@@ -27,6 +27,7 @@ syn = { version = "2", features = ["full", "parsing"] }
 toml = "0.8"
 tracing = { workspace = true }
 jackdaw_schema.workspace = true
+jackdaw_env.workspace = true
 
 [build-dependencies]
 # The build script assembles the embedded SDK-builder recipe: it parses

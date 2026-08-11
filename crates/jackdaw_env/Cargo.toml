@@ -1,0 +1,12 @@
+[package]
+name = "jackdaw_env"
+version.workspace = true
+edition = "2024"
+description = "Development environment functionality for Jackdaw"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+
+[lints]
+workspace = true

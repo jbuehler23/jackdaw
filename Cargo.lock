@@ -4784,6 +4784,7 @@ dependencies = [
  "jackdaw_cli_internal",
  "jackdaw_commands",
  "jackdaw_csg",
+ "jackdaw_env",
  "jackdaw_feathers",
  "jackdaw_geometry",
  "jackdaw_hull",
@@ -4930,6 +4931,7 @@ name = "jackdaw_cli_internal"
 version = "0.19.0"
 dependencies = [
  "dunce",
+ "jackdaw_env",
  "jackdaw_project_build",
  "jackdaw_schema",
 ]
@@ -4968,6 +4970,10 @@ version = "0.19.0"
 dependencies = [
  "jackdaw",
 ]
+
+[[package]]
+name = "jackdaw_env"
+version = "0.19.0"
 
 [[package]]
 name = "jackdaw_extension"
@@ -5151,6 +5157,7 @@ dependencies = [
 name = "jackdaw_project_build"
 version = "0.19.0"
 dependencies = [
+ "jackdaw_env",
  "jackdaw_schema",
  "serde",
  "serde_json",
