@@ -78,8 +78,9 @@ impl TerrainDataStore {
     }
 
     /// Mark a sidecar path as failed to load: a file exists but its
-    /// contents could not be decoded. See [`Self::load_failed`] docs on
-    /// the field for why this is kept separate from "no entry".
+    /// contents could not be decoded. See the `load_failed` field's docs
+    /// (above, on this struct) for why this is kept separate from "no
+    /// entry".
     pub fn mark_load_failed(&mut self, data_path: impl Into<String>) {
         self.load_failed.insert(data_path.into());
     }

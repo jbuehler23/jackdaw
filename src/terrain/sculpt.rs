@@ -35,12 +35,12 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// command deliberately does not sync the heights to the document.
 ///
 /// Memory model: each entry holds two full heightmap copies (`old_heights`
-/// and `new_heights`), and [`CommandHistory`](crate::commands::CommandHistory)'s
-/// `undo_stack` is a plain, uncapped `Vec`. A long sculpting session on a
-/// large terrain therefore accumulates memory proportional to
-/// `resolution^2 * strokes` for as long as the tab stays open -- there is
-/// currently no depth cap or delta compression, and none is planned this
-/// round. If this becomes a real problem, the fix belongs at
+/// and `new_heights`), and [`CommandHistory`]'s `undo_stack` is a plain,
+/// uncapped `Vec`. A long sculpting session on a large terrain therefore
+/// accumulates memory proportional to `resolution^2 * strokes` for as
+/// long as the tab stays open -- there is currently no depth cap or
+/// delta compression, and none is planned this round. If this becomes a
+/// real problem, the fix belongs at
 /// `CommandHistory` (a shared depth cap for every command type), not as
 /// special-casing here.
 pub struct SetTerrainHeights {
