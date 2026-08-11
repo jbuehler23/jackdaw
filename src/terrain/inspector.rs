@@ -173,6 +173,18 @@ fn update_terrain_inspector(
         return;
     }
 
+    // Ensure at least one container exists before committing local
+    // state: a container is spawned by the component display system the
+    // frame after selection, so skip silently and retry next frame
+    // rather than marking this render "done" for a container that was
+    // never actually populated. Committing local_state here (rather than
+    // as soon as `changed` is known) is what makes the retry possible --
+    // committing unconditionally left the inspector permanently blank
+    // whenever this frame's render did not actually happen.
+    if container_query.is_empty() {
+        return;
+    }
+
     local_state.terrain_entity = terrain_entity;
     local_state.edit_mode_is_sculpt = is_sculpt;
     local_state.edit_mode_is_paint = is_paint;
@@ -180,342 +192,341 @@ fn update_terrain_inspector(
     local_state.quantization_enabled = quantization.enabled;
     local_state.scatter_signature = scatter_signature;
 
-    // Ensure container exists
-    let container = if let Ok((entity, children)) = container_query.single() {
+    // Multi-instance dock layouts can host more than one inspector tab,
+    // each with its own TerrainInspectorContainer (see
+    // component_display.rs's `for inspector in &inspectors`); every
+    // container gets its own subtree mirroring the same data.
+    for (container, children) in &container_query {
         // Clear existing content
         if let Some(children) = children {
             for child in children.iter() {
                 commands.entity(child).despawn();
             }
         }
-        entity
-    } else {
-        // Will be created by the component display system -- skip this frame
-        return;
-    };
 
-    let Some(terrain_entity_id) = terrain_entity else {
-        return;
-    };
+        let Some(terrain_entity_id) = terrain_entity else {
+            continue;
+        };
 
-    // --- Paint channels (when paint mode active) ---
-    // Above the brush, matching every reference tool: you pick what you
-    // are painting first, then how wide the brush is.
-    if is_paint {
+        // --- Paint channels (when paint mode active) ---
+        // Above the brush, matching every reference tool: you pick what you
+        // are painting first, then how wide the brush is.
+        if is_paint {
+            let (_section, body) = jackdaw_feathers::collapsible::collapsible_section(
+                &mut commands,
+                "Paint Channels",
+                &icon_font.0,
+                container,
+            );
+            let terrain = terrain_data.get(terrain_entity_id).ok().cloned();
+            spawn_channel_ui(&mut commands, body, terrain.as_ref(), &paint_state);
+        }
+
+        // --- Brush settings section (sculpt and paint share one brush) ---
+        if is_sculpt || is_paint {
+            let (_section, body) = jackdaw_feathers::collapsible::collapsible_section(
+                &mut commands,
+                "Brush",
+                &icon_font.0,
+                container,
+            );
+
+            spawn_labeled_field(
+                &mut commands,
+                body,
+                "Radius",
+                "Area of effect for the brush",
+                brush_settings.radius as f64,
+                BrushField::Radius,
+            );
+            spawn_labeled_field(
+                &mut commands,
+                body,
+                "Strength",
+                "How quickly the brush modifies terrain",
+                brush_settings.strength as f64,
+                BrushField::Strength,
+            );
+            spawn_labeled_field(
+                &mut commands,
+                body,
+                "Falloff",
+                "Brush edge softness (1=linear, 2=smooth)",
+                brush_settings.falloff as f64,
+                BrushField::Falloff,
+            );
+        }
+
+        // --- Scatter section (always shown when terrain selected) ---
+        // Declarative rather than brush-driven, so unlike Paint Channels it
+        // is not gated on an edit mode: there is no scatter tool to pick up.
+        {
+            let (_section, body) = jackdaw_feathers::collapsible::collapsible_section(
+                &mut commands,
+                "Scatter",
+                &icon_font.0,
+                container,
+            );
+            let terrain = terrain_data.get(terrain_entity_id).ok().cloned();
+            crate::terrain::scatter::spawn_scatter_ui(
+                &mut commands,
+                body,
+                terrain.as_ref(),
+                &scatter_state,
+                &scatter_report,
+            );
+        }
+
+        // --- Quantization section (always shown when terrain selected) ---
+        // It describes the terrain itself, not a tool, so it is not gated on
+        // an edit mode the way the brush is.
+        {
+            let (_section, body) = jackdaw_feathers::collapsible::collapsible_section(
+                &mut commands,
+                "Quantization",
+                &icon_font.0,
+                container,
+            );
+
+            commands.spawn((
+                button::button(
+                    ButtonProps::new(if quantization.enabled {
+                        "Quantization: On"
+                    } else {
+                        "Quantization: Off"
+                    })
+                    .with_variant(if quantization.enabled {
+                        ButtonVariant::Primary
+                    } else {
+                        ButtonVariant::Default
+                    })
+                    .call_operator(crate::terrain::quantize_ops::TerrainQuantizeToggleOp::ID),
+                ),
+                ChildOf(body),
+            ));
+
+            spawn_quant_field(
+                &mut commands,
+                body,
+                "Cell Size",
+                "World units per cell edge. 0 leaves the terrain's size alone",
+                quantization.cell_size as f64,
+                QuantField::CellSize,
+            );
+            spawn_quant_field(
+                &mut commands,
+                body,
+                "Height Step",
+                "World units per elevation step. 0 leaves heights unsnapped",
+                quantization.height_step as f64,
+                QuantField::HeightStep,
+            );
+
+            // Sculpt, generate and erode snap as they go; this is for the
+            // heights that were already there when the setting was turned on.
+            commands.spawn((
+                button::button(
+                    ButtonProps::new("Apply")
+                        .with_variant(ButtonVariant::Primary)
+                        .call_operator(crate::terrain::quantize_ops::TerrainQuantizeApplyOp::ID),
+                ),
+                ChildOf(body),
+            ));
+        }
+
+        // --- Generation section (always shown when terrain selected) ---
         let (_section, body) = jackdaw_feathers::collapsible::collapsible_section(
             &mut commands,
-            "Paint Channels",
+            "Terrain Generation",
             &icon_font.0,
             container,
         );
-        let terrain = terrain_data.get(terrain_entity_id).ok().cloned();
-        spawn_channel_ui(&mut commands, body, terrain.as_ref(), &paint_state);
-    }
 
-    // --- Brush settings section (sculpt and paint share one brush) ---
-    if is_sculpt || is_paint {
-        let (_section, body) = jackdaw_feathers::collapsible::collapsible_section(
-            &mut commands,
-            "Brush",
-            &icon_font.0,
-            container,
-        );
-
-        spawn_labeled_field(
-            &mut commands,
-            body,
-            "Radius",
-            "Area of effect for the brush",
-            brush_settings.radius as f64,
-            BrushField::Radius,
-        );
-        spawn_labeled_field(
-            &mut commands,
-            body,
-            "Strength",
-            "How quickly the brush modifies terrain",
-            brush_settings.strength as f64,
-            BrushField::Strength,
-        );
-        spawn_labeled_field(
-            &mut commands,
-            body,
-            "Falloff",
-            "Brush edge softness (1=linear, 2=smooth)",
-            brush_settings.falloff as f64,
-            BrushField::Falloff,
-        );
-    }
-
-    // --- Scatter section (always shown when terrain selected) ---
-    // Declarative rather than brush-driven, so unlike Paint Channels it
-    // is not gated on an edit mode: there is no scatter tool to pick up.
-    {
-        let (_section, body) = jackdaw_feathers::collapsible::collapsible_section(
-            &mut commands,
-            "Scatter",
-            &icon_font.0,
-            container,
-        );
-        let terrain = terrain_data.get(terrain_entity_id).ok().cloned();
-        crate::terrain::scatter::spawn_scatter_ui(
-            &mut commands,
-            body,
-            terrain.as_ref(),
-            &scatter_state,
-            &scatter_report,
-        );
-    }
-
-    // --- Quantization section (always shown when terrain selected) ---
-    // It describes the terrain itself, not a tool, so it is not gated on
-    // an edit mode the way the brush is.
-    {
-        let (_section, body) = jackdaw_feathers::collapsible::collapsible_section(
-            &mut commands,
-            "Quantization",
-            &icon_font.0,
-            container,
-        );
-
+        // Noise type combobox
+        let noise_options: Vec<String> = jackdaw_terrain::NoiseType::ALL
+            .iter()
+            .map(|n| n.label().to_string())
+            .collect();
+        let noise_row = commands
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: px(tokens::SPACING_XS),
+                    width: Val::Percent(100.0),
+                    ..Default::default()
+                },
+                ChildOf(body),
+            ))
+            .id();
         commands.spawn((
-            button::button(
-                ButtonProps::new(if quantization.enabled {
-                    "Quantization: On"
-                } else {
-                    "Quantization: Off"
-                })
-                .with_variant(if quantization.enabled {
-                    ButtonVariant::Primary
-                } else {
-                    ButtonVariant::Default
-                })
-                .call_operator(crate::terrain::quantize_ops::TerrainQuantizeToggleOp::ID),
-            ),
-            ChildOf(body),
-        ));
-
-        spawn_quant_field(
-            &mut commands,
-            body,
-            "Cell Size",
-            "World units per cell edge. 0 leaves the terrain's size alone",
-            quantization.cell_size as f64,
-            QuantField::CellSize,
-        );
-        spawn_quant_field(
-            &mut commands,
-            body,
-            "Height Step",
-            "World units per elevation step. 0 leaves heights unsnapped",
-            quantization.height_step as f64,
-            QuantField::HeightStep,
-        );
-
-        // Sculpt, generate and erode snap as they go; this is for the
-        // heights that were already there when the setting was turned on.
-        commands.spawn((
-            button::button(
-                ButtonProps::new("Apply")
-                    .with_variant(ButtonVariant::Primary)
-                    .call_operator(crate::terrain::quantize_ops::TerrainQuantizeApplyOp::ID),
-            ),
-            ChildOf(body),
-        ));
-    }
-
-    // --- Generation section (always shown when terrain selected) ---
-    let (_section, body) = jackdaw_feathers::collapsible::collapsible_section(
-        &mut commands,
-        "Terrain Generation",
-        &icon_font.0,
-        container,
-    );
-
-    // Noise type combobox
-    let noise_options: Vec<String> = jackdaw_terrain::NoiseType::ALL
-        .iter()
-        .map(|n| n.label().to_string())
-        .collect();
-    let noise_row = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: px(tokens::SPACING_XS),
-                width: Val::Percent(100.0),
+            Text::new("Noise Type"),
+            TextFont {
+                font_size: tokens::TEXT_SIZE_SM,
                 ..Default::default()
             },
-            ChildOf(body),
-        ))
-        .id();
-    commands.spawn((
-        Text::new("Noise Type"),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        Node {
-            min_width: px(80.0),
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        ChildOf(noise_row),
-    ));
-    commands
-        .spawn((
-            combobox::combobox_with_selected(noise_options, gen_state.settings.noise_type.index()),
-            ChildOf(noise_row),
-        ))
-        .observe(
-            |event: On<ComboBoxChangeEvent>, mut gen_state: ResMut<TerrainGenerateState>| {
-                gen_state.settings.noise_type =
-                    jackdaw_terrain::NoiseType::from_index(event.selected);
+            TextColor(tokens::TEXT_SECONDARY),
+            Node {
+                min_width: px(80.0),
+                flex_shrink: 0.0,
+                ..Default::default()
             },
+            ChildOf(noise_row),
+        ));
+        commands
+            .spawn((
+                combobox::combobox_with_selected(noise_options, gen_state.settings.noise_type.index()),
+                ChildOf(noise_row),
+            ))
+            .observe(
+                |event: On<ComboBoxChangeEvent>, mut gen_state: ResMut<TerrainGenerateState>| {
+                    gen_state.settings.noise_type =
+                        jackdaw_terrain::NoiseType::from_index(event.selected);
+                },
+            );
+
+        spawn_gen_field(
+            &mut commands,
+            body,
+            "Seed",
+            "Same seed always produces the same terrain",
+            gen_state.settings.seed as f64,
+            GenField::Seed,
+        );
+        spawn_gen_field(
+            &mut commands,
+            body,
+            "Frequency",
+            "Lower = broader features, higher = finer detail",
+            gen_state.settings.frequency,
+            GenField::Frequency,
+        );
+        spawn_gen_field(
+            &mut commands,
+            body,
+            "Octaves",
+            "Layers of noise stacked together. More = finer detail",
+            gen_state.settings.octaves as f64,
+            GenField::Octaves,
+        );
+        spawn_gen_field(
+            &mut commands,
+            body,
+            "Lacunarity",
+            "How much each octave's frequency increases",
+            gen_state.settings.lacunarity,
+            GenField::Lacunarity,
+        );
+        spawn_gen_field(
+            &mut commands,
+            body,
+            "Persistence",
+            "How much each octave contributes. Lower = subtler",
+            gen_state.settings.persistence,
+            GenField::Persistence,
+        );
+        spawn_gen_field(
+            &mut commands,
+            body,
+            "Amplitude",
+            "Overall height scale of the generated terrain",
+            gen_state.settings.amplitude as f64,
+            GenField::Amplitude,
+        );
+        spawn_gen_field(
+            &mut commands,
+            body,
+            "Offset",
+            "Vertical offset added after generation",
+            gen_state.settings.offset as f64,
+            GenField::Offset,
         );
 
-    spawn_gen_field(
-        &mut commands,
-        body,
-        "Seed",
-        "Same seed always produces the same terrain",
-        gen_state.settings.seed as f64,
-        GenField::Seed,
-    );
-    spawn_gen_field(
-        &mut commands,
-        body,
-        "Frequency",
-        "Lower = broader features, higher = finer detail",
-        gen_state.settings.frequency,
-        GenField::Frequency,
-    );
-    spawn_gen_field(
-        &mut commands,
-        body,
-        "Octaves",
-        "Layers of noise stacked together. More = finer detail",
-        gen_state.settings.octaves as f64,
-        GenField::Octaves,
-    );
-    spawn_gen_field(
-        &mut commands,
-        body,
-        "Lacunarity",
-        "How much each octave's frequency increases",
-        gen_state.settings.lacunarity,
-        GenField::Lacunarity,
-    );
-    spawn_gen_field(
-        &mut commands,
-        body,
-        "Persistence",
-        "How much each octave contributes. Lower = subtler",
-        gen_state.settings.persistence,
-        GenField::Persistence,
-    );
-    spawn_gen_field(
-        &mut commands,
-        body,
-        "Amplitude",
-        "Overall height scale of the generated terrain",
-        gen_state.settings.amplitude as f64,
-        GenField::Amplitude,
-    );
-    spawn_gen_field(
-        &mut commands,
-        body,
-        "Offset",
-        "Vertical offset added after generation",
-        gen_state.settings.offset as f64,
-        GenField::Offset,
-    );
+        // Generate button
+        commands.spawn((
+            button::button(
+                ButtonProps::new("Generate")
+                    .with_variant(ButtonVariant::Primary)
+                    .call_operator(crate::terrain::ops::TerrainGenerateOp::ID),
+            ),
+            ChildOf(body),
+        ));
 
-    // Generate button
-    commands.spawn((
-        button::button(
-            ButtonProps::new("Generate")
-                .with_variant(ButtonVariant::Primary)
-                .call_operator(crate::terrain::ops::TerrainGenerateOp::ID),
-        ),
-        ChildOf(body),
-    ));
+        // --- Erosion section ---
+        let (_section, ebody) = jackdaw_feathers::collapsible::collapsible_section(
+            &mut commands,
+            "Hydraulic Erosion",
+            &icon_font.0,
+            container,
+        );
 
-    // --- Erosion section ---
-    let (_section, ebody) = jackdaw_feathers::collapsible::collapsible_section(
-        &mut commands,
-        "Hydraulic Erosion",
-        &icon_font.0,
-        container,
-    );
+        spawn_erosion_field(
+            &mut commands,
+            ebody,
+            "Iterations",
+            "Number of water droplets simulated",
+            gen_state.erosion.iterations as f64,
+            ErosionField::Iterations,
+        );
+        spawn_erosion_field(
+            &mut commands,
+            ebody,
+            "Erosion Radius",
+            "Area of effect for each erosion step",
+            gen_state.erosion.erosion_radius as f64,
+            ErosionField::ErosionRadius,
+        );
+        spawn_erosion_field(
+            &mut commands,
+            ebody,
+            "Inertia",
+            "How much a droplet keeps its previous direction",
+            gen_state.erosion.inertia as f64,
+            ErosionField::Inertia,
+        );
+        spawn_erosion_field(
+            &mut commands,
+            ebody,
+            "Capacity",
+            "How much sediment water can carry",
+            gen_state.erosion.capacity as f64,
+            ErosionField::Capacity,
+        );
+        spawn_erosion_field(
+            &mut commands,
+            ebody,
+            "Deposition",
+            "Rate sediment is dropped when water slows",
+            gen_state.erosion.deposition as f64,
+            ErosionField::Deposition,
+        );
+        spawn_erosion_field(
+            &mut commands,
+            ebody,
+            "Erosion Rate",
+            "Rate terrain is dissolved by flowing water",
+            gen_state.erosion.erosion as f64,
+            ErosionField::Erosion,
+        );
+        spawn_erosion_field(
+            &mut commands,
+            ebody,
+            "Evaporation",
+            "How quickly water droplets shrink",
+            gen_state.erosion.evaporation as f64,
+            ErosionField::Evaporation,
+        );
 
-    spawn_erosion_field(
-        &mut commands,
-        ebody,
-        "Iterations",
-        "Number of water droplets simulated",
-        gen_state.erosion.iterations as f64,
-        ErosionField::Iterations,
-    );
-    spawn_erosion_field(
-        &mut commands,
-        ebody,
-        "Erosion Radius",
-        "Area of effect for each erosion step",
-        gen_state.erosion.erosion_radius as f64,
-        ErosionField::ErosionRadius,
-    );
-    spawn_erosion_field(
-        &mut commands,
-        ebody,
-        "Inertia",
-        "How much a droplet keeps its previous direction",
-        gen_state.erosion.inertia as f64,
-        ErosionField::Inertia,
-    );
-    spawn_erosion_field(
-        &mut commands,
-        ebody,
-        "Capacity",
-        "How much sediment water can carry",
-        gen_state.erosion.capacity as f64,
-        ErosionField::Capacity,
-    );
-    spawn_erosion_field(
-        &mut commands,
-        ebody,
-        "Deposition",
-        "Rate sediment is dropped when water slows",
-        gen_state.erosion.deposition as f64,
-        ErosionField::Deposition,
-    );
-    spawn_erosion_field(
-        &mut commands,
-        ebody,
-        "Erosion Rate",
-        "Rate terrain is dissolved by flowing water",
-        gen_state.erosion.erosion as f64,
-        ErosionField::Erosion,
-    );
-    spawn_erosion_field(
-        &mut commands,
-        ebody,
-        "Evaporation",
-        "How quickly water droplets shrink",
-        gen_state.erosion.evaporation as f64,
-        ErosionField::Evaporation,
-    );
-
-    // Erode button
-    commands.spawn((
-        button::button(
-            ButtonProps::new("Erode")
-                .with_variant(ButtonVariant::Primary)
-                .call_operator(crate::terrain::ops::TerrainErodeOp::ID),
-        ),
-        ChildOf(ebody),
-    ));
+        // Erode button
+        commands.spawn((
+            button::button(
+                ButtonProps::new("Erode")
+                    .with_variant(ButtonVariant::Primary)
+                    .call_operator(crate::terrain::ops::TerrainErodeOp::ID),
+            ),
+            ChildOf(ebody),
+        ));
+    }
 }
 
 /// Sync brush resource values into existing `text_edit` widgets without rebuilding the UI.
@@ -1100,6 +1111,20 @@ fn spawn_erosion_field(
     ));
 }
 
+/// Parse a committed numeric field, falling back to `0.0` for anything
+/// that is not a usable number.
+///
+/// `str::parse::<f64>` accepts "nan" / "inf" / "-inf" as valid input, so a
+/// parse success alone does not mean a usable number: a non-finite value
+/// is rejected the same as a parse failure, rather than being allowed to
+/// reach the brush, the store, undo, and eventually the sidecar.
+fn parse_finite_or_zero(text: &str) -> f64 {
+    text.parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+        .unwrap_or(0.0)
+}
+
 /// Handle `TextEditCommitEvent` for terrain inspector fields (brush, gen, erosion).
 fn on_terrain_text_commit(
     event: On<TextEditCommitEvent>,
@@ -1113,7 +1138,7 @@ fn on_terrain_text_commit(
     selection: Res<Selection>,
     mut commands: Commands,
 ) {
-    let value: f64 = event.text.parse().unwrap_or(0.0);
+    let value: f64 = parse_finite_or_zero(&event.text);
 
     // Walk up from committed entity to find a field binding
     let mut current = event.entity;
@@ -1173,5 +1198,117 @@ fn on_terrain_text_commit(
             return;
         }
         current = parent;
+    }
+}
+
+#[cfg(test)]
+mod parse_finite_or_zero_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_numbers_parse_through() {
+        assert_eq!(parse_finite_or_zero("3.5"), 3.5);
+        assert_eq!(parse_finite_or_zero("-12"), -12.0);
+    }
+
+    /// I2 pinning test, the exact scenario from the review finding: `nan`
+    /// and `inf` parse successfully as `f64` but must not reach a brush
+    /// setting as usable numbers.
+    #[test]
+    fn non_finite_text_falls_back_to_zero() {
+        assert_eq!(parse_finite_or_zero("nan"), 0.0);
+        assert_eq!(parse_finite_or_zero("NaN"), 0.0);
+        assert_eq!(parse_finite_or_zero("inf"), 0.0);
+        assert_eq!(parse_finite_or_zero("-inf"), 0.0);
+        assert_eq!(parse_finite_or_zero("infinity"), 0.0);
+    }
+
+    #[test]
+    fn unparsable_text_falls_back_to_zero() {
+        assert_eq!(parse_finite_or_zero("not a number"), 0.0);
+        assert_eq!(parse_finite_or_zero(""), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod update_terrain_inspector_tests {
+    use jackdaw_feathers::icons::IconFont;
+
+    use super::*;
+    use crate::selection::Selection;
+
+    fn base_world() -> World {
+        let mut world = World::new();
+        world.init_resource::<Selection>();
+        world.init_resource::<TerrainEditMode>();
+        world.init_resource::<TerrainBrushSettings>();
+        world.init_resource::<TerrainGenerateState>();
+        world.insert_resource(IconFont(Handle::default()));
+        world.init_resource::<TerrainPaintState>();
+        world.init_resource::<crate::terrain::scatter::TerrainScatterState>();
+        world.init_resource::<crate::terrain::scatter::TerrainScatterReport>();
+        world
+    }
+
+    fn select_a_terrain(world: &mut World) {
+        let terrain = world.spawn(jackdaw_scene_types::Terrain::default()).id();
+        world.resource_mut::<Selection>().entities = vec![terrain];
+    }
+
+    /// I3 pinning test, the exact scenario from the review finding: the
+    /// signature was committed to `local_state` before the container
+    /// lookup, so a frame where the container did not exist yet (it is
+    /// spawned a frame later, by the component display system) still
+    /// marked the render "done" -- `changed` went false and the
+    /// inspector never tried again.
+    #[test]
+    fn a_container_that_appears_a_frame_late_still_gets_rendered() {
+        let mut world = base_world();
+        select_a_terrain(&mut world);
+
+        // Frame 1: selection changed, but no container exists yet.
+        world
+            .run_system_cached(update_terrain_inspector)
+            .expect("system runs");
+        world.flush();
+
+        // Frame 2: the container shows up.
+        let container = world.spawn((TerrainInspectorContainer, Node::default())).id();
+        world
+            .run_system_cached(update_terrain_inspector)
+            .expect("system runs");
+        world.flush();
+
+        let children = world.get::<Children>(container);
+        assert!(
+            children.is_some_and(|c| !c.is_empty()),
+            "the container must be populated once it exists, even a frame late",
+        );
+    }
+
+    /// I3 pinning test: a multi-instance dock layout spawns one
+    /// TerrainInspectorContainer per docked inspector panel.
+    /// `Query::single()` errors when more than one entity matches an
+    /// archetype, which used to leave every docked panel blank.
+    #[test]
+    fn every_docked_container_gets_rendered() {
+        let mut world = base_world();
+        select_a_terrain(&mut world);
+
+        let a = world.spawn((TerrainInspectorContainer, Node::default())).id();
+        let b = world.spawn((TerrainInspectorContainer, Node::default())).id();
+
+        world
+            .run_system_cached(update_terrain_inspector)
+            .expect("system runs");
+        world.flush();
+
+        for container in [a, b] {
+            let children = world.get::<Children>(container);
+            assert!(
+                children.is_some_and(|c| !c.is_empty()),
+                "container {container:?} must be populated",
+            );
+        }
     }
 }
