@@ -12,7 +12,8 @@
 //! This keeps identical scene-relative paths isolated between tabs while
 //! entities continue to round-trip through BSN text.
 
-use bevy::platform::collections::HashMap;
+use bevy::log::warn_once;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use jackdaw_terrain::TerrainData;
 use jackdaw_terrain::sidecar;
@@ -22,6 +23,16 @@ use jackdaw_terrain::sidecar;
 #[derive(Resource, Default)]
 pub struct TerrainDataStore {
     entries: HashMap<String, TerrainData>,
+    /// Sidecar paths whose most recent read attempt found a file but
+    /// could not decode it (corrupt bytes, a newer format version, ...).
+    ///
+    /// Distinct from a path with no entry at all, which just means
+    /// "never loaded or created" -- that case is the ordinary flat-
+    /// terrain-on-a-missing-sidecar story and stays lenient. A
+    /// load-failed path is different: real data exists on disk and this
+    /// store must not fabricate a zeroed replacement for it, either for
+    /// editing or for save to write back over the original.
+    load_failed: HashSet<String>,
 }
 
 impl TerrainDataStore {
@@ -47,9 +58,13 @@ impl TerrainDataStore {
             .unwrap_or(&[])
     }
 
-    /// Install data for a sidecar path, replacing anything already there.
+    /// Install data for a sidecar path, replacing anything already there
+    /// and clearing any load-failed mark -- a fresh, successfully decoded
+    /// read supersedes a previous failure for the same path.
     pub fn insert(&mut self, data_path: impl Into<String>, data: TerrainData) {
-        self.entries.insert(data_path.into(), data);
+        let data_path = data_path.into();
+        self.load_failed.remove(&data_path);
+        self.entries.insert(data_path, data);
     }
 
     /// Drop a sidecar path's data.
@@ -62,6 +77,18 @@ impl TerrainDataStore {
         self.entries.contains_key(data_path)
     }
 
+    /// Mark a sidecar path as failed to load: a file exists but its
+    /// contents could not be decoded. See [`Self::load_failed`] docs on
+    /// the field for why this is kept separate from "no entry".
+    pub fn mark_load_failed(&mut self, data_path: impl Into<String>) {
+        self.load_failed.insert(data_path.into());
+    }
+
+    /// Whether a sidecar path's last read attempt failed to decode.
+    pub fn is_load_failed(&self, data_path: &str) -> bool {
+        self.load_failed.contains(data_path)
+    }
+
     /// Data for a terrain, created zeroed at the terrain's resolution if
     /// absent, resized if the resolution changed underneath, and
     /// reconciled against the terrain's declared channels.
@@ -70,11 +97,24 @@ impl TerrainDataStore {
     /// array can never be a different length than the terrain claims, and
     /// a channel the user just added is already zeroed at the right
     /// length by the time anything tries to paint it.
+    ///
+    /// Returns `None` and refuses the edit for a path marked
+    /// [`Self::is_load_failed`]: minting zeroed data here is exactly the
+    /// silent-data-loss path this store exists to prevent, since the
+    /// next save would otherwise write that zeroed data over the real
+    /// file.
     pub fn entry_for(
         &mut self,
         terrain: &jackdaw_scene_types::Terrain,
     ) -> Option<&mut TerrainData> {
         if terrain.data_path.is_empty() {
+            return None;
+        }
+        if self.load_failed.contains(&terrain.data_path) {
+            warn_once!(
+                "Refusing to edit terrain data that failed to load; \
+                 fix or replace the sidecar file and reload the scene"
+            );
             return None;
         }
         let data = self
@@ -352,5 +392,24 @@ mod tests {
         let path = mint_data_path(&store, "");
         assert!(path.starts_with("untitled.terrain-"));
         assert!(path.ends_with(sidecar::EXTENSION));
+    }
+
+    /// C1: a path marked load-failed must refuse edits rather than mint
+    /// zeroed data that a later save would write over the real file.
+    #[test]
+    fn entry_for_refuses_a_load_failed_path() {
+        let mut store = TerrainDataStore::default();
+        store.mark_load_failed("a.jdterrain");
+        assert!(store.entry_for(&terrain(4, "a.jdterrain")).is_none());
+        assert!(!store.contains("a.jdterrain"));
+    }
+
+    #[test]
+    fn inserting_data_clears_a_previous_load_failed_mark() {
+        let mut store = TerrainDataStore::default();
+        store.mark_load_failed("a.jdterrain");
+        store.insert("a.jdterrain", TerrainData::default());
+        assert!(!store.is_load_failed("a.jdterrain"));
+        assert!(store.entry_for(&terrain(4, "a.jdterrain")).is_some());
     }
 }

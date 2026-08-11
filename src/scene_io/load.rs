@@ -328,7 +328,17 @@ pub(crate) fn import_terrain_sidecars(world: &mut World, scene_path: &str, mode:
                         .resource_mut::<crate::terrain::TerrainDataStore>()
                         .insert(data_path, data);
                 }
-                Err(err) => warn!("Terrain data {} is unreadable: {err}", full.display()),
+                Err(err) => {
+                    warn!(
+                        "Terrain data {} is unreadable ({err}); edits to this terrain \
+                         are refused and save will not overwrite the file until it is \
+                         fixed and reloaded",
+                        full.display()
+                    );
+                    world
+                        .resource_mut::<crate::terrain::TerrainDataStore>()
+                        .mark_load_failed(data_path);
+                }
             },
             // A legacy scene names no sidecar it ever wrote, so only a
             // terrain that expected one is worth warning about.

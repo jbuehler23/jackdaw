@@ -272,11 +272,17 @@ fn export_navmesh_sibling(world: &World, scene_path: &str) {
 /// Write every terrain's bulk data to its sidecar beside the scene.
 ///
 /// A scene with no terrain is a clean no-op. Each write completes before
-/// returning, and any invalid path, missing store entry, encoding failure,
-/// or filesystem error is returned to the save boundary so the tab stays
-/// dirty. One file per terrain is named by the scene-relative `data_path`
-/// the `Terrain` component carries, so a scene and its terrain data move
-/// together.
+/// returning, and an invalid path, encoding failure, or filesystem error
+/// is returned to the save boundary so the tab stays dirty. One file per
+/// terrain is named by the scene-relative `data_path` the `Terrain`
+/// component carries, so a scene and its terrain data move together.
+///
+/// A path with no store entry (never loaded -- its sidecar was missing --
+/// and never edited) is silently skipped: there is nothing to write and
+/// nothing lost. A path marked load-failed (a sidecar existed but could
+/// not decode) is also skipped, with a warning: writing zeroed data over
+/// a real, if damaged, file would be worse than leaving it alone. Neither
+/// case fails the save.
 ///
 /// Only terrains that are actually in the scene are written. The store
 /// can outlive them -- an undo can bring one back, and other tabs keep
@@ -318,11 +324,20 @@ pub(crate) fn export_terrain_sidecars(
                 )));
             }
         };
-        let data = store.get(&data_path).ok_or_else(|| {
-            BevyError::from(format!(
-                "terrain sidecar {data_path:?} has no in-memory data"
-            ))
-        })?;
+        if store.is_load_failed(&data_path) {
+            warn!(
+                "Not saving terrain data {data_path:?}: it failed to load, so writing \
+                 would overwrite the original file with empty data. Fix or replace the \
+                 sidecar and reload the scene."
+            );
+            continue;
+        }
+        // No entry means this path was never loaded (its sidecar was
+        // missing, and the load stayed lenient) and never edited since:
+        // nothing to write, and nothing lost by skipping it.
+        let Some(data) = store.get(&data_path) else {
+            continue;
+        };
         let bytes = sidecar::encode(data).ok_or_else(|| {
             BevyError::from(format!(
                 "terrain sidecar {data_path:?} declares more data than fits in memory"
@@ -1366,6 +1381,111 @@ mod terrain_sidecar_tests {
         assert!(
             !tmp.join("other-scene.terrain-0.jdterrain").exists(),
             "another scene's terrain must not be written here"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// C1 pinning test, the finding's exact scenario: a teammate's sidecar
+    /// was written by a newer build (`SidecarError::UnsupportedVersion`),
+    /// this build cannot read it, the user paints a stroke anyway, then
+    /// saves. Before the fix this wrote a zeroed `TerrainData` straight
+    /// over the real file.
+    #[test]
+    fn an_unreadable_sidecar_is_never_overwritten_by_a_save() {
+        let tmp = unique_tmp_dir("unreadable");
+        let scene_path = tmp.join("zone.bsn");
+        let sidecar_path = tmp.join("zone.terrain-0.jdterrain");
+
+        let mut original = sidecar::encode(&sculpted()).expect("encodes");
+        original[8..10].copy_from_slice(&(sidecar::VERSION + 1).to_le_bytes());
+        std::fs::write(&sidecar_path, &original).expect("write sidecar");
+
+        let mut world = World::new();
+        world.insert_resource(TerrainDataStore::default());
+        world.spawn(jackdaw_scene_types::Terrain {
+            resolution: 4,
+            data_path: "zone.terrain-0.jdterrain".to_string(),
+            ..default()
+        });
+
+        crate::scene_io::import_terrain_sidecars(
+            &mut world,
+            &scene_path.to_string_lossy(),
+            crate::scene_io::SidecarImport::Reload,
+        );
+        assert!(
+            world
+                .resource::<TerrainDataStore>()
+                .is_load_failed("zone.terrain-0.jdterrain"),
+            "a decode failure must mark the entry load-failed",
+        );
+
+        // The stroke: an edit attempt must be refused, not minted as
+        // zeroed data.
+        let brushed = jackdaw_scene_types::Terrain {
+            resolution: 4,
+            data_path: "zone.terrain-0.jdterrain".to_string(),
+            ..default()
+        };
+        assert!(
+            world
+                .resource_mut::<TerrainDataStore>()
+                .entry_for(&brushed)
+                .is_none(),
+            "edits to a load-failed terrain must be refused",
+        );
+
+        // Ctrl+S: the save must succeed and must not touch the file.
+        export_terrain_sidecars(&mut world, &scene_path.to_string_lossy())
+            .expect("save must not hard-error on a load-failed entry");
+        assert_eq!(
+            std::fs::read(&sidecar_path).expect("sidecar still on disk"),
+            original,
+            "the unreadable original must survive the save byte-for-byte",
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// C1 pinning test for the twin bug: a scene whose sidecar was never
+    /// copied alongside it (missing, not corrupt) loads flat and must
+    /// stay saveable indefinitely, not hard-error on every save attempt.
+    #[test]
+    fn a_never_loaded_missing_sidecar_stays_saveable() {
+        let tmp = unique_tmp_dir("never-loaded");
+        let scene_path = tmp.join("zone.bsn");
+        let sidecar_path = tmp.join("zone.terrain-0.jdterrain");
+
+        let mut world = World::new();
+        world.insert_resource(TerrainDataStore::default());
+        world.spawn(jackdaw_scene_types::Terrain {
+            resolution: 4,
+            data_path: "zone.terrain-0.jdterrain".to_string(),
+            ..default()
+        });
+
+        crate::scene_io::import_terrain_sidecars(
+            &mut world,
+            &scene_path.to_string_lossy(),
+            crate::scene_io::SidecarImport::Reload,
+        );
+        assert!(
+            !world
+                .resource::<TerrainDataStore>()
+                .contains("zone.terrain-0.jdterrain")
+        );
+        assert!(
+            !world
+                .resource::<TerrainDataStore>()
+                .is_load_failed("zone.terrain-0.jdterrain")
+        );
+
+        export_terrain_sidecars(&mut world, &scene_path.to_string_lossy())
+            .expect("a scene with a never-loaded terrain must remain saveable");
+        assert!(
+            !sidecar_path.exists(),
+            "nothing should be written for data that never existed"
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
