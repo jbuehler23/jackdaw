@@ -1086,7 +1086,7 @@ fn on_terrain_text_commit(
                 // do what it says.
                 ErosionField::Iterations => {
                     gen_state.erosion.iterations =
-                        (value as u32).min(jackdaw_terrain::erosion::MAX_ITERATIONS)
+                        (value as u32).min(jackdaw_terrain::erosion::MAX_ITERATIONS);
                 }
                 ErosionField::ErosionRadius => gen_state.erosion.erosion_radius = value as u32,
                 ErosionField::Inertia => gen_state.erosion.inertia = value as f32,
@@ -1189,7 +1189,7 @@ mod update_terrain_inspector_tests {
     }
 
     /// I3 pinning test: a multi-instance dock layout spawns one
-    /// TerrainInspectorContainer per docked inspector panel.
+    /// `TerrainInspectorContainer` per docked inspector panel.
     /// `Query::single()` errors when more than one entity matches an
     /// archetype, which used to leave every docked panel blank.
     #[test]

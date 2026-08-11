@@ -284,8 +284,8 @@ mod tests {
 
     /// M12 pinning test: a capture that never gets a viewport keeps
     /// failing every frame past the timeout. Before the latch,
-    /// drive_shot_probe re-entered the timeout arm on every subsequent
-    /// call and wrote a fresh AppExit each time.
+    /// `drive_shot_probe` re-entered the timeout arm on every subsequent
+    /// call and wrote a fresh `AppExit` each time.
     #[test]
     fn a_capture_that_never_starts_emits_app_exit_only_once() {
         let mut world = World::new();
