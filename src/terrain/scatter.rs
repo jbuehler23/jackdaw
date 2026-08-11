@@ -38,6 +38,13 @@ use super::inspector::{
     spawn_add_tile, spawn_hint, spawn_labeled_field, spawn_tile, spawn_tile_grid, spawn_tile_remove,
 };
 use super::ops::has_selected_terrain;
+
+/// A run estimated to place more instances than this is refused rather
+/// than spawning that many entities (and undo-stack history) in one
+/// click. High enough for any legitimate scatter; low enough that a
+/// stray density (a pasted value, a unit mismatch) cannot hang the
+/// editor or balloon the undo stack.
+const MAX_SCATTER_INSTANCES: u32 = 100_000;
 use crate::commands::{CommandGroup, CommandHistory, DespawnEntity, EditorCommand, SpawnEntity};
 use crate::selection::Selection;
 
@@ -527,6 +534,30 @@ fn run_scatter(world: &mut World, params: &OperatorParameters) {
             .unwrap_or(state.align_to_normal),
         asset_count: assets.len(),
     };
+
+    // A mask or a weight channel only ever reduce the instance count from
+    // here, so density times the full world area is a safe upper bound
+    // on what the kernel would produce -- cheap to check before running
+    // it. Without a cap, one click at a stray density (a pasted value, a
+    // unit mismatch) can queue an unbounded number of spawns onto the
+    // undo stack.
+    let world_area = f64::from(terrain.size.x) * f64::from(terrain.size.y);
+    let estimated_instances = f64::from(scatter_params.density) * world_area;
+    if estimated_instances > MAX_SCATTER_INSTANCES as f64 {
+        set_report(
+            world,
+            TerrainScatterReport {
+                message: format!(
+                    "refused: density {} over {world_area:.0} square units would place \
+                     roughly {estimated_instances:.0} instances, over the \
+                     {MAX_SCATTER_INSTANCES} limit; lower density or spacing and try again",
+                    scatter_params.density,
+                ),
+                ..default()
+            },
+        );
+        return;
+    }
 
     let (heightmap, channels) = {
         let mut store = world.resource_mut::<TerrainDataStore>();
@@ -1258,5 +1289,61 @@ mod tests {
             &Transform::default(),
         );
         assert!((upright.rotation * Vec3::Y).angle_between(Vec3::Y) < 1e-4);
+    }
+
+    /// I7 pinning test, the exact scenario from the review finding: a
+    /// stray density over a large terrain would previously queue an
+    /// unbounded number of spawns onto the undo stack. The run must be
+    /// refused up front, with a report, and never reach the kernel.
+    #[test]
+    fn a_pathological_density_is_refused_before_running_the_kernel() {
+        let mut world = World::new();
+        world.init_resource::<Selection>();
+        world.init_resource::<TerrainScatterState>();
+        world.init_resource::<TerrainScatterReport>();
+
+        let data_path = "zone.terrain-0.jdterrain";
+        let mut store = TerrainDataStore::default();
+        store.insert(
+            data_path,
+            jackdaw_terrain::TerrainData {
+                resolution: 4,
+                heights: vec![0.0; 16],
+                channels: vec![],
+            },
+        );
+        world.insert_resource(store);
+
+        world.spawn(jackdaw_scene_types::Terrain {
+            resolution: 4,
+            size: Vec2::splat(1000.0),
+            data_path: data_path.to_string(),
+            ..default()
+        });
+
+        use jackdaw_scene_types::PropertyValue;
+
+        let mut params = OperatorParameters::default();
+        params
+            .0
+            .insert("density".to_string(), PropertyValue::Float(1000.0));
+        params.0.insert(
+            "assets".to_string(),
+            PropertyValue::String("kit/Tree.gltf".into()),
+        );
+
+        run_scatter(&mut world, &params);
+
+        let report = world.resource::<TerrainScatterReport>();
+        assert_eq!(report.placed, 0, "a refused run must place nothing");
+        assert!(
+            report.message.contains("refused") && report.message.contains("100000"),
+            "report must explain the refusal: {}",
+            report.message
+        );
+        assert!(
+            world.query::<&ScatterGroup>().iter(&world).next().is_none(),
+            "a refused run must not spawn a group",
+        );
     }
 }
