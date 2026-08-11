@@ -1144,6 +1144,7 @@ mod update_terrain_inspector_tests {
         world.init_resource::<TerrainBrushSettings>();
         world.init_resource::<TerrainGenerateState>();
         world.insert_resource(IconFont(Handle::default()));
+        world.insert_resource(EditorFont(Handle::default()));
         world.init_resource::<TerrainPaintState>();
         world.init_resource::<crate::terrain::scatter::TerrainScatterState>();
         world.init_resource::<crate::terrain::scatter::TerrainScatterReport>();
