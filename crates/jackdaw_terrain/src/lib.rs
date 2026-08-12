@@ -20,4 +20,4 @@ pub use mesh::{ChunkMeshData, build_chunk_mesh_data, build_chunk_mesh_data_flat}
 pub use quantize::{quantize_height, quantize_heights, quantize_region};
 pub use region::{Region, RegionCoord, RegionSize, RegionSizeError, TerrainRegions};
 pub use scatter::{Placement, ScatterMask, ScatterParams, scatter};
-pub use sidecar::{SidecarError, TerrainData};
+pub use sidecar::{RegionTerrainData, SidecarError, TerrainData};
