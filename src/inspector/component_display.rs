@@ -320,18 +320,14 @@ pub(crate) fn build_inspector_displays(
         })
         .collect();
 
-    // Sort: custom-category groups first, then alphabetical within
-    // each tier. `AvianCollider` is pinned to the top of its group
-    // because it carries the collider-type dropdown the user reaches
-    // for most when iterating on physics; ordering it alphabetically
-    // (where it'd sit under `RigidBody` in the Avian3d group) buries
-    // it under runtime-state components.
-    let group_pin_priority = |type_path: &str| -> u8 {
-        if type_path == "jackdaw_avian_integration::AvianCollider" {
-            0
-        } else {
-            1
-        }
+    // Sort: custom-category groups first, then by group name, then
+    // authored before derived within a group, then alphabetical.
+    let is_derived_path = |type_path: &str| -> bool {
+        !authored_type_paths.is_empty()
+            && !jackdaw_bsn::type_paths_include(
+                authored_type_paths.iter().map(String::as_str),
+                type_path,
+            )
     };
     comp_list.sort_by(|a, b| {
         let a_custom = custom_groups.contains(&a.1);
@@ -339,7 +335,7 @@ pub(crate) fn build_inspector_displays(
         b_custom
             .cmp(&a_custom)
             .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| group_pin_priority(&a.3).cmp(&group_pin_priority(&b.3)))
+            .then_with(|| is_derived_path(&a.3).cmp(&is_derived_path(&b.3)))
             .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
     });
 
