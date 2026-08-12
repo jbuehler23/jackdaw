@@ -1,19 +1,23 @@
 pub mod brush;
 pub mod channel;
+pub mod control;
 pub mod erosion;
 pub mod generate;
 pub mod heightmap;
 pub mod mesh;
 pub mod quantize;
+pub mod region;
 pub mod scatter;
 pub mod sidecar;
 
 pub use brush::{SculptTool, affected_chunks, affected_chunks_at, apply_brush};
 pub use channel::{ChannelData, ChannelElement, apply_channel_brush};
+pub use control::Control;
 pub use erosion::{ErosionParams, hydraulic_erosion};
 pub use generate::{GenerateSettings, NoiseType, generate_heightmap};
 pub use heightmap::Heightmap;
 pub use mesh::{ChunkMeshData, build_chunk_mesh_data, build_chunk_mesh_data_flat};
 pub use quantize::{quantize_height, quantize_heights, quantize_region};
+pub use region::{Region, RegionCoord, RegionSize, RegionSizeError, TerrainRegions};
 pub use scatter::{Placement, ScatterMask, ScatterParams, scatter};
 pub use sidecar::{SidecarError, TerrainData};
