@@ -1396,7 +1396,7 @@ fn get_tuple_field_type_path(
 fn empty_component_patch_for_type(type_path: &str, registry: &TypeRegistry) -> BsnPatch {
     match registry
         .get_with_type_path(type_path)
-        .map(|registration| registration.type_info())
+        .map(bevy::reflect::TypeRegistration::type_info)
     {
         Some(bevy::reflect::TypeInfo::TupleStruct(_)) => {
             BsnPatch::TupleStruct(BsnTupleStructData {
@@ -1415,7 +1415,7 @@ fn empty_component_patch_for_type(type_path: &str, registry: &TypeRegistry) -> B
 fn empty_container_value_for_type(type_path: &str, registry: &TypeRegistry) -> BsnValue {
     match registry
         .get_with_type_path(type_path)
-        .map(|registration| registration.type_info())
+        .map(bevy::reflect::TypeRegistration::type_info)
     {
         Some(bevy::reflect::TypeInfo::TupleStruct(_)) => {
             BsnValue::TupleStruct(BsnTupleStructData {

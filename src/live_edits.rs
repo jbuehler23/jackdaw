@@ -1319,7 +1319,7 @@ mod tests {
     }
 
     #[test]
-    fn undo_of_a_newly_authored_component_removes_it() {
+    fn undo_demotes_authored_live_component() {
         let (mut world, preview, _node_id) = build_world();
 
         save_unauthored_health(&mut world, preview);
@@ -1337,8 +1337,8 @@ mod tests {
             "undo removes the component entry instead of writing null"
         );
         assert!(
-            world.get::<Health>(preview).is_none(),
-            "undo removes the ECS component too"
+            world.get::<Health>(preview).is_some(),
+            "demote keeps the live component that predated the author"
         );
     }
 

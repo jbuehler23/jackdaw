@@ -548,7 +548,7 @@ fn prepare_authored_subtree_for_spawn(world: &mut World, ast: &mut jackdaw_bsn::
     assign_unique_entity_root_names(world, ast);
 }
 
-/// SceneNodeIds on entity roots of `ast`.
+/// `SceneNodeIds` on entity roots of `ast`.
 fn entity_root_scene_node_ids(
     world: &World,
     ast: &jackdaw_bsn::SceneBsnAst,
@@ -875,7 +875,7 @@ fn copy_components(world: &mut World) {
 /// `SceneNodeId` and despawns it (children go with the hierarchy). On redo,
 /// re-spawns from the remapped clipboard text that already carries those ids.
 struct PasteEntitiesCommand {
-    /// SceneNodeIds assigned to pasted entity roots at first paste.
+    /// `SceneNodeIds` assigned to pasted entity roots at first paste.
     spawned_node_ids: Vec<jackdaw_scene_types::SceneNodeId>,
     /// Clipboard BSN with fresh ids and unique names already written in,
     /// preserved so redo re-spawns the same authored patches.
