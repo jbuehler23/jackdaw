@@ -964,7 +964,7 @@ pub struct SetBsnField {
     /// exist before this edit; undo then removes what execute authored.
     ///
     /// For derived (ECS-only) components, callers should supply the pre-edit
-    /// live value via [`field_edit_commit`] / the gesture session. If still
+    /// live value via `field_edit_commit` / the gesture session. If still
     /// `None` at execute, the live field is captured as a fallback for
     /// immediate edits that never preview-mutated ECS.
     pub old_value: Option<jackdaw_bsn::BsnValue>,
