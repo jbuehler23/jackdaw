@@ -2,18 +2,49 @@
 //!
 //! A terrain is a sparse grid of fixed-size square [`Region`]s, addressed by
 //! integer [`RegionCoord`]. A region springs into existence the first time
-//! an edit touches one of its cells and is dropped again once every cell in
-//! it goes back to the default value -- a terrain that has only ever been
-//! edited near the origin costs nothing for the rest of the world, however
-//! far it nominally extends. This mirrors `Terrain3D`'s region model.
+//! an edit writes a non-default value into one of its cells -- a terrain
+//! that has only ever been edited near the origin costs nothing for the
+//! rest of the world, however far it nominally extends. This mirrors
+//! `Terrain3D`'s region model.
+//!
+//! Existence, once granted, is an AUTHORED fact, not a derived one (T1
+//! review ruling, 2026-08-12): a region sculpted flat back to every default
+//! value is still a region a person chose to allocate, and it stays
+//! allocated, round-trips through a sidecar, and re-encodes exactly as it
+//! was. The only way a region goes away is [`TerrainRegions::remove_region`]
+//! -- an explicit, deliberate removal, not a side effect of ordinary
+//! editing. This also means no setter ever scans a whole region to decide
+//! whether to keep it: allocating is an O(1) "does this one write differ
+//! from default" check, not an O(side^2) region-wide scan.
 //!
 //! Heights and the control map (see [`crate::control`]) always exist per
-//! region; the color layer is optional and only allocated the first time a
-//! cell in that region is painted, per the design's "allocated on first
-//! paint" rule.
+//! region; the color layer is optional and, once allocated the first time a
+//! cell in that region is painted, stays allocated for the same
+//! authored-presence reason -- it does not collapse back to absent just
+//! because every pixel happens to read as [`DEFAULT_COLOR`] again.
 //!
 //! Cell coordinates are signed: a region's world position can be negative
 //! in either axis, since edits are not constrained to start at the origin.
+//!
+//! # Seam rule (T4 builds on this; documented here since this is where
+//! region addressing lives)
+//!
+//! Cells are single-owner: a cell belongs to exactly one region, and
+//! storage never duplicates an edge row into its neighbor. A mesher
+//! building seamless geometry across a region boundary reads the
+//! neighboring region directly (via [`TerrainRegions::region`]) for the
+//! extra vertex row/column it needs; if that neighbor is not allocated, the
+//! mesher clamps to the current region's own edge rather than treating the
+//! absent neighbor as an error or fabricating a duplicate row for it.
+//!
+//! # A note on `f32` equality
+//!
+//! [`Region`], [`TerrainRegions`] and [`crate::sidecar::RegionTerrainData`]
+//! all derive `PartialEq` down to raw `f32` heights. IEEE 754 `NaN` is not
+//! equal to itself, so a height array containing `NaN` makes its own struct
+//! not equal to a bit-for-bit copy of itself under `==`/`assert_eq!`; a test
+//! that needs to compare data that may contain `NaN` must compare
+//! `to_bits()` of the individual floats instead.
 
 use std::collections::HashMap;
 
@@ -41,13 +72,22 @@ impl RegionCoord {
     }
 }
 
-/// Why a region size could not be used for a newly created terrain.
+impl core::fmt::Display for RegionCoord {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "({}, {})", self.x, self.z)
+    }
+}
+
+/// Why a region size could not be used.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegionSizeError {
     /// A region cannot have zero cells per side.
     Zero,
-    /// New terrains require a power-of-two region size, so the mesher and
-    /// LOD clipmap (later tasks) can assume clean subdivision.
+    /// Region size must be a power of two, so the mesher and LOD clipmap
+    /// (later tasks) can assume clean subdivision. This is a real,
+    /// always-enforced invariant, not just a rule for newly created
+    /// terrains: a sidecar that declares a non-power-of-two region size is
+    /// rejected the same as one that declares zero.
     NotPowerOfTwo,
 }
 
@@ -63,17 +103,24 @@ impl core::fmt::Display for RegionSizeError {
 impl core::error::Error for RegionSizeError {}
 
 /// Cells per edge of every region in a terrain. Immutable once a terrain
-/// exists: changing it would require re-bucketing every region.
+/// exists: changing it would require re-bucketing every region. Every
+/// `RegionSize` in existence, however it was built, is guaranteed a
+/// nonzero power of two -- there is no unchecked or "trusted caller"
+/// constructor. A v1 sidecar's resolution is not assumed to satisfy this,
+/// so migrating one is fallible; see
+/// [`crate::sidecar::RegionTerrainData::from_legacy_v1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RegionSize(u32);
 
 impl RegionSize {
     /// Region side length new terrains use unless the author picks another
     /// power of two at creation time.
-    pub const DEFAULT: u32 = 256;
+    pub const DEFAULT: RegionSize = RegionSize(256);
 
-    /// Validated constructor for a terrain created going forward: `side`
-    /// must be a nonzero power of two.
+    /// Validated constructor: `side` must be a nonzero power of two. Used
+    /// for terrains created going forward and for every sidecar v3 decode
+    /// -- a declared region size is only ever trusted once it has passed
+    /// through here.
     pub fn new(side: u32) -> Result<Self, RegionSizeError> {
         if side == 0 {
             return Err(RegionSizeError::Zero);
@@ -82,20 +129,6 @@ impl RegionSize {
             return Err(RegionSizeError::NotPowerOfTwo);
         }
         Ok(Self(side))
-    }
-
-    /// Unchecked constructor for sizes that predate the power-of-two rule.
-    ///
-    /// A v1 sidecar's whole resolution becomes one implicit region of that
-    /// exact size on migration (see [`crate::sidecar`]), and that
-    /// resolution was never required to be a power of two. Sidecar v3
-    /// decode also uses this once it has confirmed the declared size is
-    /// backed by enough file bytes to be plausible.
-    ///
-    /// The caller must ensure `side > 0`; this is not re-checked.
-    pub(crate) fn new_unchecked(side: u32) -> Self {
-        debug_assert!(side > 0, "region size must be nonzero");
-        Self(side)
     }
 
     pub fn get(self) -> u32 {
@@ -110,7 +143,7 @@ impl RegionSize {
 pub struct Region {
     side: u32,
     heights: Vec<f32>,
-    control: Vec<u32>,
+    control: Vec<Control>,
     color: Option<Vec<[u8; 4]>>,
 }
 
@@ -120,7 +153,7 @@ impl Region {
         Self {
             side,
             heights: vec![0.0; n],
-            control: vec![0; n],
+            control: vec![Control::default(); n],
             color: None,
         }
     }
@@ -131,7 +164,7 @@ impl Region {
     pub(crate) fn from_parts(
         side: u32,
         heights: Vec<f32>,
-        control: Vec<u32>,
+        control: Vec<Control>,
         color: Option<Vec<[u8; 4]>>,
     ) -> Self {
         let n = (side as usize) * (side as usize);
@@ -157,8 +190,8 @@ impl Region {
         &self.heights
     }
 
-    /// Row-major packed control words, length `side * side`.
-    pub fn control_words(&self) -> &[u32] {
+    /// Row-major control words, length `side * side`.
+    pub fn control_words(&self) -> &[Control] {
         &self.control
     }
 
@@ -181,12 +214,12 @@ impl Region {
     }
 
     fn control(&self, lx: u32, lz: u32) -> Control {
-        Control::from_raw(self.control[self.idx(lx, lz)])
+        self.control[self.idx(lx, lz)]
     }
 
     fn set_control(&mut self, lx: u32, lz: u32, value: Control) {
         let i = self.idx(lx, lz);
-        self.control[i] = value.to_raw();
+        self.control[i] = value;
     }
 
     fn color_at(&self, lx: u32, lz: u32) -> [u8; 4] {
@@ -203,21 +236,16 @@ impl Region {
         let layer = self.color.get_or_insert_with(|| vec![DEFAULT_COLOR; n]);
         layer[i] = value;
     }
+}
 
-    /// Drop the color layer back to `None` if painting has undone every
-    /// cell back to [`DEFAULT_COLOR`], so an undo-to-nothing stroke does
-    /// not leave a permanently allocated (if uniform) color buffer behind.
-    fn prune_color_if_default(&mut self) {
-        if matches!(&self.color, Some(layer) if layer.iter().all(|c| *c == DEFAULT_COLOR)) {
-            self.color = None;
-        }
-    }
-
-    fn is_default(&self) -> bool {
-        self.color.is_none()
-            && self.heights.iter().all(|h| *h == 0.0)
-            && self.control.iter().all(|c| *c == 0)
-    }
+/// Collapse `-0.0` to `+0.0` so a height that reads as "the default value"
+/// always has the one canonical bit pattern, in memory and on disk. Without
+/// this, sculpting a cell to exactly `-0.0` would compare equal to a
+/// never-touched default cell (`-0.0 == 0.0` is `true`) while carrying a
+/// different bit pattern, which is exactly the kind of surprise a "bit-level
+/// round trip" sidecar format should not have.
+fn canonicalize_zero(value: f32) -> f32 {
+    if value == 0.0 { 0.0 } else { value }
 }
 
 /// A terrain's sparse height/control/color storage.
@@ -252,15 +280,25 @@ impl TerrainRegions {
         self.regions.get(&coord)
     }
 
-    /// Insert an already-built region, dropping it instead if it turns out
-    /// to be all-default. Used by sidecar decode and the v1 migration
-    /// bridge; edits during normal use go through [`Self::set_height`] and
-    /// friends instead.
+    /// Insert an already-built region as an authored, present region.
+    /// Unlike the per-cell setters this never checks the region's content:
+    /// a region a sidecar's region table lists, or that migration builds
+    /// from a legacy heightmap, is present because it says so, default
+    /// content and all. Used by sidecar decode and the v1 migration
+    /// bridge; both are responsible for rejecting a duplicate coordinate
+    /// themselves before calling this, since a second call for the same
+    /// coordinate silently overwrites the first.
     pub(crate) fn insert_region(&mut self, coord: RegionCoord, region: Region) {
         debug_assert_eq!(region.side(), self.region_size.get());
-        if !region.is_default() {
-            self.regions.insert(coord, region);
-        }
+        self.regions.insert(coord, region);
+    }
+
+    /// Explicitly deallocate a region regardless of its content. This is
+    /// the only way a region goes away once it exists -- ordinary editing,
+    /// even sculpting every cell back to default, never does this on its
+    /// own. Returns the removed region, if there was one.
+    pub fn remove_region(&mut self, coord: RegionCoord) -> Option<Region> {
+        self.regions.remove(&coord)
     }
 
     /// Allocated regions in a deterministic, coordinate-sorted order.
@@ -290,16 +328,22 @@ impl TerrainRegions {
     }
 
     /// Write a height, allocating the owning region if this is its first
-    /// non-default write, and dropping it again if the write brought every
-    /// cell in it back to default.
+    /// non-default write. Once allocated, a region never deallocates
+    /// itself as a side effect of a write -- see the module docs.
     pub fn set_height(&mut self, x: i32, z: i32, value: f32) {
+        let value = canonicalize_zero(value);
         let (coord, lx, lz) = self.locate(x, z);
-        let side = self.region_size;
-        self.regions
-            .entry(coord)
-            .or_insert_with(|| Region::empty(side.get()))
-            .set_height(lx, lz, value);
-        self.prune(coord);
+        match self.regions.get_mut(&coord) {
+            Some(region) => region.set_height(lx, lz, value),
+            None if value != 0.0 => {
+                let side = self.region_size.get();
+                self.regions
+                    .entry(coord)
+                    .or_insert_with(|| Region::empty(side))
+                    .set_height(lx, lz, value);
+            }
+            None => {}
+        }
     }
 
     pub fn control_at(&self, x: i32, z: i32) -> Control {
@@ -311,12 +355,17 @@ impl TerrainRegions {
 
     pub fn set_control(&mut self, x: i32, z: i32, value: Control) {
         let (coord, lx, lz) = self.locate(x, z);
-        let side = self.region_size;
-        self.regions
-            .entry(coord)
-            .or_insert_with(|| Region::empty(side.get()))
-            .set_control(lx, lz, value);
-        self.prune(coord);
+        match self.regions.get_mut(&coord) {
+            Some(region) => region.set_control(lx, lz, value),
+            None if value != Control::default() => {
+                let side = self.region_size.get();
+                self.regions
+                    .entry(coord)
+                    .or_insert_with(|| Region::empty(side))
+                    .set_control(lx, lz, value);
+            }
+            None => {}
+        }
     }
 
     pub fn color_at(&self, x: i32, z: i32) -> [u8; 4] {
@@ -329,20 +378,16 @@ impl TerrainRegions {
     /// Paint a color, allocating the region's color layer on first use.
     pub fn set_color(&mut self, x: i32, z: i32, value: [u8; 4]) {
         let (coord, lx, lz) = self.locate(x, z);
-        let side = self.region_size;
-        self.regions
-            .entry(coord)
-            .or_insert_with(|| Region::empty(side.get()))
-            .set_color(lx, lz, value);
-        self.prune(coord);
-    }
-
-    fn prune(&mut self, coord: RegionCoord) {
-        if let Some(region) = self.regions.get_mut(&coord) {
-            region.prune_color_if_default();
-            if region.is_default() {
-                self.regions.remove(&coord);
+        match self.regions.get_mut(&coord) {
+            Some(region) => region.set_color(lx, lz, value),
+            None if value != DEFAULT_COLOR => {
+                let side = self.region_size.get();
+                self.regions
+                    .entry(coord)
+                    .or_insert_with(|| Region::empty(side))
+                    .set_color(lx, lz, value);
             }
+            None => {}
         }
     }
 }
@@ -358,6 +403,7 @@ mod tests {
         assert_eq!(RegionSize::new(255), Err(RegionSizeError::NotPowerOfTwo));
         assert!(RegionSize::new(256).is_ok());
         assert!(RegionSize::new(1).is_ok());
+        assert_eq!(RegionSize::DEFAULT.get(), 256);
     }
 
     #[test]
@@ -386,33 +432,66 @@ mod tests {
         assert_eq!(t.region_count(), 0);
         t.set_control(1, 1, Control::default());
         assert_eq!(t.region_count(), 0);
+        t.set_color(1, 1, DEFAULT_COLOR);
+        assert_eq!(t.region_count(), 0);
     }
 
     #[test]
-    fn returning_every_cell_to_default_deallocates_the_region() {
+    fn writing_negative_zero_to_an_unallocated_cell_allocates_nothing() {
+        let mut t = TerrainRegions::new(RegionSize::new(4).unwrap());
+        t.set_height(1, 1, -0.0);
+        assert_eq!(t.region_count(), 0);
+        assert_eq!(t.height_at(1, 1).to_bits(), 0.0f32.to_bits());
+    }
+
+    #[test]
+    fn negative_zero_is_canonicalized_to_positive_zero_bit_pattern() {
+        let mut t = TerrainRegions::new(RegionSize::new(4).unwrap());
+        // Force an allocation first, then sculpt the same cell to -0.0.
+        t.set_height(1, 1, 5.0);
+        t.set_height(1, 1, -0.0);
+        assert_eq!(t.height_at(1, 1).to_bits(), 0.0f32.to_bits());
+    }
+
+    #[test]
+    fn a_nan_height_still_allocates_and_reads_back_as_nan() {
+        let mut t = TerrainRegions::new(RegionSize::new(4).unwrap());
+        t.set_height(0, 0, f32::NAN);
+        assert_eq!(t.region_count(), 1);
+        assert!(t.height_at(0, 0).is_nan());
+    }
+
+    #[test]
+    fn sculpting_every_cell_back_to_default_does_not_deallocate_the_region() {
         let mut t = TerrainRegions::new(RegionSize::new(4).unwrap());
         t.set_height(0, 0, 3.0);
         t.set_height(1, 2, 4.0);
         assert_eq!(t.region_count(), 1);
         t.set_height(0, 0, 0.0);
-        assert_eq!(t.region_count(), 1, "region 1,2 is still non-default");
         t.set_height(1, 2, 0.0);
-        assert_eq!(t.region_count(), 0);
+        assert_eq!(
+            t.region_count(),
+            1,
+            "an authored region persists even when every cell reads as default"
+        );
+        assert_eq!(t.height_at(0, 0), 0.0);
+        assert_eq!(t.height_at(1, 2), 0.0);
     }
 
     #[test]
-    fn control_writes_allocate_and_deallocate_independently_of_height() {
+    fn control_writes_allocate_but_never_self_deallocate() {
         let mut t = TerrainRegions::new(RegionSize::new(4).unwrap());
         let painted = Control::default().with_base_id(2);
         t.set_control(0, 0, painted);
         assert_eq!(t.region_count(), 1);
         assert_eq!(t.control_at(0, 0), painted);
         t.set_control(0, 0, Control::default());
-        assert_eq!(t.region_count(), 0);
+        assert_eq!(t.region_count(), 1);
+        assert_eq!(t.control_at(0, 0), Control::default());
     }
 
     #[test]
-    fn color_layer_allocates_on_first_paint_and_frees_when_reverted() {
+    fn color_layer_allocates_on_first_paint_and_stays_allocated() {
         let mut t = TerrainRegions::new(RegionSize::new(4).unwrap());
         assert_eq!(t.color_at(2, 2), DEFAULT_COLOR);
         t.set_color(2, 2, [10, 20, 30, 255]);
@@ -424,21 +503,22 @@ mod tests {
 
         t.set_color(2, 2, DEFAULT_COLOR);
         assert!(
-            t.region(RegionCoord::ORIGIN).is_none(),
-            "region should fully deallocate once color, control and height are all default"
+            t.region(RegionCoord::ORIGIN).unwrap().color().is_some(),
+            "the color layer stays allocated even once every pixel is default again"
         );
+        assert_eq!(t.region_count(), 1);
     }
 
     #[test]
-    fn painting_color_does_not_by_itself_keep_an_otherwise_default_region_forever_once_undone() {
-        let mut t = TerrainRegions::new(RegionSize::new(2).unwrap());
-        t.set_color(0, 0, [1, 2, 3, 4]);
-        t.set_color(1, 1, [5, 6, 7, 8]);
-        assert_eq!(t.region_count(), 1);
-        t.set_color(0, 0, DEFAULT_COLOR);
-        assert_eq!(t.region_count(), 1, "cell (1,1) is still painted");
-        t.set_color(1, 1, DEFAULT_COLOR);
+    fn explicit_remove_is_the_only_way_a_region_disappears() {
+        let mut t = TerrainRegions::new(RegionSize::new(4).unwrap());
+        t.set_height(0, 0, 1.0);
+        t.set_height(0, 0, 0.0);
+        assert_eq!(t.region_count(), 1, "still present after sculpting to 0");
+        let removed = t.remove_region(RegionCoord::ORIGIN);
+        assert!(removed.is_some());
         assert_eq!(t.region_count(), 0);
+        assert!(t.remove_region(RegionCoord::ORIGIN).is_none());
     }
 
     #[test]
@@ -516,17 +596,27 @@ mod tests {
     }
 
     #[test]
-    fn insert_region_drops_an_all_default_region_instead_of_storing_it() {
+    fn insert_region_keeps_an_all_default_region() {
         let mut t = TerrainRegions::new(RegionSize::new(2).unwrap());
-        let region = Region::from_parts(2, vec![0.0; 4], vec![0; 4], None);
+        let region = Region::from_parts(2, vec![0.0; 4], vec![Control::default(); 4], None);
         t.insert_region(RegionCoord::ORIGIN, region);
-        assert_eq!(t.region_count(), 0);
+        assert_eq!(
+            t.region_count(),
+            1,
+            "an explicitly authored all-default region is still present"
+        );
+        assert_eq!(t.height_at(0, 0), 0.0);
     }
 
     #[test]
     fn insert_region_keeps_a_non_default_region() {
         let mut t = TerrainRegions::new(RegionSize::new(2).unwrap());
-        let region = Region::from_parts(2, vec![1.0, 0.0, 0.0, 0.0], vec![0; 4], None);
+        let region = Region::from_parts(
+            2,
+            vec![1.0, 0.0, 0.0, 0.0],
+            vec![Control::default(); 4],
+            None,
+        );
         t.insert_region(RegionCoord::ORIGIN, region);
         assert_eq!(t.region_count(), 1);
         assert_eq!(t.height_at(0, 0), 1.0);
