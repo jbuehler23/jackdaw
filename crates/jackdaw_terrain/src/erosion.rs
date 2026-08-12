@@ -29,15 +29,9 @@ pub struct ErosionParams {
     pub min_slope: f32,
 }
 
-/// Iterations above this are clamped down to it rather than run.
-///
-/// Each iteration costs up to `max_lifetime` steps, so an unbounded
-/// count -- typed into the UI, or passed by a script or a headless
-/// caller -- can hang the editor for an unbounded amount of time. This
-/// is well above the default (70,000) and any legitimate heavy use, and
-/// is enforced here regardless of which widget or caller set
-/// `iterations`, not just whatever limit an inspector field happens to
-/// impose.
+/// Iterations above this are clamped rather than run: each iteration costs
+/// up to `max_lifetime` steps, so an unbounded count can hang for an
+/// unbounded time.
 pub const MAX_ITERATIONS: u32 = 1_000_000;
 
 /// Clamp a requested iteration count to [`MAX_ITERATIONS`].
@@ -275,9 +269,7 @@ fn erode_at(
 mod tests {
     use super::*;
 
-    /// I11 pinning test: an iteration count typed into the UI (or set by
-    /// any other caller) is capped regardless of what requested it, since
-    /// each iteration costs real, unbounded wall-clock time.
+    /// An iteration count is capped regardless of what requested it.
     #[test]
     fn a_pathological_iteration_count_is_clamped() {
         assert_eq!(clamp_iterations(u32::MAX), MAX_ITERATIONS);

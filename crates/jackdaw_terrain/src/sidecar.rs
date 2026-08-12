@@ -30,59 +30,43 @@
 //! the data, so the same terrain always produces the same bytes and a
 //! sidecar can be committed and diffed.
 //!
-//! There is no checksum. A file can be truncated or bit-flipped by
-//! something outside the atomic-write path this format's own writer uses
-//! (a bad disk, a naive sync tool) and still pass magic/version/length
-//! checks while carrying wrong values -- decode only catches structural
-//! corruption (bad magic, an unreadable version, a length that does not
-//! fit the claimed shape), not silent bit rot within otherwise
-//! well-formed bytes. Accepted as a tradeoff for the format staying
-//! trivial to read from any language; revisit if this ever needs to
-//! survive untrusted or unreliable transport.
+//! There is no checksum. Decode catches structural corruption (bad magic,
+//! an unreadable version, a length that does not fit the claimed shape),
+//! not silent bit rot within otherwise well-formed bytes.
 //!
-//! Decode also requires the file to end exactly where the declared
-//! structure ends: trailing bytes, or a header that under-claims a count
-//! (leaving real data unconsumed), are both rejected as [`SidecarError::Truncated`]
-//! rather than silently ignored. Failing open here -- accepting a
-//! shorter-than-claimed read as success -- would discard the unconsumed
-//! tail the moment anything re-saves the file.
+//! Decode requires the file to end exactly where the declared structure
+//! ends: trailing bytes, and a header that under-claims a count, are both
+//! rejected as [`SidecarError::Truncated`].
 //!
-//! # v3: regions
+//! # Format version 2
 //!
-//! [`VERSION`] (1) is the layout above: one dense heightmap plus channels,
-//! everything sized to a single `resolution`. It is what the terrain
-//! track's design doc calls "v2" -- there has only ever been one shipped
-//! format before this one, and the doc's v2/v3 numbering counts generations
-//! of the design, not this field's literal value. [`VERSION_V3`] (2) is
-//! what the doc calls "v3": heights, the control map and an optional color
-//! layer move into sparse regions (see [`crate::region`]), addressed by
-//! [`RegionCoord`]. Channels are unaffected -- they are gameplay masks, not
-//! visual splat, and stay dense at `channel_resolution` exactly as they
-//! were at `resolution` before.
+//! Format version 1 is the layout above: one dense heightmap plus channels,
+//! sized to a single `resolution`. Format version 2 moves heights, the
+//! control map, and an optional color layer into sparse regions (see
+//! [`crate::region`]), addressed by [`RegionCoord`]. Channels stay dense at
+//! `channel_resolution`, unchanged from version 1.
 //!
 //! ```text
 //! offset  size          field
 //! 0       8             magic, b"JDTERRN\0"             (shared header)
-//! 8       2             format version, u16 == VERSION_V3
+//! 8       2             format version, u16 == 2
 //! 10      2             flags, u16 (reserved, must be 0)
 //! 12      4             channel_resolution, u32
 //! 16      4             channel_count, u32
-//! 20      ...           channels, same per-channel layout as v1
+//! 20      ...           channels, same per-channel layout as version 1
 //! then
 //!         4             region_size, u32 (cells per region edge; a
-//!                        nonzero power of two, checked on decode)
+//!                        nonzero power of two)
 //!         4             region_count, u32
 //!         4             texture_set path length in bytes, u32 (0 = none)
 //!         n             texture_set path, UTF-8, project-relative
-//! then, per region (region_count times), each an AUTHORED, present
-//! region regardless of its content (see crate::region):
+//! then, per region (region_count times), each present regardless of
+//! content:
 //!         4             region coord x, i32
 //!         4             region coord z, i32
 //!         1             region flags, u8:
 //!                          bit 0 = has color layer
-//!                          bit 1 = present (always 1; a file with this
-//!                                  clear declares a state this build does
-//!                                  not understand)
+//!                          bit 1 = present (always 1)
 //!                          bits 2-7 = reserved, must be 0
 //!         3             padding, must be 0
 //!         4*size^2      heights, f32 (IEEE 754, little-endian)
@@ -90,20 +74,14 @@
 //!         4*size^2      color RGBA8 -- only present if flag bit 0 is set
 //! ```
 //!
-//! [`load`] and [`save`] are the entry points call sites should use going
-//! forward: `load` transparently upgrades a v1 file into a single implicit
-//! region at the origin sized to its old resolution, with no control or
-//! color data (rejecting a legacy resolution that is not a power of two,
-//! since this crate does not resample on migration), and `save` always
-//! writes v3. A newer-than-this-build version is refused by both, the same
-//! as v1 -- a file this build cannot understand is never silently dropped
-//! or overwritten. `save`/[`encode_regions`] also refuse to write a
-//! malformed texture-set reference, so a bad reference can never reach disk
-//! in the first place; a file that somehow has one anyway (hand-edited, or
-//! written by something other than this crate) is still caught on the way
-//! back in by [`decode_regions`]. The bare `encode`/`decode` (v1) and
-//! `encode_regions`/`decode_regions` (v3) pairs stay available for testing
-//! and for code that specifically needs one format or the other.
+//! [`load`] and [`save`] are the entry points to use: `load` upgrades a
+//! version-1 file into a single region at the origin sized to its old
+//! resolution, and `save` always writes version 2. A newer-than-this-build
+//! version is refused by both. `save`/[`encode_regions`] refuse to write a
+//! malformed texture-set reference; [`decode_regions`] rejects one too, for
+//! bytes from elsewhere. The bare `encode`/`decode` and
+//! `encode_regions`/`decode_regions` pairs stay available for one format
+//! or the other directly.
 
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
@@ -121,10 +99,8 @@ pub const VERSION: u16 = 1;
 
 /// Format version [`encode_regions`]/[`decode_regions`] read and write, and
 /// what [`save`] always writes: regions replace the dense heightmap. See
-/// the module-level "v3: regions" section for the full layout and how the
-/// version numbers here map onto the terrain track design doc's v2/v3
-/// naming.
-pub const VERSION_V3: u16 = 2;
+/// the module-level "Format version 2" section for the full layout.
+pub const VERSION_2: u16 = 2;
 
 /// Conventional file extension for a terrain sidecar.
 pub const EXTENSION: &str = "jdterrain";
@@ -132,8 +108,7 @@ pub const EXTENSION: &str = "jdterrain";
 /// Region flags bit: this region has a color layer, written right after
 /// its control words.
 const REGION_FLAG_HAS_COLOR: u8 = 0b0000_0001;
-/// Region flags bit: this region is present. Always set by this build;
-/// see the module-level v3 byte table.
+/// Region flags bit: this region is present. Always set by this build.
 const REGION_FLAG_PRESENT: u8 = 0b0000_0010;
 /// Every region flags bit this build understands.
 const REGION_FLAGS_KNOWN: u8 = REGION_FLAG_HAS_COLOR | REGION_FLAG_PRESENT;
@@ -171,14 +146,11 @@ impl core::fmt::Display for SidecarPathError {
 impl core::error::Error for SidecarPathError {}
 
 /// Traversal guard shared by every project-relative path string this crate
-/// accepts from a file: sidecar `data_path` (resolved beneath a scene) and
-/// texture-set references (resolved beneath the project) both go through
-/// this before any format-specific check, so both stay equally hostile to
-/// the same escape tricks.
+/// accepts from a file: sidecar `data_path` and texture-set references both
+/// go through this before any format-specific check.
 ///
-/// Deliberately stricter than the host platform: backslashes and Windows
-/// drive prefixes are rejected on every platform, as are empty, `.` and
-/// `..` components.
+/// Stricter than the host platform: backslashes and Windows drive prefixes
+/// are rejected on every platform, as are empty, `.` and `..` components.
 fn reject_path_traversal(data_path: &str) -> Result<(), SidecarPathError> {
     if data_path.is_empty() {
         return Err(SidecarPathError::Empty);
@@ -227,10 +199,8 @@ pub fn resolve_path(scene_dir: &Path, data_path: &str) -> Result<PathBuf, Sideca
 }
 
 /// Validate a texture-set asset reference: a project-relative path string,
-/// stored on a v3 sidecar and resolved beneath the project root by whatever
-/// asset system loads it (T2/T3, not this crate). Same traversal guard as
-/// [`resolve_path`], minus the sidecar-specific extension check -- the
-/// texture-set asset's extension is not this crate's concern.
+/// resolved beneath the project root by the asset system that loads it.
+/// Same traversal guard as [`resolve_path`], minus the extension check.
 pub fn validate_texture_set_ref(path: &str) -> Result<(), SidecarPathError> {
     reject_path_traversal(path)
 }
@@ -265,18 +235,17 @@ pub enum SidecarError {
     BadName,
     /// The declared dimensions do not fit in this platform's address space.
     TooLarge,
-    /// A v3 region table declared an unusable region size.
+    /// A region table declared an unusable region size.
     InvalidRegionSize(RegionSizeError),
     /// The texture-set reference string is unsafe or malformed.
     InvalidTextureSetRef(SidecarPathError),
-    /// A v3 region table declared the same region coordinate twice.
+    /// A region table declared the same region coordinate twice.
     DuplicateRegion(RegionCoord),
-    /// A v1 resolution is not a power of two, so it cannot become a v3
-    /// region without resampling -- which this crate does not do.
+    /// A resolution is not a power of two, so it cannot become a region
+    /// without resampling.
     UnmigratableResolution(u32),
-    /// A write-back (see [`RegionTerrainData::try_apply_legacy`]) was
-    /// attempted on a document with region data a legacy [`TerrainData`]
-    /// cannot represent.
+    /// [`RegionTerrainData::try_apply_legacy`] was attempted on a document
+    /// with region data a [`TerrainData`] cannot represent.
     NotLegacyCompatible,
 }
 
@@ -306,7 +275,7 @@ impl core::fmt::Display for SidecarError {
             }
             Self::UnmigratableResolution(res) => write!(
                 f,
-                "terrain resolution {res} is not a power of two and cannot become a v3 region without resampling"
+                "terrain resolution {res} is not a power of two and cannot become a region without resampling"
             ),
             Self::NotLegacyCompatible => write!(
                 f,
@@ -470,7 +439,7 @@ pub fn encode(data: &TerrainData) -> Option<Vec<u8>> {
 }
 
 /// Deserialize a terrain's bulk data. Requires the file to end exactly
-/// where the header's declared shape says it should -- see the module docs.
+/// where the declared shape says it should.
 pub fn decode(bytes: &[u8]) -> Result<TerrainData, SidecarError> {
     let mut r = Reader { bytes, at: 0 };
 
@@ -478,9 +447,8 @@ pub fn decode(bytes: &[u8]) -> Result<TerrainData, SidecarError> {
         return Err(SidecarError::BadMagic);
     }
     let version = r.u16()?;
-    // 0 has never been a version any build wrote (VERSION starts at 1);
-    // accepting it would let a file whose version bytes were zeroed out
-    // by corruption parse as if it were a real, if ancient, format.
+    // Version 0 is never valid: it would accept a file whose version
+    // bytes were zeroed out by corruption.
     if version == 0 || version > VERSION {
         return Err(SidecarError::UnsupportedVersion(version));
     }
@@ -515,17 +483,12 @@ pub fn decode(bytes: &[u8]) -> Result<TerrainData, SidecarError> {
     })
 }
 
-/// A v3 terrain document: channels (unchanged from v1) plus sparse
-/// region-based heights/control/color, plus the texture set the splat
-/// material paints with.
-///
-/// Derives `PartialEq` down to raw `f32` heights; see the "a note on `f32`
-/// equality" section in [`crate::region`] before comparing a document that
-/// might contain `NaN`.
+/// A terrain document: channels plus sparse region-based heights/control/
+/// color, plus the texture set the splat material paints with.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RegionTerrainData {
-    /// Sizes `channels` exactly as `resolution` sized them in v1. Unrelated
-    /// to region addressing -- channels are not part of the region model.
+    /// Sizes `channels`. Unrelated to region addressing -- channels are
+    /// not part of the region model.
     pub channel_resolution: u32,
     /// Named integer layers, in the order the project declared them.
     pub channels: Vec<ChannelData>,
@@ -537,22 +500,15 @@ pub struct RegionTerrainData {
 }
 
 impl RegionTerrainData {
-    /// Migrate a v1 [`TerrainData`] into a v3 document: one implicit region
-    /// at [`RegionCoord::ORIGIN`], sized to the legacy resolution exactly
-    /// -- no resampling. The migrated region carries no control or color
-    /// paint (both stay at their all-default values), and is present even
-    /// if every height in it happens to be flat/default: a v1 file
-    /// authored its whole extent, zero included, and that is a real region
-    /// now, not nothing (see [`crate::region`]'s authored-presence rule).
-    /// Channels are moved across unchanged.
+    /// Migrate a [`TerrainData`] into a region document: one region at
+    /// [`RegionCoord::ORIGIN`], sized to the legacy resolution, with no
+    /// control or color paint. Present even if every height is default.
+    /// Channels move across unchanged.
     ///
-    /// A region size must be a nonzero power of two ([`RegionSize::new`]),
-    /// and this crate does not resample on migration, so a legacy
-    /// resolution that is not a power of two is rejected with
-    /// [`SidecarError::UnmigratableResolution`] rather than silently
-    /// rounded or truncated. A resolution of exactly 0 (an empty legacy
-    /// terrain) is the one exception: there are no cells to place in a
-    /// region either way, so it migrates to zero regions under
+    /// Region size must be a nonzero power of two; a legacy resolution
+    /// that isn't one is rejected with
+    /// [`SidecarError::UnmigratableResolution`] rather than resampled. A
+    /// resolution of 0 migrates to zero regions under
     /// [`RegionSize::DEFAULT`].
     pub fn from_legacy_v1(data: &TerrainData) -> Result<Self, SidecarError> {
         let mut normalized = data.clone();
@@ -586,15 +542,10 @@ impl RegionTerrainData {
         })
     }
 
-    /// A [`TerrainData`] view of this document, for call sites that have
-    /// not migrated to the region API yet -- the "compat view" that lets
-    /// existing single-blob call sites keep working unmodified as long as
-    /// a terrain is still, in every sense, v1-shaped: at most one region,
-    /// at the origin, sized to `channel_resolution`, with no control or
-    /// color paint. Returns `None` once any of that stops holding, rather
-    /// than lossily flattening real region/control/color data into a shape
-    /// that cannot represent it -- at that point the call site has to move
-    /// to the region API for real.
+    /// A [`TerrainData`] view of this document: at most one region, at the
+    /// origin, sized to `channel_resolution`, with no control or color
+    /// paint. Returns `None` once any of that stops holding, rather than
+    /// flattening data it cannot represent.
     pub fn as_legacy(&self) -> Option<TerrainData> {
         let heights = match self.regions.region_count() {
             0 => {
@@ -631,19 +582,11 @@ impl RegionTerrainData {
     }
 
     /// Write a [`TerrainData`]'s heights and channels back into this
-    /// document's single origin region -- the inverse of [`Self::as_legacy`].
-    ///
-    /// This is the write-back path for call sites that still edit through
-    /// the legacy dense API (every existing sculpt/paint operator, until a
-    /// later task moves them onto regions directly): load, `as_legacy` to
-    /// get a `TerrainData`, run the existing edit, `try_apply_legacy` the
-    /// result back, `save`. It refuses under exactly the conditions
-    /// [`Self::as_legacy`] would return `None` for -- multi-region, or
-    /// control/color paint already present -- rather than clobbering
-    /// region-only data a legacy edit cannot see. On success this replaces
-    /// `channel_resolution`, `channels` and `regions` wholesale (from a
-    /// fresh [`Self::from_legacy_v1`] of `data`) and leaves `texture_set`
-    /// untouched, since a legacy view never had an opinion about it.
+    /// document's single origin region -- the inverse of
+    /// [`Self::as_legacy`]. Refuses under the same conditions
+    /// [`Self::as_legacy`] returns `None` for. On success replaces
+    /// `channel_resolution`, `channels` and `regions` wholesale; leaves
+    /// `texture_set` untouched.
     pub fn try_apply_legacy(&mut self, data: &TerrainData) -> Result<(), SidecarError> {
         if self.as_legacy().is_none() {
             return Err(SidecarError::NotLegacyCompatible);
@@ -656,10 +599,7 @@ impl RegionTerrainData {
     }
 
     /// Bring `channels` to exactly `channel_resolution^2` entries,
-    /// zero-filling. Regions are never out of sync with their own `side`
-    /// by construction, so this only ever needs to touch `channels`; kept
-    /// as its own step (called by [`load`]) for a document built or edited
-    /// by hand rather than through decode.
+    /// zero-filling.
     pub fn normalize(&mut self) {
         let cells = (self.channel_resolution as usize) * (self.channel_resolution as usize);
         for channel in &mut self.channels {
@@ -697,9 +637,8 @@ impl RegionTerrainData {
     }
 }
 
-/// Serialize a v3 terrain document. Refuses a malformed texture-set
-/// reference rather than writing it -- see the module docs -- and refuses
-/// a size that overflows `usize`, the same as [`encode`].
+/// Serialize a terrain document. Refuses a malformed texture-set reference,
+/// and a size that overflows `usize`.
 pub fn encode_regions(data: &RegionTerrainData) -> Result<Vec<u8>, SidecarError> {
     if let Some(texture_set) = data.texture_set.as_deref() {
         validate_texture_set_ref(texture_set).map_err(SidecarError::InvalidTextureSetRef)?;
@@ -711,7 +650,7 @@ pub fn encode_regions(data: &RegionTerrainData) -> Result<Vec<u8>, SidecarError>
     let mut out = Vec::with_capacity(data.encoded_len().ok_or(SidecarError::TooLarge)?);
 
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&VERSION_V3.to_le_bytes());
+    out.extend_from_slice(&VERSION_2.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     out.extend_from_slice(&data.channel_resolution.to_le_bytes());
     out.extend_from_slice(&(data.channels.len() as u32).to_le_bytes());
@@ -750,9 +689,9 @@ pub fn encode_regions(data: &RegionTerrainData) -> Result<Vec<u8>, SidecarError>
     Ok(out)
 }
 
-/// Deserialize a v3 terrain document. Requires the file to end exactly
-/// where the header's declared shape says it should, and rejects a region
-/// table that declares the same coordinate twice -- see the module docs.
+/// Deserialize a terrain document. Requires the file to end exactly where
+/// the declared shape says it should, and rejects a region table that
+/// declares the same coordinate twice.
 pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
     let mut r = Reader { bytes, at: 0 };
 
@@ -760,7 +699,7 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
         return Err(SidecarError::BadMagic);
     }
     let version = r.u16()?;
-    if version != VERSION_V3 {
+    if version != VERSION_2 {
         return Err(SidecarError::UnsupportedVersion(version));
     }
     if r.u16()? != 0 {
@@ -804,9 +743,6 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
             return Err(SidecarError::ReservedFieldSet);
         }
         if flags & REGION_FLAG_PRESENT == 0 {
-            // This build only ever writes present regions; a clear
-            // presence bit means a state (an authored-absent tombstone,
-            // perhaps) this build does not understand.
             return Err(SidecarError::ReservedFieldSet);
         }
         if r.take(3)? != [0u8; 3] {
@@ -865,13 +801,10 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
     })
 }
 
-/// Load a sidecar of either version, upgrading a v1 file into a v3
-/// document in memory and normalizing it (see
-/// [`RegionTerrainData::normalize`]) before returning. Refuses a file
-/// written by a newer build than this one understands, the same as
-/// [`decode`]/[`decode_regions`] each do for their own version, and refuses
-/// a v1 file whose resolution cannot become a region (see
-/// [`RegionTerrainData::from_legacy_v1`]).
+/// Load a sidecar of either format version, upgrading version 1 to a
+/// region document and normalizing it before returning. Refuses a file
+/// written by a newer build, and a version-1 file whose resolution cannot
+/// become a region.
 pub fn load(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
     let mut r = Reader { bytes, at: 0 };
     if r.take(MAGIC.len())? != MAGIC {
@@ -882,14 +815,14 @@ pub fn load(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
     let mut data = match version {
         0 => Err(SidecarError::UnsupportedVersion(0)),
         VERSION => decode(bytes).and_then(|legacy| RegionTerrainData::from_legacy_v1(&legacy)),
-        VERSION_V3 => decode_regions(bytes),
+        VERSION_2 => decode_regions(bytes),
         other => Err(SidecarError::UnsupportedVersion(other)),
     }?;
     data.normalize();
     Ok(data)
 }
 
-/// Serialize a terrain document as the current version (v3). The inverse
+/// Serialize a terrain document as the current format version. The inverse
 /// of [`load`] for any file [`load`] can produce.
 pub fn save(data: &RegionTerrainData) -> Result<Vec<u8>, SidecarError> {
     encode_regions(data)
@@ -1023,9 +956,6 @@ mod tests {
         );
     }
 
-    /// M5: version 0 has never been written by any build and must not be
-    /// accepted as if it were a real, if ancient, format -- most likely
-    /// to show up from version bytes zeroed out by corruption.
     #[test]
     fn rejects_version_zero() {
         let mut bytes = encode(&sample()).expect("encodes");
@@ -1068,9 +998,6 @@ mod tests {
         assert_eq!(decode(&bytes), Err(SidecarError::Truncated));
     }
 
-    /// C2: a file with real bytes left over after every declared field is
-    /// read must not be silently accepted -- that tail would be lost the
-    /// next time something re-saves what it decoded.
     #[test]
     fn rejects_trailing_bytes_after_a_complete_v1_document() {
         let mut bytes = encode(&sample()).expect("encodes");
@@ -1078,8 +1005,6 @@ mod tests {
         assert_eq!(decode(&bytes), Err(SidecarError::Truncated));
     }
 
-    /// C2: an under-claimed channel count leaves the second channel's real
-    /// bytes unconsumed; that must fail the same as trailing garbage.
     #[test]
     fn rejects_an_under_claimed_channel_count_that_leaves_bytes_unconsumed() {
         let data = TerrainData {
@@ -1233,10 +1158,6 @@ mod tests {
         assert_eq!(back, data);
     }
 
-    /// C3: a region a person sculpted back to every default value is still
-    /// a region they chose to allocate. It must survive a full
-    /// bytes-round-trip, and re-encoding what was just decoded must
-    /// produce the identical bytes again.
     #[test]
     fn v3_round_trip_preserves_an_explicitly_declared_all_default_region() {
         let mut regions = TerrainRegions::new(RegionSize::new(2).unwrap());
@@ -1279,6 +1200,7 @@ mod tests {
 
         let original = data.regions.region(RegionCoord::ORIGIN).unwrap();
         let round_tripped = back.regions.region(RegionCoord::ORIGIN).unwrap();
+        // NaN != NaN; compare bits.
         for (a, b) in original.heights().iter().zip(round_tripped.heights()) {
             assert_eq!(
                 a.to_bits(),
@@ -1314,9 +1236,6 @@ mod tests {
         assert_eq!(migrated.channel_resolution, 0);
     }
 
-    /// C3: a v1 file authored its whole extent, flat or not -- migrating a
-    /// flat but nonzero-resolution legacy terrain must still produce a
-    /// present region, not nothing.
     #[test]
     fn migrating_a_flat_nonzero_resolution_v1_terrain_still_produces_a_present_region() {
         let data = TerrainData {
@@ -1328,9 +1247,6 @@ mod tests {
         assert_eq!(migrated.regions.region_count(), 1);
     }
 
-    /// I1: a legacy resolution that is not a power of two cannot become a
-    /// region without resampling, which this crate does not do -- pinned
-    /// as a clear, explicit rejection rather than silent truncation.
     #[test]
     fn migrating_a_non_power_of_two_legacy_resolution_is_rejected_with_a_clear_error() {
         let data = TerrainData {
@@ -1346,11 +1262,9 @@ mod tests {
 
     #[test]
     fn v1_to_v3_migration_round_trips_through_load_and_save() {
-        // Build a real v1 file with the existing encoder.
         let original = sample();
         let v1_bytes = encode(&original).expect("v1 encodes");
 
-        // Load it: auto-upgrades to a v3 document, single implicit region.
         let migrated = load(&v1_bytes).expect("loads v1");
         assert_eq!(
             migrated,
@@ -1358,13 +1272,11 @@ mod tests {
         );
         assert_eq!(migrated.as_legacy(), Some(original.clone()));
 
-        // Save it: always writes v3.
-        let v3_bytes = save(&migrated).expect("v3 encodes");
-        assert_eq!(u16::from_le_bytes([v3_bytes[8], v3_bytes[9]]), VERSION_V3);
+        let v3_bytes = save(&migrated).expect("encodes");
+        assert_eq!(u16::from_le_bytes([v3_bytes[8], v3_bytes[9]]), VERSION_2);
         assert_ne!(v3_bytes[8..10], v1_bytes[8..10]);
 
-        // Reload the v3 bytes: matches what was saved exactly.
-        let reloaded = load(&v3_bytes).expect("loads v3");
+        let reloaded = load(&v3_bytes).expect("loads");
         assert_eq!(reloaded, migrated);
     }
 
@@ -1474,28 +1386,28 @@ mod tests {
     fn rejects_a_v3_file_written_by_a_newer_build() {
         let bytes = encode_regions(&sample_regions()).expect("encodes");
         let mut newer = bytes.clone();
-        newer[8..10].copy_from_slice(&(VERSION_V3 + 1).to_le_bytes());
+        newer[8..10].copy_from_slice(&(VERSION_2 + 1).to_le_bytes());
         assert_eq!(
             decode_regions(&newer),
-            Err(SidecarError::UnsupportedVersion(VERSION_V3 + 1))
+            Err(SidecarError::UnsupportedVersion(VERSION_2 + 1))
         );
         assert_eq!(
             load(&newer),
-            Err(SidecarError::UnsupportedVersion(VERSION_V3 + 1))
+            Err(SidecarError::UnsupportedVersion(VERSION_2 + 1))
         );
     }
 
     #[test]
     fn load_never_misparses_one_version_as_the_other() {
         let v1 = encode(&sample()).expect("encodes");
-        let v3 = encode_regions(&sample_regions()).expect("encodes");
+        let regions_bytes = encode_regions(&sample_regions()).expect("encodes");
         assert_eq!(
             decode_regions(&v1),
             Err(SidecarError::UnsupportedVersion(VERSION))
         );
         assert_eq!(
-            decode(&v3),
-            Err(SidecarError::UnsupportedVersion(VERSION_V3))
+            decode(&regions_bytes),
+            Err(SidecarError::UnsupportedVersion(VERSION_2))
         );
     }
 
@@ -1535,8 +1447,6 @@ mod tests {
         );
     }
 
-    /// I1: region size must be a real, always-enforced power-of-two
-    /// invariant, not just a rule for newly created terrains.
     #[test]
     fn v3_rejects_a_non_power_of_two_region_size() {
         let data = RegionTerrainData {
@@ -1655,8 +1565,6 @@ mod tests {
         );
     }
 
-    /// C1: a bad reference must never reach disk in the first place --
-    /// encode is where this is caught, not decode.
     #[test]
     fn encode_regions_refuses_an_invalid_texture_set_reference() {
         let data = RegionTerrainData {
@@ -1675,15 +1583,12 @@ mod tests {
         ));
     }
 
-    /// C1: since encode can no longer produce such a file, hand-craft the
-    /// bytes to prove decode is still hostile-safe on its own, in case
-    /// bytes ever reach it from something other than this crate's encoder.
     #[test]
     fn decode_regions_also_refuses_a_hand_crafted_invalid_texture_set_reference() {
         let bad_ref = b"../escape";
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&MAGIC);
-        bytes.extend_from_slice(&VERSION_V3.to_le_bytes());
+        bytes.extend_from_slice(&VERSION_2.to_le_bytes());
         bytes.extend_from_slice(&0u16.to_le_bytes());
         bytes.extend_from_slice(&0u32.to_le_bytes()); // channel_resolution
         bytes.extend_from_slice(&0u32.to_le_bytes()); // channel_count
@@ -1708,11 +1613,9 @@ mod tests {
         }
     }
 
-    /// C2: fixed to test truncation at every real structural boundary
-    /// (rather than arbitrary offsets), one byte short of each field's own
-    /// end. The fixture's layout is asserted against the real encoder's
-    /// output length first, so a wrong hand computation fails loudly
-    /// instead of silently testing the wrong offsets.
+    /// Truncates one byte short of each field's own end. The fixture's
+    /// layout is asserted against the real encoder's output length first,
+    /// so a wrong hand computation fails loudly.
     #[test]
     fn v3_every_structural_boundary_is_rejected_one_byte_short() {
         let mut regions = TerrainRegions::new(RegionSize::new(2).unwrap());
@@ -1782,19 +1685,16 @@ mod tests {
             texture_set: None,
         };
         let mut bytes = encode_regions(&data).expect("encodes");
-        // No regions were written, so forging a region_count of 1 against
-        // an enormous (but power-of-two, and non-overflowing) region_size
-        // must not allocate that claim -- distinct from the TooLarge case
-        // below, where the claim overflows arithmetic before any read.
+        // Forges an allocation the tiny file cannot back; distinct from the
+        // TooLarge case below, which overflows arithmetic before any read.
         bytes[20..24].copy_from_slice(&(1u32 << 20).to_le_bytes()); // region_size
         bytes[24..28].copy_from_slice(&1u32.to_le_bytes()); // region_count
         assert_eq!(decode_regions(&bytes), Err(SidecarError::Truncated));
     }
 
-    /// I6/C2 boundary: a region size whose cell-count-in-bytes overflows
-    /// `usize` must be reported as `TooLarge`, not `Truncated` -- the
-    /// failure happens in arithmetic before any byte is read, so it must
-    /// not be conflated with merely running out of file.
+    /// A region size whose cell-count-in-bytes overflows `usize` reports
+    /// `TooLarge`, not `Truncated`: the failure is arithmetic, before any
+    /// byte is read.
     #[test]
     fn v3_a_genuinely_overflowing_size_claim_is_too_large_not_truncated() {
         // 2^31 is a valid power-of-two region size; its cell count squared
@@ -1802,7 +1702,7 @@ mod tests {
         let region_size: u32 = 1 << 31;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&MAGIC);
-        bytes.extend_from_slice(&VERSION_V3.to_le_bytes());
+        bytes.extend_from_slice(&VERSION_2.to_le_bytes());
         bytes.extend_from_slice(&0u16.to_le_bytes());
         bytes.extend_from_slice(&0u32.to_le_bytes()); // channel_resolution
         bytes.extend_from_slice(&0u32.to_le_bytes()); // channel_count
@@ -1830,8 +1730,6 @@ mod tests {
         assert_eq!(decode_regions(&bytes), Err(SidecarError::Truncated));
     }
 
-    /// C2: trailing bytes after a fully-decoded v3 document must be
-    /// rejected, the same as v1.
     #[test]
     fn v3_rejects_trailing_bytes_after_a_complete_document() {
         let mut bytes = encode_regions(&sample_regions()).expect("encodes");
@@ -1839,8 +1737,6 @@ mod tests {
         assert_eq!(decode_regions(&bytes), Err(SidecarError::Truncated));
     }
 
-    /// C2: an under-claimed `region_count` leaves a real region's bytes
-    /// unconsumed.
     #[test]
     fn v3_rejects_an_under_claimed_region_count_that_leaves_bytes_unconsumed() {
         let mut regions = TerrainRegions::new(RegionSize::new(2).unwrap());
@@ -1859,8 +1755,6 @@ mod tests {
         assert_eq!(decode_regions(&bytes), Err(SidecarError::Truncated));
     }
 
-    /// I2: decode must be canonical -- a file cannot declare the same
-    /// region coordinate twice.
     #[test]
     fn v3_rejects_a_duplicate_region_coordinate() {
         let mut regions = TerrainRegions::new(RegionSize::new(2).unwrap());

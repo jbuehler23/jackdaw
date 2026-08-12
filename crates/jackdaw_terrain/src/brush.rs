@@ -228,10 +228,7 @@ mod tests {
         assert_eq!(touched.len(), 4, "got {touched:?}");
     }
 
-    /// I2 pinning test: a non-finite strength (parsed from a hand-typed
-    /// "nan" or "inf" in the strength field) must not poison the
-    /// heightmap. Before the guard, `amount = strength * f * dt` wrote
-    /// NaN directly into every cell the falloff touched.
+    /// A non-finite strength must not poison the heightmap.
     #[test]
     fn a_non_finite_strength_does_not_poison_the_heightmap() {
         let mut hm = Heightmap::new(5, Vec2::splat(4.0), 10.0);

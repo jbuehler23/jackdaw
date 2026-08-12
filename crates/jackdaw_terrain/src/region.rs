@@ -1,58 +1,32 @@
 //! Sparse region storage for a terrain's heights, control map, and color.
 //!
 //! A terrain is a sparse grid of fixed-size square [`Region`]s, addressed by
-//! integer [`RegionCoord`]. A region springs into existence the first time
-//! an edit writes a non-default value into one of its cells -- a terrain
-//! that has only ever been edited near the origin costs nothing for the
-//! rest of the world, however far it nominally extends. This mirrors
-//! `Terrain3D`'s region model.
+//! integer [`RegionCoord`]. A region allocates the first time an edit
+//! writes a non-default value into one of its cells.
 //!
-//! Existence, once granted, is an AUTHORED fact, not a derived one (T1
-//! review ruling, 2026-08-12): a region sculpted flat back to every default
-//! value is still a region a person chose to allocate, and it stays
-//! allocated, round-trips through a sidecar, and re-encodes exactly as it
-//! was. The only way a region goes away is [`TerrainRegions::remove_region`]
-//! -- an explicit, deliberate removal, not a side effect of ordinary
-//! editing. This also means no setter ever scans a whole region to decide
-//! whether to keep it: allocating is an O(1) "does this one write differ
-//! from default" check, not an O(side^2) region-wide scan.
+//! Region presence is explicit, not derived from content: a region
+//! sculpted back to every default value stays allocated and round-trips
+//! through a sidecar unchanged. [`TerrainRegions::remove_region`] is the
+//! only way a region is removed. Allocating on write is an O(1) check
+//! against the value being written, not a scan of the region.
 //!
 //! Heights and the control map (see [`crate::control`]) always exist per
-//! region; the color layer is optional and, once allocated the first time a
-//! cell in that region is painted, stays allocated for the same
-//! authored-presence reason -- it does not collapse back to absent just
-//! because every pixel happens to read as [`DEFAULT_COLOR`] again.
+//! region. The color layer is optional, allocated on first paint, and then
+//! stays allocated: it does not collapse back to absent just because every
+//! pixel reads as [`DEFAULT_COLOR`] again.
 //!
-//! Cell coordinates are signed: a region's world position can be negative
-//! in either axis, since edits are not constrained to start at the origin.
+//! Cell coordinates are signed; a region's position can be negative in
+//! either axis.
 //!
-//! # Seam rule (T4 builds on this; documented here since this is where
-//! region addressing lives)
-//!
-//! Cells are single-owner: a cell belongs to exactly one region, and
-//! storage never duplicates an edge row into its neighbor. A mesher
-//! building seamless geometry across a region boundary reads the
-//! neighboring region directly (via [`TerrainRegions::region`]) for the
-//! extra vertex row/column it needs; if that neighbor is not allocated, the
-//! mesher clamps to the current region's own edge rather than treating the
-//! absent neighbor as an error or fabricating a duplicate row for it.
-//!
-//! # A note on `f32` equality
-//!
-//! [`Region`], [`TerrainRegions`] and [`crate::sidecar::RegionTerrainData`]
-//! all derive `PartialEq` down to raw `f32` heights. IEEE 754 `NaN` is not
-//! equal to itself, so a height array containing `NaN` makes its own struct
-//! not equal to a bit-for-bit copy of itself under `==`/`assert_eq!`; a test
-//! that needs to compare data that may contain `NaN` must compare
-//! `to_bits()` of the individual floats instead.
+//! Each cell has a single owning region; storage never duplicates an edge
+//! row into a neighbor. Edge vertices are read from the neighboring region
+//! (via [`TerrainRegions::region`]), and an absent neighbor clamps.
 
 use std::collections::HashMap;
 
 use crate::control::Control;
 
-/// A cell's tint when no color layer has been painted there. Opaque white:
-/// "no tint," matching the convention that an unpainted region looks
-/// exactly like the splat material alone would render it.
+/// Tint for a cell with no color layer: opaque white (no tint).
 pub const DEFAULT_COLOR: [u8; 4] = [255, 255, 255, 255];
 
 /// Integer coordinate of a region on the terrain's region grid. Not a cell
@@ -83,11 +57,8 @@ impl core::fmt::Display for RegionCoord {
 pub enum RegionSizeError {
     /// A region cannot have zero cells per side.
     Zero,
-    /// Region size must be a power of two, so the mesher and LOD clipmap
-    /// (later tasks) can assume clean subdivision. This is a real,
-    /// always-enforced invariant, not just a rule for newly created
-    /// terrains: a sidecar that declares a non-power-of-two region size is
-    /// rejected the same as one that declares zero.
+    /// Region size must be a power of two, so the mesher can assume clean
+    /// subdivision. Enforced on every `RegionSize`, not just new terrains.
     NotPowerOfTwo,
 }
 
@@ -103,12 +74,8 @@ impl core::fmt::Display for RegionSizeError {
 impl core::error::Error for RegionSizeError {}
 
 /// Cells per edge of every region in a terrain. Immutable once a terrain
-/// exists: changing it would require re-bucketing every region. Every
-/// `RegionSize` in existence, however it was built, is guaranteed a
-/// nonzero power of two -- there is no unchecked or "trusted caller"
-/// constructor. A v1 sidecar's resolution is not assumed to satisfy this,
-/// so migrating one is fallible; see
-/// [`crate::sidecar::RegionTerrainData::from_legacy_v1`].
+/// exists. Always a nonzero power of two; there is no unchecked
+/// constructor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RegionSize(u32);
 
@@ -117,10 +84,7 @@ impl RegionSize {
     /// power of two at creation time.
     pub const DEFAULT: RegionSize = RegionSize(256);
 
-    /// Validated constructor: `side` must be a nonzero power of two. Used
-    /// for terrains created going forward and for every sidecar v3 decode
-    /// -- a declared region size is only ever trusted once it has passed
-    /// through here.
+    /// `side` must be a nonzero power of two.
     pub fn new(side: u32) -> Result<Self, RegionSizeError> {
         if side == 0 {
             return Err(RegionSizeError::Zero);
@@ -158,9 +122,7 @@ impl Region {
         }
     }
 
-    /// Build a region directly from already-sized layers. Used by sidecar
-    /// decode and the v1 migration bridge, both of which validate lengths
-    /// against `side` themselves before calling this.
+    /// Build a region from already-sized layers. Lengths must match `side`.
     pub(crate) fn from_parts(
         side: u32,
         heights: Vec<f32>,
@@ -238,21 +200,16 @@ impl Region {
     }
 }
 
-/// Collapse `-0.0` to `+0.0` so a height that reads as "the default value"
-/// always has the one canonical bit pattern, in memory and on disk. Without
-/// this, sculpting a cell to exactly `-0.0` would compare equal to a
-/// never-touched default cell (`-0.0 == 0.0` is `true`) while carrying a
-/// different bit pattern, which is exactly the kind of surprise a "bit-level
-/// round trip" sidecar format should not have.
+/// Collapse `-0.0` to `+0.0`, so a default-valued cell has one canonical
+/// bit pattern whether it was touched or not.
 fn canonicalize_zero(value: f32) -> f32 {
     if value == 0.0 { 0.0 } else { value }
 }
 
 /// A terrain's sparse height/control/color storage.
 ///
-/// Existing paint channels (scatter masks) are not part of this: they stay
-/// dense, whole-terrain, and unrelated to regions, per the design's split
-/// between gameplay masks and visual splat data.
+/// Paint channels (scatter masks) are not part of this; they stay dense
+/// and whole-terrain.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TerrainRegions {
     region_size: RegionSize,
@@ -280,31 +237,22 @@ impl TerrainRegions {
         self.regions.get(&coord)
     }
 
-    /// Insert an already-built region as an authored, present region.
-    /// Unlike the per-cell setters this never checks the region's content:
-    /// a region a sidecar's region table lists, or that migration builds
-    /// from a legacy heightmap, is present because it says so, default
-    /// content and all. Used by sidecar decode and the v1 migration
-    /// bridge; both are responsible for rejecting a duplicate coordinate
-    /// themselves before calling this, since a second call for the same
-    /// coordinate silently overwrites the first.
+    /// Insert an already-built region as present, regardless of content.
+    /// Callers must reject a duplicate coordinate themselves; a second call
+    /// for the same coordinate overwrites the first.
     pub(crate) fn insert_region(&mut self, coord: RegionCoord, region: Region) {
         debug_assert_eq!(region.side(), self.region_size.get());
         self.regions.insert(coord, region);
     }
 
-    /// Explicitly deallocate a region regardless of its content. This is
-    /// the only way a region goes away once it exists -- ordinary editing,
-    /// even sculpting every cell back to default, never does this on its
-    /// own. Returns the removed region, if there was one.
+    /// Remove a region regardless of content. The only way a region is
+    /// deallocated. Returns the removed region, if any.
     pub fn remove_region(&mut self, coord: RegionCoord) -> Option<Region> {
         self.regions.remove(&coord)
     }
 
-    /// Allocated regions in a deterministic, coordinate-sorted order.
-    /// Serializing code depends on this: `HashMap` iteration order is not
-    /// stable, and encoding must be a pure function of the data regardless
-    /// of the order edits happened to allocate regions in.
+    /// Allocated regions in coordinate-sorted order, independent of
+    /// `HashMap` iteration order.
     pub fn iter_sorted(&self) -> impl Iterator<Item = (RegionCoord, &Region)> {
         let mut entries: Vec<_> = self.regions.iter().map(|(c, r)| (*c, r)).collect();
         entries.sort_by_key(|(coord, _)| *coord);
@@ -327,9 +275,8 @@ impl TerrainRegions {
             .map_or(0.0, |region| region.height(lx, lz))
     }
 
-    /// Write a height, allocating the owning region if this is its first
-    /// non-default write. Once allocated, a region never deallocates
-    /// itself as a side effect of a write -- see the module docs.
+    /// Write a height, allocating the region on first non-default write.
+    /// A region never deallocates itself as a side effect of a write.
     pub fn set_height(&mut self, x: i32, z: i32, value: f32) {
         let value = canonicalize_zero(value);
         let (coord, lx, lz) = self.locate(x, z);

@@ -1,29 +1,24 @@
-//! Packed per-cell control value: which textures a splat cell paints with.
+//! Packed per-cell control value: base texture id, overlay texture id, and
+//! the blend between them. Scales past 16 textures without one weight map
+//! per texture.
 //!
-//! Same field decomposition as `Terrain3D`'s control map (base texture,
-//! overlay texture, blend), different bit assignment; scales past 16
-//! textures without one weight map per texture. The bit layout is a
-//! PERSISTED CONTRACT -- it is written verbatim into sidecar v3 region
-//! data, so changing it breaks every terrain saved with the old layout.
-//! Blend is 8 bits from day one (T1 review ruling, 2026-08-12): the
-//! reserved bits sit directly above it, so widening later would break
-//! them.
+//! The bit layout is a persisted contract: written verbatim into sidecar
+//! format version 2 region data. Changing it breaks every terrain saved
+//! with the old layout.
 //!
 //! ```text
 //! bit     width   field
 //! 0       5       base texture id, 0..=31
 //! 5       5       overlay texture id, 0..=31
 //! 10      8       blend, 0..=255 (0 = pure base, 255 = pure overlay)
-//! 18      14      reserved (future: holes, autoshader flags), must be 0
+//! 18      14      reserved, must be 0
 //! ```
 //!
-//! Call sites never shift or mask a raw `u32` themselves; they go through
-//! the typed accessors below, which read and write only their own field
-//! and leave every other bit -- including the reserved range -- untouched.
-//! `Control` is `#[repr(transparent)]` over its packed `u32` so a region's
-//! control layer can be stored and sliced as `[Control]` directly, with no
-//! bare-integer escape hatch for call sites to accidentally compare or
-//! shift around the type.
+//! Call sites use the typed accessors below rather than shifting or
+//! masking a raw `u32`; each accessor touches only its own field, leaving
+//! every other bit -- including reserved -- unchanged. `Control` is
+//! `#[repr(transparent)]`, so a region's control layer stores `[Control]`
+//! directly rather than `[u32]`.
 
 const BASE_SHIFT: u32 = 0;
 const BASE_MASK: u32 = 0x1F;
@@ -50,14 +45,13 @@ pub const MAX_BLEND: u8 = BLEND_MASK as u8;
 pub struct Control(u32);
 
 impl Control {
-    /// Wrap a raw packed value. Does not validate the reserved bits; a
-    /// decoder that must refuse unknown reserved bits checks
-    /// [`Control::reserved`] itself before trusting the rest.
+    /// Wrap a raw packed value. Does not validate reserved bits; callers
+    /// that must reject unknown reserved bits check [`Control::reserved`].
     pub const fn from_raw(raw: u32) -> Self {
         Self(raw)
     }
 
-    /// The raw packed value, exactly as it would be written to a sidecar.
+    /// The raw packed value, as written to a sidecar.
     pub const fn to_raw(self) -> u32 {
         self.0
     }
@@ -95,19 +89,16 @@ impl Control {
         ((self.0 >> BLEND_SHIFT) & BLEND_MASK) as u8
     }
 
-    /// Set the blend value. The field is a full `u8` (`0..=255`), so every
-    /// possible input is in range -- nothing to clamp. Every other field,
-    /// including reserved bits, is left unchanged.
+    /// Set the blend value (no clamping needed; the field is a full `u8`).
+    /// Every other field, including reserved bits, is left unchanged.
     #[must_use]
     pub fn with_blend(self, blend: u8) -> Self {
         let blend = blend as u32;
         Self((self.0 & !(BLEND_MASK << BLEND_SHIFT)) | (blend << BLEND_SHIFT))
     }
 
-    /// The reserved 14 bits, unshifted. Zero on every control value this
-    /// build writes; a decoder rejects a file where this is nonzero,
-    /// because it means something a future build understands and this one
-    /// does not.
+    /// The reserved 14 bits, unshifted. Must be 0; decode rejects a
+    /// nonzero value.
     pub fn reserved(self) -> u16 {
         ((self.0 >> RESERVED_SHIFT) & RESERVED_MASK) as u16
     }
@@ -171,8 +162,7 @@ mod tests {
         assert_eq!(Control::default().with_base_id(32).base_id(), 31);
         assert_eq!(Control::default().with_base_id(255).base_id(), 31);
         assert_eq!(Control::default().with_overlay_id(200).overlay_id(), 31);
-        // blend already fills a full u8, so there is no out-of-range input
-        // for it to clamp; 255 is both MAX_BLEND and u8::MAX.
+        // blend fills a full u8; nothing to clamp.
         assert_eq!(MAX_BLEND, u8::MAX);
     }
 
