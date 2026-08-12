@@ -40,6 +40,8 @@ const SKIP_PREFIXES: &[&str] = &[
     // from CameraRig and Projection instead.
     "bevy_camera::camera::",
     "bevy_camera::components::",
+    // Would cause our own entities to become relation targets. Big mess!
+    "avian3d::collision::collider::collider_hierarchy::",
 ];
 
 /// Specific component type paths to skip.
@@ -50,6 +52,8 @@ const SKIP_PATHS: &[&str] = &[
     "bevy_ecs::visibility::InheritedVisibility",
     "bevy_ecs::visibility::ViewVisibility",
     "bevy_ecs::hierarchy::Children",
+    // Causes crashes with e.g. ColliderConstructor::ConvexHullFromMesh
+    "avian3d::collision::collider::constructor::ColliderConstructor",
 ];
 
 fn should_skip(type_path: &str) -> bool {
