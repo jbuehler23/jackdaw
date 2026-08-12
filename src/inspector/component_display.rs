@@ -980,22 +980,6 @@ pub(crate) fn spawn_component_display(
         ChildOf(toggle_area),
     ));
 
-    // Derived (= on the live entity, no authored document patch) gets a
-    // dashed-circle mark so required/runtime companions read differently
-    // from explicitly authored components.
-    if is_derived {
-        commands.spawn((
-            Text::new(String::from(Icon::CircleDashed.unicode())),
-            TextFont {
-                font: font.clone().into(),
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_MUTED_COLOR.into()),
-            ChildOf(toggle_area),
-        ));
-    }
-
     // Component name (orange if overridden; muted when derived).
     let name_color = if is_overridden {
         default_style::INSPECTOR_OVERRIDE
