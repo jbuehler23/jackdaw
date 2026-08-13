@@ -18,8 +18,8 @@ mod query;
 pub use from_reflect::{
     BsnAssetContext, component_to_bsn_patch, component_to_bsn_patch_with_assets,
 };
-pub use mutate::clone_node_into;
-pub use query::bsn_value_as_int;
+pub use mutate::{clone_node_into, clone_subtree_into};
+pub use query::{bsn_value_as_int, is_enum_variant_of, type_paths_include};
 
 /// A list of patches that together define one BSN entity.
 /// Each child entity has a [`BsnPatch`] component.
@@ -106,12 +106,6 @@ pub struct SceneBsnAst {
     /// Maps AST patches entities to ECS scene entities (reverse of above).
     pub ast_to_ecs: HashMap<Entity, Entity>,
 }
-
-/// Component types on a document node that were computed by editor systems
-/// rather than authored by the user. Derived components are skipped on save;
-/// an explicit user edit promotes the component to authored.
-#[derive(Component, Debug, Default)]
-pub struct DerivedComponents(pub bevy::platform::collections::HashSet<String>);
 
 /// Component on every ECS entity that was spawned from (or synced to) BSN.
 /// Points back to the AST node entity in [`SceneBsnAst::world`].

@@ -41,14 +41,20 @@ name = "jackdaw_cli_internal"
 version = "0.19.0"
 dependencies = [
  "dunce",
+ "jackdaw_env",
  "jackdaw_project_build",
  "jackdaw_schema",
 ]
 
 [[package]]
+name = "jackdaw_env"
+version = "0.19.0"
+
+[[package]]
 name = "jackdaw_project_build"
 version = "0.19.0"
 dependencies = [
+ "jackdaw_env",
  "jackdaw_schema",
  "serde",
  "serde_json",

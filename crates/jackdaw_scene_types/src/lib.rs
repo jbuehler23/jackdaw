@@ -30,6 +30,7 @@ pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
 pub use types::{
     Brush, BrushFaceData, BrushGroup, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
     GltfSource, NavmeshRegion, PrefabBaseline, PropertyValue, SceneRootTag, Terrain,
+    TerrainChannel, TerrainChannelElement, TerrainPaletteEntry, TerrainQuantization,
 };
 
 use bevy::prelude::*;
@@ -77,6 +78,10 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<GltfSource>()
             .register_type::<NavmeshRegion>()
             .register_type::<Terrain>()
+            .register_type::<TerrainChannel>()
+            .register_type::<TerrainChannelElement>()
+            .register_type::<TerrainPaletteEntry>()
+            .register_type::<TerrainQuantization>()
             .register_type::<MeshMirror>()
             .register_type::<ModifierStack>()
             .register_type::<ModifierEntry>()

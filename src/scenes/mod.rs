@@ -13,6 +13,7 @@ use bevy::prelude::*;
 
 use crate::commands::CommandHistory;
 use crate::project::ProjectRoot;
+use crate::terrain::TerrainDataStore;
 
 pub struct ScenesPlugin;
 
@@ -126,6 +127,9 @@ pub struct SceneTab {
     pub content: TabContent,
     pub view_state: ViewState,
     pub history: CommandHistory,
+    /// Decoded terrain sidecars owned by this tab while it is inactive.
+    /// The active tab's store lives in the world as a resource instead.
+    pub terrain_data_store: TerrainDataStore,
     /// Recorded `CommandHistory.undo_stack.len()` as of the last time
     /// the dirty-tracking system ran (or the tab was activated, or
     /// saved). If the live history is deeper than this, the user has
@@ -144,6 +148,7 @@ impl SceneTab {
             content: TabContent::default(),
             view_state: ViewState::with_default_camera(),
             history: CommandHistory::default(),
+            terrain_data_store: TerrainDataStore::default(),
             history_depth_at_last_check: 0,
         }
     }

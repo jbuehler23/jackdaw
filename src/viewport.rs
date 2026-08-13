@@ -15,6 +15,7 @@ use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_camera::{JackdawCameraPlugin, JackdawCameraSettings};
 
 use bevy::ecs::system::SystemParam;
+use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility};
 
 use crate::core_extension::CoreExtensionInputContext;
 use crate::selection::{Selected, Selection};
@@ -82,15 +83,16 @@ struct AxisIndicatorAsset(Handle<GizmoAsset>);
 pub struct ViewportGrid(pub Entity);
 
 /// Shared counter that hands out a unique [`RenderLayers`] index per
-/// viewport. Layer 0 is the default world; layer 1 is reserved for
-/// the material preview. Per-viewport grids start at layer 2 so
-/// they only render to "their" camera.
+/// viewport. Layer 0 is the default world; layer 1 is reserved for the
+/// material preview and layer 2 for the asset browser's model thumbnail
+/// stage ([`crate::model_thumbnail::THUMBNAIL_LAYER`]). Per-viewport grids
+/// start after those so they only render to "their" camera.
 #[derive(Resource)]
 pub(crate) struct ViewportLayerCounter(usize);
 
 impl Default for ViewportLayerCounter {
     fn default() -> Self {
-        Self(1)
+        Self(crate::model_thumbnail::THUMBNAIL_LAYER)
     }
 }
 
@@ -579,6 +581,8 @@ fn handle_viewport_drop(
     active: Res<ActiveViewport>,
     snap_settings: Res<crate::snapping::SnapSettings>,
     mut drag: ResMut<crate::asset_browser::ActiveAssetDrag>,
+    mut ray_cast: MeshRayCast,
+    editor_entities: Query<(), With<crate::EditorEntity>>,
     mut commands: Commands,
 ) {
     // The asset browser sets `ActiveAssetDrag.path` only for entries
@@ -618,12 +622,28 @@ fn handle_viewport_drop(
         return;
     };
 
-    let position =
-        cursor_to_ground_plane_for(cursor_pos, camera, cam_tf, viewport_entity, &viewport_query)
-            .unwrap_or(Vec3::ZERO);
+    let surface = cursor_to_surface_for(
+        cursor_pos,
+        camera,
+        cam_tf,
+        viewport_entity,
+        &viewport_query,
+        &mut ray_cast,
+        &editor_entities,
+    );
+    let position = surface
+        .or_else(|| {
+            cursor_to_ground_plane_for(cursor_pos, camera, cam_tf, viewport_entity, &viewport_query)
+        })
+        .unwrap_or(Vec3::ZERO);
 
     let ctrl = false; // No Ctrl check needed for drop placement
-    let snapped_pos = snap_settings.snap_translate_vec3_if(position, ctrl);
+    let mut snapped_pos = snap_settings.snap_translate_vec3_if(position, ctrl);
+    // Landing on the surface is the point; quantizing height would lift the
+    // drop off it or bury it. Grid snap still applies across the ground.
+    if surface.is_some() {
+        snapped_pos.y = position.y;
+    }
 
     if let Some(image_path) = image_drag {
         let path = image_path.to_string_lossy().replace('\\', "/");
@@ -683,6 +703,45 @@ pub(crate) fn cursor_to_ground_plane_for(
         viewport_query,
     )?;
     raycast_to_ground(camera, cam_tf, viewport_cursor)
+}
+
+/// World point where the cursor ray meets scene geometry, or `None` when it
+/// meets nothing.
+///
+/// This is what makes a drop land on the terrain or prop under the cursor
+/// rather than on the `Y=0` plane beneath it. Callers fall back to
+/// [`cursor_to_ground_plane_for`] so an empty scene still places at the
+/// ground.
+pub(crate) fn cursor_to_surface_for(
+    cursor_pos: Vec2,
+    camera: &Camera,
+    cam_tf: &GlobalTransform,
+    viewport_entity: Entity,
+    viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    ray_cast: &mut MeshRayCast,
+    editor_entities: &Query<(), With<crate::EditorEntity>>,
+) -> Option<Vec3> {
+    let viewport_cursor = crate::viewport_util::window_to_viewport_cursor_for(
+        cursor_pos,
+        camera,
+        viewport_entity,
+        viewport_query,
+    )?;
+    let ray = camera.viewport_to_world(cam_tf, viewport_cursor).ok()?;
+
+    // Editor-internal meshes (gizmos, previews, the per-viewport grid) carry
+    // `EditorEntity` and sit at world origin on off-screen render layers;
+    // `MeshRayCast` ignores render layers, so filter them out or the drop
+    // snaps onto an invisible mesh. Same guard the selection raycast and the
+    // image-ingest drop use.
+    let editor_filter = |entity: Entity| !editor_entities.contains(entity);
+    let settings = MeshRayCastSettings::default()
+        .with_visibility(RayCastVisibility::Any)
+        .with_filter(&editor_filter);
+    ray_cast
+        .cast_ray(ray, &settings)
+        .first()
+        .map(|(_, hit)| hit.point)
 }
 
 fn raycast_to_ground(

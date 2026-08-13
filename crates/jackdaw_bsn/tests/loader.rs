@@ -127,6 +127,18 @@ fn malformed_input_returns_error() {
 }
 
 #[test]
+fn empty_input_yields_no_roots() {
+    for text in ["", "   ", "\n\t\n", "// comment only\n"] {
+        let ast = parse_bsn_text(text).expect("empty-ish input should load");
+        assert!(
+            ast.roots.is_empty(),
+            "expected no roots for {text:?}, got {}",
+            ast.roots.len()
+        );
+    }
+}
+
+#[test]
 fn scene_load_routes_embedded_assets_and_resolves_references() {
     use bevy::app::{App, TaskPoolPlugin};
     use bevy::asset::{Asset, AssetApp, AssetPlugin, Assets, Handle, ReflectAsset, ReflectHandle};

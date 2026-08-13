@@ -124,7 +124,7 @@ pub fn seed_default_categories(r: &mut InspectorRegistry) {
         // Core transform/visibility components live in the Object tab.
         ("bevy_transform::components::transform::Transform", "object"),
         ("bevy_ecs::name::Name", "object"),
-        ("bevy_render::view::visibility::Visibility", "object"),
+        ("bevy_camera::visibility::Visibility", "object"),
         // Brush geometry lives in the Mesh tab. The real reflect path is
         // jackdaw_scene_types::types::Brush; the short alias is seeded as well so
         // any lookup using the unqualified form also resolves correctly.

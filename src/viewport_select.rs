@@ -159,10 +159,7 @@ pub(crate) fn handle_viewport_click(
         || guards.is_any_interaction_active()
         || guards.gizmo_hover.hovered_axis.is_some()
         || just_finished_draw
-        || matches!(
-            *guards.terrain_edit_mode,
-            crate::terrain::TerrainEditMode::Sculpt(_)
-        )
+        || guards.terrain_edit_mode.brush_active()
     {
         return;
     }

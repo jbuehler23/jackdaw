@@ -330,7 +330,12 @@ pub(crate) fn on_add_component_button_click(
         .map(|node| doc.component_type_paths(node).into_iter().collect())
         .unwrap_or_default();
     for schema in project_types.components() {
-        if schema.hidden || authored.contains(&schema.type_path) {
+        if schema.hidden
+            || jackdaw_bsn::type_paths_include(
+                authored.iter().map(String::as_str),
+                &schema.type_path,
+            )
+        {
             continue;
         }
         let group = if !schema.category.is_empty() {

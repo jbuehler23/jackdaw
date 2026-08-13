@@ -944,11 +944,9 @@ mod tests {
         let contents = String::from_utf8(contents).unwrap();
 
         assert_eq!(edges, 1, "{contents}");
+        let resolved = resolve_artifact("libglam-abc.rlib", &deps_dir);
         assert!(
-            contents.contains(&format!(
-                "my_game@0.1.0:glam={}\n",
-                deps_dir.join("libglam-abc.rlib").display()
-            )),
+            contents.contains(&format!("my_game@0.1.0:glam={resolved}\n")),
             "{contents}"
         );
         assert!(contents.contains("replaced:glam\n"), "{contents}");

@@ -83,7 +83,7 @@ pub(crate) fn add_component_displays(
     let source_entity = entity_ref.entity();
     let sel_count = selection.entities.len();
 
-    let jsn_type_paths = inspector_type_paths_for(
+    let authored_type_paths = inspector_type_paths_for(
         &asts.bsn,
         &prefab_cache,
         source_entity,
@@ -109,7 +109,7 @@ pub(crate) fn add_component_displays(
             &editor_font,
             false,
             &materials,
-            &jsn_type_paths,
+            &authored_type_paths,
             Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
@@ -122,6 +122,38 @@ pub(crate) fn add_component_displays(
             NotifyAdded::<InspectorDirty>::default(),
         ));
     }
+}
+
+/// Scene-document components that live under `jackdaw_scene_types` and
+/// carry the inspector's dedicated tool surfaces: `Brush` mounts the
+/// mesh card (`brush_display`, and with it the whole Mesh tab), `Terrain`
+/// mounts the scatter / quantization / channel / generation sections.
+///
+/// [`hidden_by_namespace`] exists to keep jackdaw's own bookkeeping
+/// components out of the generic list. These two are not bookkeeping --
+/// they are the scene data the user selected the entity to edit -- so
+/// culling them takes their entire tool surface with them and leaves a
+/// cube or a terrain showing nothing but `Transform`.
+const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 2] = [
+    "jackdaw_scene_types::types::Brush",
+    "jackdaw_scene_types::types::Terrain",
+];
+
+/// Whether a `jackdaw*` type is editor bookkeeping rather than something
+/// the inspector should offer as a card.
+///
+/// A namespace cull with two kinds of hole punched in it: the crates whose
+/// components are user-facing wholesale, and the individual scene-data
+/// types in [`SCENE_TYPES_WITH_INSPECTOR_CARDS`].
+fn hidden_by_namespace(full_path: &str) -> bool {
+    full_path.starts_with("jackdaw")
+        && !full_path.starts_with("jackdaw_jsn")
+        && !full_path.starts_with("jackdaw_geometry")
+        && !full_path.starts_with("jackdaw::reference_image")
+        && !full_path.starts_with("jackdaw_avian_integration")
+        && !full_path.starts_with("jackdaw_animation")
+        && !full_path.starts_with("jackdaw_multiplayer")
+        && !SCENE_TYPES_WITH_INSPECTOR_CARDS.contains(&full_path)
 }
 
 #[expect(
@@ -142,7 +174,7 @@ pub(crate) fn build_inspector_displays(
     editor_font: &EditorFont,
     _read_only: bool,
     materials: &Assets<StandardMaterial>,
-    jsn_type_paths: &HashSet<String>,
+    authored_type_paths: &HashSet<String>,
     scene_ast: Option<&jackdaw_bsn::SceneBsnAst>,
     prefab_cache: Option<&PrefabAstCache>,
     collapse_state: &super::InspectorCollapseState,
@@ -216,14 +248,7 @@ pub(crate) fn build_inspector_displays(
             {
                 let table = registration.type_info().type_path_table();
                 let full_path = table.path();
-                if full_path.starts_with("jackdaw")
-                    && !full_path.starts_with("jackdaw_jsn")
-                    && !full_path.starts_with("jackdaw_geometry")
-                    && !full_path.starts_with("jackdaw::reference_image")
-                    && !full_path.starts_with("jackdaw_avian_integration")
-                    && !full_path.starts_with("jackdaw_animation")
-                    && !full_path.starts_with("jackdaw_multiplayer")
-                {
+                if hidden_by_namespace(full_path) {
                     return None;
                 }
                 // AST filter: hide Bevy-internal components that
@@ -245,8 +270,11 @@ pub(crate) fn build_inspector_displays(
                         || full_path.starts_with("jackdaw_avian_integration")
                         || full_path.starts_with("jackdaw_multiplayer"));
                 if !is_user_type
-                    && !jsn_type_paths.is_empty()
-                    && !jsn_type_paths.contains(full_path)
+                    && !authored_type_paths.is_empty()
+                    && !jackdaw_bsn::type_paths_include(
+                        authored_type_paths.iter().map(String::as_str),
+                        full_path,
+                    )
                 {
                     return None;
                 }
@@ -292,18 +320,14 @@ pub(crate) fn build_inspector_displays(
         })
         .collect();
 
-    // Sort: custom-category groups first, then alphabetical within
-    // each tier. `AvianCollider` is pinned to the top of its group
-    // because it carries the collider-type dropdown the user reaches
-    // for most when iterating on physics; ordering it alphabetically
-    // (where it'd sit under `RigidBody` in the Avian3d group) buries
-    // it under runtime-state components.
-    let group_pin_priority = |type_path: &str| -> u8 {
-        if type_path == "jackdaw_avian_integration::AvianCollider" {
-            0
-        } else {
-            1
-        }
+    // Sort: custom-category groups first, then by group name, then
+    // authored before derived within a group, then alphabetical.
+    let is_derived_path = |type_path: &str| -> bool {
+        !authored_type_paths.is_empty()
+            && !jackdaw_bsn::type_paths_include(
+                authored_type_paths.iter().map(String::as_str),
+                type_path,
+            )
     };
     comp_list.sort_by(|a, b| {
         let a_custom = custom_groups.contains(&a.1);
@@ -311,7 +335,7 @@ pub(crate) fn build_inspector_displays(
         b_custom
             .cmp(&a_custom)
             .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| group_pin_priority(&a.3).cmp(&group_pin_priority(&b.3)))
+            .then_with(|| is_derived_path(&a.3).cmp(&is_derived_path(&b.3)))
             .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
     });
 
@@ -360,6 +384,11 @@ pub(crate) fn build_inspector_displays(
         });
 
         let is_overridden = is_overridden_baseline || is_overridden_prefab;
+        let is_derived = !authored_type_paths.is_empty()
+            && !jackdaw_bsn::type_paths_include(
+                authored_type_paths.iter().map(String::as_str),
+                type_path.as_str(),
+            );
 
         // Forward the prefab context whenever the entity sits inside a
         // prefab instance so the right-click menu can offer Revert /
@@ -422,6 +451,7 @@ pub(crate) fn build_inspector_displays(
                 entity: source_entity,
                 component: Some(component_id),
                 is_overridden,
+                is_derived,
                 prefab_ctx: spec_prefab_ctx,
                 revert_through_prefab,
                 icon_font: &icon_font.0,
@@ -560,6 +590,7 @@ pub(crate) fn build_inspector_displays(
                     entity: source_entity,
                     component: None,
                     is_overridden: false,
+                    is_derived: false,
                     prefab_ctx: None,
                     revert_through_prefab: false,
                     icon_font: &icon_font.0,
@@ -720,7 +751,7 @@ pub(crate) fn on_inspector_dirty(
         }
         let sel_count = selection.entities.len();
 
-        let jsn_type_paths = inspector_type_paths_for(
+        let authored_type_paths = inspector_type_paths_for(
             &asts.bsn,
             &prefab_cache,
             source_entity,
@@ -743,7 +774,7 @@ pub(crate) fn on_inspector_dirty(
             &editor_font,
             false,
             &materials,
-            &jsn_type_paths,
+            &authored_type_paths,
             Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
@@ -817,6 +848,9 @@ pub(crate) struct ComponentDisplaySpec<'a> {
     pub entity: Entity,
     pub component: Option<ComponentId>,
     pub is_overridden: bool,
+    /// True when the component is on the live entity but has no authored
+    /// document patch (`#[require]` companions, runtime inserts, etc.).
+    pub is_derived: bool,
     /// When `Some`, the entity sits inside a prefab instance. Drives
     /// the right-click menu for every component on the entity.
     pub prefab_ctx: Option<PrefabInstanceCtx>,
@@ -843,6 +877,7 @@ pub(crate) fn spawn_component_display(
         entity,
         component,
         is_overridden,
+        is_derived,
         prefab_ctx,
         revert_through_prefab,
         icon_font,
@@ -941,9 +976,11 @@ pub(crate) fn spawn_component_display(
         ChildOf(toggle_area),
     ));
 
-    // Component name (orange if overridden).
+    // Component name (orange if overridden; muted when derived).
     let name_color = if is_overridden {
         default_style::INSPECTOR_OVERRIDE
+    } else if is_derived {
+        tokens::TEXT_MUTED_COLOR.into()
     } else {
         tokens::TEXT_DISPLAY_COLOR.into()
     };
@@ -1045,29 +1082,31 @@ pub(crate) fn spawn_component_display(
 
         // Remove component button (X icon). See revert button for the
         // tooltip-data + manual-dispatch pattern.
-        let remove_path = type_path_owned.clone();
-        let remove_call = ButtonOperatorCall::new(super::ops::ComponentRemoveOp::ID)
-            .with_param("entity", entity_param)
-            .with_param("type_path", remove_path.clone());
-        commands.spawn((
-            Text::new(String::from(Icon::X.unicode())),
-            TextFont {
-                font: font.clone().into(),
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-            Hovered::default(),
-            remove_call,
-            ChildOf(header),
-            bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-                commands
-                    .operator(super::ops::ComponentRemoveOp::ID)
-                    .param("entity", entity_param)
-                    .param("type_path", type_path_owned.clone())
-                    .call();
-            }),
-        ));
+        if !is_derived {
+            let remove_path = type_path_owned.clone();
+            let remove_call = ButtonOperatorCall::new(super::ops::ComponentRemoveOp::ID)
+                .with_param("entity", entity_param)
+                .with_param("type_path", remove_path.clone());
+            commands.spawn((
+                Text::new(String::from(Icon::X.unicode())),
+                TextFont {
+                    font: font.clone().into(),
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+                Hovered::default(),
+                remove_call,
+                ChildOf(header),
+                bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                    commands
+                        .operator(super::ops::ComponentRemoveOp::ID)
+                        .param("entity", entity_param)
+                        .param("type_path", type_path_owned.clone())
+                        .call();
+                }),
+            ));
+        }
     }
 
     // Right-click context menu on prefab-instance component headers.
@@ -1191,5 +1230,39 @@ pub(crate) fn filter_inspector_components(
                 Display::None
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hidden_by_namespace;
+
+    #[test]
+    fn the_scene_data_components_with_their_own_cards_survive_the_namespace_cull() {
+        // Each mounts a dedicated inspector surface; culling either one
+        // takes a whole tool panel out of the editor.
+        assert!(!hidden_by_namespace("jackdaw_scene_types::types::Brush"));
+        assert!(!hidden_by_namespace("jackdaw_scene_types::types::Terrain"));
+    }
+
+    #[test]
+    fn editor_bookkeeping_stays_out_of_the_generic_list() {
+        assert!(hidden_by_namespace(
+            "jackdaw_scene_types::node_id::SceneNodeId"
+        ));
+        assert!(hidden_by_namespace(
+            "jackdaw::draw_brush::stable_id::BrushStableId"
+        ));
+        // The wholesale-allowed crates are untouched by the cull.
+        assert!(!hidden_by_namespace(
+            "jackdaw_avian_integration::AvianCollider"
+        ));
+        assert!(!hidden_by_namespace(
+            "jackdaw_geometry::modifiers::ModifierStack"
+        ));
+        // Non-jackdaw types never reach this rule's business end.
+        assert!(!hidden_by_namespace(
+            "bevy_transform::components::transform::Transform"
+        ));
     }
 }

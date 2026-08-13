@@ -538,8 +538,10 @@ fn format_grid_size(size: f32) -> String {
     if size.fract() == 0.0 {
         format!("{size:.0}")
     } else {
-        // Powers of two below 1 are exact; default formatting renders
-        // them cleanly (e.g. 0.25, 0.0625).
+        // Default `f32` formatting prints the shortest string that reads
+        // back as the same value, so it renders both the power-of-two
+        // sizes (0.25, 0.0625) and an explicit metric increment (1.5,
+        // 2.5) without a trailing tail of digits.
         format!("{size}")
     }
 }
@@ -1747,5 +1749,29 @@ mod live_badge_tests {
             Color::NONE,
             "the viewport border clears back to transparent in Scene mode"
         );
+    }
+}
+
+#[cfg(test)]
+mod grid_readout_tests {
+    use super::*;
+
+    #[test]
+    fn whole_sizes_lose_their_trailing_zero() {
+        assert_eq!(format_grid_size(1.0), "1");
+        assert_eq!(format_grid_size(8.0), "8");
+    }
+
+    #[test]
+    fn power_of_two_fractions_read_exactly() {
+        assert_eq!(format_grid_size(0.25), "0.25");
+        assert_eq!(format_grid_size(0.0625), "0.0625");
+    }
+
+    #[test]
+    fn an_explicit_metric_increment_reads_as_itself() {
+        assert_eq!(format_grid_size(1.5), "1.5");
+        assert_eq!(format_grid_size(2.5), "2.5");
+        assert_eq!(format_grid_size(0.75), "0.75");
     }
 }
