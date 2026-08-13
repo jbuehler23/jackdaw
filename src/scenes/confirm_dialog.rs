@@ -383,10 +383,13 @@ pub fn on_quit_dialog_button_click(
 
         match action {
             ConfirmQuitButton::SaveAll => {
-                crate::scenes::operators::scene_save_all_system(world);
-                world
-                    .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
-                    .write(bevy::app::AppExit::Success);
+                if crate::scenes::operators::scene_save_all_system(world) {
+                    world
+                        .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
+                        .write(bevy::app::AppExit::Success);
+                } else {
+                    warn!("quit cancelled because one or more scenes could not be saved");
+                }
             }
             ConfirmQuitButton::DiscardAll => {
                 world
@@ -429,70 +432,131 @@ pub fn on_dialog_button_click(
         let Some(target) = world.resource::<PendingTabClose>().tab_index else {
             return;
         };
-
-        match action {
-            ConfirmDialogButton::Save => {
-                let tab_count = world.resource::<crate::scenes::Scenes>().tabs.len();
-                if target >= tab_count {
-                    world.resource_mut::<PendingTabClose>().tab_index = None;
-                    return;
-                }
-
-                let tab_path = world.resource::<crate::scenes::Scenes>().tabs[target]
-                    .path
-                    .clone();
-
-                if let Some(path) = tab_path {
-                    // Swap to the target tab if it is not active.
-                    let active = world.resource::<crate::scenes::Scenes>().active;
-                    if active != target {
-                        crate::scenes::swap::swap_active_tab(world, target);
-                    }
-
-                    // Point SceneFilePath at this tab so save works correctly.
-                    let path_str = path.to_string_lossy().into_owned();
-                    if let Some(mut sfp) =
-                        world.get_resource_mut::<crate::scene_io::SceneFilePath>()
-                    {
-                        sfp.path = Some(path_str);
-                    }
-
-                    crate::scene_io::save_scene(world);
-
-                    // Mark not-dirty after save.
-                    if let Some(tab) = world
-                        .resource_mut::<crate::scenes::Scenes>()
-                        .tabs
-                        .get_mut(target)
-                    {
-                        tab.dirty = false;
-                    }
-
-                    world.resource_mut::<PendingTabClose>().tab_index = None;
-
-                    // Now close the (now-clean) tab.
-                    crate::scenes::operators::scene_close_system_unprompted(world, target);
-                } else {
-                    // Untitled tab: no path available.
-                    // Deviation: falling back to Discard with a warning.
-                    // A full file-save-dialog sub-flow for this case is deferred.
-                    warn!(
-                        "confirm_dialog: tab {} is untitled; treating Save as Discard (deferred)",
-                        target
-                    );
-                    world.resource_mut::<PendingTabClose>().tab_index = None;
-                    crate::scenes::operators::scene_close_system_unprompted(world, target);
-                }
-            }
-            ConfirmDialogButton::Discard => {
-                world.resource_mut::<PendingTabClose>().tab_index = None;
-                crate::scenes::operators::scene_close_system_unprompted(world, target);
-            }
-            ConfirmDialogButton::Cancel => {
-                world.resource_mut::<PendingTabClose>().tab_index = None;
-            }
-        }
+        apply_confirm_dialog_action(world, action, target);
     });
 
     Ok(())
+}
+
+/// The Save / Discard / Cancel decision for a pending tab close, factored
+/// out of the click observer so it is callable (and testable) directly
+/// with a target index rather than only through `PendingTabClose`.
+fn apply_confirm_dialog_action(world: &mut World, action: ConfirmDialogButton, target: usize) {
+    match action {
+        ConfirmDialogButton::Save => {
+            let tab_count = world.resource::<crate::scenes::Scenes>().tabs.len();
+            if target >= tab_count {
+                world.resource_mut::<PendingTabClose>().tab_index = None;
+                return;
+            }
+
+            let tab_path = world.resource::<crate::scenes::Scenes>().tabs[target]
+                .path
+                .clone();
+
+            if let Some(path) = tab_path {
+                // Swap to the target tab if it is not active.
+                let active = world.resource::<crate::scenes::Scenes>().active;
+                if active != target {
+                    crate::scenes::swap::swap_active_tab(world, target);
+                }
+
+                // Point SceneFilePath at this tab so save works correctly.
+                let path_str = path.to_string_lossy().into_owned();
+                if let Some(mut sfp) = world.get_resource_mut::<crate::scene_io::SceneFilePath>() {
+                    sfp.path = Some(path_str);
+                }
+
+                // Cleared regardless of outcome: siblings (untitled tab,
+                // Discard, Cancel) all clear it unconditionally, and
+                // leaving it set on a failed save here used to make
+                // scene_close_system treat every later close request on
+                // any dirty tab as "a dialog is already up" and silently
+                // ignore it.
+                world.resource_mut::<PendingTabClose>().tab_index = None;
+
+                if crate::scene_io::save_scene(world) {
+                    // The save boundary cleared dirty state only after
+                    // every authoritative file reached disk.
+                    crate::scenes::operators::scene_close_system_unprompted(world, target);
+                } else {
+                    warn!("confirm_dialog: save failed; keeping tab {target} open");
+                }
+            } else {
+                // Untitled tab: no path available.
+                // Deviation: falling back to Discard with a warning.
+                // A full file-save-dialog sub-flow for this case is deferred.
+                warn!(
+                    "confirm_dialog: tab {} is untitled; treating Save as Discard (deferred)",
+                    target
+                );
+                world.resource_mut::<PendingTabClose>().tab_index = None;
+                crate::scenes::operators::scene_close_system_unprompted(world, target);
+            }
+        }
+        ConfirmDialogButton::Discard => {
+            world.resource_mut::<PendingTabClose>().tab_index = None;
+            crate::scenes::operators::scene_close_system_unprompted(world, target);
+        }
+        ConfirmDialogButton::Cancel => {
+            world.resource_mut::<PendingTabClose>().tab_index = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod apply_confirm_dialog_action_tests {
+    use crate::scene_io::SceneFilePath;
+    use crate::scenes::{SceneTab, Scenes};
+
+    use super::*;
+
+    /// A world with one dirty tab pointed at `path`, and a confirm dialog
+    /// already pending on it -- enough for the Save branch of
+    /// `apply_confirm_dialog_action` to run without touching BSN AST or
+    /// asset-catalog machinery (both are optional resources that
+    /// `save_scene_inner` tolerates being absent).
+    fn world_with_dirty_tab_at(path: std::path::PathBuf) -> World {
+        let mut world = World::new();
+        world.init_resource::<jackdaw_commands::CommandHistory>();
+        world.init_resource::<crate::scene_io::SceneDirtyState>();
+        world.init_resource::<SceneFilePath>();
+
+        let mut tab = SceneTab::new_untitled(1);
+        tab.path = Some(path);
+        tab.dirty = true;
+        world.insert_resource(Scenes {
+            tabs: vec![tab],
+            active: 0,
+        });
+        world.insert_resource(PendingTabClose { tab_index: Some(0) });
+        world
+    }
+
+    /// I10(b) pinning test, the exact scenario from the review finding:
+    /// a failed save from the tab-close confirm dialog used to leave
+    /// `PendingTabClose.tab_index` set, which made `scene_close_system`
+    /// treat every later close request on any dirty tab as "a dialog is
+    /// already up" and silently ignore it.
+    #[test]
+    fn a_failed_save_still_clears_pending_tab_close() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let blocked_parent = tmp.path().join("not-a-directory");
+        std::fs::write(&blocked_parent, b"blocks directory creation").expect("seed blocker");
+        let scene_path = blocked_parent.join("zone.bsn");
+
+        let mut world = world_with_dirty_tab_at(scene_path);
+
+        apply_confirm_dialog_action(&mut world, ConfirmDialogButton::Save, 0);
+
+        assert_eq!(
+            world.resource::<PendingTabClose>().tab_index,
+            None,
+            "a failed save must still clear tab_index so later closes are not ignored",
+        );
+        assert!(
+            world.resource::<Scenes>().tabs[0].dirty,
+            "a failed save must leave the tab dirty",
+        );
+    }
 }

@@ -464,6 +464,7 @@ pub fn gizmo_drag(
     mut drag_state: ResMut<GizmoDragState>,
     snap_settings: Res<SnapSettings>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+    mut commands: Commands,
 ) -> OperatorResult {
     let cursor_pos = viewport_ctx.cursor.get()?;
     // First-frame: pick the active (hovered) viewport. Subsequent
@@ -533,9 +534,10 @@ pub fn gizmo_drag(
     }
 
     if mouse.just_released(MouseButton::Left) {
-        // Undo is handled by the framework: the modal captured a
-        // before-snapshot on start; returning Finished triggers an
-        // after-snapshot + SnapshotDiff push.
+        // Sync ECS → AST before Finished so the framework's after-snapshot
+        // (and a later save) see the dragged Transforms. Undo is still the
+        // SnapshotDiff; this only brings the document up to date.
+        queue_sync_gizmo_transforms_to_ast(&drag_state, &transforms, &mut commands);
         clear_gizmo_drag_state(&mut drag_state, &mut cursor_query);
         return OperatorResult::Finished;
     }
@@ -629,6 +631,41 @@ pub fn gizmo_drag(
         ActiveTool::Select => return OperatorResult::Finished,
     }
     OperatorResult::Running
+}
+
+/// Mirror each gizmo target's live ECS [`Transform`] into the scene document.
+///
+/// Object gizmo mutates ECS every frame and relies on `SnapshotDiff` for undo.
+/// Save / after-snapshot emit the document, so without this the dragged pose
+/// never reaches the `.bsn`.
+fn queue_sync_gizmo_transforms_to_ast(
+    drag_state: &GizmoDragState,
+    transforms: &Query<(&GlobalTransform, &mut Transform), With<Selected>>,
+    commands: &mut Commands,
+) {
+    let to_sync: Vec<(Entity, Transform)> = drag_state
+        .targets
+        .iter()
+        .filter_map(|target| {
+            transforms
+                .get(target.entity)
+                .ok()
+                .map(|(_, transform)| (target.entity, *transform))
+        })
+        .collect();
+    if to_sync.is_empty() {
+        return;
+    }
+    commands.queue(move |world: &mut World| {
+        for (entity, transform) in to_sync {
+            crate::commands::sync_component_to_ast(
+                world,
+                entity,
+                "bevy_transform::components::transform::Transform",
+                &transform,
+            );
+        }
+    });
 }
 
 fn cancel_gizmo_drag(

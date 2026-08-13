@@ -7,7 +7,8 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::world::World;
 
 use jackdaw_bsn::{
-    BsnPatch, BsnValue, SceneBsnAst, clone_node_into, get_bsn_field, parse_bsn_text,
+    BsnPatch, BsnValue, SceneBsnAst, clone_node_into, clone_subtree_into, get_bsn_field,
+    parse_bsn_text,
 };
 
 const TRANSFORM: &str = "test_types::Transform";
@@ -311,6 +312,61 @@ fn clone_node_into_preserves_nested_and_handle_bearing_values() {
         Some(BsnValue::String("#Mat0".to_string())),
         "the handle reference string survives the copy verbatim"
     );
+}
+
+// ---------------------------------------------------------------------------
+// clone_subtree_into
+// ---------------------------------------------------------------------------
+
+#[test]
+fn clone_subtree_into_copies_hierarchy_without_ecs_links() {
+    let (src, ecs_root, _) = clone_fixture();
+    let src_root = root_named(&src, "Root");
+    let src_child = child_named(&src, src_root, "Child");
+
+    let mut dst = SceneBsnAst::default();
+    let grafted = clone_subtree_into(&mut dst, &src, src_root, None);
+
+    assert_eq!(dst.roots, vec![grafted]);
+    assert_eq!(dst.get_name(grafted), Some("Root"));
+    let grafted_child = child_named(&dst, grafted, "Child");
+    assert_eq!(
+        get_bsn_field(&dst, grafted_child, MATERIAL, "base"),
+        Some(BsnValue::String("#Mat0".to_string())),
+    );
+    assert_eq!(
+        get_bsn_field(&src, src_child, MATERIAL, "base"),
+        get_bsn_field(&dst, grafted_child, MATERIAL, "base"),
+    );
+    assert!(
+        dst.ecs_for_ast(grafted).is_none(),
+        "graft must not adopt the source ECS link"
+    );
+    assert_eq!(
+        src.ecs_for_ast(src_root),
+        Some(ecs_root),
+        "source links stay intact"
+    );
+}
+
+#[test]
+fn clone_subtree_into_under_parent_does_not_add_a_root() {
+    let src = parse_bsn_text(
+        "#Leaf\n\
+         test_types::Tag(1)\n",
+    )
+    .expect("fixture parses");
+    let leaf = root_named(&src, "Leaf");
+
+    let mut dst = SceneBsnAst::default();
+    let parent = dst.create_entity_node(vec![BsnPatch::Name("Parent".to_string())]);
+    dst.add_to_roots(parent);
+
+    let grafted = clone_subtree_into(&mut dst, &src, leaf, Some(parent));
+
+    assert_eq!(dst.roots, vec![parent]);
+    assert_eq!(dst.get_children_ast(parent), vec![grafted]);
+    assert_eq!(dst.get_name(grafted), Some("Leaf"));
 }
 
 // ---------------------------------------------------------------------------

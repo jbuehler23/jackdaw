@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 
-use crate::scene_io::{SceneDirtyState, SceneFilePath};
+use crate::scene_io::SceneFilePath;
 use crate::scenes::{SceneTab, Scenes, swap::swap_active_tab};
 
 /// Counter for default `untitled-N` names. Persists across the editor
@@ -338,20 +338,33 @@ pub fn scene_switch_system(world: &mut World, target: usize) {
 
 #[operator(id = "scene.save_all", label = "Save All", allows_undo = false)]
 pub fn scene_save_all(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(scene_save_all_system);
+    commands.queue(|world: &mut World| {
+        scene_save_all_system(world);
+    });
     OperatorResult::Finished
 }
 
 /// Iterate tabs, switching to each in turn, serializing tabs with a path
 /// to disk synchronously, then return to the originally-active tab.
 ///
-/// Tabs without a path (untitled) are skipped.
-pub fn scene_save_all_system(world: &mut World) {
+/// Clean tabs without a path (untitled) are skipped. A dirty untitled tab or
+/// any authoritative write failure makes the result `false` and leaves that
+/// tab dirty, allowing callers such as quit confirmation to refuse to exit.
+pub fn scene_save_all_system(world: &mut World) -> bool {
     let original_active = world.resource::<Scenes>().active;
     let count = world.resource::<Scenes>().tabs.len();
+    let mut all_saved = true;
 
     for i in 0..count {
-        let Some(path) = world.resource::<Scenes>().tabs[i].path.clone() else {
+        let (path, dirty) = {
+            let scenes = world.resource::<Scenes>();
+            (scenes.tabs[i].path.clone(), scenes.tabs[i].dirty)
+        };
+        let Some(path) = path else {
+            if dirty {
+                warn!("scene.save_all: cannot save dirty untitled tab {i} without a path");
+                all_saved = false;
+            }
             continue;
         };
 
@@ -359,56 +372,17 @@ pub fn scene_save_all_system(world: &mut World) {
             swap_active_tab(world, i);
         }
 
-        // A legacy `.jsn` path redirects to its `.bsn` sibling, keeping the
-        // original as a `.jsn.bak` backup, the same convention the single
-        // save uses.
-        let jsn_redirect = path.extension().is_some_and(|e| e == "jsn");
-        let target_path = if jsn_redirect {
-            path.with_extension("bsn")
-        } else {
-            path.clone()
-        };
-
-        // Point SceneFilePath at this tab's path so the emit resolves
-        // relative asset references correctly.
-        let path_str = target_path.to_string_lossy().into_owned();
+        // Use the same persistence boundary as a single-scene save: terrain
+        // sidecars complete before scene text, legacy paths redirect safely,
+        // and dirty state only clears after every authoritative write.
+        let path_str = path.to_string_lossy().into_owned();
         if let Some(mut sfp) = world.get_resource_mut::<SceneFilePath>() {
-            sfp.path = Some(path_str.clone());
+            sfp.path = Some(path_str);
         }
 
-        let parent = target_path
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_default();
-        let contents = crate::scene_io::emit_bsn_scene_with_inline_assets(world, &parent);
-        if jsn_redirect {
-            let backup = format!("{}.bak", path.to_string_lossy());
-            if let Err(err) = std::fs::rename(&path, &backup) {
-                warn!("scene.save_all: could not back up {path:?} to {backup}: {err}");
-            }
-            world.resource_mut::<Scenes>().tabs[i].path = Some(target_path.clone());
-        }
-        match std::fs::write(&target_path, &contents) {
-            Ok(()) => {
-                let depth = world
-                    .resource::<crate::commands::CommandHistory>()
-                    .undo_stack
-                    .len();
-                {
-                    let mut scenes = world.resource_mut::<Scenes>();
-                    scenes.tabs[i].dirty = false;
-                    scenes.tabs[i].history_depth_at_last_check = depth;
-                }
-                // Sync the dirty state counter.
-                if let Some(history_len) = world
-                    .get_resource::<jackdaw_commands::CommandHistory>()
-                    .map(|h| h.undo_stack.len())
-                    && let Some(mut ds) = world.get_resource_mut::<SceneDirtyState>()
-                {
-                    ds.undo_len_at_save = history_len;
-                }
-            }
-            Err(err) => warn!("scene.save_all: failed to write {target_path:?}: {err}"),
+        if let Err(err) = crate::scene_io::save_scene_inner(world) {
+            warn!("scene.save_all: failed to save {path:?}: {err}");
+            all_saved = false;
         }
     }
 
@@ -424,6 +398,8 @@ pub fn scene_save_all_system(world: &mut World) {
     if let Some(mut sfp) = world.get_resource_mut::<SceneFilePath>() {
         sfp.path = active_path;
     }
+
+    all_saved
 }
 
 #[operator(id = "scene.cycle_next", label = "Next Scene Tab", allows_undo = false)]

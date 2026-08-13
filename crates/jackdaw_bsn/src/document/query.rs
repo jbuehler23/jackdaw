@@ -3,15 +3,23 @@
 
 use bevy::ecs::entity::Entity;
 
-use super::{BsnPatch, BsnPatches, BsnValue, DerivedComponents, SceneBsnAst};
+use super::{BsnPatch, BsnPatches, BsnValue, SceneBsnAst};
 
 /// Check if `stored_path` is an enum variant of `base_path`.
 /// e.g. `foo::Bar::Sphere` is a variant of `foo::Bar`.
-fn is_enum_variant_of(stored_path: &str, base_path: &str) -> bool {
+pub fn is_enum_variant_of(stored_path: &str, base_path: &str) -> bool {
     stored_path.starts_with(base_path)
         && stored_path.as_bytes().get(base_path.len()) == Some(&b':')
         && stored_path[base_path.len()..].starts_with("::")
         && !stored_path[base_path.len() + 2..].contains("::")
+}
+
+/// Whether `paths` includes `type_path`, treating a stored `Enum::Variant`
+/// patch as covering the base enum type.
+pub fn type_paths_include<'a>(paths: impl IntoIterator<Item = &'a str>, type_path: &str) -> bool {
+    paths
+        .into_iter()
+        .any(|path| path == type_path || is_enum_variant_of(path, type_path))
 }
 
 impl SceneBsnAst {
@@ -65,14 +73,6 @@ impl SceneBsnAst {
             }
         }
         None
-    }
-
-    /// Whether `type_path` is marked derived (computed, not authored) on this
-    /// node.
-    pub fn is_derived(&self, patches_entity: Entity, type_path: &str) -> bool {
-        self.world
-            .get::<DerivedComponents>(patches_entity)
-            .is_some_and(|d| d.0.contains(type_path))
     }
 
     /// The stable node id carried by a document node's `SceneNodeId(id)`
@@ -175,7 +175,7 @@ impl SceneBsnAst {
 
     /// Find which AST entity contains `child_ast` in a Children patch.
     /// Returns `None` if `child_ast` is a root (or not found).
-    pub(super) fn find_ast_parent_of(&self, child_ast: Entity) -> Option<Entity> {
+    pub fn find_ast_parent_of(&self, child_ast: Entity) -> Option<Entity> {
         if self.roots.contains(&child_ast) {
             return None;
         }
@@ -450,5 +450,33 @@ mod query_tests {
 
         // The single-node clone must not drag the source's children across.
         assert!(dst.get_children_ast(cloned).is_empty());
+    }
+
+    #[test]
+    fn type_paths_include_matches_enum_variant_patches() {
+        let paths = [
+            "avian3d::dynamics::rigid_body::RigidBody::Dynamic",
+            "bevy_transform::components::transform::Transform",
+        ];
+        assert!(type_paths_include(
+            paths,
+            "avian3d::dynamics::rigid_body::RigidBody"
+        ));
+        assert!(type_paths_include(
+            paths,
+            "bevy_transform::components::transform::Transform"
+        ));
+        assert!(!type_paths_include(
+            paths,
+            "avian3d::dynamics::rigid_body::RigidBodyDisabled"
+        ));
+        assert!(is_enum_variant_of(
+            "avian3d::dynamics::rigid_body::RigidBody::Static",
+            "avian3d::dynamics::rigid_body::RigidBody"
+        ));
+        assert!(!is_enum_variant_of(
+            "avian3d::dynamics::rigid_body::RigidBody",
+            "avian3d::dynamics::rigid_body::RigidBody"
+        ));
     }
 }
