@@ -4830,6 +4830,7 @@ dependencies = [
  "toml",
  "toml_edit 0.22.27",
  "webbrowser",
+ "windows 0.61.3",
  "winit",
 ]
 

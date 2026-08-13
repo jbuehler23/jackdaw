@@ -189,6 +189,9 @@ jackdaw_localization = { version = "0.19.0", path = "crates/jackdaw_localization
 jackdaw_env.workspace = true
 webbrowser.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_System_JobObjects"] }
+
 # Powers the Linux `PR_SET_PDEATHSIG` hook that takes PIE game processes down
 # with the editor when it is killed (`src/pie.rs`).
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -300,6 +303,7 @@ webbrowser = "1"
 fluent_content = "0.0.5"
 unic-langid = { version = "0.9", features = ["macros"] }
 sys-locale = "0.2"
+windows = "0.61.3"
 
 # Idiomatic Bevy code often triggers these lints, and the CI workflow treats them as errors.
 [workspace.lints.clippy]
