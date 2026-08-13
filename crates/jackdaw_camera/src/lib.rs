@@ -59,7 +59,7 @@ impl Default for JackdawCameraSettings {
     fn default() -> Self {
         Self {
             sensitivity: 0.003,
-            speed: 5.0,
+            speed: 10.0,
             run_multiplier: 2.0,
             enabled: true,
             scroll_speed: 1.0,

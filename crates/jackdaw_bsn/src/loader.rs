@@ -63,6 +63,12 @@ pub fn parse_bsn_text(text: &str) -> Result<SceneBsnAst, BsnLoadError> {
     }
 
     strip_scene_root_marker(&mut ast, root);
+
+    // No patches means an empty document, not a blank scene root.
+    if ast.get_patches(root).is_none_or(|p| p.0.is_empty()) {
+        return Ok(SceneBsnAst::default());
+    }
+
     ast.add_to_roots(root);
     Ok(ast)
 }

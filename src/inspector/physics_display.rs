@@ -13,19 +13,18 @@ use crate::commands::{AddComponent, CommandGroup, CommandHistory, EditorCommand}
 pub(crate) const RIGID_BODY_TYPE_PATH: &str = "avian3d::dynamics::rigid_body::RigidBody";
 pub(crate) const AVIAN_COLLIDER_TYPE_PATH: &str = "jackdaw_avian_integration::AvianCollider";
 
-/// Command that disables physics on an entity. Captures the full pre-disable
-/// state (`RigidBody`, `AvianCollider`, and all derived avian components in
-/// the document) so undo restores them.
+/// Command that disables physics on an entity. Captures authored physics
+/// patches (`RigidBody`, `AvianCollider`, and any other avian overrides the
+/// user pinned) so undo restores them. Runtime `#[require]` companions are
+/// never in the document and are rebuilt by avian on re-enable.
 pub(crate) struct DisablePhysics {
     entity: Entity,
     /// Document patches that were removed, cloned for restore on undo.
     removed_patches: Vec<jackdaw_bsn::BsnPatch>,
-    /// Derived components that were cleared on execute, for re-adding on undo.
-    removed_derived: std::collections::HashSet<String>,
 }
 
 /// Whether a type path names one of the physics components this command
-/// removes: the canonical pair plus every derived avian component.
+/// removes: the canonical pair plus any authored avian overrides.
 fn is_physics_type_path(type_path: &str) -> bool {
     type_path == RIGID_BODY_TYPE_PATH
         || type_path == AVIAN_COLLIDER_TYPE_PATH
@@ -46,30 +45,21 @@ fn patch_type_path(patch: &jackdaw_bsn::BsnPatch) -> Option<&str> {
 impl DisablePhysics {
     pub(crate) fn from_world(world: &World, entity: Entity) -> Self {
         let mut removed_patches = Vec::new();
-        let mut removed_derived = std::collections::HashSet::new();
         let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
-        if let Some(node) = ast.ast_for(entity) {
-            if let Some(patches) = ast.get_patches(node) {
-                for &pe in &patches.0 {
-                    if let Some(patch) = ast.get_patch(pe)
-                        && patch_type_path(patch).is_some_and(is_physics_type_path)
-                    {
-                        removed_patches.push(patch.clone());
-                    }
-                }
-            }
-            if let Some(derived) = ast.world.get::<jackdaw_bsn::DerivedComponents>(node) {
-                for type_path in derived.0.iter() {
-                    if is_physics_type_path(type_path) {
-                        removed_derived.insert(type_path.clone());
-                    }
+        if let Some(node) = ast.ast_for(entity)
+            && let Some(patches) = ast.get_patches(node)
+        {
+            for &pe in &patches.0 {
+                if let Some(patch) = ast.get_patch(pe)
+                    && patch_type_path(patch).is_some_and(is_physics_type_path)
+                {
+                    removed_patches.push(patch.clone());
                 }
             }
         }
         Self {
             entity,
             removed_patches,
-            removed_derived,
         }
     }
 }
@@ -82,7 +72,7 @@ impl EditorCommand for DisablePhysics {
             ec.remove::<AvianCollider>();
             ec.remove::<Collider>();
         }
-        // Clean up the document (matches previous behavior)
+        // Clean up authored physics patches from the document.
         let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
         if let Some(node) = ast.ast_for(self.entity) {
             let physics_paths: Vec<String> = ast
@@ -92,9 +82,6 @@ impl EditorCommand for DisablePhysics {
                 .collect();
             for type_path in physics_paths {
                 ast.remove_component_patch(node, &type_path);
-            }
-            if let Some(mut derived) = ast.world.get_mut::<jackdaw_bsn::DerivedComponents>(node) {
-                derived.0.clear();
             }
         }
     }
@@ -108,18 +95,6 @@ impl EditorCommand for DisablePhysics {
                     let pe = ast.world.spawn(patch.clone()).id();
                     if let Some(patches) = ast.get_patches_mut(node) {
                         patches.0.push(pe);
-                    }
-                }
-                if !self.removed_derived.is_empty() {
-                    let set: bevy::platform::collections::HashSet<String> =
-                        self.removed_derived.iter().cloned().collect();
-                    match ast.world.get_mut::<jackdaw_bsn::DerivedComponents>(node) {
-                        Some(mut derived) => derived.0.extend(set),
-                        None => {
-                            ast.world
-                                .entity_mut(node)
-                                .insert(jackdaw_bsn::DerivedComponents(set));
-                        }
                     }
                 }
             }
