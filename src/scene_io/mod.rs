@@ -17,10 +17,10 @@ mod save;
 pub mod stamp;
 
 pub use legacy::{load_inline_assets, load_scene_from_jsn};
+pub use load::load_scene_from_file;
 pub(crate) use load::{
     SidecarImport, clear_scene_entities, despawn_scene_entities, import_terrain_sidecars,
 };
-pub use load::load_scene_from_file;
 pub use registration::{register_entities_in_ast, register_entity_in_ast};
 pub use save::{
     SaveOutcome, emit_bsn_scene_with_inline_assets, save_layout_to_project, save_scene,
