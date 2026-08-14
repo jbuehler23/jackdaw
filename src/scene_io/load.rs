@@ -373,9 +373,7 @@ fn do_new_scene(world: &mut World) {
     scene_path.path = None;
     scene_path.metadata = SceneMetadata::default();
     world.resource_mut::<SceneDirtyState>().undo_len_at_save = 0;
-    if let Err(err) =
-        jackdaw_bsn::load_bsn_scene(world, crate::scenes::operators::NEW_SCENE_BSN)
-    {
+    if let Err(err) = jackdaw_bsn::load_bsn_scene(world, crate::scenes::operators::NEW_SCENE_BSN) {
         warn!("Failed to load new scene: {err}");
     }
     info!("New scene created");

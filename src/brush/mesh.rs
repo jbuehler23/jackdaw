@@ -11,7 +11,8 @@ use super::{BrushMaterialPalette, BrushMeshCache, BrushPreview};
 use crate::default_style;
 use crate::draw_brush::DrawBrushState;
 use crate::selection::Selected;
-use jackdaw_geometry::compute_brush_geometry_from_planes;
+use jackdaw_geometry::{compute_brush_geometry_from_planes, compute_face_tangent_axes};
+use jackdaw_scene_types::BrushFaceData;
 
 pub(super) struct MeshPlugin;
 
@@ -94,14 +95,47 @@ pub fn setup_default_materials(
     });
 }
 
-/// Keep each brush's `Transform.translation` at the geometric centroid
-/// of its local vertices. After concave edits (vertex drag, extrude,
-/// inset, etc.) the topology vertices drift in local space while the
-/// entity Transform stays put, leaving the gizmo (and ray-cast AABB)
-/// far from the visible mesh. This system shifts the local vertices
-/// back so their centroid is at the origin, then translates the entity
-/// Transform by the equivalent world-space offset so the rendered
-/// position stays the same.
+/// Axis-aligned bounding-box center of `positions`, or `None` when empty.
+fn bounds_center(positions: impl Iterator<Item = Vec3>) -> Option<Vec3> {
+    let mut bounds_min = Vec3::splat(f32::MAX);
+    let mut bounds_max = Vec3::splat(f32::MIN);
+    let mut any = false;
+    for position in positions {
+        bounds_min = bounds_min.min(position);
+        bounds_max = bounds_max.max(position);
+        any = true;
+    }
+    any.then_some((bounds_min + bounds_max) * 0.5)
+}
+
+/// Keep projected UVs stable when every vertex is translated by `-center`.
+fn compensate_uv_offset_for_origin_shift(faces: &mut [BrushFaceData], center: Vec3) {
+    for face in faces {
+        let (u_axis, v_axis) = if face.uv_u_axis == Vec3::ZERO || face.uv_v_axis == Vec3::ZERO {
+            compute_face_tangent_axes(face.plane.normal)
+        } else {
+            (face.uv_u_axis, face.uv_v_axis)
+        };
+        let delta_u = center.dot(u_axis);
+        let delta_v = center.dot(v_axis);
+        let cos_rotation = face.uv_rotation.cos();
+        let sin_rotation = face.uv_rotation.sin();
+        let delta_rotated_u = delta_u * cos_rotation - delta_v * sin_rotation;
+        let delta_rotated_v = delta_u * sin_rotation + delta_v * cos_rotation;
+        face.uv_offset.x += delta_rotated_u / face.uv_scale.x.max(0.001);
+        face.uv_offset.y += delta_rotated_v / face.uv_scale.y.max(0.001);
+    }
+}
+
+/// Keep each brush's `Transform.translation` at the axis-aligned bounds
+/// center of its local vertices. After edits (face pull, vertex drag,
+/// extrude, inset, etc.) topology vertices drift in local space while
+/// the entity Transform stays put, so a later load that recenters
+/// geometry would slide the brush in the world. This system shifts the
+/// local vertices (and matching face planes) so the bounds center is at
+/// the origin, then translates the entity Transform by the equivalent
+/// offset so the rendered position stays the same. Both halves are
+/// written into the scene document so save/load keep the pair.
 ///
 /// Skipped while a vertex / edge / face drag or the edit-mode gizmo drag
 /// is active so mid-drag world coordinates remain stable.
@@ -109,56 +143,74 @@ pub fn setup_default_materials(
 /// Brushes carrying a modifier stack are excluded: a modifier (e.g. the
 /// mirror plane) is anchored to the brush-local origin/offset, and
 /// recentering would shift it relative to the geometry every edit.
-pub fn recenter_brush_origins(
+pub(crate) fn recenter_brush_origins(
     mut brushes: Query<
         (
+            Entity,
             &mut super::Brush,
             &mut Transform,
             Option<&mut crate::brush::BrushHalfedge>,
         ),
-        (
-            Or<(Changed<super::Brush>, Changed<crate::brush::BrushHalfedge>)>,
-            Without<jackdaw_geometry::ModifierStack>,
-        ),
+        Without<jackdaw_geometry::ModifierStack>,
     >,
     vertex_drag: Res<super::VertexDragState>,
     edge_drag: Res<super::EdgeDragState>,
     face_drag: Res<super::BrushDragState>,
     edit_gizmo_drag: Res<crate::gizmos::EditGizmoDragState>,
+    mut commands: Commands,
 ) {
     if vertex_drag.active || edge_drag.active || face_drag.active || edit_gizmo_drag.active {
         return;
     }
-    for (mut brush, mut transform, halfedge) in &mut brushes {
+    let mut synced: Vec<(Entity, super::Brush, Transform)> = Vec::new();
+    for (entity, mut brush, mut transform, halfedge) in &mut brushes {
         // Prefer the live halfedge mesh when present (Vertex / Edge /
         // Face mode), since `brush.topology` may not yet reflect the
         // in-flight halfedge edits.
-        let verts: Vec<bevy::math::Vec3> = if let Some(ref he) = halfedge {
-            he.mesh.verts.values().map(|v| v.co).collect()
+        let center = if let Some(ref he) = halfedge {
+            bounds_center(he.mesh.verts.values().map(|v| v.co))
         } else {
-            brush.topology.vertices.iter().map(|v| v.position).collect()
+            bounds_center(brush.topology.vertices.iter().map(|v| v.position))
         };
-        if verts.is_empty() {
+        let Some(center) = center else {
             continue;
-        }
-        let centroid = verts.iter().copied().sum::<bevy::math::Vec3>() / verts.len() as f32;
-        // Skip when the centroid drift is too small to matter; this
+        };
+        // Skip when the bounds-center drift is too small to matter; this
         // also stops the system from re-triggering itself once the
         // brush is centered.
-        if centroid.length_squared() < 1e-6 {
+        if center.length_squared() < 1e-6 {
             continue;
         }
         for v in &mut brush.topology.vertices {
-            v.position -= centroid;
+            v.position -= center;
         }
         if let Some(mut he) = halfedge {
             for (_, vert) in he.mesh.verts.iter_mut() {
-                vert.co -= centroid;
+                vert.co -= center;
             }
         }
-        let world_offset = transform.rotation * (centroid * transform.scale);
+        for face in &mut brush.faces {
+            face.plane.distance -= face.plane.normal.dot(center);
+        }
+        compensate_uv_offset_for_origin_shift(&mut brush.faces, center);
+        let world_offset = transform.rotation * (center * transform.scale);
         transform.translation += world_offset;
+        synced.push((entity, brush.clone(), *transform));
     }
+    if synced.is_empty() {
+        return;
+    }
+    commands.queue(move |world: &mut World| {
+        for (entity, brush, transform) in synced {
+            super::sync_brush_to_ast(world, entity, &brush);
+            crate::commands::sync_component_to_ast::<Transform>(
+                world,
+                entity,
+                "bevy_transform::components::transform::Transform",
+                &transform,
+            );
+        }
+    });
 }
 
 /// `regenerate_brush_meshes` only reacts to change ticks, so removing a

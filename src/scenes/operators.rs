@@ -462,7 +462,6 @@ pub fn scene_cycle_prev(_: In<OperatorParameters>, mut commands: Commands) -> Op
 mod tests {
     #[test]
     fn new_scene_bsn_parses() {
-        jackdaw_bsn::parse_bsn_text(super::NEW_SCENE_BSN)
-            .expect("inline new-scene BSN must parse");
+        jackdaw_bsn::parse_bsn_text(super::NEW_SCENE_BSN).expect("inline new-scene BSN must parse");
     }
 }
