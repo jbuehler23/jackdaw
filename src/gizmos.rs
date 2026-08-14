@@ -239,6 +239,7 @@ pub(crate) fn handle_gizmo_hover(
     active: Res<crate::viewport::ActiveViewport>,
     edit_mode: Res<crate::brush::EditMode>,
     draw_state: Res<crate::draw_brush::DrawBrushState>,
+    face_drag: Res<crate::brush::BrushDragState>,
     edit_ctx: EditGizmoCtx,
 ) {
     hover.hovered_axis = None;
@@ -285,7 +286,7 @@ pub(crate) fn handle_gizmo_hover(
         return;
     }
 
-    let (gizmo_pos, rotation) = if in_brush_edit {
+    let (gizmo_pos, rotation) = if in_brush_edit && !face_drag.quick_action {
         // Sub-elements are points with no per-target frame, so world axes.
         let Some(pos) = edit_ctx.sub_element_centroid() else {
             return;
@@ -975,6 +976,7 @@ fn draw_gizmos(
     drag_state: Res<GizmoDragState>,
     modal: Res<ModalTransformState>,
     edit_mode: Res<crate::brush::EditMode>,
+    face_drag: Res<crate::brush::BrushDragState>,
     edit_ctx: EditGizmoCtx,
 ) {
     if matches!(*mode, ActiveTool::Select) {
@@ -993,7 +995,10 @@ fn draw_gizmos(
     // drag (translate follows; rotate/scale keep the centroid at the pivot).
     // Reading the targets' GlobalTransform / live cache glues the gizmo to
     // the meshes, which read the same data.
-    let (gizmo_pos, rotation) = if in_brush_edit {
+    //
+    // Object-mode face pull temporarily enters face edit; keep the gizmo on
+    // the entity origin for that gesture so it does not jump to the face.
+    let (gizmo_pos, rotation) = if in_brush_edit && !face_drag.quick_action {
         // Sub-elements are points with no per-target frame, so world axes.
         // During a drag use the operator's stable draw position (held at the
         // pivot for scale / rotate) so grid-snapped vertices do not make the
