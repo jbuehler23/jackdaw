@@ -532,10 +532,21 @@ impl Plugin for BrushPlugin {
                     ApplyDeferred,
                     mesh::mark_brushes_changed_on_modifier_removal,
                     mesh::recenter_brush_origins,
+                    crate::physics_brush_bridge::sync_avian_position_from_brush_transform,
                     ApplyDeferred,
                     mesh::regenerate_brush_meshes,
                     ApplyDeferred,
+                    crate::physics_brush_bridge::sync_editor_collider_config,
                     mesh::ensure_brush_chunk_materials,
+                )
+                    .chain()
+                    .after(crate::EditorInteractionSystems)
+                    .run_if(in_state(crate::AppState::Editor)),
+            )
+            // PostUpdate to prevent flash of old position while transfroms update
+            .add_systems(
+                PostUpdate,
+                (
                     gizmo_overlay::draw_brush_edit_gizmos,
                     gizmo_overlay::update_vertex_handles,
                     gizmo_overlay::update_edge_overlay,
@@ -545,8 +556,7 @@ impl Plugin for BrushPlugin {
                     box_select::update_brush_box_select_overlay,
                 )
                     .chain()
-                    .after(crate::EditorInteractionSystems)
-                    .run_if(in_state(crate::AppState::Editor)),
+                    .in_set(crate::JackdawDrawSystems),
             )
             .add_systems(
                 Update,

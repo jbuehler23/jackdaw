@@ -18,11 +18,22 @@ pub struct PhysicsBrushBridgePlugin;
 
 impl Plugin for PhysicsBrushBridgePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            PreUpdate,
-            sync_editor_collider_config.run_if(in_state(crate::AppState::Editor)),
-        )
-        .add_observer(remove_collider_when_avian_collider_removed);
+        app.add_observer(remove_collider_when_avian_collider_removed);
+    }
+}
+
+/// Copy a recentered brush `Transform` into avian `Position` / `Rotation`.
+///
+/// Avian treats `Position` as the physics pose. Recenter writes `Transform`
+/// in `Update`, and without this copy a collider insert or
+/// `position_to_transform` writeback can snap the entity back to the
+/// pre-recenter pose for a frame.
+pub(crate) fn sync_avian_position_from_brush_transform(
+    mut helper: PhysicsTransformHelper,
+    changed: Query<Entity, (With<Brush>, With<AvianCollider>, Changed<Transform>)>,
+) {
+    for entity in &changed {
+        let _ = helper.update_physics_transform(entity);
     }
 }
 
@@ -48,7 +59,7 @@ fn remove_collider_when_avian_collider_removed(
 /// the green wireframe matches the new geometry. Handles both
 /// mesh-backed entities (reads from `Mesh3d`) and brushes (reads
 /// from `BrushMeshCache`).
-fn sync_editor_collider_config(
+pub(crate) fn sync_editor_collider_config(
     mut commands: Commands,
     changed: Query<
         (
