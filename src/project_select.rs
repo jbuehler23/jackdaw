@@ -1249,7 +1249,7 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
             None
         };
         if let Some(scene_path) = scene_path {
-            crate::scene_io::load_scene_from_file(world, &scene_path);
+            crate::scenes::operators::scene_open_system(world, &scene_path);
         } else {
             crate::scenes::operators::scene_new_system(world);
         }

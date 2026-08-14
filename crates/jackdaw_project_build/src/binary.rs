@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use jackdaw_env::rust_env_command;
 use jackdaw_schema::{ProjectSchema, SCHEMA_FLAG, parse_from_stdout, write_schema};
 
 use crate::build::{BuildEvent, ProjectBuildError, parse_build_line};
@@ -39,7 +40,7 @@ pub fn build_project_binary(
         spec.project_root.display()
     )));
 
-    let mut command = Command::new("cargo");
+    let mut command = rust_env_command("cargo");
     command
         .arg("build")
         .args(["-p", &spec.package_name])

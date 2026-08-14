@@ -97,13 +97,9 @@ fn handle_grid_size_scroll(
     let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
 
-    // Shift+Scroll is used for brush resize when terrain sculpt is active;
-    // only allow grid resize via Shift+Scroll when NOT sculpting.
-    let shift_grid = shift
-        && !matches!(
-            *terrain_edit_mode,
-            crate::terrain::TerrainEditMode::Sculpt(_)
-        );
+    // Shift+Scroll is used for brush resize when terrain sculpt or paint
+    // is active; only allow grid resize via Shift+Scroll when neither is.
+    let shift_grid = shift && !terrain_edit_mode.brush_active();
 
     if !((ctrl && alt) || shift_grid) {
         return;

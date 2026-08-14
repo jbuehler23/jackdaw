@@ -22,12 +22,16 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<SceneOpenRecentOp>();
 
     ctx.bind_operator::<CoreExtensionInputContext, SceneNewOp>([PresetInput::key("KeyN")
-        .ctrl()
+        .ctrl_or_super()
         .shift()]);
-    ctx.bind_operator::<CoreExtensionInputContext, SceneOpenOp>([PresetInput::key("KeyO").ctrl()]);
-    ctx.bind_operator::<CoreExtensionInputContext, SceneSaveOp>([PresetInput::key("KeyS").ctrl()]);
+    ctx.bind_operator::<CoreExtensionInputContext, SceneOpenOp>([
+        PresetInput::key("KeyO").ctrl_or_super()
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, SceneSaveOp>([
+        PresetInput::key("KeyS").ctrl_or_super()
+    ]);
     ctx.bind_operator::<CoreExtensionInputContext, SceneSaveAsOp>([PresetInput::key("KeyS")
-        .ctrl()
+        .ctrl_or_super()
         .shift()]);
 }
 

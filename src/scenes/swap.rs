@@ -113,16 +113,23 @@ pub(crate) fn capture_active_tab(world: &mut World) {
         scenes.tabs[active].content = TabContent::Scene(Some(Box::new(doc)));
     }
 
+    let terrain_data_store = world
+        .get_resource_mut::<crate::terrain::TerrainDataStore>()
+        .map(|mut store| std::mem::take(&mut *store));
     let mut scenes = world.resource_mut::<Scenes>();
     let tab = &mut scenes.tabs[active];
     tab.view_state = view_state;
     tab.history = history;
+    if let Some(terrain_data_store) = terrain_data_store {
+        tab.terrain_data_store = terrain_data_store;
+    }
 }
 
 /// Spawn the target tab's document into the live world and restore per-tab
 /// history and view state.
 pub fn activate_tab(world: &mut World, target: usize) {
-    let (mut content, view_state, history, tab_path) = {
+    let has_terrain_data_store = world.contains_resource::<crate::terrain::TerrainDataStore>();
+    let (mut content, view_state, history, tab_path, terrain_data_store) = {
         let mut scenes = world.resource_mut::<Scenes>();
         let tab = &mut scenes.tabs[target];
         (
@@ -130,8 +137,16 @@ pub fn activate_tab(world: &mut World, target: usize) {
             std::mem::take(&mut tab.view_state),
             std::mem::take(&mut tab.history),
             tab.path.clone(),
+            has_terrain_data_store.then(|| std::mem::take(&mut tab.terrain_data_store)),
         )
     };
+
+    // Restore the target tab's bulk terrain data before spawning its scene
+    // and importing any sidecars. `FillMissing` can now preserve unsaved
+    // edits without confusing a same-named sidecar from another tab.
+    if let Some(terrain_data_store) = terrain_data_store {
+        *world.resource_mut::<crate::terrain::TerrainDataStore>() = terrain_data_store;
+    }
 
     // Materialize the document to install. For `Prefab` tabs, clone from
     // the cache; for `Scene` tabs, take the captured document (or default).
@@ -201,6 +216,20 @@ pub fn activate_tab(world: &mut World, target: usize) {
     // `save_scene` correctly delegates to `save_scene_as`.
     if let Some(mut spath) = world.get_resource_mut::<crate::scene_io::SceneFilePath>() {
         spath.path = tab_path.as_ref().map(|p| p.to_string_lossy().into_owned());
+    }
+
+    // Hydrate any terrain sidecar the store has not seen yet. A tab opened
+    // by `scene_open_system` pushes a parsed document straight onto the
+    // tab strip and never goes through `finish_load_scene`, so this is the
+    // only place its bulk data gets read. `FillMissing` is deliberate: a
+    // swap back to a tab the user has been sculpting must keep the unsaved
+    // edits the store holds rather than re-reading the older file.
+    if let Some(path) = tab_path.as_ref() {
+        crate::scene_io::import_terrain_sidecars(
+            world,
+            &path.to_string_lossy(),
+            crate::scene_io::SidecarImport::FillMissing,
+        );
     }
 
     let mut scenes = world.resource_mut::<Scenes>();

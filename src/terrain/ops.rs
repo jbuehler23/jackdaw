@@ -5,7 +5,7 @@ use jackdaw_api::prelude::*;
 
 use super::inspector::TerrainGenerateState;
 use super::sculpt::SetTerrainHeights;
-use super::{TerrainDirtyChunks, TerrainEditMode};
+use super::{TerrainDataStore, TerrainDirtyChunks, TerrainEditMode};
 use crate::commands::CommandHistory;
 use crate::selection::Selection;
 
@@ -30,7 +30,7 @@ fn toggle_to(mode: &mut TerrainEditMode, target: TerrainEditMode) {
 
 /// Tool-toggle ops require a terrain to be selected; otherwise the
 /// toolbar that hosts these buttons is hidden anyway.
-fn has_selected_terrain(
+pub(super) fn has_selected_terrain(
     selection: Res<Selection>,
     terrains: Query<(), With<jackdaw_scene_types::Terrain>>,
 ) -> bool {
@@ -147,9 +147,12 @@ pub(crate) fn terrain_tool_generate(
 /// Reads the noise/octaves/etc. settings from the inspector's
 /// generation panel ([`TerrainGenerateState`]).
 ///
-/// `allows_undo = false` because this op pushes its own
-/// [`SetTerrainHeights`] history entry; letting the framework also
-/// capture a diff would double-record the change.
+/// `allows_undo` is left at its default (`true`), not set to `false`:
+/// this op pushes its own [`SetTerrainHeights`] history entry, but that
+/// entry only ever touches heights, which live outside the AST (see
+/// `store.rs`'s module doc). The framework's automatic before/after
+/// snapshot diff sees no change there and skips recording a duplicate,
+/// per CONTRIBUTING's note on `push_executed`.
 #[operator(
     id = "terrain.generate",
     label = "Generate Terrain",
@@ -159,23 +162,31 @@ pub(crate) fn terrain_tool_generate(
 pub(crate) fn terrain_generate(
     _: In<OperatorParameters>,
     selection: Res<Selection>,
-    mut terrains: Query<(&mut jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
+    mut terrains: Query<(&jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
+    mut store: ResMut<TerrainDataStore>,
     gen_state: Res<TerrainGenerateState>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     let entity = selection.primary()?;
-    let (mut terrain, mut dirty) = terrains.get_mut(entity)?;
+    let (terrain, mut dirty) = terrains.get_mut(entity)?;
 
-    let old_heights = terrain.heights.clone();
-    let new_heights = jackdaw_terrain::generate_heightmap(terrain.resolution, &gen_state.settings);
-    terrain.heights = new_heights.clone();
+    let mut new_heights =
+        jackdaw_terrain::generate_heightmap(terrain.resolution, &gen_state.settings);
+    // Snap before the array is stored or recorded, so the terrain is
+    // never briefly off-lattice and undo never restores an unsnapped
+    // intermediate that was not on screen.
+    if let Some(step) = terrain.quantization.active_height_step() {
+        jackdaw_terrain::quantize_heights(&mut new_heights, step);
+    }
+    let data = store.entry_for(terrain)?;
+    let old_heights = std::mem::replace(&mut data.heights, new_heights.clone());
     dirty.rebuild_all = true;
-    history.push_executed(Box::new(SetTerrainHeights {
+    history.push_executed(Box::new(SetTerrainHeights::new(
         entity,
         old_heights,
         new_heights,
-        label: "Generate Terrain".to_string(),
-    }));
+        "Generate Terrain".to_string(),
+    )));
     OperatorResult::Finished
 }
 
@@ -184,9 +195,12 @@ pub(crate) fn terrain_generate(
 /// Uses the erosion settings from the inspector's generation panel
 /// ([`TerrainGenerateState::erosion`]).
 ///
-/// `allows_undo = false` because this op pushes its own
-/// [`SetTerrainHeights`] history entry; letting the framework also
-/// capture a diff would double-record the change.
+/// `allows_undo` is left at its default (`true`), not set to `false`:
+/// this op pushes its own [`SetTerrainHeights`] history entry, but that
+/// entry only ever touches heights, which live outside the AST (see
+/// `store.rs`'s module doc). The framework's automatic before/after
+/// snapshot diff sees no change there and skips recording a duplicate,
+/// per CONTRIBUTING's note on `push_executed`.
 #[operator(
     id = "terrain.erode",
     label = "Erode Terrain",
@@ -196,23 +210,33 @@ pub(crate) fn terrain_generate(
 pub(crate) fn terrain_erode(
     _: In<OperatorParameters>,
     selection: Res<Selection>,
-    mut terrains: Query<(&mut jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
+    mut terrains: Query<(&jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
+    mut store: ResMut<TerrainDataStore>,
     gen_state: Res<TerrainGenerateState>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     let entity = selection.primary()?;
-    let (mut terrain, mut dirty) = terrains.get_mut(entity)?;
+    let (terrain, mut dirty) = terrains.get_mut(entity)?;
+    let resolution = terrain.resolution;
+    let step = terrain.quantization.active_height_step();
+    let data = store.entry_for(terrain)?;
 
-    let old_heights = terrain.heights.clone();
-    let mut new_heights = terrain.heights.clone();
-    jackdaw_terrain::hydraulic_erosion(&mut new_heights, terrain.resolution, &gen_state.erosion);
-    terrain.heights = new_heights.clone();
+    let old_heights = data.heights.clone();
+    let mut new_heights = data.heights.clone();
+    jackdaw_terrain::hydraulic_erosion(&mut new_heights, resolution, &gen_state.erosion);
+    // Erosion moves sediment in continuous amounts, so on a quantized
+    // terrain it is re-snapped whole: without this a single erode pass
+    // silently takes every cell off the lattice.
+    if let Some(step) = step {
+        jackdaw_terrain::quantize_heights(&mut new_heights, step);
+    }
+    data.heights = new_heights.clone();
     dirty.rebuild_all = true;
-    history.push_executed(Box::new(SetTerrainHeights {
+    history.push_executed(Box::new(SetTerrainHeights::new(
         entity,
         old_heights,
         new_heights,
-        label: "Erode Terrain".to_string(),
-    }));
+        "Erode Terrain".to_string(),
+    )));
     OperatorResult::Finished
 }

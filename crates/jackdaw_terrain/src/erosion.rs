@@ -29,6 +29,16 @@ pub struct ErosionParams {
     pub min_slope: f32,
 }
 
+/// Iterations above this are clamped rather than run: each iteration costs
+/// up to `max_lifetime` steps, so an unbounded count can hang for an
+/// unbounded time.
+pub const MAX_ITERATIONS: u32 = 1_000_000;
+
+/// Clamp a requested iteration count to [`MAX_ITERATIONS`].
+fn clamp_iterations(requested: u32) -> u32 {
+    requested.min(MAX_ITERATIONS)
+}
+
 impl Default for ErosionParams {
     fn default() -> Self {
         Self {
@@ -56,11 +66,12 @@ impl Default for ErosionParams {
 pub fn hydraulic_erosion(heights: &mut [f32], resolution: u32, params: &ErosionParams) {
     let res = resolution as i32;
     let mut rng = rand::rng();
+    let iterations = clamp_iterations(params.iterations);
 
     // Precompute erosion brush weights
     let brush = compute_erosion_brush(params.erosion_radius as i32);
 
-    for _ in 0..params.iterations {
+    for _ in 0..iterations {
         // Random start position (avoid edges)
         let mut pos_x = rng.random_range(1.0..(res - 2) as f32);
         let mut pos_z = rng.random_range(1.0..(res - 2) as f32);
@@ -251,5 +262,24 @@ fn erode_at(
         if x >= 0 && x < res && z >= 0 && z < res {
             heights[(z * res + x) as usize] -= amount * brush.weights[i];
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An iteration count is capped regardless of what requested it.
+    #[test]
+    fn a_pathological_iteration_count_is_clamped() {
+        assert_eq!(clamp_iterations(u32::MAX), MAX_ITERATIONS);
+        assert_eq!(clamp_iterations(MAX_ITERATIONS + 1), MAX_ITERATIONS);
+    }
+
+    #[test]
+    fn ordinary_iteration_counts_are_left_alone() {
+        assert_eq!(clamp_iterations(70_000), 70_000);
+        assert_eq!(clamp_iterations(0), 0);
+        assert_eq!(clamp_iterations(MAX_ITERATIONS), MAX_ITERATIONS);
     }
 }

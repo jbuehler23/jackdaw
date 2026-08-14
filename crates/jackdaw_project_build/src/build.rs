@@ -22,7 +22,9 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+use jackdaw_env::rust_env_command;
 
 use crate::linkage;
 use crate::plan::{self, PlanError, SdkManifest};
@@ -300,7 +302,7 @@ pub fn build_project_dylib(
     let target_dir = target_root.join(&salt);
     retain_recent_target_dirs(&target_root, &salt);
 
-    let mut cmd = Command::new("cargo");
+    let mut cmd = rust_env_command("cargo");
     cmd.args(["rustc", "--crate-type", "dylib", "--target", &sdk.triple])
         // Machine-readable stream so the editor can show live per-crate
         // progress, with rustc's diagnostics in it.

@@ -94,7 +94,7 @@ pub fn load_bsn_assets(
 /// Whether a document root is a named asset entry (its type patch resolves to
 /// a registered `Asset` type). Scene loading routes these into `Assets<T>`
 /// stores instead of spawning them as entities.
-pub(crate) fn is_asset_root(
+pub fn is_asset_root(
     ast: &SceneBsnAst,
     root: bevy::ecs::entity::Entity,
     reg: &bevy::reflect::TypeRegistry,
@@ -102,6 +102,30 @@ pub(crate) fn is_asset_root(
     asset_value_from_root(ast, root)
         .and_then(|(type_path, _)| reg.get_with_type_path(&type_path))
         .is_some_and(|registration| registration.data::<ReflectAsset>().is_some())
+}
+
+/// Document roots that are named asset catalog entries.
+pub fn asset_roots(
+    ast: &SceneBsnAst,
+    reg: &bevy::reflect::TypeRegistry,
+) -> Vec<bevy::ecs::entity::Entity> {
+    ast.roots
+        .iter()
+        .copied()
+        .filter(|&root| is_asset_root(ast, root, reg))
+        .collect()
+}
+
+/// Document roots that spawn as scene entities (not named asset entries).
+pub fn entity_roots(
+    ast: &SceneBsnAst,
+    reg: &bevy::reflect::TypeRegistry,
+) -> Vec<bevy::ecs::entity::Entity> {
+    ast.roots
+        .iter()
+        .copied()
+        .filter(|&root| !is_asset_root(ast, root, reg))
+        .collect()
 }
 
 /// The result of loading a scene `.bsn`: spawned entities plus the named
@@ -122,11 +146,7 @@ pub fn load_bsn_scene(world: &mut World, text: &str) -> Result<LoadedBsnScene, B
     let mut assets = Vec::new();
     {
         let reg = registry.read();
-        let roots = ast.roots.clone();
-        for root in roots {
-            if !is_asset_root(&ast, root, &reg) {
-                continue;
-            }
+        for root in asset_roots(&ast, &reg) {
             let Some(name) = ast.get_name(root).map(str::to_owned) else {
                 continue;
             };
