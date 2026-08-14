@@ -97,7 +97,7 @@
 | Key | Action |
 |-----|--------|
 | Ctrl+S | Save scene |
-| Ctrl+O | Open scene |
+| Ctrl+O | Open scene in a new tab |
 | Ctrl+T | New scene tab |
 | Ctrl+Z | Undo |
 | Ctrl+Shift+Z | Redo |

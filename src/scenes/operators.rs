@@ -34,6 +34,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneNewOp>([
         PresetInput::key("KeyT").ctrl(),
     ]);
+    ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneOpenOp>([
+        PresetInput::key("KeyO").ctrl_or_super(),
+    ]);
     ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneCloseOp>([
         PresetInput::key("KeyW").ctrl(),
     ]);
@@ -84,11 +87,7 @@ pub fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> Operator
             return;
         };
         // Legacy .jsn picks confirm conversion before opening.
-        crate::migrate_dialog::request_open_with_conversion(
-            world,
-            &path,
-            crate::migrate_dialog::ConversionOpenTarget::Tab,
-        );
+        crate::migrate_dialog::request_open_with_conversion(world, &path);
     });
     OperatorResult::Finished
 }

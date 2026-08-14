@@ -1,11 +1,10 @@
-//! Scene I/O operators: open / save / save as / save selection
-//! as prefab / open recent.
+//! Scene I/O operators: save / save as / save selection as prefab /
+//! open recent.
 //!
 //! These wrap the existing free functions in [`crate::scene_io`] so they
 //! can be dispatched uniformly through the operator API (menu, keybind,
 //! F3 command palette, extension code). BEI bindings for the
-//! usual Ctrl+O / Ctrl+S / Ctrl+Shift+S keybinds are attached
-//! here.
+//! usual Ctrl+S / Ctrl+Shift+S keybinds are attached here.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -14,29 +13,17 @@ use jackdaw_api_internal::keymap::PresetInput;
 use crate::core_extension::CoreExtensionInputContext;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<SceneOpenOp>()
-        .register_operator::<SceneSaveOp>()
+    ctx.register_operator::<SceneSaveOp>()
         .register_operator::<SceneSaveAsOp>()
         .register_operator::<SceneSaveSelectionAsPrefabOp>()
         .register_operator::<SceneOpenRecentOp>();
 
-    ctx.bind_operator::<CoreExtensionInputContext, SceneOpenOp>([
-        PresetInput::key("KeyO").ctrl_or_super()
-    ]);
     ctx.bind_operator::<CoreExtensionInputContext, SceneSaveOp>([
         PresetInput::key("KeyS").ctrl_or_super()
     ]);
     ctx.bind_operator::<CoreExtensionInputContext, SceneSaveAsOp>([PresetInput::key("KeyS")
         .ctrl_or_super()
         .shift()]);
-}
-
-#[operator(id = "scene.open", label = "Open")]
-pub fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        crate::scene_io::load_scene(world);
-    });
-    OperatorResult::Finished
 }
 
 #[operator(id = "scene.save", label = "Save", allows_undo = false)]

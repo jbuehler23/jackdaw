@@ -4,50 +4,20 @@ use std::path::Path;
 use bevy::{
     ecs::reflect::AppTypeRegistry,
     prelude::*,
-    tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
+    tasks::{Task, futures_lite::future},
 };
-use rfd::{AsyncFileDialog, FileHandle};
+use rfd::FileHandle;
 use serde::de::DeserializeSeed;
 
 use crate::EditorEntity;
 
 use super::registration::register_entities_in_ast;
 use super::save::save_scene_inner;
-use super::{SceneDirtyState, SceneFilePath, get_window_handle};
+use super::{SceneDirtyState, SceneFilePath};
 
 #[derive(Resource)]
 pub(super) enum SceneDialogTask {
     Save(Task<Option<FileHandle>>),
-    Load(Task<Option<FileHandle>>),
-}
-
-fn spawn_open_dialog(world: &mut World) {
-    let raw_handle = get_window_handle(world);
-    let last_dir = world.resource::<SceneFilePath>().last_directory.clone();
-
-    let mut dialog = AsyncFileDialog::new()
-        .add_filter("BSN Scene", &["bsn"])
-        .add_filter("Legacy JSN Scene", &["jsn"])
-        .add_filter("Legacy Scene", &["scene.json"]);
-
-    if let Some(dir) = &last_dir {
-        dialog = dialog.set_directory(dir);
-    }
-    if let Some(ref rh) = raw_handle {
-        // SAFETY: called on the main thread during an exclusive system
-        let handle = unsafe { rh.get_handle() };
-        dialog = dialog.set_parent(&handle);
-    }
-
-    let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_file().await });
-    world.insert_resource(SceneDialogTask::Load(task));
-}
-
-pub fn load_scene(world: &mut World) {
-    if world.contains_resource::<SceneDialogTask>() {
-        return; // Dialog already open
-    }
-    spawn_open_dialog(world);
 }
 
 pub fn load_scene_from_file(world: &mut World, chosen: &std::path::Path) {
@@ -493,20 +463,6 @@ pub(super) fn poll_scene_dialog(world: &mut World) {
                     Ok(()) => {}
                     Err(err) => error!("scene save (after Save As dialog) failed: {err}"),
                 }
-            }
-        }
-        SceneDialogTask::Load(t) => {
-            let Some(result) = future::block_on(future::poll_once(t)) else {
-                world.insert_resource(task);
-                return;
-            };
-            if let Some(file) = result {
-                // Legacy .jsn picks confirm conversion before loading.
-                crate::migrate_dialog::request_open_with_conversion(
-                    world,
-                    file.path(),
-                    crate::migrate_dialog::ConversionOpenTarget::Scene,
-                );
             }
         }
     }

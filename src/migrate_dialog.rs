@@ -32,19 +32,10 @@ pub struct PendingMigration {
     pub file_count: Option<usize>,
 }
 
-/// How a confirmed per-file conversion continues: opening a scene tab or
-/// loading into the single-scene flow.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ConversionOpenTarget {
-    Tab,
-    Scene,
-}
-
-/// The `.jsn` file a per-file conversion prompt is waiting on, with the
-/// open flow to resume when the user confirms.
+/// The `.jsn` file a per-file conversion prompt is waiting on.
 #[derive(Resource, Default)]
 pub struct PendingFileConversion {
-    pub pending: Option<(PathBuf, ConversionOpenTarget)>,
+    pub pending: Option<PathBuf>,
 }
 
 /// Which conversion prompt is currently displayed as an editor dialog.
@@ -60,14 +51,14 @@ enum OpenPrompt {
 /// a `.jsn` path raises a confirmation, and the open resumes only when the
 /// user picks Convert and Open. The open paths themselves convert the file
 /// on disk, so confirming both converts and opens.
-pub fn request_open_with_conversion(world: &mut World, path: &Path, target: ConversionOpenTarget) {
+pub fn request_open_with_conversion(world: &mut World, path: &Path) {
     let is_legacy = path.extension().is_some_and(|e| e == "jsn");
     let headless = world.get_resource::<EditorFont>().is_none();
     if !is_legacy || headless {
-        run_open(world, path, target);
+        crate::scenes::operators::scene_open_system(world, path);
         return;
     }
-    world.resource_mut::<PendingFileConversion>().pending = Some((path.to_path_buf(), target));
+    world.resource_mut::<PendingFileConversion>().pending = Some(path.to_path_buf());
     world.insert_resource(OpenPrompt::File);
 
     let file_name = path
@@ -85,13 +76,6 @@ pub fn request_open_with_conversion(world: &mut World, path: &Path, target: Conv
             .with_close_on_click_outside(false),
     );
     world.flush();
-}
-
-fn run_open(world: &mut World, path: &Path, target: ConversionOpenTarget) {
-    match target {
-        ConversionOpenTarget::Tab => crate::scenes::operators::scene_open_system(world, path),
-        ConversionOpenTarget::Scene => crate::scene_io::load_scene_from_file(world, path),
-    }
 }
 
 /// Count the project's legacy `.jsn` files (scenes, prefabs, catalog;
@@ -190,8 +174,8 @@ fn resolve_confirmed_prompt(world: &mut World, kind: OpenPrompt) {
         OpenPrompt::Project => resolve_migration(world, true),
         OpenPrompt::File => {
             let pending = world.resource_mut::<PendingFileConversion>().pending.take();
-            if let Some((path, target)) = pending {
-                run_open(world, &path, target);
+            if let Some(path) = pending {
+                crate::scenes::operators::scene_open_system(world, &path);
             }
         }
     }
@@ -222,7 +206,7 @@ fn resolve_declined_prompt(world: &mut World, kind: OpenPrompt) {
         OpenPrompt::Project => resolve_migration(world, false),
         OpenPrompt::File => {
             let pending = world.resource_mut::<PendingFileConversion>().pending.take();
-            if let Some((path, _target)) = pending {
+            if let Some(path) = pending {
                 info!(
                     "Left {} unconverted; it cannot be opened until converted",
                     path.display()
