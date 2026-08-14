@@ -1,6 +1,6 @@
 //! Engine-agnostic snapping math.
 //!
-//! [`SnapSettings`] holds the grid power and the per-tool snap toggles and
+//! [`SnapSettings`] holds the grid size and the per-tool snap toggles and
 //! increments, and computes snapped translation, rotation, and scale values.
 //! The math here is pure arithmetic over [`glam`] vectors with no engine
 //! dependency, so it can drive snapping in any host. The editor wraps this in
@@ -16,8 +16,10 @@ pub const GRID_POWER_MIN: i32 = -5;
 /// `2^GRID_POWER_MAX`.
 pub const GRID_POWER_MAX: i32 = 8;
 
-/// Snap toggles, increments, and the grid power. The grid size is derived from
-/// the power; the per-tool increments and flags drive the snap methods.
+/// Snap toggles, increments, and the grid size. The grid size is the
+/// explicit [`SnapSettings::grid_increment`] when one is set and the
+/// power-of-two ladder otherwise; the per-tool increments and flags drive
+/// the snap methods.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnapSettings {
     pub translate_snap: bool,
@@ -26,8 +28,23 @@ pub struct SnapSettings {
     pub rotate_increment: f32,
     pub scale_snap: bool,
     pub scale_increment: f32,
-    /// Exponential grid power. Actual grid size = `2^grid_power`.
+    /// Exponential grid power. The grid size is `2^grid_power` unless
+    /// [`SnapSettings::grid_increment`] overrides it.
     pub grid_power: i32,
+    /// Explicit grid size in world units, or `0.0` for "derived from
+    /// `grid_power`".
+    ///
+    /// The power ladder is the right control for a world with no metric
+    /// of its own -- halving and doubling is how you find a working grid
+    /// by feel. A game built on 1.5 m or 2.5 m cells has already
+    /// decided, and no power of two will ever be its cell. This is the
+    /// way to say the number outright.
+    ///
+    /// `#[serde(default)]` because settings written before this field
+    /// existed have to keep loading, and its default is exactly the old
+    /// behaviour.
+    #[serde(default)]
+    pub grid_increment: f32,
 }
 
 impl Default for SnapSettings {
@@ -43,13 +60,23 @@ impl Default for SnapSettings {
             scale_snap: false,
             scale_increment: 0.1,
             grid_power,
+            grid_increment: 0.0,
         }
     }
 }
 
 impl SnapSettings {
-    /// Actual grid size derived from `grid_power`: `2^grid_power`.
+    /// The grid size in world units.
+    ///
+    /// An explicit [`SnapSettings::grid_increment`] wins: the two
+    /// controls are two ways of saying the same thing, so the one the
+    /// user touched last is the one that holds. Zero, negative and
+    /// non-finite increments fall back to the `2^grid_power` ladder
+    /// rather than yielding a grid nothing can snap to.
     pub fn grid_size(&self) -> f32 {
+        if self.grid_increment.is_finite() && self.grid_increment > 0.0 {
+            return self.grid_increment;
+        }
         2.0_f32.powi(self.grid_power)
     }
 
@@ -180,6 +207,81 @@ mod tests {
         assert!((s.grid_size() - 8.0).abs() < 1e-6);
         s.grid_power = -2;
         assert!((s.grid_size() - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_explicit_increment_beats_the_power() {
+        let s = SnapSettings {
+            grid_power: 3, // would be 8.0
+            grid_increment: 1.5,
+            ..SnapSettings::default()
+        };
+        assert!((s.grid_size() - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_increment_of_zero_falls_back_to_the_power() {
+        let mut s = SnapSettings {
+            grid_power: 3,
+            grid_increment: 0.0,
+            ..SnapSettings::default()
+        };
+        assert!((s.grid_size() - 8.0).abs() < 1e-6);
+
+        // So does anything that is not a usable interval.
+        for bad in [-1.5, f32::NAN, f32::INFINITY] {
+            s.grid_increment = bad;
+            assert!((s.grid_size() - 8.0).abs() < 1e-6, "increment {bad}");
+        }
+    }
+
+    #[test]
+    fn a_one_and_a_half_metre_grid_snaps_to_its_own_lattice() {
+        let s = SnapSettings {
+            grid_increment: 1.5,
+            ..SnapSettings::default()
+        };
+        // 2.2 is nearer 1.5 than 3.0; 2.3 is nearer 3.0.
+        assert!((s.snap_position_to_grid(Vec3::splat(2.2)) - Vec3::splat(1.5)).length() < 1e-5);
+        assert!((s.snap_position_to_grid(Vec3::splat(2.3)) - Vec3::splat(3.0)).length() < 1e-5);
+    }
+
+    #[test]
+    fn the_increment_ships_off_so_the_power_still_rules() {
+        let s = SnapSettings::default();
+        assert_eq!(s.grid_increment, 0.0);
+        assert!((s.grid_size() - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn settings_round_trip_through_serde() {
+        let s = SnapSettings {
+            grid_power: 1,
+            grid_increment: 2.5,
+            translate_snap: true,
+            ..SnapSettings::default()
+        };
+        let json = serde_json::to_string(&s).expect("serialize");
+        let back: SnapSettings = serde_json::from_str(&json).expect("deserialize");
+        assert!(back == s);
+        assert!((back.grid_size() - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn settings_written_before_the_increment_existed_still_load() {
+        // Exactly the field set an earlier build wrote.
+        let legacy = r#"{
+            "translate_snap": false,
+            "translate_increment": 0.25,
+            "rotate_snap": false,
+            "rotate_increment": 0.2617994,
+            "scale_snap": false,
+            "scale_increment": 0.1,
+            "grid_power": -2
+        }"#;
+        let loaded: SnapSettings = serde_json::from_str(legacy).expect("deserialize legacy");
+        assert_eq!(loaded.grid_increment, 0.0);
+        assert!((loaded.grid_size() - 0.25).abs() < 1e-6);
     }
 
     #[test]

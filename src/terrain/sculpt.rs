@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 
 use super::{
-    CHUNK_SIZE, TerrainBrushSettings, TerrainDirtyChunks, TerrainEditMode, TerrainSculptState,
+    CHUNK_SIZE, TerrainBrushSettings, TerrainDataStore, TerrainDirtyChunks, TerrainEditMode,
+    TerrainSculptState,
 };
 use crate::commands::{CommandHistory, EditorCommand};
 use crate::default_style;
@@ -28,32 +28,101 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 }
 
 /// Undo command for terrain height changes.
+///
+/// Heights are written to [`TerrainDataStore`], not to the component and
+/// not to the scene document. Pushing 262,144 floats through the BSN AST
+/// on every stroke is the defect the sidecar exists to fix, so this
+/// command deliberately does not sync the heights to the document.
+///
+/// Memory model: each entry holds two full heightmap copies (`old_heights`
+/// and `new_heights`), and [`CommandHistory`]'s `undo_stack` is a plain,
+/// uncapped `Vec`. A long sculpting session on a large terrain therefore
+/// accumulates memory proportional to `resolution^2 * strokes` for as
+/// long as the tab stays open -- there is currently no depth cap or
+/// delta compression, and none is planned this round. If this becomes a
+/// real problem, the fix belongs at
+/// `CommandHistory` (a shared depth cap for every command type), not as
+/// special-casing here.
 pub struct SetTerrainHeights {
     pub entity: Entity,
     pub old_heights: Vec<f32>,
     pub new_heights: Vec<f32>,
     pub label: String,
+    /// Optional `(old, new)` world size to move with the heights.
+    ///
+    /// Only the quantize operator sets this. Pinning a terrain's vertex
+    /// spacing to a metric cell size resizes it and re-snaps its heights
+    /// in one gesture, and undoing half of that leaves the terrain at a
+    /// spacing its heights were never snapped for. `size` is three
+    /// floats, not a per-cell array, so it does reach the document --
+    /// the rule this command exists to keep is about bulk data, not
+    /// about every field.
+    pub resize: Option<(Vec2, Vec2)>,
+}
+
+impl SetTerrainHeights {
+    /// Construct a heights-only entry. The overwhelmingly common case:
+    /// a stroke, a generate, an erode.
+    pub fn new(
+        entity: Entity,
+        old_heights: Vec<f32>,
+        new_heights: Vec<f32>,
+        label: String,
+    ) -> Self {
+        Self {
+            entity,
+            old_heights,
+            new_heights,
+            label,
+            resize: None,
+        }
+    }
+
+    fn apply(&self, world: &mut World, heights: &[f32], size: Option<Vec2>) {
+        if let Some(size) = size {
+            let resized = match world.get_mut::<jackdaw_scene_types::Terrain>(self.entity) {
+                Some(mut terrain) if terrain.size != size => {
+                    terrain.size = size;
+                    Some(terrain.clone())
+                }
+                _ => None,
+            };
+            if let Some(terrain) = resized {
+                crate::commands::sync_component_to_ast(
+                    world,
+                    self.entity,
+                    "jackdaw_scene_types::types::Terrain",
+                    &terrain,
+                );
+            }
+        }
+        let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(self.entity) else {
+            return;
+        };
+        let terrain = terrain.clone();
+        if let Some(data) = world.resource_mut::<TerrainDataStore>().entry_for(&terrain) {
+            data.heights = heights.to_vec();
+            data.normalize();
+        }
+        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(self.entity) {
+            dirty.rebuild_all = true;
+        }
+    }
 }
 
 impl EditorCommand for SetTerrainHeights {
     fn execute(&mut self, world: &mut World) {
-        if let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(self.entity) {
-            terrain.heights = self.new_heights.clone();
-        }
-        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(self.entity) {
-            dirty.rebuild_all = true;
-        }
-        sync_terrain_heights_to_ast(world, self.entity);
+        // `apply` already copies its `heights` slice into the store
+        // (`data.heights = heights.to_vec()`), so cloning `new_heights`
+        // here first was a second full-array copy for nothing -- a
+        // 512-resolution terrain is 262,144 floats, so that was 1 MiB
+        // wasted per undo/redo click. `&self.new_heights` borrows
+        // straight from the command.
+        self.apply(world, &self.new_heights, self.resize.map(|(_, new)| new));
     }
 
     fn undo(&mut self, world: &mut World) {
-        if let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(self.entity) {
-            terrain.heights = self.old_heights.clone();
-        }
-        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(self.entity) {
-            dirty.rebuild_all = true;
-        }
-        sync_terrain_heights_to_ast(world, self.entity);
+        self.apply(world, &self.old_heights, self.resize.map(|(old, _)| old));
     }
 
     fn description(&self) -> &str {
@@ -61,21 +130,9 @@ impl EditorCommand for SetTerrainHeights {
     }
 }
 
-fn sync_terrain_heights_to_ast(world: &mut World, entity: Entity) {
-    if let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(entity) {
-        let terrain = terrain.clone();
-        crate::commands::sync_component_to_ast(
-            world,
-            entity,
-            "jackdaw_scene_types::types::terrain::Terrain",
-            &terrain,
-        );
-    }
-}
-
 /// Raycast the cursor against the selected terrain's XZ plane and
 /// return the (entity, grid coordinate) that the brush should target.
-fn terrain_brush_hit(
+pub(super) fn terrain_brush_hit(
     vp: &crate::viewport::ViewportCursor,
     terrain_query: &Query<(Entity, &jackdaw_scene_types::Terrain, &GlobalTransform)>,
     selection: &Selection,
@@ -107,16 +164,17 @@ fn terrain_brush_hit(
         return None;
     }
 
-    let heightmap = jackdaw_terrain::Heightmap {
-        resolution: terrain.resolution,
-        size: terrain.size,
-        max_height: terrain.max_height,
-        heights: terrain.heights.clone(),
-    };
-    Some((
-        terrain_entity,
-        heightmap.world_to_grid(Vec2::new(local.x, local.z)),
-    ))
+    Some((terrain_entity, local_to_grid(terrain, local.xz())))
+}
+
+/// Grid coordinate of a terrain-local XZ position.
+///
+/// Pure geometry, so the brush cursor does not copy a 512-resolution
+/// heightmap out of the store every frame just to learn which cell it is
+/// hovering. Mirrors `Heightmap::world_to_grid`.
+fn local_to_grid(terrain: &jackdaw_scene_types::Terrain, local: Vec2) -> Vec2 {
+    let cell = terrain.size / (terrain.resolution.max(2) - 1) as f32;
+    (local + terrain.size / 2.0) / cell
 }
 
 /// Track the brush-target grid position so the overlay gizmo follows
@@ -175,9 +233,7 @@ fn sculpt_invoke_trigger(
 #[operator(
     id = "terrain.sculpt",
     label = "Sculpt Terrain",
-    description = "Apply the active sculpt tool while LMB is held. Modal: commits \
-                   the height delta as a single undo entry on release; Escape \
-                   restores the pre-stroke heights.",
+    description = "Sculpt the terrain under the brush while the mouse button is held.",
     modal = true,
     allows_undo = false,
     cancel = cancel_terrain_sculpt,
@@ -188,28 +244,34 @@ pub fn terrain_sculpt(
     edit_mode: Res<TerrainEditMode>,
     brush_settings: Res<TerrainBrushSettings>,
     mut sculpt_state: ResMut<TerrainSculptState>,
-    mut terrain_query: Query<(&mut jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
+    mut terrain_query: Query<(&jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
+    mut store: ResMut<TerrainDataStore>,
     mut history: ResMut<CommandHistory>,
     time: Res<Time>,
-    modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+    active: ActiveModalQuery,
 ) -> OperatorResult {
     let TerrainEditMode::Sculpt(tool) = *edit_mode else {
         return OperatorResult::Cancelled;
     };
     let target = sculpt_state.target?;
-    let (mut terrain, mut dirty) = terrain_query.get_mut(target)?;
+    let (terrain, mut dirty) = terrain_query.get_mut(target)?;
+    let data = store.entry_for(terrain)?;
 
-    if modal.is_none() {
+    if !active.is_modal_running() {
         sculpt_state.active = true;
-        sculpt_state.stroke_snapshot = terrain.heights.clone();
-    } else if mouse.just_released(MouseButton::Left) {
+        sculpt_state.stroke_snapshot = data.heights.clone();
+    }
+
+    // See `super::stroke_should_end` doc: checked every frame, including
+    // the modal's first, not gated behind `else`/`modal.is_some()`.
+    if super::stroke_should_end(&mouse) {
         sculpt_state.active = false;
-        history.push_executed(Box::new(SetTerrainHeights {
-            entity: target,
-            old_heights: std::mem::take(&mut sculpt_state.stroke_snapshot),
-            new_heights: terrain.heights.clone(),
-            label: format!("Terrain {tool:?}"),
-        }));
+        history.push_executed(Box::new(SetTerrainHeights::new(
+            target,
+            std::mem::take(&mut sculpt_state.stroke_snapshot),
+            data.heights.clone(),
+            format!("Terrain {tool:?}"),
+        )));
         return OperatorResult::Finished;
     }
 
@@ -218,7 +280,7 @@ pub fn terrain_sculpt(
             resolution: terrain.resolution,
             size: terrain.size,
             max_height: terrain.max_height,
-            heights: terrain.heights.clone(),
+            heights: std::mem::take(&mut data.heights),
         };
         jackdaw_terrain::apply_brush(
             &mut hm,
@@ -230,9 +292,23 @@ pub fn terrain_sculpt(
             time.delta_secs(),
             None,
         );
+        // Snap inside the stroke, not on release: the user has to watch
+        // the terraces form while dragging, or they are sculpting one
+        // surface and getting another. Only the cells the brush touched
+        // are rewritten, so this costs the brush footprint per frame
+        // rather than the whole array.
+        if let Some(step) = terrain.quantization.active_height_step() {
+            jackdaw_terrain::quantize_region(
+                &mut hm.heights,
+                terrain.resolution,
+                grid_pos,
+                brush_settings.radius,
+                step,
+            );
+        }
         let affected =
             jackdaw_terrain::affected_chunks(&hm, grid_pos, brush_settings.radius, CHUNK_SIZE);
-        terrain.heights = hm.heights;
+        data.heights = hm.heights;
         for chunk in affected {
             dirty.dirty.insert(chunk);
         }
@@ -242,7 +318,8 @@ pub fn terrain_sculpt(
 
 fn cancel_terrain_sculpt(
     mut sculpt_state: ResMut<TerrainSculptState>,
-    mut terrain_query: Query<(&mut jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
+    mut terrain_query: Query<(&jackdaw_scene_types::Terrain, &mut TerrainDirtyChunks)>,
+    mut store: ResMut<TerrainDataStore>,
 ) {
     if !sculpt_state.active {
         return;
@@ -250,9 +327,11 @@ fn cancel_terrain_sculpt(
     sculpt_state.active = false;
     let snapshot = std::mem::take(&mut sculpt_state.stroke_snapshot);
     if let Some(target) = sculpt_state.target
-        && let Ok((mut terrain, mut dirty)) = terrain_query.get_mut(target)
+        && let Ok((terrain, mut dirty)) = terrain_query.get_mut(target)
+        && let Some(data) = store.entry_for(terrain)
     {
-        terrain.heights = snapshot;
+        data.heights = snapshot;
+        data.normalize();
         dirty.rebuild_all = true;
     }
 }
@@ -287,6 +366,7 @@ fn draw_terrain_brush_gizmo(
     brush_settings: Res<TerrainBrushSettings>,
     edit_mode: Res<TerrainEditMode>,
     terrains: Query<(&jackdaw_scene_types::Terrain, &GlobalTransform)>,
+    store: Res<TerrainDataStore>,
     mut gizmos: Gizmos,
 ) {
     if !matches!(*edit_mode, TerrainEditMode::Sculpt(_)) {
@@ -304,12 +384,7 @@ fn draw_terrain_brush_gizmo(
         return;
     };
 
-    let heightmap = jackdaw_terrain::Heightmap {
-        resolution: terrain.resolution,
-        size: terrain.size,
-        max_height: terrain.max_height,
-        heights: terrain.heights.clone(),
-    };
+    let heightmap = super::mesh::heightmap_from_terrain(terrain, &store);
 
     let segments = 32;
     let radius = brush_settings.radius;

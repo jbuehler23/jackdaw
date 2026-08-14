@@ -864,7 +864,14 @@ pub struct NavmeshRegion {
     pub connection_url: String,
 }
 
-/// Terrain heightmap component. Stores all data needed for serialization.
+/// Terrain shape and the descriptive parts of its data.
+///
+/// Only the small, human-editable fields live here. The bulk per-cell
+/// arrays -- heights and every paint channel -- live in a binary sidecar
+/// beside the scene (`jackdaw_terrain::sidecar`), keyed by
+/// [`Terrain::data_path`]. A 512-resolution heightmap is 262,144 floats;
+/// serializing that as scene text defeats the point of a format you can
+/// read in a `git diff`.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component, Default, @crate::EditorCategory::new("Terrain"), @crate::EditorHidden)]
 pub struct Terrain {
@@ -874,19 +881,198 @@ pub struct Terrain {
     pub size: Vec2,
     /// Maximum height value for normalization.
     pub max_height: f32,
-    /// Row-major height data, length = resolution^2.
+    /// The paint channels this terrain declares, in project order.
+    ///
+    /// Descriptors only -- name, width, palette. They are small and a
+    /// person edits them, so they stay inline and diffable. The per-cell
+    /// values they describe live in the sidecar with the heights.
+    pub channels: Vec<TerrainChannel>,
+    /// Scene-relative path of this terrain's binary data sidecar.
+    ///
+    /// The editor keeps the decoded data in a resource keyed by this
+    /// string, which is why it has to travel on the component: a tab
+    /// swap round-trips the scene through BSN *text* and respawns every
+    /// entity, so a plain reflected `String` is the only thing that
+    /// survives the trip.
+    pub data_path: String,
+    /// Legacy inline heights, read from scenes written before the
+    /// sidecar existed.
+    ///
+    /// This is a migration inlet, not storage. The editor drains it into
+    /// the sidecar store on load and leaves it empty, so a scene saved by
+    /// this build writes `heights: []` and the real data goes to
+    /// [`Terrain::data_path`]. Read heights through the store, never
+    /// from here.
     pub heights: Vec<f32>,
+    /// Optional snapping of this terrain onto the game's own metric grid.
+    ///
+    /// Off by default, and a terrain that never touches it behaves
+    /// exactly as one authored before the setting existed.
+    pub quantization: TerrainQuantization,
 }
 
 impl Default for Terrain {
     fn default() -> Self {
-        let resolution = 256;
         Self {
-            resolution,
+            resolution: 256,
             size: Vec2::new(100.0, 100.0),
             max_height: 50.0,
-            heights: vec![0.0; (resolution * resolution) as usize],
+            channels: Vec::new(),
+            data_path: String::new(),
+            heights: Vec::new(),
+            quantization: TerrainQuantization::default(),
         }
+    }
+}
+
+impl Terrain {
+    /// Cell count this terrain's per-cell arrays must have.
+    pub fn cell_count(&self) -> usize {
+        (self.resolution as usize) * (self.resolution as usize)
+    }
+}
+
+/// Optional snapping of a terrain onto a game's own metric grid.
+///
+/// A game whose world is built out of 1 m cells and 0.25 m elevation
+/// steps wants a terrain that is exactly that, not one that happens to
+/// pass near it. With this on, sculpting snaps heights to multiples of
+/// [`TerrainQuantization::height_step`] as the user drags, the mesh is
+/// built flat-shaded so the terraces are visible, and
+/// [`TerrainQuantization::cell_size`] pins the terrain's XZ vertex
+/// spacing -- which is what makes an integer export lossless.
+///
+/// Both steps are opt-in independently: a project can want a metric cell
+/// size with continuous elevation, or terraced elevation at whatever
+/// size the terrain already is.
+/// The derived `Default` -- off, both steps zero -- is the contract: a
+/// terrain that never touches this field is byte-identical to one from
+/// before it existed.
+#[derive(Reflect, Clone, Debug, Default, PartialEq)]
+#[reflect(Default)]
+pub struct TerrainQuantization {
+    pub enabled: bool,
+    /// World units per cell edge in XZ. 0 leaves [`Terrain::size`] alone.
+    pub cell_size: f32,
+    /// World units per elevation step. 0 disables height snapping.
+    pub height_step: f32,
+}
+
+impl TerrainQuantization {
+    /// World-space XZ extent a terrain of `resolution` vertices needs for
+    /// its vertex spacing to equal [`Self::cell_size`] exactly.
+    ///
+    /// Vertex spacing is `size / (resolution - 1)` -- `resolution` counts
+    /// vertices, so a 256-vertex edge has 255 cells. Returns `None` when
+    /// there is no cell size to honour or the grid is too degenerate to
+    /// have a spacing.
+    pub fn world_size_for(&self, resolution: u32) -> Option<Vec2> {
+        if !self.enabled || !self.cell_size.is_finite() || self.cell_size <= 0.0 || resolution < 2 {
+            return None;
+        }
+        Some(Vec2::splat(self.cell_size * (resolution - 1) as f32))
+    }
+
+    /// The elevation step to snap to, or `None` when height snapping is
+    /// off for this terrain.
+    pub fn active_height_step(&self) -> Option<f32> {
+        if !self.enabled || !self.height_step.is_finite() || self.height_step <= 0.0 {
+            return None;
+        }
+        Some(self.height_step)
+    }
+}
+
+/// Storage width of a paint channel's values on disk.
+///
+/// Mirrors `jackdaw_terrain::ChannelElement`. It exists separately because
+/// `jackdaw_terrain` is deliberately dependency-light (`bevy_math` only)
+/// and this one has to be reflected to reach the scene document.
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[reflect(Default)]
+pub enum TerrainChannelElement {
+    /// One byte per cell, values `0..=255`.
+    #[default]
+    U8,
+    /// Two bytes per cell, values `0..=65535`.
+    U16,
+}
+
+impl TerrainChannelElement {
+    /// Largest value this width can hold. Painting clamps to it.
+    pub fn max_value(self) -> u16 {
+        match self {
+            Self::U8 => u8::MAX as u16,
+            Self::U16 => u16::MAX,
+        }
+    }
+
+    /// Human-readable name, for a width picker.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::U8 => "u8 (0-255)",
+            Self::U16 => "u16 (0-65535)",
+        }
+    }
+
+    /// Every width, in picker order.
+    pub const ALL: [Self; 2] = [Self::U8, Self::U16];
+}
+
+/// One entry in a paint channel's palette: a value, what the project
+/// calls it, and how the editor draws it.
+///
+/// Jackdaw never interprets `label`. It is the project's word for what
+/// this value means -- "grass", "walkable", "spawn: heavy" -- and the
+/// editor only ever displays it.
+#[derive(Reflect, Clone, Debug, PartialEq)]
+#[reflect(Default)]
+pub struct TerrainPaletteEntry {
+    /// The value written into the channel when this entry is painted.
+    pub value: u16,
+    /// Project-defined name. Display only.
+    pub label: String,
+    /// Swatch colour, and the tint the viewport draws for this value.
+    pub color: Color,
+}
+
+impl Default for TerrainPaletteEntry {
+    fn default() -> Self {
+        Self {
+            value: 0,
+            label: "unset".to_string(),
+            color: Color::srgb(0.5, 0.5, 0.5),
+        }
+    }
+}
+
+/// A named per-cell integer layer over a terrain.
+///
+/// Only the descriptor lives here. The values are `resolution^2` entries
+/// in the terrain's sidecar. Jackdaw stores the name and palette as
+/// opaque data: it never validates them, ships defaults for them, or
+/// branches on them.
+#[derive(Reflect, Clone, Debug, Default, PartialEq)]
+#[reflect(Default)]
+pub struct TerrainChannel {
+    /// Project-defined name. Also the export filename for this layer.
+    pub name: String,
+    /// Storage width, and therefore the value ceiling.
+    pub element: TerrainChannelElement,
+    /// Named values with display colours, in project order.
+    pub palette: Vec<TerrainPaletteEntry>,
+}
+
+impl TerrainChannel {
+    /// The palette entry for a stored value, if the palette names it.
+    pub fn entry(&self, value: u16) -> Option<&TerrainPaletteEntry> {
+        self.palette.iter().find(|entry| entry.value == value)
+    }
+
+    /// Colour to draw a stored value with. Values the palette does not
+    /// name draw as unpainted ground rather than as an error.
+    pub fn color_of(&self, value: u16) -> Option<Color> {
+        self.entry(value).map(|entry| entry.color)
     }
 }
 
@@ -947,5 +1133,68 @@ mod tests {
     fn pyramid_has_four_sides_plus_base() {
         let p = Brush::pyramid(0.5, 0.5, 0.5);
         assert_eq!(p.faces.len(), 5); // 4 side faces + 1 base cap
+    }
+
+    #[test]
+    fn quantization_ships_off_and_inert() {
+        let q = TerrainQuantization::default();
+        assert!(!q.enabled);
+        assert_eq!(q.cell_size, 0.0);
+        assert_eq!(q.height_step, 0.0);
+        assert_eq!(q.world_size_for(256), None);
+        assert_eq!(q.active_height_step(), None);
+        assert_eq!(Terrain::default().quantization, q);
+    }
+
+    #[test]
+    fn cell_size_sets_a_world_size_whose_spacing_is_that_cell() {
+        let q = TerrainQuantization {
+            enabled: true,
+            cell_size: 1.0,
+            height_step: 0.0,
+        };
+        // 256 vertices is 255 cells, so a 1-unit cell wants 255 units.
+        let size = q.world_size_for(256).expect("a size for a live cell size");
+        assert_eq!(size, Vec2::splat(255.0));
+        assert_eq!(size.x / (256 - 1) as f32, 1.0);
+
+        let q = TerrainQuantization {
+            cell_size: 2.5,
+            ..q
+        };
+        assert_eq!(q.world_size_for(65), Some(Vec2::splat(160.0)));
+    }
+
+    #[test]
+    fn a_disabled_or_degenerate_quantization_asks_for_no_resize() {
+        let live = TerrainQuantization {
+            enabled: true,
+            cell_size: 1.5,
+            height_step: 0.25,
+        };
+        assert!(live.world_size_for(256).is_some());
+        assert_eq!(live.active_height_step(), Some(0.25));
+
+        // Off wins over any value.
+        let off = TerrainQuantization {
+            enabled: false,
+            ..live.clone()
+        };
+        assert_eq!(off.world_size_for(256), None);
+        assert_eq!(off.active_height_step(), None);
+
+        // Zero, negative and non-finite steps each opt out on their own.
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let q = TerrainQuantization {
+                cell_size: bad,
+                height_step: bad,
+                ..live.clone()
+            };
+            assert_eq!(q.world_size_for(256), None, "cell_size {bad}");
+            assert_eq!(q.active_height_step(), None, "height_step {bad}");
+        }
+
+        // A grid with no cells has no spacing to pin.
+        assert_eq!(live.world_size_for(1), None);
     }
 }

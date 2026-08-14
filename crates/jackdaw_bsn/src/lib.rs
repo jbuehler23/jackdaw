@@ -17,8 +17,8 @@ pub mod sync;
 pub mod writer;
 
 pub use catalog::{
-    CatalogAssetRef, CatalogEntry, LoadedBsnScene, append_assets_to_ast, load_bsn_assets,
-    load_bsn_scene, serialize_assets_to_bsn,
+    CatalogAssetRef, CatalogEntry, LoadedBsnScene, append_assets_to_ast, asset_roots, entity_roots,
+    is_asset_root, load_bsn_assets, load_bsn_scene, serialize_assets_to_bsn,
 };
 
 pub use parse::{ParseError, parse_bsn};
@@ -27,8 +27,9 @@ pub use delta::{apply_deltas, bsn_value_eq, shallow_diff};
 
 pub use document::{
     AstNodeRef, BsnAssetContext, BsnField, BsnPatch, BsnPatches, BsnStructData, BsnStructFields,
-    BsnTupleStructData, BsnValue, DerivedComponents, SceneBsnAst, bsn_value_as_int,
-    clone_node_into, component_to_bsn_patch, component_to_bsn_patch_with_assets,
+    BsnTupleStructData, BsnValue, SceneBsnAst, bsn_value_as_int, clone_node_into,
+    clone_subtree_into, component_to_bsn_patch, component_to_bsn_patch_with_assets,
+    is_enum_variant_of, type_paths_include,
 };
 pub use emitter::{emit_entities, emit_entity, emit_scene};
 pub use loader::{BsnLoadError, parse_bsn_text};
@@ -36,7 +37,7 @@ pub use loader::{BsnLoadError, parse_bsn_text};
 pub use apply::{
     AstDirty, BsnApplyAssets, BsnSceneAssets, apply_ast_to_ecs, apply_component_patch,
     apply_dirty_ast_patches, bsn_value_to_reflect, get_bsn_field, remove_bsn_field, set_bsn_field,
-    spawn_from_ast,
+    spawn_ast_node, spawn_from_ast,
 };
 
 pub use sync::{

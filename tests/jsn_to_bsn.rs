@@ -391,6 +391,12 @@ fn inline_material_reference_and_terrain_survive_conversion() {
     // Author a scene with a Terrain component, then hand it an inline
     // material asset and a brush face that references it by name, the way the
     // editor's save path stores catalog-less materials.
+    //
+    // The terrain here is deliberately a *legacy* one: heights inline on
+    // the component and no `data_path`, which is what every scene written
+    // before the binary sidecar looks like. Conversion has to carry those
+    // heights through untouched -- the editor drains them into the sidecar
+    // store on load, and it can only do that if they survived the trip.
     let mut app_a = headless_app();
     let node_id = SceneNodeId::next();
     app_a.world_mut().spawn((
@@ -402,7 +408,14 @@ fn inline_material_reference_and_terrain_survive_conversion() {
             resolution: 3,
             size: Vec2::new(8.0, 8.0),
             max_height: 2.5,
+            channels: Vec::new(),
+            data_path: String::new(),
             heights: vec![0.0, 0.5, 1.0, 0.0, 0.25, 0.75, 0.1, 0.2, 0.3],
+            // A scene this old predates quantization, so it carries the
+            // default. Spelled out rather than `..default()` because the
+            // point of this literal is to enumerate what a legacy scene
+            // holds.
+            quantization: Default::default(),
         },
         jackdaw_scene_types::SceneRootTag,
     ));
@@ -462,7 +475,9 @@ fn inline_material_reference_and_terrain_survive_conversion() {
     );
     assert_eq!(converted.report.asset_count, 1);
 
-    // Terrain round-trips semantically into the BSN-loaded world.
+    // Terrain round-trips semantically into the BSN-loaded world: the
+    // small descriptive fields, the (empty) sidecar path, and the legacy
+    // inline heights the editor migrates on next load.
     let mut app_b = headless_app();
     spawn_bsn(&mut app_b, &converted.scene_bsn);
     let ground = find_by_node_id(app_b.world_mut(), node_id).expect("ground by node id");
@@ -471,9 +486,63 @@ fn inline_material_reference_and_terrain_survive_conversion() {
         .get::<Terrain>(ground)
         .expect("terrain survives");
     assert_eq!(terrain.resolution, 3);
-    assert_eq!(terrain.heights.len(), 9);
     assert!((terrain.max_height - 2.5).abs() < 1e-6);
+    assert!((terrain.size - Vec2::new(8.0, 8.0)).length() < 1e-6);
+    assert_eq!(
+        terrain.data_path, "",
+        "a legacy terrain names no sidecar; the editor mints one on load"
+    );
+    assert_eq!(terrain.heights.len(), 9);
     assert!((terrain.heights[2] - 1.0).abs() < 1e-6);
+    assert!(
+        !terrain.quantization.enabled,
+        "a scene that never mentioned quantization comes back with it off"
+    );
+}
+
+/// A terrain's quantization is a small reflected descriptor, so it has to
+/// survive the scene text the way `resolution` does. Without this the
+/// setting would look like it worked and silently reset on next load.
+#[test]
+fn terrain_quantization_survives_conversion() {
+    use jackdaw_scene_types::{Terrain, TerrainQuantization};
+
+    let mut app_a = headless_app();
+    let node_id = SceneNodeId::next();
+    app_a.world_mut().spawn((
+        Name::new("Ground"),
+        Transform::default(),
+        node_id,
+        Terrain {
+            resolution: 5,
+            quantization: TerrainQuantization {
+                enabled: true,
+                cell_size: 1.5,
+                height_step: 0.25,
+            },
+            ..Default::default()
+        },
+        jackdaw_scene_types::SceneRootTag,
+    ));
+    let scene = world_to_jsn_scene(app_a.world_mut());
+
+    let mut app_c = headless_app();
+    let converted =
+        convert_jsn_scene_to_bsn(app_c.world_mut(), &scene).expect("conversion succeeds");
+
+    let mut app_b = headless_app();
+    spawn_bsn(&mut app_b, &converted.scene_bsn);
+    let ground = find_by_node_id(app_b.world_mut(), node_id).expect("ground by node id");
+    let quantization = app_b
+        .world()
+        .get::<Terrain>(ground)
+        .expect("terrain survives")
+        .quantization
+        .clone();
+
+    assert!(quantization.enabled);
+    assert!((quantization.cell_size - 1.5).abs() < 1e-6);
+    assert!((quantization.height_step - 0.25).abs() < 1e-6);
 }
 
 #[test]

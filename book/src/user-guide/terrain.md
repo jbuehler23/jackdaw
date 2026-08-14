@@ -44,13 +44,100 @@ runs on the CPU and rebuilds every chunk mesh when it
 finishes. Save before you click. We do not have a cancel
 button yet.
 
-## Texture painting
+## Paint channels
 
-Texture painting on terrain is on the roadmap but not built.
-Today the terrain takes a single material applied to the
-whole surface. If you need varied surface textures, blend in
-your fragment shader or split the heightmap into multiple
-terrains, each with its own material.
+Choose the paintbrush in the terrain toolbar to edit integer
+channels such as biome, ground type, or buildability. Add a
+channel and one or more palette values in the **Paint
+Channels** section, select the value to write, and drag over
+the terrain. Hold `Ctrl` while painting to restore value `0`.
+
+**Show Painted Values** tints the terrain with the active
+palette so the stored data is visible even before a game
+material consumes it. New channel and palette entries receive
+generated names and colours; project-specific descriptor
+names, integer widths, labels, values, and colours can also be
+authored directly in the scene document.
+
+## Quantization
+
+Enable quantization when the game needs a fixed metric grid or
+terraced elevations. **Cell Size** controls the world-space
+distance between samples and **Height Step** controls the
+elevation interval. Sculpt, generation, and erosion snap new
+changes while quantization is enabled. Click **Apply** once to
+snap heights that existed before it was enabled.
+
+Turning quantization off stops future snapping but does not
+alter heights that are already stored.
+
+## Scatter
+
+The **Scatter** section places model instances across the
+selected terrain. Add one or more model assets, then configure
+density, spacing, scale, yaw, normal alignment, and an optional
+paint-channel mask. A seed produces the same placement for the
+same terrain and channel data.
+
+Re-running the same scatter group replaces untouched generated
+instances. Instances moved, rotated, or scaled by hand are
+preserved. The whole run is a single undoable edit.
+
+## Sidecars and export
+
+Scene files keep the small terrain descriptor, while heights
+and per-cell channel values are stored beside the scene in
+versioned `.jdterrain` files. Save and move those sidecars with
+the `.bsn` scene that references them.
+
+For a headless runtime or another engine, export the authored
+terrain with:
+
+```text
+jd export-terrain path/to/scene.bsn --out path/to/export
+```
+
+The export contains height and channel images, a manifest, and
+placed-scene data. Quantized projects normally keep cell size
+and elevation step on the terrain; unquantized scenes can pass
+`--cell-size` and `--elevation-step` together for an export-only
+grid. Add `--raw-heights` when the consumer also needs the raw
+height buffer.
+
+### Export format contract
+
+This is a cross-repo contract: an importer in another repo is
+built against it, so treat the shapes below as stable.
+
+- `manifest.json`, `format_version: 2`. Bumped whenever a field
+  is added, removed, or reinterpreted; an importer should check
+  it and refuse (or degrade explicitly) on a version it does
+  not understand, rather than assume the shape it expects.
+- `heightmap.png` is a 16-bit grayscale PNG. Every pixel decodes
+  to a world-space height via
+  `height = manifest.heightmap.base_m + pixel * manifest.heightmap.step_m`
+  (`encoding: "unsigned-steps-from-base"`). Quantized exports
+  set `step_m` to the terrain's elevation step; unquantized
+  exports derive `step_m` from the actual authored height span
+  (not from `max_height_m`, which is a configured ceiling and
+  can differ from the real data range).
+- Each paint channel is its own PNG (`channels/<name>.png`, 8-
+  or 16-bit depending on the channel's element width) plus a
+  manifest entry: `name`, `file`, `bit_depth`, `element`
+  (`"u8"` / `"u16"`), and `palette` -- a list of
+  `{ value, label, color }` entries, `color` as `#rrggbb`.
+  Channel names are guaranteed unique in one export: the writer
+  refuses the whole export if the scene's channel names collide,
+  either exactly or after filename sanitization.
+- `placements.json`, its own `format_version: 1`, lists every
+  scattered / placed instance: `name`, `asset` (nullable),
+  `translation_m` / `rotation_quat` / `scale`, and `components`
+  (a free-form JSON map of any extra authored component data on
+  that instance).
+- `heights.f32`, present only with `--raw-heights`: the raw
+  height buffer as little-endian `f32`, row-major, unquantized
+  and unscaled -- for a consumer that wants the source values
+  rather than the quantized PNG encoding.
 
 ## Chunking
 
@@ -71,9 +158,16 @@ renders at full resolution.
   knob to tune first. Defaults aim for a generic mountain;
   rolling hills want fewer iterations and a higher
   evaporation rate.
-- **Standalone game shows no terrain.** `jackdaw_runtime`
-  doesn't pull in `jackdaw_terrain`. If your game needs
-  terrain at runtime, add `jackdaw_terrain` to your
-  standalone `Cargo.toml` and bring whatever plugin /
-  systems you want into your game's plugin alongside
-  `JackdawPlugin`.
+- **Standalone game shows no terrain.** Two separate causes
+  land on the same symptom. First, `jackdaw_runtime` doesn't
+  pull in `jackdaw_terrain`: if your game needs terrain at
+  runtime, add `jackdaw_terrain` to your standalone
+  `Cargo.toml` and bring whatever plugin / systems you want
+  into your game's plugin alongside `JackdawPlugin`. Second,
+  even with the crate present, a terrain's heights and paint
+  channels live in a `.jdterrain` sidecar next to the `.bsn`
+  scene, not in the scene file itself (see "Sidecars and
+  export" above) -- if you load a `.bsn` scene directly at
+  runtime rather than through the `jd export-terrain` pipeline,
+  every referenced `.jdterrain` sidecar has to ship and load
+  alongside it, or the terrain reads as flat.

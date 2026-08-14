@@ -95,12 +95,13 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
                 ctrl,
                 shift,
                 alt,
+                super_,
             } => {
                 let Some(key_code) = key_code_from_name(key) else {
                     report.skipped_unparseable_key.push(key.clone());
                     continue;
                 };
-                let mod_keys = mod_keys_from_bools(*ctrl, *shift, *alt);
+                let mod_keys = mod_keys_from_bools(*ctrl, *shift, *alt, *super_);
                 ResolvedBinding::Press {
                     binding: key_code.with_mod_keys(mod_keys),
                     phase: entry.phase,
@@ -111,6 +112,7 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
                 ctrl,
                 shift,
                 alt,
+                super_,
             } => {
                 let Some(mb) = mouse_button_from_name(button) else {
                     report
@@ -118,7 +120,7 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
                         .push(format!("{}: {button}", entry.operator));
                     continue;
                 };
-                let mod_keys = mod_keys_from_bools(*ctrl, *shift, *alt);
+                let mod_keys = mod_keys_from_bools(*ctrl, *shift, *alt, *super_);
                 ResolvedBinding::Press {
                     binding: mb.with_mod_keys(mod_keys),
                     phase: entry.phase,
@@ -129,8 +131,9 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
                 ctrl,
                 shift,
                 alt,
+                super_,
             } => {
-                let mod_keys = mod_keys_from_bools(*ctrl, *shift, *alt);
+                let mod_keys = mod_keys_from_bools(*ctrl, *shift, *alt, *super_);
                 ResolvedBinding::Scroll {
                     // Scroll phase is irrelevant; ScrollTick replaces it.
                     binding: Binding::MouseWheel { mod_keys },
@@ -197,7 +200,7 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
 }
 
 /// Build a `ModKeys` bitmask from the three preset boolean fields.
-fn mod_keys_from_bools(ctrl: bool, shift: bool, alt: bool) -> ModKeys {
+fn mod_keys_from_bools(ctrl: bool, shift: bool, alt: bool, super_: bool) -> ModKeys {
     let mut mk = ModKeys::empty();
     if ctrl {
         mk |= ModKeys::CONTROL;
@@ -207,6 +210,9 @@ fn mod_keys_from_bools(ctrl: bool, shift: bool, alt: bool) -> ModKeys {
     }
     if alt {
         mk |= ModKeys::ALT;
+    }
+    if super_ {
+        mk |= ModKeys::SUPER;
     }
     mk
 }
@@ -518,6 +524,7 @@ mod tests {
                     ctrl: false,
                     shift: false,
                     alt: false,
+                    super_: false,
                 },
                 phase: PresetPhase::Press,
                 context: PresetContext::Operators,
