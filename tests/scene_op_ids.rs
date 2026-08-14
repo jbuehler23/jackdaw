@@ -1,5 +1,5 @@
-//! `scene.new` and `scene.open` are each registered twice, by the single-scene
-//! ops in `scene_ops.rs` and the tab ops in `scenes/operators.rs`. The
+//! `scene.open` is registered twice, by the single-scene ops in
+//! `scene_ops.rs` and the tab ops in `scenes/operators.rs`. The
 //! dispatcher indexes operators by id into a `HashMap`, so the last
 //! registration wins and registration order decides which one a menu click or
 //! keybind runs.
@@ -14,7 +14,7 @@ mod util;
 
 /// Ids knowingly registered by two subsystems. A new duplicate is an
 /// accidental collision: one of the two operators becomes unreachable by id.
-const KNOWN_DUPLICATE_IDS: &[&str] = &["scene.new", "scene.open"];
+const KNOWN_DUPLICATE_IDS: &[&str] = &["scene.open"];
 
 #[test]
 fn scene_new_dispatch_resolves_to_the_tab_operator() {
@@ -32,9 +32,7 @@ fn scene_new_dispatch_resolves_to_the_tab_operator() {
     assert_eq!(
         after,
         before + 1,
-        "scene.new resolved to the single-scene operator (which resets the \
-         scene in place) instead of the tab operator (which appends a tab); \
-         dispatch returned {result:?}, tabs {before} -> {after}"
+        "scene.new should append a tab; dispatch returned {result:?}, tabs {before} -> {after}"
     );
 }
 
@@ -45,8 +43,8 @@ fn both_scene_op_registrations_are_present() {
     let mut app = util::editor_test_app();
 
     for (id, expected) in [
-        ("scene.new", ["New", "New Scene"]),
-        ("scene.open", ["Open", "Open Scene..."]),
+        ("scene.new", ["New Scene"].as_slice()),
+        ("scene.open", ["Open", "Open Scene..."].as_slice()),
     ] {
         let mut labels = util::operator_labels(&mut app, id);
         labels.sort_unstable();

@@ -12,12 +12,8 @@ use serde::de::DeserializeSeed;
 use crate::EditorEntity;
 
 use super::registration::register_entities_in_ast;
-use super::save::{SaveOutcome, save_scene_inner, save_scene_with_outcome};
-use super::{SceneDirtyState, SceneFilePath, SceneMetadata, get_window_handle, is_scene_dirty};
-
-/// Marker resource: a "save before new scene?" dialog is currently open.
-#[derive(Resource)]
-pub(super) struct PendingNewScene;
+use super::save::save_scene_inner;
+use super::{SceneDirtyState, SceneFilePath, get_window_handle};
 
 #[derive(Resource)]
 pub(super) enum SceneDialogTask {
@@ -353,93 +349,6 @@ pub(crate) fn import_terrain_sidecars(world: &mut World, scene_path: &str, mode:
     }
 }
 
-pub fn new_scene(world: &mut World) {
-    if is_scene_dirty(world) {
-        world.insert_resource(PendingNewScene);
-        world.commands().trigger(
-            jackdaw_feathers::dialog::OpenDialogEvent::new("Unsaved Changes", "Save")
-                .with_secondary_action("Discard")
-                .with_description("You have unsaved changes. Save before creating a new scene?"),
-        );
-        world.flush();
-        return;
-    }
-    do_new_scene(world);
-}
-
-fn do_new_scene(world: &mut World) {
-    clear_scene_entities(world);
-    let mut scene_path = world.resource_mut::<SceneFilePath>();
-    scene_path.path = None;
-    scene_path.metadata = SceneMetadata::default();
-    world.resource_mut::<SceneDirtyState>().undo_len_at_save = 0;
-    if let Err(err) = jackdaw_bsn::load_bsn_scene(world, crate::scenes::operators::NEW_SCENE_BSN) {
-        warn!("Failed to load new scene: {err}");
-    }
-    info!("New scene created");
-}
-
-pub(super) fn on_new_scene_save(
-    _event: On<jackdaw_feathers::dialog::DialogActionEvent>,
-    mut commands: Commands,
-) {
-    commands.queue(|world: &mut World| {
-        if !world.contains_resource::<PendingNewScene>() {
-            return;
-        }
-        // Untitled active tab: `save_scene` opens a Save As dialog rather
-        // than writing anything, and returns before the user has picked
-        // a file. `PendingNewScene` is deliberately left in place for
-        // that case (not removed here) so `poll_scene_dialog` can create
-        // the new scene once that dialog actually resolves; removing it
-        // unconditionally lost the "and then start a new scene" intent
-        // the moment the active tab had no path.
-        match save_scene_with_outcome(world) {
-            SaveOutcome::Saved => {
-                world.remove_resource::<PendingNewScene>();
-                do_new_scene(world);
-            }
-            SaveOutcome::DialogOpened => {}
-            SaveOutcome::Failed => {
-                world.remove_resource::<PendingNewScene>();
-                warn!("new scene cancelled because the current scene was not saved");
-            }
-        }
-    });
-}
-
-pub(super) fn on_new_scene_discard(
-    _event: On<jackdaw_feathers::dialog::DialogSecondaryActionEvent>,
-    mut commands: Commands,
-) {
-    commands.queue(|world: &mut World| {
-        if world.remove_resource::<PendingNewScene>().is_none() {
-            return;
-        }
-        do_new_scene(world);
-    });
-}
-
-/// If `PendingNewScene` exists but no dialog is open, the user dismissed
-/// via Esc/Cancel -- or a Save As dialog that `PendingNewScene` is
-/// waiting on (see `on_new_scene_save`) was itself cancelled, since that
-/// leaves the same "pending with nothing left to resolve it" state. A
-/// still-open Save As dialog is a native file picker, not an
-/// `EditorDialog` entity, so it has to be checked separately: without
-/// that check, this system would clear `PendingNewScene` out from under
-/// `poll_scene_dialog` on the very next frame, before the user had a
-/// chance to pick a file.
-pub(super) fn cleanup_pending_new_scene(
-    pending: Option<Res<PendingNewScene>>,
-    dialogs: Query<(), With<jackdaw_feathers::dialog::EditorDialog>>,
-    dialog_task: Option<Res<SceneDialogTask>>,
-    mut commands: Commands,
-) {
-    if pending.is_some() && dialogs.is_empty() && dialog_task.is_none() {
-        commands.remove_resource::<PendingNewScene>();
-    }
-}
-
 /// Collect `roots` and their full descendant subtrees into a set,
 /// walking the `Children` relation. Each root is included; the returned
 /// set dedups the walk so a shared descendant is visited only once.
@@ -581,15 +490,7 @@ pub(super) fn poll_scene_dialog(world: &mut World) {
                 }
 
                 match save_scene_inner(world) {
-                    Ok(()) => {
-                        // "Save & New Scene" on an until-now-untitled tab
-                        // deferred creating the new scene to here: the
-                        // Save As dialog had to actually resolve first.
-                        // See `on_new_scene_save`.
-                        if world.remove_resource::<PendingNewScene>().is_some() {
-                            do_new_scene(world);
-                        }
-                    }
+                    Ok(()) => {}
                     Err(err) => error!("scene save (after Save As dialog) failed: {err}"),
                 }
             }
@@ -756,61 +657,5 @@ mod terrain_sidecar_import_tests {
             "a missing sidecar leaves the terrain flat",
         );
         let _ = std::fs::remove_dir_all(&tmp);
-    }
-}
-
-/// Tests for the "Save & New Scene" hand-off: `on_new_scene_save` used to
-/// remove `PendingNewScene` unconditionally, so a Save on an untitled
-/// active tab (which opens a Save As dialog rather than writing anything)
-/// lost the "and then start a new scene" intent the moment the dialog
-/// opened. `PendingNewScene` now survives until something actually
-/// resolves it -- a completed save (`poll_scene_dialog`) or a
-/// cancelled/dismissed one (`cleanup_pending_new_scene`).
-#[cfg(test)]
-mod cleanup_pending_new_scene_tests {
-    use bevy::tasks::AsyncComputeTaskPool;
-
-    use super::*;
-
-    /// I10(a) pinning test, the exact scenario from the review finding:
-    /// while a Save As dialog opened by "Save & New Scene" is still in
-    /// flight, `PendingNewScene` must not be cleared out from under it.
-    /// A native file picker has no `EditorDialog` entity, so the
-    /// dialog-emptiness check alone used to look identical to an
-    /// Esc/Cancel.
-    #[test]
-    fn pending_new_scene_survives_while_a_save_dialog_is_in_flight() {
-        AsyncComputeTaskPool::get_or_init(|| bevy::tasks::TaskPoolBuilder::new().build());
-
-        let mut world = World::new();
-        world.insert_resource(PendingNewScene);
-        let task = AsyncComputeTaskPool::get().spawn(async { None });
-        world.insert_resource(SceneDialogTask::Save(task));
-
-        world
-            .run_system_cached(cleanup_pending_new_scene)
-            .expect("system runs");
-
-        assert!(
-            world.contains_resource::<PendingNewScene>(),
-            "must not be cleared while the Save As dialog is still open",
-        );
-    }
-
-    /// The original Esc/Cancel case this system exists for: nothing left
-    /// to resolve `PendingNewScene`, so it must still be cleared.
-    #[test]
-    fn pending_new_scene_is_cleared_once_nothing_is_left_to_resolve_it() {
-        let mut world = World::new();
-        world.insert_resource(PendingNewScene);
-
-        world
-            .run_system_cached(cleanup_pending_new_scene)
-            .expect("system runs");
-
-        assert!(
-            !world.contains_resource::<PendingNewScene>(),
-            "with no dialog and no in-flight task, this is an Esc/Cancel and must clear",
-        );
     }
 }

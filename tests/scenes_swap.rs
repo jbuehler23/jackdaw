@@ -493,11 +493,16 @@ fn scene_new_appends_an_untitled_tab() {
     assert_eq!(scenes.active, 0);
     assert!(scenes.tabs[0].path.is_none());
     assert!(scenes.tabs[0].display_name.starts_with("untitled-"));
-    let has_sun = {
+    let has_light = {
         let mut names = app.world_mut().query::<&Name>();
-        names.iter(app.world()).any(|name| name.as_str() == "Sun")
+        names
+            .iter(app.world())
+            .any(|name| name.as_str() == "Directional Light")
     };
-    assert!(has_sun, "new untitled scene should spawn the default Sun");
+    assert!(
+        has_light,
+        "new untitled scene should spawn the default directional light"
+    );
 
     app.world_mut()
         .run_system_cached(jackdaw::scenes::operators::scene_new_system)

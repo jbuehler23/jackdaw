@@ -20,7 +20,7 @@ pub use legacy::{load_inline_assets, load_scene_from_jsn};
 pub(crate) use load::{
     SidecarImport, clear_scene_entities, despawn_scene_entities, import_terrain_sidecars,
 };
-pub use load::{load_scene, load_scene_from_file, new_scene};
+pub use load::{load_scene, load_scene_from_file};
 pub use registration::{register_entities_in_ast, register_entity_in_ast};
 pub use save::{
     SaveOutcome, emit_bsn_scene_with_inline_assets, save_layout_to_project, save_scene,
@@ -28,7 +28,7 @@ pub use save::{
 };
 pub(crate) use save::{emit_bsn_entities_with_inline_assets, save_scene_inner};
 
-use load::{cleanup_pending_new_scene, on_new_scene_discard, on_new_scene_save, poll_scene_dialog};
+use load::poll_scene_dialog;
 
 /// Component type path prefixes that should never be saved (runtime-only / internal).
 const SKIP_COMPONENT_PREFIXES: &[&str] = &[
@@ -183,12 +183,9 @@ impl Plugin for SceneIoPlugin {
             .init_resource::<SceneDirtyState>()
             .add_systems(
                 Update,
-                (poll_scene_dialog, cleanup_pending_new_scene)
-                    .run_if(in_state(crate::AppState::Editor)),
+                poll_scene_dialog.run_if(in_state(crate::AppState::Editor)),
             )
-            .add_systems(PostUpdate, deactivate_document_cameras)
-            .add_observer(on_new_scene_save)
-            .add_observer(on_new_scene_discard);
+            .add_systems(PostUpdate, deactivate_document_cameras);
     }
 }
 
