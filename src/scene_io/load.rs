@@ -11,7 +11,7 @@ use serde::de::DeserializeSeed;
 
 use crate::EditorEntity;
 
-use super::registration::{register_entities_in_ast, register_entity_in_ast};
+use super::registration::register_entities_in_ast;
 use super::save::{SaveOutcome, save_scene_inner, save_scene_with_outcome};
 use super::{SceneDirtyState, SceneFilePath, SceneMetadata, get_window_handle, is_scene_dirty};
 
@@ -373,45 +373,12 @@ fn do_new_scene(world: &mut World) {
     scene_path.path = None;
     scene_path.metadata = SceneMetadata::default();
     world.resource_mut::<SceneDirtyState>().undo_len_at_save = 0;
-    spawn_default_lighting(world);
-    info!("New scene created");
-}
-
-/// Spawn default lighting for a new / empty scene (Sun directional
-/// light + no ambient). Idempotent: if any `DirectionalLight` already
-/// exists in the world we skip the Sun spawn so loaded scenes that
-/// carry their own lighting don't get a duplicate `Sun`. The ambient
-/// override is always applied since it is a `Resource` mutation, not a
-/// spawn.
-pub fn spawn_default_lighting(world: &mut World) {
-    world.insert_resource(GlobalAmbientLight::NONE);
-
-    let has_directional = world
-        .query::<&DirectionalLight>()
-        .iter(world)
-        .next()
-        .is_some();
-    if has_directional {
-        return;
+    if let Err(err) =
+        jackdaw_bsn::load_bsn_scene(world, crate::scenes::operators::NEW_SCENE_BSN)
+    {
+        warn!("Failed to load new scene: {err}");
     }
-
-    let sun = world
-        .spawn((
-            Name::new("Sun"),
-            DirectionalLight {
-                shadow_maps_enabled: true,
-                illuminance: 10000.0,
-                ..default()
-            },
-            Transform::from_xyz(10.0, 20.0, 10.0).with_rotation(Quat::from_euler(
-                EulerRot::XYZ,
-                -0.8,
-                0.4,
-                0.0,
-            )),
-        ))
-        .id();
-    register_entity_in_ast(world, sun);
+    info!("New scene created");
 }
 
 pub(super) fn on_new_scene_save(

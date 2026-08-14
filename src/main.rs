@@ -130,8 +130,7 @@ fn main() -> AppExit {
             avian3d::prelude::PhysicsPlugins::default(),
             bevy_enhanced_input::prelude::EnhancedInputPlugin,
         ))
-        .add_plugins(editor_plugins)
-        .add_systems(OnEnter(jackdaw::AppState::Editor), spawn_scene);
+        .add_plugins(editor_plugins);
 
     if let Some(pending) = auto_open {
         app.insert_resource(pending);
@@ -150,12 +149,6 @@ fn editor_plugins(app: &mut App) {
     app.add_plugins(JackdawEditorPlugins::default());
     #[cfg(feature = "dylib")]
     app.add_plugins(DylibLoaderPlugin);
-}
-
-fn spawn_scene(mut commands: Commands) {
-    commands.queue(|world: &mut World| {
-        jackdaw::scene_io::spawn_default_lighting(world);
-    });
 }
 
 #[track_caller]

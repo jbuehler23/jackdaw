@@ -7,7 +7,20 @@ use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::scene_io::SceneFilePath;
-use crate::scenes::{SceneTab, Scenes, swap::swap_active_tab};
+use crate::scenes::{SceneTab, Scenes, TabContent, swap::swap_active_tab};
+
+/// Starting document for File > New and untitled tabs.
+pub(crate) const NEW_SCENE_BSN: &str = "\
+#Sun
+bevy_light::directional_light::DirectionalLight {
+    shadow_maps_enabled: true,
+}
+bevy_transform::components::transform::Transform {
+    translation: glam::Vec3 { x: 0.0, y: 8.0, z: 0.0 },
+    rotation: glam::Quat { x: -0.4226183, y: 0.0, z: 0.0, w: 0.9063078 },
+}
+bevy_camera::visibility::Visibility::Visible
+";
 
 /// Counter for default `untitled-N` names. Persists across the editor
 /// session so closing unsaved tabs and creating new ones doesn't reuse
@@ -58,17 +71,30 @@ pub fn scene_new_system(world: &mut World) {
         c.0 += 1;
         c.0
     };
-    let tab = SceneTab::new_untitled(n);
+    let doc = match jackdaw_bsn::parse_bsn_text(NEW_SCENE_BSN) {
+        Ok(doc) => doc,
+        Err(err) => {
+            error!("new scene: inline default BSN failed to parse: {err}");
+            jackdaw_bsn::SceneBsnAst::default()
+        }
+    };
+    let mut tab = SceneTab::new_untitled(n);
+    tab.content = TabContent::Scene(Some(Box::new(doc)));
     let target = world.resource_mut::<Scenes>().push_tab(tab);
+    activate_pushed_tab(world, target);
+}
 
-    // First tab: no active to swap FROM. Just set active.
+/// Activate a tab that was just appended. The first tab cannot go through
+/// `swap_active_tab`: `Scenes.active` defaults to 0, so swap would see
+/// `current == target` and no-op without loading the document.
+fn activate_pushed_tab(world: &mut World, target: usize) {
     let tab_count = world.resource::<Scenes>().tabs.len();
     if tab_count == 1 {
-        world.resource_mut::<Scenes>().active = 0;
-        return;
+        world.resource_mut::<Scenes>().active = target;
+        crate::scenes::swap::activate_tab(world, target);
+    } else {
+        swap_active_tab(world, target);
     }
-
-    swap_active_tab(world, target);
 }
 
 #[operator(id = "scene.open", label = "Open Scene...", allows_undo = false)]
@@ -211,18 +237,7 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     };
 
     let target = world.resource_mut::<Scenes>().push_tab(tab);
-
-    // If this is the first tab we've pushed, there is nothing to swap
-    // away from, so `swap_active_tab` would bail at `current == target`
-    // and the snapshot would never get loaded into the world. Skip
-    // straight to activation in that case.
-    let tab_count = world.resource::<Scenes>().tabs.len();
-    if tab_count == 1 {
-        world.resource_mut::<Scenes>().active = target;
-        crate::scenes::swap::activate_tab(world, target);
-    } else {
-        swap_active_tab(world, target);
-    }
+    activate_pushed_tab(world, target);
 }
 
 fn pick_scene_file() -> Option<std::path::PathBuf> {
@@ -441,4 +456,13 @@ pub fn scene_cycle_prev(_: In<OperatorParameters>, mut commands: Commands) -> Op
         scene_switch_system(world, target);
     });
     OperatorResult::Finished
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn new_scene_bsn_parses() {
+        jackdaw_bsn::parse_bsn_text(super::NEW_SCENE_BSN)
+            .expect("inline new-scene BSN must parse");
+    }
 }

@@ -20,7 +20,7 @@ pub use legacy::{load_inline_assets, load_scene_from_jsn};
 pub(crate) use load::{
     SidecarImport, clear_scene_entities, despawn_scene_entities, import_terrain_sidecars,
 };
-pub use load::{load_scene, load_scene_from_file, new_scene, spawn_default_lighting};
+pub use load::{load_scene, load_scene_from_file, new_scene};
 pub use registration::{register_entities_in_ast, register_entity_in_ast};
 pub use save::{
     SaveOutcome, emit_bsn_scene_with_inline_assets, save_layout_to_project, save_scene,

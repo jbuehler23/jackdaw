@@ -476,6 +476,7 @@ fn scene_new_appends_an_untitled_tab() {
             .disable::<WinitPlugin>(),
     );
     app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
@@ -492,6 +493,11 @@ fn scene_new_appends_an_untitled_tab() {
     assert_eq!(scenes.active, 0);
     assert!(scenes.tabs[0].path.is_none());
     assert!(scenes.tabs[0].display_name.starts_with("untitled-"));
+    let has_sun = {
+        let mut names = app.world_mut().query::<&Name>();
+        names.iter(app.world()).any(|name| name.as_str() == "Sun")
+    };
+    assert!(has_sun, "new untitled scene should spawn the default Sun");
 
     app.world_mut()
         .run_system_cached(jackdaw::scenes::operators::scene_new_system)
@@ -523,6 +529,7 @@ fn scene_open_dedupes_by_path() {
             .disable::<WinitPlugin>(),
     );
     app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
@@ -1117,6 +1124,7 @@ fn scene_open_flags_dirty_when_ids_need_migration() {
             .disable::<WinitPlugin>(),
     );
     app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
