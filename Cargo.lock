@@ -4873,6 +4873,7 @@ dependencies = [
  "dirs",
  "jackdaw_api_macros",
  "jackdaw_commands",
+ "jackdaw_env",
  "jackdaw_panels",
  "jackdaw_scene_types",
  "lucide-icons",
@@ -4975,6 +4976,9 @@ dependencies = [
 [[package]]
 name = "jackdaw_env"
 version = "0.19.0"
+dependencies = [
+ "dirs",
+]
 
 [[package]]
 name = "jackdaw_extension"
