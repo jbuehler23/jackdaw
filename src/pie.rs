@@ -1549,6 +1549,61 @@ fn reconcile_play_state(world: &mut World) {
     }
 }
 
+#[cfg(target_os = "windows")]
+mod pie_windows {
+    use std::{
+        os::{
+            raw::c_void,
+            windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+        },
+        process::Child,
+        sync::LazyLock,
+    };
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::*;
+    use windows::core::PCWSTR;
+
+    pub static PIE_JOB: LazyLock<Job> = LazyLock::new(|| unsafe {
+        let handle = OwnedHandle::from_raw_handle(
+            CreateJobObjectW(None, PCWSTR::null())
+                .expect("Failed to create job object for PIE")
+                .0,
+        );
+
+        let info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+            BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
+                LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                    | JOB_OBJECT_LIMIT_BREAKAWAY_OK
+                    | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        SetInformationJobObject(
+            HANDLE(handle.as_raw_handle()),
+            JobObjectExtendedLimitInformation,
+            &raw const info as *const c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+        .expect("Failed to set job object info for PIE");
+
+        Job(handle)
+    });
+
+    pub struct Job(pub OwnedHandle);
+
+    impl Job {
+        pub fn assign_to_process(&self, process: &Child) {
+            let handle = process.as_raw_handle();
+            unsafe {
+                AssignProcessToJobObject(HANDLE(self.0.as_raw_handle()), HANDLE(handle))
+                    .expect("Failed to assign process to job for PIE")
+            };
+        }
+    }
+}
+
 /// Launch the project's game binary for one instance, point it at a
 /// fresh rendezvous, start draining its stderr, and begin awaiting its
 /// connection on a task pool. Returns the `Connecting` stage; on
@@ -1640,6 +1695,11 @@ fn spawn_instance(
             return None;
         }
     };
+
+    // On Windows, we use a job object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE set.
+    // Because we own the only handle to the object, if Jackdaw crashes, the job object will be closed and the game killed.
+    #[cfg(target_os = "windows")]
+    pie_windows::PIE_JOB.assign_to_process(&child);
 
     let stderr_tail: StderrTail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
     if let Some(stderr) = child.stderr.take() {
