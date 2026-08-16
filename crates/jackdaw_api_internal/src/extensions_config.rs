@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 use bevy::{platform::collections::HashSet, prelude::*};
 use serde::{Deserialize, Serialize};
 
-use crate::paths::config_dir;
+use jackdaw_env::paths::config_dir;
 
 /// On-disk shape. Maps extension IDs to their configuration.
 #[derive(Serialize, Deserialize, Default, Deref, DerefMut)]
