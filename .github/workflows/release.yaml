@@ -166,6 +166,7 @@ jobs:
           -p jackdaw_camera_rig
           -p jackdaw_commands
           -p jackdaw_dylib
+          -p jackdaw_env
           -p jackdaw_extension
           -p jackdaw_feathers
           -p jackdaw_fuzzy

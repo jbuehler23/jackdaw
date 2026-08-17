@@ -13,6 +13,7 @@ jackdaw_panels.workspace = true
 jackdaw_commands.workspace = true
 jackdaw_api_macros.workspace = true
 jackdaw_scene_types.workspace = true
+jackdaw_env.workspace = true
 lucide-icons.workspace = true
 dirs.workspace = true
 serde.workspace = true

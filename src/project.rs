@@ -4,7 +4,7 @@ use std::{
 };
 
 use bevy::prelude::*;
-use jackdaw_api_internal::paths::{last_new_project_location_path, recent_file_path};
+use jackdaw_env::paths::{last_new_project_location_path, recent_file_path};
 use serde::{Deserialize, Serialize};
 
 /// Resource holding the active project root directory and its config.
