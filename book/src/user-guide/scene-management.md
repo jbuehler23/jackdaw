@@ -11,9 +11,9 @@ normal Bevy crate: a folder with a `Cargo.toml`, a
 - `Ctrl+S` saves the current scene to its on-disk path. The
   first save prompts for a path; pick something under
   `assets/`.
-- `Ctrl+O` opens a scene from disk. The picker starts in the
+- `Ctrl+O` opens a scene in a new tab. The picker starts in the
   current project's `assets/` folder.
-- `Ctrl+Shift+N` creates a new empty scene in memory; it is
+- `Ctrl+T` creates a new empty scene tab; it is
   unsaved until you `Ctrl+S` it.
 
 Scene files are human-readable, line-diffable, and designed to

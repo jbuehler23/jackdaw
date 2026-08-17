@@ -34,6 +34,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneNewOp>([
         PresetInput::key("KeyT").ctrl(),
     ]);
+    ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneOpenOp>([
+        PresetInput::key("KeyO").ctrl_or_super(),
+    ]);
     ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneCloseOp>([
         PresetInput::key("KeyW").ctrl(),
     ]);
@@ -60,15 +63,21 @@ pub fn scene_new_system(world: &mut World) {
     };
     let tab = SceneTab::new_untitled(n);
     let target = world.resource_mut::<Scenes>().push_tab(tab);
+    activate_pushed_tab(world, target);
+    crate::entity_ops::seed_new_scene_defaults(world);
+}
 
-    // First tab: no active to swap FROM. Just set active.
+/// Activate a tab that was just appended. The first tab cannot go through
+/// `swap_active_tab`: `Scenes.active` defaults to 0, so swap would see
+/// `current == target` and no-op without loading the document.
+fn activate_pushed_tab(world: &mut World, target: usize) {
     let tab_count = world.resource::<Scenes>().tabs.len();
     if tab_count == 1 {
-        world.resource_mut::<Scenes>().active = 0;
-        return;
+        world.resource_mut::<Scenes>().active = target;
+        crate::scenes::swap::activate_tab(world, target);
+    } else {
+        swap_active_tab(world, target);
     }
-
-    swap_active_tab(world, target);
 }
 
 #[operator(id = "scene.open", label = "Open Scene...", allows_undo = false)]
@@ -78,11 +87,7 @@ pub fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> Operator
             return;
         };
         // Legacy .jsn picks confirm conversion before opening.
-        crate::migrate_dialog::request_open_with_conversion(
-            world,
-            &path,
-            crate::migrate_dialog::ConversionOpenTarget::Tab,
-        );
+        crate::migrate_dialog::request_open_with_conversion(world, &path);
     });
     OperatorResult::Finished
 }
@@ -211,18 +216,7 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     };
 
     let target = world.resource_mut::<Scenes>().push_tab(tab);
-
-    // If this is the first tab we've pushed, there is nothing to swap
-    // away from, so `swap_active_tab` would bail at `current == target`
-    // and the snapshot would never get loaded into the world. Skip
-    // straight to activation in that case.
-    let tab_count = world.resource::<Scenes>().tabs.len();
-    if tab_count == 1 {
-        world.resource_mut::<Scenes>().active = target;
-        crate::scenes::swap::activate_tab(world, target);
-    } else {
-        swap_active_tab(world, target);
-    }
+    activate_pushed_tab(world, target);
 }
 
 fn pick_scene_file() -> Option<std::path::PathBuf> {

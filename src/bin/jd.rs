@@ -608,7 +608,7 @@ fn resolve_pack_project(args: &[String]) -> Result<PackProject, String> {
 /// The conventional publisher key location, so `keygen` and `pack` agree
 /// without either being told where it is.
 fn default_publisher_key() -> Option<std::path::PathBuf> {
-    jackdaw_project_build::bootstrap::data_dir().map(|dir| dir.join("publisher-key.pk8"))
+    jackdaw_env::paths::data_dir().map(|dir| dir.join("publisher-key.pk8"))
 }
 
 fn first_positional(args: &[String]) -> Option<&String> {

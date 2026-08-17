@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use jackdaw_env::paths::data_dir;
 use jackdaw_env::rust_env_command;
 use serde::{Deserialize, Serialize};
 
@@ -19,25 +20,6 @@ use serde::{Deserialize, Serialize};
 /// recipe's `rust-toolchain.toml`: the rmeta trick requires project
 /// builds and the SDK to share an exact rustc.
 pub const SDK_TOOLCHAIN_CHANNEL: &str = jackdaw_env::RUSTUP_TOOLCHAIN;
-
-/// The jackdaw data dir: `$XDG_DATA_HOME/jackdaw` when set to an absolute
-/// path, else `~/.jackdaw`. `None` when no home directory resolves.
-pub fn data_dir() -> Option<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
-        let xdg = PathBuf::from(xdg);
-        if xdg.is_absolute() {
-            return Some(xdg.join("jackdaw"));
-        }
-    }
-    home_dir().map(|home| home.join(".jackdaw"))
-}
-
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
-}
 
 /// The cache dir for this (jackdaw version, toolchain) SDK build. Keyed
 /// so a version or toolchain change lands in a fresh dir and old ones can

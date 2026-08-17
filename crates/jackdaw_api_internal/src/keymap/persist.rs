@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use super::types::ActiveKeymapPreset;
 
 fn keymap_preset_path() -> Option<PathBuf> {
-    crate::paths::config_dir().map(|d| d.join("keymap_preset.json"))
+    jackdaw_env::paths::config_dir().map(|d| d.join("keymap_preset.json"))
 }
 
 /// Load the active keymap preset from disk. Returns the default ("classic")

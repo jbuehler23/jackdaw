@@ -39,7 +39,6 @@ pub mod keymap;
 pub mod keymap_conditions;
 pub mod lifecycle;
 pub mod operator;
-pub mod paths;
 pub mod pie;
 mod registries;
 pub mod runtime;

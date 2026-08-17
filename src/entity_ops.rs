@@ -225,7 +225,12 @@ pub fn create_entity(
                     shadow_maps_enabled: true,
                     ..default()
                 },
-                Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, 0.4, 0.0)),
+                Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, 0.4, 0.0))
+                    .with_translation(Vec3 {
+                        x: 0.0,
+                        y: 10.0,
+                        z: 0.0,
+                    }),
             ))
             .id(),
         EntityTemplate::SpotLight => commands
@@ -375,19 +380,32 @@ fn apply_last_material(entity: Entity) -> impl FnOnce(&mut World) {
     }
 }
 
+/// Spawn a template into the live world and register it in the scene document.
+pub fn spawn_template_in_document(world: &mut World, template: EntityTemplate) -> Entity {
+    let mut system_state: SystemState<(Commands, ResMut<Selection>)> = SystemState::new(world);
+    let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
+        return Entity::PLACEHOLDER;
+    };
+    let entity = create_entity(&mut commands, template, &mut selection);
+    system_state.apply(world);
+    crate::scene_io::register_entity_in_ast(world, entity);
+    entity
+}
+
+/// Seed an empty live document with a directional light.
+pub(crate) fn seed_new_scene_defaults(world: &mut World) {
+    if !world.contains_resource::<jackdaw_bsn::SceneBsnAst>() {
+        world.insert_resource(jackdaw_bsn::SceneBsnAst::default());
+    }
+    spawn_template_in_document(world, EntityTemplate::DirectionalLight);
+}
+
 /// World-access version of `create_entity`. Used from menu actions and other deferred contexts.
 /// Pushes a `SpawnEntity` command so the addition can be undone.
 pub fn create_entity_in_world(world: &mut World, template: EntityTemplate) {
     let label = format!("Add {}", template.label());
     let spawn_fn = Box::new(move |world: &mut World| -> Entity {
-        let mut system_state: SystemState<(Commands, ResMut<Selection>)> = SystemState::new(world);
-        let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
-            return Entity::PLACEHOLDER;
-        };
-        let entity = create_entity(&mut commands, template, &mut selection);
-        system_state.apply(world);
-        crate::scene_io::register_entity_in_ast(world, entity);
-        entity
+        spawn_template_in_document(world, template)
     });
 
     let mut cmd: Box<dyn EditorCommand> = Box::new(crate::commands::SpawnEntity {

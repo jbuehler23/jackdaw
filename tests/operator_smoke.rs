@@ -14,7 +14,8 @@ use jackdaw::asset_browser::AssetSelectFolderOp;
 use jackdaw::entity_ops::EntityAddImageOp;
 use jackdaw::material_browser::MaterialSelectFolderOp;
 use jackdaw::navmesh::save_load::{NavmeshLoadOp, NavmeshSaveOp};
-use jackdaw::scene_ops::{SceneOpenOp, SceneSaveAsOp, SceneSaveOp};
+use jackdaw::scene_ops::{SceneSaveAsOp, SceneSaveOp};
+use jackdaw::scenes::operators::SceneOpenOp;
 use jackdaw_api::prelude::*;
 
 mod util;

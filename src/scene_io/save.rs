@@ -1087,9 +1087,9 @@ mod tests {
     }
 
     /// I10(a): `save_scene_with_outcome` must distinguish a genuine
-    /// failure from "opened a dialog instead" so a caller with work to
-    /// defer (see `scene_io::load::on_new_scene_save`) does not give up
-    /// on a save that has not actually finished yet.
+    /// failure from "opened a dialog instead" so a caller that still has
+    /// work to do after a save does not treat a pending Save As dialog
+    /// as a failed write.
     #[test]
     fn save_scene_with_outcome_reports_saved_on_success() {
         let mut world = build_live_save_world();
