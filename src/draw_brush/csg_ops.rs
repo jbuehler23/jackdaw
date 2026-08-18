@@ -4,9 +4,8 @@ use crate::commands::{
 };
 use crate::draw_brush::{
     ActiveDraw, BrushData, BrushOrGroup, BrushStableId, DrawBrushState, MIN_FRAGMENT_SIZE,
-    PUNCH_THROUGH_DEPTH, StableIdCounter, brush_data_from_entity, build_cutter_planes,
-    build_cutter_planes_polygon, entity_by_stable_id, spawn_brush_from_data, spawn_brush_or_group,
-    topology_aabbs_overlap,
+    PUNCH_THROUGH_DEPTH, StableIdCounter, brush_data_from_entity, drawn_brush_from_active,
+    entity_by_stable_id, spawn_brush_from_data, spawn_brush_or_group, topology_aabbs_overlap,
 };
 use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
@@ -25,7 +24,7 @@ pub(crate) fn brush_parent_group(world: &World, entity: Entity) -> Option<(Entit
     Some((parent, translation))
 }
 
-/// Perform CSG subtraction: subtract the drawn cuboid from all intersecting brushes.
+/// Perform CSG subtraction: subtract the drawn solid from all intersecting brushes.
 /// Routes through the mesh-CSG kernel so concave targets are handled correctly.
 pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
     // Box-cut always punches through: extend the cutter far into the brush
@@ -36,31 +35,34 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
     let mut punch_active = active.clone();
     punch_active.depth = -PUNCH_THROUGH_DEPTH;
 
-    let cutter_planes = if punch_active.polygon_vertices.is_empty() {
-        build_cutter_planes(&punch_active)
-    } else {
-        build_cutter_planes_polygon(&punch_active)
+    let Some((cutter_brush, cutter_transform)) = drawn_brush_from_active(&punch_active) else {
+        return;
     };
-    let cutter_topology = compute_brush_topology(&cutter_planes);
+    let (world_cutter_faces, world_cutter_topo) = jackdaw_csg::brush_to_world(
+        &cutter_brush.faces,
+        &cutter_brush.topology,
+        cutter_transform.rotation,
+        cutter_transform.translation,
+    );
 
     // Diagnostic logging for CSG subtract: log cutter geometry so a buggy
     // op can be reconstructed from the log output. Remove this block once
     // the box-cutter bugs are pinned down.
     {
-        let bbox_min = cutter_topology
+        let bbox_min = world_cutter_topo
             .vertices
             .iter()
             .map(|v| v.position)
             .fold(Vec3::MAX, Vec3::min);
-        let bbox_max = cutter_topology
+        let bbox_max = world_cutter_topo
             .vertices
             .iter()
             .map(|v| v.position)
             .fold(Vec3::MIN, Vec3::max);
         info!(
             "csg-subtract: cutter faces={} verts={} bbox=({:.4},{:.4},{:.4})..({:.4},{:.4},{:.4})",
-            cutter_planes.len(),
-            cutter_topology.vertices.len(),
+            world_cutter_faces.len(),
+            world_cutter_topo.vertices.len(),
             bbox_min.x,
             bbox_min.y,
             bbox_min.z,
@@ -85,7 +87,7 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
         }
 
         let mut results: Vec<SubtractionResult> = Vec::new();
-        let cutter_input = jackdaw_csg::CsgInput::new(&cutter_planes, &cutter_topology);
+        let cutter_input = jackdaw_csg::CsgInput::new(&world_cutter_faces, &world_cutter_topo);
 
         for (entity, brush, global_transform) in &targets {
             // Transform target faces + topology to world space.
@@ -96,7 +98,7 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
             // Cheap AABB rejection before invoking the kernel. See
             // `topology_aabbs_overlap` above for why we don't use the plane
             // separating-axis test on concave brushes.
-            if !topology_aabbs_overlap(&world_target_topo, &cutter_topology) {
+            if !topology_aabbs_overlap(&world_target_topo, &world_cutter_topo) {
                 continue;
             }
 

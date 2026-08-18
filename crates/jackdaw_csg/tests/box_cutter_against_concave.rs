@@ -1,11 +1,10 @@
 //! Integration test for the interactive C-key box cutter migrated to
 //! `jackdaw_csg::brush_difference_split`.
 //!
-//! The cutter is a thin slab (the same shape the drawn-cuboid path
-//! produces from `build_cutter_planes` in `src/draw_brush.rs`). The
-//! target is a cube with one beveled edge. The convex-only
-//! `subtract_brush` path bails on this concave target; mesh-CSG should
-//! split the cube into the expected fragments.
+//! The cutter is a thin slab (the same shape a drawn rectangle produces
+//! from `Brush::prism`). The target is a cube with one beveled edge. The
+//! convex-only `subtract_brush` path bails on this concave target;
+//! mesh-CSG should split the cube into the expected fragments.
 
 use glam::Vec3;
 use jackdaw_csg::{CsgInput, brush_difference_split};
@@ -49,8 +48,7 @@ fn beveled_cube(half: f32, width: f32) -> Brush {
 }
 
 /// Build a slab cutter aligned to the world axes. Equivalent in shape
-/// to what `build_cutter_planes` produces from a flat drawn rectangle
-/// with extrude depth `depth` along the +Y axis.
+/// to a drawn rectangle extruded along +Y.
 fn box_cutter(center: Vec3, half_x: f32, half_z: f32, depth: f32) -> Brush {
     let mut brush = Brush::cuboid(half_x, depth.abs() / 2.0, half_z);
     for v in &mut brush.topology.vertices {

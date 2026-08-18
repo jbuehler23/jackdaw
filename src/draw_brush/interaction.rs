@@ -1,7 +1,7 @@
 use crate::default_style;
 use crate::draw_brush::{
-    ConfirmDrawBrushOp, DrawBrushGizmoGroup, DrawBrushState, DrawMode, DrawPhase, DrawPlane,
-    EXTRUDE_DEPTH_SENSITIVITY, MIN_FOOTPRINT_SIZE, convex_hull_on_plane, draw_plane_grid,
+    ConfirmDrawBrushOp, DrawBrushDashedGizmoGroup, DrawBrushGizmoGroup, DrawBrushState, DrawMode,
+    DrawPhase, DrawPlane, EXTRUDE_DEPTH_SENSITIVITY, MIN_FOOTPRINT_SIZE, draw_plane_grid,
     footprint_corners, ray_plane_intersection, snap_to_diagonal, snap_to_plane_grid,
 };
 use crate::prelude::*;
@@ -373,6 +373,7 @@ pub(crate) fn draw_brush_preview(
     draw_state: Res<DrawBrushState>,
     snap_settings: Res<SnapSettings>,
     mut gizmos: Gizmos<DrawBrushGizmoGroup>,
+    mut dashed_gizmos: Gizmos<DrawBrushDashedGizmoGroup>,
     brushes: Query<(&Brush, &GlobalTransform)>,
 ) {
     let Some(ref active) = draw_state.active else {
@@ -459,17 +460,24 @@ pub(crate) fn draw_brush_preview(
                 gizmos.sphere(Isometry3d::from_translation(v), 0.04, color);
             }
 
-            // Compute and draw the convex hull outline
-            let hull = convex_hull_on_plane(verts, &active.plane);
-            if hull.len() >= 2 {
-                for i in 0..hull.len() {
-                    gizmos.line(hull[i], hull[(i + 1) % hull.len()], color);
-                }
+            for pair in verts.windows(2) {
+                gizmos.line(pair[0], pair[1], color);
+            }
+            if let [first, .., last] = verts.as_slice()
+                && verts.len() >= 3
+            {
+                gizmos.line(*last, *first, color);
             }
 
-            // Draw preview edge from last placed vertex to cursor
+            // Draw preview edges from last → cursor and cursor → first once
+            // there is a chain to close.
             if let (Some(&last), Some(cursor_pos)) = (verts.last(), cursor) {
-                gizmos.line(last, cursor_pos, color);
+                dashed_gizmos.line(last, cursor_pos, color);
+                if let Some(&first) = verts.first()
+                    && verts.len() >= 2
+                {
+                    dashed_gizmos.line(cursor_pos, first, color);
+                }
 
                 // Crosshair at cursor
                 let size = 0.15;

@@ -124,8 +124,108 @@ pub(crate) fn snap_to_diagonal(hit: Vec3, origin: Vec3, plane: &DrawPlane) -> Ve
     plane.axis_u * snapped_u + plane.axis_v * snapped_v + plane.normal * plane_d
 }
 
-/// Compute the 2D convex hull of coplanar points projected onto the drawing plane.
-/// Returns the subset of input points forming the hull, in CCW winding order.
-pub(crate) fn convex_hull_on_plane(points: &[Vec3], plane: &DrawPlane) -> Vec<Vec3> {
-    jackdaw_hull::convex_hull_on_plane(points, plane.axis_u, plane.axis_v)
+/// True if the ring self-intersects when projected onto the drawing plane.
+pub(crate) fn polygon_self_intersects_on_plane(points: &[Vec3], plane: &DrawPlane) -> bool {
+    let n = points.len();
+    if n < 4 {
+        return false;
+    }
+    let projected: Vec<Vec2> = points
+        .iter()
+        .map(|&point| {
+            Vec2::new(
+                (point - plane.origin).dot(plane.axis_u),
+                (point - plane.origin).dot(plane.axis_v),
+            )
+        })
+        .collect();
+    for i in 0..n {
+        let i_next = (i + 1) % n;
+        for j in (i + 1)..n {
+            let j_next = (j + 1) % n;
+            if i == j_next || j == i_next {
+                continue;
+            }
+            if segments_intersect(
+                projected[i],
+                projected[i_next],
+                projected[j],
+                projected[j_next],
+            ) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn segments_intersect(start_a: Vec2, end_a: Vec2, start_b: Vec2, end_b: Vec2) -> bool {
+    let orientation_start_b = orient(start_a, end_a, start_b);
+    let orientation_end_b = orient(start_a, end_a, end_b);
+    let orientation_start_a = orient(start_b, end_b, start_a);
+    let orientation_end_a = orient(start_b, end_b, end_a);
+    if orientation_start_b * orientation_end_b < 0.0
+        && orientation_start_a * orientation_end_a < 0.0
+    {
+        return true;
+    }
+    const EPS: f32 = 1e-5;
+    (orientation_start_b.abs() <= EPS && point_on_segment(start_b, start_a, end_a))
+        || (orientation_end_b.abs() <= EPS && point_on_segment(end_b, start_a, end_a))
+        || (orientation_start_a.abs() <= EPS && point_on_segment(start_a, start_b, end_b))
+        || (orientation_end_a.abs() <= EPS && point_on_segment(end_a, start_b, end_b))
+}
+
+fn orient(start: Vec2, end: Vec2, point: Vec2) -> f32 {
+    (end - start).perp_dot(point - start)
+}
+
+fn point_on_segment(point: Vec2, segment_start: Vec2, segment_end: Vec2) -> bool {
+    const EPS: f32 = 1e-5;
+    let segment = segment_end - segment_start;
+    let to_point = point - segment_start;
+    let length_squared = segment.length_squared();
+    if length_squared <= EPS * EPS {
+        return to_point.length_squared() <= EPS * EPS;
+    }
+    let parameter = to_point.dot(segment) / length_squared;
+    parameter >= -EPS && parameter <= 1.0 + EPS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::draw_brush::DrawPlane;
+    use bevy::prelude::Vec3;
+
+    fn xz_plane() -> DrawPlane {
+        DrawPlane {
+            origin: Vec3::ZERO,
+            normal: Vec3::Y,
+            axis_u: Vec3::X,
+            axis_v: Vec3::Z,
+        }
+    }
+
+    #[test]
+    fn chevron_ring_is_not_self_intersecting() {
+        let chevron = [
+            Vec3::new(0.0, 0.0, -1.0),
+            Vec3::new(3.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(0.5, 0.0, 0.0),
+        ];
+        assert!(!polygon_self_intersects_on_plane(&chevron, &xz_plane()));
+    }
+
+    #[test]
+    fn bowtie_ring_is_self_intersecting() {
+        let bowtie = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ];
+        assert!(polygon_self_intersects_on_plane(&bowtie, &xz_plane()));
+    }
 }

@@ -1,4 +1,5 @@
 use crate::core_extension::CoreExtensionInputContext;
+use crate::default_style;
 use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
 use crate::{selection::Selection, viewport::ViewportCursor};
@@ -228,8 +229,7 @@ pub(crate) fn draw_brush_toggle_mode(
     OperatorResult::Finished
 }
 
-/// Close the in-progress polygon (via convex hull) and switch to
-/// extruding depth.
+/// Close the in-progress polygon and switch to extruding depth.
 #[operator(
     id = "viewport.draw_brush.commit_polygon",
     label = "Commit Polygon",
@@ -243,11 +243,12 @@ pub(crate) fn draw_brush_commit_polygon(
     vp: ViewportCursor,
 ) -> OperatorResult {
     let active = draw_state.active.as_mut()?;
-    let hull = convex_hull_on_plane(&active.polygon_vertices, &active.plane);
-    if hull.len() < 3 {
+    if active.polygon_vertices.len() < 3 {
         return OperatorResult::Cancelled;
     }
-    active.polygon_vertices = hull;
+    if polygon_self_intersects_on_plane(&active.polygon_vertices, &active.plane) {
+        return OperatorResult::Cancelled;
+    }
     let viewport_cursor = (|| {
         let cursor_pos = vp.cursor()?;
         let camera_entity = active.camera.or_else(|| vp.camera_entity())?;
@@ -417,6 +418,9 @@ pub(crate) const PUNCH_THROUGH_DEPTH: f32 = 1000.0;
 #[derive(Default, Reflect, GizmoConfigGroup)]
 pub struct DrawBrushGizmoGroup;
 
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub struct DrawBrushDashedGizmoGroup;
+
 pub struct DrawBrushPlugin;
 
 impl Plugin for DrawBrushPlugin {
@@ -426,6 +430,7 @@ impl Plugin for DrawBrushPlugin {
             .init_resource::<StableIdCounter>()
             .add_systems(Update, assign_missing_brush_stable_ids)
             .init_gizmo_group::<DrawBrushGizmoGroup>()
+            .init_gizmo_group::<DrawBrushDashedGizmoGroup>()
             .add_systems(Startup, configure_draw_brush_gizmos)
             .add_systems(
                 Update,
@@ -449,6 +454,10 @@ impl Plugin for DrawBrushPlugin {
 fn configure_draw_brush_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
     let (config, _) = config_store.config_mut::<DrawBrushGizmoGroup>();
     config.depth_bias = -1.0;
+
+    let (config, _) = config_store.config_mut::<DrawBrushDashedGizmoGroup>();
+    config.depth_bias = -1.0;
+    config.line = default_style::DEFAULT_DASHED_LINE_CONFIG;
 }
 
 /// Marker action: Alt+B starts a draw that appends the new brush to

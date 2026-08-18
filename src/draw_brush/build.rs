@@ -1,10 +1,8 @@
 use crate::draw_brush::{ActiveDraw, MIN_EXTRUDE_DEPTH, StableIdCounter};
 use crate::selection::{Selected, Selection};
 use bevy::prelude::*;
-use jackdaw_geometry::{
-    compute_brush_geometry_from_planes, compute_brush_topology, compute_face_tangent_axes,
-};
-use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
+use jackdaw_geometry::{compute_brush_geometry_from_planes, compute_brush_topology};
+use jackdaw_scene_types::Brush;
 
 /// Rotation that maps local X -> `axis_u`, local Y -> `normal`,
 /// local Z -> `axis_u` × `normal` (right-handed).
@@ -42,22 +40,27 @@ pub(crate) fn prism_from_world_polygon(
     ))
 }
 
-pub(crate) fn spawn_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
+/// Prism solid for the in-progress draw.
+pub(crate) fn drawn_brush_from_active(active: &ActiveDraw) -> Option<(Brush, Transform)> {
     let polygon: Vec<Vec3> = if !active.polygon_vertices.is_empty() {
         active.polygon_vertices.clone()
     } else {
         footprint_corners(active).to_vec()
     };
-    let plane = active.plane.clone();
-    let depth = active.depth;
+    prism_from_world_polygon(
+        &polygon,
+        active.plane.normal,
+        active.plane.axis_u,
+        active.depth,
+    )
+}
+
+pub(crate) fn spawn_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
+    let Some((mut brush, transform)) = drawn_brush_from_active(active) else {
+        return;
+    };
 
     commands.queue(move |world: &mut World| {
-        let Some((mut brush, transform)) =
-            prism_from_world_polygon(&polygon, plane.normal, plane.axis_u, depth)
-        else {
-            return;
-        };
-
         let last_mat = world
             .resource::<crate::brush::LastUsedMaterial>()
             .material
@@ -192,117 +195,4 @@ pub(crate) fn footprint_corners(active: &ActiveDraw) -> [Vec3; 4] {
         plane.origin + plane.axis_u * max_u + plane.axis_v * max_v,
         plane.origin + plane.axis_u * min_u + plane.axis_v * max_v,
     ]
-}
-
-/// Build 6 world-space cutter planes from the `ActiveDraw` cuboid.
-pub(crate) fn build_cutter_planes(active: &ActiveDraw) -> Vec<BrushFaceData> {
-    let plane = &active.plane;
-
-    let c1_u = (active.corner1 - plane.origin).dot(plane.axis_u);
-    let c1_v = (active.corner1 - plane.origin).dot(plane.axis_v);
-    let c2_u = (active.corner2 - plane.origin).dot(plane.axis_u);
-    let c2_v = (active.corner2 - plane.origin).dot(plane.axis_v);
-
-    let min_u = c1_u.min(c2_u);
-    let max_u = c1_u.max(c2_u);
-    let min_v = c1_v.min(c2_v);
-    let max_v = c1_v.max(c2_v);
-
-    let half_u = (max_u - min_u) / 2.0;
-    let half_v = (max_v - min_v) / 2.0;
-    let half_depth = active.depth.abs() / 2.0;
-
-    let center_on_plane =
-        plane.origin + plane.axis_u * (min_u + max_u) / 2.0 + plane.axis_v * (min_v + max_v) / 2.0;
-    let center = center_on_plane + plane.normal * active.depth / 2.0;
-
-    let normals_dists = [
-        (plane.axis_u, plane.axis_u.dot(center) + half_u),
-        (-plane.axis_u, (-plane.axis_u).dot(center) + half_u),
-        (plane.axis_v, plane.axis_v.dot(center) + half_v),
-        (-plane.axis_v, (-plane.axis_v).dot(center) + half_v),
-        (plane.normal, plane.normal.dot(center) + half_depth),
-        (-plane.normal, (-plane.normal).dot(center) + half_depth),
-    ];
-    normals_dists
-        .iter()
-        .map(|&(normal, distance)| {
-            let (u, v) = compute_face_tangent_axes(normal);
-            BrushFaceData {
-                plane: BrushPlane { normal, distance },
-                uv_scale: Vec2::ONE,
-                uv_u_axis: u,
-                uv_v_axis: v,
-                ..default()
-            }
-        })
-        .collect()
-}
-
-/// Build N+2 world-space cutter planes from a polygon prism `ActiveDraw`.
-pub(crate) fn build_cutter_planes_polygon(active: &ActiveDraw) -> Vec<BrushFaceData> {
-    let verts = &active.polygon_vertices;
-    let normal = active.plane.normal;
-    let depth = active.depth;
-    let half_depth = depth.abs() / 2.0;
-    let centroid: Vec3 = verts.iter().sum::<Vec3>() / verts.len() as f32;
-    let center = centroid + normal * depth / 2.0;
-
-    let mut faces = Vec::new();
-
-    // Top cap (+normal)
-    let (top_u, top_v) = compute_face_tangent_axes(normal);
-    faces.push(BrushFaceData {
-        plane: BrushPlane {
-            normal,
-            distance: normal.dot(center) + half_depth,
-        },
-        uv_scale: Vec2::ONE,
-        uv_u_axis: top_u,
-        uv_v_axis: top_v,
-        ..default()
-    });
-
-    // Bottom cap (-normal)
-    let (bot_u, bot_v) = compute_face_tangent_axes(-normal);
-    faces.push(BrushFaceData {
-        plane: BrushPlane {
-            normal: -normal,
-            distance: (-normal).dot(center) + half_depth,
-        },
-        uv_scale: Vec2::ONE,
-        uv_u_axis: bot_u,
-        uv_v_axis: bot_v,
-        ..default()
-    });
-
-    // Side planes: one per polygon edge
-    let n = verts.len();
-    for i in 0..n {
-        let a = verts[i];
-        let b = verts[(i + 1) % n];
-        let edge = b - a;
-        let mut side_normal = edge.cross(normal).normalize_or_zero();
-        if side_normal.length_squared() < 0.5 {
-            continue;
-        }
-        // Ensure outward-facing
-        if side_normal.dot(a - centroid) < 0.0 {
-            side_normal = -side_normal;
-        }
-        let distance = side_normal.dot(a);
-        let (su, sv) = compute_face_tangent_axes(side_normal);
-        faces.push(BrushFaceData {
-            plane: BrushPlane {
-                normal: side_normal,
-                distance,
-            },
-            uv_scale: Vec2::ONE,
-            uv_u_axis: su,
-            uv_v_axis: sv,
-            ..default()
-        });
-    }
-
-    faces
 }

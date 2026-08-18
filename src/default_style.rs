@@ -161,3 +161,10 @@ pub const DEFAULT_LINE_CONFIG: GizmoLineConfig = GizmoLineConfig {
     style: GizmoLineStyle::Solid,
     joints: GizmoLineJoint::None,
 };
+pub const DEFAULT_DASHED_LINE_CONFIG: GizmoLineConfig = GizmoLineConfig {
+    style: GizmoLineStyle::Dashed {
+        gap_scale: 3.0,
+        line_scale: 4.0,
+    },
+    ..DEFAULT_LINE_CONFIG
+};

@@ -240,7 +240,7 @@ impl Brush {
 
     /// Create a prism brush from a polygon base and extrusion depth along a normal.
     ///
-    /// `vertices` are the polygon vertices in local space (must be coplanar, convex, >= 3).
+    /// `vertices` are a coplanar simple polygon in local space (>= 3).
     /// `normal` is the extrusion direction (unit vector, perpendicular to the polygon plane).
     /// `depth` is the total extrusion distance (can be negative; absolute value is used).
     ///
@@ -252,17 +252,21 @@ impl Brush {
     ///
     /// Returns `None` if fewer than 3 vertices or zero depth.
     pub fn prism(vertices: &[Vec3], normal: Vec3, depth: f32) -> Option<Self> {
-        use jackdaw_geometry::{MeshEdge, MeshLoop, MeshPoly, MeshVert};
+        use jackdaw_geometry::{MeshEdge, MeshLoop, MeshPoly, MeshVert, newell_normal};
 
         if vertices.len() < 3 || depth.abs() < 1e-6 {
             return None;
         }
 
         let n = vertices.len();
+        let mut vertices = vertices.to_vec();
+        if newell_normal(&vertices).dot(normal) < 0.0 {
+            vertices.reverse();
+        }
+
         let half_depth = depth.abs() / 2.0;
         let mut faces = Vec::new();
 
-        // Top cap: faces outward along +normal
         let (top_u, top_v) = compute_face_tangent_axes(normal);
         faces.push(BrushFaceData {
             plane: BrushPlane {
@@ -275,7 +279,6 @@ impl Brush {
             ..default()
         });
 
-        // Bottom cap: faces outward along -normal
         let (bot_u, bot_v) = compute_face_tangent_axes(-normal);
         faces.push(BrushFaceData {
             plane: BrushPlane {
@@ -288,8 +291,6 @@ impl Brush {
             ..default()
         });
 
-        // Side planes: one for each edge of the polygon
-        let centroid: Vec3 = vertices.iter().sum::<Vec3>() / n as f32;
         let mut valid_side_indices: Vec<usize> = Vec::new();
         for i in 0..n {
             let a = vertices[i];
@@ -299,13 +300,6 @@ impl Brush {
             if side_normal.length_squared() < 0.5 {
                 continue;
             }
-
-            // Ensure outward-facing: dot with (vertex - centroid) should be positive
-            let side_normal = if side_normal.dot(a - centroid) < 0.0 {
-                -side_normal
-            } else {
-                side_normal
-            };
             let distance = side_normal.dot(a);
             let (su, sv) = compute_face_tangent_axes(side_normal);
             faces.push(BrushFaceData {
