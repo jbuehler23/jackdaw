@@ -6,50 +6,62 @@ use jackdaw_geometry::{
 };
 use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
 
+/// Rotation that maps local X -> `axis_u`, local Y -> `normal`,
+/// local Z -> `axis_u` × `normal` (right-handed).
+pub(crate) fn rotation_from_draw_axes(normal: Vec3, axis_u: Vec3) -> Quat {
+    Quat::from_mat3(&Mat3::from_cols(axis_u, normal, axis_u.cross(normal)))
+}
+
+/// Build a local-space prism and it's transform.
+pub(crate) fn prism_from_world_polygon(
+    polygon: &[Vec3],
+    normal: Vec3,
+    axis_u: Vec3,
+    depth: f32,
+) -> Option<(Brush, Transform)> {
+    if polygon.len() < 3 || depth.abs() < MIN_EXTRUDE_DEPTH {
+        return None;
+    }
+
+    let centroid = polygon.iter().copied().sum::<Vec3>() / polygon.len() as f32;
+    let center = centroid + normal * depth / 2.0;
+    let rotation = rotation_from_draw_axes(normal, axis_u);
+    let inv_rotation = rotation.inverse();
+    let local_verts: Vec<Vec3> = polygon
+        .iter()
+        .map(|&vertex| inv_rotation * (vertex - centroid))
+        .collect();
+    let brush = Brush::prism(&local_verts, Vec3::Y, depth)?;
+    Some((
+        brush,
+        Transform {
+            translation: center,
+            rotation,
+            scale: Vec3::ONE,
+        },
+    ))
+}
+
 pub(crate) fn spawn_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
-    let plane = &active.plane;
-
-    // Decompose corners into plane-local u/v coordinates
-    let c1_u = (active.corner1 - plane.origin).dot(plane.axis_u);
-    let c1_v = (active.corner1 - plane.origin).dot(plane.axis_v);
-    let c2_u = (active.corner2 - plane.origin).dot(plane.axis_u);
-    let c2_v = (active.corner2 - plane.origin).dot(plane.axis_v);
-
-    let min_u = c1_u.min(c2_u);
-    let max_u = c1_u.max(c2_u);
-    let min_v = c1_v.min(c2_v);
-    let max_v = c1_v.max(c2_v);
-
-    let half_u = (max_u - min_u) / 2.0;
-    let half_v = (max_v - min_v) / 2.0;
-    let half_depth = active.depth.abs() / 2.0;
-
-    // Center on the plane
-    let center_on_plane =
-        plane.origin + plane.axis_u * (min_u + max_u) / 2.0 + plane.axis_v * (min_v + max_v) / 2.0;
-    let center = center_on_plane + plane.normal * active.depth / 2.0;
-
-    // For ground-plane (normal=Y): axis_u=X, axis_v=Z, normal=Y
-    // Brush::cuboid uses half_x, half_y, half_z in local space
-    // We need to map: local X -> axis_u, local Y -> normal, local Z -> axis_v
-    let brush = Brush::cuboid(half_u, half_depth, half_v);
-
-    let rotation = if plane.normal == Vec3::Y {
-        Quat::IDENTITY
-    } else if plane.normal == Vec3::NEG_Y {
-        Quat::from_rotation_x(std::f32::consts::PI)
+    let polygon: Vec<Vec3> = if !active.polygon_vertices.is_empty() {
+        active.polygon_vertices.clone()
     } else {
-        let target_mat = Mat3::from_cols(plane.axis_u, plane.normal, -plane.axis_v);
-        Quat::from_mat3(&target_mat)
+        footprint_corners(active).to_vec()
     };
+    let plane = active.plane.clone();
+    let depth = active.depth;
 
     commands.queue(move |world: &mut World| {
-        // Apply last-used material to all faces
+        let Some((mut brush, transform)) =
+            prism_from_world_polygon(&polygon, plane.normal, plane.axis_u, depth)
+        else {
+            return;
+        };
+
         let last_mat = world
             .resource::<crate::brush::LastUsedMaterial>()
             .material
             .clone();
-        let mut brush = brush;
         if let Some(ref mat) = last_mat {
             for face in &mut brush.faces {
                 face.material = mat.clone();
@@ -61,11 +73,7 @@ pub(crate) fn spawn_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
             .spawn((
                 Name::new("Brush"),
                 brush,
-                Transform {
-                    translation: center,
-                    rotation,
-                    scale: Vec3::ONE,
-                },
+                transform,
                 Visibility::default(),
                 stable_id,
             ))
@@ -73,20 +81,16 @@ pub(crate) fn spawn_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
 
         crate::scene_io::register_entity_in_ast(world, entity);
 
-        // Select the new brush
-        {
-            // Deselect current selection
-            let selection = world.resource::<Selection>();
-            let old_selected: Vec<Entity> = selection.entities.clone();
-            for &e in &old_selected {
-                if let Ok(mut ec) = world.get_entity_mut(e) {
-                    ec.remove::<Selected>();
-                }
+        let selection = world.resource::<Selection>();
+        let old_selected: Vec<Entity> = selection.entities.clone();
+        for &e in &old_selected {
+            if let Ok(mut ec) = world.get_entity_mut(e) {
+                ec.remove::<Selected>();
             }
-            let mut selection = world.resource_mut::<Selection>();
-            selection.entities = vec![entity];
-            world.entity_mut(entity).insert(Selected);
         }
+        let mut selection = world.resource_mut::<Selection>();
+        selection.entities = vec![entity];
+        world.entity_mut(entity).insert(Selected);
     });
 }
 
@@ -165,85 +169,6 @@ pub(crate) fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
         crate::brush::sync_brush_to_ast(world, target_entity, &new_brush);
         if let Some(mut brush) = world.get_mut::<Brush>(target_entity) {
             *brush = new_brush.clone();
-        }
-    });
-}
-
-/// Spawn a brush from polygon vertices + extrude depth.
-pub(crate) fn spawn_polygon_brush(active: &ActiveDraw, commands: &mut Commands) {
-    if active.polygon_vertices.len() < 3 || active.depth.abs() < MIN_EXTRUDE_DEPTH {
-        return;
-    }
-
-    let polygon = active.polygon_vertices.clone();
-    let normal = active.plane.normal;
-    let depth = active.depth;
-
-    commands.queue(move |world: &mut World| {
-        // Compute centroid + center
-        let centroid: Vec3 = polygon.iter().sum::<Vec3>() / polygon.len() as f32;
-        let center = centroid + normal * depth / 2.0;
-
-        let rotation = if normal == Vec3::Y {
-            Quat::IDENTITY
-        } else if normal == Vec3::NEG_Y {
-            Quat::from_rotation_x(std::f32::consts::PI)
-        } else {
-            let (u, _v) = compute_face_tangent_axes(normal);
-            let target_mat = Mat3::from_cols(u, normal, -normal.cross(u).normalize());
-            Quat::from_mat3(&target_mat)
-        };
-        let inv_rotation = rotation.inverse();
-
-        let local_verts: Vec<Vec3> = polygon
-            .iter()
-            .map(|&v| inv_rotation * (v - center))
-            .collect();
-
-        let Some(mut brush) = Brush::prism(&local_verts, Vec3::Y, depth) else {
-            return;
-        };
-
-        // Apply last-used material
-        let last_mat = world
-            .resource::<crate::brush::LastUsedMaterial>()
-            .material
-            .clone();
-        if let Some(ref mat) = last_mat {
-            for face in &mut brush.faces {
-                face.material = mat.clone();
-            }
-        }
-
-        let stable_id = world.resource_mut::<StableIdCounter>().next();
-        let entity = world
-            .spawn((
-                Name::new("Brush"),
-                brush,
-                Transform {
-                    translation: center,
-                    rotation,
-                    scale: Vec3::ONE,
-                },
-                Visibility::default(),
-                stable_id,
-            ))
-            .id();
-
-        crate::scene_io::register_entity_in_ast(world, entity);
-
-        // Select the new brush
-        {
-            let selection = world.resource::<Selection>();
-            let old_selected: Vec<Entity> = selection.entities.clone();
-            for &e in &old_selected {
-                if let Ok(mut ec) = world.get_entity_mut(e) {
-                    ec.remove::<Selected>();
-                }
-            }
-            let mut selection = world.resource_mut::<Selection>();
-            selection.entities = vec![entity];
-            world.entity_mut(entity).insert(Selected);
         }
     });
 }

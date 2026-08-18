@@ -379,13 +379,7 @@ fn confirm_draw_brush(
             draw_state.active = None;
             match active.mode {
                 DrawMode::Add => {
-                    if !active.polygon_vertices.is_empty() {
-                        if active.append_target.is_some() {
-                            append_to_brush(&active, &mut commands);
-                        } else {
-                            spawn_polygon_brush(&active, &mut commands);
-                        }
-                    } else if active.append_target.is_some() {
+                    if active.append_target.is_some() {
                         append_to_brush(&active, &mut commands);
                     } else {
                         spawn_drawn_brush(&active, &mut commands);

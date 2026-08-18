@@ -23,7 +23,7 @@ use crate::brush::{
     BrushDragCapture, BrushDragState, BrushEditMode, BrushMeshCache, BrushSelection,
     BrushSubSelection, EdgeDragState, EditMode, VertexDragState, rebuild_brush_from_vertices,
 };
-use crate::draw_brush::DrawBrushState;
+use crate::draw_brush::{DrawBrushState, prism_from_world_polygon};
 use crate::keybind_focus::KeybindFocus;
 use crate::modal_transform::ModalTransformState;
 use crate::selection::{Selected, Selection};
@@ -707,37 +707,14 @@ fn spawn_extruded_brush(
     depth: f32,
     commands: &mut Commands,
 ) {
-    if face_polygon_world.len() < 3 || depth.abs() < MIN_EXTRUDE_DEPTH {
+    let (axis_u, _) = jackdaw_geometry::compute_face_tangent_axes(world_normal);
+    let Some((mut brush, transform)) =
+        prism_from_world_polygon(face_polygon_world, world_normal, axis_u, depth)
+    else {
         return;
-    }
-
-    let face_polygon = face_polygon_world.to_vec();
-    let normal = world_normal;
+    };
 
     commands.queue(move |world: &mut World| {
-        let face_centroid: Vec3 = face_polygon.iter().sum::<Vec3>() / face_polygon.len() as f32;
-        let center = face_centroid + normal * depth / 2.0;
-
-        let rotation = if normal == Vec3::Y {
-            Quat::IDENTITY
-        } else if normal == Vec3::NEG_Y {
-            Quat::from_rotation_x(std::f32::consts::PI)
-        } else {
-            let (u, _v) = jackdaw_geometry::compute_face_tangent_axes(normal);
-            let target_mat = Mat3::from_cols(u, normal, -normal.cross(u).normalize());
-            Quat::from_mat3(&target_mat)
-        };
-        let inv_rotation = rotation.inverse();
-
-        let local_verts: Vec<Vec3> = face_polygon
-            .iter()
-            .map(|&v| inv_rotation * (v - center))
-            .collect();
-
-        let Some(mut brush) = Brush::prism(&local_verts, Vec3::Y, depth) else {
-            return;
-        };
-
         let last_mat = world
             .resource::<crate::brush::LastUsedMaterial>()
             .material
@@ -749,16 +726,7 @@ fn spawn_extruded_brush(
         }
 
         let entity = world
-            .spawn((
-                Name::new("Brush"),
-                brush,
-                Transform {
-                    translation: center,
-                    rotation,
-                    scale: Vec3::ONE,
-                },
-                Visibility::default(),
-            ))
+            .spawn((Name::new("Brush"), brush, transform, Visibility::default()))
             .id();
 
         let selection = world.resource::<Selection>();
