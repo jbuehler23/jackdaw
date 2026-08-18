@@ -410,10 +410,6 @@ pub(crate) const EXTRUDE_DEPTH_SENSITIVITY: f32 = 0.003;
 pub(crate) const MIN_FOOTPRINT_SIZE: f32 = 0.01;
 pub(crate) const MIN_EXTRUDE_DEPTH: f32 = 0.01;
 pub(crate) const MIN_FRAGMENT_SIZE: f32 = 0.005;
-/// Punch-through depth used by box-cut subtract: large enough to traverse any
-/// reasonably-sized target so the user never needs to drag for depth.
-/// Matches BoxCutter-style default behavior.
-pub(crate) const PUNCH_THROUGH_DEPTH: f32 = 1000.0;
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
 pub struct DrawBrushGizmoGroup;

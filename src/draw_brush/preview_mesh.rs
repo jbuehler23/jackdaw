@@ -1,7 +1,6 @@
 use crate::default_style;
 use crate::draw_brush::{
-    DrawBrushState, DrawMode, DrawPhase, PUNCH_THROUGH_DEPTH, drawn_brush_from_active,
-    topology_aabbs_overlap,
+    DrawBrushState, DrawMode, DrawPhase, drawn_brush_from_active, topology_aabbs_overlap,
 };
 use crate::{EditorEntity, brush::BrushMaterialPalette, selection::Selected};
 use bevy::{
@@ -116,18 +115,7 @@ pub(crate) fn manage_draw_preview_mesh(
     *cached_preview_key = Some(current_key);
 
     // Build the drawn solid from the authored ring (or footprint rect).
-    // For Cut mode, force a punch-through depth so the preview matches the
-    // actual subtract op (which always extends the cutter through any target).
-    let cutter_active_storage;
-    let cutter_active = if active.mode == DrawMode::Cut {
-        let mut a = active.clone();
-        a.depth = -PUNCH_THROUGH_DEPTH;
-        cutter_active_storage = a;
-        &cutter_active_storage
-    } else {
-        active
-    };
-    let Some((cutter_brush, cutter_transform)) = drawn_brush_from_active(cutter_active) else {
+    let Some((cutter_brush, cutter_transform)) = drawn_brush_from_active(active) else {
         clear_draw_preview(
             &mut commands,
             preview_query.iter(),

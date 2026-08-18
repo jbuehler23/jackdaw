@@ -4,8 +4,8 @@ use crate::commands::{
 };
 use crate::draw_brush::{
     ActiveDraw, BrushData, BrushOrGroup, BrushStableId, DrawBrushState, MIN_FRAGMENT_SIZE,
-    PUNCH_THROUGH_DEPTH, StableIdCounter, brush_data_from_entity, drawn_brush_from_active,
-    entity_by_stable_id, spawn_brush_from_data, spawn_brush_or_group, topology_aabbs_overlap,
+    StableIdCounter, brush_data_from_entity, drawn_brush_from_active, entity_by_stable_id,
+    spawn_brush_from_data, spawn_brush_or_group, topology_aabbs_overlap,
 };
 use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
@@ -27,15 +27,7 @@ pub(crate) fn brush_parent_group(world: &World, entity: Entity) -> Option<(Entit
 /// Perform CSG subtraction: subtract the drawn solid from all intersecting brushes.
 /// Routes through the mesh-CSG kernel so concave targets are handled correctly.
 pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
-    // Box-cut always punches through: extend the cutter far into the brush
-    // along the inward normal so it traverses any reasonably-sized target.
-    // The face plane the user clicked is the cutter's near cap; the far cap
-    // is `PUNCH_THROUGH_DEPTH` behind it (into the brush). The user's drag
-    // for depth is ignored here, matching BoxCutter's default behavior.
-    let mut punch_active = active.clone();
-    punch_active.depth = -PUNCH_THROUGH_DEPTH;
-
-    let Some((cutter_brush, cutter_transform)) = drawn_brush_from_active(&punch_active) else {
+    let Some((cutter_brush, cutter_transform)) = drawn_brush_from_active(active) else {
         return;
     };
     let (world_cutter_faces, world_cutter_topo) = jackdaw_csg::brush_to_world(
