@@ -1,7 +1,6 @@
 use crate::draw_brush::{ActiveDraw, MIN_EXTRUDE_DEPTH, StableIdCounter};
 use crate::selection::{Selected, Selection};
 use bevy::prelude::*;
-use jackdaw_geometry::{compute_brush_geometry_from_planes, compute_brush_topology};
 use jackdaw_scene_types::Brush;
 
 /// Rotation that maps local X -> `axis_u`, local Y -> `normal`,
@@ -101,69 +100,73 @@ pub(crate) fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
     let Some(target_entity) = active.append_target else {
         return;
     };
-
-    // Build the drawn shape's world-space vertices (prism from polygon or cuboid from footprint)
-    let offset = active.plane.normal * active.depth;
-    let drawn_verts: Vec<Vec3> = if !active.polygon_vertices.is_empty() {
-        let mut verts = Vec::with_capacity(active.polygon_vertices.len() * 2);
-        for &v in &active.polygon_vertices {
-            verts.push(v);
-            verts.push(v + offset);
-        }
-        verts
-    } else {
-        let base = footprint_corners(active);
-        let mut verts = Vec::with_capacity(8);
-        for corner in &base {
-            verts.push(*corner);
-            verts.push(*corner + offset);
-        }
-        verts
+    let Some((mut drawn_brush, drawn_transform)) = drawn_brush_from_active(active) else {
+        return;
     };
 
     commands.queue(move |world: &mut World| {
-        let Some(brush) = world.get::<Brush>(target_entity) else {
+        let Some(target_brush) = world.get::<Brush>(target_entity) else {
             return;
         };
-        let old_brush = brush.clone();
+        let old_brush = target_brush.clone();
 
         let Some(global_tf) = world.get::<GlobalTransform>(target_entity) else {
             return;
         };
-        let (_, rotation, translation) = global_tf.to_scale_rotation_translation();
-        let inv_rotation = rotation.inverse();
+        let (_, target_rotation, target_translation) = global_tf.to_scale_rotation_translation();
 
-        let existing_verts = compute_brush_geometry_from_planes(&old_brush.faces).0;
-        let existing_count = existing_verts.len();
-
-        let mut all_local_verts: Vec<Vec3> = existing_verts;
-        for v in &drawn_verts {
-            all_local_verts.push(inv_rotation * (*v - translation));
-        }
-
-        if all_local_verts.len() < 4 {
-            return;
-        }
-
-        let old_face_polygons = compute_brush_geometry_from_planes(&old_brush.faces).1;
         let last_mat = world
             .resource::<crate::brush::LastUsedMaterial>()
             .material
             .clone();
-        let Some(new_faces) = jackdaw_hull::build_hull_faces_matching(
-            &all_local_verts,
-            existing_count,
-            &old_brush.faces,
-            &old_face_polygons,
-            last_mat.unwrap_or_default(),
-        ) else {
-            return;
-        };
+        if let Some(ref mat) = last_mat {
+            for face in &mut drawn_brush.faces {
+                face.material = mat.clone();
+            }
+        }
 
-        let topology = compute_brush_topology(&new_faces);
+        let (world_target_faces, world_target_topo) = jackdaw_csg::brush_to_world(
+            &old_brush.faces,
+            &old_brush.topology,
+            target_rotation,
+            target_translation,
+        );
+        let (world_drawn_faces, world_drawn_topo) = jackdaw_csg::brush_to_world(
+            &drawn_brush.faces,
+            &drawn_brush.topology,
+            drawn_transform.rotation,
+            drawn_transform.translation,
+        );
+
+        let target_input = jackdaw_csg::CsgInput::new(&world_target_faces, &world_target_topo);
+        let drawn_input = jackdaw_csg::CsgInput::new(&world_drawn_faces, &world_drawn_topo);
+        let unioned = match jackdaw_csg::brush_boolean(
+            &target_input,
+            &drawn_input,
+            jackdaw_csg::BooleanOp::Union,
+        ) {
+            Ok(brush) => brush,
+            Err(e) => {
+                warn!("append-to-brush CSG union error: {e}");
+                return;
+            }
+        };
+        if unioned.topology.vertices.len() < 4 || unioned.faces.len() < 4 {
+            return;
+        }
+
+        // Keep the target's transform
+        let inv_rotation = target_rotation.inverse();
+        let (local_faces, local_topo) = jackdaw_csg::brush_to_world(
+            &unioned.faces,
+            &unioned.topology,
+            inv_rotation,
+            -(inv_rotation * target_translation),
+        );
+
         let new_brush = Brush {
-            faces: new_faces,
-            topology,
+            faces: local_faces,
+            topology: local_topo,
         };
 
         // Apply (ECS + AST). Undo is handled by the enclosing
@@ -171,7 +174,7 @@ pub(crate) fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
         // per-command push needed here.
         crate::brush::sync_brush_to_ast(world, target_entity, &new_brush);
         if let Some(mut brush) = world.get_mut::<Brush>(target_entity) {
-            *brush = new_brush.clone();
+            *brush = new_brush;
         }
     });
 }

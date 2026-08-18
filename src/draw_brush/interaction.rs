@@ -14,7 +14,7 @@ use bevy::{
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
     prelude::*,
 };
-use jackdaw_geometry::{compute_brush_geometry_from_planes, compute_face_tangent_axes};
+use jackdaw_geometry::compute_face_tangent_axes;
 use jackdaw_scene_types::Brush;
 
 pub(crate) fn draw_brush_update(
@@ -385,17 +385,14 @@ pub(crate) fn draw_brush_preview(
         DrawMode::Cut => default_style::CUT_MODE,
     };
 
-    // Highlight the append target brush so the user knows they're in hull mode
+    // Highlight the append target so the user knows the draw will union into it.
     if let Some(target) = active.append_target
         && let Ok((brush, brush_tf)) = brushes.get(target)
     {
-        let (verts, polys) = compute_brush_geometry_from_planes(&brush.faces);
-        for polygon in &polys {
-            for i in 0..polygon.len() {
-                let a = brush_tf.transform_point(verts[polygon[i]]);
-                let b = brush_tf.transform_point(verts[polygon[(i + 1) % polygon.len()]]);
-                gizmos.line(a, b, default_style::DRAW_MODE);
-            }
+        for edge in &brush.topology.edges {
+            let a = brush_tf.transform_point(brush.topology.vertices[edge.v[0] as usize].position);
+            let b = brush_tf.transform_point(brush.topology.vertices[edge.v[1] as usize].position);
+            gizmos.line(a, b, default_style::DRAW_MODE);
         }
     }
 
