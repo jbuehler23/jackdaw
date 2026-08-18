@@ -93,6 +93,125 @@ impl OperatorResultExt for OperatorResult {
 }
 
 #[test]
+fn entity_place_gltf_survives_later_history_and_scene_tabs() {
+    let path = "models/dungeon.glb";
+    let position = Vec3::new(1.25, -2.0, 3.5);
+    let mut app = util::editor_test_app();
+    let stack_before = app.world().resource::<CommandHistory>().undo_stack.len();
+
+    app.world_mut()
+        .operator("entity.place_gltf")
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        })
+        .param("path", path.to_string())
+        .param("pos_x", position.x as f64)
+        .param("pos_y", position.y as f64)
+        .param("pos_z", position.z as f64)
+        .call()
+        .expect("entity.place_gltf dispatch resolves")
+        .assert_finished_or_panic("entity.place_gltf");
+
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        stack_before + 1,
+        "placement should create exactly one undo entry"
+    );
+
+    let placed = assert_single_renderable_gltf(&mut app, path, position);
+    assert!(
+        app.world()
+            .resource::<jackdaw_bsn::SceneBsnAst>()
+            .ast_for(placed)
+            .is_some(),
+        "placed GLB must be part of the authoritative scene document"
+    );
+
+    // Reproduce the reported sequence: a later rotate action creates another
+    // snapshot, then undo/redo reloads the scene document. The authored GLB
+    // and its derived render root must both survive those reloads.
+    app.world_mut()
+        .operator("tool.rotate")
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        })
+        .call()
+        .expect("tool.rotate dispatch resolves")
+        .assert_finished_or_panic("tool.rotate");
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        stack_before + 2,
+        "rotate should create the history entry after placement"
+    );
+
+    app.world_mut()
+        .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
+    assert_single_renderable_gltf(&mut app, path, position);
+
+    app.world_mut()
+        .resource_scope(|world, mut history: Mut<CommandHistory>| history.redo(world));
+    assert_single_renderable_gltf(&mut app, path, position);
+
+    // Undo both actions, then redo just the placement to verify the placement
+    // snapshot itself also restores a renderable GLB.
+    app.world_mut()
+        .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
+    app.world_mut()
+        .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
+    assert_eq!(
+        app.world_mut()
+            .query::<&jackdaw_scene_types::GltfSource>()
+            .iter(app.world())
+            .count(),
+        0,
+        "undo should remove the placed GLB"
+    );
+    app.world_mut()
+        .resource_scope(|world, mut history: Mut<CommandHistory>| history.redo(world));
+    assert_single_renderable_gltf(&mut app, path, position);
+
+    // Scene tabs capture and restore the same authoritative document. A trip
+    // to an empty tab and back must rehydrate the GLB's derived render root.
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        *scenes = jackdaw::scenes::Scenes::default();
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(1));
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(2));
+        scenes.active = 0;
+    }
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    assert_eq!(
+        app.world_mut()
+            .query::<&jackdaw_scene_types::GltfSource>()
+            .iter(app.world())
+            .count(),
+        0,
+        "the second tab should remain empty"
+    );
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+    assert_single_renderable_gltf(&mut app, path, position);
+}
+
+#[track_caller]
+fn assert_single_renderable_gltf(app: &mut App, path: &str, position: Vec3) -> Entity {
+    let (entity, source, transform, _) = app
+        .world_mut()
+        .query::<(
+            Entity,
+            &jackdaw_scene_types::GltfSource,
+            &Transform,
+            &bevy::world_serialization::WorldAssetRoot,
+        )>()
+        .single(app.world())
+        .expect("expected one GLB root with its derived render asset");
+    assert_eq!(source.path, path);
+    assert_eq!(transform.translation, position);
+    entity
+}
+
+#[test]
 fn view_toggle_wireframe_round_trip() {
     let mut app = util::editor_test_app();
     assert_undo_redo_round_trip(&mut app, "view.toggle_wireframe");

@@ -446,14 +446,15 @@ pub fn spawn_gltf(
     entity
 }
 
-pub fn spawn_gltf_in_world(world: &mut World, path: &str, position: Vec3) {
+fn spawn_gltf_in_world(world: &mut World, path: &str, position: Vec3) {
     let mut system_state: SystemState<(Commands, Res<AssetServer>, ResMut<Selection>)> =
         SystemState::new(world);
     let Ok((mut commands, asset_server, mut selection)) = system_state.get_mut(world) else {
         return;
     };
-    spawn_gltf(&mut commands, &asset_server, path, position, &mut selection);
+    let entity = spawn_gltf(&mut commands, &asset_server, path, position, &mut selection);
     system_state.apply(world);
+    crate::scene_io::register_entity_in_ast(world, entity);
 }
 
 pub fn delete_selected(world: &mut World) {
@@ -1365,6 +1366,7 @@ use crate::core_extension::CoreExtensionInputContext;
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityDeleteOp>()
         .register_operator::<EntityDuplicateOp>()
+        .register_operator::<EntityPlaceGltfOp>()
         .register_operator::<EntityCopyComponentsOp>()
         .register_operator::<EntityPasteComponentsOp>()
         .register_operator::<EntityToggleVisibilityOp>()
@@ -1444,6 +1446,45 @@ fn can_act_on_entities(
 }
 
 // -- Entity lifecycle --------------------------------------------
+
+#[operator(
+    id = "entity.place_gltf",
+    label = "Place GLTF",
+    description = "Place a GLTF asset into the active scene at a world position.",
+    allows_undo = true,
+    params(
+        path(String, doc = "Path to the GLTF asset."),
+        pos_x(f64, doc = "World-space X position."),
+        pos_y(f64, doc = "World-space Y position."),
+        pos_z(f64, doc = "World-space Z position."),
+    )
+)]
+pub(crate) fn entity_place_gltf(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(path) = params.as_str("path").map(str::to_owned) else {
+        warn!("entity.place_gltf: missing `path` param");
+        return OperatorResult::Cancelled;
+    };
+    let Some(x) = params.as_float("pos_x") else {
+        warn!("entity.place_gltf: missing `pos_x` param");
+        return OperatorResult::Cancelled;
+    };
+    let Some(y) = params.as_float("pos_y") else {
+        warn!("entity.place_gltf: missing `pos_y` param");
+        return OperatorResult::Cancelled;
+    };
+    let Some(z) = params.as_float("pos_z") else {
+        warn!("entity.place_gltf: missing `pos_z` param");
+        return OperatorResult::Cancelled;
+    };
+    let position = Vec3::new(x as f32, y as f32, z as f32);
+    commands.queue(move |world: &mut World| {
+        spawn_gltf_in_world(world, &path, position);
+    });
+    OperatorResult::Finished
+}
 
 #[operator(
     id = "entity.delete",
