@@ -196,7 +196,7 @@ fn entity_place_gltf_survives_later_history_and_scene_tabs() {
 
 #[track_caller]
 fn assert_single_renderable_gltf(app: &mut App, path: &str, position: Vec3) -> Entity {
-    let (entity, source, transform, _) = app
+    let (entity, source, transform, root) = app
         .world_mut()
         .query::<(
             Entity,
@@ -208,6 +208,19 @@ fn assert_single_renderable_gltf(app: &mut App, path: &str, position: Vec3) -> E
         .expect("expected one GLB root with its derived render asset");
     assert_eq!(source.path, path);
     assert_eq!(transform.translation, position);
+    // Assert the derived handle actually resolves. Checking only that the
+    // component exists would pass with a defaulted handle, which is exactly
+    // the state that renders nothing.
+    let resolved = app
+        .world()
+        .resource::<AssetServer>()
+        .get_path(root.0.id())
+        .map(|p| p.to_string())
+        .expect("derived WorldAssetRoot handle has no asset path");
+    assert!(
+        resolved.contains("dungeon.glb"),
+        "derived handle points at {resolved:?}, not the placed model"
+    );
     entity
 }
 

@@ -60,6 +60,11 @@ pub enum EntityCategory {
     /// `IsA`). Drawn with a faint tinge to signal it's a materialized
     /// child of an instance rather than authored directly.
     Inherited,
+    /// A node of a loaded asset (a glTF scene's own nodes and meshes) rather
+    /// than something authored. Shown so the model's structure is inspectable,
+    /// but drawn with its own icon and a muted tone because it has no document
+    /// node and so cannot be duplicated, deleted or reparented.
+    AssetPart,
     /// A container entity: it has children but no more specific type of its
     /// own, so it reads as a grouping node (e.g. a "Trees" parent).
     Group,

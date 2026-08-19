@@ -37,6 +37,7 @@ pub fn category_color(category: EntityCategory, inherited: bool) -> Color {
         EntityCategory::Scene => tokens::CATEGORY_SCENE,
         EntityCategory::Prefab => tokens::CATEGORY_PREFAB,
         EntityCategory::Inherited => tokens::CATEGORY_INHERITED,
+        EntityCategory::AssetPart => tokens::CATEGORY_ASSET_PART,
         EntityCategory::Group | EntityCategory::Entity => tokens::CATEGORY_ENTITY,
     }
 }
@@ -451,6 +452,7 @@ fn category_dot(
         EntityCategory::Prefab => Icon::Package,
         EntityCategory::Scene => Icon::Clapperboard,
         EntityCategory::Inherited | EntityCategory::Mesh => Icon::Box,
+        EntityCategory::AssetPart => Icon::Component,
         EntityCategory::Group => Icon::Folder,
         EntityCategory::Entity => Icon::Dot,
     });

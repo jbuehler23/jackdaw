@@ -69,6 +69,10 @@ const SKIP_COMPONENT_PATHS: &[&str] = &[
     // runtime mesh/material assets into the scene.
     "bevy_mesh::components::Mesh3d",
     "bevy_pbr::mesh_material::MeshMaterial3d<bevy_pbr::pbr_material::StandardMaterial>",
+    // The GLTF instance handle, derived from the authored `GltfSource` by
+    // `derive_world_asset_root`. Writing it into the document would put a
+    // raw asset handle in a file that other machines and the runtime read.
+    "bevy_world_serialization::components::WorldAssetRoot",
     // UI layout output. Bevy recomputes all of it every frame from `Node`, and
     // `ComputedUiTargetCamera` additionally holds a view-local camera entity
     // that means nothing in a saved document.

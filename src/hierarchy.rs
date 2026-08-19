@@ -148,12 +148,41 @@ impl Plugin for HierarchyPlugin {
     }
 }
 
+/// True when `entity` was spawned by the glTF loader under a `GltfSource`
+/// root rather than authored by the user. Authored entities parented under a
+/// model keep a document node, so the absence of one is what separates the
+/// loader's nodes from anything the user put there.
+fn is_asset_part(world: &World, entity: Entity) -> bool {
+    if world
+        .get_resource::<jackdaw_bsn::SceneBsnAst>()
+        .is_some_and(|doc| doc.ast_for(entity).is_some())
+    {
+        return false;
+    }
+    let mut current = entity;
+    while let Some(ChildOf(parent)) = world.get::<ChildOf>(current) {
+        if world
+            .get::<jackdaw_scene_types::GltfSource>(*parent)
+            .is_some()
+        {
+            return true;
+        }
+        current = *parent;
+    }
+    false
+}
+
 /// Classify a scene entity by its primary component for tree display.
 /// Returns the underlying category (Brush mesh, Camera, Light, etc.)
 /// regardless of whether the entity is inherited from a prefab. Inherited
 /// status is conveyed separately via [`is_inherited_descendant`] so the
 /// outliner can pair the right icon with a muted color.
 fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
+    // Checked before the component-based arms below: a glTF leaf carries
+    // `Mesh3d` and would otherwise read as an ordinary authored mesh.
+    if is_asset_part(world, entity) {
+        return EntityCategory::AssetPart;
+    }
     if world.get::<crate::prefab::IsA>(entity).is_some() {
         return EntityCategory::Prefab;
     }
@@ -178,7 +207,14 @@ fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
     {
         return EntityCategory::Scene;
     }
-    if world.get::<WorldAssetRoot>(entity).is_some() {
+    // `GltfSource` is the authored component and `WorldAssetRoot` the handle
+    // derived from it, so match the former first: otherwise the row's icon
+    // depends on whether the asset has finished loading yet.
+    if world
+        .get::<jackdaw_scene_types::GltfSource>(entity)
+        .is_some()
+        || world.get::<WorldAssetRoot>(entity).is_some()
+    {
         return EntityCategory::Scene;
     }
     // An entity with no type of its own but with children reads as a grouping
@@ -2470,6 +2506,57 @@ mod tests {
         let plain = world.spawn_empty().id();
         assert_eq!(classify_entity(&world, root), EntityCategory::Scene);
         assert_ne!(classify_entity(&world, plain), EntityCategory::Scene);
+    }
+
+    #[test]
+    fn gltf_descendants_classify_as_asset_parts() {
+        // The glTF root is authored; everything the loader spawned under it is
+        // not, including the mesh leaf, which would otherwise read as Mesh.
+        let mut world = World::new();
+        let root = world
+            .spawn(jackdaw_scene_types::GltfSource {
+                path: "models/dungeon.glb".into(),
+                scene_index: 0,
+            })
+            .id();
+        let scene = world.spawn(ChildOf(root)).id();
+        let mesh_leaf = world.spawn((ChildOf(scene), Mesh3d::default())).id();
+
+        assert_eq!(classify_entity(&world, root), EntityCategory::Scene);
+        assert_eq!(classify_entity(&world, scene), EntityCategory::AssetPart);
+        assert_eq!(
+            classify_entity(&world, mesh_leaf),
+            EntityCategory::AssetPart
+        );
+
+        // An authored mesh outside any glTF subtree is unaffected.
+        let authored_mesh = world.spawn(Mesh3d::default()).id();
+        assert_eq!(classify_entity(&world, authored_mesh), EntityCategory::Mesh);
+    }
+
+    #[test]
+    fn authored_children_of_a_model_keep_their_own_category() {
+        // Parenting your own entity under a model is normal (a light on a lamp
+        // prop). It has a document node, so it stays editable and must not be
+        // lumped in with the nodes the loader spawned.
+        let mut world = World::new();
+        world.insert_resource(jackdaw_bsn::SceneBsnAst::default());
+        let root = world
+            .spawn(jackdaw_scene_types::GltfSource {
+                path: "models/dungeon.glb".into(),
+                scene_index: 0,
+            })
+            .id();
+
+        let loader_node = world.spawn(ChildOf(root)).id();
+        assert_eq!(
+            classify_entity(&world, loader_node),
+            EntityCategory::AssetPart
+        );
+
+        let authored = world.spawn((ChildOf(root), PointLight::default())).id();
+        jackdaw_bsn::create_entity_in_ast(&mut world, authored, None);
+        assert_eq!(classify_entity(&world, authored), EntityCategory::Light);
     }
 
     #[test]

@@ -223,6 +223,10 @@ pub const CATEGORY_PREFAB: Color = Color::srgb(0.95, 0.7, 0.3);
 /// Inherited-from-prefab entity dot color (muted amber, signals "not authored here")
 pub const CATEGORY_INHERITED: Color = Color::srgba(0.65, 0.55, 0.42, 0.75);
 /// Generic entity dot color (green)
+/// Parts of a loaded asset (glTF nodes/meshes). Muted like the inherited
+/// tone: the rows are inspectable but not editable.
+pub const CATEGORY_ASSET_PART: Color = Color::srgba(0.0, 0.667, 0.733, 0.55);
+
 pub const CATEGORY_ENTITY: Color = Color::srgba(0.259, 0.725, 0.514, 1.0);
 
 // ---------------------------------------------------------------------------
