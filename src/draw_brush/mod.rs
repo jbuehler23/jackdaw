@@ -469,6 +469,10 @@ fn dispatch_start_add_append(_: On<Start<StartDrawBrushAddAppendAction>>, mut co
         .operator(ActivateDrawBrushModalOp::ID)
         .param("mode", "Add")
         .param("append", true)
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        })
         .call();
 }
 
@@ -486,5 +490,9 @@ fn dispatch_start_cut(
     commands
         .operator(ActivateDrawBrushModalOp::ID)
         .param("mode", "Cut")
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        })
         .call();
 }
