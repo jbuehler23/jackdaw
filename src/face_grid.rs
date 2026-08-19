@@ -140,13 +140,7 @@ fn draw_brush_wireframe(
         }
 
         // we use the same color for wireframe and outline, outlines are just thicker and not drawn in front of geo
-        let color: Color = if is_brush_selected {
-            if in_clip_mode {
-                default_style::WIREFRAME_OUTLINE_SELECTED_CLIP
-            } else {
-                default_style::WIREFRAME_OUTLINE_SELECTED
-            }
-        } else if is_parent_selected {
+        let color: Color = if is_selected {
             if in_clip_mode {
                 default_style::WIREFRAME_OUTLINE_SELECTED_CLIP
             } else {
