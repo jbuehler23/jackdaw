@@ -1,6 +1,7 @@
 use crate::default_style;
 use crate::draw_brush::{
-    DrawBrushState, DrawMode, DrawPhase, drawn_brush_from_active, topology_aabbs_overlap,
+    DrawBrushState, DrawMode, DrawPhase, cut_brush_from_active, drawn_brush_from_active,
+    topology_aabbs_overlap,
 };
 use crate::{EditorEntity, brush::BrushMaterialPalette, selection::Selected};
 use bevy::{
@@ -115,7 +116,10 @@ pub(crate) fn manage_draw_preview_mesh(
     *cached_preview_key = Some(current_key);
 
     // Build the drawn solid from the authored ring (or footprint rect).
-    let Some((cutter_brush, cutter_transform)) = drawn_brush_from_active(active) else {
+    let Some((cutter_brush, cutter_transform)) = (match active.mode {
+        DrawMode::Cut => cut_brush_from_active(active),
+        DrawMode::Add => drawn_brush_from_active(active),
+    }) else {
         clear_draw_preview(
             &mut commands,
             preview_query.iter(),

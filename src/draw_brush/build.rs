@@ -1,4 +1,4 @@
-use crate::draw_brush::{ActiveDraw, MIN_EXTRUDE_DEPTH};
+use crate::draw_brush::{ActiveDraw, CUT_FACE_PAD, MIN_EXTRUDE_DEPTH};
 use crate::selection::{Selected, Selection};
 use bevy::prelude::*;
 use jackdaw_scene_types::Brush;
@@ -39,18 +39,37 @@ pub(crate) fn prism_from_world_polygon(
     ))
 }
 
-/// Prism solid for the in-progress draw.
-pub(crate) fn drawn_brush_from_active(active: &ActiveDraw) -> Option<(Brush, Transform)> {
-    let polygon: Vec<Vec3> = if !active.polygon_vertices.is_empty() {
+fn active_draw_polygon(active: &ActiveDraw) -> Vec<Vec3> {
+    if !active.polygon_vertices.is_empty() {
         active.polygon_vertices.clone()
     } else {
         footprint_corners(active).to_vec()
-    };
+    }
+}
+
+/// Prism solid for the in-progress draw.
+pub(crate) fn drawn_brush_from_active(active: &ActiveDraw) -> Option<(Brush, Transform)> {
+    prism_from_world_polygon(
+        &active_draw_polygon(active),
+        active.plane.normal,
+        active.plane.axis_u,
+        active.depth,
+    )
+}
+
+/// Cut-mode prism: into the hit face when the drag is inward, with the
+/// near cap padded outward so the start face is crossed rather than
+/// coplanar. Outward drags produce no cutter.
+pub(crate) fn cut_brush_from_active(active: &ActiveDraw) -> Option<(Brush, Transform)> {
+    let polygon: Vec<Vec3> = active_draw_polygon(active)
+        .into_iter()
+        .map(|vertex| vertex + active.plane.normal * CUT_FACE_PAD)
+        .collect();
     prism_from_world_polygon(
         &polygon,
         active.plane.normal,
         active.plane.axis_u,
-        active.depth,
+        active.depth - CUT_FACE_PAD,
     )
 }
 

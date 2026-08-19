@@ -494,7 +494,11 @@ pub(crate) fn draw_brush_preview(
             }
         }
         DrawPhase::ExtrudingDepth => {
-            let offset = active.plane.normal * active.depth;
+            let depth = match active.mode {
+                DrawMode::Cut => active.depth.min(0.0),
+                DrawMode::Add => active.depth,
+            };
+            let offset = active.plane.normal * depth;
 
             if !active.polygon_vertices.is_empty() {
                 // Polygon prism wireframe

@@ -4,7 +4,7 @@ use crate::commands::{
 };
 use crate::draw_brush::{
     ActiveDraw, BrushData, DrawBrushState, MIN_FRAGMENT_SIZE, brush_data_from_entity,
-    drawn_brush_from_active, spawn_brush_from_data, topology_aabbs_overlap,
+    cut_brush_from_active, spawn_brush_from_data, topology_aabbs_overlap,
 };
 use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
@@ -83,7 +83,7 @@ fn spawn_subtract_fragments(
 /// Perform CSG subtraction: subtract the drawn solid from all intersecting brushes.
 /// Routes through the mesh-CSG kernel so concave targets are handled correctly.
 pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
-    let Some((cutter_brush, cutter_transform)) = drawn_brush_from_active(active) else {
+    let Some((cutter_brush, cutter_transform)) = cut_brush_from_active(active) else {
         return;
     };
     let (world_cutter_faces, world_cutter_topo) = jackdaw_csg::brush_to_world(

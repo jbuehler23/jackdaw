@@ -370,7 +370,11 @@ fn confirm_draw_brush(
             }
         }
         DrawPhase::ExtrudingDepth => {
-            if active.depth.abs() < MIN_EXTRUDE_DEPTH {
+            let has_depth = match active.mode {
+                DrawMode::Cut => active.depth <= -MIN_EXTRUDE_DEPTH,
+                DrawMode::Add => active.depth.abs() >= MIN_EXTRUDE_DEPTH,
+            };
+            if !has_depth {
                 return OperatorResult::Cancelled; // No depth, keep extruding
             }
             let active = active.clone();
@@ -407,6 +411,8 @@ pub(crate) const EXTRUDE_DEPTH_SENSITIVITY: f32 = 0.003;
 pub(crate) const MIN_FOOTPRINT_SIZE: f32 = 0.01;
 pub(crate) const MIN_EXTRUDE_DEPTH: f32 = 0.01;
 pub(crate) const MIN_FRAGMENT_SIZE: f32 = 0.005;
+/// Outward pad on Cut prisms so the cutter crosses the start face.
+pub(crate) const CUT_FACE_PAD: f32 = 1e-3;
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
 pub struct DrawBrushGizmoGroup;
