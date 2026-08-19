@@ -14,7 +14,7 @@
 //! ballpark as in the editor), with the cutter overlapping a single
 //! corner of the target. The expected result is one solid L-shape.
 
-use glam::{Quat, Vec3};
+use glam::{Affine3A, Vec3};
 use jackdaw_csg::{CsgInput, brush_difference_split, brush_to_world};
 use jackdaw_scene_types::Brush;
 
@@ -22,8 +22,11 @@ use jackdaw_scene_types::Brush;
 /// op: face planes and topology in world space.
 fn world_cuboid(half_x: f32, half_y: f32, half_z: f32, center: Vec3) -> Brush {
     let brush = Brush::cuboid(half_x, half_y, half_z);
-    let (world_faces, world_topo) =
-        brush_to_world(&brush.faces, &brush.topology, Quat::IDENTITY, center);
+    let (world_faces, world_topo) = brush_to_world(
+        &brush.faces,
+        &brush.topology,
+        Affine3A::from_translation(center),
+    );
     Brush {
         faces: world_faces,
         topology: world_topo,

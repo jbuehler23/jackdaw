@@ -84,8 +84,7 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
     let (world_cutter_faces, world_cutter_topo) = jackdaw_csg::brush_to_world(
         &cutter_brush.faces,
         &cutter_brush.topology,
-        cutter_transform.rotation,
-        cutter_transform.translation,
+        cutter_transform.compute_affine(),
     );
 
     // Diagnostic logging for CSG subtract: log cutter geometry so a buggy
@@ -129,9 +128,11 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
 
         for (entity, brush, global_transform) in &targets {
             // Transform target faces + topology to world space.
-            let (_, rotation, translation) = global_transform.to_scale_rotation_translation();
-            let (world_target_faces, world_target_topo) =
-                jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, rotation, translation);
+            let (world_target_faces, world_target_topo) = jackdaw_csg::brush_to_world(
+                &brush.faces,
+                &brush.topology,
+                global_transform.affine(),
+            );
 
             // Cheap AABB rejection before invoking the kernel. See
             // `topology_aabbs_overlap` above for why we don't use the plane
@@ -566,8 +567,7 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
     let cutter_world: Vec<(Vec<BrushFaceData>, jackdaw_scene_types::BrushTopology)> = cutters
         .iter()
         .map(|(_, brush, gt)| {
-            let (_, rotation, translation) = gt.to_scale_rotation_translation();
-            jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, rotation, translation)
+            jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, gt.affine())
         })
         .collect();
 
@@ -575,9 +575,8 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
 
     for (entity, brush, global_transform) in &targets {
         let entity = *entity;
-        let (_, rotation, translation) = global_transform.to_scale_rotation_translation();
         let (target_world_faces, target_world_topo) =
-            jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, rotation, translation);
+            jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, global_transform.affine());
 
         // Cheap rejection: if no cutter's AABB even touches the target's,
         // skip the whole op. Mesh-CSG would handle it correctly but the
@@ -765,8 +764,7 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
         selected_brushes
             .iter()
             .map(|(_, brush, gt)| {
-                let (_, rotation, translation) = gt.to_scale_rotation_translation();
-                jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, rotation, translation)
+                jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, gt.affine())
             })
             .collect();
 

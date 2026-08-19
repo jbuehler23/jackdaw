@@ -45,8 +45,9 @@ cache.
   each connected component as a separate `CsgBrush`, matching the
   existing `subtract_brush` shape.
 - `brush_batch_union(inputs)` -- N-way union.
-- `brush_to_world(faces, topology, rotation, translation)` -- transform
-  helper for going into world space before a boolean op.
+- `brush_to_world(faces, topology, transform)` -- affine transform
+  helper (scale, rotation, translation) for going into world space
+  before a boolean op.
 - `brush_recentre(brush)` -- subtract the centroid so the result sits at
   the origin in local space.
 

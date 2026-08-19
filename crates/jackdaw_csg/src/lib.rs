@@ -39,7 +39,7 @@
 //! See `project_remote_game_integration.md` and the concave-by-default
 //! audit doc in MEMORY.md for the broader rollout plan.
 
-use glam::{Quat, Vec2, Vec3};
+use glam::{Affine3A, Mat3, Vec2, Vec3};
 use jackdaw_geometry::{
     BrushFaceData, BrushPlane, BrushTopology, EPSILON, FaceMaterial, compute_face_tangent_axes,
     newell_normal, triangulate_face_polygon, triangulate_polygon_with_holes,
@@ -853,8 +853,9 @@ pub fn brush_batch_union(inputs: &[CsgInput<'_>]) -> Result<CsgBrush, CsgError> 
     manifold_to_brush(&result, &runs)
 }
 
-/// Translate a brush's topology positions and face planes by a world
-/// transform (rotation + translation). UV axes are also rotated.
+/// Transform a brush's topology positions and face planes by an affine
+/// world transform (scale, rotation, translation). UV axes are transformed
+/// as tangent vectors.
 ///
 /// This is the topology-aware companion of
 /// `jackdaw_geometry::brush_planes_to_world`. Mesh-CSG needs vertices in
@@ -862,14 +863,30 @@ pub fn brush_batch_union(inputs: &[CsgInput<'_>]) -> Result<CsgBrush, CsgError> 
 pub fn brush_to_world(
     faces: &[BrushFaceData],
     topology: &BrushTopology,
-    rotation: Quat,
-    translation: Vec3,
+    transform: Affine3A,
 ) -> (Vec<BrushFaceData>, BrushTopology) {
+    let linear = Mat3::from(transform.matrix3);
+    let determinant = linear.determinant();
+    let normal_matrix = if determinant.abs() > EPSILON {
+        linear.inverse().transpose()
+    } else {
+        linear
+    };
+    let translation = Vec3::from(transform.translation);
+
     let world_faces: Vec<BrushFaceData> = faces
         .iter()
         .map(|f| {
-            let world_normal = (rotation * f.plane.normal).normalize();
-            let world_distance = f.plane.distance + world_normal.dot(translation);
+            let transformed_normal = normal_matrix * f.plane.normal;
+            let normal_length = transformed_normal.length();
+            let (world_normal, world_distance) = if normal_length > EPSILON {
+                let world_normal = transformed_normal / normal_length;
+                let world_distance =
+                    (f.plane.distance + transformed_normal.dot(translation)) / normal_length;
+                (world_normal, world_distance)
+            } else {
+                (f.plane.normal, f.plane.distance)
+            };
             BrushFaceData {
                 plane: BrushPlane {
                     normal: world_normal,
@@ -879,15 +896,15 @@ pub fn brush_to_world(
                 uv_offset: f.uv_offset,
                 uv_scale: f.uv_scale,
                 uv_rotation: f.uv_rotation,
-                uv_u_axis: (rotation * f.uv_u_axis).normalize_or_zero(),
-                uv_v_axis: (rotation * f.uv_v_axis).normalize_or_zero(),
+                uv_u_axis: transform.transform_vector3(f.uv_u_axis).normalize_or_zero(),
+                uv_v_axis: transform.transform_vector3(f.uv_v_axis).normalize_or_zero(),
                 is_cap: f.is_cap,
             }
         })
         .collect();
     let mut world_topo = topology.clone();
     for v in &mut world_topo.vertices {
-        v.position = rotation * v.position + translation;
+        v.position = transform.transform_point3(v.position);
     }
     (world_faces, world_topo)
 }
@@ -914,8 +931,6 @@ pub fn brush_recentre(brush: &mut CsgBrush) -> Vec3 {
     }
     centroid
 }
-
-const _: f32 = EPSILON;
 
 #[cfg(test)]
 mod tests {

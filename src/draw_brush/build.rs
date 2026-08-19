@@ -113,7 +113,7 @@ pub(crate) fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
         let Some(global_tf) = world.get::<GlobalTransform>(target_entity) else {
             return;
         };
-        let (_, target_rotation, target_translation) = global_tf.to_scale_rotation_translation();
+        let target_affine = global_tf.affine();
 
         let last_mat = world
             .resource::<crate::brush::LastUsedMaterial>()
@@ -125,17 +125,12 @@ pub(crate) fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
             }
         }
 
-        let (world_target_faces, world_target_topo) = jackdaw_csg::brush_to_world(
-            &old_brush.faces,
-            &old_brush.topology,
-            target_rotation,
-            target_translation,
-        );
+        let (world_target_faces, world_target_topo) =
+            jackdaw_csg::brush_to_world(&old_brush.faces, &old_brush.topology, target_affine);
         let (world_drawn_faces, world_drawn_topo) = jackdaw_csg::brush_to_world(
             &drawn_brush.faces,
             &drawn_brush.topology,
-            drawn_transform.rotation,
-            drawn_transform.translation,
+            drawn_transform.compute_affine(),
         );
 
         let target_input = jackdaw_csg::CsgInput::new(&world_target_faces, &world_target_topo);
@@ -156,13 +151,8 @@ pub(crate) fn append_to_brush(active: &ActiveDraw, commands: &mut Commands) {
         }
 
         // Keep the target's transform
-        let inv_rotation = target_rotation.inverse();
-        let (local_faces, local_topo) = jackdaw_csg::brush_to_world(
-            &unioned.faces,
-            &unioned.topology,
-            inv_rotation,
-            -(inv_rotation * target_translation),
-        );
+        let (local_faces, local_topo) =
+            jackdaw_csg::brush_to_world(&unioned.faces, &unioned.topology, target_affine.inverse());
 
         let new_brush = Brush {
             faces: local_faces,

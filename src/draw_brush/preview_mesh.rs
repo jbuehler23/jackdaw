@@ -128,8 +128,7 @@ pub(crate) fn manage_draw_preview_mesh(
     let (world_cutter_faces, world_cutter_topo) = jackdaw_csg::brush_to_world(
         &cutter_brush.faces,
         &cutter_brush.topology,
-        cutter_transform.rotation,
-        cutter_transform.translation,
+        cutter_transform.compute_affine(),
     );
     if world_cutter_topo.vertices.len() < 4 {
         clear_draw_preview(
@@ -235,9 +234,8 @@ pub(crate) fn manage_draw_preview_mesh(
         let cutter_input = jackdaw_csg::CsgInput::new(&world_cutter_faces, &world_cutter_topo);
 
         for (brush_entity, brush, brush_tf, is_selected) in brushes.iter() {
-            let (_, rotation, translation) = brush_tf.to_scale_rotation_translation();
             let (world_target_faces, world_target_topo) =
-                jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, rotation, translation);
+                jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, brush_tf.affine());
 
             // Cheap AABB rejection before invoking the kernel. The plane-
             // based separating-axis test isn't sound for concave brushes
