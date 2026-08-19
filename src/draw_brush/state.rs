@@ -1,7 +1,7 @@
 use crate::commands::{EditorCommand, deselect_entities};
-use crate::draw_brush::{BrushStableId, StableIdCounter, entity_by_stable_id};
+use crate::scene_io::entity_by_scene_node_id;
 use bevy::prelude::*;
-use jackdaw_scene_types::Brush;
+use jackdaw_scene_types::{Brush, SceneNodeId};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum DrawPhase {
@@ -69,61 +69,51 @@ pub(crate) struct DrawBrushState {
 /// Minimal data needed to respawn a brush entity.
 #[derive(Clone)]
 pub(crate) struct BrushData {
-    pub(crate) stable_id: BrushStableId,
+    pub(crate) node_id: SceneNodeId,
     pub(crate) brush: Brush,
     pub(crate) transform: Transform,
     pub(crate) name: String,
-    pub(crate) parent_stable_id: Option<BrushStableId>,
+    pub(crate) parent_node_id: Option<SceneNodeId>,
 }
 
-/// Read brush data from an existing entity. Lazily assigns a `BrushStableId` if missing.
-pub(crate) fn brush_data_from_entity(world: &mut World, entity: Entity) -> BrushData {
-    // Ensure the entity has a stable ID
-    let stable_id = if let Some(sid) = world.get::<BrushStableId>(entity) {
-        *sid
-    } else {
-        let sid = world.resource_mut::<StableIdCounter>().next();
-        world.entity_mut(entity).insert(sid);
-        sid
-    };
+fn scene_node_id_of(world: &mut World, entity: Entity) -> SceneNodeId {
+    if let Some(id) = world.get::<SceneNodeId>(entity).copied() {
+        return id;
+    }
+    let id = SceneNodeId::next();
+    world.entity_mut(entity).insert(id);
+    id
+}
 
-    // Ensure parent has a stable ID too
-    let parent_stable_id = if let Some(child_of) = world.get::<ChildOf>(entity) {
-        let parent = child_of.0;
-        if let Some(psid) = world.get::<BrushStableId>(parent) {
-            Some(*psid)
-        } else {
-            let psid = world.resource_mut::<StableIdCounter>().next();
-            world.entity_mut(parent).insert(psid);
-            Some(psid)
-        }
-    } else {
-        None
-    };
+/// Read brush data from an existing entity. Mints a `SceneNodeId` if missing.
+pub(crate) fn brush_data_from_entity(world: &mut World, entity: Entity) -> BrushData {
+    let node_id = scene_node_id_of(world, entity);
+    let parent = world.get::<ChildOf>(entity).map(|child_of| child_of.0);
+    let parent_node_id = parent.map(|parent| scene_node_id_of(world, parent));
 
     BrushData {
-        stable_id,
+        node_id,
         brush: world.get::<Brush>(entity).unwrap().clone(),
         transform: *world.get::<Transform>(entity).unwrap(),
         name: world
             .get::<Name>(entity)
             .map(std::string::ToString::to_string)
             .unwrap_or_default(),
-        parent_stable_id,
+        parent_node_id,
     }
 }
 
 /// Spawn a brush entity from stored data. Returns new entity ID.
 pub(crate) fn spawn_brush_from_data(world: &mut World, data: &BrushData) -> Entity {
     let parent_entity = data
-        .parent_stable_id
-        .and_then(|psid| entity_by_stable_id(world, psid));
+        .parent_node_id
+        .and_then(|id| entity_by_scene_node_id(world, id));
 
     let mut ec = world.spawn((
         Name::new(data.name.clone()),
         data.brush.clone(),
         data.transform,
-        data.stable_id,
+        data.node_id,
         Visibility::default(),
     ));
     if let Some(parent) = parent_entity {
@@ -148,7 +138,7 @@ impl EditorCommand for CreateBrushCommand {
     }
 
     fn undo(&mut self, world: &mut World) {
-        if let Some(entity) = entity_by_stable_id(world, self.data.stable_id) {
+        if let Some(entity) = entity_by_scene_node_id(world, self.data.node_id) {
             deselect_entities(world, &[entity]);
             world
                 .resource_mut::<jackdaw_bsn::SceneBsnAst>()

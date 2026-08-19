@@ -54,3 +54,15 @@ pub fn register_entities_in_ast(world: &mut World, entities: &[Entity]) {
         register_entity_in_ast(world, entity);
     }
 }
+
+/// Live ECS entity carrying `id`, if any.
+pub(crate) fn entity_by_scene_node_id(
+    world: &mut World,
+    id: jackdaw_scene_types::SceneNodeId,
+) -> Option<Entity> {
+    world
+        .query::<(Entity, &jackdaw_scene_types::SceneNodeId)>()
+        .iter(world)
+        .find(|(_, nid)| **nid == id)
+        .map(|(e, _)| e)
+}

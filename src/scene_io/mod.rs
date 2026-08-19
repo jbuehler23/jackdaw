@@ -21,6 +21,7 @@ pub use load::load_scene_from_file;
 pub(crate) use load::{
     SidecarImport, clear_scene_entities, despawn_scene_entities, import_terrain_sidecars,
 };
+pub(crate) use registration::entity_by_scene_node_id;
 pub use registration::{register_entities_in_ast, register_entity_in_ast};
 pub use save::{
     SaveOutcome, emit_bsn_scene_with_inline_assets, save_layout_to_project, save_scene,
@@ -91,13 +92,11 @@ const SKIP_COMPONENT_PATHS: &[&str] = &[
 /// they match a skip prefix.
 const ALWAYS_SAVE_PATHS: &[&str] = &[
     "bevy_camera::visibility::Visibility",
-    // Overrides the `jackdaw::` skip so `apply_ast_to_world` can
-    // match selected brushes by stable id across an undo.
-    "jackdaw::draw_brush::BrushStableId",
     // The stable node id must persist so a running game can map a live
-    // entity back to its authored node. It is written as the structural
-    // `JsnEntity::id` field rather than a component entry, but this keeps
-    // any other save path from stripping it.
+    // entity back to its authored node, and so the editor can restore
+    // selection across undo and tab swaps. It is written as the
+    // structural `JsnEntity::id` field rather than a component entry,
+    // but this keeps any other save path from stripping it.
     jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH,
     // Prefab marker components must round-trip through save and AST
     // registration; stripping them breaks instance inheritance and

@@ -237,12 +237,12 @@ pub fn activate_tab(world: &mut World, target: usize) {
     scenes.tabs[target].history_depth_at_last_check = history_depth;
 }
 
-/// Captures camera transform, edit mode, and selection as stable IDs.
+/// Captures camera transform, edit mode, and selection as scene node ids.
 fn capture_view_state(world: &mut World) -> ViewState {
     use crate::brush::{BrushSelection, EditMode};
-    use crate::draw_brush::BrushStableId;
     use crate::selection::Selected;
     use crate::viewport::MainViewportCamera;
+    use jackdaw_scene_types::SceneNodeId;
 
     let mut cam_q = world.query_filtered::<&Transform, With<MainViewportCamera>>();
     let camera_transform = cam_q.iter(world).next().copied().unwrap_or_default();
@@ -256,8 +256,8 @@ fn capture_view_state(world: &mut World) -> ViewState {
         .cloned()
         .unwrap_or_default();
 
-    let mut sel_q = world.query_filtered::<&BrushStableId, With<Selected>>();
-    let selection: Vec<BrushStableId> = sel_q.iter(world).copied().collect();
+    let mut sel_q = world.query_filtered::<&SceneNodeId, With<Selected>>();
+    let selection: Vec<SceneNodeId> = sel_q.iter(world).copied().collect();
 
     ViewState {
         camera_transform,
@@ -271,9 +271,9 @@ fn capture_view_state(world: &mut World) -> ViewState {
 /// Restores camera transform, edit mode, and selection.
 fn apply_view_state(world: &mut World, view_state: &ViewState) {
     use crate::brush::{BrushSelection, EditMode};
-    use crate::draw_brush::BrushStableId;
     use crate::selection::{Selected, Selection};
     use crate::viewport::MainViewportCamera;
+    use jackdaw_scene_types::SceneNodeId;
 
     // Camera transform.
     let mut cam_q = world.query_filtered::<&mut Transform, With<MainViewportCamera>>();
@@ -291,15 +291,15 @@ fn apply_view_state(world: &mut World, view_state: &ViewState) {
         *bs = view_state.brush_sub_selection.clone();
     }
 
-    // Object selection: rebuild from stable IDs.
-    let mut sid_q = world.query::<(Entity, &BrushStableId)>();
-    let sid_map: std::collections::HashMap<BrushStableId, Entity> =
-        sid_q.iter(world).map(|(e, sid)| (*sid, e)).collect();
+    // Object selection: rebuild from scene node ids.
+    let mut nid_q = world.query::<(Entity, &SceneNodeId)>();
+    let nid_map: std::collections::HashMap<SceneNodeId, Entity> =
+        nid_q.iter(world).map(|(e, nid)| (*nid, e)).collect();
 
     let entities: Vec<Entity> = view_state
         .selection
         .iter()
-        .filter_map(|sid| sid_map.get(sid).copied())
+        .filter_map(|nid| nid_map.get(nid).copied())
         .collect();
 
     // Clear any current Selected markers (the world was just repopulated).

@@ -227,12 +227,9 @@ pub struct ViewState {
     /// reflect the entire `Projection` enum across tab swaps.
     pub camera_projection: Option<bevy::math::Mat4>,
     pub edit_mode: crate::brush::EditMode,
-    /// Object-level selection stored as stable IDs so it survives the
-    /// despawn / respawn cycle of a tab swap. `BrushStableId` lives in
-    /// `crate::draw_brush` since that's where the stable-ID counter is
-    /// defined; not all selected entities are brushes, but the
-    /// counter and component are the editor-wide identity mechanism.
-    pub selection: Vec<crate::draw_brush::BrushStableId>,
+    /// Object-level selection stored as scene node ids so it survives
+    /// the despawn / respawn cycle of a tab swap.
+    pub selection: Vec<jackdaw_scene_types::SceneNodeId>,
     /// Brush sub-element selection (verts, edges, faces) for whichever
     /// brush is active in `selection`.
     pub brush_sub_selection: crate::brush::BrushSelection,

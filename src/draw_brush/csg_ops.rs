@@ -3,18 +3,18 @@ use crate::commands::{
     deselect_entities,
 };
 use crate::draw_brush::{
-    ActiveDraw, BrushData, BrushStableId, DrawBrushState, MIN_FRAGMENT_SIZE, StableIdCounter,
-    brush_data_from_entity, drawn_brush_from_active, entity_by_stable_id, spawn_brush_from_data,
-    topology_aabbs_overlap,
+    ActiveDraw, BrushData, DrawBrushState, MIN_FRAGMENT_SIZE, brush_data_from_entity,
+    drawn_brush_from_active, spawn_brush_from_data, topology_aabbs_overlap,
 };
 use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
+use crate::scene_io::entity_by_scene_node_id;
 use crate::selection::{Selected, Selection};
 use bevy::prelude::*;
 use jackdaw_geometry::{
     clean_degenerate_faces, compute_brush_geometry_from_planes, compute_brush_topology,
 };
-use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
+use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane, SceneNodeId};
 
 struct SubtractionResult {
     original_entity: Entity,
@@ -43,17 +43,22 @@ fn spawn_subtract_fragments(
     originals: &[BrushData],
     parent_translations: &std::collections::HashMap<Entity, Vec3>,
 ) -> Vec<BrushData> {
-    let mut counter = world.resource_mut::<StableIdCounter>();
-    let fragment_stable_ids: Vec<Vec<BrushStableId>> = results
+    let fragment_node_ids: Vec<Vec<SceneNodeId>> = results
         .iter()
-        .map(|result| result.fragments.iter().map(|_| counter.next()).collect())
+        .map(|result| {
+            result
+                .fragments
+                .iter()
+                .map(|_| SceneNodeId::next())
+                .collect()
+        })
         .collect();
 
     let mut fragments = Vec::new();
     for (result_index, result) in results.iter().enumerate() {
-        let parent_stable_id = originals
+        let parent_node_id = originals
             .get(result_index)
-            .and_then(|original| original.parent_stable_id);
+            .and_then(|original| original.parent_node_id);
         let parent_translation = parent_translations.get(&result.original_entity);
         for (fragment_index, (brush, transform)) in result.fragments.iter().enumerate() {
             let local_transform = if let Some(parent_translation) = parent_translation {
@@ -62,11 +67,11 @@ fn spawn_subtract_fragments(
                 *transform
             };
             let brush_data = BrushData {
-                stable_id: fragment_stable_ids[result_index][fragment_index],
+                node_id: fragment_node_ids[result_index][fragment_index],
                 brush: brush.clone(),
                 transform: local_transform,
                 name: "Brush".to_string(),
-                parent_stable_id,
+                parent_node_id,
             };
             spawn_brush_from_data(world, &brush_data);
             fragments.push(brush_data);
@@ -342,11 +347,10 @@ struct SubtractBrushCommand {
 
 impl EditorCommand for SubtractBrushCommand {
     fn execute(&mut self, world: &mut World) {
-        // Despawn originals by stable ID lookup
         let orig_entities: Vec<Entity> = self
             .originals
             .iter()
-            .filter_map(|d| entity_by_stable_id(world, d.stable_id))
+            .filter_map(|d| entity_by_scene_node_id(world, d.node_id))
             .collect();
         deselect_entities(world, &orig_entities);
         for entity in &orig_entities {
@@ -362,13 +366,13 @@ impl EditorCommand for SubtractBrushCommand {
     fn undo(&mut self, world: &mut World) {
         let mut all_entities = Vec::new();
         for data in &self.fragments {
-            if let Some(entity) = entity_by_stable_id(world, data.stable_id) {
+            if let Some(entity) = entity_by_scene_node_id(world, data.node_id) {
                 collect_entity_ids(world, entity, &mut all_entities);
             }
         }
         deselect_entities(world, &all_entities);
         for data in &self.fragments {
-            if let Some(entity) = entity_by_stable_id(world, data.stable_id)
+            if let Some(entity) = entity_by_scene_node_id(world, data.node_id)
                 && let Ok(e) = world.get_entity_mut(entity)
             {
                 e.despawn();
@@ -853,13 +857,12 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
         faces: clean,
         topology,
     };
-    let frag_sid = world.resource_mut::<StableIdCounter>().next();
     let brush_data = BrushData {
-        stable_id: frag_sid,
+        node_id: SceneNodeId::next(),
         brush: new_brush,
         transform: Transform::from_translation(centroid),
         name: "Brush".to_string(),
-        parent_stable_id: None,
+        parent_node_id: None,
     };
     let entity = spawn_brush_from_data(world, &brush_data);
 

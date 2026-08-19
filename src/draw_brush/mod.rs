@@ -14,7 +14,6 @@ mod extend_face;
 mod interaction;
 mod plane_math;
 mod preview_mesh;
-mod stable_id;
 mod state;
 
 pub(crate) use self::build::*;
@@ -23,7 +22,6 @@ pub(crate) use self::extend_face::*;
 pub(crate) use self::interaction::*;
 pub(crate) use self::plane_math::*;
 pub(crate) use self::preview_mesh::*;
-pub(crate) use self::stable_id::*;
 pub(crate) use self::state::*;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -95,8 +93,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<DrawBrushCancelCutOp>()
         .register_menu_entry::<ActivateDrawBrushModalOp>(TopLevelMenu::Add);
 
-    ctx.init_resource::<DrawBrushState>()
-        .init_resource::<StableIdCounter>();
+    ctx.init_resource::<DrawBrushState>();
 }
 
 /// Draw a new brush in the viewport.
@@ -422,10 +419,7 @@ pub struct DrawBrushPlugin;
 impl Plugin for DrawBrushPlugin {
     fn build(&self, app: &mut App) {
         // TODO: Move *all* of this into the `extension` method and turn systems into ops on the way.
-        app.register_type::<BrushStableId>()
-            .init_resource::<StableIdCounter>()
-            .add_systems(Update, assign_missing_brush_stable_ids)
-            .init_gizmo_group::<DrawBrushGizmoGroup>()
+        app.init_gizmo_group::<DrawBrushGizmoGroup>()
             .init_gizmo_group::<DrawBrushDashedGizmoGroup>()
             .add_systems(Startup, configure_draw_brush_gizmos)
             .add_systems(

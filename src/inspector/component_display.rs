@@ -1250,9 +1250,6 @@ mod tests {
         assert!(hidden_by_namespace(
             "jackdaw_scene_types::node_id::SceneNodeId"
         ));
-        assert!(hidden_by_namespace(
-            "jackdaw::draw_brush::stable_id::BrushStableId"
-        ));
         // The wholesale-allowed crates are untouched by the cull.
         assert!(!hidden_by_namespace(
             "jackdaw_avian_integration::AvianCollider"

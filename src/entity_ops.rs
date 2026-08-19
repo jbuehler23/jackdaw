@@ -561,7 +561,6 @@ pub fn duplicate_selected(world: &mut World) {
 /// Mint fresh ids and unique root names on an authored subtree before it is
 /// grafted/spawned.
 fn prepare_authored_subtree_for_spawn(world: &mut World, ast: &mut jackdaw_bsn::SceneBsnAst) {
-    remap_brush_stable_ids(world, ast);
     mint_scene_node_ids(world, ast);
     assign_unique_entity_root_names(world, ast);
 }
@@ -1010,43 +1009,6 @@ fn spawn_bsn_clipboard(world: &mut World, text: &str) -> Vec<Entity> {
         }
     };
     graft_and_spawn(world, &parsed, None)
-}
-
-/// Rewrite `BrushStableId` values in a parsed clipboard document, replacing
-/// each with a fresh ID minted from `StableIdCounter`. No-ops on nodes that
-/// do not carry one (cameras, empties, etc.).
-fn remap_brush_stable_ids(world: &mut World, ast: &mut jackdaw_bsn::SceneBsnAst) {
-    let mut stack: Vec<Entity> = ast.roots.clone();
-    let mut nodes = Vec::new();
-    while let Some(node) = stack.pop() {
-        nodes.push(node);
-        stack.extend(ast.get_children_ast(node));
-    }
-    for node in nodes {
-        let found = ast.get_patches(node).and_then(|patches| {
-            patches.0.iter().copied().find(|&pe| {
-                matches!(
-                    ast.get_patch(pe),
-                    Some(jackdaw_bsn::BsnPatch::TupleStruct(data))
-                        if data.type_path.ends_with("BrushStableId")
-                )
-            })
-        });
-        if let Some(pe) = found {
-            let type_path = match ast.get_patch(pe) {
-                Some(jackdaw_bsn::BsnPatch::TupleStruct(data)) => data.type_path.clone(),
-                _ => continue,
-            };
-            let fresh = crate::draw_brush::mint_stable_id(world);
-            ast.set_patch(
-                pe,
-                jackdaw_bsn::BsnPatch::TupleStruct(jackdaw_bsn::BsnTupleStructData {
-                    type_path,
-                    values: vec![jackdaw_bsn::BsnValue::Int(fresh.0 as i128)],
-                }),
-            );
-        }
-    }
 }
 
 /// Ensure every entity node in `ast` carries a fresh `SceneNodeId` patch so
@@ -1924,56 +1886,6 @@ pub(crate) fn entity_add_prefab(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Verifies that `remap_brush_stable_ids` replaces existing `BrushStableId`
-    /// values in a parsed clipboard document with fresh IDs from
-    /// `StableIdCounter`, so pasted copies don't share IDs with their
-    /// originals.
-    #[test]
-    fn paste_assigns_fresh_stable_ids() {
-        let mut world = World::new();
-        crate::draw_brush::init_stable_id_counter(&mut world);
-
-        const STABLE_ID_PATH: &str = "jackdaw::draw_brush::BrushStableId";
-        let original_id: u64 = 7;
-
-        let mut ast = jackdaw_bsn::SceneBsnAst::default();
-        let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::TupleStruct(
-            jackdaw_bsn::BsnTupleStructData {
-                type_path: STABLE_ID_PATH.to_string(),
-                values: vec![jackdaw_bsn::BsnValue::Int(original_id as i128)],
-            },
-        )]);
-        ast.add_to_roots(node);
-
-        remap_brush_stable_ids(&mut world, &mut ast);
-
-        let stored = jackdaw_bsn::get_bsn_field(&ast, node, STABLE_ID_PATH, "0");
-        assert!(
-            matches!(stored, Some(jackdaw_bsn::BsnValue::Int(v)) if v != i128::from(original_id)),
-            "pasted entity should have a new stable ID, got {stored:?}"
-        );
-    }
-
-    /// Verifies that nodes without a `BrushStableId` patch are untouched by
-    /// `remap_brush_stable_ids`.
-    #[test]
-    fn paste_does_not_add_stable_ids_to_non_brush_entities() {
-        let mut world = World::new();
-        crate::draw_brush::init_stable_id_counter(&mut world);
-
-        let mut ast = jackdaw_bsn::SceneBsnAst::default();
-        let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("Empty".to_string())]);
-        ast.add_to_roots(node);
-
-        remap_brush_stable_ids(&mut world, &mut ast);
-
-        assert_eq!(
-            ast.component_type_paths(node),
-            Vec::<String>::new(),
-            "no component patch was added"
-        );
-    }
 
     /// `mint_scene_node_ids` replaces any existing `SceneNodeId` with a fresh
     /// sparse id and leaves other patches alone.

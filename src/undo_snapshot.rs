@@ -96,15 +96,15 @@ impl SceneSnapshot for BsnDocumentSnapshot {
     fn apply(&self, world: &mut World) {
         // Mirror the JSN apply sequence: preserve undo history (despawn
         // directly, never through `clear_scene_entities`), drop stale
-        // selection and tree rows first, and restore selection by stable
+        // selection and tree rows first, and restore selection by node
         // id after the respawn re-mints entities.
-        let selected_stable_ids: Vec<crate::draw_brush::BrushStableId> = world
+        let selected_node_ids: Vec<jackdaw_scene_types::SceneNodeId> = world
             .get_resource::<crate::selection::Selection>()
             .map(|selection| {
                 selection
                     .entities
                     .iter()
-                    .filter_map(|&e| world.get::<crate::draw_brush::BrushStableId>(e).copied())
+                    .filter_map(|&e| world.get::<jackdaw_scene_types::SceneNodeId>(e).copied())
                     .collect()
             })
             .unwrap_or_default();
@@ -148,14 +148,14 @@ impl SceneSnapshot for BsnDocumentSnapshot {
             error!("undo snapshot failed to reload: {err}");
         }
 
-        if !selected_stable_ids.is_empty()
+        if !selected_node_ids.is_empty()
             && let Some(_) = world.get_resource::<crate::selection::Selection>()
         {
             let restored: Vec<Entity> = {
-                let mut query = world.query::<(Entity, &crate::draw_brush::BrushStableId)>();
+                let mut query = world.query::<(Entity, &jackdaw_scene_types::SceneNodeId)>();
                 query
                     .iter(world)
-                    .filter(|(_, id)| selected_stable_ids.contains(id))
+                    .filter(|(_, id)| selected_node_ids.contains(id))
                     .map(|(e, _)| e)
                     .collect()
             };

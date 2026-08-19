@@ -1,4 +1,4 @@
-use crate::draw_brush::{ActiveDraw, MIN_EXTRUDE_DEPTH, StableIdCounter};
+use crate::draw_brush::{ActiveDraw, MIN_EXTRUDE_DEPTH};
 use crate::selection::{Selected, Selection};
 use bevy::prelude::*;
 use jackdaw_scene_types::Brush;
@@ -70,15 +70,8 @@ pub(crate) fn spawn_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
             }
         }
 
-        let stable_id = world.resource_mut::<StableIdCounter>().next();
         let entity = world
-            .spawn((
-                Name::new("Brush"),
-                brush,
-                transform,
-                Visibility::default(),
-                stable_id,
-            ))
+            .spawn((Name::new("Brush"), brush, transform, Visibility::default()))
             .id();
 
         crate::scene_io::register_entity_in_ast(world, entity);
