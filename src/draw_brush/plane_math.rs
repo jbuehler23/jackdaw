@@ -189,7 +189,7 @@ fn point_on_segment(point: Vec2, segment_start: Vec2, segment_end: Vec2) -> bool
         return to_point.length_squared() <= EPS * EPS;
     }
     let parameter = to_point.dot(segment) / length_squared;
-    parameter >= -EPS && parameter <= 1.0 + EPS
+    (-EPS..=1.0 + EPS).contains(&parameter)
 }
 
 #[cfg(test)]

@@ -1583,7 +1583,7 @@ mod pie_windows {
         SetInformationJobObject(
             HANDLE(handle.as_raw_handle()),
             JobObjectExtendedLimitInformation,
-            &raw const info as *const c_void,
+            (&raw const info).cast::<c_void>(),
             std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
         )
         .expect("Failed to set job object info for PIE");
@@ -1598,8 +1598,8 @@ mod pie_windows {
             let handle = process.as_raw_handle();
             unsafe {
                 AssignProcessToJobObject(HANDLE(self.0.as_raw_handle()), HANDLE(handle))
-                    .expect("Failed to assign process to job for PIE")
-            };
+                    .expect("Failed to assign process to job for PIE");
+            }
         }
     }
 }
