@@ -250,17 +250,12 @@ pub fn regenerate_brush_meshes(
     palette: Res<BrushMaterialPalette>,
     parents: Query<&ChildOf>,
     selected_query: Query<(), With<Selected>>,
-    group_edit: Res<crate::viewport_select::GroupEditState>,
     halfedge_q: Query<&crate::brush::BrushHalfedge>,
 ) {
     for (entity, brush, stack, children, preview, is_selected) in &changed_brushes {
-        let in_active_group = group_edit
-            .active_group
-            .is_some_and(|group| parents.get(entity).is_ok_and(|c| c.0 == group));
-        let parent_selected = !in_active_group
-            && parents
-                .get(entity)
-                .is_ok_and(|child_of| selected_query.contains(child_of.0));
+        let parent_selected = parents
+            .get(entity)
+            .is_ok_and(|child_of| selected_query.contains(child_of.0));
         let effectively_selected = is_selected || parent_selected;
         // Despawn all Mesh3d children from previous regen cycles.
         if let Some(children) = children {
@@ -480,16 +475,11 @@ pub fn ensure_brush_chunk_materials(
     )>,
     parents: Query<&ChildOf>,
     selected_query: Query<(), With<Selected>>,
-    group_edit: Res<crate::viewport_select::GroupEditState>,
 ) {
     for (entity, cache, has_preview, is_selected) in &brushes {
-        let in_active_group = group_edit
-            .active_group
-            .is_some_and(|group| parents.get(entity).is_ok_and(|c| c.0 == group));
-        let parent_selected = !in_active_group
-            && parents
-                .get(entity)
-                .is_ok_and(|child_of| selected_query.contains(child_of.0));
+        let parent_selected = parents
+            .get(entity)
+            .is_ok_and(|child_of| selected_query.contains(child_of.0));
         let effectively_selected = is_selected || parent_selected;
         let highlighted = effectively_selected || has_preview;
         for &chunk_entity in &cache.chunk_entities {

@@ -14,7 +14,7 @@
 //!
 //! The snapshot capture covers `ViewModeSettings`, `OverlaySettings`,
 //! `EditMode`, `ActiveTool`, `GizmoSpace`, `SnapSettings`,
-//! `PhysicsOverlayConfig`, `GroupEditState.active_group`, and the
+//! `PhysicsOverlayConfig`, and the
 //! scene AST (see `src/undo_snapshot.rs`).
 //!
 //!

@@ -10,12 +10,6 @@ pub use jackdaw_geometry::{
     BrushFaceData, BrushPlane, BrushTopology, compute_brush_topology, compute_face_tangent_axes,
 };
 
-/// Groups multiple convex brush fragments produced by CSG subtraction.
-/// Fragments become children of the group entity.
-#[derive(Component, Reflect, Clone, Debug, Default)]
-#[reflect(Component, Default, @crate::EditorHidden)]
-pub struct BrushGroup;
-
 /// Marks the entity a loaded scene's content is spawned under, so tools can
 /// show it as a scene root. Reflectable so it streams over the play-in-editor
 /// link and projects onto the editor preview entity.

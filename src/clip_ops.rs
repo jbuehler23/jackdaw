@@ -9,7 +9,7 @@
 use bevy::{prelude::*, ui::ui_transform::UiGlobalTransform};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
-use jackdaw_scene_types::{Brush, BrushFaceData, BrushGroup, BrushPlane};
+use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
 
 use crate::brush::{
     BrushEditMode, BrushMeshCache, BrushSelection, ClipMode, ClipState, EditMode, SetBrush,
@@ -458,12 +458,12 @@ fn queue_split_spawn(
         scale: Vec3::ONE,
     };
     commands.queue(move |world: &mut World| {
-        let parent_group = world
-            .get::<ChildOf>(brush_entity)
-            .map(|c| c.0)
-            .filter(|&p| world.get::<BrushGroup>(p).is_some());
-        let actual_transform = if parent_group.is_some() {
-            *world.get::<Transform>(brush_entity).unwrap()
+        let parent = world.get::<ChildOf>(brush_entity).map(|c| c.0);
+        let actual_transform = if parent.is_some() {
+            world
+                .get::<Transform>(brush_entity)
+                .copied()
+                .unwrap_or(spawn_transform)
         } else {
             spawn_transform
         };
@@ -474,7 +474,7 @@ fn queue_split_spawn(
             actual_transform,
             Visibility::default(),
         ));
-        if let Some(parent) = parent_group {
+        if let Some(parent) = parent {
             spawner.insert(ChildOf(parent));
         }
         let entity = spawner.id();

@@ -14,7 +14,6 @@ pub const AXIS_Z_BRIGHT: Color = Color::srgba(0.157, 0.565, 1.0, 1.0);
 // -- Brush wireframe + outline --
 pub const WIREFRAME_OUTLINE_SELECTED: Color = Color::srgba(1.0, 0.4196, 0.10196, 1.0);
 pub const WIREFRAME_OUTLINE_SELECTED_CLIP: Color = Color::srgba(0.133, 0.827, 0.933, 0.25);
-pub const WIREFRAME_OUTLINE_GROUP_EDIT: Color = Color::srgba(0.133, 0.827, 0.933, 0.35);
 pub const WIREFRAME_OUTLINE_UNSELECTED: Color = Color::srgba(1.0, 1.0, 1.0, 1.0);
 pub const WIREFRAME_OUTLINE_CUT_PREVIEW: Color = Color::srgba(0.133, 0.827, 0.933, 0.25);
 

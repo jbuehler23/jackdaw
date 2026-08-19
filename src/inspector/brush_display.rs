@@ -925,32 +925,26 @@ pub(crate) fn brush_face_set_uv_scale_preset(
 #[operator(
     id = "brush.clear_all_materials",
     label = "Clear All Materials",
-    description = "Clear materials from every face of the selected brushes (expanding any selected brush groups into their child brushes)."
+    description = "Clear materials from every face of the selected brushes (expanding any selected non-brush parents into their child brushes)."
 )]
 pub(crate) fn brush_clear_all_materials(
     _: In<OperatorParameters>,
     selection: Res<Selection>,
     mut brushes: Query<&mut Brush>,
     mut history: ResMut<CommandHistory>,
-    brush_groups: Query<(), With<jackdaw_scene_types::types::BrushGroup>>,
     children_query: Query<&Children>,
     mut commands: Commands,
 ) -> OperatorResult {
-    // Expand BrushGroups into child brushes
-    let targets: Vec<Entity> = selection
-        .entities
-        .iter()
-        .flat_map(|&e| {
-            if brush_groups.contains(e) {
-                children_query
-                    .get(e)
-                    .map(|c| c.iter().collect::<Vec<_>>())
-                    .unwrap_or_default()
-            } else {
-                vec![e]
-            }
-        })
-        .collect();
+    let targets: Vec<Entity> = crate::brush::shown_edit_brushes(
+        &selection.entities,
+        |e| brushes.contains(e),
+        |e| {
+            children_query
+                .get(e)
+                .map(|c| c.iter().collect())
+                .unwrap_or_default()
+        },
+    );
 
     let mut group_commands: Vec<Box<dyn jackdaw_commands::EditorCommand>> = Vec::new();
     for entity in targets {

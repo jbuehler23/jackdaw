@@ -580,7 +580,7 @@ impl Plugin for BrushPlugin {
 }
 
 /// Edit brushes for a selection: every selected brush, plus the child brushes
-/// of any selected entity that is not itself a brush (e.g. a `BrushGroup`).
+/// of any selected entity that is not itself a brush.
 /// `is_brush` reports whether an entity has a `Brush`; `children_of` yields an
 /// entity's direct children. Order follows the selection; duplicates removed.
 pub(crate) fn shown_edit_brushes(

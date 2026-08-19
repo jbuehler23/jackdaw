@@ -33,7 +33,7 @@ use crate::{
     selection::{Selected, Selection},
 };
 use jackdaw_feathers::dialog::{DialogActionEvent, DialogChildrenSlot};
-use jackdaw_scene_types::{Brush, BrushGroup};
+use jackdaw_scene_types::Brush;
 
 /// Stores the default name for the prefab save dialog.
 #[derive(Resource, Default)]
@@ -156,9 +156,6 @@ impl Plugin for HierarchyPlugin {
 fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
     if world.get::<crate::prefab::IsA>(entity).is_some() {
         return EntityCategory::Prefab;
-    }
-    if world.get::<BrushGroup>(entity).is_some() {
-        return EntityCategory::Mesh;
     }
     if world.get::<Camera>(entity).is_some() {
         return EntityCategory::Camera;

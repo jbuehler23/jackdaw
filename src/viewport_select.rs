@@ -14,8 +14,7 @@ use bevy::{
     prelude::*,
 };
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::keymap::PresetInput;
-use jackdaw_scene_types::{Brush, BrushGroup};
+use jackdaw_scene_types::Brush;
 
 /// Marker for the box-select visual overlay node.
 #[derive(Component)]
@@ -25,50 +24,21 @@ pub struct ViewportSelectPlugin;
 
 impl Plugin for ViewportSelectPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<BoxSelectState>()
-            .init_resource::<GroupEditState>()
-            .init_resource::<LastClick>()
-            .add_systems(
-                Update,
-                (
-                    handle_viewport_click.after(handle_gizmo_hover),
-                    box_select_pending_trigger,
-                    box_select_promote_pending.after(box_select_pending_trigger),
-                    update_box_select_overlay,
-                )
-                    .in_set(crate::EditorInteractionSystems),
-            );
+        app.init_resource::<BoxSelectState>().add_systems(
+            Update,
+            (
+                handle_viewport_click.after(handle_gizmo_hover),
+                box_select_pending_trigger,
+                box_select_promote_pending.after(box_select_pending_trigger),
+                update_box_select_overlay,
+            )
+                .in_set(crate::EditorInteractionSystems),
+        );
     }
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<BoxSelectOp>()
-        .register_operator::<ViewportExitGroupEditOp>();
-    ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, ViewportExitGroupEditOp>(
-        [PresetInput::key("Escape")],
-    );
-}
-
-fn group_edit_active(
-    group_edit: Res<GroupEditState>,
-    keybind_focus: crate::keybind_focus::KeybindFocus,
-) -> bool {
-    !keybind_focus.is_typing() && group_edit.active_group.is_some()
-}
-
-/// Exit `BrushGroup` edit mode (entered via double-click on a group).
-#[operator(
-    id = "viewport.exit_group_edit",
-    label = "Exit Group Edit",
-    description = "Stop editing the current brush group.",
-    is_available = group_edit_active,
-)]
-pub(crate) fn viewport_exit_group_edit(
-    _: In<OperatorParameters>,
-    mut group_edit: ResMut<GroupEditState>,
-) -> OperatorResult {
-    group_edit.active_group = None;
-    OperatorResult::Finished
+    ctx.register_operator::<BoxSelectOp>();
 }
 
 /// Cursor delta (in window pixels) that promotes a pending LMB-down
@@ -113,20 +83,6 @@ pub fn cursor_dragged_past_threshold(start: Vec2, current: Vec2) -> bool {
     current.distance_squared(start) >= BOX_SELECT_DRAG_THRESHOLD * BOX_SELECT_DRAG_THRESHOLD
 }
 
-/// Tracks whether the user is editing inside a `BrushGroup` (entered via double-click).
-#[derive(Resource, Default)]
-pub struct GroupEditState {
-    /// The `BrushGroup` entity we're currently editing inside of.
-    pub active_group: Option<Entity>,
-}
-
-/// Tracks last click for double-click detection.
-#[derive(Resource, Default)]
-pub(crate) struct LastClick {
-    entity: Option<Entity>,
-    time: f64,
-}
-
 pub(crate) fn handle_viewport_click(
     pointer: crate::modal_inputs::PointerInputs,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -134,7 +90,6 @@ pub(crate) fn handle_viewport_click(
     scene_entities: Query<(Entity, &GlobalTransform), (Without<EditorEntity>, With<Transform>)>,
     editor_entities: Query<(), With<EditorEntity>>,
     parents: Query<&ChildOf>,
-    brush_groups: Query<(), With<BrushGroup>>,
     brushes: Query<(), With<Brush>>,
     reference_images: Query<&crate::reference_image::ReferenceImage>,
     guards: InteractionGuards,
@@ -142,7 +97,6 @@ pub(crate) fn handle_viewport_click(
     mut input_focus: ResMut<InputFocus>,
     mut commands: Commands,
     mut ray_cast: MeshRayCast,
-    (mut group_edit, mut last_click, time): (ResMut<GroupEditState>, ResMut<LastClick>, Res<Time>),
     // One-frame memory of `draw_state.active`. `draw_brush.confirm` clears
     // the state inline before this system runs, so the same mouse-press
     // would otherwise fall through to `selection.clear()` and strip
@@ -207,8 +161,6 @@ pub(crate) fn handle_viewport_click(
                 *hit_entity,
                 &scene_entities,
                 &parents,
-                &group_edit,
-                &brush_groups,
                 &brushes,
                 &reference_images,
             ) {
@@ -228,8 +180,6 @@ pub(crate) fn handle_viewport_click(
                     *hit_entity,
                     &scene_entities,
                     &parents,
-                    &group_edit,
-                    &brush_groups,
                     &brushes,
                     &reference_images,
                 ) == Some(current_primary)
@@ -258,22 +208,7 @@ pub(crate) fn handle_viewport_click(
         }
     }
 
-    // Double-click detection: if same entity clicked within 400ms, enter group
-    let now = time.elapsed_secs_f64();
     if let Some(entity) = best_entity {
-        let is_double_click = last_click.entity == Some(entity) && (now - last_click.time) < 0.4;
-
-        if is_double_click && brush_groups.contains(entity) {
-            // Double-click on a BrushGroup: enter group edit mode
-            group_edit.active_group = Some(entity);
-            last_click.entity = None;
-            last_click.time = 0.0;
-            return;
-        }
-
-        last_click.entity = Some(entity);
-        last_click.time = now;
-
         let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
         let in_physics_mode = *guards.edit_mode == crate::brush::EditMode::Physics;
 
@@ -294,13 +229,6 @@ pub(crate) fn handle_viewport_click(
             selection.select_single(&mut commands, entity);
         }
     } else {
-        last_click.entity = None;
-        last_click.time = 0.0;
-
-        // Clicked on empty space  -- exit group edit and deselect all (unless Ctrl held)
-        if group_edit.active_group.is_some() {
-            group_edit.active_group = None;
-        }
         let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
         if !ctrl {
             selection.clear(&mut commands);
@@ -536,17 +464,12 @@ fn is_locked_reference(
 /// selectable ancestor. A brush resolves to itself regardless of nesting.
 /// A non-brush scene entity whose parent is also a scene entity walks up
 /// to the scene-entity root (resolves GLTF sub-meshes to the model root).
-/// When inside a group (`GroupEditState::active_group` is set), non-brush
-/// children of that group stop at the child so individual fragments can
-/// be selected; a brush child returns via the brush early-exit above.
 /// Locked reference images resolve to `None` so viewport clicks pass
 /// through to whatever sits behind them.
 fn find_selectable_ancestor(
     mut entity: Entity,
     scene_entities: &Query<(Entity, &GlobalTransform), (Without<EditorEntity>, With<Transform>)>,
     parents: &Query<&ChildOf>,
-    group_edit: &GroupEditState,
-    brush_groups: &Query<(), With<BrushGroup>>,
     brushes: &Query<(), With<Brush>>,
     reference_images: &Query<&crate::reference_image::ReferenceImage>,
 ) -> Option<Entity> {
@@ -565,11 +488,6 @@ fn find_selectable_ancestor(
             if let Ok(child_of) = parents.get(entity) {
                 let parent = child_of.0;
                 if scene_entities.contains(parent) {
-                    // When editing inside a group and this parent is that group,
-                    // stop here so individual non-brush fragments can be selected.
-                    if group_edit.active_group == Some(parent) && brush_groups.contains(parent) {
-                        return Some(entity);
-                    }
                     entity = parent;
                     continue;
                 }

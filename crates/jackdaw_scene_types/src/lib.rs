@@ -28,9 +28,9 @@ pub use brush_chunks::{MeshChunk, build_brush_chunks};
 pub use mesh_rebuild::evaluate_brush_geometry;
 pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
 pub use types::{
-    Brush, BrushFaceData, BrushGroup, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
-    GltfSource, NavmeshRegion, PrefabBaseline, PropertyValue, SceneRootTag, Terrain,
-    TerrainChannel, TerrainChannelElement, TerrainPaletteEntry, TerrainQuantization,
+    Brush, BrushFaceData, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh, GltfSource,
+    NavmeshRegion, PrefabBaseline, PropertyValue, SceneRootTag, Terrain, TerrainChannel,
+    TerrainChannelElement, TerrainPaletteEntry, TerrainQuantization,
 };
 
 use bevy::prelude::*;
@@ -61,7 +61,6 @@ impl Plugin for SceneTypesPlugin {
             Modifier, ModifierEntry, ModifierStack,
         };
         app.register_type::<Brush>()
-            .register_type::<BrushGroup>()
             .register_type::<SceneRootTag>()
             .register_type::<BrushFaceData>()
             .register_type::<BrushPlane>()

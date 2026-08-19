@@ -545,7 +545,6 @@ fn handle_apply_material(
     selection: Res<Selection>,
     mut brushes: Query<&mut Brush>,
     mut history: ResMut<CommandHistory>,
-    brush_groups: Query<(), With<jackdaw_scene_types::types::BrushGroup>>,
     children_query: Query<&Children>,
     mut last_material: ResMut<LastUsedMaterial>,
     mut commands: Commands,
@@ -580,21 +579,16 @@ fn handle_apply_material(
             });
         }
     } else {
-        // Collect targets, expanding BrushGroups into their child brushes
-        let targets: Vec<Entity> = selection
-            .entities
-            .iter()
-            .flat_map(|&e| {
-                if brush_groups.contains(e) {
-                    children_query
-                        .get(e)
-                        .map(|c| c.iter().collect::<Vec<_>>())
-                        .unwrap_or_default()
-                } else {
-                    vec![e]
-                }
-            })
-            .collect();
+        let targets: Vec<Entity> = crate::brush::shown_edit_brushes(
+            &selection.entities,
+            |e| brushes.contains(e),
+            |e| {
+                children_query
+                    .get(e)
+                    .map(|c| c.iter().collect())
+                    .unwrap_or_default()
+            },
+        );
         let mut group_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
         for entity in targets {
             if let Ok(mut brush) = brushes.get_mut(entity) {

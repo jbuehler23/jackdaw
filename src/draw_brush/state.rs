@@ -1,7 +1,7 @@
 use crate::commands::{EditorCommand, deselect_entities};
 use crate::draw_brush::{BrushStableId, StableIdCounter, entity_by_stable_id};
 use bevy::prelude::*;
-use jackdaw_scene_types::{Brush, BrushGroup};
+use jackdaw_scene_types::Brush;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum DrawPhase {
@@ -76,19 +76,6 @@ pub(crate) struct BrushData {
     pub(crate) parent_stable_id: Option<BrushStableId>,
 }
 
-/// Either a single brush or a group containing child brushes.
-#[derive(Clone)]
-pub(crate) enum BrushOrGroup {
-    Single(Box<BrushData>),
-    Group {
-        stable_id: BrushStableId,
-        transform: Transform,
-        name: String,
-        parent_stable_id: Option<BrushStableId>,
-        children: Vec<BrushData>,
-    },
-}
-
 /// Read brush data from an existing entity. Lazily assigns a `BrushStableId` if missing.
 pub(crate) fn brush_data_from_entity(world: &mut World, entity: Entity) -> BrushData {
     // Ensure the entity has a stable ID
@@ -145,43 +132,6 @@ pub(crate) fn spawn_brush_from_data(world: &mut World, data: &BrushData) -> Enti
     let entity = ec.id();
     crate::scene_io::register_entity_in_ast(world, entity);
     entity
-}
-
-/// Spawn a brush or group from stored data. Returns top-level entity ID.
-pub(crate) fn spawn_brush_or_group(world: &mut World, data: &BrushOrGroup) -> Entity {
-    match data {
-        BrushOrGroup::Single(brush_data) => spawn_brush_from_data(world, brush_data),
-        BrushOrGroup::Group {
-            stable_id,
-            transform,
-            name,
-            parent_stable_id,
-            children,
-        } => {
-            let parent_entity = parent_stable_id.and_then(|psid| entity_by_stable_id(world, psid));
-
-            let mut ec = world.spawn((
-                Name::new(name.clone()),
-                BrushGroup,
-                *transform,
-                *stable_id,
-                Visibility::default(),
-            ));
-            if let Some(p) = parent_entity {
-                ec.insert(ChildOf(p));
-            }
-            let group_id = ec.id();
-            crate::scene_io::register_entity_in_ast(world, group_id);
-            for child in children {
-                // Children reference the group by the group's stable_id which
-                // we just spawned, so spawn_brush_from_data will find it.
-                let mut child_data = child.clone();
-                child_data.parent_stable_id = Some(*stable_id);
-                spawn_brush_from_data(world, &child_data);
-            }
-            group_id
-        }
-    }
 }
 
 /// Per-command undo entry for brush spawns from the legacy non-

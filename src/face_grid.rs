@@ -2,14 +2,11 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 
-use jackdaw_scene_types::BrushGroup;
-
 use crate::brush::{Brush, BrushEditMode, BrushMeshCache, EditMode};
 use crate::draw_brush::{CutPreviewFace, CutPreviewHidden, CutResultPreviewMesh};
 use crate::selection::Selected;
 use crate::snapping::SnapSettings;
 use crate::viewport_overlays::OverlaySettings;
-use crate::viewport_select::GroupEditState;
 use crate::{JackdawDrawSystems, default_style};
 
 /// Gizmo group for face grid lines. Rendered slightly in front of geometry.
@@ -102,8 +99,6 @@ fn draw_brush_wireframe(
     >,
     parents: Query<&ChildOf>,
     selected_query: Query<(), With<Selected>>,
-    group_edit: Res<GroupEditState>,
-    brush_groups: Query<(), With<BrushGroup>>,
 ) {
     let in_clip_mode = matches!(*edit_mode, EditMode::BrushEdit(BrushEditMode::Clip));
 
@@ -124,10 +119,7 @@ fn draw_brush_wireframe(
         let is_parent_selected = parents
             .get(entity)
             .is_ok_and(|child_of| selected_query.contains(child_of.0));
-        let in_active_group = group_edit
-            .active_group
-            .is_some_and(|group| parents.get(entity).is_ok_and(|c| c.0 == group));
-        let is_selected = is_brush_selected || in_active_group || is_parent_selected;
+        let is_selected = is_brush_selected || is_parent_selected;
 
         // While editing this brush, the per-element overlay is the wireframe
         // (resting / selected / hover colors), so skip the object wireframe
@@ -154,8 +146,6 @@ fn draw_brush_wireframe(
             } else {
                 default_style::WIREFRAME_OUTLINE_SELECTED
             }
-        } else if in_active_group {
-            default_style::WIREFRAME_OUTLINE_GROUP_EDIT
         } else if is_parent_selected {
             if in_clip_mode {
                 default_style::WIREFRAME_OUTLINE_SELECTED_CLIP
@@ -166,29 +156,6 @@ fn draw_brush_wireframe(
             default_style::WIREFRAME_OUTLINE_UNSELECTED
         };
 
-        // Determine if we should hide cap-only edges (internal cut boundaries)
-        let in_brush_group = parents
-            .get(entity)
-            .is_ok_and(|child_of| brush_groups.contains(child_of.0));
-        let hide_cap_edges = in_brush_group && !is_brush_selected;
-
-        // Pre-collect non-cap edges (edges on at least one original face)
-        let non_cap_edges: Option<HashSet<(usize, usize)>> = if hide_cap_edges {
-            let mut set = HashSet::new();
-            for (fi, polygon) in cache.face_polygons.iter().enumerate() {
-                if !brush.faces.get(fi).is_some_and(|f| f.is_cap) {
-                    for i in 0..polygon.len() {
-                        let a = polygon[i];
-                        let b = polygon[(i + 1) % polygon.len()];
-                        set.insert((a.min(b), a.max(b)));
-                    }
-                }
-            }
-            Some(set)
-        } else {
-            None
-        };
-
         // Draw edges
         let mut drawn_edges = HashSet::new();
         for polygon in &cache.face_polygons {
@@ -197,11 +164,6 @@ fn draw_brush_wireframe(
                 let b = polygon[(i + 1) % polygon.len()];
                 let edge = (a.min(b), a.max(b));
                 if drawn_edges.insert(edge) {
-                    if let Some(ref nce) = non_cap_edges
-                        && !nce.contains(&edge)
-                    {
-                        continue;
-                    }
                     let wa = global_tf.transform_point(cache.vertices[a]);
                     let wb = global_tf.transform_point(cache.vertices[b]);
                     if is_selected {
@@ -242,7 +204,6 @@ fn draw_face_grids(
     >,
     parents: Query<&ChildOf>,
     selected_query: Query<(), With<Selected>>,
-    group_edit: Res<GroupEditState>,
 ) {
     if !settings.show_face_grid {
         return;
@@ -254,13 +215,9 @@ fn draw_face_grids(
         if !inherited_vis.get() {
             continue;
         }
-        let in_active_group = group_edit
-            .active_group
-            .is_some_and(|group| parents.get(entity).is_ok_and(|c| c.0 == group));
-        let parent_selected = !in_active_group
-            && parents
-                .get(entity)
-                .is_ok_and(|child_of| selected_query.contains(child_of.0));
+        let parent_selected = parents
+            .get(entity)
+            .is_ok_and(|child_of| selected_query.contains(child_of.0));
         let effectively_selected = is_selected || parent_selected;
         let color = if effectively_selected {
             default_style::FACE_GRID_SELECTED

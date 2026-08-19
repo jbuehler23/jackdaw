@@ -11,7 +11,6 @@ use bevy::light::{FogVolume, VolumetricFog};
 use bevy::prelude::*;
 use bevy::ui::widget::ViewportNode;
 use jackdaw_feathers::tokens;
-use jackdaw_scene_types::BrushGroup;
 
 #[derive(Component)]
 struct AxisLabel;
@@ -127,8 +126,6 @@ fn draw_selection_bounding_boxes(
     children_query: Query<&Children>,
     mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
     meshes: Res<Assets<Mesh>>,
-    parents: Query<&ChildOf>,
-    brush_groups: Query<(), With<BrushGroup>>,
 ) {
     let color = default_style::SELECTION_BBOX;
 
@@ -144,13 +141,6 @@ fn draw_selection_bounding_boxes(
         // have no other selection cue and ALWAYS draw the AABB.
         let is_brush = maybe_brush_cache.is_some();
         if is_brush && !settings.show_bounding_boxes {
-            continue;
-        }
-        // Skip children of BrushGroups (the group itself gets a bounding box)
-        if parents
-            .get(entity)
-            .is_ok_and(|c| brush_groups.contains(c.0))
-        {
             continue;
         }
         // Collect world-space vertices

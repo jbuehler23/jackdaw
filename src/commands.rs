@@ -2214,7 +2214,6 @@ mod bsn_doc_coherence_tests {
         app.init_resource::<crate::view_modes::ViewModeSettings>();
         app.init_resource::<crate::viewport_overlays::OverlaySettings>();
         app.init_resource::<jackdaw_avian_integration::PhysicsOverlayConfig>();
-        app.init_resource::<crate::viewport_select::GroupEditState>();
 
         let entity = app
             .world_mut()

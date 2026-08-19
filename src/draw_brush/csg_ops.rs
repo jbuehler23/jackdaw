@@ -3,9 +3,9 @@ use crate::commands::{
     deselect_entities,
 };
 use crate::draw_brush::{
-    ActiveDraw, BrushData, BrushOrGroup, BrushStableId, DrawBrushState, MIN_FRAGMENT_SIZE,
-    StableIdCounter, brush_data_from_entity, drawn_brush_from_active, entity_by_stable_id,
-    spawn_brush_from_data, spawn_brush_or_group, topology_aabbs_overlap,
+    ActiveDraw, BrushData, BrushStableId, DrawBrushState, MIN_FRAGMENT_SIZE, StableIdCounter,
+    brush_data_from_entity, drawn_brush_from_active, entity_by_stable_id, spawn_brush_from_data,
+    topology_aabbs_overlap,
 };
 use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
@@ -14,14 +14,65 @@ use bevy::prelude::*;
 use jackdaw_geometry::{
     clean_degenerate_faces, compute_brush_geometry_from_planes, compute_brush_topology,
 };
-use jackdaw_scene_types::{Brush, BrushFaceData, BrushGroup, BrushPlane};
+use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
 
-/// If `entity` is a child of a `BrushGroup`, return (`parent_entity`, `parent_translation`).
-pub(crate) fn brush_parent_group(world: &World, entity: Entity) -> Option<(Entity, Vec3)> {
+struct SubtractionResult {
+    original_entity: Entity,
+    fragments: Vec<(Brush, Transform)>,
+}
+
+fn parent_world_translation(world: &World, entity: Entity) -> Option<Vec3> {
     let parent = world.get::<ChildOf>(entity)?.0;
-    world.get::<BrushGroup>(parent)?;
-    let translation = world.get::<GlobalTransform>(parent)?.translation();
-    Some((parent, translation))
+    Some(world.get::<GlobalTransform>(parent)?.translation())
+}
+
+fn parent_translations_of(
+    world: &World,
+    entities: impl Iterator<Item = Entity>,
+) -> std::collections::HashMap<Entity, Vec3> {
+    entities
+        .filter_map(|entity| {
+            parent_world_translation(world, entity).map(|translation| (entity, translation))
+        })
+        .collect()
+}
+
+fn spawn_subtract_fragments(
+    world: &mut World,
+    results: &[SubtractionResult],
+    originals: &[BrushData],
+    parent_translations: &std::collections::HashMap<Entity, Vec3>,
+) -> Vec<BrushData> {
+    let mut counter = world.resource_mut::<StableIdCounter>();
+    let fragment_stable_ids: Vec<Vec<BrushStableId>> = results
+        .iter()
+        .map(|result| result.fragments.iter().map(|_| counter.next()).collect())
+        .collect();
+
+    let mut fragments = Vec::new();
+    for (result_index, result) in results.iter().enumerate() {
+        let parent_stable_id = originals
+            .get(result_index)
+            .and_then(|original| original.parent_stable_id);
+        let parent_translation = parent_translations.get(&result.original_entity);
+        for (fragment_index, (brush, transform)) in result.fragments.iter().enumerate() {
+            let local_transform = if let Some(parent_translation) = parent_translation {
+                Transform::from_translation(transform.translation - *parent_translation)
+            } else {
+                *transform
+            };
+            let brush_data = BrushData {
+                stable_id: fragment_stable_ids[result_index][fragment_index],
+                brush: brush.clone(),
+                transform: local_transform,
+                name: "Brush".to_string(),
+                parent_stable_id,
+            };
+            spawn_brush_from_data(world, &brush_data);
+            fragments.push(brush_data);
+        }
+    }
+    fragments
 }
 
 /// Perform CSG subtraction: subtract the drawn solid from all intersecting brushes.
@@ -73,11 +124,6 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
             .collect();
 
         // Second, compute subtractions (pure computation).
-        struct SubtractionResult {
-            original_entity: Entity,
-            fragments: Vec<(Brush, Transform)>,
-        }
-
         let mut results: Vec<SubtractionResult> = Vec::new();
         let cutter_input = jackdaw_csg::CsgInput::new(&world_cutter_faces, &world_cutter_topo);
 
@@ -251,25 +297,10 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
             originals.push(brush_data_from_entity(world, result.original_entity));
         }
 
-        // Capture parent group info before despawning originals
-        // Now using stable IDs: (original_entity -> (parent_stable_id, parent_translation))
-        let mut parent_groups: std::collections::HashMap<Entity, (BrushStableId, Vec3)> =
-            std::collections::HashMap::new();
-        for result in &results {
-            if let Some((parent_entity, parent_translation)) =
-                brush_parent_group(world, result.original_entity)
-            {
-                // Ensure the parent group has a stable ID
-                let parent_sid = if let Some(sid) = world.get::<BrushStableId>(parent_entity) {
-                    *sid
-                } else {
-                    let sid = world.resource_mut::<StableIdCounter>().next();
-                    world.entity_mut(parent_entity).insert(sid);
-                    sid
-                };
-                parent_groups.insert(result.original_entity, (parent_sid, parent_translation));
-            }
-        }
+        let parent_translations = parent_translations_of(
+            world,
+            results.iter().map(|result| result.original_entity),
+        );
 
         // Clean up selection: remove originals that are about to be despawned
         {
@@ -290,91 +321,8 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
             }
         }
 
-        // Spawn fragments and build BrushOrGroup data
-        let mut fragments: Vec<BrushOrGroup> = Vec::new();
-        let mut counter = world.resource_mut::<StableIdCounter>();
-        // Pre-allocate stable IDs for all new fragments
-        let fragment_stable_ids: Vec<Vec<BrushStableId>> = results
-            .iter()
-            .map(|r| r.fragments.iter().map(|_| counter.next()).collect())
-            .collect();
-        let group_stable_ids: Vec<Option<BrushStableId>> = results
-            .iter()
-            .map(|r| {
-                if r.fragments.len() > 1 && !parent_groups.contains_key(&r.original_entity) {
-                    Some(counter.next())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        for (result_idx, result) in results.iter().enumerate() {
-            if let Some(&(parent_sid, parent_translation)) =
-                parent_groups.get(&result.original_entity)
-            {
-                // Fragments stay in existing parent group
-                for (frag_idx, (brush, transform)) in result.fragments.iter().enumerate() {
-                    let brush_data = BrushData {
-                        stable_id: fragment_stable_ids[result_idx][frag_idx],
-                        brush: brush.clone(),
-                        transform: Transform::from_translation(
-                            transform.translation - parent_translation,
-                        ),
-                        name: "Brush".to_string(),
-                        parent_stable_id: Some(parent_sid),
-                    };
-                    spawn_brush_from_data(world, &brush_data);
-                    fragments.push(BrushOrGroup::Single(Box::new(brush_data)));
-                }
-            } else if result.fragments.len() == 1 {
-                // Single fragment: spawn standalone
-                let (brush, transform) = &result.fragments[0];
-                let brush_data = BrushData {
-                    stable_id: fragment_stable_ids[result_idx][0],
-                    brush: brush.clone(),
-                    transform: *transform,
-                    name: "Brush".to_string(),
-                    parent_stable_id: None,
-                };
-                spawn_brush_from_data(world, &brush_data);
-                fragments.push(BrushOrGroup::Single(Box::new(brush_data)));
-            } else if result.fragments.len() > 1 {
-                // Multiple fragments: group under a BrushGroup parent
-                let group_center = result
-                    .fragments
-                    .iter()
-                    .map(|(_, tf)| tf.translation)
-                    .sum::<Vec3>()
-                    / result.fragments.len() as f32;
-
-                let group_sid = group_stable_ids[result_idx].unwrap();
-                let children: Vec<BrushData> = result
-                    .fragments
-                    .iter()
-                    .enumerate()
-                    .map(|(frag_idx, (brush, transform))| BrushData {
-                        stable_id: fragment_stable_ids[result_idx][frag_idx],
-                        brush: brush.clone(),
-                        transform: Transform::from_translation(
-                            transform.translation - group_center,
-                        ),
-                        name: "Brush".to_string(),
-                        parent_stable_id: None, // filled in by spawn_brush_or_group
-                    })
-                    .collect();
-
-                let group_data = BrushOrGroup::Group {
-                    stable_id: group_sid,
-                    transform: Transform::from_translation(group_center),
-                    name: "Brush Group".to_string(),
-                    parent_stable_id: None,
-                    children,
-                };
-                spawn_brush_or_group(world, &group_data);
-                fragments.push(group_data);
-            }
-        }
+        let fragments =
+            spawn_subtract_fragments(world, &results, &originals, &parent_translations);
 
         // Push undo command
         let cmd = SubtractBrushCommand {
@@ -388,17 +336,7 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
 
 struct SubtractBrushCommand {
     originals: Vec<BrushData>,
-    fragments: Vec<BrushOrGroup>,
-}
-
-impl SubtractBrushCommand {
-    /// Resolve the stable ID of a `BrushOrGroup` to its current entity.
-    fn fragment_stable_id(data: &BrushOrGroup) -> BrushStableId {
-        match data {
-            BrushOrGroup::Single(d) => d.stable_id,
-            BrushOrGroup::Group { stable_id, .. } => *stable_id,
-        }
-    }
+    fragments: Vec<BrushData>,
 }
 
 impl EditorCommand for SubtractBrushCommand {
@@ -415,31 +353,26 @@ impl EditorCommand for SubtractBrushCommand {
                 e.despawn();
             }
         }
-        // Spawn fragments (stable IDs are reassigned from stored data)
         for data in &self.fragments {
-            spawn_brush_or_group(world, data);
+            spawn_brush_from_data(world, data);
         }
     }
 
     fn undo(&mut self, world: &mut World) {
-        // Despawn fragments by stable ID lookup
         let mut all_entities = Vec::new();
         for data in &self.fragments {
-            let sid = Self::fragment_stable_id(data);
-            if let Some(entity) = entity_by_stable_id(world, sid) {
+            if let Some(entity) = entity_by_stable_id(world, data.stable_id) {
                 collect_entity_ids(world, entity, &mut all_entities);
             }
         }
         deselect_entities(world, &all_entities);
         for data in &self.fragments {
-            let sid = Self::fragment_stable_id(data);
-            if let Some(entity) = entity_by_stable_id(world, sid)
+            if let Some(entity) = entity_by_stable_id(world, data.stable_id)
                 && let Ok(e) = world.get_entity_mut(entity)
             {
                 e.despawn();
             }
         }
-        // Respawn originals (stable IDs are reassigned from stored data)
         for data in &self.originals {
             spawn_brush_from_data(world, data);
         }
@@ -638,11 +571,6 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
         })
         .collect();
 
-    struct SubtractionResult {
-        original_entity: Entity,
-        fragments: Vec<(Brush, Transform)>,
-    }
-
     let mut results: Vec<SubtractionResult> = Vec::new();
 
     for (entity, brush, global_transform) in &targets {
@@ -773,23 +701,8 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
         originals.push(brush_data_from_entity(world, result.original_entity));
     }
 
-    // Capture parent group info before despawning originals
-    let mut parent_groups: std::collections::HashMap<Entity, (BrushStableId, Vec3)> =
-        std::collections::HashMap::new();
-    for result in &results {
-        if let Some((parent_entity, parent_translation)) =
-            brush_parent_group(world, result.original_entity)
-        {
-            let parent_sid = if let Some(sid) = world.get::<BrushStableId>(parent_entity) {
-                *sid
-            } else {
-                let sid = world.resource_mut::<StableIdCounter>().next();
-                world.entity_mut(parent_entity).insert(sid);
-                sid
-            };
-            parent_groups.insert(result.original_entity, (parent_sid, parent_translation));
-        }
-    }
+    let parent_translations =
+        parent_translations_of(world, results.iter().map(|result| result.original_entity));
 
     // Clean up selection: remove targets about to be despawned
     {
@@ -810,84 +723,7 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
         }
     }
 
-    // Spawn fragments and build BrushOrGroup data
-    let mut fragments: Vec<BrushOrGroup> = Vec::new();
-    let mut counter = world.resource_mut::<StableIdCounter>();
-    let fragment_stable_ids: Vec<Vec<BrushStableId>> = results
-        .iter()
-        .map(|r| r.fragments.iter().map(|_| counter.next()).collect())
-        .collect();
-    let group_stable_ids: Vec<Option<BrushStableId>> = results
-        .iter()
-        .map(|r| {
-            if r.fragments.len() > 1 && !parent_groups.contains_key(&r.original_entity) {
-                Some(counter.next())
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    for (result_idx, result) in results.iter().enumerate() {
-        if let Some(&(parent_sid, parent_translation)) = parent_groups.get(&result.original_entity)
-        {
-            for (frag_idx, (brush, transform)) in result.fragments.iter().enumerate() {
-                let brush_data = BrushData {
-                    stable_id: fragment_stable_ids[result_idx][frag_idx],
-                    brush: brush.clone(),
-                    transform: Transform::from_translation(
-                        transform.translation - parent_translation,
-                    ),
-                    name: "Brush".to_string(),
-                    parent_stable_id: Some(parent_sid),
-                };
-                spawn_brush_from_data(world, &brush_data);
-                fragments.push(BrushOrGroup::Single(Box::new(brush_data)));
-            }
-        } else if result.fragments.len() == 1 {
-            let (brush, transform) = &result.fragments[0];
-            let brush_data = BrushData {
-                stable_id: fragment_stable_ids[result_idx][0],
-                brush: brush.clone(),
-                transform: *transform,
-                name: "Brush".to_string(),
-                parent_stable_id: None,
-            };
-            spawn_brush_from_data(world, &brush_data);
-            fragments.push(BrushOrGroup::Single(Box::new(brush_data)));
-        } else if result.fragments.len() > 1 {
-            let group_center = result
-                .fragments
-                .iter()
-                .map(|(_, tf)| tf.translation)
-                .sum::<Vec3>()
-                / result.fragments.len() as f32;
-
-            let group_sid = group_stable_ids[result_idx].unwrap();
-            let children: Vec<BrushData> = result
-                .fragments
-                .iter()
-                .enumerate()
-                .map(|(frag_idx, (brush, transform))| BrushData {
-                    stable_id: fragment_stable_ids[result_idx][frag_idx],
-                    brush: brush.clone(),
-                    transform: Transform::from_translation(transform.translation - group_center),
-                    name: "Brush".to_string(),
-                    parent_stable_id: None,
-                })
-                .collect();
-
-            let group_data = BrushOrGroup::Group {
-                stable_id: group_sid,
-                transform: Transform::from_translation(group_center),
-                name: "Brush Group".to_string(),
-                parent_stable_id: None,
-                children,
-            };
-            spawn_brush_or_group(world, &group_data);
-            fragments.push(group_data);
-        }
-    }
+    let fragments = spawn_subtract_fragments(world, &results, &originals, &parent_translations);
 
     // Push undo command
     let cmd = SubtractBrushCommand {
@@ -1039,7 +875,7 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
     // Push undo command (reuses SubtractBrushCommand, same undo/redo pattern).
     let cmd = SubtractBrushCommand {
         originals,
-        fragments: vec![BrushOrGroup::Single(Box::new(brush_data))],
+        fragments: vec![brush_data],
     };
     let mut history = world.resource_mut::<CommandHistory>();
     history.push_executed(Box::new(cmd));
