@@ -66,6 +66,34 @@ designers), use `@EditorDescription`:
 pub struct PlayerSpawn;
 ```
 
+## Viewport previews for markers
+
+A spawn marker is a pose plus a type. The editor does not run
+your game, so it cannot query `PlayerSpawn` as a live component.
+Tag the type with `@EditorPreview` and the schema extractor
+tells the editor which glTF to instance. The scene file still
+stores only the marker and transform. Play never sees a ghost
+mesh.
+
+```rust
+use jackdaw_runtime::prelude::*;
+
+/// Player start. Preview mesh matches the standing volume.
+#[derive(Component, Reflect, Default)]
+#[reflect(
+    Component,
+    Default,
+    @EditorCategory::new("Spawn"),
+    @EditorPreview::gltf("models/player_spawn.glb"),
+)]
+pub struct PlayerSpawn;
+```
+
+Paths are Bevy asset paths under `assets/`. Rebuild the project
+after changing the attribute so the editor picks up the new
+schema. If the entity already has a brush, a glTF, or a mesh,
+the overlay is skipped.
+
 ## Hiding a component from the picker
 
 Sometimes a component is part of your plugin's internal
