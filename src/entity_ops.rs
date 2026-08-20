@@ -58,7 +58,8 @@ impl Plugin for EntityOpsPlugin {
                 warn!("Failed to initialize system clipboard: {e}");
             }
         }
-        app.register_type::<EmptyEntity>()
+        app.add_observer(derive_world_asset_root)
+            .register_type::<EmptyEntity>()
             .register_type::<SceneCamera>()
             .register_type::<SceneLight>()
             .register_type::<SceneFogVolume>()
@@ -66,6 +67,38 @@ impl Plugin for EntityOpsPlugin {
             .register_type::<SceneAnimationPlayer>()
             .register_type::<SceneAudioSource>();
     }
+}
+
+/// Derive the render-side `WorldAssetRoot` from the authored `GltfSource`,
+/// the way reference images and terrains derive their render state.
+///
+/// Undo, redo, tab swaps and file loads all re-insert `GltfSource` from the
+/// document, so deriving it here is what brings the model back on each of
+/// those paths without the handle ever being written to the document.
+fn derive_world_asset_root(
+    insert: On<Insert, GltfSource>,
+    sources: Query<&GltfSource>,
+    existing: Query<&WorldAssetRoot>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+) {
+    let entity = insert.entity;
+    let Ok(source) = sources.get(entity) else {
+        return;
+    };
+    // Scenes authored before paths were normalised still hold an absolute
+    // path; `to_asset_path` reduces those and passes a relative one through.
+    let asset_path = to_asset_path(&source.path);
+    let scene: Handle<bevy::world_serialization::WorldAsset> =
+        asset_server.load(GltfAssetLabel::Scene(source.scene_index).from_asset(asset_path));
+    // Re-inserting an equal handle still trips `Changed`, and the world-asset
+    // spawner despawns and respawns the whole instance on every change.
+    // Applying the document re-inserts `GltfSource` wholesale, so without this
+    // the model is rebuilt on every undo.
+    if existing.get(entity).is_ok_and(|root| root.0 == scene) {
+        return;
+    }
+    commands.entity(entity).insert(WorldAssetRoot(scene));
 }
 
 /// Marks an entity as an intentionally-empty scene entity (`Add > Empty`).
@@ -419,7 +452,6 @@ pub fn create_entity_in_world(world: &mut World, template: EntityTemplate) {
 
 pub fn spawn_gltf(
     commands: &mut Commands,
-    asset_server: &AssetServer,
     path: &str,
     position: Vec3,
     selection: &mut Selection,
@@ -429,16 +461,17 @@ pub fn spawn_gltf(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "GLTF Model".to_string());
     let scene_index = 0;
+    // Store the asset-relative path, not the browser's absolute one: the
+    // runtime and other machines cannot strip this project's assets prefix,
+    // and an unapproved absolute path is refused outright by the asset server.
     let asset_path = to_asset_path(path);
-    let scene = asset_server.load(GltfAssetLabel::Scene(scene_index).from_asset(asset_path));
     let entity = commands
         .spawn((
             Name::new(file_name),
             GltfSource {
-                path: path.to_string(),
+                path: asset_path,
                 scene_index,
             },
-            WorldAssetRoot(scene),
             Transform::from_translation(position),
         ))
         .id();
@@ -446,14 +479,14 @@ pub fn spawn_gltf(
     entity
 }
 
-pub fn spawn_gltf_in_world(world: &mut World, path: &str, position: Vec3) {
-    let mut system_state: SystemState<(Commands, Res<AssetServer>, ResMut<Selection>)> =
-        SystemState::new(world);
-    let Ok((mut commands, asset_server, mut selection)) = system_state.get_mut(world) else {
+fn spawn_gltf_in_world(world: &mut World, path: &str, position: Vec3) {
+    let mut system_state: SystemState<(Commands, ResMut<Selection>)> = SystemState::new(world);
+    let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
         return;
     };
-    spawn_gltf(&mut commands, &asset_server, path, position, &mut selection);
+    let entity = spawn_gltf(&mut commands, path, position, &mut selection);
     system_state.apply(world);
+    crate::scene_io::register_entity_in_ast(world, entity);
 }
 
 pub fn delete_selected(world: &mut World) {
@@ -1322,6 +1355,7 @@ use crate::core_extension::CoreExtensionInputContext;
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityDeleteOp>()
         .register_operator::<EntityDuplicateOp>()
+        .register_operator::<EntityPlaceGltfOp>()
         .register_operator::<EntityCopyComponentsOp>()
         .register_operator::<EntityPasteComponentsOp>()
         .register_operator::<EntityToggleVisibilityOp>()
@@ -1401,6 +1435,45 @@ fn can_act_on_entities(
 }
 
 // -- Entity lifecycle --------------------------------------------
+
+#[operator(
+    id = "entity.place_gltf",
+    label = "Place GLTF",
+    description = "Place a GLTF asset into the active scene at a world position.",
+    allows_undo = true,
+    params(
+        path(String, doc = "Path to the GLTF asset."),
+        pos_x(f64, doc = "World-space X position."),
+        pos_y(f64, doc = "World-space Y position."),
+        pos_z(f64, doc = "World-space Z position."),
+    )
+)]
+pub(crate) fn entity_place_gltf(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(path) = params.as_str("path").map(str::to_owned) else {
+        warn!("entity.place_gltf: missing `path` param");
+        return OperatorResult::Cancelled;
+    };
+    let Some(x) = params.as_float("pos_x") else {
+        warn!("entity.place_gltf: missing `pos_x` param");
+        return OperatorResult::Cancelled;
+    };
+    let Some(y) = params.as_float("pos_y") else {
+        warn!("entity.place_gltf: missing `pos_y` param");
+        return OperatorResult::Cancelled;
+    };
+    let Some(z) = params.as_float("pos_z") else {
+        warn!("entity.place_gltf: missing `pos_z` param");
+        return OperatorResult::Cancelled;
+    };
+    let position = Vec3::new(x as f32, y as f32, z as f32);
+    commands.queue(move |world: &mut World| {
+        spawn_gltf_in_world(world, &path, position);
+    });
+    OperatorResult::Finished
+}
 
 #[operator(
     id = "entity.delete",

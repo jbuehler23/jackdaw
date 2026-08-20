@@ -679,9 +679,17 @@ fn handle_viewport_drop(
     } else if is_template {
         warn!(".template.json files are no longer supported; use prefabs instead");
     } else {
-        commands.queue(move |world: &mut World| {
-            crate::entity_ops::spawn_gltf_in_world(world, &path, snapped_pos);
-        });
+        commands
+            .operator(crate::entity_ops::EntityPlaceGltfOp::ID)
+            .settings(CallOperatorSettings {
+                creates_history_entry: true,
+                ..default()
+            })
+            .param("path", path)
+            .param("pos_x", snapped_pos.x as f64)
+            .param("pos_y", snapped_pos.y as f64)
+            .param("pos_z", snapped_pos.z as f64)
+            .call();
     }
 }
 
