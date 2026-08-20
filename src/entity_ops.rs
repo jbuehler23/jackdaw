@@ -944,12 +944,7 @@ impl crate::commands::EditorCommand for PasteEntitiesCommand {
 
         crate::commands::deselect_entities(world, &to_despawn);
         for e in to_despawn {
-            world
-                .resource_mut::<jackdaw_bsn::SceneBsnAst>()
-                .remove_entity_node(e);
-            if let Ok(ec) = world.get_entity_mut(e) {
-                ec.despawn();
-            }
+            crate::commands::despawn_scene_entity(world, e);
         }
     }
 

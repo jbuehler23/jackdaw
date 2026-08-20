@@ -814,12 +814,7 @@ impl EditorCommand for SpawnEntity {
     fn undo(&mut self, world: &mut World) {
         if let Some(entity) = self.spawned.take() {
             deselect_entities(world, &[entity]);
-            world
-                .resource_mut::<jackdaw_bsn::SceneBsnAst>()
-                .remove_entity_node(entity);
-            if let Ok(entity_mut) = world.get_entity_mut(entity) {
-                entity_mut.despawn();
-            }
+            despawn_scene_entity(world, entity);
         }
     }
 
@@ -851,12 +846,7 @@ impl DespawnEntity {
 impl EditorCommand for DespawnEntity {
     fn execute(&mut self, world: &mut World) {
         deselect_entities(world, &[self.entity]);
-        world
-            .resource_mut::<jackdaw_bsn::SceneBsnAst>()
-            .remove_entity_node(self.entity);
-        if let Ok(entity_mut) = world.get_entity_mut(self.entity) {
-            entity_mut.despawn();
-        }
+        despawn_scene_entity(world, self.entity);
     }
 
     fn undo(&mut self, world: &mut World) {
@@ -900,6 +890,14 @@ pub(crate) fn deselect_entities(world: &mut World, entities: &[Entity]) {
     }
     let mut selection = world.resource_mut::<Selection>();
     selection.entities.retain(|e| !entities.contains(e));
+}
+
+/// Remove `entity` from the live BSN document, then despawn it from ECS.
+pub(crate) fn despawn_scene_entity(world: &mut World, entity: Entity) {
+    jackdaw_bsn::delete_entity_from_ast(world, entity);
+    if let Ok(entity_mut) = world.get_entity_mut(entity) {
+        entity_mut.despawn();
+    }
 }
 
 /// Create a `DynamicWorld` snapshot of a single entity and all its descendants.

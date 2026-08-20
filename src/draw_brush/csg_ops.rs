@@ -1,6 +1,6 @@
 use crate::commands::{
     CommandGroup, CommandHistory, DespawnEntity, EditorCommand, collect_entity_ids,
-    deselect_entities,
+    deselect_entities, despawn_scene_entity,
 };
 use crate::draw_brush::{
     ActiveDraw, BrushData, DrawBrushState, MIN_FRAGMENT_SIZE, brush_data_from_entity,
@@ -320,11 +320,8 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
             }
         }
 
-        // Despawn originals
         for result in &results {
-            if let Ok(e) = world.get_entity_mut(result.original_entity) {
-                e.despawn();
-            }
+            despawn_scene_entity(world, result.original_entity);
         }
 
         let fragments =
@@ -354,9 +351,7 @@ impl EditorCommand for SubtractBrushCommand {
             .collect();
         deselect_entities(world, &orig_entities);
         for entity in &orig_entities {
-            if let Ok(e) = world.get_entity_mut(*entity) {
-                e.despawn();
-            }
+            despawn_scene_entity(world, *entity);
         }
         for data in &self.fragments {
             spawn_brush_from_data(world, data);
@@ -372,10 +367,8 @@ impl EditorCommand for SubtractBrushCommand {
         }
         deselect_entities(world, &all_entities);
         for data in &self.fragments {
-            if let Some(entity) = entity_by_scene_node_id(world, data.node_id)
-                && let Ok(e) = world.get_entity_mut(entity)
-            {
-                e.despawn();
+            if let Some(entity) = entity_by_scene_node_id(world, data.node_id) {
+                despawn_scene_entity(world, entity);
             }
         }
         for data in &self.originals {
@@ -515,11 +508,8 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
             selection.entities.retain(|e| !others.contains(e));
         }
 
-        // Despawn others
         for &other in &others {
-            if let Ok(entity_mut) = world.get_entity_mut(other) {
-                entity_mut.despawn();
-            }
+            despawn_scene_entity(world, other);
         }
 
         // Push grouped undo command
@@ -719,11 +709,8 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
         }
     }
 
-    // Despawn originals
     for result in &results {
-        if let Ok(e) = world.get_entity_mut(result.original_entity) {
-            e.despawn();
-        }
+        despawn_scene_entity(world, result.original_entity);
     }
 
     let fragments = spawn_subtract_fragments(world, &results, &originals, &parent_translations);
@@ -838,11 +825,8 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
         }
     }
 
-    // Despawn originals
     for (entity, _, _) in &selected_brushes {
-        if let Ok(e) = world.get_entity_mut(*entity) {
-            e.despawn();
-        }
+        despawn_scene_entity(world, *entity);
     }
 
     // Spawn the intersection brush. Reuse the manifold-derived topology

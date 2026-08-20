@@ -193,12 +193,7 @@ impl EditorCommand for InstantiateWidgetCommand {
         let Some(entity) = self.spawned.take() else {
             return;
         };
-        world
-            .resource_mut::<jackdaw_bsn::SceneBsnAst>()
-            .remove_entity_node(entity);
-        if let Ok(entity) = world.get_entity_mut(entity) {
-            entity.despawn();
-        }
+        crate::commands::despawn_scene_entity(world, entity);
     }
 
     fn description(&self) -> &str {

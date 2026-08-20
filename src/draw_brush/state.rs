@@ -1,4 +1,4 @@
-use crate::commands::{EditorCommand, deselect_entities};
+use crate::commands::{EditorCommand, deselect_entities, despawn_scene_entity};
 use crate::scene_io::entity_by_scene_node_id;
 use bevy::prelude::*;
 use jackdaw_scene_types::{Brush, SceneNodeId};
@@ -140,12 +140,7 @@ impl EditorCommand for CreateBrushCommand {
     fn undo(&mut self, world: &mut World) {
         if let Some(entity) = entity_by_scene_node_id(world, self.data.node_id) {
             deselect_entities(world, &[entity]);
-            world
-                .resource_mut::<jackdaw_bsn::SceneBsnAst>()
-                .remove_entity_node(entity);
-            if let Ok(entity_mut) = world.get_entity_mut(entity) {
-                entity_mut.despawn();
-            }
+            despawn_scene_entity(world, entity);
         }
     }
 
