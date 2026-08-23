@@ -9,7 +9,7 @@ pub mod canonical_path;
 pub mod components;
 pub mod operators;
 pub mod overrides_bsn;
-pub mod resolver_bsn;
+
 pub mod save_load;
 pub mod sync;
 pub mod watcher;
@@ -17,6 +17,7 @@ pub mod watcher;
 pub use cache::PrefabAstCache;
 pub use canonical_path::{CanonicalPrefabPath, canonical_prefab_path};
 pub use components::{IsA, Prefab, PrefabEntityId};
+pub use jackdaw_bsn::resolver_bsn;
 
 use bevy::prelude::*;
 

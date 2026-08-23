@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use bevy::ecs::entity::Entity;
 use bevy::platform::collections::{HashMap, HashSet};
 
-use jackdaw_bsn::{
+use crate::{
     BsnPatch, BsnValue, SceneBsnAst, apply_deltas, bsn_value_as_int, bsn_value_eq, clone_node_into,
     get_bsn_field, shallow_diff,
 };
@@ -69,9 +69,9 @@ impl fmt::Display for ResolveError {
 
 impl std::error::Error for ResolveError {}
 
-pub(crate) const PREFAB_TYPE: &str = "jackdaw::prefab::components::Prefab";
-pub(crate) const PREFAB_ENTITY_ID_TYPE: &str = "jackdaw::prefab::components::PrefabEntityId";
-pub(crate) const ISA_TYPE: &str = "jackdaw::prefab::components::IsA";
+pub const PREFAB_TYPE: &str = "jackdaw::prefab::components::Prefab";
+pub const PREFAB_ENTITY_ID_TYPE: &str = "jackdaw::prefab::components::PrefabEntityId";
+pub const ISA_TYPE: &str = "jackdaw::prefab::components::IsA";
 
 /// A prefab source lookup: maps a project-relative prefab path to its
 /// cached BSN document. Tests back this with a `HashMap<PathBuf,
@@ -467,13 +467,13 @@ fn remove_name_patch(ast: &mut SceneBsnAst, node: Entity) {
 /// The `PrefabEntityId` on `node`, read from its whole-component value. The
 /// id serializes as a tuple struct wrapping one integer; a bare integer is
 /// also accepted.
-pub(crate) fn read_prefab_entity_id(ast: &SceneBsnAst, node: Entity) -> Option<u32> {
+pub fn read_prefab_entity_id(ast: &SceneBsnAst, node: Entity) -> Option<u32> {
     let whole = get_bsn_field(ast, node, PREFAB_ENTITY_ID_TYPE, "")?;
     bsn_value_as_int(&whole).and_then(|i| u32::try_from(i).ok())
 }
 
 /// The `IsA.source` path on `isa_node`, read as a string subfield.
-pub(crate) fn read_isa_source(ast: &SceneBsnAst, isa_node: Entity) -> Option<PathBuf> {
+pub fn read_isa_source(ast: &SceneBsnAst, isa_node: Entity) -> Option<PathBuf> {
     match get_bsn_field(ast, isa_node, ISA_TYPE, "source")? {
         BsnValue::String(s) => Some(PathBuf::from(s)),
         _ => None,
@@ -482,7 +482,7 @@ pub(crate) fn read_isa_source(ast: &SceneBsnAst, isa_node: Entity) -> Option<Pat
 
 /// The `IsA.deleted` list on `isa_node`, read as a list of integer ids.
 /// An absent or non-list value yields an empty vector.
-pub(crate) fn read_isa_deleted(ast: &SceneBsnAst, isa_node: Entity) -> Vec<u32> {
+pub fn read_isa_deleted(ast: &SceneBsnAst, isa_node: Entity) -> Vec<u32> {
     match get_bsn_field(ast, isa_node, ISA_TYPE, "deleted") {
         Some(BsnValue::List(items)) => items
             .iter()
@@ -494,7 +494,7 @@ pub(crate) fn read_isa_deleted(ast: &SceneBsnAst, isa_node: Entity) -> Vec<u32> 
 
 /// Convert a whole-component `BsnValue` into the patch that stores it.
 /// Non-component shapes (scalars, lists, maps) yield `None`.
-pub(crate) fn value_to_patch(value: BsnValue) -> Option<BsnPatch> {
+pub fn value_to_patch(value: BsnValue) -> Option<BsnPatch> {
     match value {
         BsnValue::Struct(data) => Some(BsnPatch::Struct(data)),
         BsnValue::TupleStruct(data) => Some(BsnPatch::TupleStruct(data)),
@@ -507,7 +507,7 @@ pub(crate) fn value_to_patch(value: BsnValue) -> Option<BsnPatch> {
 /// existing patch or inserting a new one. Reflection-registry independent:
 /// it manipulates patches directly rather than routing through
 /// `set_bsn_field`, so it works for any authored type path.
-pub(crate) fn set_whole_component(
+pub fn set_whole_component(
     ast: &mut SceneBsnAst,
     node: Entity,
     type_path: &str,
@@ -528,13 +528,13 @@ pub(crate) fn set_whole_component(
 
 /// Deep-copy an entire scene document into a fresh one. Thin alias over
 /// [`SceneBsnAst::deep_clone`] kept for the resolver's call sites.
-pub(crate) fn clone_scene(src: &SceneBsnAst) -> SceneBsnAst {
+pub fn clone_scene(src: &SceneBsnAst) -> SceneBsnAst {
     src.deep_clone()
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jackdaw_bsn::{BsnField, BsnStructData, BsnStructFields, BsnTupleStructData};
+    use crate::{BsnField, BsnStructData, BsnStructFields, BsnTupleStructData};
 
     fn f(name: &str, value: BsnValue) -> BsnField {
         BsnField {
