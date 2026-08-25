@@ -556,7 +556,7 @@ fn is_locked_reference(
 /// Locked reference images resolve to `None` so viewport clicks pass
 /// through to whatever sits behind them.
 fn find_selectable_ancestor(
-    entity: Entity,
+    mut entity: Entity,
     scene_entities: &Query<(Entity, &GlobalTransform), (Without<EditorEntity>, With<Transform>)>,
     parents: &Query<&ChildOf>,
     brushes: &Query<(), With<Brush>>,
@@ -570,7 +570,6 @@ fn find_selectable_ancestor(
             .filter(|h| !is_locked_reference(reference_images, *h));
     }
 
-    let mut entity = entity;
     loop {
         if is_locked_reference(reference_images, entity) {
             return None;
@@ -600,9 +599,8 @@ fn find_selectable_ancestor(
     }
 }
 
-/// If `entity` is a schema preview or lives under one, the marker host
-/// that owns that preview. Viewport clicks should select the host, not
-/// the overlay mesh or an ancestor group.
+/// If `entity` is a schema preview or lives under one, return the marker host
+/// that owns that preview.
 fn schema_preview_host(
     mut entity: Entity,
     parents: &Query<&ChildOf>,

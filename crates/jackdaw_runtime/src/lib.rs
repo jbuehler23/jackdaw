@@ -84,8 +84,8 @@ use jackdaw_bsn::{
 
 pub use jackdaw_scene_types::{
     Brush, BrushFaceData, CustomProperties, EditorCategory, EditorDescription, EditorHidden,
-    EditorPreview, EditorPreviewKind, GltfSource, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude,
-    PropertyValue, ScatterGroup, ScatterInstance, SkipSerialization,
+    EditorPreview, GltfSource, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude, PropertyValue,
+    ScatterGroup, ScatterInstance, SkipSerialization,
 };
 
 #[cfg(feature = "pie")]
@@ -119,9 +119,9 @@ pub mod prelude {
     #[cfg(feature = "terrain")]
     pub use crate::TerrainViewer;
     pub use crate::{
-        EditorCategory, EditorDescription, EditorHidden, EditorPreview, EditorPreviewKind,
-        JackdawCatalog, JackdawCatalogPath, JackdawPlugin, JackdawSceneMember, JackdawSceneRoot,
-        SceneRefused, SkipSerialization,
+        EditorCategory, EditorDescription, EditorHidden, EditorPreview, JackdawCatalog,
+        JackdawCatalogPath, JackdawPlugin, JackdawSceneMember, JackdawSceneRoot, SceneRefused,
+        SkipSerialization,
     };
 }
 
@@ -696,10 +696,8 @@ fn spawn_scene_entities(
     // (catalog spelling), merged with the project catalog. Kept in
     // `BsnSceneAssets` so `apply_component_patch` resolves reference strings.
     let mut local_assets = load_embedded_assets(world, ast, &registry);
-    if let Some(catalog) = world.get_resource::<JackdawCatalog>() {
-        for (name, handle) in catalog.handles.clone() {
-            local_assets.entry(name).or_insert(handle);
-        }
+    for (name, handle) in world.resource::<JackdawCatalog>().handles.clone() {
+        local_assets.entry(name).or_insert(handle);
     }
     let mut scene_assets = bevy::platform::collections::HashMap::default();
     for (name, handle) in &local_assets {
@@ -1613,36 +1611,5 @@ mod material_texture_format_tests {
         app.update();
 
         assert_eq!(format_of(&app, &image), TextureFormat::R16Unorm);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use bevy::prelude::*;
-    use jackdaw_schema::{PreviewSchema, extract_from_registry};
-
-    use super::EditorPreview;
-
-    #[derive(Component, Reflect, Default)]
-    #[reflect(Component, Default, @EditorPreview::gltf("models/rifle.glb"))]
-    struct SpawnMarker;
-
-    #[test]
-    fn extract_copies_editor_preview() {
-        let mut registry = bevy::reflect::TypeRegistry::default();
-        registry.register::<SpawnMarker>();
-        let schema = extract_from_registry(&registry);
-        let marker = schema
-            .components
-            .iter()
-            .find(|c| c.type_path.ends_with("SpawnMarker"))
-            .expect("SpawnMarker in schema");
-        assert_eq!(
-            marker.preview,
-            Some(PreviewSchema::Gltf {
-                path: "models/rifle.glb".to_string(),
-                scene: 0
-            })
-        );
     }
 }

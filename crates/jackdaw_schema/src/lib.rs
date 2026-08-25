@@ -95,14 +95,9 @@ pub struct TypeSchema {
     pub description: String,
     /// `@EditorHidden`: skip in the picker.
     pub hidden: bool,
-    /// `@EditorPreview`: viewport overlay the editor instances for
-    /// marker components. Absent when the type has no preview.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_optional_preview"
-    )]
-    pub preview: Option<PreviewSchema>,
+    /// `@EditorPreview` glTF path under `assets/`, or empty.
+    #[serde(default)]
+    pub preview: String,
     /// Whether a default value could be constructed (picker requires it).
     pub default_constructible: bool,
     /// The type's fields (empty for unit/opaque/enum kinds).
@@ -194,25 +189,6 @@ pub struct FieldSchema {
     pub type_path: String,
 }
 
-/// Viewport overlay for a project component, copied from
-/// [`jackdaw_scene_types::EditorPreview`] at extract time.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PreviewSchema {
-    Gltf { path: String, scene: usize },
-}
-
-fn deserialize_optional_preview<'de, D>(deserializer: D) -> Result<Option<PreviewSchema>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = serde_json::Value::deserialize(deserializer)?;
-    if value.is_null() {
-        return Ok(None);
-    }
-    Ok(serde_json::from_value(value).ok())
-}
-
 /// The reflect kind of a schema'd type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeKind {
@@ -234,9 +210,7 @@ mod extract {
     use bevy::reflect::func::args::Ownership;
     use bevy::reflect::serde::ReflectSerializer;
     use bevy::reflect::{NamedField, TypeInfo, TypeRegistration, TypeRegistry};
-    use jackdaw_scene_types::{
-        EditorCategory, EditorDescription, EditorHidden, EditorPreview, EditorPreviewKind,
-    };
+    use jackdaw_scene_types::{EditorCategory, EditorDescription, EditorHidden, EditorPreview};
 
     /// Build the schema for this process's reflected types.
     ///
@@ -338,7 +312,8 @@ mod extract {
         let hidden = attrs.is_some_and(|a| a.get::<EditorHidden>().is_some());
         let preview = attrs
             .and_then(|a| a.get::<EditorPreview>())
-            .map(preview_schema_from);
+            .map(|p| p.0.to_string())
+            .unwrap_or_default();
 
         let (kind, fields, variants) = shape_of(info);
         let entity_fields = info
@@ -439,15 +414,6 @@ mod extract {
         VariantSchema {
             name: variant.name().to_string(),
             fields,
-        }
-    }
-
-    fn preview_schema_from(preview: &EditorPreview) -> PreviewSchema {
-        match &preview.kind {
-            EditorPreviewKind::Gltf { path, scene } => PreviewSchema::Gltf {
-                path: path.to_string(),
-                scene: *scene,
-            },
         }
     }
 
@@ -574,43 +540,6 @@ mod tests {
 
         let parsed = parse_from_stdout(&stdout).expect("parse");
         assert_eq!(parsed.functions.len(), 1, "the later dump must win");
-    }
-
-    #[test]
-    fn type_schema_without_preview_field_deserializes() {
-        let json = r#"{
-            "type_path":"game::PlayerSpawn",
-            "short_name":"PlayerSpawn",
-            "module_path":"game",
-            "category":"",
-            "description":"",
-            "hidden":false,
-            "default_constructible":true,
-            "fields":[],
-            "kind":"Marker",
-            "default":null
-        }"#;
-        let parsed: TypeSchema = serde_json::from_str(json).expect("old schema json");
-        assert!(parsed.preview.is_none());
-    }
-
-    #[test]
-    fn unknown_preview_kind_deserializes_as_none() {
-        let json = r#"{
-            "type_path":"game::PlayerSpawn",
-            "short_name":"PlayerSpawn",
-            "module_path":"game",
-            "category":"",
-            "description":"",
-            "hidden":false,
-            "preview":{"cylinder":{"radius":0.5,"height":1.7}},
-            "default_constructible":true,
-            "fields":[],
-            "kind":"Marker",
-            "default":null
-        }"#;
-        let parsed: TypeSchema = serde_json::from_str(json).expect("legacy preview json");
-        assert!(parsed.preview.is_none());
     }
 }
 
