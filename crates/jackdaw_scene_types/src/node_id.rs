@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rand::Rng;
+use rand::RngExt;
 
 use bevy::prelude::*;
 

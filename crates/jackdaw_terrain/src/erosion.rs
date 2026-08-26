@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 
 /// Parameters for hydraulic erosion simulation.
 #[derive(Clone, Debug)]
