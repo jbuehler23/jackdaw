@@ -2,7 +2,9 @@ pub mod brush;
 pub mod channel;
 pub mod clipmap;
 pub mod control;
+#[cfg(feature = "procgen")]
 pub mod erosion;
+#[cfg(feature = "procgen")]
 pub mod generate;
 pub mod heightmap;
 pub mod navmesh;
@@ -25,7 +27,9 @@ pub use clipmap::{
 pub use control::{
     Control, MANUAL_BIT, MAX_BLEND, MAX_TEXTURE_ID, apply_control_brush, apply_restore_brush,
 };
+#[cfg(feature = "procgen")]
 pub use erosion::{ErosionParams, hydraulic_erosion};
+#[cfg(feature = "procgen")]
 pub use generate::{GenerateSettings, NoiseType, generate_heightmap};
 pub use heightmap::{Heightmap, SurfaceHit};
 pub use navmesh::{BakeParams, NavPolygon, NavmeshArtifact, NavmeshError, SurfaceMesh};

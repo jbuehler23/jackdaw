@@ -7,8 +7,8 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-noise.workspace = true
-rand.workspace = true
+noise = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
 bevy_math = "0.19"
 bevy = { version = "0.19", default-features = false, optional = true, features = [
     "std",
@@ -16,10 +16,17 @@ bevy = { version = "0.19", default-features = false, optional = true, features =
 ] }
 
 [features]
-default = ["render"]
-# The splat material and its shader. Under `--no-default-features` the data
-# model, sidecar, mesher, scatter and texture-set validation all still build,
-# with no GPU crate in the graph.
+default = ["render", "procgen"]
+# Heightmap synthesis and hydraulic erosion. Splitting these out keeps `noise`
+# and `rand` - and thus `getrandom`, which does not build for
+# wasm32-unknown-unknown - out of the graph for consumers that only read baked
+# artifacts (a game server validating movement against a navmesh).
+procgen = ["dep:noise", "dep:rand"]
+# The splat material and its shader. Without it no GPU crate is in the graph.
+# `--no-default-features` drops `procgen` too, leaving the data model, sidecar,
+# mesher, scatter, navmesh and texture-set validation: enough to read and query
+# a baked artifact, and the only configuration that builds for
+# wasm32-unknown-unknown.
 render = ["dep:bevy", "bevy/bevy_pbr", "bevy/bevy_render", "bevy/bevy_image"]
 
 [lints]
