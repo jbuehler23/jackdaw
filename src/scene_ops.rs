@@ -26,9 +26,28 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .shift()]);
 }
 
-#[operator(id = "scene.save", label = "Save", allows_undo = false)]
-pub fn scene_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(|world: &mut World| {
+#[operator(
+    id = "scene.save",
+    label = "Save",
+    allows_undo = false,
+    params(path(
+        String,
+        doc = "Where to save. Defaults to where the scene already lives, \
+               and asks when it does not live anywhere yet."
+    ))
+)]
+pub fn scene_save(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    // A named destination stands in for the Save As dialog. It renames the tab first, so
+    // everything the save writes beside the scene (terrain sidecars, the baked navmesh)
+    // lands beside the new name.
+    let path = params
+        .as_str("path")
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned);
+    commands.queue(move |world: &mut World| {
+        if let Some(path) = path {
+            crate::scene_io::retarget_active_scene(world, &path);
+        }
         crate::scene_io::save_scene(world);
     });
     OperatorResult::Finished

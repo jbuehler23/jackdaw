@@ -4746,7 +4746,6 @@ dependencies = [
  "bevy_monitors",
  "bevy_rerecast",
  "bevy_window_chrome",
- "bincode",
  "ctrlc",
  "dirs",
  "dunce",
@@ -5165,6 +5164,7 @@ dependencies = [
 name = "jackdaw_runtime"
 version = "0.19.0"
 dependencies = [
+ "avian3d",
  "bevy",
  "jackdaw_avian_integration",
  "jackdaw_bsn",
@@ -5173,6 +5173,7 @@ dependencies = [
  "jackdaw_pie_protocol",
  "jackdaw_scene_types",
  "jackdaw_schema",
+ "jackdaw_terrain",
  "jackdaw_ui",
  "serde",
  "serde_json",
@@ -5240,6 +5241,7 @@ dependencies = [
 name = "jackdaw_terrain"
 version = "0.19.0"
 dependencies = [
+ "bevy",
  "bevy_math",
  "noise",
  "rand 0.9.5",

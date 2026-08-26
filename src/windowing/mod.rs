@@ -56,16 +56,44 @@ fn window_chrome_theme() -> WindowChromeTheme {
     }
 }
 
+/// `JACKDAW_WINDOW_SIZE=<width>x<height>` overrides the primary window's
+/// initial resolution (physical pixels), e.g. `1920x1080` to pin the
+/// window for scripted screenshot runs. Read once at startup, like
+/// [`crate::project::ENV_OPEN_PROJECT`] and [`crate::screenshot::ENV_SHOT`].
+/// Unset in interactive launches, which keeps the platform/WM default.
+pub const ENV_WINDOW_SIZE: &str = "JACKDAW_WINDOW_SIZE";
+
+fn window_size_override() -> Option<bevy::window::WindowResolution> {
+    parse_window_size(&std::env::var(ENV_WINDOW_SIZE).ok()?)
+}
+
+/// Parse a `<width>x<height>` [`ENV_WINDOW_SIZE`] value. Malformed values
+/// (missing `x`, non-numeric halves) parse to `None` rather than failing the
+/// launch.
+fn parse_window_size(raw: &str) -> Option<bevy::window::WindowResolution> {
+    let (w, h) = raw.split_once('x')?;
+    let width: u32 = w.trim().parse().ok()?;
+    let height: u32 = h.trim().parse().ok()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(bevy::window::WindowResolution::new(width, height))
+}
+
 /// [`WindowPlugin`] for editor binaries.
 ///
 /// Configures jackdaw's custom chrome window and disables Bevy's default
 /// close-to-exit wiring so [`crate::scenes::intercept_window_close`] can
 /// show the unsaved-changes dialog before quitting.
 pub fn editor_window_plugin() -> WindowPlugin {
+    let mut window = primary_window_attributes();
+    if let Some(resolution) = window_size_override() {
+        window.resolution = resolution;
+    }
     WindowPlugin {
         exit_condition: ExitCondition::DontExit,
         close_when_requested: false,
-        primary_window: Some(primary_window_attributes()),
+        primary_window: Some(window),
         ..default()
     }
 }
@@ -77,5 +105,42 @@ impl Plugin for WindowingPlugin {
         app.add_plugins(WindowChromePlugin::new(window_chrome_theme()));
         app.add_plugins(WindowIconPlugin::new(window_icon_png_bytes()));
         app.add_plugins(repo_link::RepoLinkPlugin);
+    }
+}
+
+#[cfg(test)]
+mod window_size_tests {
+    use super::*;
+
+    #[test]
+    fn a_well_formed_size_parses() {
+        let resolution = parse_window_size("1920x1080").unwrap();
+        assert_eq!(resolution.physical_width(), 1920);
+        assert_eq!(resolution.physical_height(), 1080);
+    }
+
+    #[test]
+    fn whitespace_around_either_half_is_tolerated() {
+        let resolution = parse_window_size(" 1920 x 1080 ").unwrap();
+        assert_eq!(resolution.physical_width(), 1920);
+        assert_eq!(resolution.physical_height(), 1080);
+    }
+
+    #[test]
+    fn missing_separator_parses_to_nothing() {
+        assert!(parse_window_size("1920").is_none());
+    }
+
+    #[test]
+    fn non_numeric_halves_parse_to_nothing() {
+        assert!(parse_window_size("wideXtall").is_none());
+        assert!(parse_window_size("1920xtall").is_none());
+    }
+
+    #[test]
+    fn a_zero_half_parses_to_nothing() {
+        assert!(parse_window_size("0x1080").is_none());
+        assert!(parse_window_size("1920x0").is_none());
+        assert!(parse_window_size("0x0").is_none());
     }
 }

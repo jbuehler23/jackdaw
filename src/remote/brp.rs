@@ -3,7 +3,7 @@ use bevy::{remote::BrpRequest, tasks::IoTaskPool};
 
 /// Send a BRP JSON-RPC 2.0 request and return the result as a background task.
 ///
-/// Follows the same pattern as `src/navmesh/brp_client.rs`. Uses `ehttp::fetch_async`
+/// Uses `ehttp::fetch_async`
 /// on the `IoTaskPool`.
 pub fn brp_request(
     endpoint: &str,

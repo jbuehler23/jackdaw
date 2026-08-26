@@ -1183,7 +1183,28 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
 /// scene is auto-loaded so the user lands in a populated editor
 /// rather than an empty one. This is the convention the game
 /// template ships with.
+///
+/// Every open funnels through here, so the asset-root check lives here: no
+/// other path can install a [`ProjectRoot`] whose `assets/` the asset server is
+/// not reading from.
 fn transition_to_editor(world: &mut World, root: PathBuf) {
+    let plan = world
+        .get_resource::<crate::restart::AssetProjectRoot>()
+        .map(|asset_root| {
+            crate::restart::plan_open(&asset_root.0, &root, crate::restart::can_restart())
+        });
+    match plan {
+        None | Some(crate::restart::OpenPlan::Here) => {}
+        Some(crate::restart::OpenPlan::Reopen) => {
+            reopen_in_new_process(root);
+            return;
+        }
+        Some(crate::restart::OpenPlan::Unreachable) => {
+            show_cannot_reopen_card(world, root);
+            return;
+        }
+    }
+
     let config = project::load_project_config(&root)
         .unwrap_or_else(|| project::create_default_project(&root));
 
@@ -1254,6 +1275,28 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
             crate::scenes::operators::scene_new_system(world);
         }
     }
+}
+
+/// Hand `root` to a process rooted at it, without letting this one shut down
+/// first. Asking for an exit can lose the reopen: teardown can destroy the
+/// window while the render thread is inside a swapchain present, and that fault
+/// kills the process with the reopen still pending. Replacing the process image
+/// ends every thread at once, so there is nothing left to race.
+///
+/// Everything a reopen needs is on disk by this point: leaving an open project
+/// for the launcher asks about unsaved changes first, and open tabs are written
+/// to the project config as they change.
+///
+/// Never returns outside tests; under test it records the request instead, so
+/// the funnel can be exercised without replacing the test binary.
+#[cfg(not(test))]
+fn reopen_in_new_process(root: PathBuf) {
+    crate::restart::relaunch_into_project(&root)
+}
+
+#[cfg(test)]
+fn reopen_in_new_process(root: PathBuf) {
+    crate::restart::request_project_relaunch(root);
 }
 
 fn spawn_launcher_section_label(
@@ -2071,6 +2114,35 @@ fn show_not_a_project_card(world: &mut World, root: PathBuf, reason: NotAProject
                 });
             });
     }
+}
+
+/// Shown when a project needs a process of its own and the editor binary to
+/// hand it to cannot be found. Opening it here would resolve every relative
+/// asset path against the project this process launched for, so the card
+/// refuses and states what to do instead.
+fn show_cannot_reopen_card(world: &mut World, root: PathBuf) {
+    let (_, card, font) = spawn_modal_card(world, 480.0, 640.0);
+    spawn_card_title(world, card, "That project needs a new window", &font);
+    spawn_card_body(
+        world,
+        card,
+        format!(
+            "`{}` is not the project this editor started with, and its assets can \
+             only be read by an editor started for it. This one cannot find its own \
+             binary to start another.\n\n\
+             Launch jackdaw again from that project's folder to open it.",
+            root.display()
+        ),
+        &font,
+    );
+
+    let row = spawn_card_button_row(world, card);
+    let back = spawn_card_button(world, row, "Back", &font, false);
+    world
+        .entity_mut(back)
+        .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.queue(close_new_project_modal);
+        });
 }
 
 /// Shown when a project's recorded pins say it targets a different Bevy
@@ -3481,5 +3553,37 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A project the asset server cannot read stops at the funnel: nothing opens here, and
+    /// it is handed to a process rooted at it. Otherwise the editor would open the project
+    /// while resolving every relative asset path against the other one.
+    ///
+    /// The hand-off happens in place of a shutdown, not after one.
+    #[test]
+    fn a_project_outside_the_asset_root_is_handed_to_another_process() {
+        let mut world = World::new();
+        world.insert_resource(crate::restart::AssetProjectRoot(PathBuf::from(
+            "/projects/alpha",
+        )));
+        world.init_resource::<bevy::ecs::message::Messages<bevy::app::AppExit>>();
+
+        transition_to_editor(&mut world, PathBuf::from("/projects/beta"));
+
+        assert!(
+            world.get_resource::<ProjectRoot>().is_none(),
+            "the wrong-rooted project must not open here"
+        );
+        assert_eq!(
+            world
+                .resource::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
+                .len(),
+            0,
+            "the reopen replaces the shutdown rather than following it"
+        );
+        assert_eq!(
+            crate::restart::take_project_relaunch(),
+            Some(PathBuf::from("/projects/beta"))
+        );
     }
 }

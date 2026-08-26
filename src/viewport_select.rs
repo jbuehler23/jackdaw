@@ -38,7 +38,30 @@ impl Plugin for ViewportSelectPlugin {
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<BoxSelectOp>();
+    ctx.register_operator::<BoxSelectOp>()
+        .register_operator::<SelectionClearOp>();
+}
+
+fn has_selection(selection: Res<Selection>) -> bool {
+    !selection.entities.is_empty()
+}
+
+/// Deselect everything, for scripted runs that need the empty-selection state
+/// without a click on empty viewport space.
+#[operator(
+    id = "selection.clear",
+    label = "Deselect All",
+    description = "Clear the current selection.",
+    is_available = has_selection,
+    allows_undo = false,
+)]
+pub(crate) fn selection_clear(
+    _: In<OperatorParameters>,
+    mut selection: ResMut<Selection>,
+    mut commands: Commands,
+) -> OperatorResult {
+    selection.clear(&mut commands);
+    OperatorResult::Finished
 }
 
 /// Cursor delta (in window pixels) that promotes a pending LMB-down
@@ -118,18 +141,20 @@ pub(crate) fn handle_viewport_click(
         return;
     }
 
-    let Some(cursor_pos) = vp.cursor() else {
+    // Bails when the cursor is over no viewport, and when it is over an overlay drawn on
+    // the viewport rather than the scene behind it. The active viewport is whichever one
+    // the cursor is in.
+    let Some(cursor_pos) = vp.viewport_pointer() else {
         return;
     };
 
-    // Bail when the cursor isn't over any viewport. Multi-viewport
-    // routing: the active viewport is whichever one the cursor is in.
     let Some((vp_computed, vp_tf)) = vp.viewport() else {
         return;
     };
     let Some((camera, cam_tf)) = vp.camera() else {
         return;
     };
+
     let map = crate::viewport_util::ViewportRemap::new(camera, vp_computed, vp_tf);
     let local_cursor = (cursor_pos - map.top_left) * map.remap;
 
@@ -270,14 +295,14 @@ fn box_select_pending_trigger(
     {
         return;
     }
-    let Some(cursor_pos) = vp.cursor() else {
+    // Bail when the press isn't the viewport's: otherwise any LMB press anywhere in the
+    // editor (toolbar, panel header, tab being dragged, a palette button over the
+    // viewport) records a pending box-select whose overlay renders across the whole window
+    // during the drag.
+    let Some(cursor_pos) = vp.viewport_pointer() else {
         return;
     };
 
-    // Bail when the cursor isn't over a viewport panel. Without this
-    // any LMB press anywhere in the editor (toolbar, panel header,
-    // tab being dragged) records a pending box-select and the
-    // overlay then renders across the whole window during the drag.
     let Some((camera, cam_tf)) = vp.camera() else {
         return;
     };

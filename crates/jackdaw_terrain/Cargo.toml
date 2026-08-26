@@ -10,6 +10,17 @@ repository = "https://github.com/jbuehler23/jackdaw"
 noise.workspace = true
 rand.workspace = true
 bevy_math = "0.19"
+bevy = { version = "0.19", default-features = false, optional = true, features = [
+    "std",
+    "bevy_asset",
+] }
+
+[features]
+default = ["render"]
+# The splat material and its shader. Under `--no-default-features` the data
+# model, sidecar, mesher, scatter and texture-set validation all still build,
+# with no GPU crate in the graph.
+render = ["dep:bevy", "bevy/bevy_pbr", "bevy/bevy_render", "bevy/bevy_image"]
 
 [lints]
 workspace = true

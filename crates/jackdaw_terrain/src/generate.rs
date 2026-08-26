@@ -36,7 +36,7 @@ impl NoiseType {
     }
 
     pub fn from_index(i: usize) -> Self {
-        #[expect(clippy::match_same_arms, reason = "Cleaner this way")]
+        #[expect(clippy::match_same_arms, reason = "one arm per index")]
         match i {
             0 => NoiseType::Perlin,
             1 => NoiseType::Simplex,
@@ -65,11 +65,11 @@ impl Default for GenerateSettings {
         Self {
             noise_type: NoiseType::Perlin,
             seed: 42,
-            frequency: 0.02,
-            octaves: 6,
+            frequency: 0.01,
+            octaves: 4,
             lacunarity: 2.0,
-            persistence: 0.5,
-            amplitude: 30.0,
+            persistence: 0.45,
+            amplitude: 8.0,
             offset: 0.0,
         }
     }

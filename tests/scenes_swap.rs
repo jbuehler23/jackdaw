@@ -183,7 +183,7 @@ fn swap_preserves_a_sculpted_terrain() {
     use bevy::winit::WinitPlugin;
     use jackdaw::terrain::TerrainDataStore;
     use jackdaw_scene_types::Terrain;
-    use jackdaw_terrain::TerrainData;
+    use jackdaw_terrain::{RegionTerrainData, TerrainData};
 
     const DATA_PATH: &str = "zone.terrain-0.jdterrain";
 
@@ -210,11 +210,12 @@ fn swap_preserves_a_sculpted_terrain() {
     let sculpted: Vec<f32> = (0..16).map(|i| i as f32 * 0.5).collect();
     app.world_mut().resource_mut::<TerrainDataStore>().insert(
         DATA_PATH.to_string(),
-        TerrainData {
+        RegionTerrainData::from_legacy_v1(&TerrainData {
             resolution: 4,
             heights: sculpted.clone(),
             channels: vec![],
-        },
+        })
+        .expect("a power-of-two resolution migrates"),
     );
     let terrain_entity = app
         .world_mut()
@@ -681,11 +682,12 @@ fn scene_save_all_reports_failure_and_keeps_a_tab_dirty() {
     let mut store = jackdaw::terrain::TerrainDataStore::default();
     store.insert(
         data_path.to_string(),
-        jackdaw_terrain::TerrainData {
+        jackdaw_terrain::RegionTerrainData::from_legacy_v1(&jackdaw_terrain::TerrainData {
             resolution: 2,
             heights: vec![0.0; 4],
             channels: vec![],
-        },
+        })
+        .expect("a power-of-two resolution migrates"),
     );
     app.world_mut().insert_resource(store);
     app.world_mut().spawn(jackdaw_scene_types::Terrain {
@@ -967,6 +969,7 @@ fn swap_does_not_keep_a_jsn_scene_snapshot_field() {
         view_state: jackdaw::scenes::ViewState::default(),
         history: jackdaw::commands::CommandHistory::default(),
         terrain_data_store: jackdaw::terrain::TerrainDataStore::default(),
+        navmesh: jackdaw::terrain::navmesh_bake::TabNavmesh::default(),
         history_depth_at_last_check: 0,
     };
 }

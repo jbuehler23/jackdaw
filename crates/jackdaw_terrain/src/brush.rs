@@ -19,33 +19,6 @@ pub fn compute_falloff(dist: f32, radius: f32, power: f32) -> f32 {
     (1.0 - (dist / radius).powf(power)).max(0.0)
 }
 
-/// Average of 8 neighbors for smoothing.
-fn average_neighbors(heightmap: &Heightmap, x: u32, z: u32) -> f32 {
-    let mut sum = 0.0;
-    let mut count = 0.0;
-    let res = heightmap.resolution;
-
-    for dz in [-1_i32, 0, 1] {
-        for dx in [-1_i32, 0, 1] {
-            if dx == 0 && dz == 0 {
-                continue;
-            }
-            let nx = x as i32 + dx;
-            let nz = z as i32 + dz;
-            if nx >= 0 && nx < res as i32 && nz >= 0 && nz < res as i32 {
-                sum += heightmap.get_height(nx as u32, nz as u32);
-                count += 1.0;
-            }
-        }
-    }
-
-    if count > 0.0 {
-        sum / count
-    } else {
-        heightmap.get_height(x, z)
-    }
-}
-
 /// Apply a brush stroke to the heightmap.
 ///
 /// `center`: grid-space center of the brush.
@@ -64,28 +37,60 @@ pub fn apply_brush(
     dt: f32,
     noise_fn: Option<&dyn Fn(f32, f32) -> f32>,
 ) {
-    // `compute_falloff` already swallows a non-finite falloff or distance
-    // via `f32::max`'s NaN-ignoring semantics, but `amount = strength * f
-    // * dt` below has no such protection: a non-finite radius, strength,
-    // or dt would otherwise write NaN straight into the heightmap.
-    if !radius.is_finite() || radius <= 0.0 || !strength.is_finite() || !dt.is_finite() {
+    let resolution = heightmap.resolution;
+    apply_brush_at(
+        &mut heightmap.heights,
+        resolution,
+        tool,
+        center,
+        radius,
+        strength,
+        falloff,
+        dt,
+        noise_fn,
+    );
+}
+
+/// [`apply_brush`] against a dense height grid the caller already holds.
+///
+/// Writes in place, so a stroke over a terrain document's region needs no
+/// round trip through a [`Heightmap`].
+pub fn apply_brush_at(
+    heights: &mut [f32],
+    resolution: u32,
+    tool: SculptTool,
+    center: Vec2,
+    radius: f32,
+    strength: f32,
+    falloff: f32,
+    dt: f32,
+    noise_fn: Option<&dyn Fn(f32, f32) -> f32>,
+) {
+    // `compute_falloff` swallows a non-finite falloff or distance through
+    // `f32::max`, but `amount = strength * f * dt` does not: a non-finite
+    // radius, strength or dt writes NaN into the heightmap.
+    if resolution == 0
+        || !radius.is_finite()
+        || radius <= 0.0
+        || !strength.is_finite()
+        || !dt.is_finite()
+    {
         return;
     }
 
-    let res = heightmap.resolution;
-    let center_height = heightmap.sample_bilinear(center.x, center.y);
+    let res = resolution as i32;
+    let center_height = sample_bilinear_in(heights, resolution, center.x, center.y);
 
-    let min_x = ((center.x - radius).floor() as i32).max(0) as u32;
-    let max_x = ((center.x + radius).ceil() as i32).min(res as i32 - 1) as u32;
-    let min_z = ((center.y - radius).floor() as i32).max(0) as u32;
-    let max_z = ((center.y + radius).ceil() as i32).min(res as i32 - 1) as u32;
+    // Clamped at both ends: a footprint entirely off the low edge gives a
+    // negative `ceil`, which as an unsigned bound spans four billion cells.
+    let min_x = ((center.x - radius).floor() as i32).clamp(0, res - 1);
+    let max_x = ((center.x + radius).ceil() as i32).clamp(0, res - 1);
+    let min_z = ((center.y - radius).floor() as i32).clamp(0, res - 1);
+    let max_z = ((center.y + radius).ceil() as i32).clamp(0, res - 1);
 
-    // For smoothing, we need a snapshot to avoid reading modified values
-    let snapshot = if tool == SculptTool::Smooth {
-        Some(heightmap.heights.clone())
-    } else {
-        None
-    };
+    // Smoothing averages the heights as they were at the start of the
+    // call, so one cell's new value never feeds the next cell's average.
+    let snapshot = (tool == SculptTool::Smooth).then(|| heights.to_vec());
 
     for gz in min_z..=max_z {
         for gx in min_x..=max_x {
@@ -96,20 +101,17 @@ pub fn apply_brush(
             }
 
             let idx = (gz * res + gx) as usize;
-            let h = heightmap.heights[idx];
+            let h = heights[idx];
             let amount = strength * f * dt;
 
-            heightmap.heights[idx] = match tool {
+            heights[idx] = match tool {
                 SculptTool::Raise => h + amount,
                 SculptTool::Lower => h - amount,
                 SculptTool::Flatten => lerp(h, center_height, amount.min(1.0)),
                 SculptTool::Smooth => {
-                    // Use snapshot for neighbor average
-                    let avg = if let Some(ref snap) = snapshot {
-                        average_neighbors_from_slice(snap, res, gx, gz)
-                    } else {
-                        average_neighbors(heightmap, gx, gz)
-                    };
+                    let avg = snapshot.as_ref().map_or(h, |snap| {
+                        average_neighbors_from_slice(snap, resolution, gx as u32, gz as u32)
+                    });
                     lerp(h, avg, amount.min(1.0))
                 }
                 SculptTool::Noise => {
@@ -122,6 +124,35 @@ pub fn apply_brush(
             };
         }
     }
+}
+
+/// [`Heightmap::sample_bilinear`] against a bare grid.
+fn sample_bilinear_in(heights: &[f32], resolution: u32, gx: f32, gz: f32) -> f32 {
+    let x0 = gx.floor() as i32;
+    let z0 = gz.floor() as i32;
+    let fx = gx - x0 as f32;
+    let fz = gz - z0 as f32;
+
+    let s = |x: i32, z: i32| -> f32 {
+        if resolution == 0 {
+            return 0.0;
+        }
+        let x = x.clamp(0, resolution as i32 - 1) as u32;
+        let z = z.clamp(0, resolution as i32 - 1) as u32;
+        heights
+            .get((z * resolution + x) as usize)
+            .copied()
+            .unwrap_or(0.0)
+    };
+
+    let h00 = s(x0, z0);
+    let h10 = s(x0 + 1, z0);
+    let h01 = s(x0, z0 + 1);
+    let h11 = s(x0 + 1, z0 + 1);
+
+    let h0 = h00 * (1.0 - fx) + h10 * fx;
+    let h1 = h01 * (1.0 - fx) + h11 * fx;
+    h0 * (1.0 - fz) + h1 * fz
 }
 
 fn average_neighbors_from_slice(heights: &[f32], res: u32, x: u32, z: u32) -> f32 {
@@ -166,9 +197,7 @@ pub fn affected_chunks(
 /// Determine which chunks a brush stroke touches, given only the grid
 /// resolution.
 ///
-/// Same result as [`affected_chunks`] without needing the heights, so a
-/// paint stroke over a channel can mark exactly the chunks a sculpt stroke
-/// of the same shape would.
+/// Same result as [`affected_chunks`] without needing the heights.
 pub fn affected_chunks_at(
     resolution: u32,
     center: Vec2,
@@ -205,6 +234,96 @@ pub fn affected_chunks_at(
 mod tests {
     use super::*;
 
+    /// A footprint entirely off one edge writes nothing, without walking
+    /// the four billion cells a negative `ceil` spans when cast unsigned.
+    #[test]
+    fn a_brush_entirely_off_the_grid_writes_nothing() {
+        let resolution = 16;
+        for center in [
+            Vec2::new(-400.0, 8.0),
+            Vec2::new(400.0, 8.0),
+            Vec2::new(8.0, -400.0),
+            Vec2::new(8.0, 400.0),
+        ] {
+            let mut heights = vec![1.0f32; (resolution * resolution) as usize];
+            apply_brush_at(
+                &mut heights,
+                resolution,
+                SculptTool::Raise,
+                center,
+                4.0,
+                10.0,
+                2.0,
+                1.0 / 60.0,
+                None,
+            );
+            assert!(heights.iter().all(|h| *h == 1.0), "{center:?} wrote a cell");
+        }
+    }
+
+    /// A grid with no cells has nothing to clamp a bound between.
+    #[test]
+    fn a_zero_resolution_grid_is_left_alone() {
+        let mut heights: Vec<f32> = Vec::new();
+        apply_brush_at(
+            &mut heights,
+            0,
+            SculptTool::Raise,
+            Vec2::ZERO,
+            4.0,
+            10.0,
+            2.0,
+            1.0 / 60.0,
+            None,
+        );
+        assert!(heights.is_empty());
+    }
+
+    /// Both forms have to write the same heights bit for bit.
+    #[test]
+    fn brushing_in_place_matches_brushing_a_heightmap() {
+        for tool in [
+            SculptTool::Raise,
+            SculptTool::Lower,
+            SculptTool::Flatten,
+            SculptTool::Smooth,
+        ] {
+            let resolution = 24;
+            let seeded: Vec<f32> = (0..resolution * resolution)
+                .map(|i| (i as f32 * 0.37).sin() * 4.0)
+                .collect();
+
+            let mut owned = Heightmap::new(resolution, Vec2::splat(23.0), 10.0);
+            owned.heights.clone_from(&seeded);
+            let mut in_place = seeded.clone();
+
+            for center in [Vec2::new(12.0, 12.0), Vec2::new(3.5, 20.5)] {
+                apply_brush(&mut owned, tool, center, 4.0, 7.0, 2.0, 1.0 / 60.0, None);
+                apply_brush_at(
+                    &mut in_place,
+                    resolution,
+                    tool,
+                    center,
+                    4.0,
+                    7.0,
+                    2.0,
+                    1.0 / 60.0,
+                    None,
+                );
+            }
+
+            assert_eq!(
+                owned
+                    .heights
+                    .iter()
+                    .map(|h| h.to_bits())
+                    .collect::<Vec<_>>(),
+                in_place.iter().map(|h| h.to_bits()).collect::<Vec<_>>(),
+                "{tool:?} disagreed between the two forms",
+            );
+        }
+    }
+
     #[test]
     fn chunk_lookup_agrees_with_the_heightmap_form() {
         let hm = Heightmap::new(65, Vec2::splat(64.0), 10.0);
@@ -228,7 +347,6 @@ mod tests {
         assert_eq!(touched.len(), 4, "got {touched:?}");
     }
 
-    /// A non-finite strength must not poison the heightmap.
     #[test]
     fn a_non_finite_strength_does_not_poison_the_heightmap() {
         let mut hm = Heightmap::new(5, Vec2::splat(4.0), 10.0);

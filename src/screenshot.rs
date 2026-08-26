@@ -1,17 +1,21 @@
-//! Viewport screenshot capture.
+//! Viewport and window screenshot capture.
 //!
 //! The 3D viewport already renders off-screen into a dedicated `Image`
-//! (`crate::viewport::build_viewport_panel`), so a capture is a
-//! [`Screenshot::image`] against a render target that already exists --
-//! no second render pass and no window grab. Capturing therefore works
-//! when the editor window is unfocused, partly covered, or never had a
-//! cursor over it.
+//! (`crate::viewport::build_viewport_panel`), so a viewport capture is a
+//! [`Screenshot::image`] against an existing render target: no second render
+//! pass and no window grab. Capturing works when the editor window is
+//! unfocused, partly covered, or never had a cursor over it.
 //!
-//! Two entry points, one capture path ([`queue_capture`]):
+//! A window capture ([`Screenshot::primary_window`]) is the whole editor
+//! surface: palette, options bar, docked panels, and the viewport together.
+//! `viewport.screenshot` shows no `bevy_ui` chrome.
 //!
-//! - the `viewport.screenshot` operator, for interactive use;
+//! Entry points, both funneled through `spawn_capture`:
+//!
+//! - the `viewport.screenshot` and `window.screenshot` operators, for
+//!   interactive use and scripted runs (`JACKDAW_RUN_OP`);
 //! - the `JACKDAW_SHOT=<path>` environment variable, which waits for the
-//!   editor to settle, captures once, and exits.
+//!   editor to settle, captures the viewport once, and exits.
 
 use std::path::{Path, PathBuf};
 
@@ -56,6 +60,8 @@ pub(crate) fn plugin(app: &mut App) {
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ViewportScreenshotOp>();
     ctx.register_menu_entry::<ViewportScreenshotOp>(TopLevelMenu::Tools);
+    ctx.register_operator::<WindowScreenshotOp>();
+    ctx.register_menu_entry::<WindowScreenshotOp>(TopLevelMenu::Tools);
 }
 
 /// The pending one-shot capture requested by [`ENV_SHOT`]. Absent when
@@ -112,13 +118,33 @@ pub fn queue_capture(
         .cloned()
         .ok_or(CaptureError::NotAnImageTarget)?;
 
+    spawn_capture(world, Screenshot::image(handle), path, exit_when_done);
+    Ok(())
+}
+
+/// Queue a capture of the whole primary window (palette, options bar, docked
+/// panels, and viewport together), written to `path` as a PNG once the GPU
+/// readback lands.
+///
+/// Unlike [`queue_capture`] this cannot fail up front: `Screenshot` targets the
+/// primary window by [`bevy::window::WindowRef::Primary`], which the renderer
+/// resolves itself, so there is no camera or render target to look up. A window
+/// that never renders never fires the observer, and that case is undetectable
+/// here.
+pub fn queue_window_capture(world: &mut World, path: PathBuf, exit_when_done: bool) {
+    spawn_capture(world, Screenshot::primary_window(), path, exit_when_done);
+}
+
+/// Spawn the [`Screenshot`] entity shared by every capture path: write
+/// the PNG and, for unattended runs, exit once the GPU readback lands.
+fn spawn_capture(world: &mut World, screenshot: Screenshot, path: PathBuf, exit_when_done: bool) {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    world.spawn(Screenshot::image(handle)).observe(
+    world.spawn(screenshot).observe(
         move |capture: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
             // Writing the PNG here rather than through bevy's
             // `save_to_disk` observer keeps write-then-exit in one
@@ -136,7 +162,6 @@ pub fn queue_capture(
             }
         },
     );
-    Ok(())
 }
 
 /// Encode a captured frame as a PNG on disk. Returns whether it landed.
@@ -216,7 +241,7 @@ pub(crate) fn viewport_screenshot(
 ) -> OperatorResult {
     let path = match params.as_str("path").filter(|p| !p.is_empty()) {
         Some(path) => PathBuf::from(path),
-        None => default_shot_path(project.as_deref()),
+        None => default_shot_path(project.as_deref(), "viewport"),
     };
     commands.queue(move |world: &mut World| {
         if let Err(err) = queue_capture(world, path, false) {
@@ -226,14 +251,42 @@ pub(crate) fn viewport_screenshot(
     OperatorResult::Finished
 }
 
-/// Where an unnamed capture goes: `screenshots/<timestamp>.png` under the
-/// open project, or under the working directory when no project is open.
-fn default_shot_path(project: Option<&crate::project::ProjectRoot>) -> PathBuf {
+/// Capture the whole editor window (palette, options bar, docked panels, and
+/// viewport) to a PNG. Unlike `viewport.screenshot`, this includes the
+/// `bevy_ui` chrome rather than only the 3D render target.
+#[operator(
+    id = "window.screenshot",
+    label = "Screenshot Window",
+    description = "Save the whole editor window, including all UI panels, to a PNG file.",
+    allows_undo = false,
+    params(path(
+        String,
+        doc = "Where to write the PNG. Defaults to a timestamped file in the project."
+    ))
+)]
+pub(crate) fn window_screenshot(
+    params: In<OperatorParameters>,
+    project: Option<Res<crate::project::ProjectRoot>>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let path = match params.as_str("path").filter(|p| !p.is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => default_shot_path(project.as_deref(), "window"),
+    };
+    commands.queue(move |world: &mut World| {
+        queue_window_capture(world, path, false);
+    });
+    OperatorResult::Finished
+}
+
+/// Where an unnamed capture goes: `screenshots/<prefix>-<timestamp>.png` under
+/// the open project, or under the working directory when no project is open.
+fn default_shot_path(project: Option<&crate::project::ProjectRoot>, prefix: &str) -> PathBuf {
     let stamp = crate::timestamps::utc_rfc3339_now().replace(':', "-");
     let dir = project
         .map(|p| p.root.join("screenshots"))
         .unwrap_or_else(|| PathBuf::from("screenshots"));
-    dir.join(format!("viewport-{stamp}.png"))
+    dir.join(format!("{prefix}-{stamp}.png"))
 }
 
 #[cfg(test)]
@@ -274,7 +327,7 @@ mod tests {
             root: root.clone(),
             config: crate::project::ProjectConfig::default(),
         };
-        let path = default_shot_path(Some(&project));
+        let path = default_shot_path(Some(&project), "viewport");
         assert!(path.starts_with(root.join("screenshots")), "{path:?}");
         assert_eq!(path.extension().and_then(|e| e.to_str()), Some("png"));
         // Colons are legal on unix and illegal on Windows; a timestamped

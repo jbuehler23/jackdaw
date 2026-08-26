@@ -180,7 +180,7 @@ fn manifest_shape_and_sort_order() {
     assert_eq!(manifest["format"], "jackdaw-terrain-export");
     assert_eq!(manifest["format_version"], 2);
     assert_eq!(manifest["source_scene"], "scenes/sample.bsn");
-    assert_eq!(manifest["terrain"]["resolution"], 3);
+    assert_eq!(manifest["terrain"]["cells_per_edge"], 3);
     assert_eq!(
         manifest["terrain"]["world_size_m"],
         serde_json::json!([2.0, 2.0])

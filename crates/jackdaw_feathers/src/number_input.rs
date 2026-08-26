@@ -99,6 +99,14 @@ const BASE_DRAG_SPEED: f64 = 0.01f64;
 ///
 /// Additional components can be inserted into this widget to customize the behavior: see
 /// [`SoftLimit`], [`HardLimit`], [`NumberInputPrecision`], and [`NumberInputStep`].
+///
+/// Not built on `bevy::feathers`' own `FeathersNumberInput`: that widget is text-entry only
+/// (no drag-scrub, no range/limit components), and `FeathersSlider` is a click-anywhere track
+/// slider with no combined numeric text box, so neither covers this widget's contract.
+///
+/// Domain behavior riding on top (limits, precision, tooltips, field bindings) is attached as
+/// separate components plus observers at the widget's entity boundary rather than folded into
+/// its scene.
 #[derive(SceneComponent, Default, Clone, Reflect)]
 #[scene(ScrubNumberInputProps)]
 #[reflect(Component, Default, Clone)]
@@ -517,6 +525,31 @@ impl NumberInputPrecision {
     }
 }
 
+/// The digits a field shows for `value`.
+///
+/// A fractional value is shown to its field's own precision rather than to
+/// `f32`'s full decimal expansion: a value arriving from a scroll-wheel resize
+/// or a scaled drag carries float noise several places down (`1.889105`).
+/// Whole-number kinds pass a precision of 0 and show no decimal point.
+///
+/// Shared by the initial spawn and every later re-insert, so a field's digits
+/// do not depend on which of the two last wrote them.
+pub(crate) fn display_digits(
+    value: &ScrubNumberInputValue,
+    precision: Option<&NumberInputPrecision>,
+) -> String {
+    let Some(NumberInputPrecision(places)) = precision else {
+        return value.to_string();
+    };
+    let places = (*places).max(0) as usize;
+    match value {
+        ScrubNumberInputValue::F32(v) => format!("{v:.places$}"),
+        ScrubNumberInputValue::F64(v) => format!("{v:.places$}"),
+        // Integer kinds have no decimals to trim either way.
+        other => other.to_string(),
+    }
+}
+
 impl Default for NumberInputPrecision {
     fn default() -> Self {
         Self(2)
@@ -564,6 +597,7 @@ fn number_input_on_insert_value(
             &ScrubNumberInputValue,
             Option<&SoftLimit>,
             Option<&HardLimit>,
+            Option<&NumberInputPrecision>,
         ),
         With<ScrubNumberInput>,
     >,
@@ -574,7 +608,8 @@ fn number_input_on_insert_value(
         .iter_descendants(update.event_target())
         .find(|e| q_text_input.contains(*e));
 
-    if let Ok((&input_value, soft_limit, hard_limit)) = q_number_input.get(update.event_target())
+    if let Ok((&input_value, soft_limit, hard_limit, precision)) =
+        q_number_input.get(update.event_target())
         && let Some(text_id) = text_input_id
         // Never overwrite the field while it is focused, since a focused
         // field owns its own text and the user may be typing or selecting.
@@ -590,7 +625,7 @@ fn number_input_on_insert_value(
             None => input_value,
         };
         let (mut editable_text, mut gradient) = q_text_input.get_mut(text_id).unwrap();
-        let new_digits = clamped_value.to_string();
+        let new_digits = display_digits(&clamped_value, precision);
         if editable_text.value().to_string() != new_digits {
             editable_text.queue_edit(TextEdit::SelectAll);
             editable_text.queue_edit(TextEdit::Insert(new_digits.into()));
@@ -670,6 +705,7 @@ fn number_input_init(
         (
             &ScrubNumberInputValue,
             Option<&SoftLimit>,
+            Option<&NumberInputPrecision>,
             Has<InteractionDisabled>,
         ),
         With<ScrubNumberInput>,
@@ -682,9 +718,9 @@ fn number_input_init(
     let text_id = insert.event_target();
     if let Ok((mut editable_text, &Hovered(hovered), mut gradient)) = q_text_input.get_mut(text_id)
         && let Ok(&ChildOf(root_id)) = q_parent.get(text_id)
-        && let Ok((input_value, limit, is_disabled)) = q_number_input.get(root_id)
+        && let Ok((input_value, limit, precision, is_disabled)) = q_number_input.get(root_id)
     {
-        let new_digits = input_value.to_string();
+        let new_digits = display_digits(input_value, precision);
         let old_digits = editable_text.value().to_string();
         if old_digits != new_digits {
             editable_text.queue_edit(TextEdit::SelectAll);
@@ -886,6 +922,45 @@ fn scrubber_on_release(
     }
 }
 
+/// Conversion factor from pixels dragged to value change, in priority order:
+/// a [`SoftLimit`] maps the full slider width to the full range, so dragging
+/// edge to edge covers the range exactly; otherwise [`NumberInputStep`] or
+/// integer formatting give a step-sized nudge per pixel; otherwise
+/// [`NumberInputPrecision`] or the value's own magnitude are used.
+fn compute_drag_speed(
+    soft_limit: Option<&SoftLimit>,
+    step: Option<&NumberInputStep>,
+    precision: Option<&NumberInputPrecision>,
+    input_value: &ScrubNumberInputValue,
+    slider_size: f64,
+) -> f64 {
+    if let Some(SoftLimit(nrange)) = soft_limit {
+        match nrange {
+            NumberInputRange::F32(range) => (range.end - range.start) as f64 / slider_size,
+            NumberInputRange::F64(range) => (range.end - range.start) / slider_size,
+            NumberInputRange::I32(range) => (range.end - range.start) as f64 / slider_size,
+            NumberInputRange::I64(range) => (range.end - range.start) as f64 / slider_size,
+        }
+    } else if let Some(NumberInputStep(step)) = step {
+        *step * BASE_DRAG_SPEED
+    } else if matches!(
+        input_value.format(),
+        ScrubNumberFormat::I32 | ScrubNumberFormat::I64
+    ) {
+        // Treat integers as having a step size of 1
+        BASE_DRAG_SPEED
+    } else if let Some(prec) = precision {
+        // Derive from precision
+        10.0_f64.powf(-(prec.0 as f64))
+    } else {
+        // Nothing to derive from, so scale by the nearest power of 10 to the
+        // current magnitude.
+        let m = input_value.as_f64().abs();
+        let decade = if m >= 1.0 { m.log10().floor() } else { 0.0 };
+        BASE_DRAG_SPEED * 10f64.powf(decade)
+    }
+}
+
 fn scrubber_on_drag_start(
     mut drag_start: On<Pointer<DragStart>>,
     q_root: Query<(
@@ -916,32 +991,7 @@ fn scrubber_on_drag_start(
         drag.base_value = *input_value;
         drag.max_distance = 0.0;
         drag.value_offset = 0.0f64;
-        // Use various heuristics to determine drag speed based on which components are present.
-        drag.drag_speed = if let Some(SoftLimit(nrange)) = soft_limit {
-            match nrange {
-                NumberInputRange::F32(range) => (range.end - range.start) as f64 / slider_size,
-                NumberInputRange::F64(range) => (range.end - range.start) / slider_size,
-                NumberInputRange::I32(range) => (range.end - range.start) as f64 / slider_size,
-                NumberInputRange::I64(range) => (range.end - range.start) as f64 / slider_size,
-            }
-        } else if let Some(NumberInputStep(step)) = step {
-            *step * BASE_DRAG_SPEED
-        } else if matches!(
-            input_value.format(),
-            ScrubNumberFormat::I32 | ScrubNumberFormat::I64
-        ) {
-            // Treat integers as having a step size of 1
-            BASE_DRAG_SPEED
-        } else if let Some(prec) = precision {
-            // Derive from precision
-            10.0_f64.powf(-(prec.0 as f64))
-        } else {
-            // No clues present, so we'll have to guess. Use an adaptive algorithm based on
-            // present value; this determines the nearest power of 10 to the current magnitude.
-            let m = input_value.as_f64().abs();
-            let decade = if m >= 1.0 { m.log10().floor() } else { 0.0 };
-            BASE_DRAG_SPEED * 10f64.powf(decade)
-        };
+        drag.drag_speed = compute_drag_speed(soft_limit, step, precision, input_value, slider_size);
 
         set_slidebar_styles(
             text_id,
@@ -1294,6 +1344,184 @@ pub fn is_scrubbing_or_focused(world: &World, root: Entity, focus: Option<Entity
         children.iter().any(|&child| walk(world, child, focus))
     }
     walk(world, root, focus)
+}
+
+/// Returns `true` while `root`'s editable-text descendant holds keyboard
+/// focus, meaning the user is mid-type. Unlike [`is_scrubbing_or_focused`],
+/// this does not guard an in-progress drag: the caller's re-inserted value and
+/// the drag's relative math (`ScrubberDragState::base_value` + `value_offset`,
+/// on a private child entity untouched by inserting `ScrubNumberInputValue`)
+/// never read from each other, so a resync mid-drag clobbers nothing. Use this
+/// where the drag gesture itself is the source of the resync (`ValueChange` ->
+/// app state -> resync within one frame), so live drag feedback is not
+/// suppressed for the span of the drag.
+pub fn is_focused_for_editing(world: &World, root: Entity, focus: Option<Entity>) -> bool {
+    fn walk(world: &World, entity: Entity, focus: Option<Entity>) -> bool {
+        if focus == Some(entity) && world.get::<EditableText>(entity).is_some() {
+            return true;
+        }
+        let Some(children) = world.get::<Children>(entity) else {
+            return false;
+        };
+        children.iter().any(|&child| walk(world, child, focus))
+    }
+    walk(world, root, focus)
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    /// A brush radius arriving from a scroll-wheel resize is a scaled `f32`,
+    /// and printing it raw puts `1.889105` in a field asking for two
+    /// places.
+    #[test]
+    fn a_fractional_value_shows_its_fields_precision_not_float_noise() {
+        let noisy = ScrubNumberInputValue::F32(1.889105);
+        assert_eq!(
+            display_digits(&noisy, Some(&NumberInputPrecision(2))),
+            "1.89",
+        );
+        assert_eq!(display_digits(&noisy, Some(&NumberInputPrecision(0))), "2");
+    }
+
+    /// A count field shows no decimal point, so Seed and Octaves do not read
+    /// as `42.00`.
+    #[test]
+    fn a_count_precision_shows_whole_numbers() {
+        assert_eq!(
+            display_digits(
+                &ScrubNumberInputValue::F32(42.0),
+                Some(&NumberInputPrecision(0))
+            ),
+            "42",
+        );
+        assert_eq!(
+            display_digits(
+                &ScrubNumberInputValue::I32(42),
+                Some(&NumberInputPrecision(2))
+            ),
+            "42",
+            "an integer kind has no decimals to pad",
+        );
+    }
+
+    /// Without a precision there is nothing to round to, and the value keeps
+    /// its own spelling.
+    #[test]
+    fn a_field_with_no_precision_keeps_the_values_own_digits() {
+        assert_eq!(
+            display_digits(&ScrubNumberInputValue::F32(1.889105), None),
+            "1.889105"
+        );
+    }
+
+    /// A value landing on a whole number mid-drag keeps its padding, so the
+    /// digits do not jump between `4` and `4.25`.
+    #[test]
+    fn a_whole_value_still_shows_its_fields_places() {
+        assert_eq!(
+            display_digits(
+                &ScrubNumberInputValue::F32(4.0),
+                Some(&NumberInputPrecision(2))
+            ),
+            "4.00",
+        );
+    }
+}
+
+#[cfg(test)]
+mod drag_speed_tests {
+    use super::*;
+
+    /// A wider box, checking that sensitivity scales with width rather than
+    /// being pinned to one field size.
+    const ROW_WIDTH: f64 = 88.0;
+    /// The options-bar chip's own scrub box (`SCRUB_CHIP_INPUT_WIDTH` in
+    /// `src/terrain/ui_fields.rs`).
+    const CHIP_WIDTH: f64 = 64.0;
+
+    /// A bounded 0-1 field (Persistence, Inertia, Deposition, Evaporation)
+    /// maps the field's own width to the full range, so dragging across a
+    /// panel row moves 0 -> 1 exactly.
+    #[test]
+    fn zero_to_one_range_spans_its_own_field_width() {
+        let limit = SoftLimit::f32(0.0..1.0);
+        let speed = compute_drag_speed(
+            Some(&limit),
+            None,
+            None,
+            &ScrubNumberInputValue::F32(0.45),
+            ROW_WIDTH,
+        );
+        assert_eq!(speed * ROW_WIDTH, 1.0, "edge-to-edge drag covers the range");
+        // A single pixel is a small, but non-zero and non-coarse, nudge.
+        assert!(
+            (0.005..0.05).contains(&speed),
+            "1px nudge should be a fine adjustment, got {speed}",
+        );
+    }
+
+    /// Same range, narrower chip: sensitivity scales with the box being
+    /// dragged across, not a fixed pixel count.
+    #[test]
+    fn zero_to_one_range_scales_with_chip_width() {
+        let limit = SoftLimit::f32(0.0..1.0);
+        let speed = compute_drag_speed(
+            Some(&limit),
+            None,
+            None,
+            &ScrubNumberInputValue::F32(0.45),
+            CHIP_WIDTH,
+        );
+        assert_eq!(speed * CHIP_WIDTH, 1.0);
+    }
+
+    /// A wide range (Amplitude, 0..200) resolves edge-to-edge, so a
+    /// full-width drag is never a no-op even though each pixel moves the
+    /// value further.
+    #[test]
+    fn wide_range_still_spans_full_drag_without_going_dead() {
+        let limit = SoftLimit::f32(0.0..200.0);
+        let speed = compute_drag_speed(
+            Some(&limit),
+            None,
+            None,
+            &ScrubNumberInputValue::F32(50.0),
+            ROW_WIDTH,
+        );
+        assert!(speed > 0.0, "must move the value on any drag distance");
+        assert!(
+            (speed * ROW_WIDTH - 200.0).abs() < 1e-9,
+            "edge-to-edge drag should cover the range, got {}",
+            speed * ROW_WIDTH
+        );
+    }
+
+    /// A whole-frame relative-scrub simulation: starting at 0.45 and dragging
+    /// the full row width right-to-left (negative delta) lands on the bottom
+    /// of the soft range.
+    #[test]
+    fn full_width_drag_right_to_left_reaches_the_bottom_of_the_range() {
+        let limit = SoftLimit::f32(0.0..1.0);
+        let base = ScrubNumberInputValue::F32(0.45);
+        let speed = compute_drag_speed(Some(&limit), None, None, &base, ROW_WIDTH);
+
+        let mut drag_state = ScrubberDragState {
+            dragging: true,
+            drag_speed: speed,
+            value_offset: 0.0,
+            max_distance: 0.0,
+            base_value: base,
+        };
+        // Drag the full field width leftward, in one step (matches the
+        // math `scrubber_on_drag` does per pointer-move event).
+        drag_state.value_offset += -ROW_WIDTH * speed;
+
+        let mut value = drag_state.base_value.offset_by(drag_state.value_offset);
+        value = limit.0.clamp(value);
+        assert_eq!(value, ScrubNumberInputValue::F32(0.0));
+    }
 }
 
 /// Plugin which keeps number-input slidebar colors in sync with the theme.

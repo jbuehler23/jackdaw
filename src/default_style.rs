@@ -89,24 +89,23 @@ pub const MARKER_SIZE: f32 = 0.008;
 pub const MEASURE_TOOL_LINE: Color = Color::srgb(1.0, 0.84, 0.0);
 pub const MEASURE_TOOL_LABEL: Color = Color::srgba(1.0, 0.84, 0.0, 1.0);
 
-// -- Navmesh visualization --
-pub const NAVMESH_DETAIL_WIREFRAME: Color = Color::srgb(0.204, 0.827, 0.600);
-pub const NAVMESH_POLYGON_WIREFRAME: Color = Color::srgb(0.984, 0.749, 0.141);
-pub const NAVMESH_POLYGON_FILL: Color = Color::srgba(0.145, 0.388, 0.922, 0.2);
-pub const NAVMESH_OBSTACLE_WIREFRAME: Color = Color::srgb(0.761, 0.255, 0.047);
-pub const NAVMESH_REGION_BOUNDS: Color = Color::srgba(0.2, 0.8, 0.4, 0.6);
-pub const NAVMESH_AREA_0: Color = Color::srgba(0.0, 0.4, 0.8, 0.25);
-pub const NAVMESH_AREA_1: Color = Color::srgba(0.8, 0.4, 0.0, 0.25);
-pub const NAVMESH_AREA_2: Color = Color::srgba(0.8, 0.0, 0.4, 0.25);
-pub const NAVMESH_AREA_3: Color = Color::srgba(0.4, 0.0, 0.8, 0.25);
-pub const NAVMESH_AREA_DEFAULT: Color = Color::srgba(0.5, 0.5, 0.5, 0.25);
-
 // -- Grid --
 pub const GRID_MAJOR_LINE: Color = Color::srgb(0.3, 0.3, 0.3);
 pub const GRID_MINOR_LINE: Color = Color::srgb(0.25, 0.25, 0.25);
 
 // -- Terrain --
 pub const TERRAIN_SCULPT_GIZMO: Color = Color::srgb(1.0, 0.8, 0.2);
+/// Region boundaries on the selected terrain. Dimmer than the brush ring, which
+/// tracks the pointer, since the grid is drawn the whole time a terrain tool is
+/// out.
+pub const TERRAIN_REGION_GRID: Color = Color::srgba(0.85, 0.87, 0.92, 0.6);
+/// The active region's border: the editor's accent, matching a selected tab.
+pub const TERRAIN_REGION_ACTIVE: Color = jackdaw_feathers::tokens::ACCENT_BLUE;
+/// Outlines of the baked navmesh's walkable polygons.
+pub const TERRAIN_NAVMESH_OVERLAY: Color = Color::srgba(0.35, 0.85, 0.45, 0.85);
+/// The same outlines once the heights beneath them have changed: amber, the
+/// editor's colour for a value that does not match its source.
+pub const TERRAIN_NAVMESH_STALE: Color = Color::srgba(0.95, 0.70, 0.25, 0.85);
 
 // -- Material preview --
 pub const MATERIAL_PREVIEW_BG: Color = Color::srgba(0.15, 0.15, 0.15, 1.0);

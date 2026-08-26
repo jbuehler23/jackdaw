@@ -68,11 +68,10 @@ pub fn hydraulic_erosion(heights: &mut [f32], resolution: u32, params: &ErosionP
     let mut rng = rand::rng();
     let iterations = clamp_iterations(params.iterations);
 
-    // Precompute erosion brush weights
     let brush = compute_erosion_brush(params.erosion_radius as i32);
 
     for _ in 0..iterations {
-        // Random start position (avoid edges)
+        // Clear of the edges, which the gradient reads past.
         let mut pos_x = rng.random_range(1.0..(res - 2) as f32);
         let mut pos_z = rng.random_range(1.0..(res - 2) as f32);
         let mut dir_x = 0.0_f32;
@@ -85,19 +84,15 @@ pub fn hydraulic_erosion(heights: &mut [f32], resolution: u32, params: &ErosionP
             let node_x = pos_x as i32;
             let node_z = pos_z as i32;
 
-            // Offset within cell
             let cell_offset_x = pos_x - node_x as f32;
             let cell_offset_z = pos_z - node_z as f32;
 
-            // Compute gradient via bilinear interpolation
             let (grad_x, grad_z, height) =
                 compute_gradient(heights, res, node_x, node_z, cell_offset_x, cell_offset_z);
 
-            // Update direction with inertia
             dir_x = dir_x * params.inertia - grad_x * (1.0 - params.inertia);
             dir_z = dir_z * params.inertia - grad_z * (1.0 - params.inertia);
 
-            // Normalize direction
             let len = (dir_x * dir_x + dir_z * dir_z).sqrt();
             if len < 1e-6 {
                 // Random direction if flat
@@ -109,17 +104,14 @@ pub fn hydraulic_erosion(heights: &mut [f32], resolution: u32, params: &ErosionP
                 dir_z /= len;
             }
 
-            // Move droplet
             let new_x = pos_x + dir_x;
             let new_z = pos_z + dir_z;
 
-            // Check bounds
             if new_x < 1.0 || new_x >= (res - 2) as f32 || new_z < 1.0 || new_z >= (res - 2) as f32
             {
                 break;
             }
 
-            // Height at new position
             let new_node_x = new_x as i32;
             let new_node_z = new_z as i32;
             let new_cell_x = new_x - new_node_x as f32;
@@ -129,13 +121,12 @@ pub fn hydraulic_erosion(heights: &mut [f32], resolution: u32, params: &ErosionP
 
             let height_diff = new_height - height;
 
-            // Sediment capacity
             let c = (-height_diff).max(params.min_slope) * speed * water * params.capacity;
 
             if sediment > c || height_diff > 0.0 {
-                // Deposit sediment
                 let deposit = if height_diff > 0.0 {
-                    // Uphill: deposit proportional to height diff, but not more than sediment
+                    // Uphill: deposit up to the height difference, never
+                    // more than the sediment carried.
                     height_diff.min(sediment)
                 } else {
                     (sediment - c) * params.deposition
@@ -152,14 +143,12 @@ pub fn hydraulic_erosion(heights: &mut [f32], resolution: u32, params: &ErosionP
                     deposit,
                 );
             } else {
-                // Erode terrain
                 let erode_amount = ((c - sediment) * params.erosion).min(-height_diff);
 
                 erode_at(heights, res, node_x, node_z, erode_amount, &brush);
                 sediment += erode_amount;
             }
 
-            // Update droplet state
             speed = ((speed * speed + height_diff * params.gravity).max(0.0)).sqrt();
             water *= 1.0 - params.evaporation;
 
@@ -191,7 +180,6 @@ fn compute_erosion_brush(radius: i32) -> ErosionBrush {
         }
     }
 
-    // Normalize
     if weight_sum > 0.0 {
         for w in &mut weights {
             *w /= weight_sum;
@@ -236,7 +224,6 @@ fn deposit_at(
     offset_z: f32,
     amount: f32,
 ) {
-    // Distribute deposit via bilinear weights to the four surrounding vertices
     let w_nw = (1.0 - offset_x) * (1.0 - offset_z);
     let w_ne = offset_x * (1.0 - offset_z);
     let w_sw = (1.0 - offset_x) * offset_z;
@@ -269,7 +256,6 @@ fn erode_at(
 mod tests {
     use super::*;
 
-    /// An iteration count is capped regardless of what requested it.
     #[test]
     fn a_pathological_iteration_count_is_clamped() {
         assert_eq!(clamp_iterations(u32::MAX), MAX_ITERATIONS);

@@ -132,13 +132,29 @@ struct TooltipState {
 /// Tick the hover delay and spawn / despawn the tooltip popover.
 /// Two-stage: a glance gets the title, lingering
 /// expands to the full description + signature.
+///
+/// Any pointer button held down, from mouse-down through release and so for
+/// the span of a drag-scrub gesture, tears down and blocks the tooltip. The
+/// check runs before the hover lookup, so it applies to every `Tooltip`
+/// consumer without a per-call-site opt-in.
 fn tick_tooltip(
     time: Res<Time>,
     targets: Query<(Entity, &Tooltip, &Hovered)>,
     window: Single<&Window, With<PrimaryWindow>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    default_font: Res<crate::icons::FeathersDefaultFont>,
     mut state: ResMut<TooltipState>,
     mut commands: Commands,
 ) {
+    if mouse.get_pressed().next().is_some() {
+        if let Some(active) = state.active.take() {
+            commands.entity(active).try_despawn();
+        }
+        state.pending = None;
+        state.stage = TooltipStage::None;
+        return;
+    }
+
     let hovered = targets
         .iter()
         .find_map(|(entity, tip, hover)| hover.get().then_some((entity, tip)));
@@ -198,13 +214,13 @@ fn tick_tooltip(
                     bevy::picking::Pickable::IGNORE,
                 ))
                 .id();
-            spawn_title(&mut commands, popover_entity, tip);
+            spawn_title(&mut commands, popover_entity, tip, &default_font.0);
             state.active = Some(popover_entity);
             state.stage = TooltipStage::Title;
         }
         TooltipStage::Title if elapsed >= FULL_HOVER_DELAY => {
             if let Some(popover) = state.active {
-                spawn_body(&mut commands, popover, tip);
+                spawn_body(&mut commands, popover, tip, &default_font.0);
                 state.stage = TooltipStage::Full;
             }
         }
@@ -224,7 +240,12 @@ fn tick_tooltip(
 /// popover root being click-through is not enough; without this, a
 /// text run hovering over a picker row would still capture the click
 /// and the underlying row would never see it.
-fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
+fn spawn_title(
+    commands: &mut Commands,
+    popover: Entity,
+    tip: &Tooltip,
+    default_font: &Handle<Font>,
+) {
     if tip.title.is_empty() {
         return;
     }
@@ -232,6 +253,7 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
         commands.spawn((
             Text::new(tip.title.clone()),
             TextFont {
+                font: default_font.into(),
                 font_size: tokens::TEXT_SIZE_SM,
                 weight: FontWeight::MEDIUM,
                 ..default()
@@ -256,6 +278,7 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
         .with_child((
             Text::new(tip.title.clone()),
             TextFont {
+                font: default_font.into(),
                 font_size: tokens::TEXT_SIZE_SM,
                 weight: FontWeight::MEDIUM,
                 ..default()
@@ -266,6 +289,7 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
         .with_child((
             Text::new(tip.keybind.clone()),
             TextFont {
+                font: default_font.into(),
                 font_size: tokens::TEXT_SIZE_SM,
                 ..default()
             },
@@ -278,11 +302,17 @@ fn spawn_title(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
 /// is the meaningful body the reader is here for, so it gets primary
 /// weight; the footer (signature / type path) is dim metadata and gets
 /// the darker grey.
-fn spawn_body(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
+fn spawn_body(
+    commands: &mut Commands,
+    popover: Entity,
+    tip: &Tooltip,
+    default_font: &Handle<Font>,
+) {
     if !tip.description.is_empty() {
         commands.spawn((
             Text::new(tip.description.clone()),
             TextFont {
+                font: default_font.into(),
                 font_size: tokens::TEXT_SIZE_SM,
                 ..default()
             },
@@ -295,6 +325,7 @@ fn spawn_body(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
         commands.spawn((
             Text::new(tip.footer.clone()),
             TextFont {
+                font: default_font.into(),
                 font_size: tokens::TEXT_SIZE_SM,
                 ..default()
             },
@@ -302,5 +333,127 @@ fn spawn_body(commands: &mut Commands, popover: Entity, tip: &Tooltip) {
             bevy::picking::Pickable::IGNORE,
             ChildOf(popover),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// Bare `World` with what `tick_tooltip` reads: `Time`, the mouse button
+    /// table, `TooltipState`, and a stand-in primary window. The system reads
+    /// only the window's cursor position, so a bare `Window` with no backend
+    /// suffices.
+    fn test_world() -> World {
+        let mut world = World::new();
+        world.init_resource::<Time>();
+        world.init_resource::<ButtonInput<MouseButton>>();
+        world.init_resource::<TooltipState>();
+        world.insert_resource(crate::icons::FeathersDefaultFont(Handle::default()));
+        world.spawn((Window::default(), PrimaryWindow));
+        world
+    }
+
+    fn tick(world: &mut World) {
+        world.run_system_once(tick_tooltip).unwrap();
+    }
+
+    fn advance(world: &mut World, dur: Duration) {
+        world.resource_mut::<Time>().advance_by(dur);
+    }
+
+    fn popover_count(world: &mut World) -> usize {
+        world
+            .query_filtered::<Entity, With<popover::EditorPopover>>()
+            .iter(world)
+            .count()
+    }
+
+    /// Hovering a tagged entity past `SHORT_HOVER_DELAY` spawns the popover,
+    /// the baseline the suppression tests build on.
+    #[test]
+    fn hover_past_delay_spawns_popover() {
+        let mut world = test_world();
+        world.spawn((
+            Tooltip::title("Persistence").with_description("desc"),
+            Hovered(true),
+        ));
+
+        tick(&mut world);
+        assert_eq!(popover_count(&mut world), 0, "not spawned before the delay");
+
+        advance(&mut world, SHORT_HOVER_DELAY);
+        tick(&mut world);
+        assert_eq!(
+            popover_count(&mut world),
+            1,
+            "spawned once the delay elapses"
+        );
+    }
+
+    /// A tooltip already showing disappears when a mouse button goes down,
+    /// even while still hovering its anchor.
+    #[test]
+    fn mouse_down_dismisses_an_open_tooltip() {
+        let mut world = test_world();
+        world.spawn((
+            Tooltip::title("Persistence").with_description("desc"),
+            Hovered(true),
+        ));
+        advance(&mut world, SHORT_HOVER_DELAY);
+        tick(&mut world);
+        assert_eq!(popover_count(&mut world), 1);
+
+        world
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        tick(&mut world);
+        assert_eq!(popover_count(&mut world), 0, "mouse-down must close it");
+    }
+
+    /// While a button stays held, over the span of a drag-scrub gesture, the
+    /// tooltip does not reappear even after the hover delay has elapsed.
+    #[test]
+    fn held_button_suppresses_the_tooltip_through_a_long_hover() {
+        let mut world = test_world();
+        world.spawn((
+            Tooltip::title("Persistence").with_description("desc"),
+            Hovered(true),
+        ));
+        world
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+
+        tick(&mut world);
+        advance(&mut world, FULL_HOVER_DELAY * 2);
+        tick(&mut world);
+        assert_eq!(
+            popover_count(&mut world),
+            0,
+            "held button must block the tooltip for as long as the drag lasts"
+        );
+    }
+
+    /// Once the button is released, the tooltip re-arms and shows again after
+    /// the hover delay: suppression is a hold, not a one-shot latch.
+    #[test]
+    fn releasing_the_button_re_arms_the_tooltip() {
+        let mut world = test_world();
+        world.spawn((
+            Tooltip::title("Persistence").with_description("desc"),
+            Hovered(true),
+        ));
+        world
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        tick(&mut world);
+
+        world
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        advance(&mut world, SHORT_HOVER_DELAY);
+        tick(&mut world);
+        assert_eq!(popover_count(&mut world), 1, "re-arms after release");
     }
 }

@@ -261,6 +261,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::history_ops::add_to_extension(ctx);
         crate::app_ops::add_to_extension(ctx);
         crate::view_ops::add_to_extension(ctx);
+        crate::fps_overlay::add_to_extension(ctx);
         crate::grid_ops::add_to_extension(ctx);
         crate::gizmo_ops::add_to_extension(ctx);
         crate::tool_ops::add_to_extension(ctx);
@@ -271,6 +272,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::physics_tool::add_to_extension(ctx);
         crate::hierarchy::add_to_extension(ctx);
         crate::file_ops::add_to_extension(ctx);
+        crate::material_assets::add_to_extension(ctx);
         crate::viewport_select::add_to_extension(ctx);
         crate::clip_ops::add_to_extension(ctx);
         crate::brush_element_ops::add_to_extension(ctx);
@@ -313,13 +315,18 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::brush::knife_mode::add_to_extension(ctx);
         crate::gizmos::add_to_extension(ctx);
         crate::terrain::sculpt::add_to_extension(ctx);
-        crate::navmesh::ops::add_to_extension(ctx);
         crate::pie::add_to_extension(ctx);
         crate::terrain::ops::add_to_extension(ctx);
+        crate::terrain::regions::add_to_extension(ctx);
+        crate::terrain::navmesh_bake::add_to_extension(ctx);
         crate::terrain::paint::add_to_extension(ctx);
         crate::terrain::channel_ops::add_to_extension(ctx);
         crate::terrain::quantize_ops::add_to_extension(ctx);
+        crate::terrain::shape_ops::add_to_extension(ctx);
         crate::terrain::scatter::add_to_extension(ctx);
+        crate::terrain::panel::add_to_extension(ctx);
+        crate::terrain::texture_ops::add_to_extension(ctx);
+        crate::terrain::autoterrain_ops::add_to_extension(ctx);
         crate::asset_browser::add_to_extension(ctx);
         crate::material_browser::add_to_extension(ctx);
         crate::inspector::ops::add_to_extension(ctx);

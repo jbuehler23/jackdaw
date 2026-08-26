@@ -3,21 +3,24 @@ use std::path::{Path, PathBuf};
 use bevy::{
     feathers::theme::ThemedText,
     image::ImageLoaderSettings,
-    picking::hover::Hovered,
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
     window::{PrimaryWindow, RawHandleWrapper},
 };
 use jackdaw_feathers::{
     button::{ButtonOperatorCall, ButtonVariant, IconButtonProps, icon_button},
-    icons,
-    text_edit::{self, TextEditCommitEvent, TextEditDragging, TextEditProps, TextEditValue},
+    icons::{self, Icon},
+    panel_card::PanelCardCollapseState,
+    text_edit::{self, TextEditProps, TextEditValue},
     tokens,
-    tooltip::Tooltip,
 };
 use rfd::AsyncFileDialog;
 
 use crate::brush::LastUsedMaterial;
+use crate::material_ui::{
+    ActionHeaderProps, HeaderAction, MaterialSection, TextureSlot, fill_surface_rows,
+    fill_texture_rows, library_actions, spawn_action_header, spawn_preview, spawn_section,
+};
 use crate::{
     EditorEntity,
     brush::{Brush, BrushEditMode, BrushSelection, EditMode, SetBrush},
@@ -32,14 +35,16 @@ pub struct MaterialBrowserPlugin;
 
 impl Plugin for MaterialBrowserPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<MaterialBrowserState>()
+        app.add_plugins(crate::material_assets::plugin)
+            .init_resource::<MaterialBrowserState>()
             .init_resource::<MaterialPreviewState>()
             .init_resource::<MaterialRegistry>()
+            .init_resource::<crate::material_assets::SavedMaterials>()
             .add_systems(
                 OnEnter(crate::AppState::Editor),
                 (
                     |world: &mut World| crate::asset_catalog::load_catalog(world),
-                    scan_material_definitions,
+                    rebuild_material_registry,
                     |world: &mut World| crate::asset_catalog::save_catalog(world),
                 )
                     .chain(),
@@ -60,45 +65,12 @@ impl Plugin for MaterialBrowserPlugin {
             .add_observer(on_material_grid_added)
             .add_observer(handle_apply_material)
             .add_observer(handle_select_material_preview)
-            .add_observer(on_material_param_commit)
             .add_observer(handle_browse_texture_slot)
             .add_observer(handle_clear_texture_slot);
     }
 }
 
-/// Simple registry of named materials for browsing.
-#[derive(Resource, Default)]
-pub struct MaterialRegistry {
-    pub entries: Vec<MaterialRegistryEntry>,
-}
-
-pub struct MaterialRegistryEntry {
-    pub name: String,
-    pub handle: Handle<StandardMaterial>,
-}
-
-impl MaterialRegistry {
-    pub fn get_by_name(&self, name: &str) -> Option<&MaterialRegistryEntry> {
-        self.entries.iter().find(|e| e.name == name)
-    }
-
-    pub fn add(&mut self, name: String, handle: Handle<StandardMaterial>) {
-        self.entries.push(MaterialRegistryEntry { name, handle });
-    }
-
-    /// Insert a "None" entry at the top of the list if one isn't already present.
-    pub fn ensure_none_entry(&mut self) {
-        if !self.entries.iter().any(|e| e.handle == Handle::default()) {
-            self.entries.insert(
-                0,
-                MaterialRegistryEntry {
-                    name: "None".to_string(),
-                    handle: Handle::default(),
-                },
-            );
-        }
-    }
-}
+pub use crate::material_assets::{MaterialRegistry, MaterialRegistryEntry};
 
 #[derive(Resource, Default)]
 pub struct MaterialBrowserState {
@@ -132,112 +104,14 @@ struct MaterialBrowserRootLabel;
 #[derive(Resource)]
 struct MaterialBrowserFolderTask(Task<Option<rfd::FileHandle>>);
 
-/// Container for the interactive preview area (shown when a material is selected).
+/// Fixed bar under the panel title holding the material action header. Outside the
+/// scrolling body, so the actions stay put.
+#[derive(Component)]
+struct MaterialActionBar;
+
+/// Container for the editing sections shown for the selected material.
 #[derive(Component)]
 struct PreviewAreaContainer;
-
-/// The `ImageNode` displaying the render-to-texture preview.
-#[derive(Component)]
-struct PreviewAreaImage;
-
-/// Text label showing the selected material name in the preview area.
-#[derive(Component)]
-struct PreviewAreaLabel;
-
-/// Identifies which material parameter a numeric input controls.
-#[derive(Component, Clone, Copy, PartialEq, Eq)]
-enum MaterialParamInput {
-    ParallaxDepthScale,
-    MaxParallaxLayers,
-    PerceptualRoughness,
-    Metallic,
-    Reflectance,
-}
-
-/// Identifies a texture slot on `StandardMaterial`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum TextureSlot {
-    BaseColorTexture,
-    NormalMapTexture,
-    MetallicRoughnessTexture,
-    EmissiveTexture,
-    OcclusionTexture,
-    DepthMap,
-}
-
-impl TextureSlot {
-    const ALL: [TextureSlot; 6] = [
-        TextureSlot::BaseColorTexture,
-        TextureSlot::NormalMapTexture,
-        TextureSlot::MetallicRoughnessTexture,
-        TextureSlot::EmissiveTexture,
-        TextureSlot::OcclusionTexture,
-        TextureSlot::DepthMap,
-    ];
-
-    fn label(self) -> &'static str {
-        match self {
-            TextureSlot::BaseColorTexture => "base_color_texture",
-            TextureSlot::NormalMapTexture => "normal_map_texture",
-            TextureSlot::MetallicRoughnessTexture => "metallic_roughness_texture",
-            TextureSlot::EmissiveTexture => "emissive_texture",
-            TextureSlot::OcclusionTexture => "occlusion_texture",
-            TextureSlot::DepthMap => "depth_map",
-        }
-    }
-
-    fn is_srgb(self) -> bool {
-        matches!(
-            self,
-            TextureSlot::BaseColorTexture | TextureSlot::EmissiveTexture
-        )
-    }
-
-    fn get_from(self, mat: &StandardMaterial) -> Option<Handle<Image>> {
-        match self {
-            TextureSlot::BaseColorTexture => mat.base_color_texture.clone(),
-            TextureSlot::NormalMapTexture => mat.normal_map_texture.clone(),
-            TextureSlot::MetallicRoughnessTexture => mat.metallic_roughness_texture.clone(),
-            TextureSlot::EmissiveTexture => mat.emissive_texture.clone(),
-            TextureSlot::OcclusionTexture => mat.occlusion_texture.clone(),
-            TextureSlot::DepthMap => mat.depth_map.clone(),
-        }
-    }
-
-    fn set_on(self, mat: &mut StandardMaterial, handle: Option<Handle<Image>>) {
-        match self {
-            TextureSlot::BaseColorTexture => mat.base_color_texture = handle,
-            TextureSlot::NormalMapTexture => mat.normal_map_texture = handle,
-            TextureSlot::MetallicRoughnessTexture => {
-                mat.metallic_roughness_texture = handle;
-                if mat.metallic_roughness_texture.is_some() {
-                    // When a metallic/roughness texture is present, scalars multiply the
-                    // texture values. Default both to 1.0 so the texture is used as-is.
-                    mat.metallic = 1.0;
-                    mat.perceptual_roughness = 1.0;
-                }
-            }
-            TextureSlot::EmissiveTexture => mat.emissive_texture = handle,
-            TextureSlot::OcclusionTexture => mat.occlusion_texture = handle,
-            TextureSlot::DepthMap => {
-                let has_depth = handle.is_some();
-                mat.depth_map = handle;
-                if has_depth {
-                    if mat.parallax_depth_scale == 0.0 {
-                        mat.parallax_depth_scale = 0.05;
-                    }
-                    if mat.max_parallax_layer_count == 0.0 {
-                        mat.max_parallax_layer_count = 32.0;
-                    }
-                    mat.parallax_mapping_method = bevy::pbr::ParallaxMappingMethod::Occlusion;
-                } else {
-                    mat.parallax_depth_scale = 0.0;
-                    mat.max_parallax_layer_count = 0.0;
-                }
-            }
-        }
-    }
-}
 
 #[derive(Event)]
 struct BrowseTextureSlot {
@@ -256,30 +130,6 @@ struct TextureSlotPickTask {
     task: Task<Option<rfd::FileHandle>>,
     slot: TextureSlot,
     material_handle: Handle<StandardMaterial>,
-}
-
-/// Returns `true` if the PNG file uses 16-bit (or higher) bit depth.
-///
-/// Bevy decodes such PNGs as `R16Uint` which is incompatible with
-/// `StandardMaterial`'s float-filterable `depth_map` slot.
-fn is_16bit_png(path: &Path) -> bool {
-    if !path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("png"))
-    {
-        return false;
-    }
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return false;
-    };
-    use std::io::Read;
-    // PNG layout: 8-byte signature, then IHDR chunk (4 len + 4 type + 13 data).
-    // Byte 24 (offset 24) is the bit depth field inside IHDR.
-    let mut header = [0u8; 25];
-    if file.read_exact(&mut header).is_err() {
-        return false;
-    }
-    header[24] >= 16
 }
 
 /// Load a texture path into an `Image` handle for the given role, choosing the
@@ -303,72 +153,64 @@ fn load_role_image(
     }
 }
 
-/// Scan a directory for PBR texture sets and create `StandardMaterial` assets.
-fn detect_and_create_materials(
-    dir: &Path,
-    asset_server: &AssetServer,
-    materials: &mut Assets<StandardMaterial>,
-) -> Vec<(String, Handle<StandardMaterial>)> {
+/// Scan a directory for PBR texture sets. `group_texture_sets` already returns
+/// them sorted by base name.
+fn detect_material_sets(dir: &Path) -> Vec<jackdaw_material::MaterialSet> {
     let mut paths = Vec::new();
     collect_texture_paths(dir, &mut paths);
+    jackdaw_material::group_texture_sets(&paths)
+}
 
-    let sets = jackdaw_material::group_texture_sets(&paths);
+/// Bind a detected set's files to a fresh `StandardMaterial`.
+fn material_from_set(
+    set: &jackdaw_material::MaterialSet,
+    asset_server: &AssetServer,
+    materials: &mut Assets<StandardMaterial>,
+) -> Handle<StandardMaterial> {
+    use jackdaw_material::TextureRole;
 
-    let mut results = Vec::new();
-    for set in sets {
-        use jackdaw_material::TextureRole;
+    let base_color_texture = set
+        .base_color
+        .as_deref()
+        .map(|p| load_role_image(TextureRole::BaseColor, p, asset_server));
+    let normal_map_texture = set
+        .normal
+        .as_deref()
+        .map(|p| load_role_image(TextureRole::Normal, p, asset_server));
+    let metallic_roughness_texture = set
+        .metallic_roughness
+        .as_deref()
+        .map(|p| load_role_image(TextureRole::MetallicRoughness, p, asset_server));
+    let emissive_texture = set
+        .emissive
+        .as_deref()
+        .map(|p| load_role_image(TextureRole::Emissive, p, asset_server));
+    let occlusion_texture = set
+        .occlusion
+        .as_deref()
+        .map(|p| load_role_image(TextureRole::Occlusion, p, asset_server));
+    // A 16-bit height map binds like any other: the material asset layer retags the `Uint`
+    // decode as its filterable `Unorm` twin before anything reaches a bind group.
+    let depth_map = set
+        .depth
+        .as_deref()
+        .map(|p| load_role_image(TextureRole::Depth, p, asset_server));
 
-        let base_color_texture = set
-            .base_color
-            .as_deref()
-            .map(|p| load_role_image(TextureRole::BaseColor, p, asset_server));
-        let normal_map_texture = set
-            .normal
-            .as_deref()
-            .map(|p| load_role_image(TextureRole::Normal, p, asset_server));
-        let metallic_roughness_texture = set
-            .metallic_roughness
-            .as_deref()
-            .map(|p| load_role_image(TextureRole::MetallicRoughness, p, asset_server));
-        let emissive_texture = set
-            .emissive
-            .as_deref()
-            .map(|p| load_role_image(TextureRole::Emissive, p, asset_server));
-        let occlusion_texture = set
-            .occlusion
-            .as_deref()
-            .map(|p| load_role_image(TextureRole::Occlusion, p, asset_server));
-        // Skip 16-bit integer PNGs for the depth slot. Bevy decodes them as
-        // R16Uint, which is incompatible with StandardMaterial's
-        // float-filterable depth_map slot. The crate still assigns the depth
-        // candidate; we drop it here, post-hoc, after reading the file header.
-        let depth_map = set
-            .depth
-            .as_deref()
-            .filter(|p| !is_16bit_png(Path::new(p)))
-            .map(|p| load_role_image(TextureRole::Depth, p, asset_server));
-
-        let scalars = set.recommended_scalars();
-        let handle = materials.add(StandardMaterial {
-            base_color_texture,
-            normal_map_texture,
-            metallic_roughness_texture,
-            emissive_texture,
-            occlusion_texture,
-            depth_map,
-            metallic: scalars.metallic,
-            perceptual_roughness: scalars.perceptual_roughness,
-            parallax_depth_scale: scalars.parallax_depth_scale,
-            parallax_mapping_method: bevy::pbr::ParallaxMappingMethod::Occlusion,
-            max_parallax_layer_count: scalars.max_parallax_layer_count,
-            ..default()
-        });
-
-        results.push((set.base_name, handle));
-    }
-
-    // `group_texture_sets` already returns sets sorted by base name.
-    results
+    let scalars = set.recommended_scalars();
+    materials.add(StandardMaterial {
+        base_color_texture,
+        normal_map_texture,
+        metallic_roughness_texture,
+        emissive_texture,
+        occlusion_texture,
+        depth_map,
+        metallic: scalars.metallic,
+        perceptual_roughness: scalars.perceptual_roughness,
+        parallax_depth_scale: scalars.parallax_depth_scale,
+        parallax_mapping_method: bevy::pbr::ParallaxMappingMethod::Occlusion,
+        max_parallax_layer_count: scalars.max_parallax_layer_count,
+        ..default()
+    })
 }
 
 /// Recursively walk a directory, collecting candidate texture file paths as
@@ -398,51 +240,119 @@ fn collect_texture_paths(dir: &Path, paths: &mut Vec<String>) {
     }
 }
 
-fn scan_material_definitions(world: &mut World) {
+/// Rebuild [`MaterialRegistry`] from the catalog plus a fresh scan of both
+/// `assets/materials` and the texture sets under `assets/`.
+///
+/// Saved materials are listed first and win their base name: a detected set
+/// whose name already belongs to a saved material is skipped. Detected sets
+/// enter the in-memory catalog (so `@Name` face references resolve and scene
+/// saves emit them) but stay unsaved until `material.save` writes a file.
+fn rebuild_material_registry(world: &mut World) {
     let assets_dir = world
         .get_resource::<crate::project::ProjectRoot>()
         .map(super::project::ProjectRoot::assets_dir)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("assets"));
     world.resource_mut::<MaterialBrowserState>().scan_directory = assets_dir.clone();
+    world.resource_mut::<MaterialRegistry>().entries.clear();
 
-    let detected = {
-        let asset_server = world.resource::<AssetServer>().clone();
-        let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-        detect_and_create_materials(&assets_dir, &asset_server, &mut materials)
-    };
+    // Material files written since the last scan (by another tool, by hand, or by a second
+    // editor) become saved materials here, without reopening the project.
+    crate::material_assets::rescan_material_files(world);
 
-    for (name, handle) in detected {
-        let already_registered = world
+    let durable = world
+        .resource::<crate::material_assets::SavedMaterials>()
+        .0
+        .clone();
+    let mut saved: Vec<(String, Handle<StandardMaterial>)> = world
+        .resource::<crate::asset_catalog::AssetCatalog>()
+        .handles
+        .iter()
+        .filter(|(name, handle)| {
+            handle.type_id() == std::any::TypeId::of::<StandardMaterial>()
+                && durable.contains(name.trim_start_matches(['@', '#']))
+        })
+        .map(|(name, handle)| {
+            (
+                name.trim_start_matches(['@', '#']).to_string(),
+                handle.clone().typed::<StandardMaterial>(),
+            )
+        })
+        .collect();
+    saved.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, handle) in saved {
+        world
+            .resource_mut::<MaterialRegistry>()
+            .add_saved(name, handle);
+    }
+
+    let sets = detect_material_sets(&assets_dir);
+    info!(
+        "Material scan: {} detected sets in {}",
+        sets.len(),
+        assets_dir.display()
+    );
+    for set in sets {
+        // The registry key, the file stem a save would use and the `@Name` scenes reference
+        // are one string, so detection commits to the file-safe spelling up front.
+        let name = crate::material_assets::sanitize_material_name(&set.base_name);
+        if world
             .resource::<MaterialRegistry>()
             .get_by_name(&name)
-            .is_some();
-        if already_registered {
+            .is_some()
+        {
             continue;
         }
-
         let catalog_name = format!("@{name}");
-        let already_in_catalog = world
+        // Reuse the handle a previous scan published under this name, so a rescan does not
+        // orphan the material on faces that reference it.
+        let existing = world
             .resource::<crate::asset_catalog::AssetCatalog>()
-            .contains_name(&catalog_name);
-        if already_in_catalog {
-            // Use the catalog's existing handle so scene saves find it in id_to_name
-            let catalog_handle = world
-                .resource::<crate::asset_catalog::AssetCatalog>()
-                .handles
-                .get(&catalog_name)
-                .cloned();
-            if let Some(h) = catalog_handle {
+            .handles
+            .get(&catalog_name)
+            .filter(|handle| handle.type_id() == std::any::TypeId::of::<StandardMaterial>())
+            .map(|handle| handle.clone().typed::<StandardMaterial>());
+        let handle = match existing {
+            Some(handle) => handle,
+            None => {
+                let handle = {
+                    let asset_server = world.resource::<AssetServer>().clone();
+                    let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+                    material_from_set(&set, &asset_server, &mut materials)
+                };
                 world
-                    .resource_mut::<MaterialRegistry>()
-                    .add(name, h.typed::<StandardMaterial>());
+                    .resource_mut::<crate::asset_catalog::AssetCatalog>()
+                    .insert(catalog_name, handle.clone().untyped());
+                handle
             }
-        } else {
-            let mut catalog = world.resource_mut::<crate::asset_catalog::AssetCatalog>();
-            catalog.insert(catalog_name, handle.clone().untyped());
-            catalog.dirty = true;
+        };
+        world.resource_mut::<MaterialRegistry>().add(name, handle);
+    }
 
-            world.resource_mut::<MaterialRegistry>().add(name, handle);
+    // Whatever the catalog holds that neither pass claimed: a material created this run and
+    // never saved, or one whose file is gone. It is in memory and references to it resolve,
+    // so it is listed as unsaved.
+    let mut orphans: Vec<(String, Handle<StandardMaterial>)> = world
+        .resource::<crate::asset_catalog::AssetCatalog>()
+        .handles
+        .iter()
+        .filter(|(_, handle)| handle.type_id() == std::any::TypeId::of::<StandardMaterial>())
+        .map(|(name, handle)| {
+            (
+                name.trim_start_matches(['@', '#']).to_string(),
+                handle.clone().typed::<StandardMaterial>(),
+            )
+        })
+        .collect();
+    orphans.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, handle) in orphans {
+        if world
+            .resource::<MaterialRegistry>()
+            .get_by_name(&name)
+            .is_some()
+        {
+            continue;
         }
+        world.resource_mut::<MaterialRegistry>().add(name, handle);
     }
 
     world.resource_mut::<MaterialRegistry>().ensure_none_entry();
@@ -457,63 +367,11 @@ fn on_material_grid_added(
 }
 
 fn rescan_material_definitions(world: &mut World) {
-    let needs_rescan = world.resource::<MaterialBrowserState>().needs_rescan;
-    if !needs_rescan {
+    if !world.resource::<MaterialBrowserState>().needs_rescan {
         return;
     }
-
-    let assets_dir = world
-        .get_resource::<crate::project::ProjectRoot>()
-        .map(super::project::ProjectRoot::assets_dir)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("assets"));
-
-    {
-        let mut state = world.resource_mut::<MaterialBrowserState>();
-        state.needs_rescan = false;
-        state.scan_directory = assets_dir.clone();
-    }
-
-    world.resource_mut::<MaterialRegistry>().entries.clear();
-
-    let detected = {
-        let asset_server = world.resource::<AssetServer>().clone();
-        let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-        detect_and_create_materials(&assets_dir, &asset_server, &mut materials)
-    };
-
-    info!(
-        "Material rescan: found {} materials in {}",
-        detected.len(),
-        assets_dir.display()
-    );
-
-    for (name, handle) in detected {
-        let catalog_name = format!("@{name}");
-        let already_in_catalog = world
-            .resource::<crate::asset_catalog::AssetCatalog>()
-            .contains_name(&catalog_name);
-        if already_in_catalog {
-            // Use the catalog's existing handle so scene saves find it in id_to_name
-            let catalog_handle = world
-                .resource::<crate::asset_catalog::AssetCatalog>()
-                .handles
-                .get(&catalog_name)
-                .cloned();
-            if let Some(h) = catalog_handle {
-                world
-                    .resource_mut::<MaterialRegistry>()
-                    .add(name, h.typed::<StandardMaterial>());
-            }
-        } else {
-            let mut catalog = world.resource_mut::<crate::asset_catalog::AssetCatalog>();
-            catalog.insert(catalog_name, handle.clone().untyped());
-            catalog.dirty = true;
-
-            world.resource_mut::<MaterialRegistry>().add(name, handle);
-        }
-    }
-
-    world.resource_mut::<MaterialRegistry>().ensure_none_entry();
+    world.resource_mut::<MaterialBrowserState>().needs_rescan = false;
+    rebuild_material_registry(world);
 }
 
 fn save_catalog_if_dirty(world: &mut World) {
@@ -547,9 +405,13 @@ fn handle_apply_material(
     mut history: ResMut<CommandHistory>,
     children_query: Query<&Children>,
     mut last_material: ResMut<LastUsedMaterial>,
+    mut catalog: ResMut<crate::asset_catalog::AssetCatalog>,
     mut commands: Commands,
 ) {
     last_material.material = Some(event.material.clone());
+    // The assignment is durable in the scene, so the catalog is rewritten; an unsaved
+    // material stays flagged as needing its own save.
+    catalog.dirty = true;
 
     let active_faces: Vec<usize> = brush_selection
         .active_sub()
@@ -648,474 +510,180 @@ fn handle_select_material_preview(
     }
 }
 
-/// Update the interactive preview area visibility and content.
+/// What the editing sections are built from. A rebuild happens when one of
+/// these changes and at no other time.
+///
+/// No camera state appears here: orbiting or zooming writes
+/// `MaterialPreviewState` every frame of the gesture, and the preview's drag
+/// observer lives inside this subtree, so a rebuild driven by that state would
+/// despawn the observer mid-drag. The preview renders camera state through
+/// `material_preview`'s own systems, which touch no UI.
+///
+/// Values are absent too: structure is rebuilt from this signature, values are
+/// refreshed in place by `material_ui::refresh_material_rows` off
+/// `AssetEvent::Modified`. A row open on two surfaces resyncs through its
+/// binding rather than through a rebuild, which would tear the section down
+/// under the pointer on every drag of the colour picker.
+#[derive(PartialEq, Clone, Debug, Default)]
+struct PreviewAreaBuild {
+    material: Option<AssetId<StandardMaterial>>,
+    name: String,
+    saved: bool,
+    /// Which slots are bound. The rows differ by it (swatch, file name, and
+    /// whether a clear button exists), so binding or clearing a texture rebuilds.
+    slots: Vec<Option<AssetId<Image>>>,
+}
+
+/// Rebuild the action header and the editing sections for the previewed material.
+///
+/// The header rebuilds even with nothing selected, so the actions never move;
+/// Save and Delete disable themselves through their operators' availability.
 fn update_preview_area(
     mut commands: Commands,
     preview_state: Res<MaterialPreviewState>,
     registry: Res<MaterialRegistry>,
     materials: Res<Assets<StandardMaterial>>,
+    collapse: Res<PanelCardCollapseState>,
+    bar_query: Query<(Entity, Option<&Children>), With<MaterialActionBar>>,
     container_query: Query<(Entity, Option<&Children>), With<PreviewAreaContainer>>,
-    dragging_query: Query<(), With<TextEditDragging>>,
-    all_children_query: Query<&Children>,
     icon_font: Res<icons::IconFont>,
+    italic_font: Res<icons::EditorFontItalic>,
     mut last_material: ResMut<LastUsedMaterial>,
+    mut built: Local<Option<PreviewAreaBuild>>,
 ) {
+    let active = preview_state
+        .active_material
+        .clone()
+        .filter(|handle| *handle != Handle::default());
+    let entry = active
+        .as_ref()
+        .and_then(|handle| registry.entries.iter().find(|e| e.handle == *handle));
+    let (name, saved) = entry
+        .map(|entry| (entry.name.clone(), entry.saved))
+        .unwrap_or_else(|| ("No material selected".to_string(), true));
+
+    let material = active.as_ref().and_then(|handle| materials.get(handle));
+    let wanted = preview_area_build(active.as_ref(), &name, saved, material);
+    if built.as_ref() == Some(&wanted) || container_query.is_empty() {
+        return;
+    }
+    *built = Some(wanted);
+
     let icon_font = icon_font.0.clone();
-    if !preview_state.is_changed() {
-        return;
-    }
+    let italic_font = italic_font.0.clone();
 
-    let Ok((container, children)) = container_query.single() else {
-        return;
-    };
-
-    // Don't rebuild while a slider drag is in progress. The drag system
-    // has in-flight commands targeting child entities.
-    if let Some(children) = children {
-        for child in children.iter() {
-            // TextEditDragging lives on the wrapper entity (grandchild of container)
-            if dragging_query.contains(child) {
-                return;
-            }
-            if let Ok(grandchildren) = all_children_query.get(child)
-                && grandchildren.iter().any(|gc| dragging_query.contains(gc))
-            {
-                return;
-            }
-        }
-    }
-
-    // Clear existing children
-    if let Some(children) = children {
-        for child in children.iter() {
-            commands.entity(child).despawn();
-        }
-    }
-
-    let Some(ref active_handle) = preview_state.active_material else {
-        return;
-    };
-
-    // Show the preview image
-    if *active_handle != Handle::default() {
-        let preview_img = preview_state.preview_image.clone();
-        commands.spawn((
-            PreviewAreaImage,
-            ImageNode::new(preview_img),
-            Node {
-                width: Val::Px(tokens::PREVIEW_IMAGE_SIZE),
-                height: Val::Px(tokens::PREVIEW_IMAGE_SIZE),
-                align_self: AlignSelf::Center,
-                ..Default::default()
-            },
-            ChildOf(container),
-        ));
-    }
-
-    // Material name
-    let active_name = registry
-        .entries
-        .iter()
-        .find(|e| e.handle == *active_handle)
-        .map(|e| e.name.clone())
-        .unwrap_or_else(|| format!("{:?}", active_handle.id()));
-    commands.spawn((
-        PreviewAreaLabel,
-        Text::new(active_name),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_PRIMARY),
-        Node {
-            align_self: AlignSelf::Center,
-            margin: UiRect::vertical(Val::Px(tokens::SPACING_XS)),
-            ..Default::default()
-        },
-        ChildOf(container),
-    ));
-
-    // Apply button
-    let handle_for_apply = active_handle.clone();
-    // set the last used material to the active handle, but don't change the material of the current selection
-    // this makes it really nice to draw new brushes after clicking on something without accidentally changing the current selection's material
-    last_material.material = Some(handle_for_apply.clone());
-
-    let apply_btn = commands
-        .spawn((
-            Node {
-                padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_XS)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
-                align_self: AlignSelf::Center,
-                margin: UiRect::top(Val::Px(tokens::SPACING_XS)),
-                ..Default::default()
-            },
-            BackgroundColor(tokens::INPUT_BG),
-            ChildOf(container),
-        ))
-        .id();
-    commands.spawn((
-        Text::new("Apply"),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_PRIMARY),
-        ChildOf(apply_btn),
-    ));
-    commands
-        .entity(apply_btn)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.trigger(ApplyMaterialDefToFaces {
-                material: handle_for_apply.clone(),
-            });
-        });
-    commands.entity(apply_btn).observe(
-        |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
-            if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                bg.0 = tokens::HOVER_BG;
-            }
-        },
-    );
-    commands.entity(apply_btn).observe(
-        |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-            if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                bg.0 = tokens::INPUT_BG;
-            }
-        },
-    );
-
-    // Material parameter sliders
-    let Some(mat) = materials.get(active_handle) else {
-        return;
-    };
-
-    let has_depth = mat.depth_map.is_some();
-
-    commands.spawn((
-        Text::new("Textures"),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        Node {
-            margin: UiRect::top(Val::Px(tokens::SPACING_MD)),
-            ..Default::default()
-        },
-        ChildOf(container),
-    ));
-
-    for slot in TextureSlot::ALL {
-        let tex_handle = slot.get_from(mat);
-        let has_tex = tex_handle.is_some();
-
-        let row = commands
-            .spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(tokens::SPACING_XS),
-                    width: Val::Percent(100.0),
-                    margin: UiRect::top(Val::Px(tokens::SPACING_XS)),
-                    ..Default::default()
-                },
-                ChildOf(container),
-            ))
-            .id();
-
-        // Slot label
-        commands.spawn((
-            Text::new(slot.label()),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-            Node {
-                min_width: Val::Px(140.0),
-                flex_shrink: 0.0,
-                ..Default::default()
-            },
-            ChildOf(row),
-        ));
-
-        // Thumbnail (24x24)
-        if let Some(ref img) = tex_handle {
-            commands.spawn((
-                ImageNode::new(img.clone()),
-                Node {
-                    width: Val::Px(24.0),
-                    height: Val::Px(24.0),
-                    flex_shrink: 0.0,
-                    ..Default::default()
-                },
-                ChildOf(row),
-            ));
-        } else {
-            commands.spawn((
-                Node {
-                    width: Val::Px(24.0),
-                    height: Val::Px(24.0),
-                    flex_shrink: 0.0,
-                    ..Default::default()
-                },
-                BackgroundColor(Color::srgb(0.25, 0.25, 0.25)),
-                ChildOf(row),
-            ));
-        }
-
-        // Texture filename
-        let path_text = tex_handle
-            .as_ref()
-            .and_then(|h| h.path())
-            .and_then(|p| {
-                p.path()
-                    .file_name()
-                    .map(|f| f.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "(none)".to_string());
-        let path_color = tokens::TEXT_SECONDARY;
-        commands.spawn((
-            Text::new(path_text),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(path_color),
-            Node {
-                flex_grow: 1.0,
-                ..Default::default()
-            },
-            ChildOf(row),
-        ));
-
-        // Browse button
-        let browse_handle = active_handle.clone();
-        let browse_btn = commands
-            .spawn((
-                Node {
-                    padding: UiRect::all(Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
-                    ..Default::default()
-                },
-                icons::icon_colored(
-                    icons::Icon::FolderOpen,
-                    tokens::TEXT_SIZE_SM_PX,
-                    icon_font.clone(),
-                    tokens::TEXT_SECONDARY,
-                ),
-                ChildOf(row),
-            ))
-            .id();
-        commands.entity(browse_btn).observe(
-            move |_: On<Pointer<Click>>,
-                  mut pending: ResMut<PendingTextureSlot>,
-                  mut commands: Commands| {
-                pending.slot = Some(slot);
-                pending.material_handle = Some(browse_handle.clone());
-                commands.operator(MaterialBrowseTextureSlotOp::ID).call();
+    for (bar, children) in &bar_query {
+        despawn_children(&mut commands, children);
+        spawn_action_header(
+            &mut commands,
+            bar,
+            ActionHeaderProps {
+                name: name.clone(),
+                saved,
+                italic_font: &italic_font,
+                icon_font: &icon_font,
+                actions: browser_actions(),
             },
         );
-
-        // Clear button (only if texture exists)
-        if has_tex {
-            let clear_handle = active_handle.clone();
-            let clear_btn = commands
-                .spawn((
-                    Node {
-                        padding: UiRect::all(Val::Px(2.0)),
-                        border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
-                        ..Default::default()
-                    },
-                    icons::icon_colored(
-                        icons::Icon::X,
-                        tokens::TEXT_SIZE_SM_PX,
-                        icon_font.clone(),
-                        tokens::TEXT_SECONDARY,
-                    ),
-                    ChildOf(row),
-                ))
-                .id();
-            commands.entity(clear_btn).observe(
-                move |_: On<Pointer<Click>>,
-                      mut pending: ResMut<PendingTextureSlot>,
-                      mut commands: Commands| {
-                    pending.slot = Some(slot);
-                    pending.material_handle = Some(clear_handle.clone());
-                    commands.operator(MaterialClearTextureSlotOp::ID).call();
-                },
-            );
-        }
     }
 
-    commands.spawn((
-        Text::new("Parameters"),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        Node {
-            margin: UiRect::top(Val::Px(tokens::SPACING_MD)),
-            ..Default::default()
-        },
-        ChildOf(container),
-    ));
+    for (container, children) in &container_query {
+        despawn_children(&mut commands, children);
+        let Some(handle) = active.clone() else {
+            continue;
+        };
+        // Selecting arms the material for the next brush drawn, leaving placed brushes
+        // untouched.
+        last_material.material = Some(handle.clone());
 
-    // Helper: spawn a label + numeric input row
-    let spawn_param_row = |commands: &mut Commands,
-                           parent: Entity,
-                           label: &str,
-                           value: f32,
-                           min: f64,
-                           max: f64,
-                           param: MaterialParamInput| {
-        let row = commands
-            .spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(tokens::SPACING_XS),
-                    width: Val::Percent(100.0),
-                    margin: UiRect::top(Val::Px(tokens::SPACING_XS)),
-                    ..Default::default()
-                },
-                ChildOf(parent),
-            ))
-            .id();
-
-        commands.spawn((
-            Text::new(label),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-            Node {
-                min_width: Val::Px(140.0),
-                flex_shrink: 0.0,
-                ..Default::default()
-            },
-            ChildOf(row),
-        ));
-
-        commands.spawn((
-            text_edit::text_edit(
-                TextEditProps::default()
-                    .numeric_f32()
-                    .grow()
-                    .with_min(min)
-                    .with_max(max)
-                    .with_default_value(format!("{value:.3}")),
-            ),
-            param,
-            ChildOf(row),
-        ));
-    };
-
-    if has_depth {
-        spawn_param_row(
+        let preview = spawn_section(
             &mut commands,
             container,
-            "parallax_depth_scale",
-            mat.parallax_depth_scale,
-            0.0,
-            0.3,
-            MaterialParamInput::ParallaxDepthScale,
+            PREVIEW_SECTION,
+            &icon_font,
+            &collapse,
         );
-        spawn_param_row(
+        spawn_preview(
+            &mut commands,
+            preview.body,
+            preview_state.preview_image.clone(),
+        );
+
+        let Some(material) = material else {
+            continue;
+        };
+        let surface = spawn_section(
             &mut commands,
             container,
-            "max_parallax_layer_count",
-            mat.max_parallax_layer_count,
-            4.0,
-            64.0,
-            MaterialParamInput::MaxParallaxLayers,
+            SURFACE_SECTION,
+            &icon_font,
+            &collapse,
         );
-    }
+        fill_surface_rows(&mut commands, surface.body, material, &handle);
 
-    spawn_param_row(
-        &mut commands,
-        container,
-        "perceptual_roughness",
-        mat.perceptual_roughness,
-        0.0,
-        2.0,
-        MaterialParamInput::PerceptualRoughness,
-    );
-    spawn_param_row(
-        &mut commands,
-        container,
-        "metallic",
-        mat.metallic,
-        0.0,
-        2.0,
-        MaterialParamInput::Metallic,
-    );
-    spawn_param_row(
-        &mut commands,
-        container,
-        "reflectance",
-        mat.reflectance,
-        0.0,
-        1.0,
-        MaterialParamInput::Reflectance,
-    );
+        let textures = spawn_section(
+            &mut commands,
+            container,
+            TEXTURES_SECTION,
+            &icon_font,
+            &collapse,
+        );
+        fill_texture_rows(&mut commands, textures.body, material, &handle, &icon_font);
+    }
 }
 
-/// Handle `TextEditCommitEvent` for material parameter inputs.
-fn on_material_param_commit(
-    event: On<TextEditCommitEvent>,
-    param_query: Query<&MaterialParamInput>,
-    child_of_query: Query<&ChildOf>,
-    preview_state: Res<MaterialPreviewState>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    registry: Res<MaterialRegistry>,
-    mut catalog: ResMut<crate::asset_catalog::AssetCatalog>,
-) {
-    // Walk up the hierarchy to find a MaterialParamInput marker
-    let mut current = event.entity;
-    let mut param = None;
-    for _ in 0..4 {
-        let Ok(child_of) = child_of_query.get(current) else {
-            break;
-        };
-        if let Ok(p) = param_query.get(child_of.parent()) {
-            param = Some(*p);
-            break;
-        }
-        current = child_of.parent();
+/// The signature the sections would be built from.
+///
+/// Takes no camera state, so an orbit cannot tear down the observer driving it.
+fn preview_area_build(
+    active: Option<&Handle<StandardMaterial>>,
+    name: &str,
+    saved: bool,
+    material: Option<&StandardMaterial>,
+) -> PreviewAreaBuild {
+    PreviewAreaBuild {
+        material: active.map(Handle::id),
+        name: name.to_string(),
+        saved,
+        slots: material
+            .map(|material| {
+                TextureSlot::ALL
+                    .iter()
+                    .map(|slot| slot.get_from(material).as_ref().map(Handle::id))
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
+}
 
-    let Some(param) = param else { return };
-    let Some(ref active_handle) = preview_state.active_material else {
+/// The library surface opens the preview and the surface values, and leaves the
+/// per-slot texture bindings collapsed.
+const PREVIEW_SECTION: MaterialSection =
+    MaterialSection::new("Preview", Icon::Eye, "materials.window.preview", false);
+const SURFACE_SECTION: MaterialSection =
+    MaterialSection::new("Surface", Icon::Palette, "materials.window.surface", false);
+const TEXTURES_SECTION: MaterialSection =
+    MaterialSection::new("Textures", Icon::Image, "materials.window.textures", true);
+
+fn despawn_children(commands: &mut Commands, children: Option<&Children>) {
+    let Some(children) = children else {
         return;
     };
-    let value: f32 = event.text.parse().unwrap_or(0.0);
-
-    let Some(mut mat) = materials.get_mut(active_handle) else {
-        return;
-    };
-    match param {
-        MaterialParamInput::ParallaxDepthScale => mat.parallax_depth_scale = value,
-        MaterialParamInput::MaxParallaxLayers => mat.max_parallax_layer_count = value,
-        MaterialParamInput::PerceptualRoughness => mat.perceptual_roughness = value,
-        MaterialParamInput::Metallic => mat.metallic = value,
-        MaterialParamInput::Reflectance => mat.reflectance = value,
+    for child in children.iter() {
+        commands.entity(child).despawn();
     }
+}
 
-    // Persist to catalog
-    let catalog_name = registry
-        .entries
-        .iter()
-        .find(|e| e.handle == *active_handle)
-        .map(|e| format!("@{}", e.name));
-    if let Some(name) = catalog_name
-        && catalog.contains_name(&name)
-    {
-        catalog.dirty = true;
-    }
+/// The library actions, plus applying the previewed material to the selection.
+fn browser_actions() -> Vec<HeaderAction> {
+    let mut actions = library_actions();
+    actions.push(HeaderAction::new(
+        Icon::PaintBucket,
+        "Apply Material",
+        "Apply this material to the selected faces or brushes.",
+        ButtonOperatorCall::new(MaterialApplyOp::ID),
+    ));
+    actions
 }
 
 fn poll_material_browser_folder(world: &mut World) {
@@ -1152,7 +720,7 @@ fn handle_browse_texture_slot(
     let slot = event.slot;
     let material_handle = event.material_handle.clone();
     let mut dialog = AsyncFileDialog::new()
-        .set_title(format!("Select image for {}", slot.label()))
+        .set_title(format!("Select image for {}", slot.field()))
         .add_filter(
             "Images",
             &["png", "jpg", "jpeg", "ktx2", "bmp", "tga", "webp"],
@@ -1184,12 +752,6 @@ fn poll_texture_slot_pick(world: &mut World) {
         return;
     };
     let path = file_handle.path().to_path_buf();
-
-    // Skip 16-bit PNGs for DepthMap
-    if slot == TextureSlot::DepthMap && is_16bit_png(&path) {
-        return;
-    }
-
     let fs_path = path.to_string_lossy().replace('\\', "/");
     let asset_path = crate::entity_ops::to_asset_path(&fs_path);
     let asset_server = world.resource::<AssetServer>().clone();
@@ -1232,9 +794,11 @@ fn update_material_browser_ui(
     state: Res<MaterialBrowserState>,
     materials: Res<Assets<StandardMaterial>>,
     project_root: Res<crate::project::ProjectRoot>,
+    italic_font: Res<icons::EditorFontItalic>,
     grid_query: Query<(Entity, Option<&Children>), With<MaterialBrowserGrid>>,
     mut root_label_query: Query<&mut Text, With<MaterialBrowserRootLabel>>,
 ) {
+    let italic_font = italic_font.0.clone();
     let needs_rebuild = registry.is_changed() || state.is_changed();
     if !needs_rebuild {
         return;
@@ -1272,108 +836,29 @@ fn update_material_browser_ui(
             continue;
         }
 
-        let name = entry.name.clone();
         let handle = entry.handle.clone();
-
-        let thumb_entity = commands
-            .spawn((
-                Node {
-                    width: Val::Px(tokens::THUMB_CELL_WIDTH),
-                    height: Val::Px(tokens::THUMB_CELL_HEIGHT),
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
-                    padding: UiRect::all(Val::Px(2.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                    ..Default::default()
-                },
-                BorderColor::all(Color::NONE),
-                BackgroundColor(Color::NONE),
-                ChildOf(grid_entity),
-            ))
-            .id();
-
-        // Use base_color_texture as thumbnail if available
-        let thumbnail = materials
-            .get(&handle)
-            .and_then(|m| m.base_color_texture.clone());
-
-        if let Some(img) = thumbnail {
-            commands.spawn((
-                ImageNode::new(img),
-                Node {
-                    width: Val::Px(tokens::THUMB_IMAGE_SIZE),
-                    height: Val::Px(tokens::THUMB_IMAGE_SIZE),
-                    ..Default::default()
-                },
-                ChildOf(thumb_entity),
-            ));
-        } else {
-            commands.spawn((
-                Node {
-                    width: Val::Px(tokens::THUMB_IMAGE_SIZE),
-                    height: Val::Px(tokens::THUMB_IMAGE_SIZE),
-                    ..Default::default()
-                },
-                BackgroundColor(Color::srgb(0.3, 0.3, 0.3)),
-                ChildOf(thumb_entity),
-            ));
-        }
-
-        // Material name label. Truncates inline when it overflows the
-        // cell; when truncated, attach a generic `Tooltip` so the
-        // user can hover to read the full name.
-        let is_truncated = name.len() > 10;
-        let display_name = if is_truncated {
-            format!("{}...", &name[..8])
-        } else {
-            name.clone()
-        };
-        let mut name_label = commands.spawn((
-            Text::new(display_name),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_XS,
-                ..default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-            Node {
-                max_width: px(tokens::THUMB_NAME_MAX_WIDTH),
-                overflow: Overflow::clip(),
-                ..default()
-            },
-            ChildOf(thumb_entity),
-        ));
-        if is_truncated {
-            name_label.insert((Hovered::default(), Tooltip::title(name.clone())));
-        }
-
-        // Hover
-        commands.entity(thumb_entity).observe(
-            |hover: On<Pointer<Over>>, mut borders: Query<&mut BorderColor>| {
-                if let Ok(mut border) = borders.get_mut(hover.event_target()) {
-                    *border = BorderColor::all(tokens::SELECTED_BORDER);
-                }
-            },
-        );
-        commands.entity(thumb_entity).observe(
-            |out: On<Pointer<Out>>, mut borders: Query<&mut BorderColor>| {
-                if let Ok(mut border) = borders.get_mut(out.event_target()) {
-                    *border = BorderColor::all(Color::NONE);
-                }
+        let tile = crate::material_assets::spawn_material_tile(
+            &mut commands,
+            grid_entity,
+            crate::material_assets::MaterialTile {
+                name: entry.name.clone(),
+                thumbnail: crate::material_assets::material_thumbnail(&materials, &handle),
+                saved: entry.saved,
+                selected: false,
+                italic_font: italic_font.clone(),
             },
         );
 
         // Single-click: select for preview
-        let handle_for_select = handle.clone();
-        commands.entity(thumb_entity).observe(
-            move |click: On<Pointer<Click>>, mut commands: Commands| {
+        commands
+            .entity(tile)
+            .observe(move |click: On<Pointer<Click>>, mut commands: Commands| {
                 if click.event().button == PointerButton::Primary {
                     commands.trigger(SelectMaterialPreview {
-                        handle: handle_for_select.clone(),
+                        handle: handle.clone(),
                     });
                 }
-            },
-        );
+            });
     }
 }
 
@@ -1448,19 +933,31 @@ pub fn material_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
                             ..Default::default()
                         },
                         children![
-                            new_material_button(icon_font.clone()),
                             material_folder_button(icon_font.clone()),
                             rescan_button(icon_font),
                         ],
                     ),
                 ],
             ),
-            // Interactive preview area (content populated dynamically)
+            // Action header.
+            (
+                MaterialActionBar,
+                EditorEntity,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    width: Val::Percent(100.0),
+                    padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_XS)),
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                },
+            ),
+            // Editing sections for the previewed material.
             (
                 PreviewAreaContainer,
                 EditorEntity,
                 Node {
                     flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(tokens::SPACING_XS),
                     width: Val::Percent(100.0),
                     padding: UiRect::all(Val::Px(tokens::SPACING_SM)),
                     flex_shrink: 1.0,
@@ -1507,20 +1004,10 @@ pub fn material_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
     )
 }
 
-fn new_material_button(icon_font: Handle<Font>) -> impl Bundle {
-    (
-        icon_button(
-            IconButtonProps::new(icons::Icon::Plus).variant(ButtonVariant::Ghost),
-            &icon_font,
-        ),
-        ButtonOperatorCall::new(MaterialCreateOp::ID),
-    )
-}
-
 fn material_folder_button(icon_font: Handle<Font>) -> impl Bundle {
     (
         icon_button(
-            IconButtonProps::new(icons::Icon::FolderOpen).variant(ButtonVariant::Ghost),
+            IconButtonProps::new(Icon::FolderOpen).variant(ButtonVariant::Ghost),
             &icon_font,
         ),
         ButtonOperatorCall::new(MaterialSelectFolderOp::ID),
@@ -1530,7 +1017,7 @@ fn material_folder_button(icon_font: Handle<Font>) -> impl Bundle {
 fn rescan_button(icon_font: Handle<Font>) -> impl Bundle {
     (
         icon_button(
-            IconButtonProps::new(icons::Icon::RefreshCw).variant(ButtonVariant::Ghost),
+            IconButtonProps::new(Icon::RefreshCw).variant(ButtonVariant::Ghost),
             &icon_font,
         ),
         ButtonOperatorCall::new(MaterialRescanOp::ID),
@@ -1553,6 +1040,8 @@ pub(crate) struct PendingTextureSlot {
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.init_resource::<PendingTextureSlot>()
         .register_operator::<MaterialCreateOp>()
+        .register_operator::<MaterialSelectOp>()
+        .register_operator::<MaterialApplyOp>()
         .register_operator::<MaterialRescanOp>()
         .register_operator::<MaterialSelectFolderOp>()
         .register_operator::<MaterialBrowseTextureSlotOp>()
@@ -1563,7 +1052,8 @@ fn pending_texture_slot_set(pending: Res<PendingTextureSlot>) -> bool {
     pending.slot.is_some() && pending.material_handle.is_some()
 }
 
-/// Create a fresh empty material and select it for preview.
+/// Create a fresh empty material and select it for preview. It stays unsaved
+/// until `material.save` writes a file for it.
 #[operator(
     id = "material.create",
     label = "New Material",
@@ -1576,24 +1066,73 @@ pub(crate) fn material_create(
     mut catalog: ResMut<crate::asset_catalog::AssetCatalog>,
     mut preview_state: ResMut<MaterialPreviewState>,
 ) -> OperatorResult {
-    let mut idx = 1u32;
-    let name = loop {
-        let candidate = format!("Material_{idx}");
-        if registry.get_by_name(&candidate).is_none() {
-            break candidate;
-        }
-        idx += 1;
-    };
-
+    let name = registry.next_created_name();
     let handle = materials.add(StandardMaterial::default());
-    let catalog_name = format!("@{name}");
-    catalog.insert(catalog_name, handle.clone().untyped());
-    catalog.dirty = true;
+    catalog.insert(format!("@{name}"), handle.clone().untyped());
     registry.add(name, handle.clone());
     preview_state.active_material = Some(handle);
     preview_state.orbit_yaw = 0.5;
     preview_state.orbit_pitch = -0.3;
     preview_state.zoom_distance = 3.0;
+    OperatorResult::Finished
+}
+
+/// Load a named material into the shared preview.
+///
+/// Each surface's action header aims its Save and Delete at the preview, so this
+/// also picks which material those act on.
+#[operator(
+    id = "material.select",
+    label = "Select Material",
+    description = "Load a material into the material preview.",
+    allows_undo = false,
+    params(material(String, doc = "Name of the material to preview."))
+)]
+pub(crate) fn material_select(
+    params: In<OperatorParameters>,
+    registry: Res<MaterialRegistry>,
+    mut preview_state: ResMut<MaterialPreviewState>,
+) -> OperatorResult {
+    let name = params.as_str("material")?;
+    let Some(entry) = registry.get_by_name(name) else {
+        warn!("material.select: no material named '{name}'");
+        return OperatorResult::Cancelled;
+    };
+    preview_state.active_material = Some(entry.handle.clone());
+    preview_state.orbit_yaw = 0.5;
+    preview_state.orbit_pitch = -0.3;
+    preview_state.zoom_distance = 3.0;
+    OperatorResult::Finished
+}
+
+/// Apply a material to the selected faces, or to every face of the selected
+/// brushes. The apply records a history entry per brush, so this operator adds
+/// none of its own.
+#[operator(
+    id = "material.apply",
+    label = "Apply Material",
+    description = "Apply a material to the selected faces or brushes.",
+    allows_undo = false,
+    params(material(
+        String,
+        doc = "Name of the material to apply. Defaults to the previewed one."
+    ))
+)]
+pub(crate) fn material_apply(
+    params: In<OperatorParameters>,
+    registry: Res<MaterialRegistry>,
+    preview_state: Res<MaterialPreviewState>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let handle = match params.as_str("material") {
+        Some(name) => registry.get_by_name(name).map(|e| e.handle.clone()),
+        None => preview_state.active_material.clone(),
+    };
+    let Some(material) = handle.filter(|h| *h != Handle::default()) else {
+        warn!("material.apply: no material to apply");
+        return OperatorResult::Cancelled;
+    };
+    commands.trigger(ApplyMaterialDefToFaces { material });
     OperatorResult::Finished
 }
 
@@ -1684,4 +1223,195 @@ pub(crate) fn material_clear_texture_slot(
         material_handle,
     });
     OperatorResult::Finished
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::asset::AssetPlugin;
+
+    fn browser_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((bevy::app::TaskPoolPlugin::default(), AssetPlugin::default()));
+        app.init_asset::<Image>();
+        app.init_asset::<StandardMaterial>();
+        app
+    }
+
+    fn detected(paths: &[&str]) -> jackdaw_material::MaterialSet {
+        let owned: Vec<String> = paths.iter().map(|p| (*p).to_string()).collect();
+        jackdaw_material::group_texture_sets(&owned)
+            .into_iter()
+            .next()
+            .expect("one set")
+    }
+
+    fn built(app: &mut App, set: &jackdaw_material::MaterialSet) -> StandardMaterial {
+        let asset_server = app.world().resource::<AssetServer>().clone();
+        let handle = {
+            let mut materials = app.world_mut().resource_mut::<Assets<StandardMaterial>>();
+            material_from_set(set, &asset_server, &mut materials)
+        };
+        app.world()
+            .resource::<Assets<StandardMaterial>>()
+            .get(&handle)
+            .expect("built material")
+            .clone()
+    }
+
+    /// The parallax scalars apply only with a height map bound, so a detected height map has
+    /// to reach the slot they read.
+    #[test]
+    fn a_detected_height_map_binds_beside_the_parallax_scalars_it_implies() {
+        let mut app = browser_app();
+        let set = detected(&["pack/rock_albedo.png", "pack/rock_height.png"]);
+        let scalars = set.recommended_scalars();
+        let material = built(&mut app, &set);
+
+        assert!(material.depth_map.is_some());
+        assert_eq!(material.parallax_depth_scale, scalars.parallax_depth_scale);
+        assert_eq!(
+            material.max_parallax_layer_count,
+            scalars.max_parallax_layer_count
+        );
+        assert!(material.parallax_depth_scale > 0.0);
+    }
+
+    /// The preview's drag observer lives inside the subtree a rebuild despawns, and the
+    /// colour picker writes `base_color` on every frame of a drag.
+    #[test]
+    fn a_scalar_edit_does_not_ask_for_a_rebuild() {
+        let mut app = browser_app();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+
+        let before = {
+            let materials = app.world().resource::<Assets<StandardMaterial>>();
+            preview_area_build(Some(&handle), "rock", true, materials.get(&handle))
+        };
+        {
+            let mut materials = app.world_mut().resource_mut::<Assets<StandardMaterial>>();
+            let mut material = materials.get_mut(&handle).expect("material");
+            material.base_color = Color::srgb(0.1, 0.2, 0.3);
+            material.metallic = 0.75;
+        }
+        let after = {
+            let materials = app.world().resource::<Assets<StandardMaterial>>();
+            preview_area_build(Some(&handle), "rock", true, materials.get(&handle))
+        };
+
+        assert_eq!(
+            before, after,
+            "a value edit changes no row's structure, so nothing is rebuilt",
+        );
+    }
+
+    /// Binding a texture changes the rows: the swatch, the file name and whether a clear
+    /// button exists.
+    #[test]
+    fn binding_a_texture_does_ask_for_a_rebuild() {
+        let mut app = browser_app();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let image = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .reserve_handle();
+
+        let before = {
+            let materials = app.world().resource::<Assets<StandardMaterial>>();
+            preview_area_build(Some(&handle), "rock", true, materials.get(&handle))
+        };
+        {
+            let mut materials = app.world_mut().resource_mut::<Assets<StandardMaterial>>();
+            materials
+                .get_mut(&handle)
+                .expect("material")
+                .base_color_texture = Some(image);
+        }
+        let after = {
+            let materials = app.world().resource::<Assets<StandardMaterial>>();
+            preview_area_build(Some(&handle), "rock", true, materials.get(&handle))
+        };
+
+        assert_ne!(before, after);
+    }
+
+    /// Saving changes the marker beside the name, which the header draws.
+    #[test]
+    fn saving_a_material_asks_for_a_rebuild() {
+        let mut app = browser_app();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let materials = app.world().resource::<Assets<StandardMaterial>>();
+        assert_ne!(
+            preview_area_build(Some(&handle), "rock", false, materials.get(&handle)),
+            preview_area_build(Some(&handle), "rock", true, materials.get(&handle)),
+        );
+    }
+
+    #[test]
+    fn a_detected_set_with_no_height_map_leaves_parallax_off() {
+        let mut app = browser_app();
+        let material = built(&mut app, &detected(&["pack/rock_albedo.png"]));
+
+        assert!(material.depth_map.is_none());
+        assert_eq!(material.parallax_depth_scale, 0.0);
+        assert_eq!(material.max_parallax_layer_count, 0.0);
+    }
+
+    fn project_browser_app() -> (App, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = browser_app();
+        // A material file is read and reflected back rather than loaded through the asset
+        // server, so the scan needs the reflection registrations.
+        app.register_asset_reflect::<Image>();
+        app.register_asset_reflect::<StandardMaterial>();
+        app.register_type::<StandardMaterial>();
+        app.insert_resource(crate::project::ProjectRoot {
+            root: tmp.path().to_path_buf(),
+            config: crate::project::ProjectConfig::default(),
+        });
+        app.init_resource::<MaterialRegistry>();
+        app.init_resource::<crate::material_assets::SavedMaterials>();
+        app.init_resource::<crate::asset_catalog::AssetCatalog>();
+        app.init_resource::<MaterialBrowserState>();
+        (app, tmp)
+    }
+
+    /// A material whose file went missing stays in the list so its name resolves, and lists
+    /// as unsaved so nothing writes the file back and a scene using it embeds it inline.
+    #[test]
+    fn a_material_whose_file_vanished_is_listed_as_unsaved() {
+        let (mut app, tmp) = project_browser_app();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        crate::material_assets::write_material_file(app.world(), "slate", &handle).expect("write");
+
+        rebuild_material_registry(app.world_mut());
+        assert!(
+            app.world().resource::<MaterialRegistry>().is_saved("slate"),
+            "a material with a file behind it is saved",
+        );
+
+        std::fs::remove_file(tmp.path().join("assets/materials/slate.material.bsn"))
+            .expect("remove");
+        rebuild_material_registry(app.world_mut());
+
+        let registry = app.world().resource::<MaterialRegistry>();
+        let entry = registry.get_by_name("slate").expect("still listed");
+        assert!(!entry.saved, "with no file behind it, it reads as unsaved");
+        assert!(
+            registry.saved_entries().all(|e| e.name != "slate"),
+            "nothing durable may name it any more",
+        );
+    }
 }

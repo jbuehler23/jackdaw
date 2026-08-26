@@ -3,9 +3,7 @@ use bevy::{
     ecs::error::ErrorContext,
     image::{ImageAddressMode, ImagePlugin, ImageSamplerDescriptor},
     prelude::*,
-    window::{ExitCondition, WindowPlugin},
 };
-use bevy_window_chrome::primary_window_attributes;
 use jackdaw::prelude::*;
 
 fn main() -> AppExit {
@@ -109,18 +107,12 @@ fn main() -> AppExit {
                         ..ImageSamplerDescriptor::linear()
                     },
                 })
-                // Disable Bevy's default window-close -> AppExit wiring so
-                // `intercept_window_close` in ScenesPlugin owns the exit path.
-                // `close_when_requested: false` prevents the OS window from
-                // being destroyed automatically; we do it ourselves after the
-                // dialog resolves. `ExitCondition::DontExit` prevents Bevy
-                // from emitting AppExit when all windows close.
-                .set(WindowPlugin {
-                    exit_condition: ExitCondition::DontExit,
-                    close_when_requested: false,
-                    primary_window: Some(primary_window_attributes()),
-                    ..default()
-                }),
+                // `editor_window_plugin` disables Bevy's default
+                // window-close -> AppExit wiring so `intercept_window_close`
+                // in ScenesPlugin owns the exit path, and honors
+                // `JACKDAW_WINDOW_SIZE`. Duplicating its fields here would
+                // drop that override.
+                .set(editor_window_plugin()),
         )
         // Ambient plugins added next to `DefaultPlugins`. The
         // editor's `EditorCorePlugin` and `PhysicsSimulationPlugin`
@@ -132,11 +124,23 @@ fn main() -> AppExit {
         ))
         .add_plugins(editor_plugins);
 
+    // The resolved asset root, so the open flow can tell whether a requested project is
+    // the one this process reads assets for.
+    app.insert_resource(jackdaw::restart::AssetProjectRoot(project_root));
+
     if let Some(pending) = auto_open {
         app.insert_resource(pending);
     }
 
-    app.run()
+    let exit = app.run();
+
+    // Opening another project asks for a process rooted at it. The request outlives the
+    // world, so it is honored here.
+    if let Some(project) = jackdaw::restart::take_project_relaunch() {
+        jackdaw::restart::relaunch_into_project(&project);
+    }
+
+    exit
 }
 
 /// Build the editor plugin for the prebuilt `jackdaw` binary.

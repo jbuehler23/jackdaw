@@ -521,6 +521,7 @@ fn drive_thumbnail_queue(
     meshes: Res<Assets<Mesh>>,
     children_query: Query<&Children>,
     mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
+    view_dependent: Query<(), With<crate::ViewDependentBounds>>,
     mut camera_query: Query<(&mut Transform, &Projection), With<ThumbnailCamera>>,
     target: Option<Res<ThumbnailTarget>>,
 ) {
@@ -548,6 +549,7 @@ fn drive_thumbnail_queue(
                 &meshes,
                 &children_query,
                 &mesh_query,
+                &view_dependent,
                 &mut camera_query,
                 &target.0,
                 &job,
@@ -606,6 +608,7 @@ fn step_job(
     meshes: &Assets<Mesh>,
     children_query: &Query<&Children>,
     mesh_query: &Query<(&Mesh3d, &GlobalTransform)>,
+    view_dependent: &Query<(), With<crate::ViewDependentBounds>>,
     camera_query: &mut Query<(&mut Transform, &Projection), With<ThumbnailCamera>>,
     target: &Handle<Image>,
     job: &Job,
@@ -652,6 +655,7 @@ fn step_job(
                 *root,
                 children_query,
                 mesh_query,
+                view_dependent,
                 meshes,
                 &mut vertices,
             );

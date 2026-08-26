@@ -238,6 +238,77 @@ mod tests {
         app
     }
 
+    // A material in the catalog emits as `@Name` only when a file on disk defines that
+    // name. An unsaved material has none, so the scene carries it inline; a bare `@Name`
+    // would resolve to nothing outside this editor run and the brush would load white.
+    #[test]
+    fn an_unsaved_catalog_material_embeds_inline_instead_of_emitting_a_name() {
+        use bevy::pbr::StandardMaterial;
+        use jackdaw_scene_types::Brush;
+
+        for saved in [false, true] {
+            let mut app = material_snapshot_app();
+            app.init_resource::<crate::asset_catalog::AssetCatalog>();
+            app.init_resource::<crate::material_assets::MaterialRegistry>();
+
+            let handle = app
+                .world_mut()
+                .resource_mut::<Assets<StandardMaterial>>()
+                .add(StandardMaterial {
+                    base_color: Color::srgb(0.9, 0.1, 0.2),
+                    ..Default::default()
+                });
+            app.world_mut()
+                .resource_mut::<crate::asset_catalog::AssetCatalog>()
+                .insert("@moss".to_string(), handle.clone().untyped());
+            {
+                let mut registry = app
+                    .world_mut()
+                    .resource_mut::<crate::material_assets::MaterialRegistry>();
+                if saved {
+                    registry.add_saved("moss".to_string(), handle.clone());
+                } else {
+                    registry.add("moss".to_string(), handle.clone());
+                }
+            }
+
+            let mut brush = Brush::cuboid(1.0, 1.0, 1.0);
+            brush.faces[0].material = handle.clone();
+            let entity = app.world_mut().spawn((Name::new("Cube"), brush)).id();
+            jackdaw_bsn::create_entity_in_ast(app.world_mut(), entity, None);
+            jackdaw_bsn::sync_to_ast(
+                app.world_mut(),
+                entity,
+                std::any::TypeId::of::<jackdaw_scene_types::Brush>(),
+            );
+
+            let text = crate::scene_io::emit_bsn_scene_with_inline_assets(
+                app.world_mut(),
+                std::path::Path::new(""),
+            );
+
+            if saved {
+                assert!(
+                    text.contains("\"@moss\""),
+                    "a saved material has a file, so the scene references it:\n{text}"
+                );
+                assert!(
+                    !text.contains("StandardMaterial {"),
+                    "a saved material must not be duplicated into the scene:\n{text}"
+                );
+            } else {
+                assert!(
+                    !text.contains("\"@moss\""),
+                    "nothing on disk defines this name:\n{text}"
+                );
+                assert!(
+                    text.contains("StandardMaterial"),
+                    "an unsaved material must travel with the scene:\n{text}"
+                );
+            }
+        }
+    }
+
     // A runtime material handle assigned to a brush face must survive a capture:
     // the incremental document records the `Brush` patch without an asset
     // context, so a bare emit would drop the handle. The capture-time inline

@@ -17,7 +17,7 @@ use bevy::{
     prelude::*,
     reflect::serde::TypedReflectSerializer,
     ui::Checked,
-    ui_widgets::{ToggleChecked, ValueChange},
+    ui_widgets::ToggleChecked,
 };
 use jackdaw_feathers::{
     button::ButtonOperatorCall,
@@ -794,50 +794,9 @@ pub(crate) fn on_inspector_dirty(
     }
 }
 
-/// Links a disclosure toggle to the collapsible section it controls. Shared by
-/// component cards and material cards; both route through `on_disclosure_change`.
-#[derive(Component)]
-pub(crate) struct DisclosureSection(pub(crate) Entity);
-
-/// Drive the section's collapsed flag and body visibility from the disclosure
-/// toggle's checked state. `value` is the expanded state, so
-/// `collapsed = !value`. The toggle does not self-manage `Checked`; set it
-/// here so the chevron rotates. Writing `CollapsibleSection.collapsed` lets
-/// `persist_inspector_collapse` record the state for the next rebuild.
-pub(crate) fn on_disclosure_change(
-    change: On<ValueChange<bool>>,
-    toggles: Query<&DisclosureSection>,
-    mut sections: Query<(&mut CollapsibleSection, &Children)>,
-    mut bodies: Query<&mut Node, With<CollapsibleBody>>,
-    mut commands: Commands,
-) {
-    let toggle = change.source;
-    let Ok(link) = toggles.get(toggle) else {
-        return;
-    };
-    let expanded = change.value;
-
-    if expanded {
-        commands.entity(toggle).insert(Checked);
-    } else {
-        commands.entity(toggle).remove::<Checked>();
-    }
-
-    let Ok((mut section, children)) = sections.get_mut(link.0) else {
-        return;
-    };
-    section.collapsed = !expanded;
-
-    for child in children.iter() {
-        if let Ok(mut node) = bodies.get_mut(child) {
-            node.display = if expanded {
-                Display::Flex
-            } else {
-                Display::None
-            };
-        }
-    }
-}
+/// The disclosure link and its handler live with the shared card widget, used by
+/// both component cards and material cards.
+pub(crate) use jackdaw_feathers::panel_card::DisclosureSection;
 
 /// Inputs to [`spawn_component_display`]. Bundled into a single
 /// struct so the call site is readable as a struct literal instead of
@@ -894,19 +853,25 @@ pub(crate) fn spawn_component_display(
         Display::Flex
     };
 
-    // Card frame: a feathers pane holding a header and a body.
+    // Card frame: a feathers pane holding a header and a body. The card's layout is
+    // patched onto the pane's own `Node` rather than replacing it: `pane` carries the
+    // stretch alignment that makes its header and body span the card, and `pane_body`
+    // carries the padding, row gap and rounded corners that draw the frame.
     let section_entity = commands
-        .spawn_scene(pane())
+        .spawn_scene((
+            pane(),
+            bsn! {
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    width: percent(100),
+                }
+            },
+        ))
         .insert((
             ComponentDisplay,
             ComponentName(name.to_string()),
             ComponentDisplayTypePath(type_path.to_string()),
             CollapsibleSection { collapsed },
-            Node {
-                flex_direction: FlexDirection::Column,
-                width: Val::Percent(100.0),
-                ..Default::default()
-            },
         ))
         .id();
 
@@ -918,16 +883,19 @@ pub(crate) fn spawn_component_display(
         .id();
 
     let body_entity = commands
-        .spawn_scene(pane_body())
+        .spawn_scene((
+            pane_body(),
+            bsn! {
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    width: percent(100),
+                    display: {body_display},
+                }
+            },
+        ))
         .insert((
             ComponentDisplayBody,
             CollapsibleBody,
-            Node {
-                flex_direction: FlexDirection::Column,
-                width: Val::Percent(100.0),
-                display: body_display,
-                ..Default::default()
-            },
             ChildOf(section_entity),
         ))
         .id();
@@ -1236,6 +1204,51 @@ pub(crate) fn filter_inspector_components(
 #[cfg(test)]
 mod tests {
     use super::hidden_by_namespace;
+    use bevy::prelude::*;
+
+    /// The card's layout is patched onto the feathers pane rather than replacing its
+    /// `Node`, which would drop the padding, row gap and rounded corners `pane_body`
+    /// spawns with.
+    #[test]
+    fn the_card_layout_is_added_to_the_panes_own_node_not_swapped_for_it() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+        ));
+
+        let spawn = app.world_mut().register_system(|mut commands: Commands| {
+            commands.spawn_scene((
+                bevy::feathers::containers::pane_body(),
+                bsn! {
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        width: percent(100),
+                        display: {Display::None},
+                    }
+                },
+            ));
+        });
+        app.world_mut().run_system(spawn).expect("system runs");
+        app.world_mut().flush();
+
+        let mut nodes = app.world_mut().query::<&Node>();
+        let node = nodes.iter(app.world()).next().expect("the body spawned");
+        assert_eq!(node.width, Val::Percent(100.0), "the card's own width");
+        assert_eq!(
+            node.display,
+            Display::None,
+            "the card's own collapsed state"
+        );
+        assert_eq!(
+            node.flex_direction,
+            FlexDirection::Column,
+            "the card's own direction",
+        );
+        assert_ne!(node.padding, UiRect::ZERO, "the pane's frame padding");
+        assert_ne!(node.row_gap, Val::ZERO, "the pane's row gap");
+    }
 
     #[test]
     fn the_scene_data_components_with_their_own_cards_survive_the_namespace_cull() {

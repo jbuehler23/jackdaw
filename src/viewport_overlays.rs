@@ -8,6 +8,7 @@ use crate::viewport::{AxisIndicator, MainViewportCamera, SceneViewport};
 use crate::{JackdawDrawSystems, default_style};
 use avian3d::parry::transformation::convex_hull;
 use bevy::light::{FogVolume, VolumetricFog};
+use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
 use bevy::ui::widget::ViewportNode;
 use jackdaw_feathers::tokens;
@@ -67,7 +68,7 @@ impl Plugin for ViewportOverlaysPlugin {
             )
             .add_systems(
                 PostUpdate,
-                (draw_coordinate_indicator, draw_navmesh_region_bounds).in_set(JackdawDrawSystems),
+                draw_coordinate_indicator.in_set(JackdawDrawSystems),
             );
     }
 }
@@ -126,6 +127,8 @@ fn draw_selection_bounding_boxes(
     children_query: Query<&Children>,
     mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
     meshes: Res<Assets<Mesh>>,
+    view_dependent: Query<(), With<crate::ViewDependentBounds>>,
+    authored_bounds: Query<&bevy::camera::primitives::Aabb>,
 ) {
     let color = default_style::SELECTION_BBOX;
 
@@ -167,10 +170,13 @@ fn draw_selection_bounding_boxes(
             }
         } else {
             let mut verts = Vec::new();
-            collect_descendant_mesh_world_vertices(
+            collect_measurable_world_vertices(
                 entity,
                 &children_query,
                 &mesh_query,
+                &view_dependent,
+                &authored_bounds,
+                global_tf,
                 &meshes,
                 &mut verts,
             );
@@ -199,6 +205,26 @@ fn draw_selection_bounding_boxes(
             }
         }
     }
+}
+
+/// An `Aabb`'s eight corners in world space, so a caller that measures geometry
+/// by its vertices can take a stated extent the same way.
+pub(crate) fn aabb_corners(
+    aabb: &bevy::camera::primitives::Aabb,
+    global_tf: &GlobalTransform,
+) -> Vec<Vec3> {
+    let center = Vec3::from(aabb.center);
+    let half = Vec3::from(aabb.half_extents);
+    let mut corners = Vec::with_capacity(8);
+    for sx in [-1.0, 1.0] {
+        for sy in [-1.0, 1.0] {
+            for sz in [-1.0, 1.0] {
+                let local = center + half * Vec3::new(sx, sy, sz);
+                corners.push(global_tf.transform_point(local));
+            }
+        }
+    }
+    corners
 }
 
 /// Compute axis-aligned bounding box from a set of points.
@@ -265,14 +291,34 @@ fn draw_hull_wireframe(
     }
 }
 
-/// Recursively collect world-space vertex positions from Mesh3d components.
+/// Recursively collect world-space vertex positions from Mesh3d components,
+/// skipping [`crate::ViewDependentBounds`] subtrees whole.
+///
+/// Geometry rebuilt around the viewer does not describe its own extent: a
+/// terrain's clipmap rings emit their vertex lattice centred on the viewer, so
+/// a box measured from them walks away with it. Such an entity carries its own
+/// `Aabb` for the extent it occupies, which a caller reads instead.
+///
+/// Returns whether a *descendant* subtree was pruned, which is not the same as
+/// no vertices coming back: a terrain with a prop parented onto it yields the
+/// prop's vertices and nothing of the ground, so a caller that reached for the
+/// authored extent only on an empty result would box the prop alone. See
+/// [`collect_measurable_world_vertices`] for that pairing.
+///
+/// `entity` itself carrying the marker is *not* reported as a prune: the whole
+/// call describes viewer-following geometry and has no extent to contribute.
 pub(crate) fn collect_descendant_mesh_world_vertices(
     entity: Entity,
     children_query: &Query<&Children>,
     mesh_query: &Query<(&Mesh3d, &GlobalTransform)>,
+    view_dependent: &Query<(), With<crate::ViewDependentBounds>>,
     meshes: &Assets<Mesh>,
     out: &mut Vec<Vec3>,
-) {
+) -> DescendantGeometry {
+    if view_dependent.contains(entity) {
+        return DescendantGeometry::SelfViewDependent;
+    }
+    let mut pruned = false;
     if let Ok((mesh3d, global_tf)) = mesh_query.get(entity)
         && let Some(mesh) = meshes.get(&mesh3d.0)
         && let Some(positions) = mesh
@@ -285,8 +331,82 @@ pub(crate) fn collect_descendant_mesh_world_vertices(
     }
     if let Ok(children) = children_query.get(entity) {
         for child in children.iter() {
-            collect_descendant_mesh_world_vertices(child, children_query, mesh_query, meshes, out);
+            pruned |= collect_descendant_mesh_world_vertices(
+                child,
+                children_query,
+                mesh_query,
+                view_dependent,
+                meshes,
+                out,
+            )
+            .pruned_something();
         }
+    }
+    if pruned {
+        DescendantGeometry::PrunedDescendant
+    } else {
+        DescendantGeometry::Measured
+    }
+}
+
+/// What a walk of an entity's descendant geometry found.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DescendantGeometry {
+    /// Every mesh under `entity` was measurable and is in `out`.
+    Measured,
+    /// At least one descendant subtree was skipped for following the viewer.
+    /// `entity`'s own authored extent supplies the missing part.
+    PrunedDescendant,
+    /// `entity` *is* viewer-following geometry, with no extent of its own to
+    /// offer: a clipmap ring's `Aabb` is re-derived from a viewer-centred
+    /// lattice on every remesh, so reading it hands back a box that moves with
+    /// the camera.
+    SelfViewDependent,
+}
+
+impl DescendantGeometry {
+    /// Whether a subtree was skipped, at any depth including this node.
+    fn pruned_something(self) -> bool {
+        !matches!(self, Self::Measured)
+    }
+}
+
+/// Every world-space vertex describing the extent of `entity`: its measurable
+/// descendant geometry, plus its own authored `Aabb` whenever a *descendant*
+/// [`crate::ViewDependentBounds`] subtree was skipped.
+///
+/// The two are unioned. A terrain root contributes its authored extent in place
+/// of the clipmap rings under it; a terrain with a prop parented onto it
+/// contributes both, so the box holds the ground and the prop rather than
+/// collapsing onto whichever had vertices.
+///
+/// An entity that is *itself* marked contributes nothing. Callers like
+/// `alignment_guides::cache_reference_coords` walk every entity in the scene one
+/// at a time, so each clipmap ring arrives here on its own, and a ring's `Aabb`
+/// is the viewer-centred lattice it was last rebuilt as; unioning that would put
+/// camera-following coordinates into the snap targets.
+pub(crate) fn collect_measurable_world_vertices(
+    entity: Entity,
+    children_query: &Query<&Children>,
+    mesh_query: &Query<(&Mesh3d, &GlobalTransform)>,
+    view_dependent: &Query<(), With<crate::ViewDependentBounds>>,
+    authored_bounds: &Query<&bevy::camera::primitives::Aabb>,
+    global_tf: &GlobalTransform,
+    meshes: &Assets<Mesh>,
+    out: &mut Vec<Vec3>,
+) {
+    let found = collect_descendant_mesh_world_vertices(
+        entity,
+        children_query,
+        mesh_query,
+        view_dependent,
+        meshes,
+        out,
+    );
+    if found == DescendantGeometry::PrunedDescendant
+        && let Ok(aabb) = authored_bounds.get(entity)
+    {
+        out.extend(aabb_corners(aabb, global_tf));
     }
 }
 
@@ -716,6 +836,9 @@ fn ensure_axis_labels(
                         position_type: PositionType::Absolute,
                         ..default()
                     },
+                    // Any hovered node other than the viewport's own suppresses
+                    // viewport gestures, and these labels sit over one corner of it.
+                    Pickable::IGNORE,
                     ChildOf(viewport_entity),
                 ))
                 .id();
@@ -836,14 +959,328 @@ fn draw_coordinate_indicator(
     }
 }
 
-/// Draw wireframe cuboid for `NavmeshRegion` entities showing their AABB bounds.
-fn draw_navmesh_region_bounds(
-    mut gizmos: Gizmos,
-    regions: Query<&GlobalTransform, With<jackdaw_scene_types::NavmeshRegion>>,
-) {
-    let color = default_style::NAVMESH_REGION_BOUNDS;
-    for global_tf in &regions {
-        let transform = global_tf.compute_transform();
-        gizmos.cube(transform, color);
+/// A selection box is measured from descendant mesh vertices, and a terrain's
+/// descendants are clipmap rings whose vertex lattice is emitted centred on the
+/// viewer. The rings carry [`crate::ViewDependentBounds`] and the walk skips
+/// them, so the box does not grow as the camera walks away.
+#[cfg(test)]
+mod selection_bounds_tests {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::camera::primitives::Aabb;
+    use bevy::mesh::PrimitiveTopology;
+
+    use super::*;
+
+    /// A single triangle at the given world offset, as a mesh entity.
+    fn quad(world: &mut World, offset: Vec3, view_dependent: bool) -> Entity {
+        let mesh = world.resource_mut::<Assets<Mesh>>().add(
+            Mesh::new(
+                PrimitiveTopology::TriangleList,
+                RenderAssetUsages::default(),
+            )
+            .with_inserted_attribute(
+                Mesh::ATTRIBUTE_POSITION,
+                vec![[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0]],
+            ),
+        );
+        let mut entity = world.spawn((
+            Mesh3d(mesh),
+            Transform::from_translation(offset),
+            GlobalTransform::from_translation(offset),
+        ));
+        if view_dependent {
+            entity.insert(crate::ViewDependentBounds);
+        }
+        entity.id()
+    }
+
+    fn collect(world: &mut World, root: Entity) -> Vec<Vec3> {
+        world
+            .run_system_cached_with(
+                |root: In<Entity>,
+                 children_query: Query<&Children>,
+                 mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
+                 view_dependent: Query<(), With<crate::ViewDependentBounds>>,
+                 meshes: Res<Assets<Mesh>>| {
+                    let mut out = Vec::new();
+                    collect_descendant_mesh_world_vertices(
+                        *root,
+                        &children_query,
+                        &mesh_query,
+                        &view_dependent,
+                        &meshes,
+                        &mut out,
+                    );
+                    out
+                },
+                root,
+            )
+            .expect("system runs")
+    }
+
+    fn measurable(world: &mut World, root: Entity) -> Vec<Vec3> {
+        world
+            .run_system_cached_with(
+                |root: In<Entity>,
+                 children_query: Query<&Children>,
+                 mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
+                 view_dependent: Query<(), With<crate::ViewDependentBounds>>,
+                 authored_bounds: Query<&Aabb>,
+                 transforms: Query<&GlobalTransform>,
+                 meshes: Res<Assets<Mesh>>| {
+                    let global_tf = transforms.get(*root).copied().unwrap_or_default();
+                    let mut out = Vec::new();
+                    collect_measurable_world_vertices(
+                        *root,
+                        &children_query,
+                        &mesh_query,
+                        &view_dependent,
+                        &authored_bounds,
+                        &global_tf,
+                        &meshes,
+                        &mut out,
+                    );
+                    out
+                },
+                root,
+            )
+            .expect("system runs")
+    }
+
+    fn world() -> World {
+        let mut world = World::new();
+        world.insert_resource(Assets::<Mesh>::default());
+        world
+    }
+
+    #[test]
+    fn a_view_dependent_child_contributes_no_vertices_however_far_it_reaches() {
+        let mut world = world();
+        let root = world
+            .spawn((Transform::default(), GlobalTransform::default()))
+            .id();
+        let ring = quad(&mut world, Vec3::new(500.0, 0.0, 500.0), true);
+        world.entity_mut(root).add_child(ring);
+
+        assert!(
+            collect(&mut world, root).is_empty(),
+            "geometry rebuilt around the viewer cannot say how large the entity is"
+        );
+    }
+
+    /// The pruning covers the subtree, not just the node: a ring's children are laid out
+    /// around the viewer with it.
+    #[test]
+    fn pruning_a_view_dependent_node_prunes_what_hangs_below_it() {
+        let mut world = world();
+        let root = world
+            .spawn((Transform::default(), GlobalTransform::default()))
+            .id();
+        let ring = world
+            .spawn((
+                Transform::default(),
+                GlobalTransform::default(),
+                crate::ViewDependentBounds,
+            ))
+            .id();
+        let inner = quad(&mut world, Vec3::new(900.0, 0.0, 0.0), false);
+        world.entity_mut(ring).add_child(inner);
+        world.entity_mut(root).add_child(ring);
+
+        assert!(collect(&mut world, root).is_empty());
+    }
+
+    #[test]
+    fn ordinary_descendant_geometry_is_still_measured() {
+        let mut world = world();
+        let root = world
+            .spawn((Transform::default(), GlobalTransform::default()))
+            .id();
+        let child = quad(&mut world, Vec3::new(5.0, 0.0, 0.0), false);
+        world.entity_mut(root).add_child(child);
+
+        let verts = collect(&mut world, root);
+        assert_eq!(verts.len(), 3);
+        let (min, max) = aabb_from_points(&verts);
+        assert_eq!(min.x, 4.0);
+        assert_eq!(max.x, 6.0);
+    }
+
+    /// A terrain's box falls back to the authored extent it carries, which does not move
+    /// with the camera.
+    #[test]
+    fn an_authored_aabb_measures_the_extent_it_states() {
+        let aabb = Aabb::from_min_max(Vec3::new(-50.0, 0.0, -50.0), Vec3::new(50.0, 8.0, 50.0));
+        let corners = aabb_corners(&aabb, &GlobalTransform::from_translation(Vec3::X * 10.0));
+
+        assert_eq!(corners.len(), 8);
+        let (min, max) = aabb_from_points(&corners);
+        assert_eq!(min, Vec3::new(-40.0, 0.0, -50.0));
+        assert_eq!(max, Vec3::new(60.0, 8.0, 50.0));
+    }
+
+    /// The fallback is a union rather than a substitution: a prop parented onto a terrain
+    /// gives the walk something to return, so a fallback gated on an empty result would
+    /// collapse the box onto the prop and drop the ground.
+    #[test]
+    fn a_prop_parented_onto_view_dependent_ground_does_not_shrink_the_box_to_itself() {
+        let mut world = world();
+        let root = world
+            .spawn((
+                Transform::default(),
+                GlobalTransform::default(),
+                Aabb::from_min_max(Vec3::new(-512.0, 0.0, -512.0), Vec3::new(512.0, 4.0, 512.0)),
+            ))
+            .id();
+        let ring = quad(&mut world, Vec3::new(900.0, 0.0, 900.0), true);
+        let prop = quad(&mut world, Vec3::new(3.0, 0.0, 3.0), false);
+        world.entity_mut(root).add_child(ring);
+        world.entity_mut(root).add_child(prop);
+
+        let verts = measurable(&mut world, root);
+        let (min, max) = aabb_from_points(&verts);
+
+        assert_eq!(
+            (min.x, max.x),
+            (-512.0, 512.0),
+            "the authored ground is in the box, not just the prop"
+        );
+        assert!(
+            max.z <= 512.0 && min.z >= -512.0,
+            "and the ring that followed the camera to 900 is not: {min:?}..{max:?}"
+        );
+    }
+
+    /// An entity whose prop sticks out past its authored extent keeps the prop in the box.
+    #[test]
+    fn a_prop_reaching_past_the_authored_extent_still_widens_the_box() {
+        let mut world = world();
+        let root = world
+            .spawn((
+                Transform::default(),
+                GlobalTransform::default(),
+                Aabb::from_min_max(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 2.0, 10.0)),
+            ))
+            .id();
+        let ring = quad(&mut world, Vec3::new(900.0, 0.0, 0.0), true);
+        let prop = quad(&mut world, Vec3::new(30.0, 0.0, 0.0), false);
+        world.entity_mut(root).add_child(ring);
+        world.entity_mut(root).add_child(prop);
+
+        let (min, max) = aabb_from_points(&measurable(&mut world, root));
+        assert_eq!(min.x, -10.0, "the authored extent sets the near edge");
+        assert_eq!(max.x, 31.0, "the prop sets the far one");
+    }
+
+    /// A clipmap ring carries the marker (`TerrainSurface` requires it) *and* an `Aabb` that
+    /// bevy re-derives from the viewer-centred lattice on every remesh.
+    /// `cache_reference_coords` walks every non-selected entity one at a time, so a ring
+    /// arrives as the queried entity itself and must contribute nothing, or a dragged object
+    /// snaps to different coordinates depending on where the camera stands.
+    #[test]
+    fn a_marked_entity_queried_directly_contributes_nothing() {
+        let mut world = world();
+        let ring = quad(&mut world, Vec3::new(500.0, 0.0, 500.0), true);
+        world
+            .entity_mut(ring)
+            .insert(Aabb::from_min_max(Vec3::splat(-320.0), Vec3::splat(320.0)));
+
+        assert!(
+            measurable(&mut world, ring).is_empty(),
+            "a ring's own Aabb is the camera-centred lattice; unioning it would \
+             re-admit viewer-following coordinates"
+        );
+    }
+
+    /// A ring moved by the camera still contributes nothing, so two camera positions give
+    /// identical snap targets.
+    #[test]
+    fn a_marked_entity_contributes_nothing_from_any_camera_position() {
+        let mut world = world();
+        let near = quad(&mut world, Vec3::ZERO, true);
+        world
+            .entity_mut(near)
+            .insert(Aabb::from_min_max(Vec3::splat(-32.0), Vec3::splat(32.0)));
+        let far = quad(&mut world, Vec3::splat(900.0), true);
+        world
+            .entity_mut(far)
+            .insert(Aabb::from_min_max(Vec3::splat(-320.0), Vec3::splat(320.0)));
+
+        assert_eq!(measurable(&mut world, near), measurable(&mut world, far));
+    }
+
+    /// A terrain root is *unmarked* (`spawn_terrain_entity` adds no `ViewDependentBounds`)
+    /// and unions its authored extent in place of the marked rings beneath it.
+    #[test]
+    fn an_unmarked_root_with_marked_descendants_unions_its_authored_extent() {
+        let mut world = world();
+        let root = world
+            .spawn((
+                Transform::default(),
+                GlobalTransform::default(),
+                Aabb::from_min_max(Vec3::new(-6.0, 0.0, -6.0), Vec3::new(6.0, 1.0, 6.0)),
+            ))
+            .id();
+        let ring = quad(&mut world, Vec3::splat(800.0), true);
+        world.entity_mut(root).add_child(ring);
+
+        let (min, max) = aabb_from_points(&measurable(&mut world, root));
+        assert_eq!(min, Vec3::new(-6.0, 0.0, -6.0));
+        assert_eq!(max, Vec3::new(6.0, 1.0, 6.0));
+    }
+
+    /// Bevy puts an `Aabb` on every mesh entity, so geometry with nothing pruned must not
+    /// union one in: a stale `Aabb` would widen the box.
+    #[test]
+    fn nothing_pruned_means_the_authored_aabb_is_not_consulted() {
+        let mut world = world();
+        let root = world
+            .spawn((
+                Transform::default(),
+                GlobalTransform::default(),
+                Aabb::from_min_max(Vec3::splat(-500.0), Vec3::splat(500.0)),
+            ))
+            .id();
+        let child = quad(&mut world, Vec3::new(5.0, 0.0, 0.0), false);
+        world.entity_mut(root).add_child(child);
+
+        let (min, max) = aabb_from_points(&measurable(&mut world, root));
+        assert_eq!(min.x, 4.0);
+        assert_eq!(max.x, 6.0);
+    }
+}
+
+/// The axis labels sit over one corner of every viewport. A viewport gesture is
+/// suppressed whenever a node other than the viewport's own is under the pointer,
+/// so a pickable label would turn that corner into a dead zone for box-select,
+/// sculpt and paint strokes, region picks and measure confirms.
+#[cfg(test)]
+mod axis_label_tests {
+    use super::*;
+
+    #[test]
+    fn axis_labels_are_not_pickable() {
+        let mut app = App::new();
+        app.add_systems(Update, ensure_axis_labels);
+        let viewport = app.world_mut().spawn(SceneViewport).id();
+        app.update();
+
+        let labels = app
+            .world()
+            .entity(viewport)
+            .get::<ViewportAxisLabels>()
+            .expect("the viewport gets a label trio")
+            .labels;
+        for label in labels {
+            let pickable = app
+                .world()
+                .entity(label)
+                .get::<Pickable>()
+                .expect("every axis label opts out of picking");
+            assert!(
+                !pickable.should_block_lower && !pickable.is_hoverable,
+                "an axis label must be Pickable::IGNORE, or it dead-zones the viewport corner",
+            );
+        }
     }
 }

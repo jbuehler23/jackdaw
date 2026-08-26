@@ -1,28 +1,24 @@
 //! Deterministic point scatter over a heightmap and its paint channels.
 //!
-//! One pure function, [`scatter`], turns a terrain plus a rule set into a
-//! list of placements. It knows nothing about entities, assets, or the
-//! editor: the caller decides what a placement becomes.
+//! [`scatter`] turns a terrain plus a rule set into a list of placements.
+//! It knows nothing about entities, assets, or the editor: the caller
+//! decides what a placement becomes.
 //!
-//! Determinism is the contract, not a nicety. The same seed and the same
-//! channel data must produce byte-identical placements, on any machine,
-//! in any build, regardless of what order the cells happened to be
-//! visited in. Everything below is arranged around that:
+//! The same seed and the same channel data produce byte-identical
+//! placements on any machine and in any build:
 //!
 //! - Every random draw comes from a stream keyed by `(seed, cell index)`
-//!   and nothing else. There is no shared RNG walking across cells, so a
-//!   cell's output does not depend on how many cells preceded it.
-//! - Cells are visited row-major, and the only order-sensitive step --
-//!   minimum-spacing rejection -- consumes that fixed order.
+//!   and nothing else, so a cell's output does not depend on how many
+//!   cells preceded it.
+//! - Cells are visited row-major, and the only order-sensitive step,
+//!   minimum-spacing rejection, consumes that fixed order.
 //! - No `HashMap`, no thread RNG, no floating-point accumulation across
 //!   cells.
 //!
-//! The PRNG is a hand-rolled `splitmix64` rather than the `rand` crate
-//! even though `rand` is already a dependency of this crate (erosion uses
-//! it). `rand`'s generators do not promise a stable value stream across
-//! versions, and a scatter that silently re-rolls on a `cargo update`
-//! would break the re-run contract that the editor operator is built on.
-//! Sixteen lines of splitmix64 pin the stream to this file forever.
+//! The PRNG is a hand-rolled `splitmix64` rather than the `rand` crate:
+//! `rand`'s generators do not promise a stable value stream across
+//! versions, and a scatter that re-rolls on a dependency bump would break
+//! the re-run contract.
 
 use bevy_math::{Vec2, Vec3};
 
@@ -35,8 +31,8 @@ pub struct ScatterMask {
     /// Index into the terrain's channel list.
     pub channel: usize,
     /// Palette values that accept a cell. An empty set accepts nothing,
-    /// which is the honest reading of "no value is allowed" and keeps a
-    /// half-configured operator from carpeting the terrain.
+    /// so a half-configured operator places nothing rather than
+    /// everything.
     pub accept: Vec<u16>,
 }
 
@@ -61,10 +57,9 @@ pub struct ScatterParams {
     /// A channel whose per-cell value scales local density.
     ///
     /// Values are normalised against the largest value present in that
-    /// channel, so a project's own scale works untranslated -- a channel
-    /// painted 0/1/2 and one painted 0..255 both mean "none to all". A
-    /// channel that is entirely zero therefore scatters nothing, which is
-    /// the reading a user painting a weight map expects.
+    /// channel, so a channel painted 0/1/2 and one painted 0..255 both
+    /// mean "none to all". A channel that is entirely zero scatters
+    /// nothing.
     pub weight_channel: Option<usize>,
     /// Uniform scale range. `scale_min == scale_max` means no variance.
     pub scale_min: f32,
@@ -74,8 +69,7 @@ pub struct ScatterParams {
     /// Tilt instances onto the surface instead of standing them upright.
     pub align_to_normal: bool,
     /// How many assets the caller's palette holds. Each placement gets an
-    /// index into it; 0 assets still produces placements, all at index 0,
-    /// so the kernel is testable without an asset list.
+    /// index into it; 0 assets still produces placements, all at index 0.
     pub asset_count: usize,
 }
 
@@ -106,9 +100,7 @@ pub struct Placement {
     /// Uniform scale.
     pub scale: f32,
     /// The up axis this instance should use: the sampled surface normal
-    /// when `align_to_normal` is on, `Vec3::Y` when it is off. Reporting
-    /// the decision rather than the raw normal means a consumer builds
-    /// one rotation without having to re-read the params.
+    /// when `align_to_normal` is on, `Vec3::Y` when it is off.
     pub normal: Vec3,
     /// Index into the caller's asset palette.
     pub asset_index: usize,
@@ -121,9 +113,8 @@ pub struct Placement {
 /// Scatter placements across `heightmap` under `params`.
 ///
 /// `channels` is the terrain's channel list in declaration order; the
-/// mask and weight indices address it. A mask or weight index that is out
-/// of range produces zero placements rather than silently ignoring the
-/// rule -- a typo in a channel index should be visible, not permissive.
+/// mask and weight indices address it. An out-of-range mask or weight
+/// index produces zero placements rather than ignoring the rule.
 pub fn scatter(
     heightmap: &Heightmap,
     channels: &[ChannelData],
@@ -142,8 +133,6 @@ pub fn scatter(
     let weight = match params.weight_channel {
         Some(index) => match channels.get(index) {
             Some(channel) => {
-                // Normalising against the channel's own peak is what
-                // makes "0/1/2" and "0..255" both mean the same thing.
                 let peak = channel.values.iter().copied().max().unwrap_or(0);
                 if peak == 0 {
                     return Vec::new();
@@ -157,8 +146,11 @@ pub fn scatter(
 
     let cell_size = heightmap.cell_size();
     let cell_area = cell_size.x * cell_size.y;
-    let half = heightmap.size / 2.0;
-    let mut spacing = SpacingGrid::new(params.min_spacing, heightmap.size);
+    // Instances ride the ground the heights and normals were sampled
+    // from, whose first vertex is not `-size / 2` for an off-centre
+    // terrain.
+    let at = heightmap.origin;
+    let mut spacing = SpacingGrid::new(params.min_spacing, heightmap.size, at);
     let mut out = Vec::new();
 
     // Row-major over cells. The last row and column are vertices with no
@@ -183,16 +175,14 @@ pub fn scatter(
 
             let mut rng = CellRng::new(params.seed, cell);
             // Stochastic rounding: a cell expecting 0.3 instances places
-            // one 30% of the time. Summed over a region that reproduces
-            // `density` exactly in expectation, which is what makes
-            // density scale linearly instead of snapping to whole
-            // instances per cell.
+            // one 30% of the time, so density scales linearly instead of
+            // snapping to whole instances per cell.
             let expected = params.density * cell_area * weight_scale;
             let count = (expected + rng.next_f32()).floor().max(0.0) as u32;
 
             for _ in 0..count {
-                // Every draw happens whether or not the point survives
-                // the spacing test, so rejecting a point never shifts the
+                // Every draw happens whether or not the point survives the
+                // spacing test, so rejecting a point never shifts the
                 // stream for the ones after it.
                 let fx = gx as f32 + rng.next_f32();
                 let fz = gz as f32 + rng.next_f32();
@@ -208,8 +198,8 @@ pub fn scatter(
                     0
                 };
 
-                let world_x = fx * cell_size.x - half.x;
-                let world_z = fz * cell_size.y - half.y;
+                let world_x = fx * cell_size.x + at.x;
+                let world_z = fz * cell_size.y + at.y;
                 if !spacing.accept(Vec2::new(world_x, world_z)) {
                     continue;
                 }
@@ -234,8 +224,8 @@ pub fn scatter(
 
 /// Surface normal at fractional grid coordinates, by central difference.
 ///
-/// The step is one grid cell, so the normal describes the slope the mesh
-/// actually renders rather than the slope of the interpolant at a point.
+/// The step is one grid cell, so the normal describes the slope of the
+/// rendered mesh rather than of the interpolant at a point.
 pub fn surface_normal(heightmap: &Heightmap, gx: f32, gz: f32) -> Vec3 {
     let cell = heightmap.cell_size();
     let dx = heightmap.sample_bilinear(gx + 1.0, gz) - heightmap.sample_bilinear(gx - 1.0, gz);
@@ -245,8 +235,8 @@ pub fn surface_normal(heightmap: &Heightmap, gx: f32, gz: f32) -> Vec3 {
 
 // --- Deterministic random ---
 
-/// The splitmix64 mixing step. Pinned here rather than pulled from a
-/// crate so the value stream can never move under a dependency bump.
+/// The splitmix64 mixing step. Pinned here rather than taken from a crate
+/// so the value stream cannot move under a dependency bump.
 #[inline]
 fn splitmix64(state: &mut u64) -> u64 {
     *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -260,7 +250,7 @@ fn splitmix64(state: &mut u64) -> u64 {
 ///
 /// Seeded by hashing the cell index and mixing it into the run seed, so
 /// neighbouring cells get uncorrelated streams and no cell's output
-/// depends on any other cell having been visited first.
+/// depends on another cell having been visited first.
 struct CellRng(u64);
 
 impl CellRng {
@@ -283,10 +273,9 @@ impl CellRng {
 /// stays cheap at a few thousand instances.
 ///
 /// The bucket edge is never smaller than `min_spacing`, so every point
-/// within `min_spacing` of a candidate is guaranteed to sit in the
-/// candidate's own bucket or one of its eight neighbours. That is what
-/// makes the grid an optimisation and not a change in behaviour: it
-/// returns exactly what a full pairwise scan would.
+/// within `min_spacing` of a candidate sits in the candidate's own bucket
+/// or one of its eight neighbours, and the grid returns what a full
+/// pairwise scan would.
 struct SpacingGrid {
     min_spacing_sq: f32,
     edge: f32,
@@ -295,13 +284,15 @@ struct SpacingGrid {
     buckets: Vec<Vec<Vec2>>,
 }
 
-/// Ceiling on buckets per axis. A pathologically small `min_spacing` over
-/// a large terrain would otherwise ask for an unbounded allocation; a
-/// coarser bucket only costs time, never correctness.
+/// Ceiling on buckets per axis. A very small `min_spacing` over a large
+/// terrain would otherwise ask for an unbounded allocation; a coarser
+/// bucket costs time, not accuracy.
 const MAX_BUCKETS_PER_AXIS: i32 = 512;
 
 impl SpacingGrid {
-    fn new(min_spacing: f32, size: Vec2) -> Self {
+    /// `origin` is the lowest corner of the ground being scattered on, so
+    /// buckets are laid in the frame the candidates are generated in.
+    fn new(min_spacing: f32, size: Vec2, origin: Vec2) -> Self {
         if min_spacing <= 0.0 {
             return Self {
                 min_spacing_sq: 0.0,
@@ -320,7 +311,7 @@ impl SpacingGrid {
         Self {
             min_spacing_sq: min_spacing * min_spacing,
             edge,
-            origin: -size / 2.0,
+            origin,
             dims,
             buckets: vec![Vec::new(); (dims.0 * dims.1) as usize],
         }
@@ -382,10 +373,9 @@ mod tests {
         })
     }
 
-    /// The headline contract. Two runs with the same seed over the same
-    /// data compare equal placement-for-placement, field-for-field --
-    /// position, yaw, scale, normal, asset index and cell -- not merely
-    /// equal in count.
+    /// Two runs with the same seed over the same data compare equal
+    /// placement-for-placement and field-for-field: position, yaw, scale,
+    /// normal, asset index and cell, not merely equal in count.
     #[test]
     fn the_same_seed_and_data_produce_identical_placements() {
         let heightmap = flat(64);
@@ -422,10 +412,9 @@ mod tests {
         assert_ne!(first, second);
     }
 
-    /// Changing which palette values are accepted must change *which*
-    /// cells receive instances and nothing about the instances in the
-    /// cells that stayed accepted. This is what makes the mask a filter
-    /// rather than a different random run.
+    /// Changing which palette values are accepted changes which cells
+    /// receive instances and nothing about the instances in the cells
+    /// that stayed accepted: the mask filters, it does not re-roll.
     #[test]
     fn narrowing_the_mask_only_removes_cells_and_leaves_the_rest_untouched() {
         let heightmap = flat(64);
@@ -471,7 +460,7 @@ mod tests {
             ..default_params()
         };
         assert!(scatter(&heightmap, &channels, &params).is_empty());
-        // A value nobody painted is the same thing by another route.
+        // A value nobody painted accepts nothing either.
         let params = ScatterParams {
             mask: mask(&[7]),
             ..params
@@ -544,14 +533,14 @@ mod tests {
         }
     }
 
-    /// The bucketed spacing grid must return exactly what a full pairwise
-    /// scan would. Driving it with a bucket edge far larger than the
-    /// spacing exercises the "coarser bucket" fallback.
+    /// The bucketed spacing grid returns what a full pairwise scan would.
+    /// A bucket edge far larger than the spacing exercises the coarser
+    /// bucket fallback.
     #[test]
     fn the_spacing_grid_matches_a_brute_force_scan() {
         let size = Vec2::new(32.0, 32.0);
         let spacing = 0.5;
-        let mut grid = SpacingGrid::new(spacing, size);
+        let mut grid = SpacingGrid::new(spacing, size, -size / 2.0);
         let mut brute: Vec<Vec2> = Vec::new();
         let mut rng = CellRng::new(11, 0);
         for _ in 0..2000 {
@@ -755,6 +744,94 @@ mod tests {
                 .iter()
                 .all(|p| channels[0].values[p.cell as usize] == 2)
         );
+    }
+
+    /// An instance carries the height and normal of the cell it came
+    /// from, so it stands over that cell. Placement that assumes a
+    /// centred grid puts every prop half a terrain away from the ground
+    /// it was sampled on when the grid does not start at `-size / 2`.
+    #[test]
+    fn placements_stand_over_the_cells_they_sampled() {
+        let at = Vec2::new(512.0, -256.0);
+        let heightmap = Heightmap::new_at(32, Vec2::new(32.0, 32.0), 10.0, at);
+        let channels = split_channel(32);
+
+        let placements = scatter(
+            &heightmap,
+            &channels,
+            &ScatterParams {
+                seed: 11,
+                density: 0.2,
+                mask: mask(&[1, 2]),
+                ..default_params()
+            },
+        );
+
+        assert!(!placements.is_empty());
+        let far = at + heightmap.size;
+        for p in &placements {
+            assert!(
+                p.position.x >= at.x && p.position.x <= far.x,
+                "{} is outside the ground the map covers",
+                p.position.x,
+            );
+            assert!(
+                p.position.z >= at.y && p.position.z <= far.y,
+                "{} is outside the ground the map covers",
+                p.position.z,
+            );
+            let cell_x = (p.cell % heightmap.resolution) as f32;
+            let cell_z = (p.cell / heightmap.resolution) as f32;
+            let cell = heightmap.cell_size();
+            assert!((p.position.x - (cell_x * cell.x + at.x)).abs() <= cell.x);
+            assert!((p.position.z - (cell_z * cell.y + at.y)).abs() <= cell.y);
+        }
+    }
+
+    /// The buckets are laid over the ground the candidates are on. A grid
+    /// anchored anywhere else clamps every candidate into one corner
+    /// bucket, and a scatter degrades to the pairwise scan the bucketing
+    /// exists to avoid.
+    #[test]
+    fn the_spacing_grid_buckets_over_the_ground_it_was_given() {
+        let size = Vec2::splat(32.0);
+        let origin = Vec2::new(900.0, -400.0);
+        let grid = SpacingGrid::new(1.0, size, origin);
+
+        assert_eq!(grid.bucket_of(origin), (0, 0));
+        let far = grid.bucket_of(origin + size);
+        assert!(
+            far.0 > 1 && far.1 > 1,
+            "the far corner must reach a far bucket, got {far:?}",
+        );
+    }
+
+    /// Minimum spacing buckets in the same frame the placements are
+    /// generated in. Buckets laid around the origin while candidates
+    /// arrive somewhere else clamp every one of them into an edge bucket,
+    /// and the rejection test stops separating them.
+    #[test]
+    fn minimum_spacing_survives_a_grid_that_is_not_centred() {
+        let params = ScatterParams {
+            seed: 5,
+            density: 0.5,
+            min_spacing: 1.5,
+            mask: mask(&[1, 2]),
+            ..default_params()
+        };
+        let centred = scatter(&flat(32), &split_channel(32), &params);
+        let offset = scatter(
+            &Heightmap::new_at(32, Vec2::new(32.0, 32.0), 10.0, Vec2::new(900.0, 900.0)),
+            &split_channel(32),
+            &params,
+        );
+
+        assert_eq!(centred.len(), offset.len());
+        for pair in offset.windows(2) {
+            let a = Vec2::new(pair[0].position.x, pair[0].position.z);
+            let b = Vec2::new(pair[1].position.x, pair[1].position.z);
+            assert!(a.distance(b) >= 1.5 - 1.0e-3);
+        }
     }
 
     fn default_params() -> ScatterParams {

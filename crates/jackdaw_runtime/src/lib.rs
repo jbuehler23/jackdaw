@@ -1,5 +1,65 @@
+//! Load a scene authored in the editor, in a game that does not have the
+//! editor.
+//!
+//! A game adds [`JackdawPlugin`], points a [`JackdawSceneRoot`] at a `.bsn`
+//! file, and the scene's entities spawn under that root: transforms, brushes,
+//! lights, cameras, UI canvases, glTF instances, and, under the features
+//! below, terrain, colliders and a baked navmesh.
+//!
+//! ```ignore
+//! App::new()
+//!     .add_plugins((DefaultPlugins, jackdaw_runtime::JackdawPlugin))
+//!     .add_systems(Startup, |mut commands: Commands, assets: Res<AssetServer>| {
+//!         commands.spawn(JackdawSceneRoot(assets.load("scene.bsn")));
+//!     })
+//!     .run();
+//! ```
+//!
+//! # What a game provides
+//!
+//! - **An asset folder**, as `AssetPlugin` was configured with: the `assets/`
+//!   beside the executable unless the game said otherwise. Terrain sidecars
+//!   and the catalog are read from it directly rather than through the asset
+//!   server. Add [`JackdawPlugin`] *after* `DefaultPlugins` so it can see how
+//!   `AssetPlugin` was configured. [`JackdawCatalogPath`] overrides the
+//!   location for a game that keeps its project elsewhere.
+//! - **A camera.** Scenes usually carry one. A game that spawns its own can
+//!   mark it `TerrainViewer` so terrain lays its detail around the camera
+//!   the player looks through rather than a UI overlay.
+//!
+//! No registration call, manifest or export step: the editor and the game
+//! read the same files with the same code.
+//!
+//! # What it reads
+//!
+//! - `<scene>.bsn`: the scene, its entities and their components, plus inline
+//!   `#Name` assets.
+//! - `catalog.bsn` and `materials/<name>.material.bsn`: the project's named
+//!   assets, loaded at startup into [`JackdawCatalog`], which an `@Name`
+//!   reference in a scene resolves against.
+//! - `<scene>.terrain-<n>.jdterrain`: one terrain's heights, control map,
+//!   colors and material slots, named by the `Terrain` component's `data_path`
+//!   relative to the scene. Read under the `terrain` feature.
+//! - `<scene>.jdnav`: the navmesh baked for that scene. Read under the
+//!   `navmesh` feature onto the scene root as a `JackdawNavmesh`.
+//!
+//! # Features
+//!
+//! - `render` (default): draw what the scene authored. A build without it does
+//!   not compile, because `jackdaw_scene_types` registers its types through
+//!   its own `render` feature.
+//! - `terrain`: draw the authored terrain. Implies `render` and `navmesh`.
+//! - `navmesh`: load the baked navmesh without drawing anything. A server that
+//!   validates moves is `render` plus `navmesh` and no `terrain`, which leaves
+//!   out the mesher, the splat material and the texture loads.
+//! - `physics`: build avian colliders from authored `AvianCollider`
+//!   components. The game adds `PhysicsPlugins` itself to simulate them. With
+//!   `terrain` as well, the authored ground gets a heightfield collider built
+//!   from the heights it is drawn from.
+//! - `pie`: play-in-editor, streaming this world to a running editor.
+
 use std::any::TypeId;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use bevy::asset::{AssetLoader, LoadContext, ReflectAsset, UntypedHandle, io::Reader};
@@ -30,6 +90,16 @@ mod pie_windowless;
 #[cfg(feature = "pie")]
 pub use pie_windowless::{maybe_windowless, windowless_requested};
 
+#[cfg(feature = "terrain")]
+mod terrain;
+#[cfg(feature = "terrain")]
+pub use terrain::TerrainViewer;
+
+#[cfg(feature = "navmesh")]
+mod navmesh;
+#[cfg(feature = "navmesh")]
+pub use navmesh::JackdawNavmesh;
+
 mod schema_cli;
 pub use schema_cli::{
     SCHEMA_FLAG, extract_schema_and_exit_if_requested, extract_schema_json,
@@ -37,6 +107,10 @@ pub use schema_cli::{
 };
 
 pub mod prelude {
+    #[cfg(feature = "navmesh")]
+    pub use crate::JackdawNavmesh;
+    #[cfg(feature = "terrain")]
+    pub use crate::TerrainViewer;
     pub use crate::{
         EditorCategory, EditorDescription, EditorHidden, JackdawCatalog, JackdawCatalogPath,
         JackdawPlugin, JackdawSceneMember, JackdawSceneRoot, SkipSerialization,
@@ -53,6 +127,12 @@ impl Plugin for JackdawPlugin {
         // the link-time reflect inventory, not `app`, and exits before
         // `App::run` opens a window.
         schema_cli::extract_schema_and_exit_if_requested();
+
+        // Sidecars and the catalog are read from the filesystem rather than
+        // through the asset server, so the folder Bevy reads assets from is
+        // recovered from the `AssetPlugin` this app added. It is only
+        // readable while the app is being built, so it is captured here.
+        app.insert_resource(AssetFolder(asset_folder(app)));
 
         // Registers every scene type for reflection and installs
         // `MeshRebuildPlugin` (which embeds the bundled grid texture
@@ -76,6 +156,12 @@ impl Plugin for JackdawPlugin {
             )
                 .chain(),
         );
+
+        #[cfg(feature = "render")]
+        app.add_plugins(MaterialTextureFormatPlugin);
+
+        #[cfg(feature = "terrain")]
+        app.add_plugins(terrain::plugin);
 
         // Build avian colliders from authored `AvianCollider` components so
         // brushes collide at runtime. Add `PhysicsPlugins` in your app to run
@@ -302,7 +388,7 @@ fn cleanup_orphaned_scene_members(
     }
 }
 
-fn spawn_loaded_scenes(
+pub(crate) fn spawn_loaded_scenes(
     world: &mut World,
     scene_roots: &mut QueryState<(Entity, &JackdawSceneRoot), Without<SceneSpawned>>,
 ) {
@@ -337,6 +423,10 @@ fn spawn_loaded_scenes(
         world
             .entity_mut(root_entity)
             .insert(SceneInstanceMembers(members));
+
+        // A bake is saved under the scene's own name, which is known here.
+        #[cfg(feature = "navmesh")]
+        navmesh::attach_navmesh(world, root_entity, &parent_path, stem.as_deref());
 
         // Give the container root a readable name from the scene's file
         // stem so the editor's Live tree shows the scene name instead of an
@@ -444,6 +534,11 @@ fn spawn_scene_entities(
                 .insert(WorldAssetRoot(scene_handle));
         }
     }
+    // A terrain's sidecar is named relative to the scene file, whose
+    // directory is known here.
+    #[cfg(feature = "terrain")]
+    terrain::attach_sidecars(world, &spawned, parent_path);
+
     #[cfg(not(feature = "render"))]
     let _ = parent_path;
 
@@ -774,18 +869,148 @@ fn preload_linear_textures(world: &mut World, ast: &SceneBsnAst) -> Vec<UntypedH
     handles
 }
 
+/// The `Unorm` twin of a 16-bit `Uint` texture format: same bytes per texel,
+/// same channel order, but float-filterable where the `Uint` side is not.
+///
+/// Bevy decodes 16-bit grayscale PNGs as `R16Uint` and grayscale+alpha as
+/// `Rg16Uint`. A `StandardMaterial` slot demands a filterable float sampler,
+/// so binding either one fails the whole bind group.
+#[cfg(feature = "render")]
+fn filterable_twin(
+    format: bevy::render::render_resource::TextureFormat,
+) -> Option<bevy::render::render_resource::TextureFormat> {
+    use bevy::render::render_resource::TextureFormat;
+    match format {
+        TextureFormat::R16Uint => Some(TextureFormat::R16Unorm),
+        TextureFormat::Rg16Uint => Some(TextureFormat::Rg16Unorm),
+        TextureFormat::Rgba16Uint => Some(TextureFormat::Rgba16Unorm),
+        _ => None,
+    }
+}
+
+/// The images a `StandardMaterial` binds, across all of its texture slots.
+#[cfg(feature = "render")]
+fn material_texture_ids(
+    material: &StandardMaterial,
+) -> impl Iterator<Item = bevy::asset::AssetId<Image>> {
+    [
+        material.base_color_texture.as_ref(),
+        material.emissive_texture.as_ref(),
+        material.metallic_roughness_texture.as_ref(),
+        material.normal_map_texture.as_ref(),
+        material.occlusion_texture.as_ref(),
+        material.depth_map.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(Handle::id)
+}
+
+/// Retags 16-bit `Uint` material textures as their filterable `Unorm` twins.
+///
+/// The editor adds this plugin as well, so a pack of 16-bit maps renders the
+/// same in the editor and in the built game.
+#[cfg(feature = "render")]
+pub struct MaterialTextureFormatPlugin;
+
+#[cfg(feature = "render")]
+impl Plugin for MaterialTextureFormatPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            PostUpdate,
+            promote_material_texture_formats.after(bevy::asset::AssetEventSystems),
+        );
+    }
+}
+
+/// Retag every 16-bit `Uint` image a material binds as its `Unorm` twin.
+///
+/// Rewrites the descriptor only: the texels already have the layout the twin
+/// declares. Runs after the asset events are published and before the render
+/// world extracts, so a depth map is never bound in the failing format. Both
+/// event streams are read, since an image may decode after the material naming
+/// it or before it.
+#[cfg(feature = "render")]
+fn promote_material_texture_formats(
+    mut image_events: MessageReader<AssetEvent<Image>>,
+    mut material_events: MessageReader<AssetEvent<StandardMaterial>>,
+    materials: Res<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    use bevy::asset::AssetId;
+
+    let touched: Vec<AssetId<Image>> = image_events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    let materials_changed = material_events.read().any(|event| {
+        matches!(
+            event,
+            AssetEvent::Added { .. } | AssetEvent::Modified { .. }
+        )
+    });
+    if touched.is_empty() && !materials_changed {
+        return;
+    }
+
+    let bound: HashSet<AssetId<Image>> = materials
+        .iter()
+        .flat_map(|(_, material)| material_texture_ids(material))
+        .collect();
+    let candidates: Vec<AssetId<Image>> = if materials_changed {
+        bound.into_iter().collect()
+    } else {
+        touched
+            .into_iter()
+            .filter(|id| bound.contains(id))
+            .collect()
+    };
+
+    for id in candidates {
+        let Some(twin) = images
+            .get(id)
+            .and_then(|image| filterable_twin(image.texture_descriptor.format))
+        else {
+            continue;
+        };
+        if let Some(mut image) = images.get_mut(id) {
+            image.texture_descriptor.format = twin;
+        }
+    }
+}
+
+/// Suffix of a saved material file under `assets/materials`. The stem before
+/// it is the material's `@Name`.
+const MATERIAL_FILE_SUFFIX: &str = ".material.bsn";
+
 /// Startup system: discover the project catalog and populate
 /// [`JackdawCatalog`]. Honours [`JackdawCatalogPath`] if present;
 /// otherwise mirrors Bevy's `FileAssetReader::get_base_path()` to
 /// look for `assets/catalog.bsn` under the asset root.
+///
+/// Materials are one file each under `assets/materials`; the catalog file
+/// holds the remaining named assets. Both feed the same `@Name` map.
 fn load_project_catalog(world: &mut World) {
+    let root = assets_root(world);
     let Some(catalog_path) = world
         .get_resource::<JackdawCatalogPath>()
         .map(|p| p.0.clone())
-        .or_else(discover_catalog_path)
+        .or_else(|| root.as_ref().map(|root| root.join("catalog.bsn")))
     else {
         return;
     };
+
+    // Materials first, so their linear-space textures claim their paths at the
+    // right color space and a saved material wins its name over any inline
+    // entry in the catalog file.
+    if let Some(root) = &root {
+        load_material_files(world, &root.join("materials"));
+    }
 
     if !catalog_path.is_file() {
         info!(
@@ -817,10 +1042,12 @@ fn load_project_catalog(world: &mut World) {
             let count = entries.len();
             let mut catalog = world.resource_mut::<JackdawCatalog>();
             for entry in entries {
-                // Scenes reference catalog assets as `@Name`.
+                // Scenes reference catalog assets as `@Name`. A material
+                // file already holding the name wins.
                 catalog
                     .handles
-                    .insert(format!("@{}", entry.name), entry.handle);
+                    .entry(format!("@{}", entry.name))
+                    .or_insert(entry.handle);
             }
             info!(
                 "Loaded project catalog with {count} entries from {}",
@@ -831,12 +1058,104 @@ fn load_project_catalog(world: &mut World) {
     }
 }
 
-/// Mirrors `bevy::asset::io::file::FileAssetReader::get_base_path`
-/// and returns the candidate catalog path. Falls back through
-/// `BEVY_ASSET_ROOT`, `CARGO_MANIFEST_DIR`, and the executable's
-/// directory. The catalog lives at `<base>/assets/catalog.bsn`,
-/// inside the `assets/` folder Bevy reads from.
-fn discover_catalog_path() -> Option<PathBuf> {
+/// Load every `assets/materials/*.material.bsn` into [`JackdawCatalog`] under
+/// its file stem. A file that fails to read or parse is logged and skipped.
+fn load_material_files(world: &mut World, dir: &Path) {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<PathBuf> = read_dir
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(MATERIAL_FILE_SUFFIX))
+        })
+        .collect();
+    files.sort();
+
+    let mut count = 0usize;
+    for path in files {
+        let Some(name) = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix(MATERIAL_FILE_SUFFIX))
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(err) => {
+                warn!("Failed to read material {}: {err}", path.display());
+                continue;
+            }
+        };
+
+        #[cfg(feature = "render")]
+        let _preloaded_textures = parse_bsn_text(&text)
+            .ok()
+            .map(|ast| preload_linear_textures(world, &ast))
+            .unwrap_or_default();
+
+        match load_bsn_assets(world, &text) {
+            Ok(entries) => {
+                if entries.len() > 1 {
+                    warn!(
+                        "{} holds {} assets; only the first is used",
+                        path.display(),
+                        entries.len()
+                    );
+                }
+                let Some(entry) = entries.into_iter().next() else {
+                    continue;
+                };
+                if entry.handle.type_id() != TypeId::of::<StandardMaterial>() {
+                    warn!("{} is not a StandardMaterial", path.display());
+                    continue;
+                }
+                world
+                    .resource_mut::<JackdawCatalog>()
+                    .handles
+                    .insert(format!("@{name}"), entry.handle);
+                count += 1;
+            }
+            Err(err) => warn!("Failed to parse material {}: {err}", path.display()),
+        }
+    }
+    if count > 0 {
+        info!("Loaded {count} saved materials from {}", dir.display());
+    }
+}
+
+/// The folder Bevy reads assets from, as this app's [`AssetPlugin`] was
+/// configured. Captured when [`JackdawPlugin`] is built.
+#[derive(Resource, Clone, Debug)]
+struct AssetFolder(Option<PathBuf>);
+
+/// The asset root every sidecar and catalog path is resolved against: the
+/// directory [`JackdawCatalogPath`] points into when it is set, else the
+/// folder the app's [`AssetPlugin`] reads from.
+pub(crate) fn assets_root(world: &World) -> Option<PathBuf> {
+    if let Some(path) = world.get_resource::<JackdawCatalogPath>() {
+        return path.0.parent().map(ToOwned::to_owned);
+    }
+    world
+        .get_resource::<AssetFolder>()
+        .and_then(|f| f.0.clone())
+}
+
+/// Where the app reads assets from: [`AssetPlugin::file_path`] resolved the
+/// way `bevy::asset::io::file::FileAssetReader` resolves it, against
+/// `BEVY_ASSET_ROOT`, `CARGO_MANIFEST_DIR`, or the executable's directory.
+///
+/// With no `AssetPlugin` added yet, the default folder stands in.
+fn asset_folder(app: &App) -> Option<PathBuf> {
+    let file_path = app
+        .get_added_plugins::<AssetPlugin>()
+        .first()
+        .map_or_else(|| AssetPlugin::default().file_path, |p| p.file_path.clone());
     let base = if let Ok(p) = std::env::var("BEVY_ASSET_ROOT") {
         PathBuf::from(p)
     } else if let Ok(p) = std::env::var("CARGO_MANIFEST_DIR") {
@@ -846,5 +1165,219 @@ fn discover_catalog_path() -> Option<PathBuf> {
             .ok()
             .and_then(|p| p.parent().map(ToOwned::to_owned))?
     };
-    Some(base.join("assets").join("catalog.bsn"))
+    Some(base.join(file_path))
+}
+
+#[cfg(test)]
+mod material_file_tests {
+    use super::*;
+    use bevy::app::App;
+    use bevy::asset::{AssetApp, AssetPlugin};
+
+    fn runtime_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((bevy::app::TaskPoolPlugin::default(), AssetPlugin::default()));
+        app.init_asset::<Image>();
+        app.init_asset::<StandardMaterial>();
+        app.register_asset_reflect::<Image>();
+        app.register_asset_reflect::<StandardMaterial>();
+        app.init_resource::<JackdawCatalog>();
+        app
+    }
+
+    const GRASS: &str =
+        "#grass\nbevy_pbr::pbr_material::StandardMaterial {\n    perceptual_roughness: 0.25,\n}\n";
+
+    #[test]
+    fn a_missing_materials_directory_is_not_an_error() {
+        let mut app = runtime_app();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        load_material_files(app.world_mut(), &tmp.path().join("materials"));
+        assert!(app.world().resource::<JackdawCatalog>().is_empty());
+    }
+
+    #[test]
+    fn material_files_populate_the_catalog_under_their_stem() {
+        let mut app = runtime_app();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("materials");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("grass.material.bsn"), GRASS).expect("write");
+        std::fs::write(dir.join("notes.txt"), "ignored").expect("write");
+        // A material file must hold a material; anything else is rejected.
+        std::fs::write(
+            dir.join("wrong.material.bsn"),
+            "#wrong\nbevy_image::image::Image\n",
+        )
+        .expect("write");
+
+        load_material_files(app.world_mut(), &dir);
+
+        assert_eq!(
+            app.world().resource::<Assets<Image>>().len(),
+            1,
+            "the non-material file must have parsed, so the rejection is the type check"
+        );
+        let catalog = app.world().resource::<JackdawCatalog>();
+        assert_eq!(catalog.len(), 1);
+        assert!(catalog.get("@grass").is_some());
+        assert!(catalog.get("@wrong").is_none());
+    }
+
+    #[test]
+    fn a_material_file_outranks_an_inline_catalog_entry_of_the_same_name() {
+        let mut app = runtime_app();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("materials");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("grass.material.bsn"), GRASS).expect("write");
+
+        load_material_files(app.world_mut(), &dir);
+        let from_file = app
+            .world()
+            .resource::<JackdawCatalog>()
+            .get("@grass")
+            .expect("file entry")
+            .clone();
+
+        // The catalog file is read second and must not displace it.
+        let inline = "#grass\nbevy_pbr::pbr_material::StandardMaterial {\n    perceptual_roughness: 0.9,\n}\n";
+        let entries = load_bsn_assets(app.world_mut(), inline).expect("parse");
+        let mut catalog = app.world_mut().resource_mut::<JackdawCatalog>();
+        for entry in entries {
+            catalog
+                .handles
+                .entry(format!("@{}", entry.name))
+                .or_insert(entry.handle);
+        }
+
+        assert_eq!(
+            app.world()
+                .resource::<JackdawCatalog>()
+                .get("@grass")
+                .map(UntypedHandle::id),
+            Some(from_file.id())
+        );
+    }
+}
+
+/// The `Uint` retag, exercised through the plugin the editor and a built game
+/// both add.
+#[cfg(all(test, feature = "render"))]
+mod material_texture_format_tests {
+    use super::*;
+    use bevy::app::App;
+    use bevy::asset::{AssetApp, AssetPlugin, RenderAssetUsages};
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+
+    fn promotion_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((bevy::app::TaskPoolPlugin::default(), AssetPlugin::default()));
+        app.init_asset::<Image>();
+        app.init_asset::<StandardMaterial>();
+        app.add_plugins(MaterialTextureFormatPlugin);
+        app
+    }
+
+    /// A one-texel image in `format`, sized from the texel it is given.
+    fn raw_image(app: &mut App, texel: &[u8], format: TextureFormat) -> Handle<Image> {
+        let image = Image::new(
+            Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            texel.to_vec(),
+            format,
+            RenderAssetUsages::default(),
+        );
+        app.world_mut().resource_mut::<Assets<Image>>().add(image)
+    }
+
+    fn format_of(app: &App, handle: &Handle<Image>) -> TextureFormat {
+        app.world()
+            .resource::<Assets<Image>>()
+            .get(handle)
+            .expect("image")
+            .texture_descriptor
+            .format
+    }
+
+    /// A 16-bit grayscale PNG decodes as `R16Uint`, which has no filterable
+    /// sampler; bound to a material slot it fails the whole bind group.
+    #[test]
+    fn a_sixteen_bit_uint_image_a_material_binds_is_retagged_as_its_unorm_twin() {
+        let mut app = promotion_app();
+        let occlusion = raw_image(&mut app, &[0x00, 0x80], TextureFormat::R16Uint);
+        let gray_alpha = raw_image(&mut app, &[0x00, 0x80, 0x00, 0xff], TextureFormat::Rg16Uint);
+        let _material = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial {
+                occlusion_texture: Some(occlusion.clone()),
+                depth_map: Some(gray_alpha.clone()),
+                ..default()
+            });
+
+        app.update();
+
+        assert_eq!(format_of(&app, &occlusion), TextureFormat::R16Unorm);
+        assert_eq!(format_of(&app, &gray_alpha), TextureFormat::Rg16Unorm);
+    }
+
+    /// The texels are untouched; only the descriptor is rewritten.
+    #[test]
+    fn promotion_leaves_the_texels_alone() {
+        let mut app = promotion_app();
+        let image = raw_image(&mut app, &[0x34, 0x12], TextureFormat::R16Uint);
+        let _material = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial {
+                depth_map: Some(image.clone()),
+                ..default()
+            });
+
+        app.update();
+
+        let images = app.world().resource::<Assets<Image>>();
+        assert_eq!(
+            images.get(&image).unwrap().data.as_deref(),
+            Some(&[0x34u8, 0x12][..])
+        );
+    }
+
+    /// An image no material binds keeps its format: an integer texture read
+    /// with `textureLoad` stays integer.
+    #[test]
+    fn an_image_no_material_binds_keeps_its_uint_format() {
+        let mut app = promotion_app();
+        let unbound = raw_image(&mut app, &[0x00, 0x80], TextureFormat::R16Uint);
+
+        app.update();
+
+        assert_eq!(format_of(&app, &unbound), TextureFormat::R16Uint);
+    }
+
+    /// The image may decode before the material that names it, so the
+    /// material's own event sweeps the slots it claims.
+    #[test]
+    fn a_material_added_after_its_image_still_gets_it_promoted() {
+        let mut app = promotion_app();
+        let image = raw_image(&mut app, &[0x00, 0x80], TextureFormat::R16Uint);
+        app.update();
+        assert_eq!(format_of(&app, &image), TextureFormat::R16Uint);
+
+        let _material = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial {
+                normal_map_texture: Some(image.clone()),
+                ..default()
+            });
+        app.update();
+
+        assert_eq!(format_of(&app, &image), TextureFormat::R16Unorm);
+    }
 }

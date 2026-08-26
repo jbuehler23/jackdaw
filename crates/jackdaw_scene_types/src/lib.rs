@@ -29,8 +29,8 @@ pub use mesh_rebuild::evaluate_brush_geometry;
 pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
 pub use types::{
     Brush, BrushFaceData, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh, GltfSource,
-    NavmeshRegion, PrefabBaseline, PropertyValue, SceneRootTag, Terrain, TerrainChannel,
-    TerrainChannelElement, TerrainPaletteEntry, TerrainQuantization,
+    PrefabBaseline, PropertyValue, SceneRootTag, Terrain, TerrainChannel, TerrainChannelElement,
+    TerrainNavmesh, TerrainPaletteEntry, TerrainQuantization,
 };
 
 use bevy::prelude::*;
@@ -75,10 +75,10 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<PropertyValue>()
             .register_type::<SceneNodeId>()
             .register_type::<GltfSource>()
-            .register_type::<NavmeshRegion>()
             .register_type::<Terrain>()
             .register_type::<TerrainChannel>()
             .register_type::<TerrainChannelElement>()
+            .register_type::<TerrainNavmesh>()
             .register_type::<TerrainPaletteEntry>()
             .register_type::<TerrainQuantization>()
             .register_type::<MeshMirror>()
@@ -165,7 +165,7 @@ impl From<String> for EditorDescription {
 ///   the hierarchy panel.
 /// - As a `#[reflect(@EditorHidden)]` attribute on a Component
 ///   type: hides the type from the Add Component picker. Used by
-///   jackdaw's own scene types (brushes, navmesh, terrain, node
+///   jackdaw's own scene types (brushes, terrain, node
 ///   graph, animation graph) and available to extension and game
 ///   crates with helper Components.
 ///

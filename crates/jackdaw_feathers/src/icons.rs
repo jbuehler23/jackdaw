@@ -33,6 +33,14 @@ pub struct IconFont(pub Handle<Font>);
 #[derive(Resource)]
 pub struct EditorFont(pub Handle<Font>);
 
+/// `bevy::feathers`'s own default body font (`fonts::REGULAR`), loaded through
+/// the `AssetServer` rather than jackdaw's synchronously-loaded
+/// [`EditorFont`], which backs a different embedded copy of the same nominal
+/// typeface. Surfaces beside native feathers widgets, which always load
+/// `fonts::REGULAR` explicitly, use this to match exactly.
+#[derive(Resource, Deref, DerefMut)]
+pub struct FeathersDefaultFont(pub Handle<Font>);
+
 /// Italic variant of the editor body font. Used by surfaces that
 /// want to mark content as "transient" or "runtime"; today the
 /// hierarchy italicises rows for entities spawned during PIE Play.
@@ -67,6 +75,16 @@ impl Plugin for IconFontPlugin {
         app.insert_resource(IconFont(icon_handle));
         app.insert_resource(EditorFont(editor_font_handle));
         app.insert_resource(EditorFontItalic(editor_font_italic_handle));
+
+        // bevy::feathers registers its own fonts as embedded assets when its
+        // plugins build, which must happen before this plugin (see
+        // `FeathersDefaultFont`'s doc comment); load by path rather than
+        // duplicating the bytes.
+        let feathers_default = app
+            .world()
+            .resource::<AssetServer>()
+            .load(crate::tokens::DEFAULT_BODY_FONT);
+        app.insert_resource(FeathersDefaultFont(feathers_default));
 
         // Register the fonts as embedded assets so they can be referenced by
         // path from `bsn!` scenes; see `font_paths`. The synchronous

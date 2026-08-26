@@ -1,21 +1,17 @@
 //! The `terrain.scatter` operator: PCG placement over paint channels.
 //!
-//! Generator proposes, painter disposes. A run stamps ordinary editable
-//! entities -- the same `GltfSource` + `WorldAssetRoot` + `Transform`
-//! shape a drag from the asset browser produces
-//! ([`crate::entity_ops::spawn_gltf`]) -- parented under one named group
-//! so the outliner shows a single collapsible node. Nothing about an
-//! instance is special-cased afterwards: move it, scale it, delete it,
-//! give it components.
+//! A run stamps ordinary editable entities, the same `GltfSource` +
+//! `WorldAssetRoot` + `Transform` shape a drag from the asset browser
+//! produces ([`crate::entity_ops::spawn_gltf`]), parented under one named
+//! group so the outliner shows a single collapsible node. Instances are not
+//! special-cased afterwards: move, scale, delete or add components to them.
 //!
-//! What makes a re-run safe is [`ScatterInstance`], a small reflected
-//! marker recording the generator, the seed, and the exact transform the
-//! generator produced. On re-run an instance whose live `Transform` still
-//! equals its recorded one is *untouched* and gets replaced; one the user
-//! moved, rotated or scaled no longer matches and is preserved. That is
-//! the whole definition, and it is deliberately narrow: it needs no
-//! bookkeeping beyond what is already saved in the scene, and it survives
-//! a save/load round trip because both halves are reflected data.
+//! [`ScatterInstance`] is a reflected marker recording the generator, the
+//! seed, and the transform the generator produced. On re-run an instance
+//! whose live `Transform` equals its recorded one is replaced; one the user
+//! moved, rotated or scaled does not match and is preserved. Both halves
+//! are reflected data, so the rule survives a save/load round trip and
+//! needs no bookkeeping outside the scene.
 //!
 //! The random stream lives in [`jackdaw_terrain::scatter()`] and derives
 //! from `(seed, cell index)` only. Nothing in this file adds randomness.
@@ -23,6 +19,8 @@
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
+use bevy::ui::Checked;
+use bevy::ui_widgets::{SliderValue, ValueChange};
 use bevy::world_serialization::WorldAssetRoot;
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
@@ -31,19 +29,19 @@ use jackdaw_feathers::{
     tokens,
 };
 use jackdaw_scene_types::GltfSource;
-use jackdaw_terrain::{Heightmap, ScatterMask, ScatterParams};
+use jackdaw_terrain::{ScatterMask, ScatterParams};
 
 use super::TerrainDataStore;
-use super::inspector::{
-    spawn_add_tile, spawn_hint, spawn_labeled_field, spawn_tile, spawn_tile_grid, spawn_tile_remove,
-};
 use super::ops::has_selected_terrain;
+use super::ui_fields::{
+    FieldKind, spawn_add_tile, spawn_checkbox, spawn_hint, spawn_slider_row, spawn_tile,
+    spawn_tile_grid, spawn_tile_remove,
+};
 
 /// A run estimated to place more instances than this is refused rather
-/// than spawning that many entities (and undo-stack history) in one
-/// click. High enough for any legitimate scatter; low enough that a
-/// stray density (a pasted value, a unit mismatch) cannot hang the
-/// editor or balloon the undo stack.
+/// than spawning that many entities, and that much undo history, in one
+/// click. A stray density from a pasted value or a unit mismatch would
+/// otherwise hang the editor.
 const MAX_SCATTER_INSTANCES: u32 = 100_000;
 use crate::commands::{CommandGroup, CommandHistory, DespawnEntity, EditorCommand, SpawnEntity};
 use crate::selection::Selection;
@@ -53,7 +51,13 @@ pub(super) fn plugin(app: &mut App) {
         .init_resource::<TerrainScatterReport>()
         .register_type::<ScatterInstance>()
         .register_type::<ScatterGroup>()
-        .add_observer(on_scatter_text_commit);
+        .add_systems(
+            Update,
+            sync_scatter_fields.run_if(in_state(crate::AppState::Editor)),
+        )
+        .add_observer(on_scatter_asset_draft_commit)
+        .add_observer(on_scatter_value_change)
+        .add_observer(on_scatter_checkbox_value_change);
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -72,7 +76,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// Marks the group entity a scatter run stamps its instances under.
 ///
 /// `key` is what a re-run matches on, so two scatter runs over the same
-/// terrain (undergrowth and trees, say) stay independent stamps rather
+/// terrain, such as undergrowth and trees, stay independent stamps rather
 /// than overwriting each other.
 #[derive(Component, Reflect, Clone, Debug, Default)]
 #[reflect(Component, Default)]
@@ -85,12 +89,12 @@ pub struct ScatterGroup {
 
 /// Provenance carried by every generated instance.
 ///
-/// `generated` is the transform this instance was born with. An instance
-/// whose live `Transform` still equals it has not been touched by hand
-/// and a re-run may replace it; anything else is the user's work and is
-/// preserved. Exact equality is the right test here because nothing in
-/// the editor perturbs a transform without the user asking -- there is no
-/// physics settle, no re-import, no snapping pass over placed entities.
+/// `generated` is the transform this instance was spawned with. An
+/// instance whose live `Transform` equals it has not been edited by hand
+/// and a re-run may replace it; anything else is preserved. Exact equality
+/// holds as a test because nothing in the editor perturbs a transform on
+/// its own: no physics settle, no re-import, no snapping pass over placed
+/// entities.
 #[derive(Component, Reflect, Clone, Debug, Default)]
 #[reflect(Component, Default)]
 pub struct ScatterInstance {
@@ -107,8 +111,8 @@ pub struct ScatterInstance {
 pub struct ScatterAsset {
     /// Project-relative or absolute path to a `.gltf` / `.glb`.
     pub path: String,
-    /// Whether this entry takes part in the next run. Unreal's per-row
-    /// checkbox and `Terrain3D`'s per-tile eye are the same control.
+    /// Whether this entry takes part in the next run. The list's per-row
+    /// checkbox and the grid's per-tile eye both carry this flag.
     pub active: bool,
 }
 
@@ -125,8 +129,8 @@ impl ScatterAsset {
 /// Everything the Scatter panel edits, and the defaults every parameter
 /// of `terrain.scatter` falls back to when the caller omits it.
 ///
-/// Keeping the defaults in a resource is what lets the same operator be
-/// clicked with no arguments and scripted with all of them.
+/// Holding the defaults in a resource lets the same operator be clicked
+/// with no arguments and scripted with all of them.
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct TerrainScatterState {
     pub seed: u64,
@@ -210,8 +214,8 @@ pub(crate) enum ScatterField {
 /// Scatter instances across a terrain from its paint channels.
 ///
 /// `allows_undo = false` because the stamp pushes its own
-/// [`CommandGroup`] history entry; letting the framework also capture a
-/// scene diff would record the change twice.
+/// [`CommandGroup`] entry, and a framework scene diff would record the
+/// change twice.
 #[operator(
     id = "terrain.scatter",
     label = "Scatter",
@@ -326,9 +330,9 @@ pub(crate) fn terrain_scatter_asset_toggle(
 
 /// Include or exclude one mask palette value.
 ///
-/// Takes the palette *row* index, like `terrain.channel.value.select`,
-/// and resolves the value off the terrain -- so the tile grid can pass
-/// its own index and the stored accept set stays in palette values.
+/// Takes the palette row index, like `terrain.channel.value.select`, and
+/// resolves the value off the terrain, so the tile grid passes its own
+/// index while the stored accept set stays in palette values.
 #[operator(
     id = "terrain.scatter.value.toggle",
     label = "Toggle Mask Value",
@@ -398,8 +402,8 @@ pub(crate) fn terrain_scatter_toggle_align(
 /// Resolve the terrain a run targets: an explicit name first, the
 /// selection otherwise.
 ///
-/// The name lookup is what makes the operator drivable with no mouse and
-/// no selection, which is the whole point of taking it as a parameter.
+/// The name lookup makes the operator drivable with no mouse and no
+/// selection.
 fn resolve_terrain(world: &mut World, name: Option<&str>) -> Option<Entity> {
     if let Some(name) = name.filter(|n| !n.is_empty()) {
         let mut query = world.query::<(Entity, Option<&Name>, &jackdaw_scene_types::Terrain)>();
@@ -414,16 +418,16 @@ fn resolve_terrain(world: &mut World, name: Option<&str>) -> Option<Entity> {
         return Some(entity);
     }
     // A scene with exactly one terrain needs no disambiguation, and a
-    // headless caller has no way to make a selection. Two or more and the
-    // caller has to say which.
+    // headless caller cannot make a selection. With two or more the caller
+    // names one.
     let mut query = world.query_filtered::<Entity, With<jackdaw_scene_types::Terrain>>();
     let mut found = query.iter(world);
     let only = found.next()?;
     found.next().is_none().then_some(only)
 }
 
-/// Names of every terrain in the scene, for a failure message that says
-/// what the caller could have asked for instead.
+/// Names of every terrain in the scene, for a failure message listing what
+/// the caller could name.
 fn terrain_names(world: &mut World) -> Vec<String> {
     let mut query = world.query::<(Option<&Name>, &jackdaw_scene_types::Terrain)>();
     query
@@ -518,8 +522,8 @@ fn run_scatter(world: &mut World, params: &OperatorParameters) {
         min_spacing: params
             .as_float("spacing")
             .map_or(state.min_spacing, |v| v as f32),
-        // An empty accept set means "no mask" rather than "accept
-        // nothing": a terrain nobody painted should still scatter.
+        // An empty accept set means no mask rather than accept nothing, so
+        // an unpainted terrain still scatters.
         mask: (!accept.is_empty()).then_some(ScatterMask { channel, accept }),
         weight_channel,
         scale_min: params
@@ -535,13 +539,28 @@ fn run_scatter(world: &mut World, params: &OperatorParameters) {
         asset_count: assets.len(),
     };
 
-    // A mask or a weight channel only ever reduce the instance count from
-    // here, so density times the full world area is a safe upper bound
-    // on what the kernel would produce -- cheap to check before running
-    // it. Without a cap, one click at a stray density (a pasted value, a
-    // unit mismatch) can queue an unbounded number of spawns onto the
-    // undo stack.
-    let world_area = f64::from(terrain.size.x) * f64::from(terrain.size.y);
+    // A mask or a weight channel only reduces the instance count, so
+    // density times the full world area bounds what the kernel would
+    // produce and can be checked before running it. Without a cap, one
+    // click at a stray density queues an unbounded number of spawns onto
+    // the undo stack.
+    let ground = world
+        .resource::<TerrainDataStore>()
+        .grid_shape(&terrain)
+        .size;
+    let world_area = f64::from(ground.x) * f64::from(ground.y);
+    // A terrain holding no regions covers no ground, and the cap above is
+    // measured against area, so every density would pass it.
+    if world_area <= 0.0 {
+        set_report(
+            world,
+            TerrainScatterReport {
+                message: "refused: no ground to scatter on; generate the terrain first".to_string(),
+                ..default()
+            },
+        );
+        return;
+    }
     let estimated_instances = f64::from(scatter_params.density) * world_area;
     if estimated_instances > MAX_SCATTER_INSTANCES as f64 {
         set_report(
@@ -559,23 +578,31 @@ fn run_scatter(world: &mut World, params: &OperatorParameters) {
         return;
     }
 
-    let (heightmap, channels) = {
+    // Read rather than `entry_for`: scattering writes no heights, so it
+    // does not retire the terrain's shared heightmap, which is the same
+    // heights it samples. It weighs a mask over the whole terrain at once,
+    // so the planes are gathered into the dense form it reads.
+    let channels = {
         let mut store = world.resource_mut::<TerrainDataStore>();
-        let Some(data) = store.entry_for(&terrain) else {
+        let Some(data) = store.read_for(&terrain) else {
             return;
         };
-        (
-            Heightmap {
-                resolution: terrain.resolution,
-                size: terrain.size,
-                max_height: terrain.max_height,
-                heights: data.heights.clone(),
-            },
-            data.channels.clone(),
-        )
+        let document = data.document();
+        let resolution = document.grid_resolution();
+        document
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(index, descriptor)| jackdaw_terrain::ChannelData {
+                name: descriptor.name.clone(),
+                element: descriptor.element,
+                values: document.regions.read_grid_channel(index, resolution),
+            })
+            .collect::<Vec<_>>()
     };
+    let heightmap = world.resource::<TerrainDataStore>().heightmap(&terrain);
 
-    let placements = jackdaw_terrain::scatter(&heightmap, &channels, &scatter_params);
+    let placements = jackdaw_terrain::scatter(&heightmap.map, &channels, &scatter_params);
 
     let key = params
         .as_str("group")
@@ -606,8 +633,7 @@ struct StampRequest {
     seed: u64,
     terrain: Entity,
     /// Placements come out of the kernel in the terrain's local space, so
-    /// the terrain's own transform has to be applied before they become
-    /// world-space instances.
+    /// this transform is applied before they become world-space instances.
     terrain_transform: Transform,
     assets: Vec<String>,
     placements: Vec<jackdaw_terrain::Placement>,
@@ -626,7 +652,7 @@ fn find_group(world: &mut World, key: &str) -> Option<Entity> {
 /// and the count it must preserve.
 ///
 /// The test is exact transform equality against the recorded `generated`
-/// transform. See [`ScatterInstance`] for why that is the whole rule.
+/// transform; see [`ScatterInstance`].
 fn partition_existing(world: &mut World, group: Entity) -> (Vec<Entity>, usize) {
     let children: Vec<Entity> = world
         .get::<Children>(group)
@@ -636,8 +662,7 @@ fn partition_existing(world: &mut World, group: Entity) -> (Vec<Entity>, usize) 
     let mut kept = 0;
     for child in children {
         let Some(generated) = world.get::<ScatterInstance>(child).map(|i| i.generated) else {
-            // Something the user parented under the group by hand. Not
-            // ours to remove.
+            // Parented under the group by hand, so it is not removed.
             kept += 1;
             continue;
         };
@@ -669,9 +694,9 @@ fn stamp(world: &mut World, request: StampRequest) {
 
     let mut cmds: Vec<Box<dyn EditorCommand>> = Vec::new();
 
-    // The group entity's id is not known until its spawn command runs,
-    // and redo re-runs it, so the instance commands read it out of a
-    // shared slot rather than capturing an id that would go stale.
+    // The group entity's id is unknown until its spawn command runs, and
+    // redo re-runs it, so the instance commands read it out of a shared
+    // slot rather than capturing an id that would go stale.
     let slot: Arc<Mutex<Option<Entity>>> = Arc::new(Mutex::new(existing_group));
     if existing_group.is_none() {
         let group_parent = world.get::<ChildOf>(terrain).map(ChildOf::parent);
@@ -777,8 +802,8 @@ fn spawn_group(world: &mut World, key: &str, parent: Option<Entity>) -> Entity {
     entity
 }
 
-/// Spawn one instance with exactly the component shape a browser drop
-/// produces, plus its provenance marker.
+/// Spawn one instance with the component shape a browser drop produces,
+/// plus its provenance marker.
 fn spawn_instance(
     world: &mut World,
     parent: Entity,
@@ -862,9 +887,9 @@ fn clear_scatter(world: &mut World, key: Option<&str>) {
 
 /// What the Scatter panel's appearance depends on.
 ///
-/// The inspector compares this rather than change-detecting the resource,
-/// because the numeric fields are typed into and rebuilding the section
-/// on every committed keystroke would take the focus away mid-edit.
+/// The inspector compares this rather than change-detecting the resource:
+/// the numeric fields are typed into, and rebuilding the section on every
+/// committed keystroke would take the focus away mid-edit.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct ScatterSignature {
     assets: Vec<(String, bool)>,
@@ -895,10 +920,8 @@ pub(super) fn signature(
 
 /// The Scatter section of the terrain inspector.
 ///
-/// Laid out in the order the reference tools use, so the workflow reads
-/// top to bottom the way it does in Unreal's Foliage panel and Unity's
-/// Paint Trees: *what* is being placed (the asset palette), *where* it
-/// may go (the mask), then *how much* and *how varied*.
+/// Top to bottom: the asset palette, the mask, then the density and
+/// variation numerics.
 pub(super) fn spawn_scatter_ui(
     commands: &mut Commands,
     parent: Entity,
@@ -933,9 +956,8 @@ pub(super) fn spawn_scatter_ui(
     spawn_path_field(commands, parent, &state.asset_draft);
 
     // --- Mask ---
-    // Reusing the channel's own palette swatches means the values here
-    // read identically to the ones in the Paint Channels section: the
-    // user picks the same tiles they painted with.
+    // The channel's own palette swatches, so these values read the same as
+    // the ones in the Paint Channels section.
     let empty: &[jackdaw_scene_types::TerrainChannel] = &[];
     let channels = terrain.map(|t| t.channels.as_slice()).unwrap_or(empty);
     if let Some(channel) = channels.get(state.mask_channel) {
@@ -972,80 +994,91 @@ pub(super) fn spawn_scatter_ui(
     }
 
     // --- Numerics ---
-    spawn_labeled_field(
+    spawn_slider_row(
         commands,
         parent,
         "Seed",
         "Same seed always places the same instances",
-        state.seed as f64,
+        state.seed as f32,
+        0.0..100_000.0,
+        FieldKind::Count,
         ScatterField::Seed,
     );
-    spawn_labeled_field(
+    spawn_slider_row(
         commands,
         parent,
         "Density",
         "Instances per square world unit",
-        state.density as f64,
+        state.density,
+        0.0..10.0,
+        FieldKind::Continuous,
         ScatterField::Density,
     );
-    spawn_labeled_field(
+    spawn_slider_row(
         commands,
         parent,
         "Min Spacing",
         "Closest two instances may sit, in world units",
-        state.min_spacing as f64,
+        state.min_spacing,
+        0.0..10.0,
+        FieldKind::Continuous,
         ScatterField::Spacing,
     );
-    spawn_labeled_field(
+    spawn_slider_row(
         commands,
         parent,
         "Mask Channel",
         "Which paint channel gates placement",
-        state.mask_channel as f64,
+        state.mask_channel as f32,
+        0.0..16.0,
+        FieldKind::Count,
         ScatterField::MaskChannel,
     );
-    spawn_labeled_field(
+    spawn_slider_row(
         commands,
         parent,
         "Weight Channel",
         "Channel scaling density per cell. -1 for none",
-        state.weight_channel.map_or(-1.0, |c| c as f64),
+        state.weight_channel.map_or(-1.0, |c| c as f32),
+        -1.0..16.0,
+        FieldKind::Count,
         ScatterField::WeightChannel,
     );
-    spawn_labeled_field(
+    spawn_slider_row(
         commands,
         parent,
         "Scale Min",
         "Smallest uniform scale",
-        state.scale_min as f64,
+        state.scale_min,
+        0.0..10.0,
+        FieldKind::Continuous,
         ScatterField::ScaleMin,
     );
-    spawn_labeled_field(
+    spawn_slider_row(
         commands,
         parent,
         "Scale Max",
         "Largest uniform scale",
-        state.scale_max as f64,
+        state.scale_max,
+        0.0..10.0,
+        FieldKind::Continuous,
         ScatterField::ScaleMax,
     );
 
     // --- Toggles ---
-    // Toggle buttons rather than checkboxes, matching the Quantization
-    // section directly above: the label carries the state, so there is no
-    // separate control to read.
-    spawn_flag_toggle(
+    spawn_checkbox(
         commands,
         parent,
         "Random Yaw",
         state.random_yaw,
-        TerrainScatterToggleYawOp::ID,
+        RandomYawCheckbox,
     );
-    spawn_flag_toggle(
+    spawn_checkbox(
         commands,
         parent,
         "Align to Normal",
         state.align_to_normal,
-        TerrainScatterToggleAlignOp::ID,
+        AlignToNormalCheckbox,
     );
 
     // --- Run ---
@@ -1062,16 +1095,15 @@ pub(super) fn spawn_scatter_ui(
         ChildOf(parent),
     ));
 
-    // Instance-count feedback, the way Unreal shows a live count on the
-    // foliage type and ProtonScatter shows Instance Count: without it a
-    // user cannot tell a run that placed nothing from one that never ran.
+    // The report line is what separates a run that placed nothing from one
+    // that never ran.
     if !report.message.is_empty() {
         spawn_hint(commands, parent, &report.message);
     }
 }
 
-/// The asset-path field. Its own helper rather than the numeric one next
-/// to it, because a path is text.
+/// The asset-path field. A separate helper from the numeric one beside it,
+/// since a path is text.
 fn spawn_path_field(commands: &mut Commands, parent: Entity, value: &str) {
     let row = commands
         .spawn((
@@ -1109,33 +1141,20 @@ fn spawn_path_field(commands: &mut Commands, parent: Entity, value: &str) {
     ));
 }
 
-fn spawn_flag_toggle(
-    commands: &mut Commands,
-    parent: Entity,
-    label: &str,
-    on: bool,
-    op_id: &'static str,
-) {
-    commands.spawn((
-        button::button(
-            ButtonProps::new(format!("{label}: {}", if on { "On" } else { "Off" }))
-                .with_variant(if on {
-                    ButtonVariant::Primary
-                } else {
-                    ButtonVariant::Default
-                })
-                .call_operator(op_id),
-        ),
-        ChildOf(parent),
-    ));
-}
+/// Tags the Scatter section's "Random Yaw" checkbox so its commit handler
+/// can tell it apart from every other checkbox in the editor.
+#[derive(Component)]
+struct RandomYawCheckbox;
 
-/// Commit handler for the Scatter section's text fields.
-///
-/// A separate observer from the sculpt/generation one so the Scatter
-/// panel owns its own bindings; both fire on every commit and each
-/// ignores fields it does not recognise.
-fn on_scatter_text_commit(
+/// Tags the Scatter section's "Align to Normal" checkbox, same reasoning
+/// as [`RandomYawCheckbox`].
+#[derive(Component)]
+struct AlignToNormalCheckbox;
+
+/// Commit handler for the Scatter section's asset-path text field. A
+/// separate observer from the numeric one, so the Scatter panel owns its
+/// bindings; each ignores fields it does not recognise.
+fn on_scatter_asset_draft_commit(
     event: On<TextEditCommitEvent>,
     bindings: Query<&ScatterField>,
     child_of_query: Query<&ChildOf>,
@@ -1147,34 +1166,104 @@ fn on_scatter_text_commit(
             return;
         };
         let parent = child_of.parent();
-        if let Ok(&field) = bindings.get(parent) {
-            apply_scatter_field(&mut state, field, &event.text);
+        if let Ok(&field) = bindings.get(parent)
+            && field == ScatterField::AssetDraft
+        {
+            state.asset_draft = event.text.trim().to_string();
             return;
         }
         current = parent;
     }
 }
 
-fn apply_scatter_field(state: &mut TerrainScatterState, field: ScatterField, text: &str) {
-    if field == ScatterField::AssetDraft {
-        state.asset_draft = text.trim().to_string();
+/// Commit handler for the Scatter section's scrub-drag numeric fields.
+fn on_scatter_value_change(
+    event: On<ValueChange<f32>>,
+    bindings: Query<&ScatterField>,
+    mut state: ResMut<TerrainScatterState>,
+) {
+    let Ok(&field) = bindings.get(event.event_target()) else {
+        return;
+    };
+    apply_scatter_numeric_field(&mut state, field, event.value);
+}
+
+fn apply_scatter_numeric_field(state: &mut TerrainScatterState, field: ScatterField, value: f32) {
+    match field {
+        ScatterField::AssetDraft => {}
+        ScatterField::Seed => state.seed = value.max(0.0) as u64,
+        ScatterField::Density => state.density = value.max(0.0),
+        ScatterField::Spacing => state.min_spacing = value.max(0.0),
+        ScatterField::MaskChannel => state.mask_channel = value.max(0.0) as usize,
+        // -1 spells no weight channel, so the field says "off" without a
+        // separate toggle beside it.
+        ScatterField::WeightChannel => {
+            state.weight_channel = (value >= 0.0).then_some(value as usize);
+        }
+        ScatterField::ScaleMin => state.scale_min = value.max(0.0),
+        ScatterField::ScaleMax => state.scale_max = value.max(0.0),
+    }
+}
+
+/// Re-insert `SliderValue` on every scrub-drag numeric field whenever
+/// `TerrainScatterState` changes, closing the loop `on_scatter_value_change`
+/// opens so the fill and digits track a drag live rather than on release.
+fn sync_scatter_fields(
+    state: Res<TerrainScatterState>,
+    fields: Query<(Entity, &ScatterField)>,
+    mut commands: Commands,
+) {
+    if !state.is_changed() {
         return;
     }
-    let number: f64 = text.trim().parse().unwrap_or(0.0);
-    match field {
-        ScatterField::AssetDraft => unreachable!("handled above"),
-        ScatterField::Seed => state.seed = number.max(0.0) as u64,
-        ScatterField::Density => state.density = (number as f32).max(0.0),
-        ScatterField::Spacing => state.min_spacing = (number as f32).max(0.0),
-        ScatterField::MaskChannel => state.mask_channel = number.max(0.0) as usize,
-        // -1 is the "no weight channel" spelling, so the field can say
-        // "off" without a separate toggle beside it.
-        ScatterField::WeightChannel => {
-            state.weight_channel = (number >= 0.0).then_some(number as usize);
-        }
-        ScatterField::ScaleMin => state.scale_min = (number as f32).max(0.0),
-        ScatterField::ScaleMax => state.scale_max = (number as f32).max(0.0),
+    for (entity, field) in &fields {
+        let value = match field {
+            ScatterField::AssetDraft => continue,
+            ScatterField::Seed => state.seed as f32,
+            ScatterField::Density => state.density,
+            ScatterField::Spacing => state.min_spacing,
+            ScatterField::MaskChannel => state.mask_channel as f32,
+            ScatterField::WeightChannel => state.weight_channel.map_or(-1.0, |c| c as f32),
+            ScatterField::ScaleMin => state.scale_min,
+            ScatterField::ScaleMax => state.scale_max,
+        };
+        commands.entity(entity).insert(SliderValue(value));
     }
+}
+
+/// Commit handler for the Scatter section's two toggles.
+/// `FeathersCheckbox` does not self-manage `Checked` (see
+/// `ui_fields::spawn_checkbox`), so this reflects the new value onto the
+/// source entity before dispatching, the same two steps
+/// `options_bar.rs`'s `on_terrain_checkbox_value_change` takes.
+fn on_scatter_checkbox_value_change(
+    event: On<ValueChange<bool>>,
+    yaw: Query<(), With<RandomYawCheckbox>>,
+    align: Query<(), With<AlignToNormalCheckbox>>,
+    mut commands: Commands,
+) {
+    let target = event.event_target();
+    let op_id = if yaw.contains(target) {
+        TerrainScatterToggleYawOp::ID
+    } else if align.contains(target) {
+        TerrainScatterToggleAlignOp::ID
+    } else {
+        return;
+    };
+
+    if event.value {
+        commands.entity(target).insert(Checked);
+    } else {
+        commands.entity(target).remove::<Checked>();
+    }
+
+    commands
+        .operator(op_id)
+        .settings(CallOperatorSettings {
+            creates_history_entry: true,
+            execution_context: ExecutionContext::Invoke,
+        })
+        .call();
 }
 
 #[cfg(test)]
@@ -1208,37 +1297,30 @@ mod tests {
         assert_eq!(asset.stem(), "CommonTree_1");
     }
 
-    /// `-1` in the weight-channel field means "no weight channel", so the
-    /// panel does not need a separate toggle beside it.
+    /// `-1` in the weight-channel field turns the weight off, so the panel
+    /// needs no separate toggle beside it.
     #[test]
     fn a_negative_weight_channel_turns_the_weight_off() {
         let mut state = TerrainScatterState::default();
-        apply_scatter_field(&mut state, ScatterField::WeightChannel, "0");
+        apply_scatter_numeric_field(&mut state, ScatterField::WeightChannel, 0.0);
         assert_eq!(state.weight_channel, Some(0));
-        apply_scatter_field(&mut state, ScatterField::WeightChannel, "-1");
+        apply_scatter_numeric_field(&mut state, ScatterField::WeightChannel, -1.0);
         assert_eq!(state.weight_channel, None);
     }
 
     #[test]
     fn numeric_fields_clamp_rather_than_going_negative() {
         let mut state = TerrainScatterState::default();
-        apply_scatter_field(&mut state, ScatterField::Density, "-4");
+        apply_scatter_numeric_field(&mut state, ScatterField::Density, -4.0);
         assert_eq!(state.density, 0.0);
-        apply_scatter_field(&mut state, ScatterField::Spacing, "-1");
+        apply_scatter_numeric_field(&mut state, ScatterField::Spacing, -1.0);
         assert_eq!(state.min_spacing, 0.0);
-        apply_scatter_field(&mut state, ScatterField::Seed, "42");
+        apply_scatter_numeric_field(&mut state, ScatterField::Seed, 42.0);
         assert_eq!(state.seed, 42);
     }
 
-    #[test]
-    fn the_asset_field_takes_text_rather_than_a_number() {
-        let mut state = TerrainScatterState::default();
-        apply_scatter_field(&mut state, ScatterField::AssetDraft, " kit/Tree.gltf ");
-        assert_eq!(state.asset_draft, "kit/Tree.gltf");
-    }
-
-    /// An instance whose transform still matches what the generator made
-    /// is replaceable; anything else is the user's work.
+    /// An instance whose transform matches its generated one is
+    /// replaceable; anything else is preserved.
     #[test]
     fn untouched_means_the_transform_still_equals_the_generated_one() {
         let generated = Transform::from_xyz(1.0, 2.0, 3.0);
@@ -1250,8 +1332,8 @@ mod tests {
         assert_ne!(Transform::from_xyz(1.0, 2.5, 3.0), instance.generated);
     }
 
-    /// The terrain's own transform has to reach the instances, or a
-    /// scatter over a moved terrain lands under the world origin.
+    /// The terrain's transform reaches the instances; without it a scatter
+    /// over a moved terrain lands at the world origin.
     #[test]
     fn the_terrain_transform_carries_into_the_instance_transform() {
         let placement = jackdaw_terrain::Placement {
@@ -1291,10 +1373,8 @@ mod tests {
         assert!((upright.rotation * Vec3::Y).angle_between(Vec3::Y) < 1e-4);
     }
 
-    /// I7 pinning test, the exact scenario from the review finding: a
-    /// stray density over a large terrain would previously queue an
-    /// unbounded number of spawns onto the undo stack. The run must be
-    /// refused up front, with a report, and never reach the kernel.
+    /// A stray density over a large terrain is refused up front, with a
+    /// report, and never reaches the kernel.
     #[test]
     fn a_pathological_density_is_refused_before_running_the_kernel() {
         let mut world = World::new();
@@ -1306,11 +1386,12 @@ mod tests {
         let mut store = TerrainDataStore::default();
         store.insert(
             data_path,
-            jackdaw_terrain::TerrainData {
+            jackdaw_terrain::RegionTerrainData::from_legacy_v1(&jackdaw_terrain::TerrainData {
                 resolution: 4,
                 heights: vec![0.0; 16],
                 channels: vec![],
-            },
+            })
+            .expect("a power-of-two resolution migrates"),
         );
         world.insert_resource(store);
 
@@ -1345,5 +1426,99 @@ mod tests {
             world.query::<&ScatterGroup>().iter(&world).next().is_none(),
             "a refused run must not spawn a group",
         );
+    }
+
+    /// An ungenerated terrain holds no regions and so nothing to scatter
+    /// on. The run says so and stops: the density cap is measured against
+    /// the ground, and zero ground lets any density through.
+    #[test]
+    fn a_terrain_with_no_ground_is_refused_before_running_the_kernel() {
+        let mut world = World::new();
+        world.init_resource::<Selection>();
+        world.init_resource::<TerrainScatterState>();
+        world.init_resource::<TerrainScatterReport>();
+
+        let data_path = "zone.terrain-0.jdterrain";
+        let mut store = TerrainDataStore::default();
+        store.insert(data_path, jackdaw_terrain::RegionTerrainData::default());
+        world.insert_resource(store);
+
+        world.spawn(jackdaw_scene_types::Terrain {
+            data_path: data_path.to_string(),
+            ..default()
+        });
+
+        use jackdaw_scene_types::PropertyValue;
+        let mut params = OperatorParameters::default();
+        params
+            .0
+            .insert("density".to_string(), PropertyValue::Float(0.1));
+        params.0.insert(
+            "assets".to_string(),
+            PropertyValue::String("kit/Tree.gltf".into()),
+        );
+
+        run_scatter(&mut world, &params);
+
+        let report = world.resource::<TerrainScatterReport>();
+        assert_eq!(report.placed, 0, "a refused run must place nothing");
+        assert!(
+            report.message.contains("refused") && report.message.contains("no ground"),
+            "report must explain the refusal: {}",
+            report.message
+        );
+        assert!(
+            world.query::<&ScatterGroup>().iter(&world).next().is_none(),
+            "a refused run must not spawn a group",
+        );
+    }
+
+    /// An intermediate drag tick updates both the state and the widget's
+    /// `SliderValue`, not only the final tick.
+    #[test]
+    fn intermediate_drag_tick_updates_state_and_resyncs_the_widget_live() {
+        let mut app = App::new();
+        app.init_resource::<TerrainScatterState>();
+        app.add_systems(Update, sync_scatter_fields);
+        app.add_observer(on_scatter_value_change);
+
+        let entity = app
+            .world_mut()
+            .spawn((ScatterField::Density, SliderValue(0.5)))
+            .id();
+
+        app.world_mut().trigger(ValueChange::<f32> {
+            source: entity,
+            value: 3.0,
+            is_final: false,
+        });
+        app.update();
+
+        assert!(
+            (app.world().resource::<TerrainScatterState>().density - 3.0).abs() < 1e-5,
+            "state must update on every drag tick, not just the final one",
+        );
+        let synced = app.world().get::<SliderValue>(entity).unwrap();
+        assert!(
+            (synced.0 - 3.0).abs() < 1e-5,
+            "the field's own SliderValue must be resynced the same pass",
+        );
+    }
+
+    /// `AssetDraft` lives on a `text_edit` rather than a slider, so the
+    /// resync skips it instead of inserting a `SliderValue`.
+    #[test]
+    fn asset_draft_field_is_not_given_a_slider_value() {
+        let mut app = App::new();
+        app.init_resource::<TerrainScatterState>();
+        app.add_systems(Update, sync_scatter_fields);
+
+        let entity = app.world_mut().spawn(ScatterField::AssetDraft).id();
+        app.world_mut()
+            .resource_mut::<TerrainScatterState>()
+            .density = 9.0;
+        app.update();
+
+        assert!(app.world().get::<SliderValue>(entity).is_none());
     }
 }

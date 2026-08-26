@@ -34,7 +34,13 @@ jackdaw_api = { workspace = true, features = ["dynamic_linking"] }
 # Depending on the whole runtime here also puts its closure in the SDK
 # manifest, so extensions redirect those crates instead of rebuilding
 # them.
-jackdaw_runtime = { workspace = true, features = ["render", "physics", "pie"] }
+jackdaw_runtime = { workspace = true, features = [
+    "render",
+    "physics",
+    "pie",
+    "terrain",
+    "navmesh",
+] }
 
 [lints]
 workspace = true

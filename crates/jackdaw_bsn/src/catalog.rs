@@ -232,15 +232,34 @@ fn asset_value_from_root(
 /// paths (when an [`AssetServer`] is present). Entries are sorted by name so
 /// the output is stable across calls.
 pub fn serialize_assets_to_bsn(world: &World, assets: &[CatalogAssetRef]) -> String {
+    serialize_assets_to_bsn_reporting(world, assets).0
+}
+
+/// [`serialize_assets_to_bsn`] plus the names it could not emit.
+///
+/// Emission drops an entry silently when its type is unregistered, generic,
+/// carries no `ReflectAsset`, or the asset is gone from its store. The text
+/// alone does not distinguish an empty input from a fully skipped one, so the
+/// skipped names are returned alongside it.
+pub fn serialize_assets_to_bsn_reporting(
+    world: &World,
+    assets: &[CatalogAssetRef],
+) -> (String, Vec<String>) {
     let mut ast = SceneBsnAst::default();
-    append_assets_to_ast(&mut ast, world, assets);
-    emit_scene(&ast)
+    let skipped = append_assets_to_ast(&mut ast, world, assets);
+    (emit_scene(&ast), skipped)
 }
 
 /// Append named asset entries to an existing document as roots, sorted by
 /// name. Scene conversion uses this to embed a scene's inline assets in the
 /// same `.bsn` document as its entities.
-pub fn append_assets_to_ast(ast: &mut SceneBsnAst, world: &World, assets: &[CatalogAssetRef]) {
+///
+/// Returns the names of entries that could not be emitted.
+pub fn append_assets_to_ast(
+    ast: &mut SceneBsnAst,
+    world: &World,
+    assets: &[CatalogAssetRef],
+) -> Vec<String> {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let reg = registry.read();
     let asset_server = world.get_resource::<AssetServer>();
@@ -248,21 +267,26 @@ pub fn append_assets_to_ast(ast: &mut SceneBsnAst, world: &World, assets: &[Cata
     let mut sorted: Vec<&CatalogAssetRef> = assets.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
 
+    let mut skipped = Vec::new();
     for asset_ref in sorted {
         let Some(registration) = reg.get(asset_ref.type_id) else {
+            skipped.push(asset_ref.name.clone());
             continue;
         };
 
         // Generic asset types cannot round-trip through the parser (their type
         // path is not a valid path token), so skip them.
         if registration.type_info().type_path().contains('<') {
+            skipped.push(asset_ref.name.clone());
             continue;
         }
 
         let Some(reflect_asset) = registration.data::<ReflectAsset>() else {
+            skipped.push(asset_ref.name.clone());
             continue;
         };
         let Some(asset_value) = reflect_asset.get(world, asset_ref.asset_id) else {
+            skipped.push(asset_ref.name.clone());
             continue;
         };
 
@@ -285,6 +309,7 @@ pub fn append_assets_to_ast(ast: &mut SceneBsnAst, world: &World, assets: &[Cata
             .id();
         ast.add_to_roots(root);
     }
+    skipped
 }
 
 #[cfg(test)]
@@ -414,6 +439,32 @@ mod tests {
         let apple = first.find("#Apple").expect("Apple present");
         let zebra = first.find("#Zebra").expect("Zebra present");
         assert!(apple < zebra, "entries must be sorted by name");
+    }
+
+    #[test]
+    fn an_unemittable_entry_is_reported_not_dropped_silently() {
+        let mut world = scalar_world();
+        let real = world
+            .resource_mut::<Assets<TestMaterial>>()
+            .add(TestMaterial::default());
+
+        let refs = vec![
+            CatalogAssetRef {
+                name: "Real".into(),
+                type_id: TypeId::of::<TestMaterial>(),
+                asset_id: real.id().untyped(),
+            },
+            // An id whose asset is not in any store: nothing to reflect.
+            CatalogAssetRef {
+                name: "Gone".into(),
+                type_id: TypeId::of::<TestMaterial>(),
+                asset_id: bevy::asset::AssetId::<TestMaterial>::invalid().untyped(),
+            },
+        ];
+
+        let (text, skipped) = serialize_assets_to_bsn_reporting(&world, &refs);
+        assert!(text.contains("#Real"));
+        assert_eq!(skipped, vec!["Gone".to_string()]);
     }
 
     #[test]
