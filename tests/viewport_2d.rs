@@ -1643,6 +1643,47 @@ fn the_grid_operator_sets_the_canvas_lattice() {
     );
 }
 
+/// Gap 4: `viewport2d.frame` framed every open panel while
+/// `viewport2d.mode` and `viewport2d.grid` moved whichever one the query
+/// happened to yield first. An operator has no panel to be called on, so
+/// all three answer for all of them.
+#[test]
+fn the_per_panel_operators_reach_every_open_panel() {
+    let mut app = util::editor_test_app();
+    let first = fit_panel(&mut app);
+    let second = fit_panel(&mut app);
+    app.update();
+
+    app.world_mut()
+        .operator("viewport2d.grid")
+        .param("size", 32.0)
+        .call()
+        .expect("dispatch")
+        .assert_finished();
+    assert_eq!(view_of(&app, first).grid, 32.0);
+    assert_eq!(
+        view_of(&app, second).grid,
+        32.0,
+        "the second panel is not a panel the operator forgot about",
+    );
+
+    app.world_mut()
+        .operator("viewport2d.mode")
+        .param("mode", "interact")
+        .call()
+        .expect("dispatch")
+        .assert_finished();
+    for panel in [first, second] {
+        assert_eq!(
+            app.world()
+                .get::<Viewport2dPanelHost>(panel)
+                .expect("host on panel parent")
+                .mode,
+            Viewport2dMode::Interact,
+        );
+    }
+}
+
 fn grid_text(app: &mut App, panel: Entity) -> String {
     let mut query = app.world_mut().query::<(&Viewport2dGridReadout, &Text)>();
     let found: Vec<String> = query

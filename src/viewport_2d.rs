@@ -1632,8 +1632,14 @@ pub(crate) fn viewport_2d_frame(
 /// The header's segmented control is a pointer gesture on a node, which a
 /// scripted run has no way to perform. This is that control as an
 /// operator, so a capture of the panel in either mode is one call rather
-/// than a synthesised click. The first open panel is moved, matching how
-/// [`route_ui_roots_to_cameras`] picks the panel a UI scene goes to.
+/// than a synthesised click.
+///
+/// Every open panel is moved, the way [`viewport_2d_frame`] frames every
+/// one. An operator is not called on a panel -- there is no pointer in it
+/// to say which -- so the alternative is picking one arbitrarily, and a
+/// scripted run that set the mode on a panel the user could not identify
+/// would be worse than one that set it everywhere. The header's own
+/// control stays per panel: that gesture does name its panel.
 #[operator(
     id = "viewport2d.mode",
     label = "Set 2D Viewport Mode",
@@ -1649,20 +1655,22 @@ pub(crate) fn viewport_2d_mode(
         warn!("viewport2d.mode: 'mode' must be `edit` or `interact`");
         return OperatorResult::Cancelled;
     };
-    let Some(mut host) = hosts.iter_mut().next() else {
+    if hosts.is_empty() {
         warn!("viewport2d.mode: no 2D viewport panel is open");
         return OperatorResult::Cancelled;
-    };
-    if host.mode != mode {
-        host.mode = mode;
+    }
+    for mut host in &mut hosts {
+        if host.mode != mode {
+            host.mode = mode;
+        }
     }
     OperatorResult::Finished
 }
 
 /// Set the canvas grid the 2D viewport snaps and nudges on.
 ///
-/// The header's stepper for a scripted run. Like `viewport2d.mode` it
-/// acts on the first open panel.
+/// The header's stepper for a scripted run. Like `viewport2d.mode` and
+/// `viewport2d.frame` it acts on every open panel.
 ///
 /// A size off the power-of-two ladder is taken as given; the header's
 /// stepper pulls it back onto the ladder from there. See
@@ -1683,15 +1691,15 @@ pub(crate) fn viewport_2d_grid(
         warn!("viewport2d.grid: 'size' must be a positive number of authored pixels");
         return OperatorResult::Cancelled;
     }
-    let Some(mut host) = hosts.iter_mut().next() else {
+    if hosts.is_empty() {
         warn!("viewport2d.grid: no 2D viewport panel is open");
         return OperatorResult::Cancelled;
-    };
-    let view = Ui2dView {
-        grid: size.clamp(MIN_UI_GRID, MAX_UI_GRID),
-        ..host.view
-    };
-    host.set_view(view);
+    }
+    let grid = size.clamp(MIN_UI_GRID, MAX_UI_GRID);
+    for mut host in &mut hosts {
+        let view = Ui2dView { grid, ..host.view };
+        host.set_view(view);
+    }
     OperatorResult::Finished
 }
 

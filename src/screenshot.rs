@@ -296,10 +296,17 @@ pub(crate) fn viewport_screenshot(
 }
 
 /// Capture what the 2D viewport is showing to a PNG.
+///
+/// The authored scene alone: this is a readback of the panel's render
+/// target, and the stage chrome [`crate::ui_stage`] draws -- the selection
+/// outline, the eight resize handles, the reference-size frame -- is
+/// `bevy_ui` in the editor window, on the far side of that boundary. Use
+/// `window.screenshot` to capture evidence of a gesture.
 #[operator(
     id = "viewport2d.screenshot",
     label = "Screenshot 2D Viewport",
-    description = "Save the UI scene the 2D viewport is showing to a PNG file.",
+    description = "Save the UI scene the 2D viewport is showing to a PNG file, \
+                   without the selection chrome; `window.screenshot` includes it.",
     allows_undo = false,
     params(path(
         String,
