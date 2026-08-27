@@ -109,9 +109,9 @@ fn main() -> AppExit {
                 })
                 // `editor_window_plugin` disables Bevy's default
                 // window-close -> AppExit wiring so `intercept_window_close`
-                // in ScenesPlugin owns the exit path, and honors
-                // `JACKDAW_WINDOW_SIZE`. Duplicating its fields here would
-                // drop that override.
+                // in ScenesPlugin owns the exit path, and it honors
+                // `JACKDAW_WINDOW_SIZE`. Spelling its fields out here instead
+                // would drop that override.
                 .set(editor_window_plugin()),
         )
         // Ambient plugins added next to `DefaultPlugins`. The

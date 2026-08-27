@@ -56,20 +56,21 @@ fn window_chrome_theme() -> WindowChromeTheme {
     }
 }
 
-/// `JACKDAW_WINDOW_SIZE=<width>x<height>` overrides the primary window's
-/// initial resolution (physical pixels), e.g. `1920x1080` to pin the
-/// window for scripted screenshot runs. Read once at startup, like
-/// [`crate::project::ENV_OPEN_PROJECT`] and [`crate::screenshot::ENV_SHOT`].
-/// Unset in interactive launches, which keeps the platform/WM default.
+/// `JACKDAW_WINDOW_SIZE=<width>x<height>` overrides the primary
+/// window's initial resolution (physical pixels), e.g. `1920x1080` so
+/// the `ux-audit` harness captures every screenshot at one fixed size.
+/// Same family as [`crate::project::ENV_OPEN_PROJECT`]
+/// and [`crate::screenshot::ENV_SHOT`]: read once at startup. Unset, the
+/// platform/WM default applies.
 pub const ENV_WINDOW_SIZE: &str = "JACKDAW_WINDOW_SIZE";
 
 fn window_size_override() -> Option<bevy::window::WindowResolution> {
     parse_window_size(&std::env::var(ENV_WINDOW_SIZE).ok()?)
 }
 
-/// Parse a `<width>x<height>` [`ENV_WINDOW_SIZE`] value. Malformed values
-/// (missing `x`, non-numeric halves) parse to `None` rather than failing the
-/// launch.
+/// Parse a `<width>x<height>` [`ENV_WINDOW_SIZE`] value. Malformed
+/// values (missing `x`, non-numeric halves) parse to `None` rather than
+/// failing the launch.
 fn parse_window_size(raw: &str) -> Option<bevy::window::WindowResolution> {
     let (w, h) = raw.split_once('x')?;
     let width: u32 = w.trim().parse().ok()?;

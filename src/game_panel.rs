@@ -261,26 +261,33 @@ fn game_mode_segment(
             ..Default::default()
         },
         BackgroundColor(Color::NONE),
-        observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-            commands.queue(move |world: &mut World| {
-                let next = match segment {
-                    GameModeSegment::Play => GamePanelMode::Play,
-                    GameModeSegment::Select => GamePanelMode::Select,
-                };
-                if next == GamePanelMode::Select
-                    && world
-                        .resource::<crate::live_input::LiveInputCapture>()
-                        .active
-                {
-                    world
-                        .resource_mut::<crate::live_input::LiveInputCapture>()
-                        .release_requested = true;
-                    crate::live_input::apply_release_requests(world);
-                    crate::live_input::flush_forwards(world);
+        observe(
+            move |click: On<Pointer<Click>>,
+                  disabled: Query<(), With<bevy::ui::InteractionDisabled>>,
+                  mut commands: Commands| {
+                if disabled.contains(click.event_target()) {
+                    return;
                 }
-                *world.resource_mut::<GamePanelMode>() = next;
-            });
-        }),
+                commands.queue(move |world: &mut World| {
+                    let next = match segment {
+                        GameModeSegment::Play => GamePanelMode::Play,
+                        GameModeSegment::Select => GamePanelMode::Select,
+                    };
+                    if next == GamePanelMode::Select
+                        && world
+                            .resource::<crate::live_input::LiveInputCapture>()
+                            .active
+                    {
+                        world
+                            .resource_mut::<crate::live_input::LiveInputCapture>()
+                            .release_requested = true;
+                        crate::live_input::apply_release_requests(world);
+                        crate::live_input::flush_forwards(world);
+                    }
+                    *world.resource_mut::<GamePanelMode>() = next;
+                });
+            },
+        ),
         children![(
             Text::new(label),
             TextFont {

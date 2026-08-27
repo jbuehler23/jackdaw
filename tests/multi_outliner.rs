@@ -9,11 +9,16 @@
 //!  - reparenting a scene entity moves its row under the new parent's
 //!    `TreeRowChildren` in every container;
 //!  - despawning the source removes the row in every container.
+//!
+//! Also pins that a `UiSceneRoot` is a root for outliner purposes. UI
+//! roots carry `UiTransform` (via `Node`), never `Transform`, so the
+//! `Transform`-keyed root predicate and root-spawn observer would leave
+//! an authored UI scene invisible in every panel.
 
 use bevy::prelude::*;
-use jackdaw::hierarchy::HierarchyTreeContainer;
-use jackdaw_ui::{UiButton, UiCanvas, UiGeneratedPart};
-use jackdaw_widgets::tree_view::{TreeIndex, TreeNode};
+use jackdaw::hierarchy::{HierarchyShowAll, HierarchyTreeContainer};
+use jackdaw_scene_types::UiSceneRoot;
+use jackdaw_widgets::tree_view::{TreeIndex, TreeNode, TreeRowContent, TreeRowLabel};
 
 mod util;
 
@@ -28,6 +33,28 @@ fn spawn_outliner_container(world: &mut World) -> Entity {
             Visibility::Inherited,
         ))
         .id()
+}
+
+/// Text of the `TreeRowLabel` under `row` (`TreeNode` -> `TreeRowContent`
+/// -> `TreeRowLabel`).
+fn row_label(world: &World, row: Entity) -> Option<String> {
+    let children: Vec<Entity> = world.get::<Children>(row)?.iter().collect();
+    for child in children {
+        if world.get::<TreeRowContent>(child).is_none() {
+            continue;
+        }
+        let Some(content_children) = world.get::<Children>(child) else {
+            continue;
+        };
+        for grandchild in content_children.iter() {
+            if world.get::<TreeRowLabel>(grandchild).is_some()
+                && let Some(text) = world.get::<Text>(grandchild)
+            {
+                return Some(text.0.clone());
+            }
+        }
+    }
+    None
 }
 
 #[test]
@@ -178,71 +205,82 @@ fn despawn_scene_entity_drops_row_in_every_outliner() {
 }
 
 #[test]
-fn ui_canvas_and_authored_children_appear_but_generated_parts_do_not() {
+fn ui_scene_root_gets_a_row_in_every_outliner() {
     let mut app = util::editor_test_app();
-    let outliner_a = spawn_outliner_container(app.world_mut());
-    let outliner_b = spawn_outliner_container(app.world_mut());
-
-    let canvas = app
-        .world_mut()
-        .spawn((Name::new("UI Canvas"), UiCanvas::default()))
-        .id();
-    app.update();
-
-    {
-        let world = app.world_mut();
-        let mut rows = world.query::<(
-            &TreeNode,
-            &mut jackdaw_widgets::tree_view::TreeChildrenPopulated,
-        )>();
-        for (row, mut populated) in rows.iter_mut(world) {
-            if row.0 == canvas {
-                populated.0 = true;
-            }
-        }
-    }
-
-    let button = app
-        .world_mut()
-        .spawn((Name::new("Button"), UiButton::default(), ChildOf(canvas)))
-        .id();
-    app.update();
-    app.update();
-
     let world = app.world_mut();
-    let index = world.resource::<TreeIndex>();
-    for container in [outliner_a, outliner_b] {
-        assert!(index.contains(container, canvas));
-        assert!(index.contains(container, button));
-    }
-    assert!(
-        world
-            .get::<Children>(button)
-            .is_none_or(bevy::prelude::RelationshipTarget::is_empty),
-        "the editor authors UI as inert data: nothing materializes onto the authored button"
-    );
 
-    // A view-local copy opts into materialization. Its generated label is
-    // implementation-owned and must stay out of every Outliner.
-    let materialized = world
+    // A UI scene root is a bevy_ui node: `UiTransform`, no `Transform`.
+    let root = world
         .spawn((
-            Name::new("Projected Button"),
-            UiButton::default(),
-            jackdaw_ui::UiMaterialize,
+            Name::new("Overlay"),
+            UiSceneRoot::default(),
+            Node::default(),
         ))
         .id();
-    app.update();
+
+    // Containers mount after the root exists, so the row has to come out
+    // of the full rebuild rather than the spawn observers.
+    let outliner_a = spawn_outliner_container(world);
+    let outliner_b = spawn_outliner_container(world);
     app.update();
 
     let world = app.world_mut();
-    let generated = world
-        .get::<Children>(materialized)
-        .expect("a marked button materializes its label")
-        .iter()
-        .find(|child| world.get::<UiGeneratedPart>(*child).is_some())
-        .expect("button label should be materialized");
-    assert!(
-        !world.resource::<TreeIndex>().contains_anywhere(generated),
-        "implementation-owned widget parts must not leak into the authored outliner"
-    );
+    let rows: Vec<Entity> = {
+        let index = world.resource::<TreeIndex>();
+        [outliner_a, outliner_b]
+            .into_iter()
+            .map(|container| {
+                index.get(container, root).unwrap_or_else(|| {
+                    panic!("{container} should host a row for the UI scene root")
+                })
+            })
+            .collect()
+    };
+    for row in &rows {
+        assert_eq!(row_label(world, *row).as_deref(), Some("Overlay"));
+    }
+}
+
+#[test]
+fn unnamed_ui_scene_root_spawns_a_row_that_picks_up_its_name() {
+    let mut app = util::editor_test_app();
+    let world = app.world_mut();
+
+    let outliner_a = spawn_outliner_container(world);
+    let outliner_b = spawn_outliner_container(world);
+    world.resource_mut::<HierarchyShowAll>().0 = true;
+    app.update();
+
+    // No `Name`, so only the root-added observer can produce the row.
+    let root = app
+        .world_mut()
+        .spawn((UiSceneRoot::default(), Node::default()))
+        .id();
+    app.update();
+
+    let world = app.world_mut();
+    let rows: Vec<Entity> = {
+        let index = world.resource::<TreeIndex>();
+        [outliner_a, outliner_b]
+            .into_iter()
+            .map(|container| {
+                index.get(container, root).unwrap_or_else(|| {
+                    panic!("{container} should host a row for the unnamed UI scene root")
+                })
+            })
+            .collect()
+    };
+
+    // Naming the root relabels the row it already owns.
+    world.entity_mut(root).insert(Name::new("HUD"));
+    app.update();
+
+    let world = app.world();
+    for row in &rows {
+        assert_eq!(
+            row_label(world, *row).as_deref(),
+            Some("HUD"),
+            "naming the UI scene root should relabel its row",
+        );
+    }
 }

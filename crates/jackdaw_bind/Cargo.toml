@@ -1,0 +1,38 @@
+[package]
+name = "jackdaw_bind"
+version.workspace = true
+edition = "2024"
+description = "Declarative UI bindings on Bevy reflection"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = [
+    "std",
+    "reflect_auto_register",
+    "reflect_functions",
+    "bevy_ui",
+    "bevy_ui_widgets",
+    "bevy_log",
+    "serialize",
+] }
+thiserror = "2"
+
+[dev-dependencies]
+bevy = { version = "0.19", default-features = false, features = [
+    "std",
+    "reflect_auto_register",
+    "reflect_functions",
+    "bevy_ui",
+    "bevy_ui_widgets",
+    "bevy_log",
+    "serialize",
+    "bevy_text",
+    # Matches how the editor builds bevy_ui: with the picking backend on, so
+    # `UiPlugin` adds `viewport_picking` here too and the test apps must supply
+    # the picking resources it reads.
+    "ui_picking",
+] }
+
+[lints]
+workspace = true

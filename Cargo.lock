@@ -4756,6 +4756,7 @@ dependencies = [
  "jackdaw_api",
  "jackdaw_api_internal",
  "jackdaw_avian_integration",
+ "jackdaw_bind",
  "jackdaw_bsn",
  "jackdaw_camera",
  "jackdaw_camera_rig",
@@ -4776,6 +4777,7 @@ dependencies = [
  "jackdaw_panels",
  "jackdaw_pick",
  "jackdaw_pie_protocol",
+ "jackdaw_prefab",
  "jackdaw_project_build",
  "jackdaw_remote",
  "jackdaw_runtime",
@@ -4786,9 +4788,9 @@ dependencies = [
  "jackdaw_select",
  "jackdaw_snap",
  "jackdaw_terrain",
- "jackdaw_ui",
  "jackdaw_uv",
  "jackdaw_widgets",
+ "jackdaw_widgets_runtime",
  "libc",
  "libloading",
  "notify",
@@ -4879,15 +4881,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "jackdaw_bind"
+version = "0.19.0"
+dependencies = [
+ "bevy",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "jackdaw_bsn"
 version = "0.19.0"
 dependencies = [
  "bevy",
+ "bevy_reflect",
+ "jackdaw_bind",
  "lalrpop",
  "lalrpop-util",
  "log",
  "nom 8.0.0",
  "pathdiff",
+ "smol_str",
  "thiserror 2.0.20",
 ]
 
@@ -5137,6 +5150,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jackdaw_prefab"
+version = "0.19.0"
+dependencies = [
+ "bevy",
+ "jackdaw_bsn",
+ "pathdiff",
+]
+
+[[package]]
 name = "jackdaw_project_build"
 version = "0.19.0"
 dependencies = [
@@ -5167,14 +5189,16 @@ dependencies = [
  "avian3d",
  "bevy",
  "jackdaw_avian_integration",
+ "jackdaw_bind",
  "jackdaw_bsn",
  "jackdaw_camera_rig",
  "jackdaw_geometry",
  "jackdaw_pie_protocol",
+ "jackdaw_prefab",
  "jackdaw_scene_types",
  "jackdaw_schema",
  "jackdaw_terrain",
- "jackdaw_ui",
+ "jackdaw_widgets_runtime",
  "serde",
  "serde_json",
  "tempfile",
@@ -5248,14 +5272,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jackdaw_ui"
-version = "0.19.0"
-dependencies = [
- "bevy",
- "bevy_scene",
-]
-
-[[package]]
 name = "jackdaw_uv"
 version = "0.19.0"
 dependencies = [
@@ -5271,6 +5287,13 @@ dependencies = [
  "bevy_enhanced_input",
  "bevy_monitors",
  "lucide-icons",
+]
+
+[[package]]
+name = "jackdaw_widgets_runtime"
+version = "0.19.0"
+dependencies = [
+ "bevy",
 ]
 
 [[package]]

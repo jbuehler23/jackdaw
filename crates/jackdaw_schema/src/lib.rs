@@ -1,6 +1,19 @@
 //! Project type schema: the data the editor needs about a project's
 //! reflected types, produced by the project itself and consumed by the
 //! editor as plain data.
+//!
+//! # Compatibility
+//!
+//! A schema is a snapshot, and the editor may be holding an older one than the
+//! project it describes. Every field here defaults on deserialization, so a
+//! dump written without a field still loads with that field empty, and the
+//! editor's offer is out of date rather than wrong: a dump carrying no
+//! [`TypeSchema::entity_fields`] leads the binding picker to offer an event's
+//! entity fields as though a binding could map them, and the binding is refused
+//! at run time. Rebuilding the project rewrites the dump.
+//!
+//! Nothing here is the authority on what a game accepts. The dispatcher is, and
+//! it works from the live type registry.
 
 use std::path::{Path, PathBuf};
 
@@ -67,6 +80,13 @@ pub struct ProjectSchema {
     pub components: Vec<TypeSchema>,
     /// Reflected `Resource` types (scene-level data).
     pub resources: Vec<TypeSchema>,
+    /// Reflected `Event` types an action binding can fire. Empty in a schema
+    /// that does not carry them.
+    #[serde(default)]
+    pub events: Vec<TypeSchema>,
+    /// Functions the game registered for bindings to call.
+    #[serde(default)]
+    pub functions: Vec<FunctionSchema>,
 }
 
 /// The shape and editor metadata of one reflected type.
@@ -93,6 +113,83 @@ pub struct TypeSchema {
     /// A default value, serialized via `ReflectSerializer` as JSON, for
     /// "add component". `None` when not default-constructible.
     pub default: Option<serde_json::Value>,
+    /// One entry per variant for enums; empty for every other kind.
+    #[serde(default)]
+    pub variants: Vec<VariantSchema>,
+    /// Every field the type declares as an `Entity`, by name.
+    ///
+    /// A bind value carries numbers, bools and strings, so none of these is a
+    /// field a binding can map. The dispatcher fills one named `entity` with
+    /// the widget's subject entity and refuses the rest; the picker offers
+    /// none of them.
+    #[serde(default)]
+    pub entity_fields: Vec<String>,
+    /// Whether reflection can build a value with fields left unset
+    /// (`Default` or `FromWorld`). An action binding on a type without
+    /// it has to map every declared field.
+    #[serde(default)]
+    pub fills_gaps: bool,
+}
+
+/// One variant of a reflected enum.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariantSchema {
+    /// Variant name, e.g. `Walk`.
+    pub name: String,
+    /// The variant's fields; for tuple variants the name is the index
+    /// as a string, matching how tuple structs are reported.
+    pub fields: Vec<FieldSchema>,
+}
+
+/// One function the game registered for bindings to call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionSchema {
+    /// Registered name, usually the full path (`my_game::ui::ratio`).
+    pub name: String,
+    /// Argument type paths, in order, from the function's first
+    /// signature. Overloads beyond the first are not reported.
+    pub arg_type_paths: Vec<String>,
+    /// How each argument is taken, positionally matching `arg_type_paths`.
+    /// Empty in a schema that does not report ownership.
+    #[serde(default)]
+    pub arg_ownerships: Vec<ArgOwnership>,
+    /// The return type's path.
+    pub return_type_path: String,
+    /// How the return value is handed back.
+    #[serde(default)]
+    pub return_ownership: ArgOwnership,
+    /// Doc comment, when the registry carries one.
+    #[serde(default)]
+    pub docs: Option<String>,
+}
+
+impl FunctionSchema {
+    /// Whether a binding can call this function.
+    ///
+    /// The evaluator builds its argument list with `with_owned` and accepts
+    /// only an owned return, so a function that borrows an argument or hands
+    /// back a reference is unusable. A schema carrying no ownership answers
+    /// `true`, leaving a bad pick to fail at call time.
+    pub fn callable_by_value(&self) -> bool {
+        self.return_ownership == ArgOwnership::Owned
+            && self
+                .arg_ownerships
+                .iter()
+                .all(|ownership| *ownership == ArgOwnership::Owned)
+    }
+}
+
+/// How a function takes an argument or hands back its result. Mirrors
+/// bevy's reflected `Ownership`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArgOwnership {
+    /// `&T`.
+    Ref,
+    /// `&mut T`.
+    Mut,
+    /// `T`. The only kind a binding can supply or consume.
+    #[default]
+    Owned,
 }
 
 /// One field of a struct or tuple-struct type.
@@ -118,9 +215,13 @@ pub enum TypeKind {
 #[cfg(feature = "reflect")]
 mod extract {
     use super::*;
-    use bevy::ecs::reflect::{ReflectComponent, ReflectResource};
+    use bevy::ecs::entity::Entity;
+    use bevy::ecs::reflect::{ReflectComponent, ReflectEvent, ReflectFromWorld, ReflectResource};
+    use bevy::reflect::enums::VariantInfo;
+    use bevy::reflect::func::FunctionRegistry;
+    use bevy::reflect::func::args::Ownership;
     use bevy::reflect::serde::ReflectSerializer;
-    use bevy::reflect::{TypeInfo, TypeRegistration, TypeRegistry};
+    use bevy::reflect::{NamedField, TypeInfo, TypeRegistration, TypeRegistry};
     use jackdaw_scene_types::{EditorCategory, EditorDescription, EditorHidden};
 
     /// Build the schema for this process's reflected types.
@@ -135,25 +236,76 @@ mod extract {
         extract_from_registry(&registry)
     }
 
-    /// Build the schema for every reflected `Component` and `Resource`
-    /// in `registry`. Everything is dumped; the editor filters to types
-    /// it does not already know.
+    /// Build the schema for every reflected `Component`, `Resource` and
+    /// `Event` in `registry`. Everything is dumped; the editor filters
+    /// to types it does not already know.
+    ///
+    /// A type can land in more than one bucket, so no picker loses it. Every
+    /// resource lands in two: `Resource` has `Component` as a supertrait and
+    /// `ReflectResource` registers `ReflectComponent` beside itself, so
+    /// resources and components cannot be told apart by asking which one a
+    /// type is.
     pub fn extract_from_registry(registry: &TypeRegistry) -> ProjectSchema {
         let mut schema = ProjectSchema::default();
         for registration in registry.iter() {
             let is_component = registration.data::<ReflectComponent>().is_some();
             let is_resource = registration.data::<ReflectResource>().is_some();
-            if !is_component && !is_resource {
+            let is_event = registration.data::<ReflectEvent>().is_some();
+            if !is_component && !is_resource && !is_event {
                 continue;
             }
             let type_schema = type_schema_for(registration, registry);
+            if is_event {
+                schema.events.push(type_schema.clone());
+            }
+            if is_resource {
+                schema.resources.push(type_schema.clone());
+            }
             if is_component {
                 schema.components.push(type_schema);
-            } else {
-                schema.resources.push(type_schema);
             }
         }
         schema
+    }
+
+    /// Describe every function registered for bindings to call.
+    ///
+    /// Only the first signature of an overloaded function is reported; the
+    /// binding picker offers one argument list.
+    pub fn extract_functions(registry: &FunctionRegistry) -> Vec<FunctionSchema> {
+        registry
+            .iter()
+            .filter_map(|function| {
+                let info = function.info();
+                let name = info.name()?.to_string();
+                let signature = info.signatures().first()?;
+                Some(FunctionSchema {
+                    name,
+                    arg_type_paths: signature
+                        .args()
+                        .iter()
+                        .map(|arg| arg.type_path().to_string())
+                        .collect(),
+                    arg_ownerships: signature
+                        .args()
+                        .iter()
+                        .map(|arg| ownership_of(arg.ownership()))
+                        .collect(),
+                    return_type_path: signature.return_info().type_path().to_string(),
+                    return_ownership: ownership_of(signature.return_info().ownership()),
+                    // The function registry carries no doc comments.
+                    docs: None,
+                })
+            })
+            .collect()
+    }
+
+    fn ownership_of(ownership: Ownership) -> ArgOwnership {
+        match ownership {
+            Ownership::Ref => ArgOwnership::Ref,
+            Ownership::Mut => ArgOwnership::Mut,
+            Ownership::Owned => ArgOwnership::Owned,
+        }
     }
 
     fn type_schema_for(registration: &TypeRegistration, registry: &TypeRegistry) -> TypeSchema {
@@ -176,7 +328,20 @@ mod extract {
             .unwrap_or_default();
         let hidden = attrs.is_some_and(|a| a.get::<EditorHidden>().is_some());
 
-        let (kind, fields) = kind_and_fields(info);
+        let (kind, fields, variants) = shape_of(info);
+        let entity_fields = info
+            .as_struct()
+            .map(|s| {
+                s.iter()
+                    .filter(|f| NamedField::is::<Entity>(f))
+                    .map(|f| f.name().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let fills_gaps = registration
+            .data::<bevy::reflect::prelude::ReflectDefault>()
+            .is_some()
+            || registration.data::<ReflectFromWorld>().is_some();
 
         // A default value drives "add component" on the editor side.
         // Serialize it with the same registry so nested project types
@@ -200,10 +365,14 @@ mod extract {
             fields,
             kind,
             default,
+            variants,
+            entity_fields,
+            fills_gaps,
         }
     }
 
-    fn kind_and_fields(info: &TypeInfo) -> (TypeKind, Vec<FieldSchema>) {
+    /// A type's kind, its own fields, and (for enums) its variants.
+    fn shape_of(info: &TypeInfo) -> (TypeKind, Vec<FieldSchema>, Vec<VariantSchema>) {
         match info {
             TypeInfo::Struct(s) => (
                 TypeKind::Struct,
@@ -213,6 +382,7 @@ mod extract {
                         type_path: field.type_path().to_string(),
                     })
                     .collect(),
+                Vec::new(),
             ),
             TypeInfo::TupleStruct(s) => (
                 TypeKind::TupleStruct,
@@ -223,9 +393,39 @@ mod extract {
                         type_path: field.type_path().to_string(),
                     })
                     .collect(),
+                Vec::new(),
             ),
-            TypeInfo::Enum(_) => (TypeKind::Enum, Vec::new()),
-            _ => (TypeKind::Marker, Vec::new()),
+            TypeInfo::Enum(e) => (
+                TypeKind::Enum,
+                Vec::new(),
+                e.iter().map(variant_of).collect(),
+            ),
+            _ => (TypeKind::Marker, Vec::new(), Vec::new()),
+        }
+    }
+
+    fn variant_of(variant: &VariantInfo) -> VariantSchema {
+        let fields = match variant {
+            VariantInfo::Struct(s) => s
+                .iter()
+                .map(|field| FieldSchema {
+                    name: field.name().to_string(),
+                    type_path: field.type_path().to_string(),
+                })
+                .collect(),
+            VariantInfo::Tuple(t) => t
+                .iter()
+                .enumerate()
+                .map(|(i, field)| FieldSchema {
+                    name: i.to_string(),
+                    type_path: field.type_path().to_string(),
+                })
+                .collect(),
+            VariantInfo::Unit(_) => Vec::new(),
+        };
+        VariantSchema {
+            name: variant.name().to_string(),
+            fields,
         }
     }
 
@@ -240,7 +440,7 @@ mod extract {
 }
 
 #[cfg(feature = "reflect")]
-pub use extract::{extract_derived_schema, extract_from_registry};
+pub use extract::{extract_derived_schema, extract_from_registry, extract_functions};
 
 #[cfg(test)]
 mod tests {
@@ -261,5 +461,268 @@ mod tests {
     #[test]
     fn output_without_a_schema_is_an_error() {
         assert!(parse_from_stdout(b"no schema here\n").is_err());
+    }
+
+    /// The editor reads whatever `schema.json` the last build left behind, so a
+    /// dump carrying none of the optional keys still loads.
+    #[test]
+    fn a_schema_without_the_new_keys_still_parses() {
+        let old = br#"{
+            "components": [{
+                "type_path": "my_game::Spin",
+                "short_name": "Spin",
+                "module_path": "my_game",
+                "category": "",
+                "description": "",
+                "hidden": false,
+                "default_constructible": false,
+                "fields": [],
+                "kind": "Marker",
+                "default": null
+            }],
+            "resources": []
+        }"#;
+        let schema = parse_from_stdout(old).expect("old schema parses");
+        assert_eq!(schema.components.len(), 1);
+        assert!(schema.events.is_empty());
+        assert!(schema.functions.is_empty());
+        assert!(schema.components[0].variants.is_empty());
+        assert!(schema.components[0].entity_fields.is_empty());
+        assert!(!schema.components[0].fills_gaps);
+    }
+
+    fn function(name: &str) -> FunctionSchema {
+        FunctionSchema {
+            name: name.to_string(),
+            arg_type_paths: vec!["f32".to_string()],
+            arg_ownerships: vec![ArgOwnership::Owned],
+            return_type_path: "f32".to_string(),
+            return_ownership: ArgOwnership::Owned,
+            docs: None,
+        }
+    }
+
+    #[test]
+    fn functions_survive_a_json_round_trip() {
+        let schema = ProjectSchema {
+            functions: vec![function("my_game::double")],
+            ..ProjectSchema::default()
+        };
+        let json = serde_json::to_vec(&schema).expect("serialize");
+        let back = parse_from_stdout(&json).expect("parse");
+        assert_eq!(back.functions.len(), 1);
+        assert_eq!(back.functions[0].name, "my_game::double");
+        assert_eq!(back.functions[0].arg_type_paths, ["f32"]);
+        assert_eq!(back.functions[0].arg_ownerships, [ArgOwnership::Owned]);
+        assert_eq!(back.functions[0].return_type_path, "f32");
+    }
+
+    /// The evaluator passes owned arguments and accepts only an owned return,
+    /// which is what the picker filters registered functions on.
+    #[test]
+    fn a_function_that_borrows_is_not_callable_by_value() {
+        assert!(function("ok").callable_by_value());
+
+        let mut borrows_an_arg = function("borrows");
+        borrows_an_arg.arg_ownerships = vec![ArgOwnership::Ref];
+        assert!(!borrows_an_arg.callable_by_value());
+
+        let mut returns_a_reference = function("lends");
+        returns_a_reference.return_ownership = ArgOwnership::Mut;
+        assert!(!returns_a_reference.callable_by_value());
+
+        // A schema carrying no ownership is offered and fails at call time.
+        let mut older = function("unknown");
+        older.arg_ownerships = Vec::new();
+        assert!(older.callable_by_value());
+    }
+
+    /// The panic-hook fallback prints the inventory-only schema and the runner
+    /// prints the full one later, so the last parseable line wins.
+    #[test]
+    fn the_last_schema_line_on_stdout_wins() {
+        let fallback = ProjectSchema::default();
+        let full = ProjectSchema {
+            functions: vec![function("my_game::double")],
+            ..ProjectSchema::default()
+        };
+        let mut stdout = serde_json::to_vec(&fallback).expect("serialize");
+        stdout.push(b'\n');
+        stdout.extend(serde_json::to_vec(&full).expect("serialize"));
+        stdout.push(b'\n');
+
+        let parsed = parse_from_stdout(&stdout).expect("parse");
+        assert_eq!(parsed.functions.len(), 1, "the later dump must win");
+    }
+}
+
+#[cfg(all(test, feature = "reflect"))]
+mod extract_tests {
+    use super::*;
+    use bevy::prelude::*;
+    use bevy::reflect::{GetTypeRegistration, TypeRegistry};
+
+    /// An event whose fields a binding can fill, and which reflection can
+    /// build when a binding leaves one unmapped.
+    #[derive(Event, Reflect)]
+    #[reflect(Event, Default)]
+    struct Fired {
+        entity: Entity,
+        amount: f32,
+    }
+
+    impl Default for Fired {
+        fn default() -> Self {
+            Self {
+                entity: Entity::PLACEHOLDER,
+                amount: 0.0,
+            }
+        }
+    }
+
+    /// An event with neither `Default` nor `FromWorld`: every declared field
+    /// has to be mapped or the dispatch fails.
+    #[derive(Event, Reflect)]
+    #[reflect(Event)]
+    struct Bare {
+        label: String,
+    }
+
+    /// `Resource` has `Component` as a supertrait and registering
+    /// `ReflectResource` registers `ReflectComponent` with it, so this lands in
+    /// both buckets.
+    #[derive(Resource, Reflect, Default)]
+    #[reflect(Resource, Default)]
+    struct Score {
+        points: u32,
+    }
+
+    #[derive(Component, Reflect, Default)]
+    #[reflect(Component, Default)]
+    enum Mode {
+        #[default]
+        Idle,
+        Walk(f32),
+        Run {
+            speed: f32,
+        },
+    }
+
+    fn schema_of<T: GetTypeRegistration>() -> ProjectSchema {
+        let mut registry = TypeRegistry::default();
+        registry.register::<T>();
+        extract_from_registry(&registry)
+    }
+
+    fn find<'a>(types: &'a [TypeSchema], short_name: &str) -> &'a TypeSchema {
+        types
+            .iter()
+            .find(|t| t.short_name == short_name)
+            .unwrap_or_else(|| panic!("no {short_name} in schema"))
+    }
+
+    #[test]
+    fn an_event_reports_its_fields_and_dispatch_traits() {
+        let schema = schema_of::<Fired>();
+        assert!(schema.components.is_empty());
+        let event = find(&schema.events, "Fired");
+        assert_eq!(event.kind, TypeKind::Struct);
+        let fields: Vec<(&str, &str)> = event
+            .fields
+            .iter()
+            .map(|f| (f.name.as_str(), f.type_path.as_str()))
+            .collect();
+        assert!(fields.contains(&("amount", "f32")), "got {fields:?}");
+        assert!(
+            fields.iter().any(|(name, _)| *name == "entity"),
+            "got {fields:?}"
+        );
+        assert_eq!(event.entity_fields, vec!["entity".to_string()]);
+        assert!(event.fills_gaps);
+    }
+
+    #[test]
+    fn an_event_that_cannot_fill_gaps_says_so() {
+        let schema = schema_of::<Bare>();
+        let event = find(&schema.events, "Bare");
+        assert!(event.entity_fields.is_empty());
+        assert!(!event.fills_gaps);
+    }
+
+    #[test]
+    fn an_enum_reports_its_variants_and_their_fields() {
+        let schema = schema_of::<Mode>();
+        let mode = find(&schema.components, "Mode");
+        assert_eq!(mode.kind, TypeKind::Enum);
+        let names: Vec<&str> = mode.variants.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["Idle", "Walk", "Run"]);
+        assert!(mode.variants[0].fields.is_empty());
+        assert_eq!(mode.variants[1].fields[0].name, "0");
+        assert_eq!(mode.variants[1].fields[0].type_path, "f32");
+        assert_eq!(mode.variants[2].fields[0].name, "speed");
+        assert_eq!(mode.variants[2].fields[0].type_path, "f32");
+    }
+
+    #[test]
+    fn a_resource_reaches_the_resources_bucket() {
+        let schema = schema_of::<Score>();
+        let resource = find(&schema.resources, "Score");
+        assert_eq!(resource.fields[0].name, "points");
+    }
+
+    /// The binding picker offers `Res(Type).field` from the resources bucket and
+    /// the inspector offers components from the components bucket, so a
+    /// resource belongs in both.
+    #[test]
+    fn a_resource_is_reported_as_a_component_too() {
+        let schema = schema_of::<Score>();
+        find(&schema.components, "Score");
+    }
+
+    #[test]
+    fn a_plain_component_is_not_reported_as_a_resource() {
+        let schema = schema_of::<Mode>();
+        find(&schema.components, "Mode");
+        assert!(schema.resources.is_empty(), "{:?}", schema.resources);
+    }
+
+    #[test]
+    fn registered_functions_report_their_signature() {
+        fn double(value: f32) -> f32 {
+            value * 2.0
+        }
+        let mut registry = bevy::reflect::func::FunctionRegistry::default();
+        registry
+            .register_with_name("my_game::double", double)
+            .expect("register");
+        let functions = extract_functions(&registry);
+        let found = functions
+            .iter()
+            .find(|f| f.name == "my_game::double")
+            .expect("double is registered");
+        assert_eq!(found.arg_type_paths, ["f32"]);
+        assert_eq!(found.arg_ownerships, [ArgOwnership::Owned]);
+        assert_eq!(found.return_type_path, "f32");
+        assert!(found.callable_by_value());
+    }
+
+    /// A function taking `&T` is registrable but not bindable, and the dump
+    /// reports the ownership the picker filters on.
+    #[test]
+    fn a_borrowing_function_is_reported_as_borrowing() {
+        fn doubled(value: &f32) -> f32 {
+            value * 2.0
+        }
+        let mut registry = bevy::reflect::func::FunctionRegistry::default();
+        registry
+            .register_with_name("my_game::doubled", doubled)
+            .expect("register");
+        let functions = extract_functions(&registry);
+        let found = functions
+            .iter()
+            .find(|f| f.name == "my_game::doubled")
+            .expect("doubled is registered");
+        assert_eq!(found.arg_ownerships, [ArgOwnership::Ref]);
+        assert!(!found.callable_by_value());
     }
 }

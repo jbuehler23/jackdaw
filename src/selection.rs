@@ -13,6 +13,38 @@ impl Plugin for SelectionPlugin {
 #[derive(Component)]
 pub struct Selected;
 
+/// Make `entity` the whole selection, from an exclusive-world caller.
+///
+/// [`Selection::select_single`] needs `Commands` to move the [`Selected`]
+/// marker; this is that call plus the `SystemState` a `&mut World` path
+/// has to build to get them.
+pub fn select_only(world: &mut World, entity: Entity) {
+    let mut state: bevy::ecs::system::SystemState<(Commands, ResMut<Selection>)> =
+        bevy::ecs::system::SystemState::new(world);
+    let Ok((mut commands, mut selection)) = state.get_mut(world) else {
+        return;
+    };
+    selection.select_single(&mut commands, entity);
+    state.apply(world);
+}
+
+/// Bring `entity` into the selection so a gesture that writes the
+/// selection writes it.
+///
+/// The inspector's write paths act on the selection rather than on an entity
+/// handed to them (`commands::field_edit_commit`, and every control on the
+/// bindings card), so an operator naming a target puts it there first. A
+/// target outside the selection replaces it; a target already inside a
+/// multi-selection leaves the selection alone.
+pub fn select_for_edit(world: &mut World, entity: Entity) {
+    let already_selected = world
+        .get_resource::<Selection>()
+        .is_some_and(|selection| selection.is_selected(entity));
+    if !already_selected {
+        select_only(world, entity);
+    }
+}
+
 /// Resource tracking the full selection state.
 #[derive(Resource, Default)]
 pub struct Selection {

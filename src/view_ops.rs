@@ -222,16 +222,17 @@ fn read_int_param(params: &OperatorParameters, name: &str) -> Option<i64> {
     })
 }
 
-/// Resolve which viewport's camera a framing op acts on: the hovered viewport,
-/// otherwise the sole `MainViewportCamera` if there is exactly one. More than
-/// one and unhovered is ambiguous, so no camera is returned.
+/// Resolve which viewport's camera a framing op should act on: the hovered
+/// viewport if one exists, otherwise the sole `MainViewportCamera` if there
+/// is exactly one. More than one is ambiguous, so nothing resolves.
 ///
-/// `ActiveViewport` reflects a literal cursor-over-the-panel hover
+/// `ActiveViewport` only reflects a literal cursor-over-the-panel hover
 /// (`update_active_viewport`), which never happens from `JACKDAW_RUN_OP` (no
-/// synthetic pointer) and can miss a keypress fired while the cursor sits over
-/// other UI in a single-viewport layout. Only `view.frame_selected` and
-/// `view.frame_all` use this fallback; `view.set_axis` and
-/// `view.toggle_persp_ortho` keep the hover-only gate (`active_viewport_ready`).
+/// synthetic pointer) and can also miss a keypress fired while the cursor
+/// sits over other UI in a single-viewport layout. Only `view.frame_selected`
+/// and `view.frame_all` use this fallback; `view.set_axis` and
+/// `view.toggle_persp_ortho` keep the hover-only gate
+/// (`active_viewport_ready`).
 fn resolve_frame_camera(
     active: &ActiveViewport,
     cameras: &Query<Entity, With<MainViewportCamera>>,
@@ -698,7 +699,8 @@ mod resolve_frame_camera_tests {
         assert_eq!(resolve_frame_camera(&active, &cameras), Some(hovered));
     }
 
-    /// The no-hover case `JACKDAW_RUN_OP` hits: falls back to the sole viewport camera.
+    /// The scripted / no-hover case `JACKDAW_RUN_OP` always hits: falls
+    /// back to the sole viewport camera.
     #[test]
     fn nothing_hovered_falls_back_to_the_sole_camera() {
         let mut world = World::new();
@@ -709,7 +711,7 @@ mod resolve_frame_camera_tests {
         assert_eq!(resolve_frame_camera(&active, &cameras), Some(camera));
     }
 
-    /// Two viewports and nothing hovered is ambiguous, so no camera resolves.
+    /// Two viewports and nothing hovered is ambiguous, so nothing resolves.
     #[test]
     fn nothing_hovered_with_two_cameras_resolves_to_nothing() {
         let mut world = World::new();

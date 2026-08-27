@@ -41,8 +41,13 @@ pub const PANEL_HEADER_BG: Color = Color::srgb(0.122, 0.122, 0.141);
 pub const TOOLBAR_BG: Color = Color::srgb(0.165, 0.165, 0.180);
 /// Text input background (#36373B)
 pub const INPUT_BG: Color = Color::srgb(0.212, 0.216, 0.231);
-/// Context menu / dropdown background (#2A2A2E with near-opaque alpha)
-pub const MENU_BG: Color = Color::srgba(0.165, 0.165, 0.180, 0.98);
+/// Context menu / dropdown background (#2A2A2E).
+///
+/// Opaque. Even a few percent of translucency lets panel text ghost up
+/// through a dropdown, worst where a submenu overlaps the menu it opened
+/// from; a translucent surface needs a backdrop blur behind it, which
+/// `bevy_ui` has no way to draw.
+pub const MENU_BG: Color = Color::srgb(0.165, 0.165, 0.180);
 /// Status bar background (#2A2A2E)
 pub const STATUS_BAR_BG: Color = Color::srgb(0.165, 0.165, 0.180);
 /// Inactive toolbar button background (#2A2A2E)
@@ -347,23 +352,30 @@ pub const SPACING_LG: f32 = 12.0;
 pub const ROW_HEIGHT: f32 = 24.0;
 pub const HEADER_HEIGHT: f32 = 28.0;
 
-/// Label column of a label-left/control-right field row. One width for every
-/// such row, so labels line up down a panel and across panels.
+/// Label column of a label-left/control-right field row. One width for
+/// every such row in the editor, so labels line up down a panel and
+/// across panels.
 pub const FIELD_LABEL_WIDTH: f32 = 96.0;
 /// How far the label column may give way in a panel too narrow for
 /// [`FIELD_LABEL_WIDTH`], before the control starts losing room instead.
 pub const FIELD_LABEL_MIN_WIDTH: f32 = 40.0;
-/// Room a field's control keeps at any panel width. A control squeezed below
-/// this reads as an empty row rather than a value.
+/// Room a field's control keeps whatever the panel width. A control
+/// squeezed below this reads as an empty row rather than a value.
 pub const FIELD_CONTROL_MIN_WIDTH: f32 = 56.0;
 /// Minimum height of one field row. Uniform so rows of different control
 /// types still read as one column.
 pub const FIELD_ROW_HEIGHT: f32 = 22.0;
-/// Room a slider keeps, over and above [`FIELD_CONTROL_MIN_WIDTH`]. A slider
-/// draws its digits centred inside its own track, and a track narrower than
-/// the digits overhangs both ends rather than clipping them.
+/// Room a slider keeps, over and above [`FIELD_CONTROL_MIN_WIDTH`]. A
+/// slider draws its digits centred inside its own track, so a track
+/// squeezed narrower than the digits does not clip them: they overhang
+/// both ends, over the label on one side and the row edge on the other.
 /// Wide enough for a signed four-figure value plus the track's padding.
 pub const SLIDER_MIN_WIDTH: f32 = 76.0;
+/// Room a field row keeps clear at its right edge for the marks an editor
+/// hangs off a property: the prefab override dot, the live-edit dot, the
+/// keyframe diamond. A row that can carry them reserves this, so a mark
+/// never lands on top of the control it describes.
+pub const FIELD_DECORATION_GUTTER: f32 = 44.0;
 /// Horizontal inset per nesting level, for a sub-value shown under the
 /// feature it belongs to. The label column shrinks by the same amount, so
 /// the controls stay aligned.
@@ -402,10 +414,11 @@ pub const BORDER_RADIUS_LG: f32 = 5.0;
 
 /// `bevy::feathers`'s own default body font, referenced explicitly.
 ///
-/// jackdaw overrides the ambient default font (`AssetId::default()`, see
-/// `icons::IconFontPlugin`) with its own embedded copy of the same nominal
-/// typeface, which is not byte-identical to `bevy::feathers`'s bundled copy.
-/// Text beside a native feathers widget, which always loads `fonts::REGULAR`
-/// explicitly, can end up visibly mismatched. Use this constant instead of
-/// `..Default::default()` wherever that seam would show.
+/// jackdaw separately overrides the *ambient* default font
+/// (`AssetId::default()`, see `icons::IconFontPlugin`) with its own
+/// embedded copy of the same nominal typeface, which is not byte-identical
+/// to `bevy::feathers`'s bundled copy. Text that sits next to a native
+/// feathers widget (which always loads `fonts::REGULAR` explicitly, never
+/// the ambient default) can end up visibly mismatched. Use this constant
+/// instead of `..Default::default()` wherever that seam would show.
 pub const DEFAULT_BODY_FONT: &str = bevy::feathers::constants::fonts::REGULAR;

@@ -84,7 +84,8 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<MeshMirror>()
             .register_type::<ModifierStack>()
             .register_type::<ModifierEntry>()
-            .register_type::<Modifier>();
+            .register_type::<Modifier>()
+            .register_type::<UiSceneRoot>();
 
         #[cfg(feature = "render")]
         {
@@ -109,6 +110,23 @@ impl Plugin for SceneTypesPlugin {
             if self.runtime_mesh_rebuild {
                 app.add_plugins(mesh_rebuild::MeshRebuildPlugin);
             }
+        }
+    }
+}
+
+/// Root of an authored UI scene. The 2D UI viewport keys on this
+/// component; `reference_size` is the design resolution the authored
+/// layout is measured against.
+#[derive(Component, Clone, Copy, Debug, Reflect)]
+#[reflect(Component, Default)]
+pub struct UiSceneRoot {
+    pub reference_size: UVec2,
+}
+
+impl Default for UiSceneRoot {
+    fn default() -> Self {
+        Self {
+            reference_size: UVec2::new(1280, 720),
         }
     }
 }

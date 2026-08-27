@@ -8,10 +8,11 @@ use std::any::TypeId;
 
 use bevy::asset::{AssetServer, ReflectHandle};
 use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
+use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::reflect::{
-    PartialReflect, ReflectMut, TypeRegistry,
-    enums::{DynamicEnum, DynamicVariant},
+    PartialReflect, ReflectFromReflect, ReflectMut, TypeRegistry,
+    enums::{DynamicEnum, DynamicVariant, Enum},
     list::DynamicList,
     map::{DynamicMap, Map},
     prelude::ReflectDefault,
@@ -42,6 +43,117 @@ pub struct BsnApplyAssets<'a> {
 pub struct BsnSceneAssets(
     pub bevy::platform::collections::HashMap<String, bevy::asset::UntypedHandle>,
 );
+
+/// Type paths the open project's extracted schema reports and the editor has
+/// no ECS registration for. Project components live in the document and become
+/// real components only in the game binary, so apply skips a patch naming one
+/// without the "not in the registry" warning an unknown type earns.
+///
+/// Absent in the game runtime, which registers the project's types and so
+/// treats an unregistered type as a fault. The set is only as fresh as the
+/// last extraction: a schema still listing a type the game has since deleted
+/// silences a document naming it, until a rebuild.
+#[derive(Resource, Default)]
+pub struct DocumentOnlyTypes {
+    types: HashSet<String>,
+    /// The enums among them. An authored variant spells a path the schema
+    /// never lists on its own (`Team::Red` against a reported `Team`), so only
+    /// these answer for a name one segment longer.
+    enums: HashSet<String>,
+}
+
+impl DocumentOnlyTypes {
+    /// Build the set from the project's component type paths and the subset of
+    /// those that are enums.
+    pub fn new(types: HashSet<String>, enums: HashSet<String>) -> Self {
+        Self { types, enums }
+    }
+
+    /// Whether the project's schema accounts for `type_path`, directly or as a
+    /// variant of one of its enums.
+    pub fn covers(&self, type_path: &str) -> bool {
+        if self.types.contains(type_path) {
+            return true;
+        }
+        type_path
+            .rsplit_once("::")
+            .is_some_and(|(owner, _)| self.enums.contains(owner))
+    }
+}
+
+/// Type paths the last apply resolved to nothing: absent from the registry and
+/// from [`DocumentOnlyTypes`] both. Loaders read this to report once that the
+/// project needs rebuilding. Absent in the game runtime, alongside
+/// [`DocumentOnlyTypes`].
+#[derive(Resource, Default)]
+pub struct UnresolvedTypes {
+    types: std::collections::BTreeSet<String>,
+    /// What the last emitted remedy named. A scene reloads on every undo
+    /// restore and prefab watcher reload, so an unchanged remedy stays quiet
+    /// instead of repeating per reload.
+    reported: std::collections::BTreeSet<String>,
+}
+
+impl UnresolvedTypes {
+    /// The type paths the last apply could not resolve.
+    pub fn types(&self) -> &std::collections::BTreeSet<String> {
+        &self.types
+    }
+
+    /// Whether the last apply resolved everything it was given.
+    pub fn is_empty(&self) -> bool {
+        self.types.is_empty()
+    }
+
+    /// Forget the previous scene's findings, keeping what was last reported so
+    /// an unchanged remedy stays quiet across reloads.
+    pub fn start_scene(&mut self) {
+        self.types.clear();
+    }
+
+    /// The remedy to log, or `None` when there is nothing new to say.
+    pub fn take_remedy(&mut self) -> Option<String> {
+        if self.types.is_empty() || self.types == self.reported {
+            return None;
+        }
+        self.reported = self.types.clone();
+        Some(unresolved_remedy(&self.types))
+    }
+}
+
+/// The line a load reports when a type resolved to nothing: what is missing,
+/// and the rebuild that would supply it.
+fn unresolved_remedy(types: &std::collections::BTreeSet<String>) -> String {
+    let plural = if types.len() == 1 { "" } else { "s" };
+    format!(
+        "{} type{plural} in this scene {} in neither the editor's registry nor \
+         the project's extracted schema ({}); rebuild the project so the editor \
+         picks up its types.",
+        types.len(),
+        if types.len() == 1 { "is" } else { "are" },
+        types
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// Record `type_path` as unapplied and report whether it is document-only.
+/// `true` means the caller stays quiet: the type is a known project component
+/// and the document is where it belongs.
+fn note_unapplied(world: &mut World, type_path: &str) -> bool {
+    if world
+        .get_resource::<DocumentOnlyTypes>()
+        .is_some_and(|known| known.covers(type_path))
+    {
+        return true;
+    }
+    if let Some(mut unresolved) = world.get_resource_mut::<UnresolvedTypes>() {
+        unresolved.types.insert(type_path.to_string());
+    }
+    false
+}
 
 /// Spawn ECS entities from the [`SceneBsnAst`] resource, linking them back to
 /// AST nodes. All entities are marked [`AstDirty`] so a following call to
@@ -233,7 +345,9 @@ fn apply_type_patch(world: &mut World, entity: Entity, type_path: &str) {
         let variant_name = &type_path[last_sep + 2..];
 
         let Some(registration) = reg.get_with_type_path(enum_path) else {
-            log::warn!("cannot apply '{type_path}': type not in the registry");
+            if !note_unapplied(world, type_path) {
+                log::warn!("cannot apply '{type_path}': type not in the registry");
+            }
             return;
         };
         let Some(reflect_default) = registration.data::<ReflectDefault>() else {
@@ -248,13 +362,43 @@ fn apply_type_patch(world: &mut World, entity: Entity, type_path: &str) {
         let mut value = reflect_default.default();
         if let ReflectMut::Enum(e) = value.reflect_mut() {
             let dynamic_enum = DynamicEnum::new(variant_name, DynamicVariant::Unit);
-            e.apply(&dynamic_enum);
+            if !apply_enum_variant(e, &dynamic_enum, type_path) {
+                return;
+            }
         }
         reflect_component.insert(
             &mut world.entity_mut(entity),
             value.as_partial_reflect(),
             &reg,
         );
+    }
+}
+
+/// Switch `target` to the variant `dynamic` names, refusing rather than dying
+/// on one the enum cannot take.
+///
+/// `PartialReflect::apply` panics on every mismatch a hand-edited document can
+/// write: a variant the type does not declare (an associated constant such as
+/// `Color::WHITE` reads exactly like a unit variant in a type path), or a
+/// variant named bare or half-filled when it carries fields. The editor's own
+/// writer always emits the full field set, so those spellings come from a
+/// person typing into the file.
+///
+/// Returns whether the variant was applied.
+fn apply_enum_variant(target: &mut dyn Enum, dynamic: &DynamicEnum, type_path: &str) -> bool {
+    match target.try_apply(dynamic) {
+        Ok(()) => true,
+        Err(err) => {
+            // The error names the variant and, for an unknown one, what was
+            // looked for; the enum's own list of variants is what it cannot
+            // know to add.
+            let variants = match target.get_represented_type_info() {
+                Some(bevy::reflect::TypeInfo::Enum(info)) => info.variant_names().join(", "),
+                _ => String::new(),
+            };
+            log::warn!("cannot apply '{type_path}': {err} (the type has {variants})");
+            false
+        }
     }
 }
 
@@ -360,6 +504,12 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
         let variant_name = &data.type_path[last_sep + 2..];
 
         let Some(registration) = reg.get_with_type_path(enum_path) else {
+            if !note_unapplied(world, &data.type_path) {
+                log::warn!(
+                    "cannot apply '{}': type not in the registry",
+                    data.type_path
+                );
+            }
             return;
         };
         let Some(reflect_default) = registration.data::<ReflectDefault>() else {
@@ -432,7 +582,9 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
                 }
                 let dynamic_enum =
                     DynamicEnum::new(variant_name, DynamicVariant::Struct(dynamic_struct));
-                e.apply(&dynamic_enum);
+                if !apply_enum_variant(e, &dynamic_enum, &data.type_path) {
+                    return;
+                }
             }
         }
 
@@ -453,28 +605,114 @@ fn merge_bsn_value_into_reflect(
     registry: &TypeRegistry,
     assets: Option<&BsnApplyAssets>,
 ) {
-    match value {
-        BsnValue::Struct(data) => {
-            if let ReflectMut::Struct(s) = target.reflect_mut() {
-                for field in &data.fields.0 {
-                    if let Some(target_field) = s.field_mut(&field.name) {
-                        merge_bsn_value_into_reflect(target_field, &field.value, registry, assets);
-                    }
-                }
+    if let BsnValue::Struct(data) = value
+        && let ReflectMut::Struct(s) = target.reflect_mut()
+    {
+        for field in &data.fields.0 {
+            if let Some(target_field) = s.field_mut(&field.name) {
+                merge_bsn_value_into_reflect(target_field, &field.value, registry, assets);
             }
         }
-        _ => {
-            if let Some(type_info) = target.get_represented_type_info()
-                && let Some(reflected) =
-                    bsn_value_to_reflect(value, type_info.type_id(), registry, assets)
-            {
-                apply_authored_value(target, &*reflected);
-            }
-        }
+        return;
     }
+    // Everything else is converted whole and written over the target,
+    // including a braced value on a field that is not a struct, which is an
+    // enum variant carrying fields. Merging field-by-field is not open to
+    // those: the target may be sitting on a different variant entirely.
+    let Some(type_info) = target.get_represented_type_info() else {
+        log::warn!("cannot apply an authored value: the field has no type of its own");
+        return;
+    };
+    let Some(reflected) = bsn_value_to_reflect(value, type_info.type_id(), registry, assets) else {
+        log::warn!(
+            "cannot apply an authored value to '{}': it does not read as that type",
+            type_info.type_path(),
+        );
+        return;
+    };
+    apply_authored_value(target, &*reflected);
 }
 
 /// Apply a tuple struct patch: merge over existing component (or default).
+/// Apply a tuple patch whose type path names an enum's tuple variant rather
+/// than a tuple struct, such as `EntityCursor::System(Pointer)`, which is how
+/// the writer spells a data variant.
+///
+/// Answers whether the patch named such a variant, so the caller reports an
+/// unknown type only when it did not. A variant that is named but cannot be
+/// built still answers `true`: it is reported here and not again.
+fn apply_tuple_variant_patch(
+    world: &mut World,
+    entity: Entity,
+    data: &BsnTupleStructData,
+    reg: &TypeRegistry,
+    assets: Option<&BsnApplyAssets>,
+) -> bool {
+    let Some(separator) = data.type_path.rfind("::") else {
+        return false;
+    };
+    let Some(registration) = reg.get_with_type_path(&data.type_path[..separator]) else {
+        return false;
+    };
+    let bevy::reflect::TypeInfo::Enum(enum_info) = registration.type_info() else {
+        return false;
+    };
+    let variant_name = variant_name_of(&data.type_path);
+    let Some(variant) = enum_info.variant(variant_name) else {
+        return false;
+    };
+    // A variant of the wrong shape belongs to this arm even though it cannot
+    // be built here: the conversion below answers a kind mismatch with `None`,
+    // and nothing else would say which of the two spellings was wrong.
+    if !matches!(variant, bevy::reflect::enums::VariantInfo::Tuple(_)) {
+        log::warn!(
+            "cannot apply '{}': '{variant_name}' is not a tuple variant of '{}', so it takes no \
+             values in parentheses",
+            data.type_path,
+            enum_info.type_path(),
+        );
+        return true;
+    }
+    let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+        log::warn!(
+            "cannot apply '{}': not a reflectable component",
+            data.type_path
+        );
+        return true;
+    };
+    let value = BsnValue::TupleStruct(data.clone());
+    let Some(built) = enum_variant_value_to_reflect(&value, enum_info, registration, reg, assets)
+    else {
+        // The conversion names what it refused for every arm reachable from
+        // here: the variant's shape was checked above.
+        return true;
+    };
+    // The dynamic enum carries whatever the document's values converted to,
+    // and a conversion that could not read a value hands back one of the wrong
+    // type rather than nothing. `ReflectComponent::insert` would take that as
+    // far as `apply` and die on the mismatch, so the value is made concrete
+    // here first, the same guard the tuple-struct arm below uses.
+    let Some(from_reflect) = registration.data::<ReflectFromReflect>() else {
+        log::warn!(
+            "cannot apply '{}': no FromReflect registered",
+            data.type_path
+        );
+        return true;
+    };
+    let Some(concrete) = from_reflect.from_reflect(&*built) else {
+        log::warn!(
+            "cannot apply '{}': its authored values do not fit the variant",
+            data.type_path
+        );
+        return true;
+    };
+    let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+        return true;
+    };
+    reflect_component.insert(&mut entity_mut, concrete.as_partial_reflect(), reg);
+    true
+}
+
 fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleStructData) {
     let server = world.get_resource::<AssetServer>().cloned();
     let local = world.get_resource::<BsnSceneAssets>().map(|r| r.0.clone());
@@ -486,13 +724,31 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
     let reg = registry.read();
 
     let Some(registration) = reg.get_with_type_path(&data.type_path) else {
+        // `Enum::Variant(value)` is not itself a registered type. The struct
+        // patch has the same fallback for a braced variant; without this one an
+        // authored `EntityCursor::System(Pointer)` reads as an unknown type and
+        // the component is dropped on load.
+        if apply_tuple_variant_patch(world, entity, data, &reg, assets_ctx.as_ref()) {
+            return;
+        }
+        if !note_unapplied(world, &data.type_path) {
+            log::warn!(
+                "cannot apply '{}': type not in the registry",
+                data.type_path
+            );
+        }
         return;
     };
     let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+        log::warn!(
+            "cannot apply '{}': not a reflectable component",
+            data.type_path
+        );
         return;
     };
 
     let Ok(tuple_info) = registration.type_info().as_tuple_struct() else {
+        log::warn!("cannot apply '{}': not a tuple struct", data.type_path);
         return;
     };
 
@@ -516,6 +772,12 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
                 let mut dynamic = bevy::reflect::tuple_struct::DynamicTupleStruct::default();
                 for (i, bsn_val) in data.values.iter().enumerate() {
                     let Some(field_info) = tuple_info.field_at(i) else {
+                        log::warn!(
+                            "cannot apply '{}': it has {} values but the type takes {}",
+                            data.type_path,
+                            data.values.len(),
+                            tuple_info.field_len(),
+                        );
                         return;
                     };
                     let Some(reflected) = bsn_value_to_reflect(
@@ -524,17 +786,46 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
                         &reg,
                         assets_ctx.as_ref(),
                     ) else {
+                        log::warn!(
+                            "cannot apply '{}': value {i} does not read as '{}'",
+                            data.type_path,
+                            field_info.ty().path(),
+                        );
                         return;
                     };
                     dynamic.insert_boxed(reflected);
                 }
                 if dynamic.field_len() != tuple_info.field_len() {
+                    log::warn!(
+                        "cannot apply '{}': it has {} values but the type takes {}",
+                        data.type_path,
+                        dynamic.field_len(),
+                        tuple_info.field_len(),
+                    );
                     return;
                 }
                 dynamic.set_represented_type(Some(registration.type_info()));
+                // `ReflectComponent::insert` panics when the dynamic value
+                // cannot be made concrete, which a document is free to ask
+                // for: an opaque field with no conversion reaches here as a
+                // mismatched type, and a load must not die on that.
+                let Some(from_reflect) = registration.data::<ReflectFromReflect>() else {
+                    log::warn!(
+                        "cannot apply '{}': no default and no FromReflect registered",
+                        data.type_path,
+                    );
+                    return;
+                };
+                let Some(concrete) = from_reflect.from_reflect(dynamic.as_partial_reflect()) else {
+                    log::warn!(
+                        "cannot apply '{}': its authored value does not fit the type",
+                        data.type_path,
+                    );
+                    return;
+                };
                 reflect_component.insert(
                     &mut world.entity_mut(entity),
-                    dynamic.as_partial_reflect(),
+                    concrete.as_partial_reflect(),
                     &reg,
                 );
                 return;
@@ -545,12 +836,24 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
     if let ReflectMut::TupleStruct(ts) = value.reflect_mut() {
         for (i, bsn_val) in data.values.iter().enumerate() {
             let Some(field_info) = tuple_info.field_at(i) else {
+                log::warn!(
+                    "cannot apply value {i} of '{}': the type takes {}",
+                    data.type_path,
+                    tuple_info.field_len(),
+                );
                 continue;
             };
-            if let Some(reflected) =
+            let Some(reflected) =
                 bsn_value_to_reflect(bsn_val, field_info.ty().id(), &reg, assets_ctx.as_ref())
-                && let Some(target) = ts.field_mut(i)
-            {
+            else {
+                log::warn!(
+                    "cannot apply value {i} of '{}': it does not read as '{}'",
+                    data.type_path,
+                    field_info.ty().path(),
+                );
+                continue;
+            };
+            if let Some(target) = ts.field_mut(i) {
                 apply_authored_value(target, &*reflected);
             }
         }
@@ -568,6 +871,15 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
 /// by position/key and never removes the rest, which would leave stale
 /// entries from the seeded default (or the previous value) behind.
 fn apply_authored_value(target: &mut dyn PartialReflect, value: &dyn PartialReflect) {
+    // What clearing is about to throw away, held until the write lands. A
+    // refused value costs the field nothing, so a cleared list or map is
+    // restored when the write is refused.
+    let clears = matches!(
+        target.reflect_mut(),
+        ReflectMut::List(_) | ReflectMut::Map(_)
+    );
+    let prior = clears.then(|| target.to_dynamic());
+
     if let ReflectMut::List(list) = target.reflect_mut() {
         while !list.is_empty() {
             list.remove(list.len() - 1);
@@ -575,7 +887,27 @@ fn apply_authored_value(target: &mut dyn PartialReflect, value: &dyn PartialRefl
     } else if let ReflectMut::Map(map) = target.reflect_mut() {
         map.drain();
     }
-    target.apply(value);
+    // Every field write funnels through here, and plain `apply` panics on a
+    // value the document shaped wrong. Refusing the write costs the field;
+    // panicking costs the document.
+    if let Err(err) = target.try_apply(value) {
+        log::warn!("cannot apply a value to '{}': {err}", type_path_of(target));
+        if let Some(prior) = prior
+            && let Err(err) = target.try_apply(&*prior)
+        {
+            log::warn!(
+                "and could not put back what '{}' was holding: {err}",
+                type_path_of(target),
+            );
+        }
+    }
+}
+
+/// What a reflected value calls itself, for a message about it.
+fn type_path_of(value: &dyn PartialReflect) -> &str {
+    value
+        .get_represented_type_info()
+        .map_or("<dynamic>", bevy::reflect::TypeInfo::type_path)
 }
 
 /// Convert a [`BsnValue`] to a boxed reflected value given the expected type.
@@ -671,6 +1003,8 @@ pub fn bsn_value_to_reflect(
                 Some(Box::new(std::borrow::Cow::<'static, str>::Owned(s.clone())))
             } else if expected == TypeId::of::<std::path::PathBuf>() {
                 Some(Box::new(std::path::PathBuf::from(s.clone())))
+            } else if expected == TypeId::of::<smol_str::SmolStr>() {
+                Some(Box::new(smol_str::SmolStr::new(s)))
             } else {
                 Some(Box::new(s.clone()))
             }
@@ -681,6 +1015,21 @@ pub fn bsn_value_to_reflect(
         BsnValue::List(items) => list_value_to_reflect(items, expected, registry, assets),
         BsnValue::Map(entries) => map_value_to_reflect(entries, expected, registry, assets),
     }
+}
+
+/// Say why a variant the document named could not be built, and refuse it. The
+/// message attributes the fault to the document rather than to the type, which
+/// is the other way round from reflection's own wording.
+fn refused_variant(
+    enum_info: &bevy::reflect::enums::EnumInfo,
+    variant: &str,
+    reason: &str,
+) -> Option<Box<dyn PartialReflect>> {
+    log::warn!(
+        "cannot read '{}::{variant}': {reason}",
+        enum_info.type_path(),
+    );
+    None
 }
 
 /// The trailing `Variant` segment of an `Enum::Variant` type path (or the whole
@@ -703,6 +1052,8 @@ fn enum_variant_value_to_reflect(
     assets: Option<&BsnApplyAssets>,
 ) -> Option<Box<dyn PartialReflect>> {
     use bevy::reflect::enums::VariantInfo;
+    // `field_len` on the dynamic forms is the trait's, not inherent.
+    use bevy::reflect::tuple::Tuple;
 
     let (variant_name, dynamic_variant) = match value {
         BsnValue::Type(type_path) => {
@@ -719,9 +1070,32 @@ fn enum_variant_value_to_reflect(
             };
             let mut dynamic_tuple = bevy::reflect::tuple::DynamicTuple::default();
             for (i, item) in data.values.iter().enumerate() {
-                let field = tuple_var.field_at(i)?;
-                let reflected = bsn_value_to_reflect(item, field.type_id(), registry, assets)?;
+                let Some(field) = tuple_var.field_at(i) else {
+                    return refused_variant(enum_info, name, "it has more values than the variant");
+                };
+                let Some(reflected) = bsn_value_to_reflect(item, field.type_id(), registry, assets)
+                else {
+                    return refused_variant(
+                        enum_info,
+                        name,
+                        &format!("value {i} does not read as '{}'", field.type_path()),
+                    );
+                };
                 dynamic_tuple.insert_boxed(reflected);
+            }
+            // A variant is written whole or not at all: reflection reads a gap
+            // as "the variant has no such field", blaming the type for what
+            // the document left out.
+            if dynamic_tuple.field_len() != tuple_var.field_len() {
+                return refused_variant(
+                    enum_info,
+                    name,
+                    &format!(
+                        "it gives {} of the variant's {} values",
+                        dynamic_tuple.field_len(),
+                        tuple_var.field_len(),
+                    ),
+                );
             }
             (name.to_string(), DynamicVariant::Tuple(dynamic_tuple))
         }
@@ -732,10 +1106,38 @@ fn enum_variant_value_to_reflect(
             };
             let mut dynamic_struct = bevy::reflect::structs::DynamicStruct::default();
             for field in &data.fields.0 {
-                let field_info = struct_var.field(&field.name)?;
-                let reflected =
-                    bsn_value_to_reflect(&field.value, field_info.type_id(), registry, assets)?;
+                let Some(field_info) = struct_var.field(&field.name) else {
+                    return refused_variant(
+                        enum_info,
+                        name,
+                        &format!("the variant has no field '{}'", field.name),
+                    );
+                };
+                let Some(reflected) =
+                    bsn_value_to_reflect(&field.value, field_info.type_id(), registry, assets)
+                else {
+                    return refused_variant(
+                        enum_info,
+                        name,
+                        &format!(
+                            "field '{}' does not read as '{}'",
+                            field.name,
+                            field_info.type_path(),
+                        ),
+                    );
+                };
                 dynamic_struct.insert_boxed(&field.name, reflected);
+            }
+            if dynamic_struct.field_len() != struct_var.field_len() {
+                return refused_variant(
+                    enum_info,
+                    name,
+                    &format!(
+                        "it gives {} of the variant's {} fields",
+                        dynamic_struct.field_len(),
+                        struct_var.field_len(),
+                    ),
+                );
             }
             (name.to_string(), DynamicVariant::Struct(dynamic_struct))
         }
@@ -782,9 +1184,24 @@ fn int_to_reflect(i: i128, expected: TypeId) -> Option<Box<dyn PartialReflect>> 
         Some(Box::new(i as f32))
     } else if expected == TypeId::of::<f64>() {
         Some(Box::new(i as f64))
+    // `NonZero` refuses rather than wraps, unlike the casting arms above. A
+    // wrapped value would disagree with the reflect side, which refuses it;
+    // converting to nothing leaves the field as it was.
+    } else if expected == TypeId::of::<std::num::NonZeroI16>() {
+        nonzero_to_reflect(i16::try_from(i).ok().and_then(std::num::NonZeroI16::new))
+    } else if expected == TypeId::of::<std::num::NonZeroU16>() {
+        nonzero_to_reflect(u16::try_from(i).ok().and_then(std::num::NonZeroU16::new))
+    } else if expected == TypeId::of::<std::num::NonZeroI32>() {
+        nonzero_to_reflect(i32::try_from(i).ok().and_then(std::num::NonZeroI32::new))
+    } else if expected == TypeId::of::<std::num::NonZeroU32>() {
+        nonzero_to_reflect(u32::try_from(i).ok().and_then(std::num::NonZeroU32::new))
     } else {
         None
     }
+}
+
+fn nonzero_to_reflect<T: PartialReflect>(value: Option<T>) -> Option<Box<dyn PartialReflect>> {
+    value.map(|v| Box::new(v) as Box<dyn PartialReflect>)
 }
 
 fn type_value_to_reflect(
@@ -810,7 +1227,9 @@ fn type_value_to_reflect(
     let mut value = reflect_default.default();
     if let ReflectMut::Enum(e) = value.reflect_mut() {
         let dynamic_enum = DynamicEnum::new(variant_name, DynamicVariant::Unit);
-        e.apply(&dynamic_enum);
+        if !apply_enum_variant(e, &dynamic_enum, type_path) {
+            return None;
+        }
     }
     Some(value.into_partial_reflect())
 }
@@ -895,6 +1314,19 @@ fn list_value_to_reflect(
 ) -> Option<Box<dyn PartialReflect>> {
     let registration = registry.get(expected)?;
 
+    // Tuples take the same `[a, b]` literal too. BSN has no tuple syntax of
+    // its own, so without this a `Vec<(String, T)>` field is authored as its
+    // `Debug` text and dropped on the way back in.
+    if let Ok(tuple_info) = registration.type_info().as_tuple() {
+        let mut dynamic = bevy::reflect::tuple::DynamicTuple::default();
+        for (index, item) in items.iter().enumerate() {
+            let field_type_id = tuple_info.field_at(index)?.type_id();
+            dynamic.insert_boxed(bsn_value_to_reflect(item, field_type_id, registry, assets)?);
+        }
+        dynamic.set_represented_type(Some(registration.type_info()));
+        return Some(Box::new(dynamic));
+    }
+
     // Fixed-size arrays take the same `[a, b]` literal as lists.
     if let Ok(array_info) = registration.type_info().as_array() {
         let item_type_id = array_info.item_ty().id();
@@ -910,10 +1342,33 @@ fn list_value_to_reflect(
     let list_info = registration.type_info().as_list().ok()?;
     let item_type_id = list_info.item_ty().id();
 
+    // Each element is made concrete here rather than left dynamic. Applying a
+    // dynamic list onto a real `Vec<T>` pushes through `T::from_reflect`, and
+    // bevy's `Vec` impl panics when that conversion fails, so an element the
+    // document spells wrong (a field missing from an enum variant, a value of
+    // the wrong shape) would take the editor down on load. Converting here
+    // turns that into a warning and one dropped element. An item type with no
+    // `FromReflect` registration keeps the dynamic value.
+    let from_reflect = registry.get_type_data::<ReflectFromReflect>(item_type_id);
     let mut dynamic_list = DynamicList::default();
-    for item in items {
-        if let Some(reflected) = bsn_value_to_reflect(item, item_type_id, registry, assets) {
-            dynamic_list.push_box(reflected);
+    let list_path = registration.type_info().type_path();
+    let item_path = list_info.item_ty().path();
+    for (index, item) in items.iter().enumerate() {
+        // Both drops are reported the same way: which list, which position,
+        // which element type. Dropping in silence leaves the user with a
+        // shorter list and nothing naming what went missing.
+        let Some(reflected) = bsn_value_to_reflect(item, item_type_id, registry, assets) else {
+            log::warn!(
+                "{list_path}[{index}]: the document's value is not a {item_path}; dropping it"
+            );
+            continue;
+        };
+        match from_reflect {
+            Some(from_reflect) => match from_reflect.from_reflect(reflected.as_ref()) {
+                Some(concrete) => dynamic_list.push_box(concrete.into_partial_reflect()),
+                None => log::warn!("{list_path}[{index}]: does not fit {item_path}; dropping it"),
+            },
+            None => dynamic_list.push_box(reflected),
         }
     }
     dynamic_list.set_represented_type(Some(registration.type_info()));
@@ -1433,6 +1888,140 @@ fn empty_container_value_for_type(type_path: &str, registry: &TypeRegistry) -> B
 }
 
 #[cfg(test)]
+mod document_only_tests {
+    use super::*;
+
+    fn set(paths: &[&str]) -> HashSet<String> {
+        paths.iter().map(|p| (*p).to_string()).collect()
+    }
+
+    /// `structs` are project components of any non-enum shape; `enums` are the
+    /// ones whose variants a document may name.
+    fn world_knowing(structs: &[&str], enums: &[&str]) -> World {
+        let mut world = World::new();
+        let mut all = set(structs);
+        all.extend(set(enums));
+        world.insert_resource(DocumentOnlyTypes::new(all, set(enums)));
+        world.init_resource::<UnresolvedTypes>();
+        world
+    }
+
+    fn unresolved(world: &World) -> Vec<String> {
+        world
+            .resource::<UnresolvedTypes>()
+            .types()
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn a_reported_project_component_is_quiet_and_unrecorded() {
+        let mut world = world_knowing(&["mygame::Health"], &[]);
+        assert!(note_unapplied(&mut world, "mygame::Health"));
+        assert!(world.resource::<UnresolvedTypes>().is_empty());
+    }
+
+    #[test]
+    fn a_variant_of_a_reported_project_enum_answers_through_its_owner() {
+        let mut world = world_knowing(&[], &["mygame::Team"]);
+        assert!(note_unapplied(&mut world, "mygame::Team::Red"));
+        assert!(world.resource::<UnresolvedTypes>().is_empty());
+    }
+
+    /// A struct has no variants, so a name one segment longer than a reported
+    /// struct is a different type, not a shape of it.
+    #[test]
+    fn a_name_below_a_reported_struct_is_not_a_variant_of_it() {
+        let mut world = world_knowing(&["mygame::Health"], &[]);
+        assert!(!note_unapplied(&mut world, "mygame::Health::Bogus"));
+        assert_eq!(unresolved(&world), ["mygame::Health::Bogus"]);
+    }
+
+    /// The owner check does not extend to a module path: only a type the
+    /// schema reported silences the warning.
+    #[test]
+    fn an_unreported_type_in_a_reported_module_is_still_recorded() {
+        let mut world = world_knowing(&[], &["mygame::Team"]);
+        assert!(!note_unapplied(&mut world, "mygame::Ghost"));
+        assert_eq!(unresolved(&world), ["mygame::Ghost"]);
+    }
+
+    #[test]
+    fn a_world_without_the_resources_records_nothing_and_stays_loud() {
+        let mut world = World::new();
+        assert!(!note_unapplied(&mut world, "mygame::Health"));
+    }
+
+    #[test]
+    fn the_remedy_names_what_is_missing_and_the_rebuild() {
+        let mut types = UnresolvedTypes::default();
+        types.types.insert("mygame::Ghost".to_string());
+        let remedy = types.take_remedy().expect("a missing type earns a remedy");
+        assert!(remedy.contains("mygame::Ghost"), "{remedy}");
+        assert!(remedy.contains("rebuild the project"), "{remedy}");
+        assert!(
+            remedy.starts_with("1 type in this scene is in neither"),
+            "one missing type reads singular: {remedy}",
+        );
+    }
+
+    #[test]
+    fn two_missing_types_read_plural() {
+        let mut types = UnresolvedTypes::default();
+        types.types.insert("mygame::Ghost".to_string());
+        types.types.insert("mygame::Wraith".to_string());
+        let remedy = types.take_remedy().expect("a remedy");
+        assert!(
+            remedy.starts_with("2 types in this scene are in neither"),
+            "{remedy}",
+        );
+    }
+
+    /// A scene reloads on every undo restore and prefab reload, and the remedy
+    /// stays quiet across those reloads while it is unchanged.
+    #[test]
+    fn an_unchanged_remedy_is_not_repeated() {
+        let mut types = UnresolvedTypes::default();
+        types.types.insert("mygame::Ghost".to_string());
+        assert!(types.take_remedy().is_some());
+
+        types.start_scene();
+        types.types.insert("mygame::Ghost".to_string());
+        assert!(
+            types.take_remedy().is_none(),
+            "the same gap must not re-announce itself",
+        );
+    }
+
+    /// Opening a second scene does not inherit the first one's findings.
+    #[test]
+    fn a_following_scene_reports_only_its_own_gaps() {
+        let mut types = UnresolvedTypes::default();
+        types.types.insert("mygame::Ghost".to_string());
+        assert!(types.take_remedy().is_some());
+
+        types.start_scene();
+        assert!(types.is_empty(), "scene B starts with nothing recorded");
+        types.types.insert("mygame::Wraith".to_string());
+        let remedy = types.take_remedy().expect("scene B has its own gap");
+        assert!(remedy.contains("mygame::Wraith"), "{remedy}");
+        assert!(!remedy.contains("Ghost"), "scene A's gap leaked: {remedy}");
+    }
+
+    /// A clean scene after a dirty one has nothing to report.
+    #[test]
+    fn a_clean_scene_says_nothing() {
+        let mut types = UnresolvedTypes::default();
+        types.types.insert("mygame::Ghost".to_string());
+        assert!(types.take_remedy().is_some());
+
+        types.start_scene();
+        assert!(types.take_remedy().is_none());
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{BsnPatches, BsnStructFields};
@@ -1458,6 +2047,90 @@ mod tests {
             .type_path()
             .to_string();
         (registry, type_path)
+    }
+
+    /// Bevy stores grid lines as `NonZero`, and a value the type cannot hold
+    /// leaves the field alone rather than landing on a neighbouring number.
+    #[test]
+    fn a_nonzero_field_takes_an_int_it_can_hold() {
+        use std::num::{NonZeroI16, NonZeroU16};
+
+        let value =
+            int_to_reflect(3, std::any::TypeId::of::<NonZeroI16>()).expect("three is a grid line");
+        assert_eq!(
+            value.try_downcast_ref::<NonZeroI16>().map(|v| v.get()),
+            Some(3),
+        );
+
+        let span = int_to_reflect(2, std::any::TypeId::of::<NonZeroU16>()).expect("a span of two");
+        assert_eq!(
+            span.try_downcast_ref::<NonZeroU16>().map(|v| v.get()),
+            Some(2),
+        );
+    }
+
+    #[test]
+    fn a_nonzero_field_refuses_zero_and_out_of_range() {
+        use std::num::{NonZeroI16, NonZeroU16};
+
+        assert!(
+            int_to_reflect(0, std::any::TypeId::of::<NonZeroI16>()).is_none(),
+            "zero is the one number this type cannot hold",
+        );
+        assert!(
+            int_to_reflect(70_000, std::any::TypeId::of::<NonZeroI16>()).is_none(),
+            "and a number past the width refuses rather than wrapping to 4464",
+        );
+        assert!(
+            int_to_reflect(-1, std::any::TypeId::of::<NonZeroU16>()).is_none(),
+            "an unsigned line has no negative side to wrap onto",
+        );
+    }
+
+    /// A `NonZero` field reads back as a plain number rather than reaching the
+    /// `Debug` fallback, whose quoted string the reader above refuses.
+    #[test]
+    fn a_nonzero_value_round_trips_through_the_document() {
+        use std::num::NonZeroI16;
+
+        use std::num::{NonZeroI32, NonZeroU16, NonZeroU32};
+
+        let registry = TypeRegistry::new();
+        let line = NonZeroI16::new(-3).expect("a negative grid line");
+        let value = BsnValue::from_reflect(&line, &registry);
+        assert_eq!(value, BsnValue::Int(-3), "it reads back as a plain number");
+
+        // All four widths, since all four are readable and writable.
+        for (read, expected) in [
+            (
+                BsnValue::from_reflect(&NonZeroU16::new(7).unwrap(), &registry),
+                7,
+            ),
+            (
+                BsnValue::from_reflect(&NonZeroI32::new(-9).unwrap(), &registry),
+                -9,
+            ),
+            (
+                BsnValue::from_reflect(&NonZeroU32::new(11).unwrap(), &registry),
+                11,
+            ),
+        ] {
+            assert_eq!(read, BsnValue::Int(expected));
+        }
+        assert!(
+            int_to_reflect(11, std::any::TypeId::of::<NonZeroU32>()).is_some(),
+            "and the widest one comes back too",
+        );
+
+        let BsnValue::Int(i) = value else {
+            unreachable!("just asserted");
+        };
+        let back = int_to_reflect(i, std::any::TypeId::of::<NonZeroI16>())
+            .expect("and the number goes back to the value it came from");
+        assert_eq!(
+            back.try_downcast_ref::<NonZeroI16>().map(|v| v.get()),
+            Some(-3),
+        );
     }
 
     #[test]
@@ -1615,6 +2288,83 @@ mod tests {
         assert_eq!(applied.source, "prefabs/tree.bsn");
         assert_eq!(applied.count, 3);
     }
+
+    /// A struct on the far side of a pair, so the shape under test is
+    /// `Vec<(String, BindPath)>`, how a binding maps an event's fields. A pair
+    /// of primitives would not show the second half surviving as a value
+    /// rather than as text.
+    #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
+    #[reflect(Default)]
+    struct Leg {
+        raw: String,
+    }
+
+    #[derive(Component, Reflect, Default, Clone)]
+    #[reflect(Component, Default)]
+    struct Pairs {
+        entries: Vec<(String, Leg)>,
+    }
+
+    fn one_pair() -> Vec<(String, Leg)> {
+        vec![(
+            "amount".to_string(),
+            Leg {
+                raw: "game::Health.current".to_string(),
+            },
+        )]
+    }
+
+    #[test]
+    fn a_tuple_field_round_trips_through_the_document() {
+        let mut world = World::new();
+        let registry = AppTypeRegistry::default();
+        {
+            let mut reg = registry.write();
+            reg.register::<Pairs>();
+        }
+        let patch = {
+            let reg = registry.read();
+            crate::component_to_bsn_patch(
+                &Pairs {
+                    entries: one_pair(),
+                },
+                &reg,
+            )
+        };
+
+        // The pair reaches the document as data, not as its `Debug` text. Both
+        // halves are checked: the `Debug` text contains the same words, and
+        // only the shape tells the two apart.
+        let BsnPatch::Struct(data) = &patch else {
+            panic!("a struct component authors as a struct patch, got {patch:?}");
+        };
+        let BsnValue::List(entries) = &data.fields.0[0].value else {
+            panic!(
+                "the entries author as a list, got {:?}",
+                data.fields.0[0].value
+            );
+        };
+        let Some(BsnValue::List(pair)) = entries.first() else {
+            panic!("a pair authors as a list of its parts, got {entries:?}");
+        };
+        assert!(
+            matches!(pair.first(), Some(BsnValue::String(name)) if name == "amount"),
+            "the first half is the name as a string: {pair:?}",
+        );
+        assert!(
+            matches!(pair.get(1), Some(BsnValue::Struct(leg)) if leg.type_path.ends_with("Leg")),
+            "the second half is a struct value, not its Debug text: {pair:?}",
+        );
+
+        world.insert_resource(registry);
+        let entity = world.spawn_empty().id();
+        apply_component_patch(&mut world, entity, &patch);
+
+        let applied = world
+            .get::<Pairs>(entity)
+            .expect("a component with a tuple field must apply");
+        assert_eq!(applied.entries, one_pair());
+    }
 }
 
 /// Field-navigation matrix for `set_bsn_field`/`get_bsn_field`. Each case
@@ -1641,6 +2391,55 @@ mod field_navigation_matrix {
         let patch_entity = ast.world.spawn(patch).id();
         let patches_entity = ast.world.spawn(BsnPatches(vec![patch_entity])).id();
         (ast, patches_entity)
+    }
+
+    /// A list of enum values, the shape `Bindings(Vec<Binding>)` has.
+    #[derive(Reflect, Debug, PartialEq)]
+    enum TestChoice {
+        Sized { size: f32 },
+        Plain,
+    }
+
+    /// A document can hold a list element that does not fit its type, from a
+    /// hand edit or a variant whose shape has changed. Applying a dynamic list
+    /// onto a real `Vec` pushes through `from_reflect`, and bevy's `Vec` impl
+    /// panics when that fails, so the element is dropped with a warning
+    /// instead.
+    #[test]
+    fn a_list_element_that_does_not_fit_is_dropped_not_panicked_on() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<TestChoice>();
+        registry.register::<Vec<TestChoice>>();
+        registry.register::<f32>();
+
+        let items = BsnValue::List(vec![
+            BsnValue::Struct(BsnStructData {
+                type_path: "TestChoice::Sized".into(),
+                fields: BsnStructFields(vec![BsnField {
+                    name: "size".into(),
+                    // A size that is not a number: the variant cannot be built.
+                    value: BsnValue::String("wide".into()),
+                }]),
+            }),
+            BsnValue::Type("TestChoice::Plain".into()),
+        ]);
+
+        let reflected = bsn_value_to_reflect(
+            &items,
+            std::any::TypeId::of::<Vec<TestChoice>>(),
+            &registry,
+            None,
+        )
+        .expect("a list of a registered enum converts");
+
+        let mut target: Vec<TestChoice> = Vec::new();
+        apply_authored_value(&mut target, reflected.as_ref());
+
+        assert_eq!(
+            target,
+            vec![TestChoice::Plain],
+            "the element that fits survives; the one that does not is dropped",
+        );
     }
 
     /// A `translation.x` style nested read: a struct component holding a

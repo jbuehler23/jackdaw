@@ -76,12 +76,15 @@ pub fn decorate_animatable_fields(
         // rebuilds that cascade-despawn `row_entity` this frame
         // don't leave orphaned `ChildOf` relationships.
         let wrapper = commands
-            .spawn((Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(0.0),
-                right: Val::Px(4.0),
-                ..default()
-            },))
+            .spawn((
+                jackdaw_feathers::field_row::FieldRowDecoration,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(0.0),
+                    right: Val::Px(4.0),
+                    ..default()
+                },
+            ))
             .id();
 
         let button_entity = commands

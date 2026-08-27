@@ -110,3 +110,88 @@ fn window_open_with_unknown_id_cancels() {
         "unknown window id should cancel, not silently no-op + Finished"
     );
 }
+
+/// The capture operators. Both stand in for a pointer gesture, so both are
+/// dispatched here with the params a capture script passes rather than empty,
+/// which is all the smoke pass can do.
+#[test]
+fn menu_open_opens_the_menu_it_names() {
+    let mut app = util::editor_test_app();
+    let world = app.world_mut();
+    let bar = world
+        .spawn(jackdaw_feathers::menu_bar::menu_bar_shell())
+        .id();
+    jackdaw_feathers::menu_bar::populate_menu_bar(
+        world,
+        bar,
+        [(
+            "File".to_string(),
+            vec![("op:scene.new".to_string(), "New".to_string())],
+        )],
+    );
+    app.update();
+
+    let result = dispatch_with_param(&mut app, "menu.open", "name", "File");
+    app.update();
+
+    assert_eq!(result, OperatorResult::Finished);
+    let world = app.world_mut();
+    assert!(
+        world
+            .resource::<jackdaw_widgets::menu_bar::MenuBarState>()
+            .open_menu
+            .is_some(),
+        "the bar records the open menu",
+    );
+    assert_eq!(
+        world
+            .query_filtered::<Entity, With<jackdaw_widgets::menu_bar::MenuBarDropdown>>()
+            .iter(world)
+            .count(),
+        1,
+        "and a dropdown is on screen to photograph",
+    );
+}
+
+/// A menu bar with no such label refuses rather than opening something else.
+#[test]
+fn menu_open_cancels_on_a_label_no_menu_carries() {
+    let mut app = util::editor_test_app();
+    let world = app.world_mut();
+    let bar = world
+        .spawn(jackdaw_feathers::menu_bar::menu_bar_shell())
+        .id();
+    jackdaw_feathers::menu_bar::populate_menu_bar(world, bar, [("File".to_string(), Vec::new())]);
+    app.update();
+
+    let result = dispatch_with_param(&mut app, "menu.open", "name", "Sculpt");
+
+    assert_eq!(result, OperatorResult::Cancelled);
+}
+
+#[test]
+fn preview_set_starts_and_stops_the_session() {
+    let mut app = util::editor_test_app();
+
+    let result = dispatch_with_param(&mut app, "preview.set", "on", true);
+    app.update();
+
+    assert_eq!(result, OperatorResult::Finished);
+    assert!(
+        app.world()
+            .resource::<jackdaw::preview_context::PreviewSession>()
+            .is_on(),
+        "the session is running",
+    );
+
+    let stopped = dispatch_with_param(&mut app, "preview.set", "on", false);
+    app.update();
+    assert_eq!(stopped, OperatorResult::Finished);
+
+    assert!(
+        !app.world()
+            .resource::<jackdaw::preview_context::PreviewSession>()
+            .is_on(),
+        "and stops again",
+    );
+}

@@ -20,7 +20,9 @@ use super::{
     TriggerSwatchMaterial,
 };
 
-use crate::button::{ButtonClickEvent, ButtonProps, ButtonVariant, button};
+use crate::button::{
+    ButtonClickEvent, ButtonContentText, ButtonProps, ButtonVariant, button, button_caption,
+};
 use crate::icons::{EditorFont, IconFont};
 use crate::popover::{
     PopoverHeaderProps, PopoverPlacement, PopoverProps, PopoverTracker, activate_trigger,
@@ -126,10 +128,20 @@ pub(super) fn setup_color_picker(
 pub(super) fn setup_trigger_swatch(
     mut commands: Commands,
     mut checkerboard_materials: ResMut<Assets<CheckerboardMaterial>>,
-    triggers: Query<(Entity, &TriggerSwatchConfig, &Children)>,
-    texts: Query<Entity, With<Text>>,
+    triggers: Query<(Entity, &TriggerSwatchConfig)>,
+    children: Query<&Children>,
+    captions: Query<(), With<ButtonContentText>>,
 ) {
-    for (trigger_entity, config, children) in &triggers {
+    for (trigger_entity, config) in &triggers {
+        // The hex readout is the button's caption. The button builds its
+        // children a tick after the trigger is spawned, so the whole pass
+        // waits for the caption: consuming the config before then would
+        // leave the readout unmarked, frozen at its spawn colour and
+        // without the margin that clears the swatch.
+        let Some(caption) = button_caption(trigger_entity, &children, &captions) else {
+            continue;
+        };
+
         commands
             .entity(trigger_entity)
             .remove::<TriggerSwatchConfig>();
@@ -173,18 +185,13 @@ pub(super) fn setup_trigger_swatch(
 
         commands.entity(trigger_entity).add_child(swatch_entity);
 
-        for child in children.iter() {
-            if texts.get(child).is_ok() {
-                commands.entity(child).insert((
-                    TriggerLabel(config.picker),
-                    Node {
-                        margin: UiRect::left(px(SWATCH_SIZE + 6.0)),
-                        ..default()
-                    },
-                ));
-                break;
-            }
-        }
+        commands.entity(caption).insert((
+            TriggerLabel(config.picker),
+            Node {
+                margin: UiRect::left(px(SWATCH_SIZE + 6.0)),
+                ..default()
+            },
+        ));
     }
 }
 
@@ -532,5 +539,96 @@ pub(super) fn despawn_orphaned_color_picker_roots(
 ) {
     for entity in &orphans {
         commands.entity(entity).try_despawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::color_picker::visuals::update_trigger_display;
+    use crate::color_picker::{ColorPickerProps, color_picker};
+    use crate::icons::{EditorFont, IconFont};
+
+    /// A picker with its trigger built, ticked far enough for the button
+    /// (and the caption inside it) to exist. The render-side material
+    /// plugins the widget's own plugin adds are not needed to read a
+    /// label, so the systems under test are registered by hand.
+    fn app_with_picker(color: [f32; 4]) -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+            crate::button::plugin,
+        ));
+        app.init_asset::<bevy::text::Font>();
+        app.init_asset::<CheckerboardMaterial>();
+        app.init_resource::<bevy::input_focus::InputFocus>();
+        app.insert_resource(IconFont(Handle::default()));
+        app.insert_resource(EditorFont(Handle::default()));
+        app.add_systems(
+            Update,
+            (
+                setup_color_picker,
+                setup_trigger_swatch,
+                update_trigger_display,
+            )
+                .chain(),
+        );
+        let entity = app
+            .world_mut()
+            .spawn(color_picker(ColorPickerProps::new().with_color(color)))
+            .id();
+        // Three: the trigger lands, the button builds its caption, the
+        // swatch pass finds it.
+        app.update();
+        app.update();
+        app.update();
+        (app, entity)
+    }
+
+    /// The hex the trigger is drawing, found by the label marker the setup
+    /// pass is supposed to have put on the button's caption.
+    fn readout(app: &App) -> String {
+        app.world()
+            .iter_entities()
+            .find(EntityRef::contains::<TriggerLabel>)
+            .expect("the trigger's caption carries the label marker")
+            .get::<Text>()
+            .expect("the label is the caption text")
+            .0
+            .clone()
+    }
+
+    /// The readout follows the colour. It only does so if the setup pass
+    /// finds the caption inside its clipping slot rather than among the
+    /// button's own children; without the marker the hex stays at the
+    /// colour it was spawned with.
+    #[test]
+    fn the_trigger_reads_the_colour_it_is_recoloured_to() {
+        let (mut app, picker) = app_with_picker([1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(readout(&app), "FF0000");
+
+        app.world_mut()
+            .get_mut::<ColorPickerState>(picker)
+            .expect("the picker holds its state")
+            .set_from_rgba([0.0, 0.0, 1.0, 1.0]);
+        app.update();
+
+        assert_eq!(readout(&app), "0000FF");
+    }
+
+    /// The readout keeps clear of the swatch drawn over the button's left
+    /// edge.
+    #[test]
+    fn the_readout_is_moved_clear_of_the_swatch() {
+        let (app, _) = app_with_picker([1.0, 0.0, 0.0, 1.0]);
+        let labelled = app
+            .world()
+            .iter_entities()
+            .find(EntityRef::contains::<TriggerLabel>)
+            .expect("the trigger's caption carries the label marker");
+        let node = labelled.get::<Node>().expect("the caption is laid out");
+        assert_eq!(node.margin.left, px(SWATCH_SIZE + 6.0));
     }
 }

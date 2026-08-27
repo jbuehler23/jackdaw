@@ -10,7 +10,7 @@
 //! Alt+G/R/S for reset, Alt+Arrow and Alt+PageUp/Down for `rotate_90`,
 //! plain Arrow and PageUp/Down for nudge.
 
-use bevy::{input_focus::InputFocus, prelude::*};
+use bevy::prelude::*;
 use bevy_enhanced_input::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
@@ -121,15 +121,20 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// arrow-key playhead-scrub and Ctrl+C/V keyframe copy/paste operators
 /// can claim those keys without fighting entity nudge / component
 /// copy/paste.
+///
+/// Typing is asked through [`crate::keybind_focus::KeybindFocus`] and
+/// not through `InputFocus` directly: bevy parks focus on the primary
+/// window when nothing has claimed it, so the bare resource reports
+/// "the user is typing" for a scene nobody has clicked in yet.
 fn can_act_on_entities(
-    input_focus: Res<InputFocus>,
+    keybind_focus: crate::keybind_focus::KeybindFocus,
     active: ActiveModalQuery,
     modal: Res<crate::modal_transform::ModalTransformState>,
     draw_state: Res<crate::draw_brush::DrawBrushState>,
     edit_mode: Res<crate::brush::EditMode>,
     tree: Res<jackdaw_panels::tree::DockTree>,
 ) -> bool {
-    if input_focus.get().is_some() || active.is_modal_running() || modal.active.is_some() {
+    if keybind_focus.is_typing() || active.is_modal_running() || modal.active.is_some() {
         return false;
     }
     if draw_state.active.is_some() {
@@ -300,11 +305,42 @@ fn transform_rotate_90_roll_cw(
 
 // -- Nudge ops ---------------------------------------------------
 
+/// Nudge the selection, by whichever of the two writers it is made of.
+///
+/// The arrow keys are one binding over two kinds of selection. A 3D
+/// selection is translated through `Transform`; a UI selection has none, and
+/// a canvas moves its nodes through `Node` in authored pixels. The canvas
+/// answers first and reports whether the selection was its to move. Routing
+/// is by the selection, not by which panel has focus.
+///
+/// [`crate::ui_stage::nudge_ui_selection`] holds the canvas half,
+/// including what Shift means there.
 fn nudge_by_axis(world: &mut World, offset_direction: Vec3) {
+    if let Some(direction) = ui_nudge_direction(offset_direction)
+        && crate::ui_stage::nudge_ui_selection(world, direction)
+    {
+        return;
+    }
     let grid_size = world
         .resource::<crate::snapping::SnapSettings>()
         .grid_size();
     nudge_selected(world, offset_direction * grid_size);
+}
+
+/// The canvas direction a world-space nudge axis means, or `None` for
+/// the one that means nothing there.
+///
+/// The arrows map onto the two axes a canvas has: world x is left and right,
+/// and the ground plane's z is up and down the screen. `PageUp`/`PageDown`
+/// nudge along world y, which a flat canvas has no axis for.
+fn ui_nudge_direction(offset_direction: Vec3) -> Option<Vec2> {
+    if offset_direction.x != 0.0 {
+        Some(Vec2::new(offset_direction.x.signum(), 0.0))
+    } else if offset_direction.z != 0.0 {
+        Some(Vec2::new(0.0, offset_direction.z.signum()))
+    } else {
+        None
+    }
 }
 
 #[operator(

@@ -17,10 +17,29 @@
 //! this one does **not** exit afterwards -- an operator run is usually
 //! setup for something else (a screenshot, a manual look), not the whole
 //! job.
+//!
+//! # Naming an entity
+//!
+//! An operator that acts on one thing in the scene declares an `Entity`
+//! parameter, and a clause is text, so [`resolve_entity_params`] fills
+//! those in: from `name=`, or from the selection for the operators that
+//! act on it when a user runs them (see [`SELECTION_FALLBACK_OPS`]). A
+//! `name=` that resolves also *selects* its target, so
+//! `component.add name=Panel type_path=...` works from a cold start with
+//! nothing selected.
+//!
+//! There is no quoting anywhere in a clause, so **a value cannot contain
+//! a space**: the root a new UI scene seeds is called `UI Root`, and no
+//! `name=` reaches it. Either leave the entity selected (`scene.new ui=true`
+//! selects the root it makes, so the next clause needs no name), or rename
+//! the node to something a clause can spell.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::lifecycle::OperatorEntity;
 use jackdaw_scene_types::PropertyValue;
+
+use crate::selection::Selection;
 
 /// Names operators to run once the editor has settled.
 pub const ENV_RUN_OP: &str = "JACKDAW_RUN_OP";
@@ -131,6 +150,317 @@ fn parse_value(raw: &str) -> PropertyValue {
     PropertyValue::String(raw.to_string().into())
 }
 
+/// The one entity carrying `wanted`, or `None` when none does or more
+/// than one does.
+///
+/// Ambiguity resolves to `None` rather than to one of the candidates.
+pub(crate) fn unique_named_entity<'a>(
+    named: impl Iterator<Item = (Entity, &'a Name)>,
+    wanted: &str,
+) -> Option<Entity> {
+    let mut matches = named
+        .filter(|(_, name)| name.as_str() == wanted)
+        .map(|(entity, _)| entity);
+    match (matches.next(), matches.next()) {
+        (Some(entity), None) => Some(entity),
+        _ => None,
+    }
+}
+
+fn entity_named(world: &mut World, wanted: &str) -> Option<Entity> {
+    let mut state = world.query_filtered::<(Entity, &Name), Without<crate::EditorEntity>>();
+    unique_named_entity(state.iter(world), wanted)
+}
+
+/// The parameter schemas declared for `id`, across every registration
+/// that answers to it. `scene.new` and `scene.open` are each declared
+/// twice (see `tests/scene_op_ids.rs`), and only one of the two is
+/// reachable by id, so both are read here rather than betting on which.
+fn declared_params(world: &mut World, id: &str) -> Vec<&'static ParamSpec> {
+    let mut state = world.query::<&OperatorEntity>();
+    state
+        .iter(world)
+        .filter(|op| op.id() == id)
+        .flat_map(|op| op.parameters().iter())
+        .collect()
+}
+
+/// Operators that take the current selection when a clause names no
+/// entity.
+///
+/// Membership follows what the operator does when a user runs it: these act
+/// on the selection, and their availability gate `has_primary_selection`
+/// refuses them when nothing is selected.
+///
+/// Everything else has to be told which entity it means, which is why this
+/// is a list and not a blanket fallback. `prefab.apply_to_source`, for
+/// instance, writes the prefab source document to disk, so a guessed target
+/// would edit a file the author never pointed at.
+///
+/// Two members' gates are not the selection.
+///
+/// `hierarchy.rename_begin`'s is `no_rename_in_progress`. It is listed
+/// because the operator itself resolves a missing `entity` from the
+/// selection (`hierarchy::resolve_rename_target`, what a bare F2 does), so
+/// filling it in here puts that resolution in the log.
+///
+/// `widget.add` has no gate at all: the Add menu's widget rows are live with
+/// nothing selected. Its `parent` is listed because
+/// `ui_palette::resolve_widget_parent` reads the selection on every click,
+/// and the parent it settles on is a preference either way, since a node
+/// outside the UI scene loses to the scene root whichever offered it.
+pub const SELECTION_FALLBACK_OPS: &[&str] = &[
+    "animation.toggle_keyframe",
+    "binding.add",
+    "binding.set",
+    "component.add",
+    "component.remove",
+    "component.revert_baseline",
+    "field.set",
+    "hierarchy.rename_begin",
+    "physics.disable",
+    "physics.enable",
+    "widget.add",
+];
+
+/// How one declared `Entity` parameter was filled in.
+///
+/// Returned from [`resolve_entity_params`] rather than only logged, so a
+/// caller can tell a resolver refusal from an availability gate that would
+/// have refused anyway.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EntityParam {
+    /// The clause passed a real entity; nothing was resolved.
+    Given { param: &'static str },
+    /// A name resolved to one entity, which also becomes the selection.
+    Named {
+        param: &'static str,
+        name: String,
+        entity: Entity,
+        entity_name: String,
+    },
+    /// The clause named nothing, so the selection filled the parameter in.
+    FromSelection {
+        param: &'static str,
+        entity: Entity,
+        entity_name: String,
+    },
+    /// The name the clause carried answers to no entity, or to two.
+    NoSuchName { param: &'static str, name: String },
+    /// The clause named nothing and this operator does not take the
+    /// selection.
+    NeedsAName { param: &'static str },
+    /// The clause named nothing, the operator does take the selection,
+    /// and nothing is selected.
+    NothingSelected { param: &'static str },
+    /// The value given is neither an entity nor a name.
+    NotAName { param: &'static str, value: String },
+}
+
+impl EntityParam {
+    /// True when the parameter was left unresolved, so the operator will
+    /// refuse rather than act.
+    pub fn is_refusal(&self) -> bool {
+        matches!(
+            self,
+            Self::NoSuchName { .. }
+                | Self::NeedsAName { .. }
+                | Self::NothingSelected { .. }
+                | Self::NotAName { .. }
+        )
+    }
+
+    /// The log line for this resolution. `None` for a parameter the clause
+    /// spelled itself.
+    pub fn line(&self, op: &str) -> Option<String> {
+        Some(match self {
+            Self::Given { .. } => return None,
+            Self::Named {
+                param,
+                name,
+                entity,
+                entity_name,
+            } => format!("{op}: `{param}` = {entity} ({entity_name}), from name={name}"),
+            Self::FromSelection {
+                param,
+                entity,
+                entity_name,
+            } => format!("{op}: `{param}` = {entity} ({entity_name}), from the selection"),
+            Self::NoSuchName { param, name } => format!(
+                "{op}: `{param}` was not set: `{name}` names no entity in this scene, or more \
+                 than one"
+            ),
+            Self::NeedsAName { param } => format!(
+                "{op}: `{param}` was not set: this operator does not act on the selection, so \
+                 name its target with `{param}=<Name>`"
+            ),
+            Self::NothingSelected { param } => format!(
+                "{op}: `{param}` was not set: nothing is selected. Select a target first, or \
+                 name it with `name=<Name>`."
+            ),
+            Self::NotAName { param, value } => {
+                format!("{op}: `{param}` was not set: {value} is neither an entity nor a name")
+            }
+        })
+    }
+}
+
+/// The `Name` an entity carries, for a log line that has to be readable
+/// next to a bare entity index.
+fn name_of(world: &World, entity: Entity) -> String {
+    world
+        .get::<Name>(entity)
+        .map_or_else(|| "unnamed".to_string(), |name| name.as_str().to_string())
+}
+
+/// Fill in the `Entity` parameters a text harness cannot spell.
+///
+/// `JACKDAW_RUN_OP` carries text, and `PropertyValue::Entity` has no
+/// spelling. Each declared `Entity` parameter is resolved here, once, before
+/// dispatch: from the name the clause gives it, from a bare `name=`, or from
+/// the current selection for the operators [`SELECTION_FALLBACK_OPS`] names.
+///
+/// A parameter resolved from a name also becomes the selection, when the
+/// operator declares exactly one entity to act on, which is what makes
+/// `component.add name=Panel type_path=...` work from a cold start. An
+/// operator taking several entities gets no such thing: none of them is
+/// "the" selection.
+///
+/// A pre-dispatch pass rather than a per-operator fallback, so operators
+/// keep reading `OperatorParameters::as_entity`, which still refuses a
+/// `PropertyValue::Int` (see `tests/operator_entity_params.rs`).
+pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityParam> {
+    let specs = declared_params(world, &op.id);
+    let entity_params: Vec<&'static str> = specs
+        .iter()
+        .filter(|spec| spec.ty == "Entity")
+        .map(|spec| spec.name)
+        .collect();
+    if entity_params.is_empty() {
+        return Vec::new();
+    }
+    let sole_target = entity_params.len() == 1;
+    let takes_selection = SELECTION_FALLBACK_OPS.contains(&op.id.as_str());
+
+    // A bare `name=` is the entity's only when the operator has no `name`
+    // parameter of its own; `selection.select` does, and it means that one.
+    let bare_name = (!specs.iter().any(|spec| spec.name == "name"))
+        .then(|| op.params.iter().find(|(key, _)| key == "name"))
+        .flatten()
+        .and_then(|(_, value)| match value {
+            PropertyValue::String(name) => Some(name.to_string()),
+            _ => None,
+        });
+
+    let mut outcomes = Vec::with_capacity(entity_params.len());
+    for param in entity_params {
+        let at = op.params.iter().position(|(key, _)| key == param);
+        let wanted = match at.map(|index| &op.params[index].1) {
+            Some(PropertyValue::Entity(_)) => {
+                outcomes.push(EntityParam::Given { param });
+                continue;
+            }
+            Some(PropertyValue::String(name)) => Some(name.to_string()),
+            Some(other) => {
+                outcomes.push(EntityParam::NotAName {
+                    param,
+                    value: other.to_string(),
+                });
+                continue;
+            }
+            None => bare_name.clone(),
+        };
+
+        let outcome = match wanted {
+            Some(name) => match entity_named(world, &name) {
+                Some(entity) => {
+                    // Selecting the named entity satisfies the operator's own
+                    // availability gate, as a click would.
+                    if sole_target {
+                        crate::selection::select_only(world, entity);
+                    }
+                    EntityParam::Named {
+                        param,
+                        name,
+                        entity,
+                        entity_name: name_of(world, entity),
+                    }
+                }
+                None => EntityParam::NoSuchName { param, name },
+            },
+            None if !takes_selection => EntityParam::NeedsAName { param },
+            None => match world
+                .get_resource::<Selection>()
+                .and_then(Selection::primary)
+            {
+                Some(entity) => EntityParam::FromSelection {
+                    param,
+                    entity,
+                    entity_name: name_of(world, entity),
+                },
+                None => EntityParam::NothingSelected { param },
+            },
+        };
+
+        let entity = match &outcome {
+            EntityParam::Named { entity, .. } | EntityParam::FromSelection { entity, .. } => {
+                Some(*entity)
+            }
+            _ => None,
+        };
+        if let Some(entity) = entity {
+            match at {
+                Some(index) => op.params[index].1 = PropertyValue::Entity(entity),
+                None => op
+                    .params
+                    .push((param.to_string(), PropertyValue::Entity(entity))),
+            }
+        }
+        outcomes.push(outcome);
+    }
+
+    for outcome in &outcomes {
+        if let Some(line) = outcome.line(&op.id) {
+            if outcome.is_refusal() {
+                warn!("{ENV_RUN_OP}: {line}");
+            } else {
+                info!("{ENV_RUN_OP}: {line}");
+            }
+        }
+    }
+    outcomes
+}
+
+/// Resolve one clause's entity parameters and dispatch it.
+///
+/// The boot queue and the authoring tests both come through here, so a
+/// scripted session and the harness run the same path.
+pub fn run_boot_op(world: &mut World, op: &BootOp) -> Result<OperatorResult, CallOperatorError> {
+    let mut op = op.clone();
+    resolve_entity_params(world, &mut op);
+    let id = op.id.clone();
+    let mut call = world.operator(op.id);
+    for (key, value) in op.params {
+        call = call.param(key, value);
+    }
+    let result = call.call();
+    // An operator refused by its availability gate reports `Cancelled` and
+    // logs only at `debug!` (see `dispatch_operator`), so a scripted run
+    // would otherwise say nothing about the clause not happening.
+    if let Ok(OperatorResult::Cancelled) = &result {
+        warn!("{ENV_RUN_OP}: {id} did not run: the operator refused or was unavailable");
+    }
+    result
+}
+
+/// Parse one `JACKDAW_RUN_OP` clause and run it.
+pub fn run_op_clause(world: &mut World, clause: &str) -> Result<OperatorResult, CallOperatorError> {
+    let Some(op) = parse_run_ops(clause).into_iter().next() else {
+        return Err(CallOperatorError::UnknownId(clause.to_string().into()));
+    };
+    run_boot_op(world, &op)
+}
+
 /// Count settle frames, then drain the queue one clause every
 /// [`GAP_FRAMES`].
 fn drive_boot_ops(world: &mut World) {
@@ -147,11 +477,7 @@ fn drive_boot_ops(world: &mut World) {
     }
 
     let op = world.resource_mut::<BootOpQueue>().queue.remove(0);
-    let mut call = world.operator(op.id.clone());
-    for (key, value) in op.params {
-        call = call.param(key, value);
-    }
-    match call.call() {
+    match run_boot_op(world, &op) {
         Ok(result) => info!("{ENV_RUN_OP}: {} -> {result:?}", op.id),
         Err(err) => error!("{ENV_RUN_OP}: {} failed: {err}", op.id),
     }
@@ -235,6 +561,104 @@ mod tests {
                 param("offset", PropertyValue::Float(-0.5)),
             ]
         );
+    }
+
+    #[test]
+    fn a_name_carried_by_one_entity_resolves_to_it() {
+        let mut world = World::new();
+        let wanted = world.spawn(Name::new("Target")).id();
+        world.spawn(Name::new("Other"));
+        let mut state = world.query::<(Entity, &Name)>();
+        assert_eq!(
+            unique_named_entity(state.iter(&world), "Target"),
+            Some(wanted)
+        );
+    }
+
+    /// A document can hold two nodes sharing a name, and neither is picked.
+    #[test]
+    fn a_name_two_entities_share_resolves_to_neither() {
+        let mut world = World::new();
+        world.spawn(Name::new("Row"));
+        world.spawn(Name::new("Row"));
+        let mut state = world.query::<(Entity, &Name)>();
+        assert_eq!(unique_named_entity(state.iter(&world), "Row"), None);
+        assert_eq!(unique_named_entity(state.iter(&world), "Missing"), None);
+    }
+
+    /// A resolved parameter's line names the operator, the parameter, the
+    /// entity, its name, and where the answer came from.
+    #[test]
+    fn a_resolved_parameter_names_its_entity_and_its_source() {
+        let mut world = World::new();
+        let entity = world.spawn(Name::new("Panel")).id();
+
+        let named = EntityParam::Named {
+            param: "entity",
+            name: "Panel".to_string(),
+            entity,
+            entity_name: name_of(&world, entity),
+        };
+        let line = named
+            .line("component.add")
+            .expect("a resolved parameter reports");
+        assert!(!named.is_refusal());
+        for expected in ["component.add", "`entity`", "Panel", "from name=Panel"] {
+            assert!(
+                line.contains(expected),
+                "{expected:?} missing from {line:?}"
+            );
+        }
+        assert!(
+            line.contains(&entity.to_string()),
+            "the entity id: {line:?}"
+        );
+
+        let from_selection = EntityParam::FromSelection {
+            param: "entity",
+            entity,
+            entity_name: name_of(&world, entity),
+        };
+        let line = from_selection.line("physics.enable").expect("reports too");
+        assert!(line.contains("from the selection"), "{line:?}");
+    }
+
+    /// An entity with no `Name` still produces a readable label.
+    #[test]
+    fn an_unnamed_entity_still_reads_as_something() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        assert_eq!(name_of(&world, entity), "unnamed");
+    }
+
+    /// A parameter the clause spelled itself produces no line; a refusal
+    /// always does.
+    #[test]
+    fn only_the_parameters_the_resolver_touched_produce_a_line() {
+        assert_eq!(
+            EntityParam::Given { param: "entity" }.line("field.set"),
+            None
+        );
+        for refusal in [
+            EntityParam::NoSuchName {
+                param: "entity",
+                name: "Nope".to_string(),
+            },
+            EntityParam::NeedsAName {
+                param: "instance_entity",
+            },
+            EntityParam::NothingSelected { param: "entity" },
+            EntityParam::NotAName {
+                param: "entity",
+                value: "42".to_string(),
+            },
+        ] {
+            assert!(refusal.is_refusal());
+            assert!(
+                refusal.line("prefab.apply_to_source").is_some(),
+                "a refusal has to say why: {refusal:?}"
+            );
+        }
     }
 
     /// A path with an `=` in it keeps everything after the first one, so

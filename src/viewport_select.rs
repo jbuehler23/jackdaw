@@ -46,8 +46,8 @@ fn has_selection(selection: Res<Selection>) -> bool {
     !selection.entities.is_empty()
 }
 
-/// Deselect everything, for scripted runs that need the empty-selection state
-/// without a click on empty viewport space.
+/// Deselect everything, for callers that need the empty-selection state without
+/// a click on empty viewport space.
 #[operator(
     id = "selection.clear",
     label = "Deselect All",
@@ -155,6 +155,15 @@ pub(crate) fn handle_viewport_click(
         return;
     };
 
+    // Overlays like the terrain tool palette are UI children of the
+    // `SceneViewport` node, positioned on top of it, so a click inside the
+    // viewport's screen rect is not necessarily a click on the 3D scene.
+    // Without this check, clicking a palette button also runs the raycast
+    // below, finds nothing under the cursor, and deselects the terrain the
+    // palette needs to stay visible.
+    if vp.blocked_by_overlay() {
+        return;
+    }
     let map = crate::viewport_util::ViewportRemap::new(camera, vp_computed, vp_tf);
     let local_cursor = (cursor_pos - map.top_left) * map.remap;
 

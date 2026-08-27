@@ -4,7 +4,7 @@
 //! authored half needs no remapping and mirrored elements map back
 //! through the source arrays.
 
-#[cfg(feature = "render")]
+#[cfg(feature = "reflect")]
 use bevy::prelude::ReflectComponent;
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
@@ -41,10 +41,10 @@ impl<'de> Deserialize<'de> for MirrorAxes {
 /// inspector checkboxes.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(
-    feature = "render",
+    feature = "reflect",
     derive(bevy::ecs::component::Component, bevy::reflect::Reflect)
 )]
-#[cfg_attr(feature = "render", reflect(Component))]
+#[cfg_attr(feature = "reflect", reflect(Component))]
 pub struct MeshMirror {
     pub mirror_x: bool,
     pub mirror_y: bool,
@@ -595,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "render")]
+    #[cfg(feature = "reflect")]
     fn mesh_mirror_round_trips_through_reflection() {
         use bevy::reflect::{
             FromReflect, TypeRegistry,

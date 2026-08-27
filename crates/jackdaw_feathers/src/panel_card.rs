@@ -1,8 +1,9 @@
-//! A collapsible titled card: native feathers pane, a disclosure toggle that
-//! owns the collapsed state, an icon and a title.
+//! A collapsible titled card: native feathers pane, a disclosure toggle
+//! that owns the collapsed state, an icon and a title.
 //!
-//! The grouping shape for stacked fields. A surface that needs its own markers
-//! on the card inserts them on the returned entities.
+//! This is the one grouping grammar for stacked fields. A surface that
+//! needs its own markers on the card inserts them on the returned
+//! entities rather than building a second card of its own.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -29,8 +30,8 @@ pub fn plugin(app: &mut App) {
 /// entity is exactly what a rebuild destroys. A card with no key is not
 /// recorded and always opens at its default.
 ///
-/// The inspector keeps its own equivalent, `InspectorCollapseState`, keyed by
-/// card title and scoped to the inspector's rebuild pass.
+/// The inspector keeps its own equivalent, `InspectorCollapseState`, keyed
+/// by card title and scoped to the inspector's rebuild pass.
 #[derive(Resource, Default)]
 pub struct PanelCardCollapseState(pub HashMap<String, bool>);
 
@@ -92,8 +93,8 @@ impl PanelCardProps {
         self
     }
 
-    /// State how this card opens. Not derived from the title: two surfaces
-    /// may open the same section differently.
+    /// State how this card opens. Set per call site rather than per title,
+    /// since two surfaces may open the same section differently.
     pub fn default_collapsed(mut self, collapsed: bool) -> Self {
         self.default_collapsed = collapsed;
         self
@@ -262,7 +263,7 @@ mod tests {
 
     /// A card the user has never touched opens the way its surface asked
     /// for; one they have closed stays closed through the next rebuild,
-    /// which the string key rather than an entity key makes possible.
+    /// which is why the state is keyed by string and not by entity.
     #[test]
     fn a_toggled_card_outlives_the_entity_it_was_toggled_on() {
         let mut state = PanelCardCollapseState::default();
@@ -279,8 +280,8 @@ mod tests {
         assert!(state.collapsed("materials.window.surface", false));
     }
 
-    /// Two surfaces may show the same section and open it differently, so
-    /// nothing keyed off the title decides this.
+    /// Two surfaces may show the same section and want it to open
+    /// differently, so nothing keyed off the title decides this.
     #[test]
     fn surfaces_keep_their_own_default_for_the_same_section_name() {
         let state = PanelCardCollapseState::default();

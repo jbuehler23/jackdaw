@@ -168,6 +168,28 @@ pub struct EditorButton;
 #[derive(Component)]
 pub struct ButtonContentText;
 
+/// The entity drawing `button`'s caption, wherever the widget put it.
+///
+/// The caption hangs in a clipping slot rather than directly off the
+/// button, and a button that also carries an icon has more than one text
+/// child, so the first text child may be the icon's glyph.
+pub fn button_caption(
+    button: Entity,
+    children: &Query<&Children>,
+    captions: &Query<(), With<ButtonContentText>>,
+) -> Option<Entity> {
+    let mut stack = vec![button];
+    while let Some(entity) = stack.pop() {
+        if captions.contains(entity) {
+            return Some(entity);
+        }
+        if let Ok(kids) = children.get(entity) {
+            stack.extend(kids.iter());
+        }
+    }
+    None
+}
+
 #[derive(Component, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ButtonVariant {
     #[default]
@@ -479,6 +501,17 @@ pub(crate) fn button_base(
             } else {
                 AlignItems::Center
             },
+            // A left-aligned button is the combobox shape: label left,
+            // chevron right. In a panel too narrow for the label, the
+            // label is what gives way, and what it cannot show is cut at
+            // the button's own edge rather than pushing the chevron past
+            // the panel's.
+            min_width: if align_left { px(0.0) } else { Val::Auto },
+            overflow: if align_left {
+                Overflow::clip_x()
+            } else {
+                Overflow::visible()
+            },
             ..default()
         },
         BackgroundColor(
@@ -618,21 +651,39 @@ fn setup_button(
                 // `with_content("")`.
                 let icon_only = matches!(size, ButtonSize::Icon | ButtonSize::IconSM);
                 if !content.is_empty() && !icon_only {
-                    parent.spawn((
-                        ButtonContentText,
-                        Text::new(&content),
-                        TextFont {
-                            font: font.clone().into(),
-                            font_size: TEXT_SIZE,
-                            weight: FontWeight::MEDIUM,
-                            ..default()
-                        },
-                        TextColor(variant.text_color().into()),
-                        Node {
+                    // The caption sits in a slot of its own because a
+                    // node cannot cut its own text: the slot takes the
+                    // room left over, and a caption longer than that is
+                    // cut at the slot's edge instead of running over the
+                    // icon beside it.
+                    parent
+                        .spawn(Node {
                             flex_grow: 1.0,
+                            flex_shrink: 1.0,
+                            min_width: px(0.0),
+                            align_items: AlignItems::Center,
+                            overflow: Overflow::clip_x(),
                             ..default()
-                        },
-                    ));
+                        })
+                        .with_children(|slot| {
+                            slot.spawn((
+                                ButtonContentText,
+                                Text::new(&content),
+                                TextFont {
+                                    font: font.clone().into(),
+                                    font_size: TEXT_SIZE,
+                                    weight: FontWeight::MEDIUM,
+                                    ..default()
+                                },
+                                TextColor(variant.text_color().into()),
+                                // One line, always: a wrapped caption
+                                // would grow the button's height.
+                                TextLayout {
+                                    linebreak: bevy::text::LineBreak::NoWrap,
+                                    ..default()
+                                },
+                            ));
+                        });
                 }
 
                 if let Some(ref subtitle) = subtitle {

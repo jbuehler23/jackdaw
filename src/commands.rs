@@ -166,6 +166,11 @@ pub(crate) fn field_edit_preview(
 
 /// Commit a field edit: build [`SetBsnField`] commands from session / document
 /// baselines, execute them, push history, and clear the gesture session.
+///
+/// A target whose component the running binding preview drives is dropped
+/// here: that value is rewritten every frame, so committing an authored one
+/// would bake whichever write landed last into the document. See
+/// [`crate::preview_context`].
 pub(crate) fn field_edit_commit(
     world: &mut World,
     type_path: &str,
@@ -175,7 +180,17 @@ pub(crate) fn field_edit_commit(
 ) {
     // Immediate commits (no prior preview) still need a derived baseline.
     field_edit_begin(world, type_path, field_path);
-    let targets = field_edit_session_targets(world);
+    let mut targets = field_edit_session_targets(world);
+    targets.retain(|&target| {
+        let previewed = crate::preview_context::preview_writes_type_path(world, target, type_path);
+        if previewed {
+            warn!(
+                "{}: `{type_path}` on {target}",
+                crate::preview_context::PREVIEW_EDIT_REFUSED
+            );
+        }
+        !previewed
+    });
 
     let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
     for &target in &targets {
@@ -269,31 +284,23 @@ pub struct ReparentEntity {
 
 impl EditorCommand for ReparentEntity {
     fn execute(&mut self, world: &mut World) {
-        let slot = world
-            .get::<jackdaw_ui::UiSlot>(self.entity)
-            .map(|slot| slot.0.clone());
         set_hierarchy_location(
             world,
             self.entity,
             HierarchyLocation {
                 parent: self.new_parent,
                 index: usize::MAX,
-                slot,
             },
         );
     }
 
     fn undo(&mut self, world: &mut World) {
-        let slot = world
-            .get::<jackdaw_ui::UiSlot>(self.entity)
-            .map(|slot| slot.0.clone());
         set_hierarchy_location(
             world,
             self.entity,
             HierarchyLocation {
                 parent: self.old_parent,
                 index: usize::MAX,
-                slot,
             },
         );
     }
@@ -304,17 +311,14 @@ impl EditorCommand for ReparentEntity {
 }
 
 /// Exact authored position of an entity in Jackdaw's ordered hierarchy.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HierarchyLocation {
     pub parent: Option<Entity>,
     pub index: usize,
-    /// Optional semantic widget slot. Containment and ordering still come
-    /// from the ECS hierarchy.
-    pub slot: Option<String>,
 }
 
 impl HierarchyLocation {
-    /// Read an entity's current parent, sibling index, and UI slot.
+    /// Read an entity's current parent and sibling index.
     pub fn from_world(world: &World, entity: Entity) -> Self {
         let parent = world.get::<ChildOf>(entity).map(ChildOf::parent);
         let index = parent
@@ -332,18 +336,13 @@ impl HierarchyLocation {
                     .position(|candidate| *candidate == node)
                     .unwrap_or(0)
             });
-        let slot = world
-            .get::<jackdaw_ui::UiSlot>(entity)
-            .map(|slot| slot.0.clone());
-        Self {
-            parent,
-            index,
-            slot,
-        }
+        Self { parent, index }
     }
 }
 
-/// Undoable reparent/reorder operation used by the outliner and UI canvas.
+/// Undoable reparent/reorder to an exact ordered location. The outliner
+/// reparents through `ReparentEntity` instead, which carries no sibling
+/// index.
 pub struct MoveEntity {
     pub entity: Entity,
     pub old: HierarchyLocation,
@@ -362,11 +361,11 @@ impl MoveEntity {
 
 impl EditorCommand for MoveEntity {
     fn execute(&mut self, world: &mut World) {
-        set_hierarchy_location(world, self.entity, self.new.clone());
+        set_hierarchy_location(world, self.entity, self.new);
     }
 
     fn undo(&mut self, world: &mut World) {
-        set_hierarchy_location(world, self.entity, self.old.clone());
+        set_hierarchy_location(world, self.entity, self.old);
     }
 
     fn description(&self) -> &str {
@@ -387,16 +386,12 @@ impl EditorCommand for MoveEntity {
 /// (prefab save, scene serialization, tab swap) read the document and
 /// silently disagree with the visible hierarchy.
 pub(crate) fn set_parent(world: &mut World, entity: Entity, parent: Option<Entity>) {
-    let slot = world
-        .get::<jackdaw_ui::UiSlot>(entity)
-        .map(|slot| slot.0.clone());
     set_hierarchy_location(
         world,
         entity,
         HierarchyLocation {
             parent,
             index: usize::MAX,
-            slot,
         },
     );
 }
@@ -421,25 +416,6 @@ pub fn set_hierarchy_location(world: &mut World, entity: Entity, location: Hiera
         }
         None => {
             world.entity_mut(entity).remove::<ChildOf>();
-        }
-    }
-
-    match location.slot {
-        Some(slot) => {
-            let slot = jackdaw_ui::UiSlot(slot);
-            world.entity_mut(entity).insert(slot.clone());
-            sync_component_to_ast(world, entity, "jackdaw_ui::UiSlot", &slot);
-        }
-        None => {
-            world.entity_mut(entity).remove::<jackdaw_ui::UiSlot>();
-            let node = world
-                .get_resource::<jackdaw_bsn::SceneBsnAst>()
-                .and_then(|ast| ast.ast_for(entity));
-            if let Some(node) = node {
-                world
-                    .resource_mut::<jackdaw_bsn::SceneBsnAst>()
-                    .remove_component_patch(node, "jackdaw_ui::UiSlot");
-            }
         }
     }
 
@@ -830,9 +806,17 @@ pub struct DespawnEntity {
 }
 
 impl DespawnEntity {
-    pub fn from_world(world: &World, entity: Entity) -> Self {
+    /// Snapshot `entity` as it was authored, so undo puts back what the user
+    /// wrote rather than what a running preview last evaluated onto it.
+    ///
+    /// The snapshot is live ECS, which during a preview session holds the
+    /// evaluator's values on every bound property, so preview writes are
+    /// suspended around it. That is why this takes `&mut World`.
+    pub fn from_world(world: &mut World, entity: Entity) -> Self {
         let parent = world.get::<ChildOf>(entity).map(|c| c.0);
+        let held = crate::preview_context::suspend_preview_writes(world);
         let scene = snapshot_entity(world, entity);
+        crate::preview_context::resume_preview_writes(world, held);
         Self {
             entity,
             scene_snapshot: scene,
@@ -1392,6 +1376,11 @@ pub(crate) fn apply_json_to_reflect(
                 *i = n.as_u64().unwrap_or_default() as u16;
             } else if let Some(i) = field.try_downcast_mut::<u64>() {
                 *i = n.as_u64().unwrap_or_default();
+            } else {
+                // Not a bare primitive: a number can still be the whole of an
+                // `Option<f32>` or a `NonZero`, which reflect deserializes
+                // through serde's own paths rather than as a named variant.
+                try_typed_deserialize(field, value, registry);
             }
         }
         serde_json::Value::Bool(b) => {
@@ -1412,7 +1401,9 @@ pub(crate) fn apply_json_to_reflect(
             // Structs, tuple structs, enum struct/tuple variants, lists, etc.
             try_typed_deserialize(field, value, registry);
         }
-        serde_json::Value::Null => {}
+        // Null means "absent", which only an `Option` accepts; for anything
+        // else the typed deserializer refuses and the field keeps its value.
+        serde_json::Value::Null => try_typed_deserialize(field, value, registry),
     }
 }
 
@@ -1588,6 +1579,112 @@ pub fn sync_component_to_ast<T: bevy::reflect::Reflect>(
     let _ = type_path;
     let registry = world.resource::<AppTypeRegistry>().clone();
     sync_component_to_bsn_doc(world, entity, value.as_partial_reflect(), &registry);
+}
+
+/// Record an authored layout edit that a live gesture already applied to
+/// the ECS.
+///
+/// One gesture is one history entry: the drag writes `Node` every frame, and
+/// only the settled value reaches the document and the undo stack. A gesture
+/// that ended where it began records nothing.
+///
+/// A gesture on a `Node` the running binding preview drives is refused, and
+/// the live value put back: the evaluator owns that property until preview
+/// stops. See [`crate::preview_context`].
+pub fn push_layout_edit(world: &mut World, entity: Entity, before: Node, after: Node) {
+    push_layout_edits(world, vec![(entity, before, after)]);
+}
+
+/// Undo label a layout gesture on more than one node lands under.
+const LAYOUT_GROUP_LABEL: &str = "Edit UI layout";
+
+/// [`push_layout_edit`] for a gesture that moved a whole selection.
+///
+/// One gesture is still one history entry however many nodes it moved, so
+/// one undo puts all of them back. Nodes the gesture left where they were
+/// drop out, and so does one the preview owns: that node alone is refused and
+/// its live value put back, while the rest of the gesture stands.
+pub fn push_layout_edits(world: &mut World, edits: Vec<(Entity, Node, Node)>) {
+    let mut commands: Vec<Box<dyn EditorCommand>> = Vec::new();
+    for (entity, before, after) in edits {
+        if before == after {
+            continue;
+        }
+        if crate::preview_context::preview_writes(world, entity, std::any::TypeId::of::<Node>()) {
+            warn!(
+                "{}: `Node` on {entity}",
+                crate::preview_context::PREVIEW_EDIT_REFUSED
+            );
+            if let Some(mut node) = world.get_mut::<Node>(entity) {
+                *node = before;
+            }
+            continue;
+        }
+        let command = SetUiNode {
+            entity,
+            before,
+            after,
+        };
+        command.sync_after_external_execute(world);
+        commands.push(Box::new(command));
+    }
+    let entry: Box<dyn EditorCommand> = match commands.len() {
+        0 => return,
+        // A single node records as itself rather than as a group of one.
+        1 => commands.pop().expect("one command"),
+        _ => Box::new(CommandGroup {
+            commands,
+            label: LAYOUT_GROUP_LABEL.to_string(),
+        }),
+    };
+    world.resource_mut::<CommandHistory>().push_executed(entry);
+}
+
+/// Undoable edit of one authored UI [`Node`].
+pub struct SetUiNode {
+    pub entity: Entity,
+    pub before: Node,
+    pub after: Node,
+}
+
+impl SetUiNode {
+    fn apply(&self, world: &mut World, value: &Node) {
+        if let Some(mut node) = world.get_mut::<Node>(self.entity) {
+            *node = value.clone();
+        }
+        sync_component_to_ast::<Node>(
+            world,
+            self.entity,
+            crate::inspector::node_card::node_type_path(),
+            value,
+        );
+    }
+}
+
+impl EditorCommand for SetUiNode {
+    fn execute(&mut self, world: &mut World) {
+        let after = self.after.clone();
+        self.apply(world, &after);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        let before = self.before.clone();
+        self.apply(world, &before);
+    }
+
+    fn description(&self) -> &str {
+        "Edit UI layout"
+    }
+
+    fn sync_after_external_execute(&self, world: &mut World) {
+        let after = self.after.clone();
+        sync_component_to_ast::<Node>(
+            world,
+            self.entity,
+            crate::inspector::node_card::node_type_path(),
+            &after,
+        );
+    }
 }
 
 /// Upsert one component's patch on the entity's BSN document node from a

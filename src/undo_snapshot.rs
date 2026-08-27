@@ -238,9 +238,10 @@ mod tests {
         app
     }
 
-    // A material in the catalog emits as `@Name` only when a file on disk defines that
-    // name. An unsaved material has none, so the scene carries it inline; a bare `@Name`
-    // would resolve to nothing outside this editor run and the brush would load white.
+    // A material in the catalog emits as `@Name` only when something on disk
+    // defines that name. An unsaved material has no file, so the scene must
+    // carry it inline instead: a bare `@Name` would resolve to nothing outside
+    // this editor run and the brush would load white.
     #[test]
     fn an_unsaved_catalog_material_embeds_inline_instead_of_emitting_a_name() {
         use bevy::pbr::StandardMaterial;

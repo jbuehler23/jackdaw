@@ -21,25 +21,20 @@ pub trait EditorCommand: Send + Sync + 'static {
 
     /// Heap bytes this entry holds, for [`CommandHistory`]'s budget.
     ///
-    /// Zero unless overridden. The entries worth counting hold bulk per-cell
-    /// arrays: a terrain's heights, control words or channel values, kept
-    /// before and after.
-    ///
-    /// A despawn reports zero. It holds a reflected snapshot of the entity's
-    /// subtree whose components are `Box<dyn PartialReflect>` with no size to
-    /// ask for, and pricing one would mean walking every field of every
-    /// component on each push, since the budget re-totals the stack.
+    /// Most entries hold entity ids and single field values and answer
+    /// zero. The ones worth counting are the terrain edits, which keep
+    /// before-and-after copies of per-cell arrays.
     fn heap_bytes(&self) -> usize {
         0
     }
 }
 
-/// Bytes of entry payload the history may hold before its oldest entries are
-/// dropped.
+/// Bytes of entry payload the history may hold before its oldest entries
+/// are dropped.
 ///
-/// Nothing else bounds the stack: it grows for as long as a tab stays open,
-/// and terrain entries are large enough that a long sculpting run can exhaust
-/// memory.
+/// Nothing else bounds the stack: it grows for as long as a tab stays
+/// open, and terrain entries are large enough that a long sculpting run
+/// can exhaust memory.
 pub const HISTORY_BUDGET_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Resource)]
@@ -79,9 +74,9 @@ impl CommandHistory {
 
     /// Drop the oldest undoable entries until both stacks fit the budget.
     ///
-    /// The total is summed rather than tracked as a running counter, because
-    /// `undo_stack` is public and callers clear and pop it directly. The
-    /// newest entry is never dropped, whatever it cost.
+    /// The total is summed rather than tracked as a running counter,
+    /// because `undo_stack` is public and callers clear and pop it
+    /// directly. The newest entry is never dropped, whatever it cost.
     fn trim_to_budget(&mut self) {
         if self.budget_bytes == 0 {
             return;
@@ -115,8 +110,8 @@ impl CommandHistory {
 }
 
 /// Warn once per process that history is being dropped to stay inside its
-/// budget. Each open tab owns a [`CommandHistory`], so a per-history warning
-/// would repeat per tab.
+/// budget. Each open tab owns a [`CommandHistory`], so a per-history
+/// warning would repeat per tab.
 fn report_budget_reached(budget: usize) {
     static SAID: std::sync::Once = std::sync::Once::new();
     SAID.call_once(|| {
@@ -229,8 +224,8 @@ mod tests {
         assert_eq!(history.heap_bytes(), 500);
     }
 
-    /// An undone entry still holds its arrays, so it counts against the same
-    /// total the undo stack does.
+    /// An undone entry still holds its arrays, so it counts against the
+    /// same total the undo stack does.
     #[test]
     fn undone_entries_still_count_toward_the_total() {
         let mut world = World::new();

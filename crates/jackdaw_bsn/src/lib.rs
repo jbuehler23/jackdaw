@@ -13,6 +13,7 @@ pub mod document;
 pub mod emitter;
 pub mod loader;
 pub mod parse;
+pub mod retired;
 pub mod sync;
 pub mod writer;
 
@@ -30,15 +31,16 @@ pub use document::{
     AstNodeRef, BsnAssetContext, BsnField, BsnPatch, BsnPatches, BsnStructData, BsnStructFields,
     BsnTupleStructData, BsnValue, SceneBsnAst, bsn_value_as_int, clone_node_into,
     clone_subtree_into, component_to_bsn_patch, component_to_bsn_patch_with_assets,
-    is_enum_variant_of, type_paths_include,
+    is_enum_variant_of, patch_type_path, type_paths_include,
 };
 pub use emitter::{emit_entities, emit_entity, emit_scene};
 pub use loader::{BsnLoadError, parse_bsn_text};
+pub use retired::{RETIRED_UI_PREFIX, RetiredUiComponents, reject_retired_ui_components};
 
 pub use apply::{
-    AstDirty, BsnApplyAssets, BsnSceneAssets, apply_ast_to_ecs, apply_component_patch,
-    apply_dirty_ast_patches, bsn_value_to_reflect, get_bsn_field, remove_bsn_field, set_bsn_field,
-    spawn_ast_node, spawn_from_ast,
+    AstDirty, BsnApplyAssets, BsnSceneAssets, DocumentOnlyTypes, UnresolvedTypes, apply_ast_to_ecs,
+    apply_component_patch, apply_dirty_ast_patches, bsn_value_to_reflect, get_bsn_field,
+    remove_bsn_field, set_bsn_field, spawn_ast_node, spawn_from_ast,
 };
 
 pub use sync::{
@@ -60,6 +62,8 @@ pub struct JackdawBsnPlugin;
 
 impl Plugin for JackdawBsnPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SceneBsnAst>();
+        app.init_resource::<SceneBsnAst>()
+            .init_resource::<DocumentOnlyTypes>()
+            .init_resource::<UnresolvedTypes>();
     }
 }

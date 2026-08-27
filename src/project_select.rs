@@ -1227,6 +1227,11 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
     let mut next_state = world.resource_mut::<NextState<AppState>>();
     next_state.set(AppState::Editor);
 
+    // Every scene below opens in this same exclusive run, before the schema
+    // watcher's first tick, so the project's component types must be known here
+    // or the session's first load reads them all as unknown.
+    crate::pie::refresh_project_types(world);
+
     let last_open_tabs = world
         .resource::<crate::project::ProjectRoot>()
         .config

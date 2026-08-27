@@ -11,7 +11,6 @@ use crate::{
     commands::{CommandHistory, DespawnEntity, EditorCommand},
     selection::{Selected, Selection},
 };
-use bevy::input_focus::InputFocus;
 
 /// System clipboard for copy/paste of entities as JSN text.
 /// On Linux/X11 the clipboard is ownership-based: data is only available while
@@ -1381,7 +1380,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<EntityAddAnimationPlayerOp>()
         .register_operator::<EntityAddAudioSourceOp>()
         .register_operator::<EntityAddFogVolumeOp>()
-        .register_operator::<EntityAddReflectionProbeOp>();
+        .register_operator::<EntityAddReflectionProbeOp>()
+        // Registered on core rather than on the UI Widgets extension that
+        // supplies the definitions, so the operator stays available and
+        // reports an unknown widget name rather than disappearing with it.
+        .register_operator::<crate::ui_palette::WidgetAddOp>();
 
     #[cfg(feature = "multiplayer")]
     ctx.register_operator::<EntityAddSpawnPointOp>()
@@ -1417,14 +1420,19 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// operator is in flight, while the draw brush modal is active, or
 /// while brush sub-element edit mode is active; matches the guards
 /// the legacy `handle_entity_keys` applied.
+///
+/// Typing is asked through [`crate::keybind_focus::KeybindFocus`] and
+/// not through `InputFocus` directly: bevy parks focus on the primary
+/// window when nothing has claimed it, so the bare resource reports
+/// "the user is typing" for a scene nobody has clicked in yet.
 fn can_act_on_entities(
-    input_focus: Res<InputFocus>,
+    keybind_focus: crate::keybind_focus::KeybindFocus,
     active: ActiveModalQuery,
     modal: Res<crate::modal_transform::ModalTransformState>,
     draw_state: Res<crate::draw_brush::DrawBrushState>,
     edit_mode: Res<crate::brush::EditMode>,
 ) -> bool {
-    if input_focus.get().is_some() || active.is_modal_running() || modal.active.is_some() {
+    if keybind_focus.is_typing() || active.is_modal_running() || modal.active.is_some() {
         return false;
     }
     if draw_state.active.is_some() {
@@ -1651,7 +1659,7 @@ pub(crate) fn entity_add_camera_rig(
     OperatorResult::Finished
 }
 
-#[operator(id = "entity.add.image", label = "Image")]
+#[operator(id = "entity.add.image", label = "Reference Image")]
 pub fn entity_add_image(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(crate::reference_image::open_reference_image_picker);
     OperatorResult::Finished
@@ -1915,9 +1923,10 @@ pub(crate) fn entity_add_terrain(
             selection.select_single(&mut commands, entity);
             system_state.apply(world);
             crate::scene_io::register_entity_in_ast(world, entity);
-            // Terrain settings live in the Terrain panel rather than the Components
-            // inspector, so the document's first terrain opens it. Later adds leave the
-            // focused tab alone.
+            // Terrain settings live in the Terrain panel, not the Components
+            // inspector, so the panel is opened for the document's first
+            // terrain. Only the first: a later add must not take focus from
+            // the tab the user is working in.
             if is_first_terrain {
                 crate::open_window_in_default_area_if_absent(world, "jackdaw.inspector.terrain");
             }
@@ -1927,15 +1936,14 @@ pub(crate) fn entity_add_terrain(
     OperatorResult::Finished
 }
 
+/// Pick a prefab file and drop an instance of it at the origin.
+///
+/// The Add menu's other rows make what they name; this one has to be told
+/// which prefab, so it asks through an async picker, polled, which keeps the
+/// editor drawing while the dialog is up.
 #[operator(id = "entity.add.prefab", label = "Prefab")]
-pub(crate) fn entity_add_prefab(
-    _: In<OperatorParameters>,
-    mut _commands: Commands,
-) -> OperatorResult {
-    warn!(
-        "entity.add.prefab: drag a prefab from the Asset Browser onto the viewport \
-         to spawn an instance"
-    );
+pub fn entity_add_prefab(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(crate::prefab::operators::open_prefab_picker);
     OperatorResult::Finished
 }
 
@@ -2007,16 +2015,18 @@ mod tests {
         );
     }
 
-    /// The Terrain panel auto-focuses only when a document gains its first terrain. A later
-    /// add leaves the focused tab alone.
+    /// The Terrain panel auto-focuses only when a document gains its first
+    /// terrain. A later add must not take focus from the tab the user is
+    /// working in.
     mod terrain_focus_guard {
         use jackdaw_panels::DockAreaStyle;
         use jackdaw_panels::tree::{DockLeaf, DockNode, DockTree};
 
         use super::*;
 
-        /// Mirrors `build_default_tree`'s `right_sidebar` leaf: seeded at boot with every
-        /// registered window as a tab, Components first and therefore active.
+        /// Mirrors `build_default_tree`'s `right_sidebar` leaf: seeded
+        /// at boot with every registered window as a tab, Components
+        /// first and therefore active.
         fn world_with_right_sidebar_seeded() -> World {
             let mut world = World::new();
             world.insert_resource(CommandHistory::default());
@@ -2084,7 +2094,7 @@ mod tests {
                 "sanity check: first add still focuses Terrain"
             );
 
-            // The user switches back to Components.
+            // The user switches back to Components to keep working there.
             focus_window(&mut world, "jackdaw.inspector");
 
             let result = world

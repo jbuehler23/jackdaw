@@ -248,14 +248,32 @@ pub(crate) fn collect_jsn_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// Convert one legacy `.jsn` scene or prefab file to its `.bsn` sibling on
-/// disk, renaming the original to `.jsn.bak`. Colliding or missing node ids
-/// heal before conversion so the persisted document carries unique ids.
-/// Returns the `.bsn` path and the conversion report.
-pub fn convert_scene_file(
+/// A legacy scene converted in memory, waiting to be written.
+///
+/// The caller decides whether the converted document is one the editor can
+/// open before any of it reaches disk. Dropping this instead of committing it
+/// leaves the `.jsn` untouched.
+pub struct PendingConversion {
+    /// Where the `.bsn` goes once the document is accepted.
+    pub bsn_path: std::path::PathBuf,
+    /// The converted document, ready to parse or write.
+    pub scene_bsn: String,
+    /// Summary of what the conversion produced.
+    pub report: ConversionReport,
+    /// The `.jsn` the conversion came from, kept as the `.jsn.bak` on commit.
+    source: std::path::PathBuf,
+    /// Held for the prefab dependencies the commit converts alongside it.
+    scene: JsnScene,
+}
+
+/// Convert one legacy `.jsn` scene or prefab file in memory. Colliding or
+/// missing node ids heal before conversion so the persisted document carries
+/// unique ids. Nothing is written; pass the result to [`commit_conversion`]
+/// once the caller accepts the converted document.
+pub fn convert_scene_file_pending(
     world: &mut World,
     path: &Path,
-) -> Result<(std::path::PathBuf, ConversionReport), BevyError> {
+) -> Result<PendingConversion, BevyError> {
     let text = std::fs::read_to_string(path)?;
     let (scene, _version) = jackdaw_jsn::format::parse_scene(&text)
         .map_err(|e| BevyError::from(format!("could not parse {}: {e}", path.display())))?;
@@ -270,15 +288,35 @@ pub fn convert_scene_file(
     let parent = path.parent().unwrap_or(Path::new(""));
     let converted = convert_jsn_scene_to_bsn_at(world, &scene, parent)?;
 
-    let bsn_path = path.with_extension("bsn");
-    std::fs::write(&bsn_path, &converted.scene_bsn)?;
-    std::fs::rename(path, backup_path(path))?;
+    Ok(PendingConversion {
+        bsn_path: path.with_extension("bsn"),
+        scene_bsn: converted.scene_bsn,
+        report: converted.report,
+        source: path.to_path_buf(),
+        scene,
+    })
+}
 
-    // Convert legacy prefabs the scene inherits from too: the prefab cache
-    // only loads `.bsn`, so an unconverted `.jsn` dependency would leave the
-    // scene's instances unresolved. Nested prefab chains convert recursively;
-    // already-converted paths are skipped by the sibling/backup checks.
-    for entity in &scene.scene {
+/// Write an accepted conversion out: the `.bsn` sibling, the original kept
+/// as `.jsn.bak`, and any legacy prefabs the scene inherits from.
+pub fn commit_conversion(world: &mut World, pending: PendingConversion) -> Result<(), BevyError> {
+    std::fs::write(&pending.bsn_path, &pending.scene_bsn)?;
+    std::fs::rename(&pending.source, backup_path(&pending.source))?;
+    convert_prefab_dependencies(world, &pending);
+    Ok(())
+}
+
+/// Convert legacy prefabs the scene inherits from.
+///
+/// The prefab cache reads `.bsn` only, so an unconverted `.jsn` dependency
+/// leaves the scene's instances unresolved: the scene opens missing every
+/// inherited entity. Nested chains convert recursively, and an already
+/// converted path is skipped, so calling this twice on one conversion is
+/// cheap. The load path calls it before resolving; committing calls it again
+/// for every other caller.
+pub fn convert_prefab_dependencies(world: &mut World, pending: &PendingConversion) {
+    let parent = pending.source.parent().unwrap_or(Path::new(""));
+    for entity in &pending.scene.scene {
         let Some(isa) = entity.components.get("jackdaw::prefab::components::IsA") else {
             continue;
         };
@@ -306,8 +344,27 @@ pub fn convert_scene_file(
             );
         }
     }
+}
 
-    Ok((bsn_path, converted.report))
+/// Convert one legacy `.jsn` scene or prefab file to its `.bsn` sibling on
+/// disk, renaming the original to `.jsn.bak`. Returns the `.bsn` path and the
+/// conversion report.
+///
+/// Converts and commits in one step, for callers that do not inspect the
+/// document first, such as the bulk project migration and the CLI. A load path
+/// splits the two around its own acceptance check.
+pub fn convert_scene_file(
+    world: &mut World,
+    path: &Path,
+) -> Result<(std::path::PathBuf, ConversionReport), BevyError> {
+    let pending = convert_scene_file_pending(world, path)?;
+    let bsn_path = pending.bsn_path.clone();
+    let report = ConversionReport {
+        entity_count: pending.report.entity_count,
+        asset_count: pending.report.asset_count,
+    };
+    commit_conversion(world, pending)?;
+    Ok((bsn_path, report))
 }
 
 fn convert_catalog_file(world: &mut World, path: &Path) -> Result<(), BevyError> {

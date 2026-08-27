@@ -280,3 +280,258 @@ fn inspector_field_edit_undoes_back_to_original() {
         cube.speed,
     );
 }
+
+const PROJECT_MARKER: &str = "mygame::world::PatrolPoint";
+const PROJECT_STRUCT: &str = "mygame::world::Health";
+const PROJECT_ENUM: &str = "mygame::world::Team";
+
+/// A schema shaped like one the project build extracts: a field-less
+/// marker, a struct, and an enum, none of which the editor has a Rust
+/// type for.
+fn project_schema() -> jackdaw_schema::ProjectSchema {
+    let entry = |type_path: &str,
+                 kind: jackdaw_schema::TypeKind,
+                 fields: Vec<jackdaw_schema::FieldSchema>| {
+        jackdaw_schema::TypeSchema {
+            type_path: type_path.to_string(),
+            short_name: type_path.rsplit("::").next().unwrap_or("").to_string(),
+            module_path: String::new(),
+            category: String::new(),
+            description: String::new(),
+            hidden: false,
+            default_constructible: true,
+            fields,
+            kind,
+            default: None,
+            variants: Vec::new(),
+            entity_fields: Vec::new(),
+            fills_gaps: true,
+        }
+    };
+    jackdaw_schema::ProjectSchema {
+        components: vec![
+            entry(PROJECT_MARKER, jackdaw_schema::TypeKind::Struct, Vec::new()),
+            entry(
+                PROJECT_STRUCT,
+                jackdaw_schema::TypeKind::Struct,
+                vec![jackdaw_schema::FieldSchema {
+                    name: "current".to_string(),
+                    type_path: "f32".to_string(),
+                }],
+            ),
+            entry(PROJECT_ENUM, jackdaw_schema::TypeKind::Enum, Vec::new()),
+        ],
+        resources: Vec::new(),
+        events: Vec::new(),
+        functions: Vec::new(),
+    }
+}
+
+fn app_with_project_schema() -> App {
+    let mut app = util::editor_test_app();
+    {
+        let native = jackdaw::project_types::native_type_paths(
+            &app.world().resource::<AppTypeRegistry>().read(),
+        );
+        app.world_mut()
+            .resource_mut::<jackdaw::project_types::ProjectTypes>()
+            .update(&project_schema(), &native);
+    }
+    jackdaw::project_types::publish_document_only_types(app.world_mut());
+    app
+}
+
+fn write_scene(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+    std::fs::create_dir_all(dir).expect("scene dir");
+    let path = dir.join("scene.bsn");
+    std::fs::write(&path, body).expect("write scene");
+    path
+}
+
+/// Project open restores every persisted tab in the same exclusive run
+/// that enters the editor, so the first scene of a session loads before
+/// the schema watcher has ever ticked. The types have to be on hand by
+/// then, or the one load the user watches is the one that misses them.
+#[test]
+fn the_first_scene_of_a_session_loads_before_any_watcher_tick() {
+    let mut app = util::editor_test_app();
+    let root = std::env::temp_dir().join(format!("jd_project_open_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let jackdaw_dir = root.join(".jackdaw");
+    std::fs::create_dir_all(&jackdaw_dir).expect("project dir");
+    std::fs::write(
+        jackdaw_schema::schema_path(&jackdaw_dir),
+        serde_json::to_vec(&project_schema()).expect("serialize schema"),
+    )
+    .expect("write schema.json");
+    let path = write_scene(
+        &root.join("assets"),
+        &format!("bevy_ecs::hierarchy::Children [\n    #Patrol\n    {PROJECT_MARKER}\n]\n"),
+    );
+
+    let config = jackdaw::project::create_default_project(&root);
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot::new(root.clone(), config));
+    assert!(
+        app.world()
+            .resource::<jackdaw::project_types::ProjectTypes>()
+            .is_empty(),
+        "no tick has run, so nothing can be known yet",
+    );
+
+    // What project open does before it restores tabs.
+    jackdaw::pie::refresh_project_types(app.world_mut());
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &path);
+
+    let unresolved = app
+        .world()
+        .resource::<jackdaw_bsn::UnresolvedTypes>()
+        .types();
+    assert!(
+        unresolved.is_empty(),
+        "the schema is on disk and current; nothing here needs a rebuild, \
+         got unresolved: {unresolved:?}",
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A scene that names the project's own components opens with them
+/// authored rather than unknown: the editor must not read it as a scene
+/// full of faults.
+#[test]
+fn a_scene_naming_project_components_loads_without_unresolved_types() {
+    let mut app = app_with_project_schema();
+    let dir = std::env::temp_dir().join(format!("jd_project_types_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = write_scene(
+        &dir,
+        &format!(
+            "bevy_ecs::hierarchy::Children [\n    #Patrol\n    {PROJECT_MARKER}\n    \
+             {PROJECT_STRUCT} {{ current: 12.0 }}\n]\n"
+        ),
+    );
+
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &path);
+    app.update();
+
+    let unresolved = app
+        .world()
+        .resource::<jackdaw_bsn::UnresolvedTypes>()
+        .types();
+    assert!(
+        unresolved.is_empty(),
+        "project components are authored, not unknown; got unresolved: {unresolved:?}",
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The document is where a project component lives, so a load followed by
+/// a save has to hand back what it was given.
+#[test]
+fn project_components_survive_an_open_and_resave() {
+    let mut app = app_with_project_schema();
+    let dir = std::env::temp_dir().join(format!("jd_project_resave_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = write_scene(
+        &dir,
+        &format!(
+            "bevy_ecs::hierarchy::Children [\n    #Patrol\n    {PROJECT_MARKER}\n    \
+             {PROJECT_STRUCT} {{ current: 12.0 }}\n]\n"
+        ),
+    );
+
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &path);
+    app.update();
+
+    // The live entity carries the authored marker through its document
+    // node: the editor has no Rust type to insert, so the node is what
+    // every editor surface reads the component off.
+    let entity = app
+        .world_mut()
+        .query_filtered::<Entity, With<jackdaw_bsn::AstNodeRef>>()
+        .iter(app.world())
+        .find(|&e| {
+            app.world()
+                .get::<Name>(e)
+                .is_some_and(|n| n.as_str() == "Patrol")
+        })
+        .expect("the authored entity spawned");
+    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    let node = ast.ast_for(entity).expect("entity is tracked");
+    for type_path in [PROJECT_MARKER, PROJECT_STRUCT] {
+        assert!(
+            ast.find_patch_by_type_path(node, type_path).is_some(),
+            "{type_path} must be on the loaded entity's node",
+        );
+    }
+
+    let emitted = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(app.world_mut(), &dir);
+    for type_path in [PROJECT_MARKER, PROJECT_STRUCT] {
+        assert!(
+            emitted.contains(type_path),
+            "re-save dropped {type_path}; got:\n{emitted}",
+        );
+    }
+    assert!(
+        emitted.contains("12.0"),
+        "re-save dropped the authored field value; got:\n{emitted}",
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A project enum is authored one variant at a time, and no schema lists
+/// `Team::Red`, only `Team`. The owning type has to answer for it.
+#[test]
+fn an_authored_variant_of_a_project_enum_is_not_unresolved() {
+    let mut app = app_with_project_schema();
+    let dir = std::env::temp_dir().join(format!("jd_project_enum_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = write_scene(
+        &dir,
+        &format!("bevy_ecs::hierarchy::Children [\n    #Squad\n    {PROJECT_ENUM}::Red\n]\n"),
+    );
+
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &path);
+    app.update();
+
+    let unresolved = app
+        .world()
+        .resource::<jackdaw_bsn::UnresolvedTypes>()
+        .types();
+    assert!(
+        unresolved.is_empty(),
+        "a variant of a reported project enum is authored, not unknown; got: {unresolved:?}",
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A type the schema does not know either is a real gap, and stays
+/// reported, which is what tells the user their build is behind the scene.
+#[test]
+fn a_type_absent_from_the_schema_is_still_reported() {
+    let mut app = app_with_project_schema();
+    let dir = std::env::temp_dir().join(format!("jd_project_stale_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = write_scene(
+        &dir,
+        "bevy_ecs::hierarchy::Children [\n    #Ghost\n    mygame::world::NotBuiltYet\n]\n",
+    );
+
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &path);
+    app.update();
+
+    let unresolved = app
+        .world()
+        .resource::<jackdaw_bsn::UnresolvedTypes>()
+        .types();
+    assert!(
+        unresolved.contains("mygame::world::NotBuiltYet"),
+        "a type in neither the registry nor the schema must be reported; got: {unresolved:?}",
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

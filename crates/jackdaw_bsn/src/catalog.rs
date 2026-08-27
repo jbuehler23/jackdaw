@@ -169,10 +169,26 @@ pub fn load_bsn_scene(world: &mut World, text: &str) -> Result<LoadedBsnScene, B
     world.insert_resource(crate::BsnSceneAssets(names));
 
     world.insert_resource(ast);
+    if let Some(mut unresolved) = world.get_resource_mut::<crate::UnresolvedTypes>() {
+        unresolved.start_scene();
+    }
     let entities = crate::spawn_from_ast(world);
     crate::apply_dirty_ast_patches(world);
+    report_unresolved_types(world);
 
     Ok(LoadedBsnScene { entities, assets })
+}
+
+/// Report once, after a load, that the missing types come from the editor's
+/// picture of the project being older than the scene, and that a rebuild
+/// refreshes it.
+fn report_unresolved_types(world: &mut World) {
+    let Some(mut unresolved) = world.get_resource_mut::<crate::UnresolvedTypes>() else {
+        return;
+    };
+    if let Some(remedy) = unresolved.take_remedy() {
+        log::warn!("{remedy}");
+    }
 }
 
 /// Build one named asset from its document value and insert it into its
@@ -239,8 +255,8 @@ pub fn serialize_assets_to_bsn(world: &World, assets: &[CatalogAssetRef]) -> Str
 ///
 /// Emission drops an entry silently when its type is unregistered, generic,
 /// carries no `ReflectAsset`, or the asset is gone from its store. The text
-/// alone does not distinguish an empty input from a fully skipped one, so the
-/// skipped names are returned alongside it.
+/// alone does not distinguish "nothing to write" from "everything skipped", so
+/// a caller deciding a file's fate gets the skipped names here.
 pub fn serialize_assets_to_bsn_reporting(
     world: &World,
     assets: &[CatalogAssetRef],

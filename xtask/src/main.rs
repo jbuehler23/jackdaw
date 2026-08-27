@@ -1,6 +1,7 @@
 //! Test-harness orchestrator. `cargo xtask <tier>` runs a tier through nextest.
 use std::process::{Command, ExitCode};
 
+mod ux_audit;
 
 /// Target triple for the heavy tier's SDK build. Reads the host from
 /// `rustc -vV` so the tier runs on any host; `JACKDAW_TRIPLE` overrides it.
@@ -141,6 +142,7 @@ fn main() -> ExitCode {
         "integration" => integration(),
         "heavy" => heavy(),
         "release-gate" => fast() && integration() && heavy(),
+        "ux-audit" => ux_audit::cmd_ux_audit(),
         "package-sdk" => {
             return jackdaw_cli_internal::package::cmd_package_sdk(&args[1..]);
         }
@@ -149,7 +151,7 @@ fn main() -> ExitCode {
         }
         other => {
             eprintln!(
-                "usage: cargo xtask <fast|integration|heavy|release-gate|package-sdk|bundle> \
+                "usage: cargo xtask <fast|integration|heavy|release-gate|ux-audit|package-sdk|bundle> \
                  (got {other:?})"
             );
             false

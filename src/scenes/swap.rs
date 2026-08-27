@@ -65,6 +65,13 @@ pub(crate) fn respawn_scene_from_ast(world: &mut World) {
 /// `Scenes.active`.
 pub(crate) fn capture_active_tab(world: &mut World) {
     let active = world.resource::<Scenes>().active;
+
+    // A refused tab never got its document into the world, so there is nothing
+    // to snapshot. The rest of the capture still applies, since its history and
+    // terrain data were restored on activation; only the document snapshot is
+    // skipped, leaving the tab holding the document it could not spawn.
+    let refused = world.resource::<Scenes>().tabs[active].is_refused();
+
     let view_state = capture_view_state(world);
     let history = std::mem::take(&mut *world.resource_mut::<CommandHistory>());
 
@@ -86,31 +93,32 @@ pub(crate) fn capture_active_tab(world: &mut World) {
         .as_ref()
         .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let text = crate::scene_io::emit_bsn_scene_with_inline_assets(world, &parent);
+    if !refused {
+        let text = crate::scene_io::emit_bsn_scene_with_inline_assets(world, &parent);
 
-    if let Some(path) = prefab_target {
-        // Prefab tab: flush the snapshot into the cache entry rather than
-        // onto the tab. The `TabContent::Prefab` key keeps pointing at the
-        // same cache entry from here on. `insert` overwrites or creates,
-        // bumps the epoch, and marks the path dirty, matching both the
-        // "first capture" and "re-capture" cases without branching on
-        // existence.
-        if let Ok(bsn) = jackdaw_bsn::parse_bsn_text(&text) {
-            world
-                .resource_mut::<crate::prefab::PrefabAstCache>()
-                .insert(path.as_path(), bsn);
-        }
-    } else {
-        // Scene tab: store the captured document directly on the tab.
-        let doc = match jackdaw_bsn::parse_bsn_text(&text) {
-            Ok(doc) => doc,
-            Err(err) => {
-                warn!("capture_active_tab: snapshot parse failed: {err}");
-                jackdaw_bsn::SceneBsnAst::default()
+        if let Some(path) = prefab_target {
+            // Prefab tab: flush the snapshot into the cache entry rather than
+            // onto the tab, which keeps pointing at that entry through its
+            // `TabContent::Prefab` key. `insert` overwrites or creates, bumps
+            // the epoch, and marks the path dirty, covering both first capture
+            // and re-capture without branching on existence.
+            if let Ok(bsn) = jackdaw_bsn::parse_bsn_text(&text) {
+                world
+                    .resource_mut::<crate::prefab::PrefabAstCache>()
+                    .insert(path.as_path(), bsn);
             }
-        };
-        let mut scenes = world.resource_mut::<Scenes>();
-        scenes.tabs[active].content = TabContent::Scene(Some(Box::new(doc)));
+        } else {
+            // Scene tab: store the captured document directly on the tab.
+            let doc = match jackdaw_bsn::parse_bsn_text(&text) {
+                Ok(doc) => doc,
+                Err(err) => {
+                    warn!("capture_active_tab: snapshot parse failed: {err}");
+                    jackdaw_bsn::SceneBsnAst::default()
+                }
+            };
+            let mut scenes = world.resource_mut::<Scenes>();
+            scenes.tabs[active].content = TabContent::Scene(Some(Box::new(doc)));
+        }
     }
 
     let terrain_data_store = world
@@ -166,6 +174,12 @@ pub fn activate_tab(world: &mut World, target: usize) {
             .unwrap_or_default(),
     };
 
+    // A tab switch installs a document the same way an open does, so it focuses
+    // the same viewport: `finish_load_scene` brings the 2D panel forward for a
+    // UI scene, and a swap that skipped it would leave the scene loaded behind
+    // whatever panel was in front.
+    let declares_ui_scene = crate::scene_io::declares_ui_scene_root(&new_doc);
+
     // Mirror `finish_load_scene`: any IsA references in the captured
     // document need their prefab files loaded into the cache, then resolved
     // (materializing inherited subtrees), before the spawn. PrefabAstCache
@@ -175,7 +189,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
         .as_ref()
         .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let resolved_text = if world
+    let resolved: Option<jackdaw_bsn::SceneBsnAst> = if world
         .get_resource::<crate::prefab::PrefabAstCache>()
         .is_some()
     {
@@ -186,31 +200,85 @@ pub fn activate_tab(world: &mut World, target: usize) {
         let cache = world.resource::<crate::prefab::PrefabAstCache>();
         let get_prefab = |p: &std::path::Path| cache.get(p);
         match crate::prefab::resolver_bsn::resolve_scene(&new_doc, &get_prefab) {
-            Ok(resolved) => jackdaw_bsn::emit_scene(&resolved),
+            Ok(resolved) => Some(resolved),
             Err(e) => {
                 warn!("activate_tab: prefab resolution failed: {e}; spawning unresolved");
-                jackdaw_bsn::emit_scene(&new_doc)
+                None
             }
         }
     } else {
-        jackdaw_bsn::emit_scene(&new_doc)
+        None
     };
+    // The gate reads the document about to spawn, not the one the tab captured.
+    // A base carrying the retired vocabulary passes it to an instance whose own
+    // document never names it, so a check before the merge would see a clean
+    // document and the component would arrive afterwards.
+    let spawning = resolved.as_ref().unwrap_or(&new_doc);
 
-    // `load_bsn_scene` installs the resolved document as the live resource
-    // and links the spawned entities to it.
-    if let Err(err) = jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
-        error!("activate_tab: failed to spawn tab scene: {err}");
+    // `load_bsn_scene` installs the resolved document as the live resource and
+    // links the spawned entities to it. Unlike `finish_load_scene` this cannot
+    // return early: the tab bookkeeping below has to run, or the editor is left
+    // pointing at a tab it never finished activating.
+    //
+    // A tab switch applies the same refusal an open does: a scene carrying the
+    // removed facade UI vocabulary is named and left unspawned rather than
+    // half-loaded. The refusal is checked before the document is emitted, so a
+    // tab that will not spawn does not pay for the text.
+    let refusal = match jackdaw_bsn::reject_retired_ui_components(spawning) {
+        Ok(()) => {
+            let resolved_text = jackdaw_bsn::emit_scene(spawning);
+            match jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
+                Ok(_) => None,
+                Err(err) => {
+                    error!("activate_tab: failed to spawn tab scene: {err}");
+                    Some(crate::scenes::TabRefusal::SpawnFailed(err.to_string()))
+                }
+            }
+        }
+        Err(err) => {
+            let name = tab_path
+                .as_ref()
+                .map_or_else(|| "this tab".to_string(), |p| p.display().to_string());
+            error!("Cannot activate '{name}': {err}");
+            Some(crate::scenes::TabRefusal::Rejected(err.to_string()))
+        }
+    };
+    let spawned_ok = refusal.is_none();
+
+    // Only a scene that spawned gets the viewport: bringing the 2D panel
+    // forward over a failed activation would present an empty stage as the
+    // UI scene.
+    if declares_ui_scene && spawned_ok {
+        crate::viewport_2d::focus_2d_viewport_tab(world);
+        // A tab framed before restores its own framing; `apply_view_state`
+        // below withdraws this request when it does.
+        crate::viewport_2d::request_2d_fit(world);
+    } else {
+        // The tab in front is not a UI scene, so no held focus is owed.
+        // Session restore opens every persisted tab in turn, so a UI scene
+        // passed through on the way could otherwise leave a focus behind and
+        // bring the panel forward over the tab actually restored.
+        world.remove_resource::<crate::viewport_2d::Pending2dFocus>();
     }
 
     // Restore the per-tab content marker. For `Prefab` tabs the marker
     // is the canonical path; for `Scene` tabs the document is live in the
     // resource now, so the tab's own slot goes back to `Scene(None)`.
+    //
+    // Unless the spawn was refused, in which case the document is not live in
+    // the resource and an empty slot would discard it. A refused tab keeps
+    // holding the document it could not spawn, so a later activation has
+    // something to retry with.
     {
         let mut scenes = world.resource_mut::<Scenes>();
         scenes.tabs[target].content = match content {
             TabContent::Prefab(p) => TabContent::Prefab(p),
+            TabContent::Scene(_) if refusal.is_some() => TabContent::Scene(Some(Box::new(new_doc))),
             TabContent::Scene(_) => TabContent::Scene(None),
         };
+        // Cleared by a successful spawn, so a refusal does not persist across
+        // activations.
+        scenes.tabs[target].refusal = refusal;
     }
 
     let history_depth = history.undo_stack.len();
@@ -250,10 +318,29 @@ fn capture_view_state(world: &mut World) -> ViewState {
     use crate::brush::{BrushSelection, EditMode};
     use crate::selection::Selected;
     use crate::viewport::MainViewportCamera;
+    use crate::viewport_2d::Viewport2dPanelHost;
     use jackdaw_scene_types::SceneNodeId;
 
     let mut cam_q = world.query_filtered::<&Transform, With<MainViewportCamera>>();
     let camera_transform = cam_q.iter(world).next().copied().unwrap_or_default();
+
+    // The 2D viewport's framing lives on its panel host rather than on its
+    // `Viewport2dCamera`, which is derived from it, so it is captured in its
+    // own pass and never reaches the query above. With several 2D panels open
+    // the first one wins; per-panel view state would need a per-panel key,
+    // which a tab-level `ViewState` has no room for.
+    //
+    // Only a framing the user chose is captured. An untouched panel holds the
+    // default view it was built with, and storing that would make `ui_view`
+    // `Some` from the first swap onwards. The restore honours that, so a tab
+    // that was never framed, because no 2D panel was docked when it opened,
+    // could never be framed later.
+    let mut host_q = world.query::<&Viewport2dPanelHost>();
+    let ui_view = host_q
+        .iter(world)
+        .next()
+        .filter(|host| host.view_touched)
+        .map(|host| host.view);
 
     let edit_mode = world
         .get_resource::<EditMode>()
@@ -273,6 +360,7 @@ fn capture_view_state(world: &mut World) -> ViewState {
         edit_mode,
         selection,
         brush_sub_selection,
+        ui_view,
     }
 }
 
@@ -281,12 +369,31 @@ fn apply_view_state(world: &mut World, view_state: &ViewState) {
     use crate::brush::{BrushSelection, EditMode};
     use crate::selection::{Selected, Selection};
     use crate::viewport::MainViewportCamera;
+    use crate::viewport_2d::Viewport2dPanelHost;
     use jackdaw_scene_types::SceneNodeId;
 
     // Camera transform.
     let mut cam_q = world.query_filtered::<&mut Transform, With<MainViewportCamera>>();
     if let Some(mut tf) = cam_q.iter_mut(world).next() {
         *tf = view_state.camera_transform;
+    }
+
+    // 2D viewport framing. `apply_2d_view` carries this onto the
+    // `Viewport2dCamera` next frame, so nothing writes that camera's
+    // transform here.
+    let mut host_q = world.query::<&mut Viewport2dPanelHost>();
+    if let Some(mut host) = host_q.iter_mut(world).next() {
+        match view_state.ui_view {
+            // A remembered framing takes precedence over the fit the
+            // activation requested.
+            Some(view) => {
+                host.set_view(view);
+                host.fit_pending = false;
+            }
+            // Nothing to restore, so the panel returns to unframed and any fit
+            // the activation requested still stands.
+            None => host.reset_view(),
+        }
     }
 
     // Edit mode.

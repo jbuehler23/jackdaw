@@ -33,11 +33,12 @@ pub struct IconFont(pub Handle<Font>);
 #[derive(Resource)]
 pub struct EditorFont(pub Handle<Font>);
 
-/// `bevy::feathers`'s own default body font (`fonts::REGULAR`), loaded through
-/// the `AssetServer` rather than jackdaw's synchronously-loaded
-/// [`EditorFont`], which backs a different embedded copy of the same nominal
-/// typeface. Surfaces beside native feathers widgets, which always load
-/// `fonts::REGULAR` explicitly, use this to match exactly.
+/// `bevy::feathers`'s own default body font (`fonts::REGULAR`), loaded
+/// through the `AssetServer` rather than jackdaw's synchronously-loaded
+/// [`EditorFont`], which backs a *different* embedded copy of the same
+/// nominal typeface. Surfaces that sit directly beside native feathers
+/// widgets (which always load `fonts::REGULAR` explicitly) use this to
+/// guarantee an exact match instead of a visually-close-but-different one.
 #[derive(Resource, Deref, DerefMut)]
 pub struct FeathersDefaultFont(pub Handle<Font>);
 

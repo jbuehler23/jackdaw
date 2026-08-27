@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use jackdaw_runtime::{JackdawPlugin, JackdawScene, JackdawSceneRoot};
-use jackdaw_ui::UiCanvas;
+use jackdaw_scene_types::UiSceneRoot;
 
 #[test]
-fn canvas_is_an_ecs_root_but_is_destroyed_with_its_scene() {
+fn ui_root_is_an_ecs_root_but_is_destroyed_with_its_scene() {
     let mut app = runtime_app();
     let scene = app
         .world_mut()
@@ -15,7 +15,7 @@ bevy_ecs::hierarchy::Children [
     bevy_transform::components::transform::Transform
     ,
     #Overlay
-    jackdaw_ui::UiCanvas
+    jackdaw_scene_types::UiSceneRoot
 ]
 "#
             .into(),
@@ -27,19 +27,19 @@ bevy_ecs::hierarchy::Children [
     app.update();
 
     let world_root = named_entity(app.world_mut(), "World");
-    let canvas = named_entity(app.world_mut(), "Overlay");
+    let ui_root = named_entity(app.world_mut(), "Overlay");
     assert_eq!(
         app.world().get::<ChildOf>(world_root).map(ChildOf::parent),
         Some(scene_root),
         "ordinary roots retain the runtime hierarchy"
     );
     assert!(
-        app.world().get::<UiCanvas>(canvas).is_some(),
-        "the authored canvas component loaded"
+        app.world().get::<UiSceneRoot>(ui_root).is_some(),
+        "the authored UI root component loaded"
     );
     assert!(
-        app.world().get::<ChildOf>(canvas).is_none(),
-        "a UI canvas must be a real ECS root for Bevy layout"
+        app.world().get::<ChildOf>(ui_root).is_none(),
+        "a UI scene root must be a real ECS root for Bevy layout"
     );
 
     app.world_mut().entity_mut(scene_root).despawn();
@@ -48,36 +48,36 @@ bevy_ecs::hierarchy::Children [
 
     assert!(app.world().get_entity(world_root).is_err());
     assert!(
-        app.world().get_entity(canvas).is_err(),
-        "unparented canvas is still owned and cleaned up by the scene"
+        app.world().get_entity(ui_root).is_err(),
+        "an unparented UI root is still owned and cleaned up by the scene"
     );
 }
 
 #[test]
-fn destroying_one_scene_does_not_destroy_another_scenes_canvas() {
+fn destroying_one_scene_does_not_destroy_another_scenes_ui_root() {
     let mut app = runtime_app();
-    let first_scene = scene_with_canvas(&mut app, "FirstCanvas");
-    let second_scene = scene_with_canvas(&mut app, "SecondCanvas");
+    let first_scene = scene_with_ui_root(&mut app, "FirstUiRoot");
+    let second_scene = scene_with_ui_root(&mut app, "SecondUiRoot");
     let first_root = app.world_mut().spawn(JackdawSceneRoot(first_scene)).id();
     app.world_mut().spawn(JackdawSceneRoot(second_scene));
 
     app.update();
     app.update();
 
-    let first_canvas = named_entity(app.world_mut(), "FirstCanvas");
-    let second_canvas = named_entity(app.world_mut(), "SecondCanvas");
+    let first_ui_root = named_entity(app.world_mut(), "FirstUiRoot");
+    let second_ui_root = named_entity(app.world_mut(), "SecondUiRoot");
     app.world_mut().entity_mut(first_root).despawn();
     app.update();
     app.update();
 
-    assert!(app.world().get_entity(first_canvas).is_err());
+    assert!(app.world().get_entity(first_ui_root).is_err());
     assert!(
-        app.world().get_entity(second_canvas).is_ok(),
+        app.world().get_entity(second_ui_root).is_ok(),
         "scene membership must be isolated per JackdawSceneRoot"
     );
 }
 
-fn scene_with_canvas(app: &mut App, name: &str) -> Handle<JackdawScene> {
+fn scene_with_ui_root(app: &mut App, name: &str) -> Handle<JackdawScene> {
     app.world_mut()
         .resource_mut::<Assets<JackdawScene>>()
         .add(JackdawScene::new(
@@ -85,7 +85,7 @@ fn scene_with_canvas(app: &mut App, name: &str) -> Handle<JackdawScene> {
                 r#"
 bevy_ecs::hierarchy::Children [
     #{name}
-    jackdaw_ui::UiCanvas
+    jackdaw_scene_types::UiSceneRoot
 ]
 "#
             ),

@@ -1,0 +1,27 @@
+[package]
+name = "jackdaw_widgets_runtime"
+version.workspace = true
+edition = "2024"
+description = "Load-time defaults and value behaviour for authored Bevy UI widgets"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = [
+    "std",
+    "reflect_auto_register",
+    "bevy_ui",
+    "bevy_ui_widgets",
+    "bevy_log",
+] }
+
+[features]
+default = []
+# The feathers styling surface: the theme markers an authored widget carries
+# and the hover state its button styling reads. `bevy_feathers` depends on
+# `bevy_render` outright, so this stays optional and a headless game keeps a
+# render-free build.
+feathers = ["bevy/bevy_feathers", "bevy/bevy_picking"]
+
+[lints]
+workspace = true

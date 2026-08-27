@@ -39,9 +39,10 @@ use jackdaw_runtime::EditorCategory;
 use super::{
     ComponentDisplay, ComponentDisplayBody, ComponentDisplayTypePath, ComponentName,
     ComponentPicker, Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch,
-    InspectorTarget, ReflectDisplayable, brush_display, category_strip::ActiveInspectorCategory,
-    component_tooltip::ReflectedTypeTooltip, custom_props_display, extract_module_group,
-    material_display, modifier_display, reflect_fields,
+    InspectorTarget, ReflectDisplayable, bindings_card, brush_display,
+    category_strip::ActiveInspectorCategory, component_tooltip::ReflectedTypeTooltip,
+    custom_props_display, extract_module_group, material_display, modifier_display, node_card,
+    reflect_fields,
 };
 use crate::inspector::prefab_field_dots::{PrefabInstanceCtx, inspector_type_paths_for};
 use crate::prefab::PrefabAstCache;
@@ -153,6 +154,7 @@ fn hidden_by_namespace(full_path: &str) -> bool {
         && !full_path.starts_with("jackdaw_avian_integration")
         && !full_path.starts_with("jackdaw_animation")
         && !full_path.starts_with("jackdaw_multiplayer")
+        && !full_path.starts_with("jackdaw_bind::")
         && !SCENE_TYPES_WITH_INSPECTOR_CARDS.contains(&full_path)
 }
 
@@ -299,15 +301,10 @@ pub(crate) fn build_inspector_displays(
                 return Some((short, module_group, component_id, full_path.to_string()));
             }
 
-            // Fallback: use Components name
+            // Unreflected components fall back to the `Components` name, and
+            // run through the same namespace rule as the reflected arm.
             let name = components.get_name(component_id)?;
-            if name.starts_with("jackdaw")
-                && !name.starts_with("jackdaw_jsn")
-                && !name.starts_with("jackdaw_geometry")
-                && !name.starts_with("jackdaw::reference_image")
-                && !name.starts_with("jackdaw_avian_integration")
-                && !name.starts_with("jackdaw_animation")
-            {
+            if hidden_by_namespace(&name) {
                 return None;
             }
             let full = name.to_string();
@@ -537,6 +534,25 @@ pub(crate) fn build_inspector_displays(
             // Priority 3c: Terrain, custom inspector sections
             if type_id == TypeId::of::<jackdaw_scene_types::Terrain>() {
                 crate::terrain::inspector::spawn_terrain_inspector_container(commands, body_entity);
+                continue;
+            }
+
+            // Priority 3d: Node, the structured layout card. Filled
+            // world-exclusive after the flush, like the material cards.
+            if type_id == TypeId::of::<Node>() {
+                let body = body_entity;
+                commands.queue(move |world: &mut World| {
+                    node_card::fill_node_card_body(world, source_entity, body);
+                });
+                continue;
+            }
+
+            // Priority 3e: Bindings, the declarative connections card.
+            if type_id == TypeId::of::<jackdaw_bind::Bindings>() {
+                let body = body_entity;
+                commands.queue(move |world: &mut World| {
+                    bindings_card::fill_bindings_card_body(world, source_entity, body);
+                });
                 continue;
             }
 
@@ -794,8 +810,8 @@ pub(crate) fn on_inspector_dirty(
     }
 }
 
-/// The disclosure link and its handler live with the shared card widget, used by
-/// both component cards and material cards.
+/// The disclosure link and its handler live with the shared card widget;
+/// component cards and material cards both use it.
 pub(crate) use jackdaw_feathers::panel_card::DisclosureSection;
 
 /// Inputs to [`spawn_component_display`]. Bundled into a single
@@ -913,6 +929,11 @@ pub(crate) fn spawn_component_display(
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(tokens::SPACING_SM),
                 flex_grow: 1.0,
+                // A generic type path is one unbreakable word wider than the
+                // sidebar, so the row clips it. The full path is on the
+                // hover tooltip.
+                min_width: Val::Px(0.0),
+                overflow: Overflow::clip_x(),
                 ..Default::default()
             },
             Hovered::default(),
@@ -960,7 +981,18 @@ pub(crate) fn spawn_component_display(
             weight: FontWeight::MEDIUM,
             ..Default::default()
         },
+        // A title that ran out of room is cut, never wrapped: a second line
+        // would move the card's controls down the panel.
+        TextLayout {
+            linebreak: bevy::text::LineBreak::NoWrap,
+            ..Default::default()
+        },
         TextColor(name_color),
+        Node {
+            min_width: Val::Px(0.0),
+            flex_shrink: 1.0,
+            ..Default::default()
+        },
         ChildOf(toggle_area),
     ));
 
@@ -1274,5 +1306,28 @@ mod tests {
         assert!(!hidden_by_namespace(
             "bevy_transform::components::transform::Transform"
         ));
+    }
+
+    /// Bindings are authored data, not editor bookkeeping: the user put
+    /// them on the entity and the inspector is where they edit them.
+    #[test]
+    fn binding_types_survive_the_namespace_cull() {
+        assert!(!hidden_by_namespace("jackdaw_bind::types::Bindings"));
+        assert!(!hidden_by_namespace("jackdaw_bind::types::BindContext"));
+        // The exemption is that crate, not every crate whose name starts
+        // with its name.
+        assert!(hidden_by_namespace("jackdaw_bindings::Foo"));
+    }
+
+    /// `AuthoredWidget` is not `Reflect`, so it reaches the inspector
+    /// through the `Components`-name fallback rather than the registry.
+    /// It stays out of the list because its crate is under the jackdaw
+    /// namespace; renaming or moving that crate would surface it to the
+    /// user as an `Other` row.
+    #[test]
+    fn the_runtime_widget_marker_stays_out_of_the_generic_list() {
+        assert!(hidden_by_namespace(std::any::type_name::<
+            jackdaw_widgets_runtime::AuthoredWidget,
+        >()));
     }
 }

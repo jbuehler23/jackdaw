@@ -6,7 +6,7 @@
 //! dependency, so it can drive snapping in any host. The editor wraps this in
 //! a Bevy resource newtype that derefs to it.
 
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
 /// Lowest grid power offered by the editor's grid stepping. The grid size is
@@ -114,6 +114,11 @@ impl SnapSettings {
         )
     }
 
+    /// Snap a translation vector on a plane.
+    pub fn snap_translate_vec2(&self, v: Vec2) -> Vec2 {
+        Vec2::new(self.snap_translate(v.x), self.snap_translate(v.y))
+    }
+
     /// Snap a rotation angle to the nearest increment.
     pub fn snap_rotate(&self, angle: f32) -> f32 {
         if self.rotate_snap && self.rotate_increment > 0.0 {
@@ -190,6 +195,81 @@ impl SnapSettings {
             v
         }
     }
+}
+
+/// The rect a 2D edge snap is moving, in whatever units the candidates
+/// are stated in.
+///
+/// Not an engine rect: this crate is arithmetic over [`glam`] and nothing
+/// else, so the caller converts on the way in.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct SnapRect {
+    pub min: Vec2,
+    pub max: Vec2,
+}
+
+impl SnapRect {
+    pub fn from_min_size(min: Vec2, size: Vec2) -> Self {
+        Self {
+            min,
+            max: min + size,
+        }
+    }
+
+    /// The three coordinates that can land on a candidate: the two
+    /// edges and the midpoint between them.
+    fn snap_lines(&self) -> [Vec2; 3] {
+        [self.min, (self.min + self.max) / 2.0, self.max]
+    }
+}
+
+/// Offset that puts one of `moving`'s edges (or its centre) onto the
+/// nearest candidate line within `threshold`, per axis.
+///
+/// The two axes are decided independently, so a rect can take its x from
+/// one neighbour and its y from another, and an axis with no candidate
+/// in range contributes zero rather than pulling toward the origin. A
+/// non-positive or non-finite threshold means no snapping at all.
+pub fn snap_edges_2d(
+    moving: SnapRect,
+    candidates_x: &[f32],
+    candidates_y: &[f32],
+    threshold: f32,
+) -> Vec2 {
+    let lines = moving.snap_lines();
+    Vec2::new(
+        nearest_delta(
+            [lines[0].x, lines[1].x, lines[2].x],
+            candidates_x,
+            threshold,
+        ),
+        nearest_delta(
+            [lines[0].y, lines[1].y, lines[2].y],
+            candidates_y,
+            threshold,
+        ),
+    )
+}
+
+/// How far this axis must move for one of `lines` to land on a
+/// candidate: the smallest such move inside `threshold`, or zero.
+fn nearest_delta(lines: [f32; 3], candidates: &[f32], threshold: f32) -> f32 {
+    if threshold <= 0.0 {
+        return 0.0;
+    }
+    let mut best = 0.0_f32;
+    let mut best_abs = f32::INFINITY;
+    for line in lines {
+        for candidate in candidates {
+            let delta = candidate - line;
+            let abs = delta.abs();
+            if abs <= threshold && abs < best_abs {
+                best = delta;
+                best_abs = abs;
+            }
+        }
+    }
+    best
 }
 
 #[cfg(test)]
@@ -310,6 +390,69 @@ mod tests {
         };
         let out = s.snap_translate_vec3(Vec3::new(0.6, 1.4, -0.6));
         assert!((out - Vec3::new(1.0, 1.0, -1.0)).length() < 1e-6);
+    }
+
+    #[test]
+    fn translate_vec2_snaps_each_axis() {
+        let s = SnapSettings {
+            translate_snap: true,
+            translate_increment: 1.0,
+            ..SnapSettings::default()
+        };
+        let out = s.snap_translate_vec2(Vec2::new(0.6, -0.6));
+        assert!((out - Vec2::new(1.0, -1.0)).length() < 1e-6);
+
+        // Off, it passes straight through, like every other snap here.
+        let off = SnapSettings::default();
+        let v = Vec2::new(0.37, 1.42);
+        assert!((off.snap_translate_vec2(v) - v).length() < 1e-6);
+    }
+
+    #[test]
+    fn an_edge_inside_the_threshold_pulls_the_rect_onto_it() {
+        // Left edge at 98, a candidate at 100: three pixels of pull.
+        let moving = SnapRect::from_min_size(Vec2::new(98.0, 40.0), Vec2::new(50.0, 20.0));
+        let out = snap_edges_2d(moving, &[100.0], &[], 6.0);
+        assert!((out - Vec2::new(2.0, 0.0)).length() < 1e-6);
+
+        // The right edge counts too: 148 is two short of 150.
+        let out = snap_edges_2d(moving, &[150.0], &[], 6.0);
+        assert!((out - Vec2::new(2.0, 0.0)).length() < 1e-6);
+
+        // And so does the centre: 123 against 120.
+        let out = snap_edges_2d(moving, &[120.0], &[], 6.0);
+        assert!((out - Vec2::new(-3.0, 0.0)).length() < 1e-6);
+    }
+
+    #[test]
+    fn the_nearest_candidate_wins_on_each_axis() {
+        let moving = SnapRect::from_min_size(Vec2::new(98.0, 41.0), Vec2::new(50.0, 20.0));
+        // 100 is 2 away from the left edge; 96 is 2 away too but 152 is
+        // only 4 from the right edge and 100 stays the smaller pull.
+        let out = snap_edges_2d(moving, &[100.0, 152.0], &[40.0, 44.0], 6.0);
+        assert!(
+            (out - Vec2::new(2.0, -1.0)).length() < 1e-6,
+            "{out:?} should take the smallest pull per axis",
+        );
+    }
+
+    #[test]
+    fn a_candidate_outside_the_threshold_moves_nothing() {
+        let moving = SnapRect::from_min_size(Vec2::new(98.0, 40.0), Vec2::new(50.0, 20.0));
+        assert_eq!(snap_edges_2d(moving, &[120.0], &[400.0], 1.0), Vec2::ZERO);
+        // An axis with no candidates at all stays put rather than
+        // collapsing toward zero.
+        assert_eq!(snap_edges_2d(moving, &[], &[], 6.0), Vec2::ZERO);
+        // A threshold of zero is "no snapping", not "snap to anything".
+        assert_eq!(snap_edges_2d(moving, &[100.0], &[40.0], 0.0), Vec2::ZERO);
+    }
+
+    #[test]
+    fn each_axis_snaps_independently() {
+        let moving = SnapRect::from_min_size(Vec2::new(98.0, 40.0), Vec2::new(50.0, 20.0));
+        // x has a candidate in range, y does not.
+        let out = snap_edges_2d(moving, &[100.0], &[400.0], 6.0);
+        assert!((out - Vec2::new(2.0, 0.0)).length() < 1e-6);
     }
 
     #[test]

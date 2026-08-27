@@ -1264,6 +1264,42 @@ impl Default for ProjectSchemaWatch {
 /// system reads it into `ProjectTypes`. On editor start it also loads a
 /// schema left by a previous session, so components are known before any
 /// rebuild.
+/// Read `<project>/.jackdaw/schema.json` into `ProjectTypes` and publish
+/// the document-only set, returning the component count when the file was
+/// newer than the last read. `None` means nothing changed and callers
+/// should not re-announce.
+///
+/// Project open calls this directly: it restores persisted tabs in the
+/// same exclusive run that sets the editor state, so the first scene of a
+/// session loads before `watch_project_schema` has ever ticked.
+pub fn refresh_project_types(world: &mut World) -> Option<usize> {
+    let root = world
+        .get_resource::<crate::project::ProjectRoot>()
+        .map(|p| p.root.clone())?;
+    let jackdaw_dir = root.join(".jackdaw");
+    let path = jackdaw_schema::schema_path(&jackdaw_dir);
+    let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+    if world
+        .get_resource::<ProjectSchemaWatch>()
+        .is_some_and(|watch| watch.last_mtime == Some(mtime))
+    {
+        return None;
+    }
+    let schema = jackdaw_schema::read_schema(&jackdaw_dir)?;
+    let native =
+        crate::project_types::native_type_paths(&world.resource::<AppTypeRegistry>().read());
+    let component_count = {
+        let mut project_types = world.resource_mut::<crate::project_types::ProjectTypes>();
+        project_types.update(&schema, &native);
+        project_types.components().count()
+    };
+    crate::project_types::publish_document_only_types(world);
+    if let Some(mut watch) = world.get_resource_mut::<ProjectSchemaWatch>() {
+        watch.last_mtime = Some(mtime);
+    }
+    Some(component_count)
+}
+
 fn watch_project_schema(world: &mut World) {
     {
         let delta = world.resource::<Time>().delta();
@@ -1272,31 +1308,9 @@ fn watch_project_schema(world: &mut World) {
             return;
         }
     }
-    let Some(root) = world
-        .get_resource::<crate::project::ProjectRoot>()
-        .map(|p| p.root.clone())
-    else {
+    let Some(component_count) = refresh_project_types(world) else {
         return;
     };
-    let jackdaw_dir = root.join(".jackdaw");
-    let path = jackdaw_schema::schema_path(&jackdaw_dir);
-    let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
-        return;
-    };
-    if world.resource::<ProjectSchemaWatch>().last_mtime == Some(mtime) {
-        return;
-    }
-    let Some(schema) = jackdaw_schema::read_schema(&jackdaw_dir) else {
-        return;
-    };
-    let native =
-        crate::project_types::native_type_paths(&world.resource::<AppTypeRegistry>().read());
-    let component_count = {
-        let mut project_types = world.resource_mut::<crate::project_types::ProjectTypes>();
-        project_types.update(&schema, &native);
-        project_types.components().count()
-    };
-    world.resource_mut::<ProjectSchemaWatch>().last_mtime = Some(mtime);
 
     // Surface the outcome in the footer so the user knows the build
     // finished and how many of their components loaded.

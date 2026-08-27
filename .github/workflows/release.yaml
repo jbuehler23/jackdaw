@@ -162,6 +162,7 @@ jobs:
           -p jackdaw_api_internal
           -p jackdaw_api_macros
           -p jackdaw_avian_integration
+          -p jackdaw_bind
           -p jackdaw_bsn
           -p jackdaw_camera_rig
           -p jackdaw_commands
@@ -174,12 +175,13 @@ jobs:
           -p jackdaw_localization
           -p jackdaw_panels
           -p jackdaw_pie_protocol
+          -p jackdaw_prefab
           -p jackdaw_runtime
           -p jackdaw_scene_types
           -p jackdaw_schema
           -p jackdaw_terrain
-          -p jackdaw_ui
           -p jackdaw_widgets
+          -p jackdaw_widgets_runtime
 
   # Downloadable per-platform bundles: the editor, its CLI, the rustc
   # wrapper, the runtime dylibs, and a relocatable SDK, all in one archive.

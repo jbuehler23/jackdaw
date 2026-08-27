@@ -11,7 +11,7 @@
 //! every id is reachable from a clean editor app.
 
 use jackdaw::asset_browser::AssetSelectFolderOp;
-use jackdaw::entity_ops::EntityAddImageOp;
+use jackdaw::entity_ops::{EntityAddImageOp, EntityAddPrefabOp};
 use jackdaw::material_browser::MaterialSelectFolderOp;
 use jackdaw::scene_ops::{SceneSaveAsOp, SceneSaveOp};
 use jackdaw::scenes::operators::SceneOpenOp;
@@ -57,6 +57,7 @@ const SMOKE_SKIP_LIST: &[SkipOp] = &[
     SkipOp::new::<AssetSelectFolderOp>("spawns native folder picker"),
     SkipOp::new::<MaterialSelectFolderOp>("spawns native folder picker"),
     SkipOp::new::<EntityAddImageOp>("spawns native image-file picker"),
+    SkipOp::new::<EntityAddPrefabOp>("spawns native prefab-file picker"),
 ];
 
 #[test]

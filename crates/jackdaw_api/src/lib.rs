@@ -40,8 +40,8 @@ use jackdaw_dylib;
 pub use jackdaw_api_internal::{
     DefaultArea, ExtensionContext, ExtensionInputContext, ExtensionPoint, ExtensionRegistrar,
     HierarchyWindow, InspectorWindow, JackdawExtension, MenuEntryDescriptor, PanelContext,
-    ToAnchorId as _, TopLevelMenu, WidgetDefinition, WidgetInstantiateContext, WidgetPreviewState,
-    WidgetProperty, WidgetPropertyKind, WidgetRegistry, WidgetSlot, WindowDescriptor,
+    ToAnchorId as _, TopLevelMenu, WidgetDefinition, WidgetInstantiateContext, WidgetRegistry,
+    WindowDescriptor,
 };
 
 pub use jackdaw_api_internal::lifecycle::ExtensionKind;
@@ -178,8 +178,7 @@ pub mod prelude {
         DefaultArea, ExtensionContext, ExtensionInputContext, ExtensionKind, ExtensionPoint,
         ExtensionRegistrar, HierarchyWindow, InspectorWindow, JackdawExtension,
         MenuEntryDescriptor, PanelContext, TopLevelMenu, WidgetDefinition,
-        WidgetInstantiateContext, WidgetPreviewState, WidgetProperty, WidgetPropertyKind,
-        WidgetRegistry, WidgetSlot, WindowDescriptor, operator,
+        WidgetInstantiateContext, WidgetRegistry, WindowDescriptor, operator,
     };
 
     /// Helper [`SystemParam`](bevy::ecs::system::SystemParam) for

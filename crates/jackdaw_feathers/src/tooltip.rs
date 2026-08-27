@@ -133,10 +133,11 @@ struct TooltipState {
 /// Two-stage: a glance gets the title, lingering
 /// expands to the full description + signature.
 ///
-/// Any pointer button held down, from mouse-down through release and so for
-/// the span of a drag-scrub gesture, tears down and blocks the tooltip. The
-/// check runs before the hover lookup, so it applies to every `Tooltip`
-/// consumer without a per-call-site opt-in.
+/// Any pointer button held down (mouse-down through release, which covers
+/// the whole span of a drag-scrub gesture) tears down and blocks the
+/// tooltip, checked before the hover lookup, so no popover sits under the
+/// cursor over a control the user is operating. The rule lives here
+/// rather than at each `Tooltip` call site.
 fn tick_tooltip(
     time: Res<Time>,
     targets: Query<(Entity, &Tooltip, &Hovered)>,
@@ -341,10 +342,10 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
-    /// Bare `World` with what `tick_tooltip` reads: `Time`, the mouse button
-    /// table, `TooltipState`, and a stand-in primary window. The system reads
-    /// only the window's cursor position, so a bare `Window` with no backend
-    /// suffices.
+    /// Bare `World` with what `tick_tooltip` reads: `Time`, the mouse
+    /// button table, `TooltipState`, and a stand-in primary window (the
+    /// system only reads its cursor position, so a bare `Window` with no
+    /// backend is enough).
     fn test_world() -> World {
         let mut world = World::new();
         world.init_resource::<Time>();
@@ -370,8 +371,8 @@ mod tests {
             .count()
     }
 
-    /// Hovering a tagged entity past `SHORT_HOVER_DELAY` spawns the popover,
-    /// the baseline the suppression tests build on.
+    /// Hovering a tagged entity past `SHORT_HOVER_DELAY` spawns the
+    /// popover; this is the baseline the suppression tests build on.
     #[test]
     fn hover_past_delay_spawns_popover() {
         let mut world = test_world();
@@ -392,8 +393,8 @@ mod tests {
         );
     }
 
-    /// A tooltip already showing disappears when a mouse button goes down,
-    /// even while still hovering its anchor.
+    /// A tooltip already showing disappears the instant a mouse button
+    /// goes down, even while still hovering its anchor.
     #[test]
     fn mouse_down_dismisses_an_open_tooltip() {
         let mut world = test_world();
@@ -412,8 +413,9 @@ mod tests {
         assert_eq!(popover_count(&mut world), 0, "mouse-down must close it");
     }
 
-    /// While a button stays held, over the span of a drag-scrub gesture, the
-    /// tooltip does not reappear even after the hover delay has elapsed.
+    /// While a button stays held (the span of a drag-scrub gesture), the
+    /// tooltip does not reappear even though the hover delay has long
+    /// since elapsed.
     #[test]
     fn held_button_suppresses_the_tooltip_through_a_long_hover() {
         let mut world = test_world();
@@ -435,8 +437,9 @@ mod tests {
         );
     }
 
-    /// Once the button is released, the tooltip re-arms and shows again after
-    /// the hover delay: suppression is a hold, not a one-shot latch.
+    /// Once the button is released, the tooltip re-arms and shows again
+    /// after the normal hover delay: suppression is a hold, not a one-shot
+    /// latch.
     #[test]
     fn releasing_the_button_re_arms_the_tooltip() {
         let mut world = test_world();

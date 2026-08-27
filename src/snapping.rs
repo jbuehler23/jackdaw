@@ -74,22 +74,32 @@ pub struct SnapSettings(pub jackdaw_snap::SnapSettings);
 
 /// Scroll-wheel grid size control. Continuous-input, so it stays as a
 /// system rather than an operator. The actual power bump is delegated
-/// to [`crate::grid_ops::GridIncreaseOp`] /
-/// [`crate::grid_ops::GridDecreaseOp`] (also bound to the bracket
-/// keys) so the clamp + translate-increment refresh live in one place.
+/// to `grid_ops::GridIncreaseOp` / `grid_ops::GridDecreaseOp` (also bound to
+/// the bracket keys) so the clamp + translate-increment refresh live in one
+/// place. Named rather than linked: this system is public for tests and those
+/// operators are not.
 ///
 /// Raw wheel read kept: grid-size stepping is gated behind a held modifier
 /// chord and predates the keymap engine; migrates with the binding-layer
 /// follow-up.
-fn handle_grid_size_scroll(
+///
+/// This grid is the 3D world's, in world units, so the wheel over a 2D
+/// viewport is ignored: there the same chord zooms the canvas. The 2D stage
+/// has a pixel grid of its own ([`crate::viewport_2d::Ui2dView::grid`]).
+///
+/// Public so tests can run it directly: the plugin schedules it inside
+/// [`crate::EditorInteractionSystems`], which never runs while a test app
+/// sits in `AppState::ProjectSelect`.
+pub fn handle_grid_size_scroll(
     keyboard: Res<ButtonInput<KeyCode>>,
     keybind_focus: crate::keybind_focus::KeybindFocus,
     modal: Res<crate::modal_transform::ModalTransformState>,
     terrain_edit_mode: Res<crate::terrain::TerrainEditMode>,
+    viewport_2d: crate::viewport_2d::Viewport2dHover,
     mut scroll_events: MessageReader<MouseWheel>,
     mut commands: Commands,
 ) {
-    if keybind_focus.is_typing() || modal.active.is_some() {
+    if keybind_focus.is_typing() || modal.active.is_some() || viewport_2d.any_stage_area() {
         return;
     }
 

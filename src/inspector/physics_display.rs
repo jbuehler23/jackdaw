@@ -31,6 +31,22 @@ fn is_physics_type_path(type_path: &str) -> bool {
         || type_path.starts_with("avian3d::")
 }
 
+/// The physics component a running preview owns on `entity`, if it owns
+/// one of the three [`DisablePhysics`] takes off.
+///
+/// Matched by [`std::any::TypeId`] rather than by type path: the concrete
+/// `Collider` avian builds carries a path this module cannot spell.
+pub(crate) fn preview_owned_physics(world: &World, entity: Entity) -> Option<&'static str> {
+    [
+        (std::any::TypeId::of::<RigidBody>(), "RigidBody"),
+        (std::any::TypeId::of::<AvianCollider>(), "AvianCollider"),
+        (std::any::TypeId::of::<Collider>(), "Collider"),
+    ]
+    .into_iter()
+    .find(|(type_id, _)| crate::preview_context::preview_writes(world, entity, *type_id))
+    .map(|(_, name)| name)
+}
+
 /// The component type path carried by a document patch, if it is a
 /// component patch.
 fn patch_type_path(patch: &jackdaw_bsn::BsnPatch) -> Option<&str> {

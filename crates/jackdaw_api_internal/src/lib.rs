@@ -88,10 +88,7 @@ pub use lifecycle::{ActiveModalOperator, Extension, ExtensionCatalog};
 pub use operator::{CallOperatorError, OperatorResult, OperatorWorldExt};
 pub use pie::PlayState;
 pub use snapshot::SceneSnapshotter;
-pub use widgets::{
-    WidgetDefinition, WidgetInstantiateContext, WidgetPreviewState, WidgetProperty,
-    WidgetPropertyKind, WidgetRegistry, WidgetSlot,
-};
+pub use widgets::{WidgetDefinition, WidgetInstantiateContext, WidgetRegistry};
 
 /// Re-exports plugin authors will want in one import.
 pub mod prelude {
@@ -111,10 +108,7 @@ pub mod prelude {
         pie::PlayState,
         runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems},
         snapshot::{ActiveSnapshotter, SceneSnapshot, SceneSnapshotter},
-        widgets::{
-            WidgetDefinition, WidgetInstantiateContext, WidgetPreviewState, WidgetProperty,
-            WidgetPropertyKind, WidgetRegistry, WidgetSlot,
-        },
+        widgets::{WidgetDefinition, WidgetInstantiateContext, WidgetRegistry},
     };
     // BEI types extension authors need for `actions!` / `bindings!` / observers.
     pub use bevy_enhanced_input::prelude::*;
@@ -256,7 +250,7 @@ impl<'a> ExtensionContext<'a> {
         self
     }
 
-    /// Register a selectable UI widget for the editor palette.
+    /// Register a UI widget the editor can create from its Add menu.
     ///
     /// The registration is owned by this extension entity and is removed
     /// automatically when the extension unloads.

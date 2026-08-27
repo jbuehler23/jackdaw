@@ -59,7 +59,11 @@
 //! - `pie`: play-in-editor, streaming this world to a running editor.
 
 use std::any::TypeId;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+// Only the texture-format promotion pass gathers bound image ids, and that is
+// a rendering build's concern.
+#[cfg(feature = "render")]
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use bevy::asset::{AssetLoader, LoadContext, ReflectAsset, UntypedHandle, io::Reader};
@@ -74,7 +78,6 @@ use jackdaw_bsn::{
     BsnApplyAssets, BsnPatch, BsnSceneAssets, BsnValue, SceneBsnAst, apply_component_patch,
     bsn_value_to_reflect, load_bsn_assets, parse_bsn_text,
 };
-use jackdaw_ui::UiCanvas;
 
 pub use jackdaw_scene_types::{
     Brush, BrushFaceData, CustomProperties, EditorCategory, EditorDescription, EditorHidden,
@@ -102,8 +105,8 @@ pub use navmesh::JackdawNavmesh;
 
 mod schema_cli;
 pub use schema_cli::{
-    SCHEMA_FLAG, extract_schema_and_exit_if_requested, extract_schema_json,
-    schema_extraction_requested,
+    SCHEMA_FLAG, extract_schema_and_exit_if_requested, extract_schema_from_world,
+    extract_schema_json, schema_extraction_requested,
 };
 
 pub mod prelude {
@@ -113,7 +116,7 @@ pub mod prelude {
     pub use crate::TerrainViewer;
     pub use crate::{
         EditorCategory, EditorDescription, EditorHidden, JackdawCatalog, JackdawCatalogPath,
-        JackdawPlugin, JackdawSceneMember, JackdawSceneRoot, SkipSerialization,
+        JackdawPlugin, JackdawSceneMember, JackdawSceneRoot, SceneRefused, SkipSerialization,
     };
 }
 
@@ -122,11 +125,11 @@ pub struct JackdawPlugin;
 impl Plugin for JackdawPlugin {
     fn build(&self, app: &mut App) {
         // The editor asks for this binary's reflected types by launching
-        // it with `--jackdaw-extract-schema`. Handle that here so every
-        // game that adds `JackdawPlugin` answers that. Extraction reads
-        // the link-time reflect inventory, not `app`, and exits before
-        // `App::run` opens a window.
-        schema_cli::extract_schema_and_exit_if_requested();
+        // it with `--jackdaw-extract-schema`, which every game that adds
+        // `JackdawPlugin` answers. The dump waits for the rest of the app
+        // to finish building, where the game's events and functions get
+        // registered, and exits before `App::run` opens a window.
+        schema_cli::extract_schema_and_exit_if_requested(app);
 
         // Sidecars and the catalog are read from the filesystem rather than
         // through the asset server, so the folder Bevy reads assets from is
@@ -140,7 +143,35 @@ impl Plugin for JackdawPlugin {
         app.add_plugins(jackdaw_scene_types::SceneTypesPlugin {
             runtime_mesh_rebuild: true,
         });
-        app.add_plugins(jackdaw_ui::JackdawUiPlugin::default());
+
+        // A world scene can carry a prefab instance, so the game needs the
+        // vocabulary the instance is written in before it loads one.
+        app.add_plugins(jackdaw_prefab::PrefabTypesPlugin);
+
+        // Bindings authored on a widget travel in the scene document. The
+        // whole plugin goes in, unlike the editor's slim registration: a game
+        // has no preview mode to gate evaluation behind.
+        app.add_plugins(jackdaw_bind::JackdawBindPlugin);
+
+        // Widget markers are built from their reflected defaults on load and
+        // widgets answer a click through global observers, neither of which
+        // `bevy_ui_widgets` supplies. Everything a scene spawns is authored
+        // content, so the gate marker goes on unconditionally in `spawn_node`.
+        app.add_plugins(jackdaw_widgets_runtime::AuthoredWidgetPlugin);
+
+        // Neither crate can name the other's half of a text binding: bevy has
+        // no reflectable text value, and the evaluator does not depend on the
+        // crate that supplies one. This is where the two meet: where a string
+        // binding writes, and which half runs first. The order is declared
+        // explicitly, though the evaluator being exclusive settles either
+        // order on its own.
+        app.insert_resource(jackdaw_bind::ValueTextTarget(jackdaw_bind::BindPath::new(
+            jackdaw_widgets_runtime::text_value_write_path(),
+        )));
+        app.configure_sets(
+            PostUpdate,
+            jackdaw_widgets_runtime::AuthoredTextSystems.after(jackdaw_bind::BindEvaluationSystems),
+        );
 
         app.init_asset::<JackdawScene>()
             .init_asset_loader::<JackdawSceneLoader>()
@@ -272,6 +303,15 @@ pub struct JackdawSceneRoot(pub Handle<JackdawScene>);
 ///
 /// UI canvases must remain ECS roots for Bevy layout, so [`ChildOf`] cannot be
 /// used as their ownership relation.
+///
+/// This bounds where a screen's bindings find their subject. A
+/// `jackdaw_bind::BindContext` names the entity a widget's paths read from,
+/// and a widget inherits the nearest one above it through `ChildOf`; a loaded
+/// scene's roots are not children of the entity carrying
+/// [`JackdawSceneRoot`], so a context put on the handle entity is inherited by
+/// nothing. A game gives its screen a subject by marking the document's root
+/// with a component of its own, then inserting the context on the entity
+/// carrying that marker once the scene has spawned.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JackdawSceneMember {
     /// The [`JackdawSceneRoot`] that owns this entity.
@@ -283,6 +323,21 @@ struct SceneInstanceMembers(Vec<Entity>);
 
 #[derive(Component)]
 struct SceneSpawned;
+
+/// Marks a scene root the loader would not spawn.
+///
+/// A refused scene and a scene that held nothing both leave the root with no
+/// children, and a game that shows a screen when its scene arrives has to tell
+/// the two apart. This says the loader stopped, whichever way it stopped: the
+/// file failed to load at all, the document would not parse, or it names
+/// components the engine does not have. The reason is in the log, and the game
+/// can offer its own fallback rather than wait for entities that are never
+/// coming.
+///
+/// The marker describes one load attempt, not the root forever: the next load
+/// of a corrected file removes it.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SceneRefused;
 
 #[derive(TypePath, Default)]
 struct JackdawSceneLoader;
@@ -311,7 +366,13 @@ impl AssetLoader for JackdawSceneLoader {
         // error rather than silently spawning nothing later. The document is
         // rebuilt from `bsn` on spawn (it owns a `World` and cannot be stored
         // in the asset).
-        parse_bsn_text(text).map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
+        let ast = parse_bsn_text(text).map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
+
+        // A document naming a component the engine does not have would load as
+        // a scene missing part of itself, so the load fails here by name
+        // instead. The editor refuses the same document on open.
+        jackdaw_bsn::reject_retired_ui_components(&ast)
+            .map_err(|e| JackdawLoadError::RetiredComponents(e.to_string()))?;
 
         let source_path = load_context.path().path();
         let parent_path = source_path.parent().unwrap_or(Path::new("")).to_owned();
@@ -337,6 +398,10 @@ pub enum JackdawLoadError {
     Io(String),
     #[error("Parse error: {0}")]
     Parse(String),
+    /// The document names components the engine does not have, so loading it
+    /// would hand the game a scene missing part of itself.
+    #[error("{0}")]
+    RetiredComponents(String),
 }
 
 /// On `JackdawScene` change, despawn the previously-spawned
@@ -376,6 +441,17 @@ fn clear_modified_scene_roots(
     }
 }
 
+/// Why the asset server gave up on a scene, when it has.
+///
+/// A load still in progress answers `None`, so a scene arriving late is not
+/// mistaken for one that was refused.
+fn scene_load_failure(world: &World, handle: &Handle<JackdawScene>) -> Option<String> {
+    match world.get_resource::<AssetServer>()?.get_load_state(handle) {
+        Some(bevy::asset::LoadState::Failed(err)) => Some(err.to_string()),
+        _ => None,
+    }
+}
+
 fn cleanup_orphaned_scene_members(
     members: Query<(Entity, &JackdawSceneMember)>,
     roots: Query<(), With<JackdawSceneRoot>>,
@@ -398,26 +474,73 @@ pub(crate) fn spawn_loaded_scenes(
         .collect();
 
     for (root_entity, handle) in to_spawn {
-        let (bsn, parent_path, stem) = {
+        // Reaching here is a fresh attempt, since the reload path removes
+        // `SceneSpawned` when the document changes, so the previous attempt's
+        // verdict does not carry over.
+        if world.get::<SceneRefused>(root_entity).is_some() {
+            world.entity_mut(root_entity).remove::<SceneRefused>();
+        }
+
+        let loaded = {
             let scenes = world.resource::<Assets<JackdawScene>>();
-            let Some(scene) = scenes.get(&handle) else {
-                continue;
-            };
-            (
-                scene.bsn.clone(),
-                scene.parent_path.clone(),
-                scene.stem.clone(),
-            )
+            scenes.get(&handle).map(|scene| {
+                (
+                    scene.bsn.clone(),
+                    scene.parent_path.clone(),
+                    scene.stem.clone(),
+                )
+            })
+        };
+        let Some((bsn, parent_path, stem)) = loaded else {
+            // Either it has not arrived yet or it never will. A document the
+            // asset loader refuses, a retired type being the common case,
+            // fails there, so nothing reaches the gates below and the root
+            // would sit empty with nothing to say why.
+            if let Some(err) = scene_load_failure(world, &handle) {
+                warn!("Cannot spawn scene: {err}");
+                world
+                    .entity_mut(root_entity)
+                    .insert((SceneSpawned, SceneRefused));
+            }
+            continue;
         };
 
         let ast = match parse_bsn_text(&bsn) {
             Ok(ast) => ast,
             Err(err) => {
                 warn!("Failed to parse scene .bsn: {err}");
-                world.entity_mut(root_entity).insert(SceneSpawned);
+                world
+                    .entity_mut(root_entity)
+                    .insert((SceneSpawned, SceneRefused));
                 continue;
             }
         };
+
+        // Names this scene in anything the prefab pass has to refuse. A game
+        // loading several scenes at once gets one warning per scene otherwise,
+        // with nothing in it to say which one degraded.
+        let scene_name = match stem.as_deref().filter(|s| !s.is_empty()) {
+            Some(stem) => parent_path
+                .join(format!("{stem}.bsn"))
+                .display()
+                .to_string(),
+            None => "a scene built in memory".to_string(),
+        };
+        let ast = resolve_prefab_references(world, ast, &parent_path, &scene_name);
+
+        // The asset loader refuses a retired document on the way in, but a
+        // scene can also reach here as in-memory text through
+        // `JackdawScene::new`. Spawning is the one place every route meets,
+        // so the refusal is repeated here rather than trusted upstream, and it
+        // reads the resolved document, because a prefab base can hand the
+        // retired vocabulary to an instance whose own file never names it.
+        if let Err(err) = jackdaw_bsn::reject_retired_ui_components(&ast) {
+            warn!("Cannot spawn scene '{scene_name}': {err}");
+            world
+                .entity_mut(root_entity)
+                .insert((SceneSpawned, SceneRefused));
+            continue;
+        }
 
         let members = spawn_scene_entities(world, root_entity, &ast, &parent_path);
         world
@@ -451,6 +574,118 @@ pub(crate) fn spawn_loaded_scenes(
 
         world.entity_mut(root_entity).insert(SceneSpawned);
     }
+}
+
+/// Materialize the prefab instances a scene document names.
+///
+/// A scene stores an instance as an `IsA` pointing at another document,
+/// relative to the scene's own directory, plus only the fields that differ
+/// from what it inherits. Resolving turns that reference into the entities it
+/// stands for before anything spawns.
+///
+/// Fail-soft, like every other refusal on this path: a scene whose references
+/// cannot be followed (a source that is missing, one outside the asset root, a
+/// cycle, a chain past [`jackdaw_prefab::MAX_PREFAB_DEPTH`]) spawns as
+/// authored, with the reason and the scene named, rather than not at all.
+///
+/// A game follows references only inside its own asset root. A scene file is
+/// shipped content a player can edit or replace, and a reference is an
+/// instruction to open and parse whatever it names, so one pointing up and out
+/// would let a scene read any file the process can. The editor is laxer; see
+/// the module doc on `jackdaw_prefab::source`.
+fn resolve_prefab_references(
+    world: &World,
+    mut ast: SceneBsnAst,
+    parent_path: &Path,
+    scene_name: &str,
+) -> SceneBsnAst {
+    if ast
+        .entities_with_component(jackdaw_prefab::ISA_TYPE)
+        .is_empty()
+    {
+        return ast;
+    }
+    let Some(assets_root) = assets_root(world) else {
+        warn!(
+            "Scene '{scene_name}' references a prefab but no asset root was found; \
+             spawning it as authored"
+        );
+        return ast;
+    };
+    let assets_root = jackdaw_prefab::normalize_path(&assets_root);
+    jackdaw_prefab::absolutize_isa_sources(&mut ast, &assets_root.join(parent_path));
+
+    let sources = match read_prefab_sources(&ast, &assets_root, scene_name) {
+        Ok(sources) => sources,
+        Err(outside) => {
+            warn!(
+                "Scene '{scene_name}' references the prefab {} from outside the asset root {}; \
+                 refusing to read it, and spawning the scene as authored",
+                outside.display(),
+                assets_root.display()
+            );
+            return ast;
+        }
+    };
+    let get_prefab = |path: &Path| sources.get(path);
+    match jackdaw_prefab::resolve_scene(&ast, &get_prefab) {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            warn!(
+                "Prefab resolution failed for scene '{scene_name}': {err}; spawning it as authored"
+            );
+            ast
+        }
+    }
+}
+
+/// Read every prefab document `ast` reaches, directly or through another
+/// prefab, keyed by the file each one came from.
+///
+/// Sources are normalized to real paths first, so a document already read is
+/// recognised as one and a loop between two prefabs ends here rather than
+/// spinning. A file that cannot be read is named and skipped; the resolver
+/// then refuses the reference to it.
+///
+/// A source outside `assets_root` returns `Err(source)` and stops the walk
+/// before that file is opened. Each source is checked as it comes off the
+/// queue rather than up front, so a prefab reached through another prefab is
+/// checked too.
+fn read_prefab_sources(
+    ast: &SceneBsnAst,
+    assets_root: &Path,
+    scene_name: &str,
+) -> Result<HashMap<PathBuf, SceneBsnAst>, PathBuf> {
+    let mut documents: HashMap<PathBuf, SceneBsnAst> = HashMap::new();
+    let mut pending = isa_sources(ast);
+    while let Some(path) = pending.pop() {
+        if documents.contains_key(&path) {
+            continue;
+        }
+        if !path.starts_with(assets_root) {
+            return Err(path);
+        }
+        match jackdaw_prefab::read_prefab_document(&path) {
+            Ok(document) => {
+                pending.extend(isa_sources(&document));
+                documents.insert(path, document);
+            }
+            Err(err) => warn!(
+                "Scene '{scene_name}': failed to read prefab {}: {err}",
+                path.display()
+            ),
+        }
+    }
+    Ok(documents)
+}
+
+/// The sources every `IsA` in `ast` names. Meaningful only once the document
+/// has been through `absolutize_isa_sources`.
+fn isa_sources(ast: &SceneBsnAst) -> Vec<PathBuf> {
+    ast.entities_with_component(jackdaw_prefab::ISA_TYPE)
+        .into_iter()
+        .filter_map(|node| jackdaw_prefab::read_isa_source(ast, node))
+        .collect()
 }
 
 /// Spawn a scene document's entities under `root_entity`.
@@ -579,7 +814,7 @@ fn spawn_node(
     let mut transform = Transform::default();
     let mut visibility = Visibility::default();
     let mut deferred: Vec<BsnPatch> = Vec::new();
-    let mut is_ui_canvas = false;
+    let mut is_ui_root = false;
 
     {
         let reg = registry.read();
@@ -606,8 +841,8 @@ fn spawn_node(
                                 visibility = v;
                             }
                         }
-                        Some(id) if id == TypeId::of::<UiCanvas>() => {
-                            is_ui_canvas = true;
+                        Some(id) if id == TypeId::of::<jackdaw_scene_types::UiSceneRoot>() => {
+                            is_ui_root = true;
                             deferred.push(patch.clone());
                         }
                         _ => deferred.push(patch.clone()),
@@ -618,8 +853,10 @@ fn spawn_node(
     }
 
     // GT / IV from the parent's already-final values + local overrides.
-    let unparented_canvas = is_document_root && is_ui_canvas;
-    let parent_gt = if unparented_canvas {
+    // A UI scene root must be a real ECS root: Bevy's layout only lays out
+    // `Node` trees that start at an unparented entity.
+    let unparented_ui_root = is_document_root && is_ui_root;
+    let parent_gt = if unparented_ui_root {
         GlobalTransform::IDENTITY
     } else {
         world
@@ -629,7 +866,7 @@ fn spawn_node(
     };
     let computed_gt = parent_gt.mul_transform(transform);
 
-    let parent_iv = if unparented_canvas {
+    let parent_iv = if unparented_ui_root {
         InheritedVisibility::VISIBLE
     } else {
         world
@@ -643,11 +880,19 @@ fn spawn_node(
         Visibility::Inherited => parent_iv,
     };
 
-    // One archetype move for all structural state.
+    // One archetype move for all structural state. `AuthoredWidget` rides
+    // along: a game has no chrome to tell apart, so everything a scene
+    // document spawns is authored content the widget observers answer for.
     let entity = world
-        .spawn((transform, visibility, computed_gt, computed_iv))
+        .spawn((
+            transform,
+            visibility,
+            computed_gt,
+            computed_iv,
+            jackdaw_widgets_runtime::AuthoredWidget,
+        ))
         .id();
-    if !unparented_canvas {
+    if !unparented_ui_root {
         world.entity_mut(entity).insert(ChildOf(parent_entity));
     }
     if is_document_root {
@@ -888,7 +1133,7 @@ fn filterable_twin(
     }
 }
 
-/// The images a `StandardMaterial` binds, across all of its texture slots.
+/// The images a `StandardMaterial` binds, over the slots every build has.
 #[cfg(feature = "render")]
 fn material_texture_ids(
     material: &StandardMaterial,
@@ -906,10 +1151,11 @@ fn material_texture_ids(
     .map(Handle::id)
 }
 
-/// Retags 16-bit `Uint` material textures as their filterable `Unorm` twins.
+/// Retags 16-bit `Uint` material textures as their filterable `Unorm`
+/// twins.
 ///
-/// The editor adds this plugin as well, so a pack of 16-bit maps renders the
-/// same in the editor and in the built game.
+/// The editor adds this plugin rather than keeping a copy of the retag, so a
+/// pack of 16-bit maps renders the same in the editor and in a built game.
 #[cfg(feature = "render")]
 pub struct MaterialTextureFormatPlugin;
 
@@ -925,11 +1171,11 @@ impl Plugin for MaterialTextureFormatPlugin {
 
 /// Retag every 16-bit `Uint` image a material binds as its `Unorm` twin.
 ///
-/// Rewrites the descriptor only: the texels already have the layout the twin
-/// declares. Runs after the asset events are published and before the render
-/// world extracts, so a depth map is never bound in the failing format. Both
-/// event streams are read, since an image may decode after the material naming
-/// it or before it.
+/// Descriptor only - the texels already have the layout the twin declares.
+/// Runs after the asset events are published and before the render world
+/// extracts, so a deep map is never bound in the format that would fail.
+/// Both event streams matter: an image may decode long after the material
+/// naming it, or the other way round.
 #[cfg(feature = "render")]
 fn promote_material_texture_formats(
     mut image_events: MessageReader<AssetEvent<Image>>,
@@ -1042,8 +1288,8 @@ fn load_project_catalog(world: &mut World) {
             let count = entries.len();
             let mut catalog = world.resource_mut::<JackdawCatalog>();
             for entry in entries {
-                // Scenes reference catalog assets as `@Name`. A material
-                // file already holding the name wins.
+                // Scenes reference catalog assets as `@Name`. A material file
+                // already holding the name wins over the inline entry.
                 catalog
                     .handles
                     .entry(format!("@{}", entry.name))
@@ -1059,7 +1305,8 @@ fn load_project_catalog(world: &mut World) {
 }
 
 /// Load every `assets/materials/*.material.bsn` into [`JackdawCatalog`] under
-/// its file stem. A file that fails to read or parse is logged and skipped.
+/// its file stem. A file that fails to read or parse is reported and skipped
+/// so one bad material never costs the rest.
 fn load_material_files(world: &mut World, dir: &Path) {
     let Ok(read_dir) = std::fs::read_dir(dir) else {
         return;
@@ -1111,6 +1358,11 @@ fn load_material_files(world: &mut World, dir: &Path) {
                 let Some(entry) = entries.into_iter().next() else {
                     continue;
                 };
+                // `StandardMaterial` exists only in a rendering build, so only
+                // there can the loaded asset be held against it. Without one
+                // the type is not registered either, so a material document
+                // fails its own load rather than reaching this far.
+                #[cfg(feature = "render")]
                 if entry.handle.type_id() != TypeId::of::<StandardMaterial>() {
                     warn!("{} is not a StandardMaterial", path.display());
                     continue;
@@ -1204,7 +1456,8 @@ mod material_file_tests {
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(dir.join("grass.material.bsn"), GRASS).expect("write");
         std::fs::write(dir.join("notes.txt"), "ignored").expect("write");
-        // A material file must hold a material; anything else is rejected.
+        // A material file must hold a material; anything else is rejected
+        // rather than published under a name scenes will reference.
         std::fs::write(
             dir.join("wrong.material.bsn"),
             "#wrong\nbevy_image::image::Image\n",
@@ -1261,8 +1514,8 @@ mod material_file_tests {
     }
 }
 
-/// The `Uint` retag, exercised through the plugin the editor and a built game
-/// both add.
+/// The one definition of the `Uint` retag, exercised through the plugin
+/// both the editor and a built game add.
 #[cfg(all(test, feature = "render"))]
 mod material_texture_format_tests {
     use super::*;
@@ -1326,7 +1579,7 @@ mod material_texture_format_tests {
         assert_eq!(format_of(&app, &gray_alpha), TextureFormat::Rg16Unorm);
     }
 
-    /// The texels are untouched; only the descriptor is rewritten.
+    /// The texels are what they were: only the descriptor is rewritten.
     #[test]
     fn promotion_leaves_the_texels_alone() {
         let mut app = promotion_app();
@@ -1349,7 +1602,7 @@ mod material_texture_format_tests {
     }
 
     /// An image no material binds keeps its format: an integer texture read
-    /// with `textureLoad` stays integer.
+    /// with `textureLoad` is meant to stay integer.
     #[test]
     fn an_image_no_material_binds_keeps_its_uint_format() {
         let mut app = promotion_app();
@@ -1360,8 +1613,8 @@ mod material_texture_format_tests {
         assert_eq!(format_of(&app, &unbound), TextureFormat::R16Uint);
     }
 
-    /// The image may decode before the material that names it, so the
-    /// material's own event sweeps the slots it claims.
+    /// The image may decode frames before the material that names it, so the
+    /// material's own event has to sweep the slots it just claimed.
     #[test]
     fn a_material_added_after_its_image_still_gets_it_promoted() {
         let mut app = promotion_app();

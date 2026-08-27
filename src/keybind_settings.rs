@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use jackdaw_commands::keybinds::{EditorAction, Keybind, KeybindRegistry};
 use jackdaw_feathers::{
-    button::{ButtonClickEvent, ButtonProps, ButtonVariant, button},
+    button::{
+        ButtonClickEvent, ButtonContentText, ButtonProps, ButtonVariant, button, button_caption,
+    },
     dialog::{
         CloseDialogEvent, DialogActionEvent, DialogChildrenSlot, EditorDialog, OpenDialogEvent,
     },
@@ -362,6 +364,7 @@ fn on_key_filter_click(
     mut registry: ResMut<KeybindRegistry>,
     recording: Res<KeybindRecordingState>,
     children_query: Query<&Children>,
+    captions: Query<(), With<ButtonContentText>>,
     mut texts: Query<&mut Text>,
 ) {
     let Ok(_) = key_filter_buttons.get(event.entity) else {
@@ -377,33 +380,50 @@ fn on_key_filter_click(
     if key_filter.active_key.is_some() {
         key_filter.active_key = None;
         key_filter.capturing = false;
-        set_button_text(event.entity, "Key: Any", &children_query, &mut texts);
+        set_button_text(
+            event.entity,
+            "Key: Any",
+            &children_query,
+            &captions,
+            &mut texts,
+        );
     } else if key_filter.capturing {
         key_filter.capturing = false;
         registry.recording = false;
-        set_button_text(event.entity, "Key: Any", &children_query, &mut texts);
+        set_button_text(
+            event.entity,
+            "Key: Any",
+            &children_query,
+            &captions,
+            &mut texts,
+        );
     } else {
         key_filter.capturing = true;
         registry.recording = true;
-        set_button_text(event.entity, "Press a key...", &children_query, &mut texts);
+        set_button_text(
+            event.entity,
+            "Press a key...",
+            &children_query,
+            &captions,
+            &mut texts,
+        );
     }
 }
 
-/// Set the text content of a button's first Text child.
+/// Write a caption into a button. The caption hangs in a clipping slot under
+/// the button rather than off it directly, so it is found by its own marker;
+/// walking the button's direct children finds nothing.
 fn set_button_text(
     button_entity: Entity,
     label: &str,
     children_query: &Query<&Children>,
+    captions: &Query<(), With<ButtonContentText>>,
     texts: &mut Query<&mut Text>,
 ) {
-    let Ok(children) = children_query.get(button_entity) else {
-        return;
-    };
-    for child in children.iter() {
-        if let Ok(mut text) = texts.get_mut(child) {
-            text.0 = label.to_string();
-            return;
-        }
+    if let Some(caption) = button_caption(button_entity, children_query, captions)
+        && let Ok(mut text) = texts.get_mut(caption)
+    {
+        text.0 = label.to_string();
     }
 }
 
@@ -415,6 +435,7 @@ fn capture_key_filter(
     recording: Res<KeybindRecordingState>,
     key_filter_btns: Query<Entity, With<KeyFilterButton>>,
     children_query: Query<&Children>,
+    captions: Query<(), With<ButtonContentText>>,
     mut texts: Query<&mut Text>,
 ) {
     if !key_filter.capturing {
@@ -429,7 +450,7 @@ fn capture_key_filter(
         key_filter.capturing = false;
         registry.recording = false;
         for btn in &key_filter_btns {
-            set_button_text(btn, "Key: Any", &children_query, &mut texts);
+            set_button_text(btn, "Key: Any", &children_query, &captions, &mut texts);
         }
         return;
     }
@@ -457,7 +478,7 @@ fn capture_key_filter(
             jackdaw_commands::keybinds::key_display_name(*key)
         );
         for btn in &key_filter_btns {
-            set_button_text(btn, &label, &children_query, &mut texts);
+            set_button_text(btn, &label, &children_query, &captions, &mut texts);
         }
         return;
     }
@@ -889,5 +910,103 @@ fn is_in_dialog(
             return false;
         };
         current = child_of.parent();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jackdaw_feathers::icons::{EditorFont, IconFont};
+
+    /// The filter button, ticked far enough for its caption to exist, with
+    /// the capture pass as the only system running.
+    fn app_with_filter_button() -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+            jackdaw_feathers::button::plugin,
+        ));
+        app.init_asset::<bevy::text::Font>();
+        app.init_resource::<bevy::input_focus::InputFocus>();
+        app.insert_resource(IconFont(Handle::default()));
+        app.insert_resource(EditorFont(Handle::default()));
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.init_resource::<ButtonInput<MouseButton>>();
+        app.init_resource::<KeyFilterState>();
+        app.init_resource::<KeybindRecordingState>();
+        app.init_resource::<KeybindRegistry>();
+        app.add_systems(Update, capture_key_filter);
+        let button_entity = app
+            .world_mut()
+            .spawn((
+                KeyFilterButton,
+                button(ButtonProps::new("Key: Any").with_variant(ButtonVariant::Default)),
+            ))
+            .id();
+        app.update();
+        app.update();
+        (app, button_entity)
+    }
+
+    /// What the button is currently drawing.
+    fn caption(app: &App, button_entity: Entity) -> String {
+        let mut stack = vec![button_entity];
+        while let Some(entity) = stack.pop() {
+            if app.world().get::<ButtonContentText>(entity).is_some()
+                && let Some(text) = app.world().get::<Text>(entity)
+            {
+                return text.0.clone();
+            }
+            if let Some(children) = app.world().get::<Children>(entity) {
+                stack.extend(children.iter());
+            }
+        }
+        panic!("the filter button draws a caption");
+    }
+
+    /// Armed capture has no other sign of itself: the button's caption is
+    /// the whole feedback, and it hangs in a clipping slot below the
+    /// button's direct children.
+    #[test]
+    fn a_captured_key_reaches_the_buttons_caption() {
+        let (mut app, button_entity) = app_with_filter_button();
+        assert_eq!(caption(&app, button_entity), "Key: Any");
+
+        app.world_mut().resource_mut::<KeyFilterState>().capturing = true;
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::F5);
+        app.update();
+
+        assert_eq!(
+            caption(&app, button_entity),
+            "Key: F5 (click to clear)",
+            "the captured key is what the button says it is filtering on",
+        );
+    }
+
+    /// Backing out of capture puts the resting caption back.
+    #[test]
+    fn cancelling_capture_puts_the_resting_caption_back() {
+        let (mut app, button_entity) = app_with_filter_button();
+        app.world_mut().resource_mut::<KeyFilterState>().capturing = true;
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::F5);
+        app.update();
+        assert_eq!(caption(&app, button_entity), "Key: F5 (click to clear)");
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.world_mut().resource_mut::<KeyFilterState>().capturing = true;
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        app.update();
+
+        assert_eq!(caption(&app, button_entity), "Key: Any");
     }
 }

@@ -32,11 +32,15 @@ serde_json = { workspace = true }
 
 [features]
 default = ["render"]
-# `render` is the full Bevy-facing build used by the editor: reflection, ECS
-# component derives, and StandardMaterial handles on faces. The engine-agnostic
-# core consumed by the Godot binding is the `--no-default-features` build:
-# glam + serde only, String materials, no derives.
-render = ["dep:bevy", "bevy/bevy_pbr", "bevy/bevy_render"]
+# `reflect` is the reflection and ECS-derive layer. Every consumer that puts
+# these types in a scene enables it, headless builds included, so the derives
+# do not depend on a render stack being present.
+reflect = ["dep:bevy"]
+# `render` is the full Bevy-facing build used by the editor: `reflect` plus
+# StandardMaterial handles on faces. The engine-agnostic core consumed by the
+# Godot binding is the `--no-default-features` build: glam + serde only,
+# String materials, no derives.
+render = ["reflect", "bevy/bevy_pbr", "bevy/bevy_render"]
 
 [lints]
 workspace = true

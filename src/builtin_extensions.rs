@@ -3,9 +3,23 @@
 //! same API third-party authors do. Disable one in File > Extensions
 //! to remove its windows from the layout.
 
-use bevy::prelude::*;
+use bevy::{
+    feathers::{
+        controls::ButtonVariant,
+        cursor::EntityCursor,
+        focus::FocusIndicator,
+        theme::{
+            InheritableThemeTextColor, ThemeBackgroundColor, ThemeBorderColor, ThemeTextColor,
+            ThemeToken, ThemedText,
+        },
+        tokens as feathers_tokens,
+    },
+    input_focus::tab_navigation::TabIndex,
+    prelude::*,
+    window::SystemCursorIcon,
+};
 use jackdaw_api::{
-    DefaultArea, ExtensionPoint, HierarchyWindow, InspectorWindow,
+    DefaultArea, ExtensionPoint, HierarchyWindow, InspectorWindow, WidgetDefinition,
     prelude::{ExtensionContext, ExtensionKind, JackdawExtension, WindowDescriptor},
 };
 use jackdaw_feathers::icons::Icon;
@@ -88,7 +102,7 @@ impl JackdawExtension for CoreWindowsExtension {
                                 font_size: tokens::TEXT_SIZE_SM,
                                 ..default()
                             },
-                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+                            TextColor(tokens::TEXT_DISABLED),
                         )],
                     ));
                 }),
@@ -223,17 +237,18 @@ impl JackdawExtension for ViewportExtension {
     }
 }
 
-/// Generic ECS-native UI authoring windows.
+/// 2D viewport, registered as a regular dock panel alongside the 3D one
+/// so a UI-authoring workspace can dock both side by side.
 #[derive(Default)]
-pub struct UiEditorExtension;
+pub struct Viewport2dExtension;
 
-impl JackdawExtension for UiEditorExtension {
+impl JackdawExtension for Viewport2dExtension {
     fn id(&self) -> String {
-        "jackdaw.ui_editor".to_string()
+        "jackdaw.viewport_2d_panel".to_string()
     }
 
     fn label(&self) -> String {
-        "UI Editor".to_string()
+        "2D Viewport".to_string()
     }
 
     fn kind(&self) -> ExtensionKind {
@@ -241,46 +256,15 @@ impl JackdawExtension for UiEditorExtension {
     }
 
     fn register(&self, ctx: &mut ExtensionContext) {
-        ctx.register_entity_icon("jackdaw_ui::UiCanvas", Icon::LayoutTemplate);
-        ctx.register_entity_icon("jackdaw_ui::UiButton", Icon::MousePointer);
-        ctx.register_entity_icon("jackdaw_ui::UiCheckbox", Icon::Check);
-        ctx.register_entity_icon("jackdaw_ui::UiToggle", Icon::ToggleLeft);
-        ctx.register_entity_icon("jackdaw_ui::UiSlider", Icon::SlidersHorizontal);
-        ctx.register_entity_icon("jackdaw_ui::UiTextInput", Icon::TextCursorInput);
-        for definition in [
-            crate::ui_authoring::canvas_definition(),
-            crate::ui_authoring::panel_definition(),
-            crate::ui_authoring::row_definition(),
-            crate::ui_authoring::column_definition(),
-            crate::ui_authoring::label_definition(),
-            crate::ui_authoring::button_definition(),
-            crate::ui_authoring::checkbox_definition(),
-            crate::ui_authoring::toggle_definition(),
-            crate::ui_authoring::slider_definition(),
-            crate::ui_authoring::text_input_definition(),
-        ] {
-            ctx.register_widget(definition);
-        }
+        crate::viewport_2d::add_to_extension(ctx);
         ctx.register_window(
-            WindowDescriptor::new(crate::ui_canvas::UI_CANVAS_WINDOW_ID)
-                .with_name("UI Canvas")
-                .with_icon(Icon::LayoutTemplate.unicode())
+            WindowDescriptor::new(crate::viewport_2d::VIEWPORT_2D_WINDOW_ID)
+                .with_name("2D Viewport")
                 .with_default_area(DefaultArea::Center)
                 .with_priority(1)
                 .with_build(|window| {
                     let parent = window.target_entity();
-                    crate::ui_canvas::build_ui_canvas_panel(window.world_mut(), parent);
-                }),
-        );
-        ctx.register_window(
-            WindowDescriptor::new(crate::ui_widgets_panel::UI_WIDGETS_WINDOW_ID)
-                .with_name("UI Widgets")
-                .with_icon(Icon::PanelsTopLeft.unicode())
-                .with_default_area(DefaultArea::Left)
-                .with_priority(2)
-                .with_build(|window| {
-                    let parent = window.target_entity();
-                    crate::ui_widgets_panel::build_ui_widgets_panel(window.world_mut(), parent);
+                    crate::viewport_2d::build_viewport_2d_panel(window.world_mut(), parent);
                 }),
         );
     }
@@ -428,7 +412,7 @@ impl JackdawExtension for TerminalExtension {
                                 font_size: tokens::TEXT_SIZE_SM,
                                 ..default()
                             },
-                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+                            TextColor(tokens::TEXT_DISABLED),
                         )],
                     ));
                 }),
@@ -483,7 +467,7 @@ impl JackdawExtension for InspectorExtension {
             WindowDescriptor::new("jackdaw.inspector.materials")
                 .with_name("Materials")
                 .with_default_area(DefaultArea::RightSidebar)
-                .with_priority(2)
+                .with_priority(3)
                 .with_build(|window| {
                     let icon_font = window
                         .world()
@@ -502,7 +486,7 @@ impl JackdawExtension for InspectorExtension {
             WindowDescriptor::new("jackdaw.inspector.resources")
                 .with_name("Resources")
                 .with_default_area(DefaultArea::RightSidebar)
-                .with_priority(3)
+                .with_priority(4)
                 .with_build(|window| {
                     window.spawn((
                         Node {
@@ -517,17 +501,25 @@ impl JackdawExtension for InspectorExtension {
                                 font_size: tokens::TEXT_SIZE_SM,
                                 ..default()
                             },
-                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+                            TextColor(tokens::TEXT_DISABLED),
                         )],
                     ));
                 }),
         );
 
         ctx.register_window(
+            WindowDescriptor::new(crate::preview_context::PREVIEW_CONTEXT_WINDOW_ID)
+                .with_name("Preview")
+                .with_default_area(DefaultArea::RightSidebar)
+                .with_priority(2)
+                .with_build(crate::preview_context::build_preview_context_panel),
+        );
+
+        ctx.register_window(
             WindowDescriptor::new("jackdaw.inspector.systems")
                 .with_name("Systems")
                 .with_default_area(DefaultArea::RightSidebar)
-                .with_priority(4)
+                .with_priority(5)
                 .with_build(|window| {
                     window.spawn((
                         Node {
@@ -542,12 +534,433 @@ impl JackdawExtension for InspectorExtension {
                                 font_size: tokens::TEXT_SIZE_SM,
                                 ..default()
                             },
-                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+                            TextColor(tokens::TEXT_DISABLED),
                         )],
                     ));
                 }),
         );
     }
+}
+
+/// The UI widget vocabulary the Add menu's UI Widgets section lists.
+///
+/// # Bevy UI components rather than feathers controls
+///
+/// A UI widget is authored content: it is written into the scene document and
+/// spawned again from that document on load. The `bevy_feathers` controls do
+/// not survive that round trip. They are `SceneComponent`s, which only
+/// `spawn_scene` can materialise; re-inserting one from a reflected patch logs
+/// an error and leaves a bare marker. The editor's save policy also skips the
+/// `bevy_feathers::` prefix as widget implementation detail. The definitions
+/// below therefore assemble `bevy_ui` and `bevy_ui_widgets`.
+///
+/// # Theming
+///
+/// The feathers styling components are plain `Reflect` components:
+/// `ThemeBackgroundColor`, `ThemeBorderColor`, `ThemeTextColor`,
+/// `InheritableThemeTextColor`, `ButtonVariant`, `FocusIndicator`, and
+/// `EntityCursor`. A definition spawns them directly, and
+/// [`crate::scene_io`]'s always-save list carries them through a round trip, so
+/// a UI widget names a design token rather than a colour and is repainted when
+/// the theme changes.
+///
+/// The dynamic styling of the multi-entity controls does not carry over.
+/// `update_button_styles` operates on one entity, so a button gets its full
+/// hover, pressed, disabled, and focus treatment. A checkbox, radio, or toggle
+/// switch drives its checked and hover states from generated children
+/// (`CheckboxMark`, `RadioOutline`, `ToggleSwitchSlide`) whose marker types are
+/// private to feathers, so those widgets get the theme-token surface
+/// (background, border, focus ring, cursor) and nothing that responds to
+/// `Checked`.
+///
+/// Value behaviour comes from [`crate::authored_widgets`], which attaches the
+/// `bevy_ui_widgets` self-update observers globally.
+#[derive(Default)]
+pub struct UiPaletteExtension;
+
+impl JackdawExtension for UiPaletteExtension {
+    fn id(&self) -> String {
+        "jackdaw.ui_palette".to_string()
+    }
+
+    fn label(&self) -> String {
+        "UI Widgets".to_string()
+    }
+
+    fn kind(&self) -> ExtensionKind {
+        ExtensionKind::Builtin
+    }
+
+    fn register(&self, ctx: &mut ExtensionContext) {
+        for definition in builtin_widget_definitions() {
+            ctx.register_widget(definition);
+        }
+    }
+}
+
+/// Spawn one authored widget under the resolved parent.
+fn spawn_widget(world: &mut World, parent: Option<Entity>, bundle: impl Bundle) -> Entity {
+    let mut entity = world.spawn(bundle);
+    if let Some(parent) = parent {
+        entity.insert(ChildOf(parent));
+    }
+    entity.id()
+}
+
+/// A container preset: a `Node` plus the theme token that makes it a surface.
+/// `None` spawns a transparent background instead, which the theme leaves
+/// alone.
+fn container_definition(
+    id: &'static str,
+    name: &'static str,
+    icon: Icon,
+    node: fn() -> Node,
+    surface: Option<ThemeToken>,
+) -> WidgetDefinition {
+    WidgetDefinition::new(id, name, "Layout", move |world, context| {
+        let entity = spawn_widget(world, context.parent, (Name::new(name), node()));
+        match surface.clone() {
+            Some(token) => world.entity_mut(entity).insert(ThemeBackgroundColor(token)),
+            None => world
+                .entity_mut(entity)
+                .insert(BackgroundColor(Color::NONE)),
+        };
+        Ok(entity)
+    })
+    .with_icon(icon)
+}
+
+/// The widgets Jackdaw ships in the Add menu.
+///
+/// Each is a single entity, except the button, whose caption is a child because
+/// `InheritableThemeTextColor` colours descendants and not the entity holding
+/// it. No other definition spawns children.
+fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
+    use bevy::ui_widgets::{
+        Button, Checkbox, RadioButton, ScrollArea, Slider, SliderRange, SliderValue,
+    };
+
+    vec![
+        container_definition(
+            "ui.panel",
+            "Panel",
+            Icon::PanelTop,
+            || Node {
+                min_width: px(160),
+                min_height: px(120),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(px(8)),
+                row_gap: px(6),
+                ..default()
+            },
+            Some(feathers_tokens::PANE_BODY_BG),
+        ),
+        container_definition(
+            "ui.row",
+            "Row",
+            Icon::Columns3,
+            || Node {
+                min_width: px(160),
+                min_height: px(32),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(6),
+                ..default()
+            },
+            None,
+        ),
+        container_definition(
+            "ui.column",
+            "Column",
+            Icon::Rows3,
+            || Node {
+                min_width: px(120),
+                min_height: px(80),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(6),
+                ..default()
+            },
+            None,
+        ),
+        container_definition(
+            "ui.grid",
+            "Grid",
+            Icon::Grid3x3,
+            || Node {
+                min_width: px(160),
+                min_height: px(120),
+                display: Display::Grid,
+                grid_template_columns: RepeatedGridTrack::flex(2, 1.0),
+                row_gap: px(6),
+                column_gap: px(6),
+                ..default()
+            },
+            None,
+        ),
+        // `ThemeTextColor` rather than the inheritable variant: this entity
+        // holds the text itself, and the inheritable one reaches descendants.
+        WidgetDefinition::new("ui.label", "Label", "Display", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Label"),
+                    Text::new("Label"),
+                    TextFont {
+                        font_size: FontSize::Px(16.0),
+                        ..default()
+                    },
+                    ThemeTextColor(feathers_tokens::TEXT_MAIN),
+                ),
+            ))
+        })
+        .with_icon(Icon::Type),
+        WidgetDefinition::new("ui.image", "Image", "Display", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Image"),
+                    Node {
+                        width: px(96),
+                        height: px(96),
+                        ..default()
+                    },
+                    ImageNode::default(),
+                ),
+            ))
+        })
+        .with_icon(Icon::Image),
+        // The one widget feathers styles entirely on one entity:
+        // `update_button_styles` reads `ButtonVariant`, `Hovered`,
+        // `ThemeBackgroundColor`, and `InheritableThemeTextColor` from the
+        // button itself, so an authored button gets hover, pressed, disabled,
+        // and focus treatment. The caption is a child because the inheritable
+        // text colour propagates downward only.
+        WidgetDefinition::new("ui.button", "Button", "Controls", |world, context| {
+            let button = spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Button"),
+                    Node {
+                        min_width: px(96),
+                        min_height: px(32),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        padding: UiRect::axes(px(12), px(6)),
+                        border_radius: BorderRadius::all(tokens::CORNER_RADIUS_LG),
+                        ..default()
+                    },
+                    Button,
+                    ButtonVariant::Normal,
+                    TabIndex(0),
+                    FocusIndicator,
+                    EntityCursor::System(SystemCursorIcon::Pointer),
+                    ThemeBackgroundColor(feathers_tokens::BUTTON_BG),
+                    InheritableThemeTextColor(feathers_tokens::BUTTON_TEXT),
+                ),
+            );
+            world.spawn((
+                Name::new("Caption"),
+                Text::new("Button"),
+                ThemedText,
+                TextLayout {
+                    justify: Justify::Center,
+                    ..default()
+                },
+                TextFont {
+                    font_size: FontSize::Px(14.0),
+                    ..default()
+                },
+                ChildOf(button),
+            ));
+            Ok(button)
+        })
+        .with_icon(Icon::MousePointerClick),
+        // Unchecked is the absence of `Checked`, so a fresh checkbox spawns
+        // without it.
+        //
+        // The tokens are the ones feathers puts on its checkbox outline child,
+        // which this one-entity checkbox stands in for. The state treatment
+        // does not come along: the checked and hover tokens are switched by
+        // systems that query private marker types, so this box keeps its
+        // resting colours whatever `Checked` says.
+        WidgetDefinition::new("ui.checkbox", "Checkbox", "Controls", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Checkbox"),
+                    Node {
+                        width: px(18),
+                        height: px(18),
+                        border: UiRect::all(px(2)),
+                        border_radius: BorderRadius::all(tokens::CORNER_RADIUS),
+                        ..default()
+                    },
+                    Checkbox,
+                    TabIndex(0),
+                    FocusIndicator,
+                    EntityCursor::System(SystemCursorIcon::Pointer),
+                    ThemeBackgroundColor(feathers_tokens::CHECKBOX_BG),
+                    ThemeBorderColor(feathers_tokens::CHECKBOX_BORDER),
+                ),
+            ))
+        })
+        .with_icon(Icon::SquareCheck),
+        // A radio spawns without `Checked` and outside a `RadioGroup`, since
+        // which radios belong together is a structural authoring decision. Its
+        // ring is the only part feathers themes on one entity; the filled mark
+        // is a generated child.
+        //
+        // A radio on its own therefore never self-updates: `bevy_ui_widgets`
+        // addresses a radio change to the group, so the observer in
+        // `crate::authored_widgets` does nothing until a `RadioGroup` ancestor
+        // exists, which is added through the inspector.
+        WidgetDefinition::new("ui.radio", "Radio Button", "Controls", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Radio Button"),
+                    Node {
+                        width: px(18),
+                        height: px(18),
+                        border: UiRect::all(px(2)),
+                        border_radius: BorderRadius::all(px(9)),
+                        ..default()
+                    },
+                    RadioButton,
+                    TabIndex(0),
+                    FocusIndicator,
+                    EntityCursor::System(SystemCursorIcon::Pointer),
+                    BackgroundColor(Color::NONE),
+                    ThemeBorderColor(feathers_tokens::RADIO_BORDER),
+                ),
+            ))
+        })
+        .with_icon(Icon::CircleDot),
+        // The feathers toggle switch carries these two tokens on its root, so
+        // the authored one matches it at rest; the sliding knob is the
+        // generated child this lacks.
+        WidgetDefinition::new(
+            "ui.toggle",
+            "Toggle Switch",
+            "Controls",
+            |world, context| {
+                Ok(spawn_widget(
+                    world,
+                    context.parent,
+                    (
+                        Name::new("Toggle Switch"),
+                        Node {
+                            width: px(40),
+                            height: px(22),
+                            border: UiRect::all(px(2)),
+                            border_radius: BorderRadius::all(px(11)),
+                            ..default()
+                        },
+                        Checkbox,
+                        TabIndex(0),
+                        FocusIndicator,
+                        EntityCursor::System(SystemCursorIcon::Pointer),
+                        ThemeBackgroundColor(feathers_tokens::SWITCH_BG),
+                        ThemeBorderColor(feathers_tokens::SWITCH_BORDER),
+                    ),
+                ))
+            },
+        )
+        .with_icon(Icon::ToggleLeft),
+        // `SliderValue` and `SliderRange` are spawned explicitly rather than
+        // left to `Slider`'s required components, so the document states the
+        // displayed value rather than inheriting an upstream default. The
+        // track takes the theme token; the filled bar is a generated child
+        // feathers styles privately.
+        WidgetDefinition::new("ui.slider", "Slider", "Controls", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Slider"),
+                    Node {
+                        width: px(180),
+                        height: px(16),
+                        border_radius: BorderRadius::all(px(8)),
+                        ..default()
+                    },
+                    Slider::default(),
+                    SliderValue(0.0),
+                    SliderRange::new(0.0, 1.0),
+                    TabIndex(0),
+                    FocusIndicator,
+                    ThemeBackgroundColor(feathers_tokens::SLIDER_BG),
+                ),
+            ))
+        })
+        .with_icon(Icon::SlidersHorizontal),
+        WidgetDefinition::new(
+            "ui.text_input",
+            "Text Input",
+            "Controls",
+            |world, context| {
+                Ok(spawn_widget(
+                    world,
+                    context.parent,
+                    (
+                        Name::new("Text Input"),
+                        Node {
+                            width: px(200),
+                            min_height: px(28),
+                            padding: UiRect::axes(px(8), px(4)),
+                            border_radius: BorderRadius::all(tokens::CORNER_RADIUS),
+                            ..default()
+                        },
+                        bevy::text::EditableText::default(),
+                        // `EditableText` is not reflectable, so the document
+                        // carries the text here instead; the widget crate
+                        // keeps the two in sync.
+                        jackdaw_widgets_runtime::TextValue::default(),
+                        TextFont {
+                            font_size: FontSize::Px(14.0),
+                            ..default()
+                        },
+                        TabIndex(0),
+                        FocusIndicator,
+                        EntityCursor::System(SystemCursorIcon::Text),
+                        ThemeTextColor(feathers_tokens::TEXT_INPUT_TEXT),
+                        ThemeBackgroundColor(feathers_tokens::TEXT_INPUT_BG),
+                    ),
+                ))
+            },
+        )
+        .with_icon(Icon::TextCursorInput),
+        WidgetDefinition::new(
+            "ui.scroll_area",
+            "Scroll Area",
+            "Controls",
+            |world, context| {
+                Ok(spawn_widget(
+                    world,
+                    context.parent,
+                    (
+                        Name::new("Scroll Area"),
+                        Node {
+                            width: px(220),
+                            height: px(160),
+                            flex_direction: FlexDirection::Column,
+                            overflow: Overflow::scroll_y(),
+                            row_gap: px(4),
+                            ..default()
+                        },
+                        ScrollArea,
+                        ThemeBackgroundColor(feathers_tokens::PANE_BODY_BG),
+                    ),
+                ))
+            },
+        )
+        .with_icon(Icon::ScrollText),
+    ]
 }
 
 #[cfg(test)]

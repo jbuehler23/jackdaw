@@ -204,7 +204,11 @@ impl JackdawExtension for JackdawCoreExtension {
         ctx.register_operator::<CancelModalOp>();
         ctx.register_operator::<crate::asset_browser::ApplyTextureOp>();
         ctx.register_operator::<crate::WindowOpenOp>()
-            .register_operator::<crate::WindowResetLayoutOp>();
+            .register_operator::<crate::WindowResetLayoutOp>()
+            .register_operator::<crate::MenuOpenOp>()
+            .register_operator::<crate::MenuHoverOp>()
+            .register_operator::<crate::ProjectOpenRecentOp>()
+            .register_operator::<crate::PreviewSetOp>();
         ctx.register_operator::<crate::ClipDeleteKeyframesOp>()
             .register_operator::<crate::ClipTimelineStepLeftOp>()
             .register_operator::<crate::ClipTimelineStepRightOp>()

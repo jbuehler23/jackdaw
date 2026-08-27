@@ -446,8 +446,8 @@ fn build_project(root: &Path) -> ExitCode {
     let jackdaw_dir = root.join(".jackdaw");
 
     println!("jackdaw build: building {}", root.display());
-    // Rendered diagnostics stream through the reporter; cargo's own
-    // "Compiling" status reaches the terminal on inherited stderr.
+    // Both accounts of the build reach the reporter: rustc's diagnostics
+    // parsed out of the JSON stream, and cargo's own stderr on a failure.
     let mut report = |event: BuildEvent| {
         if let BuildEvent::Log(line) = event {
             eprintln!("{line}");

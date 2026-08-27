@@ -33,7 +33,7 @@ use crate::{
     selection::{Selected, Selection},
 };
 use jackdaw_feathers::dialog::{DialogActionEvent, DialogChildrenSlot};
-use jackdaw_scene_types::Brush;
+use jackdaw_scene_types::{Brush, UiSceneRoot};
 
 /// Stores the default name for the prefab save dialog.
 #[derive(Resource, Default)]
@@ -103,6 +103,7 @@ impl Plugin for HierarchyPlugin {
             .init_resource::<HierarchyShowAll>()
             .init_resource::<RevealTarget>()
             .init_resource::<EntityIconRegistry>()
+            .init_resource::<RowsAwaitingRegistration>()
             .add_systems(Startup, setup_tree_node_expanded_watcher)
             .add_systems(OnEnter(crate::AppState::Editor), setup_name_watcher)
             .add_systems(
@@ -123,11 +124,17 @@ impl Plugin for HierarchyPlugin {
             )
             .add_systems(
                 PostUpdate,
-                rebuild_hierarchy_on_container_added
+                (
+                    rebuild_hierarchy_on_container_added,
+                    // Row maintenance, so it runs wherever the row-spawn
+                    // observers do rather than only in the Editor state.
+                    spawn_rows_for_late_registrations,
+                )
                     .after(jackdaw_widgets::tree_view::maintain_tree_index),
             )
             .add_observer(handle_inline_rename_commit)
             .add_observer(on_root_entity_added)
+            .add_observer(on_ui_root_added)
             .add_observer(on_entity_reparented)
             .add_observer(on_entity_deparented)
             .add_observer(on_tree_node_expanded)
@@ -198,9 +205,14 @@ fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
     if world.get::<Mesh3d>(entity).is_some() {
         return EntityCategory::Mesh;
     }
+    // A UI scene root takes the same category as a 3D one, so the two sort
+    // together in the outliner.
     if world
         .get::<jackdaw_scene_types::SceneRootTag>(entity)
         .is_some()
+        || world
+            .get::<jackdaw_scene_types::UiSceneRoot>(entity)
+            .is_some()
     {
         return EntityCategory::Scene;
     }
@@ -292,10 +304,123 @@ fn is_outliner_child(world: &World, child: Entity) -> bool {
     world.get_entity(child).is_ok()
         && world.get::<EditorEntity>(child).is_none()
         && world.get::<EditorHidden>(child).is_none()
-        && world.get::<jackdaw_ui::UiGeneratedPart>(child).is_none()
         && world
             .get::<jackdaw_scene_types::DerivedFaceMesh>(child)
             .is_none()
+        && !is_generated_part(world, child)
+}
+
+/// Whether `child` is a part some widget or plugin generated under an
+/// authored node rather than something the user placed.
+///
+/// The document is the test. A child the scene document has no node for,
+/// hanging off a parent it does have one for, was made after the parent was
+/// authored and will not survive a save, so it gets no row to select and
+/// edit. A UI widget assembled from several entities is the common case.
+///
+/// When the parent is *also* absent from the document (the whole live PIE
+/// tree, an unsaved scratch hierarchy) nothing was authored and the rule does
+/// not apply. "Show All" turns it off entirely.
+fn is_generated_part(world: &World, child: Entity) -> bool {
+    if world
+        .get_resource::<HierarchyShowAll>()
+        .is_some_and(|show_all| show_all.0)
+    {
+        return false;
+    }
+    let Some(document) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
+        return false;
+    };
+    let Some(parent) = world.get::<ChildOf>(child).map(ChildOf::parent) else {
+        return false;
+    };
+    document.ast_for(child).is_none() && document.ast_for(parent).is_some()
+}
+
+/// Children whose row was withheld because the document had no node for them
+/// *yet*, each paired with the `TreeRowChildren` container the row belongs
+/// under.
+///
+/// Authored entities can be parented first and registered later: a new
+/// animation clip registers from an `Update` system a frame after it is
+/// spawned, and a load registers its entities after spawning them, with the
+/// row-spawn observers running in between. Judged then, those look like
+/// generated parts to [`is_generated_part`].
+///
+/// A withheld row is therefore remembered rather than dropped, and
+/// [`spawn_rows_for_late_registrations`] revisits the list whenever the
+/// document changes. A part that never registers stays on the list until its
+/// entity dies.
+#[derive(Resource, Default)]
+struct RowsAwaitingRegistration(Vec<(Entity, Entity)>);
+
+/// Remember a row this frame declined to spawn, in case the entity is only
+/// waiting for its document node.
+fn withhold_row(world: &mut World, children_container: Entity, child: Entity) {
+    let entry = (children_container, child);
+    let Some(mut pending) = world.get_resource_mut::<RowsAwaitingRegistration>() else {
+        return;
+    };
+    if !pending.0.contains(&entry) {
+        pending.0.push(entry);
+    }
+}
+
+/// Spawn the rows withheld from entities that have since joined the document.
+///
+/// Gated on the document actually changing, so a list holding real generated
+/// parts costs nothing between registrations.
+fn spawn_rows_for_late_registrations(
+    document: Res<jackdaw_bsn::SceneBsnAst>,
+    mut pending: ResMut<RowsAwaitingRegistration>,
+    live: Query<Entity>,
+    mut commands: Commands,
+) {
+    if pending.0.is_empty() || !document.is_changed() {
+        return;
+    }
+    let mut still_waiting = Vec::new();
+    for (children_container, child) in std::mem::take(&mut pending.0) {
+        if !live.contains(child) || !live.contains(children_container) {
+            continue;
+        }
+        if document.ast_for(child).is_none() {
+            still_waiting.push((children_container, child));
+            continue;
+        }
+        commands.queue(move |world: &mut World| {
+            spawn_withheld_row(world, children_container, child);
+        });
+    }
+    pending.0 = still_waiting;
+}
+
+/// Spawn one withheld row, re-checking everything that could have moved
+/// between the frame the row was withheld and this one.
+fn spawn_withheld_row(world: &mut World, children_container: Entity, child: Entity) {
+    if world.get_entity(children_container).is_err() || !is_outliner_child(world, child) {
+        return;
+    }
+    // The row this container belongs to must still be the child's parent; a
+    // reparent since the row was withheld is handled elsewhere.
+    let row = world
+        .get::<ChildOf>(children_container)
+        .map(ChildOf::parent);
+    let row_source = row
+        .and_then(|row| world.get::<TreeNode>(row))
+        .map(|node| node.0);
+    if row_source != world.get::<ChildOf>(child).map(ChildOf::parent) {
+        return;
+    }
+    if !world.resource::<HierarchyShowAll>().0 && world.get::<Name>(child).is_none() {
+        return;
+    }
+    if let Some(owner) = ancestor_hierarchy_root(world, children_container)
+        && world.resource::<TreeIndex>().contains(owner, child)
+    {
+        return;
+    }
+    spawn_single_tree_row(world, child, children_container);
 }
 
 /// Returns true if `entity` has `PrefabEntityId` but NOT `IsA` -- meaning
@@ -441,7 +566,7 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
         roots: &mut QueryState<
             Entity,
             (
-                Or<(With<Transform>, With<jackdaw_ui::UiCanvas>)>,
+                Or<(With<Transform>, With<UiSceneRoot>)>,
                 Without<EditorEntity>,
                 Without<EditorHidden>,
                 Without<ChildOf>,
@@ -457,8 +582,9 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
 
         // In Live mode the roots are the live preview entities whose parent is
         // not itself live, shown as-is (no Name/show-all filter). In Scene mode
-        // they are the authored root scene entities (Transform, no ChildOf, no
-        // editor markers), filtered by Name unless show-all is on.
+        // they are the authored root scene entities (Transform or UiSceneRoot,
+        // no ChildOf, no editor markers), filtered by Name unless show-all is
+        // on.
         let live = world
             .get_resource::<crate::pie_mirror::PieViewMode>()
             .copied()
@@ -669,15 +795,46 @@ fn on_root_entity_added(
     mut commands: Commands,
     tree_index: Res<TreeIndex>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
-    generated_ui_check: Query<(), With<jackdaw_ui::UiGeneratedPart>>,
     child_of_check: Query<(), With<ChildOf>>,
 ) {
-    let entity = trigger.event_target();
+    queue_root_row_spawn(
+        trigger.event_target(),
+        &mut commands,
+        &tree_index,
+        &editor_check,
+        &child_of_check,
+    );
+}
 
-    if editor_check.contains(entity)
-        || generated_ui_check.contains(entity)
-        || child_of_check.contains(entity)
-    {
+/// A UI scene root is a `bevy_ui` node: it carries `UiTransform`, never
+/// `Transform`, so [`on_root_entity_added`] cannot fire for it. This mirrors
+/// that observer on `UiSceneRoot`.
+fn on_ui_root_added(
+    trigger: On<Add, UiSceneRoot>,
+    mut commands: Commands,
+    tree_index: Res<TreeIndex>,
+    editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
+    child_of_check: Query<(), With<ChildOf>>,
+) {
+    queue_root_row_spawn(
+        trigger.event_target(),
+        &mut commands,
+        &tree_index,
+        &editor_check,
+        &child_of_check,
+    );
+}
+
+/// Queue a row spawn for `entity` in every Outliner panel, if it is
+/// still an unparented, non-editor root when the command flushes.
+fn queue_root_row_spawn(
+    entity: Entity,
+    commands: &mut Commands,
+    tree_index: &TreeIndex,
+    editor_check: &Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
+    child_of_check: &Query<(), With<ChildOf>>,
+) {
+    if editor_check.contains(entity) || child_of_check.contains(entity) {
         return;
     }
     if tree_index.contains_anywhere(entity) {
@@ -692,9 +849,6 @@ fn on_root_entity_added(
         if world.get::<EditorEntity>(entity).is_some()
             || world.get::<EditorHidden>(entity).is_some()
         {
-            return;
-        }
-        if world.get::<jackdaw_ui::UiGeneratedPart>(entity).is_some() {
             return;
         }
         // In named-only mode, skip entities without a Name
@@ -725,7 +879,6 @@ fn on_name_changed(
     content_query: Query<&Children, With<TreeRowContent>>,
     mut label_query: Query<&mut Text, With<TreeRowLabel>>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
-    generated_ui_check: Query<(), With<jackdaw_ui::UiGeneratedPart>>,
     child_of_check: Query<(), With<ChildOf>>,
 ) {
     let entity = trigger.event_target();
@@ -764,10 +917,7 @@ fn on_name_changed(
     } else {
         // No row exists anywhere yet. Spawn one per container if this
         // is a visible root.
-        if editor_check.contains(entity)
-            || generated_ui_check.contains(entity)
-            || child_of_check.contains(entity)
-        {
+        if editor_check.contains(entity) || child_of_check.contains(entity) {
             return;
         }
 
@@ -778,7 +928,6 @@ fn on_name_changed(
             }
             if world.get::<EditorEntity>(entity).is_some()
                 || world.get::<EditorHidden>(entity).is_some()
-                || world.get::<jackdaw_ui::UiGeneratedPart>(entity).is_some()
             {
                 return;
             }
@@ -906,7 +1055,6 @@ fn on_entity_reparented(
     mut commands: Commands,
     tree_index: Res<TreeIndex>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
-    generated_ui_check: Query<(), With<jackdaw_ui::UiGeneratedPart>>,
     tree_node_check: Query<(), With<TreeNode>>,
     child_of_query: Query<&ChildOf>,
     children_query: Query<&Children>,
@@ -916,10 +1064,7 @@ fn on_entity_reparented(
     let entity = trigger.event_target();
 
     // Skip editor/hidden entities and tree row UI entities
-    if editor_check.contains(entity)
-        || generated_ui_check.contains(entity)
-        || tree_node_check.contains(entity)
-    {
+    if editor_check.contains(entity) || tree_node_check.contains(entity) {
         return;
     }
 
@@ -986,6 +1131,15 @@ fn on_entity_reparented(
             }
             // In named-only mode, skip entities without a Name
             if !world.resource::<HierarchyShowAll>().0 && world.get::<Name>(entity).is_none() {
+                return;
+            }
+            // Same predicate the expansion path applies, so a part appearing
+            // under an already-expanded row is filtered like one under a
+            // collapsed row. A part awaiting its document node is remembered.
+            if !is_outliner_child(world, entity) {
+                if is_generated_part(world, entity) {
+                    withhold_row(world, parent_children_container_for_spawn, entity);
+                }
                 return;
             }
             spawn_single_tree_row(world, entity, parent_children_container_for_spawn);
@@ -1123,6 +1277,9 @@ fn on_tree_node_expanded(
         let mut child_data: Vec<(Entity, String, EntityCategory)> = Vec::new();
         for child in source_children {
             if !child_visible_in_mode(world, child, live, &live_set) {
+                if is_generated_part(world, child) {
+                    withhold_row(world, container, child);
+                }
                 continue;
             }
             // Skip children that already have a row under this
@@ -1155,6 +1312,13 @@ fn on_tree_node_expanded(
 
 /// Handle tree row click -> select the source entity.
 /// Plain click on selected entity -> deselect. Ctrl+Click -> toggle.
+///
+/// A double click on a prefab instance root opens the scene it inherits
+/// from, which is the only way to edit an imported UI scene: where it is
+/// instanced its tree is inherited, not authored. The timing state is a
+/// `Local` because nothing outside this observer reads it; the window
+/// matches the other double clicks in the editor (`viewport_select`, the
+/// asset browser).
 fn on_tree_row_clicked(
     event: On<TreeRowClicked>,
     mut commands: Commands,
@@ -1164,9 +1328,28 @@ fn on_tree_row_clicked(
     parent_query: Query<&ChildOf>,
     tree_nodes: Query<Entity, With<TreeNode>>,
     remote_check: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+    time: Res<Time>,
+    instances: Query<(), With<crate::prefab::IsA>>,
+    mut last_click: Local<Option<(Entity, f64)>>,
 ) {
     // Skip remote entity proxies, handled by entity_browser observer
     if remote_check.contains(event.source_entity) {
+        return;
+    }
+
+    // Resolved before the selection below: the first click of the pair
+    // already selected this row, so the second would read as a click on a
+    // selected row and deselect it. A consumed double click resets, so a
+    // third click starts a new pair rather than opening the source again.
+    let now = time.elapsed_secs_f64();
+    let doubled = matches!(*last_click, Some((entity, at))
+        if entity == event.source_entity && now - at < DOUBLE_CLICK_SECS);
+    *last_click = (!doubled).then_some((event.source_entity, now));
+    if doubled && instances.contains(event.source_entity) {
+        commands
+            .operator("prefab.open_source")
+            .param("entity", event.source_entity)
+            .call();
         return;
     }
 
@@ -1187,6 +1370,9 @@ fn on_tree_row_clicked(
         focused.0 = Some(tree_row);
     }
 }
+
+/// How long after a row click a second one still reads as a double click.
+const DOUBLE_CLICK_SECS: f64 = 0.4;
 
 /// When Selected is added, highlight the corresponding row in every
 /// Outliner panel.
@@ -1314,9 +1500,7 @@ fn on_tree_row_dropped(
                     cmd.execute(world);
                     world
                         .resource_mut::<CommandHistory>()
-                        .undo_stack
-                        .push(Box::new(cmd));
-                    world.resource_mut::<CommandHistory>().redo_stack.clear();
+                        .push_executed(Box::new(cmd));
                     return;
                 }
             }
@@ -1331,9 +1515,7 @@ fn on_tree_row_dropped(
         cmd.execute(world);
         world
             .resource_mut::<CommandHistory>()
-            .undo_stack
-            .push(Box::new(cmd));
-        world.resource_mut::<CommandHistory>().redo_stack.clear();
+            .push_executed(Box::new(cmd));
     });
 }
 
@@ -1366,9 +1548,7 @@ fn on_tree_row_dropped_on_root(
         cmd.execute(world);
         world
             .resource_mut::<CommandHistory>()
-            .undo_stack
-            .push(Box::new(cmd));
-        world.resource_mut::<CommandHistory>().redo_stack.clear();
+            .push_executed(Box::new(cmd));
     });
 
     // Move every Outliner panel's row for this source back under its
@@ -1834,14 +2014,74 @@ fn refresh_row_visibility_glyph(world: &mut World, entity: Entity, hidden: bool)
     }
 }
 
+/// Move one entity under another, the way dragging its outliner row does.
+///
+/// Both targets are named rather than taken from the selection, which cannot
+/// say which of the two it means. The move goes through [`ReparentEntity`],
+/// so the outliner, the document, and one undo entry all follow from the same
+/// command a drop pushes.
+#[operator(
+    id = "entity.reparent",
+    label = "Reparent Entity",
+    description = "Move an entity under another entity.",
+    allows_undo = false,
+    params(
+        child(Entity, doc = "Entity to move."),
+        parent(Entity, doc = "Entity that adopts it."),
+    )
+)]
+pub(crate) fn entity_reparent(
+    params: In<OperatorParameters>,
+    parents: Query<&ChildOf>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let child = params.as_entity("child")?;
+    let parent = params.as_entity("parent")?;
+    if is_at_or_below(&parents, child, parent) {
+        // An operator call can name a parent no drag can reach; adopting an
+        // own ancestor is a cycle the document has no shape for.
+        warn!("entity.reparent: {parent} is inside {child}, so it cannot adopt it");
+        return OperatorResult::Cancelled;
+    }
+    commands.queue(move |world: &mut World| {
+        let old_parent = world.get::<ChildOf>(child).map(ChildOf::parent);
+        let mut cmd = ReparentEntity {
+            entity: child,
+            old_parent,
+            new_parent: Some(parent),
+        };
+        cmd.execute(world);
+        world
+            .resource_mut::<CommandHistory>()
+            .push_executed(Box::new(cmd));
+    });
+    OperatorResult::Finished
+}
+
+/// Whether `candidate` is `ancestor` itself or sits somewhere below it.
+fn is_at_or_below(parents: &Query<&ChildOf>, ancestor: Entity, candidate: Entity) -> bool {
+    let mut current = candidate;
+    loop {
+        if current == ancestor {
+            return true;
+        }
+        match parents.get(current) {
+            Ok(parent) => current = parent.parent(),
+            Err(_) => return false,
+        }
+    }
+}
+
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<RenameBeginOp>()
+    ctx.register_operator::<EntityReparentOp>()
+        .register_operator::<RenameBeginOp>()
         .register_operator::<HierarchyOpenContextMenuOp>()
         .register_operator::<PrefabSaveAsPrefabOp>()
         .register_operator::<PrefabSaveSceneAsPrefabOp>()
         .register_operator::<PrefabSaveAsVariantOp>()
         .register_operator::<crate::prefab::operators::PrefabSaveOp>()
         .register_operator::<crate::prefab::operators::PrefabSpawnInstanceOp>()
+        .register_operator::<crate::prefab::operators::PrefabOpenSourceOp>()
         .register_operator::<crate::prefab::operators::PrefabRevertFieldOp>()
         .register_operator::<crate::prefab::operators::PrefabRevertComponentOp>()
         .register_operator::<crate::prefab::operators::PrefabRevertAllOp>()
@@ -2500,8 +2740,12 @@ mod tests {
     fn scene_root_tag_classifies_as_scene() {
         let mut world = World::new();
         let root = world.spawn(jackdaw_scene_types::SceneRootTag).id();
+        let ui_root = world
+            .spawn(jackdaw_scene_types::UiSceneRoot::default())
+            .id();
         let plain = world.spawn_empty().id();
         assert_eq!(classify_entity(&world, root), EntityCategory::Scene);
+        assert_eq!(classify_entity(&world, ui_root), EntityCategory::Scene);
         assert_ne!(classify_entity(&world, plain), EntityCategory::Scene);
     }
 

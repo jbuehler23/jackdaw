@@ -1,0 +1,12 @@
+bevy_ecs::hierarchy::Children [
+    #Material_1
+    bevy_pbr::pbr_material::StandardMaterial
+    ,
+    #base_mesh
+    bevy_pbr::pbr_material::StandardMaterial
+    ,
+    #basemesh_male_m
+    bevy_pbr::pbr_material::StandardMaterial {
+        perceptual_roughness: 0.8999999761581421,
+    }
+]

@@ -16,6 +16,7 @@ pub fn plugin(app: &mut App) {
             (
                 setup_combobox,
                 handle_combobox_popover_closed,
+                apply_selected_index.before(sync_combobox_selection),
                 sync_combobox_selection,
             ),
         );
@@ -102,9 +103,30 @@ pub struct ComboBoxChangeEvent {
     pub value: Option<String>,
 }
 
-/// Selected index component for external mutation of combobox selection.
+/// Which option a combobox is showing, outside the widget. The config the
+/// widget reads is crate-private, so this is the only handle a caller has
+/// on the selection: write it and the trigger button repaints; read it
+/// back and it is what the user last picked.
+///
+/// Out-of-range values are ignored rather than clamped, so an index that
+/// names no option leaves the shown selection alone.
 #[derive(Component)]
 pub struct ComboBoxSelectedIndex(pub usize);
+
+/// Push an externally-set index into the widget's own config, where
+/// [`sync_combobox_selection`] picks it up and repaints the label.
+fn apply_selected_index(
+    mut combos: Query<
+        (&ComboBoxSelectedIndex, &mut ComboBoxConfig),
+        Changed<ComboBoxSelectedIndex>,
+    >,
+) {
+    for (index, mut config) in &mut combos {
+        if index.0 < config.options.len() && config.selected != index.0 {
+            config.selected = index.0;
+        }
+    }
+}
 
 pub fn combobox(options: Vec<impl Into<ComboBoxOptionData>>) -> impl Bundle {
     combobox_with_selected(options, 0)
@@ -401,7 +423,9 @@ fn handle_option_click(
     options: Query<&ComboBoxOption>,
     mut configs: Query<&mut ComboBoxConfig>,
     popovers: Query<(Entity, &ComboBoxPopover)>,
-    triggers: Query<(Entity, &ComboBoxTrigger, &Children)>,
+    triggers: Query<(Entity, &ComboBoxTrigger)>,
+    children: Query<&Children>,
+    captions: Query<(), With<crate::button::ButtonContentText>>,
     mut texts: Query<&mut Text>,
 ) {
     let Ok(option) = options.get(trigger.entity) else {
@@ -415,6 +439,12 @@ fn handle_option_click(
     let has_label_override = config.label_override.is_some();
     let is_icon_only = config.style == ComboBoxStyle::IconOnly;
     config.selected = option.index;
+    // Keep the outside-visible index on the user's own pick too, so a
+    // reader never sees a stale selection and a later write of the same
+    // index is not mistaken for a no-op.
+    commands
+        .entity(option.combobox)
+        .insert(ComboBoxSelectedIndex(option.index));
 
     commands.trigger(ComboBoxChangeEvent {
         entity: option.combobox,
@@ -425,15 +455,15 @@ fn handle_option_click(
 
     // Update trigger button text
     if !is_icon_only && !has_label_override {
-        for (_trigger_entity, combo_trigger, children) in &triggers {
+        for (trigger_entity, combo_trigger) in &triggers {
             if combo_trigger.0 != option.combobox {
                 continue;
             }
-            for child in children.iter() {
-                if let Ok(mut text) = texts.get_mut(child) {
-                    **text = option.label.clone();
-                    break;
-                }
+            if let Some(caption) =
+                crate::button::button_caption(trigger_entity, &children, &captions)
+                && let Ok(mut text) = texts.get_mut(caption)
+            {
+                **text = option.label.clone();
             }
         }
     }
@@ -448,31 +478,154 @@ fn handle_option_click(
 
 fn sync_combobox_selection(
     mut combos: Query<(Entity, &ComboBoxConfig, &mut ComboBoxState)>,
-    triggers: Query<(&ComboBoxTrigger, &Children)>,
+    triggers: Query<(Entity, &ComboBoxTrigger)>,
+    children: Query<&Children>,
+    captions: Query<(), With<crate::button::ButtonContentText>>,
     mut texts: Query<&mut Text>,
 ) {
     for (entity, config, mut state) in &mut combos {
         if !config.initialized {
             continue;
         }
+        // A combobox given a caption of its own keeps it: the button is a
+        // menu the user opens, not a readout of what it last opened.
+        if config.label_override.is_some() {
+            state.last_synced_selected = Some(config.selected);
+            continue;
+        }
         let Some(option) = config.options.get(config.selected) else {
             continue;
         };
         let index_changed = state.last_synced_selected != Some(config.selected);
-        for (trigger_ref, children) in &triggers {
+        for (trigger_entity, trigger_ref) in &triggers {
             if trigger_ref.0 != entity {
                 continue;
             }
-            for child in children.iter() {
-                if let Ok(mut text) = texts.get_mut(child) {
-                    if index_changed || **text != option.label {
-                        **text = option.label.clone();
-                        state.last_synced_selected = Some(config.selected);
-                    }
-                    break;
-                }
+            if let Some(caption) =
+                crate::button::button_caption(trigger_entity, &children, &captions)
+                && let Ok(mut text) = texts.get_mut(caption)
+                && (index_changed || **text != option.label)
+            {
+                **text = option.label.clone();
+                state.last_synced_selected = Some(config.selected);
             }
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::icons::{EditorFont, IconFont};
+
+    /// A combobox with three options, ticked far enough for its trigger
+    /// button (and the label text inside it) to exist. The button draws its
+    /// own label, so its setup pass has to be here too.
+    fn app_with_combobox() -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+            crate::button::plugin,
+        ));
+        app.init_asset::<bevy::text::Font>();
+        app.init_resource::<bevy::input_focus::InputFocus>();
+        app.insert_resource(IconFont(Handle::default()));
+        app.insert_resource(EditorFont(Handle::default()));
+        app.add_systems(
+            Update,
+            (
+                setup_combobox,
+                apply_selected_index.before(sync_combobox_selection),
+                sync_combobox_selection,
+            ),
+        );
+        let entity = app
+            .world_mut()
+            .spawn(combobox_with_selected(vec!["px", "%", "auto"], 0))
+            .id();
+        app.update();
+        app.update();
+        (app, entity)
+    }
+
+    /// The same app, for a combobox that carries a caption of its own.
+    fn app_with_captioned_combobox(caption: &str) -> (App, Entity) {
+        let (mut app, _) = app_with_combobox();
+        let entity = app
+            .world_mut()
+            .spawn(combobox_with_label(vec!["Field", "Action"], caption))
+            .id();
+        app.update();
+        app.update();
+        (app, entity)
+    }
+
+    /// A combobox used as a menu keeps the caption it was given: the
+    /// selection sync must not write the picked option over it.
+    #[test]
+    fn a_caption_of_its_own_survives_the_selection_sync() {
+        let (mut app, combobox) = app_with_captioned_combobox("Add Binding");
+        assert_eq!(label(&mut app, combobox), "Add Binding");
+
+        app.world_mut()
+            .entity_mut(combobox)
+            .insert(ComboBoxSelectedIndex(1));
+        app.update();
+        app.update();
+
+        assert_eq!(label(&mut app, combobox), "Add Binding");
+    }
+
+    /// The label the trigger button is currently drawing, told apart from
+    /// the chevron beside it by the button's own content marker.
+    fn label(app: &mut App, combobox: Entity) -> String {
+        let mut stack = vec![combobox];
+        while let Some(entity) = stack.pop() {
+            if app
+                .world()
+                .get::<crate::button::ButtonContentText>(entity)
+                .is_some()
+                && let Some(text) = app.world().get::<Text>(entity)
+            {
+                return text.0.clone();
+            }
+            if let Some(children) = app.world().get::<Children>(entity) {
+                stack.extend(children.iter());
+            }
+        }
+        panic!("the trigger button draws a label");
+    }
+
+    /// The label follows a selection written from outside, not only a
+    /// click, so the inspector can put a combobox back where an undo left
+    /// it.
+    #[test]
+    fn an_externally_set_index_repaints_the_label() {
+        let (mut app, combobox) = app_with_combobox();
+        assert_eq!(label(&mut app, combobox), "px");
+
+        app.world_mut()
+            .entity_mut(combobox)
+            .insert(ComboBoxSelectedIndex(2));
+        app.update();
+
+        assert_eq!(label(&mut app, combobox), "auto");
+    }
+
+    /// An index that names no option is a caller bug; the widget keeps
+    /// showing what it has rather than landing somewhere arbitrary.
+    #[test]
+    fn an_out_of_range_index_leaves_the_selection_alone() {
+        let (mut app, combobox) = app_with_combobox();
+
+        app.world_mut()
+            .entity_mut(combobox)
+            .insert(ComboBoxSelectedIndex(9));
+        app.update();
+
+        assert_eq!(label(&mut app, combobox), "px");
     }
 }

@@ -301,6 +301,7 @@ fn entity_param_rejects_int_across_inspector_and_hierarchy_ops() {
         )
     };
     let field_factory: fn() -> PropertyValue = || PropertyValue::String("value".to_string().into());
+    let kind_factory: fn() -> PropertyValue = || PropertyValue::String("field".to_string().into());
 
     let cases: &[(&'static str, &[(&'static str, fn() -> PropertyValue)])] = &[
         ("component.add", &[("type_path", type_path_factory)]),
@@ -319,6 +320,16 @@ fn entity_param_rejects_int_across_inspector_and_hierarchy_ops() {
             ],
         ),
         ("hierarchy.rename_begin", &[]),
+        (
+            "field.set",
+            &[
+                ("type_path", type_path_factory),
+                ("field", field_factory),
+                ("value", field_factory),
+            ],
+        ),
+        ("binding.add", &[("kind", kind_factory)]),
+        ("binding.set", &[]),
     ];
     for (id, extras) in cases {
         let mut builder = app.world_mut().operator(*id).param("entity", entity_as_int);

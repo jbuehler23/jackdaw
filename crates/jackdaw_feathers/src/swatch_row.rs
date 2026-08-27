@@ -1,9 +1,9 @@
 //! A field row whose control is an asset reference: square swatch, the
 //! name of what is bound, then the buttons that change it.
 //!
-//! Built on [`crate::field_row`], so a swatch row lines up with the plain rows
-//! above and below it. The caller supplies the image and fills
-//! [`SwatchRow::actions`], so this knows nothing about the kind of asset.
+//! Built on [`crate::field_row`], so a swatch row lines up with the plain
+//! rows above and below it. Nothing here knows what kind of asset it
+//! shows - the caller supplies the image and fills [`SwatchRow::actions`].
 
 use bevy::prelude::*;
 
@@ -27,7 +27,8 @@ pub struct SwatchRowProps {
     /// `None` draws an empty swatch rather than leaving a hole.
     pub image: Option<Handle<Image>>,
     pub indent: u8,
-    /// Dim the value text, marking it a placeholder rather than a name.
+    /// Dim the value text: nothing is bound, so the text is a placeholder
+    /// rather than a name.
     pub unbound: bool,
 }
 
@@ -153,8 +154,8 @@ mod tests {
         app
     }
 
-    /// An unbound slot still draws its square, so a column of slots reads as
-    /// a column rather than as gaps between the filled ones.
+    /// An unbound slot still draws its square, so a column of slots reads
+    /// as a column rather than as gaps between the filled ones.
     #[test]
     fn an_unbound_row_keeps_its_swatch_and_drops_the_image() {
         let app = spawn_with(SwatchRowProps::new("Normal").placeholder("None"));

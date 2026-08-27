@@ -2,18 +2,26 @@
 //!
 //! The 3D viewport already renders off-screen into a dedicated `Image`
 //! (`crate::viewport::build_viewport_panel`), so a viewport capture is a
-//! [`Screenshot::image`] against an existing render target: no second render
-//! pass and no window grab. Capturing works when the editor window is
-//! unfocused, partly covered, or never had a cursor over it.
+//! [`Screenshot::image`] against a render target that already exists: no
+//! second render pass and no window grab. Capturing therefore works when
+//! the editor window is unfocused, partly covered, or never had a cursor
+//! over it.
 //!
 //! A window capture ([`Screenshot::primary_window`]) is the whole editor
 //! surface: palette, options bar, docked panels, and the viewport together.
-//! `viewport.screenshot` shows no `bevy_ui` chrome.
+//! `viewport.screenshot` alone shows no `bevy_ui` chrome.
 //!
-//! Entry points, both funneled through `spawn_capture`:
+//! The 2D viewport panel works the same way as the 3D one: its camera draws
+//! into an image held at the authored reference size, so
+//! `viewport2d.screenshot` is the same render-target capture aimed at a
+//! different camera, and it writes the UI scene at its authored resolution
+//! rather than at whatever the dock leaf measures.
 //!
-//! - the `viewport.screenshot` and `window.screenshot` operators, for
-//!   interactive use and scripted runs (`JACKDAW_RUN_OP`);
+//! Entry points, all funneled through `spawn_capture`:
+//!
+//! - the `viewport.screenshot`, `viewport2d.screenshot` and
+//!   `window.screenshot` operators, for interactive use and scripted runs
+//!   (`JACKDAW_RUN_OP`);
 //! - the `JACKDAW_SHOT=<path>` environment variable, which waits for the
 //!   editor to settle, captures the viewport once, and exits.
 
@@ -64,6 +72,15 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_menu_entry::<WindowScreenshotOp>(TopLevelMenu::Tools);
 }
 
+/// The 2D viewport's own capture. Registered on
+/// [`crate::builtin_extensions::Viewport2dExtension`] rather than here,
+/// so a workspace without that panel is not offered a screenshot of a
+/// render target it has no camera for.
+pub(crate) fn add_2d_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<Viewport2dScreenshotOp>();
+    ctx.register_menu_entry::<Viewport2dScreenshotOp>(TopLevelMenu::Tools);
+}
+
 /// The pending one-shot capture requested by [`ENV_SHOT`]. Absent when
 /// the variable is unset, which is every interactive run.
 #[derive(Resource)]
@@ -111,7 +128,35 @@ pub fn queue_capture(
     path: PathBuf,
     exit_when_done: bool,
 ) -> Result<(), CaptureError> {
-    let mut cameras = world.query_filtered::<&RenderTarget, With<MainViewportCamera>>();
+    queue_camera_capture::<MainViewportCamera>(world, path, exit_when_done)
+}
+
+/// Queue a capture of a 2D viewport panel's render target, written to `path`
+/// as a PNG: the authored UI scene at its reference resolution, without the
+/// panel chrome around it.
+///
+/// The panel holds its image at the scene's reference size (see
+/// [`crate::viewport_2d::size_targets_to_reference`]), so the file holds the
+/// canvas at its authored resolution whatever the dock leaf measures and
+/// whatever the user has zoomed to. With several 2D panels open the first
+/// wins, matching how a UI scene is routed.
+pub fn queue_2d_capture(
+    world: &mut World,
+    path: PathBuf,
+    exit_when_done: bool,
+) -> Result<(), CaptureError> {
+    queue_camera_capture::<crate::viewport_2d::Viewport2dCamera>(world, path, exit_when_done)
+}
+
+/// Queue a capture of the render target belonging to the first camera
+/// marked `C`. Shared by the viewport captures, which differ only in
+/// which camera they mean.
+fn queue_camera_capture<C: Component>(
+    world: &mut World,
+    path: PathBuf,
+    exit_when_done: bool,
+) -> Result<(), CaptureError> {
+    let mut cameras = world.query_filtered::<&RenderTarget, With<C>>();
     let target = cameras.iter(world).next().ok_or(CaptureError::NoViewport)?;
     let handle = target
         .as_image()
@@ -126,11 +171,10 @@ pub fn queue_capture(
 /// panels, and viewport together), written to `path` as a PNG once the GPU
 /// readback lands.
 ///
-/// Unlike [`queue_capture`] this cannot fail up front: `Screenshot` targets the
-/// primary window by [`bevy::window::WindowRef::Primary`], which the renderer
-/// resolves itself, so there is no camera or render target to look up. A window
-/// that never renders never fires the observer, and that case is undetectable
-/// here.
+/// Unlike [`queue_capture`] this cannot fail up front: `Screenshot` targets
+/// the primary window by `bevy_window::WindowRef::Primary`, which the
+/// renderer resolves itself, so there is no camera or render target to look
+/// up first. With no primary window at all the observer never fires.
 pub fn queue_window_capture(world: &mut World, path: PathBuf, exit_when_done: bool) {
     spawn_capture(world, Screenshot::primary_window(), path, exit_when_done);
 }
@@ -251,9 +295,37 @@ pub(crate) fn viewport_screenshot(
     OperatorResult::Finished
 }
 
+/// Capture what the 2D viewport is showing to a PNG.
+#[operator(
+    id = "viewport2d.screenshot",
+    label = "Screenshot 2D Viewport",
+    description = "Save the UI scene the 2D viewport is showing to a PNG file.",
+    allows_undo = false,
+    params(path(
+        String,
+        doc = "Where to write the PNG. Defaults to a timestamped file in the project."
+    ))
+)]
+pub(crate) fn viewport_2d_screenshot(
+    params: In<OperatorParameters>,
+    project: Option<Res<crate::project::ProjectRoot>>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let path = match params.as_str("path").filter(|p| !p.is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => default_shot_path(project.as_deref(), "viewport-2d"),
+    };
+    commands.queue(move |world: &mut World| {
+        if let Err(err) = queue_2d_capture(world, path, false) {
+            error!("viewport2d.screenshot: {err}");
+        }
+    });
+    OperatorResult::Finished
+}
+
 /// Capture the whole editor window (palette, options bar, docked panels, and
 /// viewport) to a PNG. Unlike `viewport.screenshot`, this includes the
-/// `bevy_ui` chrome rather than only the 3D render target.
+/// `bevy_ui` chrome, not just the 3D render target.
 #[operator(
     id = "window.screenshot",
     label = "Screenshot Window",
@@ -279,8 +351,9 @@ pub(crate) fn window_screenshot(
     OperatorResult::Finished
 }
 
-/// Where an unnamed capture goes: `screenshots/<prefix>-<timestamp>.png` under
-/// the open project, or under the working directory when no project is open.
+/// Where an unnamed capture goes: `screenshots/<prefix>-<timestamp>.png`
+/// under the open project, or under the working directory when no
+/// project is open.
 fn default_shot_path(project: Option<&crate::project::ProjectRoot>, prefix: &str) -> PathBuf {
     let stamp = crate::timestamps::utc_rfc3339_now().replace(':', "-");
     let dir = project

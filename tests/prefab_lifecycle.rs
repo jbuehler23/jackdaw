@@ -451,6 +451,74 @@ fn load_resolves_isa_spawns_inherited_entities() {
     );
 }
 
+/// A legacy scene whose prefab is legacy too. The cache reads `.bsn` only, so
+/// opening has to convert the dependency before it resolves; converting late
+/// leaves the instance spawning as a bare entity, with the inherited tree
+/// missing from a scene that looks like it opened fine.
+#[test]
+fn a_legacy_scene_resolves_a_legacy_prefab_it_inherits_from() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("cluster.jsn");
+    let scene_path = tmp.path().join("level.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+
+    std::fs::write(
+        &prefab_path,
+        r#"{
+        "jsn": { "format_version": [3,0,0], "editor_version": "0", "bevy_version": "0.18" },
+        "metadata": { "name": "cluster", "created": "", "modified": "" },
+        "assets": {},
+        "scene": [
+            {
+                "components": {
+                    "jackdaw::prefab::components::Prefab": null,
+                    "jackdaw::prefab::components::PrefabEntityId": 0,
+                    "bevy_ecs::name::Name": "cluster_root"
+                }
+            },
+            {
+                "parent": 0,
+                "components": {
+                    "jackdaw::prefab::components::PrefabEntityId": 1,
+                    "bevy_ecs::name::Name": "inherited_rock"
+                }
+            }
+        ]
+    }"#,
+    )
+    .unwrap();
+
+    let scene_jsn = format!(
+        r#"{{
+            "jsn": {{ "format_version": [3,0,0], "editor_version": "0", "bevy_version": "0.18" }},
+            "metadata": {{ "name": "level", "created": "", "modified": "" }},
+            "assets": {{}},
+            "scene": [{{
+                "components": {{
+                    "jackdaw::prefab::components::IsA": {{ "source": "{}", "deleted": [] }},
+                    "jackdaw::prefab::components::PrefabEntityId": 0,
+                    "bevy_ecs::name::Name": "instance"
+                }}
+            }}]
+        }}"#,
+        prefab_path.to_string_lossy().replace('\\', "/")
+    );
+    std::fs::write(&scene_path, scene_jsn).unwrap();
+
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
+
+    let mut name_q = app.world_mut().query::<&bevy::prelude::Name>();
+    let names: Vec<String> = name_q
+        .iter(app.world())
+        .map(|n| n.as_str().to_string())
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "inherited_rock"),
+        "the legacy prefab converted before the resolve, so its tree is here: {names:?}"
+    );
+}
+
 #[test]
 fn save_writes_sparse_deltas_only() {
     let tmp = tempfile::tempdir().unwrap();
@@ -4085,5 +4153,187 @@ fn scene_save_reopen_round_trip_preserves_instance_and_override() {
         (transform.translation.x - 99.0).abs() < 1e-4,
         "edited Transform.x preserved across save/reopen (99.0); got {}",
         transform.translation.x
+    );
+}
+
+/// A prefab that itself inherits (`mid` `IsA` `base`) hands the instance ids
+/// that exist nowhere in `mid`'s own file. Baselines must therefore be read
+/// from the resolved source, not the raw one, or every transitively inherited
+/// entity is skipped while the pass still reports success.
+#[test]
+fn revert_all_reverts_field_inherited_through_a_nested_prefab() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_path = tmp.path().join("base.bsn");
+    let mid_path = tmp.path().join("mid.bsn");
+    std::fs::write(
+        &base_path,
+        "#base\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         bevy_transform::components::transform::Transform {\n\
+             translation: glam::Vec3 { x: 0.0, y: 0.0, z: 0.0 },\n\
+             rotation: glam::Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },\n\
+             scale: glam::Vec3 { x: 1.0, y: 1.0, z: 1.0 },\n\
+         }\n\
+         bevy_ecs::hierarchy::Children [\n\
+             #knob\n\
+             jackdaw::prefab::components::PrefabEntityId(7)\n\
+             bevy_transform::components::transform::Transform {\n\
+                 translation: glam::Vec3 { x: 3.0, y: 0.0, z: 0.0 },\n\
+                 rotation: glam::Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },\n\
+                 scale: glam::Vec3 { x: 1.0, y: 1.0, z: 1.0 },\n\
+             }\n\
+         ]",
+    )
+    .unwrap();
+    std::fs::write(
+        &mid_path,
+        format!(
+            "#mid\n\
+             jackdaw::prefab::components::Prefab\n\
+             jackdaw::prefab::components::PrefabEntityId(0)\n\
+             jackdaw::prefab::components::IsA {{ source: \"{}\", deleted: [] }}",
+            base_path.to_string_lossy().replace('\\', "/")
+        ),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(app.world_mut(), &mid_path, bevy::math::Vec3::ZERO);
+
+    let knob = |app: &bevy::prelude::App| {
+        app.world()
+            .resource::<jackdaw_bsn::SceneBsnAst>()
+            .find_node_by_component_int(PEID_TYPE, 7)
+            .expect("id inherited through the middle prefab materializes")
+    };
+
+    // Override the transitively inherited entity, then revert it.
+    {
+        let registry = app
+            .world()
+            .resource::<bevy::ecs::reflect::AppTypeRegistry>()
+            .clone();
+        let reg = registry.read();
+        let node = knob(&app);
+        let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        jackdaw_bsn::set_bsn_field(
+            &mut ast,
+            node,
+            TRANSFORM_TYPE,
+            "translation.x",
+            jackdaw_bsn::BsnValue::Float(99.0),
+            &reg,
+        );
+    }
+    assert_eq!(
+        live_field_f64(&app, knob(&app), TRANSFORM_TYPE, "translation.x"),
+        Some(99.0),
+        "override lands before the revert"
+    );
+
+    let instance_key = sole_isa_node(&app);
+    let report = jackdaw::prefab::operators::revert_all(app.world_mut(), instance_key);
+
+    assert_eq!(
+        report.unresolved, 0,
+        "every instance entity resolves against the expanded source"
+    );
+    assert_eq!(
+        live_field_f64(&app, knob(&app), TRANSFORM_TYPE, "translation.x"),
+        Some(3.0),
+        "inherited field reverts to the base prefab's value"
+    );
+}
+
+/// An instance entity whose `PrefabEntityId` matches nothing in the resolved
+/// source cannot be reverted. It must be counted and reported, never dropped
+/// from a pass that then claims to have reverted everything.
+#[test]
+fn revert_all_reports_targets_with_no_baseline() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.bsn");
+    std::fs::write(
+        &prefab_path,
+        "#p\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         bevy_transform::components::transform::Transform {\n\
+             translation: glam::Vec3 { x: 0.0, y: 0.0, z: 0.0 },\n\
+             rotation: glam::Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },\n\
+             scale: glam::Vec3 { x: 1.0, y: 1.0, z: 1.0 },\n\
+         }",
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        bevy::math::Vec3::ZERO,
+    );
+
+    let instance_key = sole_isa_node(&app);
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        let stray = ast.create_entity_node(vec![peid_patch(42)]);
+        ast.add_child_to_ast(instance_key, stray);
+    }
+
+    let report = jackdaw::prefab::operators::revert_all(app.world_mut(), instance_key);
+
+    assert_eq!(
+        report.unresolved, 1,
+        "the id absent from the source is reported, not silently skipped"
+    );
+    assert_eq!(report.reverted, 1, "the instance root itself still reverts");
+}
+
+/// A prefab that stops parsing must not be forgotten. The scene still names
+/// it, so it stays watched, its last good copy stays cached, and the edit that
+/// repairs the file is picked up like any other.
+#[test]
+fn a_prefab_that_fails_to_parse_stays_watched_and_recovers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.bsn");
+    let scene_path = tmp.path().join("s.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    app.add_plugins(jackdaw::prefab::watcher::PrefabWatcherPlugin);
+    write_bsn_prefab(&mut app, &prefab_path, &prefab_with_name("v1"));
+    std::fs::write(&scene_path, scene_referencing(&prefab_path)).unwrap();
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
+    assert!(
+        current_names(&mut app).iter().any(|n| n == "v1"),
+        "initial load sees v1"
+    );
+
+    // Break the file and let the watcher see that it fails to parse.
+    std::fs::write(&prefab_path, "not a bsn document {{{").unwrap();
+    let settle = std::time::Instant::now() + std::time::Duration::from_millis(1200);
+    while std::time::Instant::now() < settle {
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        current_names(&mut app).iter().any(|n| n == "v1"),
+        "a file that stopped parsing leaves the scene on its last good copy"
+    );
+
+    // Repair it. The watcher has to still be listening.
+    write_bsn_prefab(&mut app, &prefab_path, &prefab_with_name("v2"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        app.update();
+        if current_names(&mut app).iter().any(|n| n == "v2") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let names = current_names(&mut app);
+    assert!(
+        names.iter().any(|n| n == "v2"),
+        "the repaired prefab is picked up; got {names:?}"
     );
 }

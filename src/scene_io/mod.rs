@@ -17,15 +17,18 @@ pub(crate) mod save;
 pub mod stamp;
 
 pub use legacy::{load_inline_assets, load_scene_from_jsn};
-pub use load::load_scene_from_file;
+pub use load::{
+    LoadOutcome, LoadRefusal, RefusalCategory, declares_ui_scene_root, is_ui_scene_root_type_path,
+    load_scene_from_file, load_scene_from_file_with_outcome, spawn_default_lighting,
+};
 pub(crate) use load::{
     SidecarImport, clear_scene_entities, despawn_scene_entities, import_terrain_sidecars,
 };
 pub(crate) use registration::entity_by_scene_node_id;
 pub use registration::{register_entities_in_ast, register_entity_in_ast};
 pub use save::{
-    SaveOutcome, emit_bsn_scene_with_inline_assets, retarget_active_scene, save_layout_to_project,
-    save_scene, save_scene_as, save_scene_with_outcome,
+    SaveOutcome, emit_bsn_scene_for_file, emit_bsn_scene_with_inline_assets, retarget_active_scene,
+    save_layout_to_project, save_scene, save_scene_as, save_scene_with_outcome,
 };
 pub(crate) use save::{emit_bsn_entities_with_inline_assets, save_scene_inner};
 
@@ -48,9 +51,10 @@ const SKIP_COMPONENT_PREFIXES: &[&str] = &[
     // Propagated/inherited values are recomputed from their source every frame
     // (`Inherited<TextColor>`, `Propagate<TextFont>`, ...).
     "bevy_app::propagate::",
-    // Widget implementation detail. Feathers styling, cursors, and focus
-    // treatment are re-derived by `jackdaw_ui`'s materializer from the
-    // authored `Ui*` component, never authored directly.
+    // Widget implementation detail: the marker components and generated parts
+    // a feathers control builds for itself. The styling components a widget
+    // definition authors are listed in `ALWAYS_SAVE_PATHS` below and override
+    // this prefix.
     "bevy_feathers::",
     // Accessibility nodes are built by the widget implementation.
     "bevy_a11y::",
@@ -79,6 +83,11 @@ const SKIP_COMPONENT_PATHS: &[&str] = &[
     // that means nothing in a saved document.
     "bevy_ui::ui_node::ComputedNode",
     "bevy_ui::ui_node::ComputedUiTargetCamera",
+    // Editor-managed routing, inserted by `route_ui_roots_to_cameras` to aim a
+    // UI scene root at its view: the open 2D viewport for an authored root, the
+    // 3D viewport for one a world scene imports. It names a camera entity this
+    // session spawned, so a saved copy would point at nothing on reload.
+    "bevy_ui::ui_node::UiTargetCamera",
     "bevy_ui::ui_node::ComputedUiRenderTargetInfo",
     "bevy_ui::stack::ComputedStackIndex",
     "bevy_ui::ui_transform::UiGlobalTransform",
@@ -86,10 +95,6 @@ const SKIP_COMPONENT_PATHS: &[&str] = &[
     "bevy_text::text::ComputedTextBlock",
     "bevy_text::text::TextLayoutInfo",
     "bevy_ui::widget::text::TextNodeFlags",
-    // Marks an implementation-owned widget part; such an entity is never
-    // registered in the document at all, so this is a backstop.
-    "jackdaw_ui::UiGeneratedPart",
-    "jackdaw_ui::UiMaterialize",
 ];
 
 /// Paths that override the skip prefixes  -- these are always saved even if
@@ -111,6 +116,19 @@ const ALWAYS_SAVE_PATHS: &[&str] = &[
     // Reference image boards persist with the scene; the quad mesh and
     // material are derived from this component at runtime.
     "jackdaw::reference_image::ReferenceImage",
+    // Authored feathers styling, as opposed to the derived styling the
+    // `bevy_feathers::` skip above covers. These are plain `Reflect` components
+    // widget creation puts on an authored node so the widget follows the theme
+    // rather than a colour frozen at spawn time. Dropping them on save reloads
+    // the document as flat boxes.
+    "bevy_feathers::theme::ThemeBackgroundColor",
+    "bevy_feathers::theme::ThemeBorderColor",
+    "bevy_feathers::theme::ThemeTextColor",
+    "bevy_feathers::theme::InheritableThemeTextColor",
+    "bevy_feathers::theme::ThemedText",
+    "bevy_feathers::controls::button::ButtonVariant",
+    "bevy_feathers::focus::FocusIndicator",
+    "bevy_feathers::cursor::EntityCursor",
 ];
 
 pub fn should_skip_component(type_path: &str) -> bool {

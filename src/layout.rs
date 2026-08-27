@@ -1028,6 +1028,11 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
                     flex_direction: FlexDirection::Column,
                     flex_grow: 1.0,
                     min_height: px(0.0),
+                    // The dock sets the panel's width. Without this floor the
+                    // column takes its own min-content width, so one
+                    // unbreakable component title widens the whole column and
+                    // the surplus is clipped at the panel's edge.
+                    min_width: px(0.0),
                     ..Default::default()
                 },
                 children![

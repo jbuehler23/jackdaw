@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::prefab::cache::PrefabAstCache;
+use crate::prefab::resolver_bsn::ISA_TYPE;
 
 pub struct PrefabWatcherPlugin;
 
@@ -29,8 +30,77 @@ struct PrefabWatchState {
 
 const DEBOUNCE: Duration = Duration::from_millis(150);
 
-fn refresh_watch_list(mut state: ResMut<PrefabWatchState>, cache: Res<PrefabAstCache>) {
-    let current_paths: Vec<PathBuf> = cache.paths().map(PathBuf::from).collect();
+/// Every prefab file to watch, taken from the open documents rather than from
+/// the cache.
+///
+/// Deriving the list from the cache alone loses a file as soon as it stops
+/// parsing: the failed reload drops the entry, the path falls off the watch
+/// list, and the edit that repairs the file goes unnoticed. The scene's `IsA`
+/// sources and the open prefab tabs survive a parse failure, so a broken prefab
+/// stays watched until nothing refers to it.
+fn prefab_paths_to_watch(
+    cache: &PrefabAstCache,
+    live: Option<&jackdaw_bsn::SceneBsnAst>,
+    scenes: Option<&crate::scenes::Scenes>,
+) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = cache.paths().map(PathBuf::from).collect();
+    let mut add = |path: PathBuf| {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    };
+    if let Some(live) = live {
+        for node in live.entities_with_component(ISA_TYPE) {
+            if let Some(source) = crate::prefab::resolver_bsn::read_isa_source(live, node) {
+                add(source);
+            }
+        }
+    }
+    if let Some(scenes) = scenes {
+        for tab in &scenes.tabs {
+            if matches!(tab.kind, crate::scenes::TabKind::Prefab)
+                && let Some(path) = tab.path.as_ref()
+            {
+                add(path.clone());
+            }
+        }
+    }
+    paths
+}
+
+/// Paths an open prefab tab holds. A write to one of those is an edit to an
+/// open document, which `crate::scenes::external_watch` prompts about; handling
+/// it here as well would apply the edit twice.
+fn open_prefab_tab_paths(world: &World) -> Vec<PathBuf> {
+    let Some(scenes) = world.get_resource::<crate::scenes::Scenes>() else {
+        return Vec::new();
+    };
+    scenes
+        .tabs
+        .iter()
+        .filter(|tab| matches!(tab.kind, crate::scenes::TabKind::Prefab))
+        .filter_map(|tab| tab.path.as_ref())
+        .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| path.clone()))
+        .collect()
+}
+
+fn refresh_watch_list(
+    mut state: ResMut<PrefabWatchState>,
+    cache: Res<PrefabAstCache>,
+    live: Option<Res<jackdaw_bsn::SceneBsnAst>>,
+    scenes: Option<Res<crate::scenes::Scenes>>,
+) {
+    // Walking the live document's `IsA` nodes costs a query per call, and the
+    // result can only differ when one of the three inputs changed. A watcher
+    // that never installed counts as stale.
+    let stale = state.watcher.is_none()
+        || cache.is_changed()
+        || live.as_ref().is_some_and(DetectChanges::is_changed)
+        || scenes.as_ref().is_some_and(DetectChanges::is_changed);
+    if !stale {
+        return;
+    }
+    let current_paths = prefab_paths_to_watch(&cache, live.as_deref(), scenes.as_deref());
     if current_paths == state.watched {
         return;
     }
@@ -103,7 +173,15 @@ fn drain_changes(world: &mut World) {
     });
     world.resource_mut::<PrefabWatchState>().debounced = debounced;
 
+    let open_prefab_tabs = open_prefab_tab_paths(world);
     for path in to_reload {
+        // An open prefab is an edited document, not only a source this scene
+        // reads. The external-scene watcher prompts about it, so applying the
+        // edit here would pre-empt that prompt.
+        if open_prefab_tabs.contains(&path) {
+            continue;
+        }
+
         // Match against the canonicalized form of any cached path so an
         // event for a symlinked or non-canonical write still updates the
         // entry the resolver looks up.
@@ -153,10 +231,16 @@ fn drain_changes(world: &mut World) {
                     .insert(cache_key.clone(), new_ast);
             }
             Err(e) => {
-                warn!("prefab reload parse failed for {}: {e}", path.display());
-                world
-                    .resource_mut::<PrefabAstCache>()
-                    .invalidate(&cache_key);
+                // Keep the last copy that parsed. Dropping it would leave the
+                // next capture with no baseline to sparsify against, rewriting
+                // every inherited value in the scene as an authored override,
+                // which a later valid version of the file could not undo since
+                // overrides win over inherited values.
+                warn!(
+                    "prefab reload parse failed for {}: {e}; keeping the last \
+                     copy that parsed",
+                    path.display()
+                );
                 continue;
             }
         }
