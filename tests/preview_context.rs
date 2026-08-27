@@ -70,11 +70,7 @@ fn health_bar_app() -> (App, HealthBar) {
 
     let world = app.world_mut();
     let root = world
-        .spawn((
-            Name::new("UI Root"),
-            UiSceneRoot::default(),
-            Node::default(),
-        ))
+        .spawn((Name::new("UiRoot"), UiSceneRoot::default(), Node::default()))
         .id();
     let fill = world
         .spawn((
@@ -387,11 +383,7 @@ fn a_schema_only_type_previews_as_a_disabled_row() {
 
     let world = app.world_mut();
     let root = world
-        .spawn((
-            Name::new("UI Root"),
-            UiSceneRoot::default(),
-            Node::default(),
-        ))
+        .spawn((Name::new("UiRoot"), UiSceneRoot::default(), Node::default()))
         .id();
     let fill = world
         .spawn((
@@ -1169,11 +1161,7 @@ fn previewing(read: &str, register: impl FnOnce(&mut App)) -> App {
     register(&mut app);
     let world = app.world_mut();
     let root = world
-        .spawn((
-            Name::new("UI Root"),
-            UiSceneRoot::default(),
-            Node::default(),
-        ))
+        .spawn((Name::new("UiRoot"), UiSceneRoot::default(), Node::default()))
         .id();
     let fill = world
         .spawn((
@@ -1239,11 +1227,7 @@ fn previewing_schema(schema: ProjectSchema, read: &str) -> App {
     }
     let world = app.world_mut();
     let root = world
-        .spawn((
-            Name::new("UI Root"),
-            UiSceneRoot::default(),
-            Node::default(),
-        ))
+        .spawn((Name::new("UiRoot"), UiSceneRoot::default(), Node::default()))
         .id();
     let fill = world
         .spawn((
@@ -1594,11 +1578,7 @@ fn a_previewing_scene_cannot_write_a_resource_the_editor_holds() {
 
     let world = app.world_mut();
     let root = world
-        .spawn((
-            Name::new("UI Root"),
-            UiSceneRoot::default(),
-            Node::default(),
-        ))
+        .spawn((Name::new("UiRoot"), UiSceneRoot::default(), Node::default()))
         .id();
     // Two bindings off one read. The second is the control: its width really
     // moves, so the first one's failure is the write it names and not a read
@@ -1679,11 +1659,7 @@ fn a_widget_edit_during_preview_cannot_write_a_resource_the_editor_holds() {
 
     let world = app.world_mut();
     let root = world
-        .spawn((
-            Name::new("UI Root"),
-            UiSceneRoot::default(),
-            Node::default(),
-        ))
+        .spawn((Name::new("UiRoot"), UiSceneRoot::default(), Node::default()))
         .id();
     let volume = world
         .spawn((

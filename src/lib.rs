@@ -2578,6 +2578,7 @@ fn file_menu_rows(hot_reload_label: &str, recent: Vec<(String, String)>) -> Vec<
     [
         vec![
             op_entry::<crate::scenes::operators::SceneNewOp>("New"),
+            new_ui_scene_entry(),
             op_entry::<crate::scenes::operators::SceneOpenOp>("Open"),
         ],
         recent,
@@ -2596,6 +2597,23 @@ fn file_menu_rows(hot_reload_label: &str, recent: Vec<(String, String)>) -> Vec<
         ],
     ]
     .concat()
+}
+
+/// `New` with `scene.new`'s `ui` parameter turned on: the row that makes a
+/// UI scene.
+///
+/// A plain [`op_entry`] cannot say this, because it carries the operator id
+/// alone. The action encoding takes parameters — the same `op:<id>?key=value`
+/// the recent-projects rows use — so the row is the operator the palette runs,
+/// with the one parameter that decides which kind of scene comes out.
+fn new_ui_scene_entry() -> (String, String) {
+    (
+        format!(
+            "{OP_PREFIX}{}?ui=true",
+            crate::scenes::operators::SceneNewOp::ID
+        ),
+        "New UI Scene".to_string(),
+    )
 }
 
 /// How many recent projects the File menu lists before the rest stay in
@@ -3858,6 +3876,44 @@ mod file_menu_tests {
         assert!(
             rows.iter().any(|(_, label)| label == "Open Recent..."),
             "the dialog is still reachable: {rows:?}",
+        );
+    }
+
+    /// The only way to make a UI scene without typing an operator by hand.
+    /// The row is `scene.new` with its `ui` parameter set, so what the menu
+    /// runs is the operator a scripted run runs.
+    #[test]
+    fn the_file_menu_offers_a_new_ui_scene() {
+        use jackdaw_feathers::button::ButtonOperatorCall;
+
+        let rows = file_menu_rows("Hot Reload: On", recent());
+        let (action, label) = rows
+            .iter()
+            .find(|(_, label)| label == "New UI Scene")
+            .expect("the File menu makes a UI scene");
+        assert_eq!(label, "New UI Scene");
+
+        let call =
+            ButtonOperatorCall::try_from(action.as_str()).expect("the row is an operator action");
+        assert_eq!(call.id, crate::scenes::operators::SceneNewOp::ID);
+        let ui = call
+            .params
+            .iter()
+            .find(|(key, _)| key == "ui")
+            .map(|(_, value)| value.clone());
+        assert!(
+            matches!(ui, Some(jackdaw_scene_types::PropertyValue::String(ref v)) if v == "true"),
+            "the row carries the parameter that makes it a UI scene: {action}",
+        );
+
+        let plain = rows
+            .iter()
+            .find(|(_, label)| label == "New")
+            .expect("the ordinary New row is still there");
+        assert_eq!(
+            plain.0,
+            format!("{OP_PREFIX}{}", crate::scenes::operators::SceneNewOp::ID),
+            "and it stays parameterless, so it still makes a 3D scene",
         );
     }
 }

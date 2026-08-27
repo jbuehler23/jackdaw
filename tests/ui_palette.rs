@@ -48,11 +48,7 @@ fn palette_app() -> App {
 /// document the way a load or an Add would leave it.
 fn open_ui_scene(world: &mut World) -> Entity {
     let root = world
-        .spawn((
-            Name::new("UI Root"),
-            UiSceneRoot::default(),
-            Node::default(),
-        ))
+        .spawn((Name::new("UiRoot"), UiSceneRoot::default(), Node::default()))
         .id();
     jackdaw::scene_io::register_entity_in_ast(world, root);
     root
@@ -1175,7 +1171,7 @@ fn a_seeded_ui_root_saves_its_focus_group() {
 
     let mut reloaded = round_trip(&mut app);
 
-    let root = by_name(reloaded.world_mut(), "UI Root");
+    let root = by_name(reloaded.world_mut(), "UiRoot");
     assert!(
         reloaded.world().get::<TabGroup>(root).is_some(),
         "the saved root comes back a tab group",
@@ -1209,7 +1205,7 @@ fn the_first_widget_into_a_groupless_root_backfills_the_focus_group() {
         "adding a widget gave the scene the group its keyboard navigation needs",
     );
     let mut reloaded = round_trip(&mut app);
-    let loaded = by_name(reloaded.world_mut(), "UI Root");
+    let loaded = by_name(reloaded.world_mut(), "UiRoot");
     assert!(
         reloaded.world().get::<TabGroup>(loaded).is_some(),
         "the backfill reached the document, not just the live world",

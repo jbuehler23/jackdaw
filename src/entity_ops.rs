@@ -424,11 +424,24 @@ pub fn spawn_template_in_document(world: &mut World, template: EntityTemplate) -
     entity
 }
 
-/// Seed an empty live document with a directional light.
-pub(crate) fn seed_new_scene_defaults(world: &mut World) {
+/// Give the world a scene document to register entities in, if it has none.
+///
+/// `register_entity_in_ast` returns silently when the resource is missing, so
+/// anything that seeds a new scene has to call this first or its seed reaches
+/// the live world and never the file.
+pub(crate) fn ensure_scene_document(world: &mut World) {
     if !world.contains_resource::<jackdaw_bsn::SceneBsnAst>() {
         world.insert_resource(jackdaw_bsn::SceneBsnAst::default());
     }
+}
+
+/// Seed an empty live document with a directional light.
+///
+/// A 3D scene only: a UI document has nothing to light, and a light seeded
+/// into one is written to disk as furniture the author never asked for. See
+/// [`crate::scenes::operators::scene_new_configured`].
+pub(crate) fn seed_new_scene_defaults(world: &mut World) {
+    ensure_scene_document(world);
     spawn_template_in_document(world, EntityTemplate::DirectionalLight);
 }
 

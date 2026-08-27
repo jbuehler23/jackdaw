@@ -318,6 +318,10 @@ impl EditorCommand for InstantiateWidgetCommand {
     }
 }
 
+/// What [`seed_ui_scene_root`] names the root it makes. Space-free, so an
+/// operator clause can address it as `name=UiRoot`.
+pub const UI_SCENE_ROOT_NAME: &str = "UiRoot";
+
 /// Seed the root a new UI scene starts from: one node a widget can be parented
 /// to, registered in the document and selected so the next Add lands inside it.
 ///
@@ -332,10 +336,15 @@ impl EditorCommand for InstantiateWidgetCommand {
 /// default `reference_size` is the design resolution that stage frames the
 /// scene at; `TabGroup` is the ancestor tab navigation gathers focusable nodes
 /// from; `Node` makes it a layout parent.
+///
+/// The name has no space in it on purpose: an operator clause has no quoting,
+/// so a `name=` value cannot carry one and a root called `UI Root` would be
+/// unaddressable from `JACKDAW_RUN_OP` or the command palette. See
+/// [`crate::boot_ops`].
 pub fn seed_ui_scene_root(world: &mut World) -> Entity {
     let root = world
         .spawn((
-            Name::new("UI Root"),
+            Name::new(UI_SCENE_ROOT_NAME),
             jackdaw_scene_types::UiSceneRoot::default(),
             TabGroup::default(),
             Node::default(),

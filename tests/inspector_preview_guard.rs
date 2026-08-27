@@ -38,11 +38,7 @@ fn scene_with_a_bound_width() -> (App, Entity) {
 
     let world = app.world_mut();
     let root = world
-        .spawn((
-            Name::new("UI Root"),
-            UiSceneRoot::default(),
-            Node::default(),
-        ))
+        .spawn((Name::new("UiRoot"), UiSceneRoot::default(), Node::default()))
         .id();
     let fill = world
         .spawn((
@@ -120,11 +116,7 @@ fn scene_with_a_bound_collider() -> (App, Entity) {
 
     let world = app.world_mut();
     let root = world
-        .spawn((
-            Name::new("UI Root"),
-            UiSceneRoot::default(),
-            Node::default(),
-        ))
+        .spawn((Name::new("UiRoot"), UiSceneRoot::default(), Node::default()))
         .id();
     let solid = world
         .spawn((

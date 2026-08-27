@@ -29,10 +29,10 @@
 //! nothing selected.
 //!
 //! There is no quoting anywhere in a clause, so **a value cannot contain
-//! a space**: the root a new UI scene seeds is called `UI Root`, and no
-//! `name=` reaches it. Either leave the entity selected (`scene.new ui=true`
-//! selects the root it makes, so the next clause needs no name), or rename
-//! the node to something a clause can spell.
+//! a space**. The root a new UI scene seeds is named `UiRoot` for that
+//! reason, so `name=UiRoot` reaches it; a node the user has renamed to
+//! something with a space in it can only be addressed by leaving it
+//! selected.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;

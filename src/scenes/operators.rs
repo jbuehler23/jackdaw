@@ -80,6 +80,13 @@ pub fn scene_new_system(world: &mut World) {
 ///
 /// Seeding runs after the tab is active: activating replaces the live entities,
 /// so a root spawned first would be despawned with the previous scene.
+///
+/// The two kinds of scene seed different things and share nothing. A 3D scene
+/// gets a directional light, without which it opens black; a UI scene gets a
+/// [`crate::ui_palette::seed_ui_scene_root`] and nothing else, because a light
+/// in a UI document is furniture the author never asked for that a save then
+/// writes to disk. So the seeding is an either/or, not a common step with a
+/// UI addendum.
 pub fn scene_new_configured(world: &mut World, ui: bool, path: Option<&std::path::Path>) {
     let n = {
         let mut c = world.resource_mut::<UntitledCounter>();
@@ -97,7 +104,11 @@ pub fn scene_new_configured(world: &mut World, ui: bool, path: Option<&std::path
     }
     let target = world.resource_mut::<Scenes>().push_tab(tab);
     activate_pushed_tab(world, target);
-    crate::entity_ops::seed_new_scene_defaults(world);
+    if ui {
+        crate::entity_ops::ensure_scene_document(world);
+    } else {
+        crate::entity_ops::seed_new_scene_defaults(world);
+    }
 
     // Point the save path at the new tab, or clear it when the tab is
     // untitled. Clearing matters: a leftover path from the previous tab would
@@ -109,6 +120,10 @@ pub fn scene_new_configured(world: &mut World, ui: bool, path: Option<&std::path
 
     if ui {
         crate::ui_palette::seed_ui_scene_root(world);
+        // Creating a UI scene is the moment the canvas is wanted, and the
+        // dock leaves the 3D viewport in front otherwise. The load and
+        // tab-swap paths front the panel the same way.
+        crate::viewport_2d::focus_2d_viewport_tab(world);
     }
 }
 
