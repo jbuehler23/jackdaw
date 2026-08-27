@@ -1243,3 +1243,90 @@ fn a_root_that_already_has_a_focus_group_keeps_the_one_it_has() {
         "the backfill adds a missing group; it never overwrites an authored one",
     );
 }
+
+/// Gap 12: an authored checkbox is one entity standing in for feathers'
+/// multi-entity control, and feathers switches the checked colours from
+/// systems that walk that structure through private markers. Without a
+/// jackdaw-side swap a bound checkbox drove `Checked` correctly and looked
+/// identical either way. Checked here through the real palette, so the
+/// spawned tokens and the swap have to agree about which pair the widget
+/// is on.
+#[test]
+fn a_checked_authored_checkbox_shows_it() {
+    use bevy::feathers::theme::ThemeBackgroundColor;
+    use bevy::feathers::tokens;
+    use bevy::ui::Checked;
+
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+
+    let checkbox = instantiate_widget(app.world_mut(), "ui.checkbox")
+        .expect("the UI scene accepts a checkbox");
+    app.update();
+    assert_eq!(
+        app.world()
+            .get::<ThemeBackgroundColor>(checkbox)
+            .map(|token| token.0.clone()),
+        Some(tokens::CHECKBOX_BG),
+        "a fresh checkbox spawns unchecked, so it rests",
+    );
+
+    app.world_mut().entity_mut(checkbox).insert(Checked);
+    app.update();
+    assert_eq!(
+        app.world()
+            .get::<ThemeBackgroundColor>(checkbox)
+            .map(|token| token.0.clone()),
+        Some(tokens::CHECKBOX_BG_CHECKED),
+        "the state a binding drives has to be visible on the canvas",
+    );
+}
+
+/// The toggle switch carries the same `Checkbox` marker as the checkbox, so
+/// a swap keyed on the marker would put checkbox colours on a switch. It is
+/// keyed on the resting token instead.
+#[test]
+fn a_toggled_authored_switch_shows_it_in_switch_colours() {
+    use bevy::feathers::theme::ThemeBackgroundColor;
+    use bevy::feathers::tokens;
+    use bevy::ui::Checked;
+
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+
+    let toggle =
+        instantiate_widget(app.world_mut(), "ui.toggle").expect("the UI scene accepts a toggle");
+    app.world_mut().entity_mut(toggle).insert(Checked);
+    app.update();
+
+    assert_eq!(
+        app.world()
+            .get::<ThemeBackgroundColor>(toggle)
+            .map(|token| token.0.clone()),
+        Some(tokens::SWITCH_BG_CHECKED),
+    );
+}
+
+/// And the radio, whose ring is the only part feathers themes on the one
+/// entity an authored radio is.
+#[test]
+fn a_chosen_authored_radio_shows_it_on_its_ring() {
+    use bevy::feathers::theme::ThemeBorderColor;
+    use bevy::feathers::tokens;
+    use bevy::ui::Checked;
+
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+
+    let radio =
+        instantiate_widget(app.world_mut(), "ui.radio").expect("the UI scene accepts a radio");
+    app.world_mut().entity_mut(radio).insert(Checked);
+    app.update();
+
+    assert_eq!(
+        app.world()
+            .get::<ThemeBorderColor>(radio)
+            .map(|token| token.0.clone()),
+        Some(tokens::RADIO_BORDER_CHECKED),
+    );
+}

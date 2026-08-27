@@ -128,7 +128,7 @@ impl Plugin for AuthoredWidgetPlugin {
                 .before(bevy::ui::UiSystems::Layout),
         );
         #[cfg(feature = "feathers")]
-        app.add_systems(Update, hydrate_button_hover);
+        app.add_systems(Update, (hydrate_button_hover, authored_check_styles));
     }
 
     /// Gives the app a theme if nothing else did.
@@ -224,6 +224,109 @@ fn hydrate_button_hover(
         commands
             .entity(button)
             .insert(bevy::picking::hover::Hovered::default());
+    }
+}
+
+/// The resting and checked halves of one theme token pair.
+///
+/// Named pairs rather than a per-widget lookup because the three authored
+/// two-state widgets are not distinguishable by their markers: a checkbox and
+/// a toggle switch both carry [`Checkbox`], and only the token they were
+/// spawned with says which is which. So the resting token an entity is
+/// carrying is what selects its pair, and a widget themed with something else
+/// entirely is left alone rather than guessed at.
+#[cfg(feature = "feathers")]
+type TokenPair = (
+    bevy::feathers::theme::ThemeToken,
+    bevy::feathers::theme::ThemeToken,
+);
+
+/// Background pairs: the checkbox box fills, and so does the switch track.
+#[cfg(feature = "feathers")]
+fn background_token_pairs() -> [TokenPair; 2] {
+    use bevy::feathers::tokens;
+    [
+        (tokens::CHECKBOX_BG, tokens::CHECKBOX_BG_CHECKED),
+        (tokens::SWITCH_BG, tokens::SWITCH_BG_CHECKED),
+    ]
+}
+
+/// Border pairs. The radio's ring is the only part feathers themes on the one
+/// entity an authored radio is, so the border is its whole checked treatment.
+#[cfg(feature = "feathers")]
+fn border_token_pairs() -> [TokenPair; 3] {
+    use bevy::feathers::tokens;
+    [
+        (tokens::CHECKBOX_BORDER, tokens::CHECKBOX_BORDER_CHECKED),
+        (tokens::SWITCH_BORDER, tokens::SWITCH_BORDER_CHECKED),
+        (tokens::RADIO_BORDER, tokens::RADIO_BORDER_CHECKED),
+    ]
+}
+
+/// The token `current` should be, given whether the widget is checked: its
+/// pair's other half, or `None` when it already is that or belongs to no pair
+/// here.
+#[cfg(feature = "feathers")]
+fn swapped_token(
+    pairs: &[TokenPair],
+    current: &bevy::feathers::theme::ThemeToken,
+    checked: bool,
+) -> Option<bevy::feathers::theme::ThemeToken> {
+    let (resting, checked_token) = pairs
+        .iter()
+        .find(|(resting, checked_token)| current == resting || current == checked_token)?;
+    let wanted = if checked { checked_token } else { resting };
+    (wanted != current).then(|| wanted.clone())
+}
+
+/// Show an authored checkbox, radio, or toggle switch in its checked colours.
+///
+/// `bevy_feathers` switches these tokens from systems that walk a multi-entity
+/// widget through private marker types (`CheckboxOutline` and friends are not
+/// public). An authored widget is one entity carrying the outline's tokens, so
+/// none of that reaches it and the box keeps its resting colours whatever
+/// [`Checked`] says -- a binding could drive the state correctly while the
+/// widget looked identical either way. This is the same swap, done on the one
+/// entity there is, using feathers' own checked tokens so an authored widget
+/// and a feathers one agree in a theme.
+///
+/// Hover and press treatments are deliberately not mirrored. Those tokens read
+/// picking state the document does not carry, and a resting-versus-checked
+/// difference is the one a person authoring a screen has to be able to see.
+///
+/// The theme components are immutable, so a change is a re-insert; the
+/// equality guard in [`swapped_token`] keeps an idle frame quiet.
+#[cfg(feature = "feathers")]
+fn authored_check_styles(
+    widgets: Query<
+        (
+            Entity,
+            Has<bevy::ui::Checked>,
+            Option<&bevy::feathers::theme::ThemeBackgroundColor>,
+            Option<&bevy::feathers::theme::ThemeBorderColor>,
+        ),
+        (
+            With<AuthoredWidget>,
+            Or<(With<Checkbox>, With<RadioButton>)>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    use bevy::feathers::theme::{ThemeBackgroundColor, ThemeBorderColor};
+
+    let backgrounds = background_token_pairs();
+    let borders = border_token_pairs();
+    for (entity, checked, background, border) in &widgets {
+        if let Some(background) = background
+            && let Some(token) = swapped_token(&backgrounds, &background.0, checked)
+        {
+            commands.entity(entity).insert(ThemeBackgroundColor(token));
+        }
+        if let Some(border) = border
+            && let Some(token) = swapped_token(&borders, &border.0, checked)
+        {
+            commands.entity(entity).insert(ThemeBorderColor(token));
+        }
     }
 }
 
@@ -713,5 +816,202 @@ mod tests {
             .expect("the plugin registers the text value");
         assert!(registration.data::<ReflectDefault>().is_some());
         assert!(registration.data::<ReflectComponent>().is_some());
+    }
+
+    /// Gap 12: an authored checkbox showed its resting colours whatever
+    /// `Checked` said, so a correctly bound box looked identical in both
+    /// states. The tokens are feathers' own, so a themed screen agrees with
+    /// a feathers control beside it.
+    #[cfg(feature = "feathers")]
+    #[test]
+    fn a_checked_authored_checkbox_takes_the_checked_tokens() {
+        use bevy::feathers::theme::{ThemeBackgroundColor, ThemeBorderColor};
+        use bevy::feathers::tokens;
+        use bevy::ui::Checked;
+
+        let mut app = app();
+        let checkbox = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                Checkbox,
+                AuthoredWidget,
+                ThemeBackgroundColor(tokens::CHECKBOX_BG),
+                ThemeBorderColor(tokens::CHECKBOX_BORDER),
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<ThemeBackgroundColor>(checkbox)
+                .map(|t| t.0.clone()),
+            Some(tokens::CHECKBOX_BG),
+            "an unchecked box rests where it was authored",
+        );
+
+        app.world_mut().entity_mut(checkbox).insert(Checked);
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<ThemeBackgroundColor>(checkbox)
+                .map(|t| t.0.clone()),
+            Some(tokens::CHECKBOX_BG_CHECKED),
+            "checking it has to be visible",
+        );
+        assert_eq!(
+            app.world()
+                .get::<ThemeBorderColor>(checkbox)
+                .map(|t| t.0.clone()),
+            Some(tokens::CHECKBOX_BORDER_CHECKED),
+        );
+
+        app.world_mut().entity_mut(checkbox).remove::<Checked>();
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<ThemeBackgroundColor>(checkbox)
+                .map(|t| t.0.clone()),
+            Some(tokens::CHECKBOX_BG),
+            "and unchecking it goes back, not to some third colour",
+        );
+    }
+
+    /// A toggle switch carries the same `Checkbox` marker, so the resting
+    /// token it was spawned with is what tells the two apart.
+    #[cfg(feature = "feathers")]
+    #[test]
+    fn a_toggle_switch_takes_the_switch_tokens_not_the_checkbox_ones() {
+        use bevy::feathers::theme::{ThemeBackgroundColor, ThemeBorderColor};
+        use bevy::feathers::tokens;
+        use bevy::ui::Checked;
+
+        let mut app = app();
+        let toggle = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                Checkbox,
+                AuthoredWidget,
+                Checked,
+                ThemeBackgroundColor(tokens::SWITCH_BG),
+                ThemeBorderColor(tokens::SWITCH_BORDER),
+            ))
+            .id();
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<ThemeBackgroundColor>(toggle)
+                .map(|t| t.0.clone()),
+            Some(tokens::SWITCH_BG_CHECKED),
+        );
+        assert_eq!(
+            app.world()
+                .get::<ThemeBorderColor>(toggle)
+                .map(|t| t.0.clone()),
+            Some(tokens::SWITCH_BORDER_CHECKED),
+        );
+    }
+
+    /// A radio is one entity too, and its ring is the only part feathers
+    /// themes there.
+    #[cfg(feature = "feathers")]
+    #[test]
+    fn a_chosen_authored_radio_takes_the_checked_ring() {
+        use bevy::feathers::theme::ThemeBorderColor;
+        use bevy::feathers::tokens;
+        use bevy::ui::Checked;
+
+        let mut app = app();
+        let radio = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                RadioButton,
+                AuthoredWidget,
+                ThemeBorderColor(tokens::RADIO_BORDER),
+            ))
+            .id();
+        app.update();
+
+        app.world_mut().entity_mut(radio).insert(Checked);
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<ThemeBorderColor>(radio)
+                .map(|t| t.0.clone()),
+            Some(tokens::RADIO_BORDER_CHECKED),
+        );
+    }
+
+    /// Editor chrome runs its own checkbox state machines, some of which
+    /// refuse a toggle. The gate that keeps the value observers off it keeps
+    /// the styling off it too.
+    #[cfg(feature = "feathers")]
+    #[test]
+    fn an_unauthored_checkbox_is_left_alone() {
+        use bevy::feathers::theme::ThemeBackgroundColor;
+        use bevy::feathers::tokens;
+        use bevy::ui::Checked;
+
+        let mut app = app();
+        let chrome = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                Checkbox,
+                Checked,
+                ThemeBackgroundColor(tokens::CHECKBOX_BG),
+            ))
+            .id();
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<ThemeBackgroundColor>(chrome)
+                .map(|t| t.0.clone()),
+            Some(tokens::CHECKBOX_BG),
+            "the host application styles its own chrome",
+        );
+    }
+
+    /// The swap is idempotent: a settled widget is not re-inserted every
+    /// frame, which would keep change detection hot and mark the document
+    /// dirty for nothing.
+    #[cfg(feature = "feathers")]
+    #[test]
+    fn a_settled_widget_is_not_rewritten_every_frame() {
+        use bevy::feathers::theme::ThemeBackgroundColor;
+        use bevy::feathers::tokens;
+        use bevy::ui::Checked;
+
+        let mut app = app();
+        let checkbox = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                Checkbox,
+                AuthoredWidget,
+                Checked,
+                ThemeBackgroundColor(tokens::CHECKBOX_BG),
+            ))
+            .id();
+        for _ in 0..4 {
+            app.update();
+        }
+        let ticks = app
+            .world()
+            .entity(checkbox)
+            .get_ref::<ThemeBackgroundColor>()
+            .map(|token| token.last_changed());
+        app.update();
+        assert_eq!(
+            app.world()
+                .entity(checkbox)
+                .get_ref::<ThemeBackgroundColor>()
+                .map(|token| token.last_changed()),
+            ticks,
+            "an agreed token is left where it is",
+        );
     }
 }

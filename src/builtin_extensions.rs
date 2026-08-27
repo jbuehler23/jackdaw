@@ -782,10 +782,12 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
         // without it.
         //
         // The tokens are the ones feathers puts on its checkbox outline child,
-        // which this one-entity checkbox stands in for. The state treatment
-        // does not come along: the checked and hover tokens are switched by
-        // systems that query private marker types, so this box keeps its
-        // resting colours whatever `Checked` says.
+        // which this one-entity checkbox stands in for. Feathers switches them
+        // from systems that query private marker types, so none of that reaches
+        // a one-entity box; `jackdaw_widgets_runtime::authored_check_styles`
+        // does the resting/checked half of the swap here instead, using the
+        // same tokens. The hover and press treatments are still feathers-only:
+        // they read picking state a document does not carry.
         WidgetDefinition::new("ui.checkbox", "Checkbox", "Controls", |world, context| {
             Ok(spawn_widget(
                 world,
@@ -812,7 +814,8 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
         // A radio spawns without `Checked` and outside a `RadioGroup`, since
         // which radios belong together is a structural authoring decision. Its
         // ring is the only part feathers themes on one entity; the filled mark
-        // is a generated child.
+        // is a generated child. So the ring is the whole chosen treatment here,
+        // taken from `RADIO_BORDER_CHECKED` once `Checked` lands.
         //
         // A radio on its own therefore never self-updates: `bevy_ui_widgets`
         // addresses a radio change to the group, so the observer in
@@ -843,7 +846,9 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
         .with_icon(Icon::CircleDot),
         // The feathers toggle switch carries these two tokens on its root, so
         // the authored one matches it at rest; the sliding knob is the
-        // generated child this lacks.
+        // generated child this lacks. With the knob missing, the track taking
+        // `SWITCH_BG_CHECKED` is the only thing that says the switch is on --
+        // which is what these tokens, and not the checkbox ones, get it.
         WidgetDefinition::new(
             "ui.toggle",
             "Toggle Switch",
