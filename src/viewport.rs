@@ -382,7 +382,7 @@ fn init_axis_indicator_asset(mut commands: Commands, mut assets: ResMut<Assets<G
 /// The despawn observer on `parent` (via [`ViewportPanelHost`]) cleans
 /// up the camera when the panel content is torn down by the reconciler
 /// (panel closed, leaf rebuilt due to split, workspace switch, etc.).
-pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
+pub fn build_viewport_panel(world: &mut World, parent: Entity) {
     // Allocate a render-target image dedicated to this viewport. The
     // size is a starting point; `ViewportNode` will resize the camera
     // viewport to match the SceneViewport UI node automatically.
@@ -541,20 +541,6 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
     if let Some(scene_vp) = scene_vp {
         world.entity_mut(scene_vp).insert(ViewportNode::new(camera));
         world.entity_mut(scene_vp).observe(handle_viewport_drop);
-
-        // The terrain tool palette overlays the viewport's content rather than
-        // sitting in the dock tree: it is a child of the SceneViewport node,
-        // absolutely positioned against its left edge. See `terrain::palette`.
-        match world.spawn_scene(crate::terrain::palette::terrain_palette()) {
-            Ok(mut palette) => {
-                palette.insert((
-                    crate::terrain::TerrainPalette,
-                    crate::EditorEntity,
-                    ChildOf(scene_vp),
-                ));
-            }
-            Err(err) => error!("failed to spawn terrain palette scene: {err}"),
-        }
     } else {
         warn!("build_viewport_panel: SceneViewport descendant not found under parent");
     }
