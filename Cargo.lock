@@ -4932,7 +4932,6 @@ dependencies = [
  "jackdaw_geometry",
  "jackdaw_scene_types",
  "manifold-csg",
- "manifold-csg-sys",
 ]
 
 [[package]]
@@ -6281,9 +6280,9 @@ dependencies = [
 
 [[package]]
 name = "manifold-csg"
-version = "0.1.8"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf7d61a2fed9e32a65e9f987505c01e7e1b1b34d32b3f75df3ecff77c246b78a"
+checksum = "7ba5f54cbee94b26c917504c18754dcf263896a98af7a28c7987f3187a21ca8f"
 dependencies = [
  "log",
  "manifold-csg-sys",
@@ -6292,9 +6291,9 @@ dependencies = [
 
 [[package]]
 name = "manifold-csg-sys"
-version = "3.4.107"
+version = "3.5.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7ba98ad842ca99ec2752d2e556f43ce69aa3f8000bd55b188053b383f9cb095"
+checksum = "9e64dddec38e7f930b9a311adc289519aa2ad864c823082f9de3428d6fac6cb5"
 dependencies = [
  "cmake",
 ]
