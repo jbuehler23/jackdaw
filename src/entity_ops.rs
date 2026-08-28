@@ -445,6 +445,33 @@ pub(crate) fn seed_new_scene_defaults(world: &mut World) {
     spawn_template_in_document(world, EntityTemplate::DirectionalLight);
 }
 
+/// What [`seed_2d_scene_root`] names the root it makes. Space-free, so an
+/// operator clause can address it as `name=Scene2d`.
+pub const SCENE_2D_ROOT_NAME: &str = "Scene2d";
+
+/// Seed the root a new 2D scene starts from: one marked, transformed node
+/// sprites are parented to, and nothing else.
+///
+/// A 2D scene has no furniture to seed -- a directional light lights nothing
+/// a sprite draws -- so the root exists to say which kind the document is.
+/// The marker is a reflected component, so a save writes it into the BSN and
+/// a reopened document is recognised as 2D again, the way `UiSceneRoot`
+/// carries a UI scene's identity.
+pub fn seed_2d_scene_root(world: &mut World) -> Entity {
+    ensure_scene_document(world);
+    let root = world
+        .spawn((
+            Name::new(SCENE_2D_ROOT_NAME),
+            jackdaw_scene_types::Scene2dRoot,
+            Transform::default(),
+            Visibility::default(),
+        ))
+        .id();
+    crate::scene_io::register_entity_in_ast(world, root);
+    crate::selection::select_only(world, root);
+    root
+}
+
 /// World-access version of `create_entity`. Used from menu actions and other deferred contexts.
 /// Pushes a `SpawnEntity` command so the addition can be undone.
 pub fn create_entity_in_world(world: &mut World, template: EntityTemplate) {

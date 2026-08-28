@@ -225,7 +225,7 @@ impl JackdawExtension for ViewportExtension {
 
     fn register(&self, ctx: &mut ExtensionContext) {
         ctx.register_window(
-            WindowDescriptor::new("jackdaw.viewport")
+            WindowDescriptor::new(crate::viewport::VIEWPORT_WINDOW_ID)
                 .with_name("Viewport")
                 .with_default_area(DefaultArea::Center)
                 .with_priority(0)

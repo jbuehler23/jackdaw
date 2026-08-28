@@ -85,7 +85,8 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<ModifierStack>()
             .register_type::<ModifierEntry>()
             .register_type::<Modifier>()
-            .register_type::<UiSceneRoot>();
+            .register_type::<UiSceneRoot>()
+            .register_type::<Scene2dRoot>();
 
         #[cfg(feature = "render")]
         {
@@ -130,6 +131,16 @@ impl Default for UiSceneRoot {
         }
     }
 }
+
+/// Root of an authored 2D world scene.
+///
+/// A 2D scene has no seeded contents of its own -- sprites are the author's
+/// to add -- so this marker is what a saved document carries to say which
+/// kind it is, the way [`UiSceneRoot`] does for a UI scene. Reopening a
+/// document that declares it recognises the scene as 2D again.
+#[derive(Component, Clone, Copy, Debug, Default, Reflect)]
+#[reflect(Component, Default)]
+pub struct Scene2dRoot;
 
 /// Picker grouping for a component. Attach via
 /// `#[reflect(@EditorCategory("Your Group"))]`.

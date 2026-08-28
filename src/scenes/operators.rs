@@ -48,46 +48,87 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ]);
 }
 
+/// Which kind of scene a `scene.new` makes.
+///
+/// The kind is the scene's own concept rather than a flag on the operator:
+/// it decides what the document is seeded with, which panel comes forward,
+/// and which marker component a save writes so a reopened document is
+/// recognised as the same kind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SceneKind {
+    /// A 3D world scene. The editor's default.
+    #[default]
+    ThreeD,
+    /// A 2D world scene: sprites in the world viewport, no 3D furniture.
+    TwoD,
+    /// A UI screen, authored on the 2D canvas.
+    Ui,
+}
+
+impl SceneKind {
+    /// Read the operator's `kind` clause: `3d`, `2d` or `ui`. Unknown
+    /// values fall back to 3D, the kind a bare `scene.new` has always made.
+    pub fn from_clause(value: &str) -> Self {
+        match value {
+            "2d" => Self::TwoD,
+            "ui" => Self::Ui,
+            _ => Self::ThreeD,
+        }
+    }
+}
+
 #[operator(
     id = "scene.new",
     label = "New Scene",
     allows_undo = false,
     params(
+        kind(
+            String,
+            default = "3d",
+            doc = "Which kind of scene to make: 3d, 2d or ui."
+        ),
         ui(
             bool,
             default = false,
-            doc = "Start the scene with a UI root, ready for widgets."
+            doc = "Deprecated alias for kind=ui. Start the scene with a UI root."
         ),
         path(String, doc = "File the new scene saves to. Untitled when omitted."),
     )
 )]
 pub fn scene_new(In(params): In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    let ui = params.as_bool("ui").unwrap_or(false);
+    // `ui=true` is the spelling scripted runs and older keymaps use. It is
+    // kept as an alias for one release, and only speaks when `kind` is
+    // absent, so an explicit kind always wins.
+    let kind = match params.as_str("kind") {
+        Some(kind) => SceneKind::from_clause(kind),
+        None if params.as_bool("ui").unwrap_or(false) => SceneKind::Ui,
+        None => SceneKind::ThreeD,
+    };
     let path = params.as_str("path").map(std::path::PathBuf::from);
     commands.queue(move |world: &mut World| {
-        scene_new_configured(world, ui, path.as_deref());
+        scene_new_configured(world, kind, path.as_deref());
     });
     OperatorResult::Finished
 }
 
 /// Sync system body. Public so tests can run it directly.
 pub fn scene_new_system(world: &mut World) {
-    scene_new_configured(world, false, None);
+    scene_new_configured(world, SceneKind::ThreeD, None);
 }
 
-/// New tab, optionally pointed at a file and optionally seeded as a UI
-/// scene.
+/// New tab of `kind`, optionally pointed at a file.
 ///
 /// Seeding runs after the tab is active: activating replaces the live entities,
 /// so a root spawned first would be despawned with the previous scene.
 ///
-/// The two kinds of scene seed different things and share nothing. A 3D scene
-/// gets a directional light, without which it opens black; a UI scene gets a
+/// The three kinds seed different things and share nothing. A 3D scene gets a
+/// directional light, without which it opens black; a UI scene gets a
 /// [`crate::ui_palette::seed_ui_scene_root`] and nothing else, because a light
 /// in a UI document is furniture the author never asked for that a save then
-/// writes to disk. So the seeding is an either/or, not a common step with a
-/// UI addendum.
-pub fn scene_new_configured(world: &mut World, ui: bool, path: Option<&std::path::Path>) {
+/// writes to disk; a 2D scene gets its root marker alone, since its contents
+/// are sprites the author places. So the seeding is a branch, not a common
+/// step with addenda.
+pub fn scene_new_configured(world: &mut World, kind: SceneKind, path: Option<&std::path::Path>) {
     let n = {
         let mut c = world.resource_mut::<UntitledCounter>();
         c.0 += 1;
@@ -104,10 +145,9 @@ pub fn scene_new_configured(world: &mut World, ui: bool, path: Option<&std::path
     }
     let target = world.resource_mut::<Scenes>().push_tab(tab);
     activate_pushed_tab(world, target);
-    if ui {
-        crate::entity_ops::ensure_scene_document(world);
-    } else {
-        crate::entity_ops::seed_new_scene_defaults(world);
+    match kind {
+        SceneKind::ThreeD => crate::entity_ops::seed_new_scene_defaults(world),
+        SceneKind::TwoD | SceneKind::Ui => crate::entity_ops::ensure_scene_document(world),
     }
 
     // Point the save path at the new tab, or clear it when the tab is
@@ -118,12 +158,21 @@ pub fn scene_new_configured(world: &mut World, ui: bool, path: Option<&std::path
         file_path.path = path.map(|path| path.to_string_lossy().into_owned());
     }
 
-    if ui {
-        crate::ui_palette::seed_ui_scene_root(world);
-        // Creating a UI scene is the moment the canvas is wanted, and the
-        // dock leaves the 3D viewport in front otherwise. The load and
-        // tab-swap paths front the panel the same way.
-        crate::viewport_2d::focus_2d_viewport_tab(world);
+    match kind {
+        SceneKind::ThreeD => {}
+        SceneKind::TwoD => {
+            crate::entity_ops::seed_2d_scene_root(world);
+            // A 2D scene is a world scene, so it is authored in the world
+            // viewport. Coming from a UI tab that panel is behind the canvas.
+            crate::viewport::focus_viewport_tab(world);
+        }
+        SceneKind::Ui => {
+            crate::ui_palette::seed_ui_scene_root(world);
+            // Creating a UI scene is the moment the canvas is wanted, and the
+            // dock leaves the 3D viewport in front otherwise. The load and
+            // tab-swap paths front the panel the same way.
+            crate::viewport_2d::focus_2d_viewport_tab(world);
+        }
     }
 }
 

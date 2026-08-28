@@ -1,8 +1,8 @@
-//! Making a UI scene: what `scene.new ui=true` puts in the document, what
-//! it names it, and where it leaves the workspace.
+//! Making a scene of each kind: what `scene.new kind=...` puts in the
+//! document, what it names it, and where it leaves the workspace.
 //!
-//! Three contracts, all of them things a human authoring a screen through
-//! the GUI trips over on the first try:
+//! The contracts, all of them things a human authoring through the GUI
+//! trips over on the first try:
 //!
 //! 1. A UI scene seeds UI defaults and nothing else. A directional light
 //!    is 3D furniture; seeded into a UI document it is saved to disk as
@@ -11,17 +11,23 @@
 //!    which has no quoting -- can address it as `name=UiRoot`.
 //! 3. Creating a UI scene brings the 2D viewport forward, the way opening
 //!    one already does. The canvas is the whole point of the scene.
+//! 4. The kind a scene was made as survives a save and a reopen, because
+//!    it is a component in the document rather than editor state.
+//! 5. A menu row makes the kind it names. The row hands its clause to the
+//!    operator through the same dispatch a click does.
 
 use bevy::prelude::*;
-use jackdaw::scenes::operators::scene_new_configured;
+use jackdaw::scenes::operators::{SceneKind, scene_new_configured};
 use jackdaw::selection::Selection;
 use jackdaw::ui_palette::UI_SCENE_ROOT_NAME;
+use jackdaw::viewport::VIEWPORT_WINDOW_ID;
 use jackdaw::viewport_2d::VIEWPORT_2D_WINDOW_ID;
+use jackdaw_api_internal::OperatorWorldExt;
 use jackdaw_panels::{
     area::DockAreaStyle,
     tree::{DockLeaf, DockTree, NodeId},
 };
-use jackdaw_scene_types::UiSceneRoot;
+use jackdaw_scene_types::{Scene2dRoot, UiSceneRoot};
 
 mod util;
 
@@ -63,7 +69,7 @@ fn active_window(app: &App, leaf: NodeId) -> Option<String> {
 fn a_new_ui_scene_seeds_the_ui_root_and_nothing_else() {
     let mut app = util::editor_test_app();
 
-    scene_new_configured(app.world_mut(), true, None);
+    scene_new_configured(app.world_mut(), SceneKind::Ui, None);
     app.update();
 
     let names = scene_names(&mut app);
@@ -87,7 +93,7 @@ fn a_new_ui_scene_seeds_the_ui_root_and_nothing_else() {
 fn a_new_3d_scene_still_seeds_its_light_and_no_ui_root() {
     let mut app = util::editor_test_app();
 
-    scene_new_configured(app.world_mut(), false, None);
+    scene_new_configured(app.world_mut(), SceneKind::ThreeD, None);
     app.update();
 
     let mut lights = app.world_mut().query::<&DirectionalLight>();
@@ -111,7 +117,7 @@ fn a_new_3d_scene_still_seeds_its_light_and_no_ui_root() {
 fn the_seeded_root_is_named_so_a_clause_can_address_it() {
     let mut app = util::editor_test_app();
 
-    scene_new_configured(app.world_mut(), true, None);
+    scene_new_configured(app.world_mut(), SceneKind::Ui, None);
     app.update();
 
     assert_eq!(UI_SCENE_ROOT_NAME, "UiRoot");
@@ -147,7 +153,7 @@ fn creating_a_ui_scene_brings_the_2d_viewport_forward() {
         "the fixture starts with the 2D viewport behind another tab",
     );
 
-    scene_new_configured(app.world_mut(), true, None);
+    scene_new_configured(app.world_mut(), SceneKind::Ui, None);
     app.update();
 
     assert_eq!(
@@ -165,12 +171,243 @@ fn creating_a_3d_scene_leaves_the_fronted_tab_alone() {
     let leaf = dock_leaf(&mut app, &["jackdaw.outliner", VIEWPORT_2D_WINDOW_ID]);
     app.update();
 
-    scene_new_configured(app.world_mut(), false, None);
+    scene_new_configured(app.world_mut(), SceneKind::ThreeD, None);
     app.update();
 
     assert_eq!(
         active_window(&app, leaf).as_deref(),
         Some("jackdaw.outliner"),
         "nothing about a 3D scene asks for the 2D canvas",
+    );
+}
+
+/// A 2D scene is a world scene with nothing in it yet. The light a 3D
+/// scene needs lights nothing a sprite draws, and every other 3D default
+/// is furniture a save would write into a document that never wanted it.
+#[test]
+fn a_new_2d_scene_seeds_its_root_and_no_3d_furniture() {
+    let mut app = util::editor_test_app();
+
+    scene_new_configured(app.world_mut(), SceneKind::TwoD, None);
+    app.update();
+
+    let names = scene_names(&mut app);
+    assert_eq!(
+        names,
+        vec![jackdaw::entity_ops::SCENE_2D_ROOT_NAME.to_string()],
+        "a 2D scene starts with its root alone: {names:?}",
+    );
+    let mut lights = app.world_mut().query::<&DirectionalLight>();
+    assert_eq!(
+        lights.iter(app.world()).count(),
+        0,
+        "a sprite is not lit, so a 2D scene seeds no light",
+    );
+    let mut ui_roots = app.world_mut().query::<&UiSceneRoot>();
+    assert_eq!(
+        ui_roots.iter(app.world()).count(),
+        0,
+        "and a 2D world scene is not a UI screen",
+    );
+    let mut roots = app.world_mut().query::<&Scene2dRoot>();
+    assert_eq!(
+        roots.iter(app.world()).count(),
+        1,
+        "the marker is what says which kind this is",
+    );
+}
+
+/// A 2D scene is authored in the world viewport, not on the UI canvas.
+/// Coming from a UI tab, that panel is the one behind.
+#[test]
+fn creating_a_2d_scene_leaves_the_ui_canvas_behind() {
+    let mut app = util::editor_test_app();
+    let leaf = dock_leaf(&mut app, &[VIEWPORT_2D_WINDOW_ID, VIEWPORT_WINDOW_ID]);
+    app.update();
+
+    scene_new_configured(app.world_mut(), SceneKind::TwoD, None);
+    app.update();
+
+    assert_eq!(
+        active_window(&app, leaf).as_deref(),
+        Some(VIEWPORT_WINDOW_ID),
+        "a 2D scene is a world scene, so the world viewport comes forward",
+    );
+}
+
+/// Gap 4. The kind is a component in the document, so reopening the file
+/// finds it. Editor state would not survive the round trip; this is the
+/// whole reason the kind is persisted the way `UiSceneRoot` is.
+#[test]
+fn a_saved_scenes_kind_survives_a_reopen() {
+    for kind in [SceneKind::TwoD, SceneKind::Ui] {
+        let mut app = util::editor_test_app();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("kept.bsn");
+
+        scene_new_configured(app.world_mut(), kind, Some(&path));
+        app.update();
+        assert!(
+            jackdaw::scene_io::save_scene(app.world_mut()),
+            "the scene must save before it can be reopened",
+        );
+        app.update();
+
+        let written = std::fs::read_to_string(&path).expect("read the saved scene");
+        let marker = match kind {
+            SceneKind::TwoD => "Scene2dRoot",
+            SceneKind::Ui => "UiSceneRoot",
+            SceneKind::ThreeD => unreachable!("3D is the kind with no marker"),
+        };
+        assert!(
+            written.contains(marker),
+            "the kind is written into the document, not held in the editor:\n{written}",
+        );
+
+        jackdaw::migrate_dialog::request_open_with_conversion(app.world_mut(), &path);
+        app.update();
+
+        match kind {
+            SceneKind::TwoD => {
+                let mut roots = app.world_mut().query::<&Scene2dRoot>();
+                assert_eq!(
+                    roots.iter(app.world()).count(),
+                    1,
+                    "the reopened document is still a 2D scene",
+                );
+            }
+            SceneKind::Ui => {
+                let mut roots = app.world_mut().query::<&UiSceneRoot>();
+                assert_eq!(
+                    roots.iter(app.world()).count(),
+                    1,
+                    "the reopened document is still a UI scene",
+                );
+            }
+            SceneKind::ThreeD => unreachable!("3D is the kind with no marker"),
+        }
+    }
+}
+
+/// Gap 5. The row a user clicks, dispatched the way a click dispatches it:
+/// the action string parsed into the operator call feathers attaches, then
+/// through the editor's button observer. A row whose clause never reaches
+/// the operator makes a 3D scene whatever it says, which is exactly what
+/// asserting on the rows alone cannot catch.
+fn click_new_scene_row(app: &mut App, label: &str) {
+    use jackdaw_feathers::button::{ButtonClickEvent, ButtonOperatorCall};
+
+    let rows = jackdaw::new_scene_rows();
+    let (action, _) = rows
+        .iter()
+        .find(|(_, row_label)| row_label == label)
+        .unwrap_or_else(|| panic!("the New group offers `{label}`: {rows:?}"));
+    let call =
+        ButtonOperatorCall::try_from(action.as_str()).expect("the row is an operator action");
+
+    let button = app.world_mut().spawn(call).id();
+    app.world_mut().trigger(ButtonClickEvent { entity: button });
+    app.update();
+    app.update();
+}
+
+#[test]
+fn clicking_the_ui_row_makes_a_ui_scene() {
+    let mut app = util::editor_test_app();
+
+    click_new_scene_row(&mut app, "UI");
+
+    let names = scene_names(&mut app);
+    assert_eq!(
+        names,
+        vec![UI_SCENE_ROOT_NAME.to_string()],
+        "the row's clause has to reach the operator: {names:?}",
+    );
+    let mut lights = app.world_mut().query::<&DirectionalLight>();
+    assert_eq!(
+        lights.iter(app.world()).count(),
+        0,
+        "a UI scene made from the menu is the same UI scene",
+    );
+}
+
+#[test]
+fn clicking_the_2d_row_makes_a_2d_scene() {
+    let mut app = util::editor_test_app();
+
+    click_new_scene_row(&mut app, "2D");
+
+    let mut roots = app.world_mut().query::<&Scene2dRoot>();
+    assert_eq!(roots.iter(app.world()).count(), 1);
+    let mut lights = app.world_mut().query::<&DirectionalLight>();
+    assert_eq!(
+        lights.iter(app.world()).count(),
+        0,
+        "no 3D furniture in a 2D scene, however it was made",
+    );
+}
+
+#[test]
+fn clicking_the_3d_row_makes_a_3d_scene() {
+    let mut app = util::editor_test_app();
+
+    click_new_scene_row(&mut app, "3D");
+
+    let mut lights = app.world_mut().query::<&DirectionalLight>();
+    assert_eq!(
+        lights.iter(app.world()).count(),
+        1,
+        "an empty 3D scene is black without it",
+    );
+    let mut ui_roots = app.world_mut().query::<&UiSceneRoot>();
+    assert_eq!(ui_roots.iter(app.world()).count(), 0);
+    let mut roots = app.world_mut().query::<&Scene2dRoot>();
+    assert_eq!(roots.iter(app.world()).count(), 0);
+}
+
+/// `ui=true` is what scripted runs and older keymaps spell. It keeps
+/// meaning `kind=ui` for one release, so nothing that spells it breaks on
+/// the day the kinds arrive.
+#[test]
+fn the_ui_true_alias_still_makes_a_ui_scene() {
+    let mut app = util::editor_test_app();
+
+    let _ = app
+        .world_mut()
+        .operator("scene.new")
+        .param("ui", true)
+        .call()
+        .expect("scene.new dispatch");
+    app.update();
+    app.update();
+
+    let names = scene_names(&mut app);
+    assert_eq!(
+        names,
+        vec![UI_SCENE_ROOT_NAME.to_string()],
+        "the old spelling still asks for a UI scene: {names:?}",
+    );
+}
+
+/// And the alias's string form, which is how it arrives from any untyped
+/// source: an action string carries `ui=true` as text, not as a bool.
+#[test]
+fn the_alias_reads_the_same_from_a_text_clause() {
+    let mut app = util::editor_test_app();
+
+    let _ = app
+        .world_mut()
+        .operator("scene.new")
+        .param("ui", "true".to_string())
+        .call()
+        .expect("scene.new dispatch");
+    app.update();
+    app.update();
+
+    let mut roots = app.world_mut().query::<&UiSceneRoot>();
+    assert_eq!(
+        roots.iter(app.world()).count(),
+        1,
+        "a clause is text; a parameter read that ignores text ignores the user",
     );
 }

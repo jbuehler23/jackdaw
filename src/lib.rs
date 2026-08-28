@@ -2576,11 +2576,8 @@ fn section_label(name: &str) -> (String, String) {
 /// of rows.
 fn file_menu_rows(hot_reload_label: &str, recent: Vec<(String, String)>) -> Vec<(String, String)> {
     [
-        vec![
-            op_entry::<crate::scenes::operators::SceneNewOp>("New"),
-            new_ui_scene_entry(),
-            op_entry::<crate::scenes::operators::SceneOpenOp>("Open"),
-        ],
+        new_scene_rows(),
+        vec![op_entry::<crate::scenes::operators::SceneOpenOp>("Open")],
         recent,
         vec![
             op_entry::<crate::scenes::operators::SceneCloseOp>("Close Tab"),
@@ -2599,21 +2596,30 @@ fn file_menu_rows(hot_reload_label: &str, recent: Vec<(String, String)>) -> Vec<
     .concat()
 }
 
-/// `New` with `scene.new`'s `ui` parameter turned on: the row that makes a
-/// UI scene.
+/// The File menu's `New` group: one row per scene kind, expanding on hover.
 ///
-/// A plain [`op_entry`] cannot say this, because it carries the operator id
-/// alone. The action encoding takes parameters — the same `op:<id>?key=value`
-/// the recent-projects rows use — so the row is the operator the palette runs,
-/// with the one parameter that decides which kind of scene comes out.
-fn new_ui_scene_entry() -> (String, String) {
-    (
-        format!(
-            "{OP_PREFIX}{}?ui=true",
-            crate::scenes::operators::SceneNewOp::ID
-        ),
-        "New UI Scene".to_string(),
-    )
+/// A plain `op_entry` carries the operator id alone, which cannot say which
+/// kind comes out. The action encoding takes parameters -- the same
+/// `op:<id>?key=value` the recent-projects rows use -- so each row is the same
+/// operator with the one clause that decides the kind.
+///
+/// Public so a test can dispatch the row a user clicks rather than a
+/// re-spelling of it: what the row carries is the whole contract.
+pub fn new_scene_rows() -> Vec<(String, String)> {
+    let kinds = ["3d", "2d", "ui"]
+        .into_iter()
+        .zip(["3D", "2D", "UI"])
+        .map(|(kind, label)| {
+            (
+                format!(
+                    "{OP_PREFIX}{}?kind={kind}",
+                    crate::scenes::operators::SceneNewOp::ID
+                ),
+                label.to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    jackdaw_feathers::menu_bar::submenu_row("New", kinds)
 }
 
 /// How many recent projects the File menu lists before the rest stay in
@@ -3802,29 +3808,32 @@ mod file_menu_tests {
     }
 
     #[test]
-    fn the_recent_projects_are_the_menus_one_group() {
+    fn the_recent_projects_are_a_group_of_the_menus_two() {
         let rows = file_menu_rows("Hot Reload: On", recent());
         let openers = rows
             .iter()
             .filter(|(action, _)| action.starts_with(SUBMENU_ACTION_PREFIX))
+            .map(|(action, _)| action.clone())
             .collect::<Vec<_>>();
         assert_eq!(
-            openers.len(),
-            1,
-            "one group, and it is the recent list: {rows:?}",
+            openers,
+            vec![
+                format!("{SUBMENU_ACTION_PREFIX}New"),
+                format!("{SUBMENU_ACTION_PREFIX}Open Recent"),
+            ],
+            "the scene kinds and the recent list: {rows:?}",
         );
-        assert_eq!(openers[0].0, format!("{SUBMENU_ACTION_PREFIX}Open Recent"));
         assert_eq!(
             rows.iter()
                 .filter(|(action, _)| action == SUBMENU_END_ACTION)
                 .count(),
-            1,
-            "the group is closed: {rows:?}",
+            openers.len(),
+            "every group is closed: {rows:?}",
         );
 
         let opened = rows
             .iter()
-            .position(|(action, _)| action.starts_with(SUBMENU_ACTION_PREFIX))
+            .position(|(action, _)| action == &format!("{SUBMENU_ACTION_PREFIX}Open Recent"))
             .expect("the group is in the menu");
         let open = rows
             .iter()
@@ -3870,8 +3879,8 @@ mod file_menu_tests {
         assert!(
             !rows
                 .iter()
-                .any(|(action, _)| action.starts_with(SUBMENU_ACTION_PREFIX)),
-            "nothing expands: {rows:?}",
+                .any(|(action, _)| action == &format!("{SUBMENU_ACTION_PREFIX}Open Recent")),
+            "nothing expands there: {rows:?}",
         );
         assert!(
             rows.iter().any(|(_, label)| label == "Open Recent..."),
@@ -3879,41 +3888,49 @@ mod file_menu_tests {
         );
     }
 
-    /// The only way to make a UI scene without typing an operator by hand.
-    /// The row is `scene.new` with its `ui` parameter set, so what the menu
-    /// runs is the operator a scripted run runs.
+    /// The three kinds a scene can be, and the only way to pick one without
+    /// typing an operator by hand. Each row is `scene.new` with the clause
+    /// that names its kind, so what the menu runs is what a scripted run runs.
     #[test]
-    fn the_file_menu_offers_a_new_ui_scene() {
+    fn the_new_group_offers_the_three_scene_kinds() {
         use jackdaw_feathers::button::ButtonOperatorCall;
 
         let rows = file_menu_rows("Hot Reload: On", recent());
-        let (action, label) = rows
+        let open = rows
             .iter()
-            .find(|(_, label)| label == "New UI Scene")
-            .expect("the File menu makes a UI scene");
-        assert_eq!(label, "New UI Scene");
+            .position(|(action, _)| action == &format!("{SUBMENU_ACTION_PREFIX}New"))
+            .expect("the File menu makes scenes");
+        let close = rows
+            .iter()
+            .skip(open)
+            .position(|(action, _)| action == SUBMENU_END_ACTION)
+            .expect("the group is closed")
+            + open;
+        let kinds = &rows[open + 1..close];
 
-        let call =
-            ButtonOperatorCall::try_from(action.as_str()).expect("the row is an operator action");
-        assert_eq!(call.id, crate::scenes::operators::SceneNewOp::ID);
-        let ui = call
-            .params
-            .iter()
-            .find(|(key, _)| key == "ui")
-            .map(|(_, value)| value.clone());
-        assert!(
-            matches!(ui, Some(jackdaw_scene_types::PropertyValue::String(ref v)) if v == "true"),
-            "the row carries the parameter that makes it a UI scene: {action}",
-        );
-
-        let plain = rows
-            .iter()
-            .find(|(_, label)| label == "New")
-            .expect("the ordinary New row is still there");
         assert_eq!(
-            plain.0,
-            format!("{OP_PREFIX}{}", crate::scenes::operators::SceneNewOp::ID),
-            "and it stays parameterless, so it still makes a 3D scene",
+            kinds.iter().map(|(_, label)| label).collect::<Vec<_>>(),
+            vec!["3D", "2D", "UI"],
+            "exactly the three kinds, in that order: {kinds:?}",
+        );
+        for (expected, (action, label)) in ["3d", "2d", "ui"].into_iter().zip(kinds) {
+            let call = ButtonOperatorCall::try_from(action.as_str())
+                .expect("the row is an operator action");
+            assert_eq!(call.id, crate::scenes::operators::SceneNewOp::ID);
+            let kind = call
+                .params
+                .iter()
+                .find(|(key, _)| key == "kind")
+                .map(|(_, value)| value.clone());
+            assert!(
+                matches!(kind, Some(jackdaw_scene_types::PropertyValue::String(ref v)) if v == expected),
+                "`{label}` carries the clause that decides its kind: {action}",
+            );
+        }
+
+        assert!(
+            !rows.iter().any(|(_, label)| label == "New UI Scene"),
+            "the flat UI row is gone, its kind now a row of the group: {rows:?}",
         );
     }
 }
