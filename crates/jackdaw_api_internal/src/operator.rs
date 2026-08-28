@@ -149,25 +149,45 @@ pub struct OperatorParameters(pub BTreeMap<String, PropertyValue>);
 
 impl OperatorParameters {
     /// Read an `i64` parameter by key.
+    ///
+    /// A value that arrived as text is parsed, so a caller whose params come
+    /// from an untyped source reads the same value as one that built them
+    /// typed. See [`Self::as_bool`].
     pub fn as_int(&self, key: &str) -> Option<i64> {
         match self.get(key)? {
             PropertyValue::Int(i) => Some(*i),
+            PropertyValue::String(s) => s.parse().ok(),
             _ => None,
         }
     }
 
-    /// Read an `f64` parameter by key.
+    /// Read an `f64` parameter by key. Text is parsed, as in
+    /// [`Self::as_bool`].
     pub fn as_float(&self, key: &str) -> Option<f64> {
         match self.get(key)? {
             PropertyValue::Float(f) => Some(*f),
+            PropertyValue::Int(i) => Some(*i as f64),
+            PropertyValue::String(s) => s.parse().ok(),
             _ => None,
         }
     }
 
     /// Read a `bool` parameter by key.
+    ///
+    /// `"true"` and `"false"` in string form read as the bool they spell.
+    /// Parameters reach an operator from sources that carry no types -- a
+    /// menu row's `op:<id>?key=value` action is plain text, and every value
+    /// in one arrives as a string -- so an accessor that only accepted
+    /// [`PropertyValue::Bool`] silently reported `None` for a clause the
+    /// author plainly wrote, and the operator ran with its default.
     pub fn as_bool(&self, key: &str) -> Option<bool> {
         match self.get(key)? {
             PropertyValue::Bool(b) => Some(*b),
+            PropertyValue::String(s) => match s.as_ref() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -866,5 +886,52 @@ fn finalize_modal(
         world.run_system_cached_with(save_history, (op.label, snapshot.before_snapshot))
     {
         error!("Failed to finalize modal operator {}: {err:?}", op.label);
+    }
+}
+
+#[cfg(test)]
+mod parameter_tests {
+    use super::*;
+
+    fn params(key: &str, value: PropertyValue) -> OperatorParameters {
+        OperatorParameters([(key.to_string(), value)].into_iter().collect())
+    }
+
+    /// A menu row, a context-menu entry and a `JACKDAW_RUN_OP` clause are all
+    /// text. Every value in one arrives as a string, so an accessor that only
+    /// answered for its own variant reported `None` for a parameter the author
+    /// plainly wrote, and the operator quietly ran with its default.
+    #[test]
+    fn a_value_that_arrived_as_text_reads_as_its_type() {
+        assert_eq!(
+            params("ui", PropertyValue::String("true".into())).as_bool("ui"),
+            Some(true),
+        );
+        assert_eq!(
+            params("ui", PropertyValue::String("false".into())).as_bool("ui"),
+            Some(false),
+        );
+        assert_eq!(
+            params("axis", PropertyValue::String("2".into())).as_int("axis"),
+            Some(2),
+        );
+        assert_eq!(
+            params("scale", PropertyValue::String("1.5".into())).as_float("scale"),
+            Some(1.5),
+        );
+    }
+
+    /// Text that spells no such value is still nothing, so a caller's default
+    /// stands rather than a guess being made for it.
+    #[test]
+    fn text_that_spells_nothing_reads_as_nothing() {
+        assert_eq!(
+            params("ui", PropertyValue::String("yes".into())).as_bool("ui"),
+            None,
+        );
+        assert_eq!(
+            params("axis", PropertyValue::String("up".into())).as_int("axis"),
+            None,
+        );
     }
 }
