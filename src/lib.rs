@@ -2527,6 +2527,12 @@ struct ExtensionMenuEntry {
 ///
 /// A menu shows one row per operator, so an entry naming an operator the
 /// built-in list already carries is dropped rather than appended.
+///
+/// The comparison is on the operator alone, not the whole action string: a
+/// menu that offers an operator through parametrised rows -- `New`'s three
+/// scene kinds -- already carries it, and a fallback row for the bare
+/// operator underneath would offer the same command a second time, in a
+/// section named after the extension that happens to own it.
 fn append_extension_entries(
     rows: &mut Vec<(String, String)>,
     mut entries: Vec<ExtensionMenuEntry>,
@@ -2534,9 +2540,11 @@ fn append_extension_entries(
     entries.sort_by(|a, b| (&a.heading, &a.label).cmp(&(&b.heading, &b.label)));
     // Deduplicated both against the rows already there and within the batch:
     // two extensions can register the same operator.
-    let mut seen: std::collections::HashSet<String> =
-        rows.iter().map(|(action, _)| action.clone()).collect();
-    entries.retain(|entry| seen.insert(entry.action.clone()));
+    let mut seen: std::collections::HashSet<String> = rows
+        .iter()
+        .map(|(action, _)| action_operator_id(action).to_string())
+        .collect();
+    entries.retain(|entry| seen.insert(action_operator_id(&entry.action).to_string()));
 
     let mut current: Option<String> = None;
     for entry in entries {
@@ -2549,6 +2557,16 @@ fn append_extension_entries(
         }
         rows.push((entry.action, entry.label));
     }
+}
+
+/// The operator an `op:` action names, without its parameters. A row that is
+/// not an operator action answers with itself, so separators and headings
+/// stay distinct from one another.
+fn action_operator_id(action: &str) -> &str {
+    let Some(rest) = action.strip_prefix(OP_PREFIX) else {
+        return action;
+    };
+    rest.split_once('?').map_or(rest, |(id, _)| id)
 }
 
 /// Menu separator row. Feathers renders any `(---, _)` entry as a
@@ -3978,6 +3996,37 @@ mod extension_menu_tests {
                 "##Jackdaw Core",
                 "op:tools.bake",
             ],
+        );
+    }
+
+    /// The built-in `New` group offers `scene.new` through three
+    /// parametrised rows. That is the operator carried, so the core
+    /// extension's bare row for it is dropped rather than opening a section
+    /// of its own beneath the group.
+    #[test]
+    fn a_parametrised_built_in_row_carries_its_operator() {
+        let mut rows = new_scene_rows();
+        rows.push(("op:scene.open".to_string(), "Open".to_string()));
+        let before = actions(&rows).len();
+
+        append_extension_entries(
+            &mut rows,
+            vec![
+                entry("Jackdaw Core Functionality", "op:scene.new", "New Scene"),
+                entry("Jackdaw Core Functionality", "op:scene.open", "Open Scene"),
+            ],
+        );
+
+        assert_eq!(
+            actions(&rows).len(),
+            before,
+            "nothing appended, and no section for it: {rows:?}",
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|(_, label)| label == "Jackdaw Core Functionality" || label == "New Scene"),
+            "{rows:?}",
         );
     }
 
