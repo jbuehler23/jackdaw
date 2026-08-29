@@ -274,10 +274,10 @@ impl ViewportCursor<'_, '_> {
     }
 }
 
-/// True when the hover map contains an entity other than `viewport_entity`, or
-/// there is no viewport to compare against. Split out of
-/// [`ViewportCursor::blocked_by_overlay`] as a pure function, testable without
-/// a `World`.
+/// True when the hover map contains an entity other than `viewport_entity`.
+/// With no viewport to compare against nothing can be over one, so the answer
+/// is false. Split out of [`ViewportCursor::blocked_by_overlay`] as a pure
+/// function, testable without a `World`.
 fn hover_blocks_click(
     hover_map: &bevy::picking::hover::HoverMap,
     viewport_entity: Option<Entity>,

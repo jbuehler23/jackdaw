@@ -415,8 +415,9 @@ const UI_SCENE_ROOT_PATH_TAIL: &str = "::UiSceneRoot";
 /// Does this document declare a UI scene?
 ///
 /// Walks every patch component rather than following `Children` from the roots,
-/// so a root nested inside a subtree is still found. Callers use this to bring
-/// the 2D viewport forward on open or on a tab switch; live routing uses a
+/// so a root nested inside a subtree is still found. Callers use this to decide
+/// whether an open or a tab switch brings the viewport forward, and read the
+/// mode to put it in from [`declared_scene_kind`]; live routing uses a
 /// `UiSceneRoot` query on the spawned world instead.
 pub fn declares_ui_scene_root(ast: &jackdaw_bsn::SceneBsnAst) -> bool {
     ast.all_patch_type_paths().any(is_ui_scene_root_type_path)

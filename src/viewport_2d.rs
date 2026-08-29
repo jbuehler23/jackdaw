@@ -1091,9 +1091,9 @@ fn place_stage(node: &mut Node, reference: Option<UVec2>, view: Ui2dView, area: 
     }
 }
 
-/// A viewport panel opening in [`ViewportMode::TwoD`].
-/// Both presentations are built
-/// either way; see [`crate::viewport_host::build_viewport_panel_in`].
+/// A viewport panel opening on the canvas whatever the current intent says.
+/// Both presentations are built either way; see
+/// [`crate::viewport_host::build_viewport_panel_in`].
 pub fn build_viewport_2d_panel(world: &mut World, parent: Entity) {
     crate::viewport_host::build_viewport_panel_in(
         world,
