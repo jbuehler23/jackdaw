@@ -117,6 +117,29 @@ pub struct UiResizeHandle {
     pub y: i8,
 }
 
+/// Which way a line runs across the canvas.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CanvasAxis {
+    /// A line down the canvas, fixing an x coordinate.
+    Vertical,
+    /// A line across the canvas, fixing a y coordinate.
+    Horizontal,
+}
+
+/// A line drawn across one panel's stage where a drag came to rest.
+///
+/// One per axis at most, and only while a gesture is landing on
+/// something: the point of it is to say *why* the node stopped where it
+/// did, so it appears with the landing and goes with it.
+#[derive(Component, Clone, Copy)]
+pub struct SnapHighlight {
+    /// The panel content entity carrying this stage's
+    /// [`Viewport2dPanelHost`].
+    pub host: Entity,
+    /// Which way the line runs.
+    pub axis: CanvasAxis,
+}
+
 /// The outline drawn around the selected authored UI node in one panel.
 #[derive(Component, Clone, Copy)]
 pub struct UiSelectionOverlay {
@@ -636,7 +659,12 @@ impl Plugin for UiStagePlugin {
             .add_observer(on_gesture_end)
             .add_systems(
                 Update,
-                (cancel_manipulation, sync_selection_overlays).chain(),
+                (
+                    cancel_manipulation,
+                    sync_selection_overlays,
+                    sync_snap_highlights,
+                )
+                    .chain(),
             );
     }
 }
@@ -1907,6 +1935,152 @@ fn cancel_manipulation(
 ) {
     if !manipulation.nodes.is_empty() && keys.just_pressed(KeyCode::Escape) {
         commands.queue(|world: &mut World| finish_manipulation(world, false));
+    }
+}
+
+/// Keep a line drawn across the stage wherever the running gesture is
+/// landing on something, and nowhere else.
+///
+/// Driven off the gesture rather than off the selection: a landing is a
+/// property of the drag in progress, so the line comes up with the first
+/// drag event that lands and goes on the release, which clears the
+/// outcome.
+fn sync_snap_highlights(
+    mut commands: Commands,
+    manipulation: Res<UiManipulation>,
+    hosts: Query<&Viewport2dPanelHost>,
+    stages: Query<&ComputedNode, With<Scene2dViewport>>,
+    highlights: Query<(Entity, &SnapHighlight)>,
+    mut nodes: Query<&mut Node>,
+) {
+    let wanted = highlight_lines(&manipulation, &hosts, &stages);
+
+    for (entity, highlight) in &highlights {
+        match wanted
+            .iter()
+            .find(|line| line.host == highlight.host && line.axis == highlight.axis)
+        {
+            Some(line) => {
+                if let Ok(mut node) = nodes.get_mut(entity) {
+                    place_highlight(&mut node, line.axis, line.at);
+                }
+            }
+            None => {
+                if let Ok(mut entity) = commands.get_entity(entity) {
+                    entity.despawn();
+                }
+            }
+        }
+    }
+
+    for line in wanted {
+        if highlights
+            .iter()
+            .any(|(_, highlight)| highlight.host == line.host && highlight.axis == line.axis)
+        {
+            continue;
+        }
+        let mut node = Node {
+            position_type: PositionType::Absolute,
+            ..default()
+        };
+        place_highlight(&mut node, line.axis, line.at);
+        commands.spawn((
+            SnapHighlight {
+                host: line.host,
+                axis: line.axis,
+            },
+            EditorEntity,
+            node,
+            BackgroundColor(line.colour),
+            // Above the outline: the line says where the edge came to
+            // rest, so the edge must not be drawn over it.
+            ZIndex(OVERLAY_Z + 1),
+            // A press over the line belongs to the gesture that drew it.
+            Pickable::IGNORE,
+            ChildOf(line.stage),
+        ));
+    }
+}
+
+/// One line the running gesture wants drawn.
+struct HighlightLine {
+    host: Entity,
+    stage: Entity,
+    axis: CanvasAxis,
+    /// Where the line sits in the stage's logical pixels.
+    at: f32,
+    colour: Color,
+}
+
+/// The lines the gesture in progress is landing on, in the stage's own
+/// logical pixels.
+///
+/// A candidate is stated from the dragged node's parent, so the
+/// canvas position is the landing plus the parent's own corner. Leaving
+/// that term out draws the line on the canvas origin's copy of it, which
+/// is the same place only while the parent is the root.
+fn highlight_lines(
+    manipulation: &UiManipulation,
+    hosts: &Query<&Viewport2dPanelHost>,
+    stages: &Query<&ComputedNode, With<Scene2dViewport>>,
+) -> Vec<HighlightLine> {
+    if manipulation.nodes.is_empty() {
+        return Vec::new();
+    }
+    let Some(host_entity) = manipulation.host else {
+        return Vec::new();
+    };
+    let Ok(host) = hosts.get(host_entity) else {
+        return Vec::new();
+    };
+    if host.mode != Viewport2dMode::Edit {
+        return Vec::new();
+    }
+    let Ok(stage) = stages.get(host.stage) else {
+        return Vec::new();
+    };
+    let target_scale = target_pixels_per_stage_pixel(stage.size(), host.target_size);
+    let scale = stage_pixels_per_target_pixel(target_scale, stage.inverse_scale_factor());
+    let origin = manipulation.candidates.origin;
+    let outcome = manipulation.last_snap;
+
+    [
+        (outcome.x, CanvasAxis::Vertical, origin.x),
+        (outcome.y, CanvasAxis::Horizontal, origin.y),
+    ]
+    .into_iter()
+    .filter_map(|(won, axis, corner)| {
+        let won = won?;
+        Some(HighlightLine {
+            host: host_entity,
+            stage: host.stage,
+            axis,
+            at: (won.at + corner) * scale,
+            colour: match won.kind {
+                CandidateKind::Guide => tokens::GUIDE_LINE,
+                _ => tokens::ACCENT_BLUE,
+            },
+        })
+    })
+    .collect()
+}
+
+/// Lay a highlight across the whole stage, a pixel thick.
+fn place_highlight(node: &mut Node, axis: CanvasAxis, at: f32) {
+    match axis {
+        CanvasAxis::Vertical => {
+            node.left = px(at);
+            node.top = px(0);
+            node.width = px(1);
+            node.height = percent(100);
+        }
+        CanvasAxis::Horizontal => {
+            node.left = px(0);
+            node.top = px(at);
+            node.width = percent(100);
+            node.height = px(1);
+        }
     }
 }
 

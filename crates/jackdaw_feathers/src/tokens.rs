@@ -190,6 +190,12 @@ pub const CONTAINER_DROP_TARGET_BG: Color = Color::Srgba(Srgba {
 pub const CONNECTION_LINE: Color = Color::srgba(1.0, 1.0, 1.0, 0.2);
 /// Disabled text color
 pub const TEXT_DISABLED: Color = Color::srgba(0.4, 0.4, 0.4, 0.5);
+/// A guide pulled off a canvas ruler, and a snap landing on one.
+///
+/// Cyan rather than the accent blue the selection chrome uses: a guide
+/// is a line the author placed, and it has to stay apart from the
+/// outline and the handles drawn over the node beside it.
+pub const GUIDE_LINE: Color = Color::srgb(0.24, 0.78, 0.85);
 
 // ---------------------------------------------------------------------------
 // Dialog / modal

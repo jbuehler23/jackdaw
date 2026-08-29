@@ -40,10 +40,10 @@ use jackdaw::{
     canvas_snap::{CanvasSnap, CanvasSnapKind},
     selection::Selection,
     ui_stage::{
-        CandidateKind, ExactPercent, HANDLE_SIZE, NodeAnchors, PixelRounding, SnapOutcome,
-        StageHit, UiManipulation, UiResizeHandle, UiSelectionOverlay, UnitBasis,
-        apply_authored_rect, authored_to_stage, stage_pixels_per_target_pixel, stage_to_authored,
-        topmost_hit,
+        CandidateKind, CanvasAxis, ExactPercent, HANDLE_SIZE, NodeAnchors, PixelRounding,
+        SnapHighlight, SnapOutcome, StageHit, UiManipulation, UiResizeHandle, UiSelectionOverlay,
+        UnitBasis, apply_authored_rect, authored_to_stage, stage_pixels_per_target_pixel,
+        stage_to_authored, topmost_hit,
     },
     viewport_2d::{
         Ui2dView, Viewport2dMode, Viewport2dPanelHost, build_viewport_2d_panel,
@@ -1945,6 +1945,151 @@ fn the_gesture_records_the_winning_line() {
 /// Edit the canvas's snap kinds, the way the header's Snap menu does.
 fn with_kinds(app: &mut App, edit: impl FnOnce(&mut CanvasSnap)) {
     edit(&mut app.world_mut().resource_mut::<CanvasSnap>());
+}
+
+// ---------------------------------------------------------------------------
+// The line a drag came to rest against
+// ---------------------------------------------------------------------------
+
+/// A drag that landed on something says so: a line across the stage
+/// where the landing is, for as long as the gesture holds it.
+///
+/// The line is drawn on the canvas, and a candidate is stated from the
+/// dragged node's own parent, so the parent's corner is part of the
+/// position. Leaving it out puts the line in the right place only while
+/// the parent happens to be the canvas root.
+#[test]
+fn a_snapped_drag_draws_the_line_it_landed_on_and_lets_go_of_it() {
+    // The dragged node's parent is the root, so the landing is already
+    // a canvas position: authored 900, half of that in stage pixels.
+    let mut app = stage_app();
+    let panel = framed_panel(&mut app, 0.5);
+    snapping_on(&mut app);
+    without_the_pixel_grid(&mut app, panel);
+    let root = ui_root(&mut app);
+    spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
+    let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+    settle(&mut app);
+
+    select(&mut app, mover);
+    settle(&mut app);
+    let (overlay, _) = overlay_node(&mut app);
+    let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 750.0));
+    let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 750.0)) - start;
+    continue_drag(&mut app, overlay, start, distance);
+    settle(&mut app);
+
+    assert_eq!(
+        snap_highlights(&mut app),
+        vec![(CanvasAxis::Vertical, px(450))],
+        "one line, down the canvas, where the near edge landed",
+    );
+    let (line, _) = snap_highlight_entities(&mut app)[0];
+    assert!(
+        app.world().get::<jackdaw::EditorEntity>(line).is_some(),
+        "the line is editor chrome, never part of the authored tree",
+    );
+    assert_eq!(
+        app.world().get::<ChildOf>(line).map(ChildOf::parent),
+        Some(stage_entity(&mut app, panel)),
+        "and it is parented into the stage beside the outline",
+    );
+
+    end_drag(&mut app, overlay, start, distance);
+    settle(&mut app);
+    assert!(
+        snap_highlights(&mut app).is_empty(),
+        "the release lets go of the line",
+    );
+
+    // The same canvas position reached from a parent that is not the
+    // root: the container sits at authored 300, and the landing is 600
+    // measured from inside it.
+    let mut app = stage_app();
+    let panel = framed_panel(&mut app, 0.5);
+    snapping_on(&mut app);
+    without_the_pixel_grid(&mut app, panel);
+    let root = ui_root(&mut app);
+    let container = spawn_child(&mut app, root, 300.0, 200.0, 1600.0, 900.0);
+    spawn_child(&mut app, container, 600.0, 0.0, 200.0, 200.0);
+    let mover = spawn_child(&mut app, container, 0.0, 500.0, 60.0, 100.0);
+    settle(&mut app);
+
+    select(&mut app, mover);
+    settle(&mut app);
+    let (overlay, _) = overlay_node(&mut app);
+    let start = begin_drag(&mut app, panel, overlay, Vec2::new(330.0, 750.0));
+    let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 750.0)) - start;
+    continue_drag(&mut app, overlay, start, distance);
+    settle(&mut app);
+
+    assert_eq!(
+        node_of(&app, mover).left,
+        px(600),
+        "the drag landed on the sibling's edge inside the container",
+    );
+    assert_eq!(
+        snap_highlights(&mut app),
+        vec![(CanvasAxis::Vertical, px(450))],
+        "and the line is drawn at the canvas position that landing is",
+    );
+}
+
+/// A drag that came to rest on nothing draws nothing. The grid is not a
+/// line the canvas can point at: it is everywhere, so a line on it says
+/// nothing about why the node stopped there.
+#[test]
+fn a_drag_that_snapped_nothing_draws_nothing() {
+    let mut app = stage_app();
+    let panel = framed_panel(&mut app, 0.5);
+    snapping_on(&mut app);
+    let root = ui_root(&mut app);
+    let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+    settle(&mut app);
+    set_grid(&mut app, panel, 8.0);
+
+    select(&mut app, mover);
+    settle(&mut app);
+    let (overlay, _) = overlay_node(&mut app);
+    let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 750.0));
+    let distance = screen_position_of(&mut app, panel, Vec2::new(1500.0, 750.0)) - start;
+    continue_drag(&mut app, overlay, start, distance);
+    settle(&mut app);
+
+    assert_eq!(
+        node_of(&app, mover).left,
+        px(1472),
+        "the drag did land on the grid, out in the open",
+    );
+    assert!(
+        snap_highlights(&mut app).is_empty(),
+        "but the grid is not a line the canvas points at",
+    );
+}
+
+/// The snap highlights on screen, with the axis each one runs along.
+fn snap_highlight_entities(app: &mut App) -> Vec<(Entity, CanvasAxis)> {
+    app.world_mut()
+        .query::<(Entity, &SnapHighlight)>()
+        .iter(app.world())
+        .map(|(entity, highlight)| (entity, highlight.axis))
+        .collect()
+}
+
+/// Every snap highlight on screen: which way it runs, and where it sits
+/// in the stage's own logical pixels.
+fn snap_highlights(app: &mut App) -> Vec<(CanvasAxis, Val)> {
+    snap_highlight_entities(app)
+        .into_iter()
+        .map(|(entity, axis)| {
+            let node = app.world().get::<Node>(entity).expect("the line is a node");
+            let at = match axis {
+                CanvasAxis::Vertical => node.left,
+                CanvasAxis::Horizontal => node.top,
+            };
+            (axis, at)
+        })
+        .collect()
 }
 
 /// Three absolutely placed children, 500 authored pixels apart on both
