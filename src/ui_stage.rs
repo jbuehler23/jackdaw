@@ -2051,7 +2051,7 @@ fn sync_snap_highlights(
             },
             EditorEntity,
             node,
-            BackgroundColor(line.colour),
+            BackgroundColor(tokens::SNAP_HIGHLIGHT),
             // Above the outline: the line says where the edge came to
             // rest, so the edge must not be drawn over it.
             ZIndex(OVERLAY_Z + 1),
@@ -2062,14 +2062,16 @@ fn sync_snap_highlights(
     }
 }
 
-/// One line the running gesture wants drawn.
+/// One line the running gesture wants drawn. Every landing is painted
+/// [`tokens::SNAP_HIGHLIGHT`], whatever kind of line it was: the
+/// highlight says the drag came to rest, and the line it came to rest
+/// against is already drawn in its own right.
 struct HighlightLine {
     host: Entity,
     stage: Entity,
     axis: CanvasAxis,
     /// Where the line sits in the stage's logical pixels.
     at: f32,
-    colour: Color,
 }
 
 /// The lines the gesture in progress is landing on, in the stage's own
@@ -2116,10 +2118,6 @@ fn highlight_lines(
             stage: host.stage,
             axis,
             at: (won.at + corner) * scale,
-            colour: match won.kind {
-                CandidateKind::Guide => tokens::GUIDE_LINE,
-                _ => tokens::ACCENT_BLUE,
-            },
         })
     })
     .collect()

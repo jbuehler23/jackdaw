@@ -196,6 +196,13 @@ pub const TEXT_DISABLED: Color = Color::srgba(0.4, 0.4, 0.4, 0.5);
 /// is a line the author placed, and it has to stay apart from the
 /// outline and the handles drawn over the node beside it.
 pub const GUIDE_LINE: Color = Color::srgb(0.24, 0.78, 0.85);
+/// The line a snapped drag came to rest against.
+///
+/// Warm, and a colour of its own: the selection outline drawn over the
+/// node is [`ACCENT_BLUE`] and a guide is [`GUIDE_LINE`], so a landing
+/// painted in either would be a line the user cannot tell apart from
+/// the thing it landed on.
+pub const SNAP_HIGHLIGHT: Color = Color::srgb(0.96, 0.62, 0.22);
 
 // ---------------------------------------------------------------------------
 // Dialog / modal

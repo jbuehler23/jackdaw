@@ -2141,6 +2141,61 @@ fn snap_highlights(app: &mut App) -> Vec<(CanvasAxis, Val)> {
         .collect()
 }
 
+/// The landing line is its own colour, whatever it landed on.
+///
+/// The selection outline is drawn over the node in `ACCENT_BLUE` and a
+/// guide is drawn under it in `GUIDE_LINE`; a landing painted in either
+/// would be a line that reads as the thing beside it rather than as the
+/// answer to "why did the drag stop here".
+#[test]
+fn the_landing_line_is_told_apart_from_the_outline_and_the_guides() {
+    let painted = |guide: bool| {
+        let mut app = stage_app();
+        let panel = framed_panel(&mut app, 0.5);
+        without_the_pixel_grid(&mut app, panel);
+        let root = ui_root(&mut app);
+        if guide {
+            app.world_mut().entity_mut(root).insert(CanvasGuides {
+                horizontal: Vec::new(),
+                vertical: vec![900.0],
+            });
+        } else {
+            spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
+        }
+        let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+        settle(&mut app);
+
+        select(&mut app, mover);
+        settle(&mut app);
+        let (overlay, _) = overlay_node(&mut app);
+        let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 750.0));
+        let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 750.0)) - start;
+        continue_drag(&mut app, overlay, start, distance);
+        settle(&mut app);
+        let (entity, _) = snap_highlight_entities(&mut app)
+            .into_iter()
+            .next()
+            .expect("the drag landed on something and drew the line");
+        app.world()
+            .get::<BackgroundColor>(entity)
+            .expect("the line is painted")
+            .0
+    };
+
+    for (landing, colour) in [("a sibling", painted(false)), ("a guide", painted(true))] {
+        assert_ne!(
+            colour,
+            jackdaw_feathers::tokens::ACCENT_BLUE,
+            "a landing on {landing} is not the selection outline's colour",
+        );
+        assert_ne!(
+            colour,
+            jackdaw_feathers::tokens::GUIDE_LINE,
+            "nor a guide's, which it would be drawn straight on top of",
+        );
+    }
+}
+
 /// A guide is a line the author drew, and a drag lands on it like any
 /// other: its own kind, so it can be switched off without taking the
 /// parent and the siblings with it.
