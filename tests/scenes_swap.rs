@@ -1489,6 +1489,11 @@ fn a_ui_scene_tab_that_fails_to_spawn_does_not_steal_the_viewport() {
         "the fixture must still read as a UI scene, or it proves nothing",
     );
     set_tab_document(&mut app, 1, doc);
+    // And the tab carries an override of its own, which the restore would
+    // apply after the activation had already declined to.
+    app.world_mut().resource_mut::<Scenes>().tabs[1]
+        .view_state
+        .viewport_mode = Some(jackdaw::viewport_host::ViewportMode::TwoD);
 
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
 
@@ -1501,6 +1506,15 @@ fn a_ui_scene_tab_that_fails_to_spawn_does_not_steal_the_viewport() {
         viewport_mode(&app),
         Some(jackdaw::viewport_host::ViewportMode::ThreeD),
         "nor put the viewport in a mode read from a document that is not there",
+    );
+    assert_eq!(
+        *app.world()
+            .resource::<jackdaw::viewport_host::ViewportModeIntent>(),
+        jackdaw::viewport_host::ViewportModeIntent {
+            mode: jackdaw::viewport_host::ViewportMode::ThreeD,
+            chosen: false,
+        },
+        "and the refused tab's stored mode is not the choice the panels follow",
     );
 }
 

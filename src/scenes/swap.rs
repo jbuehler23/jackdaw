@@ -289,7 +289,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
 
     let history_depth = history.undo_stack.len();
     *world.resource_mut::<CommandHistory>() = history;
-    apply_view_state(world, &view_state);
+    apply_view_state(world, &view_state, spawned_ok);
 
     // Critical: sync the global `SceneFilePath` to whichever tab is now
     // active. Without this, `save_scene` sees the previous tab's path
@@ -379,7 +379,11 @@ fn capture_view_state(world: &mut World) -> ViewState {
 }
 
 /// Restores camera transform, edit mode, and selection.
-fn apply_view_state(world: &mut World, view_state: &ViewState) {
+///
+/// `spawned` says whether the tab's document is live in the world. A tab that
+/// refused to spawn keeps its view state for the retry, but none of it may be
+/// applied to a viewport still showing the tab the user is left on.
+fn apply_view_state(world: &mut World, view_state: &ViewState, spawned: bool) {
     use crate::brush::{BrushSelection, EditMode};
     use crate::selection::{Selected, Selection};
     use crate::viewport::MainViewportCamera;
@@ -412,7 +416,9 @@ fn apply_view_state(world: &mut World, view_state: &ViewState) {
 
     // A mode the user picked for this tab outranks the one its kind implies,
     // which the activation above has already set.
-    if let Some(mode) = view_state.viewport_mode {
+    if let Some(mode) = view_state.viewport_mode
+        && spawned
+    {
         crate::viewport_host::set_viewport_mode(world, mode, true);
     }
 
