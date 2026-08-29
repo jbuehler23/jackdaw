@@ -3867,8 +3867,9 @@ mod preset_tree_tests {
         assert_one_viewport_panel(&build_animation_tree(), "animation");
     }
 
-    /// The default tree takes its center tabs from the registry, so this is
-    /// the same assertion made against what the extensions actually register.
+    /// The default tree takes its center tabs from the registry. This drives
+    /// it against a registry holding one center window; that the extensions
+    /// register no second center window is asserted where they are enabled.
     #[test]
     fn the_default_tree_docks_one_viewport_panel_in_the_center() {
         let mut world = World::new();

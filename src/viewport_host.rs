@@ -111,6 +111,8 @@ pub fn primary_2d_host<'a>(
 /// world, so it goes to a panel showing the world. Taking the canvas panel's
 /// world camera instead would aim the overlay at a camera the mode has
 /// switched off, and it would vanish from the panel still showing the world.
+/// With every panel on the canvas there is no such panel, and the first one
+/// stands in so the overlay still has a layout target.
 pub fn primary_3d_host<'a>(
     hosts: impl Iterator<Item = (Entity, &'a ViewportHost)>,
 ) -> Option<Entity> {

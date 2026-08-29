@@ -381,8 +381,8 @@ fn capture_view_state(world: &mut World) -> ViewState {
 /// Restores camera transform, edit mode, and selection.
 ///
 /// `spawned` says whether the tab's document is live in the world. A tab that
-/// refused to spawn keeps its view state for the retry, but none of it may be
-/// applied to a viewport still showing the tab the user is left on.
+/// refused to spawn keeps its view state for the retry, but the mode it chose
+/// may not reach a viewport still showing the tab the user is left on.
 fn apply_view_state(world: &mut World, view_state: &ViewState, spawned: bool) {
     use crate::brush::{BrushSelection, EditMode};
     use crate::selection::{Selected, Selection};
