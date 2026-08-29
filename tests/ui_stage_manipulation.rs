@@ -40,14 +40,14 @@ use jackdaw::{
     canvas_snap::{CanvasSnap, CanvasSnapKind},
     selection::Selection,
     ui_stage::{
-        CandidateKind, CanvasAxis, ExactPercent, HANDLE_SIZE, NodeAnchors, PixelRounding,
-        SnapHighlight, SnapOutcome, StageHit, UiManipulation, UiResizeHandle, UiSelectionOverlay,
-        UnitBasis, apply_authored_rect, authored_to_stage, stage_pixels_per_target_pixel,
-        stage_to_authored, topmost_hit,
+        CandidateKind, CanvasAxis, ExactPercent, GuideLine, HANDLE_SIZE, NodeAnchors,
+        PixelRounding, SnapHighlight, SnapOutcome, StageHit, UiManipulation, UiResizeHandle,
+        UiSelectionOverlay, UnitBasis, apply_authored_rect, authored_to_stage,
+        stage_pixels_per_target_pixel, stage_to_authored, topmost_hit,
     },
     viewport_2d::{
-        Ui2dView, Viewport2dMode, Viewport2dPanelHost, build_viewport_2d_panel,
-        target_pixels_per_stage_pixel,
+        CanvasRuler, RULER_SIZE, Ui2dView, Viewport2dMode, Viewport2dPanelHost,
+        build_viewport_2d_panel, ruler_marks, target_pixels_per_stage_pixel,
     },
 };
 
@@ -2502,6 +2502,256 @@ fn a_resize_of_a_far_pinned_node_leaves_the_far_offset_alone() {
     );
 }
 
+#[test]
+fn rulers_sit_outside_the_area_the_stage_is_measured_against() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    authored_scene(&mut app);
+    settle(&mut app);
+
+    assert_eq!(
+        area_size(&app, panel),
+        Vec2::new(1200.0, 600.0),
+        "the gutter comes off the panel the way the header does",
+    );
+    let area = app
+        .world()
+        .get::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .area;
+    for (ruler, _) in rulers_of(&mut app, panel) {
+        assert!(
+            !descends_from(&app, ruler, area),
+            "a ruler inside the area would be clipped with the canvas and fake a stage hover",
+        );
+    }
+
+    // The area is still what a fit is computed against, so the framing
+    // the panel arrives at is the one that area asks for.
+    app.world_mut()
+        .get_mut::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .fit_pending = true;
+    settle(&mut app);
+    let view = app
+        .world()
+        .get::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .view;
+    assert_eq!(
+        view.zoom,
+        jackdaw::viewport_2d::fit_view(view, REFERENCE, Vec2::new(1200.0, 600.0)).zoom,
+        "the fit is the one the 1200x600 area asks for",
+    );
+}
+
+#[test]
+fn show_rulers_off_gives_the_area_the_gutter_back() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    authored_scene(&mut app);
+    settle(&mut app);
+
+    app.world_mut().resource_mut::<CanvasSnap>().show_rulers = false;
+    settle(&mut app);
+    assert_eq!(
+        area_size(&app, panel),
+        Vec2::new(1200.0 + RULER_SIZE, 600.0 + RULER_SIZE),
+        "a hidden gutter takes no room from the canvas",
+    );
+
+    app.world_mut().resource_mut::<CanvasSnap>().show_rulers = true;
+    settle(&mut app);
+    assert_eq!(
+        area_size(&app, panel),
+        Vec2::new(1200.0, 600.0),
+        "and comes back the size it was",
+    );
+}
+
+/// The ruler is a reading of the canvas as the panel is showing it: the
+/// figures follow the pan, not just the zoom.
+#[test]
+fn ruler_labels_count_every_hundred_authored_pixels_at_the_zoom() {
+    // A canvas origin a hundred pixels off the left of the ruler, at
+    // half zoom: the ruler's 1200 pixels read 200 to 2600 authored.
+    let marks = ruler_marks(-100.0, 0.5, 1200.0);
+    let labels: Vec<f32> = marks
+        .iter()
+        .filter(|mark| mark.labelled)
+        .map(|mark| mark.authored)
+        .collect();
+    assert_eq!(
+        labels.len(),
+        25,
+        "one label per hundred authored pixels on the ruler: {labels:?}",
+    );
+    assert_eq!(
+        (labels.first().copied(), labels.last().copied()),
+        (Some(200.0), Some(2600.0)),
+    );
+    assert!(
+        marks.iter().any(|mark| !mark.labelled),
+        "with the tens ten pixels apart there are ticks between the labels",
+    );
+
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    authored_scene(&mut app);
+    // Pan a hundred stage pixels left, which is the origin above.
+    let mut host = app
+        .world_mut()
+        .get_mut::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent");
+    host.view.pan.x = 200.0;
+    settle(&mut app);
+
+    let drawn = ruler_labels(&mut app, panel, CanvasAxis::Vertical);
+    assert_eq!(
+        drawn.len(),
+        25,
+        "the ruler draws the labels the reading asks for: {drawn:?}",
+    );
+    assert_eq!(
+        drawn.first().map(|(text, at)| (text.as_str(), *at)),
+        Some(("200", 2.0)),
+        "and reads the authored pixel under it, pan included",
+    );
+}
+
+#[test]
+fn every_panel_showing_the_scene_draws_its_guides() {
+    let mut app = stage_app();
+    let first = panel_entity(&mut app);
+    let second = panel_entity(&mut app);
+    let (root, _, _) = authored_scene(&mut app);
+    app.world_mut().entity_mut(root).insert(CanvasGuides {
+        horizontal: vec![180.0],
+        vertical: vec![320.0],
+    });
+    settle(&mut app);
+
+    assert_eq!(
+        guide_lines_of(&mut app, first),
+        vec![
+            (CanvasAxis::Vertical, px(320.0 * 0.5 - 3.5)),
+            (CanvasAxis::Horizontal, px(180.0 * 0.5 - 3.5)),
+        ],
+        "the scene's guides are drawn over the canvas at the panel's scale",
+    );
+    assert_eq!(
+        guide_lines_of(&mut app, second).len(),
+        2,
+        "a second panel showing the same scene draws the same guides",
+    );
+
+    app.world_mut().resource_mut::<CanvasSnap>().show_guides = false;
+    settle(&mut app);
+    assert!(
+        guide_lines_of(&mut app, first).is_empty(),
+        "hidden guides are drawn nowhere",
+    );
+
+    app.world_mut().resource_mut::<CanvasSnap>().show_guides = true;
+    app.world_mut()
+        .get_mut::<Viewport2dPanelHost>(first)
+        .expect("host on panel parent")
+        .mode = Viewport2dMode::Interact;
+    settle(&mut app);
+    assert!(
+        guide_lines_of(&mut app, first).is_empty(),
+        "a panel running the scene has no editor lines over it",
+    );
+    assert_eq!(
+        guide_lines_of(&mut app, second).len(),
+        2,
+        "while the panel still being authored keeps them",
+    );
+}
+
+/// The panel's stage area as it was laid out, in logical pixels.
+fn area_size(app: &App, panel: Entity) -> Vec2 {
+    let area = app
+        .world()
+        .get::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .area;
+    let computed = app
+        .world()
+        .get::<ComputedNode>(area)
+        .expect("the stage area is laid out");
+    computed.size() * computed.inverse_scale_factor()
+}
+
+fn rulers_of(app: &mut App, panel: Entity) -> Vec<(Entity, CanvasAxis)> {
+    let mut query = app.world_mut().query::<(Entity, &CanvasRuler)>();
+    query
+        .iter(app.world())
+        .filter(|(_, ruler)| ruler.host == panel)
+        .map(|(entity, ruler)| (entity, ruler.axis))
+        .collect()
+}
+
+fn descends_from(app: &App, entity: Entity, ancestor: Entity) -> bool {
+    let mut cursor = entity;
+    while let Some(parent) = app.world().get::<ChildOf>(cursor).map(ChildOf::parent) {
+        if parent == ancestor {
+            return true;
+        }
+        cursor = parent;
+    }
+    false
+}
+
+/// What one of a panel's rulers has written on it: each label and how
+/// far along the ruler it sits, in order.
+fn ruler_labels(app: &mut App, panel: Entity, axis: CanvasAxis) -> Vec<(String, f32)> {
+    let ruler = rulers_of(app, panel)
+        .into_iter()
+        .find(|(_, ruler_axis)| *ruler_axis == axis)
+        .map(|(entity, _)| entity)
+        .expect("the panel has a ruler on each axis");
+    let children: Vec<Entity> = app
+        .world()
+        .get::<Children>(ruler)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    let mut labels: Vec<(String, f32)> = children
+        .into_iter()
+        .filter_map(|child| {
+            let text = app.world().get::<Text>(child)?.0.clone();
+            let node = app.world().get::<Node>(child)?;
+            let at = match (axis, node.left, node.top) {
+                (CanvasAxis::Vertical, Val::Px(left), _) => left,
+                (CanvasAxis::Horizontal, _, Val::Px(top)) => top,
+                _ => return None,
+            };
+            Some((text, at))
+        })
+        .collect();
+    labels.sort_by(|(_, a), (_, b)| a.total_cmp(b));
+    labels
+}
+
+/// The guides drawn over one panel: each line's axis and where its hit
+/// slab was placed, in the order the scene lists them.
+fn guide_lines_of(app: &mut App, panel: Entity) -> Vec<(CanvasAxis, Val)> {
+    let mut query = app.world_mut().query::<(&GuideLine, &Node)>();
+    let mut lines: Vec<(CanvasAxis, usize, Val)> = query
+        .iter(app.world())
+        .filter(|(line, _)| line.host == panel)
+        .map(|(line, node)| {
+            let at = match line.axis {
+                CanvasAxis::Vertical => node.left,
+                CanvasAxis::Horizontal => node.top,
+            };
+            (line.axis, line.index, at)
+        })
+        .collect();
+    lines.sort_by_key(|(axis, index, _)| (*axis == CanvasAxis::Horizontal, *index));
+    lines.into_iter().map(|(axis, _, at)| (axis, at)).collect()
+}
+
 /// A root filling the canvas with one child authored as `node`. Returns
 /// the panel and the child.
 fn anchored_app(node: Node) -> (App, Entity, Entity) {
@@ -2549,8 +2799,12 @@ fn framed_panel(app: &mut App, zoom: f32) -> Entity {
         .spawn((
             jackdaw::EditorEntity,
             Node {
-                width: px(1200),
-                height: px(600.0 + jackdaw_feathers::tokens::TOOLBAR_HEIGHT),
+                // The header and the ruler gutter come off the panel
+                // before the area is measured, so the panel is grown by
+                // both to leave the 1200x600 area every position below
+                // is stated against.
+                width: px(1200.0 + RULER_SIZE),
+                height: px(600.0 + RULER_SIZE + jackdaw_feathers::tokens::TOOLBAR_HEIGHT),
                 ..default()
             },
         ))

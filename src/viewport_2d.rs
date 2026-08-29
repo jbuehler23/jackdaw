@@ -46,10 +46,11 @@ use jackdaw_feathers::{
 use jackdaw_scene_types::UiSceneRoot;
 
 use crate::{
+    canvas_snap::CanvasSnap,
     prefab::{AuthoredUiSceneRoot, ImportedUiSceneRoot},
     prelude::*,
     selection::Selection,
-    ui_stage::stage_to_authored,
+    ui_stage::{CanvasAxis, stage_to_authored},
     viewport::{
         DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH, InteractionGuards, UiCursorPos,
         ViewportLayerCounter,
@@ -484,6 +485,10 @@ impl Plugin for Viewport2dPlugin {
                     // area's measured size and the image is held at the
                     // authored reference size the panel exists to show.
                     size_targets_to_reference.after(UiSystems::PostLayout),
+                    // After the placement, so a ruler's marks are
+                    // measured against the area the canvas was just laid
+                    // into.
+                    sync_rulers.after(size_targets_to_reference),
                 ),
             );
     }
@@ -1060,10 +1065,7 @@ fn place_stage(node: &mut Node, reference: Option<UVec2>, view: Ui2dView, area: 
         Some(reference) => {
             let canvas = reference.as_vec2().max(Vec2::ONE);
             let size = canvas * view.zoom;
-            // The view pans in authored pixels from the canvas centre,
-            // y up; layout places from the canvas's top-left, y down.
-            let focus = canvas / 2.0 + Vec2::new(view.pan.x, -view.pan.y);
-            let top_left = area / 2.0 - focus * view.zoom;
+            let top_left = stage_origin(reference, view, area);
             (
                 px(top_left.x),
                 px(top_left.y),
@@ -1089,6 +1091,390 @@ fn place_stage(node: &mut Node, reference: Option<UVec2>, view: Ui2dView, area: 
     if node.height != height {
         node.height = height;
     }
+}
+
+/// Where the canvas's top-left corner sits inside an `area`-sized stage
+/// area, in that area's own logical pixels.
+///
+/// The one place the view becomes a position: the stage node is placed
+/// there, and the rulers measure their marks from it, so a mark and the
+/// pixel it names cannot drift apart.
+///
+/// The view pans in authored pixels from the canvas centre, y up; layout
+/// places from the canvas's top-left, y down, hence the flip.
+pub fn stage_origin(reference: UVec2, view: Ui2dView, area: Vec2) -> Vec2 {
+    let canvas = reference.as_vec2().max(Vec2::ONE);
+    let focus = canvas / 2.0 + Vec2::new(view.pan.x, -view.pan.y);
+    area / 2.0 - focus * view.zoom
+}
+
+/// Thickness of a ruler, in the panel's logical pixels. It comes off the
+/// stage area the way the header does, so the area stays the one node
+/// the stage is placed inside and measured against.
+pub const RULER_SIZE: f32 = 18.0;
+
+/// Authored pixels between labelled marks, before the ruler coarsens the
+/// step to keep the labels apart.
+const RULER_LABEL_STEP: f32 = 100.0;
+
+/// Closest two labelled marks may come, in the ruler's logical pixels.
+const RULER_LABEL_GAP: f32 = 40.0;
+
+/// Closest two unlabelled marks may come before the ruler stops drawing
+/// them at all.
+const RULER_TICK_GAP: f32 = 4.0;
+
+/// How far a labelled mark reaches into the ruler from the stage edge.
+const RULER_LABEL_TICK: f32 = 6.0;
+
+/// How far an unlabelled mark reaches in.
+const RULER_TICK: f32 = 3.0;
+
+/// Most marks one ruler draws. A canvas zoomed all the way out is
+/// hundreds of thousands of authored pixels wide, and every mark is a
+/// node.
+const RULER_MARK_LIMIT: usize = 512;
+
+/// One of the three nodes making up a panel's ruler gutter: the two
+/// rulers and the corner between them. Hidden together when the canvas
+/// settings say the rulers are off, which gives the gutter back to the
+/// stage area.
+#[derive(Component, Clone, Copy)]
+pub struct CanvasRulerPart {
+    pub host: Entity,
+}
+
+/// A ruler along one edge of a panel's stage area.
+///
+/// `axis` is the axis of the guides pulled off it: the ruler along the
+/// top measures x and drops [`CanvasAxis::Vertical`] guides, the one
+/// down the left measures y and drops horizontal ones.
+#[derive(Component, Clone, Copy)]
+pub struct CanvasRuler {
+    pub host: Entity,
+    pub axis: CanvasAxis,
+}
+
+/// What one ruler's marks were last drawn for. The marks are rebuilt
+/// when this changes and left alone when it does not, so panning and
+/// zooming is the only thing that respawns them.
+#[derive(Component, Clone, Copy, PartialEq)]
+struct RulerMarks {
+    /// Where the canvas's origin sits along the ruler.
+    origin: f32,
+    zoom: f32,
+    /// How far the ruler runs, in its own logical pixels.
+    length: f32,
+}
+
+/// One mark on a ruler.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RulerMark {
+    /// How far along the ruler it sits, in the ruler's logical pixels.
+    pub at: f32,
+    /// The authored pixel it names.
+    pub authored: f32,
+    /// Whether it carries its figure as a label.
+    pub labelled: bool,
+}
+
+/// The marks a ruler `length` logical pixels long draws, given the
+/// canvas origin sitting `origin` pixels along it at `zoom`.
+///
+/// Labels every hundred authored pixels, or a coarser multiple of a
+/// hundred once that step would bring two labels within forty pixels of
+/// each other, with nine unlabelled marks between each pair while those
+/// stay four pixels apart.
+pub fn ruler_marks(origin: f32, zoom: f32, length: f32) -> Vec<RulerMark> {
+    let mut marks = Vec::new();
+    if !zoom.is_finite() || zoom <= 0.0 || !origin.is_finite() || length <= 0.0 {
+        return marks;
+    }
+    let label_step = ruler_label_step(zoom);
+    let tick_step = label_step / 10.0;
+    let (step, per_label) = if tick_step * zoom >= RULER_TICK_GAP {
+        (tick_step, 10)
+    } else {
+        (label_step, 1)
+    };
+
+    let mut index = (-origin / (zoom * step)).ceil() as i64;
+    while marks.len() < RULER_MARK_LIMIT {
+        let authored = index as f32 * step;
+        let at = origin + authored * zoom;
+        if at > length {
+            break;
+        }
+        marks.push(RulerMark {
+            at,
+            authored,
+            labelled: index.rem_euclid(per_label) == 0,
+        });
+        index += 1;
+    }
+    marks
+}
+
+/// Authored pixels between labels at `zoom`: the hundred the ruler wants,
+/// walked up the 1-2-5 ladder until two labels stand apart.
+fn ruler_label_step(zoom: f32) -> f32 {
+    let ladder = [2.0, 2.5, 2.0];
+    let mut step = RULER_LABEL_STEP;
+    let mut rung = 0;
+    while step * zoom < RULER_LABEL_GAP && step < 1.0e6 {
+        step *= ladder[rung % ladder.len()];
+        rung += 1;
+    }
+    step
+}
+
+/// Draw each panel's rulers for the view it is showing, and take the
+/// gutter down when the canvas settings say the rulers are off.
+///
+/// Runs after the stage has been placed, so a ruler measures against the
+/// same area size the canvas was laid into.
+fn sync_rulers(
+    snap: Res<CanvasSnap>,
+    roots: Query<&UiSceneRoot, AuthoredUiSceneRoot>,
+    hosts: Query<&Viewport2dPanelHost>,
+    areas: Query<&ComputedNode, With<Scene2dStageArea>>,
+    rulers: Query<(Entity, &CanvasRuler, Option<&RulerMarks>, Option<&Children>)>,
+    mut parts: Query<&mut Node, With<CanvasRulerPart>>,
+    mut commands: Commands,
+) {
+    let display = if snap.show_rulers {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    for mut node in &mut parts {
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    if !snap.show_rulers {
+        return;
+    }
+
+    let reference = roots
+        .iter()
+        .next()
+        .map(|root| root.reference_size.max(UVec2::ONE));
+
+    for (entity, ruler, drawn, children) in &rulers {
+        let Ok(host) = hosts.get(ruler.host) else {
+            continue;
+        };
+        let area = areas
+            .get(host.area)
+            .map(|area| area.size() * area.inverse_scale_factor())
+            .unwrap_or(Vec2::ZERO);
+        let wanted = reference.map(|reference| {
+            let origin = stage_origin(reference, host.view, area);
+            match ruler.axis {
+                CanvasAxis::Vertical => RulerMarks {
+                    origin: origin.x,
+                    zoom: host.view.zoom,
+                    length: area.x,
+                },
+                CanvasAxis::Horizontal => RulerMarks {
+                    origin: origin.y,
+                    zoom: host.view.zoom,
+                    length: area.y,
+                },
+            }
+        });
+        if drawn.copied() == wanted {
+            continue;
+        }
+
+        for child in children.into_iter().flatten() {
+            commands.entity(*child).despawn();
+        }
+        let Some(wanted) = wanted else {
+            commands.entity(entity).remove::<RulerMarks>();
+            continue;
+        };
+        commands.entity(entity).insert(wanted);
+        for mark in ruler_marks(wanted.origin, wanted.zoom, wanted.length) {
+            commands.entity(entity).with_children(|ruler_node| {
+                ruler_node.spawn(ruler_mark(ruler.axis, mark));
+                if mark.labelled {
+                    ruler_node.spawn(ruler_label(ruler.axis, mark));
+                }
+            });
+        }
+    }
+}
+
+/// The line one mark draws, growing in from the edge the stage is on.
+fn ruler_mark(axis: CanvasAxis, mark: RulerMark) -> impl Bundle {
+    let reach = if mark.labelled {
+        RULER_LABEL_TICK
+    } else {
+        RULER_TICK
+    };
+    let mut node = Node {
+        position_type: PositionType::Absolute,
+        ..default()
+    };
+    match axis {
+        CanvasAxis::Vertical => {
+            node.left = px(mark.at);
+            node.bottom = px(0);
+            node.width = px(1);
+            node.height = px(reach);
+        }
+        CanvasAxis::Horizontal => {
+            node.top = px(mark.at);
+            node.right = px(0);
+            node.width = px(reach);
+            node.height = px(1);
+        }
+    }
+    (
+        crate::EditorEntity,
+        node,
+        BackgroundColor(if mark.labelled {
+            tokens::TEXT_SECONDARY
+        } else {
+            tokens::BORDER_STRONG
+        }),
+        Pickable::IGNORE,
+    )
+}
+
+/// The authored figure a labelled mark carries, tucked against the
+/// outer edge so the marks themselves stay readable.
+fn ruler_label(axis: CanvasAxis, mark: RulerMark) -> impl Bundle {
+    let mut node = Node {
+        position_type: PositionType::Absolute,
+        ..default()
+    };
+    match axis {
+        CanvasAxis::Vertical => {
+            node.left = px(mark.at + 2.0);
+            node.top = px(1);
+        }
+        CanvasAxis::Horizontal => {
+            node.left = px(2);
+            node.top = px(mark.at + 1.0);
+        }
+    }
+    (
+        crate::EditorEntity,
+        node,
+        Text::new(format!("{:.0}", mark.authored)),
+        TextFont {
+            font_size: tokens::TEXT_SIZE_XS,
+            ..default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        Pickable::IGNORE,
+    )
+}
+
+/// The gutter around a panel's stage area: the corner, the ruler along
+/// the top, and the ruler down the left, with the area itself filling
+/// what is left.
+///
+/// The area is untouched by this, still the node the stage is placed
+/// inside and measured against, so the cursor mapping, the hover test
+/// and the framing all keep reading the same node they always did.
+fn build_ruler_frame(world: &mut World, host: Entity, stage_area: Entity) -> Entity {
+    let corner = world
+        .spawn((
+            crate::EditorEntity,
+            CanvasRulerPart { host },
+            Node {
+                width: px(RULER_SIZE),
+                height: px(RULER_SIZE),
+                flex_shrink: 0.0,
+                ..default()
+            },
+            BackgroundColor(tokens::PANEL_HEADER_BG),
+        ))
+        .id();
+    let ruler_x = world
+        .spawn((
+            crate::EditorEntity,
+            CanvasRulerPart { host },
+            CanvasRuler {
+                host,
+                axis: CanvasAxis::Vertical,
+            },
+            Node {
+                height: px(RULER_SIZE),
+                flex_grow: 1.0,
+                min_width: px(0),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BackgroundColor(tokens::PANEL_HEADER_BG),
+            Pickable::default(),
+        ))
+        .id();
+    let ruler_y = world
+        .spawn((
+            crate::EditorEntity,
+            CanvasRulerPart { host },
+            CanvasRuler {
+                host,
+                axis: CanvasAxis::Horizontal,
+            },
+            Node {
+                width: px(RULER_SIZE),
+                flex_shrink: 0.0,
+                min_height: px(0),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BackgroundColor(tokens::PANEL_HEADER_BG),
+            Pickable::default(),
+        ))
+        .id();
+
+    let top = world
+        .spawn((
+            crate::EditorEntity,
+            Node {
+                width: percent(100),
+                flex_direction: FlexDirection::Row,
+                flex_shrink: 0.0,
+                ..default()
+            },
+        ))
+        .id();
+    world.entity_mut(top).add_children(&[corner, ruler_x]);
+
+    let body = world
+        .spawn((
+            crate::EditorEntity,
+            Node {
+                width: percent(100),
+                flex_direction: FlexDirection::Row,
+                flex_grow: 1.0,
+                min_height: px(0),
+                ..default()
+            },
+        ))
+        .id();
+    world.entity_mut(body).add_children(&[ruler_y, stage_area]);
+
+    let frame = world
+        .spawn((
+            crate::EditorEntity,
+            Node {
+                width: percent(100),
+                flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
+                min_height: px(0),
+                ..default()
+            },
+        ))
+        .id();
+    world.entity_mut(frame).add_children(&[top, body]);
+    frame
 }
 
 /// A viewport panel opening on the canvas whatever the current intent says.
@@ -1222,7 +1608,6 @@ pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity
             crate::EditorEntity,
             Scene2dStageArea,
             Node {
-                width: percent(100),
                 flex_grow: 1.0,
                 min_width: px(0),
                 min_height: px(0),
@@ -1233,6 +1618,7 @@ pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity
         ))
         .id();
     world.entity_mut(stage_area).add_child(stage);
+    let ruler_frame = build_ruler_frame(world, parent, stage_area);
 
     let column = world
         .spawn((
@@ -1250,7 +1636,7 @@ pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity
             children![viewport_2d_header(parent)],
         ))
         .id();
-    world.entity_mut(column).add_child(stage_area);
+    world.entity_mut(column).add_child(ruler_frame);
 
     world.entity_mut(parent).insert(Viewport2dPanelHost {
         camera,

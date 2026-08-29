@@ -86,6 +86,11 @@ const MIN_NODE_SIZE: f32 = 1.0;
 /// frame, and above anything else placed in the stage alongside it.
 const OVERLAY_Z: i32 = 50;
 
+/// How wide a guide is to the pointer, in the stage's logical pixels. A
+/// one-pixel line is drawn down the middle of it: the line has to be
+/// thin to place a node against, and wide enough to pick up again.
+const GUIDE_HIT_WIDTH: f32 = 7.0;
+
 /// How close, in **pointer** pixels, a dragged edge has to come to a
 /// neighbouring one before it lands on it.
 ///
@@ -150,6 +155,23 @@ pub struct SnapHighlight {
     pub host: Entity,
     /// Which way the line runs.
     pub axis: CanvasAxis,
+}
+
+/// One of the scene's guides, drawn over one panel's stage.
+///
+/// The guides belong to the scene rather than to a panel, so every panel
+/// showing that scene draws the same set. `index` is the guide's place
+/// in its axis's list, which is kept sorted, so it names the same line
+/// for as long as the list holds still.
+#[derive(Component, Clone, Copy)]
+pub struct GuideLine {
+    /// The panel content entity carrying this stage's
+    /// [`Viewport2dPanelHost`].
+    pub host: Entity,
+    /// Which way the line runs.
+    pub axis: CanvasAxis,
+    /// Which guide of that axis it draws.
+    pub index: usize,
 }
 
 /// The outline drawn around the selected authored UI node in one panel.
@@ -674,6 +696,7 @@ impl Plugin for UiStagePlugin {
                 (
                     cancel_manipulation,
                     sync_selection_overlays,
+                    sync_guide_lines,
                     sync_snap_highlights,
                 )
                     .chain(),
@@ -2119,6 +2142,158 @@ fn place_highlight(node: &mut Node, axis: CanvasAxis, at: f32) {
             node.top = px(at);
             node.width = percent(100);
             node.height = px(1);
+        }
+    }
+}
+
+/// Draw the open scene's guides over every panel showing it.
+///
+/// Guides are scene data, not a property of a gesture or a selection, so
+/// they stand whatever the canvas is doing; what takes them down is the
+/// panel leaving [`Viewport2dMode::Edit`], where the stage belongs to the
+/// running scene, or the canvas settings saying they are hidden.
+fn sync_guide_lines(
+    mut commands: Commands,
+    snap: Res<CanvasSnap>,
+    roots: Query<(Entity, &CanvasGuides), AuthoredUiSceneRoot>,
+    hosts: Query<(Entity, &Viewport2dPanelHost)>,
+    stages: Query<&ComputedNode, With<Scene2dViewport>>,
+    lines: Query<(Entity, &GuideLine)>,
+    mut nodes: Query<&mut Node>,
+) {
+    let wanted = guide_lines(&snap, &roots, &hosts, &stages);
+
+    for (entity, line) in &lines {
+        match wanted.iter().find(|want| {
+            want.host == line.host && want.axis == line.axis && want.index == line.index
+        }) {
+            Some(want) => {
+                if let Ok(mut node) = nodes.get_mut(entity) {
+                    place_guide(&mut node, want.axis, want.at);
+                }
+            }
+            None => {
+                if let Ok(mut entity) = commands.get_entity(entity) {
+                    entity.despawn();
+                }
+            }
+        }
+    }
+
+    for want in wanted {
+        if lines.iter().any(|(_, line)| {
+            line.host == want.host && line.axis == want.axis && line.index == want.index
+        }) {
+            continue;
+        }
+        let mut node = Node {
+            position_type: PositionType::Absolute,
+            ..default()
+        };
+        place_guide(&mut node, want.axis, want.at);
+        let mut line = Node {
+            position_type: PositionType::Absolute,
+            ..default()
+        };
+        place_highlight(&mut line, want.axis, (GUIDE_HIT_WIDTH - 1.0) / 2.0);
+        commands.spawn((
+            GuideLine {
+                host: want.host,
+                axis: want.axis,
+                index: want.index,
+            },
+            EditorEntity,
+            node,
+            // Under the selection chrome: a guide says where to put a
+            // node, and the node being placed is what the user is
+            // looking at.
+            ZIndex(OVERLAY_Z - 1),
+            // Pickable, because a guide is dragged by its line.
+            Pickable::default(),
+            ChildOf(want.stage),
+            children![(
+                EditorEntity,
+                line,
+                BackgroundColor(tokens::GUIDE_LINE),
+                Pickable::IGNORE,
+            )],
+        ));
+    }
+}
+
+/// One guide drawn over one panel.
+struct WantedGuide {
+    host: Entity,
+    stage: Entity,
+    axis: CanvasAxis,
+    index: usize,
+    /// Where the line sits in the stage's logical pixels.
+    at: f32,
+}
+
+/// Every guide every panel wants drawn.
+///
+/// A guide's position is canvas-global authored pixels, and the stage
+/// node *is* the canvas, so the whole mapping is the stage's own scale:
+/// there is no parent corner to add, unlike a snap landing.
+fn guide_lines(
+    snap: &CanvasSnap,
+    roots: &Query<(Entity, &CanvasGuides), AuthoredUiSceneRoot>,
+    hosts: &Query<(Entity, &Viewport2dPanelHost)>,
+    stages: &Query<&ComputedNode, With<Scene2dViewport>>,
+) -> Vec<WantedGuide> {
+    if !snap.show_guides {
+        return Vec::new();
+    }
+    // A malformed document holding several roots picks the lowest
+    // entity, the same one the guide operators write.
+    let Some((_, guides)) = roots.iter().min_by_key(|(entity, _)| *entity) else {
+        return Vec::new();
+    };
+
+    let mut wanted = Vec::new();
+    for (host_entity, host) in hosts {
+        if host.mode != Viewport2dMode::Edit {
+            continue;
+        }
+        let Ok(stage) = stages.get(host.stage) else {
+            continue;
+        };
+        let target_scale = target_pixels_per_stage_pixel(stage.size(), host.target_size);
+        let scale = stage_pixels_per_target_pixel(target_scale, stage.inverse_scale_factor());
+        for (axis, positions) in [
+            (CanvasAxis::Vertical, &guides.vertical),
+            (CanvasAxis::Horizontal, &guides.horizontal),
+        ] {
+            for (index, at) in positions.iter().enumerate() {
+                wanted.push(WantedGuide {
+                    host: host_entity,
+                    stage: host.stage,
+                    axis,
+                    index,
+                    at: at * scale,
+                });
+            }
+        }
+    }
+    wanted
+}
+
+/// Lay a guide's hit slab across the whole stage, centred on the line.
+fn place_guide(node: &mut Node, axis: CanvasAxis, at: f32) {
+    let half = GUIDE_HIT_WIDTH / 2.0;
+    match axis {
+        CanvasAxis::Vertical => {
+            node.left = px(at - half);
+            node.top = px(0);
+            node.width = px(GUIDE_HIT_WIDTH);
+            node.height = percent(100);
+        }
+        CanvasAxis::Horizontal => {
+            node.left = px(0);
+            node.top = px(at - half);
+            node.width = percent(100);
+            node.height = px(GUIDE_HIT_WIDTH);
         }
     }
 }
