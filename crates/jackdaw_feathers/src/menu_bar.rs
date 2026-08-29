@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bevy::{feathers::theme::ThemedText, prelude::*, ui::ui_transform::UiGlobalTransform};
 use jackdaw_widgets::menu_bar::{
     MenuAction, MenuBar, MenuBarDropdown, MenuBarDropdownItem, MenuBarItem, MenuBarState,
@@ -30,6 +32,47 @@ pub const SUBMENU_ACTION_PREFIX: &str = ">>";
 /// Action string closing the innermost [`SUBMENU_ACTION_PREFIX`] group.
 pub const SUBMENU_END_ACTION: &str = "<<";
 
+/// Action strings in menu entries that start with this prefix render as a
+/// row showing a ticked box; the suffix is the action the row dispatches.
+pub const CHECKED_ACTION_PREFIX: &str = "[x]";
+
+/// Action strings in menu entries that start with this prefix render as a
+/// row showing an empty box; the suffix is the action the row dispatches.
+pub const UNCHECKED_ACTION_PREFIX: &str = "[ ]";
+
+/// One dropdown row that shows `checked` beside `label` and dispatches
+/// `action` when clicked. `action` is anything a plain row takes, an
+/// [`OP_ACTION_PREFIX`] call included, so a row's state and its call are
+/// written in one place.
+pub fn checked_row(
+    checked: bool,
+    action: impl Into<String>,
+    label: impl Into<String>,
+) -> (String, String) {
+    let prefix = if checked {
+        CHECKED_ACTION_PREFIX
+    } else {
+        UNCHECKED_ACTION_PREFIX
+    };
+    (format!("{prefix}{}", action.into()), label.into())
+}
+
+/// The box a row in state `checked` draws.
+pub fn checked_icon(checked: bool) -> Icon {
+    if checked {
+        Icon::SquareCheck
+    } else {
+        Icon::Square
+    }
+}
+
+/// On a dropdown row built by [`checked_row`], the state its box shows.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MenuCheckedRow {
+    /// Whether the row's box is ticked.
+    pub checked: bool,
+}
+
 /// One menu group as dropdown rows: an opener carrying `label`, the
 /// group's own `rows`, and the closer. Feathers renders the opener as a
 /// row with an arrow that expands `rows` in a child dropdown while the
@@ -54,7 +97,11 @@ pub fn plugin(app: &mut App) {
         .add_observer(on_menu_pointer_out)
         .add_systems(
             Update,
-            (sync_menu_bar_item_backgrounds, advance_submenu_hover),
+            (
+                sync_menu_bar_item_backgrounds,
+                advance_submenu_hover,
+                refresh_dynamic_menu_rows,
+            ),
         );
 }
 
@@ -116,6 +163,7 @@ fn on_menu_bar_item_over(
     mut state: ResMut<MenuBarState>,
     items: Query<(&MenuBarItem, &ComputedNode, &UiGlobalTransform)>,
     item_check: Query<Entity, With<MenuBarItem>>,
+    bars: Query<Entity, With<MenuBar>>,
     parents: Query<&ChildOf>,
     windows: Query<&Window>,
     mut bg_query: Query<(Entity, &mut BackgroundColor), With<MenuBarItem>>,
@@ -124,10 +172,18 @@ fn on_menu_bar_item_over(
         return;
     };
     // Hover only switches menus after the user has opened one with a click.
-    if state.open_menu.is_none() {
+    let Some(open) = state.open_menu else {
+        return;
+    };
+    if open == entity {
         return;
     }
-    if state.open_menu == Some(entity) {
+    // Sweeping the pointer along one menu bar walks its menus. A menu
+    // button elsewhere in the editor is not on that walk: passing over it
+    // with a menu open would otherwise swap the open menu for the
+    // button's, from a pointer that was only on its way somewhere else.
+    let bar = menu_bar_of(entity, &bars, &parents);
+    if bar.is_none() || bar != menu_bar_of(open, &bars, &parents) {
         return;
     }
     let Ok((item, computed, global_tf)) = items.get(entity) else {
@@ -724,6 +780,69 @@ fn spawn_menu_bar_item(
     ));
 }
 
+/// Builds a menu's rows from the world each time it is asked, so a menu
+/// showing state (a [`checked_row`], a value in a label) is as fresh as
+/// the world it reads.
+pub type MenuRowsFn = Arc<dyn Fn(&World) -> Vec<(String, String)> + Send + Sync>;
+
+/// On a [`MenuBarItem`], the source its `actions` are rebuilt from.
+#[derive(Component, Clone)]
+pub struct DynamicMenuRows(pub MenuRowsFn);
+
+/// A menu that opens from a button of its own rather than from a menu
+/// bar: a ghost button carrying `icon` and `label`, whose rows `rows`
+/// builds from the world. Clicking it opens the same dropdown a menu-bar
+/// item opens, with the same hover submenus and the same outside-click
+/// close.
+///
+/// The button is a [`MenuBarItem`] with no [`MenuBar`] over it, which is
+/// what keeps hovering it from switching a menu bar's open menu.
+pub fn menu_button(label: impl Into<String>, icon: Icon, rows: MenuRowsFn) -> impl Bundle {
+    let label = label.into();
+    (
+        MenuBarItem {
+            label: label.clone(),
+            actions: Vec::new(),
+        },
+        DynamicMenuRows(rows),
+        button(
+            ButtonProps::new(label)
+                .with_variant(ButtonVariant::Ghost)
+                .with_left_icon(icon),
+        ),
+    )
+}
+
+/// Rebuild every [`DynamicMenuRows`] item's rows, writing them only when
+/// they differ from what the item already holds so an unchanged menu
+/// leaves change detection alone.
+fn refresh_dynamic_menu_rows(world: &mut World) {
+    let sources = world
+        .query::<(Entity, &DynamicMenuRows)>()
+        .iter(world)
+        .map(|(entity, rows)| (entity, rows.clone()))
+        .collect::<Vec<_>>();
+    for (entity, rows) in sources {
+        let actions = (rows.0)(world);
+        let Some(mut item) = world.get_mut::<MenuBarItem>(entity) else {
+            continue;
+        };
+        if item.actions != actions {
+            item.actions = actions;
+        }
+    }
+}
+
+/// The [`MenuBar`] `item` belongs to, or `None` for a menu button
+/// standing on its own.
+fn menu_bar_of(
+    item: Entity,
+    bars: &Query<Entity, With<MenuBar>>,
+    parents: &Query<&ChildOf>,
+) -> Option<Entity> {
+    find_ancestor_matching(item, bars, parents)
+}
+
 fn spawn_dropdown(
     commands: &mut Commands,
     x: f32,
@@ -826,33 +945,46 @@ fn spawn_dropdown(
             continue;
         }
 
+        let (checked, action) = checked_state(action);
         let item = MenuBarDropdownItem {
-            action: action.clone(),
+            action: action.to_string(),
         };
-        let btn = button(
-            ButtonProps::new(label.clone())
-                .with_variant(ButtonVariant::Ghost)
-                // TODO: add keybind as subtitle
-                .align_left(),
-        );
+        let mut props = ButtonProps::new(label.clone())
+            .with_variant(ButtonVariant::Ghost)
+            // TODO: add keybind as subtitle
+            .align_left();
+        if let Some(checked) = checked {
+            props = props.with_left_icon(checked_icon(checked));
+        }
 
-        if let Ok(call) = ButtonOperatorCall::try_from(action.as_str()) {
-            // Operator-bound menu entries dispatch through the editor's
-            // `ButtonOperatorCall` observer; the editor's tooltip
-            // renderer reads the call's id + params for the rich
-            // hover popover.
-            commands.entity(dropdown).with_child((item, btn, call));
-        } else {
-            // Non-operator actions (legacy free-form action ids)
-            // dispatch via the `MenuAction` event. They get no hover
-            // tooltip; the operator-only tooltip pipeline has no
-            // place for them, and these will go away once every menu
-            // entry is operator-backed.
-            commands.entity(dropdown).with_child((item, btn));
+        let mut row = commands.spawn((item, button(props), ChildOf(dropdown)));
+        if let Some(checked) = checked {
+            row.insert(MenuCheckedRow { checked });
+        }
+        // Operator-bound menu entries dispatch through the editor's
+        // `ButtonOperatorCall` observer; the editor's tooltip renderer
+        // reads the call's id + params for the rich hover popover.
+        // Non-operator actions (legacy free-form action ids) dispatch
+        // via the `MenuAction` event and get no tooltip; these will go
+        // away once every menu entry is operator-backed.
+        if let Ok(call) = ButtonOperatorCall::try_from(action) {
+            row.insert(call);
         }
     }
 
     dropdown
+}
+
+/// The box state a row's action asks for, and the action left once the
+/// prefix carrying it is off. `None` for a row that shows no box.
+fn checked_state(action: &str) -> (Option<bool>, &str) {
+    if let Some(rest) = action.strip_prefix(CHECKED_ACTION_PREFIX) {
+        (Some(true), rest)
+    } else if let Some(rest) = action.strip_prefix(UNCHECKED_ACTION_PREFIX) {
+        (Some(false), rest)
+    } else {
+        (None, action)
+    }
 }
 
 /// The rows of the group opened just before `start`, and the index past
@@ -952,6 +1084,200 @@ mod tests {
         assert!(
             world.get::<MenuBarDropdownItem>(rows[1]).is_some(),
             "an action row is still a menu entry",
+        );
+    }
+
+    #[test]
+    fn a_checked_row_shows_its_state_and_still_dispatches_its_operator() {
+        let (world, _, rows) = dropdown(
+            vec![
+                checked_row(true, "op:canvas.snap?kind=pixel", "Use Pixel Snap"),
+                checked_row(false, "op:canvas.snap?kind=guides", "Guides"),
+            ],
+            0.0,
+            1080.0,
+        );
+
+        assert_eq!(
+            rows.iter()
+                .map(|row| world.get::<MenuCheckedRow>(*row).map(|row| row.checked))
+                .collect::<Vec<_>>(),
+            vec![Some(true), Some(false)],
+            "each row shows the state it was built with",
+        );
+        assert_eq!(
+            checked_icon(true).unicode(),
+            Icon::SquareCheck.unicode(),
+            "a row that is on draws a ticked box",
+        );
+        assert_eq!(
+            checked_icon(false).unicode(),
+            Icon::Square.unicode(),
+            "a row that is off draws an empty box",
+        );
+
+        let call = world
+            .get::<ButtonOperatorCall>(rows[0])
+            .expect("a checked row still calls the operator its action names");
+        assert_eq!(
+            call.to_string(),
+            "canvas.snap(kind: \"pixel\")",
+            "the state prefix is off the action before it is parsed",
+        );
+        assert_eq!(
+            world
+                .get::<MenuBarDropdownItem>(rows[0])
+                .map(|item| item.action.clone()),
+            Some("op:canvas.snap?kind=pixel".to_string()),
+            "the row's action is what is left once the prefix is off",
+        );
+    }
+
+    #[test]
+    fn a_checked_row_inside_a_group_keeps_its_state() {
+        let (world, _, rows) = dropdown(
+            submenu_row(
+                "Smart Snapping",
+                [checked_row(true, "op:canvas.snap?kind=parent", "Parent")],
+            ),
+            0.0,
+            1080.0,
+        );
+        let group = world
+            .get::<SubmenuRow>(rows[0])
+            .expect("the group row carries what it expands");
+
+        let (child, _, child_rows) = dropdown(group.actions.clone(), 0.0, 1080.0);
+        assert_eq!(
+            child
+                .get::<MenuCheckedRow>(child_rows[0])
+                .map(|row| row.checked),
+            Some(true),
+            "the state reaches the child dropdown with the row",
+        );
+    }
+
+    /// What a menu built from the world reads.
+    #[derive(Resource)]
+    struct SnapKindOn(bool);
+
+    /// An app with the menu machinery running and nothing spawned.
+    fn menu_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<MenuBarState>()
+            .insert_resource(Time::<()>::default())
+            .add_plugins(plugin);
+        app
+    }
+
+    fn item_rows(app: &App, item: Entity) -> Vec<(String, String)> {
+        app.world()
+            .get::<MenuBarItem>(item)
+            .expect("the menu button is a menu-bar item")
+            .actions
+            .clone()
+    }
+
+    #[test]
+    fn a_menu_button_rebuilds_its_rows_from_the_world() {
+        let mut app = menu_app();
+        app.insert_resource(SnapKindOn(false));
+        let button = app
+            .world_mut()
+            .spawn(menu_button(
+                "Snap",
+                Icon::Magnet,
+                Arc::new(|world: &World| {
+                    let on = world.resource::<SnapKindOn>().0;
+                    vec![checked_row(
+                        on,
+                        "op:canvas.snap?kind=pixel",
+                        "Use Pixel Snap",
+                    )]
+                }),
+            ))
+            .id();
+
+        app.update();
+        assert_eq!(
+            item_rows(&app, button),
+            vec![checked_row(
+                false,
+                "op:canvas.snap?kind=pixel",
+                "Use Pixel Snap"
+            )],
+            "the rows are built from the world the button opens over",
+        );
+
+        app.world_mut().resource_mut::<SnapKindOn>().0 = true;
+        app.update();
+        assert_eq!(
+            item_rows(&app, button),
+            vec![checked_row(
+                true,
+                "op:canvas.snap?kind=pixel",
+                "Use Pixel Snap"
+            )],
+            "a menu opened after the change shows the change",
+        );
+    }
+
+    /// A menu-bar item that the hover path can act on: the open path
+    /// reads a laid-out node off it.
+    fn bar_item(app: &mut App, label: &str, parent: Option<Entity>) -> Entity {
+        let mut entity = app.world_mut().spawn((
+            MenuBarItem {
+                label: label.to_string(),
+                actions: vec![("op:test.row".to_string(), label.to_string())],
+            },
+            ComputedNode::default(),
+            UiGlobalTransform::default(),
+            BackgroundColor(Color::NONE),
+        ));
+        if let Some(parent) = parent {
+            entity.insert(ChildOf(parent));
+        }
+        entity.id()
+    }
+
+    fn open_menu(app: &mut App, item: Entity) {
+        app.world_mut().resource_mut::<MenuBarState>().open_menu = Some(item);
+    }
+
+    fn opened(app: &App) -> Option<Entity> {
+        app.world().resource::<MenuBarState>().open_menu
+    }
+
+    #[test]
+    fn a_header_menu_button_does_not_join_the_top_bars_hover_chain() {
+        let mut app = menu_app();
+        let bar = app.world_mut().spawn(MenuBar).id();
+        let file = bar_item(&mut app, "File", Some(bar));
+        let edit = bar_item(&mut app, "Edit", Some(bar));
+        let header = app
+            .world_mut()
+            .spawn((
+                menu_button("Snap", Icon::Magnet, Arc::new(|_: &World| Vec::new())),
+                ComputedNode::default(),
+                UiGlobalTransform::default(),
+            ))
+            .id();
+        app.update();
+
+        open_menu(&mut app, file);
+        hover(&mut app, edit);
+        assert_eq!(
+            opened(&app),
+            Some(edit),
+            "the pointer walking one menu bar still walks its menus",
+        );
+
+        open_menu(&mut app, file);
+        hover(&mut app, header);
+        assert_eq!(
+            opened(&app),
+            Some(file),
+            "a menu button outside the bar is not one of the bar's menus",
         );
     }
 
