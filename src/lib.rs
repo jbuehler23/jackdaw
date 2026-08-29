@@ -124,6 +124,7 @@ pub mod view_modes;
 pub mod view_ops;
 pub mod viewport;
 pub mod viewport_2d;
+pub mod viewport_host;
 pub mod viewport_overlays;
 pub mod viewport_select;
 pub mod viewport_util;
@@ -350,6 +351,7 @@ impl Plugin for EditorCorePlugin {
                 hierarchy::HierarchyPlugin,
                 viewport::ViewportPlugin,
                 viewport_2d::Viewport2dPlugin,
+                viewport_host::ViewportHostPlugin,
                 ui_stage::UiStagePlugin,
                 preview_context::PreviewContextPlugin,
                 authored_widgets::AuthoredWidgetPlugin,

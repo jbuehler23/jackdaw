@@ -361,6 +361,7 @@ fn capture_view_state(world: &mut World) -> ViewState {
         selection,
         brush_sub_selection,
         ui_view,
+        viewport_mode: None,
     }
 }
 

@@ -286,6 +286,12 @@ pub struct ViewState {
     /// `Viewport2dPanelHost::view_touched`; without it the default framing
     /// would be stored here on the first swap and read as chosen thereafter.
     pub ui_view: Option<crate::viewport_2d::Ui2dView>,
+    /// The viewport mode the user picked for this tab, overriding the one its
+    /// scene kind asks for.
+    ///
+    /// `None` means the tab was never switched, so its next activation puts
+    /// the viewport in whichever mode the document's kind implies.
+    pub viewport_mode: Option<crate::viewport_host::ViewportMode>,
 }
 
 impl ViewState {

@@ -423,6 +423,40 @@ pub fn is_ui_scene_root_type_path(path: &str) -> bool {
     path == UI_SCENE_ROOT_TYPE || path.ends_with(UI_SCENE_ROOT_PATH_TAIL)
 }
 
+/// Type name of the 2D world scene root marker, matched the same way as
+/// [`UI_SCENE_ROOT_TYPE`].
+const SCENE_2D_ROOT_TYPE: &str = "Scene2dRoot";
+
+/// [`SCENE_2D_ROOT_TYPE`] as the tail of a qualified path.
+const SCENE_2D_ROOT_PATH_TAIL: &str = "::Scene2dRoot";
+
+/// Which kind of scene this document is, read from the root markers a save
+/// writes.
+///
+/// The counterpart of the kind a `scene.new` was given: a reopened document
+/// carries no operator parameter, so its kind has to be read back out of it.
+/// Walks every patch component, like [`declares_ui_scene_root`], so a marker
+/// nested inside a subtree still counts. A document carrying neither marker is
+/// a 3D scene, which is what the editor has always assumed.
+pub fn declared_scene_kind(ast: &jackdaw_bsn::SceneBsnAst) -> crate::scenes::operators::SceneKind {
+    use crate::scenes::operators::SceneKind;
+
+    let mut two_d = false;
+    for path in ast.all_patch_type_paths() {
+        if is_ui_scene_root_type_path(path) {
+            // A UI screen is the more specific kind: a document declaring both
+            // is authored as UI.
+            return SceneKind::Ui;
+        }
+        two_d |= path == SCENE_2D_ROOT_TYPE || path.ends_with(SCENE_2D_ROOT_PATH_TAIL);
+    }
+    if two_d {
+        SceneKind::TwoD
+    } else {
+        SceneKind::ThreeD
+    }
+}
+
 /// Whether a sidecar import may overwrite data the store already holds.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SidecarImport {
@@ -942,6 +976,91 @@ bevy_camera::visibility::Visibility::Inherited
 some_crate::NotAUiSceneRoot
 "#
         ));
+    }
+}
+
+/// Tests for reading a saved document's kind back out of it, which is how a
+/// reopened scene reaches the viewport mode it was authored in.
+#[cfg(test)]
+mod declared_scene_kind_tests {
+    use super::declared_scene_kind;
+    use crate::scenes::operators::SceneKind;
+
+    fn kind_of(bsn: &str) -> SceneKind {
+        let ast = jackdaw_bsn::parse_bsn_text(bsn).expect("the fixture parses");
+        declared_scene_kind(&ast)
+    }
+
+    #[test]
+    fn a_document_with_a_ui_root_is_a_ui_scene() {
+        assert_eq!(
+            kind_of(
+                r#"
+#Overlay
+UiSceneRoot
+"#
+            ),
+            SceneKind::Ui
+        );
+    }
+
+    #[test]
+    fn a_qualified_2d_root_is_a_2d_scene() {
+        assert_eq!(
+            kind_of(
+                r#"
+#World
+jackdaw_scene_types::Scene2dRoot
+"#
+            ),
+            SceneKind::TwoD
+        );
+    }
+
+    #[test]
+    fn a_2d_root_nested_in_a_subtree_is_found() {
+        assert_eq!(
+            kind_of(
+                r#"
+bevy_ecs::hierarchy::Children [
+    #World
+    bevy_transform::components::transform::Transform
+    Children [
+        #Root
+        jackdaw_scene_types::Scene2dRoot
+    ]
+]
+"#
+            ),
+            SceneKind::TwoD,
+            "a walk that only visited document roots would miss this"
+        );
+    }
+
+    #[test]
+    fn a_document_with_neither_marker_is_a_3d_scene() {
+        assert_eq!(
+            kind_of(
+                r#"
+#World
+bevy_transform::components::transform::Transform
+"#
+            ),
+            SceneKind::ThreeD
+        );
+    }
+
+    #[test]
+    fn a_type_merely_ending_in_the_2d_root_name_is_not_a_2d_scene() {
+        assert_eq!(
+            kind_of(
+                r#"
+#World
+some_crate::NotAScene2dRoot
+"#
+            ),
+            SceneKind::ThreeD
+        );
     }
 }
 
