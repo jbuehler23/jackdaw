@@ -398,6 +398,7 @@ fn build_scene(heights: &[f32]) -> (String, usize) {
                 cell_size: 1.0,
                 height_step: 0.25,
             },
+            ..default()
         },
         ChildOf(root),
     ));

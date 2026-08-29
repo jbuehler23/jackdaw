@@ -20,11 +20,15 @@ pub struct PendingTabClose {
     pub tab_index: Option<usize>,
 }
 
-/// Tracks whether the "save-all before quit" dialog is currently shown.
+/// Whether the "save-all before quit" dialog is currently shown.
 #[derive(Resource, Default)]
 pub struct PendingQuit {
     /// `true` while the quit confirmation dialog is displayed.
     pub active: bool,
+    /// `true` when confirming leaves the open project for the launcher rather
+    /// than exiting. Both discard the editor's live scene and ask the same
+    /// question with different wording.
+    pub leaving_project: bool,
 }
 
 /// Marker on the dialog root (the scrim node). Used to despawn the whole
@@ -269,8 +273,13 @@ pub fn spawn_confirm_quit_dialog(world: &mut World) {
     ));
 
     // Body.
+    let body = if world.resource::<PendingQuit>().leaving_project {
+        "You have unsaved changes. Save all before closing this project?"
+    } else {
+        "You have unsaved changes. Save all before quitting?"
+    };
     world.spawn((
-        Text::new("You have unsaved changes. Save all before quitting?"),
+        Text::new(body),
         TextFont {
             font: editor_font.clone().into(),
             font_size: tokens::TEXT_SIZE_SM,
@@ -378,31 +387,107 @@ pub fn on_quit_dialog_button_click(
         }
     }
 
-    commands.queue(move |world: &mut World| {
-        world.resource_mut::<PendingQuit>().active = false;
-
-        match action {
-            ConfirmQuitButton::SaveAll => {
-                if crate::scenes::operators::scene_save_all_system(world) {
-                    world
-                        .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
-                        .write(bevy::app::AppExit::Success);
-                } else {
-                    warn!("quit cancelled because one or more scenes could not be saved");
-                }
-            }
-            ConfirmQuitButton::DiscardAll => {
-                world
-                    .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
-                    .write(bevy::app::AppExit::Success);
-            }
-            ConfirmQuitButton::Cancel => {
-                // Nothing to do; dialog is already despawned.
-            }
-        }
-    });
+    commands.queue(move |world: &mut World| apply_confirm_quit_action(world, action));
 
     Ok(())
+}
+
+/// Resolve the quit dialog. Separate from the observer so each of the three
+/// answers can be run against a world directly.
+pub(crate) fn apply_confirm_quit_action(world: &mut World, action: ConfirmQuitButton) {
+    let leaving_project = {
+        let Some(mut pending) = world.get_resource_mut::<PendingQuit>() else {
+            return;
+        };
+        pending.active = false;
+        pending.leaving_project
+    };
+
+    match action {
+        ConfirmQuitButton::SaveAll => {
+            if crate::scenes::operators::scene_save_all_system(world) {
+                confirmed_leave(world, leaving_project);
+            } else {
+                warn!("leaving cancelled because one or more scenes could not be saved");
+                // A failed save leaves the editor where it was, so it disarms what
+                // the confirmed path would have acted on.
+                disarm_leave(world);
+                report_save_failure(world);
+            }
+        }
+        ConfirmQuitButton::DiscardAll => confirmed_leave(world, leaving_project),
+        ConfirmQuitButton::Cancel => disarm_leave(world),
+    }
+}
+
+/// Clear what the dialog armed: the project the user picked would otherwise
+/// open the next time the launcher is reached, and the wording flag would
+/// outlive the question it belonged to.
+fn disarm_leave(world: &mut World) {
+    world.remove_resource::<crate::project_select::PendingAutoOpen>();
+    if let Some(mut pending) = world.get_resource_mut::<PendingQuit>() {
+        pending.leaving_project = false;
+    }
+}
+
+/// Report that nothing was saved. The dialog is gone by the time a save is
+/// attempted, so without a toast the user reads its disappearance as success.
+fn report_save_failure(world: &mut World) {
+    let (Some(editor_font), Some(icon_font)) = (
+        world.get_resource::<EditorFont>().map(|f| f.0.clone()),
+        world
+            .get_resource::<jackdaw_feathers::icons::IconFont>()
+            .map(|f| f.0.clone()),
+    ) else {
+        return;
+    };
+    world.spawn(jackdaw_feathers::toast::toast(
+        jackdaw_feathers::toast::ToastVariant::Error,
+        "Could not save every scene. Nothing was closed.",
+        jackdaw_feathers::toast::DEFAULT_TOAST_DURATION,
+        &editor_font,
+        &icon_font,
+    ));
+}
+
+/// Act on a confirmed Save All / Discard All: back to the launcher when the
+/// user was closing the project, out of the app otherwise.
+fn confirmed_leave(world: &mut World, leaving_project: bool) {
+    if leaving_project {
+        world.resource_mut::<PendingQuit>().leaving_project = false;
+        world
+            .resource_mut::<NextState<crate::AppState>>()
+            .set(crate::AppState::ProjectSelect);
+        return;
+    }
+    world
+        .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
+        .write(bevy::app::AppExit::Success);
+}
+
+/// Leave the open project for the launcher, asking about unsaved work first.
+/// Returns `true` when the caller may flip the state itself; `false` when a
+/// dialog owns the decision.
+///
+/// Both ways out of a project (Home and Open Recent) go through here, since
+/// leaving clears the live scene either way.
+pub fn leave_project_or_confirm(world: &mut World) -> bool {
+    let any_dirty = world
+        .get_resource::<crate::scenes::Scenes>()
+        .is_some_and(|scenes| scenes.tabs.iter().any(|tab| tab.dirty));
+    if !any_dirty {
+        return true;
+    }
+    let Some(mut pending) = world.get_resource_mut::<PendingQuit>() else {
+        return true;
+    };
+    if pending.active {
+        return false;
+    }
+    pending.active = true;
+    pending.leaving_project = true;
+    spawn_confirm_quit_dialog(world);
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -558,5 +643,65 @@ mod apply_confirm_dialog_action_tests {
             world.resource::<Scenes>().tabs[0].dirty,
             "a failed save must leave the tab dirty",
         );
+    }
+
+    /// Closing a project throws away the live scene as quitting does, so unsaved work stops
+    /// the caller and raises the dialog.
+    #[test]
+    fn unsaved_work_holds_the_project_open_until_it_is_answered() {
+        let mut world = world_with_dirty_tab_at(std::path::PathBuf::from("/nowhere/zone.bsn"));
+        world.init_resource::<PendingQuit>();
+
+        assert!(
+            !leave_project_or_confirm(&mut world),
+            "the caller must not leave while the question is unanswered"
+        );
+        let pending = world.resource::<PendingQuit>();
+        assert!(pending.active);
+        assert!(pending.leaving_project, "the wording follows this flag");
+    }
+
+    /// A save that could not happen leaves nothing armed: a project pick left behind would
+    /// have the next Home relaunch into that project instead of reaching the launcher.
+    #[test]
+    fn a_failed_save_disarms_the_project_pick_and_the_wording() {
+        let mut world = world_with_dirty_tab_at(std::path::PathBuf::from("/nowhere/zone.bsn"));
+        // Untitled, so there is no path to save it to.
+        world.resource_mut::<Scenes>().tabs[0].path = None;
+        world.insert_resource(PendingQuit {
+            active: true,
+            leaving_project: true,
+        });
+        world.insert_resource(crate::project_select::PendingAutoOpen {
+            path: std::path::PathBuf::from("/projects/beta"),
+            skip_build: false,
+        });
+
+        apply_confirm_quit_action(&mut world, ConfirmQuitButton::SaveAll);
+
+        assert!(
+            world
+                .get_resource::<crate::project_select::PendingAutoOpen>()
+                .is_none(),
+            "a pick nobody confirmed must not survive to fire later",
+        );
+        let pending = world.resource::<PendingQuit>();
+        assert!(!pending.active);
+        assert!(!pending.leaving_project);
+        assert!(
+            world.resource::<Scenes>().tabs[0].dirty,
+            "the work is still unsaved",
+        );
+    }
+
+    /// With nothing unsaved there is no question, so the caller leaves at once.
+    #[test]
+    fn a_saved_project_closes_without_a_prompt() {
+        let mut world = world_with_dirty_tab_at(std::path::PathBuf::from("/nowhere/zone.bsn"));
+        world.init_resource::<PendingQuit>();
+        world.resource_mut::<Scenes>().tabs[0].dirty = false;
+
+        assert!(leave_project_or_confirm(&mut world));
+        assert!(!world.resource::<PendingQuit>().active);
     }
 }

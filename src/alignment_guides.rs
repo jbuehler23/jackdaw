@@ -105,6 +105,33 @@ fn dragged_entity_position(
     None
 }
 
+/// The queries [`viewport_overlays::collect_measurable_world_vertices`] needs,
+/// bundled so both guide systems stay inside bevy's system-argument limit.
+#[derive(bevy::ecs::system::SystemParam)]
+struct MeasurableGeometry<'w, 's> {
+    children_query: Query<'w, 's, &'static Children>,
+    mesh_query: Query<'w, 's, (&'static Mesh3d, &'static GlobalTransform)>,
+    view_dependent: Query<'w, 's, (), With<crate::ViewDependentBounds>>,
+    authored_bounds: Query<'w, 's, &'static bevy::camera::primitives::Aabb>,
+    meshes: Res<'w, Assets<Mesh>>,
+}
+
+impl MeasurableGeometry<'_, '_> {
+    /// See [`viewport_overlays::collect_measurable_world_vertices`].
+    fn collect(&self, entity: Entity, global_tf: &GlobalTransform, out: &mut Vec<Vec3>) {
+        viewport_overlays::collect_measurable_world_vertices(
+            entity,
+            &self.children_query,
+            &self.mesh_query,
+            &self.view_dependent,
+            &self.authored_bounds,
+            global_tf,
+            &self.meshes,
+            out,
+        );
+    }
+}
+
 /// Cache sorted unique vertex coordinates (per axis) for all non-selected entities at drag start.
 fn cache_reference_coords(
     mut state: ResMut<AlignmentGuideState>,
@@ -114,9 +141,7 @@ fn cache_reference_coords(
     modal_state: Res<ModalTransformState>,
     viewport_drag: Res<ViewportDragState>,
     non_selected: Query<(Entity, &GlobalTransform, Option<&BrushMeshCache>), Without<Selected>>,
-    children_query: Query<&Children>,
-    mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
-    meshes: Res<Assets<Mesh>>,
+    geometry: MeasurableGeometry,
 ) {
     if !settings.show_alignment_guides {
         state.cache_valid = false;
@@ -157,13 +182,7 @@ fn cache_reference_coords(
                 .collect::<Vec<Vec3>>()
         } else {
             let mut verts = Vec::new();
-            viewport_overlays::collect_descendant_mesh_world_vertices(
-                entity,
-                &children_query,
-                &mesh_query,
-                &meshes,
-                &mut verts,
-            );
+            geometry.collect(entity, global_tf, &mut verts);
             if verts.is_empty() {
                 continue;
             }
@@ -233,9 +252,7 @@ fn draw_alignment_guides(
     active: Res<crate::viewport::ActiveViewport>,
     selected: Query<(Entity, &GlobalTransform, Option<&BrushMeshCache>), With<Selected>>,
     mut selected_transforms: Query<&mut Transform, With<Selected>>,
-    children_query: Query<&Children>,
-    mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
-    meshes: Res<Assets<Mesh>>,
+    geometry: MeasurableGeometry,
 ) {
     if !settings.show_alignment_guides {
         return;
@@ -278,13 +295,7 @@ fn draw_alignment_guides(
                 dragged_verts.push(global_tf.transform_point(*v));
             }
         } else {
-            viewport_overlays::collect_descendant_mesh_world_vertices(
-                entity,
-                &children_query,
-                &mesh_query,
-                &meshes,
-                &mut dragged_verts,
-            );
+            geometry.collect(entity, global_tf, &mut dragged_verts);
         }
     }
     if dragged_verts.is_empty() {
@@ -371,5 +382,127 @@ fn draw_alignment_guides(
                 }
             }
         }
+    }
+}
+
+/// Alignment guides snap a dragged object to the coordinates of the geometry
+/// around it. A terrain draws itself as clipmap rings laid out around the
+/// camera, so [`MeasurableGeometry`] supplies its authored extent in place of
+/// edges that would move with the viewer.
+#[cfg(test)]
+mod measurable_geometry_tests {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::camera::primitives::Aabb;
+    use bevy::mesh::PrimitiveTopology;
+
+    use super::*;
+
+    fn world() -> World {
+        let mut world = World::new();
+        world.insert_resource(Assets::<Mesh>::default());
+        world
+    }
+
+    fn triangle(world: &mut World, offset: Vec3, view_dependent: bool) -> Entity {
+        let mesh = world.resource_mut::<Assets<Mesh>>().add(
+            Mesh::new(
+                PrimitiveTopology::TriangleList,
+                RenderAssetUsages::default(),
+            )
+            .with_inserted_attribute(
+                Mesh::ATTRIBUTE_POSITION,
+                vec![[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0]],
+            ),
+        );
+        let mut entity = world.spawn((
+            Mesh3d(mesh),
+            Transform::from_translation(offset),
+            GlobalTransform::from_translation(offset),
+        ));
+        if view_dependent {
+            entity.insert(crate::ViewDependentBounds);
+        }
+        entity.id()
+    }
+
+    fn collect(world: &mut World, root: Entity) -> Vec<Vec3> {
+        world
+            .run_system_cached_with(
+                |root: In<Entity>,
+                 geometry: MeasurableGeometry,
+                 transforms: Query<&GlobalTransform>| {
+                    let global_tf = transforms.get(*root).copied().unwrap_or_default();
+                    let mut out = Vec::new();
+                    geometry.collect(*root, &global_tf, &mut out);
+                    out
+                },
+                root,
+            )
+            .expect("system runs")
+    }
+
+    #[test]
+    fn a_terrains_authored_edges_are_offered_as_snap_targets() {
+        let mut world = world();
+        let terrain = world
+            .spawn((
+                Transform::default(),
+                GlobalTransform::default(),
+                Aabb::from_min_max(Vec3::new(-50.0, 0.0, -50.0), Vec3::new(50.0, 3.0, 50.0)),
+            ))
+            .id();
+        let ring = triangle(&mut world, Vec3::new(800.0, 0.0, 800.0), true);
+        world.entity_mut(terrain).add_child(ring);
+
+        let verts = collect(&mut world, terrain);
+
+        assert!(!verts.is_empty(), "a terrain has edges worth snapping to");
+        let (min, max) = crate::viewport_overlays::aabb_from_points(&verts);
+        assert_eq!(min, Vec3::new(-50.0, 0.0, -50.0));
+        assert_eq!(max, Vec3::new(50.0, 3.0, 50.0));
+    }
+
+    #[test]
+    fn ordinary_geometry_is_unaffected() {
+        let mut world = world();
+        let root = world
+            .spawn((Transform::default(), GlobalTransform::default()))
+            .id();
+        let child = triangle(&mut world, Vec3::new(7.0, 0.0, 0.0), false);
+        world.entity_mut(root).add_child(child);
+
+        let verts = collect(&mut world, root);
+        assert_eq!(verts.len(), 3);
+        let (min, max) = crate::viewport_overlays::aabb_from_points(&verts);
+        assert_eq!(min.x, 6.0);
+        assert_eq!(max.x, 8.0);
+    }
+
+    /// `cache_reference_coords` walks every non-selected entity one at a time, so each
+    /// clipmap ring is queried on its own. A ring carries `ViewDependentBounds` and an
+    /// `Aabb` bevy re-derives from the viewer-centred lattice, so contributing that `Aabb`
+    /// would make a dragged object snap to different coordinates depending on where the
+    /// camera stands.
+    #[test]
+    fn a_ring_offers_no_snap_targets_wherever_the_camera_put_it() {
+        let mut world = world();
+        let near = triangle(&mut world, Vec3::ZERO, true);
+        world
+            .entity_mut(near)
+            .insert(Aabb::from_min_max(Vec3::splat(-32.0), Vec3::splat(32.0)));
+        let far = triangle(&mut world, Vec3::splat(900.0), true);
+        world
+            .entity_mut(far)
+            .insert(Aabb::from_min_max(Vec3::splat(-320.0), Vec3::splat(320.0)));
+
+        assert!(
+            collect(&mut world, near).is_empty(),
+            "a ring is not a snap target"
+        );
+        assert_eq!(
+            collect(&mut world, near),
+            collect(&mut world, far),
+            "and moving the camera must not change what is offered"
+        );
     }
 }

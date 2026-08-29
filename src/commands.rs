@@ -34,7 +34,7 @@ struct FieldEditSessionKey {
 
 /// Live field values at [`field_edit_begin`] for in-progress gestures.
 ///
-/// Lifecycle: [`field_edit_begin`] → [`field_edit_preview`]* →
+/// Lifecycle: [`field_edit_begin`] -> [`field_edit_preview`]* ->
 /// [`field_edit_commit`].
 ///
 /// Preview mutates ECS before any `SetBsnField` exists. Capturing live values
@@ -536,9 +536,8 @@ impl EditorCommand for AddComponent {
             return;
         }
 
-        // Snapshot reflected components before insert so we can tell which
-        // companions `#[require]` (and similar) added, without writing them
-        // into the document.
+        // Snapshot reflected components before insert to identify which companions
+        // `#[require]` (and similar) added, without writing them into the document.
         drop(registry);
         let before = reflected_component_type_paths(world, self.entity);
 
@@ -1164,7 +1163,7 @@ impl EditorCommand for SetBsnField {
             if self.was_derived {
                 // Drop the override so the component is derived (or absent
                 // from the document) again. Restore the pre-edit live field
-                // onto the temporary patch when we have one, so mirror can
+                // onto the temporary patch when one exists, so mirror can
                 // put ECS back before the patch is removed.
                 if let Some(old_value) = &self.old_value {
                     jackdaw_bsn::set_bsn_field(
@@ -1903,7 +1902,7 @@ mod set_bsn_field_tests {
             .spawn(Transform::from_xyz(2.0, 5.0, 8.0))
             .id();
         create_entity_in_ast(app.world_mut(), entity, None);
-        // Transform is on the entity but not in the document → derived.
+        // Transform is on the entity but not in the document, so it is derived.
         let type_path = "bevy_transform::components::transform::Transform";
         {
             let ast = app.world().resource::<SceneBsnAst>();

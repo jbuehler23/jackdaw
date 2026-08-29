@@ -3,11 +3,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::asset::{ReflectAsset, ReflectHandle, UntypedAssetId};
 use bevy::reflect::TypeRegistry;
-use bevy::{
-    ecs::reflect::AppTypeRegistry,
-    prelude::*,
-    tasks::{AsyncComputeTaskPool, IoTaskPool},
-};
+use bevy::{ecs::reflect::AppTypeRegistry, prelude::*, tasks::AsyncComputeTaskPool};
 use rfd::AsyncFileDialog;
 
 use super::load::SceneDialogTask;
@@ -27,7 +23,7 @@ use super::{
 /// system temp dir: a rename across filesystems (e.g. `/tmp` to a
 /// project on another mount) is not atomic and fails outright on most
 /// platforms.
-fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
         .file_name()
@@ -121,6 +117,37 @@ pub fn save_scene_with_outcome(world: &mut World) -> SaveOutcome {
             error!("scene save failed: {err}");
             SaveOutcome::Failed
         }
+    }
+}
+
+/// Point the active tab, and the global scene path, at `path`.
+///
+/// The tab keeps its contents and its history and takes the new file. The next
+/// save writes there, and everything that lives beside a scene follows it.
+pub fn retarget_active_scene(world: &mut World, path: &str) {
+    let path = PathBuf::from(path);
+    let display_name = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "untitled".to_string());
+    if let Some(mut scene_path) = world.get_resource_mut::<SceneFilePath>() {
+        scene_path.path = Some(path.to_string_lossy().into_owned());
+    }
+    if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
+        let active = scenes.active;
+        if let Some(tab) = scenes.tabs.get_mut(active) {
+            tab.path = Some(path.clone());
+            tab.display_name = display_name;
+        }
+    }
+    // A rename leaves the ground unchanged, so the bake taken from it follows the new name.
+    // Left pointed at the old file, the check that stops one scene's navmesh landing beside
+    // another's would refuse the next save's artifact write.
+    if let Some(mut state) =
+        world.get_resource_mut::<crate::terrain::navmesh_bake::TerrainNavmeshState>()
+        && let Some(baked) = state.baked.as_mut()
+    {
+        baked.scene = Some(path);
     }
 }
 
@@ -271,9 +298,9 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         .map_err(|err| BevyError::from(format!("failed to write scene file {path}: {err}")))?;
     info!("Scene saved to {path}");
 
-    // Also persist the in-memory baked navmesh (if any) to a sibling
-    // `<scene>.nav` file so it survives reload. No-op when nothing is baked.
-    export_navmesh_sibling(world, &path);
+    // A terrain bake writes its own artifact when it finishes; this covers a scene that has
+    // moved since, keeping the two files named after each other.
+    crate::terrain::navmesh_bake::export_beside_scene(world, &path);
 
     // The authoritative scene and sidecars are now on disk. Only now clear
     // dirty state and retarget a redirected tab at its new `.bsn` path.
@@ -303,53 +330,6 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     save_layout_to_project(world);
 
     Ok(())
-}
-
-/// Export the in-memory baked navmesh to a sibling `<scene>.nav` file,
-/// reusing the same bincode serialization as the manual `navmesh.save`
-/// operator (and the same contract `navmesh.load` / a headless server
-/// reads back). This is a clean no-op when no navmesh is baked (the common
-/// case): it never errors the scene save and never writes an empty file.
-///
-/// Known limitation: a previously-exported `.nav` is never deleted here. If
-/// a scene once had a navmesh (so `.nav` exists) and the navmesh is later
-/// removed, the stale `.nav` remains on disk. This is intentional for now -
-/// deletion risks clobbering a file another tool or the user owns, and a
-/// stale `.nav` is better caught by a freshness check on the load side.
-fn export_navmesh_sibling(world: &World, scene_path: &str) {
-    use bevy_rerecast::Navmesh;
-
-    use crate::navmesh::NavmeshHandleRes;
-
-    let Some(handle) = world.get_resource::<NavmeshHandleRes>() else {
-        return;
-    };
-    let Some(assets) = world.get_resource::<Assets<Navmesh>>() else {
-        return;
-    };
-    let Some(navmesh) = assets.get(&handle.0) else {
-        return;
-    };
-
-    let nav_path = PathBuf::from(scene_path).with_extension("nav");
-    let navmesh = navmesh.clone();
-    IoTaskPool::get()
-        .spawn(async move {
-            let result = (|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-                if let Some(parent) = nav_path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                let mut file = std::fs::File::create(&nav_path)?;
-                let config = bincode::config::standard();
-                bincode::serde::encode_into_std_write(&navmesh, &mut file, config)?;
-                Ok(())
-            })();
-            match result {
-                Ok(()) => info!("Navmesh exported to {}", nav_path.display()),
-                Err(err) => warn!("Failed to export navmesh: {err}"),
-            }
-        })
-        .detach();
 }
 
 /// Write every terrain's bulk data to its sidecar beside the scene.
@@ -422,9 +402,9 @@ pub(crate) fn export_terrain_sidecars(
         let Some(data) = store.get(&data_path) else {
             continue;
         };
-        let bytes = sidecar::encode(data).ok_or_else(|| {
+        let bytes = sidecar::save(data).map_err(|err| {
             BevyError::from(format!(
-                "terrain sidecar {data_path:?} declares more data than fits in memory"
+                "terrain sidecar {data_path:?} cannot be written: {err}"
             ))
         })?;
         writes.push((path, bytes));
@@ -765,10 +745,18 @@ pub fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: &Path) 
 
     // Seed the reference map with assets that already resolve: catalog entries
     // and scene-inline entries already embedded as document roots.
+    //
+    // An unsaved material is left out: nothing on disk defines it, so seeding it would emit
+    // an `@Name` that resolves nowhere outside this editor run. Unseeded, it embeds inline
+    // and the scene stands alone.
     let mut seed: bevy::platform::collections::HashMap<UntypedAssetId, String> =
         bevy::platform::collections::HashMap::default();
+    let ephemeral = crate::material_assets::ephemeral_material_ids(world);
     if let Some(catalog) = world.get_resource::<crate::asset_catalog::AssetCatalog>() {
         for (id, name) in &catalog.id_to_name {
+            if ephemeral.contains(id) {
+                continue;
+            }
             seed.entry(*id).or_insert_with(|| name.clone());
         }
     }
@@ -866,10 +854,10 @@ fn rederive_handle_patches(
 /// their subtrees) as BSN text for the clipboard.
 ///
 /// Same-scene inline `#Name` refs are preserved via the live
-/// [`jackdaw_bsn::BsnSceneAssets`] seed (same as full-scene save). Pathless
-/// handles unknown to the live scene still embed as `#Name` roots. Stable
-/// node ids are stripped so paste can mint fresh ones. Works on a deep clone
-/// of the document, so emission never mutates the live state.
+/// [`jackdaw_bsn::BsnSceneAssets`] seed, as in a full-scene save. Pathless
+/// handles unknown to the live scene embed as `#Name` roots. Stable node ids are
+/// stripped so paste can mint fresh ones. Works on a deep clone of the document,
+/// so emission does not mutate live state.
 pub(crate) fn emit_bsn_entities_with_inline_assets(
     world: &mut World,
     parent_path: &Path,
@@ -890,13 +878,18 @@ pub(crate) fn emit_bsn_entities_with_inline_assets(
 
     let registry = world.resource::<AppTypeRegistry>().clone();
 
-    // Seed catalog and live scene-inline names so same-scene copy keeps the
-    // existing `#Name` refs. Cross-scene paste of unknown inline assets is
-    // not supported yet; those handles would need embedding + merge.
+    // Seed catalog and live scene-inline names so same-scene copy keeps the existing `#Name`
+    // refs. Cross-scene paste of unknown inline assets is unsupported; those handles would
+    // need embedding and merge. Unsaved materials are left unseeded so the clip carries
+    // them inline.
     let mut seed: bevy::platform::collections::HashMap<UntypedAssetId, String> =
         bevy::platform::collections::HashMap::default();
+    let ephemeral = crate::material_assets::ephemeral_material_ids(world);
     if let Some(catalog) = world.get_resource::<crate::asset_catalog::AssetCatalog>() {
         for (id, name) in &catalog.id_to_name {
+            if ephemeral.contains(id) {
+                continue;
+            }
             seed.entry(*id).or_insert_with(|| name.clone());
         }
     }
@@ -924,8 +917,8 @@ pub(crate) fn emit_bsn_entities_with_inline_assets(
         collect_bsn_inline_assets(world, &reg, &entities, seed)
     };
 
-    // Strip stable node ids from the copied subtrees; paste mints fresh ones
-    // before grafting, so the clipboard must not carry the source ids.
+    // Strip stable node ids from the copied subtrees: paste mints fresh ones before
+    // grafting, so the clipboard must not carry the source ids.
     for &node in &subtree_nodes {
         let found = ast.get_patches(node).and_then(|patches| {
             patches.0.iter().copied().find(|&pe| {
@@ -963,6 +956,30 @@ pub(crate) fn emit_bsn_entities_with_inline_assets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_save_renames_the_tab_it_saves() {
+        use crate::scenes::{SceneTab, Scenes};
+
+        let mut world = World::new();
+        world.init_resource::<SceneFilePath>();
+        let mut scenes = Scenes::default();
+        scenes.push_tab(SceneTab::new_untitled(1));
+        world.insert_resource(scenes);
+
+        retarget_active_scene(&mut world, "/tmp/zones/harbour.bsn");
+
+        assert_eq!(
+            world.resource::<SceneFilePath>().path.as_deref(),
+            Some("/tmp/zones/harbour.bsn")
+        );
+        let scenes = world.resource::<Scenes>();
+        assert_eq!(scenes.tabs[0].display_name, "harbour");
+        assert_eq!(
+            scenes.tabs[0].path.as_deref(),
+            Some(Path::new("/tmp/zones/harbour.bsn"))
+        );
+    }
 
     /// In Live view the preview world carries streamed game values, so a save
     /// must persist the AST's authored entity payload, not the live overlay.
@@ -1061,11 +1078,12 @@ mod tests {
         let mut store = crate::terrain::TerrainDataStore::default();
         store.insert(
             data_path.to_string(),
-            jackdaw_terrain::TerrainData {
+            jackdaw_terrain::RegionTerrainData::from_legacy_v1(&jackdaw_terrain::TerrainData {
                 resolution: 2,
                 heights: vec![0.0; 4],
                 channels: vec![],
-            },
+            })
+            .expect("a power-of-two resolution migrates"),
         );
         world.insert_resource(store);
         world.spawn(jackdaw_scene_types::Terrain {
@@ -1086,10 +1104,9 @@ mod tests {
         );
     }
 
-    /// I10(a): `save_scene_with_outcome` must distinguish a genuine
-    /// failure from "opened a dialog instead" so a caller that still has
-    /// work to do after a save does not treat a pending Save As dialog
-    /// as a failed write.
+    /// `save_scene_with_outcome` distinguishes a failure from an opened dialog, so a caller
+    /// with work to defer (see `scene_io::load::on_new_scene_save`) does not give up on a
+    /// save still in flight.
     #[test]
     fn save_scene_with_outcome_reports_saved_on_success() {
         let mut world = build_live_save_world();
@@ -1184,156 +1201,6 @@ mod tests {
     }
 }
 
-/// Tests for the navmesh auto-export-on-save sibling writer.
-///
-/// `export_navmesh_sibling` dispatches the actual file write onto
-/// `IoTaskPool` and `.detach()`es it, so "assert the file exists right
-/// after calling" is inherently racy. This build enables the
-/// `multi_threaded` task-pool feature, so detached IO-pool tasks run on
-/// dedicated OS threads and make progress without any main-thread tick.
-/// We therefore exercise the *real* production code path (Option 1 from
-/// the plan) and poll the filesystem with a bounded timeout for the
-/// sibling `.nav` to appear. The no-navmesh case early-returns before
-/// any task is spawned, so it is deterministic without polling.
-#[cfg(test)]
-mod navmesh_export_tests {
-    use std::path::PathBuf;
-    use std::time::Duration;
-
-    use bevy::prelude::*;
-    use bevy::tasks::{IoTaskPool, TaskPoolBuilder};
-    use bevy_rerecast::Navmesh;
-    use bevy_rerecast::rerecast::{DetailNavmesh, PolygonNavmesh};
-
-    use super::export_navmesh_sibling;
-    use crate::navmesh::NavmeshHandleRes;
-
-    /// Build a minimal, valid `Navmesh`. `Navmesh` itself does not derive
-    /// `Default`, but each of its three fields does (`PolygonNavmesh` and
-    /// `DetailNavmesh` derive it; `NavmeshSettings` has a hand-written
-    /// `impl Default`), so we assemble it field-by-field.
-    fn empty_navmesh() -> Navmesh {
-        Navmesh {
-            polygon: PolygonNavmesh::default(),
-            detail: DetailNavmesh::default(),
-            settings: bevy_rerecast::NavmeshSettings::default(),
-        }
-    }
-
-    /// A unique temp directory for one test, namespaced by PID + a label
-    /// so concurrent test runs (and the two tests here) never collide.
-    fn unique_tmp_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("jd_nav_{}_{label}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        dir
-    }
-
-    /// A minimal App with just enough to host `Assets<Navmesh>`:
-    /// `MinimalPlugins` provides the task pools that `AssetPlugin`
-    /// requires, `AssetPlugin` provides the asset infrastructure, and
-    /// `init_asset::<Navmesh>` registers the store.
-    fn minimal_asset_app() -> App {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .init_asset::<Navmesh>();
-        app
-    }
-
-    #[test]
-    fn exports_decodable_nav_when_baked() {
-        // The production write runs on IoTaskPool; make sure it exists.
-        // `get_or_init` is idempotent, so this is safe even if another
-        // test/plugin already initialized it.
-        IoTaskPool::get_or_init(|| TaskPoolBuilder::new().build());
-
-        let tmp = unique_tmp_dir("baked");
-        let scene_path = tmp.join("zone.jsn");
-        let nav_path = tmp.join("zone.nav");
-
-        let mut app = minimal_asset_app();
-
-        // Insert a baked navmesh and point NavmeshHandleRes at it.
-        let handle = app
-            .world_mut()
-            .resource_mut::<Assets<Navmesh>>()
-            .add(empty_navmesh());
-        app.world_mut().insert_resource(NavmeshHandleRes(handle));
-
-        // Call the real production helper: it spawns a detached IoTaskPool
-        // write of the sibling `.nav`.
-        export_navmesh_sibling(app.world(), &scene_path.to_string_lossy());
-
-        // Poll for the file to appear (bounded ~3s). The IO pool runs on
-        // its own threads, so no app tick is needed; we still tick the
-        // global pools each iteration as a belt-and-suspenders nudge in
-        // case the runner constrained the pool to the calling thread.
-        // Poll for the sibling `.nav` to both exist AND fully decode (bounded
-        // ~3s). The IO pool runs on its own threads and creates the file before
-        // the bytes are flushed, so `exists()` alone races the write and can
-        // read a truncated file; a successful decode is the real readiness
-        // signal. The bytes must decode back into a Navmesh via the same bincode
-        // contract the loader uses (`navmesh.load`). We still tick the global
-        // pools each iteration as a belt-and-suspenders nudge in case the runner
-        // constrained the pool to the calling thread.
-        let config = bincode::config::standard();
-        let mut decoded: Option<Navmesh> = None;
-        for _ in 0..300 {
-            if nav_path.exists()
-                && let Ok(mut file) = std::fs::File::open(&nav_path)
-                && let Ok(nav) = bincode::serde::decode_from_std_read(&mut file, config)
-            {
-                decoded = Some(nav);
-                break;
-            }
-            bevy::tasks::tick_global_task_pools_on_main_thread();
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let decoded = decoded.unwrap_or_else(|| {
-            panic!(
-                "sibling .nav was not written and decodable within the timeout: {}",
-                nav_path.display()
-            )
-        });
-        assert_eq!(
-            decoded,
-            empty_navmesh(),
-            "round-tripped navmesh must equal the baked input"
-        );
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn no_nav_when_not_baked() {
-        let tmp = unique_tmp_dir("empty");
-        let scene_path = tmp.join("empty.jsn");
-        let nav_path = tmp.join("empty.nav");
-
-        // Asset store exists, but NO NavmeshHandleRes resource is inserted,
-        // so the helper early-returns before spawning any task. This path
-        // is deterministic and needs no polling.
-        let app = minimal_asset_app();
-
-        export_navmesh_sibling(app.world(), &scene_path.to_string_lossy());
-
-        // Give any (erroneously) spawned async write a chance to land, so
-        // a regression that drops the guard would actually be caught.
-        for _ in 0..20 {
-            bevy::tasks::tick_global_task_pools_on_main_thread();
-            std::thread::sleep(Duration::from_millis(5));
-        }
-
-        assert!(
-            !nav_path.exists(),
-            "no .nav must be written when nothing is baked: {}",
-            nav_path.display()
-        );
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-}
-
 /// Tests for the terrain sidecar sibling writer.
 ///
 /// These drive the synchronous save boundary directly: success means the
@@ -1343,7 +1210,7 @@ mod terrain_sidecar_tests {
     use std::path::PathBuf;
 
     use bevy::prelude::*;
-    use jackdaw_terrain::{TerrainData, sidecar};
+    use jackdaw_terrain::{RegionTerrainData, TerrainData, sidecar};
 
     use super::{emit_bsn_scene_with_inline_assets, export_terrain_sidecars};
     use crate::terrain::TerrainDataStore;
@@ -1364,10 +1231,40 @@ mod terrain_sidecar_tests {
         }
     }
 
+    /// A store holding ground for `terrain`, in regions sized to keep the fixture small.
+    /// Nothing allocates implicitly, so a terrain a test writes to is laid down first.
+    fn store_holding(terrain: &jackdaw_scene_types::Terrain) -> TerrainDataStore {
+        let mut regions = jackdaw_terrain::TerrainRegions::new(
+            jackdaw_terrain::RegionSize::new(terrain.resolution.next_power_of_two())
+                .expect("a power of two"),
+        );
+        regions
+            .ensure_grid(terrain.resolution)
+            .expect("inside the region cap");
+        let mut store = TerrainDataStore::default();
+        store.insert(
+            terrain.data_path.clone(),
+            jackdaw_terrain::RegionTerrainData {
+                regions,
+                ..Default::default()
+            },
+        );
+        store
+    }
+
+    fn document(data: &TerrainData) -> RegionTerrainData {
+        let mut document =
+            RegionTerrainData::from_legacy_v1(data).expect("a power-of-two resolution migrates");
+        // The load path settles a document onto the geometry its cells are drawn at before
+        // a save, so a stand-in for a document the editor holds states its own.
+        document.grid = Some(jackdaw_terrain::sidecar::GridGeometry::DEFAULT);
+        document
+    }
+
     fn world_with_terrain(data_path: &str, data: TerrainData) -> World {
         let mut world = World::new();
         let mut store = TerrainDataStore::default();
-        store.insert(data_path.to_string(), data);
+        store.insert(data_path.to_string(), document(&data));
         world.insert_resource(store);
         world.spawn(jackdaw_scene_types::Terrain {
             resolution: 4,
@@ -1377,10 +1274,10 @@ mod terrain_sidecar_tests {
         world
     }
 
-    fn read_decode(path: &std::path::Path) -> Option<TerrainData> {
+    fn read_decode(path: &std::path::Path) -> Option<RegionTerrainData> {
         std::fs::read(path)
             .ok()
-            .and_then(|bytes| sidecar::decode(&bytes).ok())
+            .and_then(|bytes| sidecar::load(&bytes).ok())
     }
 
     #[test]
@@ -1395,7 +1292,7 @@ mod terrain_sidecar_tests {
 
         let decoded = read_decode(&sidecar_path)
             .unwrap_or_else(|| panic!("sidecar not written: {}", sidecar_path.display()));
-        assert_eq!(decoded, sculpted());
+        assert_eq!(decoded, document(&sculpted()));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1469,10 +1366,8 @@ mod terrain_sidecar_tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// The defect this whole design exists to fix: a 512-resolution
-    /// terrain used to write 262,144 text floats into the scene file on
-    /// every save. `.bsn` is sold as a format you can read in a `git
-    /// diff`, so the terrain's contribution has to be a handful of lines.
+    /// Terrain heights live in the sidecar, so a 512-resolution terrain contributes a
+    /// handful of lines to the scene text rather than 262,144 floats.
     #[test]
     fn a_512_terrain_contributes_almost_nothing_to_the_scene_text() {
         use bevy::ecs::reflect::AppTypeRegistry;
@@ -1492,11 +1387,11 @@ mod terrain_sidecar_tests {
         let mut store = TerrainDataStore::default();
         store.insert(
             "zone.terrain-0.jdterrain".to_string(),
-            TerrainData {
+            document(&TerrainData {
                 resolution: 512,
                 heights: vec![0.75; 512 * 512],
                 channels: vec![],
-            },
+            }),
         );
         world.insert_resource(store);
 
@@ -1532,9 +1427,10 @@ mod terrain_sidecar_tests {
         let scene_path = tmp.join("zone.bsn");
 
         let mut world = world_with_terrain("zone.terrain-0.jdterrain", sculpted());
-        world
-            .resource_mut::<TerrainDataStore>()
-            .insert("other-scene.terrain-0.jdterrain".to_string(), sculpted());
+        world.resource_mut::<TerrainDataStore>().insert(
+            "other-scene.terrain-0.jdterrain".to_string(),
+            document(&sculpted()),
+        );
         export_terrain_sidecars(&mut world, &scene_path.to_string_lossy())
             .expect("this scene's sidecar writes");
 
@@ -1550,19 +1446,17 @@ mod terrain_sidecar_tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// C1 pinning test, the finding's exact scenario: a teammate's sidecar
-    /// was written by a newer build (`SidecarError::UnsupportedVersion`),
-    /// this build cannot read it, the user paints a stroke anyway, then
-    /// saves. Before the fix this wrote a zeroed `TerrainData` straight
-    /// over the real file.
+    /// A sidecar written by a newer build (`SidecarError::UnsupportedVersion`) cannot be
+    /// read here. The user paints a stroke anyway and saves; the save must not write a
+    /// zeroed document over the real file.
     #[test]
     fn an_unreadable_sidecar_is_never_overwritten_by_a_save() {
         let tmp = unique_tmp_dir("unreadable");
         let scene_path = tmp.join("zone.bsn");
         let sidecar_path = tmp.join("zone.terrain-0.jdterrain");
 
-        let mut original = sidecar::encode(&sculpted()).expect("encodes");
-        original[8..10].copy_from_slice(&(sidecar::VERSION + 1).to_le_bytes());
+        let mut original = sidecar::save(&document(&sculpted())).expect("encodes");
+        original[8..10].copy_from_slice(&(sidecar::VERSION_5 + 1).to_le_bytes());
         std::fs::write(&sidecar_path, &original).expect("write sidecar");
 
         let mut world = World::new();
@@ -1608,6 +1502,238 @@ mod terrain_sidecar_tests {
             original,
             "the unreadable original must survive the save byte-for-byte",
         );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The texture-set reference and the control word under every cell are authored through
+    /// the store, written by a save, and come back from the file identical.
+    #[test]
+    fn authored_paint_and_materials_survive_a_save_and_reload() {
+        use jackdaw_terrain::Control;
+
+        let tmp = unique_tmp_dir("paint-roundtrip");
+        let scene_path = tmp.join("zone.bsn");
+        let data_path = "zone.terrain-0.jdterrain";
+        let terrain = jackdaw_scene_types::Terrain {
+            resolution: 4,
+            data_path: data_path.to_string(),
+            ..default()
+        };
+        let painted = Control::default()
+            .with_base_id(3)
+            .with_overlay_id(7)
+            .with_blend(200);
+
+        let mut world = World::new();
+        world.insert_resource(store_holding(&terrain));
+        world.spawn(terrain.clone());
+        let authored = {
+            let mut store = world.resource_mut::<TerrainDataStore>();
+            store
+                .entry_for(&terrain)
+                .expect("keyed")
+                .set_heights(&sculpted().heights);
+            store.control_mut(&terrain).expect("keyed")[5] = painted;
+            store
+                .set_materials(
+                    data_path,
+                    vec![
+                        jackdaw_terrain::sidecar::TerrainMaterialSlot::new("grass"),
+                        jackdaw_terrain::sidecar::TerrainMaterialSlot {
+                            material: "rock_05".to_string(),
+                            uv_scale: 0.25,
+                            detile: 0.5,
+                        },
+                    ],
+                )
+                .expect("plain material names are accepted");
+            store.get(data_path).expect("authored").clone()
+        };
+
+        export_terrain_sidecars(&mut world, &scene_path.to_string_lossy()).expect("save succeeds");
+
+        // A fresh store, as a reopened editor has.
+        let mut reopened = World::new();
+        reopened.insert_resource(TerrainDataStore::default());
+        reopened.spawn(terrain.clone());
+        crate::scene_io::import_terrain_sidecars(
+            &mut reopened,
+            &scene_path.to_string_lossy(),
+            crate::scene_io::SidecarImport::Reload,
+        );
+
+        let store = reopened.resource::<TerrainDataStore>();
+        assert_eq!(
+            store.get(data_path),
+            Some(&authored),
+            "the reloaded document must equal what was authored",
+        );
+        assert_eq!(store.control(data_path)[5], painted);
+        assert_eq!(store.materials(data_path).len(), 2);
+        assert_eq!(store.materials(data_path)[1].material, "rock_05");
+        assert_eq!(store.materials(data_path)[1].uv_scale, 0.25);
+        assert_eq!(store.materials(data_path)[1].detile, 0.5);
+        assert_eq!(store.heights(data_path), sculpted().heights.as_slice());
+        assert!(
+            store.take_control_dirty(data_path).is_some(),
+            "loaded paint must be marked for upload, or it never reaches the material",
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 129 vertices per edge is 2^7 + 1, so no single power-of-two region holds it. It has
+    /// to open, be editable, and round-trip every height, seam row included.
+    #[test]
+    fn a_non_power_of_two_sidecar_opens_and_embeds_every_height() {
+        let tmp = unique_tmp_dir("non-pow2");
+        let scene_path = tmp.join("zone.bsn");
+        let sidecar_path = tmp.join("zone.terrain-0.jdterrain");
+
+        let heights: Vec<f32> = (0..129 * 129).map(|i| i as f32 * 0.5).collect();
+        let original = sidecar::encode(&TerrainData {
+            resolution: 129,
+            heights: heights.clone(),
+            channels: vec![],
+        })
+        .expect("v1 encodes");
+        std::fs::write(&sidecar_path, &original).expect("write sidecar");
+
+        let odd = jackdaw_scene_types::Terrain {
+            resolution: 129,
+            data_path: "zone.terrain-0.jdterrain".to_string(),
+            ..default()
+        };
+        let mut world = World::new();
+        world.insert_resource(TerrainDataStore::default());
+        world.spawn(odd.clone());
+
+        crate::scene_io::import_terrain_sidecars(
+            &mut world,
+            &scene_path.to_string_lossy(),
+            crate::scene_io::SidecarImport::Reload,
+        );
+        let store = world.resource::<TerrainDataStore>();
+        assert!(
+            !store.is_load_failed("zone.terrain-0.jdterrain"),
+            "a 2^k + 1 vertex grid is storable and must not be quarantined",
+        );
+        // A 129-vertex grid lands in the 2x2 block of 128-cell regions that holds it, so the
+        // terrain is 256 cells across with the authored 129 embedded at its corner. Each
+        // authored height stays on the cell it described; the rest is ground the regions
+        // brought with them.
+        let document = store.get("zone.terrain-0.jdterrain").expect("loaded");
+        assert_eq!(document.grid_resolution(), 256);
+        for (at, want) in heights.iter().enumerate() {
+            let (x, z) = ((at % 129) as i32, (at / 129) as i32);
+            assert_eq!(document.regions.height_at(x, z), *want);
+        }
+        assert!(
+            world
+                .resource_mut::<TerrainDataStore>()
+                .entry_for(&odd)
+                .is_some(),
+            "edits to it must be accepted",
+        );
+
+        export_terrain_sidecars(&mut world, &scene_path.to_string_lossy()).expect("save succeeds");
+        let reloaded = read_decode(&sidecar_path).expect("sidecar rewritten");
+        for (at, want) in heights.iter().enumerate() {
+            let (x, z) = ((at % 129) as i32, (at / 129) as i32);
+            assert_eq!(
+                reloaded.regions.height_at(x, z),
+                *want,
+                "the rewrite must keep every height, seam row included",
+            );
+        }
+        assert_eq!(reloaded.regions.region_size().get(), 128);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A pre-region sidecar opens, migrates, and is rewritten in the current format with no
+    /// user action.
+    #[test]
+    fn a_pre_region_sidecar_migrates_on_load_and_saves_in_the_current_format() {
+        let tmp = unique_tmp_dir("migrate");
+        let scene_path = tmp.join("zone.bsn");
+        let sidecar_path = tmp.join("zone.terrain-0.jdterrain");
+        std::fs::write(
+            &sidecar_path,
+            sidecar::encode(&sculpted()).expect("v1 encodes"),
+        )
+        .expect("write sidecar");
+
+        let mut world = World::new();
+        world.insert_resource(TerrainDataStore::default());
+        world.spawn(jackdaw_scene_types::Terrain {
+            resolution: 4,
+            data_path: "zone.terrain-0.jdterrain".to_string(),
+            ..default()
+        });
+        crate::scene_io::import_terrain_sidecars(
+            &mut world,
+            &scene_path.to_string_lossy(),
+            crate::scene_io::SidecarImport::Reload,
+        );
+        assert_eq!(
+            world
+                .resource::<TerrainDataStore>()
+                .heights("zone.terrain-0.jdterrain"),
+            sculpted().heights.as_slice(),
+        );
+
+        export_terrain_sidecars(&mut world, &scene_path.to_string_lossy()).expect("save succeeds");
+        let rewritten = std::fs::read(&sidecar_path).expect("read back");
+        assert_eq!(
+            u16::from_le_bytes([rewritten[8], rewritten[9]]),
+            sidecar::VERSION_5,
+        );
+        // The load settled this terrain onto the geometry its declared rectangle drew with
+        // (four vertices across the default 100 metres, cornered at -size/2) and the rewrite
+        // records it, so reading the file back needs no rectangle.
+        let mut migrated = document(&sculpted());
+        migrated.grid = Some(sidecar::GridGeometry {
+            cell_size: 100.0 / 3.0,
+            anchor: Vec2::splat(-50.0),
+        });
+        assert_eq!(
+            read_decode(&sidecar_path),
+            Some(migrated),
+            "the migrated document must survive the rewrite",
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A terrain the editor touched and then flattened is a region on disk, not an empty
+    /// document that would reopen as no terrain at all.
+    #[test]
+    fn a_flat_but_authored_terrain_round_trips_as_a_present_region() {
+        let tmp = unique_tmp_dir("flat-authored");
+        let scene_path = tmp.join("zone.bsn");
+        let data_path = "zone.terrain-0.jdterrain";
+        let terrain = jackdaw_scene_types::Terrain {
+            resolution: 4,
+            data_path: data_path.to_string(),
+            ..default()
+        };
+
+        let mut world = World::new();
+        world.insert_resource(store_holding(&terrain));
+        world.spawn(terrain.clone());
+        {
+            let mut store = world.resource_mut::<TerrainDataStore>();
+            let mut entry = store.entry_for(&terrain).expect("keyed");
+            entry.heights_mut()[0] = 5.0;
+            entry.set_heights(&[0.0; 16]);
+        }
+        export_terrain_sidecars(&mut world, &scene_path.to_string_lossy()).expect("save succeeds");
+
+        let reloaded = read_decode(&tmp.join(data_path)).expect("sidecar written");
+        assert_eq!(reloaded.regions.region_count(), 1);
+        assert!(reloaded.contiguous_grid().is_some());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

@@ -1371,7 +1371,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityAddCameraRigOp>();
     ctx.register_operator::<EntityAddEmptyOp>()
         .register_operator::<EntityAddImageOp>()
-        .register_operator::<EntityAddNavmeshOp>()
         .register_operator::<EntityAddTerrainOp>()
         .register_operator::<EntityAddPrefabOp>()
         .register_operator::<EntityAddPlaneOp>()
@@ -1802,28 +1801,6 @@ pub(crate) fn entity_add_reflection_probe(
     OperatorResult::Finished
 }
 
-#[operator(id = "entity.add.navmesh", label = "Navmesh")]
-pub(crate) fn entity_add_navmesh(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
-) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        crate::spawn_undoable(world, "Add Navmesh Region", |world| {
-            let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
-                SystemState::new(world);
-            let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
-                return Entity::PLACEHOLDER;
-            };
-            let entity = crate::navmesh::spawn_navmesh_entity(&mut commands);
-            selection.select_single(&mut commands, entity);
-            system_state.apply(world);
-            crate::scene_io::register_entity_in_ast(world, entity);
-            entity
-        });
-    });
-    OperatorResult::Finished
-}
-
 #[cfg(feature = "multiplayer")]
 #[operator(id = "entity.add.spawn_point", label = "Spawn Point")]
 pub(crate) fn entity_add_spawn_point(
@@ -1923,7 +1900,12 @@ pub(crate) fn entity_add_terrain(
     mut commands: Commands,
 ) -> OperatorResult {
     commands.queue(|world: &mut World| {
-        crate::spawn_undoable(world, "Add Terrain", |world| {
+        let is_first_terrain = world
+            .query_filtered::<Entity, With<jackdaw_scene_types::Terrain>>()
+            .iter(world)
+            .next()
+            .is_none();
+        crate::spawn_undoable(world, "Add Terrain", move |world| {
             let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
                 SystemState::new(world);
             let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
@@ -1933,6 +1915,12 @@ pub(crate) fn entity_add_terrain(
             selection.select_single(&mut commands, entity);
             system_state.apply(world);
             crate::scene_io::register_entity_in_ast(world, entity);
+            // Terrain settings live in the Terrain panel rather than the Components
+            // inspector, so the document's first terrain opens it. Later adds leave the
+            // focused tab alone.
+            if is_first_terrain {
+                crate::open_window_in_default_area_if_absent(world, "jackdaw.inspector.terrain");
+            }
             entity
         });
     });
@@ -2016,6 +2004,143 @@ mod tests {
             ast.get_name(also_taken),
             Some("Brush 4"),
             "batch collisions advance past names assigned earlier in the same pass"
+        );
+    }
+
+    /// The Terrain panel auto-focuses only when a document gains its first terrain. A later
+    /// add leaves the focused tab alone.
+    mod terrain_focus_guard {
+        use jackdaw_panels::DockAreaStyle;
+        use jackdaw_panels::tree::{DockLeaf, DockNode, DockTree};
+
+        use super::*;
+
+        /// Mirrors `build_default_tree`'s `right_sidebar` leaf: seeded at boot with every
+        /// registered window as a tab, Components first and therefore active.
+        fn world_with_right_sidebar_seeded() -> World {
+            let mut world = World::new();
+            world.insert_resource(CommandHistory::default());
+            world.insert_resource(Selection::default());
+            let mut tree = DockTree::new();
+            tree.set_root_leaf(
+                DockLeaf::new("right_sidebar", DockAreaStyle::TabBar).with_windows(vec![
+                    "jackdaw.inspector".to_string(),
+                    "jackdaw.inspector.terrain".to_string(),
+                    "jackdaw.inspector.materials".to_string(),
+                ]),
+            );
+            world.insert_resource(tree);
+            world
+        }
+
+        fn active_window(world: &World) -> Option<String> {
+            let tree = world.resource::<DockTree>();
+            let leaf = tree.get(tree.root?).and_then(DockNode::as_leaf)?;
+            leaf.windows
+                .iter()
+                .find(|t| Some(t.id) == leaf.active)
+                .map(|t| t.window_id.clone())
+        }
+
+        fn focus_window(world: &mut World, window_id: &str) {
+            let mut tree = world.resource_mut::<DockTree>();
+            let leaf_id = tree.root.expect("seeded tree has a root");
+            let tab_id = tree
+                .get(leaf_id)
+                .and_then(DockNode::as_leaf)
+                .and_then(|l| l.tabs().find(|(id, _)| *id == window_id))
+                .map(|(_, tab)| tab)
+                .expect("window is present as a seeded tab");
+            tree.set_active(leaf_id, tab_id);
+        }
+
+        #[test]
+        fn first_terrain_add_focuses_the_seeded_unfocused_tab() {
+            let mut world = world_with_right_sidebar_seeded();
+
+            let result = world
+                .run_system_cached_with(entity_add_terrain, OperatorParameters::default())
+                .expect("system runs");
+            assert_eq!(result, OperatorResult::Finished);
+
+            assert_eq!(
+                active_window(&world).as_deref(),
+                Some("jackdaw.inspector.terrain"),
+                "the document's first terrain should bring the panel to front"
+            );
+        }
+
+        #[test]
+        fn second_terrain_add_leaves_components_active() {
+            let mut world = world_with_right_sidebar_seeded();
+
+            let result = world
+                .run_system_cached_with(entity_add_terrain, OperatorParameters::default())
+                .expect("first add runs");
+            assert_eq!(result, OperatorResult::Finished);
+            assert_eq!(
+                active_window(&world).as_deref(),
+                Some("jackdaw.inspector.terrain"),
+                "sanity check: first add still focuses Terrain"
+            );
+
+            // The user switches back to Components.
+            focus_window(&mut world, "jackdaw.inspector");
+
+            let result = world
+                .run_system_cached_with(entity_add_terrain, OperatorParameters::default())
+                .expect("second add runs");
+            assert_eq!(result, OperatorResult::Finished);
+
+            assert_eq!(
+                active_window(&world).as_deref(),
+                Some("jackdaw.inspector"),
+                "a second terrain must not steal focus from Components"
+            );
+        }
+    }
+
+    /// A terrain's extent lives in its sidecar, so a saved scene states no rectangle beside
+    /// it. The two extent fields are read only by the load-time migration, where a stated
+    /// rectangle means a sidecar that cannot place its own grid.
+    #[test]
+    fn a_saved_terrain_declares_no_extent() {
+        use bevy::ecs::reflect::AppTypeRegistry;
+
+        let mut world = World::new();
+        world.insert_resource(CommandHistory::default());
+        world.insert_resource(Selection::default());
+        world.init_resource::<AppTypeRegistry>();
+        {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            let mut writer = registry.write();
+            writer.register::<Name>();
+            writer.register::<Transform>();
+            writer.register::<Visibility>();
+            writer.register::<jackdaw_scene_types::Terrain>();
+            writer.register::<jackdaw_scene_types::SceneNodeId>();
+        }
+        world.init_resource::<jackdaw_bsn::SceneBsnAst>();
+        world.init_resource::<jackdaw_panels::tree::DockTree>();
+        world.init_resource::<jackdaw_panels::registry::WindowRegistry>();
+
+        let result = world
+            .run_system_cached_with(entity_add_terrain, OperatorParameters::default())
+            .expect("the operator runs");
+        assert_eq!(result, OperatorResult::Finished);
+
+        let text = crate::scene_io::emit_bsn_scene_with_inline_assets(
+            &mut world,
+            std::path::Path::new("."),
+        );
+
+        assert!(
+            !text.contains("resolution:"),
+            "the saved scene must not declare a resolution:\n{text}"
+        );
+        assert!(
+            !text.contains("size:"),
+            "the saved scene must not declare a size:\n{text}"
         );
     }
 }

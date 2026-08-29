@@ -831,27 +831,6 @@ pub struct PrefabBaseline {
     pub components: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component, Default, @crate::EditorCategory::new("Navmesh"), @crate::EditorHidden)]
-pub struct NavmeshRegion {
-    pub agent_radius: f32,
-    pub agent_height: f32,
-    pub walkable_climb: f32,
-    pub walkable_slope_degrees: f32,
-    pub cell_size_fraction: f32,
-    pub cell_height_fraction: f32,
-    pub min_region_size: u16,
-    pub merge_region_size: u16,
-    pub max_simplification_error: f32,
-    pub max_vertices_per_polygon: u16,
-    pub edge_max_len_factor: u16,
-    pub detail_sample_dist: f32,
-    pub detail_sample_max_error: f32,
-    pub tiling: bool,
-    pub tile_size: u16,
-    pub connection_url: String,
-}
-
 /// Terrain shape and the descriptive parts of its data.
 ///
 /// Only the small, human-editable fields live here. The bulk per-cell
@@ -863,9 +842,31 @@ pub struct NavmeshRegion {
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component, Default, @crate::EditorCategory::new("Terrain"), @crate::EditorHidden)]
 pub struct Terrain {
-    /// Vertices per edge.
+    /// World metres per grid cell edge, and the only shape this terrain
+    /// declares. The cell count is not stated anywhere: the sidecar's
+    /// allocated regions are the terrain, and sculpting past the last region
+    /// allocates another.
+    ///
+    /// This is the authoring surface, what the user edits and an undo
+    /// restores. The sidecar carries the same number beside the cells it
+    /// describes, and on load the sidecar's copy wins: a save writes the
+    /// sidecar before the scene text and cannot roll one back if the other
+    /// fails, so the geometry travels with the data.
+    ///
+    /// Cell `(0, 0)` sits at this entity's origin, offset by the sidecar's
+    /// anchor: zero for a terrain authored against this format, `-size/2` for
+    /// one migrated from a declared rectangle.
+    pub cell_size: f32,
+    /// Vertices per edge of a declared rectangle, in scenes that carry one.
+    ///
+    /// A migration inlet, not shape, like [`Terrain::heights`]. The editor
+    /// reads this and [`Terrain::size`] once on load to work out the spacing
+    /// and corner that rectangle drew its stored cells at, writes the answer
+    /// to the sidecar, and resets both to their defaults. Read the spacing
+    /// from [`Terrain::cell_size`], never from here.
     pub resolution: u32,
-    /// World-space XZ dimensions.
+    /// World-space XZ dimensions of a declared rectangle. A migration inlet;
+    /// see [`Terrain::resolution`].
     pub size: Vec2,
     /// Maximum height value for normalization.
     pub max_height: f32,
@@ -897,11 +898,23 @@ pub struct Terrain {
     /// Off by default, and a terrain that never touches it behaves
     /// exactly as one authored before the setting existed.
     pub quantization: TerrainQuantization,
+    /// What this terrain's navigation mesh is baked for.
+    pub navmesh: TerrainNavmesh,
 }
 
+/// These values are a persisted contract: BSN elides a field equal to its
+/// `Default` on write and refills it from `ReflectDefault` on read, so a scene
+/// saved while a field held its default carries none of it and takes whatever
+/// this returns.
+///
+/// `resolution` and `size` therefore read 256 and 100 metres. A scene that
+/// declared a rectangle elided them at exactly these numbers, and the
+/// migration refills the same ones to work out where its stored cells were
+/// drawn. Changing either moves that ground.
 impl Default for Terrain {
     fn default() -> Self {
         Self {
+            cell_size: 1.0,
             resolution: 256,
             size: Vec2::new(100.0, 100.0),
             max_height: 50.0,
@@ -909,6 +922,7 @@ impl Default for Terrain {
             data_path: String::new(),
             heights: Vec::new(),
             quantization: TerrainQuantization::default(),
+            navmesh: TerrainNavmesh::default(),
         }
     }
 }
@@ -917,6 +931,39 @@ impl Terrain {
     /// Cell count this terrain's per-cell arrays must have.
     pub fn cell_count(&self) -> usize {
         (self.resolution as usize) * (self.resolution as usize)
+    }
+}
+
+/// What a terrain's navigation mesh is baked for.
+///
+/// Scene data rather than an editor preference: the navmesh beside a scene was
+/// baked for a particular character, and reopening the scene has to show which
+/// one and bake the same one again. The voxel size a bake rasterizes at is
+/// derived from the terrain's cell size and is not authored here.
+///
+/// The `Default` is a persisted contract, as with [`TerrainQuantization`]:
+/// BSN elides a field equal to it, so changing these numbers changes what
+/// every scene that never touched them bakes.
+#[derive(Reflect, Clone, Debug, PartialEq)]
+#[reflect(Default)]
+pub struct TerrainNavmesh {
+    /// Agent radius in world units. Walkable ground is eroded by this, so the
+    /// navmesh stops this far short of every wall.
+    pub agent_radius: f32,
+    /// Agent height in world units. Ground with less headroom is not
+    /// walkable.
+    pub agent_height: f32,
+    /// Steepest ground the agent may stand on, in degrees.
+    pub max_slope_degrees: f32,
+}
+
+impl Default for TerrainNavmesh {
+    fn default() -> Self {
+        Self {
+            agent_radius: 0.4,
+            agent_height: 1.8,
+            max_slope_degrees: 45.0,
+        }
     }
 }
 
@@ -940,25 +987,26 @@ impl Terrain {
 #[reflect(Default)]
 pub struct TerrainQuantization {
     pub enabled: bool,
-    /// World units per cell edge in XZ. 0 leaves [`Terrain::size`] alone.
+    /// World units per cell edge in XZ that Apply pins the terrain to, by
+    /// writing it into [`Terrain::cell_size`]. 0 leaves the terrain's spacing
+    /// alone and quantizes elevation only.
+    ///
+    /// Distinct from `Terrain::cell_size`, which is the spacing the terrain is
+    /// drawn at. This is the spacing the project holds its terrains to, kept
+    /// whether or not Apply has been pressed.
     pub cell_size: f32,
     /// World units per elevation step. 0 disables height snapping.
     pub height_step: f32,
 }
 
 impl TerrainQuantization {
-    /// World-space XZ extent a terrain of `resolution` vertices needs for
-    /// its vertex spacing to equal [`Self::cell_size`] exactly.
-    ///
-    /// Vertex spacing is `size / (resolution - 1)` -- `resolution` counts
-    /// vertices, so a 256-vertex edge has 255 cells. Returns `None` when
-    /// there is no cell size to honour or the grid is too degenerate to
-    /// have a spacing.
-    pub fn world_size_for(&self, resolution: u32) -> Option<Vec2> {
-        if !self.enabled || !self.cell_size.is_finite() || self.cell_size <= 0.0 || resolution < 2 {
+    /// The spacing to pin the terrain's cells to, or `None` when cell
+    /// quantization is off for this terrain.
+    pub fn active_cell_size(&self) -> Option<f32> {
+        if !self.enabled || !self.cell_size.is_finite() || self.cell_size <= 0.0 {
             return None;
         }
-        Some(Vec2::splat(self.cell_size * (resolution - 1) as f32))
+        Some(self.cell_size)
     }
 
     /// The elevation step to snap to, or `None` when height snapping is
@@ -1064,29 +1112,6 @@ impl TerrainChannel {
     }
 }
 
-impl Default for NavmeshRegion {
-    fn default() -> Self {
-        Self {
-            agent_radius: 0.6,
-            agent_height: 2.0,
-            walkable_climb: 0.9,
-            walkable_slope_degrees: 45.0,
-            cell_size_fraction: 2.0,
-            cell_height_fraction: 4.0,
-            min_region_size: 8,
-            merge_region_size: 20,
-            max_simplification_error: 1.3,
-            max_vertices_per_polygon: 6,
-            edge_max_len_factor: 8,
-            detail_sample_dist: 6.0,
-            detail_sample_max_error: 1.0,
-            tiling: false,
-            tile_size: 32,
-            connection_url: "http://127.0.0.1:15702".to_string(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1129,38 +1154,35 @@ mod tests {
         assert!(!q.enabled);
         assert_eq!(q.cell_size, 0.0);
         assert_eq!(q.height_step, 0.0);
-        assert_eq!(q.world_size_for(256), None);
+        assert_eq!(q.active_cell_size(), None);
         assert_eq!(q.active_height_step(), None);
         assert_eq!(Terrain::default().quantization, q);
     }
 
     #[test]
-    fn cell_size_sets_a_world_size_whose_spacing_is_that_cell() {
+    fn a_live_cell_size_is_the_spacing_to_pin_the_terrain_to() {
         let q = TerrainQuantization {
             enabled: true,
             cell_size: 1.0,
             height_step: 0.0,
         };
-        // 256 vertices is 255 cells, so a 1-unit cell wants 255 units.
-        let size = q.world_size_for(256).expect("a size for a live cell size");
-        assert_eq!(size, Vec2::splat(255.0));
-        assert_eq!(size.x / (256 - 1) as f32, 1.0);
+        assert_eq!(q.active_cell_size(), Some(1.0));
 
         let q = TerrainQuantization {
             cell_size: 2.5,
             ..q
         };
-        assert_eq!(q.world_size_for(65), Some(Vec2::splat(160.0)));
+        assert_eq!(q.active_cell_size(), Some(2.5));
     }
 
     #[test]
-    fn a_disabled_or_degenerate_quantization_asks_for_no_resize() {
+    fn a_disabled_or_degenerate_quantization_pins_nothing() {
         let live = TerrainQuantization {
             enabled: true,
             cell_size: 1.5,
             height_step: 0.25,
         };
-        assert!(live.world_size_for(256).is_some());
+        assert_eq!(live.active_cell_size(), Some(1.5));
         assert_eq!(live.active_height_step(), Some(0.25));
 
         // Off wins over any value.
@@ -1168,7 +1190,7 @@ mod tests {
             enabled: false,
             ..live.clone()
         };
-        assert_eq!(off.world_size_for(256), None);
+        assert_eq!(off.active_cell_size(), None);
         assert_eq!(off.active_height_step(), None);
 
         // Zero, negative and non-finite steps each opt out on their own.
@@ -1178,11 +1200,8 @@ mod tests {
                 height_step: bad,
                 ..live.clone()
             };
-            assert_eq!(q.world_size_for(256), None, "cell_size {bad}");
+            assert_eq!(q.active_cell_size(), None, "cell_size {bad}");
             assert_eq!(q.active_height_step(), None, "height_step {bad}");
         }
-
-        // A grid with no cells has no spacing to pin.
-        assert_eq!(live.world_size_for(1), None);
     }
 }

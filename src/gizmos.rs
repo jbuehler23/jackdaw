@@ -535,8 +535,8 @@ pub fn gizmo_drag(
     }
 
     if mouse.just_released(MouseButton::Left) {
-        // Sync ECS → AST before Finished so the framework's after-snapshot
-        // (and a later save) see the dragged Transforms. Undo is still the
+        // Sync ECS -> AST before Finished so the framework's after-snapshot
+        // (and a later save) see the dragged Transforms. Undo remains the
         // SnapshotDiff; this only brings the document up to date.
         queue_sync_gizmo_transforms_to_ast(&drag_state, &transforms, &mut commands);
         clear_gizmo_drag_state(&mut drag_state, &mut cursor_query);

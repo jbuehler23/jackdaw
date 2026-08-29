@@ -13,7 +13,7 @@ use bevy::{
 mod legacy;
 mod load;
 mod registration;
-mod save;
+pub(crate) mod save;
 pub mod stamp;
 
 pub use legacy::{load_inline_assets, load_scene_from_jsn};
@@ -24,8 +24,8 @@ pub(crate) use load::{
 pub(crate) use registration::entity_by_scene_node_id;
 pub use registration::{register_entities_in_ast, register_entity_in_ast};
 pub use save::{
-    SaveOutcome, emit_bsn_scene_with_inline_assets, save_layout_to_project, save_scene,
-    save_scene_as, save_scene_with_outcome,
+    SaveOutcome, emit_bsn_scene_with_inline_assets, retarget_active_scene, save_layout_to_project,
+    save_scene, save_scene_as, save_scene_with_outcome,
 };
 pub(crate) use save::{emit_bsn_entities_with_inline_assets, save_scene_inner};
 

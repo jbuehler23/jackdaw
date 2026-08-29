@@ -405,17 +405,21 @@ fn inline_material_reference_and_terrain_survive_conversion() {
         node_id,
         jackdaw_scene_types::Brush::cuboid(1.0, 1.0, 1.0),
         Terrain {
+            // A scene this old declares a rectangle rather than a cell size.
+            // The load path derives a cell size from that pair and empties it,
+            // so the pair is what has to survive the conversion.
+            cell_size: Terrain::default().cell_size,
             resolution: 3,
             size: Vec2::new(8.0, 8.0),
             max_height: 2.5,
             channels: Vec::new(),
             data_path: String::new(),
             heights: vec![0.0, 0.5, 1.0, 0.0, 0.25, 0.75, 0.1, 0.2, 0.3],
-            // A scene this old predates quantization, so it carries the
-            // default. Spelled out rather than `..default()` because the
-            // point of this literal is to enumerate what a legacy scene
-            // holds.
+            // A scene this old predates quantization and the navmesh agent, so
+            // it carries both defaults. Spelled out rather than `..default()`
+            // so the literal enumerates what a legacy scene holds.
             quantization: Default::default(),
+            navmesh: Default::default(),
         },
         jackdaw_scene_types::SceneRootTag,
     ));
@@ -741,6 +745,10 @@ fn catalog_round_trips_as_bsn() {
     fn project_app(root: &std::path::Path) -> App {
         let mut app = headless_app();
         app.init_resource::<AssetCatalog>();
+        // Saving and loading a catalog both go through the material files,
+        // which this minimal app has to supply the bookkeeping for.
+        app.init_resource::<jackdaw::material_assets::MaterialRegistry>();
+        app.init_resource::<jackdaw::material_assets::SavedMaterials>();
         app.world_mut().insert_resource(ProjectRoot::new(
             root.to_path_buf(),
             jackdaw::project::ProjectConfig::default(),

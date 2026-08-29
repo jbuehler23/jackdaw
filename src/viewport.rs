@@ -144,9 +144,29 @@ pub(crate) struct ViewportCursor<'w, 's> {
     >,
     active: Res<'w, ActiveViewport>,
     ui_scale: Res<'w, UiScale>,
+    hover_map: Res<'w, bevy::picking::hover::HoverMap>,
 }
 
 impl ViewportCursor<'_, '_> {
+    /// The cursor position when the pointer belongs to the 3D scene: over a
+    /// viewport, and over that viewport's own `SceneViewport` node rather than
+    /// UI drawn on top of it.
+    ///
+    /// Overlays like the terrain tool palette are drawn over the
+    /// `SceneViewport` node, so a press inside the viewport's screen rect is
+    /// not necessarily a press on the scene. Every system that starts a
+    /// viewport gesture from a pointer press (selection, box-select, terrain
+    /// sculpt and paint strokes, region picking, measure) reads the cursor
+    /// through here, so a click on an overlay does not reach the scene behind
+    /// it.
+    pub fn viewport_pointer(&self) -> Option<Vec2> {
+        let viewport_entity = self.active.ui_node?;
+        if hover_blocks_click(&self.hover_map, Some(viewport_entity)) {
+            return None;
+        }
+        self.cursor()
+    }
+
     /// The hovered viewport's camera + global transform.
     pub fn camera(&self) -> Option<(&Camera, &GlobalTransform)> {
         let camera_entity = self.active.camera?;
@@ -212,6 +232,21 @@ impl ViewportCursor<'_, '_> {
     }
 }
 
+/// True when the hover map contains some entity other than `viewport_entity`
+/// (or there is no viewport to compare against).
+fn hover_blocks_click(
+    hover_map: &bevy::picking::hover::HoverMap,
+    viewport_entity: Option<Entity>,
+) -> bool {
+    let Some(viewport_entity) = viewport_entity else {
+        return false;
+    };
+    hover_map
+        .values()
+        .flat_map(|hits| hits.keys())
+        .any(|&entity| entity != viewport_entity)
+}
+
 /// Cursor position in ui-logical pixels, the space `Val::Px` and
 /// [`crate::viewport_util::ViewportRemap`] operate in. Use this anywhere the
 /// cursor will be compared against UI nodes or fed into viewport-coordinate
@@ -270,6 +305,9 @@ pub struct ViewportPlugin;
 impl Plugin for ViewportPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((JackdawCameraPlugin, InfiniteGridPlugin))
+            // Must come after `InfiniteGridPlugin` in build order: it patches the
+            // grid's shader in place. See `editor_grid_depth_patch`.
+            .add_plugins(crate::editor_grid_depth_patch::plugin)
             .init_resource::<CameraFlyActive>()
             .init_resource::<ActiveViewport>()
             .init_resource::<ViewportLayerCounter>()
@@ -472,8 +510,7 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
     // The main editor toolbar is a bsn! Scene, so it can't live inside the
     // Bundle `children!` of `viewport_with_toolbar`. Spawn it standalone,
     // stamp the editor markers, and slot it in as the first child (index 0)
-    // above the viewport. This runs before the navmesh insert so the navmesh
-    // row lands at index 1, directly beneath it.
+    // above the viewport, with the contextual row beneath it at index 1.
     match world.spawn_scene(crate::layout::toolbar()) {
         Ok(mut toolbar) => {
             toolbar.insert((crate::layout::Toolbar, crate::EditorEntity));
@@ -483,29 +520,16 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
         Err(err) => error!("failed to spawn editor toolbar scene: {err}"),
     }
 
-    // The navmesh toolbar is a bsn! Scene, so it can't live inside the Bundle
-    // `children!` above. Spawn it standalone, stamp the editor markers, and
-    // slot it in right under the main toolbar (index 1) so the contextual row
-    // sits above the viewport rather than below it.
-    match world.spawn_scene(crate::navmesh::toolbar::navmesh_toolbar()) {
-        Ok(mut navmesh) => {
-            navmesh.insert((crate::navmesh::toolbar::NavmeshToolbar, crate::EditorEntity));
-            let navmesh = navmesh.id();
-            world.entity_mut(column).insert_children(1, &[navmesh]);
+    // The terrain options bar is likewise a bsn! Scene. Spawn it standalone,
+    // stamp the editor markers, and slot it in at index 1 so the contextual
+    // row sits directly beneath the main toolbar and above the viewport.
+    match world.spawn_scene(crate::terrain::options_bar::terrain_options_bar()) {
+        Ok(mut bar) => {
+            bar.insert((crate::terrain::TerrainOptionsBar, crate::EditorEntity));
+            let bar = bar.id();
+            world.entity_mut(column).insert_children(1, &[bar]);
         }
-        Err(err) => error!("failed to spawn navmesh toolbar scene: {err}"),
-    }
-
-    // The terrain toolbar is likewise a bsn! Scene. Spawn it standalone,
-    // stamp the editor markers, and slot it in at index 2 so the contextual
-    // row sits directly beneath the navmesh toolbar and above the viewport.
-    match world.spawn_scene(crate::terrain::toolbar::terrain_toolbar()) {
-        Ok(mut terrain) => {
-            terrain.insert((crate::terrain::toolbar::TerrainToolbar, crate::EditorEntity));
-            let terrain = terrain.id();
-            world.entity_mut(column).insert_children(2, &[terrain]);
-        }
-        Err(err) => error!("failed to spawn terrain toolbar scene: {err}"),
+        Err(err) => error!("failed to spawn terrain options bar scene: {err}"),
     }
 
     // Find the freshly-spawned SceneViewport that's a descendant of
@@ -516,6 +540,22 @@ pub(crate) fn build_viewport_panel(world: &mut World, parent: Entity) {
         world.entity_mut(scene_vp).observe(handle_viewport_drop);
     } else {
         warn!("build_viewport_panel: SceneViewport descendant not found under parent");
+    }
+
+    // The terrain tool palette overlays the viewport's content rather
+    // than sitting in the dock tree: a child of this column, absolutely
+    // positioned against its left edge at a fixed offset that clears the
+    // toolbar and the options bar's first row (see `terrain::palette`).
+    // Last child, so it draws over the viewport below it.
+    match world.spawn_scene(crate::terrain::palette::terrain_palette()) {
+        Ok(mut palette) => {
+            palette.insert((
+                crate::terrain::TerrainPalette,
+                crate::EditorEntity,
+                ChildOf(column),
+            ));
+        }
+        Err(err) => error!("failed to spawn terrain palette scene: {err}"),
     }
 
     // Tag the panel content entity so the despawn observer can find
@@ -916,10 +956,13 @@ fn camera_bookmark_keys(
         return;
     }
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     let in_object_mode = *edit_mode == crate::brush::EditMode::Object;
     // Don't shadow edit-mode digit shortcuts when a brush is selected
     // and we're in Object mode (Digit1-4 there switches to Vertex /
-    // Edge / Face / Clip).
+    // Edge / Face / Clip), and don't shadow Alt+Digit1-8 (terrain tool
+    // palette, `terrain/ops.rs`): the `if alt { continue }` below skips
+    // every digit while Alt is held, not just 1-8.
     let conflicts_with_edit_mode_digits =
         in_object_mode && selection.primary().is_some_and(|e| brushes.contains(e));
     let digits = [
@@ -935,6 +978,9 @@ fn camera_bookmark_keys(
     ];
     for (slot, key) in digits.iter().enumerate() {
         if !keyboard.just_pressed(*key) {
+            continue;
+        }
+        if alt {
             continue;
         }
         if ctrl {
@@ -1037,4 +1083,60 @@ pub(crate) fn viewport_bookmark_load(
     let bookmark = config.bookmarks[slot]?;
     *transform = bookmark.transform;
     OperatorResult::Finished
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::picking::{backend::HitData, hover::HoverMap, pointer::PointerId};
+
+    use super::*;
+
+    fn hover_map_with(entity: Entity) -> HoverMap {
+        let hit = HitData {
+            camera: Entity::PLACEHOLDER,
+            depth: 0.0,
+            position: None,
+            normal: None,
+            extra: None,
+        };
+        let mut hits = bevy::ecs::entity::EntityHashMap::default();
+        hits.insert(entity, hit);
+        let mut map = HoverMap::default();
+        map.insert(PointerId::Mouse, hits);
+        map
+    }
+
+    /// A click that hovers only the viewport's own node reaches the 3D raycast.
+    #[test]
+    fn viewport_own_node_does_not_block_the_click() {
+        let viewport = Entity::from_raw_u32(1).unwrap();
+        let hover_map = hover_map_with(viewport);
+        assert!(!hover_blocks_click(&hover_map, Some(viewport)));
+    }
+
+    /// A click that hovers another entity (a palette button, the options bar) is a click on
+    /// an overlay, not the 3D scene.
+    #[test]
+    fn an_overlay_entity_blocks_the_click() {
+        let viewport = Entity::from_raw_u32(1).unwrap();
+        let palette_button = Entity::from_raw_u32(2).unwrap();
+        let hover_map = hover_map_with(palette_button);
+        assert!(hover_blocks_click(&hover_map, Some(viewport)));
+    }
+
+    /// No hover at all (cursor over empty desktop, or hover systems not yet run) does not
+    /// block ordinary viewport clicks.
+    #[test]
+    fn an_empty_hover_map_does_not_block_the_click() {
+        let viewport = Entity::from_raw_u32(1).unwrap();
+        assert!(!hover_blocks_click(&HoverMap::default(), Some(viewport)));
+    }
+
+    /// With no active viewport (cursor outside any viewport) there is nothing to compare the
+    /// hover against, so the click is not blocked.
+    #[test]
+    fn no_active_viewport_does_not_block_the_click() {
+        let hover_map = hover_map_with(Entity::from_raw_u32(2).unwrap());
+        assert!(!hover_blocks_click(&hover_map, None));
+    }
 }

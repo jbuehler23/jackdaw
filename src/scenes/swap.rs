@@ -116,6 +116,7 @@ pub(crate) fn capture_active_tab(world: &mut World) {
     let terrain_data_store = world
         .get_resource_mut::<crate::terrain::TerrainDataStore>()
         .map(|mut store| std::mem::take(&mut *store));
+    let navmesh = crate::terrain::navmesh_bake::take_from_world(world);
     let mut scenes = world.resource_mut::<Scenes>();
     let tab = &mut scenes.tabs[active];
     tab.view_state = view_state;
@@ -123,13 +124,16 @@ pub(crate) fn capture_active_tab(world: &mut World) {
     if let Some(terrain_data_store) = terrain_data_store {
         tab.terrain_data_store = terrain_data_store;
     }
+    if let Some(navmesh) = navmesh {
+        tab.navmesh = navmesh;
+    }
 }
 
 /// Spawn the target tab's document into the live world and restore per-tab
 /// history and view state.
 pub fn activate_tab(world: &mut World, target: usize) {
     let has_terrain_data_store = world.contains_resource::<crate::terrain::TerrainDataStore>();
-    let (mut content, view_state, history, tab_path, terrain_data_store) = {
+    let (mut content, view_state, history, tab_path, terrain_data_store, navmesh) = {
         let mut scenes = world.resource_mut::<Scenes>();
         let tab = &mut scenes.tabs[target];
         (
@@ -138,6 +142,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
             std::mem::take(&mut tab.history),
             tab.path.clone(),
             has_terrain_data_store.then(|| std::mem::take(&mut tab.terrain_data_store)),
+            std::mem::take(&mut tab.navmesh),
         )
     };
 
@@ -147,6 +152,8 @@ pub fn activate_tab(world: &mut World, target: usize) {
     if let Some(terrain_data_store) = terrain_data_store {
         *world.resource_mut::<crate::terrain::TerrainDataStore>() = terrain_data_store;
     }
+    // The bake taken from that ground, restored with it.
+    crate::terrain::navmesh_bake::install_in_world(world, navmesh);
 
     // Materialize the document to install. For `Prefab` tabs, clone from
     // the cache; for `Scene` tabs, take the captured document (or default).
@@ -230,6 +237,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
             &path.to_string_lossy(),
             crate::scene_io::SidecarImport::FillMissing,
         );
+        crate::terrain::navmesh_bake::import_beside_scene(world, &path.to_string_lossy());
     }
 
     let mut scenes = world.resource_mut::<Scenes>();

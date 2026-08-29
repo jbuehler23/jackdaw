@@ -1,13 +1,23 @@
-//! Operators for the terrain contextual toolbar and inspector.
+//! Operators for the terrain tool palette, contextual options bar, and
+//! Terrain panel's Generation section.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 
-use super::inspector::TerrainGenerateState;
+use super::paint::TerrainToolPaintOp;
+use super::panel::TerrainGenerateState;
 use super::sculpt::SetTerrainHeights;
-use super::{TerrainDataStore, TerrainDirtyChunks, TerrainEditMode};
+use super::{TerrainDataStore, TerrainDirtyChunks, TerrainEditMode, TerrainPaintState};
 use crate::commands::CommandHistory;
+use crate::core_extension::CoreExtensionInputContext;
 use crate::selection::Selection;
+
+/// Regions per axis a generate lays down on a terrain that holds none.
+///
+/// Four is a kilometre a side at the default cell size. Nothing caps a
+/// terrain at it.
+const FRESH_TERRAIN_REGIONS: u32 = 4;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TerrainToolRaiseOp>()
@@ -15,9 +25,56 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<TerrainToolFlattenOp>()
         .register_operator::<TerrainToolSmoothOp>()
         .register_operator::<TerrainToolNoiseOp>()
-        .register_operator::<TerrainToolGenerateOp>()
+        .register_operator::<TerrainToolQuantizeOp>()
+        .register_operator::<TerrainToolNavmeshOp>()
+        .register_operator::<TerrainToolExitToSelectOp>()
         .register_operator::<TerrainGenerateOp>()
         .register_operator::<TerrainErodeOp>();
+
+    // Palette shortcuts, Alt+1-9 down the palette's left-to-right,
+    // top-to-bottom order (Raise, Lower, Flatten, Smooth, Noise, Paint,
+    // Quantize, Navmesh, Regions; the last is bound in `regions.rs` beside
+    // its operator). Plain Digit1-4 dispatch mesh edit-mode switches on
+    // this input context (`edit_mode_ops.rs`), so the terrain palette takes
+    // the Alt chord rather than colliding with them.
+    ctx.bind_operator::<CoreExtensionInputContext, TerrainToolRaiseOp>([PresetInput::key(
+        "Digit1",
+    )
+    .alt()]);
+    ctx.bind_operator::<CoreExtensionInputContext, TerrainToolLowerOp>([PresetInput::key(
+        "Digit2",
+    )
+    .alt()]);
+    ctx.bind_operator::<CoreExtensionInputContext, TerrainToolFlattenOp>([PresetInput::key(
+        "Digit3",
+    )
+    .alt()]);
+    ctx.bind_operator::<CoreExtensionInputContext, TerrainToolSmoothOp>([PresetInput::key(
+        "Digit4",
+    )
+    .alt()]);
+    ctx.bind_operator::<CoreExtensionInputContext, TerrainToolNoiseOp>([PresetInput::key(
+        "Digit5",
+    )
+    .alt()]);
+    ctx.bind_operator::<CoreExtensionInputContext, TerrainToolPaintOp>([PresetInput::key(
+        "Digit6",
+    )
+    .alt()]);
+    ctx.bind_operator::<CoreExtensionInputContext, TerrainToolQuantizeOp>([PresetInput::key(
+        "Digit7",
+    )
+    .alt()]);
+    ctx.bind_operator::<CoreExtensionInputContext, TerrainToolNavmeshOp>([PresetInput::key(
+        "Digit8",
+    )
+    .alt()]);
+    // Esc leaves the active tool for no-tool. Mid-stroke the sculpt/paint
+    // modal's cancel binding (Escape) takes precedence: this op's
+    // `is_available` refuses to fire while a stroke is in progress.
+    ctx.bind_operator::<CoreExtensionInputContext, TerrainToolExitToSelectOp>([PresetInput::key(
+        "Escape",
+    )]);
 }
 
 fn toggle_to(mode: &mut TerrainEditMode, target: TerrainEditMode) {
@@ -28,13 +85,50 @@ fn toggle_to(mode: &mut TerrainEditMode, target: TerrainEditMode) {
     };
 }
 
-/// Tool-toggle ops require a terrain to be selected; otherwise the
-/// toolbar that hosts these buttons is hidden anyway.
+/// Tool-toggle ops require a terrain to be selected; without one the
+/// palette and options bar that host these buttons are hidden.
 pub(super) fn has_selected_terrain(
     selection: Res<Selection>,
     terrains: Query<(), With<jackdaw_scene_types::Terrain>>,
 ) -> bool {
     selection.primary().is_some_and(|e| terrains.contains(e))
+}
+
+/// Bound to Escape: leaves the active tool for no-tool, restoring
+/// click-select and gizmo interaction in the viewport. Available only when
+/// a tool is active and no stroke is running, so it does not fight the
+/// modal's stroke-cancel handling. There is no palette button for it: the
+/// main toolbar's Select tool and pressing an active tool's button again
+/// (see `toggle_to`) both leave a terrain tool.
+#[operator(
+    id = "terrain.tool.exit_to_select",
+    label = "Exit to Select",
+    description = "Stop editing and select entities in the viewport.",
+    is_available = can_exit_to_select,
+    allows_undo = false
+)]
+pub(crate) fn terrain_tool_exit_to_select(
+    _: In<OperatorParameters>,
+    mut mode: ResMut<TerrainEditMode>,
+) -> OperatorResult {
+    *mode = TerrainEditMode::None;
+    OperatorResult::Finished
+}
+
+/// Escape cancels an in-progress stroke rather than switching tools, so
+/// this refuses while `TerrainSculptState` or `TerrainPaintState` reports
+/// one running.
+fn can_exit_to_select(
+    selection: Res<Selection>,
+    terrains: Query<(), With<jackdaw_scene_types::Terrain>>,
+    mode: Res<TerrainEditMode>,
+    sculpt: Res<super::TerrainSculptState>,
+    paint: Res<TerrainPaintState>,
+) -> bool {
+    selection.primary().is_some_and(|e| terrains.contains(e))
+        && *mode != TerrainEditMode::None
+        && !sculpt.active
+        && !paint.active
 }
 
 /// Pick the raise sculpt tool. Pressing again puts the brush away.
@@ -127,32 +221,47 @@ pub(crate) fn terrain_tool_noise(
     OperatorResult::Finished
 }
 
-/// Open the heightmap-generation panel. Pressing again closes it.
+/// Pick the Quantize tool, which brings up the quantization options bar
+/// (cell size, height step, on/off, Apply). Pressing again puts it away.
 #[operator(
-    id = "terrain.tool.generate",
-    label = "Generate",
-    description = "Open the heightmap-generation panel.",
+    id = "terrain.tool.quantize",
+    label = "Quantize",
+    description = "Show the terrain's grid-quantization settings.",
     is_available = has_selected_terrain
 )]
-pub(crate) fn terrain_tool_generate(
+pub(crate) fn terrain_tool_quantize(
     _: In<OperatorParameters>,
     mut mode: ResMut<TerrainEditMode>,
 ) -> OperatorResult {
-    toggle_to(&mut mode, TerrainEditMode::Generate);
+    toggle_to(&mut mode, TerrainEditMode::Quantize);
+    OperatorResult::Finished
+}
+
+/// Pick the Navmesh tool, which shows the bake params, the Bake action and
+/// the overlay toggle in the options bar. Claims no viewport input.
+#[operator(
+    id = "terrain.tool.navmesh",
+    label = "Navmesh",
+    description = "Bake a navigation mesh from this terrain.",
+    is_available = has_selected_terrain
+)]
+pub(crate) fn terrain_tool_navmesh(
+    _: In<OperatorParameters>,
+    mut mode: ResMut<TerrainEditMode>,
+) -> OperatorResult {
+    toggle_to(&mut mode, TerrainEditMode::Navmesh);
     OperatorResult::Finished
 }
 
 /// Generate a fresh heightmap for the selected terrain.
 ///
-/// Reads the noise/octaves/etc. settings from the inspector's
-/// generation panel ([`TerrainGenerateState`]).
+/// Reads the noise and octave settings from the Terrain panel's Generation
+/// section ([`TerrainGenerateState`]).
 ///
-/// `allows_undo` is left at its default (`true`), not set to `false`:
-/// this op pushes its own [`SetTerrainHeights`] history entry, but that
-/// entry only ever touches heights, which live outside the AST (see
-/// `store.rs`'s module doc). The framework's automatic before/after
-/// snapshot diff sees no change there and skips recording a duplicate,
-/// per CONTRIBUTING's note on `push_executed`.
+/// `allows_undo` stays at its default of `true`: this op pushes its own
+/// [`SetTerrainHeights`] entry, and that entry touches only heights, which
+/// live outside the AST, so the framework's snapshot diff sees no change
+/// and records no duplicate.
 #[operator(
     id = "terrain.generate",
     label = "Generate Terrain",
@@ -166,22 +275,42 @@ pub(crate) fn terrain_generate(
     mut store: ResMut<TerrainDataStore>,
     gen_state: Res<TerrainGenerateState>,
     mut history: ResMut<CommandHistory>,
+    mut commands: Commands,
 ) -> OperatorResult {
     let entity = selection.primary()?;
     let (terrain, mut dirty) = terrains.get_mut(entity)?;
 
-    let mut new_heights =
-        jackdaw_terrain::generate_heightmap(terrain.resolution, &gen_state.settings);
-    // Snap before the array is stored or recorded, so the terrain is
-    // never briefly off-lattice and undo never restores an unsnapped
-    // intermediate that was not on screen.
+    let mut data = store.entry_for(terrain)?;
+    // An unsculpted terrain holds no regions and so has nothing to
+    // generate over. A generate lays down a footprint of four regions a
+    // side, a kilometre of ground at the default cell size; sculpting past
+    // it allocates more.
+    let mut refused = None;
+    if data.document().grid_resolution() == 0
+        && let Err(err) =
+            data.ensure_extent(FRESH_TERRAIN_REGIONS * jackdaw_terrain::RegionSize::DEFAULT.get())
+    {
+        refused = Some(err.to_string());
+    }
+    if let Some(message) = refused {
+        warn!("{message}");
+        commands.queue(move |world: &mut World| {
+            crate::terrain::toast_terrain_notice(world, &message);
+        });
+        return OperatorResult::Cancelled;
+    }
+    let resolution = data.document().grid_resolution();
+
+    let mut new_heights = jackdaw_terrain::generate_heightmap(resolution, &gen_state.settings);
+    // Snap before the array is stored or recorded, so the terrain is never
+    // briefly off-lattice and undo restores no unsnapped intermediate.
     if let Some(step) = terrain.quantization.active_height_step() {
         jackdaw_terrain::quantize_heights(&mut new_heights, step);
     }
-    let data = store.entry_for(terrain)?;
-    let old_heights = std::mem::replace(&mut data.heights, new_heights.clone());
+    let old_heights = data.heights().to_vec();
+    data.set_heights(&new_heights);
     dirty.rebuild_all = true;
-    history.push_executed(Box::new(SetTerrainHeights::new(
+    history.push_executed(Box::new(SetTerrainHeights::whole(
         entity,
         old_heights,
         new_heights,
@@ -192,15 +321,13 @@ pub(crate) fn terrain_generate(
 
 /// Apply hydraulic erosion to the selected terrain.
 ///
-/// Uses the erosion settings from the inspector's generation panel
+/// Uses the erosion settings from the Terrain panel's Generation section
 /// ([`TerrainGenerateState::erosion`]).
 ///
-/// `allows_undo` is left at its default (`true`), not set to `false`:
-/// this op pushes its own [`SetTerrainHeights`] history entry, but that
-/// entry only ever touches heights, which live outside the AST (see
-/// `store.rs`'s module doc). The framework's automatic before/after
-/// snapshot diff sees no change there and skips recording a duplicate,
-/// per CONTRIBUTING's note on `push_executed`.
+/// `allows_undo` stays at its default of `true`: this op pushes its own
+/// [`SetTerrainHeights`] entry, and that entry touches only heights, which
+/// live outside the AST, so the framework's snapshot diff sees no change
+/// and records no duplicate.
 #[operator(
     id = "terrain.erode",
     label = "Erode Terrain",
@@ -217,26 +344,109 @@ pub(crate) fn terrain_erode(
 ) -> OperatorResult {
     let entity = selection.primary()?;
     let (terrain, mut dirty) = terrains.get_mut(entity)?;
-    let resolution = terrain.resolution;
     let step = terrain.quantization.active_height_step();
-    let data = store.entry_for(terrain)?;
+    let mut data = store.entry_for(terrain)?;
+    // Erosion strides the document's heights, so this is the grid those
+    // heights are stored on.
+    let resolution = data.document().grid_resolution();
 
-    let old_heights = data.heights.clone();
-    let mut new_heights = data.heights.clone();
+    let old_heights = data.heights().to_vec();
+    let mut new_heights = old_heights.clone();
     jackdaw_terrain::hydraulic_erosion(&mut new_heights, resolution, &gen_state.erosion);
-    // Erosion moves sediment in continuous amounts, so on a quantized
-    // terrain it is re-snapped whole: without this a single erode pass
-    // silently takes every cell off the lattice.
+    // Erosion moves sediment in continuous amounts, so a quantized terrain
+    // is re-snapped whole; one pass would otherwise take every cell off the
+    // lattice.
     if let Some(step) = step {
         jackdaw_terrain::quantize_heights(&mut new_heights, step);
     }
-    data.heights = new_heights.clone();
+    data.set_heights(&new_heights);
     dirty.rebuild_all = true;
-    history.push_executed(Box::new(SetTerrainHeights::new(
+    history.push_executed(Box::new(SetTerrainHeights::whole(
         entity,
         old_heights,
         new_heights,
         "Erode Terrain".to_string(),
     )));
     OperatorResult::Finished
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Plain Digit1-4 are bound to mesh edit-mode switches on
+    /// `CoreExtensionInputContext` (`edit_mode_ops.rs`), so the terrain
+    /// palette does not reuse them.
+    #[test]
+    fn palette_keybinds_use_alt_not_plain_digits() {
+        let alt_binding = PresetInput::key("Digit1").alt();
+        let plain_binding = PresetInput::key("Digit1");
+        assert_ne!(alt_binding, plain_binding);
+    }
+
+    /// `can_exit_to_select` keeps `terrain.tool.exit_to_select` from firing
+    /// while a stroke runs, so Escape stays the sculpt/paint modal's
+    /// mid-stroke cancel.
+    #[test]
+    fn exit_to_select_is_unavailable_mid_stroke() {
+        let mut world = World::new();
+        world.init_resource::<Selection>();
+        world.init_resource::<TerrainEditMode>();
+        world.init_resource::<super::super::TerrainSculptState>();
+        world.init_resource::<TerrainPaintState>();
+
+        let terrain = world.spawn(jackdaw_scene_types::Terrain::default()).id();
+        world.resource_mut::<Selection>().entities = vec![terrain];
+        *world.resource_mut::<TerrainEditMode>() =
+            TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Raise);
+
+        assert!(
+            world
+                .run_system_cached(can_exit_to_select)
+                .expect("system runs"),
+            "available once a tool is active and nothing is mid-stroke",
+        );
+
+        world
+            .resource_mut::<super::super::TerrainSculptState>()
+            .active = true;
+        assert!(
+            !world
+                .run_system_cached(can_exit_to_select)
+                .expect("system runs"),
+            "must be unavailable while a stroke is in progress",
+        );
+    }
+
+    /// An unsculpted terrain holds no regions, so a generate lays ground
+    /// down rather than running over nothing.
+    #[test]
+    fn generating_on_a_fresh_terrain_lays_down_ground() {
+        let mut store = TerrainDataStore::default();
+        let terrain = jackdaw_scene_types::Terrain {
+            data_path: "zone.terrain-0.jdterrain".to_string(),
+            ..default()
+        };
+        assert_eq!(store.grid_shape(&terrain).resolution, 0, "nothing yet");
+
+        let side = jackdaw_terrain::RegionSize::DEFAULT.get();
+        store
+            .entry_for(&terrain)
+            .expect("keyed")
+            .ensure_extent(FRESH_TERRAIN_REGIONS * side)
+            .expect("the fresh footprint is far inside the cap");
+
+        let shape = store.grid_shape(&terrain);
+        assert_eq!(shape.resolution, FRESH_TERRAIN_REGIONS * side);
+        assert_eq!(
+            store
+                .get(&terrain.data_path)
+                .expect("keyed")
+                .regions
+                .region_count(),
+            (FRESH_TERRAIN_REGIONS * FRESH_TERRAIN_REGIONS) as usize,
+        );
+        // A kilometre a side at the default cell size.
+        assert_eq!(shape.size.x, (shape.resolution - 1) as f32);
+    }
 }

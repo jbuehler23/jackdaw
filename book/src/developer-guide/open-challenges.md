@@ -1,9 +1,8 @@
 # Open challenges
 
-This is the honest list. Stuff that's not done, or is partly
-done, or is genuinely hard. Nothing here is shipped. If you
-want to take a swing at any of it, please file an issue first
-so we can talk through the approach.
+Work that is unfinished, partly done, or hard. Nothing here is
+shipped. If you want to take a swing at any of it, please file
+an issue first so the approach can be talked through.
 
 ## Windows dylib hardening
 
@@ -72,8 +71,6 @@ taste in the area could lead. One line each:
 - Particle / VFX editor. Not started.
 - Material graph editor (shader-graph style). Not started.
 - Light baking and lightmap pipeline. Not started.
-- Navmesh debug overlay. We have a navmesh component but no
-  visualisation.
 - Cinematics / cutscene editor. Not started.
 - Audio mixer. Not started.
 - Localization (i18n). Not started.
@@ -83,21 +80,18 @@ taste in the area could lead. One line each:
 - Level streaming for large open worlds. Not started.
 
 If you care about any of these, opening a small "here's what
-I'd do" issue is the best starting point. We don't want to
-solo-design any of them.
+I'd do" issue is the best starting point.
 
 ## Asset processing pipeline
 
-Right now asset processing only happens at editor runtime. If
-you want to pre-process textures or bake meshes for a CI
-build, you have to start the editor headlessly, which is not
-great.
+Asset processing happens only at editor runtime. To pre-process
+textures or bake meshes for a CI build, you have to start the
+editor headlessly.
 
-Half of the second shape below now exists: `jd` drives
-the editor's build machinery from a terminal with `build` and
-`run`. What is missing is a `process` step and the
-asset-processing pipeline behind it.
-The remaining shapes:
+The second shape below is half built: `jd` drives the editor's
+build machinery from a terminal with `build` and `run`. What is
+missing is a `process` step and the asset-processing pipeline
+behind it. The remaining shapes:
 
 - Split the user's game into a library plus multiple binaries
   (run, process), with processing driven from the project's own
@@ -111,22 +105,20 @@ the design.
 
 ## Single-entity editor-only ergonomics
 
-Today `EditorOnly` skips the whole entity from save, so to
-have a `PlayerSpawn` marker that ships and a visual indicator
-that doesn't, you author a parent (with `PlayerSpawn`) and a
-child (with `EditorOnly` + a mesh).
+`EditorOnly` skips the whole entity from save, so to have a
+`PlayerSpawn` marker that ships and a visual indicator that
+doesn't, you author a parent (with `PlayerSpawn`) and a child
+(with `EditorOnly` + a mesh).
 
-A single entity cannot carry both today, because the save
-filter is at entity granularity. A
-future `EditorOnlyVisuals` marker that strips visual components
-(`Mesh3d`, `MeshMaterial3d`, etc) at save time but keeps the
-entity and its non-visual components would enable single-
-entity authoring. The cost is a small allowlist of "visual"
-component types that grows as bevy adds new ones.
+A single entity cannot carry both, because the save filter is at
+entity granularity. An `EditorOnlyVisuals` marker that strips
+visual components (`Mesh3d`, `MeshMaterial3d`, etc) at save time
+but keeps the entity and its non-visual components would enable
+single-entity authoring. The cost is a small allowlist of
+"visual" component types that grows as bevy adds new ones.
 
 Where to dig in: design the allowlist, file an issue, then
-implement. The semantics decision is the harder part than
-the code.
+implement. The semantics are harder than the code.
 
 ## Brush face children as a custom relationship
 
@@ -138,11 +130,11 @@ means user code that walks brush children sees jackdaw's
 implementation detail.
 
 A custom Bevy relationship (not `ChildOf`) for face entities
-would solve this cleanly. The face entities would be reachable
+would solve this. The face entities would be reachable
 through the relationship but invisible to standard `Children`
 queries. The cost is a small per-frame propagation system that
 reads the brush's `GlobalTransform` and writes the face's.
 
 Where to dig in: the relationship API in Bevy 0.19, and
-whether we can do this without breaking `BrushFaceEntity`
+whether this can be done without breaking `BrushFaceEntity`
 queries that already work.

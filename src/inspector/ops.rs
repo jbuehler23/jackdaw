@@ -23,7 +23,34 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<super::brush_display::BrushFaceClearMaterialOp>()
         .register_operator::<super::brush_display::BrushFaceApplyTextureToAllOp>()
         .register_operator::<super::brush_display::BrushFaceSetUvScalePresetOp>()
-        .register_operator::<super::brush_display::BrushClearAllMaterialsOp>();
+        .register_operator::<super::brush_display::BrushClearAllMaterialsOp>()
+        .register_operator::<InspectorCategoryOp>();
+}
+
+/// Show one of the inspector's category tabs.
+///
+/// The strip's own tabs write the same resource, so a click and a scripted call
+/// take the same path. An id with no matching tab still applies: the strip
+/// resolves back to an applicable category on its next rebuild, as it does when
+/// the selection changes.
+#[operator(
+    id = "inspector.category",
+    label = "Inspector Category",
+    description = "Show one of the inspector's category tabs.",
+    allows_undo = false,
+    params(category(
+        String,
+        default = "object",
+        doc = "Category id, e.g. \"object\", \"material\"."
+    ))
+)]
+pub(crate) fn inspector_category(
+    params: In<OperatorParameters>,
+    mut active: ResMut<super::category_strip::ActiveInspectorCategory>,
+) -> OperatorResult {
+    let category = params.as_str("category").unwrap_or("object").to_string();
+    active.0 = std::borrow::Cow::Owned(category);
+    OperatorResult::Finished
 }
 
 /// Inspector operators all act on the inspected entity (the primary

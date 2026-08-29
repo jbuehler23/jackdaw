@@ -2,16 +2,15 @@
 //! data become a directory of PNG heightmaps/channels plus a JSON manifest
 //! and a placements list, for an importer in another repo to consume.
 //!
-//! Split in two, per the usual shape: [`build_export`] is a pure function
-//! over plain data (no scene, no `World`), so its byte-for-byte output can
-//! be tested without a `.bsn` fixture. [`run_export_terrain_cli`] is the
-//! thin shell that loads a scene headless, reads its terrain sidecar, and
-//! writes what [`build_export`] returns to disk.
+//! [`build_export`] is a pure function over plain data, with no scene and
+//! no `World`, so its byte-for-byte output can be tested without a `.bsn`
+//! fixture. [`run_export_terrain_cli`] is the shell that loads a scene
+//! headless, reads its terrain sidecar, and writes what [`build_export`]
+//! returns to disk.
 //!
-//! The output layout is a cross-repo CONTRACT (an importer is being built
-//! against it in another repo at the same time): field names, key order,
-//! sort order, and PNG pixel convention here must not drift without
-//! updating that contract.
+//! The output layout is a cross-repo contract: field names, key order, sort
+//! order, and PNG pixel convention must not drift without updating that
+//! contract.
 
 use std::cmp::Ordering;
 use std::io::Cursor;
@@ -89,16 +88,12 @@ pub struct ExportInput<'a> {
     /// Row-major (z-major), `resolution^2` long.
     pub heights: &'a [f32],
     pub channels: &'a [ExportChannel],
-    /// `(size.x, size.y)` -- world-space XZ extent.
+    /// `(size.x, size.y)`, the world-space XZ extent.
     pub size: (f32, f32),
-    /// World-space XZ position of heightmap sample `(0, 0)` -- the terrain
-    /// entity's computed world translation minus half `size`, since the
-    /// mesh is built terrain-LOCAL (`world_x = gx * cell.x - half_size.x`,
-    /// `jackdaw_terrain::mesh`) and jackdaw terrains are entity-centred. An
-    /// importer that places sample `(0, 0)` at its own coordinate-system
-    /// origin needs this offset to land placements on the cells they were
-    /// actually authored over, rather than wherever "translation minus
-    /// nothing" happens to fall.
+    /// World-space XZ position of heightmap sample `(0, 0)`: the terrain
+    /// entity's world translation plus the grid's anchor, since the mesh is
+    /// built terrain-local (`jackdaw_terrain::mesh`) and a terrain's cells
+    /// sit where its grid says rather than around its entity.
     pub terrain_origin_m: [f32; 2],
     pub max_height: f32,
     /// `Some((cell_size_m, elevation_step_m))` for a quantized export.
@@ -166,9 +161,9 @@ pub struct ExportedFile {
 
 /// Build every file a terrain export produces, from plain in-memory data.
 ///
-/// Pure: no filesystem, no `World`. Deterministic: the same input always
-/// produces byte-identical output (every collection that feeds an output
-/// file is sorted before it is written).
+/// No filesystem and no `World`. The same input produces byte-identical
+/// output: every collection feeding an output file is sorted before it is
+/// written.
 pub fn build_export(input: &ExportInput) -> Result<Vec<ExportedFile>, ExportError> {
     if let Some((cell_size, _)) = input.quantization {
         validate_cell_size(input.size, input.resolution, cell_size)?;
@@ -180,12 +175,10 @@ pub fn build_export(input: &ExportInput) -> Result<Vec<ExportedFile>, ExportErro
             jackdaw_terrain::quantize_heights(&mut snapped_heights, elevation_step);
             elevation_step
         }
-        // `max_height` is a configured ceiling, not necessarily the
-        // actual authored span: sculpted heights can run below zero or
-        // above it, and a step sized off `max_height` alone then
-        // overflows the u16 pixel range for that real span. Derive the
-        // step from the actual min..max of the heights being exported
-        // instead, so the pixel range always fits by construction.
+        // `max_height` is a configured ceiling rather than the authored
+        // span, which sculpted heights can exceed or run below, so a step
+        // sized off it can overflow the u16 range. The step comes from the
+        // min..max span instead.
         None => {
             let min = snapped_heights
                 .iter()
@@ -241,10 +234,8 @@ pub fn build_export(input: &ExportInput) -> Result<Vec<ExportedFile>, ExportErro
         let filename = sanitize_channel_filename(&channel.name);
         if let Some((_, owner)) = filename_owners.iter().find(|(f, _)| *f == filename) {
             if owner == &channel.name {
-                // Two channels with the exact same name: not a filename
-                // collision between distinct names, but two distinct
-                // channels racing for one output file. Last-wins in the
-                // writer would silently drop one.
+                // Two channels with the same name write one output file,
+                // and last-wins would drop one.
                 return Err(ExportError::DuplicateChannelName(channel.name.clone()));
             }
             return Err(ExportError::ChannelNameCollision(
@@ -260,9 +251,8 @@ pub fn build_export(input: &ExportInput) -> Result<Vec<ExportedFile>, ExportErro
                 encode_png_u16(input.resolution, input.resolution, &channel.values)?
             }
             ExportChannelElement::U8 => {
-                // Saturate rather than wrap, matching sidecar.rs's own
-                // U8 encode: a value of 256 truncating to 0 would be a
-                // silently wrong palette index, not just a clipped one.
+                // Saturate rather than wrap, matching sidecar.rs's U8
+                // encode: wrapping would turn 256 into palette index 0.
                 let values8: Vec<u8> = channel
                     .values
                     .iter()
@@ -299,7 +289,7 @@ pub fn build_export(input: &ExportInput) -> Result<Vec<ExportedFile>, ExportErro
         format_version: 2,
         source_scene: input.source_scene.to_string(),
         terrain: ManifestTerrain {
-            resolution: input.resolution,
+            cells_per_edge: input.resolution,
             world_size_m: [input.size.0, input.size.1],
             max_height_m: input.max_height,
             terrain_origin_m: input.terrain_origin_m,
@@ -456,7 +446,9 @@ struct Manifest {
 
 #[derive(Serialize)]
 struct ManifestTerrain {
-    resolution: u32,
+    /// Cells per edge of the grid this export wrote. A terrain declares no
+    /// resolution; this is how many cells it stores.
+    cells_per_edge: u32,
     world_size_m: [f32; 2],
     max_height_m: f32,
     terrain_origin_m: [f32; 2],
@@ -566,8 +558,6 @@ fn run(args: &[String]) -> Result<String, String> {
         .get::<Terrain>(terrain_entity)
         .expect("queried entity carries Terrain")
         .clone();
-    let terrain_origin_m = terrain_origin_for(world, terrain_entity, &terrain)?;
-
     let (quantization, quantization_source) =
         resolve_quantization(&terrain, cell_size_flag, elevation_step_flag)?;
     let quantization_report = match (quantization_source, quantization) {
@@ -581,14 +571,15 @@ fn run(args: &[String]) -> Result<String, String> {
     };
 
     let scene_dir = scene_path.parent().unwrap_or_else(|| Path::new("."));
-    let terrain_data = load_terrain_data(&terrain, scene_dir)?;
-    if terrain_data.heights.len() != terrain.cell_count() {
+    let (terrain_data, grid) = load_terrain_data(&terrain, scene_dir)?;
+    let cells = (terrain_data.resolution as usize) * (terrain_data.resolution as usize);
+    if terrain_data.heights.len() != cells {
         return Err(format!(
-            "{}: terrain data has {} height values, expected {} for resolution {}",
+            "{}: terrain data has {} height values, expected {cells} for the {} cells \
+             per edge it stores",
             scene_path.display(),
             terrain_data.heights.len(),
-            terrain.cell_count(),
-            terrain.resolution
+            terrain_data.resolution,
         ));
     }
 
@@ -601,7 +592,7 @@ fn run(args: &[String]) -> Result<String, String> {
                 .iter()
                 .find(|c| c.name == descriptor.name)
                 .map(|c| c.values.clone())
-                .unwrap_or_else(|| vec![0u16; terrain.cell_count()]);
+                .unwrap_or_else(|| vec![0u16; cells]);
             ExportChannel {
                 name: descriptor.name.clone(),
                 element: match descriptor.element {
@@ -622,13 +613,18 @@ fn run(args: &[String]) -> Result<String, String> {
         })
         .collect();
 
-    let placements = collect_placements(app.world_mut(), terrain_entity);
+    // Extent is derived rather than declared: the cells the terrain stores,
+    // at the size those cells are drawn. The origin is where its first cell
+    // sits, the entity plus the grid's anchor.
+    let world_size = (terrain_data.resolution.saturating_sub(1)) as f32 * grid.cell_size;
+    let terrain_origin_m = terrain_origin_for(world, terrain_entity, grid.anchor)?;
 
+    let placements = collect_placements(app.world_mut(), terrain_entity);
     let input = ExportInput {
-        resolution: terrain.resolution,
+        resolution: terrain_data.resolution,
         heights: &terrain_data.heights,
         channels: &channels,
-        size: (terrain.size.x, terrain.size.y),
+        size: (world_size, world_size),
         terrain_origin_m,
         max_height: terrain.max_height,
         quantization,
@@ -718,16 +714,12 @@ fn parse_f32_flag(args: &[String], name: &str) -> Result<Option<f32>, String> {
 
 /// Resolve the export's quantization and where it came from.
 ///
-/// Precedence: the terrain's own authored
-/// [`TerrainQuantization`](jackdaw_scene_types::TerrainQuantization) wins when
-/// it is actually turned on (`enabled` and both `cell_size` and
-/// `height_step` positive) -- that is the project's durable setting, not a
-/// one-off export choice. `--cell-size`/`--elevation-step` are the fallback
-/// for terrains that never opted in. Giving exactly one flag is ambiguous
-/// and rejected; giving both while the terrain also declares quantization
-/// is accepted only when they agree (within the same 1e-6 tolerance the
-/// cell-size/resolution check uses) -- silently preferring one would hide
-/// a real authoring mismatch.
+/// Precedence: the terrain's authored
+/// [`TerrainQuantization`](jackdaw_scene_types::TerrainQuantization) wins
+/// when enabled (both `cell_size` and `height_step` positive).
+/// `--cell-size`/`--elevation-step` are the fallback. Giving exactly one
+/// flag is rejected; giving both while the terrain also declares
+/// quantization is accepted only when they agree (within 1e-6).
 fn resolve_quantization(
     terrain: &Terrain,
     cell_size_flag: Option<f32>,
@@ -774,23 +766,72 @@ fn resolve_quantization(
     }
 }
 
+/// The dense grid this export writes, and the geometry it was drawn at.
+///
+/// The geometry travels with the data because a terrain's extent is the
+/// cells it stores: how much ground the export covers is that count times
+/// the cell size, and where it starts is the grid's anchor.
 fn load_terrain_data(
     terrain: &Terrain,
     scene_dir: &Path,
-) -> Result<jackdaw_terrain::TerrainData, String> {
+) -> Result<(jackdaw_terrain::TerrainData, jackdaw_terrain::GridGeometry), String> {
     if !terrain.data_path.is_empty() {
         let sidecar_path = jackdaw_terrain::sidecar::resolve_path(scene_dir, &terrain.data_path)
             .map_err(|err| format!("invalid terrain data path {:?}: {err}", terrain.data_path))?;
         match std::fs::read(&sidecar_path) {
             Ok(bytes) => {
-                let mut data = jackdaw_terrain::sidecar::decode(&bytes)
+                // Either format version; a pre-region sidecar migrates on
+                // the way in. The export pipeline is dense, so it reads the
+                // document's editing window and writes no control or colour
+                // layer.
+                let document = jackdaw_terrain::sidecar::load(&bytes)
                     .map_err(|e| format!("{}: {e}", sidecar_path.display()))?;
+                // What the dense pipeline cannot represent is an error
+                // rather than a warning: exporting zeroes, or one region
+                // out of several, ships a wrong artifact that reads as a
+                // right one. Extent runs from the origin outwards, so a
+                // region at a negative coordinate is ground this dense grid
+                // has no index for; everything else is inside by
+                // construction.
+                let outside = document
+                    .regions
+                    .iter_sorted()
+                    .any(|(coord, _)| coord.x < 0 || coord.z < 0);
+                if outside {
+                    return Err(format!(
+                        "{}: terrain holds regions at negative coordinates and this export \
+                         writes one dense grid from the origin; exporting them is not \
+                         supported yet",
+                        sidecar_path.display(),
+                    ));
+                }
+                let resolution = document.grid_resolution();
+                let channels = document
+                    .channels
+                    .iter()
+                    .enumerate()
+                    .map(|(index, descriptor)| jackdaw_terrain::ChannelData {
+                        name: descriptor.name.clone(),
+                        element: descriptor.element,
+                        values: document.regions.read_grid_channel(index, resolution),
+                    })
+                    .collect();
+                let mut data = jackdaw_terrain::TerrainData {
+                    resolution,
+                    heights: document.grid_heights(),
+                    channels,
+                };
                 data.normalize();
-                return Ok(data);
+                let grid = jackdaw_terrain::sidecar::resolve_grid(
+                    document.grid,
+                    terrain.size,
+                    terrain.resolution,
+                );
+                return Ok((data, grid));
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && !terrain.heights.is_empty() => {
-                // Legacy scene: no sidecar was ever written, fall through to
-                // the inline heights below.
+                // Legacy scene with no sidecar; falls through to the inline
+                // heights below.
             }
             Err(e) => {
                 return Err(format!(
@@ -804,11 +845,16 @@ fn load_terrain_data(
     if terrain.heights.is_empty() {
         return Err("terrain has no data_path sidecar and no legacy inline heights".to_string());
     }
-    Ok(jackdaw_terrain::TerrainData {
-        resolution: terrain.resolution,
-        heights: terrain.heights.clone(),
-        channels: Vec::new(),
-    })
+    // Legacy inline heights: their grid is the rectangle the component
+    // declares, which is what the migration reads.
+    Ok((
+        jackdaw_terrain::TerrainData {
+            resolution: terrain.resolution,
+            heights: terrain.heights.clone(),
+            channels: Vec::new(),
+        },
+        jackdaw_terrain::GridGeometry::for_declared_rect(terrain.size, terrain.resolution),
+    ))
 }
 
 fn color_to_hex(color: bevy::color::Color) -> String {
@@ -836,13 +882,13 @@ fn resolved_transform(world: &World, entity: bevy::ecs::entity::Entity) -> Trans
 
 /// World-space XZ origin for heightmap sample `(0, 0)`.
 ///
-/// The export contract is an axis-aligned heightfield and carries no terrain
-/// orientation or scale basis. Reject transforms that cannot be represented
-/// instead of emitting coordinates that only appear valid.
+/// The export contract is an axis-aligned heightfield and carries no
+/// terrain orientation or scale basis, so a transform it cannot represent
+/// is rejected rather than written out as coordinates that appear valid.
 fn terrain_origin_for(
     world: &World,
     entity: bevy::ecs::entity::Entity,
-    terrain: &Terrain,
+    anchor: bevy::math::Vec2,
 ) -> Result<[f32; 2], String> {
     const EPSILON: f32 = 1e-5;
 
@@ -867,8 +913,8 @@ fn terrain_origin_for(
     }
 
     Ok([
-        transform.translation.x - terrain.size.x / 2.0,
-        transform.translation.z - terrain.size.y / 2.0,
+        transform.translation.x + anchor.x,
+        transform.translation.z + anchor.y,
     ])
 }
 
@@ -1017,9 +1063,7 @@ mod tests {
 
     #[test]
     fn terrain_quantization_disabled_falls_through_to_flags_even_with_stale_values() {
-        // `enabled: false` with nonzero leftover fields must not leak
-        // through -- disabling quantization has to mean "off", not "off
-        // unless someone forgot to zero the numbers".
+        // `enabled: false` means off whatever the other two fields hold.
         let terrain = terrain_with_quantization(false, 1.0, 0.25);
         let (quantization, source) = resolve_quantization(&terrain, Some(3.0), Some(0.75)).unwrap();
         assert_eq!(quantization, Some((3.0, 0.75)));
@@ -1106,15 +1150,11 @@ mod tests {
                 GlobalTransform::from(Transform::from_xyz(11.0, 4.0, -7.0)),
             ))
             .id();
-        let terrain = Terrain {
-            size: Vec2::new(4.0, 6.0),
-            ..default()
-        };
+        // Where the grid's first cell sits relative to the entity. A
+        // migrated terrain carries `-size/2` here.
+        let anchor = Vec2::new(-2.0, -3.0);
 
-        assert_eq!(
-            terrain_origin_for(&world, entity, &terrain),
-            Ok([9.0, -10.0])
-        );
+        assert_eq!(terrain_origin_for(&world, entity, anchor), Ok([9.0, -10.0]));
 
         world
             .entity_mut(entity)
@@ -1124,7 +1164,7 @@ mod tests {
                 ..default()
             }));
         assert!(
-            terrain_origin_for(&world, entity, &terrain)
+            terrain_origin_for(&world, entity, anchor)
                 .unwrap_err()
                 .contains("rotation")
         );
@@ -1137,7 +1177,7 @@ mod tests {
                 ..default()
             }));
         assert!(
-            terrain_origin_for(&world, entity, &terrain)
+            terrain_origin_for(&world, entity, anchor)
                 .unwrap_err()
                 .contains("scale")
         );
@@ -1175,12 +1215,8 @@ mod tests {
             .find(bevy::prelude::EntityRef::contains::<Terrain>)
             .expect("terrain reloads")
             .id();
-        let terrain = world
-            .get::<Terrain>(terrain_entity)
-            .expect("queried entity carries Terrain");
-
         assert!(
-            terrain_origin_for(world, terrain_entity, terrain)
+            terrain_origin_for(world, terrain_entity, Vec2::ZERO)
                 .unwrap_err()
                 .contains("rotation"),
             "the inherited rotation must be propagated before export",

@@ -177,6 +177,7 @@ jobs:
           -p jackdaw_runtime
           -p jackdaw_scene_types
           -p jackdaw_schema
+          -p jackdaw_terrain
           -p jackdaw_ui
           -p jackdaw_widgets
 

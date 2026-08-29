@@ -14,6 +14,7 @@ use bevy::prelude::*;
 use crate::commands::CommandHistory;
 use crate::project::ProjectRoot;
 use crate::terrain::TerrainDataStore;
+use crate::terrain::navmesh_bake::TabNavmesh;
 
 pub struct ScenesPlugin;
 
@@ -67,6 +68,7 @@ pub fn intercept_window_close(
         return;
     }
     pending.active = true;
+    pending.leaving_project = false;
 
     commands.queue(|world: &mut World| {
         confirm_dialog::spawn_confirm_quit_dialog(world);
@@ -130,6 +132,10 @@ pub struct SceneTab {
     /// Decoded terrain sidecars owned by this tab while it is inactive.
     /// The active tab's store lives in the world as a resource instead.
     pub terrain_data_store: TerrainDataStore,
+    /// This tab's baked navmesh and any bake still running for it. Held per tab,
+    /// like the terrain data: a bake describes one scene's ground and must not
+    /// follow the editor to another.
+    pub navmesh: TabNavmesh,
     /// Recorded `CommandHistory.undo_stack.len()` as of the last time
     /// the dirty-tracking system ran (or the tab was activated, or
     /// saved). If the live history is deeper than this, the user has
@@ -149,6 +155,7 @@ impl SceneTab {
             view_state: ViewState::with_default_camera(),
             history: CommandHistory::default(),
             terrain_data_store: TerrainDataStore::default(),
+            navmesh: TabNavmesh::default(),
             history_depth_at_last_check: 0,
         }
     }

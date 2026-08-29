@@ -1,5 +1,6 @@
 use bevy::{
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
+    picking::prelude::Pickable,
     prelude::*,
 };
 use jackdaw_api::prelude::*;
@@ -101,6 +102,7 @@ pub(crate) fn measure_distance(
     mut state: ResMut<MeasureToolState>,
     vp: crate::viewport::ViewportCursor,
     mut ray_cast: MeshRayCast,
+    editor_entities: Query<(), With<crate::EditorEntity>>,
 ) -> OperatorResult {
     if !state.initialized {
         // Viewport capture is deferred so the modal can start from a
@@ -142,7 +144,7 @@ pub(crate) fn measure_distance(
         let vp_cursor = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)?;
         let ray = camera.viewport_to_world(cam_tf, vp_cursor).ok()?;
         Some(
-            raycast_closest_point(ray, &mut ray_cast)
+            raycast_closest_point(ray, &mut ray_cast, &editor_entities)
                 .or_else(|| ray_plane_intersection(ray, Vec3::ZERO, Vec3::Y))
                 .unwrap_or(cam_tf.translation() + *ray.direction * 10.0),
         )
@@ -164,13 +166,14 @@ fn cancel_measure_distance(mut state: ResMut<MeasureToolState>) {
     state.viewport = None;
 }
 
-/// Without the viewport check the toolbar click that activates the
-/// modal would also be picked up as the first confirm.
+/// Without the pointer check, the toolbar click that activates the modal would
+/// be taken as the first confirm, as would a click on an overlay floating over
+/// the viewport.
 fn confirm_measure_available(
     state: Res<MeasureToolState>,
     vp: crate::viewport::ViewportCursor,
 ) -> bool {
-    state.active && vp.viewport_entity().is_some()
+    state.active && vp.viewport_pointer().is_some()
 }
 
 #[operator(
@@ -203,8 +206,21 @@ fn confirm_measure_distance(
 
 // -- Raycasting helpers --
 
-fn raycast_closest_point(ray: Ray3d, ray_cast: &mut MeshRayCast) -> Option<Vec3> {
-    let settings = MeshRayCastSettings::default().with_visibility(RayCastVisibility::Any);
+/// The nearest scene geometry under `ray`.
+///
+/// Editor entities are filtered out: the tool reports distances in the authored
+/// world, and the editor draws meshes into it that are not part of it. The
+/// navmesh overlay is a sheet floating above the ground it describes, so
+/// measuring against it would answer with the drawing rather than the terrain.
+fn raycast_closest_point(
+    ray: Ray3d,
+    ray_cast: &mut MeshRayCast,
+    editor_entities: &Query<(), With<crate::EditorEntity>>,
+) -> Option<Vec3> {
+    let editor_filter = |entity: Entity| !editor_entities.contains(entity);
+    let settings = MeshRayCastSettings::default()
+        .with_visibility(RayCastVisibility::Any)
+        .with_filter(&editor_filter);
     ray_cast
         .cast_ray(ray, &settings)
         .first()
@@ -276,6 +292,9 @@ fn ensure_measure_label(
                 position_type: PositionType::Absolute,
                 ..default()
             },
+            // Any hovered node other than the viewport's own suppresses viewport
+            // gestures, and this readout follows the pointer over the viewport.
+            Pickable::IGNORE,
             Visibility::Hidden,
             ChildOf(parent),
         ))

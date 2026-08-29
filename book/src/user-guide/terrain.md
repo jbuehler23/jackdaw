@@ -1,17 +1,18 @@
 # Terrain
 
-Jackdaw's terrain is a heightmap-backed mesh, chunked for
-streaming and edited with brush-style sculpt tools. The crate
-that does the work is `jackdaw_terrain`; if you want the
-actual data structures, the entry points are
-`Heightmap`, `apply_brush`, and `build_chunk_mesh_data`.
+Jackdaw's terrain is a heightmap-backed mesh, rendered as
+clipmap LOD levels around the camera and edited with
+brush-style sculpt tools. The crate that does the work is
+`jackdaw_terrain`; if you want the actual data structures, the
+entry points are `Heightmap`, `apply_brush`, and
+`build_clipmap_mesh_data`.
 
 ## Add a terrain
 
 `Add > Terrain` in the hierarchy. You get a flat heightmap
-component on a new entity, with a chunked mesh underneath.
-Resolution and physical size are properties on the
-`Terrain` component, editable in the inspector.
+component on a new entity, rendered as clipmap LOD levels
+around the camera. Resolution and physical size are properties
+on the `Terrain` component, editable in the inspector.
 
 ## Sculpt
 
@@ -40,9 +41,8 @@ sediment capacity in the panel; click `Run`. It is a
 one-shot operation, not a real-time tool.
 
 This is the slowest thing in the terrain workflow, since it
-runs on the CPU and rebuilds every chunk mesh when it
-finishes. Save before you click. We do not have a cancel
-button yet.
+runs on the CPU and rebuilds every LOD level when it
+finishes. Save before you click. There is no cancel button.
 
 ## Paint channels
 
@@ -85,10 +85,17 @@ preserved. The whole run is a single undoable edit.
 
 ## Sidecars and export
 
-Scene files keep the small terrain descriptor, while heights
-and per-cell channel values are stored beside the scene in
-versioned `.jdterrain` files. Save and move those sidecars with
-the `.bsn` scene that references them.
+Scene files keep the small terrain descriptor, while heights,
+painted texture ids and per-cell channel values are stored beside
+the scene in versioned `.jdterrain` files, along with the terrain's
+texture-set reference. Save and move those sidecars with the `.bsn`
+scene that references them.
+
+A sidecar in an older format migrates when the scene opens and is
+rewritten in the current format on the next save. A sidecar this
+build cannot read, such as one written by a newer jackdaw or one
+whose resolution is not a power of two, refuses edits and is never
+overwritten, so nothing is lost while you fix or replace it.
 
 For a headless runtime or another engine, export the authored
 terrain with:
@@ -139,35 +146,78 @@ built against it, so treat the shapes below as stable.
   and unscaled -- for a consumer that wants the source values
   rather than the quantized PNG encoding.
 
-## Chunking
+## Rendering
 
-Chunks are 32 cells per edge (`src/terrain/mod.rs::CHUNK_SIZE`).
-Edits only rebuild the chunks that overlap the brush,
-which is what keeps sculpting fast on large heightmaps.
-There is no LOD or frustum streaming yet; every chunk
-renders at full resolution.
+Terrain draws as a handful of concentric LOD levels centred on
+the camera: the level under the camera samples every grid
+point, and each ring out doubles the step and covers four
+times the ground, so the vertex budget stays flat as the
+terrain grows. Levels snap their outer edge to the coarser
+level next to them, so boundaries between levels stay
+crack-free however far the camera moves. A level only draws
+where the terrain has data; ground no region owns costs
+nothing to render. Edits rebuild only the levels whose ground
+changed, which keeps sculpting fast on large heightmaps.
+
+Each material slot has its own **Tiling** and **Detiling**
+controls, in the terrain panel's **Slot** section. Tiling sets
+how many times the texture repeats per world unit; Detiling
+breaks up that repetition by turning and shifting individual
+tiles -- 0 is off.
+
+## Autoterrain
+
+Autoterrain textures the cells you have not painted from the
+slope under them: flat ground draws one of the terrain's
+textures, steep ground another, and the band between them
+blends by height the same way two painted textures do. Turn it
+on in the terrain panel's **Textures** tab, under
+**Autoterrain**, where you also pick which texture flat and
+steep ground draw and set the slope band in degrees. It is off
+per terrain until you turn it on.
+
+Painting a cell claims it: from then on it draws what you
+painted, wherever the slope goes. With the paint options bar's
+**Restore Auto** checkbox on, the brush hands the cells under it
+back to autoterrain without disturbing the paint underneath, so
+a later stroke over them brings back what they had.
+
+Autoterrain is evaluated as the terrain draws, so sculpting
+re-textures the ground as you go: raise a bank past the slope
+band and it takes the steep texture as soon as it is steep. The
+settings live in the terrain's sidecar, so a built game shades
+the ground the way the editor showed it.
 
 ## Common gotchas
 
-- **Mesh shows seams between chunks.** Normals are computed
-  per chunk. The boundary samples should match across
-  chunks; if they don't, an edit straddled the boundary and
-  one side never rebuilt. Touch both sides with the smooth
-  tool to force the rebuild.
 - **Erosion result looks wrong.** Iteration count is the
   knob to tune first. Defaults aim for a generic mountain;
   rolling hills want fewer iterations and a higher
   evaporation rate.
-- **Standalone game shows no terrain.** Two separate causes
-  land on the same symptom. First, `jackdaw_runtime` doesn't
-  pull in `jackdaw_terrain`: if your game needs terrain at
-  runtime, add `jackdaw_terrain` to your standalone
-  `Cargo.toml` and bring whatever plugin / systems you want
-  into your game's plugin alongside `JackdawPlugin`. Second,
-  even with the crate present, a terrain's heights and paint
-  channels live in a `.jdterrain` sidecar next to the `.bsn`
-  scene, not in the scene file itself (see "Sidecars and
-  export" above) -- if you load a `.bsn` scene directly at
-  runtime rather than through the `jd export-terrain` pipeline,
-  every referenced `.jdterrain` sidecar has to ship and load
-  alongside it, or the terrain reads as flat.
+- **Standalone game shows no terrain.** `jackdaw_runtime`
+  draws terrain behind its `terrain` feature, which is off by
+  default so a game without terrain links neither the mesher
+  nor the shader. Turn it on in your game's `Cargo.toml`:
+  `jackdaw_runtime = { version = "0.19", features = ["terrain"] }`.
+  With it on, `JackdawPlugin` reads each `Terrain` entity's
+  `.jdterrain` sidecar from beside the `.bsn` scene that spawned
+  it and draws the result with the same splat material and
+  clipmap mesher the editor uses. The sidecars have to ship
+  alongside the scene (see "Sidecars and export" above): a
+  missing one reads as flat ground, and one that will not decode
+  draws nothing at all.
+
+  Your game also has to have an active `Camera3d`, because the
+  LOD levels are laid out around wherever the terrain is being
+  looked at from. An authored `.bsn` scene carries none, since
+  the editor never saves its viewport camera into one, so spawn
+  the camera yourself. With none in the world the terrain does
+  not draw, and `jackdaw_runtime` says so in the log once.
+
+  By default the viewer is the active `Camera3d` with the
+  highest `order`, which in a single-camera game is the only
+  one there is. If your game draws a UI overlay through a
+  second camera at a higher `order`, put the `TerrainViewer`
+  marker component on your world camera; a marked camera is
+  preferred over any unmarked one, so the overlay cannot pull
+  the finest LOD ring away from the player.

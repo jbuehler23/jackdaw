@@ -18,7 +18,6 @@ use jackdaw_feathers::tokens;
 pub(crate) const WORLD_ENTITY_ICONS: &[(&str, Icon)] = &[
     ("jackdaw_scene_types::types::Brush", Icon::Cuboid),
     ("jackdaw_scene_types::types::Terrain", Icon::Mountain),
-    ("jackdaw_scene_types::types::NavmeshRegion", Icon::Waypoints),
     ("jackdaw::entity_ops::SceneFogVolume", Icon::CloudFog),
     ("jackdaw::entity_ops::SceneReflectionProbe", Icon::Sparkles),
     ("jackdaw::entity_ops::SceneAnimationPlayer", Icon::Play),
@@ -437,7 +436,7 @@ impl JackdawExtension for TerminalExtension {
     }
 }
 
-/// Right-sidebar stack: Components, Materials, Resources, Systems.
+/// Right-sidebar stack: Components, Terrain, Materials, Resources, Systems.
 #[derive(Default)]
 pub struct InspectorExtension;
 
@@ -471,10 +470,20 @@ impl JackdawExtension for InspectorExtension {
         );
 
         ctx.register_window(
+            WindowDescriptor::new("jackdaw.inspector.terrain")
+                .with_name("Terrain")
+                .with_default_area(DefaultArea::RightSidebar)
+                .with_priority(1)
+                .with_build(|window| {
+                    window.spawn(crate::terrain::panel::terrain_panel_content());
+                }),
+        );
+
+        ctx.register_window(
             WindowDescriptor::new("jackdaw.inspector.materials")
                 .with_name("Materials")
                 .with_default_area(DefaultArea::RightSidebar)
-                .with_priority(1)
+                .with_priority(2)
                 .with_build(|window| {
                     let icon_font = window
                         .world()
@@ -493,7 +502,7 @@ impl JackdawExtension for InspectorExtension {
             WindowDescriptor::new("jackdaw.inspector.resources")
                 .with_name("Resources")
                 .with_default_area(DefaultArea::RightSidebar)
-                .with_priority(2)
+                .with_priority(3)
                 .with_build(|window| {
                     window.spawn((
                         Node {
@@ -518,7 +527,7 @@ impl JackdawExtension for InspectorExtension {
             WindowDescriptor::new("jackdaw.inspector.systems")
                 .with_name("Systems")
                 .with_default_area(DefaultArea::RightSidebar)
-                .with_priority(3)
+                .with_priority(4)
                 .with_build(|window| {
                     window.spawn((
                         Node {
@@ -560,7 +569,6 @@ mod tests {
             let mut registry = registry.write();
             registry.register::<jackdaw_scene_types::Brush>();
             registry.register::<jackdaw_scene_types::Terrain>();
-            registry.register::<jackdaw_scene_types::NavmeshRegion>();
             registry.register::<crate::entity_ops::SceneFogVolume>();
             registry.register::<crate::entity_ops::SceneReflectionProbe>();
             registry.register::<crate::entity_ops::SceneAnimationPlayer>();
@@ -586,12 +594,6 @@ mod tests {
             (
                 world.spawn(jackdaw_scene_types::Terrain::default()).id(),
                 Icon::Mountain,
-            ),
-            (
-                world
-                    .spawn(jackdaw_scene_types::NavmeshRegion::default())
-                    .id(),
-                Icon::Waypoints,
             ),
             (
                 world.spawn(crate::entity_ops::SceneFogVolume).id(),

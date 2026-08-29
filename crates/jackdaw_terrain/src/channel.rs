@@ -1,9 +1,8 @@
 //! Named per-cell integer layers painted over a heightmap.
 //!
-//! A channel is whatever the project says it is. Jackdaw stores the name,
-//! the values, and the width; it never interprets them. Games use channels
-//! for material indices, biome ids, walkability, spawn weights, zoning --
-//! anything that is one small number per terrain cell.
+//! Jackdaw stores the name, the values and the width, and never interprets
+//! them. A channel holds one small number per terrain cell: a material
+//! index, a biome id, walkability, a spawn weight.
 
 use bevy_math::Vec2;
 
@@ -11,9 +10,9 @@ use crate::brush::compute_falloff;
 
 /// Storage width a channel's values are written with on disk.
 ///
-/// Values always live in memory as `u16` so there is one paint path and one
-/// undo shape; the width only decides how many bytes a channel costs in the
-/// sidecar and what the largest paintable value is.
+/// Values are held in memory as `u16` whatever the width. The width decides
+/// how many bytes a channel costs in the sidecar and the largest paintable
+/// value.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ChannelElement {
     /// One byte per cell, values `0..=255`.
@@ -58,7 +57,31 @@ impl ChannelElement {
     }
 }
 
+/// What a terrain declares one channel to be: its name and its width.
+///
+/// The directory entry only. Per-cell values live in the regions, beside
+/// the heights they describe.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelDescriptor {
+    /// Project-defined name. Opaque to jackdaw; used as the export filename.
+    pub name: String,
+    /// Storage width, and therefore the value ceiling.
+    pub element: ChannelElement,
+}
+
+impl ChannelDescriptor {
+    pub fn new(name: impl Into<String>, element: ChannelElement) -> Self {
+        Self {
+            name: name.into(),
+            element,
+        }
+    }
+}
+
 /// One named layer of per-cell values, row-major, `resolution^2` long.
+///
+/// The inlet for reading a sidecar written as a dense grid over the whole
+/// terrain. Loading slices it into the regions it covers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelData {
     /// Project-defined name. Opaque to jackdaw; used as the export filename.
@@ -80,17 +103,20 @@ impl ChannelData {
     }
 
     /// Value at integer grid coordinates, or 0 out of bounds.
+    ///
+    /// A channel whose length does not match `resolution^2` reads 0
+    /// everywhere rather than only past its end: the row stride is the
+    /// caller's, so an index landing inside the stored values names a
+    /// different cell than the one asked for.
     pub fn get(&self, resolution: u32, x: u32, z: u32) -> u16 {
-        if x >= resolution || z >= resolution {
+        let side = resolution as usize;
+        if x >= resolution || z >= resolution || self.values.len() != side * side {
             return 0;
         }
-        self.values[(z * resolution + x) as usize]
+        self.values[z as usize * side + x as usize]
     }
 
     /// Grow or shrink to `resolution^2`, zero-filling any new cells.
-    ///
-    /// Used when a channel is added to a terrain that already has height
-    /// data, and when a terrain's resolution changes underneath it.
     pub fn resize_to(&mut self, resolution: u32) {
         let want = (resolution as usize) * (resolution as usize);
         self.values.resize(want, 0);
@@ -102,8 +128,7 @@ impl ChannelData {
 /// Integer channels cannot blend, so the brush is a threshold stamp rather
 /// than an accumulation: a cell is written when its falloff is at least
 /// `threshold`, and left alone otherwise. `threshold` of 0 writes the whole
-/// disc; raising it shrinks the written area inside the same visible ring,
-/// which is how a soft-edged brush behaves on discrete data.
+/// disc; raising it shrinks the written area inside the same radius.
 ///
 /// `center` and `radius` are in grid cells. `value` is clamped to `element`.
 /// Returns the number of cells changed, so a caller can skip an undo entry
@@ -149,6 +174,19 @@ pub fn apply_channel_brush(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every read of a mismatched channel is 0, including the ones whose
+    /// index lands inside the stored values: at the caller's stride those
+    /// name a different cell.
+    #[test]
+    fn a_resolution_the_stored_values_do_not_match_reads_zero() {
+        let mut channel = ChannelData::new("mask", ChannelElement::U16, 4);
+        channel.values[5] = 9;
+        assert_eq!(channel.get(4, 1, 1), 9);
+        assert_eq!(channel.get(8, 7, 7), 0);
+        assert_eq!(channel.get(8, 1, 1), 0);
+        assert_eq!(channel.get(2, 1, 1), 0);
+    }
 
     #[test]
     fn element_widths_and_ceilings() {

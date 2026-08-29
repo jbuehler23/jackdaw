@@ -6,9 +6,11 @@
 use std::{borrow::Cow, collections::HashMap};
 
 use bevy::prelude::*;
+use jackdaw_panels::WindowRegistry;
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<WindowExtensionRegistry>()
+        .init_resource::<WindowRegistry>()
         .init_resource::<crate::widgets::WidgetRegistry>();
 }
 

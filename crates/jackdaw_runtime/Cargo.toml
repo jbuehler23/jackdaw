@@ -32,6 +32,14 @@ jackdaw_camera_rig = { version = "0.19.0", path = "../jackdaw_camera_rig", optio
 # overlay gizmos are dead code in the game; a lean release build can override with
 # `default-features = false`.
 jackdaw_avian_integration = { version = "0.19.0", path = "../jackdaw_avian_integration", optional = true }
+# Named directly as well as through the bridge: the terrain ground collider is
+# built here from stored heights rather than from an authored `AvianCollider`.
+# Workspace features, to resolve to the same build as the bridge and editor.
+avian3d = { workspace = true, optional = true }
+# The data model, sidecar decoder, splat material and clipmap mesher shared with
+# the editor. Default features off, so a `navmesh`-only build takes the data
+# half alone and `terrain` asks for the rendering half by name.
+jackdaw_terrain = { version = "0.19.0", path = "../jackdaw_terrain", optional = true, default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "2"
@@ -62,10 +70,28 @@ pie = [
 # Avian physics: build `Collider`s from authored `AvianCollider` components at
 # runtime so brushes collide in the standalone game and in PIE, not only in the
 # editor preview. Add `PhysicsPlugins` in your app to actually simulate.
-physics = ["dep:jackdaw_avian_integration"]
+# With `terrain` as well, the authored ground gets a heightfield collider under
+# it; no separate feature gates that.
+physics = ["dep:jackdaw_avian_integration", "dep:avian3d"]
+# Draw the terrain a scene authored. Each `Terrain` entity's sidecar is read
+# from beside the scene file, its material slots resolve against the project
+# catalog, and the surface is built with the same splat material and clipmap
+# mesher the editor uses. Off by default: a game with no terrain does not link
+# the mesher or the shader.
+terrain = ["render", "navmesh", "jackdaw_terrain/render"]
+# Load the navmesh baked beside a scene, as a `JackdawNavmesh` on the scene
+# root. Decoding only: nothing is meshed and nothing is drawn, so a server that
+# validates moves takes this without `terrain`.
+navmesh = ["dep:jackdaw_terrain"]
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# Ground-collider tests query the built collider through avian's spatial
+# queries, so the test targets name it themselves.
+avian3d = { workspace = true }
+# Terrain tests build a sidecar to load back. Optional for the library, so the
+# test targets name it themselves.
+jackdaw_terrain = { version = "0.19.0", path = "../jackdaw_terrain" }

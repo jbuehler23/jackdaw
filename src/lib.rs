@@ -52,11 +52,13 @@ pub mod camera_preview;
 pub mod core_extension;
 pub mod dock_ops;
 pub mod document_ops;
+pub mod editor_grid_depth_patch;
 pub mod ext_build;
 mod extension_lifecycle;
 pub mod extension_resolution;
 pub mod extensions_dialog;
 pub mod file_ops;
+pub mod fps_overlay;
 pub mod hot_reload;
 pub mod layout;
 pub mod live_edits;
@@ -65,8 +67,10 @@ pub mod live_frame;
 pub mod live_frame_view;
 pub mod live_highlight;
 pub mod live_input;
+pub mod material_assets;
 pub mod material_browser;
 pub mod material_preview;
+pub mod material_ui;
 pub mod measure_tool;
 pub mod mesh_quick_menu;
 pub mod migrate;
@@ -74,7 +78,6 @@ pub mod modal_inputs;
 pub mod modal_transform;
 pub mod model_thumbnail;
 pub mod modifier_ops;
-pub mod navmesh;
 pub mod new_project;
 pub mod numeric_transform;
 pub mod operator_tooltip;
@@ -214,6 +217,17 @@ pub struct BlocksCameraInput;
 #[derive(Component, Default)]
 pub struct NonSerializable;
 
+/// Marker for geometry that is rebuilt around the viewer, and so does not
+/// describe the extent of what it draws.
+///
+/// The framing operators (`view.frame_all`, `view.frame_selected`) skip it. A
+/// terrain's clipmap rings reach from the terrain to wherever the camera is
+/// standing, so measuring them and moving the camera to suit walks the camera
+/// further back on every call. An entity whose drawn geometry carries this
+/// marker carries its own `Aabb` for the extent it occupies.
+#[derive(Component, Default)]
+pub struct ViewDependentBounds;
+
 // `SkipSerialization` is defined in `jackdaw_scene_types`
 // alongside `EditorHidden` so user game crates that only depend on
 // `jackdaw_runtime` can reach it without pulling in the full editor
@@ -345,6 +359,7 @@ impl Plugin for EditorCorePlugin {
             brush::BrushPlugin,
             camera_preview::CameraPreviewPlugin,
             material_preview::MaterialPreviewPlugin,
+            material_ui::plugin,
             undo_snapshot::plugin,
             migrate_dialog::plugin,
         ))
@@ -356,7 +371,6 @@ impl Plugin for EditorCorePlugin {
             brush::mirror_plane_overlay::MirrorPlaneOverlayPlugin,
             asset_ingest::AssetIngestPlugin,
             alignment_guides::AlignmentGuidesPlugin,
-            navmesh::NavmeshPlugin,
             terrain::TerrainPlugin,
             screenshot::plugin,
             reference_image::ReferenceImagePlugin,
@@ -367,6 +381,8 @@ impl Plugin for EditorCorePlugin {
         ))
         .add_plugins(model_thumbnail::plugin)
         .add_plugins(boot_ops::plugin)
+        .add_plugins(fps_overlay::plugin)
+        .add_systems(Update, view_ops::drive_dolly)
         .add_plugins(jackdaw_avian_integration::PhysicsOverlaysPlugin::<
             selection::Selected,
         >::new())
@@ -2244,6 +2260,8 @@ fn populate_menu(
                 op_entry::<view_ops::ViewFrameSelectedOp>("Frame Selected"),
                 op_entry::<view_ops::ViewFrameAllOp>("Frame All"),
                 separator(),
+                op_entry::<fps_overlay::ViewToggleFpsOverlayOp>("Toggle FPS Overlay"),
+                separator(),
                 op_entry::<view_ops::ViewUiZoomInOp>("Zoom UI In"),
                 op_entry::<view_ops::ViewUiZoomOutOp>("Zoom UI Out"),
                 op_entry::<view_ops::ViewUiZoomResetOp>("Reset UI Zoom"),
@@ -2290,8 +2308,9 @@ pub(crate) fn window_open(
     if registry.get(&window_id).is_none() {
         return OperatorResult::Cancelled;
     }
+    // Focus the tab if this window already has one rather than docking a second copy.
     commands.queue(move |world: &mut World| {
-        open_window_in_default_area(world, &window_id);
+        open_window_in_default_area_if_absent(world, &window_id);
     });
     OperatorResult::Finished
 }
@@ -2409,11 +2428,16 @@ fn cleanup_editor(world: &mut World) {
         }
     }
 
-    // 5. Reset resources
+    // 5. Reset resources. The catalog, the durable-name set and the material registry all
+    // describe the project being closed; carrying them into the next one would write its
+    // materials into that project's assets.
     world.insert_resource(scene_io::SceneFilePath::default());
     world.insert_resource(scene_io::SceneDirtyState::default());
     world.insert_resource(Selection::default());
     world.insert_resource(commands::CommandHistory::default());
+    world.insert_resource(asset_catalog::AssetCatalog::default());
+    world.insert_resource(material_assets::SavedMaterials::default());
+    world.insert_resource(material_assets::MaterialRegistry::default());
 
     // 6. Remove project root
     world.remove_resource::<project::ProjectRoot>();
@@ -2528,9 +2552,12 @@ pub(crate) fn open_recent_dialog(world: &mut World) {
                 });
                 commands.trigger(jackdaw_feathers::dialog::CloseDialogEvent);
                 commands.queue(move |world: &mut World| {
-                    world
-                        .resource_mut::<NextState<AppState>>()
-                        .set(AppState::ProjectSelect);
+                    // Cancelling at the prompt drops the pick above.
+                    if scenes::confirm_dialog::leave_project_or_confirm(world) {
+                        world
+                            .resource_mut::<NextState<AppState>>()
+                            .set(AppState::ProjectSelect);
+                    }
                 });
             },
         );
@@ -3042,6 +3069,41 @@ fn largest_visible_leaf(
         .map(|(id, _, _)| id)
 }
 
+/// Open a registered dock window, or bring its tab to the front when one
+/// already exists in the live tree. Unlike [`open_window_in_default_area`]
+/// (used by the Window menu, which always adds a fresh tab), this serves
+/// programmatic auto-open triggers such as the Terrain panel opening itself
+/// when a Terrain entity is added.
+///
+/// A present tab is focused rather than left alone: every fresh workspace's
+/// `right_sidebar` leaf is seeded at boot with one tab per registered window
+/// (`build_default_tree`), Terrain included but not focused
+/// (`DockLeaf::with_windows` activates the first one, and priority order puts
+/// Components first). A presence check alone would leave the Terrain tab
+/// unfocused behind Components when `entity.add.terrain` runs.
+pub(crate) fn open_window_in_default_area_if_absent(world: &mut World, window_id: &str) {
+    let existing = {
+        let tree = world.resource::<jackdaw_panels::tree::DockTree>();
+        tree.find_leaf_with_window(window_id).map(|leaf_id| {
+            let tab_id = tree
+                .get(leaf_id)
+                .and_then(|n| n.as_leaf())
+                .and_then(|l| l.tabs().find(|(id, _)| *id == window_id))
+                .map(|(_, tab)| tab);
+            (leaf_id, tab_id)
+        })
+    };
+    match existing {
+        Some((leaf_id, Some(tab_id))) => {
+            world
+                .resource_mut::<jackdaw_panels::tree::DockTree>()
+                .set_active(leaf_id, tab_id);
+        }
+        Some((_, None)) => {}
+        None => open_window_in_default_area(world, window_id),
+    }
+}
+
 fn open_window_in_default_area(world: &mut World, window_id: &str) {
     use jackdaw_panels::tree::DockTree;
 
@@ -3258,5 +3320,74 @@ fn sync_icon_font(
 ) {
     if let Some(font) = icon_font {
         commands.insert_resource(jackdaw_panels::IconFontHandle(font.0.clone()));
+    }
+}
+
+#[cfg(test)]
+mod dock_open_tests {
+    use jackdaw_panels::DockAreaStyle;
+    use jackdaw_panels::tree::{DockLeaf, DockNode, DockTree};
+
+    use super::*;
+
+    /// Mirrors `build_default_tree`'s `right_sidebar` leaf: seeded at boot with every
+    /// registered window as a tab, Components first and therefore active.
+    fn world_with_right_sidebar_seeded() -> World {
+        let mut world = World::new();
+        let mut tree = DockTree::new();
+        tree.set_root_leaf(
+            DockLeaf::new("right_sidebar", DockAreaStyle::TabBar).with_windows(vec![
+                "jackdaw.inspector".to_string(),
+                "jackdaw.inspector.terrain".to_string(),
+                "jackdaw.inspector.materials".to_string(),
+            ]),
+        );
+        world.insert_resource(tree);
+        world
+    }
+
+    /// A present but unfocused tab is not treated as already open: called on a freshly
+    /// booted workspace (Terrain tab present, Components active), this brings Terrain to
+    /// the front.
+    #[test]
+    fn a_present_but_unfocused_tab_is_brought_to_front() {
+        let mut world = world_with_right_sidebar_seeded();
+
+        open_window_in_default_area_if_absent(&mut world, "jackdaw.inspector.terrain");
+
+        let tree = world.resource::<DockTree>();
+        let leaf = tree
+            .get(tree.root.unwrap())
+            .and_then(DockNode::as_leaf)
+            .unwrap();
+        let active_window = leaf
+            .windows
+            .iter()
+            .find(|t| Some(t.id) == leaf.active)
+            .map(|t| t.window_id.as_str());
+        assert_eq!(active_window, Some("jackdaw.inspector.terrain"));
+        // No duplicate tab was pushed: still exactly the three seeded.
+        assert_eq!(leaf.windows.len(), 3);
+    }
+
+    /// Calling it again once Terrain is the active tab leaves it active with no duplicate.
+    #[test]
+    fn calling_it_again_when_already_active_stays_stable() {
+        let mut world = world_with_right_sidebar_seeded();
+        open_window_in_default_area_if_absent(&mut world, "jackdaw.inspector.terrain");
+        open_window_in_default_area_if_absent(&mut world, "jackdaw.inspector.terrain");
+
+        let tree = world.resource::<DockTree>();
+        let leaf = tree
+            .get(tree.root.unwrap())
+            .and_then(DockNode::as_leaf)
+            .unwrap();
+        assert_eq!(leaf.windows.len(), 3);
+        let active_window = leaf
+            .windows
+            .iter()
+            .find(|t| Some(t.id) == leaf.active)
+            .map(|t| t.window_id.as_str());
+        assert_eq!(active_window, Some("jackdaw.inspector.terrain"));
     }
 }

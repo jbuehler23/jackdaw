@@ -13,6 +13,8 @@ tests/fixtures/**/Cargo.lock
 *.mp4
 # jsn
 .jsn/project.jsn
+.jsn/catalog.bsn
+.jsn/*.bak
 # editor config / generated caches
 .jackdaw/
 # web explorer app

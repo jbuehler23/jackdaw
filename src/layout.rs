@@ -406,7 +406,7 @@ pub(crate) fn viewport_with_toolbar() -> impl Bundle {
             ..Default::default()
         },
         BackgroundColor(tokens::PANEL_BG),
-        // The main editor toolbar, the navmesh toolbar, and the terrain
+        // The main editor toolbar and the terrain
         // toolbar are bsn! Scenes, which can't nest inside this Bundle
         // `children!` tree. They're spawned separately and slotted in above
         // the viewport by `build_viewport_panel`.
@@ -767,13 +767,12 @@ fn scene_view() -> impl Bundle {
     )
 }
 
-/// Operator ids the main viewport toolbar owns. The navmesh and terrain
-/// contextual toolbars spawn the same `ButtonOperatorCall` and
-/// `ButtonVariant` component pair and drive their own highlighters, so
-/// [`update_toolbar_button_variants`] only flips the variant on these ids
-/// and leaves everything else alone. The grid stepper actions
-/// `GridDecreaseOp` and `GridIncreaseOp` are absent by design. They never
-/// highlight, so they stay at their spawn variant.
+/// Operator ids the main viewport toolbar owns. The terrain contextual
+/// toolbar spawns the same `ButtonOperatorCall` and `ButtonVariant`
+/// component pair and drives its own highlighter, so
+/// [`update_toolbar_button_variants`] flips the variant only on these ids. The
+/// grid stepper actions `GridDecreaseOp` and `GridIncreaseOp` are absent: they
+/// never highlight, so they stay at their spawn variant.
 fn is_main_toolbar_op(id: &str) -> bool {
     id == ToolSelectOp::ID
         || id == ToolTranslateOp::ID
@@ -798,9 +797,9 @@ fn is_main_toolbar_op(id: &str) -> bool {
 /// place toolbar active-state lives; `BackgroundColor` is never mutated
 /// directly.
 ///
-/// Buttons whose id isn't a main-toolbar op are skipped, so the navmesh
-/// contextual row and this one never fight over the same `ButtonVariant`
-/// even though they share the component pair.
+/// Buttons whose id isn't a main-toolbar op are skipped, so the terrain
+/// contextual row and this one do not write the same `ButtonVariant` even
+/// though they share the component pair.
 ///
 /// This is an [`On<RefreshOperatorButtons>`] observer. Every editor-state
 /// change it reads from -- active tool, edit mode, gizmo space, snap, and

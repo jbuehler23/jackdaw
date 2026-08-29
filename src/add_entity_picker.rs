@@ -16,9 +16,9 @@ use crate::entity_ops::EntityAddCameraRigOp;
 use crate::entity_ops::{
     EntityAddAnimationPlayerOp, EntityAddAudioSourceOp, EntityAddCameraOp, EntityAddConeOp,
     EntityAddCubeOp, EntityAddCylinderOp, EntityAddDirectionalLightOp, EntityAddEmptyOp,
-    EntityAddFogVolumeOp, EntityAddImageOp, EntityAddNavmeshOp, EntityAddPlaneOp,
-    EntityAddPointLightOp, EntityAddPrefabOp, EntityAddPyramidOp, EntityAddReflectionProbeOp,
-    EntityAddSphereOp, EntityAddSpotLightOp, EntityAddTerrainOp, EntityAddWedgeOp,
+    EntityAddFogVolumeOp, EntityAddImageOp, EntityAddPlaneOp, EntityAddPointLightOp,
+    EntityAddPrefabOp, EntityAddPyramidOp, EntityAddReflectionProbeOp, EntityAddSphereOp,
+    EntityAddSpotLightOp, EntityAddTerrainOp, EntityAddWedgeOp,
 };
 #[cfg(feature = "multiplayer")]
 use crate::entity_ops::{EntityAddNetworkRoomOp, EntityAddSpawnPointOp, EntityAddZoneTransitionOp};
@@ -171,11 +171,6 @@ fn builtin_groups() -> Vec<AddMenuItem> {
             action: op_action::<EntityAddImageOp>(),
             label: "Image".into(),
             category: cameras_entities,
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddNavmeshOp>(),
-            label: "Navmesh Region".into(),
-            category: regions.clone(),
         },
         AddMenuItem {
             action: op_action::<EntityAddTerrainOp>(),

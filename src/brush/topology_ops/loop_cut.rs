@@ -1,5 +1,6 @@
 //! `brush.mesh.loop_cut` operator.
 
+use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
 use jackdaw_api::prelude::*;
@@ -450,6 +451,9 @@ pub fn update_loop_cut_mid_label(
                 position_type: PositionType::Absolute,
                 ..default()
             },
+            // Any hovered node other than the viewport's own suppresses
+            // viewport gestures; this badge is never a click target.
+            Pickable::IGNORE,
             Visibility::Hidden,
             ChildOf(viewport_entity),
         ));
