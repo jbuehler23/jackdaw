@@ -54,9 +54,7 @@ use crate::{
     },
 };
 
-/// Dock window id of the 2D viewport panel, as
-/// [`crate::builtin_extensions::Viewport2dExtension`] registers it.
-pub const VIEWPORT_2D_WINDOW_ID: &str = "jackdaw.viewport_2d";
+pub use crate::viewport::VIEWPORT_2D_WINDOW_ID;
 
 /// Furthest out the user can zoom, in stage logical pixels per authored
 /// pixel.

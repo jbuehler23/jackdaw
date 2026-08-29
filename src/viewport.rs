@@ -30,8 +30,25 @@ use jackdaw_widgets::file_browser::FileBrowserItem;
 #[derive(Component)]
 pub struct MainViewportCamera;
 
-/// Dock window id of the 3D viewport panel, where world scenes are authored.
+/// Dock window id of the viewport panel, where scenes are authored.
 pub const VIEWPORT_WINDOW_ID: &str = "jackdaw.viewport";
+
+/// Former dock window id of the separate 2D viewport panel.
+///
+/// An alias for [`VIEWPORT_WINDOW_ID`]: the canvas is a mode of the one
+/// viewport panel rather than a panel of its own. Persisted layouts and
+/// scripted runs still name it, so it resolves rather than failing.
+pub const VIEWPORT_2D_WINDOW_ID: &str = "jackdaw.viewport_2d";
+
+/// The window id a dock request means, resolving [`VIEWPORT_2D_WINDOW_ID`]
+/// onto the panel that answers for it. Any other id is its own.
+pub fn canonical_window_id(window_id: &str) -> &str {
+    if window_id == VIEWPORT_2D_WINDOW_ID {
+        VIEWPORT_WINDOW_ID
+    } else {
+        window_id
+    }
+}
 
 /// Bring the world viewport forward in whichever dock leaf holds it.
 ///
