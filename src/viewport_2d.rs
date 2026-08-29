@@ -857,7 +857,8 @@ fn entity_is_hovered(entity: Entity, hover_map: &HoverMap, parents: &Query<&Chil
 /// spawn two parking cameras in a single frame's command queue.
 ///
 /// With several panels open one answers for the canvas
-/// ([`crate::viewport_host::primary_2d_host`]), matching how `ViewState`
+/// ([`crate::viewport_host::primary_2d_host`]) and one for the world
+/// ([`crate::viewport_host::primary_3d_host`]), matching how `ViewState`
 /// captures a single `ui_view`.
 pub fn route_ui_roots_to_cameras(
     mut commands: Commands,
@@ -874,12 +875,14 @@ pub fn route_ui_roots_to_cameras(
         return;
     }
 
-    let primary = crate::viewport_host::primary_2d_host(panels.iter())
-        .and_then(|entity| hosts.get(entity).ok());
-    let panel = primary.map(|(stage, _)| stage.camera);
-    // The same panel's world camera, so an imported scene and an authored
-    // one are seen from the one panel rather than from two.
-    let world = primary
+    let panel = crate::viewport_host::primary_2d_host(panels.iter())
+        .and_then(|entity| hosts.get(entity).ok())
+        .map(|(stage, _)| stage.camera);
+    // A panel showing the world, because that is where an imported overlay is
+    // drawn. The canvas panel's world camera is off while its mode holds, so
+    // routing there would hide the overlay from the panel still showing it.
+    let world = crate::viewport_host::primary_3d_host(panels.iter())
+        .and_then(|entity| hosts.get(entity).ok())
         .map(|(_, world)| world.camera)
         .or_else(|| world_view.iter().next());
     let parking = ((!authored.is_empty() && panel.is_none())

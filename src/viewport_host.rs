@@ -101,9 +101,32 @@ pub struct ViewportHost {
 pub fn primary_2d_host<'a>(
     hosts: impl Iterator<Item = (Entity, &'a ViewportHost)>,
 ) -> Option<Entity> {
+    first_host_in(hosts, ViewportMode::TwoD)
+}
+
+/// The panel that answers for the editor's one 3D world.
+///
+/// The counterpart of [`primary_2d_host`], for what belongs to the world
+/// rather than to the canvas: a scene's imported overlay is drawn over the
+/// world, so it goes to a panel showing the world. Taking the canvas panel's
+/// world camera instead would aim the overlay at a camera the mode has
+/// switched off, and it would vanish from the panel still showing the world.
+pub fn primary_3d_host<'a>(
+    hosts: impl Iterator<Item = (Entity, &'a ViewportHost)>,
+) -> Option<Entity> {
+    first_host_in(hosts, ViewportMode::ThreeD)
+}
+
+/// The first panel in `mode`, or the first panel of any mode when none is in
+/// it, so a scene opened while every panel is elsewhere still lays out against
+/// a real target.
+fn first_host_in<'a>(
+    hosts: impl Iterator<Item = (Entity, &'a ViewportHost)>,
+    mode: ViewportMode,
+) -> Option<Entity> {
     let mut first = None;
     for (entity, host) in hosts {
-        if host.mode == ViewportMode::TwoD {
+        if host.mode == mode {
             return Some(entity);
         }
         first.get_or_insert(entity);

@@ -779,3 +779,62 @@ fn the_mode_operator_records_a_mode_with_no_panel_to_move() {
     app.update();
     assert_showing(&app, panel, ViewportMode::TwoD);
 }
+
+/// A world scene's imported overlay belongs to the world, so it is routed into
+/// a panel showing the world. Sending it to the panel answering for the canvas
+/// would aim it at a camera that panel's mode has switched off, and the overlay
+/// would vanish from the panel still showing the world.
+#[test]
+fn an_imported_overlay_routes_into_the_panel_showing_the_world() {
+    use bevy::ui::UiTargetCamera;
+    use jackdaw::viewport::ViewportPanelHost;
+    use jackdaw_scene_types::UiSceneRoot;
+
+    let mut app = util::editor_test_app();
+    app.world_mut().insert_resource(ViewportModeIntent {
+        mode: ViewportMode::TwoD,
+        chosen: true,
+    });
+    let in_2d = panel(&mut app);
+    app.world_mut().insert_resource(ViewportModeIntent {
+        mode: ViewportMode::ThreeD,
+        chosen: true,
+    });
+    let in_3d = panel(&mut app);
+    assert_eq!(host(&app, in_2d).mode, ViewportMode::TwoD);
+    assert_eq!(host(&app, in_3d).mode, ViewportMode::ThreeD);
+
+    // Imported rather than authored: an `IsA` instance root with no `Prefab`
+    // of its own, which is what tells the routing it is an overlay a world
+    // scene pulled in rather than the document being edited.
+    let root = app
+        .world_mut()
+        .spawn((
+            UiSceneRoot {
+                reference_size: UVec2::new(1280, 720),
+            },
+            Node::default(),
+            jackdaw::prefab::IsA {
+                source: std::path::PathBuf::from("hud.bsn"),
+                deleted: Vec::new(),
+            },
+        ))
+        .id();
+    app.world_mut()
+        .run_system_cached(jackdaw::viewport_2d::route_ui_roots_to_cameras)
+        .expect("route_ui_roots_to_cameras ran");
+    app.update();
+
+    let world_camera = app
+        .world()
+        .get::<ViewportPanelHost>(in_3d)
+        .expect("host on panel parent")
+        .camera;
+    assert_eq!(
+        app.world()
+            .get::<UiTargetCamera>(root)
+            .map(UiTargetCamera::entity),
+        Some(world_camera),
+        "the overlay is routed into a panel that is showing the world",
+    );
+}
