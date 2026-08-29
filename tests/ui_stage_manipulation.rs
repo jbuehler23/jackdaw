@@ -2857,8 +2857,8 @@ fn every_panel_showing_the_scene_draws_its_guides() {
     assert_eq!(
         guide_lines_of(&mut app, first),
         vec![
-            (CanvasAxis::Vertical, px(320.0 * 0.5 - 3.5)),
-            (CanvasAxis::Horizontal, px(180.0 * 0.5 - 3.5)),
+            (CanvasAxis::Vertical, px(320.0 * 0.5 - 2.5)),
+            (CanvasAxis::Horizontal, px(180.0 * 0.5 - 2.5)),
         ],
         "the scene's guides are drawn over the canvas at the panel's scale",
     );
@@ -3037,8 +3037,8 @@ fn dragging_a_guide_moves_it_and_dragging_it_back_onto_the_ruler_removes_it() {
         &mut app,
         panel,
         line,
-        Vec2::new(320.0, 300.0),
-        Vec2::new(504.0, 300.0),
+        Vec2::new(320.0, 900.0),
+        Vec2::new(504.0, 900.0),
     );
     settle(&mut app);
     assert_eq!(
@@ -3053,7 +3053,7 @@ fn dragging_a_guide_moves_it_and_dragging_it_back_onto_the_ruler_removes_it() {
         &mut app,
         panel,
         line,
-        Vec2::new(504.0, 300.0),
+        Vec2::new(504.0, 900.0),
         Vec2::new(504.0, -10.0),
     );
     settle(&mut app);
@@ -3200,6 +3200,57 @@ fn a_dragged_guide_lands_on_a_whole_pixel_or_on_the_grid() {
         dropped(true, 324.37),
         vec![328.0],
         "and on the canvas's own lattice while the magnet is on",
+    );
+}
+
+/// A guide drawn along a node's edge does not swallow the node.
+///
+/// Guides are drawn to place nodes against, so a guide and an edge on
+/// the same pixel is the case they exist for; a slab that took every
+/// press over it would make the node it was drawn for unselectable and
+/// unmovable.
+#[test]
+fn a_node_under_a_guide_can_still_be_picked_up() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (root, _, front) = authored_scene(&mut app);
+    // `front` spans authored x 400..800: the guide runs down its left
+    // edge, so the press below lands on the guide's slab.
+    app.world_mut().entity_mut(root).insert(CanvasGuides {
+        horizontal: Vec::new(),
+        vertical: vec![400.0],
+    });
+    settle(&mut app);
+
+    let line = guide_line_entity(&mut app, panel, CanvasAxis::Vertical, 0);
+    press_at(&mut app, panel, Vec2::new(400.0, 250.0), line);
+    settle(&mut app);
+    assert_eq!(
+        app.world().resource::<Selection>().primary(),
+        Some(front),
+        "the press went through the guide to the node under it",
+    );
+
+    let (overlay, _) = overlay_node(&mut app);
+    let entries = history_len(&app);
+    drag_authored(
+        &mut app,
+        panel,
+        overlay,
+        Vec2::new(400.0, 250.0),
+        Vec2::new(400.0, 450.0),
+    );
+    settle(&mut app);
+    assert_eq!(
+        node_of(&app, front).top,
+        px(400),
+        "and the node moves down the guide it was placed against",
+    );
+    assert_eq!(history_len(&app), entries + 1, "as one entry");
+    assert_eq!(
+        guide_positions(&app, root, CanvasAxis::Vertical),
+        vec![400.0],
+        "the guide itself stayed where the author put it",
     );
 }
 

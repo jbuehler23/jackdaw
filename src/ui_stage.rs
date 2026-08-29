@@ -88,7 +88,12 @@ const OVERLAY_Z: i32 = 50;
 /// How wide a guide is to the pointer, in the stage's logical pixels. A
 /// one-pixel line is drawn down the middle of it: the line has to be
 /// thin to place a node against, and wide enough to pick up again.
-const GUIDE_HIT_WIDTH: f32 = 7.0;
+///
+/// Narrow, because the slab lies over the canvas: two pixels either side
+/// of the line is enough to catch and little enough to keep the guide
+/// off the nodes it was drawn to place. What a press over a node does
+/// is [`guide_takes_the_press`].
+const GUIDE_HIT_WIDTH: f32 = 5.0;
 
 /// How close, in **pointer** pixels, a dragged edge has to come to a
 /// neighbouring one before it lands on it.
@@ -2388,9 +2393,70 @@ fn guide_gesture(
     Some((host, axis, index))
 }
 
+/// What the guide gestures need to ask whether a node is under the
+/// pointer: the same hit test a press on the stage itself goes through.
+#[derive(SystemParam)]
+struct StageUnderGuide<'w, 's> {
+    ui_scale: Res<'w, UiScale>,
+    stages:
+        Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<Scene2dViewport>>,
+    roots: Query<'w, 's, (Entity, &'static UiTargetCamera), AuthoredUiSceneRoot>,
+    nodes: AuthoredNodes<'w, 's>,
+    children: Query<'w, 's, &'static Children>,
+}
+
+/// Whether a guide takes a pointer event at `cursor`, or lets it through
+/// to the canvas underneath.
+///
+/// A guide's slab lies over the scene, so a guide drawn along a node's
+/// edge -- which is what guides are for -- would otherwise swallow every
+/// press on that edge and leave the node unselectable. The guide takes
+/// the press over empty canvas and gives it up over a node: a line the
+/// author placed is worth less than the node they placed it for.
+///
+/// The scene root covers the whole canvas, so a hit on the root is what
+/// empty canvas looks like to the hit test, and the guide keeps those.
+/// A press on a ruler is never over the canvas at all, so a ruler always
+/// takes its own.
+fn guide_takes_the_press(
+    parts: &GuideTargets,
+    stage: &StageUnderGuide,
+    host_entity: Entity,
+    on_a_guide: bool,
+    cursor: Vec2,
+) -> bool {
+    if !on_a_guide {
+        return true;
+    }
+    let Ok(host) = parts.hosts.get(host_entity) else {
+        return true;
+    };
+    let Ok(stage_nodes) = stage.stages.get(host.stage) else {
+        return true;
+    };
+    match hit_at(
+        cursor,
+        host,
+        stage_nodes,
+        &stage.roots,
+        &stage.nodes,
+        &stage.children,
+    ) {
+        StagePick::Hit(entity) => stage
+            .roots
+            .iter()
+            .any(|(root, routed)| routed.entity() == host.camera && root == entity),
+        StagePick::Miss | StagePick::Empty => true,
+    }
+}
+
 /// Claim a press on a ruler or a guide, so the dock never sees it.
-fn on_guide_press(mut event: On<Pointer<Press>>, parts: GuideTargets) {
-    if guide_gesture(event.event_target(), event.button, &parts).is_some() {
+fn on_guide_press(mut event: On<Pointer<Press>>, parts: GuideTargets, stage: StageUnderGuide) {
+    let Some((host, _, index)) = guide_gesture(event.event_target(), event.button, &parts) else {
+        return;
+    };
+    let cursor = event.pointer_location.position / stage.ui_scale.0;
+    if guide_takes_the_press(&parts, &stage, host, index.is_some(), cursor) {
         event.propagate(false);
     }
 }
@@ -2398,15 +2464,20 @@ fn on_guide_press(mut event: On<Pointer<Press>>, parts: GuideTargets) {
 fn on_guide_drag_start(
     mut event: On<Pointer<DragStart>>,
     parts: GuideTargets,
-    ui_scale: Res<UiScale>,
+    stage: StageUnderGuide,
     mut commands: Commands,
 ) {
     let Some((host, axis, index)) = guide_gesture(event.event_target(), event.button, &parts)
     else {
         return;
     };
+    let cursor = event.pointer_location.position / stage.ui_scale.0;
+    // The press over a node went to the canvas, so the drag that follows
+    // it belongs to the canvas too.
+    if !guide_takes_the_press(&parts, &stage, host, index.is_some(), cursor) {
+        return;
+    }
     event.propagate(false);
-    let cursor = event.pointer_location.position / ui_scale.0;
     commands.queue(move |world: &mut World| {
         let started = begin_guide_drag(world, host, axis, index, cursor);
         // A drag that could not be measured leaves nothing half-built
