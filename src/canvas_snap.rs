@@ -1,0 +1,269 @@
+//! What the 2D canvas snaps a dragged node to, and the two view toggles
+//! that go with it.
+//!
+//! Project-wide rather than per tab or per document: the answer to "what
+//! do my drags land on" is a way of working, so it lives beside the other
+//! project settings in `.jackdaw/settings.json` (see
+//! [`crate::project_settings`]) and follows the project rather than the
+//! scene. The grid a tab snaps to stays per tab, on `Ui2dView`.
+//!
+//! Deliberately outside the undo snapshot: Ctrl+Z after a drag puts the
+//! node back, and taking the user's snap preferences with it would be a
+//! surprise. That is what keeps [`CanvasSnap`] off both
+//! `EditorStateSnapshot` and `SnapSettings`.
+
+use std::path::PathBuf;
+
+use bevy::prelude::*;
+use jackdaw_api::prelude::*;
+use serde::{Deserialize, Serialize};
+
+use crate::project::ProjectRoot;
+use crate::project_settings::{Section, load_section, store_section};
+
+/// The settings-file key the canvas settings live under.
+const CANVAS_SECTION: &str = "canvas";
+
+pub(crate) fn plugin(app: &mut App) {
+    app.init_resource::<CanvasSnap>()
+        .add_systems(Update, sync_project_canvas_snap);
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<CanvasSnapOp>()
+        .register_operator::<CanvasRulersOp>()
+        .register_operator::<CanvasGuidesOp>();
+}
+
+/// One kind of line the canvas offers a dragged node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CanvasSnapKind {
+    /// Round the authored pixels a drag writes to whole numbers.
+    Pixel,
+    /// The parent's padding-box edges and centre.
+    Parent,
+    /// Quarters of the parent box: 0, 25, 50, 75 and 100 percent.
+    PercentLines,
+    /// The near and far edges of the dragged node's siblings.
+    SiblingSides,
+    /// The centres of the dragged node's siblings.
+    SiblingCenters,
+    /// Nodes elsewhere in the scene, outside the dragged node's family.
+    OtherNodes,
+    /// The guides pulled off the rulers.
+    Guides,
+}
+
+impl CanvasSnapKind {
+    /// Every kind, in the order the canvas offers them and the menu lists
+    /// them.
+    pub const ALL: [Self; 7] = [
+        Self::Pixel,
+        Self::Parent,
+        Self::PercentLines,
+        Self::SiblingSides,
+        Self::SiblingCenters,
+        Self::OtherNodes,
+        Self::Guides,
+    ];
+
+    /// The kind `id` names, or `None` when it names none of them.
+    pub fn parse(id: &str) -> Option<Self> {
+        let id = id.trim().to_ascii_lowercase();
+        Self::ALL.into_iter().find(|kind| kind.id() == id)
+    }
+
+    /// How a caller names this kind: the `kind` parameter of the
+    /// `canvas.snap` operator.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Pixel => "pixel",
+            Self::Parent => "parent",
+            Self::PercentLines => "percent_lines",
+            Self::SiblingSides => "sibling_sides",
+            Self::SiblingCenters => "sibling_centers",
+            Self::OtherNodes => "other_nodes",
+            Self::Guides => "guides",
+        }
+    }
+
+    /// How the menu row for this kind reads.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pixel => "Use Pixel Snap",
+            Self::Parent => "Parent",
+            Self::PercentLines => "Percent Lines",
+            Self::SiblingSides => "Sibling Sides",
+            Self::SiblingCenters => "Sibling Centers",
+            Self::OtherNodes => "Other Nodes",
+            Self::Guides => "Guides",
+        }
+    }
+}
+
+/// Which kinds of line the 2D canvas offers a drag, and whether the
+/// rulers and guides are drawn.
+///
+/// Everything is on out of the box except [`CanvasSnapKind::OtherNodes`],
+/// which reaches across the scene and would otherwise pull a node towards
+/// something the user cannot see next to it.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CanvasSnap {
+    /// Round the authored pixels a drag writes to whole numbers.
+    pub pixel: bool,
+    /// Snap to the parent's padding-box edges and centre.
+    pub parent: bool,
+    /// Snap to the quarter lines of the parent box.
+    pub percent_lines: bool,
+    /// Snap to sibling edges.
+    pub sibling_sides: bool,
+    /// Snap to sibling centres.
+    pub sibling_centers: bool,
+    /// Snap to nodes outside the dragged node's family.
+    pub other_nodes: bool,
+    /// Snap to the scene's guides.
+    pub guides: bool,
+    /// Draw the rulers along the top and left of the stage.
+    pub show_rulers: bool,
+    /// Draw the scene's guides over the stage.
+    pub show_guides: bool,
+}
+
+impl Default for CanvasSnap {
+    fn default() -> Self {
+        Self {
+            pixel: true,
+            parent: true,
+            percent_lines: true,
+            sibling_sides: true,
+            sibling_centers: true,
+            other_nodes: false,
+            guides: true,
+            show_rulers: true,
+            show_guides: true,
+        }
+    }
+}
+
+impl CanvasSnap {
+    /// Whether `kind` is on.
+    pub fn enabled(&self, kind: CanvasSnapKind) -> bool {
+        match kind {
+            CanvasSnapKind::Pixel => self.pixel,
+            CanvasSnapKind::Parent => self.parent,
+            CanvasSnapKind::PercentLines => self.percent_lines,
+            CanvasSnapKind::SiblingSides => self.sibling_sides,
+            CanvasSnapKind::SiblingCenters => self.sibling_centers,
+            CanvasSnapKind::OtherNodes => self.other_nodes,
+            CanvasSnapKind::Guides => self.guides,
+        }
+    }
+
+    /// Turn `kind` on or off.
+    pub fn set(&mut self, kind: CanvasSnapKind, on: bool) {
+        let field = match kind {
+            CanvasSnapKind::Pixel => &mut self.pixel,
+            CanvasSnapKind::Parent => &mut self.parent,
+            CanvasSnapKind::PercentLines => &mut self.percent_lines,
+            CanvasSnapKind::SiblingSides => &mut self.sibling_sides,
+            CanvasSnapKind::SiblingCenters => &mut self.sibling_centers,
+            CanvasSnapKind::OtherNodes => &mut self.other_nodes,
+            CanvasSnapKind::Guides => &mut self.guides,
+        };
+        *field = on;
+    }
+}
+
+/// Load the open project's canvas settings, once per project opened.
+fn sync_project_canvas_snap(
+    project: Option<Res<ProjectRoot>>,
+    mut snap: ResMut<CanvasSnap>,
+    mut loaded_root: Local<Option<PathBuf>>,
+) {
+    let Some(project) = project else {
+        return;
+    };
+    if loaded_root.as_ref() == Some(&project.root) {
+        return;
+    }
+    *loaded_root = Some(project.root.clone());
+    *snap = load_section(&project.root, Section::Key(CANVAS_SECTION));
+}
+
+/// Write the canvas settings back to the open project. A run with no
+/// project open keeps them for the session and writes nothing.
+fn persist(project: Option<&ProjectRoot>, snap: &CanvasSnap) {
+    let Some(project) = project else {
+        return;
+    };
+    store_section(&project.root, Section::Key(CANVAS_SECTION), snap);
+}
+
+/// Turn one kind of canvas snapping on or off.
+///
+/// Preferences rather than scene data, so no history entry: undo after a
+/// drag moves the node back and leaves the user's snapping alone.
+#[operator(
+    id = "canvas.snap",
+    label = "Set Canvas Snapping",
+    description = "Turn one kind of 2D canvas snapping on or off.",
+    allows_undo = false,
+    params(
+        kind(
+            String,
+            doc = "Which kind: `pixel`, `parent`, `percent_lines`, `sibling_sides`, `sibling_centers`, `other_nodes` or `guides`."
+        ),
+        on(bool, doc = "On or off. Omit to flip whichever way it currently is.")
+    )
+)]
+pub(crate) fn canvas_snap(
+    params: In<OperatorParameters>,
+    mut snap: ResMut<CanvasSnap>,
+    project: Option<Res<ProjectRoot>>,
+) -> OperatorResult {
+    let Some(kind) = params.as_str("kind").and_then(CanvasSnapKind::parse) else {
+        warn!("canvas.snap: 'kind' must name one of the canvas's snap kinds");
+        return OperatorResult::Cancelled;
+    };
+    let on = params.as_bool("on").unwrap_or(!snap.enabled(kind));
+    snap.set(kind, on);
+    persist(project.as_deref(), &snap);
+    OperatorResult::Finished
+}
+
+/// Show or hide the canvas rulers.
+#[operator(
+    id = "canvas.rulers",
+    label = "Show Rulers",
+    description = "Show or hide the 2D canvas's rulers.",
+    allows_undo = false,
+    params(on(bool, doc = "On or off. Omit to flip whichever way it currently is."))
+)]
+pub(crate) fn canvas_rulers(
+    params: In<OperatorParameters>,
+    mut snap: ResMut<CanvasSnap>,
+    project: Option<Res<ProjectRoot>>,
+) -> OperatorResult {
+    snap.show_rulers = params.as_bool("on").unwrap_or(!snap.show_rulers);
+    persist(project.as_deref(), &snap);
+    OperatorResult::Finished
+}
+
+/// Show or hide the scene's guides.
+#[operator(
+    id = "canvas.guides",
+    label = "Show Guides",
+    description = "Show or hide the 2D canvas's guides.",
+    allows_undo = false,
+    params(on(bool, doc = "On or off. Omit to flip whichever way it currently is."))
+)]
+pub(crate) fn canvas_guides(
+    params: In<OperatorParameters>,
+    mut snap: ResMut<CanvasSnap>,
+    project: Option<Res<ProjectRoot>>,
+) -> OperatorResult {
+    snap.show_guides = params.as_bool("on").unwrap_or(!snap.show_guides);
+    persist(project.as_deref(), &snap);
+    OperatorResult::Finished
+}

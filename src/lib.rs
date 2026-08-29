@@ -51,6 +51,7 @@ use std::{collections::BTreeMap, marker::PhantomData};
 pub use inspector::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 
 pub mod camera_preview;
+pub mod canvas_snap;
 pub mod core_extension;
 pub mod dock_ops;
 pub mod document_ops;
@@ -96,6 +97,7 @@ pub mod project;
 pub mod project_build;
 pub mod project_files;
 pub mod project_select;
+pub mod project_settings;
 pub mod project_types;
 pub mod reference_image;
 pub mod reflect_default;
@@ -388,6 +390,7 @@ impl Plugin for EditorCorePlugin {
             camera_preview::CameraPreviewPlugin,
             material_preview::MaterialPreviewPlugin,
             material_ui::plugin,
+            canvas_snap::plugin,
             undo_snapshot::plugin,
             migrate_dialog::plugin,
         ))

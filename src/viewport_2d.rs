@@ -1534,6 +1534,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<Viewport2dModeOp>();
     ctx.register_operator::<Viewport2dGridOp>();
     ctx.register_operator::<SelectionSelectOp>();
+    crate::canvas_snap::add_to_extension(ctx);
     crate::screenshot::add_2d_to_extension(ctx);
 }
 

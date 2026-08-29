@@ -1127,7 +1127,12 @@ impl Default for EditRebuildThrottle {
 }
 
 /// Editor-wide project build preferences.
+///
+/// Kept at the top level of the project's settings file, where they were
+/// written before the file grew other sections; see
+/// [`crate::project_settings`].
 #[derive(Resource, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 struct EditorBuildSettings {
     /// When true, the editor rebuilds the project automatically on source
     /// change. Opt-in and off by default: otherwise a rebuild fires
@@ -1149,11 +1154,10 @@ fn sync_project_build_settings(
         return;
     }
     *loaded_root = Some(project.root.clone());
-    let path = project.root.join(".jackdaw/settings.json");
-    *settings = std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default();
+    *settings = crate::project_settings::load_section(
+        &project.root,
+        crate::project_settings::Section::TopLevel,
+    );
 }
 
 fn persist_project_build_settings(world: &World) {
@@ -1163,21 +1167,11 @@ fn persist_project_build_settings(world: &World) {
     ) else {
         return;
     };
-    let path = project.root.join(".jackdaw/settings.json");
-    if let Some(parent) = path.parent()
-        && let Err(error) = std::fs::create_dir_all(parent)
-    {
-        warn!("PIE: could not persist build settings: {error}");
-        return;
-    }
-    match serde_json::to_vec_pretty(settings) {
-        Ok(bytes) => {
-            if let Err(error) = std::fs::write(path, bytes) {
-                warn!("PIE: could not persist build settings: {error}");
-            }
-        }
-        Err(error) => warn!("PIE: could not encode build settings: {error}"),
-    }
+    crate::project_settings::store_section(
+        &project.root,
+        crate::project_settings::Section::TopLevel,
+        settings,
+    );
 }
 
 /// Start a game build for `root` unless one is already in flight.
