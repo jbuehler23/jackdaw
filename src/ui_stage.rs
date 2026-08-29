@@ -2444,7 +2444,7 @@ fn begin_guide_drag(
     let position = match index {
         Some(index) if index < others.len() => others.remove(index),
         Some(_) => return None,
-        None => axis_of(cursor_on_canvas(world, host, cursor)?, axis),
+        None => guide_landing(world, host, axis, cursor)?,
     };
 
     let drag = GuideDrag {
@@ -2480,10 +2480,10 @@ fn on_guide_drag(
             let Some(drag) = manipulation.active.as_mut() else {
                 return;
             };
-            let Some(point) = cursor_on_canvas(world, drag.host, cursor) else {
+            let Some(position) = guide_landing(world, drag.host, drag.axis, cursor) else {
                 return;
             };
-            drag.position = axis_of(point, drag.axis);
+            drag.position = position;
             drag.dropping = past_the_rulers_edge(world, drag.host, drag.axis, cursor);
             crate::canvas_snap::preview_guides(
                 world,
@@ -2534,6 +2534,32 @@ fn cancel_guide_drag(
     if manipulation.active.is_some() && keys.just_pressed(KeyCode::Escape) {
         commands.queue(|world: &mut World| finish_guide_drag(world, false));
     }
+}
+
+/// Where a guide dragged to `cursor` comes to rest, in canvas-global
+/// authored pixels.
+///
+/// Whole pixels at the least: a guide is read back as a figure and typed
+/// into the inspector, and a line at 320.37 is one nothing else can be
+/// aimed at. With the canvas's magnet on it lands on the panel's own
+/// lattice instead, the one a dragged node lands on, and Ctrl inverts
+/// that exactly as it inverts a node's drag.
+fn guide_landing(world: &World, host: Entity, axis: CanvasAxis, cursor: Vec2) -> Option<f32> {
+    let raw = axis_of(cursor_on_canvas(world, host, cursor)?, axis);
+    let ctrl = world
+        .get_resource::<ButtonInput<KeyCode>>()
+        .is_some_and(|keys| keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]));
+    let kinds = world
+        .get_resource::<CanvasSnap>()
+        .copied()
+        .unwrap_or_default();
+    let grid = world
+        .get::<Viewport2dPanelHost>(host)
+        .map_or(0.0, |host| host.view.grid);
+    if kinds.magnet(ctrl) && grid > 0.0 && grid.is_finite() {
+        return Some((raw / grid).round() * grid);
+    }
+    Some(raw.round())
 }
 
 /// The coordinate a guide of this axis is stated in.

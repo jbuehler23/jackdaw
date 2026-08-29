@@ -128,16 +128,18 @@ pub(crate) fn add_component_displays(
 /// Scene-document components that live under `jackdaw_scene_types` and
 /// carry the inspector's dedicated tool surfaces: `Brush` mounts the
 /// mesh card (`brush_display`, and with it the whole Mesh tab), `Terrain`
-/// mounts the scatter / quantization / channel / generation sections.
+/// mounts the scatter / quantization / channel / generation sections;
+/// `CanvasGuides` is where a canvas guide's exact position is typed.
 ///
 /// [`hidden_by_namespace`] exists to keep jackdaw's own bookkeeping
 /// components out of the generic list. These two are not bookkeeping --
 /// they are the scene data the user selected the entity to edit -- so
 /// culling them takes their entire tool surface with them and leaves a
 /// cube or a terrain showing nothing but `Transform`.
-const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 2] = [
+const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 3] = [
     "jackdaw_scene_types::types::Brush",
     "jackdaw_scene_types::types::Terrain",
+    "jackdaw_scene_types::CanvasGuides",
 ];
 
 /// Whether a `jackdaw*` type is editor bookkeeping rather than something
@@ -1288,6 +1290,10 @@ mod tests {
         // takes a whole tool panel out of the editor.
         assert!(!hidden_by_namespace("jackdaw_scene_types::types::Brush"));
         assert!(!hidden_by_namespace("jackdaw_scene_types::types::Terrain"));
+        assert!(
+            !hidden_by_namespace(std::any::type_name::<jackdaw_scene_types::CanvasGuides>()),
+            "the UI root's guides show as a card, so their positions are typeable",
+        );
     }
 
     #[test]

@@ -2854,17 +2854,19 @@ fn dragging_a_guide_moves_it_and_dragging_it_back_onto_the_ruler_removes_it() {
 
     let line = guide_line_entity(&mut app, panel, CanvasAxis::Vertical, 0);
     let entries = history_len(&app);
+    // Both ends of the drag sit on the panel's own lattice, which is
+    // what the magnet lands a guide on.
     drag_authored(
         &mut app,
         panel,
         line,
         Vec2::new(320.0, 300.0),
-        Vec2::new(500.0, 300.0),
+        Vec2::new(504.0, 300.0),
     );
     settle(&mut app);
     assert_eq!(
         guide_positions(&app, root, CanvasAxis::Vertical),
-        vec![500.0],
+        vec![504.0],
         "the guide follows the cursor",
     );
     assert_eq!(history_len(&app), entries + 1, "and is one entry");
@@ -2874,8 +2876,8 @@ fn dragging_a_guide_moves_it_and_dragging_it_back_onto_the_ruler_removes_it() {
         &mut app,
         panel,
         line,
-        Vec2::new(500.0, 300.0),
-        Vec2::new(500.0, -10.0),
+        Vec2::new(504.0, 300.0),
+        Vec2::new(504.0, -10.0),
     );
     settle(&mut app);
     assert!(
@@ -2986,6 +2988,44 @@ fn a_guide_drag_that_did_not_move_records_nothing() {
     );
 }
 
+/// A guide lands on a figure the inspector can state.
+///
+/// Whole authored pixels with the magnet off, and the panel's own
+/// lattice with it on: a guide is the line other things are aimed at, so
+/// it has to sit somewhere they can reach.
+#[test]
+fn a_dragged_guide_lands_on_a_whole_pixel_or_on_the_grid() {
+    let dropped = |magnet_on: bool, to: f32| {
+        let mut app = stage_app();
+        let panel = panel_entity(&mut app);
+        let (root, _, _) = authored_scene(&mut app);
+        magnet(&mut app, magnet_on);
+        set_grid(&mut app, panel, 8.0);
+        settle(&mut app);
+        let ruler = ruler_entity(&mut app, panel, CanvasAxis::Vertical);
+        drag_authored(
+            &mut app,
+            panel,
+            ruler,
+            Vec2::new(to, -10.0),
+            Vec2::new(to, 400.0),
+        );
+        settle(&mut app);
+        guide_positions(&app, root, CanvasAxis::Vertical)
+    };
+
+    assert_eq!(
+        dropped(false, 320.37),
+        vec![320.0],
+        "a guide dropped off the ruler lands on the authored pixel under it",
+    );
+    assert_eq!(
+        dropped(true, 324.37),
+        vec![328.0],
+        "and on the canvas's own lattice while the magnet is on",
+    );
+}
+
 /// One of a panel's rulers.
 fn ruler_entity(app: &mut App, panel: Entity, axis: CanvasAxis) -> Entity {
     rulers_of(app, panel)
@@ -3005,8 +3045,7 @@ fn guide_line_entity(app: &mut App, panel: Entity, axis: CanvasAxis, index: usiz
         .expect("the panel draws the scene's guides")
 }
 
-/// The scene's guides on one axis, rounded to the authored pixel the
-/// pointer was aimed at.
+/// The scene's guides on one axis, exactly as the scene holds them.
 fn guide_positions(app: &App, root: Entity, axis: CanvasAxis) -> Vec<f32> {
     let Some(guides) = app.world().get::<CanvasGuides>(root) else {
         return Vec::new();
@@ -3015,7 +3054,7 @@ fn guide_positions(app: &App, root: Entity, axis: CanvasAxis) -> Vec<f32> {
         CanvasAxis::Vertical => &guides.vertical,
         CanvasAxis::Horizontal => &guides.horizontal,
     };
-    lines.iter().map(|at| at.round()).collect()
+    lines.clone()
 }
 
 /// A root filling the canvas with one child authored as `node`. Returns
