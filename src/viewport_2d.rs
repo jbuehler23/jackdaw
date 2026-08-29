@@ -55,6 +55,7 @@ use crate::{
 };
 
 pub use crate::viewport::VIEWPORT_2D_WINDOW_ID;
+use crate::viewport_host::{ViewportMode, ViewportModeIntent};
 
 /// Furthest out the user can zoom, in stage logical pixels per authored
 /// pixel.
@@ -1175,14 +1176,28 @@ fn apply_pending_2d_focus(world: &mut World) {
 
 /// Build closure for the `jackdaw.viewport_2d` `DockWindowDescriptor`.
 ///
-/// Spawns a camera plus a render-target image dedicated to this panel,
-/// then the panel's own UI: a column holding a header row above a
-/// [`Scene2dStageArea`], with the [`Scene2dViewport`] stage placed
-/// inside it showing the camera's image.
+/// A panel opening in [`ViewportMode::TwoD`]. Both presentations are built
+/// either way; see [`crate::viewport_host::build_viewport_panel_in`].
+pub fn build_viewport_2d_panel(world: &mut World, parent: Entity) {
+    crate::viewport_host::build_viewport_panel_in(
+        world,
+        parent,
+        ViewportModeIntent {
+            mode: ViewportMode::TwoD,
+            chosen: false,
+        },
+    );
+}
+
+/// Build the panel's 2D presentation: a camera plus a render-target image
+/// dedicated to this panel, then a column holding a header row above a
+/// [`Scene2dStageArea`], with the [`Scene2dViewport`] stage placed inside it
+/// showing the camera's image. Returns the column, which the mode switch shows
+/// and hides.
 ///
 /// The despawn observer on `parent` (via [`Viewport2dPanelHost`]) cleans
 /// the camera up when the reconciler tears the panel down.
-pub fn build_viewport_2d_panel(world: &mut World, parent: Entity) {
+pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity {
     // A render-target image dedicated to this panel. The size is only a
     // starting point: `size_targets_to_reference` holds it at the
     // authored reference size while a UI scene is open, and nothing else
@@ -1332,6 +1347,8 @@ pub fn build_viewport_2d_panel(world: &mut World, parent: Entity) {
         fit_pending: true,
         target_size: UVec2::new(DEFAULT_VIEWPORT_WIDTH, DEFAULT_VIEWPORT_HEIGHT),
     });
+
+    column
 }
 
 /// Header row above the 2D viewport stage: what is being edited on the
@@ -1408,6 +1425,7 @@ fn viewport_2d_header(host: Entity) -> impl Bundle {
                 ),
             ),
             viewport_2d_mode_bar(host),
+            crate::viewport_host::viewport_mode_bar(host),
         ],
     )
 }

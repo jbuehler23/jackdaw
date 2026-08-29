@@ -2,11 +2,23 @@
 //!
 //! One panel authors both, so the mode is the panel's own state rather than a
 //! second panel. This module owns the mode itself, what a scene kind asks for,
-//! and the two resources that carry a mode request across a frame boundary.
+//! the resources that carry a mode request across a frame boundary, and the
+//! panel's identity: [`ViewportHost`], which names the two presentation
+//! subtrees and says which of them the user is looking at.
+//!
+//! The presentations themselves stay in [`crate::viewport`] (a `SceneViewport`
+//! projecting a 3D camera) and [`crate::viewport_2d`] (a zoomable stage showing
+//! a 2D camera's image). Both are built for every panel and both keep their own
+//! state component on the panel entity; the mode decides which column is
+//! displayed and which camera renders.
 
-use bevy::prelude::*;
+use bevy::{prelude::*, ui_widgets::observe};
+use jackdaw_feathers::tokens;
 
+use crate::prelude::*;
 use crate::scenes::operators::SceneKind;
+use crate::viewport::{CameraFlyActive, ViewportPanelHost};
+use crate::viewport_2d::{Ui2dPanActive, Viewport2dPanelHost};
 
 /// What a viewport panel is showing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -62,11 +74,263 @@ pub struct ViewportModeIntent {
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingViewportFocus(pub ViewportMode);
 
+/// A viewport panel, on its dock-leaf content entity.
+///
+/// The panel's identity: which mode it is in and where its two presentation
+/// subtrees are. `ViewportPanelHost` and `Viewport2dPanelHost` sit beside it on
+/// the same entity holding each presentation's own state.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewportHost {
+    pub mode: ViewportMode,
+    /// Whether [`Self::mode`] is one the user picked rather than one the
+    /// scene's kind implied. Travels into the tab's view state on a swap.
+    pub mode_chosen: bool,
+    /// Root of the 3D presentation's column.
+    pub three_d: Entity,
+    /// Root of the 2D presentation's column.
+    pub two_d: Entity,
+}
+
+/// Build a viewport panel in the mode `intent` asks for.
+///
+/// Both presentations are built whatever the mode is, and the mode shows one
+/// and hides the other. Building only the wanted one would make a switch a
+/// panel rebuild, which would drop the camera pose, the canvas framing and the
+/// per-panel chrome every time the user flipped between them.
+pub fn build_viewport_panel_in(world: &mut World, parent: Entity, intent: ViewportModeIntent) {
+    let three_d = crate::viewport::build_3d_presentation(world, parent);
+    let two_d = crate::viewport_2d::build_2d_presentation(world, parent);
+    world.entity_mut(parent).insert(ViewportHost {
+        mode: intent.mode,
+        mode_chosen: intent.chosen,
+        three_d,
+        two_d,
+    });
+    // Directly, rather than waiting for the scheduled pass: a panel that spent
+    // its first frame showing both columns would show the 2D stage stacked
+    // under the 3D toolbar.
+    if let Err(err) = world.run_system_cached(apply_viewport_mode) {
+        error!("failed to apply the viewport mode to a new panel: {err}");
+    }
+}
+
+/// Show the column the mode names, hide the other, and let only the shown
+/// one's camera render.
+///
+/// Nothing is despawned: the chrome, the camera pose and the canvas framing all
+/// belong to the panel and outlive a switch. `Display::None` is what takes the
+/// hidden column out of layout; Bevy clamps a zero-sized `ViewportNode`'s
+/// render target to one pixel rather than refusing it, and the camera is
+/// switched off in the same pass, so nothing draws into that pixel.
+///
+/// An inactive camera still gets its target's size, so a UI root parked on the
+/// hidden 2D camera stays laid out at its authored reference resolution.
+pub(crate) fn apply_viewport_mode(
+    hosts: Query<
+        (
+            Entity,
+            &ViewportHost,
+            &ViewportPanelHost,
+            &Viewport2dPanelHost,
+        ),
+        Changed<ViewportHost>,
+    >,
+    mut nodes: Query<&mut Node>,
+    mut cameras: Query<&mut Camera>,
+    mut fly: ResMut<CameraFlyActive>,
+    mut panning: ResMut<Ui2dPanActive>,
+) {
+    for (entity, host, three_d, two_d) in &hosts {
+        let shows_3d = host.mode == ViewportMode::ThreeD;
+        for (column, shown) in [(host.three_d, shows_3d), (host.two_d, !shows_3d)] {
+            let Ok(mut node) = nodes.get_mut(column) else {
+                continue;
+            };
+            let display = if shown { Display::Flex } else { Display::None };
+            if node.display != display {
+                node.display = display;
+            }
+        }
+        for (camera, active) in [(three_d.camera, shows_3d), (two_d.camera, !shows_3d)] {
+            if let Ok(mut camera) = cameras.get_mut(camera)
+                && camera.is_active != active
+            {
+                camera.is_active = active;
+            }
+        }
+        // A gesture cannot outlive the presentation it was started on.
+        if shows_3d {
+            if panning.0 == Some(entity) {
+                panning.0 = None;
+            }
+        } else {
+            fly.0 = false;
+        }
+    }
+}
+
+/// Marker on one segment of the 3D|2D control, naming the panel it switches.
+///
+/// The panel is carried rather than looked up, for the reason
+/// [`crate::viewport_2d::Viewport2dModeSegment`] carries one: a segment in one
+/// panel's bar must never move another panel's.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewportModeSegment {
+    pub host: Entity,
+    pub mode: ViewportMode,
+}
+
+/// The two-segment 3D|2D control, built like the Edit|Interact bar beside it
+/// (`crate::viewport_2d::viewport_2d_mode_bar`) and the Game panel's
+/// Play/Select bar.
+///
+/// One is spawned into each presentation's bar, so whichever bar the mode is
+/// showing carries the way back out of it.
+pub(crate) fn viewport_mode_bar(host: Entity) -> impl Bundle {
+    (
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
+            overflow: Overflow::clip(),
+            flex_shrink: 0.0,
+            ..default()
+        },
+        BackgroundColor(tokens::ELEVATED_BG),
+        BorderColor::all(tokens::BORDER_SUBTLE),
+        children![
+            viewport_mode_segment(
+                host,
+                ViewportMode::ThreeD,
+                "3D",
+                "3D: author the scene in the world viewport",
+            ),
+            viewport_mode_segment(
+                host,
+                ViewportMode::TwoD,
+                "2D",
+                "2D: author the scene on the canvas",
+            ),
+        ],
+    )
+}
+
+/// One clickable segment inside the 3D|2D control.
+fn viewport_mode_segment(
+    host: Entity,
+    mode: ViewportMode,
+    label: &'static str,
+    tooltip: &'static str,
+) -> impl Bundle {
+    (
+        ViewportModeSegment { host, mode },
+        Interaction::default(),
+        jackdaw_feathers::tooltip::Tooltip::title(tooltip),
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+        observe(
+            move |click: On<Pointer<Click>>,
+                  disabled: Query<(), With<bevy::ui::InteractionDisabled>>,
+                  mut hosts: Query<&mut ViewportHost>,
+                  mut intent: ResMut<ViewportModeIntent>| {
+                if disabled.contains(click.event_target()) {
+                    return;
+                }
+                let Ok(mut panel) = hosts.get_mut(host) else {
+                    return;
+                };
+                *intent = ViewportModeIntent { mode, chosen: true };
+                if panel.mode != mode || !panel.mode_chosen {
+                    panel.mode = mode;
+                    panel.mode_chosen = true;
+                }
+            },
+        ),
+        children![(
+            Text::new(label),
+            TextFont {
+                font_size: tokens::TEXT_SIZE_SM,
+                ..default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+        )],
+    )
+}
+
+/// Highlight the segment matching each panel's mode, in both of its bars.
+fn update_viewport_mode_bar(
+    hosts: Query<&ViewportHost>,
+    mut segments: Query<(&ViewportModeSegment, &mut BackgroundColor)>,
+) {
+    for (segment, mut background) in &mut segments {
+        let Ok(host) = hosts.get(segment.host) else {
+            continue;
+        };
+        let color = if host.mode == segment.mode {
+            tokens::TOOLBAR_ACTIVE_BG
+        } else {
+            Color::NONE
+        };
+        if background.0 != color {
+            background.0 = color;
+        }
+    }
+}
+
+/// Register the operators this module owns.
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<ViewportModeOp>();
+}
+
+/// Switch the viewport between the 3D world and the 2D canvas.
+///
+/// Every open panel, like `viewport2d.mode` and `viewport2d.frame`: an operator
+/// call names no panel, and a scripted run that moved one the user could not
+/// identify would be worse than one that moved them all. The bar's own segments
+/// are per panel, because that gesture does name its panel.
+#[operator(
+    id = "viewport.mode",
+    label = "Set Viewport Mode",
+    description = "Switch the viewport between the 3D world and the 2D canvas.",
+    allows_undo = false,
+    params(mode(String, doc = "`3d` for the world viewport, `2d` for the canvas."))
+)]
+pub(crate) fn viewport_mode(
+    params: In<OperatorParameters>,
+    mut hosts: Query<&mut ViewportHost>,
+    mut intent: ResMut<ViewportModeIntent>,
+) -> OperatorResult {
+    let Some(mode) = params.as_str("mode").and_then(ViewportMode::parse) else {
+        warn!("viewport.mode: 'mode' must be `3d` or `2d`");
+        return OperatorResult::Cancelled;
+    };
+    if hosts.is_empty() {
+        warn!("viewport.mode: no viewport panel is open");
+        return OperatorResult::Cancelled;
+    }
+    *intent = ViewportModeIntent { mode, chosen: true };
+    for mut host in &mut hosts {
+        if host.mode != mode || !host.mode_chosen {
+            host.mode = mode;
+            host.mode_chosen = true;
+        }
+    }
+    OperatorResult::Finished
+}
+
 pub struct ViewportHostPlugin;
 
 impl Plugin for ViewportHostPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ViewportModeIntent>();
+        app.init_resource::<ViewportModeIntent>()
+            .add_systems(Update, (apply_viewport_mode, update_viewport_mode_bar));
     }
 }
 

@@ -22,6 +22,8 @@ use crate::selection::{Selected, Selection};
 use crate::snapping::GridSettings;
 use jackdaw_widgets::file_browser::FileBrowserItem;
 
+use crate::viewport_host::{ViewportMode, ViewportModeIntent};
+
 /// Marker for a 3D viewport camera. Once multi-viewport support
 /// lands every viewport panel will spawn its own camera carrying this
 /// marker, so queries that need *all* viewport cameras (or a specific
@@ -93,12 +95,19 @@ pub(crate) const DEFAULT_VIEWPORT_HEIGHT: u32 = 720;
 #[derive(Component)]
 pub struct SceneViewport;
 
-/// Sits on the dock-leaf content entity that hosts a viewport panel.
-/// Holds the camera entity that the panel's `ViewportNode` is
-/// projecting, so the despawn observer can clean up the camera (and
-/// its render-target image) when the panel content is torn down.
+/// The 3D presentation's state, on the dock-leaf content entity that hosts a
+/// viewport panel.
+///
+/// Holds the camera entity that the panel's `ViewportNode` is projecting, so
+/// the despawn observer can clean up the camera (and its render-target image)
+/// when the panel content is torn down.
+///
+/// A sibling of [`crate::viewport_host::ViewportHost`], which is the panel's
+/// identity, and of `Viewport2dPanelHost`, the other presentation's state. All
+/// three sit on the same entity: a panel is one thing that can be shown two
+/// ways, not two panels.
 #[derive(Component)]
-pub(crate) struct ViewportPanelHost {
+pub struct ViewportPanelHost {
     pub camera: Entity,
     /// Per-viewport infinite-grid entity. Spawned alongside the camera
     /// on a private `RenderLayers` so each viewport renders its own
@@ -403,7 +412,7 @@ impl Plugin for ViewportPlugin {
 /// One-time global setup for the editor's viewport infrastructure.
 ///
 /// Per-viewport setup (camera, render-target image, `SceneViewport`
-/// UI node, infinite grid) lives in [`build_viewport_panel`], which
+/// UI node, infinite grid) lives in [`build_3d_presentation`], which
 /// runs each time the dock-tree reconciler instantiates a
 /// `jackdaw.viewport` panel.
 pub(crate) fn setup_viewport() {}
@@ -422,16 +431,32 @@ fn init_axis_indicator_asset(mut commands: Commands, mut assets: ResMut<Assets<G
 
 /// Build closure for the `jackdaw.viewport` `DockWindowDescriptor`.
 ///
-/// Spawns a fresh camera + render-target image + `ViewportNode` for
-/// the panel, plus the toolbar/SceneViewport UI bundle as the panel's
-/// content. Each registered viewport instance gets its own camera, so
-/// quad-view / stacked-viewport / multi-window setups all just work
-/// once the user drops more `jackdaw.viewport` panels into the tree.
-///
-/// The despawn observer on `parent` (via `ViewportPanelHost`) cleans
-/// up the camera when the panel content is torn down by the reconciler
-/// (panel closed, leaf rebuilt due to split, workspace switch, etc.).
+/// A panel opening in [`ViewportMode::ThreeD`]. Both presentations are built
+/// either way; see [`crate::viewport_host::build_viewport_panel_in`].
 pub fn build_viewport_panel(world: &mut World, parent: Entity) {
+    crate::viewport_host::build_viewport_panel_in(
+        world,
+        parent,
+        ViewportModeIntent {
+            mode: ViewportMode::ThreeD,
+            chosen: false,
+        },
+    );
+}
+
+/// Build the panel's 3D presentation: a camera rendering into its own image,
+/// the toolbar/`SceneViewport` column that projects it, and the floating
+/// chrome that overlays it. Returns the column, which the mode switch shows
+/// and hides.
+///
+/// Each viewport instance gets its own camera, so quad-view / stacked-viewport
+/// / multi-window setups all just work once the user drops more
+/// `jackdaw.viewport` panels into the tree.
+///
+/// The despawn observer on `parent` (via [`ViewportPanelHost`]) cleans up the
+/// camera when the panel content is torn down by the reconciler (panel closed,
+/// leaf rebuilt due to split, workspace switch, etc.).
+pub(crate) fn build_3d_presentation(world: &mut World, parent: Entity) -> Entity {
     // Allocate a render-target image dedicated to this viewport. The
     // size is a starting point; `ViewportNode` will resize the camera
     // viewport to match the SceneViewport UI node automatically.
@@ -568,6 +593,16 @@ pub fn build_viewport_panel(world: &mut World, parent: Entity) {
             toolbar.insert((crate::layout::Toolbar, crate::EditorEntity));
             let toolbar = toolbar.id();
             world.entity_mut(column).insert_children(0, &[toolbar]);
+            // The 3D/2D switch, at the toolbar's right end. The toolbar's own
+            // spacer already pushes everything after it there, so the bar
+            // needs no second one.
+            let mode_bar = world
+                .spawn((
+                    crate::EditorEntity,
+                    crate::viewport_host::viewport_mode_bar(parent),
+                ))
+                .id();
+            world.entity_mut(toolbar).add_child(mode_bar);
         }
         Err(err) => error!("failed to spawn editor toolbar scene: {err}"),
     }
@@ -591,7 +626,7 @@ pub fn build_viewport_panel(world: &mut World, parent: Entity) {
         world.entity_mut(scene_vp).insert(ViewportNode::new(camera));
         world.entity_mut(scene_vp).observe(handle_viewport_drop);
     } else {
-        warn!("build_viewport_panel: SceneViewport descendant not found under parent");
+        warn!("build_3d_presentation: SceneViewport descendant not found under parent");
     }
 
     // The terrain tool palette overlays the viewport's content rather
@@ -617,10 +652,12 @@ pub fn build_viewport_panel(world: &mut World, parent: Entity) {
         grid,
         axis_indicator,
     });
+
+    column
 }
 
 /// Walk the descendants of `root` looking for the first entity that
-/// has component `T`. Used by [`build_viewport_panel`] to locate the
+/// has component `T`. Used by [`build_3d_presentation`] to locate the
 /// `SceneViewport` node spawned inside the panel content bundle.
 fn find_descendant_with<T: Component>(world: &mut World, root: Entity) -> Option<Entity> {
     let mut stack = vec![root];
@@ -1051,6 +1088,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ViewportFocusSelectedOp>()
         .register_operator::<ViewportBookmarkSaveOp>()
         .register_operator::<ViewportBookmarkLoadOp>();
+    crate::viewport_host::add_to_extension(ctx);
 
     ctx.bind_operator::<CoreExtensionInputContext, ViewportFocusSelectedOp>([PresetInput::key(
         "KeyF",

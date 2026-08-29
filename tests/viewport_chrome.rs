@@ -11,6 +11,7 @@ use bevy::prelude::*;
 use jackdaw::layout::Toolbar;
 use jackdaw::terrain::{TerrainOptionsBar, TerrainPalette};
 use jackdaw::viewport::build_viewport_panel;
+use jackdaw::viewport_2d::{Viewport2dTitle, build_viewport_2d_panel};
 use jackdaw_feathers::button::ButtonOperatorCall;
 
 mod util;
@@ -43,13 +44,14 @@ fn raise_buttons(app: &mut App) -> usize {
         .count()
 }
 
-/// A panel with two scene tabs open, ready to swap between.
-fn app_with_panel_and_two_tabs() -> App {
+/// A panel with two scene tabs open, ready to swap between. `build` is which
+/// mode the panel opens in; the chrome belongs to the panel either way.
+fn app_with_panel_and_two_tabs(build: fn(&mut World, Entity)) -> App {
     use jackdaw::scenes::{SceneTab, Scenes};
 
     let mut app = util::editor_test_app();
     let parent = app.world_mut().spawn(Node::default()).id();
-    build_viewport_panel(app.world_mut(), parent);
+    build(app.world_mut(), parent);
 
     {
         let mut scenes = app.world_mut().resource_mut::<Scenes>();
@@ -63,12 +65,23 @@ fn app_with_panel_and_two_tabs() -> App {
 }
 
 /// A panel carries exactly one terrain tool palette, holding exactly one
-/// button per entry.
+/// button per entry. The mode a panel opens in is which of its two
+/// presentations is shown, not how much chrome it builds, so both open the
+/// same single set.
 #[test]
 fn a_viewport_panel_builds_one_terrain_palette() {
+    for build in BUILDERS {
+        a_viewport_panel_builds_one_terrain_palette_in(build);
+    }
+}
+
+/// The two ways a panel opens: in the 3D world, and on the 2D canvas.
+const BUILDERS: [fn(&mut World, Entity); 2] = [build_viewport_panel, build_viewport_2d_panel];
+
+fn a_viewport_panel_builds_one_terrain_palette_in(build: fn(&mut World, Entity)) {
     let mut app = util::editor_test_app();
     let parent = app.world_mut().spawn(Node::default()).id();
-    build_viewport_panel(app.world_mut(), parent);
+    build(app.world_mut(), parent);
     app.update();
 
     assert_eq!(
@@ -88,26 +101,35 @@ fn a_viewport_panel_builds_one_terrain_palette() {
     }
 }
 
-/// The rest of the panel's floating chrome is single too. Same class of bug as
-/// a doubled palette, so it is pinned in the same place.
+/// The rest of the panel's chrome is single too, in either mode. Same class of
+/// bug as a doubled palette, so it is pinned in the same place.
 #[test]
-fn a_viewport_panel_builds_one_options_bar_and_one_toolbar() {
-    let mut app = util::editor_test_app();
-    let parent = app.world_mut().spawn(Node::default()).id();
-    build_viewport_panel(app.world_mut(), parent);
-    app.update();
+fn a_viewport_panel_builds_one_options_bar_toolbar_and_title() {
+    for build in BUILDERS {
+        let mut app = util::editor_test_app();
+        let parent = app.world_mut().spawn(Node::default()).id();
+        build(app.world_mut(), parent);
+        app.update();
 
-    assert_eq!(count::<TerrainOptionsBar>(&mut app), 1, "one options bar");
-    assert_eq!(count::<Toolbar>(&mut app), 1, "one main toolbar");
+        assert_eq!(count::<TerrainOptionsBar>(&mut app), 1, "one options bar");
+        assert_eq!(count::<Toolbar>(&mut app), 1, "one main toolbar");
+        assert_eq!(count::<Viewport2dTitle>(&mut app), 1, "one canvas title");
+    }
 }
 
 /// Swapping back and forth between two scenes leaves the palette alone. The
 /// chrome belongs to the panel, and a swap replaces the scene under it.
 #[test]
 fn swapping_tabs_does_not_multiply_the_terrain_palette() {
+    for build in BUILDERS {
+        swapping_tabs_does_not_multiply_the_terrain_palette_in(build);
+    }
+}
+
+fn swapping_tabs_does_not_multiply_the_terrain_palette_in(build: fn(&mut World, Entity)) {
     use jackdaw::scenes::swap::swap_active_tab;
 
-    let mut app = app_with_panel_and_two_tabs();
+    let mut app = app_with_panel_and_two_tabs(build);
 
     let palettes = count::<TerrainPalette>(&mut app);
     let buttons = raise_buttons(&mut app);
@@ -134,14 +156,22 @@ fn swapping_tabs_does_not_multiply_the_terrain_palette() {
 /// The same for the bar and the toolbar.
 #[test]
 fn swapping_tabs_does_not_multiply_the_options_bar_or_toolbar() {
+    for build in BUILDERS {
+        swapping_tabs_does_not_multiply_the_options_bar_or_toolbar_in(build);
+    }
+}
+
+fn swapping_tabs_does_not_multiply_the_options_bar_or_toolbar_in(build: fn(&mut World, Entity)) {
     use jackdaw::scenes::swap::swap_active_tab;
 
-    let mut app = app_with_panel_and_two_tabs();
+    let mut app = app_with_panel_and_two_tabs(build);
 
     let bars = count::<TerrainOptionsBar>(&mut app);
     let toolbars = count::<Toolbar>(&mut app);
+    let titles = count::<Viewport2dTitle>(&mut app);
     assert_eq!(bars, 1);
     assert_eq!(toolbars, 1);
+    assert_eq!(titles, 1);
 
     for target in [1, 0, 1, 0] {
         swap_active_tab(app.world_mut(), target);
@@ -156,6 +186,11 @@ fn swapping_tabs_does_not_multiply_the_options_bar_or_toolbar() {
             count::<Toolbar>(&mut app),
             toolbars,
             "swapping to tab {target} must not add a toolbar",
+        );
+        assert_eq!(
+            count::<Viewport2dTitle>(&mut app),
+            titles,
+            "swapping to tab {target} must not add a canvas title",
         );
     }
 }

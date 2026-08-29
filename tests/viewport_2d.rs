@@ -55,6 +55,7 @@ use jackdaw_scene_types::UiSceneRoot;
 use jackdaw::{
     selection::Selection,
     ui_stage::UiSelectionOverlay,
+    viewport::ViewportPanelHost,
     viewport_2d::{
         DEFAULT_UI_GRID, MAX_UI_GRID, MAX_ZOOM, MIN_UI_GRID, MIN_ZOOM, Scene2dViewport, Ui2dView,
         Viewport2dCamera, Viewport2dGridReadout, Viewport2dGridStep, Viewport2dMode,
@@ -62,6 +63,7 @@ use jackdaw::{
         build_viewport_2d_panel, cursor_area_offset, cursor_stage_offset, fit_view, pan_by,
         request_2d_fit, stepped_ui_grid, target_pixels_per_stage_pixel, world_at, zoom_toward,
     },
+    viewport_host::{ViewportHost, ViewportMode},
 };
 
 mod util;
@@ -78,6 +80,29 @@ fn building_the_panel_wires_camera_target_and_host() {
         .get::<Viewport2dPanelHost>(parent)
         .expect("host on panel parent");
     assert_eq!(host.mode, Viewport2dMode::Edit);
+
+    // The panel is one thing shown two ways: the 2D presentation's state sits
+    // beside the panel's own identity, which opens on the canvas here and lets
+    // only that camera render.
+    let panel = app
+        .world()
+        .get::<ViewportHost>(parent)
+        .copied()
+        .expect("the panel's own state on the same entity");
+    assert_eq!(panel.mode, ViewportMode::TwoD);
+    assert!(
+        app.world().get::<Camera>(host.camera).unwrap().is_active,
+        "the shown presentation's camera renders",
+    );
+    let camera_3d = app
+        .world()
+        .get::<ViewportPanelHost>(parent)
+        .expect("the 3D presentation is built too")
+        .camera;
+    assert!(
+        !app.world().get::<Camera>(camera_3d).unwrap().is_active,
+        "the hidden presentation's camera does not",
+    );
 
     let cam = app.world().entity(host.camera);
     assert!(cam.contains::<Camera2d>());
@@ -401,14 +426,17 @@ fn tab_switch_round_trips_the_2d_view() {
         .id();
     build_viewport_2d_panel(app.world_mut(), parent);
 
+    // The panel's own 3D camera, rather than one spawned beside it: every panel
+    // builds both presentations now, so "the first viewport camera" would find
+    // the panel's and leave a second one untouched.
     let camera_3d = app
-        .world_mut()
-        .spawn((
-            Camera3d::default(),
-            Transform::from_xyz(1.0, 2.0, 3.0),
-            jackdaw::viewport::MainViewportCamera,
-        ))
-        .id();
+        .world()
+        .get::<ViewportPanelHost>(parent)
+        .expect("the 3D presentation's state")
+        .camera;
+    app.world_mut()
+        .entity_mut(camera_3d)
+        .insert(Transform::from_xyz(1.0, 2.0, 3.0));
 
     {
         let mut scenes = app.world_mut().resource_mut::<Scenes>();
