@@ -6,9 +6,17 @@ impl Plugin for MenuBarPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MenuBarState>()
             .add_observer(close_menu_on_action)
-            .add_systems(Update, close_menu_on_click_outside);
+            .add_systems(Update, close_menu_on_click_outside.in_set(MenuBarClose));
     }
 }
+
+/// The pass that takes an open menu down on a click outside it.
+///
+/// Public so a click handler that wants the menu to stay open can be
+/// ordered before it: the press and the click land on the same frame,
+/// so [`MenuBarState::hold_open`] has to be written first to be read.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MenuBarClose;
 
 /// Marker on the root menu bar node.
 #[derive(Component)]
@@ -39,6 +47,10 @@ pub struct MenuBarState {
     pub open_menu: Option<Entity>,
     /// The dropdown entity, if spawned.
     pub dropdown_entity: Option<Entity>,
+    /// Set by a click that belongs to the open menu and must not close
+    /// it, such as a row that only flips a box. Read and cleared by the
+    /// next close pass, so it holds for exactly the one click.
+    pub hold_open: bool,
 }
 
 /// Fired when a menu item is clicked.
@@ -68,11 +80,19 @@ fn close_menu_on_click_outside(
         return;
     }
 
-    // Close on Escape or left-click outside
-    if mouse.just_pressed(MouseButton::Left) || keyboard.just_pressed(KeyCode::Escape) {
-        if let Some(dropdown) = state.dropdown_entity.take() {
-            commands.entity(dropdown).despawn();
+    // Escape closes whatever was clicked; a left press closes unless the
+    // click that made it belongs to the menu.
+    if !keyboard.just_pressed(KeyCode::Escape) {
+        if !mouse.just_pressed(MouseButton::Left) {
+            return;
         }
-        state.open_menu = None;
+        if state.hold_open {
+            state.hold_open = false;
+            return;
+        }
     }
+    if let Some(dropdown) = state.dropdown_entity.take() {
+        commands.entity(dropdown).despawn();
+    }
+    state.open_menu = None;
 }

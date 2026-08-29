@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use bevy::{feathers::theme::ThemedText, prelude::*, ui::ui_transform::UiGlobalTransform};
 use jackdaw_widgets::menu_bar::{
-    MenuAction, MenuBar, MenuBarDropdown, MenuBarDropdownItem, MenuBarItem, MenuBarState,
+    MenuAction, MenuBar, MenuBarClose, MenuBarDropdown, MenuBarDropdownItem, MenuBarItem,
+    MenuBarState,
 };
 
 use crate::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonVariant, button};
@@ -88,7 +89,12 @@ pub fn submenu_row(
 }
 
 pub fn plugin(app: &mut App) {
-    app.init_resource::<SubmenuState>()
+    // A checked row writes `hold_open` from the click observer, and the
+    // press that made the click lands on the same frame, so the close
+    // pass has to read it after the click pass has written it.
+    app.configure_sets(Update, MenuBarClose.after(crate::button::ButtonClickPass))
+        .init_resource::<SubmenuState>()
+        .add_observer(hold_the_menu_open_for_a_checked_row)
         .add_observer(on_dropdown_item_click)
         .add_observer(on_menu_bar_item_click)
         .add_observer(on_menu_bar_item_over)
@@ -101,8 +107,51 @@ pub fn plugin(app: &mut App) {
                 sync_menu_bar_item_backgrounds,
                 advance_submenu_hover,
                 refresh_dynamic_menu_rows,
+                redraw_the_open_dropdown_on_new_rows.after(refresh_dynamic_menu_rows),
             ),
         );
+}
+
+/// A click on a row that only flips a box leaves the menu open.
+///
+/// Every other row is a command: it does its thing and the menu is done.
+/// A box is a setting, and settings are read and changed in runs, so the
+/// dropdown stays up and redraws itself with the new state through
+/// [`redraw_the_open_dropdown_on_new_rows`].
+fn hold_the_menu_open_for_a_checked_row(
+    event: On<ButtonClickEvent>,
+    rows: Query<(), With<MenuCheckedRow>>,
+    mut state: ResMut<MenuBarState>,
+) {
+    if state.open_menu.is_some() && rows.contains(event.entity) {
+        state.hold_open = true;
+    }
+}
+
+/// Draw the open dropdown again whenever its item's rows change, so a
+/// menu held open by a checked row shows the state the click produced.
+fn redraw_the_open_dropdown_on_new_rows(
+    mut commands: Commands,
+    mut state: ResMut<MenuBarState>,
+    items: Query<(&MenuBarItem, &ComputedNode, &UiGlobalTransform), Changed<MenuBarItem>>,
+    windows: Query<&Window>,
+) {
+    let Some(open) = state.open_menu else {
+        return;
+    };
+    let Ok((item, computed, global_tf)) = items.get(open) else {
+        return;
+    };
+    let window_height = window_height(&windows);
+    open_menu_dropdown(
+        &mut commands,
+        &mut state,
+        open,
+        item,
+        computed,
+        global_tf,
+        window_height,
+    );
 }
 
 /// When a dropdown item is clicked, fire the [`MenuAction`]; unless the
@@ -897,6 +946,12 @@ fn spawn_dropdown(
         ))
         .id();
 
+    // A dropdown showing any box gives every row the box's room, so the
+    // captions of the rows without one do not start further left.
+    let boxes = actions
+        .iter()
+        .any(|(action, _)| checked_state(action).0.is_some());
+
     let mut index = 0;
     while index < actions.len() {
         let (action, label) = &actions[index];
@@ -948,12 +1003,14 @@ fn spawn_dropdown(
                 label: group.to_string(),
                 actions: rows,
             };
-            let arrow = button(
-                ButtonProps::new(group.to_string())
-                    .with_variant(ButtonVariant::Ghost)
-                    .align_left()
-                    .with_right_icon(Icon::ChevronRight),
-            );
+            let mut arrow_props = ButtonProps::new(group.to_string())
+                .with_variant(ButtonVariant::Ghost)
+                .align_left()
+                .with_right_icon(Icon::ChevronRight);
+            if boxes {
+                arrow_props = arrow_props.reserving_left_icon();
+            }
+            let arrow = button(arrow_props);
             commands.entity(dropdown).with_child((row, arrow));
             continue;
         }
@@ -975,8 +1032,10 @@ fn spawn_dropdown(
             .with_variant(ButtonVariant::Ghost)
             // TODO: add keybind as subtitle
             .align_left();
-        if let Some(checked) = checked {
-            props = props.with_left_icon(checked_icon(checked));
+        match checked {
+            Some(checked) => props = props.with_left_icon(checked_icon(checked)),
+            None if boxes => props = props.reserving_left_icon(),
+            None => {}
         }
 
         let mut row = commands.spawn((item, button(props), ChildOf(dropdown)));
@@ -1042,6 +1101,7 @@ fn submenu_group(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::button::ButtonSize;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::picking::backend::HitData;
     use bevy::picking::events::{Out, Over, Pointer};
@@ -1152,6 +1212,59 @@ mod tests {
                 .map(|item| item.action.clone()),
             Some("op:canvas.snap?kind=pixel".to_string()),
             "the row's action is what is left once the prefix is off",
+        );
+    }
+
+    /// A dropdown that shows a box anywhere keeps the box's room on
+    /// every row, so the captions line up down the menu instead of the
+    /// rows without a box starting further left.
+    #[test]
+    fn a_dropdown_showing_a_box_keeps_its_room_on_every_row() {
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<Font>()
+            .init_resource::<bevy::input_focus::InputFocus>()
+            .insert_resource(Time::<()>::default())
+            .insert_resource(crate::icons::EditorFont(Handle::default()))
+            .insert_resource(crate::icons::IconFont(Handle::default()))
+            .add_plugins(crate::button::plugin);
+        let actions = vec![
+            checked_row(true, "op:canvas.snap?kind=pixel", "Use Pixel Snap"),
+            ("op:viewport2d.grid?size=4".to_string(), "Finer".to_string()),
+        ];
+        let dropdown = app
+            .world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                spawn_dropdown(&mut commands, 0.0, 0.0, 1080.0, &actions)
+            })
+            .expect("the dropdown spawns");
+        app.update();
+        app.update();
+
+        let rows: Vec<Entity> = app
+            .world()
+            .get::<Children>(dropdown)
+            .map(|children| children.iter().collect())
+            .unwrap_or_default();
+        let first_child = |row: Entity| {
+            app.world()
+                .get::<Children>(row)
+                .and_then(|children| children.iter().next())
+                .expect("a row has its content")
+        };
+        assert!(
+            app.world().get::<Text>(first_child(rows[0])).is_some(),
+            "the row with a box draws it first",
+        );
+        let slot = first_child(rows[1]);
+        assert!(
+            app.world().get::<Text>(slot).is_none(),
+            "the row without one leads with a slot rather than a glyph",
+        );
+        assert_eq!(
+            app.world().get::<Node>(slot).map(|node| node.width),
+            Some(Val::Px(ButtonSize::MD.icon_slot())),
+            "and the slot is the box's own width, so the captions line up",
         );
     }
 

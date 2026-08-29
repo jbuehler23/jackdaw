@@ -203,14 +203,14 @@ fn the_header_snap_menu_lists_every_kind_with_its_state() {
         vec![
             ("[x]op:canvas.snap?kind=enabled", "Use Snap"),
             ("[x]op:canvas.snap?kind=pixel", "Use Pixel Snap"),
-            (">>Smart Snapping", ""),
+            ("---", ""),
+            ("##Smart Snapping", ""),
             ("[x]op:canvas.snap?kind=parent", "Parent"),
             ("[x]op:canvas.snap?kind=percent_lines", "Percent Lines"),
             ("[x]op:canvas.snap?kind=sibling_sides", "Sibling Sides"),
             ("[x]op:canvas.snap?kind=sibling_centers", "Sibling Centers"),
             ("[ ]op:canvas.snap?kind=other_nodes", "Other Nodes"),
             ("[x]op:canvas.snap?kind=guides", "Guides"),
-            ("<<", ""),
             ("---", ""),
             ("[x]op:canvas.rulers?on=false", "Show Rulers"),
             ("[x]op:canvas.guides?on=false", "Show Guides"),
@@ -233,13 +233,41 @@ fn the_header_snap_menu_lists_every_kind_with_its_state() {
 }
 
 #[test]
-fn clicking_a_snap_row_flips_the_kind_and_the_menu_closes() {
-    use bevy::input::{ButtonState, mouse::MouseButtonInput};
-    use bevy::window::PrimaryWindow;
-    use jackdaw_feathers::button::ButtonClickEvent;
-    use jackdaw_widgets::menu_bar::{MenuBarDropdownItem, MenuBarState};
+fn clicking_a_snap_row_flips_the_kind_and_leaves_the_menu_open() {
+    use jackdaw_widgets::menu_bar::MenuBarState;
 
     let mut app = snap_menu_app();
+    open_snap_menu(&mut app);
+
+    click_row(&mut app, "op:canvas.snap?kind=pixel");
+    assert!(!snap(&app).pixel, "the row flips the kind its action names");
+    assert!(
+        app.world().resource::<MenuBarState>().open_menu.is_some(),
+        "and a row that only flips a box leaves the menu up to be read",
+    );
+    assert!(
+        dropdown_rows(&mut app).contains(&"op:canvas.snap?kind=pixel".to_string()),
+        "with its rows redrawn in place",
+    );
+    assert!(
+        checked_rows(&mut app).contains(&(String::from("op:canvas.snap?kind=pixel"), false)),
+        "so the box the click emptied shows empty: {:?}",
+        checked_rows(&mut app),
+    );
+
+    // A row that is a command rather than a box is done with the menu.
+    click_row(&mut app, "op:viewport2d.grid?size=4");
+    assert!(
+        app.world().resource::<MenuBarState>().open_menu.is_none(),
+        "a plain row closes the menu behind it",
+    );
+}
+
+/// Open the header's Snap menu the way the operator a scripted run uses
+/// opens it.
+fn open_snap_menu(app: &mut App) {
+    use jackdaw_widgets::menu_bar::MenuBarState;
+
     app.world_mut()
         .operator("menu.open")
         .param("name", "Snap")
@@ -251,35 +279,67 @@ fn clicking_a_snap_row_flips_the_kind_and_the_menu_closes() {
         app.world().resource::<MenuBarState>().open_menu.is_some(),
         "the header's Snap menu opens like any other menu",
     );
+}
+
+/// Click the open dropdown's row whose action is `action`: the button
+/// click, and the press that made it, on the one frame the editor sees
+/// them on.
+fn click_row(app: &mut App, action: &str) {
+    use bevy::input::{ButtonState, mouse::MouseButtonInput};
+    use bevy::window::PrimaryWindow;
+    use jackdaw_feathers::button::ButtonClickEvent;
+    use jackdaw_widgets::menu_bar::MenuBarDropdownItem;
 
     let row = app
         .world_mut()
         .query::<(Entity, &MenuBarDropdownItem)>()
         .iter(app.world())
-        .find(|(_, item)| item.action == "op:canvas.snap?kind=pixel")
+        .find(|(_, item)| item.action == action)
         .map(|(entity, _)| entity)
-        .expect("the open menu offers the pixel row");
-    app.world_mut().trigger(ButtonClickEvent { entity: row });
-    app.update();
-    app.update();
-    assert!(!snap(&app).pixel, "the row flips the kind its action names",);
-
-    // The press that made the click is what takes the menu down.
+        .unwrap_or_else(|| panic!("the open menu offers a {action} row"));
     let window = app
         .world_mut()
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(app.world())
         .expect("headless apps still have a primary window");
+    app.world_mut().trigger(ButtonClickEvent { entity: row });
     app.world_mut().write_message(MouseButtonInput {
         button: MouseButton::Left,
         state: ButtonState::Pressed,
         window,
     });
     app.update();
-    assert!(
-        app.world().resource::<MenuBarState>().open_menu.is_none(),
-        "and the menu closes behind it",
-    );
+    // Let the button go, so the next click is a press the editor sees
+    // rather than one already held down.
+    app.world_mut().write_message(MouseButtonInput {
+        button: MouseButton::Left,
+        state: ButtonState::Released,
+        window,
+    });
+    for _ in 0..4 {
+        app.update();
+    }
+}
+
+/// The actions the open dropdown's rows carry.
+fn dropdown_rows(app: &mut App) -> Vec<String> {
+    app.world_mut()
+        .query::<&jackdaw_widgets::menu_bar::MenuBarDropdownItem>()
+        .iter(app.world())
+        .map(|item| item.action.clone())
+        .collect()
+}
+
+/// The open dropdown's rows that show a box, and the state each shows.
+fn checked_rows(app: &mut App) -> Vec<(String, bool)> {
+    app.world_mut()
+        .query::<(
+            &jackdaw_widgets::menu_bar::MenuBarDropdownItem,
+            &jackdaw_feathers::menu_bar::MenuCheckedRow,
+        )>()
+        .iter(app.world())
+        .map(|(item, row)| (item.action.clone(), row.checked))
+        .collect()
 }
 
 /// An editor with one 2D viewport panel laid out, so its header's Snap

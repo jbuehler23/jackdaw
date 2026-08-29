@@ -43,7 +43,6 @@ use jackdaw_feathers::{
     button::{ButtonProps, ButtonSize, ButtonVariant, button},
     menu_bar::{
         OP_ACTION_PREFIX, SECTION_ACTION_PREFIX, SEPARATOR_ACTION, checked_row, menu_button,
-        submenu_row,
     },
     tokens,
 };
@@ -1779,7 +1778,9 @@ fn viewport_2d_snap_menu(host: Entity) -> impl Bundle {
 ///
 /// The master leads, so the switch that governs the menu is the first
 /// thing in it; pixel snapping follows, because it is about what a drag
-/// writes rather than what it lands on.
+/// writes rather than what it lands on. The six kinds that offer a line
+/// sit flat under a heading rather than behind a hover submenu: their
+/// whole point is being read at a glance.
 fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
     let snap = world
         .get_resource::<CanvasSnap>()
@@ -1800,14 +1801,18 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
     let mut rows = vec![
         kind_row(CanvasSnapKind::Enabled),
         kind_row(CanvasSnapKind::Pixel),
+        (SEPARATOR_ACTION.to_string(), String::new()),
+        (
+            format!("{SECTION_ACTION_PREFIX}Smart Snapping"),
+            String::new(),
+        ),
     ];
-    rows.extend(submenu_row(
-        "Smart Snapping",
+    rows.extend(
         CanvasSnapKind::ALL
             .into_iter()
             .filter(|kind| !matches!(kind, CanvasSnapKind::Enabled | CanvasSnapKind::Pixel))
             .map(kind_row),
-    ));
+    );
     rows.push((SEPARATOR_ACTION.to_string(), String::new()));
     rows.push(checked_row(
         snap.show_rulers,

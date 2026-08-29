@@ -154,8 +154,22 @@ impl TryFrom<&str> for ButtonOperatorCall {
     }
 }
 
+/// The pass that turns a pressed button into a [`ButtonClickEvent`].
+///
+/// Public so anything that has to see the click's effects on the frame
+/// it happened can be ordered after it.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ButtonClickPass;
+
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, (setup_button, handle_hover, handle_button_click));
+    app.add_systems(
+        Update,
+        (
+            setup_button,
+            handle_hover,
+            handle_button_click.in_set(ButtonClickPass),
+        ),
+    );
 }
 
 #[derive(Component)]
@@ -345,12 +359,23 @@ impl ButtonSize {
             Self::Icon | Self::MD => FontSize::Px(16.0),
         }
     }
+
+    /// How wide a left-icon slot is, for a button reserving one it does
+    /// not fill. Matches [`Self::icon_size`], so a row with an icon and
+    /// a row without start their captions in the same place.
+    pub fn icon_slot(&self) -> f32 {
+        match self {
+            Self::IconSM => 14.0,
+            Self::Icon | Self::MD => 16.0,
+        }
+    }
 }
 
 #[derive(Component)]
 struct ButtonConfig {
     content: String,
     left_icon: Option<Icon>,
+    left_icon_space: bool,
     right_icon: Option<Icon>,
     subtitle: Option<String>,
     call_operator: Option<Cow<'static, str>>,
@@ -364,6 +389,10 @@ pub struct ButtonProps {
     pub size: ButtonSize,
     pub align_left: bool,
     pub left_icon: Option<Icon>,
+    /// Keep the left icon's room even with no icon in it, so a run of
+    /// buttons where only some carry one still starts every caption in
+    /// the same place.
+    pub left_icon_space: bool,
     pub right_icon: Option<Icon>,
     pub direction: FlexDirection,
     pub subtitle: Option<String>,
@@ -391,6 +420,12 @@ impl ButtonProps {
     }
     pub fn with_left_icon(mut self, icon: Icon) -> Self {
         self.left_icon = Some(icon);
+        self
+    }
+    /// Reserve the left icon's room without putting an icon in it. See
+    /// [`ButtonProps::left_icon_space`].
+    pub fn reserving_left_icon(mut self) -> Self {
+        self.left_icon_space = true;
         self
     }
     pub fn with_right_icon(mut self, icon: Icon) -> Self {
@@ -535,6 +570,7 @@ pub fn button(props: ButtonProps) -> impl Bundle {
         size,
         align_left,
         left_icon,
+        left_icon_space,
         right_icon,
         direction,
         subtitle,
@@ -547,6 +583,7 @@ pub fn button(props: ButtonProps) -> impl Bundle {
         ButtonConfig {
             content,
             left_icon,
+            left_icon_space,
             right_icon,
             subtitle,
             call_operator,
@@ -587,7 +624,7 @@ fn setup_button(
         let (left_padding, right_padding) = if icon_only {
             (size.padding(), size.padding())
         } else {
-            let left = if config.left_icon.is_some() || is_column {
+            let left = if config.left_icon.is_some() || config.left_icon_space || is_column {
                 px(6.0)
             } else {
                 size.padding()
@@ -616,6 +653,7 @@ fn setup_button(
         // `with_children` here closes that window; everything
         // happens atomically on one `&mut World` block.
         let left_icon = config.left_icon;
+        let left_icon_space = config.left_icon_space;
         let right_icon = config.right_icon;
         let content = config.content.clone();
         let subtitle = config.subtitle.clone();
@@ -632,16 +670,26 @@ fn setup_button(
                 ec.insert(ButtonOperatorCall::new(id));
             }
             ec.with_children(|parent| {
-                if let Some(icon) = left_icon {
-                    parent.spawn((
-                        Text::new(icon.unicode()),
-                        TextFont {
-                            font: icon_font_handle.clone().into(),
-                            font_size: size.icon_size(),
+                match left_icon {
+                    Some(icon) => {
+                        parent.spawn((
+                            Text::new(icon.unicode()),
+                            TextFont {
+                                font: icon_font_handle.clone().into(),
+                                font_size: size.icon_size(),
+                                ..default()
+                            },
+                            TextColor(variant.text_color().into()),
+                        ));
+                    }
+                    None if left_icon_space => {
+                        parent.spawn(Node {
+                            width: px(size.icon_slot()),
+                            flex_shrink: 0.0,
                             ..default()
-                        },
-                        TextColor(variant.text_color().into()),
-                    ));
+                        });
+                    }
+                    None => {}
                 }
 
                 // Icon-sized buttons render only the icon; the
@@ -840,6 +888,7 @@ impl Default for ButtonProps {
             size: Default::default(),
             align_left: Default::default(),
             left_icon: Default::default(),
+            left_icon_space: Default::default(),
             right_icon: Default::default(),
             direction: Default::default(),
             subtitle: Default::default(),
