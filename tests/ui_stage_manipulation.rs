@@ -306,6 +306,9 @@ fn a_press_on_the_selected_nodes_own_body_still_moves_it() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
+    // A gesture read for what it writes, not for what it lands on:
+    // the magnet off is the only way to see the cursor's own figures.
+    magnet(&mut app, false);
     settle(&mut app);
 
     click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
@@ -649,6 +652,9 @@ fn a_move_gesture_is_one_undoable_entry() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
+    // A gesture read for what it writes, not for what it lands on:
+    // the magnet off is the only way to see the cursor's own figures.
+    magnet(&mut app, false);
     settle(&mut app);
 
     click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
@@ -695,6 +701,9 @@ fn the_top_left_handle_moves_the_offset_and_the_size_together() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
+    // A gesture read for what it writes, not for what it lands on:
+    // the magnet off is the only way to see the cursor's own figures.
+    magnet(&mut app, false);
     settle(&mut app);
 
     click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
@@ -739,6 +748,9 @@ fn a_zoom_mid_drag_moves_the_drag_onto_the_new_scale() {
     // Half zoom: two authored pixels per pointer pixel.
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
+    // A gesture read for what it writes, not for what it lands on:
+    // the magnet off is the only way to see the cursor's own figures.
+    magnet(&mut app, false);
     settle(&mut app);
 
     click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
@@ -838,6 +850,9 @@ fn escape_abandons_a_gesture_in_progress() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
+    // A gesture read for what it writes, not for what it lands on:
+    // the magnet off is the only way to see the cursor's own figures.
+    magnet(&mut app, false);
     settle(&mut app);
 
     click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
@@ -882,9 +897,6 @@ fn a_snapped_move_lands_on_a_sibling_edge_unless_ctrl_says_otherwise() {
         let mut app = stage_app();
         let panel = panel_entity(&mut app);
         let (_, _, front) = authored_scene(&mut app);
-        app.world_mut()
-            .resource_mut::<jackdaw::snapping::SnapSettings>()
-            .translate_snap = true;
         settle(&mut app);
 
         click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
@@ -940,7 +952,6 @@ fn a_snapped_gesture_lands_on_the_canvas_pixel_grid() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
-    snapping_on(&mut app);
     settle(&mut app);
 
     click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
@@ -967,7 +978,6 @@ fn a_snapped_gesture_lands_on_the_canvas_pixel_grid() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
-    snapping_on(&mut app);
     settle(&mut app);
 
     click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
@@ -1001,11 +1011,12 @@ fn a_snapped_gesture_lands_on_the_canvas_pixel_grid() {
 /// out in the open.
 #[test]
 fn ctrl_turns_the_grid_and_the_edges_on_together() {
-    // The toggle is off throughout: Ctrl is the whole switch here.
+    // The master is off throughout: Ctrl is the whole switch here.
     let landed = |to: Vec2| {
         let mut app = stage_app();
         let panel = panel_entity(&mut app);
         let (_, _, front) = authored_scene(&mut app);
+        magnet(&mut app, false);
         settle(&mut app);
 
         click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
@@ -1032,6 +1043,42 @@ fn ctrl_turns_the_grid_and_the_edges_on_together() {
     );
 }
 
+/// A canvas that has had nothing switched on snaps.
+///
+/// The master is the canvas's own, and it ships on, so the first drag a
+/// new user makes lands on its neighbour. Shipping it off would leave
+/// the rulers, the guides and every kind in the menu doing nothing until
+/// a switch nothing points at had been found and turned.
+#[test]
+fn a_drag_on_a_default_canvas_already_snaps() {
+    let mut app = stage_app();
+    assert!(
+        app.world().resource::<CanvasSnap>().enabled,
+        "the canvas's magnet is on out of the box",
+    );
+    let panel = panel_entity(&mut app);
+    let (_, _, front) = authored_scene(&mut app);
+    settle(&mut app);
+
+    click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
+    settle(&mut app);
+    let (overlay, _) = overlay_node(&mut app);
+    drag_authored(
+        &mut app,
+        panel,
+        overlay,
+        Vec2::new(500.0, 250.0),
+        Vec2::new(704.0, 250.0),
+    );
+    settle(&mut app);
+
+    assert_eq!(
+        node_of(&app, front).left,
+        px(600),
+        "the sibling's edge pulled the drag onto it, with nothing turned on first",
+    );
+}
+
 /// The snap radius is a distance on screen, not in the canvas: a cursor
 /// stopping a given number of *screen* pixels past a neighbour snaps, or
 /// does not, identically at any zoom.
@@ -1047,7 +1094,6 @@ fn the_snap_radius_is_the_same_on_screen_at_any_zoom() {
         let mut app = stage_app();
         let panel = framed_panel(&mut app, zoom);
         let (_, _, front) = authored_scene(&mut app);
-        snapping_on(&mut app);
         without_the_pixel_grid(&mut app, panel);
         settle(&mut app);
 
@@ -1104,6 +1150,9 @@ fn offsets_inside_a_bordered_parent_are_measured_from_the_padding_box() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let flexed = bordered_scene(&mut app);
+    // A gesture read for what it writes, not for what it lands on:
+    // the magnet off is the only way to see the cursor's own figures.
+    magnet(&mut app, false);
     settle(&mut app);
 
     select(&mut app, flexed);
@@ -1425,6 +1474,9 @@ fn hold_shift(app: &mut App) {
 fn a_drag_moves_every_selected_node_and_undoes_as_one() {
     let (mut app, panel, nodes) = selection_app();
     let [first, second, third] = nodes;
+    // A gesture read for what it writes, not for what it lands on:
+    // the magnet off is the only way to see the cursor's own figures.
+    magnet(&mut app, false);
     select_all(&mut app, &nodes);
     settle(&mut app);
     let before: Vec<Node> = nodes.iter().map(|node| node_of(&app, *node)).collect();
@@ -1476,7 +1528,6 @@ fn a_drag_moves_every_selected_node_and_undoes_as_one() {
 fn a_snapped_multi_move_keeps_the_selection_arranged() {
     let mut app = stage_app();
     let panel = framed_panel(&mut app, 0.5);
-    snapping_on(&mut app);
     without_the_pixel_grid(&mut app, panel);
     let root = ui_root(&mut app);
     // What the mover lands on.
@@ -1527,7 +1578,6 @@ fn a_move_lands_on_a_sibling_centre_when_that_kind_is_on() {
     let landed = |centres: bool| {
         let mut app = stage_app();
         let panel = framed_panel(&mut app, 0.5);
-        snapping_on(&mut app);
         without_the_pixel_grid(&mut app, panel);
         with_kinds(&mut app, |kinds| kinds.sibling_centers = centres);
         let root = ui_root(&mut app);
@@ -1572,7 +1622,6 @@ fn a_kind_switched_off_frees_the_edge_it_governs() {
     let landed = |sides: bool| {
         let mut app = stage_app();
         let panel = framed_panel(&mut app, 0.5);
-        snapping_on(&mut app);
         without_the_pixel_grid(&mut app, panel);
         with_kinds(&mut app, |kinds| kinds.sibling_sides = sides);
         let root = ui_root(&mut app);
@@ -1613,6 +1662,7 @@ fn ctrl_still_inverts_the_kinds_together_with_the_grid() {
     let landed = |ctrl: bool, to: f32| {
         let mut app = stage_app();
         let panel = framed_panel(&mut app, 0.5);
+        magnet(&mut app, false);
         let root = ui_root(&mut app);
         spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
         let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
@@ -1759,7 +1809,6 @@ fn a_percent_anchored_node_landing_on_a_quarter_line_writes_the_exact_percent() 
 fn quarter_line_app(node: Node) -> (App, Entity, Entity) {
     let mut app = stage_app();
     let panel = framed_panel(&mut app, 0.5);
-    snapping_on(&mut app);
     let root = ui_root(&mut app);
     let container = spawn_child(&mut app, root, 0.0, 0.0, 1003.0, 400.0);
     let child = app.world_mut().spawn((node, ChildOf(container))).id();
@@ -1780,7 +1829,13 @@ fn pixel_snap_off_keeps_the_fraction_a_zoomed_drag_produced() {
         let root = ui_root(&mut app);
         let mover = spawn_child(&mut app, root, 400.0, 200.0, 100.0, 100.0);
         settle(&mut app);
-        with_kinds(&mut app, |kinds| kinds.pixel = pixel);
+        // The master off leaves the pixel kind as the only thing
+        // deciding the figure: that it is a separate switch is the
+        // point of this test.
+        with_kinds(&mut app, |kinds| {
+            kinds.enabled = false;
+            kinds.pixel = pixel;
+        });
 
         select(&mut app, mover);
         settle(&mut app);
@@ -1814,7 +1869,6 @@ fn other_nodes_reach_across_the_tree_only_when_asked() {
     let landed = |other_nodes: bool, to: f32| {
         let mut app = stage_app();
         let panel = framed_panel(&mut app, 0.5);
-        snapping_on(&mut app);
         without_the_pixel_grid(&mut app, panel);
         with_kinds(&mut app, |kinds| kinds.other_nodes = other_nodes);
         let root = ui_root(&mut app);
@@ -1865,7 +1919,6 @@ fn other_nodes_reach_across_the_tree_only_when_asked() {
 fn a_nudge_ignores_the_snap_kinds() {
     let mut app = stage_app();
     let panel = framed_panel(&mut app, 0.5);
-    snapping_on(&mut app);
     let root = ui_root(&mut app);
     // Four authored pixels to the right of the mover's near edge: well
     // inside the radius a drag would land from.
@@ -1905,7 +1958,6 @@ fn a_nudge_ignores_the_snap_kinds() {
 fn the_gesture_records_the_winning_line() {
     let mut app = stage_app();
     let panel = framed_panel(&mut app, 0.5);
-    snapping_on(&mut app);
     without_the_pixel_grid(&mut app, panel);
     let root = ui_root(&mut app);
     spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
@@ -1964,7 +2016,6 @@ fn a_snapped_drag_draws_the_line_it_landed_on_and_lets_go_of_it() {
     // a canvas position: authored 900, half of that in stage pixels.
     let mut app = stage_app();
     let panel = framed_panel(&mut app, 0.5);
-    snapping_on(&mut app);
     without_the_pixel_grid(&mut app, panel);
     let root = ui_root(&mut app);
     spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
@@ -2007,7 +2058,6 @@ fn a_snapped_drag_draws_the_line_it_landed_on_and_lets_go_of_it() {
     // measured from inside it.
     let mut app = stage_app();
     let panel = framed_panel(&mut app, 0.5);
-    snapping_on(&mut app);
     without_the_pixel_grid(&mut app, panel);
     let root = ui_root(&mut app);
     let container = spawn_child(&mut app, root, 300.0, 200.0, 1600.0, 900.0);
@@ -2042,7 +2092,6 @@ fn a_snapped_drag_draws_the_line_it_landed_on_and_lets_go_of_it() {
 fn a_drag_that_snapped_nothing_draws_nothing() {
     let mut app = stage_app();
     let panel = framed_panel(&mut app, 0.5);
-    snapping_on(&mut app);
     let root = ui_root(&mut app);
     let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
     settle(&mut app);
@@ -2100,7 +2149,6 @@ fn a_drag_lands_on_a_guide_when_that_kind_is_on() {
     let landed = |guides: bool| {
         let mut app = stage_app();
         let panel = framed_panel(&mut app, 0.5);
-        snapping_on(&mut app);
         without_the_pixel_grid(&mut app, panel);
         with_kinds(&mut app, |kinds| kinds.guides = guides);
         let root = ui_root(&mut app);
@@ -2387,6 +2435,9 @@ fn a_drag_edits_the_offsets_the_node_was_authored_with() {
         height: px(200),
         ..default()
     });
+    // A gesture read for what it writes, not for what it lands on:
+    // the magnet off is the only way to see the cursor's own figures.
+    magnet(&mut app, false);
     let overlay = outline_over(&mut app, node);
     drag_authored(
         &mut app,
@@ -2483,6 +2534,9 @@ fn a_resize_of_a_far_pinned_node_leaves_the_far_offset_alone() {
         height: px(200),
         ..default()
     });
+    // A gesture read for what it writes, not for what it lands on:
+    // the magnet off is the only way to see the cursor's own figures.
+    magnet(&mut app, false);
     let overlay = outline_over(&mut app, node);
     // The node's left edge is at 2400 - 400 - 400 = 1600.
     let handle = handle_entity(&mut app, overlay, (-1, 0));
@@ -3142,11 +3196,10 @@ fn bordered_scene(app: &mut App) -> Entity {
     flexed
 }
 
-/// Turn snapping on, the way the toolbar's snap toggle does.
-fn snapping_on(app: &mut App) {
-    app.world_mut()
-        .resource_mut::<jackdaw::snapping::SnapSettings>()
-        .translate_snap = true;
+/// Put the canvas's master magnet where the Snap menu's first row puts
+/// it. On is the default, so this is only ever called to turn it off.
+fn magnet(app: &mut App, on: bool) {
+    with_kinds(app, |kinds| kinds.enabled = on);
 }
 
 /// Put the panel's canvas grid on a one-pixel lattice, which is no

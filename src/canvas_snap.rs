@@ -46,9 +46,12 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// numbers, so naming one is naming its position.
 pub(crate) const GUIDE_MATCH: f32 = 0.5;
 
-/// One kind of line the canvas offers a dragged node.
+/// One switch on the canvas's snapping: the master, the pixel rounding,
+/// or one kind of line a dragged node can land on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CanvasSnapKind {
+    /// Whether the canvas snaps at all.
+    Enabled,
     /// Round the authored pixels a drag writes to whole numbers.
     Pixel,
     /// The parent's padding-box edges and centre.
@@ -68,7 +71,8 @@ pub enum CanvasSnapKind {
 impl CanvasSnapKind {
     /// Every kind, in the order the canvas offers them and the menu lists
     /// them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
+        Self::Enabled,
         Self::Pixel,
         Self::Parent,
         Self::PercentLines,
@@ -88,6 +92,7 @@ impl CanvasSnapKind {
     /// `canvas.snap` operator.
     pub fn id(self) -> &'static str {
         match self {
+            Self::Enabled => "enabled",
             Self::Pixel => "pixel",
             Self::Parent => "parent",
             Self::PercentLines => "percent_lines",
@@ -101,6 +106,7 @@ impl CanvasSnapKind {
     /// How the menu row for this kind reads.
     pub fn label(self) -> &'static str {
         match self {
+            Self::Enabled => "Use Snap",
             Self::Pixel => "Use Pixel Snap",
             Self::Parent => "Parent",
             Self::PercentLines => "Percent Lines",
@@ -118,9 +124,17 @@ impl CanvasSnapKind {
 /// Everything is on out of the box except [`CanvasSnapKind::OtherNodes`],
 /// which reaches across the scene and would otherwise pull a node towards
 /// something the user cannot see next to it.
+///
+/// [`CanvasSnap::enabled`] is the canvas's own master, separate from the
+/// 3D tools' `SnapSettings`: the two answer different questions, and a
+/// canvas whose magnet followed the 3D toolbar would not snap at all
+/// until the user found a control that says nothing about the canvas.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CanvasSnap {
+    /// Whether the canvas snaps at all. Ctrl inverts it for the length
+    /// of a gesture.
+    pub enabled: bool,
     /// Round the authored pixels a drag writes to whole numbers.
     pub pixel: bool,
     /// Snap to the parent's padding-box edges and centre.
@@ -144,6 +158,7 @@ pub struct CanvasSnap {
 impl Default for CanvasSnap {
     fn default() -> Self {
         Self {
+            enabled: true,
             pixel: true,
             parent: true,
             percent_lines: true,
@@ -159,8 +174,9 @@ impl Default for CanvasSnap {
 
 impl CanvasSnap {
     /// Whether `kind` is on.
-    pub fn enabled(&self, kind: CanvasSnapKind) -> bool {
+    pub fn offers(&self, kind: CanvasSnapKind) -> bool {
         match kind {
+            CanvasSnapKind::Enabled => self.enabled,
             CanvasSnapKind::Pixel => self.pixel,
             CanvasSnapKind::Parent => self.parent,
             CanvasSnapKind::PercentLines => self.percent_lines,
@@ -171,9 +187,17 @@ impl CanvasSnap {
         }
     }
 
+    /// Whether a gesture snaps at all, with `ctrl` held or not: the
+    /// master, inverted by Ctrl for the length of the gesture, the way
+    /// the 3D tools invert their own magnet.
+    pub fn magnet(&self, ctrl: bool) -> bool {
+        self.enabled != ctrl
+    }
+
     /// Turn `kind` on or off.
     pub fn set(&mut self, kind: CanvasSnapKind, on: bool) {
         let field = match kind {
+            CanvasSnapKind::Enabled => &mut self.enabled,
             CanvasSnapKind::Pixel => &mut self.pixel,
             CanvasSnapKind::Parent => &mut self.parent,
             CanvasSnapKind::PercentLines => &mut self.percent_lines,
@@ -223,7 +247,7 @@ fn persist(project: Option<&ProjectRoot>, snap: &CanvasSnap) {
     params(
         kind(
             String,
-            doc = "Which kind: `pixel`, `parent`, `percent_lines`, `sibling_sides`, `sibling_centers`, `other_nodes` or `guides`."
+            doc = "Which switch: `enabled`, `pixel`, `parent`, `percent_lines`, `sibling_sides`, `sibling_centers`, `other_nodes` or `guides`."
         ),
         on(bool, doc = "On or off. Omit to flip whichever way it currently is.")
     )
@@ -237,7 +261,7 @@ pub(crate) fn canvas_snap(
         warn!("canvas.snap: 'kind' must name one of the canvas's snap kinds");
         return OperatorResult::Cancelled;
     };
-    let on = params.as_bool("on").unwrap_or(!snap.enabled(kind));
+    let on = params.as_bool("on").unwrap_or(!snap.offers(kind));
     snap.set(kind, on);
     persist(project.as_deref(), &snap);
     OperatorResult::Finished

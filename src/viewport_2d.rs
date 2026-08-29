@@ -1777,9 +1777,9 @@ fn viewport_2d_snap_menu(host: Entity) -> impl Bundle {
 
 /// The rows the Snap menu shows for the world as it stands.
 ///
-/// Pixel snapping leads on its own because it is about what a drag
-/// writes rather than what it lands on; the six kinds that offer a line
-/// sit in a group together.
+/// The master leads, so the switch that governs the menu is the first
+/// thing in it; pixel snapping follows, because it is about what a drag
+/// writes rather than what it lands on.
 fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
     let snap = world
         .get_resource::<CanvasSnap>()
@@ -1787,7 +1787,7 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
         .unwrap_or_default();
     let kind_row = |kind: CanvasSnapKind| {
         checked_row(
-            snap.enabled(kind),
+            snap.offers(kind),
             format!("{OP_ACTION_PREFIX}{}?kind={}", CanvasSnapOp::ID, kind.id()),
             kind.label(),
         )
@@ -1797,12 +1797,15 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
         .map(|host| host.view.grid)
         .unwrap_or(DEFAULT_UI_GRID);
 
-    let mut rows = vec![kind_row(CanvasSnapKind::Pixel)];
+    let mut rows = vec![
+        kind_row(CanvasSnapKind::Enabled),
+        kind_row(CanvasSnapKind::Pixel),
+    ];
     rows.extend(submenu_row(
         "Smart Snapping",
         CanvasSnapKind::ALL
             .into_iter()
-            .filter(|kind| *kind != CanvasSnapKind::Pixel)
+            .filter(|kind| !matches!(kind, CanvasSnapKind::Enabled | CanvasSnapKind::Pixel))
             .map(kind_row),
     ));
     rows.push((SEPARATOR_ACTION.to_string(), String::new()));

@@ -66,7 +66,6 @@ use crate::{
     commands::push_layout_edits,
     prefab::AuthoredUiSceneRoot,
     selection::Selection,
-    snapping::SnapSettings,
     viewport_2d::{
         CanvasRuler, Scene2dViewport, Viewport2dMode, Viewport2dPanelHost, cursor_stage_offset,
         target_pixels_per_stage_pixel,
@@ -99,9 +98,8 @@ const GUIDE_HIT_WIDTH: f32 = 7.0;
 /// scale the panel is drawing at as each drag event arrives (see
 /// [`live_scale`]), so a zoom mid-gesture moves the radius with it.
 ///
-/// A module constant rather than a [`SnapSettings`] field: the settings
-/// travel inside undo snapshots, so every field added to them is a
-/// change to what a snapshot has to round-trip.
+/// A module constant rather than a [`CanvasSnap`] field: the radius is
+/// what "near" means on this canvas, not a preference the user states.
 const EDGE_SNAP_PIXELS: f32 = 6.0;
 
 /// The eight handle positions, clockwise from the top-left corner.
@@ -1646,18 +1644,14 @@ fn on_gesture_drag(mut event: On<Pointer<Drag>>, parts: GestureTargets, mut comm
                 .is_some_and(|keys| {
                     keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
                 });
-            let outcome = match world.get_resource::<SnapSettings>() {
-                Some(snap) => snap_gesture(
-                    dragged,
-                    edges,
-                    &manipulation.candidates,
-                    snap,
-                    manipulation.grid,
-                    ctrl,
-                    scale,
-                ),
-                None => SnapOutcome::default(),
-            };
+            let outcome = snap_gesture(
+                dragged,
+                edges,
+                &manipulation.candidates,
+                manipulation.kinds.magnet(ctrl),
+                manipulation.grid,
+                scale,
+            );
             // The primary's whole delta, snap included; the rest of the
             // selection moves by it.
             let delta = distance * scale + outcome.nudge;
@@ -1759,13 +1753,11 @@ fn floor_size(rect: Vec4, edges: (i8, i8)) -> Vec4 {
 ///
 /// # One switch
 ///
-/// Both kinds of snapping are decided by
-/// [`jackdaw_snap::SnapSettings::translate_active`] once, at the top:
-/// the user's toggle, inverted by Ctrl for the length of the gesture, as
-/// in the 3D tools. Consulting the raw `translate_snap` field further
-/// down, as `snap_translate_vec2` does, would make Ctrl mean "edges
-/// only" and give the toggle's off state two meanings depending on which
-/// kind of snap was near.
+/// Both kinds of snapping are decided by `magnet` once, at the top:
+/// [`CanvasSnap::enabled`] inverted by Ctrl for the length of the
+/// gesture. Consulting the individual kinds a second time further down
+/// would make Ctrl mean "edges only" and give the master's off state two
+/// meanings depending on which kind of snap was near.
 ///
 /// `grid` is the lattice in authored pixels; `scale` is authored pixels
 /// per pointer pixel, which is what turns [`EDGE_SNAP_PIXELS`] into a
@@ -1774,12 +1766,11 @@ fn snap_gesture(
     rect: Vec4,
     edges: (i8, i8),
     candidates: &SnapCandidates,
-    snap: &SnapSettings,
+    magnet: bool,
     grid: f32,
-    ctrl: bool,
     scale: f32,
 ) -> SnapOutcome {
-    if !snap.translate_active(ctrl) {
+    if !magnet {
         return SnapOutcome::default();
     }
     let min = Vec2::new(rect.x, rect.y);

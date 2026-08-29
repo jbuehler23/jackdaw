@@ -23,12 +23,13 @@ fn the_snap_kinds_ship_with_the_defaults_the_canvas_expects() {
 
     let on = CanvasSnapKind::ALL
         .into_iter()
-        .filter(|kind| snap.enabled(*kind))
+        .filter(|kind| snap.offers(*kind))
         .map(CanvasSnapKind::id)
         .collect::<Vec<_>>();
     assert_eq!(
         on,
         vec![
+            "enabled",
             "pixel",
             "parent",
             "percent_lines",
@@ -36,7 +37,7 @@ fn the_snap_kinds_ship_with_the_defaults_the_canvas_expects() {
             "sibling_centers",
             "guides",
         ],
-        "every kind but the cross-tree one is on out of the box",
+        "the canvas snaps out of the box, and every kind but the cross-tree one is on",
     );
     assert!(
         snap.show_rulers && snap.show_guides,
@@ -200,6 +201,7 @@ fn the_header_snap_menu_lists_every_kind_with_its_state() {
             .map(|(action, label)| (action.as_str(), label.as_str()))
             .collect::<Vec<_>>(),
         vec![
+            ("[x]op:canvas.snap?kind=enabled", "Use Snap"),
             ("[x]op:canvas.snap?kind=pixel", "Use Pixel Snap"),
             (">>Smart Snapping", ""),
             ("[x]op:canvas.snap?kind=parent", "Parent"),
