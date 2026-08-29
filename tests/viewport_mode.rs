@@ -839,6 +839,124 @@ fn an_imported_overlay_routes_into_the_panel_showing_the_world() {
     );
 }
 
+/// Every segment of the switch that names `panel` and `mode`. There is one in
+/// each presentation's bar, because whichever bar is showing has to carry the
+/// way back out.
+fn segments_for(app: &mut App, panel: Entity, mode: ViewportMode) -> Vec<Entity> {
+    let found: Vec<Entity> = app
+        .world_mut()
+        .query::<(Entity, &ViewportModeSegment)>()
+        .iter(app.world())
+        .filter(|(_, segment)| segment.host == panel && segment.mode == mode)
+        .map(|(entity, _)| entity)
+        .collect();
+    assert_eq!(found.len(), 2, "one segment per mode per presentation bar");
+    found
+}
+
+/// Click a segment the way a user does: the `Pointer<Click>` its inline
+/// observer is watching for.
+fn click(app: &mut App, segment: Entity) {
+    use bevy::camera::{NormalizedRenderTarget, RenderTarget};
+    use bevy::picking::{
+        backend::HitData,
+        events::{Click, Pointer},
+        pointer::{Location, PointerButton, PointerId},
+    };
+    use bevy::window::WindowRef;
+
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(app.world())
+        .expect("headless apps still have a primary window");
+    let target: NormalizedRenderTarget = RenderTarget::Window(WindowRef::Primary)
+        .normalize(Some(window))
+        .expect("the primary window normalizes");
+    let camera = app
+        .world()
+        .get::<ViewportPanelHost>(
+            app.world()
+                .get::<ViewportModeSegment>(segment)
+                .expect("a segment names its panel")
+                .host,
+        )
+        .expect("the 3D presentation's state")
+        .camera;
+
+    app.world_mut().trigger(Pointer::new(
+        PointerId::Mouse,
+        Location {
+            target,
+            position: Vec2::ZERO,
+        },
+        Click {
+            button: PointerButton::Primary,
+            hit: HitData::new(camera, 0.0, None, None),
+            duration: core::time::Duration::ZERO,
+            count: 1,
+        },
+        segment,
+    ));
+}
+
+/// Clicking a segment moves the panel it names and records the mode as one the
+/// user asked for. The panel is carried on the segment rather than looked up,
+/// so a switch in one panel's bar leaves the panel beside it alone.
+#[test]
+fn clicking_a_segment_moves_only_the_panel_it_names() {
+    let mut app = util::editor_test_app();
+    let first = panel(&mut app);
+    let second = panel(&mut app);
+    app.update();
+
+    let segment = segments_for(&mut app, first, ViewportMode::TwoD)[0];
+    click(&mut app, segment);
+    app.update();
+
+    assert_showing(&app, first, ViewportMode::TwoD);
+    assert!(
+        host(&app, first).mode_chosen,
+        "the switch is the user asking, so the mode is chosen",
+    );
+    assert_showing(&app, second, ViewportMode::ThreeD);
+    assert!(
+        !host(&app, second).mode_chosen,
+        "and the panel beside it is untouched",
+    );
+    assert_eq!(
+        *app.world().resource::<ViewportModeIntent>(),
+        ViewportModeIntent {
+            mode: ViewportMode::TwoD,
+            chosen: true,
+        },
+        "the tab's intent records the choice, so a swap can restore it",
+    );
+}
+
+/// A disabled segment is not a switch. The observer reads the flag itself,
+/// because a `Pointer<Click>` reaches an entity whatever its interaction state.
+#[test]
+fn a_disabled_segment_does_not_switch_the_mode() {
+    let mut app = util::editor_test_app();
+    let panel = panel(&mut app);
+    app.update();
+
+    let segment = segments_for(&mut app, panel, ViewportMode::TwoD)[0];
+    app.world_mut()
+        .entity_mut(segment)
+        .insert(bevy::ui::InteractionDisabled);
+    click(&mut app, segment);
+    app.update();
+
+    assert_showing(&app, panel, ViewportMode::ThreeD);
+    assert_eq!(
+        *app.world().resource::<ViewportModeIntent>(),
+        ViewportModeIntent::default(),
+        "and nothing was recorded for the tab either",
+    );
+}
+
 /// Everything the `Update` schedule orders after `system`.
 ///
 /// An ordering may be stated against the system, against a set holding it, or

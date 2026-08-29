@@ -572,6 +572,46 @@ fn the_old_2d_window_id_opens_the_viewport_panel() {
     );
 }
 
+/// The same id on a workspace where the panel is not docked at all docks it,
+/// once, and brings it forward: a scripted run naming the canvas must not
+/// meet an empty dock and a window nobody registers.
+#[test]
+fn the_old_2d_window_id_docks_the_viewport_panel_when_none_is_open() {
+    let mut app = op_app();
+    let leaf = dock_leaf(&mut app, &["jackdaw.outliner"]);
+
+    app.world_mut()
+        .operator("window.open")
+        .param("window_id", "jackdaw.viewport_2d")
+        .call()
+        .expect("window.open dispatches")
+        .assert_finished();
+    app.update();
+
+    let windows: Vec<String> = {
+        let tree = app.world().resource::<jackdaw_panels::tree::DockTree>();
+        tree.get(leaf)
+            .and_then(jackdaw_panels::tree::DockNode::as_leaf)
+            .expect("the dock still has its one leaf")
+            .tabs()
+            .map(|(window, _)| window.to_string())
+            .collect()
+    };
+    assert_eq!(
+        windows
+            .iter()
+            .filter(|id| id.as_str() == VIEWPORT_WINDOW_ID)
+            .count(),
+        1,
+        "one viewport tab was docked, got {windows:?}",
+    );
+    assert_eq!(
+        active_window(&app, leaf).as_deref(),
+        Some(VIEWPORT_WINDOW_ID),
+        "and it is the tab in front",
+    );
+}
+
 /// The reference-resolution contract. The panel's render-target image is
 /// held at the active UI scene's `UiSceneRoot::reference_size`, so the
 /// authored tree lays out at exactly the resolution it was designed for,

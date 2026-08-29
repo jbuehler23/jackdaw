@@ -3,15 +3,17 @@
 //!
 //! Each is spawned by `build_viewport_panel` rather than authored into the dock
 //! tree, so nothing but that function decides how many of each a panel gets.
-//! These tests pin the count at one per panel, and pin it across tab switches:
-//! a swap tears the scene down and spawns another, and the chrome belongs to
-//! the panel rather than to the scene, so it has to come through untouched.
+//! These tests pin the count at one per panel, and pin it across a mode switch
+//! and across tab switches: a swap tears the scene down and spawns another, and
+//! the chrome belongs to the panel rather than to the scene, so it has to come
+//! through untouched.
 
 use bevy::prelude::*;
 use jackdaw::layout::Toolbar;
 use jackdaw::terrain::{TerrainOptionsBar, TerrainPalette};
 use jackdaw::viewport::build_viewport_panel;
-use jackdaw::viewport_2d::{Viewport2dTitle, build_viewport_2d_panel};
+use jackdaw::viewport_2d::Viewport2dTitle;
+use jackdaw::viewport_host::{ViewportMode, set_viewport_mode};
 use jackdaw_feathers::button::ButtonOperatorCall;
 
 mod util;
@@ -44,14 +46,24 @@ fn raise_buttons(app: &mut App) -> usize {
         .count()
 }
 
-/// A panel with two scene tabs open, ready to swap between. `build` is which
-/// mode the panel opens in; the chrome belongs to the panel either way.
-fn app_with_panel_and_two_tabs(build: fn(&mut World, Entity)) -> App {
+/// A panel switched into `mode`, on a fresh editor app. The switch happens on
+/// a built panel rather than at build time, because that is the flip the chrome
+/// has to survive: both presentations are built either way, and the mode only
+/// decides which is shown.
+fn panel_in(app: &mut App, mode: ViewportMode) -> Entity {
+    let parent = app.world_mut().spawn(Node::default()).id();
+    build_viewport_panel(app.world_mut(), parent);
+    set_viewport_mode(app.world_mut(), mode, true);
+    app.update();
+    parent
+}
+
+/// A panel in `mode` with two scene tabs open, ready to swap between.
+fn app_with_panel_and_two_tabs(mode: ViewportMode) -> App {
     use jackdaw::scenes::{SceneTab, Scenes};
 
     let mut app = util::editor_test_app();
-    let parent = app.world_mut().spawn(Node::default()).id();
-    build(app.world_mut(), parent);
+    panel_in(&mut app, mode);
 
     {
         let mut scenes = app.world_mut().resource_mut::<Scenes>();
@@ -65,24 +77,21 @@ fn app_with_panel_and_two_tabs(build: fn(&mut World, Entity)) -> App {
 }
 
 /// A panel carries exactly one terrain tool palette, holding exactly one
-/// button per entry. The mode a panel opens in is which of its two
-/// presentations is shown, not how much chrome it builds, so both open the
-/// same single set.
+/// button per entry. A panel's mode is which of its two presentations is
+/// shown, not how much chrome it builds, so the count holds in either.
 #[test]
 fn a_viewport_panel_builds_one_terrain_palette() {
-    for build in BUILDERS {
-        a_viewport_panel_builds_one_terrain_palette_in(build);
+    for mode in MODES {
+        a_viewport_panel_builds_one_terrain_palette_in(mode);
     }
 }
 
-/// The two ways a panel opens: in the 3D world, and on the 2D canvas.
-const BUILDERS: [fn(&mut World, Entity); 2] = [build_viewport_panel, build_viewport_2d_panel];
+/// The two things a panel can be showing: the 3D world, and the 2D canvas.
+const MODES: [ViewportMode; 2] = [ViewportMode::ThreeD, ViewportMode::TwoD];
 
-fn a_viewport_panel_builds_one_terrain_palette_in(build: fn(&mut World, Entity)) {
+fn a_viewport_panel_builds_one_terrain_palette_in(mode: ViewportMode) {
     let mut app = util::editor_test_app();
-    let parent = app.world_mut().spawn(Node::default()).id();
-    build(app.world_mut(), parent);
-    app.update();
+    panel_in(&mut app, mode);
 
     assert_eq!(
         count::<TerrainPalette>(&mut app),
@@ -105,11 +114,9 @@ fn a_viewport_panel_builds_one_terrain_palette_in(build: fn(&mut World, Entity))
 /// bug as a doubled palette, so it is pinned in the same place.
 #[test]
 fn a_viewport_panel_builds_one_options_bar_toolbar_and_title() {
-    for build in BUILDERS {
+    for mode in MODES {
         let mut app = util::editor_test_app();
-        let parent = app.world_mut().spawn(Node::default()).id();
-        build(app.world_mut(), parent);
-        app.update();
+        panel_in(&mut app, mode);
 
         assert_eq!(count::<TerrainOptionsBar>(&mut app), 1, "one options bar");
         assert_eq!(count::<Toolbar>(&mut app), 1, "one main toolbar");
@@ -121,15 +128,15 @@ fn a_viewport_panel_builds_one_options_bar_toolbar_and_title() {
 /// chrome belongs to the panel, and a swap replaces the scene under it.
 #[test]
 fn swapping_tabs_does_not_multiply_the_terrain_palette() {
-    for build in BUILDERS {
-        swapping_tabs_does_not_multiply_the_terrain_palette_in(build);
+    for mode in MODES {
+        swapping_tabs_does_not_multiply_the_terrain_palette_in(mode);
     }
 }
 
-fn swapping_tabs_does_not_multiply_the_terrain_palette_in(build: fn(&mut World, Entity)) {
+fn swapping_tabs_does_not_multiply_the_terrain_palette_in(mode: ViewportMode) {
     use jackdaw::scenes::swap::swap_active_tab;
 
-    let mut app = app_with_panel_and_two_tabs(build);
+    let mut app = app_with_panel_and_two_tabs(mode);
 
     let palettes = count::<TerrainPalette>(&mut app);
     let buttons = raise_buttons(&mut app);
@@ -156,15 +163,15 @@ fn swapping_tabs_does_not_multiply_the_terrain_palette_in(build: fn(&mut World, 
 /// The same for the bar and the toolbar.
 #[test]
 fn swapping_tabs_does_not_multiply_the_options_bar_or_toolbar() {
-    for build in BUILDERS {
-        swapping_tabs_does_not_multiply_the_options_bar_or_toolbar_in(build);
+    for mode in MODES {
+        swapping_tabs_does_not_multiply_the_options_bar_or_toolbar_in(mode);
     }
 }
 
-fn swapping_tabs_does_not_multiply_the_options_bar_or_toolbar_in(build: fn(&mut World, Entity)) {
+fn swapping_tabs_does_not_multiply_the_options_bar_or_toolbar_in(mode: ViewportMode) {
     use jackdaw::scenes::swap::swap_active_tab;
 
-    let mut app = app_with_panel_and_two_tabs(build);
+    let mut app = app_with_panel_and_two_tabs(mode);
 
     let bars = count::<TerrainOptionsBar>(&mut app);
     let toolbars = count::<Toolbar>(&mut app);

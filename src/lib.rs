@@ -3818,6 +3818,84 @@ mod dock_open_tests {
 }
 
 #[cfg(test)]
+mod preset_tree_tests {
+    use jackdaw_panels::tree::{DockLeaf, DockTree};
+    use jackdaw_panels::{DockWindowDescriptor, WindowRegistry};
+
+    use super::*;
+    use crate::viewport::{VIEWPORT_2D_WINDOW_ID, VIEWPORT_WINDOW_ID};
+
+    /// The window ids the leaf with this area id holds, in tab order.
+    fn windows_in(tree: &DockTree, area_id: &str) -> Vec<String> {
+        tree.leaves()
+            .find(|(_, leaf): &(_, &DockLeaf)| leaf.area_id == area_id)
+            .map(|(_, leaf)| leaf.tabs().map(|(window, _)| window.to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Every window id anywhere in the tree.
+    fn all_windows(tree: &DockTree) -> Vec<String> {
+        tree.leaves()
+            .flat_map(|(_, leaf)| leaf.tabs().map(|(window, _)| window.to_string()))
+            .collect()
+    }
+
+    /// The canvas is a mode of the viewport panel, so a preset asks for the
+    /// panel once and never for a second window beside it.
+    fn assert_one_viewport_panel(tree: &DockTree, preset: &str) {
+        let center = windows_in(tree, "center");
+        assert_eq!(
+            center.iter().filter(|id| *id == VIEWPORT_WINDOW_ID).count(),
+            1,
+            "{preset}'s center leaf holds one viewport tab, got {center:?}",
+        );
+        assert!(
+            !all_windows(tree)
+                .iter()
+                .any(|id| id == VIEWPORT_2D_WINDOW_ID),
+            "{preset} must not dock a window the editor no longer registers",
+        );
+    }
+
+    #[test]
+    fn the_level_design_preset_docks_one_viewport_panel_in_the_center() {
+        assert_one_viewport_panel(&build_level_design_tree(), "level design");
+    }
+
+    #[test]
+    fn the_animation_preset_docks_one_viewport_panel_in_the_center() {
+        assert_one_viewport_panel(&build_animation_tree(), "animation");
+    }
+
+    /// The default tree takes its center tabs from the registry, so this is
+    /// the same assertion made against what the extensions actually register.
+    #[test]
+    fn the_default_tree_docks_one_viewport_panel_in_the_center() {
+        let mut world = World::new();
+        world.init_resource::<DockTree>();
+        let mut registry = WindowRegistry::default();
+        for (id, area) in [
+            (VIEWPORT_WINDOW_ID, "center"),
+            ("jackdaw.inspector", "right_sidebar"),
+        ] {
+            registry.register(DockWindowDescriptor {
+                id: id.to_string(),
+                name: id.to_string(),
+                icon: None,
+                default_area: area.to_string(),
+                priority: 0,
+                build: std::sync::Arc::new(|_| {}),
+            });
+        }
+        world.insert_resource(registry);
+
+        build_default_tree(&mut world);
+
+        assert_one_viewport_panel(world.resource::<DockTree>(), "the default tree");
+    }
+}
+
+#[cfg(test)]
 mod file_menu_tests {
     use super::*;
     use jackdaw_feathers::menu_bar::{
