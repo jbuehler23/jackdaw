@@ -353,6 +353,23 @@ pub fn stage_offset_clamped(
     (offset.clamp(-half, half) * target_scale, inside)
 }
 
+/// [`cursor_stage_offset`]'s mapping with neither its refusal nor its
+/// clamp: where the cursor is over the canvas, whether or not it is on
+/// it.
+///
+/// What a gesture placing a line on the canvas reads. Those run off the
+/// edge by design, a guide dragged back onto its ruler to drop it being
+/// the whole point of the gesture, and the clamp would answer with the
+/// edge for every position past it.
+pub fn stage_offset_unbounded(
+    cursor: Vec2,
+    centre: Vec2,
+    inverse_scale_factor: f32,
+    target_scale: f32,
+) -> Vec2 {
+    (cursor / inverse_scale_factor - centre) * target_scale
+}
+
 /// Offset of `cursor` from the centre of a panel's stage **area**, in
 /// that area's own logical pixels, or `None` when the cursor is outside
 /// it.

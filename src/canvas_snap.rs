@@ -44,7 +44,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// How near, in authored pixels, a position has to be to a guide to name
 /// it. Half a pixel: guides are placed by hand and read back as exact
 /// numbers, so naming one is naming its position.
-const GUIDE_MATCH: f32 = 0.5;
+pub(crate) const GUIDE_MATCH: f32 = 0.5;
 
 /// One kind of line the canvas offers a dragged node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,9 +310,50 @@ fn edit_guides(world: &mut World, root: Entity, axis: CanvasAxis, position: f32,
         };
         lines.remove(index);
     }
-    // The component goes off the root with its last guide, so an empty
-    // one never reaches a saved document.
-    let after = (!next.horizontal.is_empty() || !next.vertical.is_empty()).then_some(next);
+    record_guides(world, root, before, held(next));
+}
+
+/// The guides a scene carries, or `None` for a set with nothing in it.
+///
+/// The component goes off the root with its last guide, so an empty one
+/// never reaches a saved document.
+pub(crate) fn held(guides: CanvasGuides) -> Option<CanvasGuides> {
+    (!guides.horizontal.is_empty() || !guides.vertical.is_empty()).then_some(guides)
+}
+
+/// Put `guides` on the root without telling the history, for a gesture
+/// showing what it is about to do. What the history is told is
+/// [`commit_guides`], once, when the gesture is released.
+pub(crate) fn preview_guides(world: &mut World, root: Entity, guides: Option<CanvasGuides>) {
+    let Ok(mut entity) = world.get_entity_mut(root) else {
+        return;
+    };
+    match guides {
+        Some(guides) => {
+            entity.insert(guides);
+        }
+        None => {
+            entity.remove::<CanvasGuides>();
+        }
+    }
+}
+
+/// Hand the history the guide edit a gesture has already written onto
+/// the scene: `before` as the gesture found the component, whatever the
+/// root carries now as the edit.
+pub(crate) fn commit_guides(world: &mut World, root: Entity, before: Option<CanvasGuides>) {
+    let after = world.get::<CanvasGuides>(root).cloned().and_then(held);
+    record_guides(world, root, before, after);
+}
+
+/// One history entry for a change to the scene's guides, and none at all
+/// when the two sides say the same thing.
+fn record_guides(
+    world: &mut World,
+    root: Entity,
+    before: Option<CanvasGuides>,
+    after: Option<CanvasGuides>,
+) {
     if after == before {
         return;
     }

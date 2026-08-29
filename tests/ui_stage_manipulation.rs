@@ -2752,6 +2752,218 @@ fn guide_lines_of(app: &mut App, panel: Entity) -> Vec<(CanvasAxis, Val)> {
     lines.into_iter().map(|(axis, _, at)| (axis, at)).collect()
 }
 
+/// A guide comes off a ruler: the press draws one under the cursor and
+/// the release leaves it where the pointer stopped.
+#[test]
+fn dragging_off_a_ruler_creates_a_guide_where_the_pointer_stops() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (root, _, _) = authored_scene(&mut app);
+    settle(&mut app);
+    let ruler = ruler_entity(&mut app, panel, CanvasAxis::Vertical);
+    let entries = history_len(&app);
+
+    drag_authored(
+        &mut app,
+        panel,
+        ruler,
+        Vec2::new(320.0, -10.0),
+        Vec2::new(320.0, 400.0),
+    );
+    settle(&mut app);
+
+    assert_eq!(
+        guide_positions(&app, root, CanvasAxis::Vertical),
+        vec![320.0],
+        "the guide is left on the authored pixel the pointer stopped over",
+    );
+    assert_eq!(history_len(&app), entries + 1, "one drag is one entry");
+
+    undo(&mut app);
+    settle(&mut app);
+    assert!(
+        app.world().get::<CanvasGuides>(root).is_none(),
+        "and one undo takes the guide, and the component, back off",
+    );
+}
+
+#[test]
+fn dragging_a_guide_moves_it_and_dragging_it_back_onto_the_ruler_removes_it() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (root, _, _) = authored_scene(&mut app);
+    app.world_mut().entity_mut(root).insert(CanvasGuides {
+        horizontal: Vec::new(),
+        vertical: vec![320.0],
+    });
+    settle(&mut app);
+
+    let line = guide_line_entity(&mut app, panel, CanvasAxis::Vertical, 0);
+    let entries = history_len(&app);
+    drag_authored(
+        &mut app,
+        panel,
+        line,
+        Vec2::new(320.0, 300.0),
+        Vec2::new(500.0, 300.0),
+    );
+    settle(&mut app);
+    assert_eq!(
+        guide_positions(&app, root, CanvasAxis::Vertical),
+        vec![500.0],
+        "the guide follows the cursor",
+    );
+    assert_eq!(history_len(&app), entries + 1, "and is one entry");
+
+    let line = guide_line_entity(&mut app, panel, CanvasAxis::Vertical, 0);
+    drag_authored(
+        &mut app,
+        panel,
+        line,
+        Vec2::new(500.0, 300.0),
+        Vec2::new(500.0, -10.0),
+    );
+    settle(&mut app);
+    assert!(
+        app.world().get::<CanvasGuides>(root).is_none(),
+        "released over its own ruler, the guide goes back where it came from",
+    );
+    assert_eq!(history_len(&app), entries + 2, "which is one more entry");
+}
+
+#[test]
+fn escape_abandons_a_guide_drag() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (root, _, _) = authored_scene(&mut app);
+    settle(&mut app);
+    let ruler = ruler_entity(&mut app, panel, CanvasAxis::Vertical);
+    let entries = history_len(&app);
+
+    let start = begin_drag(&mut app, panel, ruler, Vec2::new(320.0, -10.0));
+    let distance = screen_position_of(&mut app, panel, Vec2::new(320.0, 400.0)) - start;
+    continue_drag(&mut app, ruler, start, distance);
+    settle(&mut app);
+    assert_eq!(
+        guide_positions(&app, root, CanvasAxis::Vertical),
+        vec![320.0],
+        "the guide follows the cursor while the drag runs",
+    );
+
+    press_escape(&mut app);
+    settle(&mut app);
+    assert!(
+        app.world().get::<CanvasGuides>(root).is_none(),
+        "Escape puts the guides back the way the drag found them",
+    );
+
+    end_drag(&mut app, ruler, start, distance);
+    settle(&mut app);
+    assert!(
+        app.world().get::<CanvasGuides>(root).is_none(),
+        "and the release that follows the cancel draws nothing",
+    );
+    assert_eq!(history_len(&app), entries, "an abandoned drag is no entry");
+}
+
+#[test]
+fn a_guide_cannot_be_dragged_in_interact_mode() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (root, _, _) = authored_scene(&mut app);
+    settle(&mut app);
+    let ruler = ruler_entity(&mut app, panel, CanvasAxis::Vertical);
+
+    app.world_mut()
+        .get_mut::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .mode = Viewport2dMode::Interact;
+    settle(&mut app);
+    let entries = history_len(&app);
+
+    drag_authored(
+        &mut app,
+        panel,
+        ruler,
+        Vec2::new(320.0, -10.0),
+        Vec2::new(320.0, 400.0),
+    );
+    settle(&mut app);
+    assert!(
+        app.world().get::<CanvasGuides>(root).is_none(),
+        "a panel running the scene draws no guides off its rulers",
+    );
+    assert_eq!(history_len(&app), entries, "and records nothing");
+}
+
+#[test]
+fn a_guide_drag_that_did_not_move_records_nothing() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (root, _, _) = authored_scene(&mut app);
+    app.world_mut().entity_mut(root).insert(CanvasGuides {
+        horizontal: Vec::new(),
+        vertical: vec![320.0],
+    });
+    settle(&mut app);
+
+    let line = guide_line_entity(&mut app, panel, CanvasAxis::Vertical, 0);
+    let entries = history_len(&app);
+
+    // Out and back inside one gesture: the guide is written on every
+    // event, and the history hears about the gesture, not the events.
+    let start = begin_drag(&mut app, panel, line, Vec2::new(320.0, 300.0));
+    let away = screen_position_of(&mut app, panel, Vec2::new(500.0, 300.0)) - start;
+    continue_drag(&mut app, line, start, away);
+    settle(&mut app);
+    continue_drag(&mut app, line, start, Vec2::ZERO);
+    end_drag(&mut app, line, start, Vec2::ZERO);
+    settle(&mut app);
+
+    assert_eq!(
+        guide_positions(&app, root, CanvasAxis::Vertical),
+        vec![320.0],
+        "the guide is back where it started",
+    );
+    assert_eq!(
+        history_len(&app),
+        entries,
+        "so the drag has nothing to record",
+    );
+}
+
+/// One of a panel's rulers.
+fn ruler_entity(app: &mut App, panel: Entity, axis: CanvasAxis) -> Entity {
+    rulers_of(app, panel)
+        .into_iter()
+        .find(|(_, ruler_axis)| *ruler_axis == axis)
+        .map(|(entity, _)| entity)
+        .expect("the panel has a ruler on each axis")
+}
+
+/// One guide line drawn over a panel.
+fn guide_line_entity(app: &mut App, panel: Entity, axis: CanvasAxis, index: usize) -> Entity {
+    let mut query = app.world_mut().query::<(Entity, &GuideLine)>();
+    query
+        .iter(app.world())
+        .find(|(_, line)| line.host == panel && line.axis == axis && line.index == index)
+        .map(|(entity, _)| entity)
+        .expect("the panel draws the scene's guides")
+}
+
+/// The scene's guides on one axis, rounded to the authored pixel the
+/// pointer was aimed at.
+fn guide_positions(app: &App, root: Entity, axis: CanvasAxis) -> Vec<f32> {
+    let Some(guides) = app.world().get::<CanvasGuides>(root) else {
+        return Vec::new();
+    };
+    let lines = match axis {
+        CanvasAxis::Vertical => &guides.vertical,
+        CanvasAxis::Horizontal => &guides.horizontal,
+    };
+    lines.iter().map(|at| at.round()).collect()
+}
+
 /// A root filling the canvas with one child authored as `node`. Returns
 /// the panel and the child.
 fn anchored_app(node: Node) -> (App, Entity, Entity) {

@@ -68,7 +68,7 @@ use crate::{
     selection::Selection,
     snapping::SnapSettings,
     viewport_2d::{
-        Scene2dViewport, Viewport2dMode, Viewport2dPanelHost, cursor_stage_offset,
+        CanvasRuler, Scene2dViewport, Viewport2dMode, Viewport2dPanelHost, cursor_stage_offset,
         target_pixels_per_stage_pixel,
     },
 };
@@ -687,14 +687,20 @@ pub struct UiStagePlugin;
 impl Plugin for UiStagePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UiManipulation>()
+            .init_resource::<GuideManipulation>()
             .add_observer(on_stage_press)
             .add_observer(on_gesture_start)
             .add_observer(on_gesture_drag)
             .add_observer(on_gesture_end)
+            .add_observer(on_guide_press)
+            .add_observer(on_guide_drag_start)
+            .add_observer(on_guide_drag)
+            .add_observer(on_guide_drag_end)
             .add_systems(
                 Update,
                 (
                     cancel_manipulation,
+                    cancel_guide_drag,
                     sync_selection_overlays,
                     sync_guide_lines,
                     sync_snap_highlights,
@@ -2295,6 +2301,297 @@ fn place_guide(node: &mut Node, axis: CanvasAxis, at: f32) {
             node.width = percent(100);
             node.height = px(GUIDE_HIT_WIDTH);
         }
+    }
+}
+
+/// The guide being dragged, if any. One drag is one history entry.
+#[derive(Resource, Default)]
+pub struct GuideManipulation {
+    active: Option<GuideDrag>,
+}
+
+impl GuideManipulation {
+    /// Where the guide being dragged is now, in canvas-global authored
+    /// pixels, or `None` when no guide is being dragged.
+    pub fn position(&self) -> Option<f32> {
+        self.active.as_ref().map(|drag| drag.position)
+    }
+}
+
+/// One guide following the cursor.
+struct GuideDrag {
+    /// The panel the drag is running on, so every event maps the cursor
+    /// through the canvas that panel is showing.
+    host: Entity,
+    /// The UI scene root the guides belong to.
+    root: Entity,
+    axis: CanvasAxis,
+    /// The axis's other guides, which the drag leaves where they are.
+    others: Vec<f32>,
+    /// Where the dragged guide is now, in canvas-global authored pixels.
+    position: f32,
+    /// The guides as the drag found them, for the history entry and for
+    /// Escape.
+    before: Option<CanvasGuides>,
+    /// Whether the cursor is over the guide's own ruler, which is where
+    /// a release drops it.
+    dropping: bool,
+}
+
+/// The guides the scene carries while `drag` is running, with the
+/// dragged line in or out.
+///
+/// A guide dragged onto another is the other one: two lines on the same
+/// pixel are one line the user cannot pull apart again, and the operator
+/// that adds a guide refuses the same way.
+fn drag_guides(drag: &GuideDrag, keep: bool) -> CanvasGuides {
+    let mut guides = drag.before.clone().unwrap_or_default();
+    let mut lines = drag.others.clone();
+    if keep
+        && !lines
+            .iter()
+            .any(|at| (at - drag.position).abs() <= crate::canvas_snap::GUIDE_MATCH)
+    {
+        lines.push(drag.position);
+    }
+    lines.sort_by(f32::total_cmp);
+    match drag.axis {
+        CanvasAxis::Vertical => guides.vertical = lines,
+        CanvasAxis::Horizontal => guides.horizontal = lines,
+    }
+    guides
+}
+
+/// What the ruler and guide observers need to resolve a pointer event.
+#[derive(SystemParam)]
+struct GuideTargets<'w, 's> {
+    rulers: Query<'w, 's, &'static CanvasRuler>,
+    lines: Query<'w, 's, &'static GuideLine>,
+    hosts: Query<'w, 's, &'static Viewport2dPanelHost>,
+}
+
+/// The panel a pointer event on a ruler or a guide belongs to, the axis
+/// of the line it is about, and which guide of that axis it is, `None`
+/// for a ruler, where a drag draws a new one.
+///
+/// Resolved synchronously so the observer can stop propagation before
+/// the event climbs out of the panel and into the dock. Only the primary
+/// button and only [`Viewport2dMode::Edit`], like every other gesture on
+/// the canvas.
+fn guide_gesture(
+    target: Entity,
+    button: PointerButton,
+    parts: &GuideTargets,
+) -> Option<(Entity, CanvasAxis, Option<usize>)> {
+    if button != PointerButton::Primary {
+        return None;
+    }
+    let (host, axis, index) = match parts.lines.get(target) {
+        Ok(line) => (line.host, line.axis, Some(line.index)),
+        Err(_) => {
+            let ruler = parts.rulers.get(target).ok()?;
+            (ruler.host, ruler.axis, None)
+        }
+    };
+    if parts.hosts.get(host).ok()?.mode != Viewport2dMode::Edit {
+        return None;
+    }
+    Some((host, axis, index))
+}
+
+/// Claim a press on a ruler or a guide, so the dock never sees it.
+fn on_guide_press(mut event: On<Pointer<Press>>, parts: GuideTargets) {
+    if guide_gesture(event.event_target(), event.button, &parts).is_some() {
+        event.propagate(false);
+    }
+}
+
+fn on_guide_drag_start(
+    mut event: On<Pointer<DragStart>>,
+    parts: GuideTargets,
+    ui_scale: Res<UiScale>,
+    mut commands: Commands,
+) {
+    let Some((host, axis, index)) = guide_gesture(event.event_target(), event.button, &parts)
+    else {
+        return;
+    };
+    event.propagate(false);
+    let cursor = event.pointer_location.position / ui_scale.0;
+    commands.queue(move |world: &mut World| {
+        let started = begin_guide_drag(world, host, axis, index, cursor);
+        // A drag that could not be measured leaves nothing half-built
+        // behind for the next event to act on.
+        world.resource_mut::<GuideManipulation>().active = started;
+    });
+}
+
+/// Pick a guide up, drawing a new one under the cursor when the drag
+/// came off a ruler rather than off a line.
+///
+/// The new guide goes straight onto the scene: it is what the drag is
+/// showing, and the history hears about it once, on release.
+fn begin_guide_drag(
+    world: &mut World,
+    host: Entity,
+    axis: CanvasAxis,
+    index: Option<usize>,
+    cursor: Vec2,
+) -> Option<GuideDrag> {
+    let root = world
+        .query_filtered::<Entity, AuthoredUiSceneRoot>()
+        .iter(world)
+        .min()?;
+    let before = world.get::<CanvasGuides>(root).cloned();
+    let mut others = before
+        .clone()
+        .map(|guides| match axis {
+            CanvasAxis::Vertical => guides.vertical,
+            CanvasAxis::Horizontal => guides.horizontal,
+        })
+        .unwrap_or_default();
+    let position = match index {
+        Some(index) if index < others.len() => others.remove(index),
+        Some(_) => return None,
+        None => axis_of(cursor_on_canvas(world, host, cursor)?, axis),
+    };
+
+    let drag = GuideDrag {
+        host,
+        root,
+        axis,
+        others,
+        position,
+        before,
+        dropping: past_the_rulers_edge(world, host, axis, cursor),
+    };
+    crate::canvas_snap::preview_guides(
+        world,
+        root,
+        crate::canvas_snap::held(drag_guides(&drag, true)),
+    );
+    Some(drag)
+}
+
+fn on_guide_drag(
+    mut event: On<Pointer<Drag>>,
+    parts: GuideTargets,
+    ui_scale: Res<UiScale>,
+    mut commands: Commands,
+) {
+    if guide_gesture(event.event_target(), event.button, &parts).is_none() {
+        return;
+    }
+    event.propagate(false);
+    let cursor = event.pointer_location.position / ui_scale.0;
+    commands.queue(move |world: &mut World| {
+        world.resource_scope(|world, mut manipulation: Mut<GuideManipulation>| {
+            let Some(drag) = manipulation.active.as_mut() else {
+                return;
+            };
+            let Some(point) = cursor_on_canvas(world, drag.host, cursor) else {
+                return;
+            };
+            drag.position = axis_of(point, drag.axis);
+            drag.dropping = past_the_rulers_edge(world, drag.host, drag.axis, cursor);
+            crate::canvas_snap::preview_guides(
+                world,
+                drag.root,
+                crate::canvas_snap::held(drag_guides(drag, true)),
+            );
+        });
+    });
+}
+
+fn on_guide_drag_end(mut event: On<Pointer<DragEnd>>, parts: GuideTargets, mut commands: Commands) {
+    if guide_gesture(event.event_target(), event.button, &parts).is_none() {
+        return;
+    }
+    event.propagate(false);
+    commands.queue(|world: &mut World| finish_guide_drag(world, true));
+}
+
+/// End the guide drag, either keeping the line where the cursor left it
+/// or putting the guides back the way the drag found them.
+///
+/// A release over the guide's own ruler takes it off the canvas: the
+/// ruler is where a guide comes from, so it is where one goes back to.
+/// Either way the history hears exactly one entry, and none at all when
+/// the guides ended up where they started.
+fn finish_guide_drag(world: &mut World, commit: bool) {
+    let Some(drag) = world.resource_mut::<GuideManipulation>().active.take() else {
+        return;
+    };
+    if !commit {
+        crate::canvas_snap::preview_guides(world, drag.root, drag.before);
+        return;
+    }
+    crate::canvas_snap::preview_guides(
+        world,
+        drag.root,
+        crate::canvas_snap::held(drag_guides(&drag, !drag.dropping)),
+    );
+    crate::canvas_snap::commit_guides(world, drag.root, drag.before);
+}
+
+/// Escape puts the guides back exactly as the drag found them.
+fn cancel_guide_drag(
+    keys: Res<ButtonInput<KeyCode>>,
+    manipulation: Res<GuideManipulation>,
+    mut commands: Commands,
+) {
+    if manipulation.active.is_some() && keys.just_pressed(KeyCode::Escape) {
+        commands.queue(|world: &mut World| finish_guide_drag(world, false));
+    }
+}
+
+/// The coordinate a guide of this axis is stated in.
+fn axis_of(point: Vec2, axis: CanvasAxis) -> f32 {
+    match axis {
+        CanvasAxis::Vertical => point.x,
+        CanvasAxis::Horizontal => point.y,
+    }
+}
+
+/// Where the cursor (ui-logical pixels) is over a panel's canvas, in
+/// canvas-global authored pixels, on the canvas or off it.
+fn cursor_on_canvas(world: &World, host: Entity, cursor: Vec2) -> Option<Vec2> {
+    let host = world.get::<Viewport2dPanelHost>(host)?;
+    let computed = world.get::<ComputedNode>(host.stage)?;
+    let transform = world.get::<UiGlobalTransform>(host.stage)?;
+    let target_scale = target_pixels_per_stage_pixel(computed.size(), host.target_size);
+    let offset = crate::viewport_2d::stage_offset_unbounded(
+        cursor,
+        transform.translation,
+        computed.inverse_scale_factor(),
+        target_scale,
+    );
+    Some(stage_to_authored(offset, host.target_size))
+}
+
+/// Whether the cursor has gone past the stage area on the side the ruler
+/// for `axis` sits on: the top for a vertical guide, the left for a
+/// horizontal one.
+///
+/// Measured against the area rather than against the ruler, so the
+/// answer is the same wherever along the gutter the cursor is, and going
+/// past the gutter altogether still counts.
+fn past_the_rulers_edge(world: &World, host: Entity, axis: CanvasAxis, cursor: Vec2) -> bool {
+    let Some(host) = world.get::<Viewport2dPanelHost>(host) else {
+        return false;
+    };
+    let (Some(computed), Some(transform)) = (
+        world.get::<ComputedNode>(host.area),
+        world.get::<UiGlobalTransform>(host.area),
+    ) else {
+        return false;
+    };
+    let inverse_scale_factor = computed.inverse_scale_factor();
+    let offset = cursor - transform.translation * inverse_scale_factor;
+    let half = computed.size() * inverse_scale_factor / 2.0;
+    match axis {
+        CanvasAxis::Vertical => offset.y < -half.y,
+        CanvasAxis::Horizontal => offset.x < -half.x,
     }
 }
 
