@@ -70,15 +70,31 @@ use bevy::prelude::*;
 use bevy::reflect::TypeRegistry;
 #[cfg(feature = "render")]
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
+use jackdaw_bsn::resolver_bsn::{ISA_TYPE, PREFAB_ENTITY_ID_TYPE, read_isa_source, resolve_scene};
 use jackdaw_bsn::{
-    BsnApplyAssets, BsnPatch, BsnSceneAssets, BsnValue, SceneBsnAst, apply_component_patch,
-    bsn_value_to_reflect, load_bsn_assets, parse_bsn_text,
+    BsnApplyAssets,
+    BsnPatch,
+    BsnSceneAssets,
+    BsnValue,
+    SceneBsnAst,
+    apply_component_patch,
+    bsn_value_to_reflect,
+    emit_scene,
+    load_bsn_assets,
+    parse_bsn_text,
 };
 use jackdaw_ui::UiCanvas;
 
 pub use jackdaw_scene_types::{
-    Brush, BrushFaceData, CustomProperties, EditorCategory, EditorDescription, EditorHidden,
-    GltfSource, PropertyValue, SkipSerialization,
+    Brush,
+    BrushFaceData,
+    CustomProperties,
+    EditorCategory,
+    EditorDescription,
+    EditorHidden,
+    GltfSource,
+    PropertyValue,
+    SkipSerialization,
 };
 
 #[cfg(feature = "pie")]
@@ -102,7 +118,9 @@ pub use navmesh::JackdawNavmesh;
 
 mod schema_cli;
 pub use schema_cli::{
-    SCHEMA_FLAG, extract_schema_and_exit_if_requested, extract_schema_json,
+    SCHEMA_FLAG,
+    extract_schema_and_exit_if_requested,
+    extract_schema_json,
     schema_extraction_requested,
 };
 
@@ -112,8 +130,15 @@ pub mod prelude {
     #[cfg(feature = "terrain")]
     pub use crate::TerrainViewer;
     pub use crate::{
-        EditorCategory, EditorDescription, EditorHidden, JackdawCatalog, JackdawCatalogPath,
-        JackdawPlugin, JackdawSceneMember, JackdawSceneRoot, SkipSerialization,
+        EditorCategory,
+        EditorDescription,
+        EditorHidden,
+        JackdawCatalog,
+        JackdawCatalogPath,
+        JackdawPlugin,
+        JackdawSceneMember,
+        JackdawSceneRoot,
+        SkipSerialization,
     };
 }
 
@@ -311,16 +336,63 @@ impl AssetLoader for JackdawSceneLoader {
         // error rather than silently spawning nothing later. The document is
         // rebuilt from `bsn` on spawn (it owns a `World` and cannot be stored
         // in the asset).
-        parse_bsn_text(text).map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
+        let ast = parse_bsn_text(text).map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
+        let isa_nodes = ast.entities_with_component(ISA_TYPE);
+        let nodes_path = isa_nodes
+            .iter()
+            .filter_map(|node| read_isa_source(&ast, *node))
+            .collect::<Vec<_>>();
+
+        let mut ast_prefabs: HashMap<PathBuf, SceneBsnAst> = HashMap::new();
+
+        for path in nodes_path {
+            let joined_path = load_context
+                .path()
+                .path()
+                .parent()
+                .unwrap_or(Path::new(""))
+                .to_owned()
+                .join(&path);
+
+            let asset_bytes = load_context
+                .read_asset_bytes(joined_path)
+                .await
+                .map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
+
+            let bytes_to_str = std::str::from_utf8(&asset_bytes)
+                .map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
+
+            let parsed_bytes =
+                parse_bsn_text(bytes_to_str).map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
+            ast_prefabs.insert(path, parsed_bytes);
+        }
+
+        let lookup = |p: &Path| ast_prefabs.get(p);
+
+        let mut resolved_scene =
+            resolve_scene(&ast, &lookup).map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
+
+        resolved_scene
+            .entities_with_component(ISA_TYPE)
+            .iter()
+            .for_each(|e| resolved_scene.remove_component_patch(*e, ISA_TYPE));
+
+        resolved_scene
+            .entities_with_component(PREFAB_ENTITY_ID_TYPE)
+            .iter()
+            .for_each(|e| resolved_scene.remove_component_patch(*e, PREFAB_ENTITY_ID_TYPE));
 
         let source_path = load_context.path().path();
         let parent_path = source_path.parent().unwrap_or(Path::new("")).to_owned();
+
         let stem = source_path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned());
 
+        let bsn = emit_scene(&resolved_scene);
+
         Ok(JackdawScene {
-            bsn: text.to_owned(),
+            bsn,
             parent_path,
             stem,
         })
