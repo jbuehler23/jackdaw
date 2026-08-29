@@ -52,35 +52,6 @@ pub fn canonical_window_id(window_id: &str) -> &str {
     }
 }
 
-/// Bring the world viewport forward in whichever dock leaf holds it.
-///
-/// Best effort: a workspace with no viewport panel is one the user arranged
-/// that way, and nothing here should add the panel back.
-pub fn focus_viewport_tab(world: &mut World) {
-    use jackdaw_panels::tree::{DockNode, DockTree};
-
-    let Some(mut tree) = world.get_resource_mut::<DockTree>() else {
-        return;
-    };
-    let Some(leaf_id) = tree.find_leaf_with_window(VIEWPORT_WINDOW_ID) else {
-        return;
-    };
-    let Some(leaf) = tree.get(leaf_id).and_then(DockNode::as_leaf) else {
-        return;
-    };
-    let Some(tab) = leaf
-        .tabs()
-        .find_map(|(window, tab)| (window == VIEWPORT_WINDOW_ID).then_some(tab))
-    else {
-        return;
-    };
-    // Any write to the resource re-runs the reconciler over the whole tree,
-    // so a viewport already in front must not pay for one.
-    if leaf.active != Some(tab) {
-        tree.set_active(leaf_id, tab);
-    }
-}
-
 /// Starting size of a viewport panel's render-target image, shared with
 /// [`crate::viewport_2d`]. Both panels allocate one before layout has measured
 /// anything, and resize it once it has.

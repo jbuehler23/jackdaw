@@ -303,7 +303,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
                 format!("cannot load scene '{path}': {err}"),
             );
         }
-        let declares_ui_scene = declares_ui_scene_root(&authored);
+        let scene_kind = declared_scene_kind(&authored);
         let resolved_text = match &resolved {
             Some(resolved) => jackdaw_bsn::emit_scene(resolved),
             None => bsn_text.clone(),
@@ -352,11 +352,18 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
             }
         }
 
-        if declares_ui_scene {
-            crate::viewport_2d::focus_2d_viewport_tab(world);
+        // The document's own kind picks the mode, so a reopened flat scene
+        // comes back on its canvas. Only a UI screen also fronts the panel:
+        // an ordinary scene must not yank the viewport over whatever the user
+        // was working in.
+        let mode = crate::viewport_host::ViewportMode::for_scene_kind(scene_kind);
+        if scene_kind == crate::scenes::operators::SceneKind::Ui {
+            crate::viewport_host::focus_viewport(world, mode);
             // Without a fit, a 1920x1080 reference shown at 100% in a dock
             // leaf reveals only the scene's top-left corner.
             crate::viewport_2d::request_2d_fit(world);
+        } else {
+            crate::viewport_host::set_viewport_mode(world, mode, false);
         }
 
         if let Some(jsn) = legacy_jsn {

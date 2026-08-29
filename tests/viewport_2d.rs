@@ -1307,6 +1307,7 @@ fn scrolling_over_the_2d_viewport_leaves_the_world_grid_alone() {
         power,
         "the wheel over the canvas is the canvas's, not the world grid's",
     );
+    drop_ignored_scroll(&mut app);
 
     // The same chord anywhere else still steps the world grid, so the
     // gate is the panel and not the whole editor.
@@ -1324,6 +1325,15 @@ fn scrolling_over_the_2d_viewport_leaves_the_world_grid_alone() {
         power + 1,
         "away from the panel the chord is the grid stepper it always was",
     );
+}
+
+/// Drop a wheel tick the handler ignored. It returns at the gate without
+/// reading the stream, so a tick meant for the canvas would otherwise be read
+/// by the next pass on top of the one that pass is measuring.
+fn drop_ignored_scroll(app: &mut App) {
+    app.world_mut()
+        .resource_mut::<bevy::ecs::message::Messages<bevy::input::mouse::MouseWheel>>()
+        .clear();
 }
 
 /// Put the cursor somewhere and let the hover authority read it, the way the
@@ -2154,7 +2164,8 @@ fn the_screenshot_ops_aim_at_the_window_and_the_panel_and_write_pngs() {
 /// UI scene in front and its canvas framed.
 #[test]
 fn a_ui_scene_opened_before_the_workspace_exists_is_still_fronted_and_framed() {
-    use jackdaw::viewport_2d::{Pending2dFocus, VIEWPORT_2D_WINDOW_ID, focus_2d_viewport_tab};
+    use jackdaw::viewport::VIEWPORT_WINDOW_ID;
+    use jackdaw::viewport_host::{PendingViewportFocus, focus_viewport};
 
     let mut app = util::editor_test_app();
     // The dock as restore finds it: no 2D viewport leaf built yet.
@@ -2166,18 +2177,18 @@ fn a_ui_scene_opened_before_the_workspace_exists_is_still_fronted_and_framed() {
         },
         Node::default(),
     ));
-    focus_2d_viewport_tab(app.world_mut());
+    focus_viewport(app.world_mut(), ViewportMode::TwoD);
     request_2d_fit(app.world_mut());
     app.update();
 
     assert!(
-        app.world().get_resource::<Pending2dFocus>().is_some(),
+        app.world().get_resource::<PendingViewportFocus>().is_some(),
         "a focus the dock cannot honour yet is held, not dropped",
     );
 
     // Then the workspace materialises: the leaf, with the viewport behind
     // another tab, and the panel the reconciler builds into it.
-    let leaf = dock_leaf(&mut app, &["jackdaw.outliner", VIEWPORT_2D_WINDOW_ID]);
+    let leaf = dock_leaf(&mut app, &["jackdaw.outliner", VIEWPORT_WINDOW_ID]);
     let panel = fit_panel(&mut app);
     for _ in 0..3 {
         app.update();
@@ -2185,11 +2196,17 @@ fn a_ui_scene_opened_before_the_workspace_exists_is_still_fronted_and_framed() {
 
     assert_eq!(
         active_window(&app, leaf).as_deref(),
-        Some(VIEWPORT_2D_WINDOW_ID),
+        Some(VIEWPORT_WINDOW_ID),
         "the tab the restored scene asked for has to come forward when it can",
     );
+    assert_eq!(
+        host_mode(&app, panel),
+        ViewportMode::TwoD,
+        "and it comes forward showing the canvas the scene asked for, not \
+         whatever mode the panel was built in",
+    );
     assert!(
-        app.world().get_resource::<Pending2dFocus>().is_none(),
+        app.world().get_resource::<PendingViewportFocus>().is_none(),
         "and the request is spent once it has been honoured",
     );
 
@@ -2224,7 +2241,8 @@ fn a_ui_scene_opened_before_the_workspace_exists_is_still_fronted_and_framed() {
 fn a_focus_asked_for_by_a_tab_the_user_left_does_not_front_the_panel() {
     use jackdaw::scenes::swap::swap_active_tab;
     use jackdaw::scenes::{SceneTab, Scenes, TabContent};
-    use jackdaw::viewport_2d::{Pending2dFocus, VIEWPORT_2D_WINDOW_ID};
+    use jackdaw::viewport::VIEWPORT_WINDOW_ID;
+    use jackdaw::viewport_host::PendingViewportFocus;
 
     let mut app = util::editor_test_app();
     // The dock as restore finds it: no 2D viewport leaf built yet.
@@ -2252,19 +2270,19 @@ fn a_focus_asked_for_by_a_tab_the_user_left_does_not_front_the_panel() {
 
     swap_active_tab(app.world_mut(), 0);
     assert!(
-        app.world().get_resource::<Pending2dFocus>().is_some(),
+        app.world().get_resource::<PendingViewportFocus>().is_some(),
         "the UI-scene tab asks for a focus the empty dock cannot honour",
     );
 
     swap_active_tab(app.world_mut(), 1);
     assert!(
-        app.world().get_resource::<Pending2dFocus>().is_none(),
+        app.world().get_resource::<PendingViewportFocus>().is_none(),
         "activating a tab that is not a UI scene settles the debt: nothing \
          is owed to a tab the user has left",
     );
 
     // The workspace materialises afterwards, as it does on restore.
-    let leaf = dock_leaf(&mut app, &["jackdaw.outliner", VIEWPORT_2D_WINDOW_ID]);
+    let leaf = dock_leaf(&mut app, &["jackdaw.outliner", VIEWPORT_WINDOW_ID]);
     fit_panel(&mut app);
     for _ in 0..3 {
         app.update();
@@ -2459,6 +2477,13 @@ fn view_of(app: &App, panel: Entity) -> Ui2dView {
         .get::<Viewport2dPanelHost>(panel)
         .expect("host on panel parent")
         .view
+}
+
+fn host_mode(app: &App, panel: Entity) -> ViewportMode {
+    app.world()
+        .get::<ViewportHost>(panel)
+        .expect("host on panel parent")
+        .mode
 }
 
 fn camera_of(app: &App, panel: Entity) -> Entity {

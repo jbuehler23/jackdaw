@@ -9,8 +9,9 @@
 //!    part of a screen that has nothing to light.
 //! 2. The seeded root is named without a space, so an operator clause --
 //!    which has no quoting -- can address it as `name=UiRoot`.
-//! 3. Creating a UI scene brings the 2D viewport forward, the way opening
-//!    one already does. The canvas is the whole point of the scene.
+//! 3. Creating a UI scene brings the viewport forward on its canvas, the
+//!    way opening one already does. The canvas is the whole point of the
+//!    scene.
 //! 4. The kind a scene was made as survives a save and a reopen, because
 //!    it is a component in the document rather than editor state.
 //! 5. A menu row makes the kind it names. The row hands its clause to the
@@ -21,7 +22,7 @@ use jackdaw::scenes::operators::{SceneKind, scene_new_configured};
 use jackdaw::selection::Selection;
 use jackdaw::ui_palette::UI_SCENE_ROOT_NAME;
 use jackdaw::viewport::VIEWPORT_WINDOW_ID;
-use jackdaw::viewport_2d::VIEWPORT_2D_WINDOW_ID;
+use jackdaw::viewport_host::{ViewportMode, ViewportModeIntent};
 use jackdaw_api_internal::OperatorWorldExt;
 use jackdaw_panels::{
     area::DockAreaStyle,
@@ -51,6 +52,20 @@ fn dock_leaf(app: &mut App, windows: &[&str]) -> NodeId {
         DockLeaf::new("center", DockAreaStyle::default())
             .with_windows(windows.iter().copied().map(String::from).collect()),
     )
+}
+
+/// What the viewport panels of the active tab are being asked to show.
+fn intent(app: &App) -> ViewportModeIntent {
+    *app.world().resource::<ViewportModeIntent>()
+}
+
+/// Put the viewport in a mode the scene's kind did not ask for, so what a
+/// later activation writes reads as a change.
+fn set_intent(app: &mut App, mode: ViewportMode) {
+    *app.world_mut().resource_mut::<ViewportModeIntent>() = ViewportModeIntent {
+        mode,
+        chosen: false,
+    };
 }
 
 /// The window whose tab is in front of `leaf`.
@@ -142,15 +157,16 @@ fn the_seeded_root_is_named_so_a_clause_can_address_it() {
 
 /// Gap 11. Making a UI scene is exactly the moment the canvas is wanted.
 /// The load and tab-swap paths already front the panel; creation did not.
+/// One panel shows both, so what comes forward is that panel, in 2D.
 #[test]
-fn creating_a_ui_scene_brings_the_2d_viewport_forward() {
+fn creating_a_ui_scene_brings_the_viewport_forward_on_its_canvas() {
     let mut app = util::editor_test_app();
-    let leaf = dock_leaf(&mut app, &["jackdaw.outliner", VIEWPORT_2D_WINDOW_ID]);
+    let leaf = dock_leaf(&mut app, &["jackdaw.outliner", VIEWPORT_WINDOW_ID]);
     app.update();
     assert_eq!(
         active_window(&app, leaf).as_deref(),
         Some("jackdaw.outliner"),
-        "the fixture starts with the 2D viewport behind another tab",
+        "the fixture starts with the viewport behind another tab",
     );
 
     scene_new_configured(app.world_mut(), SceneKind::Ui, None);
@@ -158,18 +174,30 @@ fn creating_a_ui_scene_brings_the_2d_viewport_forward() {
 
     assert_eq!(
         active_window(&app, leaf).as_deref(),
-        Some(VIEWPORT_2D_WINDOW_ID),
+        Some(VIEWPORT_WINDOW_ID),
         "a new UI scene fronts the panel it is authored in",
+    );
+    assert_eq!(
+        intent(&app),
+        ViewportModeIntent {
+            mode: ViewportMode::TwoD,
+            chosen: false,
+        },
+        "and asks it for the canvas, on the scene's behalf rather than the \
+         user's: a switch afterwards is the user's and is remembered",
     );
 }
 
 /// And only for a UI scene: a new 3D scene leaves the workspace as the
-/// user arranged it.
+/// user arranged it. The mode still follows the kind, so a 3D scene made
+/// from a UI tab does not open on the canvas the UI scene left behind.
 #[test]
 fn creating_a_3d_scene_leaves_the_fronted_tab_alone() {
     let mut app = util::editor_test_app();
-    let leaf = dock_leaf(&mut app, &["jackdaw.outliner", VIEWPORT_2D_WINDOW_ID]);
+    let leaf = dock_leaf(&mut app, &["jackdaw.outliner", VIEWPORT_WINDOW_ID]);
     app.update();
+    // As a UI tab would leave it: on the canvas, and not by the user's hand.
+    set_intent(&mut app, ViewportMode::TwoD);
 
     scene_new_configured(app.world_mut(), SceneKind::ThreeD, None);
     app.update();
@@ -177,7 +205,15 @@ fn creating_a_3d_scene_leaves_the_fronted_tab_alone() {
     assert_eq!(
         active_window(&app, leaf).as_deref(),
         Some("jackdaw.outliner"),
-        "nothing about a 3D scene asks for the 2D canvas",
+        "nothing about a 3D scene asks for a panel to come forward",
+    );
+    assert_eq!(
+        intent(&app),
+        ViewportModeIntent {
+            mode: ViewportMode::ThreeD,
+            chosen: false,
+        },
+        "but the viewport it is authored in is the world one",
     );
 }
 
@@ -217,12 +253,12 @@ fn a_new_2d_scene_seeds_its_root_and_no_3d_furniture() {
     );
 }
 
-/// A 2D scene is authored in the world viewport, not on the UI canvas.
-/// Coming from a UI tab, that panel is the one behind.
+/// A 2D world scene is drawn flat, so it is authored on the canvas like a
+/// UI screen, and wants the same panel in front.
 #[test]
-fn creating_a_2d_scene_leaves_the_ui_canvas_behind() {
+fn creating_a_2d_scene_brings_the_viewport_forward_on_its_canvas() {
     let mut app = util::editor_test_app();
-    let leaf = dock_leaf(&mut app, &[VIEWPORT_2D_WINDOW_ID, VIEWPORT_WINDOW_ID]);
+    let leaf = dock_leaf(&mut app, &["jackdaw.outliner", VIEWPORT_WINDOW_ID]);
     app.update();
 
     scene_new_configured(app.world_mut(), SceneKind::TwoD, None);
@@ -231,7 +267,14 @@ fn creating_a_2d_scene_leaves_the_ui_canvas_behind() {
     assert_eq!(
         active_window(&app, leaf).as_deref(),
         Some(VIEWPORT_WINDOW_ID),
-        "a 2D scene is a world scene, so the world viewport comes forward",
+        "a scene drawn flat is authored in the panel that can show it flat",
+    );
+    assert_eq!(
+        intent(&app),
+        ViewportModeIntent {
+            mode: ViewportMode::TwoD,
+            chosen: false,
+        },
     );
 }
 
@@ -264,8 +307,23 @@ fn a_saved_scenes_kind_survives_a_reopen() {
             "the kind is written into the document, not held in the editor:\n{written}",
         );
 
+        // A fresh editor, because the tab that wrote the file is still open in
+        // this one and reopening its own path just switches to it.
+        let mut app = util::editor_test_app();
+        // The mode a reopen lands in has to come from the document too: the
+        // operator parameter that made this scene is long gone.
+        set_intent(&mut app, ViewportMode::ThreeD);
         jackdaw::migrate_dialog::request_open_with_conversion(app.world_mut(), &path);
         app.update();
+
+        assert_eq!(
+            intent(&app),
+            ViewportModeIntent {
+                mode: ViewportMode::TwoD,
+                chosen: false,
+            },
+            "a reopened flat document comes back on the canvas it was drawn on",
+        );
 
         match kind {
             SceneKind::TwoD => {

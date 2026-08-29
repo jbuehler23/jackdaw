@@ -8,6 +8,8 @@
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use jackdaw::scenes::swap::swap_active_tab;
+use jackdaw::scenes::{SceneTab, Scenes, TabContent};
 use jackdaw::{
     viewport::{
         ActiveViewport, ViewportPanelHost, build_viewport_panel, run_active_viewport_update,
@@ -330,5 +332,129 @@ fn hovering_a_panel_reports_the_mode_it_is_in() {
         app.world().resource::<ActiveViewport>().mode,
         None,
         "off every panel the cursor is over no viewport at all",
+    );
+}
+
+/// Two tabs of different kinds, each carried as a document so activating one
+/// goes through the real spawn-and-configure path. Tab 0 is a UI screen, tab 1
+/// an ordinary world scene.
+fn two_scene_tabs(app: &mut App) {
+    let mut scenes = app.world_mut().resource_mut::<Scenes>();
+    scenes.tabs.clear();
+    scenes.tabs.push(SceneTab::new_untitled(1));
+    scenes.tabs.push(SceneTab::new_untitled(2));
+    scenes.tabs[0].content = TabContent::Scene(Some(Box::new(
+        jackdaw_bsn::parse_bsn_text("#Overlay\njackdaw_scene_types::UiSceneRoot\n")
+            .expect("the fixture parses"),
+    )));
+    scenes.tabs[1].content = TabContent::Scene(Some(Box::new(
+        jackdaw_bsn::parse_bsn_text("#World\nbevy_transform::components::transform::Transform\n")
+            .expect("the fixture parses"),
+    )));
+    scenes.active = 1;
+}
+
+/// The mode stored for a tab, which is what its next activation restores.
+fn stored_mode(app: &App, tab: usize) -> Option<ViewportMode> {
+    app.world().resource::<Scenes>().tabs[tab]
+        .view_state
+        .viewport_mode
+}
+
+fn switch_mode(app: &mut App, mode: &'static str) {
+    app.world_mut()
+        .operator("viewport.mode")
+        .param("mode", mode)
+        .call()
+        .expect("viewport.mode dispatches")
+        .assert_finished();
+    app.update();
+}
+
+/// A tab opens in the mode its scene's kind asks for, and a mode the user
+/// picked outranks that for the tab it was picked in.
+///
+/// One contract with two halves, because the second is what makes the first
+/// safe to keep applying: the override lives in the tab's view state, so it
+/// survives a swap; a tab nobody switched stores none, so it goes on taking
+/// its kind's answer instead of being frozen in whatever mode it was left in.
+#[test]
+fn a_chosen_mode_is_remembered_per_tab_and_an_unchosen_one_is_recomputed() {
+    let mut app = util::editor_test_app();
+    let panel = panel(&mut app);
+    two_scene_tabs(&mut app);
+
+    swap_active_tab(app.world_mut(), 0);
+    app.update();
+    assert_showing(&app, panel, ViewportMode::TwoD);
+    assert!(
+        !host(&app, panel).mode_chosen,
+        "a UI screen opens on the canvas because of what it is, not because \
+         anyone asked",
+    );
+
+    // The user overrules it for this tab.
+    switch_mode(&mut app, "3d");
+    assert_showing(&app, panel, ViewportMode::ThreeD);
+
+    swap_active_tab(app.world_mut(), 1);
+    app.update();
+    assert_showing(&app, panel, ViewportMode::ThreeD);
+    assert!(
+        !host(&app, panel).mode_chosen,
+        "the world scene is in 3D on its own account",
+    );
+    assert_eq!(
+        stored_mode(&app, 0),
+        Some(ViewportMode::ThreeD),
+        "leaving the tab stores the mode its user chose",
+    );
+
+    swap_active_tab(app.world_mut(), 0);
+    app.update();
+    assert_showing(&app, panel, ViewportMode::ThreeD);
+    assert!(
+        host(&app, panel).mode_chosen,
+        "and coming back restores it over the one the kind asks for",
+    );
+
+    swap_active_tab(app.world_mut(), 1);
+    app.update();
+    swap_active_tab(app.world_mut(), 0);
+    app.update();
+    assert_eq!(
+        stored_mode(&app, 1),
+        None,
+        "a swap stamps no override on a tab the user never switched",
+    );
+    assert_showing(&app, panel, ViewportMode::ThreeD);
+}
+
+/// The same rule from the other side: a second UI tab that nobody switched
+/// still opens on its canvas, however the tab beside it was overruled.
+#[test]
+fn a_tab_that_was_never_switched_follows_its_scenes_kind() {
+    let mut app = util::editor_test_app();
+    let panel = panel(&mut app);
+    two_scene_tabs(&mut app);
+    app.world_mut()
+        .resource_mut::<Scenes>()
+        .tabs
+        .push(SceneTab::new_untitled(3));
+    app.world_mut().resource_mut::<Scenes>().tabs[2].content = TabContent::Scene(Some(Box::new(
+        jackdaw_bsn::parse_bsn_text("#Screen\njackdaw_scene_types::UiSceneRoot\n")
+            .expect("the fixture parses"),
+    )));
+
+    swap_active_tab(app.world_mut(), 0);
+    app.update();
+    switch_mode(&mut app, "3d");
+
+    swap_active_tab(app.world_mut(), 2);
+    app.update();
+    assert_showing(&app, panel, ViewportMode::TwoD);
+    assert!(
+        !host(&app, panel).mode_chosen,
+        "one tab's override is that tab's, and says nothing about another",
     );
 }

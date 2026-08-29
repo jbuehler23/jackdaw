@@ -174,11 +174,12 @@ pub fn activate_tab(world: &mut World, target: usize) {
             .unwrap_or_default(),
     };
 
-    // A tab switch installs a document the same way an open does, so it focuses
-    // the same viewport: `finish_load_scene` brings the 2D panel forward for a
-    // UI scene, and a swap that skipped it would leave the scene loaded behind
-    // whatever panel was in front.
-    let declares_ui_scene = crate::scene_io::declares_ui_scene_root(&new_doc);
+    // A tab switch installs a document the same way an open does, so it sets
+    // the viewport the same way: `finish_load_scene` reads the document's kind
+    // for the mode and brings the panel forward for a UI scene, and a swap that
+    // skipped it would leave the scene loaded behind whatever panel was in
+    // front, in whatever mode the tab before it left.
+    let scene_kind = crate::scene_io::declared_scene_kind(&new_doc);
 
     // Mirror `finish_load_scene`: any IsA references in the captured
     // document need their prefab files loaded into the cache, then resolved
@@ -245,20 +246,25 @@ pub fn activate_tab(world: &mut World, target: usize) {
     };
     let spawned_ok = refusal.is_none();
 
-    // Only a scene that spawned gets the viewport: bringing the 2D panel
-    // forward over a failed activation would present an empty stage as the
-    // UI scene.
-    if declares_ui_scene && spawned_ok {
-        crate::viewport_2d::focus_2d_viewport_tab(world);
+    // Only a scene that spawned gets the viewport: bringing the canvas forward
+    // over a failed activation would present an empty stage as the UI scene,
+    // and a mode read from a document that is not there would be the wrong
+    // mode for the tab still on screen.
+    let mode = crate::viewport_host::ViewportMode::for_scene_kind(scene_kind);
+    if spawned_ok && scene_kind == crate::scenes::operators::SceneKind::Ui {
+        crate::viewport_host::focus_viewport(world, mode);
         // A tab framed before restores its own framing; `apply_view_state`
         // below withdraws this request when it does.
         crate::viewport_2d::request_2d_fit(world);
     } else {
-        // The tab in front is not a UI scene, so no held focus is owed.
-        // Session restore opens every persisted tab in turn, so a UI scene
-        // passed through on the way could otherwise leave a focus behind and
-        // bring the panel forward over the tab actually restored.
-        world.remove_resource::<crate::viewport_2d::Pending2dFocus>();
+        // The tab in front did not ask for the panel, so no held focus is
+        // owed. Session restore opens every persisted tab in turn, so a UI
+        // scene passed through on the way could otherwise leave a focus behind
+        // and bring the panel forward over the tab actually restored.
+        world.remove_resource::<crate::viewport_host::PendingViewportFocus>();
+        if spawned_ok {
+            crate::viewport_host::set_viewport_mode(world, mode, false);
+        }
     }
 
     // Restore the per-tab content marker. For `Prefab` tabs the marker
@@ -354,6 +360,13 @@ fn capture_view_state(world: &mut World) -> ViewState {
     let mut sel_q = world.query_filtered::<&SceneNodeId, With<Selected>>();
     let selection: Vec<SceneNodeId> = sel_q.iter(world).copied().collect();
 
+    // Only a mode the user picked. One that followed from the scene's kind is
+    // recomputed on the next activation, so storing it would freeze a tab in
+    // the mode it happened to be in the first time it was left.
+    let viewport_mode = world
+        .get_resource::<crate::viewport_host::ViewportModeIntent>()
+        .and_then(|intent| intent.chosen.then_some(intent.mode));
+
     ViewState {
         camera_transform,
         camera_projection: None,
@@ -361,7 +374,7 @@ fn capture_view_state(world: &mut World) -> ViewState {
         selection,
         brush_sub_selection,
         ui_view,
-        viewport_mode: None,
+        viewport_mode,
     }
 }
 
@@ -395,6 +408,12 @@ fn apply_view_state(world: &mut World, view_state: &ViewState) {
             // the activation requested still stands.
             None => host.reset_view(),
         }
+    }
+
+    // A mode the user picked for this tab outranks the one its kind implies,
+    // which the activation above has already set.
+    if let Some(mode) = view_state.viewport_mode {
+        crate::viewport_host::set_viewport_mode(world, mode, true);
     }
 
     // Edit mode.

@@ -460,7 +460,6 @@ impl Plugin for Viewport2dPlugin {
             .add_systems(
                 Update,
                 (
-                    apply_pending_2d_focus,
                     update_viewport_2d_mode_bar,
                     update_viewport_2d_title,
                     update_viewport_2d_zoom_readout,
@@ -1077,72 +1076,6 @@ fn place_stage(node: &mut Node, reference: Option<UVec2>, view: Ui2dView, area: 
     }
     if node.height != height {
         node.height = height;
-    }
-}
-
-/// A focus the dock had nothing to give: no `jackdaw.viewport_2d` leaf
-/// existed when a UI scene asked to be brought forward.
-///
-/// Session restore is the case this exists for.
-/// `project_select::transition_to_editor` opens the persisted tabs
-/// synchronously, on the frame it sets `AppState::Editor` and before the
-/// dock reconciler has built a single leaf, so the focus the scene asks
-/// for on open lands on an empty tree. Held here rather than dropped, and
-/// honoured by `apply_pending_2d_focus` on the first frame the leaf
-/// exists.
-#[derive(Resource)]
-pub struct Pending2dFocus;
-
-/// Bring a docked 2D viewport tab to the front. Called when a scene that
-/// declares a [`UiSceneRoot`] is opened or activated, so the panel that
-/// can actually show it is the one the user is looking at.
-///
-/// With no 2D viewport docked *yet* the request is held in
-/// [`Pending2dFocus`]; it is never turned into a panel the user's
-/// workspace did not ask for.
-pub fn focus_2d_viewport_tab(world: &mut World) {
-    if !front_2d_viewport_tab(world) {
-        world.insert_resource(Pending2dFocus);
-    }
-}
-
-/// Bring the tab forward, reporting whether the dock had one to bring.
-fn front_2d_viewport_tab(world: &mut World) -> bool {
-    use jackdaw_panels::tree::DockTree;
-
-    let Some(mut tree) = world.get_resource_mut::<DockTree>() else {
-        return false;
-    };
-    let Some(leaf_id) = tree.find_leaf_with_window(VIEWPORT_2D_WINDOW_ID) else {
-        return false;
-    };
-    let Some(leaf) = tree
-        .get(leaf_id)
-        .and_then(jackdaw_panels::tree::DockNode::as_leaf)
-    else {
-        return false;
-    };
-    let Some(tab) = leaf
-        .tabs()
-        .find_map(|(window, tab)| (window == VIEWPORT_2D_WINDOW_ID).then_some(tab))
-    else {
-        return false;
-    };
-    // `set_active` writes unconditionally, and any write to the `DockTree`
-    // resource re-runs the reconciler over the whole tree. Switching
-    // between two UI-scene tabs must not pay for that when the panel is
-    // already the one in front.
-    if leaf.active != Some(tab) {
-        tree.set_active(leaf_id, tab);
-    }
-    true
-}
-
-/// Honour a held focus once the dock has a 2D viewport leaf to honour it
-/// on, and only then drop the request.
-fn apply_pending_2d_focus(world: &mut World) {
-    if world.contains_resource::<Pending2dFocus>() && front_2d_viewport_tab(world) {
-        world.remove_resource::<Pending2dFocus>();
     }
 }
 

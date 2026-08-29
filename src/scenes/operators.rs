@@ -159,20 +159,23 @@ pub fn scene_new_configured(world: &mut World, kind: SceneKind, path: Option<&st
     }
 
     match kind {
-        SceneKind::ThreeD => {}
         SceneKind::TwoD => {
             crate::entity_ops::seed_2d_scene_root(world);
-            // A 2D scene is a world scene, so it is authored in the world
-            // viewport. Coming from a UI tab that panel is behind the canvas.
-            crate::viewport::focus_viewport_tab(world);
         }
         SceneKind::Ui => {
             crate::ui_palette::seed_ui_scene_root(world);
-            // Creating a UI scene is the moment the canvas is wanted, and the
-            // dock leaves the 3D viewport in front otherwise. The load and
-            // tab-swap paths front the panel the same way.
-            crate::viewport_2d::focus_2d_viewport_tab(world);
         }
+        SceneKind::ThreeD => {}
+    }
+
+    // The kind picks the mode; the user can switch afterwards. A flat scene
+    // is also the moment its canvas is wanted, and the dock leaves whatever
+    // was in front there otherwise, so those two kinds front the panel as
+    // well. The load and tab-swap paths front it the same way.
+    let mode = crate::viewport_host::ViewportMode::for_scene_kind(kind);
+    match kind {
+        SceneKind::TwoD | SceneKind::Ui => crate::viewport_host::focus_viewport(world, mode),
+        SceneKind::ThreeD => crate::viewport_host::set_viewport_mode(world, mode, false),
     }
 }
 

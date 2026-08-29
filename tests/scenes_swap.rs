@@ -1411,15 +1411,15 @@ fn finish_load_scene_entities_and_ast_share_ids_after_heal() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// Opening a UI scene brings the 2D viewport forward (`finish_load_scene`),
-/// and a *tab switch* into one has to behave identically. Otherwise the
-/// scene activates behind whichever panel happened to be in front and the
-/// user is looking at the wrong thing while the editor insists the scene
-/// is open.
+/// Opening a UI scene brings the viewport forward on its canvas
+/// (`finish_load_scene`), and a *tab switch* into one has to behave
+/// identically. Otherwise the scene activates behind whichever panel happened
+/// to be in front and the user is looking at the wrong thing while the editor
+/// insists the scene is open.
 #[test]
-fn activating_a_ui_scene_tab_brings_the_2d_viewport_forward() {
+fn activating_a_ui_scene_tab_brings_the_viewport_forward() {
     let mut app = make_app_with_n_tabs(2);
-    let leaf = dock_tree_with_a_2d_viewport(&mut app);
+    let leaf = dock_tree_with_a_viewport(&mut app);
     assert_eq!(
         active_window(&app, leaf).as_deref(),
         Some("jackdaw.outliner"),
@@ -1431,8 +1431,13 @@ fn activating_a_ui_scene_tab_brings_the_2d_viewport_forward() {
 
     assert_eq!(
         active_window(&app, leaf).as_deref(),
-        Some("jackdaw.viewport_2d"),
+        Some(jackdaw::viewport::VIEWPORT_WINDOW_ID),
         "activating a UI-scene tab must front the panel that can show it",
+    );
+    assert_eq!(
+        viewport_mode(&app),
+        Some(jackdaw::viewport_host::ViewportMode::TwoD),
+        "and ask it for the canvas the scene is drawn on",
     );
 }
 
@@ -1441,7 +1446,7 @@ fn activating_a_ui_scene_tab_brings_the_2d_viewport_forward() {
 #[test]
 fn activating_an_ordinary_scene_tab_leaves_the_front_panel_alone() {
     let mut app = make_app_with_n_tabs(2);
-    let leaf = dock_tree_with_a_2d_viewport(&mut app);
+    let leaf = dock_tree_with_a_viewport(&mut app);
 
     let doc =
         jackdaw_bsn::parse_bsn_text("#World\nbevy_transform::components::transform::Transform\n")
@@ -1463,7 +1468,13 @@ fn activating_an_ordinary_scene_tab_leaves_the_front_panel_alone() {
 #[test]
 fn a_ui_scene_tab_that_fails_to_spawn_does_not_steal_the_viewport() {
     let mut app = make_app_with_n_tabs(2);
-    let leaf = dock_tree_with_a_2d_viewport(&mut app);
+    let leaf = dock_tree_with_a_viewport(&mut app);
+    // A viewport already showing the world, so a flip would read as one.
+    app.world_mut()
+        .insert_resource(jackdaw::viewport_host::ViewportModeIntent {
+            mode: jackdaw::viewport_host::ViewportMode::ThreeD,
+            chosen: false,
+        });
 
     // Declares a UI root, but carries a patch that cannot survive the
     // emit-and-reparse round trip `activate_tab` spawns through.
@@ -1485,6 +1496,11 @@ fn a_ui_scene_tab_that_fails_to_spawn_does_not_steal_the_viewport() {
         active_window(&app, leaf).as_deref(),
         Some("jackdaw.outliner"),
         "a scene that never spawned must not front an empty stage",
+    );
+    assert_eq!(
+        viewport_mode(&app),
+        Some(jackdaw::viewport_host::ViewportMode::ThreeD),
+        "nor put the viewport in a mode read from a document that is not there",
     );
 }
 
@@ -1849,9 +1865,17 @@ fn set_tab_document(app: &mut bevy::app::App, tab: usize, doc: jackdaw_bsn::Scen
     scenes.tabs[tab].content = TabContent::Scene(Some(Box::new(doc)));
 }
 
-/// A dock holding the 2D viewport behind another tab, so a focus change
-/// is visible as a change rather than as the starting state.
-fn dock_tree_with_a_2d_viewport(app: &mut bevy::app::App) -> jackdaw_panels::tree::NodeId {
+/// What the viewport panels of the active tab are being asked to show, or
+/// `None` before anything has asked them for anything.
+fn viewport_mode(app: &bevy::app::App) -> Option<jackdaw::viewport_host::ViewportMode> {
+    app.world()
+        .get_resource::<jackdaw::viewport_host::ViewportModeIntent>()
+        .map(|intent| intent.mode)
+}
+
+/// A dock holding the viewport behind another tab, so a focus change is
+/// visible as a change rather than as the starting state.
+fn dock_tree_with_a_viewport(app: &mut bevy::app::App) -> jackdaw_panels::tree::NodeId {
     use jackdaw_panels::{
         area::DockAreaStyle,
         tree::{DockLeaf, DockTree},
@@ -1862,7 +1886,7 @@ fn dock_tree_with_a_2d_viewport(app: &mut bevy::app::App) -> jackdaw_panels::tre
     tree.set_root_leaf(
         DockLeaf::new("center", DockAreaStyle::default()).with_windows(vec![
             "jackdaw.outliner".to_string(),
-            "jackdaw.viewport_2d".to_string(),
+            jackdaw::viewport::VIEWPORT_WINDOW_ID.to_string(),
         ]),
     )
 }

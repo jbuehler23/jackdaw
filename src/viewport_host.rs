@@ -169,6 +169,84 @@ pub(crate) fn apply_viewport_mode(
     }
 }
 
+/// Put every open panel, and the tab's intent, in `mode`.
+///
+/// `chosen` says who asked: the user, through the switch or the operator, or
+/// the scene's kind on activation. Only a chosen mode is stored in the tab's
+/// view state, so a tab the user never switched follows its kind for good.
+///
+/// The dock is untouched, so this costs no reconcile; use [`focus_viewport`]
+/// when the panel also has to come forward.
+pub fn set_viewport_mode(world: &mut World, mode: ViewportMode, chosen: bool) {
+    world.insert_resource(ViewportModeIntent { mode, chosen });
+    let mut hosts = world.query::<&mut ViewportHost>();
+    for mut host in hosts.iter_mut(world) {
+        if host.mode != mode || host.mode_chosen != chosen {
+            host.mode = mode;
+            host.mode_chosen = chosen;
+        }
+    }
+}
+
+/// Put the viewport in `mode` and bring its tab forward.
+///
+/// Best effort on the dock: a workspace with no viewport panel is one the user
+/// arranged that way, and nothing here adds the panel back. With no leaf to
+/// front yet the request is held in [`PendingViewportFocus`] instead. The mode
+/// is set either way, so panels already open follow immediately.
+pub fn focus_viewport(world: &mut World, mode: ViewportMode) {
+    set_viewport_mode(world, mode, false);
+    if !front_viewport_tab(world) {
+        world.insert_resource(PendingViewportFocus(mode));
+    }
+}
+
+/// Bring the viewport's tab forward, reporting whether the dock had one to
+/// bring.
+fn front_viewport_tab(world: &mut World) -> bool {
+    use jackdaw_panels::tree::{DockNode, DockTree};
+
+    let Some(mut tree) = world.get_resource_mut::<DockTree>() else {
+        return false;
+    };
+    let Some(leaf_id) = tree.find_leaf_with_window(crate::viewport::VIEWPORT_WINDOW_ID) else {
+        return false;
+    };
+    let Some(leaf) = tree.get(leaf_id).and_then(DockNode::as_leaf) else {
+        return false;
+    };
+    let Some(tab) = leaf
+        .tabs()
+        .find_map(|(window, tab)| (window == crate::viewport::VIEWPORT_WINDOW_ID).then_some(tab))
+    else {
+        return false;
+    };
+    // `set_active` writes unconditionally, and any write to the `DockTree`
+    // resource re-runs the reconciler over the whole tree. Switching between
+    // two tabs that both want the viewport must not pay for that when it is
+    // already the panel in front.
+    if leaf.active != Some(tab) {
+        tree.set_active(leaf_id, tab);
+    }
+    true
+}
+
+/// Honour a held request once the dock has a viewport leaf to honour it on,
+/// and only then drop it.
+///
+/// The mode is written again here, not just the front: a request is held
+/// exactly when no leaf existed, so the panels that answer it are built
+/// afterwards, in whatever mode their window descriptor starts them in.
+fn apply_pending_viewport_focus(world: &mut World) {
+    let Some(pending) = world.get_resource::<PendingViewportFocus>().copied() else {
+        return;
+    };
+    if front_viewport_tab(world) {
+        set_viewport_mode(world, pending.0, false);
+        world.remove_resource::<PendingViewportFocus>();
+    }
+}
+
 /// Marker on one segment of the 3D|2D control, naming the panel it switches.
 ///
 /// The panel is carried rather than looked up, for the reason
@@ -332,9 +410,12 @@ impl Plugin for ViewportHostPlugin {
         app.init_resource::<ViewportModeIntent>().add_systems(
             Update,
             (
-                // Ahead of the hover pass, so a panel that changed mode
-                // this frame is hover-tested as what it now shows.
-                apply_viewport_mode.before(crate::EditorInteractionSystems),
+                // Chained, and ahead of the hover pass: a held request becomes
+                // a mode, the mode reaches the columns and the cameras, and
+                // only then is a panel hover-tested as what it now shows.
+                (apply_pending_viewport_focus, apply_viewport_mode)
+                    .chain()
+                    .before(crate::EditorInteractionSystems),
                 update_viewport_mode_bar,
             ),
         );
