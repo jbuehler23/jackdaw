@@ -55,7 +55,7 @@ use jackdaw_scene_types::UiSceneRoot;
 use jackdaw::{
     selection::Selection,
     ui_stage::UiSelectionOverlay,
-    viewport::ViewportPanelHost,
+    viewport::{ActiveViewport, ViewportPanelHost},
     viewport_2d::{
         DEFAULT_UI_GRID, MAX_UI_GRID, MAX_ZOOM, MIN_UI_GRID, MIN_ZOOM, Scene2dViewport, Ui2dView,
         Viewport2dCamera, Viewport2dGridReadout, Viewport2dGridStep, Viewport2dMode,
@@ -1276,10 +1276,11 @@ fn run_pan_zoom(app: &mut App) {
     jackdaw::viewport_2d::run_2d_pan_zoom(app.world_mut());
 }
 
-/// The wheel over a 2D viewport belongs to the canvas. The 3D grid
-/// stepper is a modifier-gated wheel handler with no viewport of its own,
-/// so without a gate the user zooming a canvas with Shift+Scroll retunes
-/// the world grid of the scene in the other panel at the same time.
+/// The wheel over a viewport showing its canvas belongs to that canvas. The
+/// 3D grid stepper is a modifier-gated wheel handler with no viewport of its
+/// own, so without a gate the user zooming a canvas with Shift+Scroll retunes
+/// the world grid of the scene in the other panel at the same time. The gate
+/// is the hover authority: the panel under the cursor, and what it is showing.
 #[test]
 fn scrolling_over_the_2d_viewport_leaves_the_world_grid_alone() {
     let mut app = mode_app();
@@ -1293,7 +1294,12 @@ fn scrolling_over_the_2d_viewport_leaves_the_world_grid_alone() {
         .press(KeyCode::ShiftLeft);
 
     let on_stage = screen_position_of(&mut app, panel, BUTTON_CENTRE);
-    drive_pointer(&mut app, moved(), on_stage);
+    hover_the_cursor(&mut app, on_stage);
+    assert_eq!(
+        app.world().resource::<ActiveViewport>().mode,
+        Some(ViewportMode::TwoD),
+        "the cursor is over a panel showing its canvas",
+    );
     scroll_up(&mut app);
     step_the_world_grid(&mut app);
     assert_eq!(
@@ -1305,7 +1311,12 @@ fn scrolling_over_the_2d_viewport_leaves_the_world_grid_alone() {
     // The same chord anywhere else still steps the world grid, so the
     // gate is the panel and not the whole editor.
     let off_panel = on_stage + Vec2::new(0.0, MODE_REFERENCE.y as f32 * 2.0);
-    drive_pointer(&mut app, moved(), off_panel);
+    hover_the_cursor(&mut app, off_panel);
+    assert_eq!(
+        app.world().resource::<ActiveViewport>().mode,
+        None,
+        "off the panel the cursor is over no viewport at all",
+    );
     scroll_up(&mut app);
     step_the_world_grid(&mut app);
     assert_eq!(
@@ -1313,6 +1324,13 @@ fn scrolling_over_the_2d_viewport_leaves_the_world_grid_alone() {
         power + 1,
         "away from the panel the chord is the grid stepper it always was",
     );
+}
+
+/// Put the cursor somewhere and let the hover authority read it, the way the
+/// schedule would if this app were in the editor state.
+fn hover_the_cursor(app: &mut App, position: Vec2) {
+    place_cursor(app, position);
+    jackdaw::viewport::run_active_viewport_update(app.world_mut());
 }
 
 fn grid_power(app: &App) -> i32 {

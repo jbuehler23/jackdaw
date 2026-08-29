@@ -543,6 +543,7 @@ pub(crate) mod pointer_harness {
     use super::{TerrainDataStore, TerrainDirtyChunks};
     use crate::selection::Selection;
     use crate::viewport::{ActiveViewport, MainViewportCamera, SceneViewport};
+    use crate::viewport_host::ViewportMode;
 
     const VIEWPORT_SIZE: Vec2 = Vec2::new(800.0, 600.0);
 
@@ -650,6 +651,8 @@ pub(crate) mod pointer_harness {
         *app.world_mut().resource_mut::<ActiveViewport>() = ActiveViewport {
             camera: Some(camera_entity),
             ui_node: Some(viewport_entity),
+            mode: Some(ViewportMode::ThreeD),
+            ..default()
         };
         hover(&mut app, viewport_entity);
         app
@@ -707,9 +710,21 @@ pub(crate) mod pointer_harness {
         *app.world_mut().resource_mut::<ActiveViewport>() = ActiveViewport {
             camera: Some(camera_entity),
             ui_node: Some(ui_node),
+            mode: Some(ViewportMode::ThreeD),
+            ..default()
         };
         hover(app, ui_node);
         ui_node
+    }
+
+    /// Puts the cursor over a viewport panel showing its 2D canvas, which is
+    /// what the hover pass writes for one: a mode, and none of the 3D
+    /// presentation it fills in only for the world.
+    pub(crate) fn hover_2d_viewport(app: &mut App) {
+        *app.world_mut().resource_mut::<ActiveViewport>() = ActiveViewport {
+            mode: Some(ViewportMode::TwoD),
+            ..default()
+        };
     }
 
     /// Puts a fresh overlay node, such as a tool-palette button, under the

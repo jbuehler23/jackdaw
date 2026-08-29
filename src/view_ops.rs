@@ -692,7 +692,7 @@ mod resolve_frame_camera_tests {
         world.spawn(MainViewportCamera);
         let active = ActiveViewport {
             camera: Some(hovered),
-            ui_node: None,
+            ..default()
         };
         let mut state = SystemState::<Query<Entity, With<MainViewportCamera>>>::new(&mut world);
         let cameras = state.get(&world).unwrap();

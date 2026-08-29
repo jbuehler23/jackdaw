@@ -329,8 +329,15 @@ pub struct ViewportHostPlugin;
 
 impl Plugin for ViewportHostPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ViewportModeIntent>()
-            .add_systems(Update, (apply_viewport_mode, update_viewport_mode_bar));
+        app.init_resource::<ViewportModeIntent>().add_systems(
+            Update,
+            (
+                // Ahead of the hover pass, so a panel that changed mode
+                // this frame is hover-tested as what it now shows.
+                apply_viewport_mode.before(crate::EditorInteractionSystems),
+                update_viewport_mode_bar,
+            ),
+        );
     }
 }
 

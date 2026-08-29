@@ -24,7 +24,6 @@
 use bevy::{
     asset::uuid::Uuid,
     camera::{NormalizedRenderTarget, RenderTarget, visibility::RenderLayers},
-    ecs::system::SystemParam,
     image::{ImageSampler, ToExtents},
     input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel},
     picking::{
@@ -55,7 +54,7 @@ use crate::{
 };
 
 pub use crate::viewport::VIEWPORT_2D_WINDOW_ID;
-use crate::viewport_host::{ViewportMode, ViewportModeIntent};
+use crate::viewport_host::{ViewportHost, ViewportMode, ViewportModeIntent};
 
 /// Furthest out the user can zoom, in stage logical pixels per authored
 /// pixel.
@@ -529,7 +528,7 @@ fn viewport_2d_pan_zoom(
     mut motion: MessageReader<MouseMotion>,
     mut wheel: MessageReader<MouseWheel>,
     areas: Query<(&ComputedNode, &UiGlobalTransform), With<Scene2dStageArea>>,
-    mut hosts: Query<(Entity, &mut Viewport2dPanelHost)>,
+    mut hosts: Query<(Entity, &ViewportHost, &mut Viewport2dPanelHost)>,
     mut panning: ResMut<Ui2dPanActive>,
 ) {
     // Both streams are read whatever becomes of them below, so a reader
@@ -565,7 +564,7 @@ fn viewport_2d_pan_zoom(
 
     if travelled != Vec2::ZERO
         && let Some(entity) = panning.0
-        && let Ok((_, mut host)) = hosts.get_mut(entity)
+        && let Ok((_, _, mut host)) = hosts.get_mut(entity)
     {
         // `MouseMotion` deltas are stage physical pixels, one conversion
         // short of the logical pixels `pan_by` is stated in.
@@ -580,7 +579,7 @@ fn viewport_2d_pan_zoom(
 
     if ticks != 0.0
         && let Some((entity, offset)) = hovered
-        && let Ok((_, mut host)) = hosts.get_mut(entity)
+        && let Ok((_, _, mut host)) = hosts.get_mut(entity)
     {
         let view = zoom_toward(host.view, offset, ticks);
         if view != host.view {
@@ -612,17 +611,17 @@ pub fn run_2d_pan_zoom(world: &mut World) {
 /// [`zoom_toward`] anchors on.
 ///
 /// Panels are walked rather than areas so each hit test uses its own
-/// panel's scale factor. First hit wins, and a panel not in
-/// [`Viewport2dMode::Edit`] is not a hit at all.
+/// panel's scale factor. First hit wins, and neither a panel showing its 3D
+/// world nor one not in [`Viewport2dMode::Edit`] is a hit at all.
 fn hovered_area(
     cursor: Vec2,
     areas: &Query<(&ComputedNode, &UiGlobalTransform), With<Scene2dStageArea>>,
-    hosts: &Query<(Entity, &mut Viewport2dPanelHost)>,
+    hosts: &Query<(Entity, &ViewportHost, &mut Viewport2dPanelHost)>,
     hover_map: &HoverMap,
     parents: &Query<&ChildOf>,
 ) -> Option<(Entity, Vec2)> {
-    for (entity, host) in hosts.iter() {
-        if host.mode != Viewport2dMode::Edit {
+    for (entity, panel, host) in hosts.iter() {
+        if panel.mode != ViewportMode::TwoD || host.mode != Viewport2dMode::Edit {
             continue;
         }
         let Ok((computed, transform)) = areas.get(host.area) else {
@@ -828,33 +827,6 @@ fn entity_is_hovered(entity: Entity, hover_map: &HoverMap, parents: &Query<&Chil
             })
             .any(|ancestor| ancestor == entity)
         })
-}
-
-/// Whether the cursor is over a 2D viewport panel, for editor-wide input
-/// that has to stand down while it is.
-///
-/// The scroll wheel is the case this exists for: the 3D grid stepper
-/// (`crate::snapping::handle_grid_size_scroll`) is a modifier-gated wheel
-/// handler with no viewport of its own, so without this it retunes the
-/// world grid while the user is only zooming a canvas.
-///
-/// Read-only, so a system already holding [`Viewport2dPanelHost`] mutably
-/// can still take it.
-#[derive(SystemParam)]
-pub struct Viewport2dHover<'w, 's> {
-    hover_map: Res<'w, HoverMap>,
-    parents: Query<'w, 's, &'static ChildOf>,
-    areas: Query<'w, 's, Entity, With<Scene2dStageArea>>,
-}
-
-impl Viewport2dHover<'_, '_> {
-    /// Whether the cursor is over any open 2D viewport panel's stage
-    /// area.
-    pub fn any_stage_area(&self) -> bool {
-        self.areas
-            .iter()
-            .any(|area| entity_is_hovered(area, &self.hover_map, &self.parents))
-    }
 }
 
 /// Point every UI scene root at the camera whose view it belongs in: an

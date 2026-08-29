@@ -175,13 +175,25 @@ impl ViewportLayerCounter {
 /// the camera that started the session, even if the cursor strays
 /// outside the viewport's bounds, so fly input stays attached to the
 /// right viewport until the user releases the mouse.
+///
+/// A panel showing its 2D canvas is hovered like any other, and reports its
+/// [`Self::host`] and [`Self::mode`], but leaves [`Self::camera`] and
+/// [`Self::ui_node`] empty: those name the 3D presentation, which is not what
+/// the cursor is over. Every world-space tool routes through one of them, so
+/// they all stand down over a canvas without a gate of their own.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct ActiveViewport {
-    /// Camera entity of the currently-hovered viewport.
+    /// Camera entity of the currently-hovered viewport, when it is showing
+    /// the 3D world.
     pub camera: Option<Entity>,
     /// UI-node entity of the currently-hovered viewport's
-    /// `SceneViewport`.
+    /// `SceneViewport`, when it is showing the 3D world.
     pub ui_node: Option<Entity>,
+    /// Panel entity of the currently-hovered viewport, in either mode.
+    pub host: Option<Entity>,
+    /// What the currently-hovered viewport is showing, or `None` when the
+    /// cursor is over no viewport at all.
+    pub mode: Option<ViewportMode>,
 }
 
 /// Bundled queries for converting screen position to a viewport ray.
@@ -922,24 +934,61 @@ fn disable_camera_on_dialog(mut camera_query: Query<&mut JackdawCameraSettings>)
     }
 }
 
-/// Multi-viewport-aware replacement for the old single-viewport
-/// `update_camera_enabled` system. Each frame:
+/// Whether `cursor`, in ui-logical pixels, is inside a UI node's rectangle.
+/// A node's transform sits at its centre, and its size is in physical pixels.
+fn node_contains(cursor: Vec2, computed: &ComputedNode, transform: &UiGlobalTransform) -> bool {
+    let scale = computed.inverse_scale_factor();
+    let centre = transform.translation * scale;
+    let half = computed.size() * scale / 2.0;
+    let top_left = centre - half;
+    let bottom_right = centre + half;
+    cursor.x >= top_left.x
+        && cursor.x <= bottom_right.x
+        && cursor.y >= top_left.y
+        && cursor.y <= bottom_right.y
+}
+
+/// What the cursor is over, once a panel has claimed it.
+#[derive(Clone, Copy)]
+struct HoveredViewport {
+    host: Entity,
+    mode: ViewportMode,
+    /// The `SceneViewport` node and the camera it projects, in
+    /// [`ViewportMode::ThreeD`] only: in the other mode the cursor is over a
+    /// canvas, which has neither.
+    three_d: Option<(Entity, Entity)>,
+}
+
+/// The one hover authority for viewport panels. Each frame:
 ///
-/// 1. Scans every `SceneViewport` UI node and finds the one under
-///    the cursor (if any).
-/// 2. Writes the hovered viewport into [`ActiveViewport`] so other
-///    systems can route input by camera entity instead of querying
-///    `Single<>` (which would panic with multiple viewports).
+/// 1. Walks every panel and finds the one under the cursor, rect-testing
+///    whichever presentation its mode is showing: the `SceneViewport` node in
+///    3D, the stage area in 2D.
+/// 2. Writes it into [`ActiveViewport`] so other systems can route input by
+///    panel, mode or camera entity instead of querying `Single<>` (which would
+///    panic with several viewports open).
 /// 3. Sticks during a right-click fly session, so the user can drag
 ///    outside the viewport's bounds without losing camera control.
 /// 4. Sets `JackdawCameraSettings::enabled` so only the active
 ///    camera responds to fly input; the others stay parked.
+///
+/// A panel showing its canvas therefore reports no camera, and every
+/// world-space tool routed through one falls silent while the cursor is there.
+///
+/// Run it on demand through [`run_active_viewport_update`].
 fn update_active_viewport(
     windows: Query<&Window>,
+    hosts: Query<(
+        Entity,
+        &crate::viewport_host::ViewportHost,
+        &ViewportPanelHost,
+        &crate::viewport_2d::Viewport2dPanelHost,
+    )>,
     viewports: Query<
         (Entity, &ComputedNode, &UiGlobalTransform, &ViewportNode),
         With<SceneViewport>,
     >,
+    nodes: Query<(&ComputedNode, &UiGlobalTransform)>,
     mut active: ResMut<ActiveViewport>,
     mut camera_query: Query<(Entity, &mut JackdawCameraSettings)>,
     modal: Res<crate::modal_transform::ModalTransformState>,
@@ -954,25 +1003,35 @@ fn update_active_viewport(
 
     let cursor = windows.single().ok().and_then(Window::cursor_position);
 
-    // Find the viewport under the cursor (if any). Multi-viewport
-    // setups iterate every SceneViewport panel; first hit wins.
-    let mut hovered: Option<(Entity, Entity)> = None; // (ui_node, camera)
+    // First hit wins, as it does for any of the editor's own rect tests:
+    // panels are laid out side by side, so at most one can hold the cursor.
+    let mut hovered: Option<HoveredViewport> = None;
     if let Some(cursor) = cursor {
-        for (ui_entity, computed, vp_transform, vp_node) in &viewports {
-            let Some(camera) = vp_node.camera else {
-                continue;
+        for (entity, host, three_d, two_d) in &hosts {
+            let hit = match host.mode {
+                ViewportMode::ThreeD => viewports
+                    .iter()
+                    .find(|(_, _, _, node)| node.camera == Some(three_d.camera))
+                    .filter(|(_, computed, transform, _)| {
+                        node_contains(cursor, computed, transform)
+                    })
+                    .map(|(node, _, _, _)| HoveredViewport {
+                        host: entity,
+                        mode: host.mode,
+                        three_d: Some((node, three_d.camera)),
+                    }),
+                ViewportMode::TwoD => nodes
+                    .get(two_d.area)
+                    .ok()
+                    .filter(|(computed, transform)| node_contains(cursor, computed, transform))
+                    .map(|_| HoveredViewport {
+                        host: entity,
+                        mode: host.mode,
+                        three_d: None,
+                    }),
             };
-            let scale = computed.inverse_scale_factor();
-            let vp_pos = vp_transform.translation * scale;
-            let vp_size = computed.size() * scale;
-            let top_left = vp_pos - vp_size / 2.0;
-            let bottom_right = vp_pos + vp_size / 2.0;
-            if cursor.x >= top_left.x
-                && cursor.x <= bottom_right.x
-                && cursor.y >= top_left.y
-                && cursor.y <= bottom_right.y
-            {
-                hovered = Some((ui_entity, camera));
+            if hit.is_some() {
+                hovered = hit;
                 break;
             }
         }
@@ -982,11 +1041,18 @@ fn update_active_viewport(
     // pinned even when the cursor strays outside its bounds. A normal
     // hover update only takes effect once the user releases RMB.
     if !fly_state.0 {
-        active.ui_node = hovered.map(|(ui, _)| ui);
-        active.camera = hovered.map(|(_, cam)| cam);
+        active.host = hovered.map(|hit| hit.host);
+        active.mode = hovered.map(|hit| hit.mode);
+        active.ui_node = hovered.and_then(|hit| hit.three_d).map(|(node, _)| node);
+        active.camera = hovered
+            .and_then(|hit| hit.three_d)
+            .map(|(_, camera)| camera);
     }
 
-    if mouse.just_pressed(MouseButton::Right) && hovered.is_some() {
+    // A fly session belongs to the 3D world, so only a hovered world starts
+    // one.
+    let hovered_world = hovered.is_some_and(|hit| hit.three_d.is_some());
+    if mouse.just_pressed(MouseButton::Right) && hovered_world {
         fly_state.0 = true;
     }
 
@@ -1002,10 +1068,21 @@ fn update_active_viewport(
     // fly session also keeps fly enabled when the cursor leaves.
     for (entity, mut settings) in &mut camera_query {
         let is_target = target_camera == Some(entity);
-        let should_enable = inputs_clear && (is_target && (hovered.is_some() || fly_engaged));
+        let should_enable = inputs_clear && (is_target && (hovered_world || fly_engaged));
         if settings.enabled != should_enable {
             settings.enabled = should_enable;
         }
+    }
+}
+
+/// Run the viewport hover pass once, outside the schedule.
+///
+/// For tests: the plugin runs `update_active_viewport` inside
+/// [`crate::EditorInteractionSystems`], which never runs while a test app sits
+/// in `AppState::ProjectSelect`.
+pub fn run_active_viewport_update(world: &mut World) {
+    if let Err(error) = world.run_system_cached(update_active_viewport) {
+        warn!("viewport hover pass could not run: {error}");
     }
 }
 

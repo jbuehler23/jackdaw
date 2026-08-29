@@ -83,9 +83,10 @@ pub struct SnapSettings(pub jackdaw_snap::SnapSettings);
 /// chord and predates the keymap engine; migrates with the binding-layer
 /// follow-up.
 ///
-/// This grid is the 3D world's, in world units, so the wheel over a 2D
-/// viewport is ignored: there the same chord zooms the canvas. The 2D stage
-/// has a pixel grid of its own ([`crate::viewport_2d::Ui2dView::grid`]).
+/// This grid is the 3D world's, in world units, so the wheel is ignored while
+/// the hovered viewport is showing its 2D canvas: there the same chord zooms
+/// that canvas, which has a pixel grid of its own
+/// ([`crate::viewport_2d::Ui2dView::grid`]).
 ///
 /// Public so tests can run it directly: the plugin schedules it inside
 /// [`crate::EditorInteractionSystems`], which never runs while a test app
@@ -95,11 +96,12 @@ pub fn handle_grid_size_scroll(
     keybind_focus: crate::keybind_focus::KeybindFocus,
     modal: Res<crate::modal_transform::ModalTransformState>,
     terrain_edit_mode: Res<crate::terrain::TerrainEditMode>,
-    viewport_2d: crate::viewport_2d::Viewport2dHover,
+    active_viewport: Res<crate::viewport::ActiveViewport>,
     mut scroll_events: MessageReader<MouseWheel>,
     mut commands: Commands,
 ) {
-    if keybind_focus.is_typing() || modal.active.is_some() || viewport_2d.any_stage_area() {
+    let over_canvas = active_viewport.mode == Some(crate::viewport_host::ViewportMode::TwoD);
+    if keybind_focus.is_typing() || modal.active.is_some() || over_canvas {
         return;
     }
 

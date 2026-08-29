@@ -7,8 +7,11 @@
 //! the user's rather than the scene kind's.
 
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use jackdaw::{
-    viewport::{ViewportPanelHost, build_viewport_panel},
+    viewport::{
+        ActiveViewport, ViewportPanelHost, build_viewport_panel, run_active_viewport_update,
+    },
     viewport_2d::Viewport2dPanelHost,
     viewport_host::{ViewportHost, ViewportMode, ViewportModeIntent, ViewportModeSegment},
 };
@@ -222,4 +225,110 @@ fn the_mode_operator_reaches_every_open_panel_and_records_the_choice() {
     for panel in [first, second] {
         assert_showing(&app, panel, ViewportMode::TwoD);
     }
+}
+
+/// A panel filling a fixed rectangle at the window's origin, so the cursor can
+/// be placed inside whichever presentation it is showing.
+fn laid_out_panel(app: &mut App) -> Entity {
+    let parent = app
+        .world_mut()
+        .spawn((
+            jackdaw::EditorEntity,
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0),
+                top: px(0),
+                width: px(PANEL_SIZE.x),
+                height: px(PANEL_SIZE.y),
+                ..default()
+            },
+        ))
+        .id();
+    build_viewport_panel(app.world_mut(), parent);
+    parent
+}
+
+const PANEL_SIZE: Vec2 = Vec2::new(800.0, 600.0);
+
+/// Low enough in the panel to clear the toolbars above the 3D viewport and the
+/// header above the 2D stage, so one position is inside either presentation.
+const INSIDE_THE_PANEL: Vec2 = Vec2::new(400.0, 450.0);
+
+fn place_cursor(app: &mut App, position: Vec2) {
+    let mut windows = app
+        .world_mut()
+        .query_filtered::<&mut Window, With<PrimaryWindow>>();
+    let mut window = windows
+        .single_mut(app.world_mut())
+        .expect("headless apps still have a primary window");
+    window.set_physical_cursor_position(Some(position.as_dvec2()));
+}
+
+fn settle(app: &mut App) {
+    for _ in 0..4 {
+        app.update();
+    }
+}
+
+/// One hover authority answers for both modes. It always names the panel and
+/// what that panel is showing; it names a camera and a viewport node only in
+/// 3D, because those are the 3D presentation's and every world-space tool
+/// routes through one of them. That is what makes the 3D tools stand down over
+/// a canvas without a gate of their own.
+#[test]
+fn hovering_a_panel_reports_the_mode_it_is_in() {
+    let mut app = util::editor_test_app();
+    let panel = laid_out_panel(&mut app);
+    settle(&mut app);
+
+    place_cursor(&mut app, INSIDE_THE_PANEL);
+    run_active_viewport_update(app.world_mut());
+
+    let active = *app.world().resource::<ActiveViewport>();
+    assert_eq!(active.host, Some(panel));
+    assert_eq!(active.mode, Some(ViewportMode::ThreeD));
+    assert_eq!(
+        active.camera,
+        Some(
+            app.world()
+                .get::<ViewportPanelHost>(panel)
+                .expect("the 3D presentation's state")
+                .camera
+        ),
+        "the world viewport routes input through its own camera",
+    );
+    assert!(
+        active
+            .ui_node
+            .is_some_and(|node| under(&app, node, host(&app, panel).three_d)),
+        "and through the leaf node inside the presentation being shown",
+    );
+
+    app.world_mut()
+        .get_mut::<ViewportHost>(panel)
+        .expect("host on panel parent")
+        .mode = ViewportMode::TwoD;
+    settle(&mut app);
+    run_active_viewport_update(app.world_mut());
+
+    let active = *app.world().resource::<ActiveViewport>();
+    assert_eq!(
+        active.host,
+        Some(panel),
+        "the same panel is under the cursor"
+    );
+    assert_eq!(active.mode, Some(ViewportMode::TwoD));
+    assert_eq!(
+        active.camera, None,
+        "a hovered canvas offers no camera to aim a world-space tool through",
+    );
+    assert_eq!(active.ui_node, None, "and no viewport node either");
+
+    place_cursor(&mut app, INSIDE_THE_PANEL + Vec2::new(0.0, PANEL_SIZE.y));
+    run_active_viewport_update(app.world_mut());
+    assert_eq!(
+        app.world().resource::<ActiveViewport>().mode,
+        None,
+        "off every panel the cursor is over no viewport at all",
+    );
 }
