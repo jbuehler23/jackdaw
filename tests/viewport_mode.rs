@@ -719,10 +719,7 @@ fn a_rebuilt_leaf_brings_the_panel_back_on_the_canvas() {
         DockLeaf::new("center", jackdaw_panels::DockAreaStyle::TabBar)
             .with_windows(vec![jackdaw::viewport::VIEWPORT_WINDOW_ID.to_string()]),
     );
-    // Directly rather than through a tick: the reconciler despawns the panel
-    // it replaces, and doing that between frames keeps it clear of the systems
-    // holding entity ids for the frame they are in.
-    jackdaw_panels::reconcile::reconcile(app.world_mut());
+    app.update();
     let before = only_panel(&mut app);
 
     switch_mode(&mut app, "2d");
@@ -732,7 +729,7 @@ fn a_rebuilt_leaf_brings_the_panel_back_on_the_canvas() {
         .resource_mut::<DockTree>()
         .add_tab(leaf, "jackdaw.outliner")
         .expect("the viewport's leaf takes a second tab");
-    jackdaw_panels::reconcile::reconcile(app.world_mut());
+    app.update();
 
     assert_eq!(
         app.world()
