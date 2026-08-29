@@ -393,6 +393,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// call names no panel, and a scripted run that moved one the user could not
 /// identify would be worse than one that moved them all. The bar's own segments
 /// are per panel, because that gesture does name its panel.
+///
+/// Only an unreadable `mode` is a refusal. An empty dock is not: the mode is
+/// recorded in [`ViewportModeIntent`] and the next panel built opens in it.
 #[operator(
     id = "viewport.mode",
     label = "Set Viewport Mode",
@@ -409,10 +412,9 @@ pub(crate) fn viewport_mode(
         warn!("viewport.mode: 'mode' must be `3d` or `2d`");
         return OperatorResult::Cancelled;
     };
-    if hosts.is_empty() {
-        warn!("viewport.mode: no viewport panel is open");
-        return OperatorResult::Cancelled;
-    }
+    // Recorded even with nothing open to move: the intent is what a panel
+    // built afterwards opens in, so a run that sets the mode before the dock
+    // has a viewport leaf still lands.
     *intent = ViewportModeIntent { mode, chosen: true };
     for mut host in &mut hosts {
         if host.mode != mode || !host.mode_chosen {

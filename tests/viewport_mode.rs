@@ -673,3 +673,109 @@ fn the_viewport_capture_aims_at_the_surface_the_mode_is_showing() {
         app.world_mut().despawn(aimed[0].0);
     }
 }
+
+/// A panel is built in whatever mode the tab is already in. The dock
+/// reconciler rebuilds a leaf whenever its tabs change, it is split, or the
+/// workspace switches, so a panel that always started in the 3D world would
+/// drop a screen's canvas on any of them.
+#[test]
+fn a_panel_built_while_the_canvas_is_showing_opens_on_the_canvas() {
+    let mut app = util::editor_test_app();
+    app.world_mut().insert_resource(ViewportModeIntent {
+        mode: ViewportMode::TwoD,
+        chosen: true,
+    });
+
+    let panel = panel(&mut app);
+    app.update();
+
+    assert_showing(&app, panel, ViewportMode::TwoD);
+    assert!(
+        host(&app, panel).mode_chosen,
+        "and it opens with the choice the tab carries, not as its kind's default",
+    );
+}
+
+/// The same rule through the machinery that actually rebuilds panels: adding a
+/// tab to the viewport's leaf makes the reconciler tear the panel down and
+/// build it again, and the mode has to come back with it.
+#[test]
+fn a_rebuilt_leaf_brings_the_panel_back_on_the_canvas() {
+    use jackdaw_api::prelude::JackdawExtension as _;
+    use jackdaw_panels::tree::{DockLeaf, DockNode, DockTree};
+
+    let mut app = util::editor_test_app();
+    jackdaw_api_internal::lifecycle::enable_extension(
+        app.world_mut(),
+        &jackdaw::builtin_extensions::ViewportExtension.id(),
+    );
+    app.update();
+
+    app.world_mut().spawn((
+        jackdaw_panels::reconcile::DockTreeHost::default(),
+        Node::default(),
+    ));
+    let leaf = app.world_mut().resource_mut::<DockTree>().set_root_leaf(
+        DockLeaf::new("center", jackdaw_panels::DockAreaStyle::TabBar)
+            .with_windows(vec![jackdaw::viewport::VIEWPORT_WINDOW_ID.to_string()]),
+    );
+    // Directly rather than through a tick: the reconciler despawns the panel
+    // it replaces, and doing that between frames keeps it clear of the systems
+    // holding entity ids for the frame they are in.
+    jackdaw_panels::reconcile::reconcile(app.world_mut());
+    let before = only_panel(&mut app);
+
+    switch_mode(&mut app, "2d");
+    assert_showing(&app, before, ViewportMode::TwoD);
+
+    app.world_mut()
+        .resource_mut::<DockTree>()
+        .add_tab(leaf, "jackdaw.outliner")
+        .expect("the viewport's leaf takes a second tab");
+    jackdaw_panels::reconcile::reconcile(app.world_mut());
+
+    assert_eq!(
+        app.world()
+            .resource::<DockTree>()
+            .get(leaf)
+            .and_then(DockNode::as_leaf)
+            .map(|leaf| leaf.windows.len()),
+        Some(2),
+        "the leaf really did change, or the rebuild never happened",
+    );
+    let rebuilt = only_panel(&mut app);
+    assert_ne!(rebuilt, before, "the reconciler built a fresh panel");
+    assert_showing(&app, rebuilt, ViewportMode::TwoD);
+}
+
+/// The one panel in the world, which a rebuild replaces with a new entity.
+fn only_panel(app: &mut App) -> Entity {
+    let panels: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<ViewportHost>>()
+        .iter(app.world())
+        .collect();
+    assert_eq!(panels.len(), 1, "one viewport leaf, one panel");
+    panels[0]
+}
+
+/// Asking for a mode with no panel open is not a refusal: the request is what
+/// the next panel opens in, so a run that sets the mode before the dock has a
+/// viewport leaf still lands.
+#[test]
+fn the_mode_operator_records_a_mode_with_no_panel_to_move() {
+    let mut app = util::editor_test_app();
+
+    switch_mode(&mut app, "2d");
+    assert_eq!(
+        *app.world().resource::<ViewportModeIntent>(),
+        ViewportModeIntent {
+            mode: ViewportMode::TwoD,
+            chosen: true,
+        },
+    );
+
+    let panel = panel(&mut app);
+    app.update();
+    assert_showing(&app, panel, ViewportMode::TwoD);
+}

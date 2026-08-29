@@ -414,17 +414,18 @@ fn init_axis_indicator_asset(mut commands: Commands, mut assets: ResMut<Assets<G
 
 /// Build closure for the `jackdaw.viewport` `DockWindowDescriptor`.
 ///
-/// A panel opening in [`ViewportMode::ThreeD`]. Both presentations are built
-/// either way; see [`crate::viewport_host::build_viewport_panel_in`].
+/// A panel opening in whatever mode [`ViewportModeIntent`] currently names,
+/// which is the mode the panels already open are in. The reconciler rebuilds a
+/// leaf whenever its tabs change, it is split, or the workspace switches, so
+/// starting from a fixed mode would put a rebuilt panel back in the 3D world
+/// while the tab in front is a screen. Both presentations are built either way;
+/// see [`crate::viewport_host::build_viewport_panel_in`].
 pub fn build_viewport_panel(world: &mut World, parent: Entity) {
-    crate::viewport_host::build_viewport_panel_in(
-        world,
-        parent,
-        ViewportModeIntent {
-            mode: ViewportMode::ThreeD,
-            chosen: false,
-        },
-    );
+    let intent = world
+        .get_resource::<ViewportModeIntent>()
+        .copied()
+        .unwrap_or_default();
+    crate::viewport_host::build_viewport_panel_in(world, parent, intent);
 }
 
 /// Build the panel's 3D presentation: a camera rendering into its own image,
