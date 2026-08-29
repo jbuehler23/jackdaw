@@ -46,7 +46,7 @@ use jackdaw::{
         stage_pixels_per_target_pixel, stage_to_authored, topmost_hit,
     },
     viewport_2d::{
-        CanvasRuler, RULER_SIZE, Ui2dView, Viewport2dMode, Viewport2dPanelHost,
+        CanvasRuler, RULER_SIZE, RulerGuideMark, Ui2dView, Viewport2dMode, Viewport2dPanelHost,
         build_viewport_2d_panel, ruler_marks, target_pixels_per_stage_pixel,
     },
 };
@@ -2728,6 +2728,120 @@ fn ruler_labels_count_every_hundred_authored_pixels_at_the_zoom() {
     );
 }
 
+/// A ruler reads to its far end however wide the panel is.
+///
+/// A fixed ceiling on the number of marks stops them partway across, and
+/// the panel past that point reads as canvas with no ruler over it.
+#[test]
+fn a_wide_ruler_is_marked_all_the_way_to_its_far_end() {
+    // The densest reading the ruler offers: ten marks per label with the
+    // marks exactly RULER_TICK_GAP apart.
+    let marks = ruler_marks(0.0, 0.4, 4000.0);
+    let last = marks.last().expect("a 4000 pixel ruler carries marks");
+    assert!(
+        last.at > 3990.0,
+        "the marks reach the ruler's far end, got {} of them ending at {}",
+        marks.len(),
+        last.at,
+    );
+    assert!(
+        marks.iter().any(|mark| !mark.labelled),
+        "and they are still the dense reading, ticks between the labels",
+    );
+}
+
+/// Panning moves the marks, it does not make new ones.
+///
+/// Comparing what a ruler was drawn for as a float means every frame of
+/// a pan is a different reading and every mark on both rulers is
+/// despawned and respawned, all the way through the drag.
+#[test]
+fn panning_moves_a_rulers_marks_rather_than_making_them_again() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    authored_scene(&mut app);
+    // Both framings put the canvas origin between two marks, so the pan
+    // between them moves every mark and brings no new figure in: what is
+    // being read here is whether an unchanged reading is redrawn.
+    pan_to(&mut app, panel, -5.0);
+    settle(&mut app);
+
+    let before = ruler_mark_entities(&mut app, panel, CanvasAxis::Vertical);
+    assert!(!before.is_empty(), "the ruler starts out marked");
+
+    pan_to(&mut app, panel, -3.0);
+    settle(&mut app);
+
+    assert_eq!(
+        ruler_mark_entities(&mut app, panel, CanvasAxis::Vertical),
+        before,
+        "the same nodes carry the reading, moved to where the pan put them",
+    );
+}
+
+/// Every guide is marked on the ruler it came off, on every panel.
+///
+/// A guide is put away by dragging it back onto its ruler, so the ruler
+/// has to show where each one is.
+#[test]
+fn each_guide_is_marked_on_its_ruler() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (root, _, _) = authored_scene(&mut app);
+    app.world_mut().entity_mut(root).insert(CanvasGuides {
+        horizontal: vec![180.0, 400.0],
+        vertical: vec![320.0],
+    });
+    settle(&mut app);
+
+    assert_eq!(
+        guide_marks_on(&mut app, panel, CanvasAxis::Vertical).len(),
+        1,
+        "the ruler along the top marks the guide down the canvas",
+    );
+    assert_eq!(
+        guide_marks_on(&mut app, panel, CanvasAxis::Horizontal).len(),
+        2,
+        "and the one down the left marks both guides across it",
+    );
+
+    app.world_mut().resource_mut::<CanvasSnap>().show_guides = false;
+    settle(&mut app);
+    assert!(
+        guide_marks_on(&mut app, panel, CanvasAxis::Vertical).is_empty(),
+        "guides that are not drawn are not marked either",
+    );
+}
+
+/// Slide the panel's view along the canvas's x axis.
+fn pan_to(app: &mut App, panel: Entity, pan: f32) {
+    app.world_mut()
+        .get_mut::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .view
+        .pan
+        .x = pan;
+}
+
+/// The nodes carrying one ruler's marks, in the order it spawned them.
+fn ruler_mark_entities(app: &mut App, panel: Entity, axis: CanvasAxis) -> Vec<Entity> {
+    let ruler = ruler_entity(app, panel, axis);
+    app.world()
+        .get::<Children>(ruler)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default()
+}
+
+/// The guide marks drawn on one of a panel's rulers.
+fn guide_marks_on(app: &mut App, panel: Entity, axis: CanvasAxis) -> Vec<usize> {
+    let mut query = app.world_mut().query::<&RulerGuideMark>();
+    query
+        .iter(app.world())
+        .filter(|mark| mark.host == panel && mark.axis == axis)
+        .map(|mark| mark.index)
+        .collect()
+}
+
 #[test]
 fn every_panel_showing_the_scene_draws_its_guides() {
     let mut app = stage_app();
@@ -2828,7 +2942,15 @@ fn ruler_labels(app: &mut App, panel: Entity, axis: CanvasAxis) -> Vec<(String, 
     let mut labels: Vec<(String, f32)> = children
         .into_iter()
         .filter_map(|child| {
-            let text = app.world().get::<Text>(child)?.0.clone();
+            // The figure sits in a box of its own, which is what the
+            // left ruler turns on its side.
+            let text = app
+                .world()
+                .get::<Children>(child)
+                .and_then(|children| children.iter().next())
+                .and_then(|text| app.world().get::<Text>(text))?
+                .0
+                .clone();
             let node = app.world().get::<Node>(child)?;
             let at = match (axis, node.left, node.top) {
                 (CanvasAxis::Vertical, Val::Px(left), _) => left,

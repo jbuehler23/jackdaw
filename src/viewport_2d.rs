@@ -46,7 +46,7 @@ use jackdaw_feathers::{
     },
     tokens,
 };
-use jackdaw_scene_types::UiSceneRoot;
+use jackdaw_scene_types::{CanvasGuides, UiSceneRoot};
 
 use crate::{
     canvas_snap::{CanvasGuidesOp, CanvasRulersOp, CanvasSnap, CanvasSnapKind, CanvasSnapOp},
@@ -509,6 +509,7 @@ impl Plugin for Viewport2dPlugin {
                     // measured against the area the canvas was just laid
                     // into.
                     sync_rulers.after(size_targets_to_reference),
+                    sync_ruler_guide_marks.after(sync_rulers),
                 ),
             );
     }
@@ -1150,10 +1151,35 @@ const RULER_LABEL_TICK: f32 = 6.0;
 /// How far an unlabelled mark reaches in.
 const RULER_TICK: f32 = 3.0;
 
-/// Most marks one ruler draws. A canvas zoomed all the way out is
-/// hundreds of thousands of authored pixels wide, and every mark is a
-/// node.
-const RULER_MARK_LIMIT: usize = 512;
+/// Marks a ruler keeps beyond the one per [`RULER_TICK_GAP`] its length
+/// has room for: the pair at either end that a pan can bring in.
+const RULER_MARK_MARGIN: usize = 8;
+
+/// How much room a label needs along the ruler it is written on. The
+/// left ruler turns its labels on their side, so this is the box they
+/// are turned inside.
+const RULER_LABEL_BOX: f32 = 40.0;
+
+/// How far in from the ruler's outer edge a turned label's centre sits,
+/// leaving the marks the rest of the gutter.
+const RULER_LABEL_INSET: f32 = 6.0;
+
+/// Most marks a ruler `length` logical pixels long draws.
+///
+/// A canvas zoomed all the way out is hundreds of thousands of authored
+/// pixels wide and every mark is a node, so there has to be a ceiling;
+/// what the ceiling must not do is stop the marks partway across a wide
+/// panel, which a fixed count does. Two marks never come closer than
+/// [`RULER_TICK_GAP`], so the length itself says how many there can be.
+fn ruler_mark_budget(length: f32) -> usize {
+    let per_length = (length / RULER_TICK_GAP).ceil();
+    let per_length = if per_length.is_finite() && per_length > 0.0 {
+        per_length as usize
+    } else {
+        0
+    };
+    per_length + RULER_MARK_MARGIN
+}
 
 /// One of the three nodes making up a panel's ruler gutter: the two
 /// rulers and the corner between them. Hidden together when the canvas
@@ -1175,16 +1201,38 @@ pub struct CanvasRuler {
     pub axis: CanvasAxis,
 }
 
-/// What one ruler's marks were last drawn for. The marks are rebuilt
-/// when this changes and left alone when it does not, so panning and
-/// zooming is the only thing that respawns them.
-#[derive(Component, Clone, Copy, PartialEq)]
-struct RulerMarks {
-    /// Where the canvas's origin sits along the ruler.
-    origin: f32,
-    zoom: f32,
-    /// How far the ruler runs, in its own logical pixels.
-    length: f32,
+/// What one ruler's marks currently read: the authored figure each one
+/// names and whether it carries it.
+///
+/// A pan moves every mark and changes none of this, so the mark nodes
+/// are kept and moved; only a reading that names different figures, or
+/// a different number of them, respawns them.
+#[derive(Component, Clone, PartialEq)]
+struct RulerMarks(Vec<(f32, bool)>);
+
+/// One node of a ruler's marks: the tick, or the figure beside it.
+#[derive(Component, Clone, Copy)]
+struct RulerMarkNode {
+    /// Which mark of the ruler's reading it draws.
+    index: usize,
+    /// Whether it is the figure rather than the tick.
+    label: bool,
+}
+
+/// A guide's position, marked on the ruler it came off.
+///
+/// A guide is removed by dragging it back onto its ruler, so the ruler
+/// has to say where each one is: without the mark the target of that
+/// drag is a stretch of empty gutter.
+#[derive(Component, Clone, Copy)]
+pub struct RulerGuideMark {
+    /// The panel content entity carrying this stage's
+    /// [`Viewport2dPanelHost`].
+    pub host: Entity,
+    /// Which way the guide runs.
+    pub axis: CanvasAxis,
+    /// Which guide of that axis it marks.
+    pub index: usize,
 }
 
 /// One mark on a ruler.
@@ -1212,14 +1260,20 @@ pub fn ruler_marks(origin: f32, zoom: f32, length: f32) -> Vec<RulerMark> {
     }
     let label_step = ruler_label_step(zoom);
     let tick_step = label_step / 10.0;
-    let (step, per_label) = if tick_step * zoom >= RULER_TICK_GAP {
+    let budget = ruler_mark_budget(length);
+    let (step, per_label) = if tick_step * zoom >= RULER_TICK_GAP
+        && ((length / (tick_step * zoom)).ceil() as usize) < budget
+    {
         (tick_step, 10)
     } else {
+        // Over budget, the unlabelled ticks are what goes: a ruler that
+        // reads the whole panel with fewer marks on it is worth more
+        // than one that stops partway across with all of them.
         (label_step, 1)
     };
 
     let mut index = (-origin / (zoom * step)).ceil() as i64;
-    while marks.len() < RULER_MARK_LIMIT {
+    while marks.len() < budget {
         let authored = index as f32 * step;
         let at = origin + authored * zoom;
         if at > length {
@@ -1255,11 +1309,13 @@ fn ruler_label_step(zoom: f32) -> f32 {
 /// same area size the canvas was laid into.
 fn sync_rulers(
     snap: Res<CanvasSnap>,
-    roots: Query<&UiSceneRoot, AuthoredUiSceneRoot>,
+    roots: Query<(Entity, &UiSceneRoot), AuthoredUiSceneRoot>,
     hosts: Query<&Viewport2dPanelHost>,
     areas: Query<&ComputedNode, With<Scene2dStageArea>>,
     rulers: Query<(Entity, &CanvasRuler, Option<&RulerMarks>, Option<&Children>)>,
-    mut parts: Query<&mut Node, With<CanvasRulerPart>>,
+    parts: Query<Entity, With<CanvasRulerPart>>,
+    mark_nodes: Query<&RulerMarkNode>,
+    mut nodes: Query<&mut Node>,
     mut commands: Commands,
 ) {
     let display = if snap.show_rulers {
@@ -1267,8 +1323,10 @@ fn sync_rulers(
     } else {
         Display::None
     };
-    for mut node in &mut parts {
-        if node.display != display {
+    for part in &parts {
+        if let Ok(mut node) = nodes.get_mut(part)
+            && node.display != display
+        {
             node.display = display;
         }
     }
@@ -1276,10 +1334,12 @@ fn sync_rulers(
         return;
     }
 
+    // A malformed document holding several roots picks the lowest
+    // entity, the same one the guide operators write.
     let reference = roots
         .iter()
-        .next()
-        .map(|root| root.reference_size.max(UVec2::ONE));
+        .min_by_key(|(entity, _)| *entity)
+        .map(|(_, root)| root.reference_size.max(UVec2::ONE));
 
     for (entity, ruler, drawn, children) in &rulers {
         let Ok(host) = hosts.get(ruler.host) else {
@@ -1289,54 +1349,221 @@ fn sync_rulers(
             .get(host.area)
             .map(|area| area.size() * area.inverse_scale_factor())
             .unwrap_or(Vec2::ZERO);
-        let wanted = reference.map(|reference| {
-            let origin = stage_origin(reference, host.view, area);
-            match ruler.axis {
-                CanvasAxis::Vertical => RulerMarks {
-                    origin: origin.x,
-                    zoom: host.view.zoom,
-                    length: area.x,
-                },
-                CanvasAxis::Horizontal => RulerMarks {
-                    origin: origin.y,
-                    zoom: host.view.zoom,
-                    length: area.y,
-                },
+        let Some(reference) = reference else {
+            if drawn.is_some() {
+                despawn_ruler_marks(&mut commands, children, &mark_nodes);
+                commands.entity(entity).remove::<RulerMarks>();
             }
-        });
-        if drawn.copied() == wanted {
+            continue;
+        };
+        let origin = stage_origin(reference, host.view, area);
+        let (origin, length) = match ruler.axis {
+            CanvasAxis::Vertical => (origin.x, area.x),
+            CanvasAxis::Horizontal => (origin.y, area.y),
+        };
+        let marks = ruler_marks(origin, host.view.zoom, length);
+        let reading = RulerMarks(
+            marks
+                .iter()
+                .map(|mark| (mark.authored, mark.labelled))
+                .collect(),
+        );
+
+        // A pan slides every mark and leaves the reading alone, so the
+        // nodes are moved rather than thrown away and made again: a
+        // respawn per frame of a drag is a respawn per frame of the pan.
+        if drawn == Some(&reading) {
+            for child in children.into_iter().flatten() {
+                let Ok(mark_node) = mark_nodes.get(*child) else {
+                    continue;
+                };
+                let (Some(mark), Ok(mut node)) =
+                    (marks.get(mark_node.index), nodes.get_mut(*child))
+                else {
+                    continue;
+                };
+                if mark_node.label {
+                    place_ruler_label(&mut node, ruler.axis, *mark);
+                } else {
+                    place_ruler_mark(&mut node, ruler.axis, *mark);
+                }
+            }
             continue;
         }
 
-        for child in children.into_iter().flatten() {
-            commands.entity(*child).despawn();
-        }
-        let Some(wanted) = wanted else {
-            commands.entity(entity).remove::<RulerMarks>();
-            continue;
-        };
-        commands.entity(entity).insert(wanted);
-        for mark in ruler_marks(wanted.origin, wanted.zoom, wanted.length) {
+        despawn_ruler_marks(&mut commands, children, &mark_nodes);
+        commands.entity(entity).insert(reading);
+        for (index, mark) in marks.into_iter().enumerate() {
             commands.entity(entity).with_children(|ruler_node| {
-                ruler_node.spawn(ruler_mark(ruler.axis, mark));
+                ruler_node.spawn(ruler_mark(ruler.axis, mark, index));
                 if mark.labelled {
-                    ruler_node.spawn(ruler_label(ruler.axis, mark));
+                    ruler_node.spawn(ruler_label(ruler.axis, mark, index));
                 }
             });
         }
     }
 }
 
+/// Take a ruler's marks down, leaving whatever else was parented to it
+/// where it is.
+fn despawn_ruler_marks(
+    commands: &mut Commands,
+    children: Option<&Children>,
+    mark_nodes: &Query<&RulerMarkNode>,
+) {
+    for child in children.into_iter().flatten() {
+        if mark_nodes.contains(*child) {
+            commands.entity(*child).despawn();
+        }
+    }
+}
+
+/// Draw every guide on the ruler it was pulled off, so the drag that
+/// takes one away has somewhere to aim.
+///
+/// The guides are scene data and the rulers are per panel, so every
+/// panel showing the scene marks the same set, and a guide following the
+/// cursor moves its mark with it: the drag writes the scene on every
+/// event.
+fn sync_ruler_guide_marks(
+    mut commands: Commands,
+    snap: Res<CanvasSnap>,
+    scenes: Query<(Entity, &UiSceneRoot, Option<&CanvasGuides>), AuthoredUiSceneRoot>,
+    hosts: Query<&Viewport2dPanelHost>,
+    areas: Query<&ComputedNode, With<Scene2dStageArea>>,
+    rulers: Query<(Entity, &CanvasRuler)>,
+    marks: Query<(Entity, &RulerGuideMark)>,
+    mut nodes: Query<&mut Node>,
+) {
+    let scene = scenes
+        .iter()
+        .min_by_key(|(entity, _, _)| *entity)
+        .filter(|_| snap.show_rulers && snap.show_guides);
+
+    let mut wanted: Vec<(Entity, RulerGuideMark, f32)> = Vec::new();
+    if let Some((_, root, Some(guides))) = scene {
+        let reference = root.reference_size.max(UVec2::ONE);
+        for (ruler_entity, ruler) in &rulers {
+            let Ok(host) = hosts.get(ruler.host) else {
+                continue;
+            };
+            if host.mode != Viewport2dMode::Edit {
+                continue;
+            }
+            let area = areas
+                .get(host.area)
+                .map(|area| area.size() * area.inverse_scale_factor())
+                .unwrap_or(Vec2::ZERO);
+            let origin = stage_origin(reference, host.view, area);
+            let (origin, positions) = match ruler.axis {
+                CanvasAxis::Vertical => (origin.x, &guides.vertical),
+                CanvasAxis::Horizontal => (origin.y, &guides.horizontal),
+            };
+            for (index, at) in positions.iter().enumerate() {
+                wanted.push((
+                    ruler_entity,
+                    RulerGuideMark {
+                        host: ruler.host,
+                        axis: ruler.axis,
+                        index,
+                    },
+                    origin + at * host.view.zoom,
+                ));
+            }
+        }
+    }
+
+    for (entity, mark) in &marks {
+        match wanted.iter().find(|(_, want, _)| {
+            want.host == mark.host && want.axis == mark.axis && want.index == mark.index
+        }) {
+            Some((_, _, at)) => {
+                if let Ok(mut node) = nodes.get_mut(entity) {
+                    place_ruler_guide_mark(&mut node, mark.axis, *at);
+                }
+            }
+            None => {
+                if let Ok(mut entity) = commands.get_entity(entity) {
+                    entity.despawn();
+                }
+            }
+        }
+    }
+
+    for (ruler, want, at) in wanted {
+        if marks.iter().any(|(_, mark)| {
+            mark.host == want.host && mark.axis == want.axis && mark.index == want.index
+        }) {
+            continue;
+        }
+        let mut node = Node {
+            position_type: PositionType::Absolute,
+            ..default()
+        };
+        place_ruler_guide_mark(&mut node, want.axis, at);
+        commands.spawn((
+            crate::EditorEntity,
+            want,
+            node,
+            BackgroundColor(tokens::GUIDE_LINE),
+            Pickable::IGNORE,
+            ChildOf(ruler),
+        ));
+    }
+}
+
+/// How wide a guide's mark on the ruler is, across the ruler's own
+/// direction.
+const RULER_GUIDE_MARK: f32 = 3.0;
+
+/// Lay a guide's mark across the ruler at `at`, centred on the guide.
+fn place_ruler_guide_mark(node: &mut Node, axis: CanvasAxis, at: f32) {
+    let half = RULER_GUIDE_MARK / 2.0;
+    match axis {
+        CanvasAxis::Vertical => {
+            node.left = px(at - half);
+            node.top = px(0);
+            node.width = px(RULER_GUIDE_MARK);
+            node.height = percent(100);
+        }
+        CanvasAxis::Horizontal => {
+            node.left = px(0);
+            node.top = px(at - half);
+            node.width = percent(100);
+            node.height = px(RULER_GUIDE_MARK);
+        }
+    }
+}
+
 /// The line one mark draws, growing in from the edge the stage is on.
-fn ruler_mark(axis: CanvasAxis, mark: RulerMark) -> impl Bundle {
+fn ruler_mark(axis: CanvasAxis, mark: RulerMark, index: usize) -> impl Bundle {
+    let mut node = Node {
+        position_type: PositionType::Absolute,
+        ..default()
+    };
+    place_ruler_mark(&mut node, axis, mark);
+    (
+        crate::EditorEntity,
+        RulerMarkNode {
+            index,
+            label: false,
+        },
+        node,
+        BackgroundColor(if mark.labelled {
+            tokens::TEXT_SECONDARY
+        } else {
+            tokens::BORDER_STRONG
+        }),
+        Pickable::IGNORE,
+    )
+}
+
+/// Put a mark's tick where the reading says, in the ruler's own pixels.
+fn place_ruler_mark(node: &mut Node, axis: CanvasAxis, mark: RulerMark) {
     let reach = if mark.labelled {
         RULER_LABEL_TICK
     } else {
         RULER_TICK
-    };
-    let mut node = Node {
-        position_type: PositionType::Absolute,
-        ..default()
     };
     match axis {
         CanvasAxis::Vertical => {
@@ -1352,38 +1579,24 @@ fn ruler_mark(axis: CanvasAxis, mark: RulerMark) -> impl Bundle {
             node.height = px(1);
         }
     }
-    (
-        crate::EditorEntity,
-        node,
-        BackgroundColor(if mark.labelled {
-            tokens::TEXT_SECONDARY
-        } else {
-            tokens::BORDER_STRONG
-        }),
-        Pickable::IGNORE,
-    )
 }
 
 /// The authored figure a labelled mark carries, tucked against the
 /// outer edge so the marks themselves stay readable.
-fn ruler_label(axis: CanvasAxis, mark: RulerMark) -> impl Bundle {
+///
+/// The ruler down the left is 18 logical pixels wide and a four-figure
+/// reading is wider than that, so its labels are turned on their side
+/// and read up the gutter. They are turned inside a box of their own,
+/// wide enough for the figure and as thick as the ruler, so what the
+/// turn puts across the gutter is a known width rather than whatever
+/// the text happened to measure.
+fn ruler_label(axis: CanvasAxis, mark: RulerMark, index: usize) -> impl Bundle {
     let mut node = Node {
         position_type: PositionType::Absolute,
         ..default()
     };
-    match axis {
-        CanvasAxis::Vertical => {
-            node.left = px(mark.at + 2.0);
-            node.top = px(1);
-        }
-        CanvasAxis::Horizontal => {
-            node.left = px(2);
-            node.top = px(mark.at + 1.0);
-        }
-    }
-    (
-        crate::EditorEntity,
-        node,
+    place_ruler_label(&mut node, axis, mark);
+    let label = (
         Text::new(format!("{:.0}", mark.authored)),
         TextFont {
             font_size: tokens::TEXT_SIZE_XS,
@@ -1391,7 +1604,41 @@ fn ruler_label(axis: CanvasAxis, mark: RulerMark) -> impl Bundle {
         },
         TextColor(tokens::TEXT_SECONDARY),
         Pickable::IGNORE,
+    );
+    (
+        crate::EditorEntity,
+        RulerMarkNode { index, label: true },
+        node,
+        UiTransform::from_rotation(match axis {
+            CanvasAxis::Vertical => Rot2::IDENTITY,
+            CanvasAxis::Horizontal => Rot2::degrees(-90.0),
+        }),
+        Pickable::IGNORE,
+        children![label],
     )
+}
+
+/// Put a mark's figure where the reading says.
+fn place_ruler_label(node: &mut Node, axis: CanvasAxis, mark: RulerMark) {
+    match axis {
+        CanvasAxis::Vertical => {
+            node.left = px(mark.at + 2.0);
+            node.top = px(1);
+            node.width = Val::Auto;
+            node.height = Val::Auto;
+        }
+        CanvasAxis::Horizontal => {
+            // Turned a quarter turn about its own centre, so the box is
+            // placed by where that centre has to end up: on the mark,
+            // and RULER_LABEL_INSET in from the ruler's outer edge.
+            node.left = px(RULER_LABEL_INSET - RULER_LABEL_BOX / 2.0);
+            node.top = px(mark.at - RULER_SIZE / 2.0);
+            node.width = px(RULER_LABEL_BOX);
+            node.height = px(RULER_SIZE);
+            node.justify_content = JustifyContent::Center;
+            node.align_items = AlignItems::Center;
+        }
+    }
 }
 
 /// The gutter around a panel's stage area: the corner, the ruler along
