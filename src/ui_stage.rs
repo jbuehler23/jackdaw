@@ -57,10 +57,11 @@ use bevy::{
     ui::{ComputedNode, ComputedStackIndex, ComputedUiTargetCamera, UiGlobalTransform},
 };
 use jackdaw_feathers::tokens;
-use jackdaw_snap::{SnapRect, snap_edges_2d};
+use jackdaw_snap::{SnapLine, SnapRect, snap_edges_2d_with_winners};
 
 use crate::{
     EditorEntity,
+    canvas_snap::CanvasSnap,
     commands::push_layout_edits,
     prefab::AuthoredUiSceneRoot,
     selection::Selection,
@@ -165,7 +166,7 @@ struct GestureNode {
 /// primary's rect and only its rect, so a resize is a gesture on that
 /// one node.
 #[derive(Resource, Default)]
-pub(crate) struct UiManipulation {
+pub struct UiManipulation {
     /// Every node the gesture is editing, primary first. Empty when no
     /// gesture is running.
     nodes: Vec<GestureNode>,
@@ -190,14 +191,158 @@ pub(crate) struct UiManipulation {
     /// own neighbours would pull a selection apart: two nodes eight
     /// pixels apart land on two different edges and stop being eight
     /// pixels apart.
-    candidates: EdgeCandidates,
+    candidates: SnapCandidates,
+    /// Which kinds of line this gesture may land on, copied off
+    /// [`CanvasSnap`] at the press so a preference changed mid-drag
+    /// cannot move a node that is already following the cursor.
+    kinds: CanvasSnap,
+    /// What the last drag event came to rest against, for the highlight
+    /// drawn over the stage.
+    last_snap: SnapOutcome,
 }
 
-/// Authored coordinates a dragged edge can snap onto, per axis.
+impl UiManipulation {
+    /// What the gesture's last drag event landed on, or an outcome with
+    /// no landings when nothing is being dragged.
+    pub fn last_snap(&self) -> SnapOutcome {
+        self.last_snap
+    }
+}
+
+/// Where one line a dragged edge can land on sits, and what it is.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Candidate {
+    /// The line's coordinate, in the authored offsets a node's own
+    /// `left`/`top` are stated in.
+    pub at: f32,
+    /// What kind of line it is, so a landing can be drawn and filtered.
+    pub kind: CandidateKind,
+    /// Where the line sits in the parent box as a percentage, when it
+    /// is a line the parent box can state that way. A node whose author
+    /// wrote the matching offset in percent takes this figure verbatim
+    /// rather than one derived from pixels.
+    pub percent: Option<f32>,
+}
+
+/// What a line a drag can land on came from. One per
+/// [`crate::canvas_snap::CanvasSnapKind`] that offers lines.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CandidateKind {
+    /// A quarter line of the parent box.
+    PercentLine,
+    /// A padding-box edge or the centre of the parent.
+    Parent,
+    /// A sibling's near or far edge.
+    SiblingSide,
+    /// A sibling's centre.
+    SiblingCentre,
+    /// One of the scene's guides.
+    Guide,
+    /// A node elsewhere in the scene, outside the dragged node's family.
+    OtherNode,
+}
+
+/// The lines a gesture can land on, per axis, in precedence order.
 #[derive(Default)]
-struct EdgeCandidates {
-    x: Vec<f32>,
-    y: Vec<f32>,
+struct SnapCandidates {
+    x: Vec<Candidate>,
+    y: Vec<Candidate>,
+    /// The parent's padding-box corner in global authored pixels: what a
+    /// candidate's coordinate is measured from, and so what turns one
+    /// back into a position on the canvas.
+    origin: Vec2,
+}
+
+/// The line one axis of a drag came to rest against.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct SnapWinner {
+    /// The line's coordinate, in the authored offsets the drag is
+    /// stated in: measured from the parent's padding-box corner, not
+    /// from the canvas.
+    pub at: f32,
+    pub kind: CandidateKind,
+    /// The line's percentage of the parent box, when it has one.
+    pub percent: Option<f32>,
+    /// Which line of the dragged rect landed on it.
+    pub line: SnapLine,
+}
+
+/// What one drag event's snapping came to.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub struct SnapOutcome {
+    /// How far the drag has to move on top of the cursor's own
+    /// distance, in authored pixels.
+    pub nudge: Vec2,
+    /// The line the x axis landed on, if any.
+    pub x: Option<SnapWinner>,
+    /// The line the y axis landed on, if any.
+    pub y: Option<SnapWinner>,
+}
+
+impl SnapOutcome {
+    /// The percentages this outcome lets a percent-authored offset be
+    /// written as, rather than as a figure derived from pixels.
+    fn exact_percent(&self) -> ExactPercent {
+        let landing = |winner: &Option<SnapWinner>| {
+            winner.and_then(|winner| {
+                winner.percent.map(|percent| PercentLanding {
+                    line: winner.line,
+                    percent,
+                })
+            })
+        };
+        ExactPercent {
+            x: landing(&self.x),
+            y: landing(&self.y),
+        }
+    }
+}
+
+/// A landing on a line the parent box states as a percentage.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PercentLanding {
+    /// Which line of the dragged rect landed on it.
+    pub line: SnapLine,
+    /// The line's percentage of the parent box.
+    pub percent: f32,
+}
+
+/// What a gesture landed on, per axis, for the offsets it is about to
+/// write. Default is "nothing exact", which is every drag that came to
+/// rest somewhere the parent box has no percentage for.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub struct ExactPercent {
+    pub x: Option<PercentLanding>,
+    pub y: Option<PercentLanding>,
+}
+
+/// How finely the pixels a gesture writes are stated.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum PixelRounding {
+    /// Whole authored pixels, the canvas's own lattice.
+    #[default]
+    Whole,
+    /// Two decimal places, so a drag zoomed past one pixel per pointer
+    /// pixel keeps the fraction it produced.
+    Fractional,
+}
+
+/// The quarter lines of the parent box, as percentages.
+const PERCENT_LINES: [f32; 5] = [0.0, 25.0, 50.0, 75.0, 100.0];
+
+/// How finely a gesture states the pixels it writes.
+///
+/// Keyed on the pixel kind alone. The master magnet and Ctrl decide
+/// whether a drag lands on a neighbour at all; how many decimals the
+/// result is written with is a separate question, answered once, and
+/// tying the two would make Ctrl silently change the units a drag
+/// commits.
+fn pixel_rounding(kinds: &CanvasSnap) -> PixelRounding {
+    if kinds.pixel {
+        PixelRounding::Whole
+    } else {
+        PixelRounding::Fractional
+    }
 }
 
 /// The unit half of an authored [`Val`], for the values a gesture writes
@@ -257,12 +402,12 @@ impl AnchorUnit {
     }
 
     /// Decimals a magnitude in this unit is rounded to on the way back
-    /// out. Whole pixels because the canvas is a pixel lattice; two
-    /// places for the rest, matching what the inspector's `Val` field
-    /// shows and commits.
-    fn round(self, magnitude: f32) -> f32 {
-        match self {
-            Self::Px => magnitude.round(),
+    /// out. Whole pixels while the canvas is on its pixel lattice; two
+    /// places otherwise and for every other unit, matching what the
+    /// inspector's `Val` field shows and commits.
+    fn round(self, magnitude: f32, rounding: PixelRounding) -> f32 {
+        match (self, rounding) {
+            (Self::Px, PixelRounding::Whole) => magnitude.round(),
             _ => (magnitude * 100.0).round() / 100.0,
         }
     }
@@ -362,6 +507,16 @@ pub struct UnitBasis {
 ///
 /// A value whose unit has nothing usable to be measured against is left
 /// alone rather than rewritten in pixels: see [`AnchorUnit::authored_px`].
+///
+/// `exact` is the axis's landing, if it came to rest on a line the
+/// parent box states as a percentage. An offset its author wrote in
+/// percent then takes that figure verbatim: a parent whose width is not
+/// a multiple of four has no exact percentage for a quarter line once
+/// the figure has been through pixels and back.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one axis of a rect, its scheme, and what it is measured against"
+)]
 fn write_axis(
     near: &mut Val,
     far: &mut Val,
@@ -372,10 +527,12 @@ fn write_axis(
     resized: bool,
     parent: f32,
     viewport: Vec2,
+    rounding: PixelRounding,
+    exact: Option<PercentLanding>,
 ) {
     let write = |slot: &mut Val, unit: AnchorUnit, authored: f32| {
         if let Some(per) = unit.authored_px(parent, viewport) {
-            *slot = unit.build(unit.round(authored / per));
+            *slot = unit.build(unit.round(authored / per, rounding));
         }
     };
 
@@ -383,7 +540,10 @@ fn write_axis(
         .near
         .or_else(|| anchor.far.is_none().then_some(AnchorUnit::Px));
     if let Some(unit) = near_unit {
-        write(near, unit, min);
+        match exact_percent_for(unit, exact, SnapLine::Min) {
+            Some(percent) => *near = Val::Percent(percent),
+            None => write(near, unit, min),
+        }
     }
     // The far offset is the gap between the node's far edge and the
     // parent's, so it needs a parent that has been measured.
@@ -391,11 +551,30 @@ fn write_axis(
         && parent > 0.0
         && parent.is_finite()
     {
-        write(far, unit, parent - (min + extent));
+        match exact_percent_for(unit, exact, SnapLine::Max) {
+            // The far offset is measured back from the parent's far
+            // edge, so a landing a quarter of the way in is three
+            // quarters of the way back.
+            Some(percent) => *far = Val::Percent(100.0 - percent),
+            None => write(far, unit, parent - (min + extent)),
+        }
     }
     if resized && !anchor.stretched() {
         write(size, anchor.size.unwrap_or(AnchorUnit::Px), extent);
     }
+}
+
+/// The percentage an offset written in percent takes verbatim, when the
+/// landing was on `wanted`: the near edge for `left`/`top` and the far
+/// edge for `right`/`bottom`. A centre landing names no edge and yields
+/// nothing.
+fn exact_percent_for(
+    unit: AnchorUnit,
+    exact: Option<PercentLanding>,
+    wanted: SnapLine,
+) -> Option<f32> {
+    let landing = exact?;
+    (unit == AnchorUnit::Percent && landing.line == wanted).then_some(landing.percent)
 }
 
 /// Write a manipulated rect back into `node` through the scheme its
@@ -403,12 +582,16 @@ fn write_axis(
 ///
 /// `rect` is `(left, top, width, height)` in authored pixels from the
 /// parent's offset box; `edges` is the gesture's, `(0, 0)` for a move.
+/// `rounding` says how finely pixels are stated, and `exact` carries any
+/// percentage the gesture landed on.
 pub fn apply_authored_rect(
     node: &mut Node,
     anchors: NodeAnchors,
     rect: Vec4,
     edges: (i8, i8),
     basis: UnitBasis,
+    rounding: PixelRounding,
+    exact: ExactPercent,
 ) {
     // Absolute placement is what a free move edits. Promote on the first
     // drag so a flex child can be positioned instead of silently
@@ -424,6 +607,8 @@ pub fn apply_authored_rect(
         edges.0 != 0,
         basis.parent.x,
         basis.viewport,
+        rounding,
+        exact.x,
     );
     write_axis(
         &mut node.top,
@@ -435,6 +620,8 @@ pub fn apply_authored_rect(
         edges.1 != 0,
         basis.parent.y,
         basis.viewport,
+        rounding,
+        exact.y,
     );
 }
 
@@ -982,12 +1169,18 @@ fn begin_manipulation(world: &World, overlay: Entity, edges: (i8, i8)) -> Option
     if nodes.is_empty() {
         return None;
     }
+    let kinds = world
+        .get_resource::<CanvasSnap>()
+        .copied()
+        .unwrap_or_default();
     Some(UiManipulation {
         edges,
         host: Some(host_entity),
         scale: gesture_scale(world, host),
         grid: host.view.grid,
-        candidates: gather_candidates(world, primary),
+        candidates: gather_candidates(world, primary, &kinds),
+        kinds,
+        last_snap: SnapOutcome::default(),
         nodes,
     })
 }
@@ -1151,42 +1344,184 @@ fn authored_offset(world: &World, entity: Entity, rect: Rect) -> Vec2 {
     rect.min
 }
 
-/// The edges a gesture on `entity` can land on: its parent's box and
-/// centre lines, and its siblings' edges, all in the same offset space
+/// The lines a gesture on `entity` can land on, in the same offset space
 /// [`authored_rect`] reports, so they can be compared with the value the
 /// gesture is about to write.
 ///
+/// The order is the precedence a landing is decided by, nearest distance
+/// first and this order to break a tie: the quarter lines of the parent
+/// box, the parent's own edges and centre, sibling sides, sibling
+/// centres, the scene's guides, and finally nodes elsewhere in the tree.
+/// `kinds` decides which of those are offered at all; an off kind
+/// contributes nothing rather than being filtered later, so nothing it
+/// governs can win a tie against a kind that is on.
+///
 /// Editor chrome is skipped, so an overlay drawn over the same tree
 /// cannot become something the authored scene snaps to.
-fn gather_candidates(world: &World, entity: Entity) -> EdgeCandidates {
-    let mut candidates = EdgeCandidates::default();
+fn gather_candidates(world: &World, entity: Entity, kinds: &CanvasSnap) -> SnapCandidates {
+    let mut candidates = SnapCandidates::default();
     let Some(parent) = world.get::<ChildOf>(entity).map(ChildOf::parent) else {
         return candidates;
     };
     let offset_box = parent_offset_box(world, entity);
     let size = offset_box.size();
-    candidates.x.extend([0.0, size.x / 2.0, size.x]);
-    candidates.y.extend([0.0, size.y / 2.0, size.y]);
     let origin = offset_box.min;
-    for sibling in world.get::<Children>(parent).into_iter().flatten().copied() {
-        if sibling == entity || world.get::<EditorEntity>(sibling).is_some() {
-            continue;
+    candidates.origin = origin;
+
+    if kinds.percent_lines {
+        for percent in PERCENT_LINES {
+            let fraction = percent / 100.0;
+            candidates.x.push(Candidate {
+                at: size.x * fraction,
+                kind: CandidateKind::PercentLine,
+                percent: Some(percent),
+            });
+            candidates.y.push(Candidate {
+                at: size.y * fraction,
+                kind: CandidateKind::PercentLine,
+                percent: Some(percent),
+            });
         }
-        let (Some(computed), Some(transform)) = (
-            world.get::<ComputedNode>(sibling),
-            world.get::<UiGlobalTransform>(sibling),
-        ) else {
-            continue;
-        };
-        let size = computed.size();
-        if size.x <= 0.0 || size.y <= 0.0 {
-            continue;
+    }
+    if kinds.parent {
+        // The parent's own lines carry their percentage too, so a
+        // percent-authored node landing on an edge or the centre writes
+        // the exact figure whether or not the quarter lines are on.
+        for (at, percent) in [(0.0, 0.0), (size.x / 2.0, 50.0), (size.x, 100.0)] {
+            candidates.x.push(Candidate {
+                at,
+                kind: CandidateKind::Parent,
+                percent: Some(percent),
+            });
         }
-        let min = transform.translation - size / 2.0 - origin;
-        candidates.x.extend([min.x, min.x + size.x]);
-        candidates.y.extend([min.y, min.y + size.y]);
+        for (at, percent) in [(0.0, 0.0), (size.y / 2.0, 50.0), (size.y, 100.0)] {
+            candidates.y.push(Candidate {
+                at,
+                kind: CandidateKind::Parent,
+                percent: Some(percent),
+            });
+        }
+    }
+
+    let siblings: Vec<Rect> = world
+        .get::<Children>(parent)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|sibling| *sibling != entity)
+        .filter_map(|sibling| node_rect(world, sibling, origin))
+        .collect();
+    if kinds.sibling_sides {
+        for rect in &siblings {
+            push_rect_sides(&mut candidates, *rect, CandidateKind::SiblingSide);
+        }
+    }
+    if kinds.sibling_centers {
+        for rect in &siblings {
+            let centre = rect.center();
+            candidates.x.push(Candidate {
+                at: centre.x,
+                kind: CandidateKind::SiblingCentre,
+                percent: None,
+            });
+            candidates.y.push(Candidate {
+                at: centre.y,
+                kind: CandidateKind::SiblingCentre,
+                percent: None,
+            });
+        }
+    }
+
+    if kinds.other_nodes {
+        for rect in other_node_rects(world, entity, parent, origin) {
+            push_rect_sides(&mut candidates, rect, CandidateKind::OtherNode);
+        }
     }
     candidates
+}
+
+/// One node's laid-out rect, measured from `origin`, or `None` when it
+/// is editor chrome or has nothing laid out to measure.
+fn node_rect(world: &World, entity: Entity, origin: Vec2) -> Option<Rect> {
+    if world.get::<EditorEntity>(entity).is_some() {
+        return None;
+    }
+    let computed = world.get::<ComputedNode>(entity)?;
+    let size = computed.size();
+    if size.x <= 0.0 || size.y <= 0.0 {
+        return None;
+    }
+    let min = world.get::<UiGlobalTransform>(entity)?.translation - size / 2.0 - origin;
+    Some(Rect::from_corners(min, min + size))
+}
+
+fn push_rect_sides(candidates: &mut SnapCandidates, rect: Rect, kind: CandidateKind) {
+    for at in [rect.min.x, rect.max.x] {
+        candidates.x.push(Candidate {
+            at,
+            kind,
+            percent: None,
+        });
+    }
+    for at in [rect.min.y, rect.max.y] {
+        candidates.y.push(Candidate {
+            at,
+            kind,
+            percent: None,
+        });
+    }
+}
+
+/// Every authored node under the same routed root that is not part of
+/// the dragged node's family, measured from `origin`.
+///
+/// The family is the parent, the parent's own children (those are the
+/// siblings, which have their own kinds), and the whole selection with
+/// everything under it: a node the gesture is carrying cannot be
+/// something the gesture lands on.
+///
+/// The root is the topmost ancestor rather than a query for the routed
+/// scene, which is the same entity: the gesture already established that
+/// the dragged node draws into this panel's camera.
+fn other_node_rects(world: &World, entity: Entity, parent: Entity, origin: Vec2) -> Vec<Rect> {
+    let mut root = entity;
+    while let Some(next) = world.get::<ChildOf>(root).map(ChildOf::parent) {
+        root = next;
+    }
+    let mut family: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    family.insert(parent);
+    family.extend(world.get::<Children>(parent).into_iter().flatten().copied());
+    let carried: std::collections::HashSet<Entity> = world
+        .get_resource::<Selection>()
+        .map(|selection| selection.entities.iter().copied().collect())
+        .unwrap_or_default();
+
+    let mut rects = Vec::new();
+    collect_other_nodes(world, root, &family, &carried, origin, &mut rects);
+    rects
+}
+
+fn collect_other_nodes(
+    world: &World,
+    entity: Entity,
+    family: &std::collections::HashSet<Entity>,
+    carried: &std::collections::HashSet<Entity>,
+    origin: Vec2,
+    rects: &mut Vec<Rect>,
+) {
+    // A carried node takes its whole subtree out: layout moves the
+    // descendants with it, so none of them holds still to land on.
+    if carried.contains(&entity) {
+        return;
+    }
+    if !family.contains(&entity)
+        && let Some(rect) = node_rect(world, entity, origin)
+    {
+        rects.push(rect);
+    }
+    for child in world.get::<Children>(entity).into_iter().flatten().copied() {
+        collect_other_nodes(world, child, family, carried, origin, rects);
+    }
 }
 
 /// Move or resize what the gesture picked up, every drag event.
@@ -1203,7 +1538,7 @@ fn on_gesture_drag(mut event: On<Pointer<Drag>>, parts: GestureTargets, mut comm
     event.propagate(false);
     let distance = event.distance;
     commands.queue(move |world: &mut World| {
-        world.resource_scope(|world, manipulation: Mut<UiManipulation>| {
+        world.resource_scope(|world, mut manipulation: Mut<UiManipulation>| {
             let Some(primary) = manipulation.nodes.first() else {
                 return;
             };
@@ -1215,7 +1550,7 @@ fn on_gesture_drag(mut event: On<Pointer<Drag>>, parts: GestureTargets, mut comm
                 .is_some_and(|keys| {
                     keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
                 });
-            let nudge = match world.get_resource::<SnapSettings>() {
+            let outcome = match world.get_resource::<SnapSettings>() {
                 Some(snap) => snap_gesture(
                     dragged,
                     edges,
@@ -1225,20 +1560,38 @@ fn on_gesture_drag(mut event: On<Pointer<Drag>>, parts: GestureTargets, mut comm
                     ctrl,
                     scale,
                 ),
-                None => Vec2::ZERO,
+                None => SnapOutcome::default(),
             };
             // The primary's whole delta, snap included; the rest of the
             // selection moves by it.
-            let delta = distance * scale + nudge;
+            let delta = distance * scale + outcome.nudge;
+            let rounding = pixel_rounding(&manipulation.kinds);
+            // Only the primary landed on anything, so only the primary
+            // may write a landing's exact percentage.
+            let exact = outcome.exact_percent();
             for (ordinal, node) in manipulation.nodes.iter().enumerate() {
                 // Only the primary is resized; the rest of a selection
                 // is carried along by the move.
                 let edges = if ordinal == 0 { edges } else { (0, 0) };
+                let exact = if ordinal == 0 {
+                    exact
+                } else {
+                    ExactPercent::default()
+                };
                 let rect = floor_size(drag_edges(node.start, edges, delta), edges);
                 if let Some(mut value) = world.get_mut::<Node>(node.entity) {
-                    apply_authored_rect(&mut value, node.anchors, rect, edges, node.basis);
+                    apply_authored_rect(
+                        &mut value,
+                        node.anchors,
+                        rect,
+                        edges,
+                        node.basis,
+                        rounding,
+                        exact,
+                    );
                 }
             }
+            manipulation.last_snap = outcome;
         });
     });
 }
@@ -1324,14 +1677,14 @@ fn floor_size(rect: Vec4, edges: (i8, i8)) -> Vec4 {
 fn snap_gesture(
     rect: Vec4,
     edges: (i8, i8),
-    candidates: &EdgeCandidates,
+    candidates: &SnapCandidates,
     snap: &SnapSettings,
     grid: f32,
     ctrl: bool,
     scale: f32,
-) -> Vec2 {
+) -> SnapOutcome {
     if !snap.translate_active(ctrl) {
-        return Vec2::ZERO;
+        return SnapOutcome::default();
     }
     let min = Vec2::new(rect.x, rect.y);
     let moving = match edges {
@@ -1347,7 +1700,7 @@ fn snap_gesture(
             }
         }
     };
-    const NONE: [f32; 0] = [];
+    const NONE: [Candidate; 0] = [];
     let x = if edges == (0, 0) || edges.0 != 0 {
         candidates.x.as_slice()
     } else {
@@ -1358,14 +1711,42 @@ fn snap_gesture(
     } else {
         &NONE
     };
-    let nudge = snap_edges_2d(moving, x, y, EDGE_SNAP_PIXELS * scale);
+    let at_x: Vec<f32> = x.iter().map(|candidate| candidate.at).collect();
+    let at_y: Vec<f32> = y.iter().map(|candidate| candidate.at).collect();
+    let (won_x, won_y) = snap_edges_2d_with_winners(moving, &at_x, &at_y, EDGE_SNAP_PIXELS * scale);
     // The grid only has a say on an axis no neighbour claimed; rounding
     // an edge landing afterwards would take it straight back off.
     let lattice = snap_to_pixel_grid(moving.min, grid) - moving.min;
-    Vec2::new(
-        if nudge.x == 0.0 { lattice.x } else { nudge.x },
-        if nudge.y == 0.0 { lattice.y } else { nudge.y },
-    )
+    SnapOutcome {
+        nudge: Vec2::new(
+            won_x.map_or(lattice.x, |snap| snap.delta),
+            won_y.map_or(lattice.y, |snap| snap.delta),
+        ),
+        x: won_x.map(|snap| winner(snap, x, edges.0)),
+        y: won_y.map(|snap| winner(snap, y, edges.1)),
+    }
+}
+
+/// Name the line an axis landed on.
+///
+/// A resize collapses the moving rect to the dragged corner, so all
+/// three of its lines are the same coordinate and the reported one says
+/// nothing about which edge of the node moved. `edge` is that axis of
+/// the gesture's handle, and it is what decides: a positive edge moved
+/// the far side, a negative one the near side.
+fn winner(snap: jackdaw_snap::AxisSnap, candidates: &[Candidate], edge: i8) -> SnapWinner {
+    let candidate = candidates[snap.candidate];
+    let line = match edge {
+        0 => snap.line,
+        edge if edge > 0 => SnapLine::Max,
+        _ => SnapLine::Min,
+    };
+    SnapWinner {
+        at: candidate.at,
+        kind: candidate.kind,
+        percent: candidate.percent,
+        line,
+    }
 }
 
 /// `point` rounded onto a lattice of `grid` authored pixels.
@@ -1390,7 +1771,11 @@ fn on_gesture_end(mut event: On<Pointer<DragEnd>>, parts: GestureTargets, mut co
 /// End the gesture, either committing what the drag already wrote or
 /// putting back what it started from.
 fn finish_manipulation(world: &mut World, commit: bool) {
-    let nodes = std::mem::take(&mut world.resource_mut::<UiManipulation>().nodes);
+    let nodes = {
+        let mut manipulation = world.resource_mut::<UiManipulation>();
+        manipulation.last_snap = SnapOutcome::default();
+        std::mem::take(&mut manipulation.nodes)
+    };
     if nodes.is_empty() {
         return;
     }
@@ -1496,7 +1881,17 @@ pub(crate) fn nudge_ui_selection(world: &mut World, direction: Vec2) -> bool {
         let Some(mut value) = world.get_mut::<Node>(node.entity) else {
             continue;
         };
-        apply_authored_rect(&mut value, node.anchors, rect, (0, 0), node.basis);
+        // Kind-blind: a nudge is a keystroke of exactly one step, so
+        // nothing it writes is up to what the canvas offers a drag.
+        apply_authored_rect(
+            &mut value,
+            node.anchors,
+            rect,
+            (0, 0),
+            node.basis,
+            PixelRounding::Whole,
+            ExactPercent::default(),
+        );
         let after = value.clone();
         edits.push((node.entity, node.before, after));
     }

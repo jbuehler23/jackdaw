@@ -34,11 +34,14 @@ use bevy::{
     window::{PrimaryWindow, WindowRef},
 };
 use jackdaw_scene_types::UiSceneRoot;
+use jackdaw_snap::SnapLine;
 
 use jackdaw::{
+    canvas_snap::{CanvasSnap, CanvasSnapKind},
     selection::Selection,
     ui_stage::{
-        HANDLE_SIZE, NodeAnchors, StageHit, UiResizeHandle, UiSelectionOverlay, UnitBasis,
+        CandidateKind, ExactPercent, HANDLE_SIZE, NodeAnchors, PixelRounding, SnapOutcome,
+        StageHit, UiManipulation, UiResizeHandle, UiSelectionOverlay, UnitBasis,
         apply_authored_rect, authored_to_stage, stage_pixels_per_target_pixel, stage_to_authored,
         topmost_hit,
     },
@@ -1512,6 +1515,438 @@ fn a_snapped_multi_move_keeps_the_selection_arranged() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// What a drag is offered, and what it writes
+// ---------------------------------------------------------------------------
+
+/// A sibling's centre line is a kind of its own, so a node can be
+/// centred on its neighbour without the neighbour's edges getting in the
+/// way -- and turning the kind off takes that line away again.
+#[test]
+fn a_move_lands_on_a_sibling_centre_when_that_kind_is_on() {
+    let landed = |centres: bool| {
+        let mut app = stage_app();
+        let panel = framed_panel(&mut app, 0.5);
+        snapping_on(&mut app);
+        without_the_pixel_grid(&mut app, panel);
+        with_kinds(&mut app, |kinds| kinds.sibling_centers = centres);
+        let root = ui_root(&mut app);
+        // Centre at authored x 400, clear of every parent and quarter
+        // line of the 2400-wide canvas.
+        spawn_child(&mut app, root, 200.0, 100.0, 400.0, 200.0);
+        let mover = spawn_child(&mut app, root, 1000.0, 700.0, 100.0, 100.0);
+        settle(&mut app);
+
+        select(&mut app, mover);
+        settle(&mut app);
+        let (overlay, _) = overlay_node(&mut app);
+        drag_authored(
+            &mut app,
+            panel,
+            overlay,
+            Vec2::new(1050.0, 750.0),
+            Vec2::new(444.0, 750.0),
+        );
+        settle(&mut app);
+        node_of(&app, mover).left
+    };
+
+    assert_eq!(
+        landed(true),
+        px(400),
+        "the sibling's centre pulls the move onto it",
+    );
+    assert_eq!(
+        landed(false),
+        px(394),
+        "with the kind off the same drag stops where the cursor did",
+    );
+}
+
+/// A kind is what puts its lines in front of a drag at all, rather than
+/// a filter applied to a landing already chosen. An edge a switched-off
+/// kind governs cannot claim a drag, and cannot win a tie against a kind
+/// that is on either.
+#[test]
+fn a_kind_switched_off_frees_the_edge_it_governs() {
+    let landed = |sides: bool| {
+        let mut app = stage_app();
+        let panel = framed_panel(&mut app, 0.5);
+        snapping_on(&mut app);
+        without_the_pixel_grid(&mut app, panel);
+        with_kinds(&mut app, |kinds| kinds.sibling_sides = sides);
+        let root = ui_root(&mut app);
+        // Sides at 900 and 1100: neither is a quarter line of the
+        // 2400-wide canvas, so only the sibling kind offers them.
+        spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
+        let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+        settle(&mut app);
+
+        select(&mut app, mover);
+        settle(&mut app);
+        let (overlay, _) = overlay_node(&mut app);
+        drag_authored(
+            &mut app,
+            panel,
+            overlay,
+            Vec2::new(230.0, 750.0),
+            Vec2::new(924.0, 750.0),
+        );
+        settle(&mut app);
+        node_of(&app, mover).left
+    };
+
+    assert_eq!(landed(true), px(900), "the sibling's near edge claims it");
+    assert_eq!(
+        landed(false),
+        px(894),
+        "and nothing does once that kind is off",
+    );
+}
+
+/// Ctrl is still one switch, and the kinds did not become a second one.
+/// Ctrl inverts the master magnet for the length of a gesture, and what
+/// that turns on is every kind of line and the pixel grid together.
+#[test]
+fn ctrl_still_inverts_the_kinds_together_with_the_grid() {
+    // The magnet is off throughout: Ctrl is the whole switch here.
+    let landed = |ctrl: bool, to: f32| {
+        let mut app = stage_app();
+        let panel = framed_panel(&mut app, 0.5);
+        let root = ui_root(&mut app);
+        spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
+        let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+        settle(&mut app);
+
+        select(&mut app, mover);
+        settle(&mut app);
+        if ctrl {
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::ControlLeft);
+        }
+        let (overlay, _) = overlay_node(&mut app);
+        drag_authored(
+            &mut app,
+            panel,
+            overlay,
+            Vec2::new(230.0, 750.0),
+            Vec2::new(to + 30.0, 750.0),
+        );
+        settle(&mut app);
+        node_of(&app, mover).left
+    };
+
+    assert_eq!(
+        landed(true, 894.0),
+        px(900),
+        "ctrl turns the sibling's edge on",
+    );
+    assert_eq!(
+        landed(true, 1470.0),
+        px(1472),
+        "... and the same ctrl lands the same gesture on the grid out in the open",
+    );
+    assert_eq!(landed(false, 894.0), px(894), "without it, neither");
+    assert_eq!(landed(false, 1470.0), px(1470), "on either kind of line");
+}
+
+/// A node whose author wrote its offset as a percentage and landed on a
+/// quarter line writes that quarter outright.
+///
+/// The parent here is 1003 authored pixels wide, so a quarter of it is
+/// 250.75: a figure that goes through the pixel path and comes back as
+/// something that is not 25%, and would leave the node a hair off the
+/// line at every other canvas size.
+#[test]
+fn a_percent_anchored_node_landing_on_a_quarter_line_writes_the_exact_percent() {
+    // Near edge: the left offset takes the quarter it landed on.
+    let (mut app, panel, child) = quarter_line_app(Node {
+        position_type: PositionType::Absolute,
+        left: percent(10),
+        top: px(0),
+        width: px(100),
+        height: px(50),
+        ..default()
+    });
+    let (overlay, _) = {
+        select(&mut app, child);
+        settle(&mut app);
+        overlay_node(&mut app)
+    };
+    drag_authored(
+        &mut app,
+        panel,
+        overlay,
+        Vec2::new(150.0, 25.0),
+        Vec2::new(300.0, 25.0),
+    );
+    settle(&mut app);
+    assert_eq!(
+        node_of(&app, child).left,
+        Val::Percent(25.0),
+        "the landing is written as the quarter it is, not as a figure from pixels",
+    );
+
+    // Far edge: `right` is measured back from the parent's far edge, so
+    // a landing a quarter of the way in is three quarters of the way
+    // back.
+    let (mut app, panel, child) = quarter_line_app(Node {
+        position_type: PositionType::Absolute,
+        right: percent(60),
+        top: px(150),
+        width: px(100),
+        height: px(50),
+        ..default()
+    });
+    let (overlay, _) = {
+        select(&mut app, child);
+        settle(&mut app);
+        overlay_node(&mut app)
+    };
+    drag_authored(
+        &mut app,
+        panel,
+        overlay,
+        Vec2::new(351.2, 175.0),
+        Vec2::new(201.2, 175.0),
+    );
+    settle(&mut app);
+    assert_eq!(
+        node_of(&app, child).right,
+        Val::Percent(75.0),
+        "a far offset landing on the quarter line writes the rest of the box",
+    );
+
+    // A centre landing names no edge, so nothing is written outright.
+    // A node centred on a quarter line sits half its own width back
+    // from it, which is not a figure that line can supply.
+    let (mut app, panel, child) = quarter_line_app(Node {
+        position_type: PositionType::Absolute,
+        left: percent(10),
+        top: px(0),
+        width: px(100),
+        height: px(50),
+        ..default()
+    });
+    let (overlay, _) = {
+        select(&mut app, child);
+        settle(&mut app);
+        overlay_node(&mut app)
+    };
+    drag_authored(
+        &mut app,
+        panel,
+        overlay,
+        Vec2::new(150.0, 25.0),
+        Vec2::new(250.75, 25.0),
+    );
+    settle(&mut app);
+    let left = node_of(&app, child).left;
+    assert!(
+        matches!(left, Val::Percent(_)),
+        "the offset stays the percentage its author wrote, got {left:?}",
+    );
+    assert_ne!(
+        left,
+        Val::Percent(25.0),
+        "a centre landing must not put the line's own figure into a near offset",
+    );
+}
+
+/// A canvas at 1003 authored pixels holding one child authored as
+/// `node`. Returns the panel and the child.
+fn quarter_line_app(node: Node) -> (App, Entity, Entity) {
+    let mut app = stage_app();
+    let panel = framed_panel(&mut app, 0.5);
+    snapping_on(&mut app);
+    let root = ui_root(&mut app);
+    let container = spawn_child(&mut app, root, 0.0, 0.0, 1003.0, 400.0);
+    let child = app.world_mut().spawn((node, ChildOf(container))).id();
+    settle(&mut app);
+    (app, panel, child)
+}
+
+/// Pixel Snap is what decides how finely a drag states the pixels it
+/// writes, and it is the only thing that decides: with it off, a canvas
+/// zoomed past one authored pixel per pointer pixel keeps the fraction
+/// the drag actually produced.
+#[test]
+fn pixel_snap_off_keeps_the_fraction_a_zoomed_drag_produced() {
+    // At zoom 4 one pointer pixel is a quarter of an authored one.
+    let landed = |pixel: bool| {
+        let mut app = stage_app();
+        let panel = framed_panel(&mut app, 4.0);
+        let root = ui_root(&mut app);
+        let mover = spawn_child(&mut app, root, 400.0, 200.0, 100.0, 100.0);
+        settle(&mut app);
+        with_kinds(&mut app, |kinds| kinds.pixel = pixel);
+
+        select(&mut app, mover);
+        settle(&mut app);
+        let (overlay, _) = overlay_node(&mut app);
+        let start = begin_drag(&mut app, panel, overlay, Vec2::new(450.0, 250.0));
+        let distance = Vec2::new(1.0, 0.0);
+        continue_drag(&mut app, overlay, start, distance);
+        end_drag(&mut app, overlay, start, distance);
+        settle(&mut app);
+        node_of(&app, mover).left
+    };
+
+    assert_eq!(
+        landed(false),
+        px(400.25),
+        "one pointer pixel at this zoom is a quarter of an authored one",
+    );
+    assert_eq!(
+        landed(true),
+        px(400),
+        "and Pixel Snap rounds that back onto the canvas's own lattice",
+    );
+}
+
+/// Other Nodes reaches outside the dragged node's family, and ships off
+/// because it pulls a node towards something the user cannot see beside
+/// it. What it never reaches is the selection's own descendants: layout
+/// carries those with the drag, so none of them holds still to land on.
+#[test]
+fn other_nodes_reach_across_the_tree_only_when_asked() {
+    let landed = |other_nodes: bool, to: f32| {
+        let mut app = stage_app();
+        let panel = framed_panel(&mut app, 0.5);
+        snapping_on(&mut app);
+        without_the_pixel_grid(&mut app, panel);
+        with_kinds(&mut app, |kinds| kinds.other_nodes = other_nodes);
+        let root = ui_root(&mut app);
+        let branch = spawn_child(&mut app, root, 0.0, 0.0, 1200.0, 1200.0);
+        // Another branch entirely: its near edge is at authored 1400.
+        spawn_child(&mut app, root, 1400.0, 0.0, 400.0, 400.0);
+        let mover = spawn_child(&mut app, branch, 200.0, 700.0, 60.0, 100.0);
+        // The mover's own child, laid out at authored 1000 to 1020.
+        spawn_child(&mut app, mover, 800.0, 0.0, 20.0, 20.0);
+        settle(&mut app);
+
+        select(&mut app, mover);
+        settle(&mut app);
+        let (overlay, _) = overlay_node(&mut app);
+        drag_authored(
+            &mut app,
+            panel,
+            overlay,
+            Vec2::new(230.0, 750.0),
+            Vec2::new(to + 30.0, 750.0),
+        );
+        settle(&mut app);
+        node_of(&app, mover).left
+    };
+
+    assert_eq!(
+        landed(true, 1394.0),
+        px(1400),
+        "a node in another branch claims the drag once the kind is on",
+    );
+    assert_eq!(
+        landed(false, 1394.0),
+        px(1394),
+        "and does not while it is off",
+    );
+    assert_eq!(
+        landed(true, 994.0),
+        px(994),
+        "the node the drag is carrying never offers its own descendants",
+    );
+}
+
+/// The keyboard nudge is kind-blind. It is one authored pixel a press
+/// however close the node is to a line the canvas would offer a drag, so
+/// the arrows stay a way of saying an exact number rather than a second
+/// way of landing on something.
+#[test]
+fn a_nudge_ignores_the_snap_kinds() {
+    let mut app = stage_app();
+    let panel = framed_panel(&mut app, 0.5);
+    snapping_on(&mut app);
+    let root = ui_root(&mut app);
+    // Four authored pixels to the right of the mover's near edge: well
+    // inside the radius a drag would land from.
+    spawn_child(&mut app, root, 404.0, 100.0, 100.0, 100.0);
+    let mover = spawn_child(&mut app, root, 400.0, 700.0, 100.0, 100.0);
+    settle(&mut app);
+    set_grid(&mut app, panel, 8.0);
+
+    select(&mut app, mover);
+    settle(&mut app);
+    nudge(&mut app, "transform.nudge_x_pos");
+    settle(&mut app);
+    assert_eq!(
+        node_of(&app, mover).left,
+        px(401),
+        "one press is one authored pixel, not a landing on the near edge",
+    );
+
+    // ... and with every kind switched off it is still that one pixel.
+    with_kinds(&mut app, |kinds| {
+        for kind in CanvasSnapKind::ALL {
+            kinds.set(kind, false);
+        }
+    });
+    nudge(&mut app, "transform.nudge_x_pos");
+    settle(&mut app);
+    assert_eq!(
+        node_of(&app, mover).left,
+        px(402),
+        "and one whole pixel again with nothing on offer",
+    );
+}
+
+/// The gesture keeps the line it came to rest against, so the canvas can
+/// draw it, and lets go of it on release.
+#[test]
+fn the_gesture_records_the_winning_line() {
+    let mut app = stage_app();
+    let panel = framed_panel(&mut app, 0.5);
+    snapping_on(&mut app);
+    without_the_pixel_grid(&mut app, panel);
+    let root = ui_root(&mut app);
+    spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
+    let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+    settle(&mut app);
+
+    select(&mut app, mover);
+    settle(&mut app);
+    let (overlay, _) = overlay_node(&mut app);
+    let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 750.0));
+    let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 750.0)) - start;
+    continue_drag(&mut app, overlay, start, distance);
+    settle(&mut app);
+
+    let outcome = app.world().resource::<UiManipulation>().last_snap();
+    let won = outcome.x.expect("the x axis landed on the sibling's edge");
+    assert_eq!(won.kind, CandidateKind::SiblingSide);
+    assert_eq!(won.line, SnapLine::Min);
+    assert_eq!(won.at, 900.0, "the line is stated where the candidate is");
+    assert_eq!(won.percent, None, "a sibling edge is no fraction of a box");
+    assert!(
+        (outcome.nudge.x - 6.0).abs() < 1e-3,
+        "and the nudge is what puts the edge on it, got {:?}",
+        outcome.nudge,
+    );
+    assert_eq!(outcome.y, None, "nothing claimed the other axis");
+
+    end_drag(&mut app, overlay, start, distance);
+    settle(&mut app);
+    assert_eq!(
+        app.world().resource::<UiManipulation>().last_snap(),
+        SnapOutcome::default(),
+        "the release lets go of the line",
+    );
+}
+
+/// Edit the canvas's snap kinds, the way the header's Snap menu does.
+fn with_kinds(app: &mut App, edit: impl FnOnce(&mut CanvasSnap)) {
+    edit(&mut app.world_mut().resource_mut::<CanvasSnap>());
+}
+
 /// Three absolutely placed children, 500 authored pixels apart on both
 /// axes. Returns the panel and the three, in tree order.
 fn selection_app() -> (App, Entity, [Entity; 3]) {
@@ -1599,7 +2034,15 @@ fn a_rect_is_written_back_through_the_scheme_it_was_read_from() {
         ..default()
     };
     let anchors = NodeAnchors::of(&node);
-    apply_authored_rect(&mut node, anchors, moved, (0, 0), basis);
+    apply_authored_rect(
+        &mut node,
+        anchors,
+        moved,
+        (0, 0),
+        basis,
+        PixelRounding::Whole,
+        ExactPercent::default(),
+    );
     assert_eq!(
         (node.left, node.top, node.right, node.bottom),
         (px(130), px(70), Val::Auto, Val::Auto),
@@ -1617,7 +2060,15 @@ fn a_rect_is_written_back_through_the_scheme_it_was_read_from() {
         ..default()
     };
     let anchors = NodeAnchors::of(&node);
-    apply_authored_rect(&mut node, anchors, moved, (0, 0), basis);
+    apply_authored_rect(
+        &mut node,
+        anchors,
+        moved,
+        (0, 0),
+        basis,
+        PixelRounding::Whole,
+        ExactPercent::default(),
+    );
     assert_eq!(
         (node.left, node.top, node.right, node.bottom),
         (Val::Auto, Val::Auto, px(670), px(330)),
@@ -1635,7 +2086,15 @@ fn a_rect_is_written_back_through_the_scheme_it_was_read_from() {
         ..default()
     };
     let anchors = NodeAnchors::of(&node);
-    apply_authored_rect(&mut node, anchors, moved, (0, 0), basis);
+    apply_authored_rect(
+        &mut node,
+        anchors,
+        moved,
+        (0, 0),
+        basis,
+        PixelRounding::Whole,
+        ExactPercent::default(),
+    );
     assert_eq!(
         (node.left, node.top),
         (percent(13), percent(14)),
@@ -1654,7 +2113,15 @@ fn a_rect_is_written_back_through_the_scheme_it_was_read_from() {
     };
     let stretched = Vec4::new(130.0, 70.0, 200.0, 100.0);
     let anchors = NodeAnchors::of(&node);
-    apply_authored_rect(&mut node, anchors, stretched, (1, 1), basis);
+    apply_authored_rect(
+        &mut node,
+        anchors,
+        stretched,
+        (1, 1),
+        basis,
+        PixelRounding::Whole,
+        ExactPercent::default(),
+    );
     assert_eq!(
         (node.left, node.right, node.width),
         (px(130), px(670), Val::Auto),
@@ -1684,6 +2151,8 @@ fn a_unit_with_no_basis_is_left_as_it_was() {
         Vec4::new(130.0, 70.0, 200.0, 100.0),
         (0, 0),
         basis,
+        PixelRounding::Whole,
+        ExactPercent::default(),
     );
     assert_eq!(
         (node.left, node.right),
@@ -1705,6 +2174,8 @@ fn a_unit_with_no_basis_is_left_as_it_was() {
         Vec4::new(240.0, 0.0, 200.0, 100.0),
         (0, 0),
         basis,
+        PixelRounding::Whole,
+        ExactPercent::default(),
     );
     assert_eq!(
         node.left,
