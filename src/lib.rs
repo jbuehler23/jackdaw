@@ -2118,21 +2118,15 @@ fn populate_menu(
     menu_bar_entity: &mut SystemState<
         Single<Entity, With<jackdaw_feathers::menu_bar::MenuBarRoot>>,
     >,
-    items: &mut QueryState<Entity, With<jackdaw_widgets::menu_bar::MenuBarItem>>,
 ) {
     let Ok(menu_bar_entity) = menu_bar_entity.get(world).map(Single::into_inner) else {
         return;
     };
 
-    // Despawn existing menu-bar items before re-populating. Idempotent on
+    // Take the bar's own items down before re-populating. Idempotent on
     // first call (nothing to remove), necessary for rebuilds when the
     // window registry changes (extensions toggled on/off).
-    let existing: Vec<Entity> = items.iter(world).collect();
-    for entity in existing {
-        if let Ok(ec) = world.get_entity_mut(entity) {
-            ec.despawn();
-        }
-    }
+    jackdaw_feathers::menu_bar::clear_menu_bar_items(world, menu_bar_entity);
 
     // Collect extension-contributed menu entries for menus OTHER than
     // "Add". The "Add" menu goes through the shared

@@ -41,12 +41,16 @@ use bevy::{
 };
 use jackdaw_feathers::{
     button::{ButtonProps, ButtonSize, ButtonVariant, button},
+    menu_bar::{
+        OP_ACTION_PREFIX, SECTION_ACTION_PREFIX, SEPARATOR_ACTION, checked_row, menu_button,
+        submenu_row,
+    },
     tokens,
 };
 use jackdaw_scene_types::UiSceneRoot;
 
 use crate::{
-    canvas_snap::CanvasSnap,
+    canvas_snap::{CanvasGuidesOp, CanvasRulersOp, CanvasSnap, CanvasSnapKind, CanvasSnapOp},
     prefab::{AuthoredUiSceneRoot, ImportedUiSceneRoot},
     prelude::*,
     selection::Selection,
@@ -1723,6 +1727,7 @@ fn viewport_2d_header(host: Entity) -> impl Bundle {
                 ..default()
             },
             viewport_2d_grid_stepper(host),
+            viewport_2d_snap_menu(host),
             (
                 Viewport2dZoomReadout { host },
                 Text::new(zoom_percent(Ui2dView::default().zoom)),
@@ -1747,6 +1752,93 @@ fn viewport_2d_header(host: Entity) -> impl Bundle {
             crate::viewport_host::viewport_mode_bar(host),
         ],
     )
+}
+
+/// The canvas's snapping menu: what a dragged node lands on, whether the
+/// rulers and the guides are drawn, and the panel's own grid.
+///
+/// The rows are built from the world each time the menu asks for them,
+/// so every box shows the setting it is about. The kinds and the two
+/// view toggles are project-wide and go through their operators; the
+/// grid is this panel's own, so its rows call the grid operator with the
+/// figure the stepper beside them would move to.
+fn viewport_2d_snap_menu(host: Entity) -> impl Bundle {
+    (
+        menu_button(
+            "Snap",
+            Icon::Magnet,
+            std::sync::Arc::new(move |world: &World| snap_menu_rows(world, host)),
+        ),
+        jackdaw_feathers::tooltip::Tooltip::title(
+            "Snap: what a dragged node lands on, and the canvas's rulers and guides",
+        ),
+    )
+}
+
+/// The rows the Snap menu shows for the world as it stands.
+///
+/// Pixel snapping leads on its own because it is about what a drag
+/// writes rather than what it lands on; the six kinds that offer a line
+/// sit in a group together.
+fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
+    let snap = world
+        .get_resource::<CanvasSnap>()
+        .copied()
+        .unwrap_or_default();
+    let kind_row = |kind: CanvasSnapKind| {
+        checked_row(
+            snap.enabled(kind),
+            format!("{OP_ACTION_PREFIX}{}?kind={}", CanvasSnapOp::ID, kind.id()),
+            kind.label(),
+        )
+    };
+    let grid = world
+        .get::<Viewport2dPanelHost>(host)
+        .map(|host| host.view.grid)
+        .unwrap_or(DEFAULT_UI_GRID);
+
+    let mut rows = vec![kind_row(CanvasSnapKind::Pixel)];
+    rows.extend(submenu_row(
+        "Smart Snapping",
+        CanvasSnapKind::ALL
+            .into_iter()
+            .filter(|kind| *kind != CanvasSnapKind::Pixel)
+            .map(kind_row),
+    ));
+    rows.push((SEPARATOR_ACTION.to_string(), String::new()));
+    rows.push(checked_row(
+        snap.show_rulers,
+        format!(
+            "{OP_ACTION_PREFIX}{}?on={}",
+            CanvasRulersOp::ID,
+            !snap.show_rulers
+        ),
+        "Show Rulers",
+    ));
+    rows.push(checked_row(
+        snap.show_guides,
+        format!(
+            "{OP_ACTION_PREFIX}{}?on={}",
+            CanvasGuidesOp::ID,
+            !snap.show_guides
+        ),
+        "Show Guides",
+    ));
+    rows.push((
+        format!("{SECTION_ACTION_PREFIX}Grid: {}", grid_label(grid)),
+        String::new(),
+    ));
+    for (steps, label) in [(-1, "Finer"), (1, "Coarser")] {
+        rows.push((
+            format!(
+                "{OP_ACTION_PREFIX}{}?size={}",
+                Viewport2dGridOp::ID,
+                stepped_ui_grid(grid, steps)
+            ),
+            label.to_string(),
+        ));
+    }
+    rows
 }
 
 /// The canvas grid control: finer, the current lattice, coarser.

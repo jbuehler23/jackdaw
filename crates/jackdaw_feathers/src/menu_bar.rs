@@ -751,6 +751,28 @@ pub fn populate_menu_bar(
     }
 }
 
+/// Take down the items a menu bar spawned, leaving every menu button
+/// that stands elsewhere in the editor where it is.
+///
+/// A [`menu_button`] carries the same [`MenuBarItem`] as a bar's own
+/// item, so "every item in the world" is the wrong set to clear: a bar
+/// rebuilt for a changed window registry would take a panel header's
+/// menu with it, and nothing would put that one back.
+pub fn clear_menu_bar_items(world: &mut World, bar: Entity) {
+    let children: Vec<Entity> = world
+        .get::<Children>(bar)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    for child in children {
+        if world.get::<MenuBarItem>(child).is_none() {
+            continue;
+        }
+        if let Ok(entity) = world.get_entity_mut(child) {
+            entity.despawn();
+        }
+    }
+}
+
 fn spawn_menu_bar_item(
     world: &mut World,
     parent: Entity,
@@ -1278,6 +1300,32 @@ mod tests {
             opened(&app),
             Some(file),
             "a menu button outside the bar is not one of the bar's menus",
+        );
+    }
+
+    #[test]
+    fn rebuilding_a_menu_bar_leaves_a_header_menu_button_standing() {
+        let mut app = menu_app();
+        let bar = app.world_mut().spawn(MenuBar).id();
+        let file = bar_item(&mut app, "File", Some(bar));
+        let header = app
+            .world_mut()
+            .spawn(menu_button(
+                "Snap",
+                Icon::Magnet,
+                Arc::new(|_: &World| Vec::new()),
+            ))
+            .id();
+
+        clear_menu_bar_items(app.world_mut(), bar);
+
+        assert!(
+            app.world().get_entity(file).is_err(),
+            "the bar's own items go, so the rebuild can put fresh ones back",
+        );
+        assert!(
+            app.world().get::<MenuBarItem>(header).is_some(),
+            "a menu button elsewhere in the editor is not the bar's to take down",
         );
     }
 

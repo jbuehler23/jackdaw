@@ -189,3 +189,136 @@ fn the_snap_kinds_stay_out_of_undo_snapshots() {
         "undoing back past the change leaves the preference where the user put it",
     );
 }
+
+#[test]
+fn the_header_snap_menu_lists_every_kind_with_its_state() {
+    let mut app = snap_menu_app();
+
+    assert_eq!(
+        snap_menu_rows(&mut app)
+            .iter()
+            .map(|(action, label)| (action.as_str(), label.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("[x]op:canvas.snap?kind=pixel", "Use Pixel Snap"),
+            (">>Smart Snapping", ""),
+            ("[x]op:canvas.snap?kind=parent", "Parent"),
+            ("[x]op:canvas.snap?kind=percent_lines", "Percent Lines"),
+            ("[x]op:canvas.snap?kind=sibling_sides", "Sibling Sides"),
+            ("[x]op:canvas.snap?kind=sibling_centers", "Sibling Centers"),
+            ("[ ]op:canvas.snap?kind=other_nodes", "Other Nodes"),
+            ("[x]op:canvas.snap?kind=guides", "Guides"),
+            ("<<", ""),
+            ("---", ""),
+            ("[x]op:canvas.rulers?on=false", "Show Rulers"),
+            ("[x]op:canvas.guides?on=false", "Show Guides"),
+            ("##Grid: 8 px", ""),
+            ("op:viewport2d.grid?size=4", "Finer"),
+            ("op:viewport2d.grid?size=16", "Coarser"),
+        ],
+        "the menu reads the canvas's settings, and every row calls what it shows",
+    );
+
+    set_kind(&mut app, "other_nodes", true);
+    app.update();
+    assert!(
+        snap_menu_rows(&mut app).contains(&(
+            "[x]op:canvas.snap?kind=other_nodes".to_string(),
+            "Other Nodes".to_string()
+        )),
+        "a kind turned on shows as on the next time the menu is asked",
+    );
+}
+
+#[test]
+fn clicking_a_snap_row_flips_the_kind_and_the_menu_closes() {
+    use bevy::input::{ButtonState, mouse::MouseButtonInput};
+    use bevy::window::PrimaryWindow;
+    use jackdaw_feathers::button::ButtonClickEvent;
+    use jackdaw_widgets::menu_bar::{MenuBarDropdownItem, MenuBarState};
+
+    let mut app = snap_menu_app();
+    app.world_mut()
+        .operator("menu.open")
+        .param("name", "Snap")
+        .call()
+        .expect("menu.open dispatches")
+        .assert_finished();
+    app.update();
+    assert!(
+        app.world().resource::<MenuBarState>().open_menu.is_some(),
+        "the header's Snap menu opens like any other menu",
+    );
+
+    let row = app
+        .world_mut()
+        .query::<(Entity, &MenuBarDropdownItem)>()
+        .iter(app.world())
+        .find(|(_, item)| item.action == "op:canvas.snap?kind=pixel")
+        .map(|(entity, _)| entity)
+        .expect("the open menu offers the pixel row");
+    app.world_mut().trigger(ButtonClickEvent { entity: row });
+    app.update();
+    app.update();
+    assert!(!snap(&app).pixel, "the row flips the kind its action names",);
+
+    // The press that made the click is what takes the menu down.
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(app.world())
+        .expect("headless apps still have a primary window");
+    app.world_mut().write_message(MouseButtonInput {
+        button: MouseButton::Left,
+        state: ButtonState::Pressed,
+        window,
+    });
+    app.update();
+    assert!(
+        app.world().resource::<MenuBarState>().open_menu.is_none(),
+        "and the menu closes behind it",
+    );
+}
+
+/// An editor with one 2D viewport panel laid out, so its header's Snap
+/// menu has built its rows.
+fn snap_menu_app() -> App {
+    let mut app = util::editor_test_app();
+    let parent = app
+        .world_mut()
+        .spawn((
+            jackdaw::EditorEntity,
+            Node {
+                width: px(1200),
+                height: px(600),
+                ..default()
+            },
+        ))
+        .id();
+    jackdaw::viewport_2d::build_viewport_2d_panel(app.world_mut(), parent);
+    for _ in 0..4 {
+        app.update();
+    }
+    app
+}
+
+/// The rows the header's Snap menu would open with.
+fn snap_menu_rows(app: &mut App) -> Vec<(String, String)> {
+    app.world_mut()
+        .query::<&jackdaw_widgets::menu_bar::MenuBarItem>()
+        .iter(app.world())
+        .find(|item| item.label == "Snap")
+        .expect("the 2D viewport header carries a Snap menu")
+        .actions
+        .clone()
+}
+
+fn set_kind(app: &mut App, kind: &str, on: bool) {
+    app.world_mut()
+        .operator("canvas.snap")
+        .param("kind", kind.to_string())
+        .param("on", on)
+        .call()
+        .expect("canvas.snap dispatches")
+        .assert_finished();
+}
