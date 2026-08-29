@@ -948,7 +948,13 @@ struct HoveredViewport {
 /// world-space tool routed through one falls silent while the cursor is there.
 ///
 /// Run it on demand through [`run_active_viewport_update`].
-fn update_active_viewport(
+///
+/// Readers of [`ActiveViewport`] scheduled in the same set order themselves
+/// after this, so they see the panel under the cursor this frame rather than
+/// the one it was over last frame; `crate::snapping::handle_grid_size_scroll`
+/// is one, and without the edge the first scroll after the cursor enters a
+/// canvas would retune the world's grid.
+pub(crate) fn update_active_viewport(
     windows: Query<&Window>,
     hosts: Query<(
         Entity,

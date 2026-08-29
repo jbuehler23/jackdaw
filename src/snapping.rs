@@ -15,7 +15,11 @@ impl Plugin for SnappingPlugin {
             .init_resource::<GridSettings>()
             .add_systems(
                 Update,
-                handle_grid_size_scroll.in_set(crate::EditorInteractionSystems),
+                handle_grid_size_scroll
+                    // The hover pass is what tells this frame's scroll which
+                    // panel it is over and what that panel is showing.
+                    .after(crate::viewport::update_active_viewport)
+                    .in_set(crate::EditorInteractionSystems),
             )
             .add_systems(
                 Update,

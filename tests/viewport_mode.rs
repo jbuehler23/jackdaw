@@ -838,3 +838,90 @@ fn an_imported_overlay_routes_into_the_panel_showing_the_world() {
         "the overlay is routed into a panel that is showing the world",
     );
 }
+
+/// Everything the `Update` schedule orders after `system`.
+///
+/// An ordering may be stated against the system, against a set holding it, or
+/// against a set holding that: `.after(a_system)` names the anonymous set of
+/// everything with that system's type. So the walk starts from the system and
+/// every set that contains it, follows the dependency edges out, and expands
+/// each set it lands on into its members.
+fn ordered_after(app: &App, system: &str) -> std::collections::HashSet<String> {
+    use bevy::ecs::schedule::{NodeId, Schedules};
+    use std::collections::HashSet;
+
+    let schedule = app
+        .world()
+        .resource::<Schedules>()
+        .get(Update)
+        .expect("the app has an Update schedule");
+    let names: Vec<(NodeId, String)> = schedule
+        .systems()
+        .expect("the schedule has run, so its systems are built")
+        .map(|(key, system)| (NodeId::System(key), system.name().as_string()))
+        .collect();
+    let start = names
+        .iter()
+        .find(|(_, name)| name.ends_with(system))
+        .map(|(node, _)| *node)
+        .unwrap_or_else(|| panic!("{system} is scheduled in Update"));
+
+    let graph = schedule.graph();
+    let hierarchy: Vec<(NodeId, NodeId)> = graph.hierarchy().graph().all_edges().collect();
+    let dependency: Vec<(NodeId, NodeId)> = graph.dependency().graph().all_edges().collect();
+
+    let mut sources = vec![start];
+    let mut seen_sources: HashSet<NodeId> = [start].into_iter().collect();
+    let mut next = 0;
+    while next < sources.len() {
+        let node = sources[next];
+        next += 1;
+        for (parent, child) in &hierarchy {
+            if *child == node && seen_sources.insert(*parent) {
+                sources.push(*parent);
+            }
+        }
+    }
+
+    let mut after: HashSet<NodeId> = HashSet::new();
+    let mut frontier: Vec<NodeId> = Vec::new();
+    for (from, to) in &dependency {
+        if seen_sources.contains(from) && after.insert(*to) {
+            frontier.push(*to);
+        }
+    }
+    while let Some(node) = frontier.pop() {
+        for (from, to) in &dependency {
+            if *from == node && after.insert(*to) {
+                frontier.push(*to);
+            }
+        }
+        for (parent, child) in &hierarchy {
+            if *parent == node && after.insert(*child) {
+                frontier.push(*child);
+            }
+        }
+    }
+
+    names
+        .into_iter()
+        .filter(|(node, _)| after.contains(node))
+        .map(|(_, name)| name)
+        .collect()
+}
+
+/// The grid-size chord reads the hovered panel's mode, so it has to read this
+/// frame's answer. Both systems sit in one set with no edge of their own, so
+/// without the ordering the executor is free to run the chord first, and the
+/// first scroll after the cursor moves onto a canvas retunes the world's grid.
+#[test]
+fn the_grid_size_chord_runs_after_the_hover_pass() {
+    let app = util::editor_test_app();
+    let after = ordered_after(&app, "update_active_viewport");
+    assert!(
+        after
+            .iter()
+            .any(|name| name.ends_with("handle_grid_size_scroll")),
+        "the grid-size chord must be ordered after the hover pass",
+    );
+}
