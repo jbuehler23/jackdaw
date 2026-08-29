@@ -3203,6 +3203,57 @@ fn a_dragged_guide_lands_on_a_whole_pixel_or_on_the_grid() {
     );
 }
 
+/// An undo while a guide is being dragged cancels the drag.
+///
+/// Undo restores the very component the drag is editing, and the drag is
+/// still holding the guides it picked up: the release would write those
+/// back over what the undo put there and record the difference as an
+/// edit nobody made.
+#[test]
+fn an_undo_during_a_guide_drag_puts_the_guides_back() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (root, _, _) = authored_scene(&mut app);
+    app.world_mut().entity_mut(root).insert(CanvasGuides {
+        horizontal: Vec::new(),
+        vertical: vec![320.0],
+    });
+    settle(&mut app);
+
+    let line = guide_line_entity(&mut app, panel, CanvasAxis::Vertical, 0);
+    let entries = history_len(&app);
+    let start = begin_drag(&mut app, panel, line, Vec2::new(320.0, 900.0));
+    let distance = screen_position_of(&mut app, panel, Vec2::new(504.0, 900.0)) - start;
+    continue_drag(&mut app, line, start, distance);
+    settle(&mut app);
+    assert_eq!(
+        guide_positions(&app, root, CanvasAxis::Vertical),
+        vec![504.0],
+        "the guide is following the cursor",
+    );
+
+    app.world_mut()
+        .operator("history.undo")
+        .call()
+        .expect("history.undo dispatches")
+        .assert_finished();
+    settle(&mut app);
+    assert_eq!(
+        guide_positions(&app, root, CanvasAxis::Vertical),
+        vec![320.0],
+        "the undo put the guides back the way the drag found them",
+    );
+
+    end_drag(&mut app, line, start, distance);
+    settle(&mut app);
+    assert_eq!(
+        guide_positions(&app, root, CanvasAxis::Vertical),
+        vec![320.0],
+        "and the release that follows writes nothing over them",
+    );
+    assert_eq!(history_len(&app), entries, "nor records anything");
+}
+
 /// A guide drawn along a node's edge does not swallow the node.
 ///
 /// Guides are drawn to place nodes against, so a guide and an edge on

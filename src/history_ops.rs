@@ -7,7 +7,8 @@
 //! If a modal operator is in flight when undo/redo fires, cancel it
 //! first. The snapshot restore would otherwise rip the scene out from
 //! under the modal, leaving its `ActiveModalOperator` marker + per-op
-//! state stale.
+//! state stale. A running 2D canvas gesture goes the same way, through
+//! [`crate::ui_stage::cancel_canvas_gestures`].
 
 use bevy::input::ButtonInput;
 use bevy::prelude::*;
@@ -51,6 +52,7 @@ pub(crate) fn history_undo(_: In<OperatorParameters>, mut commands: Commands) ->
             return;
         }
         cancel_active_modal_if_any(world);
+        crate::ui_stage::cancel_canvas_gestures(world);
         world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
             history.undo(world);
         });
@@ -73,6 +75,7 @@ pub(crate) fn history_redo(_: In<OperatorParameters>, mut commands: Commands) ->
             return;
         }
         cancel_active_modal_if_any(world);
+        crate::ui_stage::cancel_canvas_gestures(world);
         world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
             history.redo(world);
         });

@@ -2594,6 +2594,19 @@ fn finish_guide_drag(world: &mut World, commit: bool) {
     crate::canvas_snap::commit_guides(world, drag.root, drag.before);
 }
 
+/// Put back whatever a canvas gesture is in the middle of, recording
+/// nothing.
+///
+/// Undo and redo restore the very components a running gesture is
+/// editing, and the gesture is still holding the state it started from:
+/// its release would write that back over what the history just put
+/// there, and record the difference as an edit the user never made. So
+/// an undo cancels the gesture first, exactly as Escape does.
+pub fn cancel_canvas_gestures(world: &mut World) {
+    finish_manipulation(world, false);
+    finish_guide_drag(world, false);
+}
+
 /// Escape puts the guides back exactly as the drag found them.
 fn cancel_guide_drag(
     keys: Res<ButtonInput<KeyCode>>,
