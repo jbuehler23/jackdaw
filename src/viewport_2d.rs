@@ -39,6 +39,7 @@ use bevy::{
     ui::{UiGlobalTransform, UiSystems, UiTargetCamera},
     ui_widgets::observe,
 };
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_feathers::{
     button::{ButtonProps, ButtonSize, ButtonVariant, button},
     menu_bar::{
@@ -50,6 +51,7 @@ use jackdaw_scene_types::{CanvasGuides, UiSceneRoot};
 
 use crate::{
     canvas_snap::{CanvasGuidesOp, CanvasRulersOp, CanvasSnap, CanvasSnapKind, CanvasSnapOp},
+    core_extension::CoreExtensionInputContext,
     prefab::{AuthoredUiSceneRoot, ImportedUiSceneRoot},
     prelude::*,
     selection::Selection,
@@ -2285,6 +2287,14 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<Viewport2dGridOp>();
     ctx.register_operator::<SelectionSelectOp>();
     crate::canvas_snap::add_to_extension(ctx);
+    // Shift+R and Shift+G: the rulers and the guides, beside the plain
+    // R and G the 3D tools take.
+    ctx.bind_operator::<CoreExtensionInputContext, CanvasRulersOp>([
+        PresetInput::key("KeyR").shift()
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, CanvasGuidesOp>([
+        PresetInput::key("KeyG").shift()
+    ]);
     crate::screenshot::add_2d_to_extension(ctx);
 }
 

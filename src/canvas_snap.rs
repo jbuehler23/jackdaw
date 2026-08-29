@@ -29,8 +29,10 @@ use crate::ui_stage::CanvasAxis;
 const CANVAS_SECTION: &str = "canvas";
 
 pub(crate) fn plugin(app: &mut App) {
-    app.init_resource::<CanvasSnap>()
-        .add_systems(Update, sync_project_canvas_snap);
+    app.init_resource::<CanvasSnap>().add_systems(
+        Update,
+        (sync_project_canvas_snap, flag_menu_dirty_on_change),
+    );
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -224,6 +226,15 @@ fn sync_project_canvas_snap(
     }
     *loaded_root = Some(project.root.clone());
     *snap = load_section(&project.root, Section::Key(CANVAS_SECTION));
+}
+
+/// Rebuild the top menu bar whenever the canvas settings move, so the
+/// View menu's boxes say where the two view toggles are rather than
+/// where they were when the bar was last built.
+fn flag_menu_dirty_on_change(snap: Res<CanvasSnap>, mut dirty: ResMut<crate::MenuBarDirty>) {
+    if snap.is_changed() {
+        dirty.0 = true;
+    }
 }
 
 /// Write the canvas settings back to the open project. A run with no

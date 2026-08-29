@@ -342,6 +342,68 @@ fn checked_rows(app: &mut App) -> Vec<(String, bool)> {
         .collect()
 }
 
+/// The canvas's two view toggles are in the top bar's View menu as
+/// well as in the canvas header's own, each showing where its switch is.
+#[test]
+fn the_view_menu_carries_the_canvas_view_toggles() {
+    let mut app = util::editor_test_app();
+    // The bar is built behind the editor state, which a headless run
+    // enters only with a project open.
+    let root = project_with_settings("view-menu", "{}");
+    open_project(&mut app, &root);
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    app.update();
+    app.world_mut().resource_mut::<jackdaw::MenuBarDirty>().0 = true;
+    app.update();
+
+    assert!(
+        view_menu_rows(&mut app).contains(&(
+            "[x]op:canvas.rulers?on=false".to_string(),
+            "Canvas Rulers".to_string()
+        )),
+        "the rulers are in the View menu, shown as on: {:?}",
+        view_menu_rows(&mut app),
+    );
+    assert!(
+        view_menu_rows(&mut app).contains(&(
+            "[x]op:canvas.guides?on=false".to_string(),
+            "Canvas Guides".to_string()
+        )),
+        "and so are the guides",
+    );
+
+    app.world_mut()
+        .operator("canvas.rulers")
+        .param("on", false)
+        .call()
+        .expect("canvas.rulers dispatches")
+        .assert_finished();
+    app.update();
+    app.update();
+    assert!(
+        view_menu_rows(&mut app).contains(&(
+            "[ ]op:canvas.rulers?on=true".to_string(),
+            "Canvas Rulers".to_string()
+        )),
+        "and a toggle turned off reads off the next time the menu is built",
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The rows the top bar's View menu carries.
+fn view_menu_rows(app: &mut App) -> Vec<(String, String)> {
+    app.world_mut()
+        .query::<&jackdaw_widgets::menu_bar::MenuBarItem>()
+        .iter(app.world())
+        .find(|item| item.label == "View")
+        .expect("the top bar carries a View menu")
+        .actions
+        .clone()
+}
+
 /// An editor with one 2D viewport panel laid out, so its header's Snap
 /// menu has built its rows.
 fn snap_menu_app() -> App {

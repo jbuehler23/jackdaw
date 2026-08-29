@@ -2113,6 +2113,16 @@ fn discover_gltf_clips(
     }
 }
 
+/// One View-menu row for a canvas view toggle: a box showing where the
+/// switch is, and a call that puts it the other way.
+fn canvas_view_row<O: jackdaw_api::op::Operator>(on: bool, label: &str) -> (String, String) {
+    jackdaw_feathers::menu_bar::checked_row(
+        on,
+        format!("{OP_PREFIX}{}?on={}", O::ID, !on),
+        label.to_string(),
+    )
+}
+
 fn populate_menu(
     world: &mut World,
     menu_bar_entity: &mut SystemState<
@@ -2226,6 +2236,14 @@ fn populate_menu(
     // labelled section.
     let add_menu = add_entity_picker::add_menu_rows(world);
 
+    // The 2D canvas's two view toggles are the same switches the
+    // canvas's own Snap menu carries, shown here as boxes so the top
+    // bar says which way each one is.
+    let canvas = world
+        .get_resource::<canvas_snap::CanvasSnap>()
+        .copied()
+        .unwrap_or_default();
+
     // Current hot-reload state ->reflect in the menu label.
     let hot_reload_on = world
         .get_resource::<hot_reload::HotReloadEnabled>()
@@ -2279,6 +2297,9 @@ fn populate_menu(
                 op_entry::<view_ops::ViewUiZoomInOp>("Zoom UI In"),
                 op_entry::<view_ops::ViewUiZoomOutOp>("Zoom UI Out"),
                 op_entry::<view_ops::ViewUiZoomResetOp>("Reset UI Zoom"),
+                separator(),
+                canvas_view_row::<canvas_snap::CanvasRulersOp>(canvas.show_rulers, "Canvas Rulers"),
+                canvas_view_row::<canvas_snap::CanvasGuidesOp>(canvas.show_guides, "Canvas Guides"),
             ],
         ),
         (TopLevelMenu::Add, add_menu),
