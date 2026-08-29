@@ -1,13 +1,16 @@
-//! The 2D viewport: a dockable panel that renders a `Camera2d` into its
-//! own texture and shows that texture in a UI node, mirroring the 3D
-//! viewport's camera-to-texture pattern (see [`crate::viewport`]).
+//! The 2D presentation of a viewport panel: a `Camera2d` rendered into a
+//! texture and shown in a UI node, mirroring the 3D presentation's
+//! camera-to-texture pattern (see [`crate::viewport`]).
 //!
-//! Holds the panel skeleton, its camera, the teardown that keeps a closed
-//! panel from leaking either, and the panel's navigation: an [`Ui2dView`]
+//! One of the two presentations every viewport panel builds; which of them
+//! is displayed is the panel's mode, in [`crate::viewport_host`].
+//!
+//! Holds the stage skeleton, its camera, the teardown that keeps a closed
+//! panel from leaking either, and the stage's navigation: an [`Ui2dView`]
 //! per panel that scroll and middle-drag move, that `place_stage` turns
 //! into the stage node's size and position, and that rides along with the
 //! scene tab it was framed for. [`route_ui_roots_to_cameras`] points
-//! authored UI roots at this panel's camera and
+//! authored UI roots at this camera and
 //! [`size_targets_to_reference`] holds that camera's image at the authored
 //! reference size. Selection and the editing overlays live in
 //! [`crate::ui_stage`].
@@ -53,7 +56,6 @@ use crate::{
     },
 };
 
-pub use crate::viewport::VIEWPORT_2D_WINDOW_ID;
 use crate::viewport_host::{ViewportHost, ViewportMode, ViewportModeIntent};
 
 /// Furthest out the user can zoom, in stage logical pixels per authored
@@ -83,9 +85,8 @@ const PARKING_CAMERA_ORDER: isize = -2;
 /// edge of the area it is fitted into.
 const FIT_MARGIN: f32 = tokens::SPACING_LG;
 
-/// Marker for a 2D viewport camera. One per `jackdaw.viewport_2d`
-/// panel, so queries that need every 2D viewport camera iterate rather
-/// than using `Single<>`.
+/// Marker for a 2D viewport camera. One per viewport panel, so queries
+/// that need every 2D camera iterate rather than using `Single<>`.
 #[derive(Component)]
 pub struct Viewport2dCamera;
 
@@ -855,11 +856,13 @@ fn entity_is_hovered(entity: Entity, hover_map: &HoverMap, parents: &Query<&Chil
 /// groups are routed in one system so a session needing to park cannot
 /// spawn two parking cameras in a single frame's command queue.
 ///
-/// With several panels open the first wins, matching how `ViewState`
+/// With several panels open one answers for the canvas
+/// ([`crate::viewport_host::primary_2d_host`]), matching how `ViewState`
 /// captures a single `ui_view`.
 pub fn route_ui_roots_to_cameras(
     mut commands: Commands,
-    hosts: Query<&Viewport2dPanelHost>,
+    panels: Query<(Entity, &ViewportHost)>,
+    hosts: Query<(&Viewport2dPanelHost, &crate::viewport::ViewportPanelHost)>,
     parked: Query<Entity, With<UiSceneParkingCamera>>,
     world_view: Query<Entity, With<crate::viewport::MainViewportCamera>>,
     authored: Query<(Entity, Option<&UiTargetCamera>), AuthoredUiSceneRoot>,
@@ -871,8 +874,14 @@ pub fn route_ui_roots_to_cameras(
         return;
     }
 
-    let panel = hosts.iter().next().map(|host| host.camera);
-    let world = world_view.iter().next();
+    let primary = crate::viewport_host::primary_2d_host(panels.iter())
+        .and_then(|entity| hosts.get(entity).ok());
+    let panel = primary.map(|(stage, _)| stage.camera);
+    // The same panel's world camera, so an imported scene and an authored
+    // one are seen from the one panel rather than from two.
+    let world = primary
+        .map(|(_, world)| world.camera)
+        .or_else(|| world_view.iter().next());
     let parking = ((!authored.is_empty() && panel.is_none())
         || (!imported.is_empty() && world.is_none()))
     .then(|| {
@@ -1079,9 +1088,8 @@ fn place_stage(node: &mut Node, reference: Option<UVec2>, view: Ui2dView, area: 
     }
 }
 
-/// Build closure for the `jackdaw.viewport_2d` `DockWindowDescriptor`.
-///
-/// A panel opening in [`ViewportMode::TwoD`]. Both presentations are built
+/// A viewport panel opening in [`ViewportMode::TwoD`].
+/// Both presentations are built
 /// either way; see [`crate::viewport_host::build_viewport_panel_in`].
 pub fn build_viewport_2d_panel(world: &mut World, parent: Entity) {
     crate::viewport_host::build_viewport_panel_in(
@@ -1261,7 +1269,7 @@ pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity
 /// right.
 ///
 /// The title names the scene rather than the panel; the dock tab above it
-/// already says "2D Viewport".
+/// already says "Viewport".
 ///
 /// Sized like the 3D viewport's toolbar (`crate::layout::toolbar`): 30px
 /// tall, 1px border, top corners rounded against the stage below, and its
@@ -1452,8 +1460,8 @@ fn update_viewport_2d_grid_readout(
 }
 
 /// What the header says when no UI scene is open: the panel's own name,
-/// as [`crate::builtin_extensions::Viewport2dExtension`] registers it.
-const PANEL_TITLE_FALLBACK: &str = "2D Viewport";
+/// as [`crate::builtin_extensions::ViewportExtension`] registers it.
+const PANEL_TITLE_FALLBACK: &str = "Viewport";
 
 /// Marker on the header text naming the UI scene the panel is editing.
 #[derive(Component)]
@@ -1514,9 +1522,9 @@ fn update_viewport_2d_zoom_readout(
     }
 }
 
-/// Operators this panel owns. Registered on
-/// [`crate::builtin_extensions::Viewport2dExtension`], so a workspace
-/// without a 2D viewport does not offer them.
+/// Operators the 2D presentation owns. Registered on
+/// [`crate::builtin_extensions::ViewportExtension`] beside the panel that
+/// carries them, so a workspace without a viewport does not offer them.
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<Viewport2dFrameOp>();
     ctx.register_menu_entry::<Viewport2dFrameOp>(TopLevelMenu::View);

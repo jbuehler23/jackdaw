@@ -582,7 +582,6 @@ impl Plugin for ExtensionPlugin {
             app.add_plugins(core_extension::plugin)
                 .register_extension::<builtin_extensions::CoreWindowsExtension>()
                 .register_extension::<builtin_extensions::ViewportExtension>()
-                .register_extension::<builtin_extensions::Viewport2dExtension>()
                 .register_extension::<builtin_extensions::UiPaletteExtension>()
                 .register_extension::<builtin_extensions::AssetBrowserExtension>()
                 .register_extension::<builtin_extensions::GamePanelExtension>()
@@ -2318,7 +2317,10 @@ pub(crate) fn window_open(
     registry: Res<jackdaw_panels::WindowRegistry>,
     mut commands: bevy::prelude::Commands,
 ) -> OperatorResult {
-    let window_id = params.as_str("window_id").map(str::to_string)?;
+    let window_id = params
+        .as_str("window_id")
+        .map(viewport::canonical_window_id)
+        .map(str::to_string)?;
     // Reject unknown ids up front so callers get `Cancelled` rather
     // than a silent no-op + `Finished`. Lets the menu/tooltip pipeline
     // distinguish "user opened a window" from "user clicked a stale
@@ -3370,7 +3372,10 @@ fn auto_save_layout_on_change(
 /// 1. `WorkspacesPersist`: full per-workspace registry (current).
 /// 2. Bare `DockTree`: single-workspace layout (older format).
 /// 3. None / unparseable: fall through to defaults.
-fn init_layout(world: &mut World) {
+///
+/// Public so a test can load a layout without driving the whole
+/// `OnEnter(AppState::Editor)` transition.
+pub fn init_layout(world: &mut World) {
     let layout_json = world
         .get_resource::<crate::project::ProjectRoot>()
         .and_then(|p| p.config.layout.clone());
@@ -3378,10 +3383,13 @@ fn init_layout(world: &mut World) {
     let mut loaded_tree = false;
     if let Some(json) = layout_json {
         // Try the per-workspace format first.
-        if let Ok(persist) =
+        if let Ok(mut persist) =
             serde_json::from_value::<jackdaw_panels::WorkspacesPersist>(json.clone())
             && !persist.workspaces.is_empty()
         {
+            for workspace in &mut persist.workspaces {
+                canonicalise_persisted_windows(&mut workspace.tree);
+            }
             let active_tree = {
                 let mut registry = world.resource_mut::<jackdaw_panels::WorkspaceRegistry>();
                 persist.apply_to_registry(&mut registry);
@@ -3394,8 +3402,9 @@ fn init_layout(world: &mut World) {
         }
         // Fall back to the older bare-DockTree format.
         if !loaded_tree
-            && let Ok(tree) = serde_json::from_value::<jackdaw_panels::tree::DockTree>(json)
+            && let Ok(mut tree) = serde_json::from_value::<jackdaw_panels::tree::DockTree>(json)
         {
+            canonicalise_persisted_windows(&mut tree);
             world.insert_resource(tree);
             loaded_tree = true;
         }
@@ -3423,6 +3432,19 @@ fn init_layout(world: &mut World) {
     // Covers both the "fresh defaults" path and the older bare-DockTree
     // load path, so subsequent workspace switches save/restore correctly.
     sync_active_workspace_from_live_tree(world);
+}
+
+/// Point a saved layout's tabs at the windows that answer for them today.
+///
+/// A layout saved while the canvas was a panel of its own still names that
+/// panel, and nothing registers it now. Its tabs become viewport tabs, and a
+/// leaf that already carries one keeps a single tab rather than two showing
+/// the same panel.
+fn canonicalise_persisted_windows(tree: &mut jackdaw_panels::tree::DockTree) {
+    tree.alias_window_kind(
+        viewport::VIEWPORT_2D_WINDOW_ID,
+        viewport::VIEWPORT_WINDOW_ID,
+    );
 }
 
 /// Open `window_id` in its registered `default_area` leaf. If the
@@ -3482,6 +3504,7 @@ fn largest_visible_leaf(
 /// first, and priority order puts Components first). The Terrain tab
 /// therefore already exists by the time `entity.add.terrain` runs.
 pub(crate) fn open_window_in_default_area_if_absent(world: &mut World, window_id: &str) {
+    let window_id = viewport::canonical_window_id(window_id);
     let existing = {
         let tree = world.resource::<jackdaw_panels::tree::DockTree>();
         tree.find_leaf_with_window(window_id).map(|leaf_id| {

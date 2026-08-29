@@ -89,10 +89,10 @@ fn bind_context_is_not_pickable() {
 #[test]
 fn an_entity_with_bindings_gets_an_inspector_card() {
     let mut app = util::editor_test_app();
-    // `selection.select` is the 2D viewport extension's operator.
+    // `selection.select` is the viewport panel extension's operator.
     jackdaw_api_internal::lifecycle::enable_extension(
         app.world_mut(),
-        &jackdaw::builtin_extensions::Viewport2dExtension.id(),
+        &jackdaw::builtin_extensions::ViewportExtension.id(),
     );
     app.update();
     app.world_mut()

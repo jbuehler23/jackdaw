@@ -72,10 +72,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_menu_entry::<WindowScreenshotOp>(TopLevelMenu::Tools);
 }
 
-/// The 2D viewport's own capture. Registered on
-/// [`crate::builtin_extensions::Viewport2dExtension`] rather than here,
-/// so a workspace without that panel is not offered a screenshot of a
-/// render target it has no camera for.
+/// The 2D presentation's own capture. Registered beside the viewport
+/// panel's other 2D operators rather than here, so a workspace without a
+/// viewport is not offered a screenshot of a render target it has no
+/// camera for.
 pub(crate) fn add_2d_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<Viewport2dScreenshotOp>();
     ctx.register_menu_entry::<Viewport2dScreenshotOp>(TopLevelMenu::Tools);
@@ -138,14 +138,24 @@ pub fn queue_capture(
 /// The panel holds its image at the scene's reference size (see
 /// [`crate::viewport_2d::size_targets_to_reference`]), so the file holds the
 /// canvas at its authored resolution whatever the dock leaf measures and
-/// whatever the user has zoomed to. With several 2D panels open the first
-/// wins, matching how a UI scene is routed.
+/// whatever the user has zoomed to. With several panels open the one
+/// answering for the canvas is captured, matching how a UI scene is routed.
 pub fn queue_2d_capture(
     world: &mut World,
     path: PathBuf,
     exit_when_done: bool,
 ) -> Result<(), CaptureError> {
-    queue_camera_capture::<crate::viewport_2d::Viewport2dCamera>(world, path, exit_when_done)
+    let camera = primary_2d_camera(world).ok_or(CaptureError::NoViewport)?;
+    queue_capture_of(world, camera, path, exit_when_done)
+}
+
+/// The 2D camera of the panel answering for the canvas.
+fn primary_2d_camera(world: &mut World) -> Option<Entity> {
+    let mut panels = world.query::<(Entity, &crate::viewport_host::ViewportHost)>();
+    let panel = crate::viewport_host::primary_2d_host(panels.iter(world))?;
+    world
+        .get::<crate::viewport_2d::Viewport2dPanelHost>(panel)
+        .map(|host| host.camera)
 }
 
 /// Queue a capture of the render target belonging to the first camera
@@ -156,9 +166,23 @@ fn queue_camera_capture<C: Component>(
     path: PathBuf,
     exit_when_done: bool,
 ) -> Result<(), CaptureError> {
-    let mut cameras = world.query_filtered::<&RenderTarget, With<C>>();
-    let target = cameras.iter(world).next().ok_or(CaptureError::NoViewport)?;
-    let handle = target
+    let mut cameras = world.query_filtered::<Entity, With<C>>();
+    let camera = cameras.iter(world).next().ok_or(CaptureError::NoViewport)?;
+    queue_capture_of(world, camera, path, exit_when_done)
+}
+
+/// Queue a capture of `camera`'s render target, which has to be an image:
+/// a camera drawing straight to the window has no texture of its own to
+/// read back, and the window capture is the way to that picture.
+fn queue_capture_of(
+    world: &mut World,
+    camera: Entity,
+    path: PathBuf,
+    exit_when_done: bool,
+) -> Result<(), CaptureError> {
+    let handle = world
+        .get::<RenderTarget>(camera)
+        .ok_or(CaptureError::NoViewport)?
         .as_image()
         .cloned()
         .ok_or(CaptureError::NotAnImageTarget)?;

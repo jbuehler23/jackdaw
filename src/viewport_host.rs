@@ -91,6 +91,26 @@ pub struct ViewportHost {
     pub two_d: Entity,
 }
 
+/// The panel that answers for the editor's one 2D canvas.
+///
+/// A UI scene is routed into a single camera and captured from a single
+/// image, so with several panels open one of them has to be picked. The
+/// first panel showing the canvas is the one the user is looking at; when
+/// none is showing it the first panel stands in, so a scene opened while
+/// every panel is in 3D still lays out against a real target.
+pub fn primary_2d_host<'a>(
+    hosts: impl Iterator<Item = (Entity, &'a ViewportHost)>,
+) -> Option<Entity> {
+    let mut first = None;
+    for (entity, host) in hosts {
+        if host.mode == ViewportMode::TwoD {
+            return Some(entity);
+        }
+        first.get_or_insert(entity);
+    }
+    first
+}
+
 /// Build a viewport panel in the mode `intent` asks for.
 ///
 /// Both presentations are built whatever the mode is, and the mode shows one

@@ -204,9 +204,13 @@ impl JackdawExtension for CoreWindowsExtension {
     }
 }
 
-/// 3D viewport, registered as a regular dock panel so multiple
+/// The viewport, registered as a regular dock panel so multiple
 /// instances (quad-view, stacked viewports for animation work, etc.)
 /// can coexist in the dock tree.
+///
+/// One panel shows either the 3D world or the 2D canvas, so the operators
+/// addressing the canvas are registered here too rather than on a panel of
+/// their own.
 #[derive(Default)]
 pub struct ViewportExtension;
 
@@ -224,6 +228,7 @@ impl JackdawExtension for ViewportExtension {
     }
 
     fn register(&self, ctx: &mut ExtensionContext) {
+        crate::viewport_2d::add_to_extension(ctx);
         ctx.register_window(
             WindowDescriptor::new(crate::viewport::VIEWPORT_WINDOW_ID)
                 .with_name("Viewport")
@@ -232,39 +237,6 @@ impl JackdawExtension for ViewportExtension {
                 .with_build(|window| {
                     let parent = window.target_entity();
                     crate::viewport::build_viewport_panel(window.world_mut(), parent);
-                }),
-        );
-    }
-}
-
-/// 2D viewport, registered as a regular dock panel alongside the 3D one
-/// so a UI-authoring workspace can dock both side by side.
-#[derive(Default)]
-pub struct Viewport2dExtension;
-
-impl JackdawExtension for Viewport2dExtension {
-    fn id(&self) -> String {
-        "jackdaw.viewport_2d_panel".to_string()
-    }
-
-    fn label(&self) -> String {
-        "2D Viewport".to_string()
-    }
-
-    fn kind(&self) -> ExtensionKind {
-        ExtensionKind::Builtin
-    }
-
-    fn register(&self, ctx: &mut ExtensionContext) {
-        crate::viewport_2d::add_to_extension(ctx);
-        ctx.register_window(
-            WindowDescriptor::new(crate::viewport_2d::VIEWPORT_2D_WINDOW_ID)
-                .with_name("2D Viewport")
-                .with_default_area(DefaultArea::Center)
-                .with_priority(1)
-                .with_build(|window| {
-                    let parent = window.target_entity();
-                    crate::viewport_2d::build_viewport_2d_panel(window.world_mut(), parent);
                 }),
         );
     }

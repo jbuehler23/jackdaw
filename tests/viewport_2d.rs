@@ -1,7 +1,7 @@
 //! 2D viewport panel and navigation coverage.
 //!
-//! `build_viewport_2d_panel` is what the dock-tree reconciler calls when
-//! it instantiates a `jackdaw.viewport_2d` leaf. These tests call it
+//! `build_viewport_2d_panel` builds a viewport panel opening on the
+//! canvas, which is what a UI scene asks for. These tests call it
 //! directly against a headless editor app (the reconciler itself only
 //! runs after entering `AppState::Editor`) and pin these contracts:
 //!
@@ -55,7 +55,7 @@ use jackdaw_scene_types::UiSceneRoot;
 use jackdaw::{
     selection::Selection,
     ui_stage::UiSelectionOverlay,
-    viewport::{ActiveViewport, ViewportPanelHost},
+    viewport::{ActiveViewport, VIEWPORT_WINDOW_ID, ViewportPanelHost},
     viewport_2d::{
         DEFAULT_UI_GRID, MAX_UI_GRID, MAX_ZOOM, MIN_UI_GRID, MIN_ZOOM, Scene2dViewport, Ui2dView,
         Viewport2dCamera, Viewport2dGridReadout, Viewport2dGridStep, Viewport2dMode,
@@ -540,23 +540,36 @@ fn applying_the_view_moves_the_camera_and_scales_the_projection() {
     );
 }
 
+/// The canvas is a mode of the viewport panel, so it is not a dock window
+/// of its own any more. Its old id still reaches the panel that answers
+/// for it: a saved layout and a scripted run both name it, and neither
+/// should meet a window nobody registers.
 #[test]
-fn the_panel_registers_as_a_dock_window() {
-    let mut app = util::editor_test_app();
-    // The startup resolver only enables what the developer's on-disk
-    // extensions.json lists, so force this one on rather than depending
-    // on the machine the test runs on.
-    jackdaw_api_internal::lifecycle::enable_extension(
-        app.world_mut(),
-        &jackdaw::builtin_extensions::Viewport2dExtension.id(),
+fn the_old_2d_window_id_opens_the_viewport_panel() {
+    let mut app = op_app();
+    let leaf = dock_leaf(&mut app, &["jackdaw.outliner", VIEWPORT_WINDOW_ID]);
+
+    assert!(
+        app.world()
+            .resource::<jackdaw_panels::WindowRegistry>()
+            .get("jackdaw.viewport_2d")
+            .is_none(),
+        "the canvas is a viewport mode, not a dock window of its own",
     );
+
+    app.world_mut()
+        .operator("window.open")
+        .param("window_id", "jackdaw.viewport_2d")
+        .call()
+        .expect("window.open dispatches")
+        .assert_finished();
     app.update();
 
-    let registry = app.world().resource::<jackdaw_panels::WindowRegistry>();
-    let descriptor = registry
-        .get("jackdaw.viewport_2d")
-        .expect("jackdaw.viewport_2d registered as a dock window");
-    assert_eq!(descriptor.name, "2D Viewport");
+    assert_eq!(
+        active_window(&app, leaf).as_deref(),
+        Some(VIEWPORT_WINDOW_ID),
+        "the old id fronts the panel that answers for it",
+    );
 }
 
 /// The reference-resolution contract. The panel's render-target image is
@@ -2015,8 +2028,8 @@ fn the_frame_op_returns_a_panned_and_zoomed_panel_to_the_fit() {
 }
 
 /// The header says what is being edited and how far in the view is. The
-/// dock tab already says "2D Viewport", so repeating it in the header
-/// spends the one line of chrome the panel has on nothing.
+/// dock tab already says "Viewport", so repeating it in the header spends
+/// the one line of chrome the panel has on nothing.
 #[test]
 fn the_header_names_the_scene_and_reads_the_zoom_back() {
     use jackdaw::scenes::{SceneTab, Scenes};
@@ -2027,7 +2040,7 @@ fn the_header_names_the_scene_and_reads_the_zoom_back() {
 
     assert_eq!(
         title_text(&mut app),
-        "2D Viewport",
+        "Viewport",
         "with no UI scene open the header falls back to the panel's name",
     );
     assert_eq!(zoom_text(&mut app, parent), "100%");
@@ -2164,7 +2177,6 @@ fn the_screenshot_ops_aim_at_the_window_and_the_panel_and_write_pngs() {
 /// UI scene in front and its canvas framed.
 #[test]
 fn a_ui_scene_opened_before_the_workspace_exists_is_still_fronted_and_framed() {
-    use jackdaw::viewport::VIEWPORT_WINDOW_ID;
     use jackdaw::viewport_host::{PendingViewportFocus, focus_viewport};
 
     let mut app = util::editor_test_app();
@@ -2241,7 +2253,6 @@ fn a_ui_scene_opened_before_the_workspace_exists_is_still_fronted_and_framed() {
 fn a_focus_asked_for_by_a_tab_the_user_left_does_not_front_the_panel() {
     use jackdaw::scenes::swap::swap_active_tab;
     use jackdaw::scenes::{SceneTab, Scenes, TabContent};
-    use jackdaw::viewport::VIEWPORT_WINDOW_ID;
     use jackdaw::viewport_host::PendingViewportFocus;
 
     let mut app = util::editor_test_app();
@@ -2391,17 +2402,17 @@ fn selecting_by_name_needs_exactly_one_match() {
     );
 }
 
-/// An editor app with the 2D viewport extension on.
+/// An editor app with the viewport panel's extension on.
 ///
-/// Its operators are registered by `Viewport2dExtension`, and the startup
-/// resolver only enables what the developer's on-disk extensions.json
-/// lists, so an op test that skips this passes or fails by the machine it
-/// runs on, and by which other tests started beside it.
+/// The canvas operators are registered by `ViewportExtension`, and the
+/// startup resolver only enables what the developer's on-disk
+/// extensions.json lists, so an op test that skips this passes or fails by
+/// the machine it runs on, and by which other tests started beside it.
 fn op_app() -> App {
     let mut app = util::editor_test_app();
     jackdaw_api_internal::lifecycle::enable_extension(
         app.world_mut(),
-        &jackdaw::builtin_extensions::Viewport2dExtension.id(),
+        &jackdaw::builtin_extensions::ViewportExtension.id(),
     );
     app.update();
     app

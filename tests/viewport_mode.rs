@@ -5,6 +5,9 @@
 //! is reachable from either bar and reads back the mode it is in, and that the
 //! `viewport.mode` operator moves every open panel and records the choice as
 //! the user's rather than the scene kind's.
+//!
+//! Also what a layout saved while the canvas was a panel of its own loads
+//! as, and which panel a UI scene is routed into when several are open.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -456,5 +459,157 @@ fn a_tab_that_was_never_switched_follows_its_scenes_kind() {
     assert!(
         !host(&app, panel).mode_chosen,
         "one tab's override is that tab's, and says nothing about another",
+    );
+}
+
+/// The dock as a saved layout describes it: one leaf holding `windows`,
+/// with `fronted`'s tab in front.
+fn saved_tree(windows: &[&str], fronted: &str) -> jackdaw_panels::tree::DockTree {
+    use jackdaw_panels::{
+        area::DockAreaStyle,
+        tree::{DockLeaf, DockNode, DockTree},
+    };
+
+    let mut tree = DockTree::default();
+    let leaf = tree.set_root_leaf(
+        DockLeaf::new("center", DockAreaStyle::default())
+            .with_windows(windows.iter().copied().map(String::from).collect()),
+    );
+    let tab = tree
+        .get(leaf)
+        .and_then(DockNode::as_leaf)
+        .and_then(|leaf| {
+            leaf.tabs()
+                .find_map(|(window, tab)| (window == fronted).then_some(tab))
+        })
+        .expect("the saved layout holds the window it fronts");
+    tree.set_active(leaf, tab);
+    tree
+}
+
+/// Load `layout` the way opening a project does.
+fn load_layout(app: &mut App, layout: serde_json::Value) {
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot {
+            root: std::path::PathBuf::from("/tmp/jackdaw-viewport-mode"),
+            config: jackdaw::project::ProjectConfig {
+                layout: Some(layout),
+                ..default()
+            },
+        });
+    jackdaw::init_layout(app.world_mut());
+}
+
+/// The windows the live tree's one leaf holds, and the one in front.
+fn loaded_leaf(app: &App) -> (Vec<String>, Option<String>) {
+    use jackdaw_panels::tree::{DockNode, DockTree};
+
+    let tree = app.world().resource::<DockTree>();
+    let leaf = tree
+        .root
+        .and_then(|root| tree.get(root))
+        .and_then(DockNode::as_leaf)
+        .expect("the loaded tree is a single leaf");
+    let windows = leaf.tabs().map(|(window, _)| window.to_string()).collect();
+    let active = leaf.active.and_then(|active| {
+        leaf.tabs()
+            .find_map(|(window, tab)| (tab == active).then(|| window.to_string()))
+    });
+    (windows, active)
+}
+
+/// A layout saved while the canvas was a panel of its own docked both of
+/// them in one leaf. Reopening it must not show two tabs for the panel
+/// they have become, and the tab the user left in front stays in front.
+#[test]
+fn a_saved_layout_holding_both_viewports_loads_as_one_tab() {
+    let mut app = util::editor_test_app();
+    let persist = jackdaw_panels::WorkspacesPersist {
+        active: Some("authoring".to_string()),
+        workspaces: vec![jackdaw_panels::WorkspacePersist {
+            id: "authoring".to_string(),
+            name: "Authoring".to_string(),
+            icon: None,
+            accent_color: [0.0, 0.0, 0.0, 1.0],
+            tree: saved_tree(
+                &["jackdaw.viewport", "jackdaw.viewport_2d"],
+                "jackdaw.viewport_2d",
+            ),
+        }],
+    };
+    load_layout(
+        &mut app,
+        serde_json::to_value(&persist).expect("the persist serialises"),
+    );
+
+    let (windows, active) = loaded_leaf(&app);
+    assert_eq!(windows, vec!["jackdaw.viewport".to_string()]);
+    assert_eq!(
+        active.as_deref(),
+        Some("jackdaw.viewport"),
+        "the leaf still fronts a viewport, not a tab that was dropped",
+    );
+}
+
+/// A layout that docked only the canvas keeps its leaf, showing the panel
+/// the canvas is now a mode of.
+#[test]
+fn a_saved_layout_holding_only_the_canvas_loads_the_viewport() {
+    let mut app = util::editor_test_app();
+    let tree = saved_tree(&["jackdaw.viewport_2d"], "jackdaw.viewport_2d");
+    load_layout(
+        &mut app,
+        serde_json::to_value(&tree).expect("the tree serialises"),
+    );
+
+    let (windows, active) = loaded_leaf(&app);
+    assert_eq!(windows, vec!["jackdaw.viewport".to_string()]);
+    assert_eq!(active.as_deref(), Some("jackdaw.viewport"));
+}
+
+/// With two panels open, the UI scene goes to the one showing the canvas.
+/// Routing it into the first panel regardless would leave the user looking
+/// at an empty stage while a panel they cannot see holds the scene.
+#[test]
+fn a_ui_scene_routes_into_the_panel_showing_the_canvas() {
+    use bevy::ui::UiTargetCamera;
+    use jackdaw::viewport_2d::build_viewport_2d_panel;
+    use jackdaw_scene_types::UiSceneRoot;
+
+    let mut app = util::editor_test_app();
+    let in_3d = panel(&mut app);
+    let in_2d = app
+        .world_mut()
+        .spawn((jackdaw::EditorEntity, Node::default()))
+        .id();
+    build_viewport_2d_panel(app.world_mut(), in_2d);
+    assert_eq!(host(&app, in_3d).mode, ViewportMode::ThreeD);
+    assert_eq!(host(&app, in_2d).mode, ViewportMode::TwoD);
+
+    let root = app
+        .world_mut()
+        .spawn((
+            UiSceneRoot {
+                reference_size: UVec2::new(1280, 720),
+            },
+            Node::default(),
+        ))
+        .id();
+    app.world_mut()
+        .run_system_cached(jackdaw::viewport_2d::route_ui_roots_to_cameras)
+        .expect("route_ui_roots_to_cameras ran");
+    app.update();
+
+    let canvas_camera = app
+        .world()
+        .get::<Viewport2dPanelHost>(in_2d)
+        .expect("host on panel parent")
+        .camera;
+    assert_eq!(
+        app.world()
+            .get::<UiTargetCamera>(root)
+            .map(UiTargetCamera::entity),
+        Some(canvas_camera),
+        "the scene is routed into the panel the user can see it in",
     );
 }
