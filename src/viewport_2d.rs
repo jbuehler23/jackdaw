@@ -2086,11 +2086,15 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
         String::new(),
     ));
     for (steps, label) in [(-1, "Finer"), (1, "Coarser")] {
+        // Named on this panel, like the stepper beside the menu: the
+        // grid is per panel, so a row in one panel's header must not
+        // move another panel's lattice.
         rows.push((
             format!(
-                "{OP_ACTION_PREFIX}{}?size={}",
+                "{OP_ACTION_PREFIX}{}?size={}&panel={}",
                 Viewport2dGridOp::ID,
-                stepped_ui_grid(grid, steps)
+                stepped_ui_grid(grid, steps),
+                host.to_bits(),
             ),
             label.to_string(),
         ));
@@ -2373,25 +2377,39 @@ pub(crate) fn viewport_2d_mode(
     label = "Set 2D Canvas Grid",
     description = "Set the lattice the 2D viewport's gestures land on, in authored pixels.",
     allows_undo = false,
-    params(size(f64, doc = "Grid size in authored pixels."))
+    params(
+        size(f64, doc = "Grid size in authored pixels."),
+        panel(
+            i64,
+            doc = "Bits of the panel content Entity to set. Omit to set every open 2D panel."
+        )
+    )
 )]
 pub(crate) fn viewport_2d_grid(
     params: In<OperatorParameters>,
-    mut hosts: Query<&mut Viewport2dPanelHost>,
+    mut hosts: Query<(Entity, &mut Viewport2dPanelHost)>,
 ) -> OperatorResult {
     let size = params.as_float("size")? as f32;
     if !size.is_finite() || size <= 0.0 {
         warn!("viewport2d.grid: 'size' must be a positive number of authored pixels");
         return OperatorResult::Cancelled;
     }
-    if hosts.is_empty() {
-        warn!("viewport2d.grid: no 2D viewport panel is open");
-        return OperatorResult::Cancelled;
-    }
+    let panel = params
+        .as_int("panel")
+        .map(|bits| Entity::from_bits(bits as u64));
     let grid = size.clamp(MIN_UI_GRID, MAX_UI_GRID);
-    for mut host in &mut hosts {
+    let mut set = 0;
+    for (entity, mut host) in &mut hosts {
+        if panel.is_some_and(|panel| panel != entity) {
+            continue;
+        }
         let view = Ui2dView { grid, ..host.view };
         host.set_view(view);
+        set += 1;
+    }
+    if set == 0 {
+        warn!("viewport2d.grid: no 2D viewport panel is open to set the grid on");
+        return OperatorResult::Cancelled;
     }
     OperatorResult::Finished
 }

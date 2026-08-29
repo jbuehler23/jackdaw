@@ -193,8 +193,10 @@ fn the_snap_kinds_stay_out_of_undo_snapshots() {
 
 #[test]
 fn the_header_snap_menu_lists_every_kind_with_its_state() {
-    let mut app = snap_menu_app();
+    let (mut app, panel) = snap_menu_app();
 
+    let finer = format!("op:viewport2d.grid?size=4&panel={}", panel.to_bits());
+    let coarser = format!("op:viewport2d.grid?size=16&panel={}", panel.to_bits());
     assert_eq!(
         snap_menu_rows(&mut app)
             .iter()
@@ -215,8 +217,8 @@ fn the_header_snap_menu_lists_every_kind_with_its_state() {
             ("[x]op:canvas.rulers?on=false", "Show Rulers"),
             ("[x]op:canvas.guides?on=false", "Show Guides"),
             ("##Grid: 8 px", ""),
-            ("op:viewport2d.grid?size=4", "Finer"),
-            ("op:viewport2d.grid?size=16", "Coarser"),
+            (finer.as_str(), "Finer"),
+            (coarser.as_str(), "Coarser"),
         ],
         "the menu reads the canvas's settings, and every row calls what it shows",
     );
@@ -236,7 +238,7 @@ fn the_header_snap_menu_lists_every_kind_with_its_state() {
 fn clicking_a_snap_row_flips_the_kind_and_leaves_the_menu_open() {
     use jackdaw_widgets::menu_bar::MenuBarState;
 
-    let mut app = snap_menu_app();
+    let (mut app, panel) = snap_menu_app();
     open_snap_menu(&mut app);
 
     click_row(&mut app, "op:canvas.snap?kind=pixel");
@@ -256,7 +258,10 @@ fn clicking_a_snap_row_flips_the_kind_and_leaves_the_menu_open() {
     );
 
     // A row that is a command rather than a box is done with the menu.
-    click_row(&mut app, "op:viewport2d.grid?size=4");
+    click_row(
+        &mut app,
+        &format!("op:viewport2d.grid?size=4&panel={}", panel.to_bits()),
+    );
     assert!(
         app.world().resource::<MenuBarState>().open_menu.is_none(),
         "a plain row closes the menu behind it",
@@ -342,6 +347,79 @@ fn checked_rows(app: &mut App) -> Vec<(String, bool)> {
         .collect()
 }
 
+/// A grid row in one panel's menu moves that panel's lattice alone.
+///
+/// The stepper beside the menu is per panel, and the row saying the same
+/// thing has to mean the same thing: two panels open on the same scene
+/// are two framings of it, and coarsening one is not a statement about
+/// the other.
+#[test]
+fn a_grid_row_moves_the_panel_whose_menu_it_is_in() {
+    let (mut app, first) = snap_menu_app();
+    let second = build_panel(&mut app);
+
+    let rows = snap_menu_rows_of(&mut app, first);
+    let finer = rows
+        .iter()
+        .find(|(_, label)| label == "Finer")
+        .map(|(action, _)| action.clone())
+        .expect("the first panel's menu offers a finer grid");
+    let call = jackdaw_feathers::button::ButtonOperatorCall::try_from(finer.as_str())
+        .expect("the row calls an operator");
+    let mut dispatch = app.world_mut().operator("viewport2d.grid");
+    for (key, value) in &call.params {
+        dispatch = dispatch.param(key.to_string(), value.clone());
+    }
+    dispatch
+        .call()
+        .expect("viewport2d.grid dispatches")
+        .assert_finished();
+    app.update();
+
+    assert_eq!(grid_of(&app, first), 4.0, "the panel the row is in halves");
+    assert_eq!(
+        grid_of(&app, second),
+        jackdaw::viewport_2d::DEFAULT_UI_GRID,
+        "and the other panel keeps the lattice it was on",
+    );
+}
+
+/// The grid one 2D panel is on.
+fn grid_of(app: &App, panel: Entity) -> f32 {
+    app.world()
+        .get::<jackdaw::viewport_2d::Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .view
+        .grid
+}
+
+/// The rows the Snap menu in `panel`'s header would open with.
+fn snap_menu_rows_of(app: &mut App, panel: Entity) -> Vec<(String, String)> {
+    let items: Vec<(Entity, Vec<(String, String)>)> = app
+        .world_mut()
+        .query::<(Entity, &jackdaw_widgets::menu_bar::MenuBarItem)>()
+        .iter(app.world())
+        .filter(|(_, item)| item.label == "Snap")
+        .map(|(entity, item)| (entity, item.actions.clone()))
+        .collect();
+    items
+        .into_iter()
+        .find(|(entity, _)| descends_from(app, *entity, panel))
+        .map(|(_, actions)| actions)
+        .expect("the panel's header carries a Snap menu")
+}
+
+fn descends_from(app: &App, entity: Entity, ancestor: Entity) -> bool {
+    let mut cursor = entity;
+    while let Some(parent) = app.world().get::<ChildOf>(cursor).map(ChildOf::parent) {
+        if parent == ancestor {
+            return true;
+        }
+        cursor = parent;
+    }
+    false
+}
+
 /// The canvas's two view toggles are in the top bar's View menu as
 /// well as in the canvas header's own, each showing where its switch is.
 #[test]
@@ -406,8 +484,14 @@ fn view_menu_rows(app: &mut App) -> Vec<(String, String)> {
 
 /// An editor with one 2D viewport panel laid out, so its header's Snap
 /// menu has built its rows.
-fn snap_menu_app() -> App {
+fn snap_menu_app() -> (App, Entity) {
     let mut app = util::editor_test_app();
+    let parent = build_panel(&mut app);
+    (app, parent)
+}
+
+/// One more 2D viewport panel, laid out.
+fn build_panel(app: &mut App) -> Entity {
     let parent = app
         .world_mut()
         .spawn((
@@ -423,7 +507,7 @@ fn snap_menu_app() -> App {
     for _ in 0..4 {
         app.update();
     }
-    app
+    parent
 }
 
 /// The rows the header's Snap menu would open with.
