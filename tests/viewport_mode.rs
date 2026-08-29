@@ -7,7 +7,8 @@
 //! the user's rather than the scene kind's.
 //!
 //! Also what a layout saved while the canvas was a panel of its own loads
-//! as, and which panel a UI scene is routed into when several are open.
+//! as, which panel a UI scene is routed into when several are open, and
+//! which surface a capture of the viewport aims at.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -612,4 +613,63 @@ fn a_ui_scene_routes_into_the_panel_showing_the_canvas() {
         Some(canvas_camera),
         "the scene is routed into the panel the user can see it in",
     );
+}
+
+/// A capture of the viewport is a picture of what the user is looking at,
+/// so it follows the mode: the world camera's image in 3D, the canvas
+/// camera's in 2D. Aiming at the world camera either way would hand back a
+/// picture of an empty world to someone editing a screen.
+#[test]
+fn the_viewport_capture_aims_at_the_surface_the_mode_is_showing() {
+    use bevy::camera::RenderTarget;
+    use bevy::render::view::screenshot::Screenshot;
+
+    let mut app = util::editor_test_app();
+    let panel = panel(&mut app);
+    let world_camera = app
+        .world()
+        .get::<ViewportPanelHost>(panel)
+        .expect("host on panel parent")
+        .camera;
+    let canvas_camera = app
+        .world()
+        .get::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .camera;
+
+    for (mode, camera) in [
+        ("3d", world_camera),
+        ("2d", canvas_camera),
+        // Back again, so the second aim is a change rather than the state
+        // the panel happened to settle in.
+        ("3d", world_camera),
+    ] {
+        switch_mode(&mut app, mode);
+        let path = std::env::temp_dir().join(format!("jackdaw-mode-shot-{mode}.png"));
+        app.world_mut()
+            .operator("viewport.screenshot")
+            .param("path", path.to_string_lossy().to_string())
+            .call()
+            .expect("viewport.screenshot dispatches")
+            .assert_finished();
+        app.update();
+
+        let expected = match app.world().get::<RenderTarget>(camera) {
+            Some(RenderTarget::Image(target)) => target.handle.clone(),
+            other => panic!("a presentation camera renders into an image, got {other:?}"),
+        };
+        let aimed: Vec<(Entity, RenderTarget)> = app
+            .world_mut()
+            .query::<(Entity, &Screenshot)>()
+            .iter(app.world())
+            .map(|(entity, shot)| (entity, shot.0.clone()))
+            .collect();
+        assert_eq!(aimed.len(), 1, "one queued capture per call");
+        assert!(
+            matches!(&aimed[0].1, RenderTarget::Image(image) if image.handle == expected),
+            "in {mode} the capture aims at that presentation's image, got {:?}",
+            aimed[0].1,
+        );
+        app.world_mut().despawn(aimed[0].0);
+    }
 }

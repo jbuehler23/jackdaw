@@ -33,6 +33,7 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 
 use crate::prelude::*;
 use crate::viewport::MainViewportCamera;
+use crate::viewport_host::{ViewportHost, ViewportMode};
 
 /// Names a PNG the editor writes once the viewport has settled, then
 /// exits. Matches the other `JACKDAW_*` boot switches
@@ -112,13 +113,20 @@ impl core::fmt::Display for CaptureError {
 
 impl core::error::Error for CaptureError {}
 
-/// Queue a capture of the main viewport's render target, written to
-/// `path` as a PNG once the GPU readback lands.
+/// Queue a capture of what the viewport is showing, written to `path` as a
+/// PNG once the GPU readback lands.
 ///
-/// The render target is read off [`MainViewportCamera`] and never off
-/// [`crate::viewport::ActiveViewport`]: `ActiveViewport` tracks the
+/// Which surface that is follows the panel's mode: the world in
+/// [`ViewportMode::ThreeD`], the canvas in [`ViewportMode::TwoD`]. A
+/// capture asked for while the user is looking at the canvas has to be a
+/// picture of the canvas, not of a world camera pointing at nothing.
+///
+/// The panel is the first one, and never the one
+/// [`crate::viewport::ActiveViewport`] names: `ActiveViewport` tracks the
 /// viewport *under the cursor*, and in an unattended run no cursor has
-/// entered a viewport, so both its fields are `None`.
+/// entered a viewport, so both its fields are `None`. With no panel at all
+/// the world camera stands in, which is what a world rendered without the
+/// dock has.
 ///
 /// With `exit_when_done`, the app exits as soon as the file is written --
 /// success when it landed, failure when it did not. That is the one-shot
@@ -128,7 +136,24 @@ pub fn queue_capture(
     path: PathBuf,
     exit_when_done: bool,
 ) -> Result<(), CaptureError> {
-    queue_camera_capture::<MainViewportCamera>(world, path, exit_when_done)
+    match viewport_camera(world) {
+        Some(camera) => queue_capture_of(world, camera, path, exit_when_done),
+        None => queue_camera_capture::<MainViewportCamera>(world, path, exit_when_done),
+    }
+}
+
+/// The camera the first viewport panel is showing through.
+fn viewport_camera(world: &mut World) -> Option<Entity> {
+    let mut panels = world.query::<(Entity, &ViewportHost)>();
+    let (panel, mode) = panels.iter(world).next().map(|(e, host)| (e, host.mode))?;
+    match mode {
+        ViewportMode::ThreeD => world
+            .get::<crate::viewport::ViewportPanelHost>(panel)
+            .map(|host| host.camera),
+        ViewportMode::TwoD => world
+            .get::<crate::viewport_2d::Viewport2dPanelHost>(panel)
+            .map(|host| host.camera),
+    }
 }
 
 /// Queue a capture of a 2D viewport panel's render target, written to `path`
@@ -151,7 +176,7 @@ pub fn queue_2d_capture(
 
 /// The 2D camera of the panel answering for the canvas.
 fn primary_2d_camera(world: &mut World) -> Option<Entity> {
-    let mut panels = world.query::<(Entity, &crate::viewport_host::ViewportHost)>();
+    let mut panels = world.query::<(Entity, &ViewportHost)>();
     let panel = crate::viewport_host::primary_2d_host(panels.iter(world))?;
     world
         .get::<crate::viewport_2d::Viewport2dPanelHost>(panel)
@@ -291,11 +316,11 @@ fn drive_shot_probe(world: &mut World) {
     }
 }
 
-/// Capture the viewport to a PNG.
+/// Capture the viewport to a PNG: the world it is showing, or the canvas.
 #[operator(
     id = "viewport.screenshot",
     label = "Screenshot Viewport",
-    description = "Save what the 3D viewport is showing to a PNG file.",
+    description = "Save what the viewport is showing to a PNG file.",
     allows_undo = false,
     params(path(
         String,
@@ -356,7 +381,7 @@ pub(crate) fn viewport_2d_screenshot(
 
 /// Capture the whole editor window (palette, options bar, docked panels, and
 /// viewport) to a PNG. Unlike `viewport.screenshot`, this includes the
-/// `bevy_ui` chrome, not just the 3D render target.
+/// `bevy_ui` chrome, not just the viewport's render target.
 #[operator(
     id = "window.screenshot",
     label = "Screenshot Window",

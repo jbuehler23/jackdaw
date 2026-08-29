@@ -3641,9 +3641,9 @@ fn sync_active_workspace_from_live_tree(world: &mut World) {
 ///
 /// Each canonical leaf is populated from `WindowRegistry::by_area`
 /// based on the windows registered with that `default_area`. The
-/// `center` leaf is empty today (the hardcoded `SceneViewport` is
-/// parented into it by `setup_viewport`). The multi-viewport work
-/// will register a real viewport panel into it.
+/// `center` leaf gets the one window registered for it, the viewport
+/// panel, whose mode decides whether it opens on the world or on the
+/// canvas.
 ///
 /// Project Files is split off the bottom of the `left` leaf via the
 /// runtime split API so the resulting bottom-left leaf gets a
