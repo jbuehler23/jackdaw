@@ -86,7 +86,8 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<ModifierEntry>()
             .register_type::<Modifier>()
             .register_type::<UiSceneRoot>()
-            .register_type::<Scene2dRoot>();
+            .register_type::<Scene2dRoot>()
+            .register_type::<CanvasGuides>();
 
         #[cfg(feature = "render")]
         {
@@ -141,6 +142,30 @@ impl Default for UiSceneRoot {
 #[derive(Component, Clone, Copy, Debug, Default, Reflect)]
 #[reflect(Component, Default)]
 pub struct Scene2dRoot;
+
+/// Guide lines an author pulled off the 2D canvas's rulers, on the root
+/// of an authored UI scene.
+///
+/// Positions are authored pixels from the canvas's top-left corner: the
+/// same measure the scene's own layout is written in, so a guide stays
+/// where the author put it whatever the panel is doing.
+///
+/// Editor-only in effect -- a running game never reads it -- but it
+/// lives here rather than in the editor because the save filter drops
+/// every type path under `jackdaw::`, and a guide has to survive the
+/// document it was drawn on.
+///
+/// The component is absent rather than empty when a scene has no guides.
+/// A saved component equal to its default emits as a bare type path, so
+/// an empty one would sit in every document that ever had a guide.
+#[derive(Component, Clone, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component, Default, @EditorHidden)]
+pub struct CanvasGuides {
+    /// Lines across the canvas, each fixing a y coordinate.
+    pub horizontal: Vec<f32>,
+    /// Lines down the canvas, each fixing an x coordinate.
+    pub vertical: Vec<f32>,
+}
 
 /// Picker grouping for a component. Attach via
 /// `#[reflect(@EditorCategory("Your Group"))]`.

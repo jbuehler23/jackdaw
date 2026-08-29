@@ -1687,6 +1687,62 @@ impl EditorCommand for SetUiNode {
     }
 }
 
+/// Undoable edit of one UI scene root's [`jackdaw_scene_types::CanvasGuides`].
+///
+/// `None` on either side means the component is not there at all. The
+/// first guide inserts it and the last one takes it off again, document
+/// patch included: a component equal to its default emits as a bare type
+/// path, so an empty `CanvasGuides` left behind would sit in every
+/// document that ever carried a guide.
+pub struct SetCanvasGuides {
+    pub root: Entity,
+    pub before: Option<jackdaw_scene_types::CanvasGuides>,
+    pub after: Option<jackdaw_scene_types::CanvasGuides>,
+}
+
+impl SetCanvasGuides {
+    fn apply(&self, world: &mut World, value: &Option<jackdaw_scene_types::CanvasGuides>) {
+        let type_path = <jackdaw_scene_types::CanvasGuides as bevy::reflect::TypePath>::type_path();
+        match value {
+            Some(guides) => {
+                if let Ok(mut entity) = world.get_entity_mut(self.root) {
+                    entity.insert(guides.clone());
+                }
+                sync_component_to_ast(world, self.root, type_path, guides);
+            }
+            None => {
+                if let Ok(mut entity) = world.get_entity_mut(self.root) {
+                    entity.remove::<jackdaw_scene_types::CanvasGuides>();
+                }
+                if let Some(mut ast) = world.get_resource_mut::<jackdaw_bsn::SceneBsnAst>()
+                    && let Some(node) = ast.ast_for(self.root)
+                {
+                    ast.remove_component_patch(node, type_path);
+                }
+            }
+        }
+        if let Ok(mut entity) = world.get_entity_mut(self.root) {
+            entity.insert(crate::inspector::InspectorDirty);
+        }
+    }
+}
+
+impl EditorCommand for SetCanvasGuides {
+    fn execute(&mut self, world: &mut World) {
+        let after = self.after.clone();
+        self.apply(world, &after);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        let before = self.before.clone();
+        self.apply(world, &before);
+    }
+
+    fn description(&self) -> &str {
+        "Edit canvas guides"
+    }
+}
+
 /// Upsert one component's patch on the entity's BSN document node from a
 /// reflected value.
 pub(crate) fn sync_component_to_bsn_doc(

@@ -57,6 +57,7 @@ use bevy::{
     ui::{ComputedNode, ComputedStackIndex, ComputedUiTargetCamera, UiGlobalTransform},
 };
 use jackdaw_feathers::tokens;
+use jackdaw_scene_types::CanvasGuides;
 use jackdaw_snap::{SnapLine, SnapRect, snap_edges_2d_with_winners};
 
 use crate::{
@@ -124,6 +125,17 @@ pub enum CanvasAxis {
     Vertical,
     /// A line across the canvas, fixing a y coordinate.
     Horizontal,
+}
+
+impl CanvasAxis {
+    /// The axis `id` names, or `None` when it names neither.
+    pub fn parse(id: &str) -> Option<Self> {
+        match id.trim().to_ascii_lowercase().as_str() {
+            "vertical" => Some(Self::Vertical),
+            "horizontal" => Some(Self::Horizontal),
+            _ => None,
+        }
+    }
 }
 
 /// A line drawn across one panel's stage where a drag came to rest.
@@ -1460,6 +1472,25 @@ fn gather_candidates(world: &World, entity: Entity, kinds: &CanvasSnap) -> SnapC
         }
     }
 
+    if kinds.guides
+        && let Some(guides) = world.get::<CanvasGuides>(scene_root(world, entity))
+    {
+        for at in &guides.vertical {
+            candidates.x.push(Candidate {
+                at: at - origin.x,
+                kind: CandidateKind::Guide,
+                percent: None,
+            });
+        }
+        for at in &guides.horizontal {
+            candidates.y.push(Candidate {
+                at: at - origin.y,
+                kind: CandidateKind::Guide,
+                percent: None,
+            });
+        }
+    }
+
     if kinds.other_nodes {
         for rect in other_node_rects(world, entity, parent, origin) {
             push_rect_sides(&mut candidates, rect, CandidateKind::OtherNode);
@@ -1500,6 +1531,20 @@ fn push_rect_sides(candidates: &mut SnapCandidates, rect: Rect, kind: CandidateK
     }
 }
 
+/// The topmost ancestor of `entity`: the root of the scene it is part
+/// of, and where the scene's guides are kept.
+///
+/// A walk up rather than a query for the routed root, which is the same
+/// entity: the gesture has already established that the dragged node
+/// draws into this panel's camera.
+fn scene_root(world: &World, entity: Entity) -> Entity {
+    let mut root = entity;
+    while let Some(next) = world.get::<ChildOf>(root).map(ChildOf::parent) {
+        root = next;
+    }
+    root
+}
+
 /// Every authored node under the same routed root that is not part of
 /// the dragged node's family, measured from `origin`.
 ///
@@ -1508,14 +1553,8 @@ fn push_rect_sides(candidates: &mut SnapCandidates, rect: Rect, kind: CandidateK
 /// everything under it: a node the gesture is carrying cannot be
 /// something the gesture lands on.
 ///
-/// The root is the topmost ancestor rather than a query for the routed
-/// scene, which is the same entity: the gesture already established that
-/// the dragged node draws into this panel's camera.
 fn other_node_rects(world: &World, entity: Entity, parent: Entity, origin: Vec2) -> Vec<Rect> {
-    let mut root = entity;
-    while let Some(next) = world.get::<ChildOf>(root).map(ChildOf::parent) {
-        root = next;
-    }
+    let root = scene_root(world, entity);
     let mut family: std::collections::HashSet<Entity> = std::collections::HashSet::new();
     family.insert(parent);
     family.extend(world.get::<Children>(parent).into_iter().flatten().copied());

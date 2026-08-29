@@ -33,7 +33,7 @@ use bevy::{
     ui::ComputedNode,
     window::{PrimaryWindow, WindowRef},
 };
-use jackdaw_scene_types::UiSceneRoot;
+use jackdaw_scene_types::{CanvasGuides, UiSceneRoot};
 use jackdaw_snap::SnapLine;
 
 use jackdaw::{
@@ -2090,6 +2090,51 @@ fn snap_highlights(app: &mut App) -> Vec<(CanvasAxis, Val)> {
             (axis, at)
         })
         .collect()
+}
+
+/// A guide is a line the author drew, and a drag lands on it like any
+/// other: its own kind, so it can be switched off without taking the
+/// parent and the siblings with it.
+#[test]
+fn a_drag_lands_on_a_guide_when_that_kind_is_on() {
+    let landed = |guides: bool| {
+        let mut app = stage_app();
+        let panel = framed_panel(&mut app, 0.5);
+        snapping_on(&mut app);
+        without_the_pixel_grid(&mut app, panel);
+        with_kinds(&mut app, |kinds| kinds.guides = guides);
+        let root = ui_root(&mut app);
+        // Nothing else in the scene sits at 900: only the guide offers it.
+        app.world_mut().entity_mut(root).insert(CanvasGuides {
+            horizontal: Vec::new(),
+            vertical: vec![900.0],
+        });
+        let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+        settle(&mut app);
+
+        select(&mut app, mover);
+        settle(&mut app);
+        let (overlay, _) = overlay_node(&mut app);
+        let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 750.0));
+        let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 750.0)) - start;
+        continue_drag(&mut app, overlay, start, distance);
+        settle(&mut app);
+        let outcome = app.world().resource::<UiManipulation>().last_snap();
+        end_drag(&mut app, overlay, start, distance);
+        settle(&mut app);
+        (node_of(&app, mover).left, outcome.x.map(|won| won.kind))
+    };
+
+    assert_eq!(
+        landed(true),
+        (px(900), Some(CandidateKind::Guide)),
+        "the guide claims the drag, and says it was a guide that did",
+    );
+    assert_eq!(
+        landed(false),
+        (px(894), None),
+        "and offers nothing once the kind is off",
+    );
 }
 
 /// Three absolutely placed children, 500 authored pixels apart on both

@@ -18,8 +18,12 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use jackdaw_scene_types::CanvasGuides;
+
+use crate::commands::{CommandHistory, EditorCommand, SetCanvasGuides};
 use crate::project::ProjectRoot;
 use crate::project_settings::{Section, load_section, store_section};
+use crate::ui_stage::CanvasAxis;
 
 /// The settings-file key the canvas settings live under.
 const CANVAS_SECTION: &str = "canvas";
@@ -32,8 +36,15 @@ pub(crate) fn plugin(app: &mut App) {
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<CanvasSnapOp>()
         .register_operator::<CanvasRulersOp>()
-        .register_operator::<CanvasGuidesOp>();
+        .register_operator::<CanvasGuidesOp>()
+        .register_operator::<CanvasGuideAddOp>()
+        .register_operator::<CanvasGuideRemoveOp>();
 }
+
+/// How near, in authored pixels, a position has to be to a guide to name
+/// it. Half a pixel: guides are placed by hand and read back as exact
+/// numbers, so naming one is naming its position.
+const GUIDE_MATCH: f32 = 0.5;
 
 /// One kind of line the canvas offers a dragged node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,4 +277,139 @@ pub(crate) fn canvas_guides(
     snap.show_guides = params.as_bool("on").unwrap_or(!snap.show_guides);
     persist(project.as_deref(), &snap);
     OperatorResult::Finished
+}
+
+/// Add a guide to the open UI scene, or remove the one nearest a
+/// position.
+///
+/// One history entry per edit, and none at all when the scene already
+/// says what the caller asked for: adding a guide where one already sits
+/// or removing one from empty canvas changes nothing.
+fn edit_guides(world: &mut World, root: Entity, axis: CanvasAxis, position: f32, add: bool) {
+    let before = world.get::<CanvasGuides>(root).cloned();
+    let mut next = before.clone().unwrap_or_default();
+    let lines = match axis {
+        CanvasAxis::Vertical => &mut next.vertical,
+        CanvasAxis::Horizontal => &mut next.horizontal,
+    };
+    if add {
+        if lines.iter().any(|at| (at - position).abs() <= GUIDE_MATCH) {
+            return;
+        }
+        lines.push(position);
+        lines.sort_by(f32::total_cmp);
+    } else {
+        let nearest = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, at)| (*at - position).abs() <= GUIDE_MATCH)
+            .min_by(|(_, a), (_, b)| (*a - position).abs().total_cmp(&(*b - position).abs()))
+            .map(|(index, _)| index);
+        let Some(index) = nearest else {
+            return;
+        };
+        lines.remove(index);
+    }
+    // The component goes off the root with its last guide, so an empty
+    // one never reaches a saved document.
+    let after = (!next.horizontal.is_empty() || !next.vertical.is_empty()).then_some(next);
+    if after == before {
+        return;
+    }
+    let mut command = SetCanvasGuides {
+        root,
+        before,
+        after,
+    };
+    command.execute(world);
+    world
+        .resource_mut::<CommandHistory>()
+        .push_executed(Box::new(command));
+}
+
+/// The open UI scene's root, or `None` when no UI scene is open. A
+/// malformed document holding several picks the lowest entity, so which
+/// one is chosen does not follow archetype order.
+fn guide_root(roots: &Query<Entity, crate::prefab::AuthoredUiSceneRoot>) -> Option<Entity> {
+    roots.iter().min()
+}
+
+/// Draw a guide down or across the open UI scene's canvas.
+#[operator(
+    id = "canvas.guide.add",
+    label = "Add Canvas Guide",
+    description = "Add a guide line to the open UI scene's canvas.",
+    allows_undo = false,
+    params(
+        axis(
+            String,
+            doc = "`vertical` for a line down the canvas, `horizontal` for one across it."
+        ),
+        position(
+            f64,
+            doc = "Where the line sits, in authored pixels from the canvas's top-left corner."
+        )
+    )
+)]
+pub(crate) fn canvas_guide_add(
+    params: In<OperatorParameters>,
+    roots: Query<Entity, crate::prefab::AuthoredUiSceneRoot>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some((root, axis, position)) = guide_call(&params, &roots, "canvas.guide.add") else {
+        return OperatorResult::Cancelled;
+    };
+    commands.queue(move |world: &mut World| edit_guides(world, root, axis, position, true));
+    OperatorResult::Finished
+}
+
+/// Take away the guide nearest a position.
+#[operator(
+    id = "canvas.guide.remove",
+    label = "Remove Canvas Guide",
+    description = "Remove the guide nearest a position on the open UI scene's canvas.",
+    allows_undo = false,
+    params(
+        axis(
+            String,
+            doc = "`vertical` for a line down the canvas, `horizontal` for one across it."
+        ),
+        position(
+            f64,
+            doc = "Where to look, in authored pixels from the canvas's top-left corner."
+        )
+    )
+)]
+pub(crate) fn canvas_guide_remove(
+    params: In<OperatorParameters>,
+    roots: Query<Entity, crate::prefab::AuthoredUiSceneRoot>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some((root, axis, position)) = guide_call(&params, &roots, "canvas.guide.remove") else {
+        return OperatorResult::Cancelled;
+    };
+    commands.queue(move |world: &mut World| edit_guides(world, root, axis, position, false));
+    OperatorResult::Finished
+}
+
+/// What both guide operators need out of a call, or `None` with a reason
+/// warned when the call names none of it.
+fn guide_call(
+    params: &OperatorParameters,
+    roots: &Query<Entity, crate::prefab::AuthoredUiSceneRoot>,
+    id: &str,
+) -> Option<(Entity, CanvasAxis, f32)> {
+    let Some(axis) = params.as_str("axis").and_then(CanvasAxis::parse) else {
+        warn!("{id}: 'axis' must be `vertical` or `horizontal`");
+        return None;
+    };
+    let Some(position) = params.as_float("position") else {
+        warn!("{id}: 'position' must be a number of authored pixels");
+        return None;
+    };
+    let Some(root) = guide_root(roots) else {
+        warn!("{id}: no UI scene is open to draw a guide on");
+        return None;
+    };
+    Some((root, axis, position as f32))
 }
