@@ -224,6 +224,9 @@ fn the_header_snap_menu_lists_every_kind_with_its_state() {
     );
 
     set_kind(&mut app, "other_nodes", true);
+    // The rows are read when the menu is being looked at, so opening it
+    // is what asks for them.
+    open_snap_menu(&mut app);
     app.update();
     assert!(
         snap_menu_rows(&mut app).contains(&(

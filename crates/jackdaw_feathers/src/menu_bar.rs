@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use bevy::{feathers::theme::ThemedText, prelude::*, ui::ui_transform::UiGlobalTransform};
+use bevy::{
+    feathers::theme::ThemedText, picking::hover::Hovered, prelude::*,
+    ui::ui_transform::UiGlobalTransform,
+};
 use jackdaw_widgets::menu_bar::{
     MenuAction, MenuBar, MenuBarClose, MenuBarDropdown, MenuBarDropdownItem, MenuBarItem,
     MenuBarState,
@@ -884,18 +887,47 @@ pub fn menu_button(label: impl Into<String>, icon: Icon, rows: MenuRowsFn) -> im
     )
 }
 
-/// Rebuild every [`DynamicMenuRows`] item's rows, writing them only when
-/// they differ from what the item already holds so an unchanged menu
-/// leaves change detection alone.
-fn refresh_dynamic_menu_rows(world: &mut World) {
-    let sources = world
-        .query::<(Entity, &DynamicMenuRows)>()
+/// Set on a menu button once its rows have been built, so the first
+/// build happens whatever the pointer is doing.
+#[derive(Component)]
+struct MenuRowsBuilt;
+
+/// Rebuild a [`DynamicMenuRows`] item's rows when they are about to be
+/// looked at, writing them only when they differ from what the item
+/// already holds so an unchanged menu leaves change detection alone.
+///
+/// Three occasions, and no others: the menu is open, so a row that
+/// flipped a box has to show it; the pointer is on the button, which is
+/// what precedes the click that opens it; or the rows have never been
+/// built. A closure reads a resource and walks the world, and a menu
+/// nobody is looking at is not worth that every frame of every frame the
+/// editor runs.
+fn refresh_dynamic_menu_rows(
+    world: &mut World,
+    sources: &mut QueryState<(
+        Entity,
+        &'static DynamicMenuRows,
+        Option<&'static Hovered>,
+        Has<MenuRowsBuilt>,
+    )>,
+) {
+    let open = world.resource::<MenuBarState>().open_menu;
+    let wanted = sources
         .iter(world)
-        .map(|(entity, rows)| (entity, rows.clone()))
+        .filter(|(entity, _, hovered, built)| {
+            Some(*entity) == open
+                || !built
+                || hovered.is_some_and(bevy::picking::hover::Hovered::get)
+        })
+        .map(|(entity, rows, _, _)| (entity, rows.clone()))
         .collect::<Vec<_>>();
-    for (entity, rows) in sources {
+    for (entity, rows) in wanted {
         let actions = (rows.0)(world);
-        let Some(mut item) = world.get_mut::<MenuBarItem>(entity) else {
+        let Ok(mut entity) = world.get_entity_mut(entity) else {
+            continue;
+        };
+        entity.insert(MenuRowsBuilt);
+        let Some(mut item) = entity.get_mut::<MenuBarItem>() else {
             continue;
         };
         if item.actions != actions {
@@ -1345,6 +1377,7 @@ mod tests {
         );
 
         app.world_mut().resource_mut::<SnapKindOn>().0 = true;
+        app.world_mut().resource_mut::<MenuBarState>().open_menu = Some(button);
         app.update();
         assert_eq!(
             item_rows(&app, button),
@@ -1353,7 +1386,55 @@ mod tests {
                 "op:canvas.snap?kind=pixel",
                 "Use Pixel Snap"
             )],
-            "a menu opened after the change shows the change",
+            "an open menu shows the change",
+        );
+    }
+
+    /// The rows closure is not run for a menu nobody is looking at.
+    ///
+    /// It reads a resource and walks the world; a menu button sits in
+    /// the editor's chrome for the whole session, and every open panel
+    /// has one.
+    #[test]
+    fn a_menu_nobody_is_looking_at_does_not_rebuild_its_rows() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let builds = Arc::new(AtomicUsize::new(0));
+        let counted = builds.clone();
+        let mut app = menu_app();
+        let button = app
+            .world_mut()
+            .spawn(menu_button(
+                "Snap",
+                Icon::Magnet,
+                Arc::new(move |_: &World| {
+                    counted.fetch_add(1, Ordering::Relaxed);
+                    vec![("op:canvas.snap?kind=pixel".to_string(), String::new())]
+                }),
+            ))
+            .id();
+
+        app.update();
+        assert_eq!(
+            builds.load(Ordering::Relaxed),
+            1,
+            "the rows are built once when the button appears",
+        );
+
+        app.update();
+        app.update();
+        assert_eq!(
+            builds.load(Ordering::Relaxed),
+            1,
+            "and a steady frame with the menu closed asks for nothing",
+        );
+
+        app.world_mut().resource_mut::<MenuBarState>().open_menu = Some(button);
+        app.update();
+        assert_eq!(
+            builds.load(Ordering::Relaxed),
+            2,
+            "an open menu is read again, so a flipped box shows flipped",
         );
     }
 
