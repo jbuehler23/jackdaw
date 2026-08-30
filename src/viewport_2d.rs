@@ -2394,24 +2394,41 @@ pub(crate) fn viewport_2d_grid(
         warn!("viewport2d.grid: 'size' must be a positive number of authored pixels");
         return OperatorResult::Cancelled;
     }
-    let panel = params
-        .as_int("panel")
-        .map(|bits| Entity::from_bits(bits as u64));
+    let open: Vec<Entity> = hosts.iter().map(|(entity, _)| entity).collect();
+    if open.is_empty() {
+        warn!("viewport2d.grid: no 2D viewport panel is open to set the grid on");
+        return OperatorResult::Cancelled;
+    }
+    let wanted = named_panels(&params, "viewport2d.grid", &open);
     let grid = size.clamp(MIN_UI_GRID, MAX_UI_GRID);
-    let mut set = 0;
     for (entity, mut host) in &mut hosts {
-        if panel.is_some_and(|panel| panel != entity) {
+        if !wanted.contains(&entity) {
             continue;
         }
         let view = Ui2dView { grid, ..host.view };
         host.set_view(view);
-        set += 1;
-    }
-    if set == 0 {
-        warn!("viewport2d.grid: no 2D viewport panel is open to set the grid on");
-        return OperatorResult::Cancelled;
     }
     OperatorResult::Finished
+}
+
+/// The panels of `open` a `panel` parameter names.
+///
+/// Bits that name no open panel -- malformed, or a handle left over from
+/// an earlier run -- are the same answer as no parameter at all. The
+/// figure is written by hand in a capture script, so the operator has
+/// more to say by acting on what is open than by bringing the editor
+/// down over it.
+fn named_panels(params: &OperatorParameters, operator: &str, open: &[Entity]) -> Vec<Entity> {
+    let Some(bits) = params.as_int("panel") else {
+        return open.to_vec();
+    };
+    match Entity::try_from_bits(bits as u64).filter(|entity| open.contains(entity)) {
+        Some(entity) => vec![entity],
+        None => {
+            warn!("{operator}: 'panel' names no open 2D panel; every one is used");
+            open.to_vec()
+        }
+    }
 }
 
 /// The mode a `mode` parameter names, or `None` when it names neither.

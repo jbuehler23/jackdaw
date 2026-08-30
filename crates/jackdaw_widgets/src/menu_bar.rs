@@ -48,8 +48,9 @@ pub struct MenuBarState {
     /// The dropdown entity, if spawned.
     pub dropdown_entity: Option<Entity>,
     /// Set by a click that belongs to the open menu and must not close
-    /// it, such as a row that only flips a box. Read and cleared by the
-    /// next close pass, so it holds for exactly the one click.
+    /// it, such as a row that only flips a box. Spent on the next close
+    /// pass and cleared by every close, so it holds for exactly the one
+    /// click and never survives to swallow a later one.
     pub hold_open: bool,
 }
 
@@ -68,6 +69,7 @@ fn close_menu_on_action(
         commands.entity(dropdown).despawn();
     }
     state.open_menu = None;
+    state.hold_open = false;
 }
 
 fn close_menu_on_click_outside(
@@ -95,4 +97,5 @@ fn close_menu_on_click_outside(
         commands.entity(dropdown).despawn();
     }
     state.open_menu = None;
+    state.hold_open = false;
 }

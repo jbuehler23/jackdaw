@@ -271,6 +271,128 @@ fn clicking_a_snap_row_flips_the_kind_and_leaves_the_menu_open() {
     );
 }
 
+/// A `panel` that names no open panel is the same as naming none.
+///
+/// The figure is written by hand in a capture script, so bits that are
+/// not an entity at all, and a handle left over from an earlier run,
+/// both reach the operator as readily as a live panel.
+#[test]
+fn a_grid_row_naming_no_open_panel_moves_every_panel() {
+    for (bits, sense) in [
+        (0, "bits that are no entity"),
+        (1, "a handle no panel answers to"),
+    ] {
+        let (mut app, first) = snap_menu_app();
+        let second = build_panel(&mut app);
+
+        app.world_mut()
+            .operator("viewport2d.grid")
+            .param("size", 8.0)
+            .param("panel", bits)
+            .call()
+            .expect("viewport2d.grid dispatches")
+            .assert_finished();
+        app.update();
+
+        assert_eq!(
+            (grid_of(&app, first), grid_of(&app, second)),
+            (8.0, 8.0),
+            "{sense} falls back to every open panel",
+        );
+    }
+}
+
+/// A checked row reached without a mouse press holds nothing over.
+///
+/// A scripted or keyboard click fires the row without the press the
+/// close pass spends the hold on; a hold left standing would eat the
+/// next click outside a later menu, and that menu would not go down.
+#[test]
+fn a_checked_row_clicked_without_a_press_does_not_swallow_a_later_click() {
+    use jackdaw_widgets::menu_bar::MenuBarState;
+
+    let (mut app, _) = snap_menu_app();
+    open_snap_menu(&mut app);
+    trigger_row(&mut app, "op:canvas.snap?kind=pixel");
+    press_escape(&mut app);
+    assert!(
+        app.world().resource::<MenuBarState>().open_menu.is_none(),
+        "Escape takes the menu down",
+    );
+
+    open_snap_menu(&mut app);
+    press_left(&mut app);
+    assert!(
+        app.world().resource::<MenuBarState>().open_menu.is_none(),
+        "and a press outside the next menu closes that one too",
+    );
+}
+
+/// Fire the open dropdown's row without the mouse press a pointer click
+/// would arrive with.
+fn trigger_row(app: &mut App, action: &str) {
+    use jackdaw_feathers::button::ButtonClickEvent;
+    use jackdaw_widgets::menu_bar::MenuBarDropdownItem;
+
+    let row = app
+        .world_mut()
+        .query::<(Entity, &MenuBarDropdownItem)>()
+        .iter(app.world())
+        .find(|(_, item)| item.action == action)
+        .map(|(entity, _)| entity)
+        .unwrap_or_else(|| panic!("the open menu offers a {action} row"));
+    app.world_mut().trigger(ButtonClickEvent { entity: row });
+    for _ in 0..4 {
+        app.update();
+    }
+}
+
+/// Escape as the editor sees it.
+fn press_escape(app: &mut App) {
+    use bevy::input::{
+        ButtonState,
+        keyboard::{Key, KeyboardInput},
+    };
+    use bevy::window::PrimaryWindow;
+
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(app.world())
+        .expect("headless apps still have a primary window");
+    app.world_mut().write_message(KeyboardInput {
+        key_code: KeyCode::Escape,
+        logical_key: Key::Escape,
+        state: ButtonState::Pressed,
+        text: None,
+        repeat: false,
+        window,
+    });
+    for _ in 0..4 {
+        app.update();
+    }
+}
+
+/// A left press landing on nothing the menu owns.
+fn press_left(app: &mut App) {
+    use bevy::input::{ButtonState, mouse::MouseButtonInput};
+    use bevy::window::PrimaryWindow;
+
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(app.world())
+        .expect("headless apps still have a primary window");
+    app.world_mut().write_message(MouseButtonInput {
+        button: MouseButton::Left,
+        state: ButtonState::Pressed,
+        window,
+    });
+    for _ in 0..4 {
+        app.update();
+    }
+}
+
 /// Open the header's Snap menu the way the operator a scripted run uses
 /// opens it.
 fn open_snap_menu(app: &mut App) {
