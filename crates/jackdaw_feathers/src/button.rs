@@ -690,7 +690,7 @@ fn setup_button(
                 return;
             }
             if let Some(checked) = left_checkbox {
-                spawn_leading_checkbox(world, entity, checked);
+                spawn_inert_checkbox(world, entity, checked);
             }
             let Ok(mut ec) = world.get_entity_mut(entity) else {
                 return;
@@ -795,15 +795,14 @@ fn setup_button(
     }
 }
 
-/// Put a native feathers checkbox in `entity`'s leading slot, showing
-/// `checked`.
+/// Put a native feathers checkbox under `entity`, showing `checked`.
 ///
-/// The box reports state and nothing else: the row it leads is the
+/// The box reports state and nothing else: the row it sits in is the
 /// thing being clicked, so the whole box subtree is `Pickable::IGNORE`
 /// and its tab stop is dropped. `InteractionDisabled` would do the same
 /// job but repaints the box in the disabled tokens, which reads as a
 /// setting that cannot be changed rather than one the row changes.
-fn spawn_leading_checkbox(world: &mut World, entity: Entity, checked: bool) {
+pub fn spawn_inert_checkbox(world: &mut World, entity: Entity, checked: bool) {
     let box_entity = match world.spawn_scene(bsn! { @FeathersCheckbox }) {
         Ok(spawned) => spawned.id(),
         Err(error) => {
