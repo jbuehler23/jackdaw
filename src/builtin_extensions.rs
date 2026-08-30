@@ -707,8 +707,10 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
         // `update_button_styles` reads `ButtonVariant`, `Hovered`,
         // `ThemeBackgroundColor`, and `InheritableThemeTextColor` from the
         // button itself, so an authored button gets hover, pressed, disabled,
-        // and focus treatment. The caption is a child because the inheritable
-        // text colour propagates downward only.
+        // and focus treatment. `Button` is the headless widget, which is
+        // what puts `Pressed` on the entity and emits `Activate`. The
+        // caption is a child because the inheritable text colour
+        // propagates downward only.
         WidgetDefinition::new("ui.button", "Button", "Controls", |world, context| {
             let button = spawn_widget(
                 world,

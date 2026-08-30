@@ -71,10 +71,9 @@ impl ButtonOperatorCall {
 ///
 /// The button carries a [`ButtonOperatorCall`], which the editor's
 /// operator-button glue reads to dispatch the operator on the `Activate`
-/// event, toggle
-/// [`InteractionDisabled`](bevy::ui::InteractionDisabled) whenever the
-/// operator reports itself unavailable, and attach a hover tooltip via
-/// the `Add, ButtonOperatorCall` observer.
+/// event, toggle [`InteractionDisabled`] whenever the operator reports
+/// itself unavailable, and attach a hover tooltip via the
+/// `Add, ButtonOperatorCall` observer.
 pub fn operator_button(
     op_id: impl Into<Cow<'static, str>>,
     caption: impl Into<String>,
@@ -981,5 +980,141 @@ impl Default for ButtonProps {
             border_radius: BorderRadius::all(px(BORDER_RADIUS_MD)),
             hidden: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::icons::{EditorFont, IconFont};
+
+    /// An app with just enough for the button's setup pass: the scene
+    /// API it applies `FeathersButton` through, and the two font
+    /// resources its children read.
+    fn app() -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+            plugin,
+        ));
+        app.init_asset::<bevy::text::Font>();
+        app.insert_resource(IconFont(Handle::default()));
+        app.insert_resource(EditorFont(Handle::default()));
+        app
+    }
+
+    fn spawn_and_settle(app: &mut App, bundle: impl Bundle) -> Entity {
+        let entity = app.world_mut().spawn(bundle).id();
+        app.update();
+        app.update();
+        entity
+    }
+
+    #[test]
+    fn a_button_is_a_feathers_button() {
+        let mut app = app();
+        let entity = spawn_and_settle(&mut app, button(ButtonProps::new("Save")));
+
+        let button = app.world().entity(entity);
+        assert!(
+            button.contains::<FeathersButton>(),
+            "the editor's button is the feathers one",
+        );
+        assert!(
+            button.contains::<bevy::ui_widgets::Button>(),
+            "which brings the headless widget that emits `Activate`",
+        );
+        assert!(
+            !button.contains::<FeathersToolButton>(),
+            "a captioned button is not the tool-button shape",
+        );
+    }
+
+    #[test]
+    fn an_icon_button_is_a_feathers_tool_button() {
+        let mut app = app();
+        let entity = spawn_and_settle(
+            &mut app,
+            icon_button(IconButtonProps::new(Icon::X), &Handle::default()),
+        );
+
+        let button = app.world().entity(entity);
+        assert!(
+            button.contains::<FeathersToolButton>(),
+            "an icon-only button is the tool-button shape",
+        );
+        assert!(
+            button.contains::<FeathersButton>(),
+            "which the tool button is itself built on",
+        );
+    }
+
+    /// The editor's looks resolve onto the three feathers carries, and
+    /// the four it does not are painted from a token of the editor's own.
+    #[test]
+    fn every_variant_resolves_onto_a_feathers_variant() {
+        assert_eq!(
+            ButtonVariant::Default.feathers(),
+            FeathersButtonVariant::Normal,
+        );
+        assert_eq!(
+            ButtonVariant::Primary.feathers(),
+            FeathersButtonVariant::Primary,
+        );
+        assert_eq!(
+            ButtonVariant::Ghost.feathers(),
+            FeathersButtonVariant::Plain
+        );
+
+        assert!(ButtonVariant::Default.background_token(false).is_none());
+        assert!(ButtonVariant::Ghost.background_token(true).is_none());
+        assert_eq!(
+            ButtonVariant::Destructive.background_token(true),
+            Some(BUTTON_DESTRUCTIVE_BG_HOVER),
+        );
+        assert_eq!(
+            ButtonVariant::Active.background_token(false),
+            Some(BUTTON_ACTIVE_BG),
+        );
+    }
+
+    /// A disabled button carries the component feathers reads to grey it
+    /// out and to withhold `Activate`.
+    #[test]
+    fn a_disabled_button_is_disabled_the_way_feathers_reads_it() {
+        let mut app = app();
+        let entity = spawn_and_settle(
+            &mut app,
+            button(ButtonProps::new("Save").with_variant(ButtonVariant::Disabled)),
+        );
+
+        assert!(
+            app.world().entity(entity).contains::<InteractionDisabled>(),
+            "the disabled look is the disabled state",
+        );
+    }
+
+    /// Activating a button raises the editor's click event, which every
+    /// click handler in the editor observes.
+    #[test]
+    fn activating_a_button_raises_the_click_event() {
+        #[derive(Resource, Default)]
+        struct Clicked(Vec<Entity>);
+
+        let mut app = app();
+        app.init_resource::<Clicked>();
+        app.add_observer(
+            |click: On<ButtonClickEvent>, mut clicked: ResMut<Clicked>| {
+                clicked.0.push(click.entity);
+            },
+        );
+        let entity = spawn_and_settle(&mut app, button(ButtonProps::new("Save")));
+
+        app.world_mut().trigger(Activate { entity });
+        app.update();
+
+        assert_eq!(app.world().resource::<Clicked>().0, vec![entity]);
     }
 }
