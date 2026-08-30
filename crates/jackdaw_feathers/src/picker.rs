@@ -201,13 +201,16 @@ impl<T: Pickable> PickerProps<T> {
         let input = commands.spawn(text_edit(text_edit_props)).id();
 
         let list = commands
-            .spawn(Node {
-                flex_direction: FlexDirection::Column,
-                width: percent(100),
-                max_height: px(400),
-                overflow: Overflow::scroll_y(),
-                ..default()
-            })
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    width: percent(100),
+                    max_height: px(400),
+                    overflow: Overflow::scroll_y(),
+                    ..default()
+                },
+                crate::scroll::scroll_area(),
+            ))
             .id();
 
         let scrollbar = commands.spawn(scrollbar(list)).id();

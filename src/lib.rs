@@ -3015,8 +3015,13 @@ fn send_scroll_events(
 
 fn on_scroll(
     mut scroll: On<Scroll>,
-    mut query: Query<(&mut ScrollPosition, &Node, &ComputedNode)>,
+    mut query: Query<
+        (&mut ScrollPosition, &Node, &ComputedNode),
+        Without<bevy::ui_widgets::ScrollArea>,
+    >,
 ) {
+    // A `ScrollArea` is the widget's to scroll; moving it here as well
+    // would move it twice for one turn of the wheel.
     let Ok((mut scroll_position, node, computed)) = query.get_mut(scroll.entity) else {
         return;
     };

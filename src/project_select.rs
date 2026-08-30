@@ -828,8 +828,8 @@ fn spawn_project_row(
                 column_gap: Val::Px(10.0),
                 ..Default::default()
             },
-            BackgroundColor(tokens::INPUT_BG),
             BorderColor::all(tokens::BORDER_SUBTLE),
+            jackdaw_feathers::list_view::list_row(),
             RecentRow(project_path.clone()),
         ))
         .id();
@@ -942,21 +942,6 @@ fn spawn_project_row(
 
         parent.commands().entity(row_entity).add_child(x_button);
     }
-
-    parent.commands().entity(row_entity).observe(
-        |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
-            if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                bg.0 = tokens::HOVER_BG;
-            }
-        },
-    );
-    parent.commands().entity(row_entity).observe(
-        |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-            if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                bg.0 = tokens::INPUT_BG;
-            }
-        },
-    );
 
     parent.commands().entity(row_entity).observe(
         move |_: On<Pointer<Click>>, mut commands: Commands| {
@@ -2324,6 +2309,7 @@ fn package_picker_list() -> impl Scene {
             overflow: Overflow::scroll_y(),
         }
         ScrollPosition::default()
+        bevy::ui_widgets::ScrollArea
         bevy::picking::hover::Hovered::default()
     }
 }
@@ -2639,6 +2625,7 @@ pub fn open_new_project_modal(world: &mut World, kind: TemplateKind) {
                 ..Default::default()
             },
             ScrollPosition::default(),
+            bevy::ui_widgets::ScrollArea,
             bevy::picking::hover::Hovered::default(),
             ChildOf(card_root),
         ))

@@ -90,6 +90,7 @@ pub fn file_browser_list_item_with_icon(
 
     (
         item.clone(),
+        crate::list_view::list_row(),
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -99,7 +100,6 @@ pub fn file_browser_list_item_with_icon(
             border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
             ..Default::default()
         },
-        BackgroundColor(Color::NONE),
         children![
             (
                 Text::new(String::from(icon.unicode())),

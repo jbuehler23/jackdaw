@@ -54,6 +54,7 @@ impl Plugin for EditorFeathersPlugin {
             inspector_field::plugin,
             variant_edit::plugin,
             scroll::plugin,
+            list_view::plugin,
             toast::plugin,
             number_input::ScrubNumberInputPlugin,
         ));
