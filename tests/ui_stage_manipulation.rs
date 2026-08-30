@@ -47,7 +47,7 @@ use jackdaw::{
     },
     viewport_2d::{
         CanvasRuler, RULER_SIZE, RulerGuideMark, Ui2dView, Viewport2dMode, Viewport2dPanelHost,
-        build_viewport_2d_panel, ruler_marks, target_pixels_per_stage_pixel,
+        build_viewport_2d_panel, fit_view, ruler_marks, target_pixels_per_stage_pixel,
     },
 };
 
@@ -2685,23 +2685,49 @@ fn rulers_sit_outside_the_area_the_stage_is_measured_against() {
         );
     }
 
-    // The area is still what a fit is computed against, so the framing
-    // the panel arrives at is the one that area asks for.
+    // The area is what a fit is computed against, and the gutter comes
+    // off it, so showing the rulers is a smaller canvas to fit into.
+    // Two different areas, two different framings, each the one
+    // `fit_view` gives for the area the panel actually had.
+    let with_rulers = refit(&mut app, panel);
+    app.world_mut().resource_mut::<CanvasSnap>().show_rulers = false;
+    settle(&mut app);
+    let without_rulers = refit(&mut app, panel);
+
+    let view = Ui2dView::default();
+    assert_eq!(
+        with_rulers,
+        fit_view(view, REFERENCE, Vec2::new(1200.0, 600.0)).zoom,
+        "the fit with the gutter is the one the 1200x600 area asks for",
+    );
+    assert_eq!(
+        without_rulers,
+        fit_view(
+            view,
+            REFERENCE,
+            Vec2::new(1200.0 + RULER_SIZE, 600.0 + RULER_SIZE),
+        )
+        .zoom,
+        "and the fit without it is the one the whole panel asks for",
+    );
+    assert!(
+        without_rulers > with_rulers,
+        "which is a larger canvas and so a closer framing: {without_rulers} vs {with_rulers}",
+    );
+}
+
+/// Frame the panel again and hand back the zoom it settled on.
+fn refit(app: &mut App, panel: Entity) -> f32 {
     app.world_mut()
         .get_mut::<Viewport2dPanelHost>(panel)
         .expect("host on panel parent")
         .fit_pending = true;
-    settle(&mut app);
-    let view = app
-        .world()
+    settle(app);
+    app.world()
         .get::<Viewport2dPanelHost>(panel)
         .expect("host on panel parent")
-        .view;
-    assert_eq!(
-        view.zoom,
-        jackdaw::viewport_2d::fit_view(view, REFERENCE, Vec2::new(1200.0, 600.0)).zoom,
-        "the fit is the one the 1200x600 area asks for",
-    );
+        .view
+        .zoom
 }
 
 #[test]
@@ -3212,6 +3238,57 @@ fn a_guide_drag_that_did_not_move_records_nothing() {
         history_len(&app),
         entries,
         "so the drag has nothing to record",
+    );
+}
+
+/// A guide drag reads the canvas the panel is actually showing.
+///
+/// Zoomed past 1:1 and panned off the origin, so both halves of the
+/// gesture have something to get wrong: the cursor mapping, which has to
+/// carry the pan as well as the zoom, and the rule that drops a guide
+/// back onto its ruler, which measures against the panel's area rather
+/// than against the canvas.
+#[test]
+fn a_guide_drag_reads_the_panned_and_zoomed_canvas() {
+    let mut app = stage_app();
+    let panel = framed_panel(&mut app, 4.0);
+    let (root, _, _) = authored_scene(&mut app);
+    app.world_mut()
+        .get_mut::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .view
+        .pan = Vec2::new(120.0, -80.0);
+    settle(&mut app);
+
+    // Authored (1200, 640) is well inside the area at this framing, and
+    // authored y 600 is above it, in the ruler's own gutter.
+    let ruler = ruler_entity(&mut app, panel, CanvasAxis::Vertical);
+    drag_authored(
+        &mut app,
+        panel,
+        ruler,
+        Vec2::new(1200.0, 600.0),
+        Vec2::new(1200.0, 640.0),
+    );
+    settle(&mut app);
+    assert_eq!(
+        guide_positions(&app, root, CanvasAxis::Vertical),
+        vec![1200.0],
+        "the guide is left on the authored pixel the pointer stopped over",
+    );
+
+    let line = guide_line_entity(&mut app, panel, CanvasAxis::Vertical, 0);
+    drag_authored(
+        &mut app,
+        panel,
+        line,
+        Vec2::new(1200.0, 640.0),
+        Vec2::new(1200.0, 600.0),
+    );
+    settle(&mut app);
+    assert!(
+        app.world().get::<CanvasGuides>(root).is_none(),
+        "and dragging it back past the ruler's edge takes it away",
     );
 }
 
