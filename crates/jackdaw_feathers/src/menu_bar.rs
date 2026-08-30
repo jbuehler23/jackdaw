@@ -848,6 +848,10 @@ pub fn populate_menu_bar(
 /// item, so "every item in the world" is the wrong set to clear: a bar
 /// rebuilt for a changed window registry would take a panel header's
 /// menu with it, and nothing would put that one back.
+///
+/// For taking a bar down, not for changing what it offers: a bar whose
+/// menus changed goes through [`populate_menu_bar`], which keeps each
+/// item standing so an open menu stays open across the change.
 pub fn clear_menu_bar_items(world: &mut World, bar: Entity) {
     let children: Vec<Entity> = world
         .get::<Children>(bar)

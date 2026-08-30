@@ -321,11 +321,12 @@ fn the_magnet_chord_flips_the_canvas_under_the_pointer() {
     use jackdaw::viewport_host::ViewportMode;
 
     for (mode, canvas_moved, tools_moved) in [
-        (ViewportMode::TwoD, true, false),
-        (ViewportMode::ThreeD, false, true),
+        (Some(ViewportMode::TwoD), true, false),
+        (Some(ViewportMode::ThreeD), false, true),
+        (None, false, true),
     ] {
         let mut app = util::editor_test_app();
-        app.world_mut().resource_mut::<ActiveViewport>().mode = Some(mode);
+        app.world_mut().resource_mut::<ActiveViewport>().mode = mode;
         let tools_were = app.world().resource::<SnapSettings>().translate_snap;
         let canvas_was = snap(&app).enabled;
 

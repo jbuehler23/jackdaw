@@ -833,7 +833,9 @@ fn number_input_on_enter_key(
 /// than the field shows -- a third of a parent box, say -- reads back as
 /// the rounded figure. A field is focused by a click alone, so an Enter
 /// or a blur reaches one nobody typed in, and committing its text would
-/// author that rounding over a value the user never touched.
+/// author that rounding over a value the user never touched. Retyping
+/// the shown figure over such a value reads the same way and commits
+/// nothing; a different figure is what commits.
 fn typed_text(
     editable_text: &EditableText,
     value: &ScrubNumberInputValue,

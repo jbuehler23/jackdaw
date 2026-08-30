@@ -2420,8 +2420,9 @@ struct GuidePointer<'w, 's> {
     slabs: Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<GuideLine>>,
 }
 
-/// How far from the drawn line, in stage-logical pixels, a press still
-/// belongs to the guide.
+/// How far from the drawn line a press still belongs to the guide, in
+/// logical screen pixels: the canvas zoom sizes the stage node rather
+/// than scaling the pointer, so the target is the same width at any zoom.
 const GUIDE_GRAB_RADIUS: f32 = 1.0;
 
 /// Whether a guide takes a pointer event at `cursor`, or lets it through

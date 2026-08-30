@@ -233,6 +233,55 @@ fn a_val_field_blurred_without_an_edit_keeps_the_value_it_was_shown() {
     );
 }
 
+/// Text the user did type commits, even when the field it replaces shows
+/// more digits than were typed: `2` over a readout of `12.00` is an edit.
+#[test]
+fn a_val_field_typed_into_commits_what_was_typed() {
+    use bevy::text::TextEdit;
+
+    let (mut app, entity) = app_with_node(Node {
+        width: Val::Px(12.0),
+        ..default()
+    });
+    let root = spawn_val(&mut app, entity, "width", Val::Px(12.0));
+    let number = number_input(&mut app, root);
+    let text = editable_text(&mut app, number);
+    let entries = app.world().resource::<CommandHistory>().undo_stack.len();
+
+    let mut editable = app
+        .world_mut()
+        .get_mut::<bevy::text::EditableText>(text)
+        .expect("the editable text");
+    editable.queue_edit(TextEdit::SelectAll);
+    editable.queue_edit(TextEdit::Insert("2".into()));
+    app.update();
+    assert_eq!(
+        app.world()
+            .get::<bevy::text::EditableText>(text)
+            .expect("the editable text")
+            .value()
+            .to_string(),
+        "2",
+        "the typed text replaced the readout",
+    );
+
+    blur(&mut app, text);
+
+    assert_eq!(
+        app.world()
+            .get::<Node>(entity)
+            .expect("the node stands")
+            .width,
+        Val::Px(2.0),
+        "what was typed is what the node now holds",
+    );
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        entries + 1,
+        "as one entry to undo",
+    );
+}
+
 /// The text entry inside a scrub number field.
 fn editable_text(app: &mut App, number: Entity) -> Entity {
     widgets_with::<bevy::text::EditableText>(app.world_mut(), number)

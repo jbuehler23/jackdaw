@@ -1301,7 +1301,51 @@ fn ruler_label_step(zoom: f32) -> f32 {
         step *= ladder[rung % ladder.len()];
         rung += 1;
     }
+    let mut rung = ladder.len();
+    loop {
+        let finer = step / ladder[(rung - 1) % ladder.len()];
+        if finer * zoom < RULER_LABEL_GAP || finer < 1.0 {
+            break;
+        }
+        step = finer;
+        rung -= 1;
+        if rung == 0 {
+            rung = ladder.len();
+        }
+    }
     step
+}
+
+#[cfg(test)]
+mod ruler_label_step_tests {
+    use super::*;
+
+    #[test]
+    fn the_label_step_keeps_labels_apart_and_no_further_apart_than_it_must() {
+        for zoom in [0.1_f32, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0] {
+            let step = ruler_label_step(zoom);
+            assert!(
+                step * zoom >= RULER_LABEL_GAP,
+                "zoom {zoom}: labels {step} apart come too close",
+            );
+            let ladder = [2.0, 2.5, 2.0];
+            let finer_fits = ladder
+                .iter()
+                .any(|div| (step / div) * zoom >= RULER_LABEL_GAP && step / div >= 1.0);
+            assert!(
+                !finer_fits,
+                "zoom {zoom}: a finer step than {step} would still fit"
+            );
+        }
+    }
+
+    #[test]
+    fn zooming_in_refines_the_labels() {
+        assert_eq!(ruler_label_step(4.0), 10.0);
+        assert_eq!(ruler_label_step(1.0), 50.0);
+        assert_eq!(ruler_label_step(0.5), 100.0);
+        assert_eq!(ruler_label_step(0.1), 500.0);
+    }
 }
 
 /// Draw each panel's rulers for the view it is showing, and take the
