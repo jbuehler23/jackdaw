@@ -3,11 +3,11 @@
 //! Play/Select, 3D/2D, Edit/Interact, Scene/Live and the Node card's
 //! enum fields.
 //!
-//! The behaviour is [`bevy_ui_widgets::RadioGroup`] and
-//! [`bevy_ui_widgets::RadioButton`]: the bar is the group, each segment
-//! is a radio whose caption is its label, a click or an arrow key on the
-//! focused group emits [`ValueChange<Entity>`] naming the chosen segment,
-//! and [`Checked`] marks the one that is current.
+//! The behaviour is [`RadioGroup`] and [`RadioButton`]: the bar is the
+//! group, each segment is a radio whose caption is its label, a click or
+//! an arrow key on the focused group emits a
+//! [`ValueChange`](bevy::ui_widgets::ValueChange) naming the chosen
+//! segment, and [`Checked`] marks the one that is current.
 //!
 //! Not `bevy_feathers`' `FeathersRadio`: its scene builds a dial (a
 //! bordered circle around a mark) beside the caption, and neither a theme
@@ -71,7 +71,8 @@ pub fn segment_chrome() -> impl Bundle {
 
 /// A segment carrying its label: `(segment_node(), segment_chrome(),
 /// segment_label(label))`. A caller adds its own marker component and
-/// the observer that reads the group's [`ValueChange<Entity>`].
+/// the observer that reads the group's
+/// [`ValueChange`](bevy::ui_widgets::ValueChange).
 pub fn segment(label: impl Into<String>) -> impl Bundle {
     (
         segment_node(),

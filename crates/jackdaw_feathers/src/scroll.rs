@@ -1,13 +1,12 @@
 //! The scrollbar beside a scrolling container.
 //!
-//! The bar is [`bevy_ui_widgets::Scrollbar`] with a
-//! [`bevy_ui_widgets::ScrollbarThumb`] inside it, painted with the
-//! feathers scrollbar tokens: the widget sizes and moves the thumb from
-//! the container's [`ScrollPosition`] and drags it back, which the
-//! hand-rolled bar it replaces could not do.
+//! The bar is [`Scrollbar`] with a [`ScrollbarThumb`] inside it, painted
+//! with the feathers scrollbar tokens: the widget sizes and moves the
+//! thumb from the container's [`ScrollPosition`] and drags it back,
+//! which the hand-rolled bar it replaces could not do.
 //!
-//! The container itself carries [`bevy_ui_widgets::ScrollArea`], so the
-//! wheel over it is the widget's too. The editor's own wheel handler
+//! The container itself carries [`ScrollArea`], so the wheel over it is
+//! the widget's too. The editor's own wheel handler
 //! (`jackdaw::on_scroll`) leaves a `ScrollArea` alone for that reason;
 //! it still answers for every other scrolling container, because it
 //! chains a scroll past a container that has reached its limit and turns

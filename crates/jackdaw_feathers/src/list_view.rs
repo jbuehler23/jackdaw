@@ -1,14 +1,13 @@
 //! Lists.
 //!
-//! A list is [`bevy_ui_widgets::ListBox`] and its rows are
-//! `bevy_feathers`' `FeathersListRow`, which is a
-//! [`bevy_ui_widgets::ListItem`] painted from the theme's list-row
-//! tokens: hover, selection and the disabled state come from the widget
-//! rather than from a pair of hand-written pointer observers.
+//! A list is [`ListBox`] and its rows are `bevy_feathers`'
+//! [`FeathersListRow`], which is a [`ListItem`](bevy::ui_widgets::ListItem)
+//! painted from the theme's list-row tokens: hover, selection and the
+//! disabled state come from the widget rather than from a pair of
+//! hand-written pointer observers.
 
 use bevy::feathers::controls::FeathersListRow;
 use bevy::prelude::*;
-
 use bevy::ui_widgets::ListBox;
 
 use crate::tokens;
@@ -32,7 +31,7 @@ pub fn list_view() -> impl Bundle {
 /// A row of a list.
 ///
 /// The returned bundle is the request, not the row: `FeathersListRow` is
-/// a scene component, so [`setup_list_rows`] applies its scene to the
+/// a scene component, so the crate's setup pass applies its scene to the
 /// entity and puts the layout the caller spawned it with back
 /// afterwards.
 pub fn list_row() -> impl Bundle {
@@ -45,7 +44,10 @@ pub struct EditorListRow {
     applied: bool,
 }
 
-fn setup_list_rows(mut commands: Commands, mut rows: Query<(Entity, &mut EditorListRow)>) {
+fn setup_list_rows(
+    mut commands: Commands,
+    mut rows: Query<(Entity, &mut EditorListRow), Added<EditorListRow>>,
+) {
     for (entity, mut row) in &mut rows {
         if row.applied {
             continue;
