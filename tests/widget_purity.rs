@@ -14,26 +14,6 @@ use std::path::{Path, PathBuf};
 /// still here. Paths are relative to the repository root.
 const ALLOWED: &[(&str, &str)] = &[
     (
-        "src/game_panel.rs",
-        "segmented view switch; the radio-group widget it belongs on is a later pass",
-    ),
-    (
-        "src/viewport_host.rs",
-        "segmented view switch; the radio-group widget it belongs on is a later pass",
-    ),
-    (
-        "src/viewport_2d.rs",
-        "segmented view switch; the radio-group widget it belongs on is a later pass",
-    ),
-    (
-        "src/layout.rs",
-        "the Scene/Live segmented toggle; the radio-group widget it belongs on is a later pass",
-    ),
-    (
-        "src/inspector/node_card.rs",
-        "segmented anchor switch; the radio-group widget it belongs on is a later pass",
-    ),
-    (
         "crates/jackdaw_feathers/src/panel_header.rs",
         "the panel tab bar; the tab widget it belongs on is a later pass",
     ),

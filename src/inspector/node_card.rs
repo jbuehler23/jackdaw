@@ -11,7 +11,10 @@
 //! and the refresh path work off the same entry.
 
 use bevy::{
-    ecs::system::SystemState, prelude::*, ui::InteractionDisabled, ui_widgets::ValueChange,
+    ecs::system::SystemState,
+    prelude::*,
+    ui::{Checked, InteractionDisabled},
+    ui_widgets::ValueChange,
 };
 use jackdaw_feathers::{
     combobox::{
@@ -23,7 +26,7 @@ use jackdaw_feathers::{
         HardLimit, NumberInputPrecision, ScrubNumberInput, ScrubNumberInputValue, SoftLimit,
     },
     panel_card::{PanelCardCollapseState, PanelCardProps, spawn_panel_card},
-    tokens,
+    segmented,
 };
 
 use super::val_field::{spawn_ui_rect_field, spawn_val_field};
@@ -821,60 +824,40 @@ fn spawn_segments(
     let bar = commands
         .spawn((
             Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-                overflow: Overflow::clip(),
                 // Four variants side by side are wider than the control slot
                 // at the default panel width, so the bar wraps what does not
                 // fit onto a second line rather than clipping it.
                 flex_wrap: FlexWrap::Wrap,
                 flex_shrink: 1.0,
                 min_width: px(0.0),
-                ..Default::default()
+                ..segmented::segmented_bar_node()
             },
-            BackgroundColor(tokens::ELEVATED_BG),
-            BorderColor::all(tokens::BORDER_SUBTLE),
+            segmented::segmented_bar_chrome(),
             ChildOf(row.control),
         ))
+        .observe(on_segment_change)
         .id();
 
     let current = (field.current)(node);
     for (index, variant) in field.variants.iter().enumerate() {
-        let background = if index == current {
-            tokens::TOOLBAR_ACTIVE_BG
-        } else {
-            Color::NONE
-        };
-        commands
-            .spawn((
-                NodeSegment {
-                    source,
-                    field,
-                    index,
-                },
-                Interaction::default(),
-                jackdaw_feathers::tooltip::Tooltip::title(format!("{}: {variant}", field.label)),
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-                    ..Default::default()
-                },
-                BackgroundColor(background),
-                ChildOf(bar),
-                children![(
-                    Text::new(*variant),
-                    TextFont {
-                        font_size: tokens::TEXT_SIZE_SM,
-                        ..Default::default()
-                    },
-                    TextColor(tokens::TEXT_SECONDARY),
-                )],
-            ))
-            .observe(on_segment_click);
+        let mut segment = commands.spawn((
+            NodeSegment {
+                source,
+                field,
+                index,
+            },
+            jackdaw_feathers::tooltip::Tooltip::title(format!("{}: {variant}", field.label)),
+            segmented::segment_node(),
+            segmented::segment_chrome(),
+            ChildOf(bar),
+            children![segmented::segment_label(*variant)],
+        ));
+        segment.insert(BackgroundColor(segmented::segment_background(
+            index == current,
+        )));
+        if index == current {
+            segment.insert(Checked);
+        }
     }
 }
 
@@ -933,18 +916,15 @@ fn commit_variant(
     });
 }
 
-fn on_segment_click(
-    click: On<Pointer<Click>>,
-    segments: Query<(&NodeSegment, Has<InteractionDisabled>)>,
+fn on_segment_change(
+    change: On<ValueChange<Entity>>,
+    segments: Query<&NodeSegment>,
     remote_proxies: RemoteProxies,
     mut commands: Commands,
 ) {
-    let Ok((segment, disabled)) = segments.get(click.event_target()) else {
+    let Ok(segment) = segments.get(change.value) else {
         return;
     };
-    if disabled {
-        return;
-    }
     if card_edit_skipped(Some(segment.source), &remote_proxies) {
         return;
     }
@@ -971,19 +951,20 @@ pub(crate) fn on_node_enum_change(
 /// card's back.
 pub fn paint_node_segments(
     nodes: Query<&Node>,
-    mut segments: Query<(&NodeSegment, &mut BackgroundColor)>,
+    mut segments: Query<(Entity, &NodeSegment, &mut BackgroundColor, Has<Checked>)>,
+    mut commands: Commands,
 ) {
-    for (segment, mut background) in &mut segments {
+    for (entity, segment, mut background, checked) in &mut segments {
         let Ok(node) = nodes.get(segment.source) else {
             continue;
         };
-        let color = if (segment.field.current)(node) == segment.index {
-            tokens::TOOLBAR_ACTIVE_BG
-        } else {
-            Color::NONE
-        };
+        let active = (segment.field.current)(node) == segment.index;
+        let color = segmented::segment_background(active);
         if background.0 != color {
             background.0 = color;
+        }
+        if checked != active {
+            segmented::set_segment_checked(&mut commands, entity, active);
         }
     }
 }

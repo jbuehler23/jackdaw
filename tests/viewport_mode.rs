@@ -182,6 +182,53 @@ fn each_bar_carries_the_switch_and_highlights_the_current_mode() {
     }
 }
 
+/// The switch is a radio group: the bar is the group, each segment is a
+/// radio button, and the segment the panel is in carries `Checked`. No
+/// segment is a hand-rolled `Interaction` control.
+#[test]
+fn the_switch_is_a_radio_group_and_checks_the_current_mode() {
+    use bevy::ui::Checked;
+    use bevy::ui_widgets::{RadioButton, RadioGroup};
+
+    let mut app = util::editor_test_app();
+    let panel = panel(&mut app);
+    app.update();
+
+    let segments: Vec<(Entity, ViewportModeSegment)> = app
+        .world_mut()
+        .query::<(Entity, &ViewportModeSegment)>()
+        .iter(app.world())
+        .filter(|(_, segment)| segment.host == panel)
+        .map(|(entity, segment)| (entity, *segment))
+        .collect();
+    assert_eq!(segments.len(), 4, "two modes in each presentation's bar");
+
+    for (entity, segment) in segments {
+        assert!(
+            app.world().get::<RadioButton>(entity).is_some(),
+            "a segment is a radio button",
+        );
+        assert!(
+            app.world().get::<Interaction>(entity).is_none(),
+            "and not a hand-rolled interaction control",
+        );
+        let bar = app
+            .world()
+            .get::<ChildOf>(entity)
+            .expect("a segment sits in a bar")
+            .parent();
+        assert!(
+            app.world().get::<RadioGroup>(bar).is_some(),
+            "the bar the segments share is the radio group",
+        );
+        assert_eq!(
+            app.world().get::<Checked>(entity).is_some(),
+            segment.mode == ViewportMode::ThreeD,
+            "the segment the panel is in is the checked one",
+        );
+    }
+}
+
 /// An operator call names no panel, so it answers for all of them, the way
 /// `viewport2d.mode` does. It also records the mode as chosen: a mode the user
 /// asked for outranks the one the scene's kind implies.

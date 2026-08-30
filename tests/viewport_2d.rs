@@ -1460,6 +1460,53 @@ fn each_panel_holds_its_own_mode() {
     assert_eq!(mode_of(&app, second), Viewport2dMode::Interact);
 }
 
+/// The Edit|Interact control is a radio group: the header bar is the
+/// group, each segment is a radio button, and the mode the panel is in
+/// carries `Checked`.
+#[test]
+fn the_mode_control_is_a_radio_group_and_checks_the_current_mode() {
+    use bevy::ui::Checked;
+    use bevy::ui_widgets::{RadioButton, RadioGroup};
+
+    let mut app = mode_app();
+    let panel = mode_panel(&mut app);
+    settle(&mut app);
+
+    for mode in [Viewport2dMode::Edit, Viewport2dMode::Interact] {
+        let segment = segment_entity(&mut app, panel, mode);
+        assert!(
+            app.world().get::<RadioButton>(segment).is_some(),
+            "a segment is a radio button",
+        );
+        assert!(
+            app.world().get::<Interaction>(segment).is_none(),
+            "and not a hand-rolled interaction control",
+        );
+        let bar = app
+            .world()
+            .get::<ChildOf>(segment)
+            .expect("a segment sits in a bar")
+            .parent();
+        assert!(
+            app.world().get::<RadioGroup>(bar).is_some(),
+            "the bar the segments share is the radio group",
+        );
+        assert_eq!(
+            app.world().get::<Checked>(segment).is_some(),
+            mode == Viewport2dMode::Edit,
+            "the mode the panel is in is the checked segment",
+        );
+    }
+
+    click_segment(&mut app, panel, Viewport2dMode::Interact);
+    settle(&mut app);
+    let interact = segment_entity(&mut app, panel, Viewport2dMode::Interact);
+    assert!(
+        app.world().get::<Checked>(interact).is_some(),
+        "and the check follows the mode",
+    );
+}
+
 fn mode_app() -> App {
     let mut app = util::editor_test_app();
     app.init_resource::<WidgetEvents>();

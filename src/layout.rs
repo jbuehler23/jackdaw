@@ -1,5 +1,8 @@
 use bevy::feathers::controls::{ButtonVariant, FeathersToolButton};
-use bevy::{prelude::*, ui_widgets::observe};
+use bevy::{
+    prelude::*,
+    ui_widgets::{ValueChange, observe},
+};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{
@@ -7,7 +10,7 @@ use jackdaw_feathers::{
         IconButtonProps, button, icon_button,
     },
     icons::{EditorFont, IconFont, icon_scene},
-    menu_bar, status_bar,
+    menu_bar, segmented, status_bar,
     text_edit::{self, TextEditProps},
     tokens,
     tree_view::tree_container_drop_observers,
@@ -1125,47 +1128,15 @@ pub fn update_save_to_scene_button(world: &mut World) {
 /// appearance system handle activation; only presentation lives here.
 fn pie_view_toggle(icon_font: Handle<Font>) -> impl Bundle {
     (
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            overflow: Overflow::clip(),
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
-        children![
-            pie_view_segment(PieViewSegment::Scene, "Scene", icon_font.clone()),
-            pie_view_segment(PieViewSegment::Live, "Live", icon_font),
-        ],
-    )
-}
-
-/// One clickable segment inside the Scene/Live toggle.
-fn pie_view_segment(
-    segment: PieViewSegment,
-    label: &'static str,
-    icon_font: Handle<Font>,
-) -> impl Bundle {
-    (
-        segment,
-        Interaction::default(),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            column_gap: px(tokens::SPACING_XS),
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-            ..Default::default()
-        },
-        BackgroundColor(Color::NONE),
+        segmented::segmented_bar(),
         observe(
-            move |click: On<Pointer<Click>>,
-                  mut commands: Commands,
-                  play_state: Res<State<PlayState>>| {
-                let _ = click;
+            |change: On<ValueChange<Entity>>,
+             segments: Query<&PieViewSegment>,
+             play_state: Res<State<PlayState>>,
+             mut commands: Commands| {
+                let Ok(&segment) = segments.get(change.value) else {
+                    return;
+                };
                 if segment == PieViewSegment::Live && *play_state.get() == PlayState::Stopped {
                     return;
                 }
@@ -1200,16 +1171,28 @@ fn pie_view_segment(
             },
         ),
         children![
-            (
-                Text::new(label),
-                TextFont {
-                    font_size: tokens::TEXT_SIZE_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-            ),
+            pie_view_segment(PieViewSegment::Scene, "Scene", icon_font.clone()),
+            pie_view_segment(PieViewSegment::Live, "Live", icon_font),
+        ],
+    )
+}
+
+/// One segment inside the Scene/Live toggle.
+fn pie_view_segment(
+    segment: PieViewSegment,
+    label: &'static str,
+    icon_font: Handle<Font>,
+) -> impl Bundle {
+    (
+        segment,
+        Node {
+            column_gap: px(tokens::SPACING_XS),
+            ..segmented::segment_node()
+        },
+        segmented::segment_chrome(),
+        children![
+            segmented::segment_label(label),
             // Live-dot: only visible when this is the Live segment and mode is Live.
-            // Shown as a small Radio icon glyph; hidden via display toggle.
             (
                 PieViewLiveDot,
                 Text::new(String::from(Icon::Radio.unicode())),
@@ -1240,24 +1223,22 @@ pub struct PieViewLiveDot;
 pub fn update_pie_view_toggle_appearance(
     mode: Res<PieViewMode>,
     play_state: Res<State<PlayState>>,
-    mut segments: Query<(&PieViewSegment, &mut BackgroundColor, &Children)>,
+    mut segments: Query<(Entity, &PieViewSegment, &mut BackgroundColor, &Children)>,
     mut texts: Query<(&mut TextColor, Option<&PieViewLiveDot>, Option<&mut Node>)>,
+    mut commands: Commands,
 ) {
     if !mode.is_changed() && !play_state.is_changed() {
         return;
     }
     let stopped = *play_state.get() == PlayState::Stopped;
-    for (segment, mut bg, children) in &mut segments {
+    for (entity, segment, mut bg, children) in &mut segments {
         let is_active = (*segment == PieViewSegment::Scene && *mode == PieViewMode::Scene)
             || (*segment == PieViewSegment::Live && *mode == PieViewMode::Live);
         let is_live_seg = *segment == PieViewSegment::Live;
         let disabled = is_live_seg && stopped;
 
-        bg.0 = if is_active {
-            tokens::TOOLBAR_ACTIVE_BG
-        } else {
-            Color::NONE
-        };
+        bg.0 = segmented::segment_background(is_active);
+        segmented::set_segment_checked(&mut commands, entity, is_active);
 
         for child in children.iter() {
             if let Ok((mut tc, dot, mut node_opt)) = texts.get_mut(child) {

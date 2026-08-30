@@ -20,6 +20,7 @@ pub mod picker;
 pub mod popover;
 pub mod progress;
 pub mod scroll;
+pub mod segmented;
 pub mod separator;
 pub mod slider_row;
 pub mod split_panel;

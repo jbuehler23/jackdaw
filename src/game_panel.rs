@@ -4,9 +4,14 @@
 //! game what is under the cursor and selects it in the Live tree. The panel
 //! is a pure monitor: no editor camera, no overlay, no compositing.
 
-use bevy::{prelude::*, ui_widgets::observe};
+use bevy::{
+    prelude::*,
+    ui::Checked,
+    ui_widgets::{ValueChange, observe},
+};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::button::{ButtonProps, button};
+use jackdaw_feathers::segmented;
 use jackdaw_feathers::tokens;
 
 use crate::live_frame::LiveFrameStream;
@@ -218,57 +223,14 @@ pub fn game_panel_content() -> impl Bundle {
 /// Build the two-segment Play/Select mode bar.
 fn game_mode_bar() -> impl Bundle {
     (
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            overflow: Overflow::clip(),
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
-        children![
-            game_mode_segment(
-                GameModeSegment::Play,
-                "Play",
-                "Play: clicks and keys go to the game (Shift+Esc releases)",
-            ),
-            game_mode_segment(
-                GameModeSegment::Select,
-                "Select",
-                "Select: click the frame to inspect the entity under the cursor",
-            ),
-        ],
-    )
-}
-
-/// One clickable segment inside the Play/Select mode bar.
-fn game_mode_segment(
-    segment: GameModeSegment,
-    label: &'static str,
-    tooltip: &'static str,
-) -> impl Bundle {
-    (
-        segment,
-        Interaction::default(),
-        jackdaw_feathers::tooltip::Tooltip::title(tooltip),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-            ..Default::default()
-        },
-        BackgroundColor(Color::NONE),
+        segmented::segmented_bar(),
         observe(
-            move |click: On<Pointer<Click>>,
-                  disabled: Query<(), With<bevy::ui::InteractionDisabled>>,
-                  mut commands: Commands| {
-                if disabled.contains(click.event_target()) {
+            |change: On<ValueChange<Entity>>,
+             segments: Query<&GameModeSegment>,
+             mut commands: Commands| {
+                let Ok(&segment) = segments.get(change.value) else {
                     return;
-                }
+                };
                 commands.queue(move |world: &mut World| {
                     let next = match segment {
                         GameModeSegment::Play => GamePanelMode::Play,
@@ -289,14 +251,31 @@ fn game_mode_segment(
                 });
             },
         ),
-        children![(
-            Text::new(label),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
+        children![
+            game_mode_segment(
+                GameModeSegment::Play,
+                "Play",
+                "Play: clicks and keys go to the game (Shift+Esc releases)",
+            ),
+            game_mode_segment(
+                GameModeSegment::Select,
+                "Select",
+                "Select: click the frame to inspect the entity under the cursor",
+            ),
+        ],
+    )
+}
+
+/// One segment inside the Play/Select mode bar.
+fn game_mode_segment(
+    segment: GameModeSegment,
+    label: &'static str,
+    tooltip: &'static str,
+) -> impl Bundle {
+    (
+        segment,
+        jackdaw_feathers::tooltip::Tooltip::title(tooltip),
+        segmented::segment(label),
     )
 }
 
@@ -440,20 +419,20 @@ fn layout_game_panel_image(
 /// Highlight the active mode segment.
 fn update_game_mode_bar(
     mode: Res<GamePanelMode>,
-    mut segments: Query<(&GameModeSegment, &mut BackgroundColor)>,
+    mut segments: Query<(Entity, &GameModeSegment, &mut BackgroundColor, Has<Checked>)>,
+    mut commands: Commands,
 ) {
-    for (segment, mut bg) in &mut segments {
+    for (entity, segment, mut bg, checked) in &mut segments {
         let is_active = match segment {
             GameModeSegment::Play => *mode == GamePanelMode::Play,
             GameModeSegment::Select => *mode == GamePanelMode::Select,
         };
-        let color = if is_active {
-            tokens::TOOLBAR_ACTIVE_BG
-        } else {
-            Color::NONE
-        };
+        let color = segmented::segment_background(is_active);
         if bg.0 != color {
             bg.0 = color;
+        }
+        if checked != is_active {
+            segmented::set_segment_checked(&mut commands, entity, is_active);
         }
     }
 }

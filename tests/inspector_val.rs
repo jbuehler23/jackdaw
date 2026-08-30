@@ -833,11 +833,15 @@ fn authored_option_int(app: &App, entity: Entity, path: &str) -> Option<i128> {
     }
 }
 
-/// The segment drawing `label`: a clickable node with that word inside it.
+/// The segment drawing `label`: a radio button with that word inside it.
 fn segment_with_label(app: &mut App, label: &str) -> Entity {
     let body = node_card_body(app);
     for entity in descendants(app.world_mut(), body) {
-        if app.world().get::<Interaction>(entity).is_none() {
+        if app
+            .world()
+            .get::<bevy::ui_widgets::RadioButton>(entity)
+            .is_none()
+        {
             continue;
         }
         let draws_label = app.world().get::<Children>(entity).is_some_and(|children| {
@@ -957,6 +961,52 @@ fn a_display_segment_click_commits_and_undoes() {
         None,
         "and takes the authored override back out of the document",
     );
+}
+
+/// The card's segmented controls are radio groups: each bar is the group,
+/// each segment a radio button, and the variant the component holds is the
+/// checked one.
+#[test]
+fn the_card_segments_are_a_radio_group() {
+    use bevy::ui::Checked;
+    use bevy::ui_widgets::{RadioButton, RadioGroup};
+
+    let (mut app, _entity) = app_with_node_card(Node::default());
+    let grid = segment_with_label(&mut app, "Grid");
+    let flex = segment_with_label(&mut app, "Flex");
+
+    for segment in [grid, flex] {
+        assert!(
+            app.world().get::<RadioButton>(segment).is_some(),
+            "a segment is a radio button",
+        );
+        assert!(
+            app.world().get::<Interaction>(segment).is_none(),
+            "and not a hand-rolled interaction control",
+        );
+    }
+    let bar = app
+        .world()
+        .get::<ChildOf>(grid)
+        .expect("a segment sits in a bar")
+        .parent();
+    assert!(
+        app.world().get::<RadioGroup>(bar).is_some(),
+        "the bar the segments share is the radio group",
+    );
+    assert!(
+        app.world().get::<Checked>(flex).is_some(),
+        "the variant the component holds is checked",
+    );
+    assert!(app.world().get::<Checked>(grid).is_none());
+
+    click_segment(&mut app, grid);
+    refresh_card(&mut app);
+    assert!(
+        app.world().get::<Checked>(grid).is_some(),
+        "and the check follows the pick",
+    );
+    assert!(app.world().get::<Checked>(flex).is_none());
 }
 
 /// A segment that does not match the component is not the lit one, however

@@ -36,8 +36,8 @@ use bevy::{
     },
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
-    ui::{UiGlobalTransform, UiSystems, UiTargetCamera},
-    ui_widgets::observe,
+    ui::{Checked, UiGlobalTransform, UiSystems, UiTargetCamera},
+    ui_widgets::{ValueChange, observe},
 };
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_feathers::{
@@ -45,7 +45,7 @@ use jackdaw_feathers::{
     menu_bar::{
         OP_ACTION_PREFIX, SECTION_ACTION_PREFIX, SEPARATOR_ACTION, checked_row, menu_button,
     },
-    tokens,
+    segmented, tokens,
 };
 use jackdaw_scene_types::{CanvasGuides, UiSceneRoot};
 
@@ -2600,17 +2600,21 @@ pub struct Viewport2dModeSegment {
 /// parameter carries, so each one holds its own target and observer.
 fn viewport_2d_mode_bar(host: Entity) -> impl Bundle {
     (
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            overflow: Overflow::clip(),
-            flex_shrink: 0.0,
-            ..default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
+        segmented::segmented_bar(),
+        observe(
+            move |change: On<ValueChange<Entity>>,
+                  segments: Query<&Viewport2dModeSegment>,
+                  mut hosts: Query<&mut Viewport2dPanelHost>| {
+                let Ok(segment) = segments.get(change.value) else {
+                    return;
+                };
+                if let Ok(mut panel) = hosts.get_mut(host)
+                    && panel.mode != segment.mode
+                {
+                    panel.mode = segment.mode;
+                }
+            },
+        ),
         children![
             viewport_2d_mode_segment(
                 host,
@@ -2637,57 +2641,33 @@ fn viewport_2d_mode_segment(
 ) -> impl Bundle {
     (
         Viewport2dModeSegment { host, mode },
-        Interaction::default(),
         jackdaw_feathers::tooltip::Tooltip::title(tooltip),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-            ..default()
-        },
-        BackgroundColor(Color::NONE),
-        observe(
-            move |click: On<Pointer<Click>>,
-                  disabled: Query<(), With<bevy::ui::InteractionDisabled>>,
-                  mut hosts: Query<&mut Viewport2dPanelHost>| {
-                if disabled.contains(click.event_target()) {
-                    return;
-                }
-                if let Ok(mut panel) = hosts.get_mut(host)
-                    && panel.mode != mode
-                {
-                    panel.mode = mode;
-                }
-            },
-        ),
-        children![(
-            Text::new(label),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
+        segmented::segment(label),
     )
 }
 
 /// Highlight the segment matching each panel's current mode.
 fn update_viewport_2d_mode_bar(
     hosts: Query<&Viewport2dPanelHost>,
-    mut segments: Query<(&Viewport2dModeSegment, &mut BackgroundColor)>,
+    mut segments: Query<(
+        Entity,
+        &Viewport2dModeSegment,
+        &mut BackgroundColor,
+        Has<Checked>,
+    )>,
+    mut commands: Commands,
 ) {
-    for (segment, mut background) in &mut segments {
+    for (entity, segment, mut background, checked) in &mut segments {
         let Ok(host) = hosts.get(segment.host) else {
             continue;
         };
-        let color = if host.mode == segment.mode {
-            tokens::TOOLBAR_ACTIVE_BG
-        } else {
-            Color::NONE
-        };
+        let active = host.mode == segment.mode;
+        let color = segmented::segment_background(active);
         if background.0 != color {
             background.0 = color;
+        }
+        if checked != active {
+            segmented::set_segment_checked(&mut commands, entity, active);
         }
     }
 }

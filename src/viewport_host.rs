@@ -12,8 +12,12 @@
 //! state component on the panel entity; the mode decides which column is
 //! displayed and which camera renders.
 
-use bevy::{prelude::*, ui_widgets::observe};
-use jackdaw_feathers::tokens;
+use bevy::{
+    prelude::*,
+    ui::Checked,
+    ui_widgets::{ValueChange, observe},
+};
+use jackdaw_feathers::segmented;
 
 use crate::prelude::*;
 use crate::scenes::operators::SceneKind;
@@ -311,17 +315,26 @@ pub struct ViewportModeSegment {
 /// showing carries the way back out of it.
 pub(crate) fn viewport_mode_bar(host: Entity) -> impl Bundle {
     (
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            overflow: Overflow::clip(),
-            flex_shrink: 0.0,
-            ..default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
+        segmented::segmented_bar(),
+        observe(
+            move |change: On<ValueChange<Entity>>,
+                  segments: Query<&ViewportModeSegment>,
+                  mut hosts: Query<&mut ViewportHost>,
+                  mut intent: ResMut<ViewportModeIntent>| {
+                let Ok(segment) = segments.get(change.value) else {
+                    return;
+                };
+                let Ok(mut panel) = hosts.get_mut(host) else {
+                    return;
+                };
+                let mode = segment.mode;
+                *intent = ViewportModeIntent { mode, chosen: true };
+                if panel.mode != mode || !panel.mode_chosen {
+                    panel.mode = mode;
+                    panel.mode_chosen = true;
+                }
+            },
+        ),
         children![
             viewport_mode_segment(
                 host,
@@ -348,61 +361,33 @@ fn viewport_mode_segment(
 ) -> impl Bundle {
     (
         ViewportModeSegment { host, mode },
-        Interaction::default(),
         jackdaw_feathers::tooltip::Tooltip::title(tooltip),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-            ..default()
-        },
-        BackgroundColor(Color::NONE),
-        observe(
-            move |click: On<Pointer<Click>>,
-                  disabled: Query<(), With<bevy::ui::InteractionDisabled>>,
-                  mut hosts: Query<&mut ViewportHost>,
-                  mut intent: ResMut<ViewportModeIntent>| {
-                if disabled.contains(click.event_target()) {
-                    return;
-                }
-                let Ok(mut panel) = hosts.get_mut(host) else {
-                    return;
-                };
-                *intent = ViewportModeIntent { mode, chosen: true };
-                if panel.mode != mode || !panel.mode_chosen {
-                    panel.mode = mode;
-                    panel.mode_chosen = true;
-                }
-            },
-        ),
-        children![(
-            Text::new(label),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
+        segmented::segment(label),
     )
 }
 
 /// Highlight the segment matching each panel's mode, in both of its bars.
 fn update_viewport_mode_bar(
     hosts: Query<&ViewportHost>,
-    mut segments: Query<(&ViewportModeSegment, &mut BackgroundColor)>,
+    mut segments: Query<(
+        Entity,
+        &ViewportModeSegment,
+        &mut BackgroundColor,
+        Has<Checked>,
+    )>,
+    mut commands: Commands,
 ) {
-    for (segment, mut background) in &mut segments {
+    for (entity, segment, mut background, checked) in &mut segments {
         let Ok(host) = hosts.get(segment.host) else {
             continue;
         };
-        let color = if host.mode == segment.mode {
-            tokens::TOOLBAR_ACTIVE_BG
-        } else {
-            Color::NONE
-        };
+        let active = host.mode == segment.mode;
+        let color = segmented::segment_background(active);
         if background.0 != color {
             background.0 = color;
+        }
+        if checked != active {
+            segmented::set_segment_checked(&mut commands, entity, active);
         }
     }
 }
