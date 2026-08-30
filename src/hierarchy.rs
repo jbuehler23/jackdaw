@@ -15,7 +15,7 @@ use jackdaw_feathers::{
     icons::IconFont,
     text_edit::{self, EditorTextEdit, TextEditCommitEvent, TextEditProps, TextEditValue},
     tokens,
-    tree_view::{ROW_BG, TreeRowStyle, tree_row},
+    tree_view::{ROW_BG, TreeRowStyle, set_row_expand_toggle, tree_row},
 };
 use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuState};
 use jackdaw_widgets::tree_view::{
@@ -116,8 +116,6 @@ impl Plugin for HierarchyPlugin {
                     update_show_all_button_appearance,
                     on_show_all_changed,
                     sync_pie_live_outliner,
-                    watch_selection_for_reveal,
-                    drive_reveal_target,
                     jackdaw_feathers::tree_view::tree_keyboard_navigation,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
@@ -129,6 +127,9 @@ impl Plugin for HierarchyPlugin {
                     // Row maintenance, so it runs wherever the row-spawn
                     // observers do rather than only in the Editor state.
                     spawn_rows_for_late_registrations,
+                    refresh_chevrons_on_document_change,
+                    watch_selection_for_reveal,
+                    drive_reveal_target,
                 )
                     .after(jackdaw_widgets::tree_view::maintain_tree_index),
             )
@@ -247,18 +248,29 @@ fn is_inherited_descendant(world: &World, entity: Entity) -> bool {
 /// active view mode, so the expand chevron only appears when expanding the
 /// row would spawn something.
 fn has_visible_children(world: &World, entity: Entity) -> bool {
-    let Some(children) = world.get::<Children>(entity) else {
-        return false;
-    };
     let live = outliner_in_live_mode(world);
     let live_set = if live {
         live_preview_set(world)
     } else {
         std::collections::HashSet::new()
     };
+    has_visible_children_in_mode(world, entity, live, &live_set)
+}
+
+/// [`has_visible_children`] with the view mode already resolved, for callers
+/// judging many entities at once.
+fn has_visible_children_in_mode(
+    world: &World,
+    entity: Entity,
+    live: bool,
+    live_set: &std::collections::HashSet<Entity>,
+) -> bool {
+    let Some(children) = world.get::<Children>(entity) else {
+        return false;
+    };
     children
         .iter()
-        .any(|child| child_visible_in_mode(world, child, live, &live_set))
+        .any(|child| child_visible_in_mode(world, child, live, live_set))
 }
 
 /// True when the outliner is currently showing the Live (running game) tree.
@@ -496,7 +508,6 @@ fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: En
         .spawn((
             tree_row(
                 &label,
-                has_children,
                 false,
                 source,
                 category,
@@ -507,6 +518,7 @@ fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: En
             ChildOf(parent_container),
         ))
         .id();
+    set_row_expand_toggle(world, tree_row_entity, has_children);
 
     // Register immediately under the owning Outliner panel so the
     // next caller in the same `commands.queue` flush sees the row
@@ -705,44 +717,54 @@ pub(crate) struct RevealTarget {
     pub(crate) frames_left: u8,
 }
 
-/// When the primary selection lands on an entity whose Live-tree row has not
-/// been spawned yet (rows spawn lazily on expansion), arm [`RevealTarget`] so
-/// the driver expands its ancestors until the row appears. Only relevant in
-/// Live mode; in Scene mode the rebuild already covers the authored tree.
-fn watch_selection_for_reveal(
-    selection: Res<Selection>,
-    mode: Res<crate::pie_mirror::PieViewMode>,
-    tree_index: Res<TreeIndex>,
-    mut reveal: ResMut<RevealTarget>,
-) {
+/// Arm [`RevealTarget`] on the primary selection so the driver brings its row
+/// into view. Both view modes need this: a node added under a collapsed parent
+/// has no row at all, or has one hidden inside a collapsed ancestor, and in
+/// neither case can the user see what they just selected. The driver clears an
+/// already-visible target on its next tick, so no check is needed here.
+fn watch_selection_for_reveal(selection: Res<Selection>, mut reveal: ResMut<RevealTarget>) {
     if !selection.is_changed() {
-        return;
-    }
-    if *mode != crate::pie_mirror::PieViewMode::Live {
         return;
     }
     let Some(primary) = selection.primary() else {
         return;
     };
-    if tree_index.contains_anywhere(primary) {
-        return;
-    }
     reveal.entity = Some(primary);
     reveal.frames_left = 16;
 }
 
-/// While [`RevealTarget`] is armed, expand the nearest already-rowed ancestor
-/// of the target each frame. Expanding a row triggers `on_tree_node_expanded`,
-/// which spawns the next level on the following flush; the driver then advances
-/// to that newly rowed ancestor on the next frame. Clears the target once its
-/// own row exists or the countdown runs out.
+/// The highest ancestor row of `target` that is still collapsed, and so is
+/// keeping `target`'s row either unspawned or hidden.
+fn collapsed_ancestor_row(world: &World, target: Entity) -> Option<Entity> {
+    for ancestor in reveal_path(world, target) {
+        let rows: Vec<Entity> = world
+            .resource::<TreeIndex>()
+            .rows_for_source(ancestor)
+            .map(|(_container, row)| row)
+            .collect();
+        for row in rows {
+            if world.get::<TreeNodeExpanded>(row).map(|e| e.0) == Some(false) {
+                return Some(row);
+            }
+        }
+    }
+    None
+}
+
+/// While [`RevealTarget`] is armed, expand the highest still-collapsed ancestor
+/// row of the target each frame. Expanding a row triggers
+/// `on_tree_node_expanded`, which spawns the next level on the following flush;
+/// the driver then advances to that newly rowed ancestor on the next frame.
+/// Clears the target once its own row exists with every ancestor open, or the
+/// countdown runs out.
 fn drive_reveal_target(world: &mut World) {
     let target = world.resource::<RevealTarget>().entity;
     let Some(target) = target else {
         return;
     };
 
-    if world.resource::<TreeIndex>().contains_anywhere(target) {
+    let row_to_expand = collapsed_ancestor_row(world, target);
+    if row_to_expand.is_none() && world.resource::<TreeIndex>().contains_anywhere(target) {
         let mut reveal = world.resource_mut::<RevealTarget>();
         reveal.entity = None;
         reveal.frames_left = 0;
@@ -755,25 +777,6 @@ fn drive_reveal_target(world: &mut World) {
         return;
     }
     world.resource_mut::<RevealTarget>().frames_left = frames_left - 1;
-
-    // Highest-to-lowest ancestor chain. Expand the first ancestor that has a
-    // row somewhere but is not yet expanded; mutating `TreeNodeExpanded` fires
-    // `on_tree_node_expanded`, which spawns the next level on the next flush.
-    let path = reveal_path(world, target);
-    let mut row_to_expand = None;
-    'outer: for ancestor in path {
-        let rows: Vec<Entity> = world
-            .resource::<TreeIndex>()
-            .rows_for_source(ancestor)
-            .map(|(_container, row)| row)
-            .collect();
-        for row in rows {
-            if world.get::<TreeNodeExpanded>(row).map(|e| e.0) == Some(false) {
-                row_to_expand = Some(row);
-                break 'outer;
-            }
-        }
-    }
 
     if let Some(row) = row_to_expand {
         if let Some(mut expanded) = world.get_mut::<TreeNodeExpanded>(row) {
@@ -1037,6 +1040,55 @@ fn refresh_row_icon(world: &mut World, entity: Entity) {
     }
 }
 
+/// Re-derive whether every Outliner row of `entity` advertises children, for
+/// a change the document does not see: a despawn leaves the parent's row still
+/// offering an expansion onto nothing.
+fn refresh_row_chevron(world: &mut World, entity: Entity) {
+    let has_children = has_visible_children(world, entity);
+    let rows: Vec<Entity> = world
+        .resource::<TreeIndex>()
+        .rows_for_source(entity)
+        .map(|(_container, row)| row)
+        .collect();
+    for row in rows {
+        set_row_expand_toggle(world, row, has_children);
+    }
+}
+
+/// Re-derive every row's disclosure after the document changed.
+///
+/// Whether a child counts is judged against the document (an unregistered
+/// child under a registered parent is a generated part, not a row), and a
+/// widget is parented before it is registered, so the moment the parent gains
+/// its child is too early to tell. This is the pass that catches up.
+fn refresh_chevrons_on_document_change(
+    document: Res<jackdaw_bsn::SceneBsnAst>,
+    mut commands: Commands,
+) {
+    if !document.is_changed() {
+        return;
+    }
+    commands.queue(refresh_all_row_chevrons);
+}
+
+fn refresh_all_row_chevrons(world: &mut World) {
+    let live = outliner_in_live_mode(world);
+    let live_set = if live {
+        live_preview_set(world)
+    } else {
+        std::collections::HashSet::new()
+    };
+    let rows: Vec<(Entity, Entity)> = world
+        .query::<(Entity, &TreeNode)>()
+        .iter(world)
+        .map(|(row, node)| (row, node.0))
+        .collect();
+    for (row, source) in rows {
+        let has_children = has_visible_children_in_mode(world, source, live, &live_set);
+        set_row_expand_toggle(world, row, has_children);
+    }
+}
+
 /// A brush's outliner row icon is registered against its `Brush` component, but
 /// the duplicate path writes a brush's components into the world incrementally
 /// through the scene, so the row can be created before `Brush` lands and shows
@@ -1157,10 +1209,16 @@ fn on_entity_deparented(
     tree_index: Res<TreeIndex>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
     tree_node_check: Query<(), With<TreeNode>>,
+    child_of_query: Query<&ChildOf>,
 ) {
     let entity = trigger.event_target();
     if editor_check.contains(entity) || tree_node_check.contains(entity) {
         return;
+    }
+    if let Ok(&ChildOf(old_parent)) = child_of_query.get(entity) {
+        commands.queue(move |world: &mut World| {
+            refresh_row_chevron(world, old_parent);
+        });
     }
     for (container, tree_entity) in tree_index.rows_for_source(entity) {
         commands.entity(tree_entity).try_insert(ChildOf(container));

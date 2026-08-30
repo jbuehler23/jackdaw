@@ -644,6 +644,158 @@ fn a_derived_child_stays_rowless_across_later_registrations() {
 }
 
 // ---------------------------------------------------------------------------
+// Outliner disclosure
+// ---------------------------------------------------------------------------
+
+fn tree_row_of(world: &mut World, source: Entity) -> Option<Entity> {
+    let mut rows = world.query::<(Entity, &jackdaw_widgets::tree_view::TreeNode)>();
+    rows.iter(world)
+        .find(|(_, node)| node.0 == source)
+        .map(|(row, _)| row)
+}
+
+/// The row's disclosure control, reached as
+/// row -> `TreeRowContent` -> `TreeNodeExpandToggle` -> the toggle. `None`
+/// when the row advertises no children.
+fn disclosure_of(world: &World, row: Entity) -> Option<Entity> {
+    let content = world.get::<Children>(row)?.iter().find(|&child| {
+        world
+            .get::<jackdaw_widgets::tree_view::TreeRowContent>(child)
+            .is_some()
+    })?;
+    let toggle = world.get::<Children>(content)?.iter().find(|&child| {
+        world
+            .get::<jackdaw_widgets::tree_view::TreeNodeExpandToggle>(child)
+            .is_some()
+    })?;
+    world.get::<Children>(toggle)?.iter().find(|&child| {
+        world
+            .get::<bevy::feathers::controls::FeathersDisclosureToggle>(child)
+            .is_some()
+    })
+}
+
+/// An outliner with one open UI scene and one panel showing it.
+fn outliner_app() -> (App, Entity) {
+    let mut app = palette_app();
+    let world = app.world_mut();
+    let root = open_ui_scene(world);
+    world.spawn((
+        HierarchyTreeContainer,
+        Node::default(),
+        Visibility::Inherited,
+    ));
+    app.update();
+    app.update();
+    (app, root)
+}
+
+/// A row spawned before its source had children still has to become
+/// expandable when the first child arrives, or a node added from the Add menu
+/// is unreachable: its own row only spawns once the parent row is expanded.
+#[test]
+fn a_row_that_gains_a_child_becomes_expandable() {
+    let (mut app, root) = outliner_app();
+    let world = app.world_mut();
+    let row = tree_row_of(world, root).expect("the open scene root has a row");
+    assert!(
+        disclosure_of(world, row).is_none(),
+        "an empty root advertises no children",
+    );
+
+    let child = world
+        .spawn((Name::new("Panel"), Node::default(), ChildOf(root)))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(world, child);
+    app.update();
+
+    let world = app.world_mut();
+    let disclosure = disclosure_of(world, row).expect("the root now advertises children");
+    assert_eq!(
+        rows_for(world, child),
+        0,
+        "the child row still waits for the expansion",
+    );
+
+    world.trigger(ValueChange {
+        source: disclosure,
+        value: true,
+        is_final: true,
+    });
+    app.update();
+    app.update();
+
+    let world = app.world_mut();
+    assert!(
+        world.get::<Checked>(disclosure).is_some(),
+        "the disclosure reads as expanded",
+    );
+    assert_eq!(
+        rows_for(world, child),
+        1,
+        "expanding the root yields the child's row",
+    );
+}
+
+/// The other direction: a row that loses its last child stops offering an
+/// expansion that would open onto nothing.
+#[test]
+fn a_row_that_loses_its_last_child_stops_advertising_children() {
+    let (mut app, root) = outliner_app();
+    let world = app.world_mut();
+    let row = tree_row_of(world, root).expect("the open scene root has a row");
+    let child = world
+        .spawn((Name::new("Panel"), Node::default(), ChildOf(root)))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(world, child);
+    app.update();
+
+    let world = app.world_mut();
+    assert!(
+        disclosure_of(world, row).is_some(),
+        "the root advertises the child",
+    );
+
+    world.entity_mut(child).despawn();
+    app.update();
+    app.update();
+
+    let world = app.world_mut();
+    assert!(
+        disclosure_of(world, row).is_none(),
+        "the last child left, so the disclosure goes with it",
+    );
+}
+
+/// Adding a widget selects it, and the selection has to bring its row into
+/// view in Scene mode too, where the parent row may never have been expanded
+/// and so holds no child rows at all.
+#[test]
+fn a_new_widget_is_revealed_in_the_scene_tree() {
+    let (mut app, root) = outliner_app();
+    let world = app.world_mut();
+    let panel = instantiate_widget(world, "ui.panel").expect("the UI scene accepts a panel");
+    for _ in 0..8 {
+        app.update();
+    }
+
+    let world = app.world_mut();
+    let row = tree_row_of(world, root).expect("the open scene root has a row");
+    assert_eq!(
+        world
+            .get::<jackdaw_widgets::tree_view::TreeNodeExpanded>(row)
+            .map(|expanded| expanded.0),
+        Some(true),
+        "revealing the selection expanded the root",
+    );
+    assert_eq!(
+        rows_for(world, panel),
+        1,
+        "the new widget has a row without anyone expanding the root by hand",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Feathers theming and value behaviour
 // ---------------------------------------------------------------------------
 

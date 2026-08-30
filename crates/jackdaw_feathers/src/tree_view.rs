@@ -1,4 +1,9 @@
-use bevy::{feathers::theme::ThemedText, prelude::*, ui_widgets::observe};
+use bevy::{
+    feathers::{controls::FeathersDisclosureToggle, theme::ThemedText},
+    prelude::*,
+    ui::Checked,
+    ui_widgets::{ValueChange, observe},
+};
 use bevy_monitors::prelude::{MonitorSelf, Mutation, NotifyChanged};
 use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeFocused, TreeNode, TreeNodeExpandToggle,
@@ -47,9 +52,12 @@ pub fn category_color(category: EntityCategory, inherited: bool) -> Color {
 /// tone while leaving the icon character to reflect the underlying
 /// category (Lightbulb for an inherited light, Video for an inherited
 /// camera, etc.).
+///
+/// The row spawns with an empty expand toggle; call
+/// [`set_row_expand_toggle`] to give it a disclosure control once the
+/// source entity's children are known.
 pub fn tree_row(
     label: &str,
-    has_children: bool,
     selected: bool,
     source: Entity,
     category: EntityCategory,
@@ -72,7 +80,6 @@ pub fn tree_row(
             // The clickable row content
             tree_row_content(
                 label,
-                has_children,
                 selected,
                 source,
                 category,
@@ -99,7 +106,7 @@ pub fn tree_row(
                 BorderColor::all(tokens::CONNECTION_LINE),
             )
         ],
-        // React to TreeNodeExpanded changes: toggle children visibility + chevron icon
+        // React to TreeNodeExpanded changes: children visibility + Checked
         observe(
             |mutation: On<Mutation<TreeNodeExpanded>>,
              expanded_query: Query<(&TreeNodeExpanded, &Children)>,
@@ -107,14 +114,13 @@ pub fn tree_row(
              content_query: Query<&Children, With<TreeRowContent>>,
              toggle_query: Query<&Children, With<TreeNodeExpandToggle>>,
              mut node_query: Query<&mut Node>,
-             mut text_query: Query<&mut Text>| {
+             mut commands: Commands| {
                 let entity = mutation.event_target();
                 let Ok((expanded, children)) = expanded_query.get(entity) else {
                     return;
                 };
 
                 for child in children.iter() {
-                    // Toggle TreeRowChildren display
                     if children_container.contains(child)
                         && let Ok(mut node) = node_query.get_mut(child)
                     {
@@ -125,28 +131,23 @@ pub fn tree_row(
                         };
                     }
 
-                    // Update chevron: TreeRowContent -> TreeNodeExpandToggle -> Text
-                    if let Ok(content_children) = content_query.get(child) {
-                        for cc in content_children.iter() {
-                            if let Ok(toggle_children) = toggle_query.get(cc) {
-                                for tc in toggle_children.iter() {
-                                    if let Ok(mut text) = text_query.get_mut(tc) {
-                                        // Only rows that already show a chevron
-                                        // flip glyphs; a childless leaf keeps its
-                                        // blank toggle even when the reveal
-                                        // machinery marks it expanded.
-                                        let chevron_right =
-                                            Icon::ChevronRight.unicode().to_string();
-                                        let chevron_down = Icon::ChevronDown.unicode().to_string();
-                                        if text.0 == chevron_right || text.0 == chevron_down {
-                                            text.0 = if expanded.0 {
-                                                chevron_down
-                                            } else {
-                                                chevron_right
-                                            };
-                                        }
-                                    }
-                                }
+                    // TreeRowContent -> TreeNodeExpandToggle -> disclosure.
+                    // A childless leaf carries no disclosure at all, so it
+                    // keeps its blank toggle even when the reveal machinery
+                    // marks it expanded.
+                    let Ok(content_children) = content_query.get(child) else {
+                        continue;
+                    };
+                    for cc in content_children.iter() {
+                        let Ok(toggle_children) = toggle_query.get(cc) else {
+                            continue;
+                        };
+                        for disclosure in toggle_children.iter() {
+                            let mut ec = commands.entity(disclosure);
+                            if expanded.0 {
+                                ec.insert(Checked);
+                            } else {
+                                ec.remove::<Checked>();
                             }
                         }
                     }
@@ -156,9 +157,89 @@ pub fn tree_row(
     )
 }
 
+/// The row's expand toggle container, reached as
+/// row -> [`TreeRowContent`] -> [`TreeNodeExpandToggle`].
+fn expand_toggle_of(world: &World, row: Entity) -> Option<Entity> {
+    let content = world
+        .get::<Children>(row)?
+        .iter()
+        .find(|&child| world.get::<TreeRowContent>(child).is_some())?;
+    world
+        .get::<Children>(content)?
+        .iter()
+        .find(|&child| world.get::<TreeNodeExpandToggle>(child).is_some())
+}
+
+/// Give `row` a [`FeathersDisclosureToggle`] when `has_children`, and take it
+/// away when not, so a row that gains its first child becomes expandable and
+/// one that loses its last stops advertising children. [`Checked`] mirrors the
+/// row's [`TreeNodeExpanded`], which is what points the chevron down.
+pub fn set_row_expand_toggle(world: &mut World, row: Entity, has_children: bool) {
+    let Some(toggle) = expand_toggle_of(world, row) else {
+        return;
+    };
+    let existing: Vec<Entity> = world
+        .get::<Children>(toggle)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    if !has_children {
+        for child in existing {
+            if let Ok(entity) = world.get_entity_mut(child) {
+                entity.despawn();
+            }
+        }
+        return;
+    }
+    let expanded = world
+        .get::<TreeNodeExpanded>(row)
+        .map(|expanded| expanded.0)
+        .unwrap_or(false);
+    if let Some(&disclosure) = existing.first() {
+        set_checked(world, disclosure, expanded);
+        return;
+    }
+    let Ok(mut disclosure) = world.spawn_scene(bsn! { @FeathersDisclosureToggle }) else {
+        return;
+    };
+    disclosure.insert(ChildOf(toggle));
+    if expanded {
+        disclosure.insert(Checked);
+    }
+    disclosure.observe(
+        |change: On<ValueChange<bool>>,
+         mut commands: Commands,
+         parent_query: Query<&ChildOf>,
+         tree_node_query: Query<(), With<TreeNodeExpanded>>| {
+            let mut current = change.event_target();
+            for _ in 0..4 {
+                if tree_node_query.contains(current) {
+                    commands
+                        .entity(current)
+                        .insert(TreeNodeExpanded(change.event().value));
+                    return;
+                }
+                let Ok(&ChildOf(parent)) = parent_query.get(current) else {
+                    return;
+                };
+                current = parent;
+            }
+        },
+    );
+}
+
+fn set_checked(world: &mut World, entity: Entity, checked: bool) {
+    let Ok(mut entity) = world.get_entity_mut(entity) else {
+        return;
+    };
+    if checked {
+        entity.insert(Checked);
+    } else {
+        entity.remove::<Checked>();
+    }
+}
+
 fn tree_row_content(
     label: &str,
-    has_children: bool,
     selected: bool,
     source: Entity,
     category: EntityCategory,
@@ -191,8 +272,8 @@ fn tree_row_content(
         BackgroundColor(bg),
         BorderColor::all(border),
         children![
-            // Expand toggle (chevron)
-            expand_toggle(has_children, &style.icon_font),
+            // Expand toggle (the disclosure lands via `set_row_expand_toggle`)
+            expand_toggle(),
             // Category icon
             category_dot(category, inherited, icon_override, &style.icon_font),
             // Label
@@ -317,32 +398,15 @@ fn tree_row_content(
     )
 }
 
-fn expand_toggle(has_children: bool, icon_font: &Handle<Font>) -> impl Bundle {
-    let (text, font) = if has_children {
-        (
-            String::from(Icon::ChevronRight.unicode()),
-            icon_font.clone(),
-        )
-    } else {
-        (String::from(" "), Handle::default())
-    };
-
+fn expand_toggle() -> impl Bundle {
     (
         TreeNodeExpandToggle,
         Node {
             width: px(TOGGLE_WIDTH),
             justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
             ..default()
         },
-        children![(
-            Text::new(text),
-            TextFont {
-                font: font.into(),
-                font_size: tokens::TEXT_SIZE_SM,
-                ..default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
         observe(
             |mut click: On<Pointer<Click>>,
              mut commands: Commands,

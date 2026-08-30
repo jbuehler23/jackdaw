@@ -4,7 +4,7 @@ use bevy::{prelude::*, tasks::Task, tasks::futures_lite::future};
 use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_feathers::{
     tokens,
-    tree_view::{TreeRowStyle, tree_row},
+    tree_view::{TreeRowStyle, set_row_expand_toggle, tree_row},
 };
 use jackdaw_remote::scene_snapshot::RemoteEntity;
 use jackdaw_widgets::tree_view::{
@@ -588,7 +588,6 @@ fn spawn_remote_tree_row(
         .spawn((
             tree_row(
                 &label,
-                has_children,
                 false,
                 proxy,
                 EntityCategory::Entity,
@@ -599,6 +598,7 @@ fn spawn_remote_tree_row(
             ChildOf(parent_container),
         ))
         .id();
+    set_row_expand_toggle(world, tree_row_entity, has_children);
 
     world
         .resource_mut::<RemoteProxyIndex>()
