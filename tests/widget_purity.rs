@@ -14,10 +14,6 @@ use std::path::{Path, PathBuf};
 /// still here. Paths are relative to the repository root.
 const ALLOWED: &[(&str, &str)] = &[
     (
-        "crates/jackdaw_feathers/src/panel_header.rs",
-        "the panel tab bar; the tab widget it belongs on is a later pass",
-    ),
-    (
         "crates/jackdaw_feathers/src/text_edit.rs",
         "the text field's own click and drag hitboxes; the feathers text input is a later pass",
     ),

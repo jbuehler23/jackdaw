@@ -14,7 +14,6 @@ pub mod list_view;
 pub mod menu_bar;
 pub mod number_input;
 pub mod panel_card;
-pub mod panel_header;
 pub mod panel_section;
 pub mod picker;
 pub mod popover;
@@ -64,7 +63,6 @@ impl Plugin for EditorFeathersPlugin {
             color_picker::plugin,
             menu_bar::plugin,
             context_menu::plugin,
-            panel_header::plugin,
             picker::plugin,
             panel_card::plugin,
         ));
