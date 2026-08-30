@@ -474,6 +474,121 @@ fn the_view_menu_carries_the_canvas_view_toggles() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A checked row in the top bar leaves the menu it was clicked in
+/// standing, and the bar walkable.
+///
+/// The row flags the bar for rebuilding, and the open menu is named by
+/// entity: an item respawned under its own open dropdown would take the
+/// dropdown's redraw, the bar's highlight and the hover walk with it.
+#[test]
+fn a_checked_row_in_the_top_bar_leaves_its_menu_open_and_the_bar_walkable() {
+    use jackdaw_widgets::menu_bar::MenuBarState;
+
+    let mut app = util::editor_test_app();
+    let root = project_with_settings("view-menu-open", "{}");
+    open_project(&mut app, &root);
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    app.update();
+    app.world_mut().resource_mut::<jackdaw::MenuBarDirty>().0 = true;
+    app.update();
+
+    let view = menu_bar_item(&mut app, "View");
+    open_menu_named(&mut app, "View");
+    assert_eq!(
+        app.world().resource::<MenuBarState>().open_menu,
+        Some(view),
+        "the View menu opens the way a click on it opens it",
+    );
+
+    click_row(&mut app, "op:canvas.rulers?on=false");
+
+    assert!(!snap(&app).show_rulers, "the row flips what it names");
+    assert!(
+        checked_rows(&mut app).contains(&("op:canvas.rulers?on=true".to_string(), false)),
+        "and the open dropdown redraws with the box the click emptied: {:?}",
+        checked_rows(&mut app),
+    );
+    assert_eq!(
+        app.world().resource::<MenuBarState>().open_menu,
+        Some(view),
+        "the item the menu hangs off is the same entity it was",
+    );
+
+    let edit = menu_bar_item(&mut app, "Edit");
+    hover_menu_bar_item(&mut app, edit);
+    app.update();
+    assert_eq!(
+        app.world().resource::<MenuBarState>().open_menu,
+        Some(edit),
+        "so the pointer can still walk from one menu to the next",
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The top bar's item with this label.
+fn menu_bar_item(app: &mut App, label: &str) -> Entity {
+    let bars: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<jackdaw_widgets::menu_bar::MenuBar>>()
+        .iter(app.world())
+        .collect();
+    app.world_mut()
+        .query::<(Entity, &jackdaw_widgets::menu_bar::MenuBarItem, &ChildOf)>()
+        .iter(app.world())
+        .find(|(_, item, parent)| item.label == label && bars.contains(&parent.parent()))
+        .map(|(entity, ..)| entity)
+        .unwrap_or_else(|| panic!("the top bar carries a {label} menu"))
+}
+
+/// Open the top bar's menu with this label, the way a scripted run does.
+fn open_menu_named(app: &mut App, label: &str) {
+    app.world_mut()
+        .operator("menu.open")
+        .param("name", label.to_string())
+        .call()
+        .expect("menu.open dispatches")
+        .assert_finished();
+    app.update();
+}
+
+/// Put the pointer on a menu-bar item, which is what switches the open
+/// menu while another one is up.
+fn hover_menu_bar_item(app: &mut App, target: Entity) {
+    use bevy::picking::pointer::{Location, PointerId};
+    use bevy::window::{PrimaryWindow, WindowRef};
+
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(app.world())
+        .expect("headless apps still have a primary window");
+    let camera = app
+        .world_mut()
+        .query_filtered::<Entity, With<Camera>>()
+        .iter(app.world())
+        .next()
+        .expect("the editor has a camera");
+    let location = Location {
+        target: bevy::camera::NormalizedRenderTarget::Window(
+            WindowRef::Entity(window)
+                .normalize(None)
+                .expect("a window reference normalizes"),
+        ),
+        position: Vec2::ZERO,
+    };
+    app.world_mut().trigger(Pointer::new(
+        PointerId::Mouse,
+        location,
+        Over {
+            hit: bevy::picking::backend::HitData::new(camera, 0.0, None, None),
+        },
+        target,
+    ));
+}
+
 /// The rows the top bar's View menu carries.
 fn view_menu_rows(app: &mut App) -> Vec<(String, String)> {
     app.world_mut()

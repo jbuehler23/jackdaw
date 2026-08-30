@@ -2133,11 +2133,6 @@ fn populate_menu(
         return;
     };
 
-    // Take the bar's own items down before re-populating. Idempotent on
-    // first call (nothing to remove), necessary for rebuilds when the
-    // window registry changes (extensions toggled on/off).
-    jackdaw_feathers::menu_bar::clear_menu_bar_items(world, menu_bar_entity);
-
     // Collect extension-contributed menu entries for menus OTHER than
     // "Add". The "Add" menu goes through the shared
     // `collect_add_menu_items` helper below so the toolbar and the

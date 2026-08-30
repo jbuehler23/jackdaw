@@ -793,13 +793,51 @@ pub fn menu_bar_shell() -> impl Bundle {
 /// identifier the host matches in a `MenuAction` observer. Action
 /// strings are owned so callers can pass `format!("op:{}", Op::ID)`
 /// without leaking operator-id string literals into UI code.
+/// An item already on the bar keeps its entity and takes the new rows in
+/// place; only a label that has come or gone is spawned or despawned.
+/// The open menu is named by entity, so respawning the bar under a menu
+/// that is up would leave [`MenuBarState::open_menu`] pointing at a dead
+/// item: the dropdown would stop redrawing, the bar would lose its
+/// highlight, and hovering the next item along would do nothing.
 pub fn populate_menu_bar(
     world: &mut World,
     menu_bar_entity: Entity,
     menus: impl IntoIterator<Item = (String, Vec<(String, String)>)>,
 ) {
+    let mut spare: Vec<Entity> = world
+        .get::<Children>(menu_bar_entity)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    spare.retain(|child| world.get::<MenuBarItem>(*child).is_some());
+
+    let mut ordered = Vec::new();
     for (label, actions) in menus {
-        spawn_menu_bar_item(world, menu_bar_entity, &label, actions);
+        let standing = spare.iter().position(|child| {
+            world
+                .get::<MenuBarItem>(*child)
+                .is_some_and(|item| item.label == label)
+        });
+        match standing {
+            Some(index) => {
+                let entity = spare.remove(index);
+                if let Some(mut item) = world.get_mut::<MenuBarItem>(entity)
+                    && item.actions != actions
+                {
+                    item.actions = actions;
+                }
+                ordered.push(entity);
+            }
+            None => ordered.push(spawn_menu_bar_item(world, menu_bar_entity, &label, actions)),
+        }
+    }
+
+    for gone in spare {
+        if let Ok(entity) = world.get_entity_mut(gone) {
+            entity.despawn();
+        }
+    }
+    if let Ok(mut bar) = world.get_entity_mut(menu_bar_entity) {
+        bar.add_children(&ordered);
     }
 }
 
@@ -830,28 +868,30 @@ fn spawn_menu_bar_item(
     parent: Entity,
     label: &str,
     actions: Vec<(String, String)>,
-) {
-    world.spawn((
-        MenuBarItem {
-            label: label.to_string(),
-            actions,
-        },
-        Node {
-            padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_XS)),
-            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        BackgroundColor(Color::NONE),
-        children![(
-            Text::new(label),
-            TextFont {
-                font_size: tokens::TEXT_SIZE,
+) -> Entity {
+    world
+        .spawn((
+            MenuBarItem {
+                label: label.to_string(),
+                actions,
+            },
+            Node {
+                padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_XS)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
                 ..Default::default()
             },
-            ThemedText,
-        )],
-        ChildOf(parent),
-    ));
+            BackgroundColor(Color::NONE),
+            children![(
+                Text::new(label),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE,
+                    ..Default::default()
+                },
+                ThemedText,
+            )],
+            ChildOf(parent),
+        ))
+        .id()
 }
 
 /// Builds a menu's rows from the world each time it is asked, so a menu
