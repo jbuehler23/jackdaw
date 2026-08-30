@@ -26,10 +26,6 @@ const ALLOWED: &[(&str, &str)] = &[
         "the popup's rows; the menu family they belong on is a later pass",
     ),
     (
-        "crates/jackdaw_feathers/src/text_edit.rs",
-        "the text field's own click and drag hitboxes; the feathers text input is a later pass",
-    ),
-    (
         "crates/jackdaw_feathers/src/dialog.rs",
         "the backdrop and panel read presses to tell a click outside the dialog from one inside; neither is a control",
     ),

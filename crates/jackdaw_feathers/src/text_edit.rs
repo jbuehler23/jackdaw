@@ -1,17 +1,17 @@
+use bevy::feathers::controls::{FeathersTextInput, FeathersTextInputContainer};
 use bevy::feathers::cursor::{EntityCursor, OverrideCursor};
 use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::text::{
-    EditableText, EditableTextFilter, FontFeatureTag, FontFeatures, FontSize, LineHeight,
-    TextCursorStyle, TextEdit, TextLayoutInfo,
+    EditableText, EditableTextFilter, FontFeatureTag, FontFeatures, FontSize, LineHeight, TextEdit,
+    TextLayoutInfo,
 };
 use bevy::ui::InteractionDisabled;
 
 use crate::icons::{EditorFont, IconFont};
 use crate::tokens::{
-    self, AXIS_LABEL_BG, BORDER_COLOR, ELEVATED_BG, PRIMARY_COLOR, SHADOW_COLOR_LIGHT,
-    TEXT_BODY_COLOR, TEXT_MUTED_COLOR, TEXT_SIZE, TEXT_SIZE_PX, TEXT_SIZE_SM,
+    self, AXIS_LABEL_BG, TEXT_BODY_COLOR, TEXT_MUTED_COLOR, TEXT_SIZE, TEXT_SIZE_PX, TEXT_SIZE_SM,
 };
 
 pub fn plugin(app: &mut App) {
@@ -19,11 +19,9 @@ pub fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                handle_focus_style,
                 handle_numeric_increment,
                 (handle_unfocus, handle_clamp_on_unfocus).chain(),
                 handle_drag_value,
-                handle_click_to_focus,
                 sync_text_edit_values,
             ),
         )
@@ -413,17 +411,7 @@ fn setup_text_edit_input(
                     column_gap: px(tokens::SPACING_MD),
                     ..default()
                 },
-                BackgroundColor(ELEVATED_BG),
-                BoxShadow(vec![ShadowStyle {
-                    x_offset: Val::ZERO,
-                    y_offset: Val::ZERO,
-                    blur_radius: Val::Px(1.0),
-                    spread_radius: Val::Px(1.0),
-                    color: SHADOW_COLOR_LIGHT,
-                }]),
-                Interaction::None,
                 Hovered::default(),
-                EntityCursor::System(bevy::window::SystemCursorIcon::Text),
             ))
             .observe(
                 |mut ev: On<bevy::picking::events::Pointer<bevy::picking::events::DragStart>>| {
@@ -479,7 +467,6 @@ fn setup_text_edit_input(
                         ..default()
                     },
                     ZIndex(10),
-                    Interaction::None,
                     Hovered::default(),
                     EntityCursor::System(bevy::window::SystemCursorIcon::ColResize),
                 ))
@@ -596,7 +583,6 @@ fn setup_text_edit_input(
         let mut text_input = commands.spawn((
             EditorTextEdit,
             config.variant,
-            EditableText::default(),
             TextFont {
                 font: font.clone().into(),
                 font_size: TEXT_SIZE,
@@ -605,11 +591,6 @@ fn setup_text_edit_input(
             },
             LineHeight::Px(line_height_px),
             TextColor(TEXT_BODY_COLOR.into()),
-            TextCursorStyle {
-                color: TEXT_BODY_COLOR.into(),
-                selection_color: PRIMARY_COLOR.with_alpha(0.3).into(),
-                ..default()
-            },
             Node {
                 flex_grow: 1.0,
                 height: px(line_height_px),
@@ -628,7 +609,9 @@ fn setup_text_edit_input(
         }
 
         if config.disabled {
-            text_input.insert(InteractionDisabled);
+            // The feathers input takes focus from its own press observer;
+            // ignoring the pointer is what keeps a disabled field unfocusable.
+            text_input.insert((InteractionDisabled, Pickable::IGNORE));
         }
 
         if let Some(ref suffix) = config.suffix {
@@ -711,20 +694,58 @@ fn setup_text_edit_input(
             wrapper_entity,
             TextEditWrapper(text_input_entity),
         );
+
+        commands.queue(move |world: &mut World| {
+            apply_feathers_text_input(world, wrapper_entity, text_input_entity);
+        });
     }
 }
 
-fn handle_focus_style(
-    focus: Res<InputFocus>,
-    mut wrappers: Query<(&TextEditWrapper, &mut BorderColor, &Hovered)>,
-) {
-    for (wrapper, mut border_color, hovered) in &mut wrappers {
-        let color = match (focus.get() == Some(wrapper.0), hovered.get()) {
-            (true, _) => PRIMARY_COLOR,
-            (_, true) => BORDER_COLOR.lighter(0.05),
-            _ => BORDER_COLOR,
-        };
-        *border_color = BorderColor::all(color);
+/// Put the field's two entities on the feathers text input.
+///
+/// The frame and the input each carry their own layout and text style,
+/// and both scenes write theirs over the entity, so the editor's are
+/// read off first and put back afterwards.
+fn apply_feathers_text_input(world: &mut World, frame: Entity, input: Entity) {
+    let frame_node = world.get::<Node>(frame).cloned();
+    let applied = match world.get_entity_mut(frame) {
+        Ok(mut frame) => frame.apply_scene(bsn! { @FeathersTextInputContainer }),
+        Err(_) => return,
+    };
+    if let Err(error) = applied {
+        error!("a text field frame did not spawn: {error}");
+        return;
+    }
+    if let (Some(node), Ok(mut frame)) = (frame_node, world.get_entity_mut(frame)) {
+        frame.insert(node);
+    }
+
+    let input_node = world.get::<Node>(input).cloned();
+    let font = world.get::<TextFont>(input).cloned();
+    let color = world.get::<TextColor>(input).copied();
+    let line_height = world.get::<LineHeight>(input).copied();
+    let applied = match world.get_entity_mut(input) {
+        Ok(mut input) => input.apply_scene(bsn! { @FeathersTextInput }),
+        Err(_) => return,
+    };
+    if let Err(error) = applied {
+        error!("a text field did not spawn: {error}");
+        return;
+    }
+    let Ok(mut input) = world.get_entity_mut(input) else {
+        return;
+    };
+    if let Some(node) = input_node {
+        input.insert(node);
+    }
+    if let Some(font) = font {
+        input.insert(font);
+    }
+    if let Some(color) = color {
+        input.insert(color);
+    }
+    if let Some(line_height) = line_height {
+        input.insert(line_height);
     }
 }
 
@@ -792,36 +813,12 @@ fn handle_suffix(
     }
 }
 
-fn handle_click_to_focus(
-    mut focus: ResMut<InputFocus>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    wrappers: Query<(&TextEditWrapper, &Interaction, &Children)>,
-    drag_hitboxes: Query<&DragHitbox>,
-    disabled_inputs: Query<(), (With<EditorTextEdit>, With<InteractionDisabled>)>,
-) {
-    if !mouse.just_pressed(MouseButton::Left) {
-        return;
-    }
-
-    for (wrapper, interaction, children) in &wrappers {
-        if disabled_inputs.contains(wrapper.0) {
-            continue;
-        }
-        let is_dragging = children
-            .iter()
-            .any(|c| drag_hitboxes.get(c).is_ok_and(|d| d.dragging));
-        if *interaction == Interaction::Pressed && !is_dragging {
-            focus.set(wrapper.0, FocusCause::Pressed);
-        }
-    }
-}
-
 fn handle_unfocus(
     mut focus: ResMut<InputFocus>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     text_edits: Query<&ChildOf, With<EditorTextEdit>>,
-    wrappers: Query<&Interaction, With<TextEditWrapper>>,
+    wrappers: Query<&Hovered, With<TextEditWrapper>>,
 ) {
     let Some(focused_entity) = focus.get() else {
         return;
@@ -829,12 +826,11 @@ fn handle_unfocus(
     let Ok(child_of) = text_edits.get(focused_entity) else {
         return;
     };
-    let Ok(interaction) = wrappers.get(child_of.parent()) else {
+    let Ok(hovered) = wrappers.get(child_of.parent()) else {
         return;
     };
 
-    let clicked_outside =
-        mouse.get_just_pressed().next().is_some() && *interaction == Interaction::None;
+    let clicked_outside = mouse.get_just_pressed().next().is_some() && !hovered.get();
     let key_dismiss = keyboard.just_pressed(KeyCode::Escape)
         || keyboard.just_pressed(KeyCode::Enter)
         || keyboard.just_pressed(KeyCode::NumpadEnter);
@@ -938,7 +934,7 @@ fn handle_drag_value(
     windows: Query<&Window>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut override_cursor: ResMut<OverrideCursor>,
-    mut drag_hitboxes: Query<(&mut DragHitbox, &Interaction, &ChildOf)>,
+    mut drag_hitboxes: Query<(&mut DragHitbox, &Hovered, &ChildOf)>,
     wrappers: Query<&TextEditWrapper>,
     mut text_edits: Query<
         (
@@ -953,14 +949,14 @@ fn handle_drag_value(
     let Ok(window) = windows.single() else { return };
     let cursor_pos = window.cursor_position();
 
-    for (mut hitbox, interaction, child_of) in &mut drag_hitboxes {
+    for (mut hitbox, hovered, child_of) in &mut drag_hitboxes {
         let Ok(wrapper) = wrappers.get(child_of.parent()) else {
             continue;
         };
         let input_entity = wrapper.0;
 
         if mouse.just_pressed(MouseButton::Left)
-            && *interaction == Interaction::Pressed
+            && hovered.get()
             && let Some(pos) = cursor_pos
         {
             let Ok((_, editable, suffix, _)) = text_edits.get(input_entity) else {
