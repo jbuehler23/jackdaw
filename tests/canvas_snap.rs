@@ -222,6 +222,13 @@ fn the_header_snap_menu_lists_every_kind_with_its_state() {
         ],
         "the menu reads the canvas's settings, and every row calls what it shows",
     );
+    assert!(
+        !snap_menu_rows(&mut app).iter().any(|(action, _)| {
+            action.starts_with(jackdaw_feathers::menu_bar::SUBMENU_ACTION_PREFIX)
+                || action == jackdaw_feathers::menu_bar::SUBMENU_END_ACTION
+        }),
+        "the kinds are read at a glance under a heading, not opened out of a submenu",
+    );
 
     set_kind(&mut app, "other_nodes", true);
     // The rows are read when the menu is being looked at, so opening it
