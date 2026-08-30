@@ -466,7 +466,7 @@ pub(crate) fn draw_brush_preview(
                 gizmos.line(*last, *first, color);
             }
 
-            // Draw preview edges from last → cursor and cursor → first once
+            // Draw preview edges from last -> cursor and cursor -> first once
             // there is a chain to close.
             if let (Some(&last), Some(cursor_pos)) = (verts.last(), cursor) {
                 dashed_gizmos.line(last, cursor_pos, color);
