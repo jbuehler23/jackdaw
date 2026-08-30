@@ -1,9 +1,14 @@
-use bevy::feathers::controls::{ButtonVariant as FeathersButtonVariant, FeathersButton};
+use bevy::feathers::constants::size::CHECKBOX_SIZE;
+use bevy::feathers::controls::{
+    ButtonVariant as FeathersButtonVariant, FeathersButton, FeathersCheckbox,
+};
 use bevy::feathers::cursor::EntityCursor;
 use bevy::feathers::theme::ThemedText;
 use bevy::input_focus::InputFocus;
+use bevy::input_focus::tab_navigation::TabIndex;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use bevy::ui::Checked;
 use jackdaw_scene_types::PropertyValue;
 use lucide_icons::Icon;
 use std::borrow::Cow;
@@ -376,6 +381,7 @@ struct ButtonConfig {
     content: String,
     left_icon: Option<Icon>,
     left_icon_space: bool,
+    left_checkbox: Option<bool>,
     right_icon: Option<Icon>,
     subtitle: Option<String>,
     call_operator: Option<Cow<'static, str>>,
@@ -389,10 +395,12 @@ pub struct ButtonProps {
     pub size: ButtonSize,
     pub align_left: bool,
     pub left_icon: Option<Icon>,
-    /// Keep the left icon's room even with no icon in it, so a run of
-    /// buttons where only some carry one still starts every caption in
-    /// the same place.
+    /// Keep the leading slot's room even with nothing in it, so a run
+    /// of buttons where only some carry an icon or a box still starts
+    /// every caption in the same place.
     pub left_icon_space: bool,
+    /// Lead the button with a `FeathersCheckbox` in this state.
+    pub left_checkbox: Option<bool>,
     pub right_icon: Option<Icon>,
     pub direction: FlexDirection,
     pub subtitle: Option<String>,
@@ -422,10 +430,18 @@ impl ButtonProps {
         self.left_icon = Some(icon);
         self
     }
-    /// Reserve the left icon's room without putting an icon in it. See
-    /// [`ButtonProps::left_icon_space`].
+    /// Reserve the leading slot's room without putting anything in it.
+    /// See [`ButtonProps::left_icon_space`].
     pub fn reserving_left_icon(mut self) -> Self {
         self.left_icon_space = true;
+        self
+    }
+    /// Lead the button with a checkbox showing `checked`. The box is
+    /// the native feathers control, made inert so the button itself
+    /// takes the click and the box only reports state. See
+    /// [`ButtonProps::left_checkbox`].
+    pub fn with_left_checkbox(mut self, checked: bool) -> Self {
+        self.left_checkbox = Some(checked);
         self
     }
     pub fn with_right_icon(mut self, icon: Icon) -> Self {
@@ -571,6 +587,7 @@ pub fn button(props: ButtonProps) -> impl Bundle {
         align_left,
         left_icon,
         left_icon_space,
+        left_checkbox,
         right_icon,
         direction,
         subtitle,
@@ -584,6 +601,7 @@ pub fn button(props: ButtonProps) -> impl Bundle {
             content,
             left_icon,
             left_icon_space,
+            left_checkbox,
             right_icon,
             subtitle,
             call_operator,
@@ -624,7 +642,11 @@ fn setup_button(
         let (left_padding, right_padding) = if icon_only {
             (size.padding(), size.padding())
         } else {
-            let left = if config.left_icon.is_some() || config.left_icon_space || is_column {
+            let left = if config.left_icon.is_some()
+                || config.left_icon_space
+                || config.left_checkbox.is_some()
+                || is_column
+            {
                 px(6.0)
             } else {
                 size.padding()
@@ -654,6 +676,7 @@ fn setup_button(
         // happens atomically on one `&mut World` block.
         let left_icon = config.left_icon;
         let left_icon_space = config.left_icon_space;
+        let left_checkbox = config.left_checkbox;
         let right_icon = config.right_icon;
         let content = config.content.clone();
         let subtitle = config.subtitle.clone();
@@ -663,6 +686,12 @@ fn setup_button(
         let font = font.clone();
         let icon_font_handle = icon_font.0.clone();
         commands.queue(move |world: &mut World| {
+            if world.get_entity(entity).is_err() {
+                return;
+            }
+            if let Some(checked) = left_checkbox {
+                spawn_leading_checkbox(world, entity, checked);
+            }
             let Ok(mut ec) = world.get_entity_mut(entity) else {
                 return;
             };
@@ -684,7 +713,7 @@ fn setup_button(
                     }
                     None if left_icon_space => {
                         parent.spawn(Node {
-                            width: px(size.icon_slot()),
+                            width: CHECKBOX_SIZE,
                             flex_shrink: 0.0,
                             ..default()
                         });
@@ -763,6 +792,39 @@ fn setup_button(
                 }
             });
         });
+    }
+}
+
+/// Put a native feathers checkbox in `entity`'s leading slot, showing
+/// `checked`.
+///
+/// The box reports state and nothing else: the row it leads is the
+/// thing being clicked, so the whole box subtree is `Pickable::IGNORE`
+/// and its tab stop is dropped. `InteractionDisabled` would do the same
+/// job but repaints the box in the disabled tokens, which reads as a
+/// setting that cannot be changed rather than one the row changes.
+fn spawn_leading_checkbox(world: &mut World, entity: Entity, checked: bool) {
+    let box_entity = match world.spawn_scene(bsn! { @FeathersCheckbox }) {
+        Ok(spawned) => spawned.id(),
+        Err(error) => {
+            error!("a button's leading checkbox did not spawn: {error}");
+            return;
+        }
+    };
+
+    let mut checkbox = world.entity_mut(box_entity);
+    checkbox.insert(ChildOf(entity));
+    checkbox.remove::<TabIndex>();
+    if checked {
+        checkbox.insert(Checked);
+    }
+
+    let mut pending = vec![box_entity];
+    while let Some(next) = pending.pop() {
+        if let Some(children) = world.get::<Children>(next) {
+            pending.extend(children.iter());
+        }
+        world.entity_mut(next).insert(Pickable::IGNORE);
     }
 }
 
@@ -889,6 +951,7 @@ impl Default for ButtonProps {
             align_left: Default::default(),
             left_icon: Default::default(),
             left_icon_space: Default::default(),
+            left_checkbox: Default::default(),
             right_icon: Default::default(),
             direction: Default::default(),
             subtitle: Default::default(),

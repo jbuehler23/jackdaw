@@ -61,15 +61,6 @@ pub fn checked_row(
     (format!("{prefix}{}", action.into()), label.into())
 }
 
-/// The box a row in state `checked` draws.
-pub fn checked_icon(checked: bool) -> Icon {
-    if checked {
-        Icon::SquareCheck
-    } else {
-        Icon::Square
-    }
-}
-
 /// On a dropdown row built by [`checked_row`], the state its box shows.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MenuCheckedRow {
@@ -1109,7 +1100,7 @@ fn spawn_dropdown(
             // TODO: add keybind as subtitle
             .align_left();
         match checked {
-            Some(checked) => props = props.with_left_icon(checked_icon(checked)),
+            Some(checked) => props = props.with_left_checkbox(checked),
             None if boxes => props = props.reserving_left_icon(),
             None => {}
         }
@@ -1177,11 +1168,13 @@ fn submenu_group(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::button::ButtonSize;
     use bevy::ecs::system::RunSystemOnce;
+    use bevy::feathers::constants::size::CHECKBOX_SIZE;
+    use bevy::feathers::controls::FeathersCheckbox;
     use bevy::picking::backend::HitData;
     use bevy::picking::events::{Out, Over, Pointer};
     use bevy::picking::pointer::PointerId;
+    use bevy::ui::{Checked, InteractionDisabled};
 
     /// Build one dropdown and hand back it and its rows, in order.
     fn dropdown(
@@ -1206,6 +1199,44 @@ mod tests {
             .map(|children| children.iter().collect::<Vec<_>>())
             .unwrap_or_default();
         (world, entity, rows)
+    }
+
+    /// The same, in an app that runs the button setup, so a row has the
+    /// children it draws.
+    fn dropdown_app(actions: Vec<(String, String)>) -> (App, Vec<Entity>) {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+        ))
+        .init_asset::<Font>()
+        .init_asset::<bevy::scene::ScenePatch>()
+        .init_resource::<bevy::input_focus::InputFocus>()
+        .insert_resource(Time::<()>::default())
+        .insert_resource(crate::icons::EditorFont(Handle::default()))
+        .insert_resource(crate::icons::IconFont(Handle::default()))
+        .add_plugins(crate::button::plugin);
+        let dropdown = app
+            .world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                spawn_dropdown(&mut commands, 0.0, 0.0, 1080.0, &actions)
+            })
+            .expect("the dropdown spawns");
+        app.update();
+        app.update();
+        let rows = app
+            .world()
+            .get::<Children>(dropdown)
+            .map(|children| children.iter().collect())
+            .unwrap_or_default();
+        (app, rows)
+    }
+
+    /// The row's leading child, if it is a checkbox, and its state.
+    fn row_box(app: &App, row: Entity) -> Option<bool> {
+        let leading = app.world().get::<Children>(row)?.iter().next()?;
+        app.world().get::<FeathersCheckbox>(leading)?;
+        Some(app.world().get::<Checked>(leading).is_some())
     }
 
     #[test]
@@ -1247,14 +1278,11 @@ mod tests {
 
     #[test]
     fn a_checked_row_shows_its_state_and_still_dispatches_its_operator() {
-        let (world, _, rows) = dropdown(
-            vec![
-                checked_row(true, "op:canvas.snap?kind=pixel", "Use Pixel Snap"),
-                checked_row(false, "op:canvas.snap?kind=guides", "Guides"),
-            ],
-            0.0,
-            1080.0,
-        );
+        let (app, rows) = dropdown_app(vec![
+            checked_row(true, "op:canvas.snap?kind=pixel", "Use Pixel Snap"),
+            checked_row(false, "op:canvas.snap?kind=guides", "Guides"),
+        ]);
+        let world = app.world();
 
         assert_eq!(
             rows.iter()
@@ -1264,14 +1292,31 @@ mod tests {
             "each row shows the state it was built with",
         );
         assert_eq!(
-            checked_icon(true).unicode(),
-            Icon::SquareCheck.unicode(),
-            "a row that is on draws a ticked box",
+            rows.iter()
+                .map(|row| row_box(&app, *row))
+                .collect::<Vec<_>>(),
+            vec![Some(true), Some(false)],
+            "each row leads with a feathers checkbox in that state",
         );
+
+        let box_entity = world
+            .get::<Children>(rows[0])
+            .and_then(|children| children.iter().next())
+            .expect("the checked row has its box");
         assert_eq!(
-            checked_icon(false).unicode(),
-            Icon::Square.unicode(),
-            "a row that is off draws an empty box",
+            world.get::<Pickable>(box_entity).map(|p| p.is_hoverable),
+            Some(false),
+            "the box does not take the pointer: the row it leads is the button",
+        );
+        assert!(
+            world
+                .get::<bevy::input_focus::tab_navigation::TabIndex>(box_entity)
+                .is_none(),
+            "and it is not a tab stop of its own",
+        );
+        assert!(
+            world.get::<InteractionDisabled>(box_entity).is_none(),
+            "an inert box is not a disabled one: it keeps its live colours",
         );
 
         let call = world
@@ -1296,50 +1341,29 @@ mod tests {
     /// rows without a box starting further left.
     #[test]
     fn a_dropdown_showing_a_box_keeps_its_room_on_every_row() {
-        let mut app = App::new();
-        app.add_plugins(bevy::asset::AssetPlugin::default())
-            .init_asset::<Font>()
-            .init_resource::<bevy::input_focus::InputFocus>()
-            .insert_resource(Time::<()>::default())
-            .insert_resource(crate::icons::EditorFont(Handle::default()))
-            .insert_resource(crate::icons::IconFont(Handle::default()))
-            .add_plugins(crate::button::plugin);
-        let actions = vec![
+        let (app, rows) = dropdown_app(vec![
             checked_row(true, "op:canvas.snap?kind=pixel", "Use Pixel Snap"),
             ("op:viewport2d.grid?size=4".to_string(), "Finer".to_string()),
-        ];
-        let dropdown = app
-            .world_mut()
-            .run_system_once(move |mut commands: Commands| {
-                spawn_dropdown(&mut commands, 0.0, 0.0, 1080.0, &actions)
-            })
-            .expect("the dropdown spawns");
-        app.update();
-        app.update();
-
-        let rows: Vec<Entity> = app
-            .world()
-            .get::<Children>(dropdown)
-            .map(|children| children.iter().collect())
-            .unwrap_or_default();
+        ]);
         let first_child = |row: Entity| {
             app.world()
                 .get::<Children>(row)
                 .and_then(|children| children.iter().next())
                 .expect("a row has its content")
         };
-        assert!(
-            app.world().get::<Text>(first_child(rows[0])).is_some(),
+        assert_eq!(
+            row_box(&app, rows[0]),
+            Some(true),
             "the row with a box draws it first",
         );
         let slot = first_child(rows[1]);
         assert!(
-            app.world().get::<Text>(slot).is_none(),
-            "the row without one leads with a slot rather than a glyph",
+            app.world().get::<FeathersCheckbox>(slot).is_none(),
+            "the row without one leads with an empty slot rather than a box",
         );
         assert_eq!(
             app.world().get::<Node>(slot).map(|node| node.width),
-            Some(Val::Px(ButtonSize::MD.icon_slot())),
+            Some(CHECKBOX_SIZE),
             "and the slot is the box's own width, so the captions line up",
         );
     }
@@ -1358,13 +1382,19 @@ mod tests {
             .get::<SubmenuRow>(rows[0])
             .expect("the group row carries what it expands");
 
-        let (child, _, child_rows) = dropdown(group.actions.clone(), 0.0, 1080.0);
+        let (child, child_rows) = dropdown_app(group.actions.clone());
         assert_eq!(
             child
+                .world()
                 .get::<MenuCheckedRow>(child_rows[0])
                 .map(|row| row.checked),
             Some(true),
             "the state reaches the child dropdown with the row",
+        );
+        assert_eq!(
+            row_box(&child, child_rows[0]),
+            Some(true),
+            "and the row there leads with a checked feathers checkbox",
         );
     }
 
