@@ -1,9 +1,11 @@
+use bevy::feathers::controls::FeathersDisclosureToggle;
 use bevy::prelude::*;
-use jackdaw_widgets::collapsible::{
-    CollapsibleBody, CollapsibleHeader, CollapsibleSection, ToggleCollapsible,
-};
+use bevy::ui::Checked;
+use bevy::ui_widgets::ToggleChecked;
+use jackdaw_widgets::collapsible::{CollapsibleBody, CollapsibleHeader, CollapsibleSection};
 use lucide_icons::Icon;
 
+use crate::panel_card::DisclosureSection;
 use crate::tokens;
 
 /// Options for an inspector card.
@@ -28,6 +30,8 @@ pub struct InspectorCardEntities {
     pub body: Entity,
     /// Present when `opts.removable`; the caller wires the remove action.
     pub remove_button: Option<Entity>,
+    /// Present when `opts.collapsible`; the control that owns the open state.
+    pub disclosure: Option<Entity>,
 }
 
 /// Marker on the remove (X) button so a consumer can observe its clicks.
@@ -127,18 +131,14 @@ pub fn spawn_inspector_card(
         ))
         .id();
 
-    if opts.collapsible {
-        commands.spawn((
-            Text::new(String::from(Icon::ChevronDown.unicode())),
-            TextFont {
-                font: font.clone().into(),
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-            ChildOf(toggle_area),
-        ));
-    }
+    let disclosure = opts.collapsible.then(|| {
+        let mut disclosure = commands.spawn_scene(bsn! { @FeathersDisclosureToggle });
+        disclosure.insert((ChildOf(toggle_area), DisclosureSection(section)));
+        if !opts.collapsed {
+            disclosure.insert(Checked);
+        }
+        disclosure.id()
+    });
 
     if let Some(header_icon) = opts.icon {
         commands.spawn((
@@ -163,13 +163,10 @@ pub fn spawn_inspector_card(
         ChildOf(toggle_area),
     ));
 
-    if opts.collapsible {
-        let section_entity = section;
+    if let Some(disclosure) = disclosure {
         commands.entity(toggle_area).observe(
             move |_: On<Pointer<Click>>, mut commands: Commands| {
-                commands.trigger(ToggleCollapsible {
-                    entity: section_entity,
-                });
+                commands.trigger(ToggleChecked { entity: disclosure });
             },
         );
     }
@@ -212,6 +209,7 @@ pub fn spawn_inspector_card(
     commands.entity(body).insert(ChildOf(section));
 
     InspectorCardEntities {
+        disclosure,
         section,
         header,
         body,
@@ -274,6 +272,20 @@ mod tests {
         header: Entity,
         body: Entity,
         remove_button: Option<Entity>,
+        disclosure: Option<Entity>,
+    }
+
+    fn card_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+        ))
+        .init_asset::<Image>()
+        .add_observer(crate::panel_card::on_disclosure_change)
+        .init_resource::<CardStore>();
+        app
     }
 
     fn spawn_card_system(mut commands: Commands, mut store: ResMut<CardStore>) {
@@ -298,13 +310,13 @@ mod tests {
             header: ents.header,
             body: ents.body,
             remove_button: ents.remove_button,
+            disclosure: ents.disclosure,
         });
     }
 
     #[test]
     fn spawn_card_yields_section_header_body_with_markers() {
-        let mut app = App::new();
-        app.init_resource::<CardStore>();
+        let mut app = card_app();
 
         // Register as a one-shot system and run it once, then flush.
         let system_id = app.world_mut().register_system(spawn_card_system);
@@ -349,6 +361,62 @@ mod tests {
                 .get::<InspectorCardRemoveButton>(remove)
                 .is_some(),
             "remove button entity must have InspectorCardRemoveButton"
+        );
+    }
+
+    /// The header opens on a real disclosure control, and the card's open
+    /// state is that control's `Checked`.
+    #[test]
+    fn the_card_opens_on_a_feathers_disclosure_toggle() {
+        let mut app = card_app();
+        let system_id = app.world_mut().register_system(spawn_card_system);
+        app.world_mut().run_system(system_id).unwrap();
+        app.world_mut().flush();
+
+        let result = app
+            .world()
+            .resource::<CardStore>()
+            .0
+            .as_ref()
+            .expect("system must have stored entities");
+        let section = result.section;
+        let body = result.body;
+        let disclosure = result
+            .disclosure
+            .expect("disclosure must be Some when collapsible");
+
+        assert!(
+            app.world()
+                .get::<FeathersDisclosureToggle>(disclosure)
+                .is_some(),
+            "the chevron is the feathers disclosure toggle"
+        );
+        assert!(
+            app.world().get::<Checked>(disclosure).is_some(),
+            "a card that opens expanded starts checked"
+        );
+
+        app.world_mut().trigger(bevy::ui_widgets::ValueChange {
+            source: disclosure,
+            value: false,
+            is_final: true,
+        });
+        app.world_mut().flush();
+
+        assert!(
+            app.world().get::<Checked>(disclosure).is_none(),
+            "collapsing unchecks the toggle"
+        );
+        assert!(
+            app.world()
+                .get::<CollapsibleSection>(section)
+                .is_some_and(|section| section.collapsed),
+            "collapsing marks the section collapsed"
+        );
+        assert_eq!(
+            app.world().get::<Node>(body).map(|node| node.display),
+            Some(Display::None),
+            "collapsing hides the body"
         );
     }
 }

@@ -3,13 +3,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
 
+use bevy::feathers::controls::FeathersDisclosureToggle;
 use bevy::prelude::*;
+use bevy::ui::Checked;
+use bevy::ui_widgets::ValueChange;
 use jackdaw_api::prelude::*;
-use jackdaw_feathers::{
-    file_browser,
-    icons::{Icon, IconFont},
-    tokens,
-};
+use jackdaw_feathers::{file_browser, icons::IconFont, tokens};
 use jackdaw_widgets::tree_view::{
     TreeChildrenPopulated, TreeNodeExpandToggle, TreeNodeExpanded, TreeRowChildren, TreeRowContent,
     TreeRowLabel,
@@ -30,6 +29,8 @@ impl Plugin for ProjectFilesPlugin {
                     .run_if(in_state(crate::AppState::Editor)),
             )
             .add_observer(handle_directory_expand)
+            .add_observer(on_directory_toggled)
+            .add_observer(on_directory_disclosure_change)
             .add_observer(on_project_files_context_action);
     }
 }
@@ -294,6 +295,80 @@ fn scan_directory(dir: &Path) -> Vec<(PathBuf, bool)> {
         .collect()
 }
 
+/// Links a directory row's disclosure control to the row it opens.
+#[derive(Component)]
+struct DirectoryDisclosure(Entity);
+
+/// Open or close one directory row. Both the row click and the disclosure
+/// control raise this, so the two agree on what a toggle does.
+#[derive(EntityEvent)]
+struct ToggleDirectory {
+    entity: Entity,
+}
+
+fn on_directory_disclosure_change(
+    change: On<ValueChange<bool>>,
+    disclosures: Query<&DirectoryDisclosure>,
+    mut commands: Commands,
+) {
+    let Ok(row) = disclosures.get(change.source) else {
+        return;
+    };
+    commands.trigger(ToggleDirectory { entity: row.0 });
+}
+
+/// Flip the row's expanded flag, show or hide its children container, and
+/// point the disclosure the way the row now stands.
+fn on_directory_toggled(
+    event: On<ToggleDirectory>,
+    mut expanded_query: Query<&mut TreeNodeExpanded>,
+    children_query: Query<&Children>,
+    children_containers: Query<(), With<TreeRowChildren>>,
+    contents: Query<(), With<TreeRowContent>>,
+    toggles: Query<(), With<TreeNodeExpandToggle>>,
+    mut nodes: Query<&mut Node>,
+    mut commands: Commands,
+) {
+    let row = event.entity;
+    let Ok(mut expanded) = expanded_query.get_mut(row) else {
+        return;
+    };
+    expanded.0 = !expanded.0;
+    let is_expanded = expanded.0;
+
+    let Ok(children) = children_query.get(row) else {
+        return;
+    };
+    for child in children.iter() {
+        if children_containers.contains(child)
+            && let Ok(mut node) = nodes.get_mut(child)
+        {
+            node.display = if is_expanded {
+                Display::Flex
+            } else {
+                Display::None
+            };
+        }
+        if !contents.contains(child) {
+            continue;
+        }
+        let Ok(content_children) = children_query.get(child) else {
+            continue;
+        };
+        for toggle in content_children.iter() {
+            if !toggles.contains(toggle) {
+                continue;
+            }
+            let mut toggle = commands.entity(toggle);
+            if is_expanded {
+                toggle.insert(Checked);
+            } else {
+                toggle.remove::<Checked>();
+            }
+        }
+    }
+}
+
 /// Spawn a single file/directory tree row.
 fn spawn_file_tree_row(
     commands: &mut Commands,
@@ -396,25 +471,13 @@ fn spawn_file_tree_row(
     );
 
     if is_dir {
-        // Expand toggle (chevron)
-        let _ = commands
-            .spawn((
+        commands
+            .spawn_scene(bsn! { @FeathersDisclosureToggle })
+            .insert((
                 TreeNodeExpandToggle,
-                Text::new(String::from(Icon::ChevronRight.unicode())),
-                TextFont {
-                    font: icon_font.clone().into(),
-                    font_size: tokens::ICON_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-                Node {
-                    width: Val::Px(15.0),
-                    flex_shrink: 0.0,
-                    ..Default::default()
-                },
+                DirectoryDisclosure(node_entity),
                 ChildOf(content),
-            ))
-            .id();
+            ));
 
         // Directory label (no icon, just text)
         commands.spawn((
@@ -444,59 +507,14 @@ fn spawn_file_tree_row(
             ChildOf(node_entity),
         ));
 
-        // Toggle expand/collapse on click
         let node_for_click = node_entity;
-        commands.entity(content).observe(
-            move |_: On<Pointer<Click>>,
-                  mut expanded_query: Query<&mut TreeNodeExpanded>,
-                  children_query: Query<&Children>,
-                  children_containers: Query<Entity, With<TreeRowChildren>>,
-                  mut node_query: Query<&mut Node>,
-                  toggle_texts: Query<&Children, With<TreeRowContent>>,
-                  toggle_markers: Query<Entity, With<TreeNodeExpandToggle>>,
-                  mut text_query: Query<&mut Text>| {
-                let Ok(mut expanded) = expanded_query.get_mut(node_for_click) else {
-                    return;
-                };
-                expanded.0 = !expanded.0;
-                let is_expanded = expanded.0;
-
-                // Toggle children visibility
-                if let Ok(children) = children_query.get(node_for_click) {
-                    for child in children.iter() {
-                        if children_containers.get(child).is_ok()
-                            && let Ok(mut node) = node_query.get_mut(child)
-                        {
-                            node.display = if is_expanded {
-                                Display::Flex
-                            } else {
-                                Display::None
-                            };
-                        }
-                    }
-                }
-
-                // Update chevron icon
-                if let Ok(content_children) = toggle_texts.get(node_for_click) {
-                    // Find the TreeRowContent, then its children
-                    for cc in content_children.iter() {
-                        if let Ok(content_kids) = children_query.get(cc) {
-                            for kid in content_kids.iter() {
-                                if toggle_markers.get(kid).is_ok()
-                                    && let Ok(mut text) = text_query.get_mut(kid)
-                                {
-                                    text.0 = String::from(if is_expanded {
-                                        Icon::ChevronDown.unicode()
-                                    } else {
-                                        Icon::ChevronRight.unicode()
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-        );
+        commands
+            .entity(content)
+            .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                commands.trigger(ToggleDirectory {
+                    entity: node_for_click,
+                });
+            });
     } else {
         // File icon based on extension
         let icon = file_browser::file_icon(&file_name);
@@ -528,5 +546,80 @@ fn spawn_file_tree_row(
             TextColor(tokens::TEXT_PRIMARY),
             ChildOf(content),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct RowStore(Option<Entity>);
+
+    fn spawn_dir_row(mut commands: Commands, mut store: ResMut<RowStore>) {
+        let parent = commands.spawn(Node::default()).id();
+        spawn_file_tree_row(
+            &mut commands,
+            parent,
+            Path::new("/project/assets"),
+            true,
+            &Handle::default(),
+        );
+        store.0 = Some(parent);
+    }
+
+    /// A directory row opens on a feathers disclosure toggle, and the row's
+    /// open state is that toggle's `Checked`.
+    #[test]
+    fn a_directory_row_opens_on_a_feathers_disclosure_toggle() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+        ))
+        .init_asset::<Image>()
+        .add_observer(on_directory_toggled)
+        .add_observer(on_directory_disclosure_change)
+        .init_resource::<RowStore>();
+
+        let system_id = app.world_mut().register_system(spawn_dir_row);
+        app.world_mut().run_system(system_id).unwrap();
+        app.world_mut().flush();
+
+        let mut toggles = app.world_mut().query_filtered::<(
+            Entity,
+            &DirectoryDisclosure,
+        ), (
+            With<FeathersDisclosureToggle>,
+            With<TreeNodeExpandToggle>,
+        )>();
+        let (disclosure, link) = toggles
+            .iter(app.world())
+            .next()
+            .expect("the directory row carries a feathers disclosure toggle");
+        let row = link.0;
+        assert!(
+            app.world().get::<Checked>(disclosure).is_none(),
+            "a directory starts closed"
+        );
+
+        app.world_mut().trigger(ValueChange {
+            source: disclosure,
+            value: true,
+            is_final: true,
+        });
+        app.world_mut().flush();
+
+        assert!(
+            app.world().get::<Checked>(disclosure).is_some(),
+            "opening the directory checks its toggle"
+        );
+        assert!(
+            app.world()
+                .get::<TreeNodeExpanded>(row)
+                .is_some_and(|expanded| expanded.0),
+            "opening the directory expands the row"
+        );
     }
 }
