@@ -1433,9 +1433,14 @@ fn authored_offset(world: &World, entity: Entity, rect: Rect) -> Vec2 {
 /// gesture is about to write.
 ///
 /// The order is the precedence a landing is decided by, nearest distance
-/// first and this order to break a tie: the quarter lines of the parent
-/// box, the parent's own edges and centre, sibling sides, sibling
-/// centres, the scene's guides, and finally nodes elsewhere in the tree.
+/// first and this order to break a tie: the parent's own edges and
+/// centre, sibling sides, sibling centres, the scene's guides, nodes
+/// elsewhere in the tree, and last the lines a percentage of the parent
+/// box names. An edge something in the scene actually has beats a line
+/// that is only a figure: the thirds put a percent line within reach of
+/// a sibling often enough that a tie is a real case, and the author can
+/// see the edge. A percent line still wins when it is strictly nearer.
+///
 /// `kinds` decides which of those are offered at all; an off kind
 /// contributes nothing rather than being filtered later, so nothing it
 /// governs can win a tie against a kind that is on.
@@ -1452,21 +1457,6 @@ fn gather_candidates(world: &World, entity: Entity, kinds: &CanvasSnap) -> SnapC
     let origin = offset_box.min;
     candidates.origin = origin;
 
-    if kinds.percent_lines {
-        for percent in PERCENT_LINES {
-            let fraction = percent / 100.0;
-            candidates.x.push(Candidate {
-                at: size.x * fraction,
-                kind: CandidateKind::PercentLine,
-                percent: Some(percent),
-            });
-            candidates.y.push(Candidate {
-                at: size.y * fraction,
-                kind: CandidateKind::PercentLine,
-                percent: Some(percent),
-            });
-        }
-    }
     if kinds.parent {
         // The parent's own lines carry their percentage too, so a
         // percent-authored node landing on an edge or the centre writes
@@ -1540,6 +1530,23 @@ fn gather_candidates(world: &World, entity: Entity, kinds: &CanvasSnap) -> SnapC
             push_rect_sides(&mut candidates, rect, CandidateKind::OtherNode);
         }
     }
+
+    if kinds.percent_lines {
+        for percent in PERCENT_LINES {
+            let fraction = percent / 100.0;
+            candidates.x.push(Candidate {
+                at: size.x * fraction,
+                kind: CandidateKind::PercentLine,
+                percent: Some(percent),
+            });
+            candidates.y.push(Candidate {
+                at: size.y * fraction,
+                kind: CandidateKind::PercentLine,
+                percent: Some(percent),
+            });
+        }
+    }
+
     candidates
 }
 

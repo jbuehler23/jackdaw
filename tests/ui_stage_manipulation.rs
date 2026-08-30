@@ -1613,6 +1613,52 @@ fn a_move_lands_on_a_sibling_centre_when_that_kind_is_on() {
     );
 }
 
+/// On a tie, an edge the scene actually has beats a percentage.
+///
+/// The percent lines are close enough to a sibling often enough that the
+/// tie is a real case, and of the two the author can only see the
+/// sibling. A percent line still wins when it is strictly nearer.
+#[test]
+fn a_sibling_edge_beats_a_percent_line_the_same_distance_away() {
+    let landed = |sides: bool| {
+        let mut app = stage_app();
+        let panel = framed_panel(&mut app, 0.5);
+        without_the_pixel_grid(&mut app, panel);
+        with_kinds(&mut app, |kinds| kinds.sibling_sides = sides);
+        let root = ui_root(&mut app);
+        // A quarter of the 2400-wide canvas is 600, and the sibling's
+        // near edge is at 612: the drag below stops at 606, six from
+        // each.
+        spawn_child(&mut app, root, 612.0, 100.0, 200.0, 200.0);
+        let mover = spawn_child(&mut app, root, 200.0, 640.0, 60.0, 100.0);
+        settle(&mut app);
+
+        select(&mut app, mover);
+        settle(&mut app);
+        let (overlay, _) = overlay_node(&mut app);
+        drag_authored(
+            &mut app,
+            panel,
+            overlay,
+            Vec2::new(230.0, 690.0),
+            Vec2::new(636.0, 690.0),
+        );
+        settle(&mut app);
+        node_of(&app, mover).left
+    };
+
+    assert_eq!(
+        landed(true),
+        px(612),
+        "the sibling's edge takes the tie from the quarter line",
+    );
+    assert_eq!(
+        landed(false),
+        px(600),
+        "and the quarter line is what is left once that kind is off",
+    );
+}
+
 /// A kind is what puts its lines in front of a drag at all, rather than
 /// a filter applied to a landing already chosen. An edge a switched-off
 /// kind governs cannot claim a drag, and cannot win a tie against a kind
