@@ -791,9 +791,15 @@ fn setup_button(
 /// them.
 fn apply_feathers_button(world: &mut World, entity: Entity, variant: ButtonVariant, tool: bool) {
     let feathers = variant.feathers();
-    // The scene writes its own form-row layout over the entity, so the
-    // layout the button was spawned with is put back afterwards.
+    // The scene writes its own form-row layout and its own (empty)
+    // caption list over the entity, so the layout the button was
+    // spawned with and any child the caller already hung on it are put
+    // back afterwards.
     let node = world.get::<Node>(entity).cloned();
+    let children: Vec<Entity> = world
+        .get::<Children>(entity)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
     let applied = {
         let Ok(mut button) = world.get_entity_mut(entity) else {
             return;
@@ -816,6 +822,11 @@ fn apply_feathers_button(world: &mut World, entity: Entity, variant: ButtonVaria
     }
     if variant == ButtonVariant::Disabled {
         button.insert(InteractionDisabled);
+    }
+    for child in children {
+        if let Ok(mut child) = world.get_entity_mut(child) {
+            child.insert(ChildOf(entity));
+        }
     }
 }
 
@@ -1093,6 +1104,27 @@ mod tests {
         assert!(
             app.world().entity(entity).contains::<InteractionDisabled>(),
             "the disabled look is the disabled state",
+        );
+    }
+
+    /// A child the caller hangs on the button survives the scene the
+    /// setup pass applies to it.
+    #[test]
+    fn a_caller_s_child_survives_the_scene() {
+        let mut app = app();
+        let entity = app.world_mut().spawn(button(ButtonProps::new(""))).id();
+        let child = app
+            .world_mut()
+            .spawn((Text::new("x"), ChildOf(entity)))
+            .id();
+        app.update();
+        app.update();
+
+        assert!(app.world().get_entity(child).is_ok(), "the child is alive");
+        assert_eq!(
+            app.world().get::<ChildOf>(child).map(ChildOf::parent),
+            Some(entity),
+            "and still the button's",
         );
     }
 
