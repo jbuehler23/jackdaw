@@ -3113,8 +3113,8 @@ fn dragging_a_guide_moves_it_and_dragging_it_back_onto_the_ruler_removes_it() {
         &mut app,
         panel,
         line,
-        Vec2::new(320.0, 900.0),
-        Vec2::new(504.0, 900.0),
+        Vec2::new(320.0, 300.0),
+        Vec2::new(504.0, 300.0),
     );
     settle(&mut app);
     assert_eq!(
@@ -3129,7 +3129,7 @@ fn dragging_a_guide_moves_it_and_dragging_it_back_onto_the_ruler_removes_it() {
         &mut app,
         panel,
         line,
-        Vec2::new(504.0, 900.0),
+        Vec2::new(504.0, 300.0),
         Vec2::new(504.0, -10.0),
     );
     settle(&mut app);
@@ -3381,12 +3381,51 @@ fn an_undo_during_a_guide_drag_puts_the_guides_back() {
     assert_eq!(history_len(&app), entries, "nor records anything");
 }
 
-/// A guide drawn along a node's edge does not swallow the node.
+/// A guide drawn along a node's edge is still dragged by its line.
 ///
 /// Guides are drawn to place nodes against, so a guide and an edge on
-/// the same pixel is the case they exist for; a slab that took every
-/// press over it would make the node it was drawn for unselectable and
-/// unmovable.
+/// the same pixel is the case they exist for. The node underneath must
+/// not cost the author the guide: the line itself stays the guide's.
+#[test]
+fn a_guide_over_a_node_is_dragged_from_the_line() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (root, _, front) = authored_scene(&mut app);
+    // `front` spans authored x 400..800, so the guide runs down its
+    // left edge and the press below is over both.
+    app.world_mut().entity_mut(root).insert(CanvasGuides {
+        horizontal: Vec::new(),
+        vertical: vec![400.0],
+    });
+    settle(&mut app);
+
+    let line = guide_line_entity(&mut app, panel, CanvasAxis::Vertical, 0);
+    drag_authored(
+        &mut app,
+        panel,
+        line,
+        Vec2::new(400.0, 250.0),
+        Vec2::new(600.0, 250.0),
+    );
+    settle(&mut app);
+
+    assert_eq!(
+        guide_positions(&app, root, CanvasAxis::Vertical),
+        vec![600.0],
+        "the guide came away with the drag that started on its line",
+    );
+    assert_eq!(
+        node_of(&app, front).left,
+        px(400),
+        "and the node it was drawn against stayed where it was",
+    );
+}
+
+/// A press off the line reaches the node the guide is drawn over.
+///
+/// The slab is wider than the line so the line is easy to hit; the
+/// pixels either side of it belong to the canvas, or a node under a
+/// guide would be unselectable and unmovable.
 #[test]
 fn a_node_under_a_guide_can_still_be_picked_up() {
     let mut app = stage_app();
@@ -3400,8 +3439,10 @@ fn a_node_under_a_guide_can_still_be_picked_up() {
     });
     settle(&mut app);
 
+    // Two stage pixels off the line, which is four authored pixels at
+    // this panel's framing, and still inside `front`.
     let line = guide_line_entity(&mut app, panel, CanvasAxis::Vertical, 0);
-    press_at(&mut app, panel, Vec2::new(400.0, 250.0), line);
+    press_at(&mut app, panel, Vec2::new(404.0, 250.0), line);
     settle(&mut app);
     assert_eq!(
         app.world().resource::<Selection>().primary(),
@@ -3415,8 +3456,8 @@ fn a_node_under_a_guide_can_still_be_picked_up() {
         &mut app,
         panel,
         overlay,
-        Vec2::new(400.0, 250.0),
-        Vec2::new(400.0, 450.0),
+        Vec2::new(404.0, 250.0),
+        Vec2::new(404.0, 450.0),
     );
     settle(&mut app);
     assert_eq!(

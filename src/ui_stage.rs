@@ -2399,70 +2399,56 @@ fn guide_gesture(
     Some((host, axis, index))
 }
 
-/// What the guide gestures need to ask whether a node is under the
-/// pointer: the same hit test a press on the stage itself goes through.
+/// What the guide gestures need to place the pointer against the line
+/// that was drawn.
 #[derive(SystemParam)]
-struct StageUnderGuide<'w, 's> {
+struct GuidePointer<'w, 's> {
     ui_scale: Res<'w, UiScale>,
-    stages:
-        Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<Scene2dViewport>>,
-    roots: Query<'w, 's, (Entity, &'static UiTargetCamera), AuthoredUiSceneRoot>,
-    nodes: AuthoredNodes<'w, 's>,
-    children: Query<'w, 's, &'static Children>,
+    slabs: Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<GuideLine>>,
 }
+
+/// How far from the drawn line, in stage-logical pixels, a press still
+/// belongs to the guide.
+const GUIDE_GRAB_RADIUS: f32 = 1.0;
 
 /// Whether a guide takes a pointer event at `cursor`, or lets it through
 /// to the canvas underneath.
 ///
-/// A guide's slab lies over the scene, so a guide drawn along a node's
-/// edge -- which is what guides are for -- would otherwise swallow every
-/// press on that edge and leave the node unselectable. The guide takes
-/// the press over empty canvas and gives it up over a node: a line the
-/// author placed is worth less than the node they placed it for.
+/// The slab a guide is picked up by is [`GUIDE_HIT_WIDTH`] across, so
+/// the line is not a one-pixel target, but only the middle of the slab
+/// is the guide's: a press within [`GUIDE_GRAB_RADIUS`] of the drawn
+/// line grabs the line, and the pixels either side of that fall through
+/// to whatever the canvas has there. A guide drawn along a node's edge
+/// -- which is what guides are for -- can therefore still be dragged off
+/// the line itself, while the node it marks stays selectable a pixel
+/// away, whichever of the two is on top.
 ///
-/// The scene root covers the whole canvas, so a hit on the root is what
-/// empty canvas looks like to the hit test, and the guide keeps those.
 /// A press on a ruler is never over the canvas at all, so a ruler always
 /// takes its own.
 fn guide_takes_the_press(
-    parts: &GuideTargets,
-    stage: &StageUnderGuide,
-    host_entity: Entity,
-    on_a_guide: bool,
+    pointer: &GuidePointer,
+    guide: Option<Entity>,
+    axis: CanvasAxis,
     cursor: Vec2,
 ) -> bool {
-    if !on_a_guide {
-        return true;
-    }
-    let Ok(host) = parts.hosts.get(host_entity) else {
+    let Some(guide) = guide else {
         return true;
     };
-    let Ok(stage_nodes) = stage.stages.get(host.stage) else {
+    let Ok((computed, transform)) = pointer.slabs.get(guide) else {
         return true;
     };
-    match hit_at(
-        cursor,
-        host,
-        stage_nodes,
-        &stage.roots,
-        &stage.nodes,
-        &stage.children,
-    ) {
-        StagePick::Hit(entity) => stage
-            .roots
-            .iter()
-            .any(|(root, routed)| routed.entity() == host.camera && root == entity),
-        StagePick::Miss | StagePick::Empty => true,
-    }
+    let line = transform.translation * computed.inverse_scale_factor();
+    (axis_of(cursor, axis) - axis_of(line, axis)).abs() <= GUIDE_GRAB_RADIUS
 }
 
 /// Claim a press on a ruler or a guide, so the dock never sees it.
-fn on_guide_press(mut event: On<Pointer<Press>>, parts: GuideTargets, stage: StageUnderGuide) {
-    let Some((host, _, index)) = guide_gesture(event.event_target(), event.button, &parts) else {
+fn on_guide_press(mut event: On<Pointer<Press>>, parts: GuideTargets, pointer: GuidePointer) {
+    let target = event.event_target();
+    let Some((_, axis, index)) = guide_gesture(target, event.button, &parts) else {
         return;
     };
-    let cursor = event.pointer_location.position / stage.ui_scale.0;
-    if guide_takes_the_press(&parts, &stage, host, index.is_some(), cursor) {
+    let cursor = event.pointer_location.position / pointer.ui_scale.0;
+    if guide_takes_the_press(&pointer, index.map(|_| target), axis, cursor) {
         event.propagate(false);
     }
 }
@@ -2470,17 +2456,17 @@ fn on_guide_press(mut event: On<Pointer<Press>>, parts: GuideTargets, stage: Sta
 fn on_guide_drag_start(
     mut event: On<Pointer<DragStart>>,
     parts: GuideTargets,
-    stage: StageUnderGuide,
+    pointer: GuidePointer,
     mut commands: Commands,
 ) {
-    let Some((host, axis, index)) = guide_gesture(event.event_target(), event.button, &parts)
-    else {
+    let target = event.event_target();
+    let Some((host, axis, index)) = guide_gesture(target, event.button, &parts) else {
         return;
     };
-    let cursor = event.pointer_location.position / stage.ui_scale.0;
-    // The press over a node went to the canvas, so the drag that follows
-    // it belongs to the canvas too.
-    if !guide_takes_the_press(&parts, &stage, host, index.is_some(), cursor) {
+    let cursor = event.pointer_location.position / pointer.ui_scale.0;
+    // The press off the line went to the canvas, so the drag that
+    // follows it belongs to the canvas too.
+    if !guide_takes_the_press(&pointer, index.map(|_| target), axis, cursor) {
         return;
     }
     event.propagate(false);
