@@ -6,6 +6,7 @@
 
 use bevy::{prelude::*, ui_widgets::observe};
 use jackdaw_api::prelude::*;
+use jackdaw_feathers::button::{ButtonProps, button};
 use jackdaw_feathers::tokens;
 
 use crate::live_frame::LiveFrameStream;
@@ -353,22 +354,10 @@ fn game_playing_chip() -> impl Bundle {
 fn game_play_input_button() -> impl Bundle {
     (
         GamePlayInputButton,
-        Interaction::default(),
         jackdaw_feathers::tooltip::Tooltip::title(
             "Forward keyboard and mouse to the running game (Shift+Esc releases)",
         ),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
+        button(ButtonProps::new("Play Input")),
         observe(|_: On<Pointer<Click>>, mut commands: Commands| {
             commands
                 .operator(crate::live_input::PiePlayInputToggleOp::ID)
@@ -378,14 +367,6 @@ fn game_play_input_button() -> impl Bundle {
                 })
                 .call();
         }),
-        children![(
-            Text::new("Play Input"),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
     )
 }
 
