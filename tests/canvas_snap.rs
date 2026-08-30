@@ -302,6 +302,46 @@ fn a_grid_row_naming_no_open_panel_moves_every_panel() {
     }
 }
 
+/// The magnet chord means the magnet of the canvas under the pointer.
+///
+/// One key for one idea: over a 2D panel it is the canvas's master, and
+/// over the 3D world it is the tools' own snapping, and neither reaches
+/// across into the other.
+#[test]
+fn the_magnet_chord_flips_the_canvas_under_the_pointer() {
+    use jackdaw::snapping::SnapSettings;
+    use jackdaw::viewport::ActiveViewport;
+    use jackdaw::viewport_host::ViewportMode;
+
+    for (mode, canvas_moved, tools_moved) in [
+        (ViewportMode::TwoD, true, false),
+        (ViewportMode::ThreeD, false, true),
+    ] {
+        let mut app = util::editor_test_app();
+        app.world_mut().resource_mut::<ActiveViewport>().mode = Some(mode);
+        let tools_were = app.world().resource::<SnapSettings>().translate_snap;
+        let canvas_was = snap(&app).enabled;
+
+        app.world_mut()
+            .operator("snap.toggle")
+            .call()
+            .expect("snap.toggle dispatches")
+            .assert_finished();
+        app.update();
+
+        assert_eq!(
+            snap(&app).enabled != canvas_was,
+            canvas_moved,
+            "{mode:?}: the canvas master",
+        );
+        assert_eq!(
+            app.world().resource::<SnapSettings>().translate_snap != tools_were,
+            tools_moved,
+            "{mode:?}: the 3D tools' snapping",
+        );
+    }
+}
+
 /// A checked row reached without a mouse press holds nothing over.
 ///
 /// A scripted or keyboard click fires the row without the press the

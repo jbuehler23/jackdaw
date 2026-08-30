@@ -3,7 +3,8 @@
 //! entry.
 //!
 //! Default keybinds: `]` (increase), `[` (decrease), `M` (toggle
-//! snapping, same as the toolbar magnet). The scroll-wheel path for
+//! snapping, same as the toolbar magnet, and the canvas's own master
+//! over a 2D panel). The scroll-wheel path for
 //! grid resize lives alongside the modifier-gated scroll handler in
 //! [`crate::snapping`].
 
@@ -11,8 +12,12 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 
+use crate::canvas_snap::CanvasSnap;
 use crate::core_extension::CoreExtensionInputContext;
+use crate::project::ProjectRoot;
 use crate::snapping::{GRID_POWER_MAX, GRID_POWER_MIN, SnapSettings};
+use crate::viewport::ActiveViewport;
+use crate::viewport_host::ViewportMode;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<GridIncreaseOp>()
@@ -86,11 +91,27 @@ pub(crate) fn grid_set_increment(
     OperatorResult::Finished
 }
 
+/// The magnet of whichever canvas the pointer is over.
+///
+/// The 2D canvas keeps a master of its own, so the chord has to mean the
+/// magnet the user is looking at: over a panel showing the 2D canvas it
+/// flips [`CanvasSnap::enabled`], a project preference that is written
+/// back like the menu's own row writes it, and anywhere else the 3D
+/// tools' snapping. Dispatched on [`ActiveViewport::mode`], the same way
+/// the grid-size scroll picks which grid a wheel means.
 #[operator(id = "snap.toggle", label = "Toggle Snapping")]
 pub(crate) fn grid_toggle_snap(
     _: In<OperatorParameters>,
     mut snap: ResMut<SnapSettings>,
+    mut canvas: ResMut<CanvasSnap>,
+    active_viewport: Res<ActiveViewport>,
+    project: Option<Res<ProjectRoot>>,
 ) -> OperatorResult {
+    if active_viewport.mode == Some(ViewportMode::TwoD) {
+        canvas.enabled = !canvas.enabled;
+        crate::canvas_snap::persist(project.as_deref(), &canvas);
+        return OperatorResult::Finished;
+    }
     // Master toggle: flip every snap type together so the magnet reads
     // as a single on/off. `translate_snap` is the representative state.
     let enabled = !snap.translate_snap;

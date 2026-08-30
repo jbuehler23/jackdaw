@@ -240,7 +240,7 @@ fn flag_menu_dirty_on_change(snap: Res<CanvasSnap>, mut dirty: ResMut<crate::Men
 
 /// Write the canvas settings back to the open project. A run with no
 /// project open keeps them for the session and writes nothing.
-fn persist(project: Option<&ProjectRoot>, snap: &CanvasSnap) {
+pub(crate) fn persist(project: Option<&ProjectRoot>, snap: &CanvasSnap) {
     let Some(project) = project else {
         return;
     };
