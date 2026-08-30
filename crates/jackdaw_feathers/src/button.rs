@@ -342,9 +342,9 @@ impl ButtonSize {
     }
 }
 
-/// Everything [`setup_button`] needs to turn a freshly spawned entity
-/// into a [`FeathersButton`]: the scene it applies, the layout it writes
-/// back over the scene's own, and the children it fills the button with.
+/// Everything the crate's setup pass needs to turn a freshly spawned
+/// entity into a [`FeathersButton`]: which scene to apply, and the
+/// children to fill the button with.
 #[derive(Component)]
 struct ButtonConfig {
     content: String,
@@ -363,7 +363,6 @@ struct ButtonConfig {
     /// Draw the leading icon with this font instead of the crate's
     /// `IconFont` resource.
     icon_font: Option<Handle<Font>>,
-    node: Node,
     initialized: bool,
 }
 
@@ -514,11 +513,7 @@ fn button_node(
     let is_column = direction == FlexDirection::Column;
 
     Node {
-        display: if hidden {
-            Display::None
-        } else {
-            Display::Flex
-        },
+        display: if hidden { Display::None } else { Display::Flex },
         width: if align_left {
             percent(100)
         } else {
@@ -580,13 +575,11 @@ pub fn button(props: ButtonProps) -> impl Bundle {
         hidden,
     } = props;
 
-    let node = button_node(size, align_left, direction, border_radius, hidden);
-
     (
         EditorButton,
         variant,
         size,
-        node.clone(),
+        button_node(size, align_left, direction, border_radius, hidden),
         ButtonConfig {
             content,
             left_icon,
@@ -598,7 +591,6 @@ pub fn button(props: ButtonProps) -> impl Bundle {
             tool: false,
             icon_color: None,
             icon_font: None,
-            node,
             initialized: false,
         },
     )
@@ -609,19 +601,25 @@ fn setup_button(
     editor_font: Res<EditorFont>,
     icon_font: Res<crate::icons::IconFont>,
     mut buttons: Query<
-        (Entity, &mut ButtonConfig, &ButtonVariant, &ButtonSize),
+        (
+            Entity,
+            &mut ButtonConfig,
+            &ButtonVariant,
+            &ButtonSize,
+            &mut Node,
+        ),
         Added<ButtonConfig>,
     >,
 ) {
     let font = editor_font.0.clone();
 
-    for (entity, mut config, variant, size) in &mut buttons {
+    for (entity, mut config, variant, size, mut node) in &mut buttons {
         if config.initialized {
             continue;
         }
         config.initialized = true;
 
-        let is_column = config.node.flex_direction == FlexDirection::Column;
+        let is_column = node.flex_direction == FlexDirection::Column;
         let icon_only = matches!(size, ButtonSize::Icon | ButtonSize::IconSM);
         // Icon-only buttons keep symmetric zero-padding so the glyph
         // sits in the dead centre of the square frame; otherwise an
@@ -646,8 +644,8 @@ fn setup_button(
             };
             (left, right)
         };
-        config.node.padding = UiRect::axes(left_padding, config.node.padding.top);
-        config.node.padding.right = right_padding;
+        node.padding = UiRect::axes(left_padding, node.padding.top);
+        node.padding.right = right_padding;
 
         // Build the button through a queued world-exclusive closure that
         // first checks it is still alive. The lazy `with_children` spawn
@@ -669,7 +667,6 @@ fn setup_button(
         let call_operator = config.call_operator.clone();
         let tool = config.tool;
         let icon_color = config.icon_color;
-        let node = config.node.clone();
         let variant = *variant;
         let size = *size;
         let font = font.clone();
@@ -681,7 +678,7 @@ fn setup_button(
             if world.get_entity(entity).is_err() {
                 return;
             }
-            apply_feathers_button(world, entity, variant, tool, &node);
+            apply_feathers_button(world, entity, variant, tool);
             if let Some(checked) = left_checkbox {
                 spawn_inert_checkbox(world, entity, checked);
             }
@@ -792,16 +789,12 @@ fn setup_button(
 /// [`FeathersToolButton`] when `tool` is set.
 ///
 /// Both are scene components, so the scene API is the only way to spawn
-/// them. Their scene sets a form-row layout, which `node` is written
-/// back over once the scene has landed.
-fn apply_feathers_button(
-    world: &mut World,
-    entity: Entity,
-    variant: ButtonVariant,
-    tool: bool,
-    node: &Node,
-) {
+/// them.
+fn apply_feathers_button(world: &mut World, entity: Entity, variant: ButtonVariant, tool: bool) {
     let feathers = variant.feathers();
+    // The scene writes its own form-row layout over the entity, so the
+    // layout the button was spawned with is put back afterwards.
+    let node = world.get::<Node>(entity).cloned();
     let applied = {
         let Ok(mut button) = world.get_entity_mut(entity) else {
             return;
@@ -819,7 +812,9 @@ fn apply_feathers_button(
     let Ok(mut button) = world.get_entity_mut(entity) else {
         return;
     };
-    button.insert(node.clone());
+    if let Some(node) = node {
+        button.insert(node);
+    }
     if variant == ButtonVariant::Disabled {
         button.insert(InteractionDisabled);
     }
@@ -942,19 +937,17 @@ pub fn icon_button(props: IconButtonProps, icon_font: &Handle<Font>) -> impl Bun
     let icon_color = color
         .unwrap_or_else(|| variant.text_color().into())
         .with_alpha(alpha);
-    let node = button_node(
-        size,
-        false,
-        FlexDirection::Row,
-        BorderRadius::all(px(BORDER_RADIUS_MD)),
-        false,
-    );
-
     (
         EditorButton,
         variant,
         size,
-        node.clone(),
+        button_node(
+            size,
+            false,
+            FlexDirection::Row,
+            BorderRadius::all(px(BORDER_RADIUS_MD)),
+            false,
+        ),
         ButtonConfig {
             content: String::new(),
             left_icon: Some(icon),
@@ -966,7 +959,6 @@ pub fn icon_button(props: IconButtonProps, icon_font: &Handle<Font>) -> impl Bun
             tool: true,
             icon_color: Some(icon_color),
             icon_font: Some(icon_font.clone()),
-            node,
             initialized: false,
         },
     )
