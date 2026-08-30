@@ -1,22 +1,21 @@
 use bevy::feathers::constants::size::CHECKBOX_SIZE;
 use bevy::feathers::controls::{
-    ButtonVariant as FeathersButtonVariant, FeathersButton, FeathersCheckbox,
+    ButtonVariant as FeathersButtonVariant, FeathersButton, FeathersCheckbox, FeathersToolButton,
 };
-use bevy::feathers::cursor::EntityCursor;
-use bevy::feathers::theme::ThemedText;
-use bevy::input_focus::InputFocus;
+use bevy::feathers::theme::{ThemeBackgroundColor, ThemeToken, ThemedText, UiTheme};
 use bevy::input_focus::tab_navigation::TabIndex;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::ui::Checked;
+use bevy::ui::{Checked, InteractionDisabled};
+use bevy::ui_widgets::Activate;
 use jackdaw_scene_types::PropertyValue;
 use lucide_icons::Icon;
 use std::borrow::Cow;
 
 use crate::icons::EditorFont;
 use crate::tokens::{
-    BORDER_RADIUS_MD, DESTRUCTIVE_RED, DESTRUCTIVE_RED_HOVER, PRIMARY_COLOR, TEXT_BODY_COLOR,
-    TEXT_DISPLAY_COLOR, TEXT_MUTED_COLOR, TEXT_SIZE, TEXT_SIZE_SM,
+    BORDER_RADIUS_MD, DESTRUCTIVE_RED, DESTRUCTIVE_RED_HOVER, TEXT_BODY_COLOR, TEXT_DISPLAY_COLOR,
+    TEXT_MUTED_COLOR, TEXT_SIZE, TEXT_SIZE_SM,
 };
 
 #[derive(EntityEvent)]
@@ -159,22 +158,46 @@ impl TryFrom<&str> for ButtonOperatorCall {
     }
 }
 
-/// The pass that turns a pressed button into a [`ButtonClickEvent`].
-///
-/// Public so anything that has to see the click's effects on the frame
-/// it happened can be ordered after it.
-#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ButtonClickPass;
-
 pub fn plugin(app: &mut App) {
-    app.add_systems(
-        Update,
-        (
-            setup_button,
-            handle_hover,
-            handle_button_click.in_set(ButtonClickPass),
-        ),
-    );
+    app.add_systems(Startup, register_button_theme_tokens)
+        .add_systems(Update, (setup_button, paint_variant_background))
+        .add_observer(fire_click_on_activate);
+}
+
+/// Design tokens for the button looks [`FeathersButtonVariant`] has no
+/// entry for. Registered into [`UiTheme`] at startup, and set on the
+/// button entity as a [`ThemeBackgroundColor`] whenever its
+/// [`ButtonVariant`] names one of them.
+pub const BUTTON_DESTRUCTIVE_BG: ThemeToken =
+    ThemeToken::new_static("jackdaw.button.destructive.bg");
+/// See [`BUTTON_DESTRUCTIVE_BG`].
+pub const BUTTON_DESTRUCTIVE_BG_HOVER: ThemeToken =
+    ThemeToken::new_static("jackdaw.button.destructive.bg.hover");
+/// See [`BUTTON_DESTRUCTIVE_BG`].
+pub const BUTTON_ACTIVE_BG: ThemeToken = ThemeToken::new_static("jackdaw.button.active.bg");
+/// See [`BUTTON_DESTRUCTIVE_BG`].
+pub const BUTTON_ACTIVE_ALT_BG: ThemeToken = ThemeToken::new_static("jackdaw.button.active-alt.bg");
+
+/// Adds the editor's own button colours to the feathers theme, so a
+/// variant feathers does not carry is still expressed as a theme token
+/// on a plain [`FeathersButton`] rather than as a second button widget.
+///
+/// The theme resource is only present once `FeathersPlugins` is added,
+/// and the editor replaces it wholesale at startup; taking it as an
+/// option keeps a widget-only test app (which has neither) working.
+fn register_button_theme_tokens(theme: Option<ResMut<UiTheme>>) {
+    let Some(mut theme) = theme else {
+        return;
+    };
+    let mut set = |token: ThemeToken, color: Srgba| {
+        theme.0.color.insert(token, color.into());
+    };
+    set(BUTTON_DESTRUCTIVE_BG, DESTRUCTIVE_RED);
+    set(BUTTON_DESTRUCTIVE_BG_HOVER, DESTRUCTIVE_RED_HOVER);
+    // Solid surface grey; toolbar active-tool indicators and combobox
+    // selected rows share this treatment.
+    set(BUTTON_ACTIVE_BG, Srgba::new(0.314, 0.314, 0.314, 1.0));
+    set(BUTTON_ACTIVE_ALT_BG, TEXT_BODY_COLOR.with_alpha(0.05));
 }
 
 #[derive(Component)]
@@ -209,6 +232,10 @@ pub fn button_caption(
     None
 }
 
+/// The editor's button looks, each resolved onto a
+/// [`FeathersButtonVariant`] by [`ButtonVariant::feathers`]. The four
+/// that feathers has no equivalent for carry a theme token instead; see
+/// [`ButtonVariant::background_token`].
 #[derive(Component, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ButtonVariant {
     #[default]
@@ -216,7 +243,6 @@ pub enum ButtonVariant {
     Primary,
     Destructive,
     Ghost,
-    Close,
     Active,
     ActiveAlt,
     Disabled,
@@ -231,103 +257,43 @@ pub enum ButtonSize {
 }
 
 impl ButtonVariant {
-    pub fn bg_color(&self, hovered: bool) -> Srgba {
-        use bevy::color::palettes::tailwind;
+    /// The feathers variant this look is drawn with. `Destructive`,
+    /// `Active` and `Disabled` sit on the plain-background variant and
+    /// take their colour from [`ButtonVariant::background_token`];
+    /// `Disabled` additionally carries `InteractionDisabled`, which is
+    /// what actually greys it out and blocks its `Activate`.
+    pub fn feathers(&self) -> FeathersButtonVariant {
         match self {
-            Self::Default => tailwind::ZINC_700,
-            Self::Ghost | Self::ActiveAlt | Self::Disabled => TEXT_BODY_COLOR,
-            Self::Primary => PRIMARY_COLOR,
-            // Solid surface grey (Figma toolbar #505050). Toolbar
-            // active-tool indicators and combobox selected rows
-            // share this treatment.
-            Self::Active => Srgba::new(0.314, 0.314, 0.314, 1.0),
-            Self::Destructive => {
-                if hovered {
-                    DESTRUCTIVE_RED_HOVER
-                } else {
-                    DESTRUCTIVE_RED
-                }
-            }
-            Self::Close => {
-                if hovered {
-                    DESTRUCTIVE_RED_HOVER
-                } else {
-                    TEXT_BODY_COLOR
-                }
+            Self::Default | Self::Disabled => FeathersButtonVariant::Normal,
+            Self::Primary => FeathersButtonVariant::Primary,
+            Self::Ghost | Self::Active | Self::ActiveAlt | Self::Destructive => {
+                FeathersButtonVariant::Plain
             }
         }
     }
-    pub fn bg_opacity(&self, hovered: bool) -> f32 {
+
+    /// The theme token painting this look's background, or `None` when
+    /// the feathers variant already paints it.
+    pub fn background_token(&self, hovered: bool) -> Option<ThemeToken> {
         match self {
-            Self::Disabled => 0.0,
-            Self::Ghost => {
-                if hovered {
-                    0.05
-                } else {
-                    0.0
-                }
-            }
-            Self::Close => {
-                if hovered {
-                    0.5
-                } else {
-                    0.0
-                }
-            }
-            // Solid #505050 in both states; no hover lift, the icon
-            // colour does the differentiation.
-            Self::Active => 1.0,
-            Self::ActiveAlt => 0.05,
-            Self::Default => {
-                if hovered {
-                    0.8
-                } else {
-                    0.5
-                }
-            }
-            Self::Primary | Self::Destructive => {
-                if hovered {
-                    0.9
-                } else {
-                    1.0
-                }
-            }
+            Self::Default | Self::Primary | Self::Ghost | Self::Disabled => None,
+            Self::Destructive => Some(if hovered {
+                BUTTON_DESTRUCTIVE_BG_HOVER
+            } else {
+                BUTTON_DESTRUCTIVE_BG
+            }),
+            // Solid in both states; no hover lift, the icon colour does
+            // the differentiation.
+            Self::Active => Some(BUTTON_ACTIVE_BG),
+            Self::ActiveAlt => Some(BUTTON_ACTIVE_ALT_BG),
         }
     }
+
     pub fn text_color(&self) -> Srgba {
         match self {
-            Self::Default | Self::Ghost | Self::Close | Self::ActiveAlt => TEXT_BODY_COLOR,
+            Self::Default | Self::Ghost | Self::ActiveAlt => TEXT_BODY_COLOR,
             Self::Primary | Self::Destructive | Self::Active => TEXT_DISPLAY_COLOR,
             Self::Disabled => TEXT_MUTED_COLOR,
-        }
-    }
-    pub fn border_color(&self) -> Srgba {
-        use bevy::color::palettes::tailwind;
-        match self {
-            Self::Default | Self::Ghost | Self::Close | Self::Disabled => tailwind::ZINC_700,
-            Self::Primary | Self::Active => PRIMARY_COLOR,
-            Self::Destructive => DESTRUCTIVE_RED,
-            Self::ActiveAlt => TEXT_BODY_COLOR,
-        }
-    }
-    pub fn border(&self) -> Val {
-        match self {
-            Self::Default | Self::ActiveAlt => Val::Px(1.0),
-            _ => Val::Px(0.0),
-        }
-    }
-    pub fn border_opacity(&self, hovered: bool) -> f32 {
-        match self {
-            Self::Ghost | Self::Close => {
-                if hovered {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
-            Self::Disabled => 0.0,
-            Self::ActiveAlt => 0.2,
-            _ => 1.0,
         }
     }
 }
@@ -376,6 +342,9 @@ impl ButtonSize {
     }
 }
 
+/// Everything [`setup_button`] needs to turn a freshly spawned entity
+/// into a [`FeathersButton`]: the scene it applies, the layout it writes
+/// back over the scene's own, and the children it fills the button with.
 #[derive(Component)]
 struct ButtonConfig {
     content: String,
@@ -385,6 +354,16 @@ struct ButtonConfig {
     right_icon: Option<Icon>,
     subtitle: Option<String>,
     call_operator: Option<Cow<'static, str>>,
+    /// Apply `FeathersToolButton` rather than `FeathersButton`: the
+    /// smaller frame feathers offers for icon-sized controls.
+    tool: bool,
+    /// Draw the leading icon in this colour instead of the variant's
+    /// text colour.
+    icon_color: Option<Color>,
+    /// Draw the leading icon with this font instead of the crate's
+    /// `IconFont` resource.
+    icon_font: Option<Handle<Font>>,
+    node: Node,
     initialized: bool,
 }
 
@@ -405,6 +384,9 @@ pub struct ButtonProps {
     pub direction: FlexDirection,
     pub subtitle: Option<String>,
     pub border_radius: BorderRadius,
+    /// Spawn with `Display::None`, for a button an appearance system
+    /// reveals once the state it belongs to is reached.
+    pub hidden: bool,
 }
 
 impl ButtonProps {
@@ -460,6 +442,11 @@ impl ButtonProps {
         self.border_radius = radius;
         self
     }
+    /// Spawn the button hidden. See [`ButtonProps::hidden`].
+    pub fn hidden(mut self) -> Self {
+        self.hidden = true;
+        self
+    }
     /// Override the button's main label. Useful in combination with
     /// `ButtonProps::from_operator::<Op>()` (defined in
     /// `jackdaw_api::ui`) when the operator's `LABEL` is too long for
@@ -479,7 +466,7 @@ impl ButtonProps {
 
 pub struct IconButtonProps {
     pub icon: Icon,
-    pub color: Option<Srgba>,
+    pub color: Option<Color>,
     pub variant: ButtonVariant,
     pub size: ButtonSize,
     pub alpha: Option<f32>,
@@ -495,8 +482,8 @@ impl IconButtonProps {
             alpha: None,
         }
     }
-    pub fn color(mut self, color: Srgba) -> Self {
-        self.color = Some(color);
+    pub fn color(mut self, color: impl Into<Color>) -> Self {
+        self.color = Some(color.into());
         self
     }
     pub fn variant(mut self, variant: ButtonVariant) -> Self {
@@ -513,72 +500,69 @@ impl IconButtonProps {
     }
 }
 
-pub(crate) fn button_base(
-    variant: ButtonVariant,
+/// The layout the editor writes over the one [`FeathersButton`]'s own
+/// scene sets: feathers sizes every button for a form row, the editor
+/// needs toolbar-sized squares, left-aligned combobox shells and
+/// two-line column buttons as well.
+fn button_node(
     size: ButtonSize,
     align_left: bool,
     direction: FlexDirection,
     border_radius: BorderRadius,
-) -> impl Bundle {
+    hidden: bool,
+) -> Node {
     let is_column = direction == FlexDirection::Column;
 
-    (
-        Button,
-        EditorButton,
-        variant,
-        size,
-        Hovered::default(),
-        EntityCursor::System(bevy::window::SystemCursorIcon::Pointer),
-        Node {
-            width: if align_left {
-                percent(100)
-            } else {
-                size.width()
-            },
-            height: if is_column { Val::Auto } else { size.height() },
-            padding: UiRect::axes(size.padding(), if is_column { px(6.0) } else { px(0.0) }),
-            border: UiRect::all(variant.border()),
-            border_radius,
-            flex_direction: direction,
-            column_gap: px(6.0),
-            row_gap: px(6.0),
-            justify_content: if align_left {
-                JustifyContent::Start
-            } else {
-                JustifyContent::Center
-            },
-            align_items: if is_column {
-                AlignItems::Start
-            } else {
-                AlignItems::Center
-            },
-            // A left-aligned button is the combobox shape: label left,
-            // chevron right. In a panel too narrow for the label, the
-            // label is what gives way, and what it cannot show is cut at
-            // the button's own edge rather than pushing the chevron past
-            // the panel's.
-            min_width: if align_left { px(0.0) } else { Val::Auto },
-            overflow: if align_left {
-                Overflow::clip_x()
-            } else {
-                Overflow::visible()
-            },
-            ..default()
+    Node {
+        display: if hidden {
+            Display::None
+        } else {
+            Display::Flex
         },
-        BackgroundColor(
-            variant
-                .bg_color(false)
-                .with_alpha(variant.bg_opacity(false))
-                .into(),
-        ),
-        BorderColor::all(
-            variant
-                .border_color()
-                .with_alpha(variant.border_opacity(false)),
-        ),
-    )
+        width: if align_left {
+            percent(100)
+        } else {
+            size.width()
+        },
+        height: if is_column { Val::Auto } else { size.height() },
+        padding: UiRect::axes(size.padding(), if is_column { px(6.0) } else { px(0.0) }),
+        border_radius,
+        flex_direction: direction,
+        column_gap: px(6.0),
+        row_gap: px(6.0),
+        justify_content: if align_left {
+            JustifyContent::Start
+        } else {
+            JustifyContent::Center
+        },
+        align_items: if is_column {
+            AlignItems::Start
+        } else {
+            AlignItems::Center
+        },
+        // A left-aligned button is the combobox shape: label left,
+        // chevron right. In a panel too narrow for the label, the
+        // label is what gives way, and what it cannot show is cut at
+        // the button's own edge rather than pushing the chevron past
+        // the panel's.
+        min_width: if align_left { px(0.0) } else { Val::Auto },
+        overflow: if align_left {
+            Overflow::clip_x()
+        } else {
+            Overflow::visible()
+        },
+        ..default()
+    }
 }
 
+/// An editor button: a [`FeathersButton`] carrying the editor's variant,
+/// size and content.
+///
+/// The returned bundle is the button's configuration, not the button
+/// itself. [`FeathersButton`] is a scene component, so it can only be
+/// spawned through the scene API; the crate's setup pass applies that
+/// scene to the entity, writes the editor's layout back over the
+/// scene's own and fills in the caption, icons and lead checkbox.
 pub fn button(props: ButtonProps) -> impl Bundle {
     let ButtonProps {
         content,
@@ -593,10 +577,16 @@ pub fn button(props: ButtonProps) -> impl Bundle {
         subtitle,
         call_operator,
         border_radius,
+        hidden,
     } = props;
 
+    let node = button_node(size, align_left, direction, border_radius, hidden);
+
     (
-        button_base(variant, size, align_left, direction, border_radius),
+        EditorButton,
+        variant,
+        size,
+        node.clone(),
         ButtonConfig {
             content,
             left_icon,
@@ -605,6 +595,10 @@ pub fn button(props: ButtonProps) -> impl Bundle {
             right_icon,
             subtitle,
             call_operator,
+            tool: false,
+            icon_color: None,
+            icon_font: None,
+            node,
             initialized: false,
         },
     )
@@ -615,25 +609,19 @@ fn setup_button(
     editor_font: Res<EditorFont>,
     icon_font: Res<crate::icons::IconFont>,
     mut buttons: Query<
-        (
-            Entity,
-            &mut ButtonConfig,
-            &ButtonVariant,
-            &ButtonSize,
-            &mut Node,
-        ),
+        (Entity, &mut ButtonConfig, &ButtonVariant, &ButtonSize),
         Added<ButtonConfig>,
     >,
 ) {
     let font = editor_font.0.clone();
 
-    for (entity, mut config, variant, size, mut node) in &mut buttons {
+    for (entity, mut config, variant, size) in &mut buttons {
         if config.initialized {
             continue;
         }
         config.initialized = true;
 
-        let is_column = node.flex_direction == FlexDirection::Column;
+        let is_column = config.node.flex_direction == FlexDirection::Column;
         let icon_only = matches!(size, ButtonSize::Icon | ButtonSize::IconSM);
         // Icon-only buttons keep symmetric zero-padding so the glyph
         // sits in the dead centre of the square frame; otherwise an
@@ -658,22 +646,20 @@ fn setup_button(
             };
             (left, right)
         };
-        node.padding = UiRect::axes(left_padding, node.padding.top);
-        node.padding.right = right_padding;
+        config.node.padding = UiRect::axes(left_padding, config.node.padding.top);
+        config.node.padding.right = right_padding;
 
-        // Spawn the button's text/icon children through a queued
-        // world-exclusive closure that first checks the button is
-        // still alive. The lazy `with_children` spawn here used to
-        // race against parent cascade-despawns: a deferred
-        // `commands.entity(entity).with_children(...)` path would
-        // queue child spawns with `ChildOf(entity)`, and if a
-        // despawn of the button landed before these flushed, the
-        // `ChildOf` insert hook would fire `add_related<ChildOf>`
-        // on a dead parent, producing the
-        // `Entity despawned ... is invalid` errors on every inspector
-        // rebuild. The `get_entity_mut` guard + synchronous
-        // `with_children` here closes that window; everything
-        // happens atomically on one `&mut World` block.
+        // Build the button through a queued world-exclusive closure that
+        // first checks it is still alive. The lazy `with_children` spawn
+        // here used to race against parent cascade-despawns: a deferred
+        // `commands.entity(entity).with_children(...)` path would queue
+        // child spawns with `ChildOf(entity)`, and if a despawn of the
+        // button landed before these flushed, the `ChildOf` insert hook
+        // would fire `add_related<ChildOf>` on a dead parent, producing
+        // the `Entity despawned ... is invalid` errors on every
+        // inspector rebuild. The `get_entity_mut` guard + synchronous
+        // `with_children` here closes that window; everything happens
+        // atomically on one `&mut World` block.
         let left_icon = config.left_icon;
         let left_icon_space = config.left_icon_space;
         let left_checkbox = config.left_checkbox;
@@ -681,14 +667,21 @@ fn setup_button(
         let content = config.content.clone();
         let subtitle = config.subtitle.clone();
         let call_operator = config.call_operator.clone();
+        let tool = config.tool;
+        let icon_color = config.icon_color;
+        let node = config.node.clone();
         let variant = *variant;
         let size = *size;
         let font = font.clone();
-        let icon_font_handle = icon_font.0.clone();
+        let icon_font_handle = config
+            .icon_font
+            .clone()
+            .unwrap_or_else(|| icon_font.0.clone());
         commands.queue(move |world: &mut World| {
             if world.get_entity(entity).is_err() {
                 return;
             }
+            apply_feathers_button(world, entity, variant, tool, &node);
             if let Some(checked) = left_checkbox {
                 spawn_inert_checkbox(world, entity, checked);
             }
@@ -708,7 +701,7 @@ fn setup_button(
                                 font_size: size.icon_size(),
                                 ..default()
                             },
-                            TextColor(variant.text_color().into()),
+                            TextColor(icon_color.unwrap_or(variant.text_color().into())),
                         ));
                     }
                     None if left_icon_space => {
@@ -795,6 +788,43 @@ fn setup_button(
     }
 }
 
+/// Turn `entity` into a real [`FeathersButton`], or a
+/// [`FeathersToolButton`] when `tool` is set.
+///
+/// Both are scene components, so the scene API is the only way to spawn
+/// them. Their scene sets a form-row layout, which `node` is written
+/// back over once the scene has landed.
+fn apply_feathers_button(
+    world: &mut World,
+    entity: Entity,
+    variant: ButtonVariant,
+    tool: bool,
+    node: &Node,
+) {
+    let feathers = variant.feathers();
+    let applied = {
+        let Ok(mut button) = world.get_entity_mut(entity) else {
+            return;
+        };
+        if tool {
+            button.apply_scene(bsn! { @FeathersToolButton { @variant: {feathers} } })
+        } else {
+            button.apply_scene(bsn! { @FeathersButton { @variant: {feathers} } })
+        }
+    };
+    if let Err(error) = applied {
+        error!("a button did not spawn: {error}");
+        return;
+    }
+    let Ok(mut button) = world.get_entity_mut(entity) else {
+        return;
+    };
+    button.insert(node.clone());
+    if variant == ButtonVariant::Disabled {
+        button.insert(InteractionDisabled);
+    }
+}
+
 /// Put a native feathers checkbox under `entity`, showing `checked`.
 ///
 /// The box reports state and nothing else: the row it sits in is the
@@ -827,60 +857,68 @@ pub fn spawn_inert_checkbox(world: &mut World, entity: Entity, checked: bool) {
     }
 }
 
-fn handle_hover(
-    // Re-render when either the hover state OR the variant
-    // changed. Without `Changed<ButtonVariant>` a toolbar button
-    // whose variant flips Active <-> Ghost (driven by an external
-    // system, e.g. `update_toolbar_button_variants`) only picks
-    // up the new bg the next time the cursor crosses it; the
-    // user sees stale highlights.
-    changed: Query<(), Or<(Changed<Hovered>, Changed<ButtonVariant>)>>,
-    mut buttons: Query<
-        (
-            Entity,
-            &ButtonVariant,
-            &Hovered,
-            &mut BackgroundColor,
-            &mut BorderColor,
-        ),
-        With<EditorButton>,
-    >,
-    focus: Res<InputFocus>,
+/// Keep the feathers variant in step with the editor's, and paint the
+/// looks feathers has no variant for.
+///
+/// `bevy_feathers` owns the button's colours: it writes
+/// [`ThemeBackgroundColor`] from its own [`FeathersButtonVariant`] on
+/// every hover, press and disable. The four editor looks it has no
+/// entry for ride on top of that as a token of the editor's own, set
+/// here in `Update` so it lands after the feathers pass in `PreUpdate`.
+///
+/// A variant flipped to `Disabled` gains `InteractionDisabled`, but
+/// flipping away from it does not drop that component: operator
+/// availability drives the same component from the other side, and
+/// clearing it here would fight it. A button that toggles between
+/// enabled and disabled should drive `InteractionDisabled` directly.
+fn paint_variant_background(
+    mut commands: Commands,
+    changed: Query<(Entity, &ButtonVariant), (Changed<ButtonVariant>, With<EditorButton>)>,
+    buttons: Query<(Entity, &ButtonVariant, &Hovered, &ThemeBackgroundColor), With<EditorButton>>,
 ) {
-    let focus_changed = focus.is_changed();
-    for (entity, variant, hovered, mut bg, mut border) in &mut buttons {
-        if !(focus_changed || changed.get(entity).is_ok()) {
+    for (entity, variant) in &changed {
+        // A menu row can be despawned between this pass and the flush
+        // that applies it, so every write here is fallible.
+        let mut button = commands.entity(entity);
+        button.try_insert(variant.feathers());
+        if *variant == ButtonVariant::Disabled {
+            button.try_insert(InteractionDisabled);
+        }
+    }
+
+    for (entity, variant, hovered, background) in &buttons {
+        let Some(token) = variant.background_token(hovered.get()) else {
             continue;
         };
-
-        let is_hovered = hovered.get() || focus.get() == Some(entity);
-        bg.0 = variant
-            .bg_color(is_hovered)
-            .with_alpha(variant.bg_opacity(is_hovered))
-            .into();
-        *border = BorderColor::all(
-            variant
-                .border_color()
-                .with_alpha(variant.border_opacity(is_hovered)),
-        );
-    }
-}
-
-fn handle_button_click(
-    interactions: Query<
-        (Entity, &Interaction, &ButtonVariant),
-        (Changed<Interaction>, With<EditorButton>),
-    >,
-    mut commands: Commands,
-) {
-    for (entity, interaction, variant) in &interactions {
-        if *interaction == Interaction::Pressed && *variant != ButtonVariant::Disabled {
-            commands.trigger(ButtonClickEvent { entity });
+        if background.0 != token {
+            commands
+                .entity(entity)
+                .try_insert(ThemeBackgroundColor(token));
         }
     }
 }
 
+/// Bridge the widget's own activation event to [`ButtonClickEvent`],
+/// which the editor's click handlers observe. `Activate` covers both the
+/// pointer release over the button and Enter/Space while it holds focus,
+/// and `bevy_ui_widgets` withholds it from a button carrying
+/// `InteractionDisabled`.
+fn fire_click_on_activate(
+    activate: On<Activate>,
+    buttons: Query<(), With<EditorButton>>,
+    mut commands: Commands,
+) {
+    if buttons.contains(activate.entity) {
+        commands.trigger(ButtonClickEvent {
+            entity: activate.entity,
+        });
+    }
+}
+
 /// Create an icon-only button using lucide icon font.
+///
+/// This is the [`FeathersToolButton`] shape: the smaller frame feathers
+/// offers for a control that is a glyph rather than a caption.
 ///
 /// To dispatch an operator on click, spawn the returned bundle alongside an
 /// [`ButtonOperatorCall`] component: `commands.spawn((icon_button(props, font),
@@ -889,10 +927,9 @@ fn handle_button_click(
 /// the tuple-form keeps the API small.
 // `+ use<>` on the return type opts out of Rust 2024's default
 // `impl Trait` lifetime capture: the bundle clones `icon_font`
-// internally (see `font: icon_font.clone()` in the body), so the
-// returned `impl Bundle` carries no borrow of the input handle and
-// can be returned through wrapper functions without leaking
-// lifetimes.
+// internally, so the returned `impl Bundle` carries no borrow of the
+// input handle and can be returned through wrapper functions without
+// leaking lifetimes.
 pub fn icon_button(props: IconButtonProps, icon_font: &Handle<Font>) -> impl Bundle + use<> {
     let IconButtonProps {
         icon,
@@ -902,42 +939,37 @@ pub fn icon_button(props: IconButtonProps, icon_font: &Handle<Font>) -> impl Bun
         alpha,
     } = props;
     let alpha = alpha.unwrap_or(1.0);
-    let icon_color = color.unwrap_or(variant.text_color()).with_alpha(alpha);
+    let icon_color = color
+        .unwrap_or_else(|| variant.text_color().into())
+        .with_alpha(alpha);
+    let node = button_node(
+        size,
+        false,
+        FlexDirection::Row,
+        BorderRadius::all(px(BORDER_RADIUS_MD)),
+        false,
+    );
 
     (
-        button_base(
-            variant,
-            size,
-            false,
-            FlexDirection::Row,
-            BorderRadius::all(px(BORDER_RADIUS_MD)),
-        ),
-        children![(
-            Text::new(icon.unicode()),
-            TextFont {
-                font: icon_font.clone().into(),
-                font_size: size.icon_size(),
-                ..default()
-            },
-            TextColor(Color::Srgba(icon_color)),
-        )],
+        EditorButton,
+        variant,
+        size,
+        node.clone(),
+        ButtonConfig {
+            content: String::new(),
+            left_icon: Some(icon),
+            left_icon_space: false,
+            left_checkbox: None,
+            right_icon: None,
+            subtitle: None,
+            call_operator: None,
+            tool: true,
+            icon_color: Some(icon_color),
+            icon_font: Some(icon_font.clone()),
+            node,
+            initialized: false,
+        },
     )
-}
-
-pub fn set_button_variant(
-    variant: ButtonVariant,
-    bg: &mut BackgroundColor,
-    border: &mut BorderColor,
-) {
-    bg.0 = variant
-        .bg_color(false)
-        .with_alpha(variant.bg_opacity(false))
-        .into();
-    *border = BorderColor::all(
-        variant
-            .border_color()
-            .with_alpha(variant.border_opacity(false)),
-    );
 }
 
 impl Default for ButtonProps {
@@ -955,6 +987,7 @@ impl Default for ButtonProps {
             direction: Default::default(),
             subtitle: Default::default(),
             border_radius: BorderRadius::all(px(BORDER_RADIUS_MD)),
+            hidden: false,
         }
     }
 }

@@ -353,7 +353,8 @@ fn a_saved_scenes_kind_survives_a_reopen() {
 /// the operator makes a 3D scene whatever it says, which is exactly what
 /// asserting on the rows alone cannot catch.
 fn click_new_scene_row(app: &mut App, label: &str) {
-    use jackdaw_feathers::button::{ButtonClickEvent, ButtonOperatorCall};
+    use bevy::ui_widgets::Activate;
+    use jackdaw_feathers::button::ButtonOperatorCall;
 
     let rows = jackdaw::new_scene_rows();
     let (action, _) = rows
@@ -364,7 +365,7 @@ fn click_new_scene_row(app: &mut App, label: &str) {
         ButtonOperatorCall::try_from(action.as_str()).expect("the row is an operator action");
 
     let button = app.world_mut().spawn(call).id();
-    app.world_mut().trigger(ButtonClickEvent { entity: button });
+    app.world_mut().trigger(Activate { entity: button });
     app.update();
     app.update();
 }

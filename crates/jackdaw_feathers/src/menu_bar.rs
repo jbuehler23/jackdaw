@@ -5,8 +5,7 @@ use bevy::{
     ui::ui_transform::UiGlobalTransform,
 };
 use jackdaw_widgets::menu_bar::{
-    MenuAction, MenuBar, MenuBarClose, MenuBarDropdown, MenuBarDropdownItem, MenuBarItem,
-    MenuBarState,
+    MenuAction, MenuBar, MenuBarDropdown, MenuBarDropdownItem, MenuBarItem, MenuBarState,
 };
 
 use crate::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonVariant, button};
@@ -83,11 +82,7 @@ pub fn submenu_row(
 }
 
 pub fn plugin(app: &mut App) {
-    // A checked row writes `hold_open` from the click observer, and the
-    // press that made the click lands on the same frame, so the close
-    // pass has to read it after the click pass has written it.
-    app.configure_sets(Update, MenuBarClose.after(crate::button::ButtonClickPass))
-        .init_resource::<SubmenuState>()
+    app.init_resource::<SubmenuState>()
         .add_observer(hold_the_menu_open_for_a_checked_row)
         .add_observer(on_dropdown_item_click)
         .add_observer(on_menu_bar_item_click)

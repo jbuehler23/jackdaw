@@ -44,7 +44,7 @@ pub use jackdaw_fuzzy::{Category, Match, Matchable, MatchedStr};
 use lucide_icons::Icon;
 
 use crate::button::{
-    ButtonClickEvent, ButtonSize, ButtonVariant, IconButtonProps, button_base, icon_button,
+    ButtonClickEvent, ButtonProps, ButtonSize, ButtonVariant, IconButtonProps, button, icon_button,
 };
 use crate::icons::{EditorFont, IconFont};
 use crate::scroll::scrollbar;
@@ -374,12 +374,13 @@ pub struct PickerItem(pub usize);
 #[must_use]
 pub fn picker_item(index: usize) -> impl Bundle {
     (
-        button_base(
-            ButtonVariant::Ghost,
-            ButtonSize::MD,
-            true,
-            FlexDirection::Column,
-            BorderRadius::ZERO,
+        button(
+            ButtonProps::new("")
+                .with_variant(ButtonVariant::Ghost)
+                .with_size(ButtonSize::MD)
+                .align_left()
+                .with_direction(FlexDirection::Column)
+                .with_border_radius(BorderRadius::ZERO),
         ),
         PickerItem(index),
         // if everything is the same tab index, it's ordered by the child index

@@ -248,7 +248,7 @@ fn handle_variant_edit_click(
     mut trackers: Query<&mut PopoverTracker>,
     existing_popovers: Query<Entity, With<VariantEditPopover>>,
     all_popovers: Query<Entity, With<EditorPopover>>,
-    mut button_styles: Query<(&mut BackgroundColor, &mut BorderColor, &mut ButtonVariant)>,
+    mut button_styles: Query<&mut ButtonVariant>,
     parents: Query<&ChildOf>,
 ) {
     let Ok(child_of) = buttons.get(trigger.entity) else {

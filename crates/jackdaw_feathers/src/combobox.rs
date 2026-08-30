@@ -3,7 +3,6 @@ use lucide_icons::Icon;
 
 use crate::button::{
     ButtonClickEvent, ButtonProps, ButtonSize, ButtonVariant, IconButtonProps, button, icon_button,
-    set_button_variant,
 };
 use crate::popover::{EditorPopover, PopoverPlacement, PopoverProps, popover};
 use crate::utils::is_descendant_of;
@@ -285,7 +284,7 @@ fn handle_trigger_click(
     mut states: Query<&mut ComboBoxState>,
     existing_popovers: Query<(Entity, &ComboBoxPopover)>,
     all_popovers: Query<Entity, With<EditorPopover>>,
-    mut button_styles: Query<(&mut BackgroundColor, &mut BorderColor, &mut ButtonVariant)>,
+    mut button_styles: Query<&mut ButtonVariant>,
     parents: Query<&ChildOf>,
 ) {
     let Ok(combo_trigger) = triggers.get(trigger.entity) else {
@@ -308,9 +307,8 @@ fn handle_trigger_click(
             } else {
                 ButtonVariant::Default
             };
-            if let Ok((mut bg, mut border, mut variant)) = button_styles.get_mut(trigger.entity) {
+            if let Ok(mut variant) = button_styles.get_mut(trigger.entity) {
                 *variant = base;
-                set_button_variant(base, &mut bg, &mut border);
             }
             return;
         }
@@ -330,9 +328,8 @@ fn handle_trigger_click(
     let combobox_entity = combo_trigger.0;
 
     // Activate the trigger button
-    if let Ok((mut bg, mut border, mut variant)) = button_styles.get_mut(trigger.entity) {
+    if let Ok(mut variant) = button_styles.get_mut(trigger.entity) {
         *variant = ButtonVariant::ActiveAlt;
-        set_button_variant(ButtonVariant::ActiveAlt, &mut bg, &mut border);
     }
 
     // Create popover with options
@@ -386,7 +383,7 @@ fn handle_combobox_popover_closed(
     mut states: Query<(&mut ComboBoxState, &ComboBoxConfig, &Children), With<EditorComboBox>>,
     popovers: Query<Entity, With<EditorPopover>>,
     triggers: Query<Entity, With<ComboBoxTrigger>>,
-    mut button_styles: Query<(&mut BackgroundColor, &mut BorderColor, &mut ButtonVariant)>,
+    mut button_styles: Query<&mut ButtonVariant>,
 ) {
     for (mut state, config, combobox_children) in &mut states {
         let Some(popover_entity) = state.popover else {
@@ -407,9 +404,8 @@ fn handle_combobox_popover_closed(
 
         for child in combobox_children.iter() {
             if triggers.get(child).is_ok() {
-                if let Ok((mut bg, mut border, mut variant)) = button_styles.get_mut(child) {
+                if let Ok(mut variant) = button_styles.get_mut(child) {
                     *variant = base;
-                    set_button_variant(base, &mut bg, &mut border);
                 }
                 break;
             }

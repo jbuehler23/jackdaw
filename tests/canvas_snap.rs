@@ -379,7 +379,7 @@ fn a_checked_row_clicked_without_a_press_does_not_swallow_a_later_click() {
 /// Fire the open dropdown's row without the mouse press a pointer click
 /// would arrive with.
 fn trigger_row(app: &mut App, action: &str) {
-    use jackdaw_feathers::button::ButtonClickEvent;
+    use bevy::ui_widgets::Activate;
     use jackdaw_widgets::menu_bar::MenuBarDropdownItem;
 
     let row = app
@@ -389,7 +389,7 @@ fn trigger_row(app: &mut App, action: &str) {
         .find(|(_, item)| item.action == action)
         .map(|(entity, _)| entity)
         .unwrap_or_else(|| panic!("the open menu offers a {action} row"));
-    app.world_mut().trigger(ButtonClickEvent { entity: row });
+    app.world_mut().trigger(Activate { entity: row });
     for _ in 0..4 {
         app.update();
     }
@@ -464,8 +464,8 @@ fn open_snap_menu(app: &mut App) {
 /// them on.
 fn click_row(app: &mut App, action: &str) {
     use bevy::input::{ButtonState, mouse::MouseButtonInput};
+    use bevy::ui_widgets::Activate;
     use bevy::window::PrimaryWindow;
-    use jackdaw_feathers::button::ButtonClickEvent;
     use jackdaw_widgets::menu_bar::MenuBarDropdownItem;
 
     let row = app
@@ -480,7 +480,7 @@ fn click_row(app: &mut App, action: &str) {
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(app.world())
         .expect("headless apps still have a primary window");
-    app.world_mut().trigger(ButtonClickEvent { entity: row });
+    app.world_mut().trigger(Activate { entity: row });
     app.world_mut().write_message(MouseButtonInput {
         button: MouseButton::Left,
         state: ButtonState::Pressed,

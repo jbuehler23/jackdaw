@@ -203,7 +203,7 @@ pub(super) fn handle_trigger_click(
     triggers: Query<&ColorPickerTrigger>,
     mut trackers: Query<&mut PopoverTracker>,
     existing_popovers: Query<(Entity, &ColorPickerPopover)>,
-    mut button_styles: Query<(&mut BackgroundColor, &mut BorderColor, &mut ButtonVariant)>,
+    mut button_styles: Query<&mut ButtonVariant>,
 ) {
     let Ok(picker_trigger) = triggers.get(trigger.entity) else {
         return;

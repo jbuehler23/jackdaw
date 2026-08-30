@@ -293,16 +293,16 @@ fn activating_a_ui_group_row_creates_the_widget_undoably() {
     app.update();
 
     let world = app.world_mut();
+    // The editor's own chrome is built from buttons too, so the widget
+    // the row made is the one parented to the open scene's root.
     let button = world
         .query_filtered::<Entity, bevy::prelude::With<bevy::ui_widgets::Button>>()
         .iter(world)
-        .find(|entity| !world.entity(*entity).contains::<jackdaw::EditorEntity>())
-        .expect("the menu row spawned a button");
-    assert_eq!(
-        world.get::<ChildOf>(button).map(ChildOf::parent),
-        Some(root),
-        "the row parents the widget the way the command always has",
-    );
+        .find(|entity| {
+            !world.entity(*entity).contains::<jackdaw::EditorEntity>()
+                && world.get::<ChildOf>(*entity).map(ChildOf::parent) == Some(root)
+        })
+        .expect("the row parents the widget the way the command always has");
     assert!(ast_holds(world, button), "the widget joins the document");
     assert_eq!(
         world.resource::<CommandHistory>().undo_stack.len(),

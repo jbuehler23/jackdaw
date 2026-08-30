@@ -4,9 +4,7 @@ use bevy::ui::{UiGlobalTransform, UiScale};
 use bevy::window::PrimaryWindow;
 use lucide_icons::Icon;
 
-use crate::button::{
-    ButtonClickEvent, ButtonVariant, IconButtonProps, icon_button, set_button_variant,
-};
+use crate::button::{ButtonClickEvent, ButtonVariant, IconButtonProps, icon_button};
 use crate::tokens::{
     BACKGROUND_COLOR, BORDER_COLOR, CORNER_RADIUS_LG, TEXT_DISPLAY_COLOR, TEXT_SIZE,
 };
@@ -41,23 +39,15 @@ impl PopoverTracker {
     }
 }
 
-pub fn activate_trigger(
-    trigger: Entity,
-    button_styles: &mut Query<(&mut BackgroundColor, &mut BorderColor, &mut ButtonVariant)>,
-) {
-    if let Ok((mut bg, mut border, mut variant)) = button_styles.get_mut(trigger) {
+pub fn activate_trigger(trigger: Entity, button_styles: &mut Query<&mut ButtonVariant>) {
+    if let Ok(mut variant) = button_styles.get_mut(trigger) {
         *variant = ButtonVariant::ActiveAlt;
-        set_button_variant(ButtonVariant::ActiveAlt, &mut bg, &mut border);
     }
 }
 
-pub fn deactivate_trigger(
-    trigger: Entity,
-    button_styles: &mut Query<(&mut BackgroundColor, &mut BorderColor, &mut ButtonVariant)>,
-) {
-    if let Ok((mut bg, mut border, mut variant)) = button_styles.get_mut(trigger) {
+pub fn deactivate_trigger(trigger: Entity, button_styles: &mut Query<&mut ButtonVariant>) {
+    if let Ok(mut variant) = button_styles.get_mut(trigger) {
         *variant = ButtonVariant::Default;
-        set_button_variant(ButtonVariant::Default, &mut bg, &mut border);
     }
 }
 
@@ -466,7 +456,7 @@ pub fn popover_content() -> impl Bundle {
 fn cleanup_tracked_popovers(
     mut trackers: Query<&mut PopoverTracker>,
     popovers: Query<Entity, With<EditorPopover>>,
-    mut button_styles: Query<(&mut BackgroundColor, &mut BorderColor, &mut ButtonVariant)>,
+    mut button_styles: Query<&mut ButtonVariant>,
 ) {
     for mut tracker in &mut trackers {
         let Some(popover_entity) = tracker.popover else {
