@@ -14,6 +14,18 @@ use std::path::{Path, PathBuf};
 /// still here. Paths are relative to the repository root.
 const ALLOWED: &[(&str, &str)] = &[
     (
+        "crates/jackdaw_panels/src/tabs.rs",
+        "the dock's own tab strip, with drag-to-reorder and a close affordance; a later pass",
+    ),
+    (
+        "crates/jackdaw_panels/src/sidebar.rs",
+        "the collapsed dock's edge icons; a later pass",
+    ),
+    (
+        "crates/jackdaw_panels/src/add_window_popup.rs",
+        "the popup's rows; the menu family they belong on is a later pass",
+    ),
+    (
         "crates/jackdaw_feathers/src/text_edit.rs",
         "the text field's own click and drag hitboxes; the feathers text input is a later pass",
     ),
@@ -32,7 +44,12 @@ const ALLOWED: &[(&str, &str)] = &[
 ];
 
 /// Directories the scan covers.
-const ROOTS: &[&str] = &["src", "crates/jackdaw_feathers/src"];
+const ROOTS: &[&str] = &[
+    "src",
+    "crates/jackdaw_feathers/src",
+    "crates/jackdaw_panels/src",
+    "crates/jackdaw_widgets/src",
+];
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -71,10 +88,18 @@ fn legacy_control(line: &str, headless: bool) -> Option<&'static str> {
 }
 
 /// Does this source pull in the headless `bevy_ui_widgets::Button`? The
-/// import may be wrapped across lines, so the whitespace goes first.
+/// import may be wrapped across lines and may name `Button` anywhere in
+/// a braced list, so the whitespace goes first and the list is read.
 fn imports_headless_button(source: &str) -> bool {
     let dense: String = source.chars().filter(|c| !c.is_whitespace()).collect();
-    dense.contains("ui_widgets::Button") || dense.contains("ui_widgets::{Button")
+    if dense.contains("ui_widgets::Button") {
+        return true;
+    }
+    dense.match_indices("ui_widgets::{").any(|(at, prefix)| {
+        let rest = &dense[at + prefix.len()..];
+        let list = rest.split('}').next().unwrap_or("");
+        list.split(',').any(|name| name == "Button")
+    })
 }
 
 #[test]
