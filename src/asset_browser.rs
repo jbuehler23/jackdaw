@@ -12,7 +12,10 @@ use bevy::{
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
     window::{PrimaryWindow, RawHandleWrapper, SystemCursorIcon},
 };
-use jackdaw_feathers::button::ButtonOperatorCall;
+use jackdaw_feathers::button::{
+    ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonVariant, IconButtonProps, button,
+    icon_button,
+};
 use jackdaw_feathers::text_edit::TextEditValue;
 use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_feathers::{file_browser, icons, icons::EditorFont, icons::IconFont, tokens};
@@ -126,12 +129,12 @@ impl Plugin for AssetBrowserPlugin {
                     check_watcher_events,
                     remove_incompatible_image_nodes,
                     update_asset_browser_filter,
-                    toggle_prefabs_only_chip,
                     update_prefabs_only_chip_style,
                     manage_asset_drag_ghost,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             )
+            .add_observer(toggle_prefabs_only_chip)
             .add_observer(handle_file_double_click)
             .add_observer(handle_select_asset_preview)
             .add_observer(on_asset_browser_context_action);
@@ -1004,28 +1007,15 @@ fn refresh_browser_on_change(
 
                 // Clickable path segment
                 parent
-                    .spawn((
-                        Button,
-                        Text::new(component),
-                        Node {
-                            border_radius: BorderRadius::all(Val::Px(3.0)),
-                            padding: UiRect::axes(Val::Px(2.0), Val::Px(1.0)),
-                            ..default()
-                        },
-                        TextFont {
-                            font_size: tokens::TEXT_SIZE,
-                            ..Default::default()
-                        },
-                        TextColor(tokens::TEXT_TERTIARY),
+                    .spawn(button(
+                        ButtonProps::new(component).with_variant(ButtonVariant::Ghost),
                     ))
                     .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                         commands.trigger(FileItemDoubleClicked {
                             path: path.clone(),
                             is_directory: true,
                         });
-                    })
-                    .observe(highlight_on_hover)
-                    .observe(unhighlight_on_out);
+                    });
             }
 
             // If a file is selected, show its name at the end of the breadcrumb
@@ -1426,6 +1416,7 @@ fn extract_array_layers(
 fn update_preview_panel(
     mut commands: Commands,
     preview_state: Res<AssetPreviewState>,
+    icon_font: Res<IconFont>,
     container_query: Query<(Entity, Option<&Children>), With<PreviewPanelContainer>>,
 ) {
     if !preview_state.is_changed() {
@@ -1540,40 +1531,16 @@ fn update_preview_panel(
             ))
             .id();
 
-        // Previous button. `Hovered + ButtonOperatorCall` are
-        // tooltip data sources only; the click below dispatches the
-        // operator manually because this is a raw Node spawn (not a
-        // feathers `button()`), so it doesn't fire `ButtonClickEvent`.
-        let prev_btn = commands
-            .spawn((
-                Node {
-                    padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
-                    ..Default::default()
-                },
-                BackgroundColor(tokens::INPUT_BG),
-                Hovered::default(),
-                ButtonOperatorCall::new(AssetCycleArrayLayerOp::ID).with_param("direction", -1i64),
-                ChildOf(nav_row),
-            ))
-            .id();
+        // Previous button. The `ButtonOperatorCall` both dispatches the
+        // operator on `Activate` and feeds the hover tooltip.
         commands.spawn((
-            Text::new("<"),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-            ChildOf(prev_btn),
+            icon_button(
+                IconButtonProps::new(icons::Icon::ChevronLeft).variant(ButtonVariant::Ghost),
+                &icon_font.0,
+            ),
+            ButtonOperatorCall::new(AssetCycleArrayLayerOp::ID).with_param("direction", -1i64),
+            ChildOf(nav_row),
         ));
-        commands
-            .entity(prev_btn)
-            .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-                commands
-                    .operator(AssetCycleArrayLayerOp::ID)
-                    .param("direction", -1i64)
-                    .call();
-            });
 
         commands.spawn((
             Text::new(layer_text),
@@ -1585,95 +1552,36 @@ fn update_preview_panel(
             ChildOf(nav_row),
         ));
 
-        // Next button. See `prev_btn` above; same pattern.
-        let next_btn = commands
-            .spawn((
-                Node {
-                    padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
-                    ..Default::default()
-                },
-                BackgroundColor(tokens::INPUT_BG),
-                Hovered::default(),
-                ButtonOperatorCall::new(AssetCycleArrayLayerOp::ID).with_param("direction", 1i64),
-                ChildOf(nav_row),
-            ))
-            .id();
+        // Next button. See the previous button above; same pattern.
         commands.spawn((
-            Text::new(">"),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-            ChildOf(next_btn),
+            icon_button(
+                IconButtonProps::new(icons::Icon::ChevronRight).variant(ButtonVariant::Ghost),
+                &icon_font.0,
+            ),
+            ButtonOperatorCall::new(AssetCycleArrayLayerOp::ID).with_param("direction", 1i64),
+            ChildOf(nav_row),
         ));
-        commands
-            .entity(next_btn)
-            .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
-                commands
-                    .operator(AssetCycleArrayLayerOp::ID)
-                    .param("direction", 1i64)
-                    .call();
-            });
     }
 
-    // Apply button (only for 2D textures). See `prev_btn` for the
-    // ButtonOperatorCall-as-tooltip-data pattern.
+    // Apply button (only for 2D textures). The `ButtonOperatorCall`
+    // dispatches on `Activate` and feeds the hover tooltip.
     if !info.is_cubemap && !info.is_array {
         let path_str = path.to_string_lossy().to_string();
-        let apply_btn = commands
+        let slot = commands
             .spawn((
                 Node {
-                    padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_XS)),
-                    border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
                     align_self: AlignSelf::Center,
                     margin: UiRect::top(Val::Px(tokens::SPACING_XS)),
                     ..Default::default()
                 },
-                BackgroundColor(tokens::INPUT_BG),
-                Hovered::default(),
-                ButtonOperatorCall::new("material.apply_texture")
-                    .with_param("path", path_str.clone()),
                 ChildOf(container),
             ))
             .id();
         commands.spawn((
-            Text::new("Apply"),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-            ChildOf(apply_btn),
+            button(ButtonProps::new("Apply")),
+            ButtonOperatorCall::new("material.apply_texture").with_param("path", path_str),
+            ChildOf(slot),
         ));
-        commands
-            .entity(apply_btn)
-            .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-                // User-facing click: explicit history opt-in.
-                commands
-                    .operator("material.apply_texture")
-                    .param("path", path_str.clone())
-                    .settings(CallOperatorSettings {
-                        creates_history_entry: true,
-                        ..default()
-                    })
-                    .call();
-            });
-        commands.entity(apply_btn).observe(
-            |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
-                if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                    bg.0 = tokens::HOVER_BG;
-                }
-            },
-        );
-        commands.entity(apply_btn).observe(
-            |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-                if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                    bg.0 = tokens::INPUT_BG;
-                }
-            },
-        );
     }
 }
 
@@ -1867,86 +1775,49 @@ fn asset_folder_button(icon_font: Handle<Font>) -> impl Bundle {
 /// Compact toolbar chip that toggles the asset browser's "Prefabs only"
 /// filter. The chip's background is updated by
 /// `update_prefabs_only_chip_style` to reflect whether the filter is on,
-/// and `toggle_prefabs_only_chip` flips `state.prefabs_only` on press.
+/// and `toggle_prefabs_only_chip` flips `state.prefabs_only` on click.
 fn prefabs_only_chip(icon_font: Handle<Font>) -> impl Bundle {
     (
         PrefabsOnlyChip,
-        Interaction::default(),
-        Hovered::default(),
         Tooltip::title("Prefabs only")
             .with_description("Show only scene files that define a prefab."),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(tokens::SPACING_XS),
-            padding: UiRect::axes(Val::Px(tokens::SPACING_SM), Val::Px(2.0)),
-            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
-        BackgroundColor(Color::NONE),
-        children![
-            (
-                Text::new(String::from(icons::Icon::Package.unicode())),
-                TextFont {
-                    font: icon_font.into(),
-                    font_size: tokens::TEXT_SIZE,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-            ),
-            (
-                Text::new("Prefabs"),
-                TextFont {
-                    font_size: tokens::TEXT_SIZE_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-            ),
-        ],
+        icon_button(
+            IconButtonProps::new(icons::Icon::Package).variant(ButtonVariant::Ghost),
+            &icon_font,
+        ),
     )
 }
 
 /// Flip `state.prefabs_only` and request a refresh whenever the chip is
-/// pressed.
+/// clicked.
 fn toggle_prefabs_only_chip(
+    click: On<ButtonClickEvent>,
+    chips: Query<(), With<PrefabsOnlyChip>>,
     mut state: ResMut<AssetBrowserState>,
-    interactions: Query<&Interaction, (Changed<Interaction>, With<PrefabsOnlyChip>)>,
 ) {
-    for interaction in &interactions {
-        if *interaction == Interaction::Pressed {
-            state.prefabs_only = !state.prefabs_only;
-            state.needs_refresh = true;
-        }
+    if chips.contains(click.entity) {
+        state.prefabs_only = !state.prefabs_only;
+        state.needs_refresh = true;
     }
 }
 
-/// Mirror `state.prefabs_only` onto the chip's background/text colors so
-/// the active state is visually obvious.
+/// Mirror `state.prefabs_only` onto the chip's variant so the active
+/// state is visually obvious.
 fn update_prefabs_only_chip_style(
     state: Res<AssetBrowserState>,
-    mut chips: Query<(&mut BackgroundColor, Option<&Children>), With<PrefabsOnlyChip>>,
-    mut text_colors: Query<&mut TextColor>,
+    mut chips: Query<&mut ButtonVariant, With<PrefabsOnlyChip>>,
 ) {
     if !state.is_changed() {
         return;
     }
-    let active = state.prefabs_only;
-    for (mut bg, children) in &mut chips {
-        bg.0 = if active {
-            tokens::ELEVATED_BG
-        } else {
-            Color::NONE
-        };
-        let target_color = if active {
-            tokens::TEXT_PRIMARY
-        } else {
-            tokens::TEXT_SECONDARY
-        };
-        let Some(children) = children else { continue };
-        for child in children.iter() {
-            if let Ok(mut color) = text_colors.get_mut(child) {
-                color.0 = target_color;
-            }
+    let target = if state.prefabs_only {
+        ButtonVariant::Active
+    } else {
+        ButtonVariant::Ghost
+    };
+    for mut variant in &mut chips {
+        if *variant != target {
+            *variant = target;
         }
     }
 }
