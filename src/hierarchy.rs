@@ -11,6 +11,7 @@ use jackdaw_api::prelude::*;
 use jackdaw_api_internal::entity_icons::{EntityIconRegistry, registered_icon};
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_feathers::{
+    button::ButtonClickEvent,
     context_menu::spawn_context_menu,
     icons::IconFont,
     text_edit::{self, EditorTextEdit, TextEditCommitEvent, TextEditProps, TextEditValue},
@@ -112,7 +113,6 @@ impl Plugin for HierarchyPlugin {
                     apply_hierarchy_filter,
                     auto_focus_inline_rename,
                     populate_prefab_dialog,
-                    toggle_show_all_button,
                     update_show_all_button_appearance,
                     on_show_all_changed,
                     sync_pie_live_outliner,
@@ -133,6 +133,7 @@ impl Plugin for HierarchyPlugin {
                 )
                     .after(jackdaw_widgets::tree_view::maintain_tree_index),
             )
+            .add_observer(toggle_show_all_button)
             .add_observer(handle_inline_rename_commit)
             .add_observer(on_root_entity_added)
             .add_observer(on_ui_root_added)
@@ -2637,15 +2638,14 @@ pub fn prefab_save_as_variant(
     OperatorResult::Finished
 }
 
-/// Toggle the show-all state when the button is pressed.
+/// Toggle the show-all state when the button is clicked.
 fn toggle_show_all_button(
+    click: On<ButtonClickEvent>,
+    buttons: Query<(), With<HierarchyShowAllButton>>,
     mut show_all: ResMut<HierarchyShowAll>,
-    interactions: Query<&Interaction, (Changed<Interaction>, With<HierarchyShowAllButton>)>,
 ) {
-    for interaction in &interactions {
-        if *interaction == Interaction::Pressed {
-            show_all.0 = !show_all.0;
-        }
+    if buttons.contains(click.entity) {
+        show_all.0 = !show_all.0;
     }
 }
 
