@@ -471,6 +471,12 @@ impl AnchorUnit {
     /// out. Whole pixels while the canvas is on its pixel lattice; two
     /// places otherwise and for every other unit, matching what the
     /// inspector's `Val` field shows and commits.
+    ///
+    /// A landing on one of the [`PERCENT_LINES`] is exempt: the figure
+    /// is written whole, so a third of the parent box is
+    /// `Val::Percent(100.0 / 3.0)` rather than a `33.33` that is a third
+    /// of nothing. Those landings do not come through here at all; see
+    /// [`exact_percent_for`].
     fn round(self, magnitude: f32, rounding: PixelRounding) -> f32 {
         match (self, rounding) {
             (Self::Px, PixelRounding::Whole) => magnitude.round(),

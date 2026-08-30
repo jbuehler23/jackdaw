@@ -198,6 +198,57 @@ fn assert_authored_val(value: Option<BsnValue>, variant: &str, magnitude: f32) {
     );
 }
 
+/// A field the user only looked at commits nothing.
+///
+/// The text is drawn to the field's own two places, so it stands for the
+/// value rather than being it. A click focuses a field without typing in
+/// it, so a blur that committed the text back would author `33.33` over
+/// the exact third of the parent box a percent landing writes.
+#[test]
+fn a_val_field_blurred_without_an_edit_keeps_the_value_it_was_shown() {
+    let exact = 100.0 / 3.0;
+    let (mut app, entity) = app_with_node(Node {
+        width: Val::Percent(exact),
+        ..default()
+    });
+    let root = spawn_val(&mut app, entity, "width", Val::Percent(exact));
+    let number = number_input(&mut app, root);
+    let text = editable_text(&mut app, number);
+    let entries = app.world().resource::<CommandHistory>().undo_stack.len();
+
+    blur(&mut app, text);
+
+    assert_eq!(
+        app.world()
+            .get::<Node>(entity)
+            .expect("the node stands")
+            .width,
+        Val::Percent(exact),
+        "the value the field was shown survives being looked at",
+    );
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        entries,
+        "and there is nothing to undo",
+    );
+}
+
+/// The text entry inside a scrub number field.
+fn editable_text(app: &mut App, number: Entity) -> Entity {
+    widgets_with::<bevy::text::EditableText>(app.world_mut(), number)
+        .first()
+        .copied()
+        .expect("the number input has a text entry")
+}
+
+/// Take the focus off a field, the way clicking elsewhere does.
+fn blur(app: &mut App, text: Entity) {
+    app.world_mut()
+        .trigger(bevy::input_focus::FocusLost { entity: text });
+    app.update();
+    app.update();
+}
+
 #[test]
 fn scrubbing_a_val_commits_to_ecs_document_and_history() {
     let (mut app, entity) = app_with_node(Node {

@@ -3,8 +3,9 @@
 //! [`ScrubNumberInput`] adds an invisible scrubber overlay on top of a
 //! numeric text entry. Dragging the overlay emits [`ValueChange<T>`] with
 //! `is_final == false`, governed by [`SoftLimit`], [`HardLimit`],
-//! [`NumberInputPrecision`], and [`NumberInputStep`]. Releasing, Enter, or
-//! blur emits a final [`ValueChange<T>`] with `is_final == true`.
+//! [`NumberInputPrecision`], and [`NumberInputStep`]. Releasing emits a
+//! final [`ValueChange<T>`] with `is_final == true`, and so do Enter and
+//! blur, on a field whose text has been typed in.
 //!
 //! The public types are prefixed `Scrub*`, and the value/format enums are
 //! named to avoid colliding with the names `bevy::feathers` exports when
@@ -793,7 +794,14 @@ fn number_input_hovered(
 fn number_input_on_enter_key(
     key_input: On<FocusedInput<KeyboardInput>>,
     q_parent: Query<&ChildOf>,
-    q_number_input: Query<(&ScrubNumberInputValue, Option<&HardLimit>), With<ScrubNumberInput>>,
+    q_number_input: Query<
+        (
+            &ScrubNumberInputValue,
+            Option<&HardLimit>,
+            Option<&NumberInputPrecision>,
+        ),
+        With<ScrubNumberInput>,
+    >,
     q_text_input: Query<&EditableText>,
     mut commands: Commands,
 ) {
@@ -802,10 +810,10 @@ fn number_input_on_enter_key(
     }
 
     if let Ok(&ChildOf(root)) = q_parent.get(key_input.event_target())
-        && let Ok((input_value, hard_limit)) = q_number_input.get(root)
+        && let Ok((input_value, hard_limit, precision)) = q_number_input.get(root)
         && let Ok(editable_text) = q_text_input.get(key_input.event_target())
+        && let Some(text_value) = typed_text(editable_text, input_value, precision)
     {
-        let text_value = editable_text.value().to_string();
         emit_value_change(
             text_value,
             input_value.format(),
@@ -815,6 +823,24 @@ fn number_input_on_enter_key(
             true,
         );
     }
+}
+
+/// The field's text when the user has changed it, and `None` when it
+/// still reads as the value the field was given.
+///
+/// The text is drawn to the field's own precision, so it stands for the
+/// value rather than being it: a magnitude with more decimals behind it
+/// than the field shows -- a third of a parent box, say -- reads back as
+/// the rounded figure. A field is focused by a click alone, so an Enter
+/// or a blur reaches one nobody typed in, and committing its text would
+/// author that rounding over a value the user never touched.
+fn typed_text(
+    editable_text: &EditableText,
+    value: &ScrubNumberInputValue,
+    precision: Option<&NumberInputPrecision>,
+) -> Option<String> {
+    let text = editable_text.value().to_string();
+    (text != display_digits(value, precision)).then_some(text)
 }
 
 fn number_input_on_focus_gained(focus_gained: On<FocusGained>, mut commands: Commands) {
@@ -828,25 +854,33 @@ fn number_input_on_focus_gained(focus_gained: On<FocusGained>, mut commands: Com
 fn number_input_on_focus_lost(
     focus_lost: On<FocusLost>,
     q_parent: Query<&ChildOf>,
-    q_number_input: Query<(&ScrubNumberInputValue, Option<&HardLimit>), With<ScrubNumberInput>>,
+    q_number_input: Query<
+        (
+            &ScrubNumberInputValue,
+            Option<&HardLimit>,
+            Option<&NumberInputPrecision>,
+        ),
+        With<ScrubNumberInput>,
+    >,
     mut q_text_input: Query<&mut EditableText>,
     mut commands: Commands,
 ) {
     let editable_text_id = focus_lost.event_target();
 
     if let Ok(&ChildOf(root)) = q_parent.get(editable_text_id)
-        && let Ok((input_value, hard_limit)) = q_number_input.get(root)
+        && let Ok((input_value, hard_limit, precision)) = q_number_input.get(root)
         && let Ok(editable_text) = q_text_input.get_mut(editable_text_id)
     {
-        let text_value = editable_text.value().to_string();
-        emit_value_change(
-            text_value,
-            input_value.format(),
-            root,
-            hard_limit,
-            &mut commands,
-            true,
-        );
+        if let Some(text_value) = typed_text(&editable_text, input_value, precision) {
+            emit_value_change(
+                text_value,
+                input_value.format(),
+                root,
+                hard_limit,
+                &mut commands,
+                true,
+            );
+        }
 
         // Restore cursor back to normal.
         commands
