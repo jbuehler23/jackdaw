@@ -2881,11 +2881,69 @@ fn each_guide_is_marked_on_its_ruler() {
         "and the one down the left marks both guides across it",
     );
 
+    // The labels are written in the rest of the gutter, so a mark that
+    // ran the whole depth of it would be painted over one of them.
+    let mark = guide_mark_node(&mut app, panel, CanvasAxis::Vertical);
+    assert_eq!(
+        (mark.height, mark.bottom, mark.top),
+        (px(6), px(0), Val::Auto),
+        "the mark stands in the band the ticks reach into, off the stage edge",
+    );
+
     app.world_mut().resource_mut::<CanvasSnap>().show_guides = false;
     settle(&mut app);
     assert!(
         guide_marks_on(&mut app, panel, CanvasAxis::Vertical).is_empty(),
         "guides that are not drawn are not marked either",
+    );
+}
+
+/// The node one of a panel's guide marks is drawn as.
+fn guide_mark_node(app: &mut App, panel: Entity, axis: CanvasAxis) -> Node {
+    let mut query = app.world_mut().query::<(Entity, &RulerGuideMark)>();
+    let entity = query
+        .iter(app.world())
+        .find(|(_, mark)| mark.host == panel && mark.axis == axis)
+        .map(|(entity, _)| entity)
+        .expect("the ruler marks the guide");
+    node_of(app, entity)
+}
+
+/// A capture states the framing it wants to shoot at.
+#[test]
+fn the_zoom_operator_frames_the_panel_it_names() {
+    let mut app = stage_app();
+    let first = panel_entity(&mut app);
+    let second = panel_entity(&mut app);
+    authored_scene(&mut app);
+    settle(&mut app);
+
+    app.world_mut()
+        .operator("viewport2d.zoom")
+        .param("zoom", 4.0)
+        .param("panel", first.to_bits() as i64)
+        .call()
+        .expect("viewport2d.zoom dispatches")
+        .assert_finished();
+    settle(&mut app);
+
+    let host = app
+        .world()
+        .get::<Viewport2dPanelHost>(first)
+        .expect("host on panel parent");
+    assert_eq!(host.view.zoom, 4.0, "the panel is framed where it was told");
+    assert!(
+        host.view_touched,
+        "and the framing is a chosen one, which a default fit cannot outrank",
+    );
+    assert_eq!(
+        app.world()
+            .get::<Viewport2dPanelHost>(second)
+            .expect("host on panel parent")
+            .view
+            .zoom,
+        0.5,
+        "the panel that was not named keeps its own framing",
     );
 }
 

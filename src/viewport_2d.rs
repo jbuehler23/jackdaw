@@ -1514,6 +1514,14 @@ fn sync_ruler_guide_marks(
     }
 }
 
+/// How far into the gutter a guide's mark reaches, measured from the
+/// stage edge the ticks are drawn against.
+///
+/// The band the ticks stand in, and no further: the labels are written
+/// in the rest of the gutter, and a mark drawn the whole depth of it
+/// would be painted over whichever label it happened to coincide with.
+const RULER_GUIDE_MARK_REACH: f32 = RULER_LABEL_TICK;
+
 /// How wide a guide's mark on the ruler is, across the ruler's own
 /// direction.
 const RULER_GUIDE_MARK: f32 = 3.0;
@@ -1524,14 +1532,16 @@ fn place_ruler_guide_mark(node: &mut Node, axis: CanvasAxis, at: f32) {
     match axis {
         CanvasAxis::Vertical => {
             node.left = px(at - half);
-            node.top = px(0);
+            node.top = Val::Auto;
+            node.bottom = px(0);
             node.width = px(RULER_GUIDE_MARK);
-            node.height = percent(100);
+            node.height = px(RULER_GUIDE_MARK_REACH);
         }
         CanvasAxis::Horizontal => {
-            node.left = px(0);
+            node.left = Val::Auto;
+            node.right = px(0);
             node.top = px(at - half);
-            node.width = percent(100);
+            node.width = px(RULER_GUIDE_MARK_REACH);
             node.height = px(RULER_GUIDE_MARK);
         }
     }
@@ -2288,7 +2298,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<Viewport2dFrameOp>();
     ctx.register_menu_entry::<Viewport2dFrameOp>(TopLevelMenu::View);
     ctx.register_operator::<Viewport2dModeOp>();
-    ctx.register_operator::<Viewport2dGridOp>();
+    ctx.register_operator::<Viewport2dGridOp>()
+        .register_operator::<Viewport2dZoomOp>();
     ctx.register_operator::<SelectionSelectOp>();
     crate::canvas_snap::add_to_extension(ctx);
     // Shift+R and Shift+G: the rulers and the guides, beside the plain
@@ -2407,6 +2418,55 @@ pub(crate) fn viewport_2d_grid(
         }
         let view = Ui2dView { grid, ..host.view };
         host.set_view(view);
+    }
+    OperatorResult::Finished
+}
+
+/// Set the 2D viewport's zoom, in stage logical pixels per authored
+/// pixel.
+///
+/// Named on one panel or, with no `panel`, on every open one, like
+/// `viewport2d.grid`. A stated zoom stands a pending fit down: the fit
+/// is the framing a panel falls back to, and it would otherwise land on
+/// the next frame and overwrite the framing that was just asked for.
+#[operator(
+    id = "viewport2d.zoom",
+    label = "Set 2D Canvas Zoom",
+    description = "Set the 2D viewport's zoom, in stage pixels per authored pixel.",
+    allows_undo = false,
+    params(
+        zoom(f64, doc = "Stage logical pixels per authored pixel."),
+        panel(
+            i64,
+            doc = "Bits of the panel content Entity to zoom. Omit to zoom every open 2D panel."
+        )
+    )
+)]
+pub(crate) fn viewport_2d_zoom(
+    params: In<OperatorParameters>,
+    mut hosts: Query<(Entity, &mut Viewport2dPanelHost)>,
+) -> OperatorResult {
+    let zoom = params.as_float("zoom")? as f32;
+    if !zoom.is_finite() || zoom <= 0.0 {
+        warn!(
+            "viewport2d.zoom: 'zoom' must be a positive number of stage pixels per authored pixel"
+        );
+        return OperatorResult::Cancelled;
+    }
+    let open: Vec<Entity> = hosts.iter().map(|(entity, _)| entity).collect();
+    if open.is_empty() {
+        warn!("viewport2d.zoom: no 2D viewport panel is open to zoom");
+        return OperatorResult::Cancelled;
+    }
+    let wanted = named_panels(&params, "viewport2d.zoom", &open);
+    let zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+    for (entity, mut host) in &mut hosts {
+        if !wanted.contains(&entity) {
+            continue;
+        }
+        let view = Ui2dView { zoom, ..host.view };
+        host.set_view(view);
+        host.fit_pending = false;
     }
     OperatorResult::Finished
 }
