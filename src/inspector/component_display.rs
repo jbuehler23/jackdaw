@@ -13,7 +13,7 @@ use bevy::{
         reflect::{AppTypeRegistry, ReflectComponent},
     },
     feathers::containers::{pane, pane_body, pane_header},
-    feathers::controls::FeathersDisclosureToggle,
+    feathers::controls::{ButtonVariant, FeathersDisclosureToggle, FeathersToolButton},
     prelude::*,
     reflect::serde::TypedReflectSerializer,
     ui::Checked,
@@ -21,7 +21,7 @@ use bevy::{
 };
 use jackdaw_feathers::{
     button::ButtonOperatorCall,
-    icons::{EditorFont, Icon, IconFont},
+    icons::{EditorFont, Icon, IconFont, icon_scene},
     tokens,
 };
 use jackdaw_localization::LocalizedText;
@@ -1089,25 +1089,14 @@ pub(crate) fn spawn_component_display(
             let remove_call = ButtonOperatorCall::new(super::ops::ComponentRemoveOp::ID)
                 .with_param("entity", entity_param)
                 .with_param("type_path", remove_path.clone());
-            commands.spawn((
-                Text::new(String::from(Icon::X.unicode())),
-                TextFont {
-                    font: font.clone().into(),
-                    font_size: tokens::TEXT_SIZE_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-                Hovered::default(),
-                remove_call,
-                ChildOf(header),
-                bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-                    commands
-                        .operator(super::ops::ComponentRemoveOp::ID)
-                        .param("entity", entity_param)
-                        .param("type_path", type_path_owned.clone())
-                        .call();
-                }),
-            ));
+            commands
+                .spawn_scene(bsn! {
+                    @FeathersToolButton {
+                        @caption: bsn! { icon_scene(Icon::X.unicode(), tokens::TEXT_SIZE_SM_PX) },
+                        @variant: {ButtonVariant::Plain}
+                    }
+                })
+                .insert((Hovered::default(), remove_call, ChildOf(header)));
         }
     }
 
@@ -1237,8 +1226,62 @@ pub(crate) fn filter_inspector_components(
 
 #[cfg(test)]
 mod tests {
-    use super::hidden_by_namespace;
+    use super::{ComponentDisplaySpec, hidden_by_namespace, spawn_component_display};
+    use bevy::feathers::controls::FeathersToolButton;
     use bevy::prelude::*;
+    use jackdaw_api_internal::operator::Operator;
+    use jackdaw_feathers::button::ButtonOperatorCall;
+
+    /// The card's remove control is the native tool button, not a bare glyph,
+    /// and it still carries the operator call that dispatches the removal.
+    #[test]
+    fn the_remove_control_is_a_feathers_tool_button() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+        ))
+        .init_asset::<Image>()
+        .init_asset::<Font>();
+
+        let component = app.world_mut().register_component::<Transform>();
+        let spawn = app
+            .world_mut()
+            .register_system(move |mut commands: Commands| {
+                let entity = commands.spawn_empty().id();
+                let font: Handle<Font> = Handle::default();
+                let collapse_state = crate::inspector::InspectorCollapseState::default();
+                spawn_component_display(
+                    &mut commands,
+                    ComponentDisplaySpec {
+                        name: "Transform",
+                        type_path: "bevy_transform::components::transform::Transform",
+                        entity,
+                        component: Some(component),
+                        is_overridden: false,
+                        is_derived: false,
+                        prefab_ctx: None,
+                        revert_through_prefab: false,
+                        icon_font: &font,
+                        editor_font: &font,
+                        collapse_state: &collapse_state,
+                    },
+                );
+            });
+        app.world_mut().run_system(spawn).expect("system runs");
+        app.world_mut().flush();
+
+        let mut removes = app
+            .world_mut()
+            .query_filtered::<&ButtonOperatorCall, With<FeathersToolButton>>();
+        assert!(
+            removes
+                .iter(app.world())
+                .any(|call| call.id == crate::inspector::ops::ComponentRemoveOp::ID),
+            "the remove control is a feathers tool button carrying the remove operator",
+        );
+    }
 
     /// The card's layout is patched onto the feathers pane rather than replacing its
     /// `Node`, which would drop the padding, row gap and rounded corners `pane_body`

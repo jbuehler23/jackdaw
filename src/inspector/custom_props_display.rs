@@ -5,8 +5,8 @@ use bevy::ecs::lifecycle::Insert;
 use bevy::ecs::system::SystemState;
 use bevy::feathers::containers::{flex_spacer, pane_body};
 use bevy::feathers::controls::{
-    FeathersCheckbox, FeathersMenu, FeathersMenuButton, FeathersMenuItem, FeathersMenuPopup,
-    FeathersTextInput, FeathersTextInputContainer,
+    ButtonVariant, FeathersCheckbox, FeathersMenu, FeathersMenuButton, FeathersMenuItem,
+    FeathersMenuPopup, FeathersTextInput, FeathersTextInputContainer, FeathersToolButton,
 };
 use bevy::feathers::theme::ThemedText;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -16,7 +16,7 @@ use bevy::prelude::*;
 use bevy::text::{EditableText, TextEdit};
 use bevy::ui::Checked;
 use bevy::ui_widgets::{Activate, ValueChange, observe};
-use jackdaw_feathers::icons::Icon;
+use jackdaw_feathers::icons::{Icon, icon_scene};
 use jackdaw_feathers::tokens;
 use jackdaw_feathers::tooltip::Tooltip;
 
@@ -249,25 +249,25 @@ pub(super) fn spawn_custom_properties_display(
 
         // Remove property button (X icon)
         let n = prop_name.clone();
-        commands.spawn((
-            Text::new(String::from(Icon::X.unicode())),
-            TextFont {
-                font: icon_font.clone().into(),
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-            Hovered::default(),
-            Tooltip::title("Remove Property")
-                .with_description("Delete this custom property from the entity."),
-            ChildOf(row),
-            observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        commands
+            .spawn_scene(bsn! {
+                @FeathersToolButton {
+                    @caption: bsn! { icon_scene(Icon::X.unicode(), tokens::TEXT_SIZE_SM_PX) },
+                    @variant: {ButtonVariant::Plain}
+                }
+            })
+            .insert((
+                Hovered::default(),
+                Tooltip::title("Remove Property")
+                    .with_description("Delete this custom property from the entity."),
+                ChildOf(row),
+            ))
+            .observe(move |_: On<Activate>, mut commands: Commands| {
                 let n = n.clone();
                 commands.queue(move |world: &mut World| {
                     remove_custom_property(world, source_entity, &n);
                 });
-            }),
-        ));
+            });
     }
 
     // "Add Property" row
@@ -773,4 +773,53 @@ pub(crate) fn on_custom_property_checkbox_commit(
     commands.queue(move |world: &mut World| {
         apply_custom_property_with_undo(world, source, &name, PropertyValue::Bool(checked));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::feathers::controls::FeathersToolButton;
+
+    /// Each property row's remove control is the native tool button rather
+    /// than a bare glyph.
+    #[test]
+    fn a_property_row_removes_through_a_feathers_tool_button() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+        ))
+        .init_asset::<Image>()
+        .init_asset::<Font>();
+
+        let spawn = app.world_mut().register_system(|mut commands: Commands| {
+            let parent = commands.spawn(Node::default()).id();
+            let source = commands.spawn_empty().id();
+            let mut properties = CustomProperties::default();
+            properties
+                .properties
+                .insert(String::from("speed"), PropertyValue::Float(1.0));
+            let font: Handle<Font> = Handle::default();
+            spawn_custom_properties_display(
+                &mut commands,
+                parent,
+                source,
+                &properties,
+                &font,
+                &font,
+            );
+        });
+        app.world_mut().run_system(spawn).expect("system runs");
+        app.world_mut().flush();
+
+        let mut buttons = app
+            .world_mut()
+            .query_filtered::<Entity, With<FeathersToolButton>>();
+        assert_eq!(
+            buttons.iter(app.world()).count(),
+            1,
+            "the one property row carries one tool button, its remove control",
+        );
+    }
 }

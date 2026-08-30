@@ -1,10 +1,11 @@
-use bevy::feathers::controls::FeathersDisclosureToggle;
+use bevy::feathers::controls::{ButtonVariant, FeathersDisclosureToggle, FeathersToolButton};
 use bevy::prelude::*;
 use bevy::ui::Checked;
 use bevy::ui_widgets::ToggleChecked;
 use jackdaw_widgets::collapsible::{CollapsibleBody, CollapsibleHeader, CollapsibleSection};
 use lucide_icons::Icon;
 
+use crate::icons::icon_scene;
 use crate::panel_card::DisclosureSection;
 use crate::tokens;
 
@@ -187,24 +188,17 @@ pub fn spawn_inspector_card(
         },
     );
 
-    let remove_button = if opts.removable {
-        let btn = commands
-            .spawn((
-                Text::new(String::from(Icon::X.unicode())),
-                TextFont {
-                    font: font.clone().into(),
-                    font_size: tokens::TEXT_SIZE_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-                InspectorCardRemoveButton,
-                ChildOf(header),
-            ))
-            .id();
-        Some(btn)
-    } else {
-        None
-    };
+    let remove_button = opts.removable.then(|| {
+        commands
+            .spawn_scene(bsn! {
+                @FeathersToolButton {
+                    @caption: bsn! { icon_scene(Icon::X.unicode(), tokens::TEXT_SIZE_SM_PX) },
+                    @variant: {ButtonVariant::Plain}
+                }
+            })
+            .insert((InspectorCardRemoveButton, ChildOf(header)))
+            .id()
+    });
 
     commands.entity(body).insert(ChildOf(section));
 
@@ -283,6 +277,7 @@ mod tests {
             bevy::scene::ScenePlugin,
         ))
         .init_asset::<Image>()
+        .init_asset::<Font>()
         .add_observer(crate::panel_card::on_disclosure_change)
         .init_resource::<CardStore>();
         app
@@ -361,6 +356,10 @@ mod tests {
                 .get::<InspectorCardRemoveButton>(remove)
                 .is_some(),
             "remove button entity must have InspectorCardRemoveButton"
+        );
+        assert!(
+            app.world().get::<FeathersToolButton>(remove).is_some(),
+            "the remove control is the feathers tool button, not a bare glyph"
         );
     }
 
