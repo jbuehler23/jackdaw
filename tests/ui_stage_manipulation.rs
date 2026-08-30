@@ -1628,7 +1628,7 @@ fn a_kind_switched_off_frees_the_edge_it_governs() {
         // Sides at 900 and 1100: neither is a quarter line of the
         // 2400-wide canvas, so only the sibling kind offers them.
         spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
-        let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+        let mover = spawn_child(&mut app, root, 200.0, 640.0, 60.0, 100.0);
         settle(&mut app);
 
         select(&mut app, mover);
@@ -1638,8 +1638,8 @@ fn a_kind_switched_off_frees_the_edge_it_governs() {
             &mut app,
             panel,
             overlay,
-            Vec2::new(230.0, 750.0),
-            Vec2::new(924.0, 750.0),
+            Vec2::new(230.0, 690.0),
+            Vec2::new(924.0, 690.0),
         );
         settle(&mut app);
         node_of(&app, mover).left
@@ -1665,7 +1665,7 @@ fn ctrl_still_inverts_the_kinds_together_with_the_grid() {
         magnet(&mut app, false);
         let root = ui_root(&mut app);
         spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
-        let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+        let mover = spawn_child(&mut app, root, 200.0, 640.0, 60.0, 100.0);
         settle(&mut app);
 
         select(&mut app, mover);
@@ -1680,8 +1680,8 @@ fn ctrl_still_inverts_the_kinds_together_with_the_grid() {
             &mut app,
             panel,
             overlay,
-            Vec2::new(230.0, 750.0),
-            Vec2::new(to + 30.0, 750.0),
+            Vec2::new(230.0, 690.0),
+            Vec2::new(to + 30.0, 690.0),
         );
         settle(&mut app);
         node_of(&app, mover).left
@@ -1816,6 +1816,56 @@ fn quarter_line_app(node: Node) -> (App, Entity, Entity) {
     (app, panel, child)
 }
 
+/// A third is a line a percent-authored node lands on, and the figure
+/// it writes is the third itself.
+///
+/// A third of the parent is a figure nothing else can produce: the
+/// pixels it lands on divide back into 33.33, which is a hair off the
+/// line at this parent size and further off at every other one. The
+/// author who wrote the offset in percent gets the percent.
+#[test]
+fn a_percent_anchored_node_landing_on_a_third_writes_the_third() {
+    let mut app = stage_app();
+    let panel = framed_panel(&mut app, 0.5);
+    let root = ui_root(&mut app);
+    // 900 across: a third of it is exactly 300 authored pixels, so what
+    // is being read is the figure written, not the place landed on.
+    let container = spawn_child(&mut app, root, 0.0, 0.0, 900.0, 400.0);
+    let child = app
+        .world_mut()
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(10),
+                top: px(0),
+                width: px(100),
+                height: px(50),
+                ..default()
+            },
+            ChildOf(container),
+        ))
+        .id();
+    settle(&mut app);
+
+    select(&mut app, child);
+    settle(&mut app);
+    let (overlay, _) = overlay_node(&mut app);
+    drag_authored(
+        &mut app,
+        panel,
+        overlay,
+        Vec2::new(140.0, 25.0),
+        Vec2::new(350.0, 25.0),
+    );
+    settle(&mut app);
+
+    assert_eq!(
+        node_of(&app, child).left,
+        Val::Percent(100.0 / 3.0),
+        "the landing is written as the third it is, not as 33.33",
+    );
+}
+
 /// Pixel Snap is what decides how finely a drag states the pixels it
 /// writes, and it is the only thing that decides: with it off, a canvas
 /// zoomed past one authored pixel per pointer pixel keeps the fraction
@@ -1887,8 +1937,8 @@ fn other_nodes_reach_across_the_tree_only_when_asked() {
             &mut app,
             panel,
             overlay,
-            Vec2::new(230.0, 750.0),
-            Vec2::new(to + 30.0, 750.0),
+            Vec2::new(230.0, 690.0),
+            Vec2::new(to + 30.0, 690.0),
         );
         settle(&mut app);
         node_of(&app, mover).left
@@ -1961,14 +2011,14 @@ fn the_gesture_records_the_winning_line() {
     without_the_pixel_grid(&mut app, panel);
     let root = ui_root(&mut app);
     spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
-    let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+    let mover = spawn_child(&mut app, root, 200.0, 640.0, 60.0, 100.0);
     settle(&mut app);
 
     select(&mut app, mover);
     settle(&mut app);
     let (overlay, _) = overlay_node(&mut app);
-    let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 750.0));
-    let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 750.0)) - start;
+    let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 690.0));
+    let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 690.0)) - start;
     continue_drag(&mut app, overlay, start, distance);
     settle(&mut app);
 
@@ -2019,14 +2069,14 @@ fn a_snapped_drag_draws_the_line_it_landed_on_and_lets_go_of_it() {
     without_the_pixel_grid(&mut app, panel);
     let root = ui_root(&mut app);
     spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
-    let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+    let mover = spawn_child(&mut app, root, 200.0, 640.0, 60.0, 100.0);
     settle(&mut app);
 
     select(&mut app, mover);
     settle(&mut app);
     let (overlay, _) = overlay_node(&mut app);
-    let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 750.0));
-    let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 750.0)) - start;
+    let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 690.0));
+    let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 690.0)) - start;
     continue_drag(&mut app, overlay, start, distance);
     settle(&mut app);
 
@@ -2062,14 +2112,14 @@ fn a_snapped_drag_draws_the_line_it_landed_on_and_lets_go_of_it() {
     let root = ui_root(&mut app);
     let container = spawn_child(&mut app, root, 300.0, 200.0, 1600.0, 900.0);
     spawn_child(&mut app, container, 600.0, 0.0, 200.0, 200.0);
-    let mover = spawn_child(&mut app, container, 0.0, 500.0, 60.0, 100.0);
+    let mover = spawn_child(&mut app, container, 0.0, 480.0, 60.0, 100.0);
     settle(&mut app);
 
     select(&mut app, mover);
     settle(&mut app);
     let (overlay, _) = overlay_node(&mut app);
-    let start = begin_drag(&mut app, panel, overlay, Vec2::new(330.0, 750.0));
-    let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 750.0)) - start;
+    let start = begin_drag(&mut app, panel, overlay, Vec2::new(330.0, 690.0));
+    let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 690.0)) - start;
     continue_drag(&mut app, overlay, start, distance);
     settle(&mut app);
 
@@ -2093,15 +2143,15 @@ fn a_drag_that_snapped_nothing_draws_nothing() {
     let mut app = stage_app();
     let panel = framed_panel(&mut app, 0.5);
     let root = ui_root(&mut app);
-    let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+    let mover = spawn_child(&mut app, root, 200.0, 640.0, 60.0, 100.0);
     settle(&mut app);
     set_grid(&mut app, panel, 8.0);
 
     select(&mut app, mover);
     settle(&mut app);
     let (overlay, _) = overlay_node(&mut app);
-    let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 750.0));
-    let distance = screen_position_of(&mut app, panel, Vec2::new(1500.0, 750.0)) - start;
+    let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 690.0));
+    let distance = screen_position_of(&mut app, panel, Vec2::new(1500.0, 690.0)) - start;
     continue_drag(&mut app, overlay, start, distance);
     settle(&mut app);
 
@@ -2162,14 +2212,14 @@ fn the_landing_line_is_told_apart_from_the_outline_and_the_guides() {
         } else {
             spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
         }
-        let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+        let mover = spawn_child(&mut app, root, 200.0, 640.0, 60.0, 100.0);
         settle(&mut app);
 
         select(&mut app, mover);
         settle(&mut app);
         let (overlay, _) = overlay_node(&mut app);
-        let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 750.0));
-        let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 750.0)) - start;
+        let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 690.0));
+        let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 690.0)) - start;
         continue_drag(&mut app, overlay, start, distance);
         settle(&mut app);
         let (entity, _) = snap_highlight_entities(&mut app)
@@ -2212,14 +2262,14 @@ fn a_drag_lands_on_a_guide_when_that_kind_is_on() {
             horizontal: Vec::new(),
             vertical: vec![900.0],
         });
-        let mover = spawn_child(&mut app, root, 200.0, 700.0, 60.0, 100.0);
+        let mover = spawn_child(&mut app, root, 200.0, 640.0, 60.0, 100.0);
         settle(&mut app);
 
         select(&mut app, mover);
         settle(&mut app);
         let (overlay, _) = overlay_node(&mut app);
-        let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 750.0));
-        let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 750.0)) - start;
+        let start = begin_drag(&mut app, panel, overlay, Vec2::new(230.0, 690.0));
+        let distance = screen_position_of(&mut app, panel, Vec2::new(924.0, 690.0)) - start;
         continue_drag(&mut app, overlay, start, distance);
         settle(&mut app);
         let outcome = app.world().resource::<UiManipulation>().last_snap();

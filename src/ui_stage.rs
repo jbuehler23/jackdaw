@@ -288,7 +288,7 @@ pub struct Candidate {
 /// [`crate::canvas_snap::CanvasSnapKind`] that offers lines.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CandidateKind {
-    /// A quarter line of the parent box.
+    /// A line of the parent box a percentage names.
     PercentLine,
     /// A padding-box edge or the centre of the parent.
     Parent,
@@ -387,8 +387,14 @@ pub enum PixelRounding {
     Fractional,
 }
 
-/// The quarter lines of the parent box, as percentages.
-const PERCENT_LINES: [f32; 5] = [0.0, 25.0, 50.0, 75.0, 100.0];
+/// The lines of the parent box a percentage names, as percentages.
+///
+/// The quarters and the thirds. A third is a figure a `Val::Percent`
+/// layout reaches for as readily as a quarter -- three columns across a
+/// row, a panel a third of the way down -- and it is the one an author
+/// cannot get by eye, because the pixels it lands on round to something
+/// that is not a third of anything.
+const PERCENT_LINES: [f32; 7] = [0.0, 25.0, 100.0 / 3.0, 50.0, 200.0 / 3.0, 75.0, 100.0];
 
 /// How finely a gesture states the pixels it writes.
 ///

@@ -58,7 +58,8 @@ pub enum CanvasSnapKind {
     Pixel,
     /// The parent's padding-box edges and centre.
     Parent,
-    /// Quarters of the parent box: 0, 25, 50, 75 and 100 percent.
+    /// The lines of the parent box a percentage names: its quarters and
+    /// its thirds.
     PercentLines,
     /// The near and far edges of the dragged node's siblings.
     SiblingSides,
@@ -141,7 +142,7 @@ pub struct CanvasSnap {
     pub pixel: bool,
     /// Snap to the parent's padding-box edges and centre.
     pub parent: bool,
-    /// Snap to the quarter lines of the parent box.
+    /// Snap to the lines of the parent box a percentage names.
     pub percent_lines: bool,
     /// Snap to sibling edges.
     pub sibling_sides: bool,
