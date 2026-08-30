@@ -1,6 +1,5 @@
 pub mod alert;
 pub mod button;
-pub mod checkbox;
 pub mod collapsible;
 pub mod color_picker;
 pub mod combobox;
@@ -47,7 +46,6 @@ impl Plugin for EditorFeathersPlugin {
             split_panel::SplitPanelPlugin,
             icons::IconFontPlugin,
             button::plugin,
-            checkbox::plugin,
             popover::plugin,
             combobox::plugin,
             dialog::plugin,
