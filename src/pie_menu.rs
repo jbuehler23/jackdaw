@@ -6,6 +6,7 @@
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
+use jackdaw_feathers::button::{ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::icons::{EditorFont, Icon, IconFont};
 use jackdaw_feathers::tokens;
 
@@ -13,7 +14,6 @@ use crate::pie::{InstanceKey, PieSession, launch_instance, stop_instance};
 use crate::run_config::{CargoMeta, RunConfigs, read_run_configs, scaffold_manifest};
 
 const MENU_MIN_WIDTH: f32 = 220.0;
-const ROW_HEIGHT: f32 = 26.0;
 const CHECK_SLOT_WIDTH: f32 = 16.0;
 
 pub struct PieMenuPlugin;
@@ -180,17 +180,11 @@ fn spawn_instance_row(
     let row = world
         .spawn((
             PieInstanceRow(spec.key),
-            Interaction::default(),
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(6.0),
-                padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
-                height: Val::Px(ROW_HEIGHT),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
-                ..Default::default()
-            },
-            BackgroundColor(Color::NONE),
+            button(
+                ButtonProps::new("")
+                    .with_variant(ButtonVariant::Ghost)
+                    .align_left(),
+            ),
             ChildOf(popover),
         ))
         .id();
@@ -241,17 +235,11 @@ fn spawn_scaffold_row(
     let row = world
         .spawn((
             PieScaffoldRow,
-            Interaction::default(),
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(8.0),
-                padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
-                height: Val::Px(ROW_HEIGHT),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
-                ..Default::default()
-            },
-            BackgroundColor(Color::NONE),
+            button(
+                ButtonProps::new("")
+                    .with_variant(ButtonVariant::Ghost)
+                    .align_left(),
+            ),
             ChildOf(popover),
         ))
         .id();

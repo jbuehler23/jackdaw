@@ -331,33 +331,38 @@ pub fn handle_add_workspace_clicks(
     mut commands: Commands,
 ) {
     for interaction in button_query.iter() {
-        if *interaction != Interaction::Pressed {
-            continue;
+        if *interaction == Interaction::Pressed {
+            add_workspace(&mut registry, &tree, &mut commands);
         }
-
-        let next_index = registry.workspaces.len() + 1;
-        let new_id = format!("workspace_{next_index}");
-        let new_name = format!("Workspace {next_index}");
-
-        let current_active = registry.active.clone();
-        if let Some(active_id) = current_active.as_ref()
-            && let Some(ws) = registry.get_mut(active_id)
-        {
-            ws.tree = tree.clone();
-        }
-
-        registry.workspaces.push(WorkspaceDescriptor {
-            id: new_id.clone(),
-            name: new_name,
-            icon: None,
-            accent_color: NEW_WORKSPACE_ACCENT,
-            layout: crate::layout::LayoutState::default(),
-            tree: tree.clone(),
-        });
-
-        let old = registry.active.clone();
-        commands.trigger(WorkspaceChanged { old, new: new_id });
     }
+}
+
+/// Append a workspace that starts as a copy of the current `DockTree`,
+/// and switch to it. Shared by the dock's own `+` tab and the title
+/// bar's workspace dropdown, which reach it from different click paths.
+pub fn add_workspace(registry: &mut WorkspaceRegistry, tree: &DockTree, commands: &mut Commands) {
+    let next_index = registry.workspaces.len() + 1;
+    let new_id = format!("workspace_{next_index}");
+    let new_name = format!("Workspace {next_index}");
+
+    let current_active = registry.active.clone();
+    if let Some(active_id) = current_active.as_ref()
+        && let Some(ws) = registry.get_mut(active_id)
+    {
+        ws.tree = tree.clone();
+    }
+
+    registry.workspaces.push(WorkspaceDescriptor {
+        id: new_id.clone(),
+        name: new_name,
+        icon: None,
+        accent_color: NEW_WORKSPACE_ACCENT,
+        layout: crate::layout::LayoutState::default(),
+        tree: tree.clone(),
+    });
+
+    let old = registry.active.clone();
+    commands.trigger(WorkspaceChanged { old, new: new_id });
 }
 
 /// Click X on a tab -> delete that workspace. Last workspace can't be
