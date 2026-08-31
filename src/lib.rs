@@ -120,6 +120,7 @@ pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod transform_ops;
 pub mod ui_grouping;
+pub mod ui_layout_presets;
 pub mod ui_palette;
 pub mod ui_stage;
 pub mod undo_snapshot;

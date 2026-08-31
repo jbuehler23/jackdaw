@@ -369,7 +369,7 @@ pub(crate) fn ungroup_selection(world: &mut World) {
 
     let location = HierarchyLocation::from_world(world, container);
     let origin = parent_offset_box(world, container).min;
-    let plan: Vec<(Entity, Node, Node)> = children
+    let moves: Vec<(Entity, Node, Node)> = children
         .iter()
         .filter_map(|&child| {
             let inside = world.get::<Node>(child).cloned()?;
@@ -391,7 +391,7 @@ pub(crate) fn ungroup_selection(world: &mut World) {
         parent: location.parent,
         index: location.index,
         snapshot: snapshot_one(world, container),
-        children: plan,
+        children: moves,
         label: "Ungroup container".to_string(),
     };
     command.execute(world);

@@ -505,6 +505,10 @@ fn build_node_card(
     type_registry: &AppTypeRegistry,
     editor_font: &Handle<Font>,
 ) {
+    // The presets first: putting a node in a named place is one press, and
+    // the fields below say what that press wrote.
+    crate::ui_layout_presets::spawn_preset_row(commands, body, icon_font);
+
     // Display, position, overflow, then the lengths. The two choices that
     // change what every field below them means are segmented controls, so the
     // current answer reads without opening a menu.

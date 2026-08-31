@@ -290,6 +290,10 @@ pub const UNBOUND_OPERATORS: &[&str] = &[
     "transform.nudge_z_neg",
     "transform.nudge_z_pos",
     "transform.numeric_apply",
+    // A preset is chosen by name, so it is one operator with eleven
+    // answers rather than eleven chords; the Node card's row is where it
+    // is reached from.
+    "ui.layout_preset",
     "view.cycle_bounding_box_mode",
     "view.dolly",
     "view.set_axis",
