@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use bevy::{
-    feathers::theme::ThemedText, picking::hover::Hovered, prelude::*,
-    ui::ui_transform::UiGlobalTransform,
+    feathers::controls::FeathersMenuDivider, feathers::theme::ThemedText, picking::hover::Hovered,
+    prelude::*, ui::ui_transform::UiGlobalTransform,
 };
 use jackdaw_widgets::menu_bar::{
     MenuAction, MenuBar, MenuBarDropdown, MenuBarDropdownItem, MenuBarItem, MenuBarState,
@@ -1019,17 +1019,9 @@ fn spawn_dropdown(
         let (action, label) = &actions[index];
         index += 1;
         if action == SEPARATOR_ACTION {
-            // Separator
-            commands.spawn((
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Px(1.0),
-                    margin: UiRect::axes(Val::Px(0.0), Val::Px(tokens::SPACING_XS)),
-                    ..Default::default()
-                },
-                BackgroundColor(tokens::BORDER_SUBTLE),
-                ChildOf(dropdown),
-            ));
+            commands
+                .spawn_scene(bsn! { @FeathersMenuDivider })
+                .insert(ChildOf(dropdown));
             continue;
         }
 
@@ -1232,6 +1224,38 @@ mod tests {
         let leading = app.world().get::<Children>(row)?.iter().next()?;
         app.world().get::<FeathersCheckbox>(leading)?;
         Some(app.world().get::<Checked>(leading).is_some())
+    }
+
+    /// A `---` row is the widget's own divider rather than a rule the
+    /// editor draws: the rule between two groups of entries is a menu
+    /// part, and the menu family ships one.
+    #[test]
+    fn a_separator_row_is_the_widgets_menu_divider() {
+        let (app, rows) = dropdown_app(vec![
+            ("op:scene.new".to_string(), "New".to_string()),
+            (SEPARATOR_ACTION.to_string(), String::new()),
+            ("op:scene.save".to_string(), "Save".to_string()),
+        ]);
+        let world = app.world();
+        assert_eq!(rows.len(), 3, "one row per entry");
+
+        let divider = rows[1];
+        assert!(
+            world.get::<MenuBarDropdownItem>(divider).is_none(),
+            "a divider dispatches nothing",
+        );
+        assert_eq!(
+            world
+                .get::<bevy::feathers::theme::ThemeBackgroundColor>(divider)
+                .map(|color| color.0.clone()),
+            Some(bevy::feathers::tokens::MENU_BORDER),
+            "it is painted in the menu's own border colour by the widget",
+        );
+        assert_eq!(
+            world.get::<Node>(divider).map(|node| node.height),
+            Some(px(1.0)),
+            "and it is the widget's one-pixel rule",
+        );
     }
 
     #[test]

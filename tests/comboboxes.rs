@@ -65,7 +65,7 @@ fn open_list(selected: usize) -> (App, Entity, Entity, Vec<Entity>) {
 /// hangs off the trigger it was opened from.
 #[test]
 fn a_combobox_opens_a_feathers_menu_popup_of_menu_items() {
-    let (mut app, _, popup, rows) = open_list(0);
+    let (app, _, popup, rows) = open_list(0);
 
     assert_eq!(rows.len(), 3, "one row per option");
     for row in &rows {
