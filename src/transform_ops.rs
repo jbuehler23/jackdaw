@@ -17,8 +17,8 @@ use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::core_extension::CoreExtensionInputContext;
 use crate::entity_ops::{
-    TransformReset, camera_snapped_rotation_axes, nudge_selected, reset_transform_selected,
-    rotate_selected,
+    TransformReset, camera_snapped_rotation_axes, can_act_on_entities, nudge_selected,
+    reset_transform_selected, rotate_selected,
 };
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -112,38 +112,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
             bindings![KeyCode::PageDown],
         ));
     });
-}
-
-/// Shared availability check for transform operators. Matches the
-/// guards the legacy `handle_entity_keys` applied.
-///
-/// Returns `false` when the timeline dock window is active so the
-/// arrow-key playhead-scrub and Ctrl+C/V keyframe copy/paste operators
-/// can claim those keys without fighting entity nudge / component
-/// copy/paste.
-///
-/// Typing is asked through [`crate::keybind_focus::KeybindFocus`] and
-/// not through `InputFocus` directly: bevy parks focus on the primary
-/// window when nothing has claimed it, so the bare resource reports
-/// "the user is typing" for a scene nobody has clicked in yet.
-fn can_act_on_entities(
-    keybind_focus: crate::keybind_focus::KeybindFocus,
-    active: ActiveModalQuery,
-    modal: Res<crate::modal_transform::ModalTransformState>,
-    draw_state: Res<crate::draw_brush::DrawBrushState>,
-    edit_mode: Res<crate::brush::EditMode>,
-    tree: Res<jackdaw_panels::tree::DockTree>,
-) -> bool {
-    if keybind_focus.is_typing() || active.is_modal_running() || modal.active.is_some() {
-        return false;
-    }
-    if draw_state.active.is_some() {
-        return false;
-    }
-    if active_tab_kind_present(&tree, "jackdaw.timeline") {
-        return false;
-    }
-    matches!(*edit_mode, crate::brush::EditMode::Object)
 }
 
 /// True if any leaf in the dock tree has its active tab pointing at a

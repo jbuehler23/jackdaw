@@ -204,3 +204,38 @@ fn a_dispatched_delete_takes_the_selected_entity_with_it() {
         "the selected entity survived the delete"
     );
 }
+
+/// Ctrl+C outside the timeline does nothing at all.
+///
+/// The chord belongs to `clip.copy_keyframes` alone (see
+/// `tests/keymap_presets.rs`), and that operator wants keyframes selected
+/// in an open timeline. A UI node selected on a canvas is neither, so the
+/// press finds nothing available and the editor stays put. The same for
+/// Ctrl+V.
+#[test]
+fn the_clipboard_chord_finds_nothing_to_run_outside_the_timeline() {
+    let mut app = util::editor_test_app();
+    let node = app
+        .world_mut()
+        .spawn((
+            bevy::prelude::Name::new("Panel"),
+            bevy::prelude::Node::default(),
+        ))
+        .id();
+    app.world_mut().resource_mut::<Selection>().entities = vec![node];
+    app.world_mut().entity_mut(node).insert(Selected);
+    app.update();
+
+    for id in ["clip.copy_keyframes", "clip.paste_keyframes"] {
+        let ready = app
+            .world_mut()
+            .operator(id)
+            .is_available()
+            .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"));
+        assert!(
+            !ready,
+            "{id} should refuse with a UI node selected and no timeline open"
+        );
+    }
+}
+

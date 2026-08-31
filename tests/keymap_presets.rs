@@ -4,7 +4,8 @@
 
 use bevy::prelude::*;
 use jackdaw_api_internal::keymap::{
-    ActiveKeymapPreset, DefaultKeymap, KeymapPreset, PresetContext, apply_keymap_preset,
+    ActiveKeymapPreset, DefaultKeymap, KeymapPreset, PresetBinding, PresetContext, PresetInput,
+    PresetPhase, apply_keymap_preset, find_conflicts,
 };
 
 mod util;
@@ -130,3 +131,51 @@ fn classic_preset_contains_builtin_entries_and_applies_them() {
         );
     }
 }
+
+/// Every operator bound to `input` in the classic preset, sorted.
+fn operators_on(defaults: &KeymapPreset, input: &PresetInput) -> Vec<String> {
+    let mut found: Vec<String> = defaults
+        .bindings
+        .iter()
+        .filter(|binding| &binding.input == input)
+        .map(|binding| binding.operator.clone())
+        .collect();
+    found.sort();
+    found
+}
+
+fn classic(app: &mut App) -> KeymapPreset {
+    app.finish();
+    app.update();
+    app.world_mut()
+        .get_resource_or_init::<DefaultKeymap>()
+        .to_classic_preset()
+}
+
+/// Ctrl+C and Ctrl+V are the clipboard chord, and in this editor they
+/// belong to the timeline's keyframes alone. Component copy/paste moved
+/// off them onto Ctrl+Shift, so a press outside the timeline runs nothing
+/// rather than quietly copying a component stack.
+#[test]
+fn the_clipboard_chord_is_the_timelines_alone() {
+    let mut app = util::headless_app();
+    let defaults = classic(&mut app);
+
+    assert_eq!(
+        operators_on(&defaults, &PresetInput::key("KeyC").ctrl()),
+        vec!["clip.copy_keyframes".to_string()],
+    );
+    assert_eq!(
+        operators_on(&defaults, &PresetInput::key("KeyV").ctrl()),
+        vec!["clip.paste_keyframes".to_string()],
+    );
+    assert_eq!(
+        operators_on(&defaults, &PresetInput::key("KeyC").ctrl().shift()),
+        vec!["entity.copy_components".to_string()],
+    );
+    assert_eq!(
+        operators_on(&defaults, &PresetInput::key("KeyV").ctrl().shift()),
+        vec!["entity.paste_components".to_string()],
+    );
+}
+

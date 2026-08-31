@@ -1454,14 +1454,19 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.bind_operator::<CoreExtensionInputContext, EntityDuplicateOp>([
         PresetInput::key("KeyD").ctrl()
     ]);
+    // Ctrl+Shift rather than Ctrl: plain Ctrl+C / Ctrl+V is the clipboard
+    // chord users reach for to copy an entity, and the timeline already
+    // claims it for keyframes.
     ctx.bind_operator::<CoreExtensionInputContext, EntityCopyComponentsOp>([PresetInput::key(
         "KeyC",
     )
-    .ctrl()]);
+    .ctrl()
+    .shift()]);
     ctx.bind_operator::<CoreExtensionInputContext, EntityPasteComponentsOp>([PresetInput::key(
         "KeyV",
     )
-    .ctrl()]);
+    .ctrl()
+    .shift()]);
     ctx.bind_operator::<CoreExtensionInputContext, EntityToggleVisibilityOp>([PresetInput::key(
         "KeyH",
     )]);
@@ -1480,21 +1485,30 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// while brush sub-element edit mode is active; matches the guards
 /// the legacy `handle_entity_keys` applied.
 ///
+/// Also refuses while the timeline dock window is active, so the
+/// keyframe operators sharing those chords answer alone. Delete and the
+/// clipboard chords are bound on both sides; the timeline is the
+/// narrower claim, so it wins wherever it is the focused window.
+///
 /// Typing is asked through [`crate::keybind_focus::KeybindFocus`] and
 /// not through `InputFocus` directly: bevy parks focus on the primary
 /// window when nothing has claimed it, so the bare resource reports
 /// "the user is typing" for a scene nobody has clicked in yet.
-fn can_act_on_entities(
+pub(crate) fn can_act_on_entities(
     keybind_focus: crate::keybind_focus::KeybindFocus,
     active: ActiveModalQuery,
     modal: Res<crate::modal_transform::ModalTransformState>,
     draw_state: Res<crate::draw_brush::DrawBrushState>,
     edit_mode: Res<crate::brush::EditMode>,
+    tree: Res<jackdaw_panels::tree::DockTree>,
 ) -> bool {
     if keybind_focus.is_typing() || active.is_modal_running() || modal.active.is_some() {
         return false;
     }
     if draw_state.active.is_some() {
+        return false;
+    }
+    if crate::transform_ops::active_tab_kind_present(&tree, "jackdaw.timeline") {
         return false;
     }
     matches!(*edit_mode, crate::brush::EditMode::Object)
