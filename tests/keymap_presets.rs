@@ -277,6 +277,8 @@ fn the_authoring_chords_claim_what_they_were_meant_to() {
         (PresetInput::key("KeyX").ctrl(), "entity.cut"),
         (PresetInput::key("ArrowUp").ctrl(), "entity.move_up"),
         (PresetInput::key("ArrowDown").ctrl(), "entity.move_down"),
+        (PresetInput::key("KeyG").ctrl(), "ui.group_into"),
+        (PresetInput::key("KeyG").ctrl().shift(), "ui.ungroup"),
     ] {
         assert_eq!(
             operators_on(&defaults, &input),
@@ -286,7 +288,13 @@ fn the_authoring_chords_claim_what_they_were_meant_to() {
     }
 
     let conflicts = find_conflicts(&defaults);
-    for chord in ["Ctrl+KeyX", "Ctrl+ArrowUp", "Ctrl+ArrowDown"] {
+    for chord in [
+        "Ctrl+KeyX",
+        "Ctrl+ArrowUp",
+        "Ctrl+ArrowDown",
+        "Ctrl+KeyG",
+        "Ctrl+Shift+KeyG",
+    ] {
         assert!(
             !conflicts.iter().any(|line| line.starts_with(chord)),
             "{chord} collided with something already bound: {conflicts:?}",

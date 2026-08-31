@@ -1592,16 +1592,23 @@ fn gesture_scale(world: &World, host: &Viewport2dPanelHost) -> f32 {
 /// The node's laid-out rect in the space its own `left`/`top` are stated
 /// in: authored pixels from its parent's top-left corner.
 fn authored_rect(world: &World, entity: Entity) -> Option<Rect> {
+    let rect = global_node_rect(world, entity)?;
+    let origin = parent_offset_box(world, entity).min;
+    Some(Rect::from_corners(rect.min - origin, rect.max - origin))
+}
+
+/// The node's laid-out rect in the global authored pixels layout reports,
+/// or `None` for a node layout has not measured.
+///
+/// This is the space two nodes under different parents can be compared in,
+/// which is what a bounding box over a selection needs.
+pub(crate) fn global_node_rect(world: &World, entity: Entity) -> Option<Rect> {
     let size = world.get::<ComputedNode>(entity)?.size();
     if size.x <= 0.0 || size.y <= 0.0 {
         return None;
     }
     let centre = world.get::<UiGlobalTransform>(entity)?.translation;
-    let origin = parent_offset_box(world, entity).min;
-    Some(Rect::from_corners(
-        centre - size / 2.0 - origin,
-        centre + size / 2.0 - origin,
-    ))
+    Some(Rect::from_corners(centre - size / 2.0, centre + size / 2.0))
 }
 
 /// The box a child's `left`/`top` are measured from, the parent's
@@ -1616,7 +1623,7 @@ fn authored_rect(world: &World, entity: Entity) -> Option<Rect> {
 /// past the edge it aimed at and make a promoted flex child jump.
 ///
 /// A node with no parent is measured from the canvas itself.
-fn parent_offset_box(world: &World, entity: Entity) -> Rect {
+pub(crate) fn parent_offset_box(world: &World, entity: Entity) -> Rect {
     let Some(parent) = world.get::<ChildOf>(entity).map(ChildOf::parent) else {
         return Rect::from_corners(Vec2::ZERO, Vec2::ZERO);
     };
