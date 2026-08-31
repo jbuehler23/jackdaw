@@ -1,15 +1,19 @@
+use bevy::feathers::controls::{FeathersMenuItem, FeathersMenuPopup};
+use bevy::feathers::theme::ThemedText;
 use bevy::prelude::*;
+use bevy::ui_widgets::Activate;
 use lucide_icons::Icon;
 
 use crate::button::{
     ButtonClickEvent, ButtonProps, ButtonSize, ButtonVariant, IconButtonProps, button, icon_button,
+    spawn_inert_checkbox,
 };
-use crate::popover::{EditorPopover, PopoverPlacement, PopoverProps, popover};
+use crate::popover::{EditorPopover, PopoverPlacement, PopoverProps, popover_shell};
 use crate::utils::is_descendant_of;
 
 pub fn plugin(app: &mut App) {
     app.add_observer(handle_trigger_click)
-        .add_observer(handle_option_click)
+        .add_observer(handle_option_activate)
         .add_systems(
             Update,
             (
@@ -332,49 +336,59 @@ fn handle_trigger_click(
         *variant = ButtonVariant::ActiveAlt;
     }
 
-    // Create popover with options
+    // The list is a feathers menu popup of menu items; the editor's
+    // popover shell is what places it against the trigger and what
+    // dismisses it on a click outside.
     let popover_entity = commands
-        .spawn((
+        .spawn_scene(bsn! { @FeathersMenuPopup })
+        .insert((
             ComboBoxPopover(combobox_entity),
-            popover(
-                PopoverProps::new(trigger.entity)
+            popover_shell(
+                &PopoverProps::new(trigger.entity)
                     .with_placement(PopoverPlacement::BottomStart)
-                    .with_padding(4.0)
-                    .with_z_index(200)
-                    .with_node(Node {
-                        min_width: px(120.0),
-                        ..default()
-                    }),
+                    .with_z_index(200),
             ),
+            Node {
+                position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Column,
+                min_width: px(120.0),
+                padding: UiRect::axes(px(0.0), px(4.0)),
+                border: UiRect::all(px(1.0)),
+                ..default()
+            },
         ))
         .id();
 
     state.popover = Some(popover_entity);
 
     for (index, option) in config.options.iter().enumerate() {
-        let variant = if config.highlight_selected && index == config.selected {
-            ButtonVariant::Active
-        } else {
-            ButtonVariant::Ghost
-        };
+        let label = option.label.clone();
+        let row = commands
+            .spawn_scene(bsn! {
+                @FeathersMenuItem {
+                    @caption: bsn! { Text({label}) ThemedText },
+                }
+            })
+            .insert((
+                ComboBoxOption {
+                    combobox: combobox_entity,
+                    index,
+                    label: option.label.clone(),
+                    value: option.value.clone(),
+                },
+                ChildOf(popover_entity),
+            ))
+            .id();
 
-        let mut button_props = ButtonProps::new(&option.label)
-            .with_variant(variant)
-            .align_left();
-
-        if let Some(icon) = option.icon {
-            button_props = button_props.with_left_icon(icon);
+        // The picked option's row shows a ticked box, which is the only
+        // state a feathers menu item has for "this is the one".
+        if config.highlight_selected && index == config.selected {
+            commands.queue(move |world: &mut World| {
+                if world.get_entity(row).is_ok() {
+                    spawn_inert_checkbox(world, row, true);
+                }
+            });
         }
-
-        commands.entity(popover_entity).with_child((
-            ComboBoxOption {
-                combobox: combobox_entity,
-                index,
-                label: option.label.clone(),
-                value: option.value.clone(),
-            },
-            button(button_props),
-        ));
     }
 }
 
@@ -413,8 +427,8 @@ fn handle_combobox_popover_closed(
     }
 }
 
-fn handle_option_click(
-    trigger: On<ButtonClickEvent>,
+fn handle_option_activate(
+    trigger: On<Activate>,
     mut commands: Commands,
     options: Query<&ComboBoxOption>,
     mut configs: Query<&mut ComboBoxConfig>,

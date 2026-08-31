@@ -173,36 +173,43 @@ impl PopoverProps {
     }
 }
 
-pub fn popover(props: PopoverProps) -> impl Bundle {
-    let PopoverProps {
-        placement,
-        anchor,
-        node,
-        padding,
-        gap,
-        z_index,
-        position,
-    } = props;
-
-    let base_node = node.unwrap_or_default();
-
+/// The behaviour a popover needs and none of its looks: where it is
+/// placed, how it is dismissed and what it stacks above. Spawn this
+/// alongside a widget's own scene when the frame is the widget's;
+/// [`popover`] is this plus the editor's own frame.
+pub fn popover_shell(props: &PopoverProps) -> impl Bundle + use<> {
     (
         EditorPopover,
         PopoverAnchor {
-            entity: anchor,
-            position,
+            entity: props.anchor,
+            position: props.position,
         },
         PopoverLayoutReady::default(),
         Popover {
-            positions: placement.positions(),
+            positions: props.placement.positions(),
             window_margin: WINDOW_MARGIN,
         },
         // The popover is a child of what it points at, so it is inside
         // whatever clips and stacks that: the override and the z index
         // are what lift it back out.
         OverrideClip,
-        placement,
+        props.placement,
         Hovered::default(),
+        Visibility::Hidden,
+        GlobalZIndex(props.z_index),
+    )
+}
+
+pub fn popover(props: PopoverProps) -> impl Bundle {
+    let shell = popover_shell(&props);
+    let PopoverProps {
+        node, padding, gap, ..
+    } = props;
+
+    let base_node = node.unwrap_or_default();
+
+    (
+        shell,
         Interaction::None,
         Node {
             position_type: PositionType::Absolute,
@@ -213,10 +220,8 @@ pub fn popover(props: PopoverProps) -> impl Bundle {
             flex_direction: FlexDirection::Column,
             ..base_node
         },
-        Visibility::Hidden,
         BackgroundColor(BACKGROUND_COLOR.into()),
         BorderColor::all(BORDER_COLOR),
-        GlobalZIndex(z_index),
     )
 }
 
