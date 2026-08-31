@@ -25,6 +25,12 @@ mod util;
 /// stage the panel lays out, so every conversion factor is an exact 2.
 const REFERENCE: UVec2 = UVec2::new(2400, 1200);
 
+/// Run one clause the way a chord runs it.
+///
+/// `creates_history_entry`, which a scripted call leaves off, is what makes
+/// the dispatcher open a snapshot span: an operator that records its own entry
+/// and one that leaves the entry to the snapshot are only told apart under a
+/// press, and this suite counts entries.
 #[track_caller]
 fn run_finished(app: &mut App, clause: &str) {
     let result = run_op_clause(app.world_mut(), clause)
@@ -315,4 +321,111 @@ fn grouping_refuses_outside_a_ui_scene() {
             "{id} should refuse with no UI scene open"
         );
     }
+}
+
+/// A container holds whatever a widget definition put inside it, not only
+/// laid-out nodes. Ungroup used to move the nodes and leave the rest to be
+/// despawned with the container, which lost them, and with a childless
+/// snapshot undo had nothing to put back.
+#[test]
+fn ungroup_carries_out_a_child_that_is_not_a_node() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (root, first, second) = authored_scene(&mut app);
+    select_both(&mut app, [first, second]);
+    run_finished(&mut app, "ui.group_into");
+    let container = named(&mut app, "Group").expect("the group container");
+
+    // A plain marker-component child, of the kind a widget's own parts are.
+    let marker = app
+        .world_mut()
+        .spawn((Name::new("Marker"), ChildOf(container)))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), marker);
+    settle(&mut app);
+
+    jackdaw::selection::select_only(app.world_mut(), container);
+    settle(&mut app);
+    run_finished(&mut app, "ui.ungroup");
+
+    assert!(
+        app.world().get_entity(marker).is_ok(),
+        "the child with no Node was despawned with the container"
+    );
+    assert_eq!(
+        app.world().get::<ChildOf>(marker).map(ChildOf::parent),
+        Some(root),
+        "it came out into the container's own parent, like the nodes did"
+    );
+    assert_eq!(
+        app.world()
+            .get::<Name>(first)
+            .map(|n| n.as_str().to_owned()),
+        Some("First".to_string()),
+        "the laid-out children came out too"
+    );
+
+    run_finished(&mut app, "history.undo");
+    let restored = named(&mut app, "Group").expect("undo put the container back");
+    assert_eq!(
+        app.world().get::<ChildOf>(marker).map(ChildOf::parent),
+        Some(restored),
+        "undo put the non-node child back inside the container"
+    );
+    let inside: Vec<Entity> = app
+        .world()
+        .get::<Children>(restored)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    assert_eq!(
+        inside.len(),
+        3,
+        "undo restored exactly what was inside, with nothing doubled"
+    );
+}
+
+/// The scene's own root is what the canvas draws, what a paste falls back to
+/// and what the outliner hangs the scene off. Ctrl+Shift+G on it used to
+/// delete it and leave the editor with a scene it could not draw.
+#[test]
+fn neither_operator_touches_the_scene_root() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (root, _, _) = authored_scene(&mut app);
+    jackdaw::selection::select_only(app.world_mut(), root);
+    settle(&mut app);
+
+    for id in ["ui.group_into", "ui.ungroup"] {
+        assert!(
+            !app.world_mut()
+                .operator(id)
+                .is_available()
+                .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}")),
+            "{id} must refuse while the scene root is the selection"
+        );
+    }
+
+    // And the world functions refuse too, so a caller reaching past the
+    // availability gate gets a refusal rather than a broken document.
+    let depth = undo_depth(&app);
+    jackdaw::ui_grouping::ungroup_selection(app.world_mut());
+    settle(&mut app);
+    assert!(
+        app.world().get_entity(root).is_ok(),
+        "ungroup deleted the scene root"
+    );
+    jackdaw::ui_grouping::group_selection(app.world_mut());
+    settle(&mut app);
+    assert_eq!(
+        app.world().get::<ChildOf>(root).map(ChildOf::parent),
+        None,
+        "group buried the scene root under a container"
+    );
+    assert_eq!(undo_depth(&app), depth, "neither refusal recorded an entry");
+    assert!(
+        app.world()
+            .resource::<jackdaw::status_bar::StatusNotice>()
+            .is_active(),
+        "a refusal says so in the status bar"
+    );
 }

@@ -23,6 +23,22 @@ use crate::{
 /// What a new container is called before the namer makes the name free.
 const GROUP_NAME: &str = "Group";
 
+/// Whether `entity` is a scene's own root rather than a node inside one.
+///
+/// A scene root is the document's anchor: the 2D stage keys on it, the paste
+/// and add paths resolve it as the fallback parent, and the outliner hangs
+/// the scene off it. Grouping it would bury it under a container, and
+/// ungrouping it would delete it and leave the editor with an open scene it
+/// cannot draw, so both refuse.
+fn is_scene_root(world: &World, entity: Entity) -> bool {
+    world
+        .get::<jackdaw_scene_types::UiSceneRoot>(entity)
+        .is_some()
+        || world
+            .get::<jackdaw_scene_types::Scene2dRoot>(entity)
+            .is_some()
+}
+
 /// Selected nodes that a group can act on: authored, laid out, and under one
 /// parent, in the order the parent holds them.
 ///
@@ -86,13 +102,25 @@ fn offsets_against(world: &World, entity: Entity, origin: Vec2) -> Option<Vec2> 
     Some(global_node_rect(world, entity)?.min - origin)
 }
 
-/// A single entity's components, without its children, so undo can put a
-/// container back with whatever else was on it.
-fn snapshot_one(world: &World, entity: Entity) -> DynamicWorld {
+/// `entity` and everything still under it, so undo can put a container back
+/// with whatever else was on it and whatever was left inside it.
+///
+/// Taken after the children have been lifted out, so what it holds is what
+/// the despawn is about to take away and undo does not resurrect a second
+/// copy of a child that is now living outside.
+fn snapshot_subtree(world: &World, entity: Entity) -> DynamicWorld {
+    let mut subtree = vec![entity];
+    let mut index = 0;
+    while index < subtree.len() {
+        if let Some(children) = world.get::<Children>(subtree[index]) {
+            subtree.extend(children.iter());
+        }
+        index += 1;
+    }
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
     filtered_scene_builder(world, &registry)
-        .extract_entities([entity].into_iter())
+        .extract_entities(subtree.into_iter())
         .build()
 }
 
@@ -198,45 +226,65 @@ impl EditorCommand for GroupIntoContainer {
     }
 }
 
+/// One child on its way out of a container.
+///
+/// `layout` is `None` for a child that carries no `Node`: a marker component,
+/// an authored data entity, anything a widget definition put inside. It has no
+/// rect to re-express, so it is moved as it is. It still moves, because a
+/// child left behind is despawned with the container and no snapshot of a
+/// childless container could bring it back.
+#[derive(Clone)]
+struct UngroupChild {
+    entity: Entity,
+    /// The child's `Node` inside the container and outside it, when it has one.
+    layout: Option<(Node, Node)>,
+}
+
 /// Lift a container's children out and take the container away.
 struct UngroupContainer {
     container: Entity,
     parent: Option<Entity>,
     index: usize,
-    /// The container's own components, so undo puts back what was there and
-    /// not merely a node of the same shape.
-    snapshot: DynamicWorld,
-    /// Each child, its `Node` inside the container, and its `Node` outside.
-    children: Vec<(Entity, Node, Node)>,
+    /// The container and whatever is still under it once the children are out,
+    /// so undo puts back what was there and not merely a node of the same
+    /// shape. Taken during `execute`, since what is left is only known then.
+    snapshot: Option<DynamicWorld>,
+    children: Vec<UngroupChild>,
     label: String,
 }
 
 impl EditorCommand for UngroupContainer {
     fn execute(&mut self, world: &mut World) {
-        for (offset, (child, _, outside)) in self.children.clone().into_iter().enumerate() {
+        for (offset, child) in self.children.clone().into_iter().enumerate() {
             set_hierarchy_location(
                 world,
-                child,
+                child.entity,
                 HierarchyLocation {
                     parent: self.parent,
                     index: self.index + offset,
                 },
             );
-            write_node(world, child, &outside);
+            if let Some((_, outside)) = &child.layout {
+                write_node(world, child.entity, outside);
+            }
         }
+        self.snapshot = Some(snapshot_subtree(world, self.container));
         crate::commands::deselect_entities(world, &[self.container]);
         despawn_scene_entity(world, self.container);
         crate::hierarchy::sync_outliner_row_order(world, self.parent);
-        let members: Vec<Entity> = self.children.iter().map(|(child, _, _)| *child).collect();
+        let members: Vec<Entity> = self.children.iter().map(|child| child.entity).collect();
         select_many(world, &members);
     }
 
     fn undo(&mut self, world: &mut World) {
-        self.container = restore_one(world, &self.snapshot, self.container);
+        let Some(snapshot) = self.snapshot.take() else {
+            return;
+        };
+        self.container = restore_one(world, &snapshot, self.container);
         if let Some(parent) = self.parent {
             world.entity_mut(self.container).insert(ChildOf(parent));
         }
-        crate::scene_io::register_entity_in_ast(world, self.container);
+        crate::ui_palette::register_authored_subtree(world, self.container);
         set_hierarchy_location(
             world,
             self.container,
@@ -245,16 +293,18 @@ impl EditorCommand for UngroupContainer {
                 index: self.index,
             },
         );
-        for (index, (child, inside, _)) in self.children.clone().into_iter().enumerate() {
+        for (index, child) in self.children.clone().into_iter().enumerate() {
             set_hierarchy_location(
                 world,
-                child,
+                child.entity,
                 HierarchyLocation {
                     parent: Some(self.container),
                     index,
                 },
             );
-            write_node(world, child, &inside);
+            if let Some((inside, _)) = &child.layout {
+                write_node(world, child.entity, inside);
+            }
         }
         crate::hierarchy::sync_outliner_row_order(world, self.parent);
     }
@@ -265,7 +315,15 @@ impl EditorCommand for UngroupContainer {
 }
 
 /// Wrap the selection in a container at its bounding rect.
-pub(crate) fn group_selection(world: &mut World) {
+pub fn group_selection(world: &mut World) {
+    let selected: Vec<Entity> = world.resource::<Selection>().entities.clone();
+    if selected.iter().any(|&entity| is_scene_root(world, entity)) {
+        crate::status_bar::notify_error(
+            world,
+            "a scene's own root cannot be grouped; select the nodes inside it",
+        );
+        return;
+    }
     let Some((parent, members)) = group_members(world) else {
         return;
     };
@@ -345,7 +403,7 @@ pub(crate) fn group_selection(world: &mut World) {
 }
 
 /// Lift the selected container's children into its place and remove it.
-pub(crate) fn ungroup_selection(world: &mut World) {
+pub fn ungroup_selection(world: &mut World) {
     let Some(container) = world.resource::<Selection>().primary() else {
         return;
     };
@@ -356,6 +414,13 @@ pub(crate) fn ungroup_selection(world: &mut World) {
             .ast_for(container)
             .is_none()
     {
+        return;
+    }
+    if is_scene_root(world, container) {
+        crate::status_bar::notify_error(
+            world,
+            "a scene's own root cannot be ungrouped; select a container inside it",
+        );
         return;
     }
     let children: Vec<Entity> = world
@@ -369,20 +434,25 @@ pub(crate) fn ungroup_selection(world: &mut World) {
 
     let location = HierarchyLocation::from_world(world, container);
     let origin = parent_offset_box(world, container).min;
-    let moves: Vec<(Entity, Node, Node)> = children
+    let moves: Vec<UngroupChild> = children
         .iter()
-        .filter_map(|&child| {
-            let inside = world.get::<Node>(child).cloned()?;
-            let mut outside = inside.clone();
-            if outside.position_type == PositionType::Absolute
-                && let Some(offset) = offsets_against(world, child, origin)
-            {
-                outside.left = px(offset.x);
-                outside.top = px(offset.y);
-                outside.right = Val::Auto;
-                outside.bottom = Val::Auto;
+        .map(|&child| {
+            let layout = world.get::<Node>(child).cloned().map(|inside| {
+                let mut outside = inside.clone();
+                if outside.position_type == PositionType::Absolute
+                    && let Some(offset) = offsets_against(world, child, origin)
+                {
+                    outside.left = px(offset.x);
+                    outside.top = px(offset.y);
+                    outside.right = Val::Auto;
+                    outside.bottom = Val::Auto;
+                }
+                (inside, outside)
+            });
+            UngroupChild {
+                entity: child,
+                layout,
             }
-            Some((child, inside, outside))
         })
         .collect();
 
@@ -390,7 +460,7 @@ pub(crate) fn ungroup_selection(world: &mut World) {
         container,
         parent: location.parent,
         index: location.index,
-        snapshot: snapshot_one(world, container),
+        snapshot: None,
         children: moves,
         label: "Ungroup container".to_string(),
     };
@@ -411,15 +481,26 @@ fn select_many(world: &mut World, entities: &[Entity]) {
     state.apply(world);
 }
 
-/// A group needs an open UI scene and at least one authored node selected.
+/// Entities a scene hangs off: neither operator touches one.
+type SceneRoots = Or<(
+    With<jackdaw_scene_types::UiSceneRoot>,
+    With<jackdaw_scene_types::Scene2dRoot>,
+)>;
+
+/// A group needs an open UI scene and at least one authored node selected
+/// that is not a scene's own root.
 fn can_group(
     keybind_focus: crate::keybind_focus::KeybindFocus,
     active: ActiveModalQuery,
     selection: Res<Selection>,
     ui_scenes: Query<(), crate::prefab::AuthoredUiSceneRoot>,
     nodes: Query<(), (With<Node>, Without<EditorEntity>)>,
+    roots: Query<(), SceneRoots>,
 ) -> bool {
     if keybind_focus.is_typing() || active.is_modal_running() || ui_scenes.is_empty() {
+        return false;
+    }
+    if selection.entities.iter().any(|&e| roots.contains(e)) {
         return false;
     }
     selection
@@ -428,21 +509,28 @@ fn can_group(
         .any(|&entity| nodes.contains(entity))
 }
 
-/// Ungrouping needs the selection to be a node with children.
+/// Ungrouping needs the selection to be a node with children, and not a
+/// scene's own root.
 fn can_ungroup(
     keybind_focus: crate::keybind_focus::KeybindFocus,
     active: ActiveModalQuery,
     selection: Res<Selection>,
     ui_scenes: Query<(), crate::prefab::AuthoredUiSceneRoot>,
     containers: Query<&Children, (With<Node>, Without<EditorEntity>)>,
+    roots: Query<(), SceneRoots>,
 ) -> bool {
     if keybind_focus.is_typing() || active.is_modal_running() || ui_scenes.is_empty() {
         return false;
     }
-    selection
-        .primary()
-        .and_then(|entity| containers.get(entity).ok())
-        .is_some_and(|children| !children.is_empty())
+    let Some(primary) = selection.primary() else {
+        return false;
+    };
+    if roots.contains(primary) {
+        return false;
+    }
+    containers
+        .get(primary)
+        .is_ok_and(|children| !children.is_empty())
 }
 
 #[operator(
