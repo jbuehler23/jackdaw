@@ -40,10 +40,48 @@ impl Plugin for ViewportSelectPlugin {
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BoxSelectOp>()
         .register_operator::<SelectionClearOp>();
+    ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SelectionClearOp>([
+        jackdaw_api_internal::keymap::PresetInput::key("Escape"),
+    ]);
 }
 
-fn has_selection(selection: Res<Selection>) -> bool {
-    !selection.entities.is_empty()
+/// Whether Escape means "drop the selection" right now.
+///
+/// Escape is the universal back-out, so nearly everything on screen has a
+/// prior claim on it: a modal operator cancels, a dialog closes, an open
+/// menu or radial menu closes, a running gesture on the canvas or in a
+/// viewport is abandoned, and a keybind being recorded stops recording.
+/// Only with none of those in flight, and something actually selected,
+/// does the press reach this far.
+///
+/// The gestures are asked of their own state rather than of the pointer:
+/// a drag is in flight for as long as its resource holds nodes, whatever
+/// the pointer is doing meanwhile.
+fn escape_is_free(
+    selection: Res<Selection>,
+    guards: InteractionGuards,
+    ui_gesture: Res<crate::ui_stage::UiManipulation>,
+    guide_gesture: Res<crate::ui_stage::GuideManipulation>,
+    box_select: Res<BoxSelectState>,
+    menu_bar: Res<jackdaw_widgets::menu_bar::MenuBarState>,
+    context_menu: Res<jackdaw_widgets::context_menu::ContextMenuState>,
+    radial: Res<jackdaw_widgets::RadialMenuState>,
+    recording: Res<crate::keybind_settings::KeybindRecordingState>,
+) -> bool {
+    if selection.entities.is_empty() || guards.is_any_interaction_active() {
+        return false;
+    }
+    if ui_gesture.is_running() || guide_gesture.position().is_some() || box_select.active {
+        return false;
+    }
+    if menu_bar.open_menu.is_some()
+        || context_menu.menu_entity.is_some()
+        || radial.open.is_some()
+        || recording.is_recording()
+    {
+        return false;
+    }
+    true
 }
 
 /// Deselect everything, for callers that need the empty-selection state without
@@ -52,7 +90,7 @@ fn has_selection(selection: Res<Selection>) -> bool {
     id = "selection.clear",
     label = "Deselect All",
     description = "Clear the current selection.",
-    is_available = has_selection,
+    is_available = escape_is_free,
     allows_undo = false,
 )]
 pub(crate) fn selection_clear(

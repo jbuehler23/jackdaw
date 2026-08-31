@@ -2354,7 +2354,38 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.bind_operator::<CoreExtensionInputContext, CanvasGuidesOp>([
         PresetInput::key("KeyG").shift()
     ]);
+    // Home frames the canvas, the way it jumps the playhead in the
+    // timeline: `viewport_2d_is_current` is what keeps the two apart.
+    ctx.bind_operator::<CoreExtensionInputContext, Viewport2dFrameOp>([PresetInput::key("Home")]);
+
     crate::screenshot::add_2d_to_extension(ctx);
+}
+
+/// True while the 2D viewport is the panel the keys belong to: its tab is
+/// the active one in some dock leaf, or the cursor is over one of its
+/// stages.
+///
+/// Home is the framing key in the 2D viewport and the jump-to-start key
+/// in the timeline. Both stay bound; this is the half that says the
+/// canvas is what the user is looking at, so the two never answer the
+/// same press.
+///
+/// Hover as well as the active tab, because a floating or side-by-side
+/// canvas can be under the cursor without being the focused tab, and that
+/// is still the panel the user means.
+fn viewport_2d_is_current(
+    hosts: Query<&Viewport2dPanelHost>,
+    hover_map: Res<HoverMap>,
+    parents: Query<&ChildOf>,
+    tree: Res<jackdaw_panels::tree::DockTree>,
+) -> bool {
+    hosts
+        .iter()
+        .any(|host| entity_is_hovered(host.area, &hover_map, &parents))
+        || crate::transform_ops::active_tab_kind_present(
+            &tree,
+            crate::viewport::VIEWPORT_2D_WINDOW_ID,
+        )
 }
 
 /// Frame the UI scene in the 2D viewport: zoom and pan so the whole
@@ -2369,7 +2400,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     id = "viewport2d.frame",
     label = "Fit 2D View",
     description = "Zoom the 2D viewport so the whole UI scene is in view.",
-    allows_undo = false
+    allows_undo = false,
+    is_available = viewport_2d_is_current
 )]
 pub(crate) fn viewport_2d_frame(
     _params: In<OperatorParameters>,

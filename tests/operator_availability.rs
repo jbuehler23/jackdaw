@@ -239,3 +239,77 @@ fn the_clipboard_chord_finds_nothing_to_run_outside_the_timeline() {
     }
 }
 
+/// Escape only reaches the selection when nothing nearer wants it.
+#[test]
+fn escape_clears_the_selection_only_when_nothing_else_claims_it() {
+    let mut app = util::editor_test_app();
+    assert!(
+        !app.world_mut()
+            .operator("selection.clear")
+            .is_available()
+            .expect("selection.clear resolves"),
+        "with nothing selected there is nothing for Escape to clear"
+    );
+
+    let entity = app.world_mut().spawn(bevy::prelude::Name::new("Kept")).id();
+    app.world_mut().resource_mut::<Selection>().entities = vec![entity];
+    app.world_mut().entity_mut(entity).insert(Selected);
+    assert!(
+        app.world_mut()
+            .operator("selection.clear")
+            .is_available()
+            .expect("selection.clear resolves"),
+        "a selection and no other claim is the case Escape is for"
+    );
+
+    // An open menu is nearer: Escape closes it, and the selection stays.
+    let menu = app.world_mut().spawn_empty().id();
+    app.world_mut()
+        .resource_mut::<jackdaw_widgets::menu_bar::MenuBarState>()
+        .open_menu = Some(menu);
+    assert!(
+        !app.world_mut()
+            .operator("selection.clear")
+            .is_available()
+            .expect("selection.clear resolves"),
+        "an open menu has the prior claim on Escape"
+    );
+}
+
+/// Home frames the canvas, and only while the canvas is what the user is
+/// looking at: elsewhere the press belongs to the timeline's jump to
+/// start, which shares the key.
+#[test]
+fn home_frames_the_canvas_only_while_a_2d_panel_is_current() {
+    let mut app = util::editor_test_app();
+    assert!(
+        !app.world_mut()
+            .operator("viewport2d.frame")
+            .is_available()
+            .expect("viewport2d.frame resolves"),
+        "no 2D panel is open, so Home is not the canvas's"
+    );
+
+    let parent = app
+        .world_mut()
+        .spawn((jackdaw::EditorEntity, bevy::prelude::Node::default()))
+        .id();
+    jackdaw::viewport_2d::build_viewport_2d_panel(app.world_mut(), parent);
+    let mut tree = jackdaw_panels::tree::DockTree::new();
+    let leaf = tree.insert(jackdaw_panels::tree::DockNode::Leaf(
+        jackdaw_panels::tree::DockLeaf::new("root", jackdaw_panels::area::DockAreaStyle::TabBar)
+            .with_windows(vec![jackdaw::viewport::VIEWPORT_2D_WINDOW_ID.into()]),
+    ));
+    tree.root = Some(leaf);
+    *app.world_mut()
+        .resource_mut::<jackdaw_panels::tree::DockTree>() = tree;
+    app.update();
+
+    assert!(
+        app.world_mut()
+            .operator("viewport2d.frame")
+            .is_available()
+            .expect("viewport2d.frame resolves"),
+        "the 2D panel's tab is the active one, so Home frames it"
+    );
+}

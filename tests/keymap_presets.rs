@@ -191,3 +191,22 @@ fn ctrl_a_is_a_preset_entry_for_the_add_entity_picker() {
     );
 }
 
+/// The two keys every other tool gives a viewport: Home frames what is in
+/// it, Escape drops the selection. Both are preset entries.
+#[test]
+fn home_and_escape_are_preset_entries() {
+    let mut app = util::headless_app();
+    let defaults = classic(&mut app);
+
+    assert!(
+        operators_on(&defaults, &PresetInput::key("Home"))
+            .contains(&"viewport2d.frame".to_string()),
+        "Home frames the canvas",
+    );
+    assert!(
+        operators_on(&defaults, &PresetInput::key("Escape"))
+            .contains(&"selection.clear".to_string()),
+        "Escape drops the selection",
+    );
+}
+

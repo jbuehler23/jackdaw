@@ -48,10 +48,19 @@ struct PendingKeybindChanges(HashMap<EditorAction, Vec<Keybind>>);
 
 /// Tracks which action/binding is being re-recorded.
 #[derive(Resource, Default)]
-struct KeybindRecordingState {
+pub(crate) struct KeybindRecordingState {
     target: Option<(EditorAction, usize)>,
     /// When set, a conflict was detected and we're waiting for the user to confirm.
     conflict: Option<PendingConflict>,
+}
+
+impl KeybindRecordingState {
+    /// Whether the dialog is waiting for the user to press the chord it
+    /// is about to record. Every other keyboard claim stands down while
+    /// it is, so the press reaches the recorder.
+    pub(crate) fn is_recording(&self) -> bool {
+        self.target.is_some()
+    }
 }
 
 struct PendingConflict {
