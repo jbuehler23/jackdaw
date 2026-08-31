@@ -396,3 +396,84 @@ fn resetting_a_rebound_row_leaves_nothing_in_the_file() {
     pending.reset_all();
     assert_eq!(pending.to_user_keymap(), UserKeymap::default());
 }
+
+/// An operator with no input action behind it has nothing for a chord
+/// to attach to, so the dialog says so instead of offering a rebind the
+/// applier would then refuse.
+#[test]
+fn a_menu_only_operator_is_listed_but_not_offered_a_chord() {
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+    let pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
+
+    let menu_only = pending
+        .rows
+        .iter()
+        .find(|row| row.operator == "app.open_keybinds")
+        .expect("opening the keybind dialog is an operator");
+    assert!(
+        !menu_only.bindable,
+        "an operator reached only from a menu has no action to bind"
+    );
+    assert!(!menu_only.is_editable());
+
+    let editable = pending
+        .rows
+        .iter()
+        .find(|row| row.operator == REBOUND)
+        .expect("undo is an operator");
+    assert!(editable.bindable && editable.is_editable());
+
+    // Every row the dialog offers a rebind on must be one the applier can
+    // actually bind, or the dialog would be writing a file that does
+    // nothing.
+    let world = app.world_mut();
+    let with_action: std::collections::HashSet<String> = world
+        .query::<&jackdaw_api_internal::lifecycle::OperatorAction>()
+        .iter(world)
+        .map(|action| action.0.to_string())
+        .collect();
+    for row in pending.rows.iter().filter(|row| row.is_editable()) {
+        assert!(
+            with_action.contains(&row.operator),
+            "{} is offered a rebind but has no action to bind",
+            row.operator
+        );
+    }
+}
+
+/// The rows the dialog cannot edit are listed together under one
+/// heading each. Grouping them by the operator's own name instead would
+/// scatter them through the list and repeat their heading at each one.
+#[test]
+fn the_fixed_rows_are_one_run_of_the_list() {
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+    let pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
+
+    let fixed_positions: Vec<usize> = pending
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.category == "Fixed")
+        .map(|(index, _)| index)
+        .collect();
+    assert!(
+        fixed_positions.len() > 1,
+        "the editor has more than one raw-bound operator"
+    );
+    assert_eq!(
+        fixed_positions.last().unwrap() - fixed_positions.first().unwrap() + 1,
+        fixed_positions.len(),
+        "the fixed rows must be contiguous, not scattered through the list"
+    );
+    for row in &pending.rows {
+        assert_eq!(
+            row.is_editable(),
+            row.category != "Fixed" && row.category != "Menu only",
+            "a row's heading and whether it can be edited must agree"
+        );
+    }
+}

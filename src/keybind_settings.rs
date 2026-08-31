@@ -8,11 +8,15 @@
 //! re-applies the result, so a rebind takes effect in the session that
 //! made it rather than at the next launch.
 //!
-//! Two kinds of row are not editable here. A *fixed* row is an operator
-//! whose chord is attached at a raw binding site rather than through the
-//! keymap (hold-repeat nudges, the draw-brush modal's own keys); the
-//! dialog shows those so the chord is not invisible, and cannot change
-//! them. The camera rows are the last users of the legacy
+//! Three kinds of row are not editable here. A *fixed* row is an
+//! operator whose chord is attached at a raw binding site rather than
+//! through the keymap (hold-repeat nudges, the draw-brush modal's own
+//! keys); the dialog shows those so the chord is not invisible, and
+//! cannot change them. A *menu only* row is an operator with no input
+//! action behind it at all: it was registered to be reached from a menu,
+//! a button or the command palette, and there is nothing for a chord to
+//! attach to, so the dialog says so rather than offering a rebind that
+//! would go nowhere. The camera rows are the last users of the legacy
 //! [`KeybindRegistry`], which drives camera fly directly; they keep
 //! their old behaviour, including their own file.
 
@@ -312,6 +316,12 @@ pub const UNBOUND_OPERATORS: &[&str] = &[
     "window.screenshot",
 ];
 
+/// Heading for the rows whose chord is attached outside the keymap.
+const FIXED: &str = "Fixed";
+
+/// Heading for the rows with no input action to attach a chord to.
+const MENU_ONLY: &str = "Menu only";
+
 /// The camera-fly actions, the last commands still driven by the legacy
 /// [`KeybindRegistry`] rather than by an operator.
 const CAMERA_ACTIONS: &[EditorAction] = &[
@@ -330,17 +340,23 @@ pub struct KeybindRow {
     pub operator: String,
     pub label: String,
     pub description: String,
-    /// The part of the operator id before the first dot, capitalised.
+    /// Where the dialog lists this row: the part of the operator id
+    /// before the first dot, capitalised, or `"Fixed"` for a row whose
+    /// chord the dialog cannot change.
     pub category: String,
     /// Chords bound at a raw site rather than through the keymap. An
     /// operator with any of these is a fixed row.
     pub fixed: Vec<String>,
+    /// Whether the operator has an input action for a chord to attach
+    /// to. False for the operators that are only ever reached from a
+    /// menu, a button or the command palette.
+    pub bindable: bool,
 }
 
 impl KeybindRow {
     /// Whether this row's chords can be changed here.
     pub fn is_editable(&self) -> bool {
-        self.fixed.is_empty()
+        self.bindable && self.fixed.is_empty()
     }
 }
 
@@ -596,15 +612,39 @@ fn collect_rows(world: &mut World) -> Vec<KeybindRow> {
         }
     }
 
+    // An operator with no action entity has nothing for a binding to
+    // point at, so the applier cannot give it a chord however the keymap
+    // is written.
+    let with_action: std::collections::HashSet<String> = world
+        .query::<&OperatorAction>()
+        .iter(world)
+        .map(|action| action.0.to_string())
+        .collect();
+
     let mut rows: Vec<KeybindRow> = world
         .query::<&OperatorEntity>()
         .iter(world)
-        .map(|op| KeybindRow {
-            operator: op.id().to_string(),
-            label: op.label().to_string(),
-            description: op.description().to_string(),
-            category: category_of(op.id()),
-            fixed: fixed.get(op.id()).cloned().unwrap_or_default(),
+        .map(|op| {
+            let raw = fixed.get(op.id()).cloned().unwrap_or_default();
+            let bindable = with_action.contains(op.id());
+            KeybindRow {
+                operator: op.id().to_string(),
+                label: op.label().to_string(),
+                description: op.description().to_string(),
+                // Grouping by where the row is listed rather than by what
+                // the operator is called keeps the rows the dialog cannot
+                // edit together; grouping by the id's head scatters them
+                // through the list and repeats their header at every one.
+                category: if !bindable {
+                    MENU_ONLY.to_string()
+                } else if raw.is_empty() {
+                    category_of(op.id())
+                } else {
+                    FIXED.to_string()
+                },
+                fixed: raw,
+                bindable,
+            }
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -706,7 +746,7 @@ pub fn advisory_text(pending: &PendingKeymapChanges, skipped: &[String]) -> Stri
     }
     if !skipped.is_empty() {
         parts.push(format!(
-            "{} saved bindings name a command this build does not have and were left alone: {}",
+            "{} saved bindings could not be attached to a command and were left alone: {}",
             skipped.len(),
             skipped.join(", ")
         ));
@@ -894,18 +934,14 @@ fn populate_keybind_dialog(
 
         let mut current_category = String::new();
         for row in &pending.rows {
-            let category = if row.is_editable() {
-                row.category.clone()
-            } else {
-                "Fixed".to_string()
-            };
+            let category = row.category.clone();
             if category != current_category {
                 current_category = category.clone();
                 let header = spawn_category_header(&mut commands, &category);
                 commands.entity(scroll).add_child(header);
             }
 
-            let chords = if row.is_editable() {
+            let chords = if row.bindable && row.fixed.is_empty() {
                 pending.chords_of(&row.operator)
             } else {
                 row.fixed.clone()
@@ -965,7 +1001,7 @@ fn populate_keybind_dialog(
             } else {
                 let note = commands
                     .spawn((
-                        Text::new("Fixed".to_string()),
+                        Text::new(row.category.clone()),
                         TextFont {
                             font_size: tokens::TEXT_SIZE_SM,
                             ..Default::default()
@@ -1780,6 +1816,7 @@ mod tests {
                     description: String::new(),
                     category: "History".into(),
                     fixed: Vec::new(),
+                    bindable: true,
                 },
                 KeybindRow {
                     operator: "history.redo".into(),
@@ -1787,6 +1824,7 @@ mod tests {
                     description: String::new(),
                     category: "History".into(),
                     fixed: Vec::new(),
+                    bindable: true,
                 },
             ],
             bindings: defaults.clone(),
