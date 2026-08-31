@@ -429,3 +429,180 @@ fn neither_operator_touches_the_scene_root() {
         "a refusal says so in the status bar"
     );
 }
+
+/// What the status bar currently says, and whether it is saying anything.
+fn notice(app: &App) -> String {
+    let notice = app.world().resource::<jackdaw::status_bar::StatusNotice>();
+    if notice.is_active() {
+        notice.text().to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// A third child between the two the test groups, which is never selected.
+fn scene_with_a_bystander(app: &mut App) -> (Entity, Entity, Entity, Entity) {
+    let root = app
+        .world_mut()
+        .spawn((
+            Name::new("UiRoot"),
+            UiSceneRoot {
+                reference_size: REFERENCE,
+            },
+            Node {
+                width: percent(100),
+                height: percent(100),
+                ..default()
+            },
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), root);
+    let first = child(app, root, "First", 100.0, 100.0, 200.0, 100.0);
+    let bystander = child(app, root, "Bystander", 400.0, 100.0, 200.0, 100.0);
+    let last = child(app, root, "Last", 700.0, 100.0, 200.0, 100.0);
+    settle(app);
+    (root, first, bystander, last)
+}
+
+fn child_names(app: &App, parent: Entity) -> Vec<String> {
+    app.world()
+        .get::<Children>(parent)
+        .map(|children| {
+            children
+                .iter()
+                .filter_map(|child| app.world().get::<Name>(child))
+                .map(|name| name.as_str().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A member's slot is an index into the sibling list as it was, and that
+/// list only reads that way once the container has left it. Undo used to
+/// replay the slots against a list that still held the container, which put
+/// a member that had a never-selected sibling between it and the other
+/// member back on the wrong side of it.
+#[test]
+fn group_undo_puts_the_members_back_around_a_sibling_that_was_never_selected() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (root, first, _bystander, last) = scene_with_a_bystander(&mut app);
+    assert_eq!(child_names(&app, root), ["First", "Bystander", "Last"]);
+
+    select_both(&mut app, [first, last]);
+    run_finished(&mut app, "ui.group_into");
+    assert_eq!(child_names(&app, root), ["Group", "Bystander"]);
+
+    run_finished(&mut app, "history.undo");
+    assert_eq!(
+        child_names(&app, root),
+        ["First", "Bystander", "Last"],
+        "undo put every sibling back in the order the list held them",
+    );
+}
+
+/// A rect re-expressed against a different offset box is only the same rect
+/// when it started from the box the container replaces, so a selection under
+/// two parents has no one box to group at. It used to fail into the log.
+#[test]
+fn grouping_across_two_parents_is_refused_out_loud() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (root, first, _second) = authored_scene(&mut app);
+    let inner = child(&mut app, root, "Inner", 100.0, 100.0, 100.0, 100.0);
+    let deeper = child(&mut app, inner, "Deeper", 10.0, 10.0, 50.0, 50.0);
+    settle(&mut app);
+
+    let depth = undo_depth(&app);
+    select_both(&mut app, [first, deeper]);
+    jackdaw::ui_grouping::group_selection(app.world_mut());
+    settle(&mut app);
+
+    assert_eq!(undo_depth(&app), depth, "nothing was grouped");
+    assert_eq!(
+        notice(&app),
+        "grouping needs every selected node under one parent"
+    );
+}
+
+/// The bounding box is axis-aligned and measured before the turn, so a
+/// container drawn on it and given a turned node as a child would draw the
+/// turn again from a different origin and move the node.
+#[test]
+fn grouping_a_rotated_node_is_refused_out_loud() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (_root, first, second) = authored_scene(&mut app);
+    app.world_mut()
+        .entity_mut(second)
+        .insert(bevy::ui::UiTransform::from_rotation(
+            bevy::math::Rot2::degrees(30.0),
+        ));
+    settle(&mut app);
+
+    let depth = undo_depth(&app);
+    select_both(&mut app, [first, second]);
+    jackdaw::ui_grouping::group_selection(app.world_mut());
+    settle(&mut app);
+
+    assert_eq!(undo_depth(&app), depth, "nothing was grouped");
+    assert_eq!(
+        notice(&app),
+        "Second is rotated or scaled, so a container around it would not be the box it fills",
+    );
+}
+
+/// Ungrouping a node with nothing inside it has nothing to do. The refusal
+/// used to go only to the log, so the chord looked broken.
+#[test]
+fn ungrouping_an_empty_node_is_refused_out_loud() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (_root, first, _second) = authored_scene(&mut app);
+    jackdaw::selection::select_only(app.world_mut(), first);
+    settle(&mut app);
+
+    let depth = undo_depth(&app);
+    jackdaw::ui_grouping::ungroup_selection(app.world_mut());
+    settle(&mut app);
+
+    assert_eq!(undo_depth(&app), depth, "nothing was ungrouped");
+    assert_eq!(notice(&app), "First holds nothing to lift out");
+}
+
+/// A member its parent was laying out has no rect of its own to keep, so it
+/// keeps flowing, now inside the container. The absolute member beside it
+/// keeps the exact place it had.
+#[test]
+fn a_flowed_member_keeps_flowing_inside_the_container() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (_root, first, second) = authored_scene(&mut app);
+    let before = node_of(&app, first);
+    let rect = rect_of(&app, second);
+    app.world_mut()
+        .get_mut::<Node>(first)
+        .expect("a node")
+        .position_type = PositionType::Relative;
+    settle(&mut app);
+
+    select_both(&mut app, [first, second]);
+    run_finished(&mut app, "ui.group_into");
+
+    let after = node_of(&app, first);
+    assert_eq!(
+        after.position_type,
+        PositionType::Relative,
+        "the flowed member is still laid out by its parent, now the container",
+    );
+    assert_eq!(
+        (after.width, after.height),
+        (before.width, before.height),
+        "and its size is untouched",
+    );
+    let moved = (rect_of(&app, second).min - rect.min).length();
+    assert!(
+        moved < 0.5,
+        "the absolutely placed member beside it did not move; it went {moved} px",
+    );
+}

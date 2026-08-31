@@ -1934,6 +1934,14 @@ pub(crate) fn hierarchy_open_context_menu(
         ),
         ("hierarchy.delete".into(), "Delete             Del".into()),
         (
+            format!("{OP_PREFIX}ui.group_into"),
+            "Group Into Container   Ctrl+G".into(),
+        ),
+        (
+            format!("{OP_PREFIX}ui.ungroup"),
+            "Ungroup    Ctrl+Shift+G".into(),
+        ),
+        (
             "hierarchy.save_prefab".into(),
             "Save Selection as Prefab...".into(),
         ),

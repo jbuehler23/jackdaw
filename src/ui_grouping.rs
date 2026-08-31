@@ -6,8 +6,24 @@
 //! is one history entry, and neither moves anything on the canvas: an
 //! authored rect is re-expressed against its new parent's offset box, which
 //! is the same arithmetic a canvas drag writes back through.
+//!
+//! What happens to a mixed selection: an absolutely placed member keeps the
+//! rect it had, re-stated against the container. A member its parent was
+//! laying out has no rect of its own to keep, so it keeps flowing, now in
+//! the container, in the order the container holds it; the canvas may
+//! therefore move it, and the container's own flow direction decides where
+//! to. A member carrying a rotated or scaled `UiTransform` is refused: the
+//! bounding box is axis-aligned, so a container drawn around a turned node
+//! would not be the box the node occupies.
+//!
+//! Every refusal says so in the status bar. Grouping is reached from a
+//! chord, the Edit menu and the outliner's context menu, and none of those
+//! leaves a place for a silent no-op to be understood as success.
 
-use bevy::{ecs::entity::hash_map::EntityHashMap, prelude::*, world_serialization::DynamicWorld};
+use bevy::{
+    ecs::entity::hash_map::EntityHashMap, math::Rot2, prelude::*, ui::UiTransform,
+    world_serialization::DynamicWorld,
+};
 use jackdaw_api::prelude::*;
 
 use crate::{
@@ -66,12 +82,45 @@ fn group_members(world: &mut World) -> Option<(Option<Entity>, Vec<Entity>)> {
         .iter()
         .any(|&entity| world.get::<ChildOf>(entity).map(ChildOf::parent) != parent)
     {
-        warn!("ui.group_into: the selection spans more than one parent");
+        crate::status_bar::notify_error(
+            world,
+            "grouping needs every selected node under one parent",
+        );
         return None;
     }
     let mut members = members;
     members.sort_by_key(|&entity| HierarchyLocation::from_world(world, entity).index);
     Some((parent, members))
+}
+
+/// What a notice calls `entity`.
+fn name_of(world: &World, entity: Entity) -> String {
+    world
+        .get::<Name>(entity)
+        .map_or_else(|| "the node".to_string(), |name| name.as_str().to_owned())
+}
+
+/// Whether `entity` is rotated or scaled.
+///
+/// Both are drawn around the node's laid-out box rather than changing it, so
+/// the rect the group is built from is the box before the turn. A container
+/// placed on that rect and given the node as a child would draw the turn
+/// again from a different origin, and the node would move.
+fn is_turned(world: &World, entity: Entity) -> bool {
+    world.get::<UiTransform>(entity).is_some_and(|transform| {
+        transform.rotation != Rot2::IDENTITY || transform.scale != Vec2::ONE
+    })
+}
+
+/// How many entries the list `parent` names holds. `None` is the scene's own
+/// root list.
+fn list_len(world: &World, parent: Option<Entity>) -> usize {
+    match parent {
+        Some(parent) => world.get::<Children>(parent).map_or(0, Children::len),
+        None => world
+            .get_resource::<jackdaw_bsn::SceneBsnAst>()
+            .map_or(0, |ast| ast.roots.len()),
+    }
 }
 
 /// The box every member sits inside, in global authored pixels.
@@ -209,14 +258,37 @@ impl EditorCommand for GroupIntoContainer {
         crate::selection::select_only(world, container);
     }
 
+    /// Undo in three passes, because the slot a member goes back to is an
+    /// index into the list as it was, and the list only reads that way once
+    /// the container has left it.
+    ///
+    /// Moving the members out first is what lets the container be despawned
+    /// without taking them with it. Replaying the slots afterwards, lowest
+    /// first, puts each member back where it was even when siblings that
+    /// were never selected sat between them: a member restored at its old
+    /// index while a lower one is still missing would land one slot early
+    /// and push the sibling past it.
     fn undo(&mut self, world: &mut World) {
         for (member, location, node) in self.before.clone() {
             write_node(world, member, &node);
-            set_hierarchy_location(world, member, location);
+            let end = list_len(world, location.parent);
+            set_hierarchy_location(
+                world,
+                member,
+                HierarchyLocation {
+                    parent: location.parent,
+                    index: end,
+                },
+            );
         }
         if let Some(container) = self.container.take() {
             crate::commands::deselect_entities(world, &[container]);
             despawn_scene_entity(world, container);
+        }
+        let mut restore = self.before.clone();
+        restore.sort_by_key(|(_, location, _)| location.index);
+        for (member, location, _) in restore {
+            set_hierarchy_location(world, member, location);
         }
         crate::hierarchy::sync_outliner_row_order(world, self.parent);
     }
@@ -327,8 +399,21 @@ pub fn group_selection(world: &mut World) {
     let Some((parent, members)) = group_members(world) else {
         return;
     };
+    if let Some(&turned) = members.iter().find(|&&member| is_turned(world, member)) {
+        let name = name_of(world, turned);
+        crate::status_bar::notify_error(
+            world,
+            format!(
+                "{name} is rotated or scaled, so a container around it would not be the box it fills"
+            ),
+        );
+        return;
+    }
     let Some(bounds) = bounding_rect(world, &members) else {
-        warn!("ui.group_into: the selection has not been laid out yet");
+        crate::status_bar::notify_error(
+            world,
+            "the selection has not been laid out yet, so it has no box to group at",
+        );
         return;
     };
     let node = container_node(world, &members, bounds);
@@ -428,7 +513,8 @@ pub fn ungroup_selection(world: &mut World) {
         .map(|children| children.iter().collect())
         .unwrap_or_default();
     if children.is_empty() {
-        warn!("ui.ungroup: the selected node holds nothing to lift out");
+        let name = name_of(world, container);
+        crate::status_bar::notify_error(world, format!("{name} holds nothing to lift out"));
         return;
     }
 
