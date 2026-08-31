@@ -398,15 +398,18 @@ fn withhold_row(world: &mut World, children_container: Entity, child: Entity) {
 
 /// Spawn the rows withheld from entities that have since joined the document.
 ///
-/// Gated on the document actually changing, so a list holding real generated
-/// parts costs nothing between registrations.
+/// Revisited whenever the list holds anything, rather than only on a frame
+/// the document changes: an entity can join the document in the same frame
+/// its row is withheld, in whichever order the two land, and a pass that only
+/// looked at the changed frames would then never look again. The list holds a
+/// handful of entries at most, and each is one lookup.
 fn spawn_rows_for_late_registrations(
     document: Res<jackdaw_bsn::SceneBsnAst>,
     mut pending: ResMut<RowsAwaitingRegistration>,
     live: Query<Entity>,
     mut commands: Commands,
 ) {
-    if pending.0.is_empty() || !document.is_changed() {
+    if pending.0.is_empty() {
         return;
     }
     let mut still_waiting = Vec::new();
@@ -1226,8 +1229,12 @@ fn on_entity_reparented(
             {
                 return;
             }
-            // In named-only mode, skip entities without a Name
+            // In named-only mode, skip entities without a Name. An authored
+            // name arrives with the document patches, which can land after
+            // the parent link does, so the row is remembered rather than
+            // dropped and revisited once the entity is in the document.
             if !world.resource::<HierarchyShowAll>().0 && world.get::<Name>(entity).is_none() {
+                withhold_row(world, parent_children_container_for_spawn, entity);
                 return;
             }
             // Same predicate the expansion path applies, so a part appearing

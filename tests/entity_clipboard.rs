@@ -327,3 +327,53 @@ fn available(app: &mut App, id: &'static str) -> bool {
         .is_available()
         .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"))
 }
+
+#[test]
+fn the_paste_gets_a_row_in_the_outliner() {
+    let mut app = clipboard_app();
+    let panel = app
+        .world_mut()
+        .spawn((
+            jackdaw::hierarchy::HierarchyTreeContainer,
+            Node::default(),
+            Visibility::Inherited,
+        ))
+        .id();
+    app.update();
+
+    let (root, children) = scene_with_two_children(&mut app);
+    let row = app
+        .world()
+        .resource::<jackdaw_widgets::tree_view::TreeIndex>()
+        .get(panel, root)
+        .expect("the root has a row");
+    app.world_mut()
+        .entity_mut(row)
+        .insert(jackdaw_widgets::tree_view::TreeNodeExpanded(true));
+    app.update();
+    app.update();
+
+    // A widget is a subtree, not one entity: the button's caption is
+    // authored too, and a paste has to give the root a row and not the part.
+    let caption = app
+        .world_mut()
+        .spawn((Name::new("Caption"), Node::default(), ChildOf(children[0])))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), caption);
+    app.update();
+
+    select(&mut app, children[0]);
+    run_finished(&mut app, "entity.copy");
+    run_finished(&mut app, "entity.paste");
+    app.update();
+    app.update();
+
+    let pasted = app.world().resource::<Selection>().entities[0];
+    assert!(
+        app.world()
+            .resource::<jackdaw_widgets::tree_view::TreeIndex>()
+            .get(panel, pasted)
+            .is_some(),
+        "the pasted entity has no Outliner row"
+    );
+}
