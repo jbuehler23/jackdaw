@@ -4052,3 +4052,123 @@ fn handle_layout(app: &mut App, overlay: Entity) -> Vec<(i8, i8)> {
         })
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// What a gesture may do to a node its parent lays out
+// ---------------------------------------------------------------------------
+
+/// A move is a statement about where the node goes, so it takes a flowed
+/// child out of the flow. A resize is not, so it writes the size and
+/// leaves the placement alone: promoting there would pull a row's child
+/// out of the row the moment the user widened it.
+#[test]
+fn a_resize_sizes_a_flowed_child_and_a_move_promotes_it() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let flexed = bordered_scene(&mut app);
+    magnet(&mut app, false);
+    settle(&mut app);
+
+    let before = node_of(&app, flexed);
+    assert_eq!(
+        (before.position_type, before.left, before.top),
+        (PositionType::Relative, Val::Auto, Val::Auto),
+        "precondition: the child is placed by its parent",
+    );
+
+    select(&mut app, flexed);
+    settle(&mut app);
+    let (overlay, _) = overlay_node(&mut app);
+    let handle = handle_entity(&mut app, overlay, (1, 1));
+    // The child's laid-out rect is the padding box's corner, 100x50.
+    drag_authored(
+        &mut app,
+        panel,
+        handle,
+        Vec2::new(310.0, 160.0),
+        Vec2::new(350.0, 180.0),
+    );
+    settle(&mut app);
+
+    let resized = node_of(&app, flexed);
+    assert_eq!(
+        (
+            resized.position_type,
+            resized.left,
+            resized.top,
+            resized.width,
+            resized.height,
+        ),
+        (
+            PositionType::Relative,
+            Val::Auto,
+            Val::Auto,
+            px(140),
+            px(70),
+        ),
+        "a resize writes the size and nothing about placement",
+    );
+
+    // The same node moved is a different statement.
+    drag_authored(
+        &mut app,
+        panel,
+        overlay,
+        Vec2::new(260.0, 135.0),
+        Vec2::new(290.0, 150.0),
+    );
+    settle(&mut app);
+
+    let moved = node_of(&app, flexed);
+    assert_eq!(
+        (moved.position_type, moved.left, moved.top),
+        (PositionType::Absolute, px(30), px(15)),
+        "a move promotes it out of the flow and places it",
+    );
+}
+
+/// A nudge of a flowed child is refused, and the refusal is said out
+/// loud. The drag has a rect and a cursor to promote against; a
+/// keystroke has neither, and promoting on an arrow press would change
+/// the layout of every sibling for a one-pixel move.
+#[test]
+fn a_nudge_of_a_flowed_child_is_refused_with_a_notice() {
+    let mut app = stage_app();
+    let _panel = panel_entity(&mut app);
+    let flexed = bordered_scene(&mut app);
+    settle(&mut app);
+
+    select(&mut app, flexed);
+    settle(&mut app);
+    let before = node_of(&app, flexed);
+    let entries = history_len(&app);
+
+    nudge(&mut app, "transform.nudge_x_pos");
+    settle(&mut app);
+
+    assert_eq!(node_of(&app, flexed), before, "nothing was written");
+    assert_eq!(history_len(&app), entries, "and nothing was recorded");
+    let notice = app.world().resource::<jackdaw::status_bar::StatusNotice>();
+    assert!(notice.is_active(), "the refusal is on the status bar");
+    assert!(
+        notice.text().contains("Absolute"),
+        "and it says what would make the move possible: {:?}",
+        notice.text(),
+    );
+
+    // Promoted by hand, the same key moves it.
+    app.world_mut()
+        .get_mut::<Node>(flexed)
+        .expect("the child is a node")
+        .position_type = PositionType::Absolute;
+    settle(&mut app);
+    nudge(&mut app, "transform.nudge_x_pos");
+    settle(&mut app);
+    assert_eq!(
+        node_of(&app, flexed).left,
+        px(1),
+        "an absolute child still nudges",
+    );
+}
+
+// ---------------------------------------------------------------------------

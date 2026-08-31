@@ -597,6 +597,7 @@ fn write_axis(
     min: f32,
     extent: f32,
     resized: bool,
+    placed: bool,
     parent: f32,
     viewport: Vec2,
     rounding: PixelRounding,
@@ -611,7 +612,9 @@ fn write_axis(
     let near_unit = anchor
         .near
         .or_else(|| anchor.far.is_none().then_some(AnchorUnit::Px));
-    if let Some(unit) = near_unit {
+    if let Some(unit) = near_unit
+        && placed
+    {
         match exact_percent_for(unit, exact, SnapLine::Min) {
             Some(percent) => *near = Val::Percent(percent),
             None => write(near, unit, min),
@@ -620,6 +623,7 @@ fn write_axis(
     // The far offset is the gap between the node's far edge and the
     // parent's, so it needs a parent that has been measured.
     if let Some(unit) = anchor.far
+        && placed
         && parent > 0.0
         && parent.is_finite()
     {
@@ -656,6 +660,22 @@ fn exact_percent_for(
 /// parent's offset box; `edges` is the gesture's, `(0, 0)` for a move.
 /// `rounding` says how finely pixels are stated, and `exact` carries any
 /// percentage the gesture landed on.
+///
+/// # What a resize does to a flowed child
+///
+/// A move is a statement about where the node goes, and a node whose
+/// parent lays it out has nowhere to go until it leaves that layout, so a
+/// move promotes it to `PositionType::Absolute` and writes offsets.
+///
+/// A resize says nothing about placement. Promoting there would take a
+/// row's child out of the row the moment the user widened it, moving the
+/// node and every sibling after it while the user was dragging one edge.
+/// So a resize on a flowed child writes `width`/`height` alone and leaves
+/// both the placement and `position_type` to the parent.
+///
+/// A node already absolute keeps both halves on either gesture: its
+/// offsets are what place it, so a handle that drags its left edge has to
+/// move `left`.
 pub fn apply_authored_rect(
     node: &mut Node,
     anchors: NodeAnchors,
@@ -665,10 +685,11 @@ pub fn apply_authored_rect(
     rounding: PixelRounding,
     exact: ExactPercent,
 ) {
-    // Absolute placement is what a free move edits. Promote on the first
-    // drag so a flex child can be positioned instead of silently
-    // refusing to move.
-    node.position_type = PositionType::Absolute;
+    let moving = edges == (0, 0);
+    let placed = moving || node.position_type == PositionType::Absolute;
+    if moving {
+        node.position_type = PositionType::Absolute;
+    }
     write_axis(
         &mut node.left,
         &mut node.right,
@@ -677,6 +698,7 @@ pub fn apply_authored_rect(
         rect.x,
         rect.z,
         edges.0 != 0,
+        placed,
         basis.parent.x,
         basis.viewport,
         rounding,
@@ -690,6 +712,7 @@ pub fn apply_authored_rect(
         rect.y,
         rect.w,
         edges.1 != 0,
+        placed,
         basis.parent.y,
         basis.viewport,
         rounding,
@@ -1983,6 +2006,28 @@ pub(crate) fn nudge_ui_selection(world: &mut World, direction: Vec2) -> bool {
     };
     if nodes.is_empty() {
         return false;
+    }
+    // A node its parent lays out has no offsets to step: a nudge would
+    // promote it out of the flow, which is a change to the layout and not
+    // the one-pixel move the key asked for. The drag has a rect and a
+    // cursor to promote against; a keystroke has neither, so it refuses
+    // and says so. The canvas still answers, so the 3D nudge does not
+    // take the key instead.
+    if let Some(flowed) = nodes
+        .iter()
+        .find(|node| node.before.position_type != PositionType::Absolute)
+    {
+        let name = world
+            .get::<Name>(flowed.entity)
+            .map(|name| name.as_str().to_owned())
+            .unwrap_or_else(|| "node".to_string());
+        crate::status_bar::notify_error(
+            world,
+            format!(
+                "{name} is placed by its parent's layout. Set Position to Absolute to move it."
+            ),
+        );
+        return true;
     }
 
     let delta = direction * step;
