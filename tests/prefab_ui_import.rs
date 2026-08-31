@@ -488,10 +488,9 @@ fn click_row(app: &mut App, source: Entity) {
 /// Double-clicking an instance row is the only gesture that opens an
 /// imported UI scene for editing, and the order inside the observer is what
 /// makes it usable: the pair is resolved BEFORE the ordinary click handling
-/// below it. The first click already selected the row, so a second one taken
-/// as an ordinary click would read as a click on a selected row and clear the
-/// selection, leaving the source open with nothing selected behind it. A
-/// consumed pair resets, so a third click is an ordinary click again.
+/// below it, so the second click opens the source instead of re-selecting
+/// the row. A consumed pair resets, so a third click is an ordinary click
+/// again, which keeps the row selected and opens nothing.
 #[test]
 fn a_double_click_on_an_instance_row_opens_its_source_and_keeps_the_row_selected() {
     let tmp = tempfile::tempdir().unwrap();
@@ -526,12 +525,18 @@ fn a_double_click_on_an_instance_row_opens_its_source_and_keeps_the_row_selected
         "and left the row selected, rather than deselecting it on the way"
     );
 
+    let tabs_before = app.world().resource::<jackdaw::scenes::Scenes>().tabs.len();
     click_row(&mut app, root);
-    assert!(
+    assert_eq!(
         app.world()
             .resource::<jackdaw::selection::Selection>()
-            .entities
-            .is_empty(),
-        "a consumed pair resets: the third click is an ordinary click on a selected row"
+            .entities,
+        vec![root],
+        "a consumed pair resets: the third click is an ordinary click, which keeps the row"
+    );
+    assert_eq!(
+        app.world().resource::<jackdaw::scenes::Scenes>().tabs.len(),
+        tabs_before,
+        "and opens nothing, so it was not read as a second pair"
     );
 }

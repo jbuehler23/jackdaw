@@ -2069,10 +2069,15 @@ fn opening_a_ui_scene_fits_the_canvas_into_the_stage_area() {
 
 /// The `viewport2d.frame` operator is the Fit control: it puts a panel
 /// panned and zoomed away back where opening the scene put it.
+///
+/// The 2D panel is made the active tab first: Home is bound to this
+/// operator and to the timeline's jump-to-start, and what keeps the two
+/// apart is that the canvas answers only while it is the panel in front.
 #[test]
 fn the_frame_op_returns_a_panned_and_zoomed_panel_to_the_fit() {
     let mut app = util::editor_test_app();
     let parent = fit_panel(&mut app);
+    dock_leaf(&mut app, &[jackdaw::viewport::VIEWPORT_2D_WINDOW_ID]);
     app.world_mut().spawn((
         UiSceneRoot {
             reference_size: UVec2::new(1280, 720),
