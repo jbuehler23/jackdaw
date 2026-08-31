@@ -1204,6 +1204,12 @@ fn paste_components(world: &mut World) {
         .push_executed(Box::new(cmd));
 }
 
+/// Flip `Visibility` between hidden and inherited on every selected
+/// entity, writing through the document so the change is saved.
+///
+/// It pushes no history entry of its own: `entity.toggle_visibility` is
+/// undoable, so the dispatcher's before/after snapshot pair is the entry,
+/// and a second one here would leave a single undo doing half the job.
 fn hide_selected(world: &mut World) {
     let selection = world.resource::<Selection>();
     let entities: Vec<Entity> = selection.entities.clone();
@@ -1211,8 +1217,6 @@ fn hide_selected(world: &mut World) {
     if entities.is_empty() {
         return;
     }
-
-    let mut cmds: Vec<Box<dyn EditorCommand>> = Vec::new();
 
     for &entity in &entities {
         let current = world
@@ -1238,16 +1242,6 @@ fn hide_selected(world: &mut World) {
             was_derived: false,
         };
         cmd.execute(world);
-        cmds.push(Box::new(cmd));
-    }
-
-    if !cmds.is_empty() {
-        let group = crate::commands::CommandGroup {
-            commands: cmds,
-            label: "Toggle visibility".to_string(),
-        };
-        let mut history = world.resource_mut::<CommandHistory>();
-        history.push_executed(Box::new(group));
     }
 }
 
@@ -1612,7 +1606,6 @@ pub(crate) fn entity_paste_components(
 #[operator(
     id = "entity.toggle_visibility",
     label = "Toggle Visibility",
-    allows_undo = false,
     is_available = can_act_on_entities
 )]
 pub(crate) fn entity_toggle_visibility(

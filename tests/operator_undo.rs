@@ -298,3 +298,21 @@ fn view_cycle_bounding_box_mode_round_trip() {
     let mut app = util::editor_test_app();
     assert_undo_redo_round_trip(&mut app, "view.cycle_bounding_box_mode");
 }
+
+/// Hiding a node is an edit to the document like any other, so Ctrl+Z
+/// puts it back. It used to be `allows_undo = false`, which left a
+/// hidden node hidden and the history one entry short of the truth.
+#[test]
+fn entity_toggle_visibility_round_trip() {
+    let mut app = util::editor_test_app();
+    let entity = app.world_mut().spawn(Name::new("Hidden")).id();
+    // The snapshot is the emitted document, so the toggle has to reach it:
+    // an entity outside the document would diff to nothing.
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
+    app.world_mut()
+        .resource_mut::<jackdaw::selection::Selection>()
+        .entities = vec![entity];
+    app.update();
+
+    assert_undo_redo_round_trip(&mut app, "entity.toggle_visibility");
+}
