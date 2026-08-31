@@ -236,7 +236,9 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
 /// the set and is still reported.
 fn conflicts_are_new(conflicts: &[String]) -> bool {
     static LAST: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
-    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if last.as_deref() == Some(conflicts) {
         return false;
     }
