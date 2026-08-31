@@ -661,44 +661,63 @@ fn assign_unique_entity_root_names(world: &mut World, ast: &mut jackdaw_bsn::Sce
         jackdaw_bsn::entity_roots(ast, &reg)
     };
 
-    let mut taken: std::collections::HashSet<String> = {
-        let mut names = std::collections::HashSet::new();
-        let mut query = world.query_filtered::<&Name, Without<EditorEntity>>();
-        for existing in query.iter(world) {
-            names.insert(existing.as_str().to_owned());
-        }
-        names
-    };
+    let mut taken = scene_entity_names(world);
 
     for root in entity_roots {
         let Some(name) = ast.get_name(root).map(str::to_owned) else {
             continue;
         };
-        if taken.insert(name.clone()) {
-            continue;
+        if let Some(free) = claim_free_name(&mut taken, &name) {
+            crate::commands::set_name_patch(ast, root, Some(&free));
         }
-
-        let mut base = name;
-        if let Some(pos) = base.rfind(' ')
-            && base[pos + 1..].parse::<u32>().is_ok()
-        {
-            base.truncate(pos);
-        }
-        let mut max_num = 0u32;
-        for existing in &taken {
-            if existing == &base {
-                max_num = max_num.max(1);
-            } else if let Some(rest) = existing.strip_prefix(base.as_str())
-                && let Some(num_str) = rest.strip_prefix(' ')
-                && let Ok(n) = num_str.parse::<u32>()
-            {
-                max_num = max_num.max(n);
-            }
-        }
-        let new_name = format!("{} {}", base, max_num + 1);
-        taken.insert(new_name.clone());
-        crate::commands::set_name_patch(ast, root, Some(&new_name));
     }
+}
+
+/// Every `Name` on a scene entity. Editor chrome (`EditorEntity`) is left out
+/// so a UI label does not force a rename.
+pub(crate) fn scene_entity_names(world: &mut World) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    let mut query = world.query_filtered::<&Name, Without<EditorEntity>>();
+    for existing in query.iter(world) {
+        names.insert(existing.as_str().to_owned());
+    }
+    names
+}
+
+/// Reserve `name` in `taken`, and say what it had to become.
+///
+/// `None` means the name was free and is now claimed. `Some(other)` is the
+/// next `Base N` suffix past every `Base` and `Base N` already in `taken`,
+/// also claimed. A name already ending in a number is renumbered from the
+/// same base rather than growing a second suffix.
+pub(crate) fn claim_free_name(
+    taken: &mut std::collections::HashSet<String>,
+    name: &str,
+) -> Option<String> {
+    if taken.insert(name.to_owned()) {
+        return None;
+    }
+
+    let mut base = name.to_owned();
+    if let Some(pos) = base.rfind(' ')
+        && base[pos + 1..].parse::<u32>().is_ok()
+    {
+        base.truncate(pos);
+    }
+    let mut max_num = 0u32;
+    for existing in taken.iter() {
+        if existing == &base {
+            max_num = max_num.max(1);
+        } else if let Some(rest) = existing.strip_prefix(base.as_str())
+            && let Some(num_str) = rest.strip_prefix(' ')
+            && let Ok(n) = num_str.parse::<u32>()
+        {
+            max_num = max_num.max(n);
+        }
+    }
+    let free = format!("{} {}", base, max_num + 1);
+    taken.insert(free.clone());
+    Some(free)
 }
 
 /// Snap a vector to the nearest cardinal world axis (+/-X, +/-Y, +/-Z).

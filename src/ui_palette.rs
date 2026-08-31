@@ -260,6 +260,32 @@ pub fn register_authored_subtree(world: &mut World, root: Entity) {
     }
 }
 
+/// Give `entity` a name no other scene entity holds, the way a duplicated
+/// subtree gets one.
+///
+/// A widget definition names its root after the kind it makes, so a second
+/// Button arrives called `Button` again. Two rows reading `Button` in the
+/// outliner name nothing, and an operator clause addressing one by name
+/// reaches whichever the query answers with first.
+///
+/// Run before the subtree is registered, so the document records the name the
+/// entity ends up with rather than the one the definition wrote.
+fn rename_off_collisions(
+    world: &mut World,
+    entity: Entity,
+    taken: &mut std::collections::HashSet<String>,
+) {
+    let Some(name) = world
+        .get::<Name>(entity)
+        .map(|name| name.as_str().to_owned())
+    else {
+        return;
+    };
+    if let Some(free) = crate::entity_ops::claim_free_name(taken, &name) {
+        world.entity_mut(entity).insert(Name::new(free));
+    }
+}
+
 /// One widget creation: run the definition, adopt the result into the
 /// document, and select it. Undo takes all three back.
 struct InstantiateWidgetCommand {
@@ -274,6 +300,9 @@ impl EditorCommand for InstantiateWidgetCommand {
     fn execute(&mut self, world: &mut World) {
         self.spawned = None;
         self.error = None;
+        // Read before the definition runs, so the new widget's own name is
+        // not in the set it is checked against.
+        let mut taken = crate::entity_ops::scene_entity_names(world);
         let context = WidgetInstantiateContext {
             parent: Some(self.parent),
         };
@@ -284,6 +313,7 @@ impl EditorCommand for InstantiateWidgetCommand {
                 if world.get::<ChildOf>(entity).map(ChildOf::parent) != Some(self.parent) {
                     world.entity_mut(entity).insert(ChildOf(self.parent));
                 }
+                rename_off_collisions(world, entity, &mut taken);
                 register_authored_subtree(world, entity);
                 crate::selection::select_only(world, entity);
                 self.spawned = Some(entity);

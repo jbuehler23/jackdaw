@@ -1482,3 +1482,40 @@ fn a_chosen_authored_radio_shows_it_on_its_ring() {
         Some(tokens::RADIO_BORDER_CHECKED),
     );
 }
+
+/// A definition names its root after the kind it makes, so three Buttons
+/// would all arrive called `Button`. Two rows reading the same thing name
+/// nothing, and an operator clause addressing one by name reaches
+/// whichever the query answers with first.
+#[test]
+fn each_added_widget_gets_a_name_of_its_own() {
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+
+    let added: Vec<Entity> = (0..3)
+        .map(|_| instantiate_widget(app.world_mut(), "ui.button").expect("the button is added"))
+        .collect();
+
+    let live: Vec<String> = added
+        .iter()
+        .map(|&entity| {
+            app.world()
+                .get::<Name>(entity)
+                .expect("a widget root is named")
+                .as_str()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(live, vec!["Button", "Button 2", "Button 3"]);
+
+    // The document records what each entity ended up called, so a save
+    // and a reload keep the three apart too.
+    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    let saved: Vec<String> = added
+        .iter()
+        .filter_map(|&entity| ast.ast_for(entity).and_then(|node| ast.get_name(node)))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(saved, live);
+}
+
