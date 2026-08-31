@@ -31,6 +31,9 @@
 /// both is still the best UX since authors rarely touch the overlap.
 pub mod prelude {
     // using the bevy-defined exports over the BEI-defined ones.
+    // Linked rather than inlined: inlining copies the whole of bevy's
+    // prelude into this crate's docs.
+    #[doc(no_inline)]
     pub use bevy::prelude::{Cancel, Press, Release, *};
     pub use jackdaw_api::prelude::*;
 }
@@ -45,4 +48,8 @@ pub use jackdaw_api::{
 /// Bevy root surface for extension code walking bevy paths beyond
 /// the prelude. Safe to glob: none of the explicit `jackdaw_api`
 /// re-exports above are items bevy defines at its root.
+///
+/// Linked rather than inlined: inlining copies all of bevy into this
+/// crate's docs.
+#[doc(no_inline)]
 pub use bevy::*;
