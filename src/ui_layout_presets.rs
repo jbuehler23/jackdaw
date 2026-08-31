@@ -3,15 +3,27 @@
 //! The nine anchors are the corners, edges and middle of the parent box; a
 //! node takes one of them by being placed absolutely with the offsets that
 //! name it, and by letting an automatic margin take the centring on any axis
-//! it is centred on. Full Rect stretches the node over the whole parent
-//! instead, and Center leaves the node in the parent's flow with automatic
-//! margins on every side.
+//! it is centred on.
+//!
+//! An anchor keeps the node the size it is. A node that states no size of
+//! its own is as wide as its content, and stating a `left` and a `right`
+//! for it would stretch it over the parent instead of putting it where the
+//! anchor says; so before the offsets are written the preset captures the
+//! size layout measured and states it in pixels. Center In Flow captures
+//! the same way. Full Rect is the one preset that means "be the size of the
+//! parent", so it drops any size the node states and lets the four zero
+//! offsets do the stretching.
+//!
+//! An anchor also places the node absolutely, which takes a node its parent
+//! was laying out out of that flow. That is what the press asked for, so it
+//! happens, and the status bar says so rather than leaving the change to be
+//! discovered.
 //!
 //! Each preset states every field it touches, so applying one twice, or
 //! applying two in a row, leaves the node saying exactly what the last
 //! preset says and nothing left over from the one before.
 
-use bevy::prelude::*;
+use bevy::{prelude::*, ui::ComputedNode};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{ButtonOperatorCall, ButtonProps, IconButtonProps, button, icon_button},
@@ -24,6 +36,18 @@ use crate::{EditorEntity, commands::push_layout_edits, selection::Selection};
 
 /// The operator a preset button dispatches.
 pub const LAYOUT_PRESET_OP: &str = "ui.layout_preset";
+
+/// What a preset does to the size the node states.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum PresetSize {
+    /// Keep the node the size it is. A node stating `Auto` on an axis has
+    /// no size to keep, so the size layout measured is written in its
+    /// place; without that the preset's two offsets would stretch the node
+    /// over the parent instead of placing it.
+    Capture,
+    /// State this size, whatever the node said before.
+    Stated(Val, Val),
+}
 
 /// One named place a node can be put in its parent.
 pub struct LayoutPreset {
@@ -39,14 +63,18 @@ pub struct LayoutPreset {
     top: Val,
     bottom: Val,
     margin: UiRect,
-    /// The size the preset states, for the one preset that states a size.
-    /// `None` leaves the node's own width and height alone.
-    size: Option<(Val, Val)>,
+    /// What the preset does to the node's width and height.
+    size: PresetSize,
 }
 
 impl LayoutPreset {
     /// `node` with this preset's fields written over it.
-    pub fn applied(&self, node: &Node) -> Node {
+    ///
+    /// `measured` is the size layout last gave the node, which a capturing
+    /// preset writes in place of an `Auto`. `None` when layout has not
+    /// measured it yet; the `Auto` then stands, because a made-up number
+    /// would be worse than the stretch.
+    pub fn applied(&self, node: &Node, measured: Option<Vec2>) -> Node {
         let mut node = node.clone();
         node.position_type = self.position_type;
         node.left = self.left;
@@ -55,9 +83,21 @@ impl LayoutPreset {
         node.bottom = self.bottom;
         node.margin = self.margin;
 
-        if let Some((width, height)) = self.size {
-            node.width = width;
-            node.height = height;
+        match self.size {
+            PresetSize::Capture => {
+                if let Some(measured) = measured {
+                    if node.width == Val::Auto {
+                        node.width = Val::Px(measured.x);
+                    }
+                    if node.height == Val::Auto {
+                        node.height = Val::Px(measured.y);
+                    }
+                }
+            }
+            PresetSize::Stated(width, height) => {
+                node.width = width;
+                node.height = height;
+            }
         }
         node
     }
@@ -83,7 +123,7 @@ const CENTRE_Y: UiRect = UiRect {
     bottom: Val::Auto,
 };
 
-/// An anchor: absolutely placed, keeping the node's own size.
+/// An anchor: absolutely placed, keeping the size the node is.
 const fn anchor(
     id: &'static str,
     label: &'static str,
@@ -104,7 +144,7 @@ const fn anchor(
         top,
         bottom,
         margin,
-        size: None,
+        size: PresetSize::Capture,
     }
 }
 
@@ -218,13 +258,14 @@ pub const WIDE_PRESETS: [LayoutPreset; 2] = [
         top: ZERO,
         bottom: ZERO,
         margin: NO_MARGIN,
-        // Stated, because a node with a width of its own would keep it and
-        // stretch nowhere.
-        size: Some((FREE, FREE)),
+        // Wiped, not captured: a node with a size of its own would keep it
+        // and stretch nowhere, and stretching is the whole of what this
+        // preset means.
+        size: PresetSize::Stated(FREE, FREE),
     },
     LayoutPreset {
         id: "center",
-        label: "Center",
+        label: "Center In Flow",
         icon: Icon::AlignCenterHorizontal,
         position_type: PositionType::Relative,
         left: FREE,
@@ -232,9 +273,22 @@ pub const WIDE_PRESETS: [LayoutPreset; 2] = [
         top: FREE,
         bottom: FREE,
         margin: UiRect::all(Val::Auto),
-        size: None,
+        size: PresetSize::Capture,
     },
 ];
+
+/// What a preset's tooltip says under its name, where the name alone does
+/// not tell two presets apart.
+fn hint(id: &str) -> &'static str {
+    match id {
+        "middle_center" => {
+            "Places the node absolutely at the middle of its parent, keeping its size."
+        }
+        "center" => "Leaves the node in its parent's flow and centres it there.",
+        "full_rect" => "Stretches the node over the whole parent, dropping any size of its own.",
+        _ => "",
+    }
+}
 
 /// Every preset, anchors first.
 pub fn presets() -> impl Iterator<Item = &'static LayoutPreset> {
@@ -246,10 +300,27 @@ pub fn preset(id: &str) -> Option<&'static LayoutPreset> {
     presets().find(|preset| preset.id == id)
 }
 
+/// The size layout last gave `entity`, or `None` when it has not been laid
+/// out.
+fn measured_size(world: &World, entity: Entity) -> Option<Vec2> {
+    let size = world.get::<ComputedNode>(entity)?.size();
+    (size.x > 0.0 && size.y > 0.0).then_some(size)
+}
+
+fn name_of(world: &World, entity: Entity) -> String {
+    world
+        .get::<Name>(entity)
+        .map_or_else(|| "node".to_string(), |name| name.as_str().to_owned())
+}
+
 /// Write `preset` over every selected node's `Node`, as one history entry.
+///
+/// The one path every preset takes, so what a press does to a node its
+/// parent was laying out is decided and said once.
 fn apply_preset(world: &mut World, preset: &'static LayoutPreset) {
     let selected: Vec<Entity> = world.resource::<Selection>().entities.clone();
     let mut edits: Vec<(Entity, Node, Node)> = Vec::new();
+    let mut promoted: Vec<String> = Vec::new();
     for entity in selected {
         if world.get::<EditorEntity>(entity).is_some() {
             continue;
@@ -257,7 +328,12 @@ fn apply_preset(world: &mut World, preset: &'static LayoutPreset) {
         let Some(before) = world.get::<Node>(entity).cloned() else {
             continue;
         };
-        let after = preset.applied(&before);
+        let after = preset.applied(&before, measured_size(world, entity));
+        if before.position_type != PositionType::Absolute
+            && after.position_type == PositionType::Absolute
+        {
+            promoted.push(name_of(world, entity));
+        }
         if let Some(mut node) = world.get_mut::<Node>(entity) {
             *node = after.clone();
         }
@@ -266,6 +342,21 @@ fn apply_preset(world: &mut World, preset: &'static LayoutPreset) {
     // One entry however many nodes the selection held, so one undo puts the
     // whole press back.
     push_layout_edits(world, edits);
+
+    // A preset is a placement, so it is allowed to take a node out of its
+    // parent's flow; the nudge refuses instead, because a keystroke has no
+    // rect to promote against. Either way the user is told which it was.
+    match promoted.len() {
+        0 => {}
+        1 => crate::status_bar::notify_warn(
+            world,
+            format!("{} is now placed absolutely", promoted[0]),
+        ),
+        _ => crate::status_bar::notify_warn(
+            world,
+            format!("{} are now placed absolutely", promoted.join(", ")),
+        ),
+    }
 }
 
 /// A preset needs a selected node to put somewhere.
@@ -318,9 +409,11 @@ pub(crate) fn ui_layout_preset(
 
 /// A preset button: a feathers control carrying the call that applies it.
 fn preset_call(preset: &'static LayoutPreset) -> (ButtonOperatorCall, Tooltip) {
+    let mut tooltip = Tooltip::title(preset.label);
+    tooltip.description = hint(preset.id).to_string();
     (
         ButtonOperatorCall::new(LAYOUT_PRESET_OP).with_param("name", preset.id),
-        Tooltip::title(preset.label),
+        tooltip,
     )
 }
 

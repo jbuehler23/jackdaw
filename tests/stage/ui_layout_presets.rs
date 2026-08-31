@@ -4,18 +4,25 @@
 //! What is pinned here:
 //!  * every preset writes the whole placement, so nothing is left over from
 //!    the preset applied before it;
+//!  * an anchor captures the size layout measured, so a node that states no
+//!    size of its own is placed rather than stretched;
+//!  * Full Rect is the one preset that drops the size, and the anchor after
+//!    it captures what the stretch measured;
+//!  * a preset that takes a node out of its parent's flow says so;
 //!  * one press is one history entry that undoes to the exact `Node`;
 //!  * the card's row offers all eleven and each button dispatches its own.
 
 use crate::util;
 
-use bevy::{prelude::*, ui_widgets::Activate};
+use bevy::{prelude::*, ui::ComputedNode, ui_widgets::Activate};
 use jackdaw::boot_ops::run_op_clause_as_user;
 use jackdaw::commands::CommandHistory;
 use jackdaw::selection::Selection;
+use jackdaw::status_bar::StatusNotice;
 use jackdaw::ui_layout_presets::{LAYOUT_PRESET_OP, LayoutPresetRow, presets, spawn_preset_row};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::button::ButtonOperatorCall;
+use jackdaw_scene_types::UiSceneRoot;
 
 #[track_caller]
 fn run(app: &mut App, clause: &str) -> OperatorResult {
@@ -337,5 +344,215 @@ fn the_card_row_offers_every_preset_and_dispatches_it() {
             .entities
             .contains(&entity),
         "the press acted on the selection"
+    );
+}
+
+/// The reference resolution the laid-out scene below is authored against.
+const REFERENCE: UVec2 = UVec2::new(800, 600);
+
+fn settle(app: &mut App) {
+    for _ in 0..4 {
+        app.update();
+    }
+}
+
+/// A 2D panel, which is what gives an authored scene a target to be laid
+/// out against.
+fn panel(app: &mut App) {
+    use jackdaw::viewport_2d::{Viewport2dPanelHost, build_viewport_2d_panel};
+    let parent = app
+        .world_mut()
+        .spawn((
+            jackdaw::EditorEntity,
+            Node {
+                width: px(800.0 + jackdaw::viewport_2d::RULER_SIZE),
+                height: px(600.0
+                    + jackdaw::viewport_2d::RULER_SIZE
+                    + jackdaw_feathers::tokens::TOOLBAR_HEIGHT),
+                ..default()
+            },
+        ))
+        .id();
+    build_viewport_2d_panel(app.world_mut(), parent);
+    let mut host = app
+        .world_mut()
+        .get_mut::<Viewport2dPanelHost>(parent)
+        .expect("host on panel parent");
+    host.view.zoom = 1.0;
+    host.fit_pending = false;
+}
+
+/// A root of a stated size holding one panel that states no size of its
+/// own, so what layout measures for it is its content and not the root.
+///
+/// `align_items: Start` matters: the default stretches a flow child across
+/// the root, and then "the size the node is" would be the root's, which is
+/// not what an anchor is meant to keep.
+fn auto_sized_panel(app: &mut App) -> (Entity, Entity) {
+    let root = app
+        .world_mut()
+        .spawn((
+            Name::new("UiRoot"),
+            UiSceneRoot {
+                reference_size: REFERENCE,
+            },
+            Node {
+                width: px(400.0),
+                height: px(300.0),
+                align_items: AlignItems::Start,
+                ..default()
+            },
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), root);
+
+    let panel_entity = app
+        .world_mut()
+        .spawn((Name::new("Panel"), Node::default(), ChildOf(root)))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), panel_entity);
+    app.world_mut().spawn((
+        Name::new("Filler"),
+        Node {
+            width: px(100.0),
+            height: px(40.0),
+            ..default()
+        },
+        ChildOf(panel_entity),
+    ));
+
+    settle(app);
+    jackdaw::selection::select_only(app.world_mut(), panel_entity);
+    settle(app);
+    (root, panel_entity)
+}
+
+fn computed_size(app: &App, entity: Entity) -> Vec2 {
+    app.world()
+        .get::<ComputedNode>(entity)
+        .expect("a laid-out node")
+        .size()
+}
+
+fn centre_of(app: &App, entity: Entity) -> Vec2 {
+    app.world()
+        .get::<bevy::ui::UiGlobalTransform>(entity)
+        .expect("a laid-out node")
+        .translation
+}
+
+/// An anchor keeps the node the size it is. A node that states no size has
+/// only the size layout gave it, so the preset writes that down before it
+/// states the offsets: without it the two offsets of Middle Center would
+/// stretch the node over the parent instead of putting it in the middle.
+#[test]
+fn middle_center_centres_an_auto_sized_panel_instead_of_stretching_it() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (root, panel_entity) = auto_sized_panel(&mut app);
+    assert_eq!(
+        computed_size(&app, panel_entity),
+        Vec2::new(100.0, 40.0),
+        "the fixture's panel is the size of its content",
+    );
+
+    run_finished(&mut app, "ui.layout_preset name=middle_center");
+    settle(&mut app);
+
+    let node = node_of(&app, panel_entity);
+    assert_eq!(
+        (node.width, node.height),
+        (px(100.0), px(40.0)),
+        "the preset captured the size layout measured",
+    );
+    assert_eq!(
+        computed_size(&app, panel_entity),
+        Vec2::new(100.0, 40.0),
+        "and the node is still that size once it is placed",
+    );
+    assert!(
+        (centre_of(&app, panel_entity) - centre_of(&app, root)).length() < 0.5,
+        "a centred node sits at the middle of its parent, not over all of it",
+    );
+}
+
+/// Full Rect means "be the size of the parent", so it is the one preset
+/// that drops a size rather than keeping it. The anchor pressed after it
+/// captures what that stretch measured, so the node stays the size it is
+/// on screen and moves to the corner.
+#[test]
+fn full_rect_drops_the_size_and_the_next_anchor_captures_the_stretch() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (_root, panel_entity) = auto_sized_panel(&mut app);
+
+    run_finished(&mut app, "ui.layout_preset name=full_rect");
+    settle(&mut app);
+    let node = node_of(&app, panel_entity);
+    assert_eq!(
+        (node.width, node.height),
+        (Val::Auto, Val::Auto),
+        "full rect states no size of its own",
+    );
+    assert_eq!(
+        computed_size(&app, panel_entity),
+        Vec2::new(400.0, 300.0),
+        "so it stretches over the whole parent",
+    );
+
+    run_finished(&mut app, "ui.layout_preset name=top_left");
+    settle(&mut app);
+    let node = node_of(&app, panel_entity);
+    assert_eq!(
+        (node.width, node.height),
+        (px(400.0), px(300.0)),
+        "the anchor captured the size the stretch had reached",
+    );
+}
+
+/// A preset is a placement, so it may take a node out of its parent's
+/// flow. The nudge refuses that; a preset does it and says so, rather than
+/// leaving the change for the user to find in the Position field.
+#[test]
+fn a_preset_that_places_a_flowed_child_absolutely_says_so() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (_root, panel_entity) = auto_sized_panel(&mut app);
+    assert_eq!(
+        node_of(&app, panel_entity).position_type,
+        PositionType::Relative,
+        "the fixture's panel starts in its parent's flow",
+    );
+
+    run_finished(&mut app, "ui.layout_preset name=middle_center");
+    settle(&mut app);
+
+    let notice = app.world().resource::<StatusNotice>();
+    assert!(notice.is_active(), "the promotion is announced");
+    assert_eq!(
+        notice.text(),
+        "Panel is now placed absolutely",
+        "the notice names the node it moved",
+    );
+}
+
+/// Center In Flow leaves the node where its parent puts it, so there is
+/// nothing to announce.
+#[test]
+fn center_in_flow_promotes_nothing_and_says_nothing() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (_root, panel_entity) = auto_sized_panel(&mut app);
+
+    run_finished(&mut app, "ui.layout_preset name=center");
+    settle(&mut app);
+
+    assert_eq!(
+        node_of(&app, panel_entity).position_type,
+        PositionType::Relative,
+    );
+    assert!(
+        !app.world().resource::<StatusNotice>().is_active(),
+        "nothing was taken out of the flow, so nothing is announced",
     );
 }
