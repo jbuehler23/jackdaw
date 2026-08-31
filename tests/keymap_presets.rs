@@ -179,3 +179,15 @@ fn the_clipboard_chord_is_the_timelines_alone() {
     );
 }
 
+/// Ctrl+A is a preset entry, so the keymap can report it, rebind it and
+/// save it like every other binding.
+#[test]
+fn ctrl_a_is_a_preset_entry_for_the_add_entity_picker() {
+    let mut app = util::headless_app();
+    let defaults = classic(&mut app);
+    assert!(
+        operators_on(&defaults, &PresetInput::key("KeyA").ctrl())
+            .contains(&"entity.add_picker".to_string()),
+    );
+}
+

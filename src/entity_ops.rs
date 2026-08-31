@@ -1443,7 +1443,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         // Registered on core rather than on the UI Widgets extension that
         // supplies the definitions, so the operator stays available and
         // reports an unknown widget name rather than disappearing with it.
-        .register_operator::<crate::ui_palette::WidgetAddOp>();
+        .register_operator::<crate::ui_palette::WidgetAddOp>()
+        .register_operator::<crate::add_entity_picker::EntityAddPickerOp>();
 
     #[cfg(feature = "multiplayer")]
     ctx.register_operator::<EntityAddSpawnPointOp>()
@@ -1477,6 +1478,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         "KeyH",
     )
     .alt()]);
+    ctx.bind_operator::<CoreExtensionInputContext, crate::add_entity_picker::EntityAddPickerOp>([
+        PresetInput::key("KeyA").ctrl(),
+    ]);
 }
 
 /// Shared availability check for entity manipulation operators.

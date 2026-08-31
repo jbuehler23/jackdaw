@@ -4,6 +4,7 @@
 //! apart.
 
 use bevy::prelude::*;
+use jackdaw_api::prelude::*;
 use jackdaw_feathers::picker::{
     Category, Matchable, PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text,
     picker_item,
@@ -69,6 +70,35 @@ pub fn collect_add_menu_items(world: &mut World) -> Vec<AddMenuItem> {
 /// every other group behind a row that expands on hover.
 pub fn add_menu_rows(world: &mut World) -> Vec<(String, String)> {
     CreationTaxonomy::collect(world).menu_rows()
+}
+
+/// Open the searchable Add Entity picker, the way the scene tree's Add
+/// Entity button does.
+///
+/// The Add menu is a walk through nested sections; this is the same
+/// vocabulary with a search field over it, which is the faster way in
+/// once the vocabulary is larger than a screen. Both read
+/// [`collect_add_menu_items`], so neither can offer something the other
+/// does not.
+///
+/// Calling it again closes it, matching the button.
+#[operator(
+    id = "entity.add_picker",
+    label = "Add Entity",
+    description = "Open the searchable Add Entity picker.",
+    allows_undo = false,
+    is_available = crate::entity_ops::can_act_on_entities
+)]
+pub(crate) fn entity_add_picker(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        if let Err(err) = world.run_system_cached(open_add_entity_picker) {
+            warn!("entity.add_picker: {err}");
+        }
+    });
+    OperatorResult::Finished
 }
 
 /// Open the Add Entity picker as a centered blocking dialog. Styled
