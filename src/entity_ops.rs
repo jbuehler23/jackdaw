@@ -8,7 +8,7 @@ use bevy::{
 
 use crate::{
     EditorEntity,
-    commands::{CommandHistory, DespawnEntity, EditorCommand},
+    commands::{CommandHistory, DespawnEntity, EditorCommand, HierarchyLocation, MoveEntity},
     selection::{Selected, Selection},
 };
 
@@ -570,6 +570,82 @@ pub fn delete_selected(world: &mut World) {
         };
         let mut history = world.resource_mut::<CommandHistory>();
         history.push_executed(Box::new(group));
+    }
+}
+
+/// How many siblings the list `parent` names holds. `None` is the scene's
+/// own root list.
+fn sibling_count(world: &World, parent: Option<Entity>) -> usize {
+    match parent {
+        Some(parent) => world.get::<Children>(parent).map_or(0, Children::len),
+        None => world
+            .get_resource::<jackdaw_bsn::SceneBsnAst>()
+            .map_or(0, |ast| ast.roots.len()),
+    }
+}
+
+/// Move every selected entity one slot along its own sibling list, earlier
+/// for `delta` of -1 and later for 1.
+///
+/// The order is written to the document, not only to the ECS, so a reordered
+/// row survives a save and reload and a flowed child changes place on the
+/// canvas. An entity already at the end it is moving towards stays where it
+/// is while the rest of the selection moves. The whole move is one entry.
+pub(crate) fn move_selected_siblings(world: &mut World, delta: isize) {
+    let selected: Vec<Entity> = world.resource::<Selection>().entities.clone();
+    let mut located: Vec<(Entity, HierarchyLocation)> = selected
+        .into_iter()
+        .filter(|&entity| {
+            world.get_entity(entity).is_ok() && world.get::<EditorEntity>(entity).is_none()
+        })
+        .map(|entity| {
+            let location = HierarchyLocation::from_world(world, entity);
+            (entity, location)
+        })
+        .collect();
+    // Nearest the destination first, so two entities moving the same way
+    // cannot swap past each other on the way.
+    located.sort_by_key(|(_, location)| location.index);
+    if delta > 0 {
+        located.reverse();
+    }
+
+    let mut moves: Vec<Box<dyn EditorCommand>> = Vec::new();
+    let mut lists: Vec<Option<Entity>> = Vec::new();
+    for (entity, _) in located {
+        let old = HierarchyLocation::from_world(world, entity);
+        let Some(index) = old.index.checked_add_signed(delta) else {
+            continue;
+        };
+        if index >= sibling_count(world, old.parent) {
+            continue;
+        }
+        let mut command = MoveEntity::new(
+            world,
+            entity,
+            HierarchyLocation {
+                parent: old.parent,
+                index,
+            },
+        );
+        command.execute(world);
+        moves.push(Box::new(command));
+        if !lists.contains(&old.parent) {
+            lists.push(old.parent);
+        }
+    }
+
+    let entry: Box<dyn EditorCommand> = match moves.len() {
+        0 => return,
+        1 => moves.pop().expect("one move"),
+        _ => Box::new(crate::commands::CommandGroup {
+            commands: moves,
+            label: "Reorder entities".to_string(),
+        }),
+    };
+    world.resource_mut::<CommandHistory>().push_executed(entry);
+    for list in lists {
+        crate::hierarchy::sync_outliner_row_order(world, list);
     }
 }
 
@@ -1407,6 +1483,8 @@ use crate::core_extension::CoreExtensionInputContext;
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityDeleteOp>()
         .register_operator::<EntityDuplicateOp>()
+        .register_operator::<EntityMoveUpOp>()
+        .register_operator::<EntityMoveDownOp>()
         .register_operator::<EntityPlaceGltfOp>()
         .register_operator::<EntityCopyComponentsOp>()
         .register_operator::<EntityPasteComponentsOp>()
@@ -1462,6 +1540,13 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     )
     .ctrl()
     .shift()]);
+    ctx.bind_operator::<CoreExtensionInputContext, EntityMoveUpOp>([
+        PresetInput::key("ArrowUp").ctrl()
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, EntityMoveDownOp>([PresetInput::key(
+        "ArrowDown",
+    )
+    .ctrl()]);
     ctx.bind_operator::<CoreExtensionInputContext, EntityToggleVisibilityOp>([PresetInput::key(
         "KeyH",
     )]);
@@ -1573,6 +1658,31 @@ pub(crate) fn entity_duplicate(
     mut commands: Commands,
 ) -> OperatorResult {
     commands.queue(duplicate_selected);
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "entity.move_up",
+    label = "Move Up",
+    description = "Move the selection one slot earlier among its siblings.",
+    is_available = can_act_on_entities
+)]
+pub(crate) fn entity_move_up(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| move_selected_siblings(world, -1));
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "entity.move_down",
+    label = "Move Down",
+    description = "Move the selection one slot later among its siblings.",
+    is_available = can_act_on_entities
+)]
+pub(crate) fn entity_move_down(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| move_selected_siblings(world, 1));
     OperatorResult::Finished
 }
 

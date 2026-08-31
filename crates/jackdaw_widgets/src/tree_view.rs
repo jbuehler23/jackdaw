@@ -205,6 +205,34 @@ pub struct TreeRowDropped {
     pub target_source: Entity,
 }
 
+/// Marker on the thin strip that stands for the gap above or below a
+/// tree row. A drop there reorders; a drop on the row itself reparents.
+#[derive(Component)]
+pub struct TreeRowInsertZone {
+    /// `true` for the strip below the row (and below everything nested
+    /// under it), `false` for the strip above it.
+    pub after: bool,
+}
+
+/// Event fired when a drag is dropped on the gap between two tree rows,
+/// which reorders rather than reparents.
+///
+/// The widget reports the gap it was dropped in as a row and a side; the
+/// consumer owns the scene, so it is the one that turns that into a parent
+/// and a sibling index.
+#[derive(EntityEvent)]
+pub struct TreeRowInserted {
+    #[event_target]
+    pub entity: Entity,
+    /// The scene entity being moved
+    pub dragged_source: Entity,
+    /// The scene entity whose row the gap sits against
+    pub target: Entity,
+    /// Which side of `target` the gap is: `0` immediately before it among
+    /// its siblings, `1` immediately after.
+    pub index: usize,
+}
+
 /// Event fired when a tree row is dropped onto the root container (deparent)
 #[derive(EntityEvent)]
 pub struct TreeRowDroppedOnRoot {

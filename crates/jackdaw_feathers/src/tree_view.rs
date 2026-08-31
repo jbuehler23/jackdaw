@@ -8,8 +8,8 @@ use bevy_monitors::prelude::{MonitorSelf, Mutation, NotifyChanged};
 use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeFocused, TreeNode, TreeNodeExpandToggle,
     TreeNodeExpanded, TreeRowChildren, TreeRowClicked, TreeRowContent, TreeRowDot, TreeRowDropped,
-    TreeRowDroppedOnRoot, TreeRowLabel, TreeRowSelected, TreeRowStartRename,
-    TreeRowVisibilityToggle, TreeRowVisibilityToggled, TreeView,
+    TreeRowDroppedOnRoot, TreeRowInsertZone, TreeRowInserted, TreeRowLabel, TreeRowSelected,
+    TreeRowStartRename, TreeRowVisibilityToggle, TreeRowVisibilityToggled, TreeView,
 };
 
 use lucide_icons::Icon;
@@ -20,6 +20,8 @@ pub const ROW_BG: Color = Color::NONE;
 const INDENT_WIDTH: f32 = 16.0;
 const TOGGLE_WIDTH: f32 = 18.0;
 const DOT_COLUMN_WIDTH: f32 = 14.0;
+/// How tall the strip standing for the gap between two rows is.
+const INSERT_ZONE_HEIGHT: f32 = 4.0;
 
 /// Parameters for tree row icon font rendering
 #[derive(Clone)]
@@ -104,7 +106,11 @@ pub fn tree_row(
                     ..default()
                 },
                 BorderColor::all(tokens::CONNECTION_LINE),
-            )
+            ),
+            // The gaps above and below the row. Last, so they sit over the
+            // row's own drop target where the two meet.
+            insertion_zone(false),
+            insertion_zone(true)
         ],
         // React to TreeNodeExpanded changes: children visibility + Checked
         observe(
@@ -152,6 +158,78 @@ pub fn tree_row(
                         }
                     }
                 }
+            },
+        ),
+    )
+}
+
+/// The strip standing for the gap above (`after == false`) or below
+/// (`after == true`) a row. Dropping there reorders the dragged entity
+/// among the row's siblings instead of making it the row's child.
+///
+/// Placed absolutely and hanging half its height past the row's edge, so it
+/// reads as the line between two rows without taking any height from the
+/// tree. The lower strip sits under the row's whole subtree, which is where
+/// "after this row" is once the row is expanded.
+fn insertion_zone(after: bool) -> impl Bundle {
+    let overhang = px(-INSERT_ZONE_HEIGHT / 2.0);
+    (
+        TreeRowInsertZone { after },
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(0.0),
+            right: px(0.0),
+            top: if after { Val::Auto } else { overhang },
+            bottom: if after { overhang } else { Val::Auto },
+            height: px(INSERT_ZONE_HEIGHT),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+        observe(
+            |mut enter: On<Pointer<DragEnter>>, mut colors: Query<&mut BackgroundColor>| {
+                enter.propagate(false);
+                if let Ok(mut color) = colors.get_mut(enter.event_target()) {
+                    color.0 = tokens::SELECTED_BORDER;
+                }
+            },
+        ),
+        observe(
+            |mut leave: On<Pointer<DragLeave>>, mut colors: Query<&mut BackgroundColor>| {
+                leave.propagate(false);
+                if let Ok(mut color) = colors.get_mut(leave.event_target()) {
+                    color.0 = Color::NONE;
+                }
+            },
+        ),
+        observe(
+            |mut drop: On<Pointer<DragDrop>>,
+             mut commands: Commands,
+             parent_query: Query<&ChildOf>,
+             tree_nodes: Query<&TreeNode>,
+             zones: Query<&TreeRowInsertZone>,
+             mut colors: Query<&mut BackgroundColor>| {
+                drop.propagate(false);
+                let zone = drop.event_target();
+                if let Ok(mut color) = colors.get_mut(zone) {
+                    color.0 = Color::NONE;
+                }
+                let Ok(&ChildOf(row)) = parent_query.get(zone) else {
+                    return;
+                };
+                let (Ok(target), Ok(side)) = (tree_nodes.get(row), zones.get(zone)) else {
+                    return;
+                };
+                let Some(dragged_source) =
+                    find_source_entity(drop.dropped, &parent_query, &tree_nodes)
+                else {
+                    return;
+                };
+                commands.trigger(TreeRowInserted {
+                    entity: zone,
+                    dragged_source,
+                    target: target.0,
+                    index: usize::from(side.after),
+                });
             },
         ),
     )

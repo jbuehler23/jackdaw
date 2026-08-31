@@ -22,8 +22,8 @@ use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuState};
 use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeFocused, TreeIndex, TreeNode, TreeNodeExpanded,
     TreeRowChildren, TreeRowClicked, TreeRowContent, TreeRowDot, TreeRowDropped,
-    TreeRowDroppedOnRoot, TreeRowInlineRename, TreeRowLabel, TreeRowRenamed, TreeRowSelected,
-    TreeRowStartRename, TreeRowVisibilityToggle, TreeRowVisibilityToggled,
+    TreeRowDroppedOnRoot, TreeRowInlineRename, TreeRowInserted, TreeRowLabel, TreeRowRenamed,
+    TreeRowSelected, TreeRowStartRename, TreeRowVisibilityToggle, TreeRowVisibilityToggled,
 };
 
 use crate::{
@@ -163,6 +163,7 @@ impl Plugin for HierarchyPlugin {
             .add_observer(on_entity_selected)
             .add_observer(on_entity_deselected)
             .add_observer(on_tree_row_dropped)
+            .add_observer(on_tree_row_inserted)
             .add_observer(on_tree_row_dropped_on_root)
             .add_observer(on_tree_row_start_rename)
             .add_observer(on_tree_row_renamed)
@@ -1620,6 +1621,123 @@ fn on_tree_row_dropped(
         world
             .resource_mut::<CommandHistory>()
             .push_executed(Box::new(cmd));
+    });
+}
+
+/// Put every Outliner panel's rows for `parent`'s children back in the order
+/// the scene holds them in.
+///
+/// A reorder changes no row's parent, so none of the reparent observers hear
+/// about it; the rows would keep the order they were spawned in and disagree
+/// with both the canvas and the saved file.
+///
+/// `None` is the scene's own root list, whose order the document holds.
+pub fn sync_outliner_row_order(world: &mut World, parent: Option<Entity>) {
+    let order: Vec<Entity> = match parent {
+        Some(parent) => world
+            .get::<Children>(parent)
+            .map(|children| children.iter().collect())
+            .unwrap_or_default(),
+        None => {
+            let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+            ast.roots
+                .iter()
+                .filter_map(|&node| ast.ecs_for_ast(node))
+                .collect()
+        }
+    };
+    if order.is_empty() {
+        return;
+    }
+
+    let containers: Vec<(Entity, Entity)> = match parent {
+        Some(parent) => {
+            let rows: Vec<(Entity, Entity)> = world
+                .resource::<TreeIndex>()
+                .rows_for_source(parent)
+                .collect();
+            rows.into_iter()
+                .filter_map(|(container, row)| {
+                    first_child_with::<TreeRowChildren>(world, row)
+                        .map(|children| (container, children))
+                })
+                .collect()
+        }
+        None => {
+            let Ok(roots) = world.run_system_cached(collect_hierarchy_containers) else {
+                return;
+            };
+            roots.into_iter().map(|root| (root, root)).collect()
+        }
+    };
+
+    for (container, row_container) in containers {
+        let wanted: Vec<Entity> = order
+            .iter()
+            .filter_map(|&source| world.resource::<TreeIndex>().get(container, source))
+            .filter(|&row| world.get::<ChildOf>(row).map(ChildOf::parent) == Some(row_container))
+            .collect();
+        for (index, row) in wanted.into_iter().enumerate() {
+            world
+                .entity_mut(row_container)
+                .insert_children(index, &[row]);
+        }
+    }
+}
+
+/// Handle a drop in the gap between two rows: reorder rather than reparent.
+///
+/// The widget reports which row the gap sits against and which side of it;
+/// the sibling index that names is read here, where the scene is.
+fn on_tree_row_inserted(
+    event: On<TreeRowInserted>,
+    mut commands: Commands,
+    parent_query: Query<&ChildOf>,
+) {
+    let dragged = event.dragged_source;
+    let target = event.target;
+    let after = event.index > 0;
+
+    if dragged == target {
+        return;
+    }
+    // Dropping a node into its own subtree would orphan the branch.
+    let mut current = target;
+    while let Ok(&ChildOf(parent)) = parent_query.get(current) {
+        if parent == dragged {
+            return;
+        }
+        current = parent;
+    }
+
+    commands.queue(move |world: &mut World| {
+        let landing = crate::commands::HierarchyLocation::from_world(world, target);
+        let old = crate::commands::HierarchyLocation::from_world(world, dragged);
+        let mut index = landing.index + usize::from(after);
+        // Taking the node out of the list first shifts every later slot
+        // down by one, so a move further down its own list aims one short.
+        if old.parent == landing.parent && old.index < index {
+            index -= 1;
+        }
+        if old.parent == landing.parent && old.index == index {
+            return;
+        }
+        let mut command = crate::commands::MoveEntity::new(
+            world,
+            dragged,
+            crate::commands::HierarchyLocation {
+                parent: landing.parent,
+                index,
+            },
+        );
+        command.execute(world);
+        world
+            .resource_mut::<CommandHistory>()
+            .push_executed(Box::new(command));
+        sync_outliner_row_order(world, old.parent);
+        if landing.parent != old.parent {
+            sync_outliner_row_order(world, landing.parent);
+        }
     });
 }
 
