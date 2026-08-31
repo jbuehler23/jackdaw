@@ -62,11 +62,21 @@ impl JackdawExtension for CoreWindowsExtension {
     }
 
     fn register(&self, ctx: &mut ExtensionContext) {
+        for (type_path, icon) in scene_kind_icons() {
+            ctx.register_entity_icon(type_path, icon);
+        }
         for (type_path, icon) in WORLD_ENTITY_ICONS {
             ctx.register_entity_icon(*type_path, *icon);
         }
         #[cfg(feature = "camera_rig")]
         ctx.register_entity_icon(CAMERA_RIG_ICON.0, CAMERA_RIG_ICON.1);
+        for (type_path, icon) in world_kind_icons() {
+            ctx.register_entity_icon(type_path, icon);
+        }
+        for (type_path, icon) in widget_kind_icons() {
+            ctx.register_entity_icon(type_path, icon);
+        }
+        ctx.register_entity_icon_predicate(container_icon);
 
         ctx.register_window(
             WindowDescriptor::new(HierarchyWindow::ID)
@@ -577,6 +587,105 @@ fn spawn_widget(world: &mut World, parent: Option<Entity>, bundle: impl Bundle) 
         entity.insert(ChildOf(parent));
     }
     entity.id()
+}
+
+/// The scene-shaped kinds, which win over everything an entity is also
+/// made of: a UI scene's root is a `Node` too, and a prefab instance is
+/// whatever it inherits.
+fn scene_kind_icons() -> Vec<(String, Icon)> {
+    use bevy::reflect::TypePath;
+    vec![
+        (
+            jackdaw_scene_types::UiSceneRoot::type_path().to_string(),
+            Icon::LayoutTemplate,
+        ),
+        (
+            jackdaw_scene_types::Scene2dRoot::type_path().to_string(),
+            Icon::Frame,
+        ),
+        (
+            jackdaw_prefab::components::IsA::type_path().to_string(),
+            Icon::Component,
+        ),
+    ]
+}
+
+/// The 3D kinds, after jackdaw's own authorable components: a brush and
+/// a terrain both carry `Mesh3d`, and they are the more particular thing.
+fn world_kind_icons() -> Vec<(String, Icon)> {
+    use bevy::reflect::TypePath;
+    vec![
+        (Camera::type_path().to_string(), Icon::Video),
+        (DirectionalLight::type_path().to_string(), Icon::Sun),
+        (PointLight::type_path().to_string(), Icon::Lightbulb),
+        (SpotLight::type_path().to_string(), Icon::Flashlight),
+        (Mesh3d::type_path().to_string(), Icon::Box),
+    ]
+}
+
+/// The component that identifies each built-in UI widget in the
+/// outliner, paired with the widget definition its icon comes from.
+///
+/// The icon is read out of the definition rather than named again here,
+/// so the Add menu and the outliner cannot come to disagree about what a
+/// kind looks like. A toggle switch is a `Checkbox` in the document, so
+/// the two share a glyph; nothing on the entity separates them.
+///
+/// An id with no definition, or a definition with no icon, contributes
+/// nothing, which the outliner icon suite catches.
+fn widget_kind_icons() -> Vec<(String, Icon)> {
+    use bevy::reflect::TypePath;
+    use bevy::ui_widgets::{Button, Checkbox, RadioButton, ScrollArea, Slider};
+
+    let sources: [(String, &str); 8] = [
+        (Button::type_path().to_string(), "ui.button"),
+        (Checkbox::type_path().to_string(), "ui.checkbox"),
+        (RadioButton::type_path().to_string(), "ui.radio"),
+        (Slider::type_path().to_string(), "ui.slider"),
+        (
+            jackdaw_widgets_runtime::TextValue::type_path().to_string(),
+            "ui.text_input",
+        ),
+        (ScrollArea::type_path().to_string(), "ui.scroll_area"),
+        (Text::type_path().to_string(), "ui.label"),
+        (ImageNode::type_path().to_string(), "ui.image"),
+    ];
+
+    let definitions = builtin_widget_definitions();
+    sources
+        .into_iter()
+        .filter_map(|(type_path, widget_id)| {
+            let icon = definitions
+                .iter()
+                .find(|definition| definition.id == widget_id)?
+                .icon?;
+            Some((type_path, icon))
+        })
+        .collect()
+}
+
+/// A `Node` that is nothing more particular is a container, and only its
+/// own values say which kind: a grid, a row, a column, or a panel. Runs
+/// after every component rule, so a control or a piece of text never
+/// reaches it.
+fn container_icon(entity: bevy::ecs::world::EntityRef) -> Option<Icon> {
+    let node = entity.get::<Node>()?;
+    if node.display == Display::Grid {
+        return Some(Icon::Grid3x3);
+    }
+    match node.flex_direction {
+        FlexDirection::Row | FlexDirection::RowReverse => Some(Icon::Columns3),
+        // The Panel preset is a column with a surface behind it, so the
+        // theme token is the only value separating a panel from a plain
+        // column. A row with a background is still a row.
+        FlexDirection::Column | FlexDirection::ColumnReverse => {
+            if entity.contains::<ThemeBackgroundColor>() {
+                Some(Icon::PanelTop)
+            } else {
+                Some(Icon::Rows3)
+            }
+        }
+    }
 }
 
 /// A container preset: a `Node` plus the theme token that makes it a surface.

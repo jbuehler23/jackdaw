@@ -128,6 +128,7 @@ impl Plugin for HierarchyPlugin {
                     // observers do rather than only in the Editor state.
                     spawn_rows_for_late_registrations,
                     refresh_chevrons_on_document_change,
+                    refresh_icons_on_node_change,
                     watch_selection_for_reveal,
                     drive_reveal_target,
                 )
@@ -143,7 +144,22 @@ impl Plugin for HierarchyPlugin {
             .add_observer(on_tree_row_clicked)
             .add_observer(on_entity_removed)
             .add_observer(on_name_changed)
-            .add_observer(on_brush_icon_ready)
+            // One observer per component that decides a row's glyph. The
+            // resolver re-reads everything, so which one fired does not
+            // matter; what matters is that every deciding component has a
+            // trigger.
+            .add_observer(refresh_icon_on_add::<Brush>)
+            .add_observer(refresh_icon_on_add::<Node>)
+            .add_observer(refresh_icon_on_add::<Text>)
+            .add_observer(refresh_icon_on_add::<ImageNode>)
+            .add_observer(refresh_icon_on_add::<Camera>)
+            .add_observer(refresh_icon_on_add::<Mesh3d>)
+            .add_observer(refresh_icon_on_add::<DirectionalLight>)
+            .add_observer(refresh_icon_on_add::<PointLight>)
+            .add_observer(refresh_icon_on_add::<SpotLight>)
+            .add_observer(refresh_icon_on_add::<jackdaw_scene_types::UiSceneRoot>)
+            .add_observer(refresh_icon_on_add::<jackdaw_scene_types::Scene2dRoot>)
+            .add_observer(refresh_icon_on_add::<jackdaw_prefab::components::IsA>)
             .add_observer(on_entity_selected)
             .add_observer(on_entity_deselected)
             .add_observer(on_tree_row_dropped)
@@ -1007,23 +1023,29 @@ fn first_child_with<C: Component>(world: &World, parent: Entity) -> Option<Entit
         .find(|&child| world.get::<C>(child).is_some())
 }
 
-/// Re-derive the icon glyph for every Outliner row of `entity`. A brush's icon
-/// is registered against its `Brush` component (`registered_icon`); the
-/// duplicate path streams a brush's components into the world one at a time
-/// through the scene, so the row can be spawned (when `Transform` lands) before
-/// `Brush` arrives, leaving the fallback dot. Refreshing the glyph here mirrors
-/// how the label refreshes on a `Name` change. Only the glyph changes: a brush
-/// root's category (and so its icon color) does not depend on `Brush`.
+/// Re-derive the icon glyph for every Outliner row of `entity`.
+///
+/// What kind of thing an entity is comes out of `registered_icon`, which
+/// reads the components it carries and, for a container, their values.
+/// Both can arrive after the row does: the duplicate path streams a
+/// brush's components in one at a time, so the row can be spawned (when
+/// `Transform` lands) before `Brush` does, and a container's
+/// `flex_direction` changes long after it has a row. Refreshing the glyph
+/// here mirrors how the label refreshes on a `Name` change. Only the glyph
+/// changes: a row's category (and so its icon color) does not depend on it.
 fn refresh_row_icon(world: &mut World, entity: Entity) {
-    let Some(icon) = registered_icon(world, entity) else {
-        return;
-    };
-    let glyph = String::from(icon.unicode());
     let rows: Vec<Entity> = world
         .resource::<TreeIndex>()
         .rows_for_source(entity)
         .map(|(_container, row)| row)
         .collect();
+    if rows.is_empty() {
+        return;
+    }
+    let Some(icon) = registered_icon(world, entity) else {
+        return;
+    };
+    let glyph = String::from(icon.unicode());
     for row in rows {
         // TreeNode -> TreeRowContent -> TreeRowDot -> glyph Text.
         let Some(content) = first_child_with::<TreeRowContent>(world, row) else {
@@ -1090,15 +1112,36 @@ fn refresh_all_row_chevrons(world: &mut World) {
     }
 }
 
-/// A brush's outliner row icon is registered against its `Brush` component, but
-/// the duplicate path writes a brush's components into the world incrementally
-/// through the scene, so the row can be created before `Brush` lands and shows
-/// the generic dot. Re-derive the glyph once `Brush` is present.
-fn on_brush_icon_ready(trigger: On<Add, Brush>, mut commands: Commands) {
+/// The component that says what kind of thing an entity is can land after
+/// its row does: the duplicate path writes a brush's components into the
+/// world one at a time, so the row can be created before `Brush` arrives
+/// and shows the generic dot, and a widget's `Node` is written before the
+/// document knows it is a row or a column. Re-derive the glyph whenever a
+/// deciding component appears.
+fn refresh_icon_on_add<C: Component>(trigger: On<Add, C>, mut commands: Commands) {
     let entity = trigger.event_target();
     commands.queue(move |world: &mut World| {
         refresh_row_icon(world, entity);
     });
+}
+
+/// A container's kind is a `Node` value, not a component, so flipping
+/// `flex_direction` in the inspector has to re-derive the glyph the same
+/// way an added component does. Only entities that already have a row are
+/// worth the lookup; `Node` changes on every authored layout edit.
+fn refresh_icons_on_node_change(
+    changed: Query<Entity, Changed<Node>>,
+    tree_index: Res<TreeIndex>,
+    mut commands: Commands,
+) {
+    for entity in &changed {
+        if !tree_index.contains_anywhere(entity) {
+            continue;
+        }
+        commands.queue(move |world: &mut World| {
+            refresh_row_icon(world, entity);
+        });
+    }
 }
 
 /// When an entity gets a parent (`ChildOf` added or changed),

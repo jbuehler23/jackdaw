@@ -518,6 +518,21 @@ impl<'a> ExtensionContext<'a> {
         self
     }
 
+    /// Register a rule that picks the outliner icon from an entity's
+    /// component values, for kinds no single component separates. Runs
+    /// in registration order alongside the component rules, so register
+    /// it after every component that would make the same entity
+    /// something more specific.
+    pub fn register_entity_icon_predicate(
+        &mut self,
+        predicate: crate::entity_icons::IconPredicate,
+    ) -> &mut Self {
+        self.world
+            .get_resource_or_insert_with(EntityIconRegistry::default)
+            .register_predicate(predicate);
+        self
+    }
+
     /// Add an inspector category tab. The six built-in categories are
     /// pre-registered; this appends or replaces by id.
     pub fn register_inspector_category(
