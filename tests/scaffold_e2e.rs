@@ -2,6 +2,11 @@
 //! as a cargo binary, and assert the template's component reaches the
 //! extracted schema. This is the user's first-run loop (New Game -> build
 //! -> component shows up in the editor) exercised headlessly.
+//!
+//! The nested build is the whole cost of this suite, and almost all of it
+//! is the dependency graph the template pins. That graph only changes when
+//! the template or the workspace lockfile does, so the target dir it
+//! compiles into is keyed on both and kept between runs.
 
 use std::path::{Path, PathBuf};
 
@@ -10,11 +15,14 @@ use jackdaw_project_build::{BuildEvent, build_project_binary, shim_spec_for_proj
 
 #[test]
 fn scaffold_game_builds_and_exposes_component() {
-    let work = unique_dir("jackdaw_scaffold_e2e");
-    let _ = std::fs::remove_dir_all(&work);
+    let key = template_revision();
+    let work = std::env::temp_dir().join("jackdaw_scaffold_e2e").join(&key);
     let dest = work.join("mygame");
+    let _ = std::fs::remove_dir_all(&dest);
+    std::fs::create_dir_all(&work).expect("a scratch dir for the scaffolded project");
 
     scaffold_new_project(&dest, "mygame", TemplateKind::Game).expect("scaffold a game project");
+    reuse_dependency_build(&dest, &dependency_cache(&key));
 
     let spec = shim_spec_for_project(&dest).expect("scaffolded project is a jackdaw project");
     let jackdaw_dir = dest.join(".jackdaw");
@@ -38,22 +46,69 @@ fn scaffold_game_builds_and_exposes_component() {
             .map(|c| c.type_path.as_str())
             .collect::<Vec<_>>()
     );
-
-    let _ = std::fs::remove_dir_all(&work);
 }
 
-/// A process-unique scratch dir under the system temp dir. `Instant`/PID
-/// keep parallel test binaries from colliding without needing a temp-dir
-/// crate.
-fn unique_dir(prefix: &str) -> PathBuf {
-    let mut base = std::env::temp_dir();
-    base.push(format!("{prefix}_{}", std::process::id()));
-    ensure_parent(&base);
-    base
-}
+/// A digest of the game template and the workspace lockfile.
+///
+/// Two runs sharing this key scaffold byte-identical sources and resolve
+/// the same dependency versions, so the second can reuse what the first
+/// compiled. Editing a template file or the lockfile changes the key and
+/// the next run builds from scratch.
+fn template_revision() -> String {
+    use std::hash::{Hash as _, Hasher as _};
 
-fn ensure_parent(path: &Path) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    collect_files(&workspace.join("templates/game"), &mut files);
+    files.sort();
+    files.push(workspace.join("Cargo.lock"));
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for file in files {
+        file.file_name().hash(&mut hasher);
+        std::fs::read(&file)
+            .unwrap_or_else(|e| panic!("read {} for the cache key: {e}", file.display()))
+            .hash(&mut hasher);
     }
+    format!("{:016x}", hasher.finish())
+}
+
+fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("read the template dir") {
+        let path = entry.expect("template dir entry").path();
+        if path.is_dir() {
+            collect_files(&path, out);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+/// The target dir this template revision compiles into, with the dirs
+/// earlier revisions left behind removed.
+fn dependency_cache(key: &str) -> PathBuf {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/scaffold-e2e");
+    std::fs::create_dir_all(&root).expect("a cache root for the nested build");
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            if entry.file_name() != *key {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    root.join(key)
+}
+
+/// Point the scaffolded project's build at the shared target dir.
+///
+/// `build_project_binary` strips `CARGO_TARGET_DIR` from the environment it
+/// hands cargo, because a build of someone else's project must not inherit
+/// this one's. The project's own cargo config is what remains, and it is
+/// read from the project dir upwards - which is under the system temp dir,
+/// so nothing of the workspace's config reaches the nested build either.
+fn reuse_dependency_build(project: &Path, target_dir: &Path) {
+    let dir = project.join(".cargo");
+    std::fs::create_dir_all(&dir).expect("a cargo config dir in the scaffolded project");
+    let contents = format!("[build]\ntarget-dir = {:?}\n", target_dir.to_string_lossy());
+    std::fs::write(dir.join("config.toml"), contents).expect("write the nested build's config");
 }
