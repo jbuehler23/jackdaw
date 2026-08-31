@@ -1519,3 +1519,62 @@ fn each_added_widget_gets_a_name_of_its_own() {
     assert_eq!(saved, live);
 }
 
+/// Click the row `row`, standing for `source`, the way the tree view's
+/// own press does.
+fn click_row(app: &mut App, row: Entity, source: Entity) {
+    app.world_mut()
+        .trigger(jackdaw_widgets::tree_view::TreeRowClicked {
+            entity: row,
+            source_entity: source,
+        });
+    app.update();
+}
+
+/// Whether the outliner is painting `source`'s row as the selected one.
+fn row_reads_selected(app: &mut App, source: Entity) -> bool {
+    let Some(row) = tree_row_of(app.world_mut(), source) else {
+        return false;
+    };
+    let world = app.world();
+    world
+        .get::<Children>(row)
+        .into_iter()
+        .flatten()
+        .any(|child| {
+            world
+                .get::<jackdaw_widgets::tree_view::TreeRowSelected>(*child)
+                .is_some()
+        })
+}
+
+/// Clicking the row you are already working on keeps it selected.
+///
+/// Deselecting there costs the inspector, the canvas outline and every
+/// gesture aimed at the node, for a click whose whole intent was to come
+/// back to it. Ctrl is the deselect.
+#[test]
+fn clicking_a_selected_outliner_row_keeps_the_selection() {
+    let (mut app, root) = outliner_app();
+    let row = tree_row_of(app.world_mut(), root).expect("the open scene root has a row");
+
+    click_row(&mut app, row, root);
+    assert_eq!(app.world().resource::<Selection>().entities, vec![root]);
+
+    click_row(&mut app, row, root);
+    assert_eq!(
+        app.world().resource::<Selection>().entities,
+        vec![root],
+        "a second click on the same row is not a deselect",
+    );
+    assert!(row_reads_selected(&mut app, root));
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::ControlLeft);
+    click_row(&mut app, row, root);
+    assert!(
+        app.world().resource::<Selection>().entities.is_empty(),
+        "Ctrl+click is what takes a row out of the selection",
+    );
+}
+

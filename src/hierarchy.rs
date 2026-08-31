@@ -1370,7 +1370,9 @@ fn on_tree_node_expanded(
 }
 
 /// Handle tree row click -> select the source entity.
-/// Plain click on selected entity -> deselect. Ctrl+Click -> toggle.
+///
+/// A plain click selects the row, whether or not it was already
+/// selected; Ctrl+click toggles it in or out of the selection.
 ///
 /// A double click on a prefab instance root opens the scene it inherits
 /// from, which is the only way to edit an imported UI scene: where it is
@@ -1396,10 +1398,8 @@ fn on_tree_row_clicked(
         return;
     }
 
-    // Resolved before the selection below: the first click of the pair
-    // already selected this row, so the second would read as a click on a
-    // selected row and deselect it. A consumed double click resets, so a
-    // third click starts a new pair rather than opening the source again.
+    // A consumed double click resets, so a third click starts a new pair
+    // rather than opening the source again.
     let now = time.elapsed_secs_f64();
     let doubled = matches!(*last_click, Some((entity, at))
         if entity == event.source_entity && now - at < DOUBLE_CLICK_SECS);
@@ -1414,10 +1414,12 @@ fn on_tree_row_clicked(
 
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
 
+    // A plain click on a row that is already selected keeps it selected.
+    // Clicking the row you are working on is how a panel is brought back
+    // into focus, and losing the selection there costs the inspector, the
+    // canvas outline and every gesture aimed at it. Ctrl is the deselect.
     if ctrl {
         selection.toggle(&mut commands, event.source_entity);
-    } else if selection.is_selected(event.source_entity) {
-        selection.clear(&mut commands);
     } else {
         selection.select_single(&mut commands, event.source_entity);
     }
