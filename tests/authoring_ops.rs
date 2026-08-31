@@ -571,7 +571,7 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
         &["child_entity", "drop_target_entity"],
         false,
     ),
-    ("widget.add", &["parent"], true),
+    ("widget.add", &["parent"], false),
 ];
 
 #[test]
@@ -916,6 +916,37 @@ fn a_parent_outside_the_ui_scene_hands_the_widget_to_the_root() {
         Some(root),
         "a widget was parented outside the UI scene"
     );
+}
+
+/// Three scripted adds make three siblings, the same as three presses of the
+/// palette row.
+///
+/// A bare `widget.add` names no parent, so the widget goes beside the
+/// selection; the selection after each add is the widget it made. Filling
+/// `parent` in from the selection would turn each clause into the adopting
+/// form and build a chain instead.
+#[test]
+fn three_widget_clauses_make_three_siblings() {
+    let mut app = widget_app();
+    run_finished(&mut app, "scene.new ui=true");
+    let root = ui_roots(app.world_mut())[0];
+
+    for _ in 0..3 {
+        run_finished(&mut app, "widget.add name=ui.button");
+    }
+
+    let names: Vec<String> = app
+        .world()
+        .get::<Children>(root)
+        .map(|children| {
+            children
+                .iter()
+                .filter_map(|child| app.world().get::<Name>(child))
+                .map(|name| name.as_str().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(names, vec!["Button", "Button2", "Button3"]);
 }
 
 #[test]

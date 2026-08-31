@@ -198,18 +198,17 @@ fn declared_params(world: &mut World, id: &str) -> Vec<&'static ParamSpec> {
 /// instance, writes the prefab source document to disk, so a guessed target
 /// would edit a file the author never pointed at.
 ///
-/// Two members' gates are not the selection.
+/// One member's gate is not the selection: `hierarchy.rename_begin`'s is
+/// `no_rename_in_progress`. It is listed because the operator itself resolves
+/// a missing `entity` from the selection (`hierarchy::resolve_rename_target`,
+/// what a bare F2 does), so filling it in here puts that resolution in the
+/// log.
 ///
-/// `hierarchy.rename_begin`'s is `no_rename_in_progress`. It is listed
-/// because the operator itself resolves a missing `entity` from the
-/// selection (`hierarchy::resolve_rename_target`, what a bare F2 does), so
-/// filling it in here puts that resolution in the log.
-///
-/// `widget.add` has no gate at all: the Add menu's widget rows are live with
-/// nothing selected. Its `parent` is listed because
-/// `ui_palette::resolve_widget_parent` reads the selection on every click,
-/// and the parent it settles on is a preference either way, since a node
-/// outside the UI scene loses to the scene root whichever offered it.
+/// `widget.add` is deliberately absent. Its `parent` names the node that
+/// *adopts* the widget, while a bare `widget.add` puts the widget beside the
+/// selection instead (`ui_palette::instantiate_widget`). Filling `parent` in
+/// from the selection would turn every clause into the adopting form, so a
+/// run of three would build a chain rather than three siblings.
 pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "animation.toggle_keyframe",
     "binding.add",
@@ -221,7 +220,6 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "hierarchy.rename_begin",
     "physics.disable",
     "physics.enable",
-    "widget.add",
 ];
 
 /// How one declared `Entity` parameter was filled in.
