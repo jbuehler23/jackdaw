@@ -35,7 +35,7 @@ use super::val_field::{spawn_ui_rect_field, spawn_val_field};
 /// card's `ComponentDisplayTypePath`, so a targeted body refresh finds it.
 /// Asked of the type rather than spelled out, so a bevy release that moves
 /// `Node` moves the card with it.
-pub(crate) fn node_type_path() -> &'static str {
+pub fn node_type_path() -> &'static str {
     <Node as bevy::reflect::TypePath>::type_path()
 }
 

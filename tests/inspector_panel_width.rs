@@ -231,3 +231,22 @@ fn a_unit_dropdown_still_reads_with_a_wide_title_on_the_list() {
         );
     }
 }
+
+/// A selected UI node opens on a tab that says something about it.
+///
+/// The inspector opens on Object, and a UI node's layout is what the node
+/// is: its box, its place in its parent, its size. Routed anywhere else,
+/// the first thing shown for a selected screen is a Transform card, and
+/// the whole of the layout sits behind a second tab beside the computed
+/// read-only components.
+#[test]
+fn the_node_card_is_on_the_tab_the_inspector_opens_on() {
+    use jackdaw_api_internal::inspector::InspectorRegistry;
+
+    let app = util::editor_test_app();
+    let registry = app.world().resource::<InspectorRegistry>();
+    assert_eq!(
+        registry.category_for(jackdaw::inspector::node_card::node_type_path()),
+        "object",
+    );
+}
