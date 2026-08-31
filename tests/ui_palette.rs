@@ -388,18 +388,22 @@ fn undoing_a_widget_removes_it_from_the_world_and_the_document() {
 }
 
 #[test]
-fn a_selected_node_inside_the_ui_scene_is_the_new_parent() {
+fn a_selected_node_inside_the_ui_scene_gets_a_sibling() {
     let mut app = palette_app();
     let world = app.world_mut();
-    open_ui_scene(world);
+    let root = open_ui_scene(world);
 
     let panel = instantiate_widget(world, "ui.panel").expect("the UI scene accepts a panel");
-    let button = instantiate_widget(world, "ui.button").expect("the panel accepts a button");
+    let button = instantiate_widget(world, "ui.button").expect("the scene accepts a button");
 
     assert_eq!(
         world.get::<ChildOf>(button).map(ChildOf::parent),
+        Some(root),
+        "a widget lands beside what the user has selected, not inside it",
+    );
+    assert_ne!(
+        world.get::<ChildOf>(button).map(ChildOf::parent),
         Some(panel),
-        "a widget lands inside whatever the user has selected",
     );
 }
 
@@ -1506,7 +1510,7 @@ fn each_added_widget_gets_a_name_of_its_own() {
                 .to_owned()
         })
         .collect();
-    assert_eq!(live, vec!["Button", "Button 2", "Button 3"]);
+    assert_eq!(live, vec!["Button", "Button2", "Button3"]);
 
     // The document records what each entity ended up called, so a save
     // and a reload keep the three apart too.
@@ -1605,7 +1609,7 @@ fn a_ui_node_duplicates_and_deletes_and_undo_takes_both_back() {
     dispatch(&mut app, "entity.duplicate");
     assert_eq!(
         named(&mut app),
-        vec!["Button".to_string(), "Button 2".to_string()],
+        vec!["Button".to_string(), "Button2".to_string()],
         "the copy is named apart from the original",
     );
 
@@ -1654,3 +1658,88 @@ fn undo(app: &mut App) {
     app.update();
     app.update();
 }
+
+/// Three presses of the Button row make three buttons, side by side.
+///
+/// They used to nest: each add parented the new widget to the selection, and
+/// the selection was the widget the press before had made, so the outliner
+/// read `UiRoot > Button > Button2 > Button3`.
+#[test]
+fn three_adds_from_a_fresh_scene_make_three_siblings() {
+    let mut app = palette_app();
+    let root = open_ui_scene(app.world_mut());
+    jackdaw::selection::select_only(app.world_mut(), root);
+    app.update();
+
+    let added: Vec<Entity> = (0..3)
+        .map(|_| instantiate_widget(app.world_mut(), "ui.button").expect("the button is added"))
+        .collect();
+    app.update();
+
+    for &entity in &added {
+        assert_eq!(
+            app.world().get::<ChildOf>(entity).map(ChildOf::parent),
+            Some(root),
+            "every add is a child of the scene root, not of the add before it"
+        );
+    }
+    let order: Vec<Entity> = app
+        .world()
+        .get::<Children>(root)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    assert_eq!(order, added, "in the order they were added");
+
+    let names: Vec<String> = added
+        .iter()
+        .map(|&entity| {
+            app.world()
+                .get::<Name>(entity)
+                .expect("a widget root is named")
+                .as_str()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(names, vec!["Button", "Button2", "Button3"]);
+}
+
+/// With a node inside the scene selected, the add is that node's sibling and
+/// lands straight after it, the way a paste does.
+#[test]
+fn an_add_beside_a_selected_node_is_its_sibling() {
+    let mut app = palette_app();
+    let root = open_ui_scene(app.world_mut());
+    jackdaw::selection::select_only(app.world_mut(), root);
+    app.update();
+
+    let panel = instantiate_widget(app.world_mut(), "ui.panel").expect("the panel is added");
+    let after = instantiate_widget(app.world_mut(), "ui.button").expect("the button is added");
+    app.update();
+
+    assert_eq!(
+        app.world().get::<ChildOf>(after).map(ChildOf::parent),
+        Some(root),
+        "the add went beside the panel, not inside it"
+    );
+    let order: Vec<Entity> = app
+        .world()
+        .get::<Children>(root)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    assert_eq!(
+        order,
+        vec![panel, after],
+        "the sibling lands straight after the one that was selected"
+    );
+
+    // And the document holds that order, so a save and a reload keep it.
+    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    let root_node = ast.ast_for(root).expect("the root is in the document");
+    let authored: Vec<Option<Entity>> = ast
+        .get_children_ast(root_node)
+        .into_iter()
+        .map(|node| ast.ecs_for_ast(node))
+        .collect();
+    assert_eq!(authored, vec![Some(panel), Some(after)]);
+}
+

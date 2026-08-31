@@ -41,7 +41,7 @@ const TAB_GROUP_TYPE_PATH: &str = "bevy_input_focus::tab_navigation::TabGroup";
         name(String, doc = "Widget definition id, e.g. \"ui.button\"."),
         parent(
             Entity,
-            doc = "Node that adopts the widget. Defaults to the selection, then the UI scene root."
+            doc = "Node that adopts the widget. Left out, the widget is the sibling after the selection."
         ),
     )
 )]
@@ -121,7 +121,8 @@ impl std::fmt::Display for PaletteError {
 
 impl std::error::Error for PaletteError {}
 
-/// Create the widget `definition_id` names, as one undoable step.
+/// Create the widget `definition_id` names beside the selection, as one
+/// undoable step.
 ///
 /// An unknown id, a document with no UI scene, and a definition that refuses
 /// all return an error for the caller to report.
@@ -129,31 +130,58 @@ pub fn instantiate_widget(world: &mut World, definition_id: &str) -> Result<Enti
     let candidate = world
         .get_resource::<Selection>()
         .and_then(Selection::primary);
-    instantiate_widget_under(world, definition_id, candidate)
+    let slot = widget_slot(world, candidate).ok_or(PaletteError::NoUiScene)?;
+    instantiate_at(world, definition_id, slot)
 }
 
-/// Create the widget `definition_id` names under `candidate`.
+/// Create the widget `definition_id` names inside `parent`, as its last child.
 ///
-/// `candidate` is a preference, not a requirement: a node outside the open UI
+/// A caller naming a parent means that node, so the widget goes in it rather
+/// than beside it: `widget.add parent=Panel` fills the panel. `None` is the
+/// case with no parent named, which is [`instantiate_widget`]'s rule instead.
+///
+/// `parent` is a preference, not a requirement: a node outside the open UI
 /// scene cannot hold a UI node, so the scene root adopts the widget instead.
-/// The same rule applies however the candidate arrived, from a selection or
-/// from a caller naming one.
 pub fn instantiate_widget_under(
     world: &mut World,
     definition_id: &str,
-    candidate: Option<Entity>,
+    parent: Option<Entity>,
+) -> Result<Entity, PaletteError> {
+    let Some(parent) = parent else {
+        return instantiate_widget(world, definition_id);
+    };
+    let root = ui_scene_root(world).ok_or(PaletteError::NoUiScene)?;
+    let parent = if is_in_ui_scene(world, parent, root) {
+        parent
+    } else {
+        root
+    };
+    instantiate_at(
+        world,
+        definition_id,
+        WidgetSlot {
+            parent,
+            index: usize::MAX,
+        },
+    )
+}
+
+/// Run the definition and put the result in `slot`.
+fn instantiate_at(
+    world: &mut World,
+    definition_id: &str,
+    slot: WidgetSlot,
 ) -> Result<Entity, PaletteError> {
     let definition = world
         .get_resource::<WidgetRegistry>()
         .and_then(|registry| registry.get(definition_id))
         .ok_or_else(|| PaletteError::UnknownDefinition(definition_id.to_string()))?;
-    let parent = widget_parent(world, candidate).ok_or(PaletteError::NoUiScene)?;
     backfill_focus_group(world);
 
     let mut command = InstantiateWidgetCommand {
         label: format!("Add {}", definition.name),
         definition,
-        parent,
+        slot,
         spawned: None,
         error: None,
     };
@@ -172,31 +200,70 @@ pub fn instantiate_widget_under(
     Ok(entity)
 }
 
-/// The node a new widget is parented to: the selection when it is part of the
-/// open UI scene, and the scene's root otherwise, so a 3D selection does not
-/// block UI authoring. `None` means the document holds no UI scene, the one
-/// case widget creation refuses.
+/// The node a new widget is parented to: the selection's parent when the
+/// selection is part of the open UI scene, and the scene's root otherwise, so
+/// a 3D selection does not block UI authoring. `None` means the document holds
+/// no UI scene, the one case widget creation refuses.
 pub fn resolve_widget_parent(world: &mut World) -> Option<Entity> {
     let candidate = world
         .get_resource::<Selection>()
         .and_then(Selection::primary);
-    widget_parent(world, candidate)
+    Some(widget_slot(world, candidate)?.parent)
 }
 
-/// [`resolve_widget_parent`] with the candidate spelled out.
-fn widget_parent(world: &mut World, candidate: Option<Entity>) -> Option<Entity> {
+/// Where a new widget goes: as the sibling straight after `candidate`.
+///
+/// The same rule a paste follows, and the rule Godot's Add follows. Adding
+/// *into* the selection instead is what turned three presses of the Button row
+/// into a Button holding a Button holding a Button, which is neither what the
+/// press looked like nor a shape anyone builds a screen out of. Filling a
+/// container is still one extra press: select something inside it, or the
+/// container itself when it is the scene root.
+///
+/// A candidate that is the scene root is the exception, since the root has no
+/// siblings to be one of: the widget becomes its last child. A candidate
+/// outside the open UI scene, or none at all, is the same case.
+fn widget_slot(world: &mut World, candidate: Option<Entity>) -> Option<WidgetSlot> {
     let root = ui_scene_root(world)?;
     let inside = candidate.filter(|entity| is_in_ui_scene(world, *entity, root));
-    Some(inside.unwrap_or(root))
+    let Some(primary) = inside.filter(|&entity| entity != root) else {
+        return Some(WidgetSlot {
+            parent: root,
+            index: usize::MAX,
+        });
+    };
+    let location = crate::commands::HierarchyLocation::from_world(world, primary);
+    Some(WidgetSlot {
+        parent: location.parent.unwrap_or(root),
+        index: location.index + 1,
+    })
 }
 
-/// The open UI scene's root. A document holds one, but a malformed one may hold
-/// several; the lowest entity is picked so the choice is stable across a
-/// session rather than following archetype order.
-pub(crate) fn ui_scene_root(world: &mut World) -> Option<Entity> {
-    world
+/// The parent and sibling slot a new widget takes.
+#[derive(Clone, Copy)]
+struct WidgetSlot {
+    parent: Entity,
+    /// [`usize::MAX`] is the end of the parent's child list.
+    index: usize,
+}
+
+/// The open UI scene's root.
+///
+/// Only a root the open document holds: a second tab's scene keeps its
+/// entities alive in the same world, so a bare query over the marker can
+/// answer with another scene's root and put a new widget, or a paste, in a
+/// document nobody has open. A document holds one root, but a malformed one
+/// may hold several; the lowest entity is picked so the choice is stable
+/// across a session rather than following archetype order.
+pub fn ui_scene_root(world: &mut World) -> Option<Entity> {
+    let candidates: Vec<Entity> = world
         .query_filtered::<Entity, crate::prefab::AuthoredUiSceneRoot>()
         .iter(world)
+        .collect();
+    let document = world.resource::<jackdaw_bsn::SceneBsnAst>();
+    candidates
+        .into_iter()
+        .filter(|&root| document.ast_for(root).is_some())
         .min()
 }
 
@@ -291,7 +358,7 @@ fn rename_off_collisions(
 struct InstantiateWidgetCommand {
     label: String,
     definition: Arc<WidgetDefinition>,
-    parent: Entity,
+    slot: WidgetSlot,
     spawned: Option<Entity>,
     error: Option<String>,
 }
@@ -304,17 +371,29 @@ impl EditorCommand for InstantiateWidgetCommand {
         // not in the set it is checked against.
         let mut taken = crate::entity_ops::scene_entity_names(world);
         let context = WidgetInstantiateContext {
-            parent: Some(self.parent),
+            parent: Some(self.slot.parent),
         };
         match (self.definition.instantiate)(world, context) {
             Ok(entity) if world.get_entity(entity).is_ok() => {
                 // A third-party definition may ignore `ctx.parent`, so
                 // re-parenting here keeps every widget inside the open scene.
-                if world.get::<ChildOf>(entity).map(ChildOf::parent) != Some(self.parent) {
-                    world.entity_mut(entity).insert(ChildOf(self.parent));
+                if world.get::<ChildOf>(entity).map(ChildOf::parent) != Some(self.slot.parent) {
+                    world.entity_mut(entity).insert(ChildOf(self.slot.parent));
                 }
                 rename_off_collisions(world, entity, &mut taken);
                 register_authored_subtree(world, entity);
+                // The document node has to exist before the slot is written,
+                // since that is where the sibling order lives.
+                crate::commands::place_entity(
+                    world,
+                    entity,
+                    crate::commands::HierarchyLocation {
+                        parent: Some(self.slot.parent),
+                        index: self.slot.index,
+                    },
+                    crate::commands::WorldTransform::Unplaced,
+                );
+                crate::hierarchy::sync_outliner_row_order(world, Some(self.slot.parent));
                 crate::selection::select_only(world, entity);
                 self.spawned = Some(entity);
             }

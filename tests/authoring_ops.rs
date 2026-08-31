@@ -1258,7 +1258,10 @@ fn hand_author(app: &mut App, path: &std::path::Path) {
     run_finished(app, "scene.new ui=true");
     let world = app.world_mut();
     let panel = jackdaw::ui_palette::instantiate_widget(world, "ui.panel").expect("a panel");
-    jackdaw::ui_palette::instantiate_widget(world, "ui.label").expect("a label under the panel");
+    // Naming the parent, as the scripted arm's `parent=Panel` does: a widget
+    // added with no parent named is the selection's sibling, not its child.
+    jackdaw::ui_palette::instantiate_widget_under(world, "ui.label", Some(panel))
+        .expect("a label under the panel");
     let bindings = Bindings(vec![Binding::Field {
         read: vec![BindPath::new("authoring_ops::AuthoringHealth.current")],
         via: None,

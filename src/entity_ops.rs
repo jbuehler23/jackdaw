@@ -724,7 +724,7 @@ pub fn duplicate_selected(world: &mut World) {
 /// grafted/spawned.
 fn prepare_authored_subtree_for_spawn(world: &mut World, ast: &mut jackdaw_bsn::SceneBsnAst) {
     mint_scene_node_ids(world, ast);
-    assign_unique_entity_root_names(world, ast);
+    assign_unique_entity_names(world, ast);
 }
 
 /// `SceneNodeIds` on entity roots of `ast`.
@@ -740,27 +740,57 @@ fn entity_root_scene_node_ids(
         .collect()
 }
 
-/// Give each entity root in `ast` a `#Name` that does not collide with live
-/// scene-entity names (or with earlier roots in the same batch). Editor chrome
-/// (`EditorEntity`) is ignored so UI labels do not force renames. Collisions
-/// get the next `Base N` suffix.
-fn assign_unique_entity_root_names(world: &mut World, ast: &mut jackdaw_bsn::SceneBsnAst) {
+/// Give every named node in `ast` a `#Name` that does not collide with a live
+/// scene-entity name, with a name already claimed elsewhere in `ast`, or with
+/// an earlier node in the same batch.
+///
+/// The whole subtree, not only its roots: a widget is a subtree, so a copied
+/// Button carries its caption, and a paste that renamed only the root would
+/// leave two entities called `Caption` in the scene. A name is what an
+/// operator clause addresses an entity by, so a duplicate makes one of the
+/// two unreachable. Editor chrome (`EditorEntity`) is ignored, so a UI label
+/// does not force a rename. Collisions get the next `BaseN` suffix.
+fn assign_unique_entity_names(world: &mut World, ast: &mut jackdaw_bsn::SceneBsnAst) {
     let registry = world.resource::<AppTypeRegistry>().clone();
-    let entity_roots = {
+    let asset_roots: std::collections::HashSet<Entity> = {
         let reg = registry.read();
-        jackdaw_bsn::entity_roots(ast, &reg)
+        jackdaw_bsn::asset_roots(ast, &reg).into_iter().collect()
     };
 
     let mut taken = scene_entity_names(world);
 
-    for root in entity_roots {
-        let Some(name) = ast.get_name(root).map(str::to_owned) else {
+    for node in walk_entity_nodes(ast) {
+        if asset_roots.contains(&node) {
+            // An asset entry's name is its reference: renaming it would break
+            // the `#Name` the components pointing at it carry.
+            continue;
+        }
+        let Some(name) = ast.get_name(node).map(str::to_owned) else {
             continue;
         };
         if let Some(free) = claim_free_name(&mut taken, &name) {
-            crate::commands::set_name_patch(ast, root, Some(&free));
+            crate::commands::set_name_patch(ast, node, Some(&free));
         }
     }
+}
+
+/// Every node in `ast`, parents before children, each visited once.
+///
+/// The visited set is what a document off the clipboard needs: one whose
+/// `Children` lists form a cycle would otherwise be walked forever.
+fn walk_entity_nodes(ast: &jackdaw_bsn::SceneBsnAst) -> Vec<Entity> {
+    let mut queue: std::collections::VecDeque<Entity> = ast.roots.iter().copied().collect();
+    let mut seen: std::collections::HashSet<Entity> = queue.iter().copied().collect();
+    let mut nodes = Vec::new();
+    while let Some(node) = queue.pop_front() {
+        nodes.push(node);
+        for child in ast.get_children_ast(node) {
+            if seen.insert(child) {
+                queue.push_back(child);
+            }
+        }
+    }
+    nodes
 }
 
 /// Every `Name` on a scene entity. Editor chrome (`EditorEntity`) is left out
@@ -777,9 +807,15 @@ pub(crate) fn scene_entity_names(world: &mut World) -> std::collections::HashSet
 /// Reserve `name` in `taken`, and say what it had to become.
 ///
 /// `None` means the name was free and is now claimed. `Some(other)` is the
-/// next `Base N` suffix past every `Base` and `Base N` already in `taken`,
-/// also claimed. A name already ending in a number is renumbered from the
-/// same base rather than growing a second suffix.
+/// next `BaseN` suffix past every `Base` and `BaseN` already in `taken`, also
+/// claimed. A name already ending in a number is renumbered from the same base
+/// rather than growing a second suffix.
+///
+/// The suffix carries no space. A name is what an operator clause addresses an
+/// entity by (`name=Button2`), and a clause has no quoting, so a name with a
+/// space in it cannot be reached from `JACKDAW_RUN_OP` or the command palette;
+/// it also wraps an outliner row that would otherwise fit. Only the suffix is
+/// constrained: a name a person typed keeps whatever spaces it has.
 pub(crate) fn claim_free_name(
     taken: &mut std::collections::HashSet<String>,
     name: &str,
@@ -788,24 +824,27 @@ pub(crate) fn claim_free_name(
         return None;
     }
 
-    let mut base = name.to_owned();
-    if let Some(pos) = base.rfind(' ')
-        && base[pos + 1..].parse::<u32>().is_ok()
-    {
-        base.truncate(pos);
-    }
+    // The base is the name with any trailing number taken off, and with the
+    // space an older suffix left behind: `Button`, `Button2` and `Button 2`
+    // all renumber from `Button` rather than growing a second suffix.
+    let trimmed = name.trim_end_matches(|c: char| c.is_ascii_digit());
+    let base = if trimmed.is_empty() {
+        name.to_owned()
+    } else {
+        trimmed.trim_end().to_owned()
+    };
+
     let mut max_num = 0u32;
     for existing in taken.iter() {
         if existing == &base {
             max_num = max_num.max(1);
         } else if let Some(rest) = existing.strip_prefix(base.as_str())
-            && let Some(num_str) = rest.strip_prefix(' ')
-            && let Ok(n) = num_str.parse::<u32>()
+            && let Ok(n) = rest.trim_start().parse::<u32>()
         {
             max_num = max_num.max(n);
         }
     }
-    let free = format!("{} {}", base, max_num + 1);
+    let free = format!("{base}{}", max_num + 1);
     taken.insert(free.clone());
     Some(free)
 }
@@ -2361,11 +2400,11 @@ mod tests {
     }
 
     #[test]
-    fn assign_unique_entity_root_names_keeps_free_names_and_numbers_collisions() {
+    fn assign_unique_entity_names_keeps_free_names_and_numbers_collisions() {
         let mut world = World::new();
         world.init_resource::<AppTypeRegistry>();
         world.spawn(Name::new("Brush"));
-        world.spawn(Name::new("Brush 2"));
+        world.spawn(Name::new("Brush2"));
         world.spawn((Name::new("Camera"), EditorEntity));
 
         let mut ast = jackdaw_bsn::SceneBsnAst::default();
@@ -2377,7 +2416,7 @@ mod tests {
         ast.add_to_roots(taken);
         ast.add_to_roots(also_taken);
 
-        assign_unique_entity_root_names(&mut world, &mut ast);
+        assign_unique_entity_names(&mut world, &mut ast);
 
         assert_eq!(
             ast.get_name(free),
@@ -2386,12 +2425,12 @@ mod tests {
         );
         assert_eq!(
             ast.get_name(taken),
-            Some("Brush 3"),
+            Some("Brush3"),
             "colliding name takes the next free number"
         );
         assert_eq!(
             ast.get_name(also_taken),
-            Some("Brush 4"),
+            Some("Brush4"),
             "batch collisions advance past names assigned earlier in the same pass"
         );
     }

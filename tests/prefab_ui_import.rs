@@ -424,6 +424,9 @@ fn a_ui_scene_variant_is_edited_on_the_stage_not_routed_to_the_world_view() {
             },
         ))
         .id();
+    // The root of the tab being edited is in that tab's document, which is
+    // how the palette tells it from a root another tab left in the world.
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), variant);
 
     app.update();
 
