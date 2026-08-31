@@ -42,7 +42,9 @@ fn empty_config_dir() -> &'static std::path::Path {
 /// A headless editor that read an empty override file, whatever any other
 /// test is doing with that file meanwhile.
 fn headless_app() -> App {
-    let guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     empty_config_dir();
     let app = util::headless_app();
     drop(guard);
@@ -526,7 +528,9 @@ fn the_fixed_rows_are_one_run_of_the_list() {
 fn a_saved_rebind_comes_back_off_disk_and_applies() {
     use jackdaw_api_internal::keymap::{load_user_keymap, save_user_keymap};
 
-    let guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = empty_config_dir();
     let saved = UserKeymap {
         bindings: vec![row(REBOUND, "F9")],
@@ -563,7 +567,9 @@ fn a_saved_rebind_comes_back_off_disk_and_applies() {
 /// what a fresh install has.
 #[test]
 fn the_suite_reads_its_own_config_directory() {
-    let _guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     empty_config_dir();
     assert_eq!(
         jackdaw_env::paths::keymap_path(),

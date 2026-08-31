@@ -290,8 +290,8 @@ impl EntityParam {
                  than one"
             ),
             Self::NeedsAName { param } => format!(
-                "{op}: `{param}` was not set: this operator does not act on the selection, so \
-                 name its target with `{param}=<Name>`"
+                "{op}: `{param}` was not set: this operator does not take its target from the \
+                 selection, so name it with `{param}=<Name>`"
             ),
             Self::NothingSelected { param } => format!(
                 "{op}: `{param}` was not set: nothing is selected. Select a target first, or \
