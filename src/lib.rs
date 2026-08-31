@@ -1305,9 +1305,16 @@ pub(crate) fn clip_delete_keyframes(
     OperatorResult::Finished
 }
 
+/// Keyframes are selected and the timeline is the focused window.
+///
+/// The window matters because `Ctrl+C` is the entity clipboard everywhere
+/// else, and the entity side refuses while the timeline is focused. The two
+/// checks are opposite sides of the same question, so one press copies
+/// keyframes or a subtree and never both.
 fn has_selected_keyframes(
     input_focus: Res<bevy::input_focus::InputFocus>,
     selection: Res<selection::Selection>,
+    tree: Res<jackdaw_panels::tree::DockTree>,
     keyframes: Query<
         (),
         bevy::ecs::query::Or<(
@@ -1318,6 +1325,9 @@ fn has_selected_keyframes(
     >,
 ) -> bool {
     if input_focus.get().is_some() {
+        return false;
+    }
+    if !crate::transform_ops::active_tab_kind_present(&tree, "jackdaw.timeline") {
         return false;
     }
     selection.entities.iter().any(|&e| keyframes.contains(e))

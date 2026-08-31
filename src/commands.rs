@@ -801,7 +801,9 @@ impl EditorCommand for SpawnEntity {
 pub struct DespawnEntity {
     pub entity: Entity,
     pub scene_snapshot: DynamicWorld,
-    pub parent: Option<Entity>,
+    /// Where the entity sat before the despawn. Undo puts it back there,
+    /// rather than leaving it stranded at the top of the scene.
+    pub location: HierarchyLocation,
     pub label: String,
 }
 
@@ -813,14 +815,14 @@ impl DespawnEntity {
     /// evaluator's values on every bound property, so preview writes are
     /// suspended around it. That is why this takes `&mut World`.
     pub fn from_world(world: &mut World, entity: Entity) -> Self {
-        let parent = world.get::<ChildOf>(entity).map(|c| c.0);
+        let location = HierarchyLocation::from_world(world, entity);
         let held = crate::preview_context::suspend_preview_writes(world);
         let scene = snapshot_entity(world, entity);
         crate::preview_context::resume_preview_writes(world, held);
         Self {
             entity,
             scene_snapshot: scene,
-            parent,
+            location,
             label: format!("Despawn entity {entity}"),
         }
     }
@@ -841,6 +843,18 @@ impl EditorCommand for DespawnEntity {
             self.entity = new_id;
         }
         crate::scene_io::register_entity_in_ast(world, self.entity);
+        // The snapshot carries the old parent's entity id, which the write
+        // cannot resolve because the parent was never part of the snapshot.
+        // A parent that has itself gone since leaves the entity at the top.
+        let location = HierarchyLocation {
+            parent: self
+                .location
+                .parent
+                .filter(|parent| world.get_entity(*parent).is_ok()),
+            index: self.location.index,
+        };
+        set_hierarchy_location(world, self.entity, location);
+        crate::hierarchy::sync_outliner_row_order(world, location.parent);
     }
 
     fn description(&self) -> &str {

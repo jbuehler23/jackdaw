@@ -152,22 +152,25 @@ fn classic(app: &mut App) -> KeymapPreset {
         .to_classic_preset()
 }
 
-/// Ctrl+C and Ctrl+V are the clipboard chord, and in this editor they
-/// belong to the timeline's keyframes alone. Component copy/paste moved
-/// off them onto Ctrl+Shift, so a press outside the timeline runs nothing
-/// rather than quietly copying a component stack.
+/// Ctrl+C and Ctrl+V are the clipboard chord, and two operators claim each:
+/// the timeline's keyframes and the entity clipboard. Their availability
+/// checks are disjoint on the timeline being the focused window, so one
+/// press answers once. The whole-component clipboard sits on Ctrl+Shift.
 #[test]
-fn the_clipboard_chord_is_the_timelines_alone() {
+fn the_clipboard_chord_is_shared_by_the_entity_and_keyframe_operators() {
     let mut app = util::headless_app();
     let defaults = classic(&mut app);
 
     assert_eq!(
         operators_on(&defaults, &PresetInput::key("KeyC").ctrl()),
-        vec!["clip.copy_keyframes".to_string()],
+        vec!["clip.copy_keyframes".to_string(), "entity.copy".to_string()],
     );
     assert_eq!(
         operators_on(&defaults, &PresetInput::key("KeyV").ctrl()),
-        vec!["clip.paste_keyframes".to_string()],
+        vec![
+            "clip.paste_keyframes".to_string(),
+            "entity.paste".to_string()
+        ],
     );
     assert_eq!(
         operators_on(&defaults, &PresetInput::key("KeyC").ctrl().shift()),
@@ -258,5 +261,47 @@ fn a_chord_claimed_twice_is_reported() {
         apply_keymap_preset(&mut world, &preset).conflicts,
         conflicts,
         "the applier reports what the detector found",
+    );
+}
+
+/// The chords the authoring operators added claim what they were meant to.
+///
+/// Every one but the shared clipboard pair belongs to a single operator, and
+/// the applier's conflict report says so: none of them turns up in it.
+#[test]
+fn the_authoring_chords_claim_what_they_were_meant_to() {
+    let mut app = util::headless_app();
+    let defaults = classic(&mut app);
+
+    for (input, operator) in [
+        (PresetInput::key("KeyX").ctrl(), "entity.cut"),
+        (PresetInput::key("ArrowUp").ctrl(), "entity.move_up"),
+        (PresetInput::key("ArrowDown").ctrl(), "entity.move_down"),
+    ] {
+        assert_eq!(
+            operators_on(&defaults, &input),
+            vec![operator.to_string()],
+            "{input:?} should be {operator}'s alone",
+        );
+    }
+
+    let conflicts = find_conflicts(&defaults);
+    for chord in ["Ctrl+KeyX", "Ctrl+ArrowUp", "Ctrl+ArrowDown"] {
+        assert!(
+            !conflicts.iter().any(|line| line.starts_with(chord)),
+            "{chord} collided with something already bound: {conflicts:?}",
+        );
+    }
+    assert!(
+        conflicts
+            .iter()
+            .any(|line| line.starts_with("Ctrl+KeyC") && line.contains("entity.copy")),
+        "the shared copy chord should be reported, advisory: {conflicts:?}",
+    );
+    assert!(
+        conflicts
+            .iter()
+            .any(|line| line.starts_with("Ctrl+KeyV") && line.contains("entity.paste")),
+        "the shared paste chord should be reported, advisory: {conflicts:?}",
     );
 }

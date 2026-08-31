@@ -39,6 +39,19 @@ impl SystemClipboard {
     }
 }
 
+/// The last entity subtree copied in this editor, as BSN text.
+///
+/// The OS clipboard is the one users reach for, and it is where a copy is
+/// written, so a subtree can be pasted into a text editor or into a second
+/// Jackdaw window. It is also the one that can be absent (no compositor, a
+/// headless run) or hold something that is not a scene, so this holds the
+/// same text as the answer for those cases.
+#[derive(Resource, Default)]
+pub struct EntityClipboard {
+    /// BSN text, empty until the first copy.
+    pub text: String,
+}
+
 pub use jackdaw_scene_types::GltfSource;
 
 pub struct EntityOpsPlugin;
@@ -57,7 +70,8 @@ impl Plugin for EntityOpsPlugin {
                 warn!("Failed to initialize system clipboard: {e}");
             }
         }
-        app.add_observer(derive_world_asset_root)
+        app.init_resource::<EntityClipboard>()
+            .add_observer(derive_world_asset_root)
             .register_type::<EmptyEntity>()
             .register_type::<SceneCamera>()
             .register_type::<SceneLight>()
@@ -997,62 +1011,79 @@ pub(crate) fn rotate_selected(world: &mut World, rotation: Quat) {
     }
 }
 
-/// Copy selected entities to the system clipboard as BSN text.
-fn copy_components(world: &mut World) {
-    let selection = world.resource::<Selection>();
-    if selection.entities.is_empty() {
-        return;
+/// The selection as BSN text: the selected subtrees plus embedded asset
+/// entries, the same shape a saved scene uses, so a copy pastes into a code
+/// editor readably and back into any scene.
+///
+/// `None` when nothing is selected or nothing selected is in the document.
+fn selection_as_bsn(world: &mut World) -> Option<String> {
+    let selected: Vec<Entity> = world.resource::<Selection>().entities.clone();
+    if selected.is_empty() {
+        return None;
     }
-    let selected: Vec<Entity> = selection.entities.clone();
-
     let nodes: Vec<Entity> = {
         let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
         selected.iter().filter_map(|&e| ast.ast_for(e)).collect()
     };
     if nodes.is_empty() {
         warn!("Copy: no selected entities have document nodes");
-        return;
+        return None;
     }
-
-    // Clipboard text is BSN: the selected subtrees plus embedded asset
-    // entries, the same shape a saved scene uses, so it pastes into code
-    // editors readably. Paste mints fresh SceneNodeIds before grafting.
     let parent_path = world
         .resource::<crate::scene_io::SceneFilePath>()
         .path
         .as_ref()
         .and_then(|p| Path::new(p).parent().map(std::path::Path::to_path_buf))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let bsn_text =
-        crate::scene_io::emit_bsn_entities_with_inline_assets(world, &parent_path, &nodes);
-    if bsn_text.trim().is_empty() {
+    let text = crate::scene_io::emit_bsn_entities_with_inline_assets(world, &parent_path, &nodes);
+    if text.trim().is_empty() {
         warn!("Copy: selected entities emitted no BSN text");
-        return;
+        return None;
     }
+    Some(text)
+}
 
-    let Some(mut cb) = world.get_resource_mut::<SystemClipboard>() else {
+/// Put `text` on the OS clipboard, and on the editor's own either way.
+///
+/// The OS clipboard is what carries a subtree to another window or another
+/// application, so it is written first; a run with no clipboard at all still
+/// copies, and pastes, through [`EntityClipboard`].
+fn write_clipboard(world: &mut World, text: String) {
+    if let Some(mut clipboard) = world.get_resource_mut::<SystemClipboard>() {
+        clipboard.last_jsn = text.clone();
+        if let Err(error) = clipboard.clipboard.set_text(&text) {
+            warn!("Copy: system clipboard failed ({error}), keeping the editor's own copy");
+        }
+    }
+    world.resource_mut::<EntityClipboard>().text = text;
+}
+
+/// The BSN text a paste should spawn from.
+///
+/// The OS clipboard wins when it holds a scene, so a subtree copied in
+/// another window (or written by hand in a text editor) pastes here. Anything
+/// else -- an empty or unreadable clipboard, or one holding text that is not
+/// a scene -- falls back to the editor's own last copy, which is what a run
+/// with no clipboard at all has.
+fn read_clipboard(world: &mut World) -> String {
+    let own = world
+        .get_resource::<EntityClipboard>()
+        .map(|clipboard| clipboard.text.clone())
+        .unwrap_or_default();
+    world
+        .get_resource_mut::<SystemClipboard>()
+        .and_then(|mut clipboard| clipboard.clipboard.get_text().ok())
+        .filter(|text| !text.trim().is_empty())
+        .filter(|text| jackdaw_bsn::parse_bsn_text(text).is_ok())
+        .unwrap_or(own)
+}
+
+/// Copy selected entities to the clipboard as BSN text.
+fn copy_components(world: &mut World) {
+    let Some(text) = selection_as_bsn(world) else {
         return;
     };
-    info!(
-        "Display: WAYLAND_DISPLAY={:?} DISPLAY={:?}",
-        std::env::var("WAYLAND_DISPLAY").ok(),
-        std::env::var("DISPLAY").ok(),
-    );
-    cb.last_jsn = bsn_text.clone();
-    match cb.clipboard.set_text(&bsn_text) {
-        Ok(()) => {
-            // Verify by reading back
-            match cb.clipboard.get_text() {
-                Ok(readback) => info!(
-                    "Clipboard set+readback OK ({} bytes written, {} read back)",
-                    bsn_text.len(),
-                    readback.len(),
-                ),
-                Err(e) => warn!("Clipboard set OK but readback failed: {e}"),
-            }
-        }
-        Err(e) => warn!("Copy: system clipboard failed ({e}), using internal fallback"),
-    }
+    write_clipboard(world, text);
 }
 
 /// Undo command for a paste operation. On undo, finds each pasted root by its
@@ -1064,34 +1095,19 @@ struct PasteEntitiesCommand {
     /// Clipboard BSN with fresh ids and unique names already written in,
     /// preserved so redo re-spawns the same authored patches.
     remapped_text: String,
+    /// Where the paste landed, so a redo puts it back in the same place
+    /// rather than at the end of the scene's root list.
+    target: PasteTarget,
     label: String,
-    /// False on first push (paste already happened); true on subsequent executes (redo).
-    is_redo: bool,
 }
 
 impl crate::commands::EditorCommand for PasteEntitiesCommand {
+    /// Only a redo reaches this: the paste itself already happened, and the
+    /// entry went onto the stack through `push_executed`, which does not
+    /// execute what it is given.
     fn execute(&mut self, world: &mut World) {
-        // First push: paste already happened in paste_components; nothing to do.
-        // Subsequent calls (redo): re-spawn from the remapped text.
-        if !self.is_redo {
-            self.is_redo = true;
-            return;
-        }
-
-        let spawned = spawn_bsn_clipboard(world, &self.remapped_text);
-
-        // Re-select the redo-pasted entities.
-        for &entity in &world.resource::<Selection>().entities.clone() {
-            if let Ok(mut ec) = world.get_entity_mut(entity) {
-                ec.remove::<Selected>();
-            }
-        }
-        let mut selection = world.resource_mut::<Selection>();
-        selection.entities = spawned.clone();
-        for &entity in &spawned {
-            world.entity_mut(entity).insert(Selected);
-        }
-
+        let spawned = spawn_bsn_clipboard(world, &self.remapped_text, self.target);
+        select_entities(world, &spawned);
         info!("Redo: re-pasted {} entities", spawned.len());
     }
 
@@ -1162,7 +1178,7 @@ fn graft_and_spawn(
 }
 
 /// Parse clipboard BSN text and graft it into the live scene document.
-fn spawn_bsn_clipboard(world: &mut World, text: &str) -> Vec<Entity> {
+fn spawn_bsn_clipboard(world: &mut World, text: &str, target: PasteTarget) -> Vec<Entity> {
     let parsed = match jackdaw_bsn::parse_bsn_text(text) {
         Ok(ast) => ast,
         Err(e) => {
@@ -1170,7 +1186,106 @@ fn spawn_bsn_clipboard(world: &mut World, text: &str) -> Vec<Entity> {
             return Vec::new();
         }
     };
-    graft_and_spawn(world, &parsed, None)
+    graft_and_spawn_at(world, &parsed, target)
+}
+
+/// Where a paste lands, in terms a redo can still resolve.
+///
+/// The parent is named by its `SceneNodeId` rather than by its `Entity`: an
+/// undo that despawned the parent and a redo that put it back give it a new
+/// entity id, and the stable id is what survives that.
+#[derive(Clone, Copy, Default)]
+struct PasteTarget {
+    /// `None` is the scene's own root list.
+    parent: Option<jackdaw_scene_types::SceneNodeId>,
+    /// Sibling index the first pasted root takes; the rest follow it.
+    index: usize,
+}
+
+impl PasteTarget {
+    /// The live location, or the end of the scene root list when the parent
+    /// this named is no longer there.
+    fn resolve(&self, world: &mut World) -> HierarchyLocation {
+        let Some(wanted) = self.parent else {
+            return HierarchyLocation {
+                parent: None,
+                index: self.index,
+            };
+        };
+        let parent = world
+            .query::<(Entity, &jackdaw_scene_types::SceneNodeId)>()
+            .iter(world)
+            .find(|(_, id)| **id == wanted)
+            .map(|(entity, _)| entity);
+        HierarchyLocation {
+            parent,
+            index: if parent.is_some() {
+                self.index
+            } else {
+                usize::MAX
+            },
+        }
+    }
+}
+
+/// Sibling straight after the primary selection, which is where a paste goes.
+///
+/// Nothing selected, or a selection the document does not hold, lands the
+/// paste at the end of the open UI scene's root, and at the end of the scene's
+/// own root list when there is no UI scene.
+fn paste_target(world: &mut World) -> PasteTarget {
+    let primary = world
+        .get_resource::<Selection>()
+        .and_then(Selection::primary);
+    if let Some(primary) = primary
+        && world
+            .resource::<jackdaw_bsn::SceneBsnAst>()
+            .ast_for(primary)
+            .is_some()
+    {
+        let location = HierarchyLocation::from_world(world, primary);
+        return PasteTarget {
+            parent: location.parent.and_then(|parent| {
+                world
+                    .get::<jackdaw_scene_types::SceneNodeId>(parent)
+                    .copied()
+            }),
+            index: location.index + 1,
+        };
+    }
+    let root = crate::ui_palette::ui_scene_root(world);
+    PasteTarget {
+        parent: root.and_then(|root| world.get::<jackdaw_scene_types::SceneNodeId>(root).copied()),
+        index: usize::MAX,
+    }
+}
+
+/// [`graft_and_spawn`] landing the roots at `target` rather than at the end
+/// of the scene's root list.
+fn graft_and_spawn_at(
+    world: &mut World,
+    source: &jackdaw_bsn::SceneBsnAst,
+    target: PasteTarget,
+) -> Vec<Entity> {
+    let location = target.resolve(world);
+    let parent_ast = location
+        .parent
+        .and_then(|parent| world.resource::<jackdaw_bsn::SceneBsnAst>().ast_for(parent));
+    let spawned = graft_and_spawn(world, source, parent_ast);
+    if location.index != usize::MAX {
+        for (offset, &root) in spawned.iter().enumerate() {
+            crate::commands::set_hierarchy_location(
+                world,
+                root,
+                HierarchyLocation {
+                    parent: location.parent,
+                    index: location.index + offset,
+                },
+            );
+        }
+        crate::hierarchy::sync_outliner_row_order(world, location.parent);
+    }
+    spawned
 }
 
 /// Ensure every entity node in `ast` carries a fresh `SceneNodeId` patch so
@@ -1217,67 +1332,108 @@ fn mint_scene_node_ids(world: &World, ast: &mut jackdaw_bsn::SceneBsnAst) {
     }
 }
 
-/// Paste entities from system clipboard BSN text.
-fn paste_components(world: &mut World) {
-    if crate::asset_ingest::paste_clipboard_image(world) {
-        return;
-    }
-
-    let text = {
-        let Some(mut cb) = world.get_resource_mut::<SystemClipboard>() else {
-            return;
-        };
-        cb.clipboard
-            .get_text()
-            .unwrap_or_else(|_| cb.last_jsn.clone())
-    };
-
+/// Paste entities from clipboard BSN text at `target`, as one history entry.
+///
+/// Returns the pasted roots, which become the selection.
+fn paste_clipboard_entities(world: &mut World, target: PasteTarget) -> Vec<Entity> {
+    let text = read_clipboard(world);
     if text.trim().is_empty() {
-        return;
+        return Vec::new();
     }
 
     let mut parsed = match jackdaw_bsn::parse_bsn_text(&text) {
         Ok(ast) => ast,
         Err(e) => {
             warn!("Clipboard text is not valid BSN: {e}");
-            return;
+            return Vec::new();
         }
     };
     if parsed.roots.is_empty() {
-        return;
+        return Vec::new();
     }
 
+    // Fresh ids and names before the graft, so the pasted subtree is a second
+    // thing in the scene rather than a second reference to the first.
     prepare_authored_subtree_for_spawn(world, &mut parsed);
     let spawned_node_ids = entity_root_scene_node_ids(world, &parsed);
     let remapped_text = jackdaw_bsn::emit_scene(&parsed);
 
-    let spawned = graft_and_spawn(world, &parsed, None);
+    let spawned = graft_and_spawn_at(world, &parsed, target);
     if spawned.is_empty() {
-        return;
+        return Vec::new();
     }
 
-    for &entity in &world.resource::<Selection>().entities.clone() {
-        if let Ok(mut ec) = world.get_entity_mut(entity) {
-            ec.remove::<Selected>();
-        }
-    }
-    let mut selection = world.resource_mut::<Selection>();
-    selection.entities = spawned.clone();
-    for &entity in &spawned {
-        world.entity_mut(entity).insert(Selected);
-    }
-
+    select_entities(world, &spawned);
     info!("Pasted {} entities from BSN clipboard", spawned.len());
 
     let cmd = PasteEntitiesCommand {
         spawned_node_ids,
         remapped_text,
+        target,
         label: "Paste entities".to_string(),
-        is_redo: false,
     };
     world
         .resource_mut::<CommandHistory>()
         .push_executed(Box::new(cmd));
+    spawned
+}
+
+/// Make `entities` the whole selection.
+fn select_entities(world: &mut World, entities: &[Entity]) {
+    for &entity in &world.resource::<Selection>().entities.clone() {
+        if let Ok(mut ec) = world.get_entity_mut(entity) {
+            ec.remove::<Selected>();
+        }
+    }
+    world.resource_mut::<Selection>().entities = entities.to_vec();
+    for &entity in entities {
+        if let Ok(mut ec) = world.get_entity_mut(entity) {
+            ec.insert(Selected);
+        }
+    }
+}
+
+/// Paste clipboard entities at the end of the scene's root list.
+fn paste_components(world: &mut World) {
+    if crate::asset_ingest::paste_clipboard_image(world) {
+        return;
+    }
+    paste_clipboard_entities(
+        world,
+        PasteTarget {
+            parent: None,
+            index: usize::MAX,
+        },
+    );
+}
+
+/// Paste clipboard entities as the sibling straight after the selection.
+fn paste_entities_after_selection(world: &mut World) {
+    if crate::asset_ingest::paste_clipboard_image(world) {
+        return;
+    }
+    let target = paste_target(world);
+    paste_clipboard_entities(world, target);
+}
+
+/// Copy the selection to the clipboard as BSN text.
+fn copy_selected_entities(world: &mut World) {
+    let Some(text) = selection_as_bsn(world) else {
+        return;
+    };
+    write_clipboard(world, text);
+}
+
+/// Copy the selection and then delete it.
+///
+/// The copy records nothing, so the delete's own entry is the whole cut and
+/// one undo puts the subtree back where it was.
+fn cut_selected_entities(world: &mut World) {
+    let Some(text) = selection_as_bsn(world) else {
+        return;
+    };
+    write_clipboard(world, text);
+    delete_selected(world);
 }
 
 /// Flip `Visibility` between hidden and inherited on every selected
@@ -1483,6 +1639,9 @@ use crate::core_extension::CoreExtensionInputContext;
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityDeleteOp>()
         .register_operator::<EntityDuplicateOp>()
+        .register_operator::<EntityCopyOp>()
+        .register_operator::<EntityCutOp>()
+        .register_operator::<EntityPasteOp>()
         .register_operator::<EntityMoveUpOp>()
         .register_operator::<EntityMoveDownOp>()
         .register_operator::<EntityPlaceGltfOp>()
@@ -1527,9 +1686,16 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.bind_operator::<CoreExtensionInputContext, EntityDuplicateOp>([
         PresetInput::key("KeyD").ctrl()
     ]);
-    // Ctrl+Shift rather than Ctrl: plain Ctrl+C / Ctrl+V is the clipboard
-    // chord users reach for to copy an entity, and the timeline already
-    // claims it for keyframes.
+    // Ctrl+C / Ctrl+X / Ctrl+V act on entities. The timeline claims the same
+    // chords for keyframes; the two availability checks are disjoint on the
+    // timeline being the focused window, so one press answers once.
+    ctx.bind_operator::<CoreExtensionInputContext, EntityCopyOp>([PresetInput::key("KeyC").ctrl()]);
+    ctx.bind_operator::<CoreExtensionInputContext, EntityCutOp>([PresetInput::key("KeyX").ctrl()]);
+    ctx.bind_operator::<CoreExtensionInputContext, EntityPasteOp>(
+        [PresetInput::key("KeyV").ctrl()],
+    );
+    // Ctrl+Shift for the whole-component clipboard, which pastes at the
+    // scene root rather than beside the selection.
     ctx.bind_operator::<CoreExtensionInputContext, EntityCopyComponentsOp>([PresetInput::key(
         "KeyC",
     )
@@ -1594,6 +1760,7 @@ pub(crate) fn can_act_on_entities(
     if crate::transform_ops::active_tab_kind_present(&tree, "jackdaw.timeline") {
         return false;
     }
+
     matches!(*edit_mode, crate::brush::EditMode::Object)
 }
 
@@ -1683,6 +1850,40 @@ pub(crate) fn entity_move_down(
     mut commands: Commands,
 ) -> OperatorResult {
     commands.queue(|world: &mut World| move_selected_siblings(world, 1));
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "entity.copy",
+    label = "Copy",
+    description = "Copy the selected subtrees to the clipboard as scene text.",
+    allows_undo = false,
+    is_available = can_act_on_entities
+)]
+pub(crate) fn entity_copy(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(copy_selected_entities);
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "entity.cut",
+    label = "Cut",
+    description = "Copy the selected subtrees to the clipboard and delete them.",
+    is_available = can_act_on_entities
+)]
+pub(crate) fn entity_cut(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(cut_selected_entities);
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "entity.paste",
+    label = "Paste",
+    description = "Paste the clipboard's subtrees as siblings after the selection.",
+    is_available = can_act_on_entities
+)]
+pub(crate) fn entity_paste(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(paste_entities_after_selection);
     OperatorResult::Finished
 }
 

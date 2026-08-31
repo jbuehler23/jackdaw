@@ -205,13 +205,12 @@ fn a_dispatched_delete_takes_the_selected_entity_with_it() {
     );
 }
 
-/// Ctrl+C outside the timeline does nothing at all.
+/// Ctrl+C outside the timeline is the entity clipboard, not the keyframe one.
 ///
-/// The chord belongs to `clip.copy_keyframes` alone (see
-/// `tests/keymap_presets.rs`), and that operator wants keyframes selected
-/// in an open timeline. A UI node selected on a canvas is neither, so the
-/// press finds nothing available and the editor stays put. The same for
-/// Ctrl+V.
+/// Both sides are bound to the chord (see `tests/keymap_presets.rs`) and
+/// their availability checks are disjoint on the timeline being the focused
+/// window. With a UI node selected on a canvas the keyframe side stands
+/// down and the entity side answers. The same for Ctrl+V.
 #[test]
 fn the_clipboard_chord_finds_nothing_to_run_outside_the_timeline() {
     let mut app = util::editor_test_app();
@@ -236,6 +235,14 @@ fn the_clipboard_chord_finds_nothing_to_run_outside_the_timeline() {
             !ready,
             "{id} should refuse with a UI node selected and no timeline open"
         );
+    }
+    for id in ["entity.copy", "entity.paste"] {
+        let ready = app
+            .world_mut()
+            .operator(id)
+            .is_available()
+            .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"));
+        assert!(ready, "{id} is what the chord means outside the timeline");
     }
 }
 
