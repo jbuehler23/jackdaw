@@ -210,3 +210,53 @@ fn home_and_escape_are_preset_entries() {
     );
 }
 
+/// Two actions on one chord co-fire and let `is_available` arbitrate, so
+/// a shared chord is reported rather than resolved. A synthetic duplicate
+/// is the shape the report has to name.
+#[test]
+fn a_chord_claimed_twice_is_reported() {
+    let preset = KeymapPreset {
+        name: "test".into(),
+        bindings: vec![
+            PresetBinding {
+                operator: "a.first".into(),
+                input: PresetInput::key("KeyC").ctrl(),
+                phase: PresetPhase::Press,
+                context: PresetContext::Operators,
+            },
+            PresetBinding {
+                operator: "a.second".into(),
+                input: PresetInput::key("KeyC").ctrl(),
+                phase: PresetPhase::Press,
+                context: PresetContext::Operators,
+            },
+            // Same key, different phase: a different chord.
+            PresetBinding {
+                operator: "a.third".into(),
+                input: PresetInput::key("KeyC").ctrl(),
+                phase: PresetPhase::Release,
+                context: PresetContext::Operators,
+            },
+            PresetBinding {
+                operator: "a.fourth".into(),
+                input: PresetInput::key("KeyD").ctrl(),
+                phase: PresetPhase::Press,
+                context: PresetContext::Operators,
+            },
+        ],
+    };
+
+    let conflicts = find_conflicts(&preset);
+    assert_eq!(
+        conflicts,
+        vec!["Ctrl+KeyC (Press, Operators): a.first, a.second".to_string()],
+        "only the chord two actions share is reported",
+    );
+
+    let mut world = World::new();
+    assert_eq!(
+        apply_keymap_preset(&mut world, &preset).conflicts,
+        conflicts,
+        "the applier reports what the detector found",
+    );
+}

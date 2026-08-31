@@ -8,7 +8,7 @@ mod apply;
 mod persist;
 mod types;
 
-pub use apply::{KeymapApplyReport, PresetSpawnedBinding, apply_keymap_preset};
+pub use apply::{KeymapApplyReport, PresetSpawnedBinding, apply_keymap_preset, find_conflicts};
 pub use persist::{load_active_keymap_preset, save_active_keymap_preset};
 pub use types::{
     ActiveKeymapPreset, BuiltinActions, DefaultKeymap, KeymapPreset, PresetBinding, PresetContext,

@@ -12,8 +12,8 @@ use crate::keymap_conditions::{DoubleClick, ScrollTick};
 use crate::lifecycle::OperatorAction;
 
 use super::types::{
-    BuiltinActions, KeymapPreset, PresetContext, PresetInput, PresetPhase, key_code_from_name,
-    mouse_button_from_name,
+    BuiltinActions, KeymapPreset, PresetBinding, PresetContext, PresetInput, PresetPhase,
+    key_code_from_name, mouse_button_from_name,
 };
 
 /// Outcome of one preset application, for conformance checks and logs.
@@ -29,6 +29,9 @@ pub struct KeymapApplyReport {
     /// Entries skipped because their input type, phase, or context is not
     /// handled by the applier. Each entry is `"operator-or-name: reason"`.
     pub skipped_unsupported: Vec<String>,
+    /// Chords claimed by more than one action. Each entry is
+    /// `"chord (phase, context): op-a, op-b"`. See [`find_conflicts`].
+    pub conflicts: Vec<String>,
 }
 
 /// Marker on binding entities spawned by [`apply_keymap_preset`].
@@ -85,7 +88,10 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
         .map(|b| b.map.clone())
         .unwrap_or_default();
 
-    let mut report = KeymapApplyReport::default();
+    let mut report = KeymapApplyReport {
+        conflicts: find_conflicts(preset),
+        ..KeymapApplyReport::default()
+    };
     for entry in &preset.bindings {
         // Resolve the input to a binding + phase shape. Scroll entries always
         // use ScrollTick regardless of the phase field; the phase is ignored.
@@ -195,8 +201,107 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
             report.skipped_unsupported,
         );
     }
+    if !report.conflicts.is_empty() {
+        warn!(
+            "preset '{}' has {} chords claimed by more than one action: {:?}",
+            preset.name,
+            report.conflicts.len(),
+            report.conflicts,
+        );
+    }
 
     report
+}
+
+/// Every chord in `preset` that more than one action claims, as
+/// `"chord (phase, context): op-a, op-b"` in the order the entries are
+/// written.
+///
+/// A chord is one input, one phase and one context. Two actions on the
+/// same one both fire, and their `is_available` checks decide which of
+/// them does anything, which is how a key means one thing in the timeline
+/// and another on the canvas. So a shared chord is reported and never
+/// resolved here: what the report is for is the pair nobody intended,
+/// where both sides are available at once and the press does two things.
+///
+/// An action claiming the same chord twice is not a conflict with
+/// itself; only distinct operator names count.
+pub fn find_conflicts(preset: &KeymapPreset) -> Vec<String> {
+    let mut claims: Vec<(&PresetBinding, Vec<&str>)> = Vec::new();
+    for entry in &preset.bindings {
+        let seen = claims.iter_mut().find(|(first, _)| {
+            first.input == entry.input
+                && first.phase == entry.phase
+                && first.context == entry.context
+        });
+        match seen {
+            Some((_, operators)) => {
+                if !operators.contains(&entry.operator.as_str()) {
+                    operators.push(entry.operator.as_str());
+                }
+            }
+            None => claims.push((entry, vec![entry.operator.as_str()])),
+        }
+    }
+    claims
+        .into_iter()
+        .filter(|(_, operators)| operators.len() > 1)
+        .map(|(entry, operators)| {
+            format!(
+                "{} ({:?}, {:?}): {}",
+                describe_input(&entry.input),
+                entry.phase,
+                entry.context,
+                operators.join(", "),
+            )
+        })
+        .collect()
+}
+
+/// One chord as a reader sees it, e.g. `Ctrl+Shift+KeyC`.
+fn describe_input(input: &PresetInput) -> String {
+    let (ctrl, shift, alt, super_, tail) = match input {
+        PresetInput::Key {
+            key,
+            ctrl,
+            shift,
+            alt,
+            super_,
+        } => (*ctrl, *shift, *alt, *super_, key.clone()),
+        PresetInput::MouseButton {
+            button,
+            ctrl,
+            shift,
+            alt,
+            super_,
+        } => (*ctrl, *shift, *alt, *super_, format!("Mouse{button}")),
+        PresetInput::Scroll {
+            up,
+            ctrl,
+            shift,
+            alt,
+            super_,
+        } => (
+            *ctrl,
+            *shift,
+            *alt,
+            *super_,
+            format!("Scroll{}", if *up { "Up" } else { "Down" }),
+        ),
+    };
+    let mut parts = Vec::new();
+    for (held, name) in [
+        (ctrl, "Ctrl"),
+        (shift, "Shift"),
+        (alt, "Alt"),
+        (super_, "Super"),
+    ] {
+        if held {
+            parts.push(name);
+        }
+    }
+    parts.push(&tail);
+    parts.join("+")
 }
 
 /// Build a `ModKeys` bitmask from the three preset boolean fields.
