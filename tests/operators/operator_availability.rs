@@ -1,0 +1,382 @@
+//! Availability-gate coverage. Each `#[operator(is_available = fn)]`
+//! refuses to run when its predicate returns `false`; the dispatcher
+//! reports that as `Ok(OperatorResult::Cancelled)`. We exercise the
+//! highest-volume gate predicates against fixtures that toggle their
+//! precondition, and rely on `OperatorWorldExt::is_available()` to
+//! report the gate decision without actually dispatching.
+//!
+//! Strategy per gate:
+//!   1. Set the world to the precondition-false state.
+//!      Assert `is_available()` returns `Ok(false)` for every operator
+//!      that uses this gate.
+//!   2. Set the world to the precondition-true state.
+//!      Assert `is_available()` returns `Ok(true)` for the same set.
+//!
+//! Skipped: gates whose state requires a real cursor / modal state /
+//! UI fixture (`picker_open`, `is_drawing`, `measure_tool_active`,
+//! etc.). Those are exercised by the modal tests in
+//! `operator_modals.rs`. The list here covers the three biggest gates
+//! by op count: `has_primary_selection`, `can_act_on_entities`, and
+//! `can_change_gizmo`.
+
+use crate::util;
+
+use jackdaw::selection::{Selected, Selection};
+use jackdaw_api::prelude::*;
+
+/// Operators gated on `has_primary_selection` (Selection resource has
+/// at least one entity).
+const HAS_PRIMARY_SELECTION_OPS: &[&str] = &[
+    "viewport.focus_selected",
+    "component.add",
+    "component.remove",
+    "component.revert_baseline",
+    "physics.enable",
+    "physics.disable",
+    "animation.toggle_keyframe",
+    "field.set",
+    "binding.add",
+    "binding.set",
+];
+
+/// Operators gated on `can_act_on_entities`. A fresh editor refuses
+/// none of them: no modal is running, no text field is focused, and
+/// the edit mode is `Object`.
+const CAN_ACT_ON_ENTITIES_OPS: &[&str] = &[
+    "entity.delete",
+    "entity.duplicate",
+    "entity.copy_components",
+    "entity.paste_components",
+    "entity.toggle_visibility",
+    "entity.unhide_all",
+    "entity.hide_unselected",
+];
+
+/// Tool and gizmo operators that should be available in a clean app
+/// (no modal running, no text field focused).
+const TOOL_AND_GIZMO_OPS: &[&str] = &[
+    "tool.select",
+    "tool.translate",
+    "tool.rotate",
+    "tool.scale",
+    "gizmo.space.toggle",
+];
+
+#[test]
+fn has_primary_selection_gate_blocks_when_empty() {
+    let mut app = util::editor_test_app();
+    app.world_mut().resource_mut::<Selection>().entities.clear();
+    for id in HAS_PRIMARY_SELECTION_OPS {
+        let ready = app
+            .world_mut()
+            .operator(*id)
+            .is_available()
+            .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"));
+        assert!(
+            !ready,
+            "{id} should be unavailable when Selection is empty, but is_available returned true"
+        );
+    }
+}
+
+#[test]
+fn has_primary_selection_gate_clears_with_selection() {
+    let mut app = util::editor_test_app();
+    let entity = app.world_mut().spawn_empty().id();
+    app.world_mut()
+        .resource_mut::<Selection>()
+        .entities
+        .push(entity);
+    app.world_mut().entity_mut(entity).insert(Selected);
+
+    for id in HAS_PRIMARY_SELECTION_OPS {
+        let ready = app
+            .world_mut()
+            .operator(*id)
+            .is_available()
+            .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"));
+        assert!(
+            ready,
+            "{id} should be available when Selection contains an entity, but is_available returned false"
+        );
+    }
+}
+
+#[test]
+fn tool_and_gizmo_ops_available_in_clean_app() {
+    let mut app = util::editor_test_app();
+    for id in TOOL_AND_GIZMO_OPS {
+        let ready = app
+            .world_mut()
+            .operator(*id)
+            .is_available()
+            .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"));
+        assert!(
+            ready,
+            "{id} should be available in a clean editor app, but is_available returned false"
+        );
+    }
+}
+
+/// Bevy's `set_initial_focus` parks `InputFocus` on the primary window
+/// in `PostStartup`, so "nothing is focused" reads as `Some(window)`.
+/// A gate that asks `input_focus.get().is_some()` therefore refuses
+/// every entity operator until something clears focus, which in the
+/// running editor means the first viewport click. `KeybindFocus` exists
+/// to avoid that, and this pins the entity gate onto it.
+#[test]
+fn entity_ops_are_available_when_focus_still_sits_on_the_window() {
+    let mut app = util::editor_test_app();
+    let focused = app
+        .world()
+        .resource::<bevy::input_focus::InputFocus>()
+        .get();
+    assert!(
+        focused.is_some(),
+        "precondition: a settled editor app parks focus on the primary window"
+    );
+    for id in CAN_ACT_ON_ENTITIES_OPS {
+        let ready = app
+            .world_mut()
+            .operator(*id)
+            .is_available()
+            .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"));
+        assert!(
+            ready,
+            "{id} should be available with focus parked on the window, but is_available returned false"
+        );
+    }
+}
+
+/// The other side of the same gate: a real text edit holding focus is
+/// the case the guard is for, and it still refuses.
+#[test]
+fn entity_ops_refuse_while_a_text_field_holds_focus() {
+    let mut app = util::editor_test_app();
+    let field = app
+        .world_mut()
+        .spawn(jackdaw_feathers::text_edit::EditorTextEdit)
+        .id();
+    app.world_mut()
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .set(field, bevy::input_focus::FocusCause::Pressed);
+    for id in CAN_ACT_ON_ENTITIES_OPS {
+        let ready = app
+            .world_mut()
+            .operator(*id)
+            .is_available()
+            .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"));
+        assert!(
+            !ready,
+            "{id} should refuse while a text field holds focus, but is_available returned true"
+        );
+    }
+}
+
+/// The gate decides whether the operator runs at all, so the dispatch
+/// it was blocking is worth one pass end to end: a selected entity is
+/// gone after `entity.delete` reports `Finished`.
+#[test]
+fn a_dispatched_delete_takes_the_selected_entity_with_it() {
+    let mut app = util::editor_test_app();
+    let entity = app
+        .world_mut()
+        .spawn(bevy::prelude::Name::new("Doomed"))
+        .id();
+    app.world_mut()
+        .resource_mut::<Selection>()
+        .entities
+        .push(entity);
+    app.world_mut().entity_mut(entity).insert(Selected);
+
+    let result = app
+        .world_mut()
+        .operator("entity.delete")
+        .call()
+        .expect("entity.delete dispatches");
+    assert!(
+        matches!(result, OperatorResult::Finished),
+        "entity.delete reported {result:?}"
+    );
+    app.update();
+    assert!(
+        app.world().get_entity(entity).is_err(),
+        "the selected entity survived the delete"
+    );
+}
+
+/// Ctrl+C outside the timeline is the entity clipboard, not the keyframe one.
+///
+/// Both sides are bound to the chord (see `tests/keymap_presets.rs`) and
+/// their availability checks are disjoint on the timeline being the focused
+/// window. With a UI node selected on a canvas the keyframe side stands
+/// down and the entity side answers. The same for Ctrl+V.
+#[test]
+fn the_clipboard_chord_finds_nothing_to_run_outside_the_timeline() {
+    let mut app = util::editor_test_app();
+    let node = app
+        .world_mut()
+        .spawn((
+            bevy::prelude::Name::new("Panel"),
+            bevy::prelude::Node::default(),
+        ))
+        .id();
+    app.world_mut().resource_mut::<Selection>().entities = vec![node];
+    app.world_mut().entity_mut(node).insert(Selected);
+    app.update();
+
+    for id in ["clip.copy_keyframes", "clip.paste_keyframes"] {
+        let ready = app
+            .world_mut()
+            .operator(id)
+            .is_available()
+            .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"));
+        assert!(
+            !ready,
+            "{id} should refuse with a UI node selected and no timeline open"
+        );
+    }
+    for id in ["entity.copy", "entity.paste"] {
+        let ready = app
+            .world_mut()
+            .operator(id)
+            .is_available()
+            .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"));
+        assert!(ready, "{id} is what the chord means outside the timeline");
+    }
+}
+
+/// Escape only reaches the selection when nothing nearer wants it.
+#[test]
+fn escape_clears_the_selection_only_when_nothing_else_claims_it() {
+    let mut app = util::editor_test_app();
+    assert!(
+        !app.world_mut()
+            .operator("selection.clear")
+            .is_available()
+            .expect("selection.clear resolves"),
+        "with nothing selected there is nothing for Escape to clear"
+    );
+
+    let entity = app.world_mut().spawn(bevy::prelude::Name::new("Kept")).id();
+    app.world_mut().resource_mut::<Selection>().entities = vec![entity];
+    app.world_mut().entity_mut(entity).insert(Selected);
+    assert!(
+        app.world_mut()
+            .operator("selection.clear")
+            .is_available()
+            .expect("selection.clear resolves"),
+        "a selection and no other claim is the case Escape is for"
+    );
+
+    // An open menu is nearer: Escape closes it, and the selection stays.
+    let menu = app.world_mut().spawn_empty().id();
+    app.world_mut()
+        .resource_mut::<jackdaw_widgets::menu_bar::MenuBarState>()
+        .open_menu = Some(menu);
+    assert!(
+        !app.world_mut()
+            .operator("selection.clear")
+            .is_available()
+            .expect("selection.clear resolves"),
+        "an open menu has the prior claim on Escape"
+    );
+}
+
+/// Home frames the canvas, and only while the canvas is what the user is
+/// looking at: elsewhere the press belongs to the timeline's jump to
+/// start, which shares the key.
+#[test]
+fn home_frames_the_canvas_only_while_a_2d_panel_is_current() {
+    let mut app = util::editor_test_app();
+    assert!(
+        !app.world_mut()
+            .operator("viewport2d.frame")
+            .is_available()
+            .expect("viewport2d.frame resolves"),
+        "no 2D panel is open, so Home is not the canvas's"
+    );
+
+    let parent = app
+        .world_mut()
+        .spawn((jackdaw::EditorEntity, bevy::prelude::Node::default()))
+        .id();
+    jackdaw::viewport_2d::build_viewport_2d_panel(app.world_mut(), parent);
+    // The layout the editor builds: the one viewport window fronted, and a
+    // host saying it is showing the canvas rather than the world.
+    let mut tree = jackdaw_panels::tree::DockTree::new();
+    let leaf = tree.insert(jackdaw_panels::tree::DockNode::Leaf(
+        jackdaw_panels::tree::DockLeaf::new("root", jackdaw_panels::area::DockAreaStyle::TabBar)
+            .with_windows(vec![jackdaw::viewport::VIEWPORT_WINDOW_ID.into()]),
+    ));
+    tree.root = Some(leaf);
+    *app.world_mut()
+        .resource_mut::<jackdaw_panels::tree::DockTree>() = tree;
+    let three_d = app.world_mut().spawn_empty().id();
+    let two_d = app.world_mut().spawn_empty().id();
+    app.world_mut().spawn(jackdaw::viewport_host::ViewportHost {
+        mode: jackdaw::viewport_host::ViewportMode::TwoD,
+        mode_chosen: true,
+        three_d,
+        two_d,
+    });
+    app.update();
+
+    assert!(
+        app.world_mut()
+            .operator("viewport2d.frame")
+            .is_available()
+            .expect("viewport2d.frame resolves"),
+        "the viewport panel is fronted in 2D, so Home frames the canvas"
+    );
+}
+
+/// Escape ends a rename before it means anything else, and closes the Add
+/// Entity picker before it means anything else again. Neither is about the
+/// selection, and both used to take it with them on the way out.
+#[test]
+fn escape_leaves_the_selection_alone_while_typing_or_in_the_picker() {
+    let mut app = util::editor_test_app();
+    let entity = app.world_mut().spawn(bevy::prelude::Name::new("Kept")).id();
+    app.world_mut().resource_mut::<Selection>().entities = vec![entity];
+    app.world_mut().entity_mut(entity).insert(Selected);
+    app.update();
+    assert!(
+        available(&mut app, "selection.clear"),
+        "a selection and no other claim is the case Escape is for"
+    );
+
+    // An F2 rename: the field has focus, and Escape cancels the edit.
+    let field = app
+        .world_mut()
+        .spawn(jackdaw_feathers::text_edit::EditorTextEdit)
+        .id();
+    app.world_mut()
+        .insert_resource(bevy::input_focus::InputFocus::from_entity(field));
+    app.update();
+    assert!(
+        !available(&mut app, "selection.clear"),
+        "Escape belongs to the rename while one is in flight"
+    );
+    app.world_mut()
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .clear();
+    app.update();
+    assert!(available(&mut app, "selection.clear"));
+
+    // The Ctrl+A picker: Escape closes it.
+    app.world_mut()
+        .spawn(jackdaw::add_entity_picker::AddEntityPicker);
+    app.update();
+    assert!(
+        !available(&mut app, "selection.clear"),
+        "Escape closes the open picker rather than clearing behind it"
+    );
+}
+
+fn available(app: &mut bevy::prelude::App, id: &'static str) -> bool {
+    app.world_mut()
+        .operator(id)
+        .is_available()
+        .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"))
+}
