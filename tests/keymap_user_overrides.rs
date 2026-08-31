@@ -124,6 +124,8 @@ fn a_row_naming_an_absent_operator_is_skipped_without_dropping_the_rest() {
 
 #[test]
 fn reapplying_a_resolved_keymap_is_idempotent() {
+    use jackdaw_api_internal::keymap::PresetSpawnedBinding;
+
     let mut app = util::headless_app();
     app.finish();
     app.update();
@@ -132,10 +134,26 @@ fn reapplying_a_resolved_keymap_is_idempotent() {
         bindings: vec![row(REBOUND, "F9")],
     };
     let resolved = resolve_keymap(&defaults, &user);
+
+    let live_bindings = |app: &mut App| {
+        let world = app.world_mut();
+        world
+            .query_filtered::<Entity, With<PresetSpawnedBinding>>()
+            .iter(world)
+            .count()
+    };
+
     let first = apply_keymap_preset(app.world_mut(), &resolved);
+    let after_first = live_bindings(&mut app);
     let second = apply_keymap_preset(app.world_mut(), &resolved);
+    let after_second = live_bindings(&mut app);
+
     assert_eq!(first.spawned_bindings, second.spawned_bindings);
     assert_eq!(first.applied_entries, second.applied_entries);
+    assert_eq!(
+        after_first, after_second,
+        "re-applying must replace the keymap's bindings, not add a second copy"
+    );
 }
 
 /// A rebound operator ends up bound to the new chord and to nothing
