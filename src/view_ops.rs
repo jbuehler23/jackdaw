@@ -253,10 +253,25 @@ fn frame_selected_available(
     selection.primary().is_some() && resolve_frame_camera(&active, &cameras).is_some()
 }
 
+/// Framing the world needs a camera to frame it in, and needs the 3D viewport
+/// to be the panel Home belongs to.
+///
+/// Home frames the canvas in the 2D viewport and the world in the 3D one. Both
+/// stay bound, so without this gate one press over the canvas would do both
+/// and the framing would come with a camera move nobody asked for.
 fn frame_all_available(
     active: Res<ActiveViewport>,
     cameras: Query<Entity, With<MainViewportCamera>>,
+    tree: Res<jackdaw_panels::tree::DockTree>,
+    viewports: Query<&crate::viewport_host::ViewportHost>,
 ) -> bool {
+    if !crate::viewport_2d::fronted_viewport_is(
+        &tree,
+        &viewports,
+        crate::viewport_host::ViewportMode::ThreeD,
+    ) {
+        return false;
+    }
     resolve_frame_camera(&active, &cameras).is_some()
 }
 

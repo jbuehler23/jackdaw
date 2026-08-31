@@ -1917,10 +1917,13 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// while brush sub-element edit mode is active; matches the guards
 /// the legacy `handle_entity_keys` applied.
 ///
-/// Also refuses while the timeline dock window is active, so the
-/// keyframe operators sharing those chords answer alone. Delete and the
-/// clipboard chords are bound on both sides; the timeline is the
-/// narrower claim, so it wins wherever it is the focused window.
+/// Also refuses while the timeline is the panel a press belongs to, so
+/// the keyframe operators sharing those chords answer alone. Delete and
+/// the clipboard chords are bound on both sides; the timeline is the
+/// narrower claim, so it wins in its own panel and nowhere else. Focus,
+/// not mere presence: the Animation workspace shows the timeline beside
+/// the outliner, and a timeline open somewhere used to leave the entity
+/// chords dead in every panel (see [`crate::panel_focus`]).
 ///
 /// Typing is asked through [`crate::keybind_focus::KeybindFocus`] and
 /// not through `InputFocus` directly: bevy parks focus on the primary
@@ -1932,7 +1935,7 @@ pub(crate) fn can_act_on_entities(
     modal: Res<crate::modal_transform::ModalTransformState>,
     draw_state: Res<crate::draw_brush::DrawBrushState>,
     edit_mode: Res<crate::brush::EditMode>,
-    tree: Res<jackdaw_panels::tree::DockTree>,
+    panel_focus: crate::panel_focus::PanelFocus,
 ) -> bool {
     if keybind_focus.is_typing() || active.is_modal_running() || modal.active.is_some() {
         return false;
@@ -1940,12 +1943,16 @@ pub(crate) fn can_act_on_entities(
     if draw_state.active.is_some() {
         return false;
     }
-    if crate::transform_ops::active_tab_kind_present(&tree, "jackdaw.timeline") {
+    if panel_focus.is_focused(TIMELINE_WINDOW_ID) {
         return false;
     }
 
     matches!(*edit_mode, crate::brush::EditMode::Object)
 }
+
+/// The timeline panel, which claims the clipboard chords and Delete inside
+/// its own bounds.
+pub(crate) const TIMELINE_WINDOW_ID: &str = "jackdaw.timeline";
 
 // -- Entity lifecycle --------------------------------------------
 

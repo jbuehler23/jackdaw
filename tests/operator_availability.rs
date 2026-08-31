@@ -302,14 +302,24 @@ fn home_frames_the_canvas_only_while_a_2d_panel_is_current() {
         .spawn((jackdaw::EditorEntity, bevy::prelude::Node::default()))
         .id();
     jackdaw::viewport_2d::build_viewport_2d_panel(app.world_mut(), parent);
+    // The layout the editor builds: the one viewport window fronted, and a
+    // host saying it is showing the canvas rather than the world.
     let mut tree = jackdaw_panels::tree::DockTree::new();
     let leaf = tree.insert(jackdaw_panels::tree::DockNode::Leaf(
         jackdaw_panels::tree::DockLeaf::new("root", jackdaw_panels::area::DockAreaStyle::TabBar)
-            .with_windows(vec![jackdaw::viewport::VIEWPORT_2D_WINDOW_ID.into()]),
+            .with_windows(vec![jackdaw::viewport::VIEWPORT_WINDOW_ID.into()]),
     ));
     tree.root = Some(leaf);
     *app.world_mut()
         .resource_mut::<jackdaw_panels::tree::DockTree>() = tree;
+    let three_d = app.world_mut().spawn_empty().id();
+    let two_d = app.world_mut().spawn_empty().id();
+    app.world_mut().spawn(jackdaw::viewport_host::ViewportHost {
+        mode: jackdaw::viewport_host::ViewportMode::TwoD,
+        mode_chosen: true,
+        three_d,
+        two_d,
+    });
     app.update();
 
     assert!(
@@ -317,6 +327,56 @@ fn home_frames_the_canvas_only_while_a_2d_panel_is_current() {
             .operator("viewport2d.frame")
             .is_available()
             .expect("viewport2d.frame resolves"),
-        "the 2D panel's tab is the active one, so Home frames it"
+        "the viewport panel is fronted in 2D, so Home frames the canvas"
     );
+}
+
+/// Escape ends a rename before it means anything else, and closes the Add
+/// Entity picker before it means anything else again. Neither is about the
+/// selection, and both used to take it with them on the way out.
+#[test]
+fn escape_leaves_the_selection_alone_while_typing_or_in_the_picker() {
+    let mut app = util::editor_test_app();
+    let entity = app.world_mut().spawn(bevy::prelude::Name::new("Kept")).id();
+    app.world_mut().resource_mut::<Selection>().entities = vec![entity];
+    app.world_mut().entity_mut(entity).insert(Selected);
+    app.update();
+    assert!(
+        available(&mut app, "selection.clear"),
+        "a selection and no other claim is the case Escape is for"
+    );
+
+    // An F2 rename: the field has focus, and Escape cancels the edit.
+    let field = app
+        .world_mut()
+        .spawn(jackdaw_feathers::text_edit::EditorTextEdit)
+        .id();
+    app.world_mut()
+        .insert_resource(bevy::input_focus::InputFocus::from_entity(field));
+    app.update();
+    assert!(
+        !available(&mut app, "selection.clear"),
+        "Escape belongs to the rename while one is in flight"
+    );
+    app.world_mut()
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .clear();
+    app.update();
+    assert!(available(&mut app, "selection.clear"));
+
+    // The Ctrl+A picker: Escape closes it.
+    app.world_mut()
+        .spawn(jackdaw::add_entity_picker::AddEntityPicker);
+    app.update();
+    assert!(
+        !available(&mut app, "selection.clear"),
+        "Escape closes the open picker rather than clearing behind it"
+    );
+}
+
+fn available(app: &mut bevy::prelude::App, id: &'static str) -> bool {
+    app.world_mut()
+        .operator(id)
+        .is_available()
+        .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"))
 }

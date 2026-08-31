@@ -45,6 +45,7 @@ pub mod keybind_focus;
 pub mod keybind_settings;
 pub mod keybinds;
 pub mod migrate_dialog;
+pub mod panel_focus;
 
 use std::{collections::BTreeMap, marker::PhantomData};
 
@@ -379,6 +380,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(file_ops::FileOpsPlugin)
         .add_plugins(keybinds::KeybindsPlugin)
         .add_plugins(keybind_settings::KeybindSettingsPlugin)
+        .add_plugins(panel_focus::PanelFocusPlugin)
         .add_plugins((
             viewport_overlays::ViewportOverlaysPlugin,
             view_modes::ViewModesPlugin,
@@ -1316,7 +1318,7 @@ pub(crate) fn clip_delete_keyframes(
 fn has_selected_keyframes(
     input_focus: Res<bevy::input_focus::InputFocus>,
     selection: Res<selection::Selection>,
-    tree: Res<jackdaw_panels::tree::DockTree>,
+    panel_focus: crate::panel_focus::PanelFocus,
     keyframes: Query<
         (),
         bevy::ecs::query::Or<(
@@ -1329,7 +1331,7 @@ fn has_selected_keyframes(
     if input_focus.get().is_some() {
         return false;
     }
-    if !crate::transform_ops::active_tab_kind_present(&tree, "jackdaw.timeline") {
+    if !panel_focus.is_focused(crate::entity_ops::TIMELINE_WINDOW_ID) {
         return false;
     }
     selection.entities.iter().any(|&e| keyframes.contains(e))
@@ -1338,13 +1340,13 @@ fn has_selected_keyframes(
 fn timeline_with_clip(
     input_focus: Res<bevy::input_focus::InputFocus>,
     active: ActiveModalQuery,
-    tree: Res<jackdaw_panels::tree::DockTree>,
+    panel_focus: crate::panel_focus::PanelFocus,
     selected_clip: Res<jackdaw_animation::SelectedClip>,
 ) -> bool {
     if input_focus.get().is_some() || active.is_modal_running() {
         return false;
     }
-    if !crate::transform_ops::active_tab_kind_present(&tree, "jackdaw.timeline") {
+    if !panel_focus.is_focused(crate::entity_ops::TIMELINE_WINDOW_ID) {
         return false;
     }
     selected_clip.0.is_some()
@@ -1353,14 +1355,14 @@ fn timeline_with_clip(
 fn timeline_paste_available(
     input_focus: Res<bevy::input_focus::InputFocus>,
     active: ActiveModalQuery,
-    tree: Res<jackdaw_panels::tree::DockTree>,
+    panel_focus: crate::panel_focus::PanelFocus,
     selected_clip: Res<jackdaw_animation::SelectedClip>,
     clipboard: Res<jackdaw_animation::KeyframeClipboard>,
 ) -> bool {
     if input_focus.get().is_some() || active.is_modal_running() {
         return false;
     }
-    if !crate::transform_ops::active_tab_kind_present(&tree, "jackdaw.timeline") {
+    if !panel_focus.is_focused(crate::entity_ops::TIMELINE_WINDOW_ID) {
         return false;
     }
     selected_clip.0.is_some() && !clipboard.entries.is_empty()

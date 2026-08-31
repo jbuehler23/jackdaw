@@ -60,6 +60,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 fn escape_is_free(
     selection: Res<Selection>,
     guards: InteractionGuards,
+    keybind_focus: crate::keybind_focus::KeybindFocus,
     ui_gesture: Res<crate::ui_stage::UiManipulation>,
     guide_gesture: Res<crate::ui_stage::GuideManipulation>,
     box_select: Res<BoxSelectState>,
@@ -67,8 +68,15 @@ fn escape_is_free(
     context_menu: Res<jackdaw_widgets::context_menu::ContextMenuState>,
     radial: Res<jackdaw_widgets::RadialMenuState>,
     recording: Res<crate::keybind_settings::KeybindRecordingState>,
+    add_entity_picker: Query<(), With<crate::add_entity_picker::AddEntityPicker>>,
 ) -> bool {
     if selection.entities.is_empty() || guards.is_any_interaction_active() {
+        return false;
+    }
+    // Escape ends an F2 rename, and closes the Add Entity picker, before it
+    // means anything else. Neither is about the selection, and both would
+    // otherwise take it with them on the way out.
+    if keybind_focus.is_typing() || !add_entity_picker.is_empty() {
         return false;
     }
     if ui_gesture.is_running() || guide_gesture.position().is_some() || box_select.active {

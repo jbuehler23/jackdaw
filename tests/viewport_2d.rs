@@ -2070,14 +2070,20 @@ fn opening_a_ui_scene_fits_the_canvas_into_the_stage_area() {
 /// The `viewport2d.frame` operator is the Fit control: it puts a panel
 /// panned and zoomed away back where opening the scene put it.
 ///
-/// The 2D panel is made the active tab first: Home is bound to this
-/// operator and to the timeline's jump-to-start, and what keeps the two
-/// apart is that the canvas answers only while it is the panel in front.
+/// The viewport panel is made the active tab first, in 2D mode: Home is
+/// bound to this operator and to the timeline's jump-to-start, and what
+/// keeps the two apart is that the canvas answers only while it is the
+/// panel in front.
+///
+/// The tab carries the one viewport window id, which is the id a layout
+/// actually registers; the canvas is a mode of that panel rather than a
+/// window of its own, so a fixture naming the 2D id is a dock no layout
+/// can produce.
 #[test]
 fn the_frame_op_returns_a_panned_and_zoomed_panel_to_the_fit() {
     let mut app = util::editor_test_app();
     let parent = fit_panel(&mut app);
-    dock_leaf(&mut app, &[jackdaw::viewport::VIEWPORT_2D_WINDOW_ID]);
+    fronted_viewport(&mut app, jackdaw::viewport_host::ViewportMode::TwoD);
     app.world_mut().spawn((
         UiSceneRoot {
             reference_size: UVec2::new(1280, 720),
@@ -2528,6 +2534,26 @@ fn fit_panel(app: &mut App) -> Entity {
     parent
 }
 
+/// The dock a real layout builds when a viewport panel is in front, showing
+/// `mode`.
+///
+/// Two halves, because the editor has one viewport *window* with two modes:
+/// the tab says a viewport is fronted, and a [`ViewportHost`] in `mode` says
+/// which of the two it is showing.
+fn fronted_viewport(app: &mut App, mode: jackdaw::viewport_host::ViewportMode) {
+    use jackdaw::viewport_host::ViewportHost;
+    dock_leaf(app, &[jackdaw::viewport::VIEWPORT_WINDOW_ID]);
+    let three_d = app.world_mut().spawn_empty().id();
+    let two_d = app.world_mut().spawn_empty().id();
+    app.world_mut().spawn(ViewportHost {
+        mode,
+        mode_chosen: true,
+        three_d,
+        two_d,
+    });
+    app.update();
+}
+
 /// A dock whose one leaf holds `windows`, in that order, so a focus
 /// change is visible as a change rather than as the starting state.
 fn dock_leaf(app: &mut App, windows: &[&str]) -> jackdaw_panels::tree::NodeId {
@@ -2788,4 +2814,67 @@ fn component_card_labels(app: &mut App) -> Vec<String> {
         }
     }
     labels
+}
+
+/// Home reaches the canvas from the layout the editor actually builds.
+///
+/// The gate used to ask the dock tree for `jackdaw.viewport_2d`, an id
+/// `canonical_window_id` maps away and no layout registers, so the answer was
+/// always no and Home did nothing unless the cursor happened to be over a
+/// stage.
+#[test]
+fn the_canvas_answers_home_while_its_panel_is_in_front() {
+    use jackdaw::viewport_host::ViewportMode;
+
+    let mut app = util::editor_test_app();
+    fit_panel(&mut app);
+    world_camera(&mut app);
+    fronted_viewport(&mut app, ViewportMode::TwoD);
+
+    assert!(
+        available(&mut app, "viewport2d.frame"),
+        "the canvas takes Home while its panel is fronted in 2D"
+    );
+    assert!(
+        !available(&mut app, "view.frame_all"),
+        "and the world framing stands down, so one press does one thing"
+    );
+}
+
+/// A camera for `view.frame_all` to frame the world in, so the operator's
+/// availability turns on the panel rather than on there being no camera.
+fn world_camera(app: &mut App) {
+    app.world_mut().spawn((
+        jackdaw::viewport::MainViewportCamera,
+        Camera3d::default(),
+        Transform::default(),
+    ));
+    app.update();
+}
+
+/// The other half: with the same panel in 3D, Home frames the world and the
+/// canvas stands down.
+#[test]
+fn the_world_answers_home_while_the_panel_is_in_three_d() {
+    use jackdaw::viewport_host::ViewportMode;
+
+    let mut app = util::editor_test_app();
+    world_camera(&mut app);
+    fronted_viewport(&mut app, ViewportMode::ThreeD);
+
+    assert!(
+        !available(&mut app, "viewport2d.frame"),
+        "the canvas does not take Home from a panel showing the world"
+    );
+    assert!(
+        available(&mut app, "view.frame_all"),
+        "the world framing takes Home instead"
+    );
+}
+
+fn available(app: &mut App, id: &'static str) -> bool {
+    app.world_mut()
+        .operator(id)
+        .is_available()
+        .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"))
 }
