@@ -8,8 +8,14 @@ mod apply;
 mod persist;
 mod types;
 
-pub use apply::{KeymapApplyReport, PresetSpawnedBinding, apply_keymap_preset, find_conflicts};
-pub use persist::{load_active_keymap_preset, save_active_keymap_preset};
+pub use apply::{
+    KeymapApplyReport, KeymapCapture, PresetSpawnedBinding, apply_keymap_preset, find_conflicts,
+    resolve_keymap,
+};
+pub use persist::{
+    UserKeymap, load_active_keymap_preset, load_user_keymap, save_active_keymap_preset,
+    save_user_keymap,
+};
 pub use types::{
     ActiveKeymapPreset, BuiltinActions, DefaultKeymap, KeymapPreset, PresetBinding, PresetContext,
     PresetInput, PresetPhase, key_code_from_name, key_code_name, mouse_button_from_name,

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use jackdaw_api_internal::keymap::{
-    ActiveKeymapPreset, BuiltinActions, DefaultKeymap, apply_keymap_preset,
+    ActiveKeymapPreset, BuiltinActions, DefaultKeymap, KeymapApplyReport, KeymapCapture,
+    UserKeymap, apply_keymap_preset, load_user_keymap, resolve_keymap,
 };
 use jackdaw_api_internal::lifecycle::enable_extension;
 
@@ -21,6 +22,8 @@ pub(super) fn plugin(app: &mut App) {
     // bindings are applied.
     app.init_resource::<BuiltinActions>()
         .init_resource::<DefaultKeymap>()
+        .init_resource::<KeymapCapture>()
+        .insert_resource(load_user_keymap())
         .add_systems(
             Startup,
             (
@@ -32,6 +35,13 @@ pub(super) fn plugin(app: &mut App) {
         );
 }
 
+/// The outcome of the last keymap application: which entries named
+/// something no loaded extension provides, and which chords more than
+/// one action claims. The keybind dialog reads it so a saved keymap
+/// reports what it could not do rather than doing it silently.
+#[derive(Resource, Default)]
+pub(crate) struct LastKeymapApply(pub(crate) KeymapApplyReport);
+
 /// Enable every catalog entry `resolve_enabled_list` reports as on.
 fn apply_enabled_extensions_startup(world: &mut World) {
     let to_enable = resolve_enabled_list(world);
@@ -42,6 +52,10 @@ fn apply_enabled_extensions_startup(world: &mut World) {
 
 /// Apply the active keymap preset once extensions finish registering.
 /// Only "classic" ships today; unknown names warn and fall back.
+///
+/// Runs at startup and again after the keybind dialog saves, so a rebind
+/// takes effect in the session that made it. The user's own rows are
+/// layered over the defaults here and nowhere else.
 pub(crate) fn apply_active_keymap(world: &mut World) {
     let defaults = world
         .get_resource_or_init::<DefaultKeymap>()
@@ -53,9 +67,14 @@ pub(crate) fn apply_active_keymap(world: &mut World) {
             active.name
         );
     }
-    let report = apply_keymap_preset(world, &defaults);
+    let user = world.get_resource_or_init::<UserKeymap>().clone();
+    let resolved = resolve_keymap(&defaults, &user);
+    let report = apply_keymap_preset(world, &resolved);
     info!(
-        "applied keymap preset 'classic': {} entries, {} bindings",
-        report.applied_entries, report.spawned_bindings
+        "applied keymap preset 'classic': {} entries, {} bindings, {} user rows",
+        report.applied_entries,
+        report.spawned_bindings,
+        user.bindings.len(),
     );
+    world.insert_resource(LastKeymapApply(report));
 }

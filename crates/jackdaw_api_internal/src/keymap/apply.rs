@@ -11,10 +11,24 @@ use crate::keymap_conditions::{DoubleClick, ScrollTick};
 
 use crate::lifecycle::OperatorAction;
 
+use super::persist::UserKeymap;
 use super::types::{
     BuiltinActions, KeymapPreset, PresetBinding, PresetContext, PresetInput, PresetPhase,
     key_code_from_name, mouse_button_from_name,
 };
+
+/// Set while the keybind settings dialog is waiting for the user to
+/// press the chord it is about to record.
+///
+/// A chord recorded in the dialog is a chord the editor is also bound
+/// to, so without this the press that names a binding also runs whatever
+/// it currently means. The operator dispatch observer reads this and
+/// stands down; the bindings themselves stay in place, so nothing has to
+/// be torn down and rebuilt around a recording.
+#[derive(Resource, Default)]
+pub struct KeymapCapture {
+    pub recording: bool,
+}
 
 /// Outcome of one preset application, for conformance checks and logs.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -211,6 +225,37 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
     }
 
     report
+}
+
+/// Layer the user's own bindings over the shipped defaults.
+///
+/// The unit of replacement is the operator, not the chord: naming an
+/// operator in [`UserKeymap`] drops every default row that operator had
+/// and uses the user's rows instead. That is what makes a rebind
+/// complete (the old chord goes away with the new one arriving) and a
+/// reset a deletion (removing the operator's user rows restores exactly
+/// what it shipped with).
+///
+/// Default rows keep their order and their positions; the user's rows
+/// follow them, so a chord's meaning does not depend on when it was
+/// rebound.
+pub fn resolve_keymap(defaults: &KeymapPreset, user: &UserKeymap) -> KeymapPreset {
+    let overridden: std::collections::HashSet<&str> = user
+        .bindings
+        .iter()
+        .map(|binding| binding.operator.as_str())
+        .collect();
+    let mut bindings: Vec<PresetBinding> = defaults
+        .bindings
+        .iter()
+        .filter(|binding| !overridden.contains(binding.operator.as_str()))
+        .cloned()
+        .collect();
+    bindings.extend(user.bindings.iter().cloned());
+    KeymapPreset {
+        name: defaults.name.clone(),
+        bindings,
+    }
 }
 
 /// Every chord in `preset` that more than one action claims, as
@@ -410,6 +455,63 @@ mod tests {
         world
             .spawn((OperatorAction(operator_id), TriggerState::default()))
             .id()
+    }
+
+    fn user_row(operator: &str, key: &str) -> PresetBinding {
+        PresetBinding {
+            operator: operator.to_string(),
+            input: PresetInput::key(key),
+            phase: PresetPhase::Press,
+            context: PresetContext::Operators,
+        }
+    }
+
+    #[test]
+    fn resolve_replaces_every_row_of_an_overridden_operator() {
+        let defaults = KeymapPreset {
+            name: "classic".into(),
+            bindings: vec![
+                user_row("tool.select", "KeyQ"),
+                user_row("tool.select", "KeyE"),
+                user_row("history.undo", "KeyZ"),
+            ],
+        };
+        let user = UserKeymap {
+            bindings: vec![user_row("tool.select", "KeyT")],
+        };
+        let resolved = resolve_keymap(&defaults, &user);
+        assert_eq!(
+            resolved.bindings,
+            vec![
+                user_row("history.undo", "KeyZ"),
+                user_row("tool.select", "KeyT")
+            ],
+            "an overridden operator loses all of its default rows, and no other operator changes"
+        );
+    }
+
+    #[test]
+    fn resolve_with_no_user_rows_is_the_defaults() {
+        let defaults = KeymapPreset {
+            name: "classic".into(),
+            bindings: vec![user_row("tool.select", "KeyQ")],
+        };
+        let resolved = resolve_keymap(&defaults, &UserKeymap::default());
+        assert_eq!(resolved, defaults);
+    }
+
+    #[test]
+    fn resolve_keeps_a_user_row_naming_an_operator_with_no_default() {
+        let defaults = KeymapPreset {
+            name: "classic".into(),
+            bindings: vec![user_row("tool.select", "KeyQ")],
+        };
+        let user = UserKeymap {
+            bindings: vec![user_row("never.bound", "KeyN")],
+        };
+        let resolved = resolve_keymap(&defaults, &user);
+        assert_eq!(resolved.bindings.len(), 2);
+        assert!(resolved.bindings.contains(&user_row("never.bound", "KeyN")));
     }
 
     #[test]

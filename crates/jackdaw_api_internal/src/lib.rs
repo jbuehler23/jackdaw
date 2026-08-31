@@ -337,15 +337,25 @@ impl<'a> ExtensionContext<'a> {
             },
             ChildOf(ext),
             children![
-                Observer::new(move |_: On<Fire<O>>, mut commands: Commands| {
-                    commands
-                        .operator(O::ID)
-                        .settings(CallOperatorSettings {
-                            execution_context: ExecutionContext::Invoke,
-                            creates_history_entry: true,
-                        })
-                        .call();
-                },),
+                Observer::new(
+                    move |_: On<Fire<O>>,
+                          capture: Option<Res<crate::keymap::KeymapCapture>>,
+                          mut commands: Commands| {
+                        // While the keybind dialog is recording, the press
+                        // naming a chord must not also mean what that chord
+                        // currently means.
+                        if capture.is_some_and(|c| c.recording) {
+                            return;
+                        }
+                        commands
+                            .operator(O::ID)
+                            .settings(CallOperatorSettings {
+                                execution_context: ExecutionContext::Invoke,
+                                creates_history_entry: true,
+                            })
+                            .call();
+                    },
+                ),
                 // Auto-tag any BEI action entity for this operator with
                 // `OperatorAction(Op::ID)` so id-keyed lookups (tooltip
                 // keybind discovery, future command palette) can find the

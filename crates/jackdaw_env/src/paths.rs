@@ -27,6 +27,11 @@ pub fn keybinds_path() -> Option<std::path::PathBuf> {
     config_dir().map(|d| d.join("keybinds.json"))
 }
 
+/// Where the user's per-operator keymap overrides live.
+pub fn keymap_path() -> Option<std::path::PathBuf> {
+    config_dir().map(|d| d.join("keymap.json"))
+}
+
 fn data_dir_fallback() -> Option<PathBuf> {
     std::env::home_dir().map(|p| p.join(DATA_DIR_FALLBACK_NAME))
 }
