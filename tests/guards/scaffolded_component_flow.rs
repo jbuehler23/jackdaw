@@ -115,7 +115,7 @@ fn add_component_lands_on_entity_and_in_ast() {
         .param("entity", entity)
         .param(
             "type_path",
-            "scaffolded_component_flow::SpinningCube".to_string(),
+            "guards::scaffolded_component_flow::SpinningCube".to_string(),
         )
         .call()
         .expect("dispatch resolves");
@@ -138,7 +138,7 @@ fn add_component_lands_on_entity_and_in_ast() {
     assert!(
         ast.component_type_paths(node)
             .iter()
-            .any(|tp| tp == "scaffolded_component_flow::SpinningCube"),
+            .any(|tp| tp == "guards::scaffolded_component_flow::SpinningCube"),
         "AddComponent must record the component in the document so \
          scene save preserves it; node has: {:?}",
         ast.component_type_paths(node),
@@ -156,7 +156,7 @@ fn add_marker_component_round_trips_through_ast() {
         .param("entity", entity)
         .param(
             "type_path",
-            "scaffolded_component_flow::PlayerSpawn".to_string(),
+            "guards::scaffolded_component_flow::PlayerSpawn".to_string(),
         )
         .call()
         .expect("dispatch resolves");
@@ -171,7 +171,7 @@ fn add_marker_component_round_trips_through_ast() {
     assert!(
         ast.component_type_paths(node)
             .iter()
-            .any(|tp| tp == "scaffolded_component_flow::PlayerSpawn"),
+            .any(|tp| tp == "guards::scaffolded_component_flow::PlayerSpawn"),
         "marker component must round-trip through the document too",
     );
 }
@@ -190,7 +190,7 @@ fn inspector_field_edit_updates_ecs_and_ast() {
         .param("entity", entity)
         .param(
             "type_path",
-            "scaffolded_component_flow::SpinningCube".to_string(),
+            "guards::scaffolded_component_flow::SpinningCube".to_string(),
         )
         .call()
         .expect("dispatch resolves");
@@ -206,7 +206,7 @@ fn inspector_field_edit_updates_ecs_and_ast() {
 
     let mut cmd: Box<dyn EditorCommand> = Box::new(SetBsnField {
         entity,
-        type_path: "scaffolded_component_flow::SpinningCube".to_string(),
+        type_path: "guards::scaffolded_component_flow::SpinningCube".to_string(),
         field_path: "speed".to_string(),
         old_value: Some(jackdaw_bsn::BsnValue::Float(0.0)),
         new_value: jackdaw_bsn::BsnValue::Float(1.5),
@@ -231,7 +231,7 @@ fn inspector_field_edit_updates_ecs_and_ast() {
     let value = jackdaw_bsn::get_bsn_field(
         ast,
         node,
-        "scaffolded_component_flow::SpinningCube",
+        "guards::scaffolded_component_flow::SpinningCube",
         "speed",
     )
     .expect("document must store the edited field");
@@ -254,7 +254,7 @@ fn inspector_field_edit_undoes_back_to_original() {
         .param("entity", entity)
         .param(
             "type_path",
-            "scaffolded_component_flow::SpinningCube".to_string(),
+            "guards::scaffolded_component_flow::SpinningCube".to_string(),
         )
         .call()
         .expect("dispatch resolves");
@@ -263,7 +263,7 @@ fn inspector_field_edit_undoes_back_to_original() {
 
     let mut cmd: Box<dyn EditorCommand> = Box::new(SetBsnField {
         entity,
-        type_path: "scaffolded_component_flow::SpinningCube".to_string(),
+        type_path: "guards::scaffolded_component_flow::SpinningCube".to_string(),
         field_path: "speed".to_string(),
         old_value: Some(jackdaw_bsn::BsnValue::Float(0.0)),
         new_value: jackdaw_bsn::BsnValue::Float(1.5),

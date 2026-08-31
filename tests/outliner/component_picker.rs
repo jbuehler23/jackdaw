@@ -167,7 +167,7 @@ fn category_default_is_empty_when_unset() {
 fn denylisted_path_filters_component() {
     let registry = registry_with_test_types();
     let mut denylist = PickerDenylist::default();
-    denylist.deny_path("component_picker::WithDefault");
+    denylist.deny_path("outliner::component_picker::WithDefault");
     let pickables = enumerate_pickable_components(&registry, &HashSet::new(), &denylist);
     assert!(
         find(&pickables, "WithDefault").is_none(),
@@ -185,7 +185,7 @@ fn denylisted_path_filters_component() {
 fn denylisted_prefix_filters_component() {
     let registry = registry_with_test_types();
     let mut denylist = PickerDenylist::default();
-    denylist.deny_prefix("component_picker::");
+    denylist.deny_prefix("outliner::component_picker::");
     let pickables = enumerate_pickable_components(&registry, &HashSet::new(), &denylist);
     assert!(
         find(&pickables, "WithDefault").is_none(),
@@ -223,7 +223,10 @@ fn avian_paths_fall_back_to_physics_category() {
 fn non_avian_paths_have_no_category_fallback() {
     assert_eq!(fallback_category_for("bevy_pbr::StandardMaterial"), None);
     assert_eq!(fallback_category_for("my_game::PlayerSpawn"), None);
-    assert_eq!(fallback_category_for("component_picker::WithDefault"), None);
+    assert_eq!(
+        fallback_category_for("outliner::component_picker::WithDefault"),
+        None
+    );
 }
 
 /// `populate_avian_picker_denylist` should hide solver / cache types,

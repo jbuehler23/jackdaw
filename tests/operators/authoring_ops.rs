@@ -220,7 +220,7 @@ fn a_component_lands_on_the_selection_when_the_clause_names_no_entity() {
 
     run_finished(
         &mut app,
-        "component.add type_path=authoring_ops::AuthoringMarker",
+        "component.add type_path=operators::authoring_ops::AuthoringMarker",
     );
 
     assert!(
@@ -232,7 +232,7 @@ fn a_component_lands_on_the_selection_when_the_clause_names_no_entity() {
     assert!(
         ast.component_type_paths(node)
             .iter()
-            .any(|type_path| type_path == "authoring_ops::AuthoringMarker"),
+            .any(|type_path| type_path == "operators::authoring_ops::AuthoringMarker"),
         "the component is in the document, not only on the entity; document holds {:?}",
         ast.component_type_paths(node)
     );
@@ -240,7 +240,7 @@ fn a_component_lands_on_the_selection_when_the_clause_names_no_entity() {
     run_finished(&mut app, "scene.save");
     let written = std::fs::read_to_string(&path).expect("the session saved");
     assert!(
-        written.contains("authoring_ops::AuthoringMarker"),
+        written.contains("operators::authoring_ops::AuthoringMarker"),
         "the saved scene does not name the added component; wrote:\n{written}"
     );
 }
@@ -268,7 +268,7 @@ fn a_component_lands_on_the_entity_a_clause_names() {
 
     run_finished(
         &mut app,
-        "component.add name=Target type_path=authoring_ops::AuthoringMarker",
+        "component.add name=Target type_path=operators::authoring_ops::AuthoringMarker",
     );
 
     assert!(
@@ -295,7 +295,7 @@ fn component_remove_takes_it_off_the_named_entity_again() {
 
     run_finished(
         &mut app,
-        "component.remove name=Target type_path=authoring_ops::AuthoringMarker",
+        "component.remove name=Target type_path=operators::authoring_ops::AuthoringMarker",
     );
 
     assert!(
@@ -404,7 +404,7 @@ fn a_named_target_becomes_the_selection_so_a_cold_clause_lands() {
 
     run_finished(
         &mut app,
-        "component.add name=Target type_path=authoring_ops::AuthoringMarker",
+        "component.add name=Target type_path=operators::authoring_ops::AuthoringMarker",
     );
 
     assert!(
@@ -513,7 +513,7 @@ fn a_number_where_an_entity_belongs_is_refused_on_the_boot_path_too() {
     let mut app = authoring_app();
     run_finished(&mut app, "scene.new ui=true");
     let root = ui_roots(app.world_mut())[0];
-    let clause = "component.add entity=42 type_path=authoring_ops::AuthoringMarker";
+    let clause = "component.add entity=42 type_path=operators::authoring_ops::AuthoringMarker";
 
     let outcomes = resolve(&mut app, clause);
 
@@ -960,14 +960,16 @@ fn a_field_binding_is_authored_from_a_clause() {
 
     run_finished(
         &mut app,
-        "binding.add entity=Button kind=field read=authoring_ops::AuthoringHealth.current \
+        "binding.add entity=Button kind=field read=operators::authoring_ops::AuthoringHealth.current \
          write=bevy_ui::ui_node::Node.width as_percent=true",
     );
 
     assert_eq!(
         bindings_of(&app, button),
         vec![Binding::Field {
-            read: vec![BindPath::new("authoring_ops::AuthoringHealth.current")],
+            read: vec![BindPath::new(
+                "operators::authoring_ops::AuthoringHealth.current"
+            )],
             via: None,
             write: BindPath::new("bevy_ui::ui_node::Node.width"),
             as_percent: true,
@@ -1025,7 +1027,7 @@ fn a_binding_clause_edits_one_binding_by_index() {
 
     run_finished(
         &mut app,
-        "binding.set entity=Slider index=0 read=authoring_ops::AuthoringHealth.current \
+        "binding.set entity=Slider index=0 read=operators::authoring_ops::AuthoringHealth.current \
          two_way=true",
     );
 
@@ -1033,7 +1035,7 @@ fn a_binding_clause_edits_one_binding_by_index() {
         bindings_of(&app, slider),
         vec![
             Binding::Value {
-                with: BindPath::new("authoring_ops::AuthoringHealth.current"),
+                with: BindPath::new("operators::authoring_ops::AuthoringHealth.current"),
                 two_way: true,
             },
             Binding::Visible {
@@ -1059,58 +1061,64 @@ fn every_binding_shape_the_card_offers_is_reachable_from_a_clause() {
 
     run_finished(
         &mut app,
-        "binding.add entity=Button kind=field read=authoring_ops::AuthoringHealth.current \
+        "binding.add entity=Button kind=field read=operators::authoring_ops::AuthoringHealth.current \
          via=jackdaw_bind::clamp01 write=bevy_ui::ui_node::Node.width as_percent=true",
     );
     run_finished(
         &mut app,
-        "binding.add entity=Button kind=field read=authoring_ops::AuthoringHealth.alive \
-         write=authoring_ops::AuthoringMarker",
+        "binding.add entity=Button kind=field read=operators::authoring_ops::AuthoringHealth.alive \
+         write=operators::authoring_ops::AuthoringMarker",
     );
     run_finished(
         &mut app,
         "binding.add entity=Button kind=text format={}/100 \
-         read=authoring_ops::AuthoringHealth.current",
+         read=operators::authoring_ops::AuthoringHealth.current",
     );
     run_finished(
         &mut app,
-        "binding.add entity=Button kind=value with=authoring_ops::AuthoringHealth.current \
+        "binding.add entity=Button kind=value with=operators::authoring_ops::AuthoringHealth.current \
          two_way=true",
     );
     run_finished(
         &mut app,
-        "binding.add entity=Button kind=action event=authoring_ops::Hit \
-         map=amount:authoring_ops::AuthoringHealth.current",
+        "binding.add entity=Button kind=action event=operators::authoring_ops::Hit \
+         map=amount:operators::authoring_ops::AuthoringHealth.current",
     );
 
     assert_eq!(
         bindings_of(&app, button),
         vec![
             Binding::Field {
-                read: vec![BindPath::new("authoring_ops::AuthoringHealth.current")],
+                read: vec![BindPath::new(
+                    "operators::authoring_ops::AuthoringHealth.current"
+                )],
                 via: Some("jackdaw_bind::clamp01".to_string()),
                 write: BindPath::new("bevy_ui::ui_node::Node.width"),
                 as_percent: true,
             },
             Binding::Field {
-                read: vec![BindPath::new("authoring_ops::AuthoringHealth.alive")],
+                read: vec![BindPath::new(
+                    "operators::authoring_ops::AuthoringHealth.alive"
+                )],
                 via: None,
-                write: BindPath::new("authoring_ops::AuthoringMarker"),
+                write: BindPath::new("operators::authoring_ops::AuthoringMarker"),
                 as_percent: false,
             },
             Binding::Text {
                 format: "{}/100".to_string(),
-                args: vec![BindPath::new("authoring_ops::AuthoringHealth.current")],
+                args: vec![BindPath::new(
+                    "operators::authoring_ops::AuthoringHealth.current"
+                )],
             },
             Binding::Value {
-                with: BindPath::new("authoring_ops::AuthoringHealth.current"),
+                with: BindPath::new("operators::authoring_ops::AuthoringHealth.current"),
                 two_way: true,
             },
             Binding::Action {
-                event: "authoring_ops::Hit".to_string(),
+                event: "operators::authoring_ops::Hit".to_string(),
                 fields: vec![(
                     "amount".to_string(),
-                    BindPath::new("authoring_ops::AuthoringHealth.current"),
+                    BindPath::new("operators::authoring_ops::AuthoringHealth.current"),
                 )],
             },
         ],
@@ -1255,7 +1263,7 @@ fn a_scripted_scene_loads_and_evaluates_like_a_hand_authored_one() {
     give_bindings(&mut scripted, "Panel");
     run_finished(
         &mut scripted,
-        "binding.add entity=Panel kind=field read=authoring_ops::AuthoringHealth.current \
+        "binding.add entity=Panel kind=field read=operators::authoring_ops::AuthoringHealth.current \
          write=bevy_ui::ui_node::Node.width as_percent=true",
     );
     run_finished(
@@ -1294,7 +1302,9 @@ fn hand_author(app: &mut App, path: &std::path::Path) {
     jackdaw::ui_palette::instantiate_widget_under(world, "ui.label", Some(panel))
         .expect("a label under the panel");
     let bindings = Bindings(vec![Binding::Field {
-        read: vec![BindPath::new("authoring_ops::AuthoringHealth.current")],
+        read: vec![BindPath::new(
+            "operators::authoring_ops::AuthoringHealth.current",
+        )],
         via: None,
         write: BindPath::new("bevy_ui::ui_node::Node.width"),
         as_percent: true,
