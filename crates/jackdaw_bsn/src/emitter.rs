@@ -90,6 +90,16 @@ pub fn emit_entities(ast: &SceneBsnAst, entities: &[Entity]) -> String {
 /// Emit all patches for one entity (one "block" in BSN), in the order they
 /// are stored in the entity's [`crate::BsnPatches`] list.
 fn emit_patches(ast: &SceneBsnAst, patches_entity: Entity, indent: usize, out: &mut String) {
+    // `indent` is the nesting depth, so this is the cap every document walk
+    // shares: a `Children` cycle stops here rather than writing text until
+    // memory runs out.
+    if indent >= crate::MAX_AST_DEPTH {
+        log::warn!(
+            "document node {patches_entity} is deeper than {}; it was not emitted",
+            crate::MAX_AST_DEPTH
+        );
+        return;
+    }
     let Some(patches) = ast.get_patches(patches_entity) else {
         return;
     };

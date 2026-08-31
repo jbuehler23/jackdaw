@@ -103,6 +103,10 @@ pub fn sync_hierarchy_to_ast(world: &mut World, entity: Entity, new_parent: Opti
 }
 
 /// Move an ECS entity's AST node to an exact ordered sibling position.
+///
+/// An entity with no document node is left alone, and said so: the caller
+/// still moves it in the ECS, so the document and the visible hierarchy part
+/// ways there and a save would not hold the move.
 pub fn sync_hierarchy_to_ast_at(
     world: &mut World,
     entity: Entity,
@@ -110,6 +114,7 @@ pub fn sync_hierarchy_to_ast_at(
     index: usize,
 ) {
     let Some(ast_ref) = world.get::<AstNodeRef>(entity) else {
+        log::warn!("{entity} has no document node; its move was not written to the document");
         return;
     };
     let node_ast = ast_ref.patches_entity;

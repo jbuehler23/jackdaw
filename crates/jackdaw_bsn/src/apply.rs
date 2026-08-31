@@ -186,6 +186,26 @@ pub fn spawn_ast_node(
     parent: Option<Entity>,
     spawned: &mut Vec<Entity>,
 ) {
+    spawn_ast_node_to_depth(world, ast_entity, parent, spawned, 0);
+}
+
+/// [`spawn_ast_node`] counting how deep it has gone, so a document whose
+/// `Children` lists form a cycle stops at [`crate::MAX_AST_DEPTH`] rather
+/// than spawning entities until memory runs out.
+fn spawn_ast_node_to_depth(
+    world: &mut World,
+    ast_entity: Entity,
+    parent: Option<Entity>,
+    spawned: &mut Vec<Entity>,
+    depth: usize,
+) {
+    if depth >= crate::MAX_AST_DEPTH {
+        log::warn!(
+            "document node {ast_entity} is deeper than {}; it was not spawned",
+            crate::MAX_AST_DEPTH
+        );
+        return;
+    }
     let ecs_entity = world
         .spawn((
             AstNodeRef {
@@ -222,7 +242,7 @@ pub fn spawn_ast_node(
     };
 
     for child_ast in children_ast {
-        spawn_ast_node(world, child_ast, Some(ecs_entity), spawned);
+        spawn_ast_node_to_depth(world, child_ast, Some(ecs_entity), spawned, depth + 1);
     }
 }
 

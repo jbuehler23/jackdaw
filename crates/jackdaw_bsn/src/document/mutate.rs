@@ -5,6 +5,15 @@ use bevy::ecs::entity::Entity;
 
 use super::{BsnPatch, BsnPatches, SceneBsnAst};
 
+/// How deep a document walk follows `Children` before it gives up.
+///
+/// A document is written by a person or by this editor and is nowhere near
+/// this deep; a clipboard payload is neither, and one whose `Children` lists
+/// form a cycle would otherwise recurse until the stack ran out. Hitting the
+/// cap is a refusal, logged and then abandoned, never a partial walk that
+/// carries on.
+pub const MAX_AST_DEPTH: usize = 256;
+
 impl SceneBsnAst {
     /// Create a new AST node for an entity with the given patches.
     pub fn create_entity_node(&mut self, patches: Vec<BsnPatch>) -> Entity {
@@ -109,7 +118,11 @@ impl SceneBsnAst {
         }
     }
 
-    /// Remove a child from a parent's Children patch.
+    /// Remove a child from every `Children` patch its parent carries.
+    ///
+    /// Every list, not the first one: a parent with two `Children` patches
+    /// holding the same child once each would otherwise keep the copy the
+    /// first list did not hold, and a move would then duplicate it.
     pub fn remove_child_from_ast(&mut self, parent_ast: Entity, child_ast: Entity) {
         let Some(patches) = self.get_patches(parent_ast) else {
             return;
@@ -121,7 +134,6 @@ impl SceneBsnAst {
                 && let BsnPatch::Children(children) = patch.into_inner()
             {
                 children.retain(|&e| e != child_ast);
-                return;
             }
         }
     }
@@ -149,6 +161,14 @@ impl SceneBsnAst {
     /// the ECS link for every node torn down (not just the top) so no stale
     /// `ecs_to_ast`/`ast_to_ecs` entries survive for a linked descendant.
     fn despawn_recursive(&mut self, node: Entity) {
+        self.despawn_recursive_to_depth(node, 0);
+    }
+
+    fn despawn_recursive_to_depth(&mut self, node: Entity, depth: usize) {
+        if depth >= MAX_AST_DEPTH {
+            log::warn!("document node {node} is deeper than {MAX_AST_DEPTH}; not torn down");
+            return;
+        }
         // Drop this node's link before its entity id is despawned and possibly
         // recycled for an unrelated AST node.
         self.unlink_ast(node);
@@ -171,7 +191,7 @@ impl SceneBsnAst {
         };
 
         for child in children {
-            self.despawn_recursive(child);
+            self.despawn_recursive_to_depth(child, depth + 1);
         }
 
         if let Some(patches) = self.get_patches(node) {
@@ -192,21 +212,45 @@ impl SceneBsnAst {
         self.insert_child_in_ast(parent_ast, child_ast, usize::MAX);
     }
 
-    /// Insert a child into a parent's ordered Children patch.
+    /// Insert a child into a parent's ordered child list.
+    ///
+    /// `index` counts over every `Children` patch the parent carries, in the
+    /// order [`Self::get_children_ast`] reports them, so the slot a caller
+    /// read from that list is the slot the child lands in whichever patch
+    /// holds it.
     pub fn insert_child_in_ast(&mut self, parent_ast: Entity, child_ast: Entity, index: usize) {
         let Some(patches) = self.get_patches(parent_ast) else {
             return;
         };
         let patch_ids: Vec<Entity> = patches.0.clone();
 
+        let mut remaining = index;
+        let mut last_list: Option<Entity> = None;
         for &patch_entity in &patch_ids {
-            if let Some(patch) = self.world.get_mut::<BsnPatch>(patch_entity)
-                && let BsnPatch::Children(children) = patch.into_inner()
-            {
-                let index = index.min(children.len());
-                children.insert(index, child_ast);
+            let Some(BsnPatch::Children(children)) = self.get_patch(patch_entity) else {
+                continue;
+            };
+            let len = children.len();
+            if remaining <= len {
+                if let Some(patch) = self.world.get_mut::<BsnPatch>(patch_entity)
+                    && let BsnPatch::Children(children) = patch.into_inner()
+                {
+                    children.insert(remaining.min(children.len()), child_ast);
+                }
                 return;
             }
+            remaining -= len;
+            last_list = Some(patch_entity);
+        }
+
+        // Past the end of every list: append to the last one there is, or
+        // start the parent's first.
+        if let Some(patch_entity) = last_list
+            && let Some(patch) = self.world.get_mut::<BsnPatch>(patch_entity)
+            && let BsnPatch::Children(children) = patch.into_inner()
+        {
+            children.push(child_ast);
+            return;
         }
 
         let children_patch = self.world.spawn(BsnPatch::Children(vec![child_ast])).id();
@@ -253,11 +297,24 @@ impl SceneBsnAst {
 }
 
 /// Graft `src_node`'s full subtree into `dst` under `dst_parent` (`None` = new root).
+///
+/// The walk stops at [`MAX_AST_DEPTH`], so a `src` whose `Children` lists form
+/// a cycle costs a bounded graft and a warning rather than the stack.
 pub fn clone_subtree_into(
     dst: &mut SceneBsnAst,
     src: &SceneBsnAst,
     src_node: Entity,
     dst_parent: Option<Entity>,
+) -> Entity {
+    clone_subtree_to_depth(dst, src, src_node, dst_parent, 0)
+}
+
+fn clone_subtree_to_depth(
+    dst: &mut SceneBsnAst,
+    src: &SceneBsnAst,
+    src_node: Entity,
+    dst_parent: Option<Entity>,
+    depth: usize,
 ) -> Entity {
     let new_node = match dst_parent {
         Some(parent) => clone_node_into(dst, src, src_node, parent),
@@ -268,8 +325,14 @@ pub fn clone_subtree_into(
             node
         }
     };
+    if depth >= MAX_AST_DEPTH {
+        log::warn!(
+            "document node {src_node} is deeper than {MAX_AST_DEPTH}; its children were not copied"
+        );
+        return new_node;
+    }
     for child in src.get_children_ast(src_node) {
-        clone_subtree_into(dst, src, child, Some(new_node));
+        clone_subtree_to_depth(dst, src, child, Some(new_node), depth + 1);
     }
     new_node
 }
@@ -302,5 +365,103 @@ fn link_cloned_subtree(
             dst.link(ecs, dst_child);
         }
         link_cloned_subtree(dst, src, src_child, dst_child);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A parent whose children are split across two `Children` patches, the
+    /// shape a parsed document with two `Children [ ... ]` relations has and
+    /// the shape an edit can leave behind.
+    fn parent_with_two_child_lists() -> (SceneBsnAst, Entity, Vec<Entity>) {
+        let mut ast = SceneBsnAst::default();
+        let kids: Vec<Entity> = (0..4)
+            .map(|index| ast.create_entity_node(vec![BsnPatch::Name(format!("Child{index}"))]))
+            .collect();
+        let first = ast
+            .world
+            .spawn(BsnPatch::Children(kids[0..2].to_vec()))
+            .id();
+        let second = ast
+            .world
+            .spawn(BsnPatch::Children(kids[2..4].to_vec()))
+            .id();
+        let name = ast.world.spawn(BsnPatch::Name("Parent".to_string())).id();
+        let parent = ast.world.spawn(BsnPatches(vec![name, first, second])).id();
+        ast.add_to_roots(parent);
+        (ast, parent, kids)
+    }
+
+    #[test]
+    fn every_child_list_contributes_to_the_child_order() {
+        let (ast, parent, kids) = parent_with_two_child_lists();
+        assert_eq!(
+            ast.get_children_ast(parent),
+            kids,
+            "reading only the first list hides half the children"
+        );
+    }
+
+    #[test]
+    fn a_child_in_the_second_list_can_be_removed() {
+        let (mut ast, parent, kids) = parent_with_two_child_lists();
+        ast.remove_child_from_ast(parent, kids[3]);
+        assert_eq!(
+            ast.get_children_ast(parent),
+            vec![kids[0], kids[1], kids[2]]
+        );
+    }
+
+    /// Removing from only the first list left the child in the second, and
+    /// the insert that followed a move then made a duplicate.
+    #[test]
+    fn a_move_within_a_split_list_does_not_duplicate_the_child() {
+        let (mut ast, parent, kids) = parent_with_two_child_lists();
+        ast.move_to_parent_at(kids[3], Some(parent), Some(parent), 0);
+        assert_eq!(
+            ast.get_children_ast(parent),
+            vec![kids[3], kids[0], kids[1], kids[2]],
+            "the child moved to the front and is there exactly once"
+        );
+    }
+
+    #[test]
+    fn an_index_past_the_first_list_lands_in_the_second() {
+        let (mut ast, parent, kids) = parent_with_two_child_lists();
+        let extra = ast.create_entity_node(vec![BsnPatch::Name("Extra".to_string())]);
+        ast.insert_child_in_ast(parent, extra, 3);
+        assert_eq!(
+            ast.get_children_ast(parent),
+            vec![kids[0], kids[1], kids[2], extra, kids[3]],
+            "the index counts over the concatenated list, not over one patch"
+        );
+    }
+
+    /// A document whose `Children` point back at an ancestor cannot come out
+    /// of the parser, but it can come off a clipboard. The walk has to end.
+    #[test]
+    fn cloning_a_cyclic_document_ends_at_the_depth_cap() {
+        let mut src = SceneBsnAst::default();
+        let child = src.create_entity_node(vec![BsnPatch::Name("Child".to_string())]);
+        let root = src.create_entity_node(vec![
+            BsnPatch::Name("Root".to_string()),
+            BsnPatch::Children(vec![child]),
+        ]);
+        src.add_to_roots(root);
+        src.add_child_to_ast(child, root);
+
+        let mut dst = SceneBsnAst::default();
+        clone_subtree_into(&mut dst, &src, root, None);
+
+        let mut depth = 0;
+        let mut node = dst.roots[0];
+        while let Some(&next) = dst.get_children_ast(node).first() {
+            depth += 1;
+            node = next;
+            assert!(depth <= MAX_AST_DEPTH, "the clone did not stop at the cap");
+        }
+        assert_eq!(depth, MAX_AST_DEPTH, "the clone stopped exactly at the cap");
     }
 }

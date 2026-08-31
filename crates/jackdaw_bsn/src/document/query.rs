@@ -153,16 +153,23 @@ impl SceneBsnAst {
     }
 
     /// Get child AST entities from [`BsnPatch::Children`], if present.
+    ///
+    /// A node may carry more than one `Children` patch: a parsed document
+    /// writes one per `Children [ ... ]` relation, and an edit that adds a
+    /// child to a node whose first patch list is not the one it belongs to
+    /// leaves a second. Every list contributes, in patch order, so the child
+    /// order this reports is the order the document holds.
     pub fn get_children_ast(&self, patches_entity: Entity) -> Vec<Entity> {
         let Some(patches) = self.get_patches(patches_entity) else {
             return Vec::new();
         };
+        let mut children = Vec::new();
         for &pe in &patches.0 {
-            if let Some(BsnPatch::Children(children)) = self.get_patch(pe) {
-                return children.clone();
+            if let Some(BsnPatch::Children(list)) = self.get_patch(pe) {
+                children.extend(list.iter().copied());
             }
         }
-        Vec::new()
+        children
     }
 
     /// Find the patch of a given type within an entity's patches list.
