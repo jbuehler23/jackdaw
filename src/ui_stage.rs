@@ -50,7 +50,7 @@
 use bevy::{
     ecs::system::SystemParam,
     picking::{
-        events::{Drag, DragEnd, DragStart, Pointer, Press},
+        events::{Drag, DragEnd, DragStart, Move, Pointer, Press},
         prelude::Pickable,
     },
     prelude::*,
@@ -84,6 +84,10 @@ const MIN_NODE_SIZE: f32 = 1.0;
 /// Draw order of the overlay inside the stage. Above the stage's own
 /// frame, and above anything else placed in the stage alongside it.
 const OVERLAY_Z: i32 = 50;
+
+/// Draw order of the pre-select outline: over the canvas, under the
+/// selection outline and its handles.
+const HOVER_OUTLINE_Z: i32 = OVERLAY_Z - 1;
 
 /// How wide a guide is to the pointer, in the stage's logical pixels. A
 /// one-pixel line is drawn down the middle of it: the line has to be
@@ -185,6 +189,35 @@ pub struct UiSelectionOverlay {
     pub host: Entity,
 }
 
+/// The outline drawn around the authored UI node under the cursor, before
+/// anything has been clicked.
+///
+/// A canvas of nested boxes says nothing about where one ends and the next
+/// begins until something is selected, so a press is a guess. This draws
+/// what the press would pick.
+///
+/// Told apart from [`UiSelectionOverlay`] by everything: a lighter line,
+/// no handles, no dark edge, and no pointer of its own. It never covers
+/// the selected node, whose own outline is the answer there.
+#[derive(Component, Clone, Copy)]
+pub struct UiHoverOutline {
+    /// The panel content entity carrying this stage's
+    /// [`Viewport2dPanelHost`].
+    pub host: Entity,
+}
+
+/// The node the cursor is over, and the panel it is over it on.
+///
+/// One pointer authors at a time, so one entry covers every panel: moving
+/// onto another canvas replaces it, and moving off the canvases clears it.
+#[derive(Resource, Default)]
+pub struct UiHoverPreselect {
+    /// The panel content entity carrying the stage the cursor is over.
+    pub host: Option<Entity>,
+    /// The authored node under the cursor.
+    pub entity: Option<Entity>,
+}
+
 /// One authored node a stage click could land on.
 #[derive(Clone, Copy, Debug)]
 pub struct StageHit {
@@ -266,6 +299,12 @@ impl UiManipulation {
     /// no landings when nothing is being dragged.
     pub fn last_snap(&self) -> SnapOutcome {
         self.last_snap
+    }
+
+    /// Whether a canvas gesture is in flight. A drag holds nodes from the
+    /// press until the release, whatever the pointer is doing meanwhile.
+    pub fn is_running(&self) -> bool {
+        !self.nodes.is_empty()
     }
 }
 
@@ -726,7 +765,9 @@ impl Plugin for UiStagePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UiManipulation>()
             .init_resource::<GuideManipulation>()
+            .init_resource::<UiHoverPreselect>()
             .add_observer(on_stage_press)
+            .add_observer(on_stage_hover)
             .add_observer(on_gesture_start)
             .add_observer(on_gesture_drag)
             .add_observer(on_gesture_end)
@@ -740,6 +781,7 @@ impl Plugin for UiStagePlugin {
                     cancel_manipulation,
                     cancel_guide_drag,
                     sync_selection_overlays,
+                    sync_hover_outlines,
                     sync_guide_lines,
                     sync_snap_highlights,
                 )
@@ -929,9 +971,24 @@ pub(crate) fn hit_at(
 /// selected node under the cursor is the move gesture; anything else, a
 /// child or an overlapping sibling, is selected instead. The handles
 /// keep their resize gesture unconditionally.
+///
+/// # Modifiers
+///
+/// Shift adds the node under the cursor to the selection, Ctrl toggles it
+/// in or out. Both are read at the press, before any drag has started.
+///
+/// Ctrl is also the snap magnet's inverter, which [`on_gesture_drag`]
+/// reads on every drag event. One key, two jobs, and a Ctrl-press that
+/// then drags does both: the modifiers held at the press decide the
+/// selection, and the modifiers held during the drag decide the
+/// snapping. Neither reads the other's moment, so holding Ctrl only after
+/// the button went down inverts the magnet without touching the
+/// selection, and releasing it after the press leaves the toggle done and
+/// the magnet alone.
 fn on_stage_press(
     mut event: On<Pointer<Press>>,
     ui_scale: Res<UiScale>,
+    keys: Res<ButtonInput<KeyCode>>,
     handles: Query<(), With<UiResizeHandle>>,
     overlays: Query<&UiSelectionOverlay>,
     hosts: Query<&Viewport2dPanelHost>,
@@ -971,24 +1028,165 @@ fn on_stage_press(
     };
     let cursor = event.pointer_location.position / ui_scale.0;
     let pick = hit_at(cursor, host, stage, &roots, &nodes, &children);
+    let extend = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let toggle = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
 
     if on_overlay.is_some() {
         // Only a hit on something else re-selects. A miss must not clear
         // a selection about to be dragged: the outline can extend past
         // whatever laid the scene out.
-        if let StagePick::Hit(entity) = pick
-            && Some(entity) != selection.primary()
-        {
+        let StagePick::Hit(entity) = pick else {
+            return;
+        };
+        if extend {
+            selection.extend(&mut commands, entity);
+        } else if toggle {
+            selection.toggle(&mut commands, entity);
+        } else if Some(entity) != selection.primary() {
             selection.select_single(&mut commands, entity);
         }
         return;
     }
 
     match pick {
+        StagePick::Hit(entity) if extend => selection.extend(&mut commands, entity),
+        StagePick::Hit(entity) if toggle => selection.toggle(&mut commands, entity),
         StagePick::Hit(entity) => selection.select_single(&mut commands, entity),
-        StagePick::Miss => selection.clear(&mut commands),
-        StagePick::Empty => {}
+        // A modified press is building a selection, so a miss beside the
+        // nodes it is building from must not empty it.
+        StagePick::Miss if !extend && !toggle => selection.clear(&mut commands),
+        StagePick::Miss | StagePick::Empty => {}
     }
+}
+
+/// Track the authored node under the cursor, for the pre-select outline.
+///
+/// The same resolution the press does, on every pointer move: the panel
+/// the cursor is over, then [`hit_at`] on its stage. In `Interact` the
+/// pointer belongs to the scene, so nothing is tracked there.
+///
+/// A running gesture clears it. The node being dragged is already
+/// outlined, and a second outline chasing whatever the cursor passes over
+/// mid-drag says nothing about what the release will do.
+fn on_stage_hover(
+    event: On<Pointer<Move>>,
+    ui_scale: Res<UiScale>,
+    manipulation: Res<UiManipulation>,
+    overlays: Query<&UiSelectionOverlay>,
+    handles: Query<&ChildOf, With<UiResizeHandle>>,
+    hosts: Query<(Entity, &Viewport2dPanelHost)>,
+    stages: Query<(&ComputedNode, &UiGlobalTransform), With<Scene2dViewport>>,
+    roots: Query<(Entity, &UiTargetCamera), AuthoredUiSceneRoot>,
+    nodes: AuthoredNodes,
+    children: Query<&Children>,
+    mut hover: ResMut<UiHoverPreselect>,
+) {
+    let target = event.event_target();
+    // A handle is part of the overlay it hangs off, so the cursor on one
+    // is still the cursor on that panel's stage.
+    let on_chrome = handles.get(target).map(ChildOf::parent).unwrap_or(target);
+    let panel = overlays.get(on_chrome).ok().map(|overlay| overlay.host);
+    let found = match panel {
+        Some(panel) => hosts.get(panel).ok(),
+        None => hosts.iter().find(|(_, host)| host.stage == target),
+    };
+    let Some((panel, host)) = found else {
+        return;
+    };
+
+    let picked = (host.mode == Viewport2dMode::Edit && manipulation.nodes.is_empty())
+        .then(|| stages.get(host.stage).ok())
+        .flatten()
+        .and_then(|stage| {
+            let cursor = event.pointer_location.position / ui_scale.0;
+            match hit_at(cursor, host, stage, &roots, &nodes, &children) {
+                StagePick::Hit(entity) => Some(entity),
+                StagePick::Miss | StagePick::Empty => None,
+            }
+        });
+
+    if hover.entity != picked || hover.host != Some(panel) {
+        hover.host = picked.is_some().then_some(panel);
+        hover.entity = picked;
+    }
+}
+
+/// Keep at most one pre-select outline, over the node
+/// [`UiHoverPreselect`] names.
+///
+/// Built on the same placement the selection outline uses, so the two
+/// agree on where a node is; the selected node is skipped, since its own
+/// outline already covers it.
+fn sync_hover_outlines(
+    mut commands: Commands,
+    hover: Res<UiHoverPreselect>,
+    selection: Res<Selection>,
+    hosts: Query<(Entity, &Viewport2dPanelHost)>,
+    stages: Query<&ComputedNode, With<Scene2dViewport>>,
+    authored: SelectedNode,
+    outlines: Query<(Entity, &UiHoverOutline)>,
+    mut nodes: Query<&mut Node>,
+) {
+    let wanted = hover
+        .entity
+        .filter(|entity| Some(*entity) != selection.primary());
+
+    for (host_entity, host) in &hosts {
+        let outline = outlines
+            .iter()
+            .find(|(_, outline)| outline.host == host_entity)
+            .map(|(entity, _)| entity);
+
+        let placement = match (host.mode, wanted, hover.host) {
+            (Viewport2dMode::Edit, Some(entity), Some(panel)) if panel == host_entity => {
+                overlay_placement(entity, host, &stages, &authored)
+            }
+            _ => Placement::Drop,
+        };
+
+        match placement {
+            Placement::At(rect) => match outline {
+                Some(outline) => {
+                    if let Ok(mut node) = nodes.get_mut(outline) {
+                        place_outline(&mut node, rect);
+                    }
+                }
+                None => spawn_hover_outline(&mut commands, host_entity, host.stage, rect),
+            },
+            Placement::Hold => {}
+            Placement::Drop => {
+                if let Some(outline) = outline
+                    && let Ok(mut entity) = commands.get_entity(outline)
+                {
+                    entity.despawn();
+                }
+            }
+        }
+    }
+}
+
+/// Spawn one panel's pre-select outline: one thin border and nothing
+/// else.
+///
+/// [`Pickable::IGNORE`] because it lies over the node it is drawn around:
+/// the press that follows the hover has to reach the stage underneath.
+fn spawn_hover_outline(commands: &mut Commands, host: Entity, stage: Entity, rect: Rect) {
+    let mut node = Node {
+        position_type: PositionType::Absolute,
+        border: UiRect::all(px(OUTLINE_WIDTH)),
+        ..default()
+    };
+    place_outline(&mut node, rect);
+
+    commands.spawn((
+        UiHoverOutline { host },
+        EditorEntity,
+        node,
+        BorderColor::all(tokens::TEXT_ACCENT),
+        ZIndex(HOVER_OUTLINE_Z),
+        Pickable::IGNORE,
+        ChildOf(stage),
+    ));
 }
 
 /// Collect `entity` and its descendants in tree order, the order

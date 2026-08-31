@@ -4054,6 +4054,160 @@ fn handle_layout(app: &mut App, overlay: Entity) -> Vec<(i8, i8)> {
 }
 
 // ---------------------------------------------------------------------------
+// Modifiers on the canvas
+// ---------------------------------------------------------------------------
+
+/// Hold a modifier the way the input pass reports it.
+fn hold(app: &mut App, key: KeyCode) {
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(key);
+}
+
+fn release(app: &mut App, key: KeyCode) {
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(key);
+}
+
+/// Shift adds to the selection, Ctrl toggles in and out, and a plain
+/// press replaces it. Without them a canvas can only ever hold one node,
+/// so nothing on it can be moved or aligned together.
+#[test]
+fn shift_adds_and_ctrl_toggles_on_the_canvas() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (root, back, front) = authored_scene(&mut app);
+    settle(&mut app);
+
+    // The part of `back` that `front` does not cover.
+    click_authored(&mut app, panel, Vec2::new(250.0, 150.0));
+    settle(&mut app);
+    assert_eq!(app.world().resource::<Selection>().entities, vec![back]);
+
+    hold(&mut app, KeyCode::ShiftLeft);
+    click_authored(&mut app, panel, Vec2::new(700.0, 350.0));
+    settle(&mut app);
+    assert_eq!(
+        app.world().resource::<Selection>().entities,
+        vec![back, front],
+        "Shift adds the second node to the first",
+    );
+    release(&mut app, KeyCode::ShiftLeft);
+
+    hold(&mut app, KeyCode::ControlLeft);
+    click_authored(&mut app, panel, Vec2::new(700.0, 350.0));
+    settle(&mut app);
+    assert_eq!(
+        app.world().resource::<Selection>().entities,
+        vec![back],
+        "Ctrl on a selected node takes it back out",
+    );
+
+    click_authored(&mut app, panel, Vec2::new(700.0, 350.0));
+    settle(&mut app);
+    assert_eq!(
+        app.world().resource::<Selection>().entities,
+        vec![back, front],
+        "and Ctrl on an unselected one puts it back",
+    );
+    release(&mut app, KeyCode::ControlLeft);
+
+    // A miss with a modifier held keeps the selection being built; a
+    // plain one clears it.
+    hold(&mut app, KeyCode::ShiftLeft);
+    click_authored(&mut app, panel, Vec2::new(1800.0, 900.0));
+    settle(&mut app);
+    assert_eq!(
+        app.world().resource::<Selection>().entities,
+        vec![back, front, root],
+        "the root covers the whole canvas, so that press is a hit on it",
+    );
+    release(&mut app, KeyCode::ShiftLeft);
+
+    click_authored(&mut app, panel, Vec2::new(1800.0, 900.0));
+    settle(&mut app);
+    assert_eq!(
+        app.world().resource::<Selection>().entities,
+        vec![root],
+        "a plain press replaces the whole selection",
+    );
+}
+
+/// Ctrl means two things on the canvas, and each reads its own moment:
+/// the modifiers held at the press decide the selection, and the
+/// modifiers held during the drag decide the snapping.
+///
+/// So a Ctrl-press that then drags does both, and neither the toggle nor
+/// the magnet inversion is lost to the other.
+#[test]
+fn ctrl_selects_at_the_press_and_inverts_the_magnet_during_the_drag() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (_, back, front) = authored_scene(&mut app);
+    settle(&mut app);
+
+    click_authored(&mut app, panel, Vec2::new(250.0, 150.0));
+    settle(&mut app);
+    assert_eq!(app.world().resource::<Selection>().entities, vec![back]);
+
+    // Ctrl down for the whole gesture: the press toggles `front` in, and
+    // the drag that follows is unsnapped.
+    hold(&mut app, KeyCode::ControlLeft);
+    let (overlay, _) = overlay_node(&mut app);
+    press_at(&mut app, panel, Vec2::new(700.0, 350.0), overlay);
+    settle(&mut app);
+    assert_eq!(
+        app.world().resource::<Selection>().entities,
+        vec![back, front],
+        "the press with Ctrl held added the node under it",
+    );
+
+    drag_authored(
+        &mut app,
+        panel,
+        overlay,
+        Vec2::new(500.0, 250.0),
+        Vec2::new(704.0, 250.0),
+    );
+    settle(&mut app);
+    assert_eq!(
+        node_of(&app, back).left,
+        px(404),
+        "and the drag under the same Ctrl landed where the cursor did",
+    );
+
+    // The other half: Ctrl held only from the press onwards inverts the
+    // magnet without ever having toggled anything.
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (_, _, front) = authored_scene(&mut app);
+    settle(&mut app);
+    click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
+    settle(&mut app);
+    let (overlay, _) = overlay_node(&mut app);
+    hold(&mut app, KeyCode::ControlLeft);
+    drag_authored(
+        &mut app,
+        panel,
+        overlay,
+        Vec2::new(500.0, 250.0),
+        Vec2::new(704.0, 250.0),
+    );
+    settle(&mut app);
+    assert_eq!(
+        app.world().resource::<Selection>().entities,
+        vec![front],
+        "no press happened under Ctrl, so the selection is untouched",
+    );
+    assert_eq!(
+        node_of(&app, front).left,
+        px(604),
+        "the magnet was inverted"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // What a gesture may do to a node its parent lays out
 // ---------------------------------------------------------------------------
 
@@ -4168,6 +4322,103 @@ fn a_nudge_of_a_flowed_child_is_refused_with_a_notice() {
         node_of(&app, flexed).left,
         px(1),
         "an absolute child still nudges",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The pre-select outline
+// ---------------------------------------------------------------------------
+
+/// The rect of the panel's pre-select outline, in the stage's logical
+/// pixels, or `None` when there is none.
+fn hover_outline(app: &mut App) -> Option<(Val, Val, Val, Val)> {
+    let outlines: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<jackdaw::ui_stage::UiHoverOutline>>()
+        .iter(app.world())
+        .collect();
+    assert!(outlines.len() <= 1, "at most one pre-select outline");
+    let outline = *outlines.first()?;
+    let node = app.world().get::<Node>(outline)?;
+    Some((node.left, node.top, node.width, node.height))
+}
+
+/// Move the pointer over the point showing `authored`, delivering to the
+/// stage.
+fn move_over(app: &mut App, panel: Entity, authored: Vec2) {
+    let stage = stage_entity(app, panel);
+    let position = screen_position_of(app, panel, authored);
+    let camera = panel_camera(app, panel);
+    pointer_at(
+        app,
+        stage,
+        position,
+        bevy::picking::events::Move {
+            hit: HitData::new(camera, 0.0, None, None),
+            delta: Vec2::ZERO,
+        },
+    );
+    app.update();
+}
+
+/// A canvas of nested boxes says nothing about where one ends and the
+/// next begins until something is selected, so a press is a guess. The
+/// pre-select outline draws what the press would pick.
+#[test]
+fn the_cursor_outlines_what_a_press_would_select() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (_, back, front) = authored_scene(&mut app);
+    settle(&mut app);
+
+    assert_eq!(hover_outline(&mut app), None, "nothing hovered, no outline");
+
+    move_over(&mut app, panel, Vec2::new(500.0, 250.0));
+    settle(&mut app);
+    assert_eq!(
+        hover_outline(&mut app),
+        Some((px(200), px(100), px(200), px(100))),
+        "the outline covers `front`, scaled into the stage",
+    );
+
+    move_over(&mut app, panel, Vec2::new(250.0, 150.0));
+    settle(&mut app);
+    assert_eq!(
+        hover_outline(&mut app),
+        Some((px(100), px(50), px(200), px(100))),
+        "and follows the cursor onto `back`",
+    );
+
+    // The selected node's own outline is the answer there, so the
+    // pre-select one stands down over it.
+    select(&mut app, back);
+    settle(&mut app);
+    move_over(&mut app, panel, Vec2::new(250.0, 150.0));
+    settle(&mut app);
+    assert_eq!(
+        hover_outline(&mut app),
+        None,
+        "no second outline over the selected node",
+    );
+
+    move_over(&mut app, panel, Vec2::new(500.0, 250.0));
+    settle(&mut app);
+    assert!(
+        hover_outline(&mut app).is_some(),
+        "but a different node under the cursor still gets one",
+    );
+    let _ = front;
+
+    // In `Interact` the pointer belongs to the scene.
+    app.world_mut()
+        .get_mut::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .mode = Viewport2dMode::Interact;
+    settle(&mut app);
+    assert_eq!(
+        hover_outline(&mut app),
+        None,
+        "a canvas being used is not a canvas being authored",
     );
 }
 
