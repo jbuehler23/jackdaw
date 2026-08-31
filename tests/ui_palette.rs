@@ -1578,3 +1578,79 @@ fn clicking_a_selected_outliner_row_keeps_the_selection() {
     );
 }
 
+/// Duplicating and deleting a UI node are the two operators a screen is
+/// actually built with, and both have to be undoable: the document is
+/// what the outliner, the canvas and the save all read.
+#[test]
+fn a_ui_node_duplicates_and_deletes_and_undo_takes_both_back() {
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    let button = instantiate_widget(app.world_mut(), "ui.button").expect("the button is added");
+    app.update();
+
+    let named = |app: &mut App| {
+        let mut names: Vec<String> = app
+            .world_mut()
+            .query_filtered::<&Name, With<Node>>()
+            .iter(app.world())
+            .filter(|name| name.as_str().starts_with("Button"))
+            .map(|name| name.as_str().to_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(named(&mut app), vec!["Button".to_string()]);
+
+    app.world_mut().resource_mut::<Selection>().entities = vec![button];
+    dispatch(&mut app, "entity.duplicate");
+    assert_eq!(
+        named(&mut app),
+        vec!["Button".to_string(), "Button 2".to_string()],
+        "the copy is named apart from the original",
+    );
+
+    undo(&mut app);
+    assert_eq!(
+        named(&mut app),
+        vec!["Button".to_string()],
+        "undo takes the copy back",
+    );
+
+    let button = by_name(app.world_mut(), "Button");
+    app.world_mut().resource_mut::<Selection>().entities = vec![button];
+    dispatch(&mut app, "entity.delete");
+    assert!(named(&mut app).is_empty(), "the node is gone");
+
+    undo(&mut app);
+    assert_eq!(
+        named(&mut app),
+        vec!["Button".to_string()],
+        "and undo brings it back",
+    );
+}
+
+/// Dispatch `id` the way a keybind or a menu row does, so the operator's
+/// history entry is created.
+fn dispatch(app: &mut App, id: &'static str) {
+    use jackdaw_api::op::OperatorWorldExt as _;
+    use jackdaw_api::prelude::OperatorResult;
+    let result = app
+        .world_mut()
+        .operator(id)
+        .settings(jackdaw_api_internal::operator::CallOperatorSettings {
+            execution_context: jackdaw_api_internal::operator::ExecutionContext::Invoke,
+            creates_history_entry: true,
+        })
+        .call()
+        .unwrap_or_else(|err| panic!("{id}: dispatch errored: {err}"));
+    assert_eq!(result, OperatorResult::Finished, "{id} reported {result:?}");
+    app.update();
+    app.update();
+}
+
+fn undo(app: &mut App) {
+    app.world_mut()
+        .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
+    app.update();
+    app.update();
+}

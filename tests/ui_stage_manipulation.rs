@@ -4423,3 +4423,161 @@ fn the_cursor_outlines_what_a_press_would_select() {
 }
 
 // ---------------------------------------------------------------------------
+// Undo, redo, and the two panels that share a selection
+// ---------------------------------------------------------------------------
+
+/// A gesture is one history entry, and redo puts back exactly the rect
+/// the drag wrote. Undo alone was already covered; the redo half is what
+/// says the entry carries both states rather than only the old one.
+#[test]
+fn redo_restores_the_rect_a_canvas_drag_wrote() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (_, _, front) = authored_scene(&mut app);
+    magnet(&mut app, false);
+    settle(&mut app);
+
+    let before = node_of(&app, front);
+    click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
+    settle(&mut app);
+    let (overlay, _) = overlay_node(&mut app);
+    drag_authored(
+        &mut app,
+        panel,
+        overlay,
+        Vec2::new(500.0, 250.0),
+        Vec2::new(560.0, 280.0),
+    );
+    settle(&mut app);
+
+    let dragged = node_of(&app, front);
+    assert_eq!((dragged.left, dragged.top), (px(460), px(230)));
+
+    undo(&mut app);
+    settle(&mut app);
+    assert_eq!(node_of(&app, front), before, "undo puts the rect back");
+
+    redo(&mut app);
+    settle(&mut app);
+    assert_eq!(
+        node_of(&app, front),
+        dragged,
+        "redo puts the dragged rect back",
+    );
+}
+
+fn redo(app: &mut App) {
+    app.world_mut().resource_scope(
+        |world, mut history: Mut<jackdaw::commands::CommandHistory>| {
+            history.redo(world);
+        },
+    );
+}
+
+/// The canvas and the outliner are two views of one selection, so a
+/// press on either shows up on the other. Without that, the panel a user
+/// is not looking at goes stale and the next action lands on the wrong
+/// node.
+#[test]
+fn the_canvas_and_the_outliner_share_one_selection() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (root, back, front) = authored_scene(&mut app);
+    for (entity, name) in [(root, "UiRoot"), (back, "Back"), (front, "Front")] {
+        app.world_mut().entity_mut(entity).insert(Name::new(name));
+        jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
+    }
+    app.world_mut().spawn((
+        jackdaw::hierarchy::HierarchyTreeContainer,
+        Node::default(),
+        Visibility::Inherited,
+    ));
+    settle(&mut app);
+    expand_row(&mut app, root);
+
+    // Canvas to outliner.
+    click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
+    settle(&mut app);
+    assert_eq!(app.world().resource::<Selection>().entities, vec![front]);
+    assert!(
+        row_reads_selected(&mut app, front),
+        "the outliner paints the row of what the canvas picked",
+    );
+
+    // Outliner to canvas.
+    let row = tree_row_of(&mut app, back).expect("the sibling has a row");
+    app.world_mut()
+        .trigger(jackdaw_widgets::tree_view::TreeRowClicked {
+            entity: row,
+            source_entity: back,
+        });
+    settle(&mut app);
+    assert_eq!(app.world().resource::<Selection>().entities, vec![back]);
+    let (_, outline) = overlay_node(&mut app);
+    assert_eq!(
+        (outline.left, outline.top, outline.width, outline.height),
+        (px(100), px(50), px(200), px(100)),
+        "the canvas outline moved to the row the outliner picked",
+    );
+}
+
+/// Open a row so its children get rows of their own, the way clicking
+/// the chevron does.
+fn expand_row(app: &mut App, source: Entity) {
+    let row = tree_row_of(app, source).expect("the source has a row");
+    let world = app.world();
+    let disclosure = world
+        .get::<Children>(row)
+        .into_iter()
+        .flatten()
+        .filter_map(|&child| {
+            world
+                .get::<jackdaw_widgets::tree_view::TreeRowContent>(child)
+                .map(|_| child)
+        })
+        .flat_map(|content| world.get::<Children>(content).into_iter().flatten())
+        .filter_map(|&child| {
+            world
+                .get::<jackdaw_widgets::tree_view::TreeNodeExpandToggle>(child)
+                .map(|_| child)
+        })
+        .flat_map(|toggle| world.get::<Children>(toggle).into_iter().flatten())
+        .find(|&&child| {
+            world
+                .get::<bevy::feathers::controls::FeathersDisclosureToggle>(child)
+                .is_some()
+        })
+        .copied()
+        .expect("the row advertises children");
+    app.world_mut().trigger(bevy::ui_widgets::ValueChange {
+        source: disclosure,
+        value: true,
+        is_final: true,
+    });
+    settle(app);
+}
+
+fn tree_row_of(app: &mut App, source: Entity) -> Option<Entity> {
+    let mut rows = app
+        .world_mut()
+        .query::<(Entity, &jackdaw_widgets::tree_view::TreeNode)>();
+    rows.iter(app.world())
+        .find(|(_, node)| node.0 == source)
+        .map(|(row, _)| row)
+}
+
+fn row_reads_selected(app: &mut App, source: Entity) -> bool {
+    let Some(row) = tree_row_of(app, source) else {
+        return false;
+    };
+    let world = app.world();
+    world
+        .get::<Children>(row)
+        .into_iter()
+        .flatten()
+        .any(|child| {
+            world
+                .get::<jackdaw_widgets::tree_view::TreeRowSelected>(*child)
+                .is_some()
+        })
+}
