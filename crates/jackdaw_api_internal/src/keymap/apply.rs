@@ -215,7 +215,7 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
             report.skipped_unsupported,
         );
     }
-    if !report.conflicts.is_empty() {
+    if !report.conflicts.is_empty() && conflicts_are_new(&report.conflicts) {
         warn!(
             "preset '{}' has {} chords claimed by more than one action: {:?}",
             preset.name,
@@ -225,6 +225,23 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
     }
 
     report
+}
+
+/// Whether `conflicts` differs from the set the last warning named, and
+/// record it as the new set.
+///
+/// The shipped preset carries deliberate shared chords, so re-applying it
+/// unchanged - which every editor boot in the process does - would repeat
+/// the same warning. A rebind that introduces or clears a conflict changes
+/// the set and is still reported.
+fn conflicts_are_new(conflicts: &[String]) -> bool {
+    static LAST: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if last.as_deref() == Some(conflicts) {
+        return false;
+    }
+    *last = Some(conflicts.to_vec());
+    true
 }
 
 /// Layer the user's own bindings over the shipped defaults.

@@ -32,12 +32,20 @@ pub struct ProjectSelectPlugin;
 
 impl Plugin for ProjectSelectPlugin {
     fn build(&self, app: &mut App) {
+        // The preflight banner exists to tell the person at the launcher that
+        // their toolchain will not build a project. A run with no windowing
+        // backend has nobody reading it, so it skips the checks rather than
+        // spawning `rustc` and `cmake` on every boot.
+        let windowed = app.is_plugin_added::<bevy::winit::WinitPlugin>();
         app.init_resource::<NewProjectState>()
             .init_resource::<crate::build_status::BuildStatus>()
             .init_resource::<PreflightState>()
             .add_systems(
                 OnEnter(AppState::ProjectSelect),
-                (spawn_project_selector, start_preflight),
+                (
+                    spawn_project_selector,
+                    start_preflight.run_if(move || windowed),
+                ),
             )
             .add_systems(
                 Update,
