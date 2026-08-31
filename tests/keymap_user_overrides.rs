@@ -11,6 +11,44 @@ use jackdaw_api_internal::lifecycle::OperatorEntity;
 
 mod util;
 
+/// A config directory of this test binary's own.
+///
+/// `headless_app` builds the editor, and the editor reads the user keymap
+/// from the config directory at startup. Without this the suite would read
+/// whoever is running it: a developer with a rebound chord would see these
+/// tests fail on their machine and nowhere else.
+///
+/// Set once for the process, before any app is built.
+static CONFIG_DIR: std::sync::LazyLock<std::path::PathBuf> = std::sync::LazyLock::new(|| {
+    let dir = std::env::temp_dir().join(format!("jackdaw_keymap_tests_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a config directory for the suite");
+    // SAFETY: set before any test spawns a thread that reads it, and the
+    // value outlives the process.
+    unsafe { std::env::set_var(jackdaw_env::paths::CONFIG_DIR_VAR, &dir) };
+    dir
+});
+
+/// One config directory serves the whole binary, and its tests run in
+/// parallel: whoever is touching the keymap file holds this.
+static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The suite's own config directory, with no keymap file in it.
+fn empty_config_dir() -> &'static std::path::Path {
+    let dir = CONFIG_DIR.as_path();
+    let _ = std::fs::remove_file(dir.join("keymap.json"));
+    dir
+}
+
+/// A headless editor that read an empty override file, whatever any other
+/// test is doing with that file meanwhile.
+fn headless_app() -> App {
+    let guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    empty_config_dir();
+    let app = util::headless_app();
+    drop(guard);
+    app
+}
+
 fn row(operator: &str, key: &str) -> PresetBinding {
     PresetBinding {
         operator: operator.to_string(),
@@ -32,7 +70,7 @@ const REBOUND: &str = "history.undo";
 
 #[test]
 fn an_override_replaces_every_default_row_of_that_operator() {
-    let mut app = util::headless_app();
+    let mut app = headless_app();
     app.finish();
     app.update();
     let defaults = classic(&mut app);
@@ -60,7 +98,7 @@ fn an_override_replaces_every_default_row_of_that_operator() {
 
 #[test]
 fn an_override_leaves_every_other_operator_alone() {
-    let mut app = util::headless_app();
+    let mut app = headless_app();
     app.finish();
     app.update();
     let defaults = classic(&mut app);
@@ -87,7 +125,7 @@ fn an_override_leaves_every_other_operator_alone() {
 
 #[test]
 fn an_empty_user_keymap_resolves_to_the_shipped_keymap() {
-    let mut app = util::headless_app();
+    let mut app = headless_app();
     app.finish();
     app.update();
     let defaults = classic(&mut app);
@@ -96,7 +134,7 @@ fn an_empty_user_keymap_resolves_to_the_shipped_keymap() {
 
 #[test]
 fn a_row_naming_an_absent_operator_is_skipped_without_dropping_the_rest() {
-    let mut app = util::headless_app();
+    let mut app = headless_app();
     app.finish();
     app.update();
     let defaults = classic(&mut app);
@@ -126,7 +164,7 @@ fn a_row_naming_an_absent_operator_is_skipped_without_dropping_the_rest() {
 fn reapplying_a_resolved_keymap_is_idempotent() {
     use jackdaw_api_internal::keymap::PresetSpawnedBinding;
 
-    let mut app = util::headless_app();
+    let mut app = headless_app();
     app.finish();
     app.update();
     let defaults = classic(&mut app);
@@ -164,7 +202,7 @@ fn applying_a_rebind_leaves_exactly_one_binding_on_the_new_chord() {
     use jackdaw_api_internal::keymap::PresetSpawnedBinding;
     use jackdaw_api_internal::lifecycle::OperatorAction;
 
-    let mut app = util::headless_app();
+    let mut app = headless_app();
     app.finish();
     app.update();
     let defaults = classic(&mut app);
@@ -242,7 +280,7 @@ fn an_absent_bindings_field_parses_as_an_empty_keymap() {
 /// of the two it is.
 #[test]
 fn every_operator_is_bound_or_listed_as_unbound() {
-    let mut app = util::headless_app();
+    let mut app = headless_app();
     app.finish();
     app.update();
     let defaults = classic(&mut app);
@@ -287,7 +325,7 @@ fn every_operator_is_bound_or_listed_as_unbound() {
 /// the editor can do is unreachable from the keybind interface.
 #[test]
 fn the_dialog_seeds_one_row_per_operator() {
-    let mut app = util::headless_app();
+    let mut app = headless_app();
     app.finish();
     app.update();
 
@@ -312,7 +350,7 @@ fn the_dialog_seeds_one_row_per_operator() {
 /// chord is visible even though the dialog cannot change it.
 #[test]
 fn a_raw_bound_operator_is_listed_as_fixed() {
-    let mut app = util::headless_app();
+    let mut app = headless_app();
     app.finish();
     app.update();
     let pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
@@ -336,7 +374,7 @@ fn a_raw_bound_operator_is_listed_as_fixed() {
 /// the keymap the dialog was showing.
 #[test]
 fn saving_a_rebind_reproduces_the_keymap_after_a_reload() {
-    let mut app = util::headless_app();
+    let mut app = headless_app();
     app.finish();
     app.update();
 
@@ -377,7 +415,7 @@ fn saving_a_rebind_reproduces_the_keymap_after_a_reload() {
 /// entirely, rather than pinning it to whatever the defaults are today.
 #[test]
 fn resetting_a_rebound_row_leaves_nothing_in_the_file() {
-    let mut app = util::headless_app();
+    let mut app = headless_app();
     app.finish();
     app.update();
 
@@ -402,7 +440,7 @@ fn resetting_a_rebound_row_leaves_nothing_in_the_file() {
 /// applier would then refuse.
 #[test]
 fn a_menu_only_operator_is_listed_but_not_offered_a_chord() {
-    let mut app = util::headless_app();
+    let mut app = headless_app();
     app.finish();
     app.update();
     let pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
@@ -448,7 +486,7 @@ fn a_menu_only_operator_is_listed_but_not_offered_a_chord() {
 /// scatter them through the list and repeat their heading at each one.
 #[test]
 fn the_fixed_rows_are_one_run_of_the_list() {
-    let mut app = util::headless_app();
+    let mut app = headless_app();
     app.finish();
     app.update();
     let pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
@@ -476,4 +514,65 @@ fn the_fixed_rows_are_one_run_of_the_list() {
             "a row's heading and whether it can be edited must agree"
         );
     }
+}
+
+/// The whole path a rebind takes: the dialog's Save writes a file, a later
+/// session reads it back, and the operator answers on the new chord.
+///
+/// The pieces were covered one at a time; the disk in the middle was not, so
+/// a keymap that serialized and resolved could still have been written where
+/// nothing read it.
+#[test]
+fn a_saved_rebind_comes_back_off_disk_and_applies() {
+    use jackdaw_api_internal::keymap::{load_user_keymap, save_user_keymap};
+
+    let guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = empty_config_dir();
+    let saved = UserKeymap {
+        bindings: vec![row(REBOUND, "F9")],
+    };
+    save_user_keymap(&saved);
+
+    let path = dir.join("keymap.json");
+    assert!(path.is_file(), "Save wrote nothing to {}", path.display());
+
+    // A later session: the file is all it has.
+    let reloaded = load_user_keymap();
+    assert_eq!(reloaded, saved, "what came back is what was written");
+
+    let _ = std::fs::remove_file(&path);
+    drop(guard);
+
+    let mut app = headless_app();
+    app.finish();
+    app.update();
+    let defaults = classic(&mut app);
+    let resolved = resolve_keymap(&defaults, &reloaded);
+    assert_eq!(
+        resolved
+            .bindings
+            .iter()
+            .filter(|b| b.operator == REBOUND)
+            .collect::<Vec<_>>(),
+        vec![&row(REBOUND, "F9")],
+        "the operator answers on the chord the file names"
+    );
+}
+
+/// An empty override directory is what the rest of the suite assumes, and
+/// what a fresh install has.
+#[test]
+fn the_suite_reads_its_own_config_directory() {
+    let _guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    empty_config_dir();
+    assert_eq!(
+        jackdaw_env::paths::keymap_path(),
+        Some(CONFIG_DIR.join("keymap.json")),
+        "the config seam points the editor at the suite's own directory"
+    );
+    assert_eq!(load_user_keymap_now(), UserKeymap::default());
+}
+
+fn load_user_keymap_now() -> UserKeymap {
+    jackdaw_api_internal::keymap::load_user_keymap()
 }
