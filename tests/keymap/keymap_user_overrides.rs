@@ -9,47 +9,7 @@ use jackdaw_api_internal::keymap::{
 };
 use jackdaw_api_internal::lifecycle::OperatorEntity;
 
-mod util;
-
-/// A config directory of this test binary's own.
-///
-/// `headless_app` builds the editor, and the editor reads the user keymap
-/// from the config directory at startup. Without this the suite would read
-/// whoever is running it: a developer with a rebound chord would see these
-/// tests fail on their machine and nowhere else.
-///
-/// Set once for the process, before any app is built.
-static CONFIG_DIR: std::sync::LazyLock<std::path::PathBuf> = std::sync::LazyLock::new(|| {
-    let dir = std::env::temp_dir().join(format!("jackdaw_keymap_tests_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("a config directory for the suite");
-    // SAFETY: set before any test spawns a thread that reads it, and the
-    // value outlives the process.
-    unsafe { std::env::set_var(jackdaw_env::paths::CONFIG_DIR_VAR, &dir) };
-    dir
-});
-
-/// One config directory serves the whole binary, and its tests run in
-/// parallel: whoever is touching the keymap file holds this.
-static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// The suite's own config directory, with no keymap file in it.
-fn empty_config_dir() -> &'static std::path::Path {
-    let dir = CONFIG_DIR.as_path();
-    let _ = std::fs::remove_file(dir.join("keymap.json"));
-    dir
-}
-
-/// A headless editor that read an empty override file, whatever any other
-/// test is doing with that file meanwhile.
-fn headless_app() -> App {
-    let guard = CONFIG_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    empty_config_dir();
-    let app = util::headless_app();
-    drop(guard);
-    app
-}
+use crate::{CONFIG_DIR, CONFIG_LOCK, empty_config_dir, headless_app};
 
 fn row(operator: &str, key: &str) -> PresetBinding {
     PresetBinding {

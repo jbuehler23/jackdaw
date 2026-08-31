@@ -8,11 +8,9 @@ use jackdaw_api_internal::keymap::{
     PresetPhase, apply_keymap_preset, find_conflicts,
 };
 
-mod util;
-
 #[test]
 fn classic_preset_entries_all_resolve_to_registered_operators() {
-    let mut app = util::headless_app();
+    let mut app = crate::headless_app();
     app.finish();
     app.update();
 
@@ -43,7 +41,7 @@ fn classic_preset_entries_all_resolve_to_registered_operators() {
 
 #[test]
 fn classic_preset_round_trips_through_json() {
-    let mut app = util::headless_app();
+    let mut app = crate::headless_app();
     app.finish();
     app.update();
     let defaults = app
@@ -57,7 +55,7 @@ fn classic_preset_round_trips_through_json() {
 
 #[test]
 fn reapplying_preset_is_idempotent() {
-    let mut app = util::headless_app();
+    let mut app = crate::headless_app();
     app.finish();
     app.update();
     let defaults = app
@@ -79,7 +77,7 @@ fn active_preset_default_is_classic() {
 /// preset must report them as applied (not skipped).
 #[test]
 fn classic_preset_contains_builtin_entries_and_applies_them() {
-    let mut app = util::headless_app();
+    let mut app = crate::headless_app();
     app.finish();
     app.update();
 
@@ -158,7 +156,7 @@ fn classic(app: &mut App) -> KeymapPreset {
 /// press answers once. The whole-component clipboard sits on Ctrl+Shift.
 #[test]
 fn the_clipboard_chord_is_shared_by_the_entity_and_keyframe_operators() {
-    let mut app = util::headless_app();
+    let mut app = crate::headless_app();
     let defaults = classic(&mut app);
 
     assert_eq!(
@@ -186,7 +184,7 @@ fn the_clipboard_chord_is_shared_by_the_entity_and_keyframe_operators() {
 /// save it like every other binding.
 #[test]
 fn ctrl_a_is_a_preset_entry_for_the_add_entity_picker() {
-    let mut app = util::headless_app();
+    let mut app = crate::headless_app();
     let defaults = classic(&mut app);
     assert!(
         operators_on(&defaults, &PresetInput::key("KeyA").ctrl())
@@ -198,7 +196,7 @@ fn ctrl_a_is_a_preset_entry_for_the_add_entity_picker() {
 /// it, Escape drops the selection. Both are preset entries.
 #[test]
 fn home_and_escape_are_preset_entries() {
-    let mut app = util::headless_app();
+    let mut app = crate::headless_app();
     let defaults = classic(&mut app);
 
     assert!(
@@ -270,7 +268,7 @@ fn a_chord_claimed_twice_is_reported() {
 /// the applier's conflict report says so: none of them turns up in it.
 #[test]
 fn the_authoring_chords_claim_what_they_were_meant_to() {
-    let mut app = util::headless_app();
+    let mut app = crate::headless_app();
     let defaults = classic(&mut app);
 
     for (input, operator) in [
