@@ -122,6 +122,10 @@ pub fn iter_operator_ids(app: &mut App) -> Vec<Cow<'static, str>> {
 /// redirect plan and a target dir, none of which belong in the committed tree.
 /// The staged target dir survives between runs so dependencies are not rebuilt.
 ///
+/// The staging path carries the test binary's name, so two binaries staging
+/// the same fixture at once each build their own copy rather than writing
+/// over each other's.
+///
 /// Staging preserves the layout, so a fixture depending on `../sibling` works
 /// as long as the caller stages that sibling too.
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
@@ -130,7 +134,10 @@ pub fn stage_fixture(name: &str) -> std::path::PathBuf {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let src = root.join("tests/fixtures").join(name);
     assert!(src.is_dir(), "no fixture crate at {}", src.display());
-    let dst = root.join("target/fixture-stage").join(name);
+    let dst = root
+        .join("target/fixture-stage")
+        .join(env!("CARGO_CRATE_NAME"))
+        .join(name);
     copy_dir(&src, &dst);
     dst
 }
