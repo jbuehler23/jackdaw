@@ -17,7 +17,7 @@
 //! run with no clipboard at all uses.
 
 use bevy::prelude::*;
-use jackdaw::boot_ops::run_op_clause;
+use jackdaw::boot_ops::{run_op_clause, run_op_clause_as_user};
 use jackdaw::commands::CommandHistory;
 use jackdaw::entity_ops::{EntityClipboard, SystemClipboard};
 use jackdaw::selection::Selection;
@@ -35,6 +35,21 @@ fn clipboard_app() -> App {
 #[track_caller]
 fn run_finished(app: &mut App, clause: &str) {
     let result = run_op_clause(app.world_mut(), clause)
+        .unwrap_or_else(|err| panic!("{clause}: dispatch errored: {err}"));
+    app.update();
+    assert_eq!(
+        result,
+        OperatorResult::Finished,
+        "{clause} reported {result:?}"
+    );
+}
+
+/// The clause run the way a chord runs it, which is the only shape that
+/// says how many history entries a press leaves behind: a press opens a
+/// snapshot span and a chained call does not.
+#[track_caller]
+fn press(app: &mut App, clause: &str) {
+    let result = run_op_clause_as_user(app.world_mut(), clause)
         .unwrap_or_else(|err| panic!("{clause}: dispatch errored: {err}"));
     app.update();
     assert_eq!(
@@ -115,11 +130,11 @@ fn a_paste_lands_beside_the_selection_under_a_free_name() {
     );
 
     let before = undo_depth(&app);
-    run_finished(&mut app, "entity.paste");
+    press(&mut app, "entity.paste");
 
     assert_eq!(
         names_under(app.world(), root),
-        vec!["Alpha", "Alpha 2", "Omega"],
+        vec!["Alpha", "Alpha2", "Omega"],
         "the paste is the sibling straight after the one that was copied"
     );
     assert_eq!(
@@ -134,7 +149,7 @@ fn a_paste_lands_beside_the_selection_under_a_free_name() {
         app.world()
             .get::<Name>(selected[0])
             .map(|name| name.as_str().to_string()),
-        Some("Alpha 2".to_string())
+        Some("Alpha2".to_string())
     );
     assert!(
         app.world()
@@ -158,7 +173,7 @@ fn a_paste_with_nothing_selected_lands_under_the_scene_root() {
 
     assert_eq!(
         names_under(app.world(), root),
-        vec!["Alpha", "Omega", "Omega 2"],
+        vec!["Alpha", "Omega", "Omega2"],
         "with nothing selected the paste goes to the end of the scene root"
     );
 }
@@ -169,7 +184,7 @@ fn a_paste_undoes_and_redoes_in_the_same_place() {
     let (root, children) = scene_with_two_children(&mut app);
     select(&mut app, children[0]);
     run_finished(&mut app, "entity.copy");
-    run_finished(&mut app, "entity.paste");
+    press(&mut app, "entity.paste");
 
     run_finished(&mut app, "history.undo");
     assert_eq!(
@@ -181,7 +196,7 @@ fn a_paste_undoes_and_redoes_in_the_same_place() {
     run_finished(&mut app, "history.redo");
     assert_eq!(
         names_under(app.world(), root),
-        vec!["Alpha", "Alpha 2", "Omega"],
+        vec!["Alpha", "Alpha2", "Omega"],
         "redo put it back beside the selection, not at the end"
     );
 }
@@ -193,7 +208,7 @@ fn a_cut_is_one_entry_and_undo_puts_the_subtree_back_in_place() {
     select(&mut app, children[0]);
     let before = undo_depth(&app);
 
-    run_finished(&mut app, "entity.cut");
+    press(&mut app, "entity.cut");
 
     assert_eq!(
         names_under(app.world(), root),
@@ -242,7 +257,7 @@ fn a_copy_survives_a_reload_and_pastes_into_the_reopened_scene() {
 
     let names = scene_names(&mut app);
     assert!(
-        names.iter().any(|name| name == "Kept 2"),
+        names.iter().any(|name| name == "Kept2"),
         "the clipboard outlived the reload; names are {names:?}"
     );
 }
@@ -291,7 +306,7 @@ fn a_subtree_copied_in_one_tab_pastes_into_another() {
 }
 
 #[test]
-fn the_timeline_keeps_the_chord_while_it_is_the_focused_window() {
+fn the_timeline_keeps_the_chord_only_in_its_own_panel() {
     let mut app = clipboard_app();
     let (_, children) = scene_with_two_children(&mut app);
     select(&mut app, children[0]);
@@ -303,6 +318,9 @@ fn the_timeline_keeps_the_chord_while_it_is_the_focused_window() {
         );
     }
 
+    // The Animation workspace shows the timeline beside the outliner. With
+    // the outliner the panel last pressed in, the entity chords are the
+    // user's, however many timelines are on screen.
     let mut tree = jackdaw_panels::tree::DockTree::new();
     let leaf = tree.insert(jackdaw_panels::tree::DockNode::Leaf(
         jackdaw_panels::tree::DockLeaf::new("root", jackdaw_panels::area::DockAreaStyle::TabBar)
@@ -311,14 +329,31 @@ fn the_timeline_keeps_the_chord_while_it_is_the_focused_window() {
     tree.root = Some(leaf);
     *app.world_mut()
         .resource_mut::<jackdaw_panels::tree::DockTree>() = tree;
-    app.update();
+    focus_panel(&mut app, "jackdaw.outliner");
+
+    for id in ["entity.copy", "entity.cut", "entity.paste"] {
+        assert!(
+            available(&mut app, id),
+            "{id} must answer while the outliner is the focused panel"
+        );
+    }
+
+    focus_panel(&mut app, "jackdaw.timeline");
 
     for id in ["entity.copy", "entity.cut", "entity.paste"] {
         assert!(
             !available(&mut app, id),
-            "{id} should stand down while the timeline is the focused window"
+            "{id} should stand down inside the timeline panel"
         );
     }
+}
+
+/// Make `window_id` the panel a press belongs to, as a click in it would.
+fn focus_panel(app: &mut App, window_id: &str) {
+    app.world_mut()
+        .resource_mut::<jackdaw::panel_focus::LastPressedPanel>()
+        .0 = Some(window_id.to_string());
+    app.update();
 }
 
 fn available(app: &mut App, id: &'static str) -> bool {
@@ -375,5 +410,110 @@ fn the_paste_gets_a_row_in_the_outliner() {
             .get(panel, pasted)
             .is_some(),
         "the pasted entity has no Outliner row"
+    );
+}
+
+/// A paste with nothing to paste says so. It used to do nothing at all,
+/// which reads as a dead key.
+#[test]
+fn a_paste_with_an_empty_clipboard_refuses_out_loud() {
+    let mut app = clipboard_app();
+    let (_, children) = scene_with_two_children(&mut app);
+    select(&mut app, children[0]);
+    let before = undo_depth(&app);
+
+    press(&mut app, "entity.paste");
+
+    assert_eq!(undo_depth(&app), before, "nothing was pasted");
+    let notice = app.world().resource::<jackdaw::status_bar::StatusNotice>();
+    assert!(notice.is_active(), "the refusal reached the status bar");
+    assert!(
+        notice.text().contains("does not hold entities"),
+        "the notice said what was wrong, not {:?}",
+        notice.text()
+    );
+}
+
+/// A UI node has no `Transform` of its own: it is placed by its parent's
+/// layout. The paste path used to read the freshly spawned entity's
+/// `GlobalTransform`, get identity back, and write that into the document as
+/// an authored `Transform` nobody asked for.
+#[test]
+fn a_pasted_ui_node_gains_no_transform_patch() {
+    let mut app = clipboard_app();
+    let (_, children) = scene_with_two_children(&mut app);
+    select(&mut app, children[0]);
+    run_finished(&mut app, "entity.copy");
+    press(&mut app, "entity.paste");
+
+    let pasted = app.world().resource::<Selection>().entities[0];
+    let ast = app.world().resource::<SceneBsnAst>();
+    let node = ast.ast_for(pasted).expect("the paste is in the document");
+    assert!(
+        ast.find_patch_by_type_path(node, "bevy_transform::components::transform::Transform")
+            .is_none(),
+        "the paste wrote a Transform into a node that authored none"
+    );
+}
+
+/// A UI node laid out in a world, or a mesh parented into a screen, is a
+/// document that neither draws nor saves as its author meant.
+#[test]
+fn a_paste_refuses_a_payload_of_the_wrong_kind() {
+    let mut app = clipboard_app();
+    let (_, children) = scene_with_two_children(&mut app);
+    select(&mut app, children[0]);
+    run_finished(&mut app, "entity.copy");
+
+    // A second tab holding a world scene rather than a UI one.
+    run_finished(&mut app, "scene.new");
+    jackdaw::selection::clear_selection_in_world(app.world_mut());
+    app.update();
+    let before = scene_names(&mut app);
+
+    press(&mut app, "entity.paste");
+
+    assert_eq!(
+        scene_names(&mut app),
+        before,
+        "the UI subtree was pasted into a world scene"
+    );
+    let notice = app.world().resource::<jackdaw::status_bar::StatusNotice>();
+    assert!(
+        notice.text().contains("not a UI scene"),
+        "the refusal said which way round it was, not {:?}",
+        notice.text()
+    );
+}
+
+/// With nothing selected the paste lands in the scene that is open, not in
+/// whichever scene happens to hold the lowest-numbered root entity.
+#[test]
+fn a_paste_with_nothing_selected_uses_the_open_scenes_root() {
+    let mut app = clipboard_app();
+    run_finished(&mut app, "scene.new ui=true");
+    let first_root = jackdaw::ui_palette::ui_scene_root(app.world_mut()).expect("the first root");
+    let carried = app
+        .world_mut()
+        .spawn((Name::new("Carried"), Node::default()))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), carried);
+    app.update();
+    select(&mut app, carried);
+    run_finished(&mut app, "entity.copy");
+
+    run_finished(&mut app, "scene.new ui=true");
+    let second_root = jackdaw::ui_palette::ui_scene_root(app.world_mut()).expect("the second root");
+    assert_ne!(first_root, second_root, "the second tab has its own root");
+    jackdaw::selection::clear_selection_in_world(app.world_mut());
+    app.update();
+
+    press(&mut app, "entity.paste");
+
+    let pasted = app.world().resource::<Selection>().entities[0];
+    assert_eq!(
+        app.world().get::<ChildOf>(pasted).map(ChildOf::parent),
+        Some(second_root),
+        "the paste went to the open scene's root"
     );
 }

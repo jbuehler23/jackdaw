@@ -12,23 +12,23 @@ use crate::{
     selection::{Selected, Selection},
 };
 
-/// System clipboard for copy/paste of entities as JSN text.
+/// System clipboard for copy/paste of entities as scene text.
 /// On Linux/X11 the clipboard is ownership-based: data is only available while
 /// the Clipboard instance is alive. Storing as a Bevy Resource keeps it alive.
+///
+/// There is no `Default`: a machine with no clipboard has none of this, and
+/// the plugin leaves the resource out rather than building one that cannot
+/// work.
 #[derive(Resource)]
 pub struct SystemClipboard {
     clipboard: arboard::Clipboard,
-    /// Fallback: last copied JSN text, in case system clipboard read fails.
-    last_jsn: String,
-}
-
-impl Default for SystemClipboard {
-    fn default() -> Self {
-        Self {
-            clipboard: arboard::Clipboard::new().expect("Failed to init system clipboard"),
-            last_jsn: String::new(),
-        }
-    }
+    /// The text this editor last put on the OS clipboard.
+    ///
+    /// What makes a clipboard read recognisable as our own emission: text
+    /// equal to this is the copy [`EntityClipboard`] mirrors, so a paste uses
+    /// the mirror rather than re-reading text that a compositor may have
+    /// re-encoded on the way through.
+    last_emitted: String,
 }
 
 impl SystemClipboard {
@@ -63,7 +63,7 @@ impl Plugin for EntityOpsPlugin {
             Ok(clipboard) => {
                 app.insert_resource(SystemClipboard {
                     clipboard,
-                    last_jsn: String::new(),
+                    last_emitted: String::new(),
                 });
             }
             Err(e) => {
@@ -1089,7 +1089,7 @@ fn selection_as_bsn(world: &mut World) -> Option<String> {
 /// copies, and pastes, through [`EntityClipboard`].
 fn write_clipboard(world: &mut World, text: String) {
     if let Some(mut clipboard) = world.get_resource_mut::<SystemClipboard>() {
-        clipboard.last_jsn = text.clone();
+        clipboard.last_emitted = text.clone();
         if let Err(error) = clipboard.clipboard.set_text(&text) {
             warn!("Copy: system clipboard failed ({error}), keeping the editor's own copy");
         }
@@ -1097,24 +1097,100 @@ fn write_clipboard(world: &mut World, text: String) {
     world.resource_mut::<EntityClipboard>().text = text;
 }
 
-/// The BSN text a paste should spawn from.
+/// The largest clipboard payload a paste will read.
 ///
-/// The OS clipboard wins when it holds a scene, so a subtree copied in
-/// another window (or written by hand in a text editor) pastes here. Anything
-/// else -- an empty or unreadable clipboard, or one holding text that is not
-/// a scene -- falls back to the editor's own last copy, which is what a run
-/// with no clipboard at all has.
-fn read_clipboard(world: &mut World) -> String {
+/// The OS clipboard is written by every process on the machine, so what comes
+/// back is not this editor's to trust: a payload past this size is refused
+/// before it is parsed, rather than parsed into a document that then has to be
+/// walked, spawned and emitted.
+const MAX_CLIPBOARD_BYTES: usize = 2 * 1024 * 1024;
+
+/// What a refused paste says.
+const NOT_ENTITIES: &str = "the clipboard does not hold entities";
+
+/// Whether `text` is an entity document this editor can paste.
+///
+/// Strict, because the alternative is spawning whatever a user happened to
+/// copy. Prose parses: a bare identifier is a valid `BsnPatch::Type`, so the
+/// parser saying yes is not on its own an answer. A payload has to be within
+/// [`MAX_CLIPBOARD_BYTES`], parse, and yield at least one entity root carrying
+/// a component this build has in the type registry. A root whose only patch is
+/// a name, or one naming a type nothing registers, is text that happens to
+/// parse rather than a scene.
+fn is_entity_document(world: &World, text: &str) -> bool {
+    if text.len() > MAX_CLIPBOARD_BYTES {
+        warn!(
+            "Paste: the clipboard holds {} bytes, past the {MAX_CLIPBOARD_BYTES} a paste reads",
+            text.len()
+        );
+        return false;
+    }
+    let Ok(ast) = jackdaw_bsn::parse_bsn_text(text) else {
+        return false;
+    };
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    jackdaw_bsn::entity_roots(&ast, &registry)
+        .into_iter()
+        .any(|root| {
+            let Some(patches) = ast.get_patches(root) else {
+                return false;
+            };
+            patches.0.iter().any(|&pe| {
+                ast.get_patch(pe)
+                    .and_then(jackdaw_bsn::patch_type_path)
+                    .is_some_and(|type_path| registry.get_with_type_path(type_path).is_some())
+            })
+        })
+}
+
+/// The scene text a paste should spawn from, or `None` when the clipboard
+/// holds no entities.
+///
+/// The editor's own [`EntityClipboard`] mirrors every copy, and the OS
+/// clipboard is what carries one between windows and applications. Which of
+/// the two answers is decided by comparing them: OS text equal to what this
+/// editor last emitted is that same copy, so the mirror answers; different
+/// text belongs to somebody else, and is accepted only when it reads as an
+/// entity document. Text that is neither is a refusal, never a quiet fall back
+/// to the mirror -- a paste of a paragraph must not produce the subtree copied
+/// an hour ago.
+fn clipboard_entities(world: &mut World) -> Option<String> {
     let own = world
         .get_resource::<EntityClipboard>()
         .map(|clipboard| clipboard.text.clone())
-        .unwrap_or_default();
-    world
+        .filter(|text| !text.trim().is_empty());
+
+    let os_text = world
         .get_resource_mut::<SystemClipboard>()
-        .and_then(|mut clipboard| clipboard.clipboard.get_text().ok())
-        .filter(|text| !text.trim().is_empty())
-        .filter(|text| jackdaw_bsn::parse_bsn_text(text).is_ok())
-        .unwrap_or(own)
+        .and_then(|mut clipboard| {
+            let text = clipboard.clipboard.get_text().ok()?;
+            Some((text, clipboard.last_emitted.clone()))
+        })
+        .filter(|(text, _)| !text.trim().is_empty());
+
+    choose_clipboard_text(world, own, os_text)
+}
+
+/// [`clipboard_entities`] with the two clipboards already read, so the choice
+/// between them can be exercised without an OS clipboard to write to.
+///
+/// `os` is the OS clipboard's text paired with what this editor last put
+/// there.
+fn choose_clipboard_text(
+    world: &World,
+    own: Option<String>,
+    os: Option<(String, String)>,
+) -> Option<String> {
+    let Some((text, last_emitted)) = os else {
+        // No readable OS clipboard: a headless run, or a session with no
+        // compositor. The mirror is the whole answer there.
+        return own;
+    };
+    if text == last_emitted {
+        return own.or(Some(text));
+    }
+    is_entity_document(world, &text).then_some(text)
 }
 
 /// Copy selected entities to the clipboard as BSN text.
@@ -1243,7 +1319,7 @@ struct PasteTarget {
 
 impl PasteTarget {
     /// The live location, or the end of the scene root list when the parent
-    /// this named is no longer there.
+    /// this names is no longer in the scene.
     fn resolve(&self, world: &mut World) -> HierarchyLocation {
         let Some(wanted) = self.parent else {
             return HierarchyLocation {
@@ -1313,13 +1389,18 @@ fn graft_and_spawn_at(
     let spawned = graft_and_spawn(world, source, parent_ast);
     if location.index != usize::MAX {
         for (offset, &root) in spawned.iter().enumerate() {
-            crate::commands::set_hierarchy_location(
+            // The roots were spawned a few lines ago and nothing has
+            // propagated a transform for them yet, so there is no world
+            // position to keep: reading one would write an identity
+            // `Transform` into the document for a node that authored none.
+            crate::commands::place_entity(
                 world,
                 root,
                 HierarchyLocation {
                     parent: location.parent,
                     index: location.index + offset,
                 },
+                crate::commands::WorldTransform::Unplaced,
             );
         }
         crate::hierarchy::sync_outliner_row_order(world, location.parent);
@@ -1336,11 +1417,19 @@ fn mint_scene_node_ids(world: &World, ast: &mut jackdaw_bsn::SceneBsnAst) {
         jackdaw_bsn::asset_roots(ast, &reg).into_iter().collect()
     };
 
+    // A visited set, not merely a stack: the document being walked came off
+    // the clipboard, and one whose `Children` lists form a cycle would
+    // otherwise be pushed onto the stack for as long as memory lasted.
     let mut stack: Vec<Entity> = ast.roots.clone();
+    let mut seen: std::collections::HashSet<Entity> = stack.iter().copied().collect();
     let mut nodes = Vec::new();
     while let Some(node) = stack.pop() {
         nodes.push(node);
-        stack.extend(ast.get_children_ast(node));
+        for child in ast.get_children_ast(node) {
+            if seen.insert(child) {
+                stack.push(child);
+            }
+        }
     }
     for node in nodes {
         if asset_roots.contains(&node) {
@@ -1371,24 +1460,67 @@ fn mint_scene_node_ids(world: &World, ast: &mut jackdaw_bsn::SceneBsnAst) {
     }
 }
 
-/// Paste entities from clipboard BSN text at `target`, as one history entry.
+/// Whether the open document is a UI scene, which decides what may be pasted
+/// into it.
+fn open_scene_is_ui(world: &mut World) -> bool {
+    crate::ui_palette::ui_scene_root(world).is_some()
+}
+
+/// Whether `ast`'s entity roots are UI nodes.
+///
+/// A `Node` patch is what makes a root a UI node: it is laid out by a parent
+/// node and drawn on the canvas. Anything else -- a mesh, a light, a camera --
+/// is placed by a `Transform` in a world.
+fn roots_are_ui_nodes(world: &World, ast: &jackdaw_bsn::SceneBsnAst) -> bool {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let node_type_path = crate::inspector::node_card::node_type_path();
+    jackdaw_bsn::entity_roots(ast, &registry)
+        .into_iter()
+        .any(|root| ast.find_patch_by_type_path(root, node_type_path).is_some())
+}
+
+/// Paste entities from clipboard scene text at `target`, as one history entry.
 ///
 /// Returns the pasted roots, which become the selection.
-fn paste_clipboard_entities(world: &mut World, target: PasteTarget) -> Vec<Entity> {
-    let text = read_clipboard(world);
+fn paste_clipboard_entities(world: &mut World, text: &str, target: PasteTarget) -> Vec<Entity> {
     if text.trim().is_empty() {
         return Vec::new();
     }
 
-    let mut parsed = match jackdaw_bsn::parse_bsn_text(&text) {
+    let mut parsed = match jackdaw_bsn::parse_bsn_text(text) {
         Ok(ast) => ast,
         Err(e) => {
             warn!("Clipboard text is not valid BSN: {e}");
+            crate::status_bar::notify_error(world, NOT_ENTITIES);
             return Vec::new();
         }
     };
     if parsed.roots.is_empty() {
+        crate::status_bar::notify_error(world, NOT_ENTITIES);
         return Vec::new();
+    }
+
+    // A UI node laid out in a world, or a mesh parented into a screen, is a
+    // scene that neither draws nor saves as its author meant. Both directions
+    // refuse rather than pasting something the document cannot hold.
+    let payload_is_ui = roots_are_ui_nodes(world, &parsed);
+    let scene_is_ui = open_scene_is_ui(world);
+    if payload_is_ui != scene_is_ui {
+        let message = if payload_is_ui {
+            "the clipboard holds UI nodes, and this is not a UI scene"
+        } else {
+            "the clipboard holds world entities, and this is a UI scene"
+        };
+        crate::status_bar::notify_error(world, message);
+        return Vec::new();
+    }
+
+    // The assets the copied components name travel with the subtree, so a
+    // pasted image node finds its image instead of a reference nothing backs.
+    let dropped = jackdaw_bsn::adopt_asset_roots(world, &parsed);
+    if !dropped.is_empty() {
+        crate::status_bar::notify_warn(world, format!("pasted without {}", dropped.join(", ")));
     }
 
     // Fresh ids and names before the graft, so the pasted subtree is a second
@@ -1434,10 +1566,7 @@ fn select_entities(world: &mut World, entities: &[Entity]) {
 
 /// Paste clipboard entities at the end of the scene's root list.
 fn paste_components(world: &mut World) {
-    if crate::asset_ingest::paste_clipboard_image(world) {
-        return;
-    }
-    paste_clipboard_entities(
+    paste_clipboard(
         world,
         PasteTarget {
             parent: None,
@@ -1448,11 +1577,26 @@ fn paste_components(world: &mut World) {
 
 /// Paste clipboard entities as the sibling straight after the selection.
 fn paste_entities_after_selection(world: &mut World) {
+    let target = paste_target(world);
+    paste_clipboard(world, target);
+}
+
+/// Put whatever the clipboard holds into the scene at `target`.
+///
+/// Entities first: an image is only what a paste means when there is no entity
+/// payload to be had. The other order lets a screenshot taken between a copy
+/// and its paste swallow the subtree the user was carrying, since a clipboard
+/// commonly holds an image and text at once. With neither, the paste refuses
+/// out loud rather than doing nothing.
+fn paste_clipboard(world: &mut World, target: PasteTarget) {
+    if let Some(text) = clipboard_entities(world) {
+        paste_clipboard_entities(world, &text, target);
+        return;
+    }
     if crate::asset_ingest::paste_clipboard_image(world) {
         return;
     }
-    let target = paste_target(world);
-    paste_clipboard_entities(world, target);
+    crate::status_bar::notify_error(world, NOT_ENTITIES);
 }
 
 /// Copy the selection to the clipboard as BSN text.
@@ -1908,6 +2052,7 @@ pub(crate) fn entity_copy(_: In<OperatorParameters>, mut commands: Commands) -> 
     id = "entity.cut",
     label = "Cut",
     description = "Copy the selected subtrees to the clipboard and delete them.",
+    allows_undo = false,
     is_available = can_act_on_entities
 )]
 pub(crate) fn entity_cut(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
@@ -1919,6 +2064,7 @@ pub(crate) fn entity_cut(_: In<OperatorParameters>, mut commands: Commands) -> O
     id = "entity.paste",
     label = "Paste",
     description = "Paste the clipboard's subtrees as siblings after the selection.",
+    allows_undo = false,
     is_available = can_act_on_entities
 )]
 pub(crate) fn entity_paste(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
@@ -2365,6 +2511,235 @@ pub(crate) fn entity_add_terrain(
 pub fn entity_add_prefab(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(crate::prefab::operators::open_prefab_picker);
     OperatorResult::Finished
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::*;
+
+    /// A world whose registry holds `Node`, so a document naming it reads as
+    /// a scene and one naming nothing registered does not.
+    fn world_with_node_registered() -> World {
+        let mut world = World::new();
+        let registry = AppTypeRegistry::default();
+        registry.write().register::<Node>();
+        world.insert_resource(registry);
+        world
+    }
+
+    /// One entity root carrying a registered component: the shape a copy
+    /// emits and the only shape a paste accepts from a stranger.
+    fn a_real_subtree() -> String {
+        format!(
+            "#Pasted\n{}\n",
+            crate::inspector::node_card::node_type_path()
+        )
+    }
+
+    #[test]
+    fn prose_is_not_an_entity_document() {
+        let world = world_with_node_registered();
+        // A bare identifier parses as a component patch, so the parser
+        // accepting the text is not on its own an answer.
+        assert!(!is_entity_document(&world, "Remember to buy milk"));
+        assert!(!is_entity_document(&world, "hello"));
+    }
+
+    #[test]
+    fn json_is_not_an_entity_document() {
+        let world = world_with_node_registered();
+        assert!(!is_entity_document(
+            &world,
+            r#"{"name": "thing", "value": 3}"#
+        ));
+    }
+
+    #[test]
+    fn a_root_naming_no_registered_component_is_not_an_entity_document() {
+        let world = world_with_node_registered();
+        assert!(
+            !is_entity_document(&world, "#Lonely\nsome::type::NobodyRegisters\n"),
+            "a root whose every patch names an unknown type is text that parses"
+        );
+    }
+
+    #[test]
+    fn a_copied_subtree_is_an_entity_document() {
+        let world = world_with_node_registered();
+        assert!(is_entity_document(&world, &a_real_subtree()));
+    }
+
+    #[test]
+    fn a_payload_past_the_size_cap_is_refused() {
+        let world = world_with_node_registered();
+        let mut oversized = a_real_subtree();
+        oversized.push_str(&" ".repeat(MAX_CLIPBOARD_BYTES));
+        assert!(
+            !is_entity_document(&world, &oversized),
+            "a payload past the cap is refused before it is parsed"
+        );
+    }
+
+    #[test]
+    fn os_text_this_editor_emitted_pastes_the_mirror() {
+        let world = world_with_node_registered();
+        let emitted = a_real_subtree();
+        assert_eq!(
+            choose_clipboard_text(
+                &world,
+                Some(emitted.clone()),
+                Some((emitted.clone(), emitted.clone()))
+            ),
+            Some(emitted),
+            "text equal to the last emission is our own copy"
+        );
+    }
+
+    #[test]
+    fn os_text_that_is_not_entities_refuses_rather_than_pasting_the_mirror() {
+        let world = world_with_node_registered();
+        let mirror = a_real_subtree();
+        for foreign in ["Remember to buy milk", r#"{"a": 1}"#] {
+            assert_eq!(
+                choose_clipboard_text(
+                    &world,
+                    Some(mirror.clone()),
+                    Some((foreign.to_string(), mirror.clone()))
+                ),
+                None,
+                "{foreign} must refuse, not paste what was copied an hour ago"
+            );
+        }
+    }
+
+    #[test]
+    fn a_subtree_from_another_window_is_accepted_over_the_mirror() {
+        let world = world_with_node_registered();
+        let foreign = format!(
+            "#FromElsewhere\n{}\n",
+            crate::inspector::node_card::node_type_path()
+        );
+        assert_eq!(
+            choose_clipboard_text(
+                &world,
+                Some(a_real_subtree()),
+                Some((foreign.clone(), a_real_subtree()))
+            ),
+            Some(foreign),
+            "a real subtree written by another instance wins over the mirror"
+        );
+    }
+
+    #[test]
+    fn with_no_os_clipboard_the_mirror_answers() {
+        let world = world_with_node_registered();
+        let mirror = a_real_subtree();
+        assert_eq!(
+            choose_clipboard_text(&world, Some(mirror.clone()), None),
+            Some(mirror)
+        );
+        assert_eq!(choose_clipboard_text(&world, None, None), None);
+    }
+
+    /// A document whose `Children` lists point back at an ancestor is not
+    /// something a parser can produce, but it is something a hostile or
+    /// corrupt payload could be built into. The walks that touch a pasted
+    /// document have to end.
+    fn ast_with_a_cycle() -> jackdaw_bsn::SceneBsnAst {
+        let mut ast = jackdaw_bsn::SceneBsnAst::default();
+        let child = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("Child".to_string())]);
+        let root = ast.create_entity_node(vec![
+            jackdaw_bsn::BsnPatch::Name("Root".to_string()),
+            jackdaw_bsn::BsnPatch::Children(vec![child]),
+        ]);
+        ast.add_to_roots(root);
+        ast.add_child_to_ast(child, root);
+        ast
+    }
+
+    #[test]
+    fn minting_ids_over_a_cyclic_document_ends() {
+        let world = world_with_node_registered();
+        let mut ast = ast_with_a_cycle();
+        mint_scene_node_ids(&world, &mut ast);
+        assert_eq!(
+            walk_entity_nodes(&ast).len(),
+            2,
+            "each node is visited once however the children point"
+        );
+    }
+
+    #[test]
+    fn naming_a_cyclic_document_ends() {
+        let mut world = world_with_node_registered();
+        let mut ast = ast_with_a_cycle();
+        assign_unique_entity_names(&mut world, &mut ast);
+        let names: Vec<Option<&str>> = walk_entity_nodes(&ast)
+            .into_iter()
+            .map(|node| ast.get_name(node))
+            .collect();
+        assert_eq!(names, vec![Some("Root"), Some("Child")]);
+    }
+
+    /// A widget is a subtree, so a copied Button carries its caption. A paste
+    /// that renamed only the root would leave two entities called `Caption`.
+    #[test]
+    fn a_pasted_subtree_uniquifies_its_descendants_too() {
+        let mut world = world_with_node_registered();
+        world.spawn(Name::new("Button"));
+        world.spawn(Name::new("Caption"));
+
+        let mut ast = jackdaw_bsn::SceneBsnAst::default();
+        let caption =
+            ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("Caption".to_string())]);
+        let root = ast.create_entity_node(vec![
+            jackdaw_bsn::BsnPatch::Name("Button".to_string()),
+            jackdaw_bsn::BsnPatch::Children(vec![caption]),
+        ]);
+        ast.add_to_roots(root);
+
+        assign_unique_entity_names(&mut world, &mut ast);
+
+        assert_eq!(ast.get_name(root), Some("Button2"));
+        assert_eq!(
+            ast.get_name(caption),
+            Some("Caption2"),
+            "a descendant colliding with a live name is renamed too"
+        );
+    }
+
+    /// The suffix has no space in it: a clause value cannot carry one, so a
+    /// name with a space is unreachable from `JACKDAW_RUN_OP`.
+    #[test]
+    fn free_names_are_addressable_from_a_clause() {
+        let mut taken = std::collections::HashSet::new();
+        assert_eq!(claim_free_name(&mut taken, "Button"), None);
+        assert_eq!(
+            claim_free_name(&mut taken, "Button"),
+            Some("Button2".to_string())
+        );
+        assert_eq!(
+            claim_free_name(&mut taken, "Button"),
+            Some("Button3".to_string())
+        );
+        for name in taken {
+            assert!(!name.contains(' '), "{name} cannot be written in a clause");
+        }
+    }
+
+    /// A name written with the older spacing renumbers from the same base
+    /// rather than growing a second suffix.
+    #[test]
+    fn an_older_spaced_suffix_renumbers_from_its_base() {
+        let mut taken: std::collections::HashSet<String> =
+            ["Button".to_string(), "Button 2".to_string()]
+                .into_iter()
+                .collect();
+        assert_eq!(
+            claim_free_name(&mut taken, "Button 2"),
+            Some("Button3".to_string())
+        );
+    }
 }
 
 #[cfg(test)]

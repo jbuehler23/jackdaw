@@ -305,13 +305,18 @@ pub(crate) fn paste_clipboard_image(world: &mut World) -> bool {
         img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .ok()
     });
+    // Each of these three is a paste that produced nothing. Saying so in the
+    // status bar is what keeps the press from looking like a dead key.
     if encoded.is_none() {
-        warn!("clipboard image could not be encoded to PNG; nothing pasted");
+        crate::status_bar::notify_error(world, "the clipboard image could not be read");
         return true;
     }
 
     let Some(project) = world.get_resource::<ProjectRoot>() else {
-        warn!("clipboard holds an image but no project is open; nothing pasted");
+        crate::status_bar::notify_error(
+            world,
+            "the clipboard holds an image, and there is no open project to write it into",
+        );
         return true;
     };
     let assets_dir = project.assets_dir();
@@ -320,6 +325,10 @@ pub(crate) fn paste_clipboard_image(world: &mut World) -> bool {
         Ok(rel) => rel,
         Err(err) => {
             warn!("failed to write pasted image into the project: {err}");
+            crate::status_bar::notify_error(
+                world,
+                "the clipboard image could not be written into the project",
+            );
             return true;
         }
     };

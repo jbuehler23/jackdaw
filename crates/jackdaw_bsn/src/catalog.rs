@@ -191,6 +191,67 @@ fn report_unresolved_types(world: &mut World) {
     }
 }
 
+/// Adopt `source`'s named asset entries into the open scene.
+///
+/// Each entry's value goes into its `Assets<T>` store, both of its reference
+/// spellings join [`crate::BsnSceneAssets`] so a `#Name` in a pasted patch
+/// resolves, and the entry joins the live document as a root unless a root of
+/// that name is already there. A copied subtree carries the assets its
+/// components name, so a pasted `ImageNode` finds its image rather than a
+/// reference nothing backs.
+///
+/// Returns the names of the entries that could not be adopted, for the caller
+/// to report: an unregistered asset type, or a value this build cannot read.
+pub fn adopt_asset_roots(world: &mut World, source: &SceneBsnAst) -> Vec<String> {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let roots = {
+        let reg = registry.read();
+        asset_roots(source, &reg)
+    };
+    if roots.is_empty() {
+        return Vec::new();
+    }
+
+    let mut dropped = Vec::new();
+    let mut adopted = Vec::new();
+    for root in roots {
+        let Some(name) = source.get_name(root).map(str::to_owned) else {
+            continue;
+        };
+        let value = asset_value_from_root(source, root);
+        let entry = value.and_then(|(type_path, asset_value)| {
+            let reg = registry.read();
+            load_asset_entry(world, &reg, &name, &type_path, &asset_value)
+        });
+        match entry {
+            Some(entry) => adopted.push((root, entry)),
+            None => dropped.push(name),
+        }
+    }
+
+    let mut names = world
+        .get_resource::<crate::BsnSceneAssets>()
+        .map(|assets| assets.0.clone())
+        .unwrap_or_default();
+    for (_, entry) in &adopted {
+        names.insert(format!("#{}", entry.name), entry.handle.clone());
+        names.insert(format!("@{}", entry.name), entry.handle.clone());
+    }
+    world.insert_resource(crate::BsnSceneAssets(names));
+
+    let mut live = world.resource_mut::<SceneBsnAst>();
+    for (root, entry) in adopted {
+        let already = live
+            .roots
+            .iter()
+            .any(|&existing| live.get_name(existing) == Some(entry.name.as_str()));
+        if !already {
+            crate::clone_subtree_into(&mut live, source, root, None);
+        }
+    }
+    dropped
+}
+
 /// Build one named asset from its document value and insert it into its
 /// `Assets<T>` store.
 fn load_asset_entry(
@@ -363,6 +424,55 @@ mod tests {
             .resource::<Assets<TestMaterial>>()
             .get(&handle.clone().typed::<TestMaterial>())
             .expect("asset should exist")
+    }
+
+    /// A copied subtree carries the assets its components name. Paste adopts
+    /// them: into the asset store, into the reference names an apply
+    /// resolves, and into the open document so a save keeps them.
+    #[test]
+    fn adopting_a_clipboard_document_s_assets_makes_its_references_resolvable() {
+        let mut world = scalar_world();
+        world.insert_resource(SceneBsnAst::default());
+
+        let handle = world
+            .resource_mut::<Assets<TestMaterial>>()
+            .add(TestMaterial {
+                metallic: 0.5,
+                roughness: 0.25,
+            });
+        let mut source = SceneBsnAst::default();
+        append_assets_to_ast(
+            &mut source,
+            &world,
+            &[CatalogAssetRef {
+                name: "Copied".into(),
+                type_id: TypeId::of::<TestMaterial>(),
+                asset_id: handle.id().untyped(),
+            }],
+        );
+        world.resource_mut::<Assets<TestMaterial>>().remove(&handle);
+
+        let dropped = adopt_asset_roots(&mut world, &source);
+
+        assert!(dropped.is_empty(), "nothing was dropped: {dropped:?}");
+        let names = &world.resource::<crate::BsnSceneAssets>().0;
+        let adopted = names
+            .get("#Copied")
+            .expect("the inline reference name resolves");
+        assert!(
+            names.contains_key("@Copied"),
+            "and the catalog spelling too"
+        );
+        assert_eq!(get_material(&world, adopted).roughness, 0.25);
+        assert_eq!(
+            world.resource::<SceneBsnAst>().roots.len(),
+            1,
+            "the entry joined the open document, so a save keeps it"
+        );
+
+        // A second paste of the same entry does not add a second root.
+        adopt_asset_roots(&mut world, &source);
+        assert_eq!(world.resource::<SceneBsnAst>().roots.len(), 1);
     }
 
     #[test]

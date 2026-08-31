@@ -18,9 +18,9 @@ pub mod sync;
 pub mod writer;
 
 pub use catalog::{
-    CatalogAssetRef, CatalogEntry, LoadedBsnScene, append_assets_to_ast, asset_roots, entity_roots,
-    is_asset_root, load_bsn_assets, load_bsn_scene, serialize_assets_to_bsn,
-    serialize_assets_to_bsn_reporting,
+    CatalogAssetRef, CatalogEntry, LoadedBsnScene, adopt_asset_roots, append_assets_to_ast,
+    asset_roots, entity_roots, is_asset_root, load_bsn_assets, load_bsn_scene,
+    serialize_assets_to_bsn, serialize_assets_to_bsn_reporting,
 };
 
 pub use parse::{ParseError, parse_bsn};

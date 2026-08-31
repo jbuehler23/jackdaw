@@ -396,10 +396,37 @@ pub(crate) fn set_parent(world: &mut World, entity: Entity, parent: Option<Entit
     );
 }
 
+/// Whether a placement re-expresses the entity's world position against its
+/// new parent.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum WorldTransform {
+    /// The entity is already somewhere: keep it there, which means writing a
+    /// new local `Transform` measured against the new parent.
+    Keep,
+    /// The entity has just been spawned and has not been laid out or
+    /// propagated, so it is nowhere yet and its `GlobalTransform` still reads
+    /// identity. Preserving that would write an identity `Transform` into the
+    /// document for a node that authored none.
+    Unplaced,
+}
+
 /// Apply an exact ordered hierarchy location to both the live ECS and BSN
 /// document while preserving an entity's world-space transform.
 pub fn set_hierarchy_location(world: &mut World, entity: Entity, location: HierarchyLocation) {
-    let current_world = world.get::<GlobalTransform>(entity).copied();
+    place_entity(world, entity, location, WorldTransform::Keep);
+}
+
+/// [`set_hierarchy_location`] saying whether the entity has a world position
+/// worth keeping.
+pub fn place_entity(
+    world: &mut World,
+    entity: Entity,
+    location: HierarchyLocation,
+    transform: WorldTransform,
+) {
+    let current_world = (transform == WorldTransform::Keep)
+        .then(|| world.get::<GlobalTransform>(entity).copied())
+        .flatten();
     let new_parent_world = location
         .parent
         .and_then(|parent| world.get::<GlobalTransform>(parent).copied());
@@ -408,9 +435,15 @@ pub fn set_hierarchy_location(world: &mut World, entity: Entity, location: Hiera
 
     match location.parent {
         Some(parent) => {
+            // `insert_children` takes the entity out of the list before it
+            // puts it back, so a child already under this parent is one slot
+            // shorter than the list reads.
             let index = world
                 .get::<Children>(parent)
-                .map(|children| location.index.min(children.len()))
+                .map(|children| {
+                    let already = children.iter().any(|child| child == entity);
+                    location.index.min(children.len() - usize::from(already))
+                })
                 .unwrap_or(0);
             world.entity_mut(parent).insert_children(index, &[entity]);
         }
