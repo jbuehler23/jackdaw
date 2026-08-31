@@ -4581,3 +4581,59 @@ fn row_reads_selected(app: &mut App, source: Entity) -> bool {
                 .is_some()
         })
 }
+
+/// Every selected node carries its own outline, so the pre-select one
+/// stands down over all of them. It used to stand down over the primary
+/// alone, which drew a second line on the rest of a multi-selection.
+#[test]
+fn the_outline_stands_down_over_every_selected_node() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (_, back, front) = authored_scene(&mut app);
+    settle(&mut app);
+
+    // `back` is last, so it is the primary; `front` is selected and is not.
+    select_all(&mut app, &[front, back]);
+    settle(&mut app);
+    move_over(&mut app, panel, Vec2::new(500.0, 250.0));
+    settle(&mut app);
+    assert_eq!(
+        hover_outline(&mut app),
+        None,
+        "a selected node that is not the primary is still selected",
+    );
+}
+
+/// The tracker only runs while the pointer is over a stage, so leaving one
+/// has to say so. Without it the last node the cursor passed over kept its
+/// outline while the pointer was somewhere else entirely.
+#[test]
+fn the_outline_goes_away_when_the_pointer_leaves_the_stage() {
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (_, _, _) = authored_scene(&mut app);
+    settle(&mut app);
+
+    move_over(&mut app, panel, Vec2::new(500.0, 250.0));
+    settle(&mut app);
+    assert!(hover_outline(&mut app).is_some(), "the cursor is on a node");
+
+    let stage = stage_entity(&mut app, panel);
+    let position = screen_position_of(&mut app, panel, Vec2::new(500.0, 250.0));
+    let camera = panel_camera(&mut app, panel);
+    pointer_at(
+        &mut app,
+        stage,
+        position,
+        bevy::picking::events::Out {
+            hit: HitData::new(camera, 0.0, None, None),
+        },
+    );
+    settle(&mut app);
+
+    assert_eq!(
+        hover_outline(&mut app),
+        None,
+        "the outline goes with the pointer",
+    );
+}

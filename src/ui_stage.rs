@@ -768,6 +768,7 @@ impl Plugin for UiStagePlugin {
             .init_resource::<UiHoverPreselect>()
             .add_observer(on_stage_press)
             .add_observer(on_stage_hover)
+            .add_observer(on_stage_leave)
             .add_observer(on_gesture_start)
             .add_observer(on_gesture_drag)
             .add_observer(on_gesture_end)
@@ -1111,12 +1112,34 @@ fn on_stage_hover(
     }
 }
 
+/// Forget the pre-select as the pointer leaves the stage.
+///
+/// [`on_stage_hover`] only runs while the pointer is over a stage, so
+/// without this the last node it passed over stays named, and its outline
+/// stays drawn, for as long as the pointer is somewhere else: over a
+/// panel, over another window, or off the screen entirely, which fires no
+/// move at all.
+fn on_stage_leave(
+    event: On<Pointer<Out>>,
+    hosts: Query<&Viewport2dPanelHost>,
+    mut hover: ResMut<UiHoverPreselect>,
+) {
+    let target = event.event_target();
+    if !hosts.iter().any(|host| host.stage == target) {
+        return;
+    }
+    hover.host = None;
+    hover.entity = None;
+}
+
 /// Keep at most one pre-select outline, over the node
 /// [`UiHoverPreselect`] names.
 ///
 /// Built on the same placement the selection outline uses, so the two
-/// agree on where a node is; the selected node is skipped, since its own
-/// outline already covers it.
+/// agree on where a node is. Every selected node is skipped, not only the
+/// primary one: each already carries a selection outline, and drawing a
+/// second line over one of them says the hover would change the selection
+/// when it would not.
 fn sync_hover_outlines(
     mut commands: Commands,
     hover: Res<UiHoverPreselect>,
@@ -1129,7 +1152,7 @@ fn sync_hover_outlines(
 ) {
     let wanted = hover
         .entity
-        .filter(|entity| Some(*entity) != selection.primary());
+        .filter(|entity| !selection.is_selected(*entity));
 
     for (host_entity, host) in &hosts {
         let outline = outlines
