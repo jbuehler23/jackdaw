@@ -37,6 +37,7 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::OperatorEntity;
+use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
 use jackdaw_scene_types::PropertyValue;
 
 use crate::selection::Selection;
@@ -459,6 +460,32 @@ pub fn run_op_clause(world: &mut World, clause: &str) -> Result<OperatorResult, 
         return Err(CallOperatorError::UnknownId(clause.to_string().into()));
     };
     run_boot_op(world, &op)
+}
+
+/// Run one clause the way a toolbar button, a menu row or a keybind does.
+///
+/// The difference from [`run_op_clause`] is `creates_history_entry`. A
+/// scripted clause is a chained call and opens no snapshot span; a press does.
+/// An operator that records its own history entry and one that leaves the
+/// entry to the snapshot look alike from a chained call and differ from a
+/// press, so anything asserting how many entries a chord leaves behind has to
+/// come through here.
+pub fn run_op_clause_as_user(
+    world: &mut World,
+    clause: &str,
+) -> Result<OperatorResult, CallOperatorError> {
+    let Some(mut op) = parse_run_ops(clause).into_iter().next() else {
+        return Err(CallOperatorError::UnknownId(clause.to_string().into()));
+    };
+    resolve_entity_params(world, &mut op);
+    let mut call = world.operator(op.id).settings(CallOperatorSettings {
+        execution_context: ExecutionContext::Invoke,
+        creates_history_entry: true,
+    });
+    for (key, value) in op.params {
+        call = call.param(key, value);
+    }
+    call.call()
 }
 
 /// Count settle frames, then drain the queue one clause every

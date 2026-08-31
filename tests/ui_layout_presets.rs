@@ -8,7 +8,7 @@
 //!  * the card's row offers all eleven and each button dispatches its own.
 
 use bevy::{prelude::*, ui_widgets::Activate};
-use jackdaw::boot_ops::run_op_clause;
+use jackdaw::boot_ops::run_op_clause_as_user;
 use jackdaw::commands::CommandHistory;
 use jackdaw::selection::Selection;
 use jackdaw::ui_layout_presets::{LAYOUT_PRESET_OP, LayoutPresetRow, presets, spawn_preset_row};
@@ -19,13 +19,19 @@ mod util;
 
 #[track_caller]
 fn run(app: &mut App, clause: &str) -> OperatorResult {
-    let result = run_op_clause(app.world_mut(), clause)
+    let result = run_op_clause_as_user(app.world_mut(), clause)
         .unwrap_or_else(|err| panic!("{clause}: dispatch errored: {err}"));
     app.update();
     app.update();
     result
 }
 
+/// Run one clause the way a chord runs it.
+///
+/// `creates_history_entry`, which a scripted call leaves off, is what makes
+/// the dispatcher open a snapshot span: an operator that records its own entry
+/// and one that leaves the entry to the snapshot are only told apart under a
+/// press, and this suite counts entries.
 #[track_caller]
 fn run_finished(app: &mut App, clause: &str) {
     let result = run(app, clause);

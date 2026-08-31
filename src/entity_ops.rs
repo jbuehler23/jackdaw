@@ -2015,6 +2015,7 @@ pub(crate) fn entity_duplicate(
     id = "entity.move_up",
     label = "Move Up",
     description = "Move the selection one slot earlier among its siblings.",
+    allows_undo = false,
     is_available = can_act_on_entities
 )]
 pub(crate) fn entity_move_up(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
@@ -2026,6 +2027,7 @@ pub(crate) fn entity_move_up(_: In<OperatorParameters>, mut commands: Commands) 
     id = "entity.move_down",
     label = "Move Down",
     description = "Move the selection one slot later among its siblings.",
+    allows_undo = false,
     is_available = can_act_on_entities
 )]
 pub(crate) fn entity_move_down(

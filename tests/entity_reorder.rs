@@ -10,7 +10,7 @@
 //!  * one reorder is one undo entry, and undo puts the order back.
 
 use bevy::prelude::*;
-use jackdaw::boot_ops::run_op_clause;
+use jackdaw::boot_ops::run_op_clause_as_user;
 use jackdaw::commands::CommandHistory;
 use jackdaw::hierarchy::{HierarchyShowAll, HierarchyTreeContainer};
 use jackdaw::selection::Selection;
@@ -20,9 +20,15 @@ use jackdaw_widgets::tree_view::{TreeIndex, TreeNode, TreeRowChildren, TreeRowIn
 
 mod util;
 
+/// Run one clause the way a chord runs it.
+///
+/// `creates_history_entry`, which a scripted call leaves off, is what makes
+/// the dispatcher open a snapshot span: an operator that records its own entry
+/// and one that leaves the entry to the snapshot are only told apart under a
+/// press, and this suite counts entries.
 #[track_caller]
 fn run_finished(app: &mut App, clause: &str) {
-    let result = run_op_clause(app.world_mut(), clause)
+    let result = run_op_clause_as_user(app.world_mut(), clause)
         .unwrap_or_else(|err| panic!("{clause}: dispatch errored: {err}"));
     app.update();
     assert_eq!(

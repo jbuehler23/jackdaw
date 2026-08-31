@@ -11,7 +11,7 @@
 //!  * both refuse outside a UI scene.
 
 use bevy::{prelude::*, ui::ComputedNode};
-use jackdaw::boot_ops::run_op_clause;
+use jackdaw::boot_ops::run_op_clause_as_user;
 use jackdaw::commands::CommandHistory;
 use jackdaw::selection::Selection;
 use jackdaw::viewport_2d::{Viewport2dPanelHost, build_viewport_2d_panel};
@@ -33,7 +33,7 @@ const REFERENCE: UVec2 = UVec2::new(2400, 1200);
 /// press, and this suite counts entries.
 #[track_caller]
 fn run_finished(app: &mut App, clause: &str) {
-    let result = run_op_clause(app.world_mut(), clause)
+    let result = run_op_clause_as_user(app.world_mut(), clause)
         .unwrap_or_else(|err| panic!("{clause}: dispatch errored: {err}"));
     settle(app);
     assert_eq!(

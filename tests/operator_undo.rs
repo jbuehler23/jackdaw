@@ -300,8 +300,7 @@ fn view_cycle_bounding_box_mode_round_trip() {
 }
 
 /// Hiding a node is an edit to the document like any other, so Ctrl+Z
-/// puts it back. It used to be `allows_undo = false`, which left a
-/// hidden node hidden and the history one entry short of the truth.
+/// puts it back.
 #[test]
 fn entity_toggle_visibility_round_trip() {
     let mut app = util::editor_test_app();

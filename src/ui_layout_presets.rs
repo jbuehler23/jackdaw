@@ -287,6 +287,9 @@ fn has_selected_node(
     id = "ui.layout_preset",
     label = "Layout Preset",
     description = "Put the selected nodes in a named place in their parent.",
+    // `push_layout_edits` records the entry; the dispatcher's snapshot pair
+    // would be a second one over the same edit.
+    allows_undo = false,
     is_available = has_selected_node,
     params(name(
         String,

@@ -537,6 +537,9 @@ fn can_ungroup(
     id = "ui.group_into",
     label = "Group Into Container",
     description = "Wrap the selection in a container at its bounding rect.",
+    // The command it queues pushes the entry; the dispatcher's snapshot pair
+    // would be a second one, and the first undo would only half the job.
+    allows_undo = false,
     is_available = can_group
 )]
 pub(crate) fn ui_group_into(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
@@ -548,6 +551,7 @@ pub(crate) fn ui_group_into(_: In<OperatorParameters>, mut commands: Commands) -
     id = "ui.ungroup",
     label = "Ungroup",
     description = "Lift a container's children into its place and remove it.",
+    allows_undo = false,
     is_available = can_ungroup
 )]
 pub(crate) fn ui_ungroup(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
