@@ -378,22 +378,75 @@ fn is_generated_part(world: &World, child: Entity) -> bool {
 /// generated parts to [`is_generated_part`].
 ///
 /// A withheld row is therefore remembered rather than dropped, and
-/// [`spawn_rows_for_late_registrations`] revisits the list whenever the
-/// document changes. A part that never registers stays on the list until its
-/// entity dies.
+/// [`spawn_rows_for_late_registrations`] revisits the list on every frame it
+/// holds anything.
+///
+/// Bounded on both sides. An entry is only made for a child whose parent the
+/// document already holds, which is what tells an entity waiting for its own
+/// node apart from a generated ECS child -- a text span, a widget's internals
+/// -- that will never have one; and an entry is given up after
+/// [`WITHHELD_ROW_PASSES`] revisits, so a scene that keeps spawning children
+/// cannot grow a list every frame walks.
 #[derive(Resource, Default)]
-struct RowsAwaitingRegistration(Vec<(Entity, Entity)>);
+struct RowsAwaitingRegistration(Vec<WithheldRow>);
+
+/// How many passes a withheld row waits for its document node before the list
+/// gives up on it. Every path that registers an entity at all does so within a
+/// frame or two of the parent link.
+const WITHHELD_ROW_PASSES: u32 = 64;
+
+/// One row [`withhold_row`] is holding back.
+struct WithheldRow {
+    /// The `TreeRowChildren` container the row belongs under.
+    children_container: Entity,
+    child: Entity,
+    /// Revisits so far, against [`WITHHELD_ROW_PASSES`].
+    passes: u32,
+}
 
 /// Remember a row this frame declined to spawn, in case the entity is only
 /// waiting for its document node.
+///
+/// A child whose parent is not itself in the document is not waiting for
+/// anything -- nothing registers a child before its parent -- so it is dropped
+/// here rather than joining a list every frame walks.
 fn withhold_row(world: &mut World, children_container: Entity, child: Entity) {
-    let entry = (children_container, child);
+    withhold_row_after(world, children_container, child, 0);
+}
+
+/// [`withhold_row`] carrying forward how many passes the row has already
+/// spent waiting, so a row put back keeps counting towards
+/// [`WITHHELD_ROW_PASSES`] rather than starting its wait again.
+fn withhold_row_after(world: &mut World, children_container: Entity, child: Entity, passes: u32) {
+    if passes >= WITHHELD_ROW_PASSES {
+        return;
+    }
+    let registered_parent = world
+        .get::<ChildOf>(child)
+        .map(ChildOf::parent)
+        .is_some_and(|parent| {
+            world
+                .get_resource::<jackdaw_bsn::SceneBsnAst>()
+                .is_some_and(|document| document.ast_for(parent).is_some())
+        });
+    if !registered_parent {
+        return;
+    }
     let Some(mut pending) = world.get_resource_mut::<RowsAwaitingRegistration>() else {
         return;
     };
-    if !pending.0.contains(&entry) {
-        pending.0.push(entry);
+    if pending
+        .0
+        .iter()
+        .any(|row| row.children_container == children_container && row.child == child)
+    {
+        return;
     }
+    pending.0.push(WithheldRow {
+        children_container,
+        child,
+        passes,
+    });
 }
 
 /// Spawn the rows withheld from entities that have since joined the document.
@@ -401,8 +454,8 @@ fn withhold_row(world: &mut World, children_container: Entity, child: Entity) {
 /// Revisited whenever the list holds anything, rather than only on a frame
 /// the document changes: an entity can join the document in the same frame
 /// its row is withheld, in whichever order the two land, and a pass that only
-/// looked at the changed frames would then never look again. The list holds a
-/// handful of entries at most, and each is one lookup.
+/// looked at the changed frames would then never look again. The list is
+/// bounded by [`withhold_row`], and each entry is one lookup.
 fn spawn_rows_for_late_registrations(
     document: Res<jackdaw_bsn::SceneBsnAst>,
     mut pending: ResMut<RowsAwaitingRegistration>,
@@ -413,16 +466,20 @@ fn spawn_rows_for_late_registrations(
         return;
     }
     let mut still_waiting = Vec::new();
-    for (children_container, child) in std::mem::take(&mut pending.0) {
-        if !live.contains(child) || !live.contains(children_container) {
+    for mut row in std::mem::take(&mut pending.0) {
+        if !live.contains(row.child) || !live.contains(row.children_container) {
             continue;
         }
-        if document.ast_for(child).is_none() {
-            still_waiting.push((children_container, child));
+        if document.ast_for(row.child).is_none() {
+            row.passes += 1;
+            if row.passes < WITHHELD_ROW_PASSES {
+                still_waiting.push(row);
+            }
             continue;
         }
+        let (children_container, child, passes) = (row.children_container, row.child, row.passes);
         commands.queue(move |world: &mut World| {
-            spawn_withheld_row(world, children_container, child);
+            spawn_withheld_row(world, children_container, child, passes);
         });
     }
     pending.0 = still_waiting;
@@ -430,7 +487,7 @@ fn spawn_rows_for_late_registrations(
 
 /// Spawn one withheld row, re-checking everything that could have moved
 /// between the frame the row was withheld and this one.
-fn spawn_withheld_row(world: &mut World, children_container: Entity, child: Entity) {
+fn spawn_withheld_row(world: &mut World, children_container: Entity, child: Entity, passes: u32) {
     if world.get_entity(children_container).is_err() || !is_outliner_child(world, child) {
         return;
     }
@@ -445,7 +502,11 @@ fn spawn_withheld_row(world: &mut World, children_container: Entity, child: Enti
     if row_source != world.get::<ChildOf>(child).map(ChildOf::parent) {
         return;
     }
+    // The document node arrived before the authored name did. Keep waiting
+    // rather than returning: the row was withheld for the name in the first
+    // place, and dropping it here loses it for good.
     if !world.resource::<HierarchyShowAll>().0 && world.get::<Name>(child).is_none() {
+        withhold_row_after(world, children_container, child, passes + 1);
         return;
     }
     if let Some(owner) = ancestor_hierarchy_root(world, children_container)

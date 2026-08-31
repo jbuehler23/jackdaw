@@ -1743,3 +1743,84 @@ fn an_add_beside_a_selected_node_is_its_sibling() {
     assert_eq!(authored, vec![Some(panel), Some(after)]);
 }
 
+/// The document node and the authored name arrive on their own schedules,
+/// and the row has to survive whichever order they land in.
+///
+/// The pass that spawns a withheld row re-checks the name, and used to give
+/// the row up when the name had not arrived yet: a load that registered the
+/// entity before applying its `Name` patch lost that row for good.
+#[test]
+fn a_row_withheld_for_its_name_arrives_when_the_name_does() {
+    let mut app = palette_app();
+    let world = app.world_mut();
+    let root = open_ui_scene(world);
+    world.spawn((
+        HierarchyTreeContainer,
+        Node::default(),
+        Visibility::Inherited,
+    ));
+    app.update();
+    let world = app.world_mut();
+    mark_expanded(world, root);
+
+    // Document first, name second: the reverse of the clip and load shape.
+    let late = world.spawn((Node::default(), ChildOf(root))).id();
+    jackdaw::scene_io::register_entity_in_ast(world, late);
+    app.update();
+    app.update();
+
+    let world = app.world_mut();
+    assert_eq!(
+        rows_for(world, late),
+        0,
+        "nothing to show yet: the entity has no name to show",
+    );
+
+    world.entity_mut(late).insert(Name::new("Named Later"));
+    app.update();
+    app.update();
+
+    assert_eq!(
+        rows_for(app.world_mut(), late),
+        1,
+        "the row arrives with the name, not never",
+    );
+}
+
+/// A generated ECS child whose parent the document does not hold cannot be
+/// waiting for a document node of its own, so it never joins the list the
+/// row pass walks every frame.
+#[test]
+fn a_child_of_an_unregistered_parent_is_not_remembered() {
+    let mut app = palette_app();
+    let world = app.world_mut();
+    let root = open_ui_scene(world);
+    world.spawn((
+        HierarchyTreeContainer,
+        Node::default(),
+        Visibility::Inherited,
+    ));
+    app.update();
+    let world = app.world_mut();
+    mark_expanded(world, root);
+
+    // A node the document does not hold, with a child under it.
+    let loose = world.spawn((Name::new("Loose"), Node::default())).id();
+    let generated = world.spawn((Node::default(), ChildOf(loose))).id();
+    app.update();
+    app.update();
+
+    assert_eq!(
+        rows_for(app.world_mut(), generated),
+        0,
+        "a generated child of an unregistered parent has no row"
+    );
+    // And giving it a name later does not conjure one, because it was never
+    // on the list in the first place.
+    app.world_mut()
+        .entity_mut(generated)
+        .insert(Name::new("Generated"));
+    app.update();
+    app.update();
+    assert_eq!(rows_for(app.world_mut(), generated), 0);
+}
