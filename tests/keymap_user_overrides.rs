@@ -264,3 +264,117 @@ fn every_operator_is_bound_or_listed_as_unbound() {
         "these operators have no chord and are not listed as deliberately unbound: {surprises:?}"
     );
 }
+
+/// The dialog lists every registered operator exactly once, so nothing
+/// the editor can do is unreachable from the keybind interface.
+#[test]
+fn the_dialog_seeds_one_row_per_operator() {
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+
+    let operator_count = {
+        let world = app.world_mut();
+        world.query::<&OperatorEntity>().iter(world).count()
+    };
+    let pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
+    assert_eq!(
+        pending.rows.len(),
+        operator_count,
+        "one row per operator, no duplicates and no omissions"
+    );
+    assert!(
+        operator_count > 100,
+        "the editor registers far more than a handful of operators; got {operator_count}"
+    );
+}
+
+/// Operators whose chord is attached at a raw binding site rather than
+/// through the keymap are listed and marked as not editable, so the
+/// chord is visible even though the dialog cannot change it.
+#[test]
+fn a_raw_bound_operator_is_listed_as_fixed() {
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+    let pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
+
+    let palette = pending
+        .rows
+        .iter()
+        .find(|row| row.operator == "command_palette.toggle")
+        .expect("the command palette is registered");
+    assert!(
+        !palette.is_editable(),
+        "an operator bound outside the keymap is a fixed row"
+    );
+    assert!(
+        !palette.fixed.is_empty(),
+        "a fixed row must show the chord it is fixed on"
+    );
+}
+
+/// Rebind, save, and come back: the file the dialog writes resolves to
+/// the keymap the dialog was showing.
+#[test]
+fn saving_a_rebind_reproduces_the_keymap_after_a_reload() {
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+
+    let mut pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
+    pending.rebind(REBOUND, PresetInput::key("F9"));
+    let expected = pending.chords_of(REBOUND);
+
+    // What Save writes, read back the way a later launch reads it.
+    let user = pending.to_user_keymap();
+    let json = serde_json::to_string(&user).expect("serialize");
+    let reloaded: UserKeymap = serde_json::from_str(&json).expect("deserialize");
+
+    let defaults = classic(&mut app);
+    let resolved = resolve_keymap(&defaults, &reloaded);
+    app.world_mut().insert_resource(reloaded);
+
+    let reopened = jackdaw::keybind_settings::pending_from_world(app.world_mut());
+    assert_eq!(
+        reopened.chords_of(REBOUND),
+        expected,
+        "the reopened dialog must show the chord that was saved"
+    );
+    assert!(
+        resolved
+            .bindings
+            .iter()
+            .any(|b| b.operator == REBOUND && b.input == PresetInput::key("F9")),
+        "the applied keymap must carry the saved chord"
+    );
+    assert_eq!(
+        reopened.to_user_keymap(),
+        user,
+        "reopening and saving again must not change the file"
+    );
+}
+
+/// Resetting the row that was rebound takes it back off the file
+/// entirely, rather than pinning it to whatever the defaults are today.
+#[test]
+fn resetting_a_rebound_row_leaves_nothing_in_the_file() {
+    let mut app = util::headless_app();
+    app.finish();
+    app.update();
+
+    let mut pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
+    pending.rebind(REBOUND, PresetInput::key("F9"));
+    assert!(!pending.to_user_keymap().bindings.is_empty());
+
+    pending.reset(REBOUND);
+    assert_eq!(
+        pending.to_user_keymap(),
+        UserKeymap::default(),
+        "a reset row must leave the file with nothing to say about it"
+    );
+
+    pending.rebind(REBOUND, PresetInput::key("F9"));
+    pending.reset_all();
+    assert_eq!(pending.to_user_keymap(), UserKeymap::default());
+}
