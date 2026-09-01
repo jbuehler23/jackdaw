@@ -583,7 +583,7 @@ fn can_group(
     nodes: Query<(), (With<Node>, Without<EditorEntity>)>,
     roots: Query<(), SceneRoots>,
 ) -> bool {
-    if keybind_focus.is_typing() || active.is_modal_running() || ui_scenes.is_empty() {
+    if keybind_focus.keyboard_is_spoken_for() || active.is_modal_running() || ui_scenes.is_empty() {
         return false;
     }
     if selection.entities.iter().any(|&e| roots.contains(e)) {
@@ -605,7 +605,7 @@ fn can_ungroup(
     containers: Query<&Children, (With<Node>, Without<EditorEntity>)>,
     roots: Query<(), SceneRoots>,
 ) -> bool {
-    if keybind_focus.is_typing() || active.is_modal_running() || ui_scenes.is_empty() {
+    if keybind_focus.keyboard_is_spoken_for() || active.is_modal_running() || ui_scenes.is_empty() {
         return false;
     }
     let Some(primary) = selection.primary() else {

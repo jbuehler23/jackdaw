@@ -5124,6 +5124,7 @@ name = "jackdaw_panels"
 version = "0.19.0"
 dependencies = [
  "bevy",
+ "jackdaw_commands",
  "jackdaw_feathers",
  "jackdaw_widgets",
  "lucide-icons",
@@ -5287,6 +5288,7 @@ dependencies = [
  "bevy",
  "bevy_enhanced_input",
  "bevy_monitors",
+ "jackdaw_commands",
  "lucide-icons",
 ]
 

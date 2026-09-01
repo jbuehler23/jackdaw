@@ -434,6 +434,14 @@ impl PendingKeymapChanges {
     }
 }
 
+/// What a row says while it is waiting for the chord to record.
+///
+/// It names the cancel, because a recording has no keyboard way out: every
+/// key the user could press is a key they might be trying to bind, Escape
+/// included. Right-clicking the row is the way back, and the dialog's own
+/// close button is the other.
+const RECORDING_PROMPT: &str = "Press a key... right-click to cancel";
+
 /// Tracks which operator or camera action is being re-recorded.
 #[derive(Resource, Default)]
 pub(crate) struct KeybindRecordingState {
@@ -540,9 +548,10 @@ struct KeymapConflictBadge(String);
 #[derive(Component)]
 struct CameraDisplayText(EditorAction);
 
-/// Rebind button for an operator row.
+/// Rebind button for an operator row. The operator it rebinds, so a test
+/// can press the same button the user does.
 #[derive(Component)]
-struct KeybindRebindButton(String);
+pub struct KeybindRebindButton(pub String);
 
 /// Rebind button for a camera row: (action, binding index).
 #[derive(Component)]
@@ -1207,7 +1216,7 @@ fn refresh_chord_lists(
                     format_preset_input(input),
                     pending.also_bound_to(&list.0, input).join(", ")
                 ),
-                None => "Press a key...".to_string(),
+                None => RECORDING_PROMPT.to_string(),
             };
             commands.spawn((
                 Text::new(prompt),
@@ -1343,7 +1352,7 @@ fn on_key_filter_click(
         registry.recording = true;
         set_button_text(
             event.entity,
-            "Press a key...",
+            RECORDING_PROMPT,
             &children_query,
             &captions,
             &mut texts,
@@ -1547,7 +1556,7 @@ fn on_rebind_click(
         registry.recording = true;
         for (display, mut text, mut color) in &mut camera_texts {
             if display.0 == btn.0 {
-                text.0 = "Press a key...".to_string();
+                text.0 = RECORDING_PROMPT.to_string();
                 color.0 = tokens::TEXT_ACCENT;
             }
         }

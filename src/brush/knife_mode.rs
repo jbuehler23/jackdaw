@@ -296,7 +296,7 @@ pub(super) fn handle_knife_mode(
 
     // While the user is typing, ignore all knife input. The hover
     // indicator still updates so the preview matches the cursor.
-    let typing = keybind_focus.is_typing();
+    let typing = keybind_focus.keyboard_is_spoken_for();
 
     // Resolve the active brush; bail (without clearing the path) if
     // the selection is gone.

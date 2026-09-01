@@ -773,6 +773,7 @@ fn picker_host_from_focus(
 fn picker_keyboard_navigation(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    capture: Option<Res<jackdaw_commands::KeymapCapture>>,
     mut focus: ResMut<InputFocus>,
     mut navigation_repeat: ResMut<PickerNavigationRepeat>,
     child_of: Query<&ChildOf>,
@@ -781,6 +782,9 @@ fn picker_keyboard_navigation(
     picker_items: Query<(Entity, &PickerItem)>,
     mut commands: Commands,
 ) {
+    if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     let pressed_enter =
         keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::NumpadEnter);
 

@@ -1978,7 +1978,8 @@ pub(crate) fn can_act_on_entities(
     edit_mode: Res<crate::brush::EditMode>,
     panel_focus: crate::panel_focus::PanelFocus,
 ) -> bool {
-    if keybind_focus.is_typing() || active.is_modal_running() || modal.active.is_some() {
+    if keybind_focus.keyboard_is_spoken_for() || active.is_modal_running() || modal.active.is_some()
+    {
         return false;
     }
     if draw_state.active.is_some() {

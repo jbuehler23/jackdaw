@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use jackdaw_commands::KeymapCapture;
 use lucide_icons::Icon;
 
 use crate::button::{
@@ -463,11 +464,19 @@ fn handle_backdrop_click(
     }
 }
 
+/// Escape closes a dialog -- except while the keybind settings are
+/// recording, when the press belongs to the recorder. Without this the
+/// one dialog the user can record in is the one Escape closes, so Escape
+/// could never be bound to anything.
 fn handle_esc_key(
     keyboard: Res<ButtonInput<KeyCode>>,
+    capture: Option<Res<KeymapCapture>>,
     dialogs: Query<(Entity, &DialogConfig), With<EditorDialog>>,
     mut commands: Commands,
 ) {
+    if KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     if !keyboard.just_pressed(KeyCode::Escape) {
         return;
     }

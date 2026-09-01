@@ -185,13 +185,13 @@ fn cancel_draw_brush_modal(mut draw_state: ResMut<DrawBrushState>) {
 /// True only while a draw is in progress and the input field isn't
 /// focused. Used as `is_available` for the in-modal keybinds.
 fn is_drawing(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushState>) -> bool {
-    !keybind_focus.is_typing() && draw_state.active.is_some()
+    !keybind_focus.keyboard_is_spoken_for() && draw_state.active.is_some()
 }
 
 /// True while a draw's polygon is being placed (multi-vertex Add/Cut
 /// before Enter commits the shape).
 fn is_drawing_polygon(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushState>) -> bool {
-    if keybind_focus.is_typing() {
+    if keybind_focus.keyboard_is_spoken_for() {
         return false;
     }
     draw_state
@@ -203,7 +203,7 @@ fn is_drawing_polygon(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushStat
 /// True while a Cut-mode draw is in progress. Cut doesn't go through
 /// the modal-finalize path on cancel, so it gets its own RMB binding.
 fn is_drawing_cut(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushState>) -> bool {
-    if keybind_focus.is_typing() {
+    if keybind_focus.keyboard_is_spoken_for() {
         return false;
     }
     draw_state

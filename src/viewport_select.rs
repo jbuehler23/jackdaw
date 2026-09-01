@@ -76,7 +76,7 @@ fn escape_is_free(
     // Escape ends an F2 rename, and closes the Add Entity picker, before it
     // means anything else. Neither is about the selection, and both would
     // otherwise take it with them on the way out.
-    if keybind_focus.is_typing() || !add_entity_picker.is_empty() {
+    if keybind_focus.keyboard_is_spoken_for() || !add_entity_picker.is_empty() {
         return false;
     }
     if ui_gesture.is_running() || guide_gesture.position().is_some() || box_select.active {

@@ -258,7 +258,7 @@ pub(crate) fn mirror_plane_drag_invoke_trigger(
     if !pointer.pointer_primary_just_pressed()
         || hover.target.is_none()
         || drag_state.active
-        || keybind_focus.is_typing()
+        || keybind_focus.keyboard_is_spoken_for()
         || vp.viewport_entity().is_none()
         || active_modal.is_modal_running()
     {

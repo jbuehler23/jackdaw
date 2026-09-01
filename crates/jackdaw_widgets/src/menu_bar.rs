@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use jackdaw_commands::KeymapCapture;
 
 pub struct MenuBarPlugin;
 
@@ -75,10 +76,11 @@ fn close_menu_on_action(
 fn close_menu_on_click_outside(
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    capture: Option<Res<KeymapCapture>>,
     mut commands: Commands,
     mut state: ResMut<MenuBarState>,
 ) {
-    if state.open_menu.is_none() {
+    if state.open_menu.is_none() || KeymapCapture::is_recording(capture.as_deref()) {
         return;
     }
 

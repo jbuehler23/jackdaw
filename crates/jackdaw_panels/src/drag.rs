@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy::ui::{UiGlobalTransform, UiScale};
+use jackdaw_commands::KeymapCapture;
 use jackdaw_feathers::tokens;
 
 use crate::area::{DockArea, DockTab};
@@ -520,9 +521,13 @@ fn on_drag_end(
 
 fn cancel_drag_on_escape(
     keys: Res<ButtonInput<KeyCode>>,
+    capture: Option<Res<KeymapCapture>>,
     mut drag_state: ResMut<DockDragState>,
     mut commands: Commands,
 ) {
+    if KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     if !keys.just_pressed(KeyCode::Escape) {
         return;
     }

@@ -365,7 +365,7 @@ fn has_selected_node(
     selection: Res<Selection>,
     nodes: Query<(), (With<Node>, Without<EditorEntity>)>,
 ) -> bool {
-    if keybind_focus.is_typing() {
+    if keybind_focus.keyboard_is_spoken_for() {
         return false;
     }
     selection

@@ -817,9 +817,13 @@ fn handle_unfocus(
     mut focus: ResMut<InputFocus>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    capture: Option<Res<jackdaw_commands::KeymapCapture>>,
     text_edits: Query<&ChildOf, With<EditorTextEdit>>,
     wrappers: Query<&Hovered, With<TextEditWrapper>>,
 ) {
+    if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     let Some(focused_entity) = focus.get() else {
         return;
     };

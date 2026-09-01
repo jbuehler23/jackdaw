@@ -4,6 +4,7 @@ use bevy::ui::OverrideClip;
 use bevy::ui_widgets::popover::{
     Popover, PopoverAlign, PopoverPlacement as PopoverPosition, PopoverSide,
 };
+use jackdaw_commands::KeymapCapture;
 use lucide_icons::Icon;
 
 use crate::button::{ButtonClickEvent, ButtonVariant, IconButtonProps, icon_button};
@@ -291,8 +292,12 @@ fn handle_popover_dismiss(
     parents: Query<&ChildOf>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    capture: Option<Res<KeymapCapture>>,
     anchor_hovered: Query<&Hovered, Without<EditorPopover>>,
 ) {
+    if KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     let esc_pressed = keyboard.just_pressed(KeyCode::Escape);
     let clicked = mouse.get_just_pressed().next().is_some();
 

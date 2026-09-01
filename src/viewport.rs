@@ -1091,9 +1091,10 @@ fn camera_bookmark_keys(
     selection: Res<Selection>,
     brushes: Query<(), With<jackdaw_scene_types::Brush>>,
     modal: Res<crate::modal_transform::ModalTransformState>,
+    focus: crate::keybind_focus::KeybindFocus,
     mut commands: Commands,
 ) {
-    if modal.active.is_some() {
+    if modal.active.is_some() || focus.keyboard_is_spoken_for() {
         return;
     }
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);

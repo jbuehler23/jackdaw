@@ -366,11 +366,15 @@ fn close_menu_on_outside_click(
     popovers: Query<&ComputedNode, With<PieMenuPopover>>,
     popover_transforms: Query<&UiGlobalTransform, With<PieMenuPopover>>,
     windows: Query<&Window>,
+    focus: crate::keybind_focus::KeybindFocus,
     mut commands: Commands,
 ) {
     let Some(popover_entity) = state.popover_entity else {
         return;
     };
+    if focus.keyboard_is_spoken_for() {
+        return;
+    }
     if !mouse.just_pressed(MouseButton::Left) && !keyboard.just_pressed(KeyCode::Escape) {
         return;
     }

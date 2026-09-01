@@ -2286,9 +2286,13 @@ pub(crate) fn nudge_ui_selection(world: &mut World, direction: Vec2) -> bool {
 /// Escape restores the exact node the gesture started from.
 fn cancel_manipulation(
     keys: Res<ButtonInput<KeyCode>>,
+    focus: crate::keybind_focus::KeybindFocus,
     manipulation: Res<UiManipulation>,
     mut commands: Commands,
 ) {
+    if focus.keyboard_is_spoken_for() {
+        return;
+    }
     if !manipulation.nodes.is_empty() && keys.just_pressed(KeyCode::Escape) {
         commands.queue(|world: &mut World| finish_manipulation(world, false));
     }
@@ -2889,9 +2893,13 @@ pub fn cancel_canvas_gestures(world: &mut World) {
 /// Escape puts the guides back exactly as the drag found them.
 fn cancel_guide_drag(
     keys: Res<ButtonInput<KeyCode>>,
+    focus: crate::keybind_focus::KeybindFocus,
     manipulation: Res<GuideManipulation>,
     mut commands: Commands,
 ) {
+    if focus.keyboard_is_spoken_for() {
+        return;
+    }
     if manipulation.active.is_some() && keys.just_pressed(KeyCode::Escape) {
         commands.queue(|world: &mut World| finish_guide_drag(world, false));
     }

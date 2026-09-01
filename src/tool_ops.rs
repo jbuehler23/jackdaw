@@ -63,7 +63,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// In-flight brush drags are blocked by `is_modal_running` since drag systems
 /// install an `ActiveModalOperator` for their duration.
 fn can_change_tool(keybind_focus: KeybindFocus, active: ActiveModalQuery) -> bool {
-    !keybind_focus.is_typing() && !active.is_modal_running()
+    !keybind_focus.keyboard_is_spoken_for() && !active.is_modal_running()
 }
 
 /// The Rotate tool shares `KeyE` with brush face Extrude. To keep both from

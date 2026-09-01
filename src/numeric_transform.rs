@@ -79,6 +79,15 @@ impl Plugin for NumericTransformPlugin {
     }
 }
 
+/// Run the numeric-entry reader once.
+///
+/// The plugin schedules it inside `EditorInteractionSystems`, which a
+/// headless app never reaches, so a test that wants the reader's own
+/// behaviour asks for it here rather than through a frame.
+pub fn run_numeric_transform_input(world: &mut World) {
+    let _ = world.run_system_cached(numeric_transform_input);
+}
+
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<NumericTransformApplyOp>();
 }
@@ -185,7 +194,7 @@ fn numeric_transform_input(
 ) {
     // Drop the armed axis entirely when the context can no longer host an
     // entry: text focus, a running modal op, or no eligible target.
-    let hard_reset = keybind_focus.is_typing()
+    let hard_reset = keybind_focus.keyboard_is_spoken_for()
         || modal.active.is_some()
         || !numeric_entry_eligible(&edit_mode, &selection, &brush_selection);
     if hard_reset {

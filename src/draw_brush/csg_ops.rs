@@ -926,7 +926,7 @@ pub(crate) fn env_allows_brush_op(
     modal: &crate::modal_transform::ModalTransformState,
     draw_state: &DrawBrushState,
 ) -> bool {
-    !keybind_focus.is_typing() && modal.active.is_none() && draw_state.active.is_none()
+    !keybind_focus.keyboard_is_spoken_for() && modal.active.is_none() && draw_state.active.is_none()
 }
 
 /// `brush.join` / `brush.csg_subtract` / `brush.csg_intersect` all

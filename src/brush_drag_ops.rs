@@ -70,7 +70,7 @@ fn drag_environment_ok(
     modal: &ModalTransformState,
     draw_state: &DrawBrushState,
 ) -> bool {
-    !keybind_focus.is_typing() && modal.active.is_none() && draw_state.active.is_none()
+    !keybind_focus.keyboard_is_spoken_for() && modal.active.is_none() && draw_state.active.is_none()
 }
 
 /// Returns true if the cursor is over any face polygon of `brush_entity`.
@@ -764,7 +764,7 @@ pub(crate) fn vertex_drag_invoke_trigger(
         || !matches!(*edit_mode, EditMode::BrushEdit(BrushEditMode::Vertex))
         || drag_state.active
         || drag_state.pending.is_some()
-        || keybind_focus.is_typing()
+        || keybind_focus.keyboard_is_spoken_for()
         || vp.viewport_entity().is_none()
         // A hovered gizmo axis owns the click; the sub-element gizmo drag
         // takes it via `gizmo.drag_edit`.
@@ -1130,7 +1130,7 @@ pub(crate) fn edge_drag_invoke_trigger(
         || !matches!(*edit_mode, EditMode::BrushEdit(BrushEditMode::Edge))
         || drag_state.active
         || drag_state.pending.is_some()
-        || keybind_focus.is_typing()
+        || keybind_focus.keyboard_is_spoken_for()
         || vp.viewport_entity().is_none()
         // A hovered gizmo axis owns the click; the sub-element gizmo drag
         // takes it via `gizmo.drag_edit`.

@@ -105,7 +105,7 @@ pub fn handle_grid_size_scroll(
     mut commands: Commands,
 ) {
     let over_canvas = active_viewport.mode == Some(crate::viewport_host::ViewportMode::TwoD);
-    if keybind_focus.is_typing() || modal.active.is_some() || over_canvas {
+    if keybind_focus.keyboard_is_spoken_for() || modal.active.is_some() || over_canvas {
         return;
     }
 

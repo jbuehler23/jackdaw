@@ -110,7 +110,7 @@ fn mesh_quick_menu_input(
 ) {
     if keys.just_pressed(KeyCode::KeyC)
         && let EditMode::BrushEdit(mode) = *edit_mode
-        && !keybind_focus.is_typing()
+        && !keybind_focus.keyboard_is_spoken_for()
         && !active.is_modal_running()
     {
         let items = items_for_submode(&menu, mode);

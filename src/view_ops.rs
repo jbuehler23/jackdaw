@@ -665,10 +665,10 @@ fn expand_world_aabb(transform: &GlobalTransform, aabb: &Aabb, min: &mut Vec3, m
 pub(crate) fn axis_view_keys(
     keyboard: Res<ButtonInput<KeyCode>>,
     modal: Res<crate::modal_transform::ModalTransformState>,
-    input_focus: Res<bevy::input_focus::InputFocus>,
+    focus: crate::keybind_focus::KeybindFocus,
     mut commands: Commands,
 ) {
-    if modal.active.is_some() || input_focus.get().is_some() {
+    if modal.active.is_some() || focus.keyboard_is_spoken_for() {
         return;
     }
 
