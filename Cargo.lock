@@ -5049,6 +5049,7 @@ dependencies = [
  "bevy",
  "dirs",
  "jackdaw_api_internal",
+ "jackdaw_env",
  "libloading",
  "ring",
  "serde",

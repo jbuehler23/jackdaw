@@ -16,7 +16,7 @@ use jackdaw_project_build::{BuildEvent, build_project_binary, shim_spec_for_proj
 #[test]
 fn scaffold_game_builds_and_exposes_component() {
     let key = template_revision();
-    let work = std::env::temp_dir().join("jackdaw_scaffold_e2e").join(&key);
+    let work = scratch_root().join(&key);
     let dest = work.join("mygame");
     let _ = std::fs::remove_dir_all(&dest);
     std::fs::create_dir_all(&work).expect("a scratch dir for the scaffolded project");
@@ -46,6 +46,20 @@ fn scaffold_game_builds_and_exposes_component() {
             .map(|c| c.type_path.as_str())
             .collect::<Vec<_>>()
     );
+}
+
+/// Where this checkout scaffolds its project.
+///
+/// Under the system temp dir, and keyed on the checkout: two worktrees
+/// scaffold the same template revision and would otherwise write the same
+/// path, so one run's `remove_dir_all` lands in the middle of the other's
+/// build. The dependency cache stays shared per key inside a checkout,
+/// which is where the reuse is worth having.
+fn scratch_root() -> PathBuf {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    env!("CARGO_MANIFEST_DIR").hash(&mut hasher);
+    std::env::temp_dir().join(format!("jackdaw_scaffold_e2e_{:016x}", hasher.finish()))
 }
 
 /// A digest of the game template and the workspace lockfile.

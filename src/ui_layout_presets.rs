@@ -300,10 +300,28 @@ pub fn preset(id: &str) -> Option<&'static LayoutPreset> {
     presets().find(|preset| preset.id == id)
 }
 
-/// The size layout last gave `entity`, or `None` when it has not been laid
-/// out.
+/// The size layout last gave `entity`, said the way `Node::width` says a
+/// size, or `None` when it has not been laid out.
+///
+/// Two conversions, because `ComputedNode` and `Node` do not speak the same
+/// units. `ComputedNode::size` is the border box in physical pixels, and a
+/// `Node` offset is logical, so the scale factor comes off first. Then the
+/// box: `width` states the border box under Bevy's default `BorderBox`
+/// sizing, and the content box under `ContentBox`, so a node stating the
+/// latter has its padding and border taken off before the figure is
+/// written -- otherwise capturing a padded node grows it by its padding
+/// every time an anchor is pressed.
 fn measured_size(world: &World, entity: Entity) -> Option<Vec2> {
-    let size = world.get::<ComputedNode>(entity)?.size();
+    let computed = world.get::<ComputedNode>(entity)?;
+    let scale = computed.inverse_scale_factor();
+    let mut size = computed.size() * scale;
+    if world
+        .get::<Node>(entity)
+        .is_some_and(|node| node.box_sizing == BoxSizing::ContentBox)
+    {
+        let inset = computed.content_inset();
+        size -= (inset.min_inset + inset.max_inset) * scale;
+    }
     (size.x > 0.0 && size.y > 0.0).then_some(size)
 }
 

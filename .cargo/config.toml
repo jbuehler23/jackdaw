@@ -32,6 +32,13 @@ rustflags = ["-Zshare-generics=no"]
 # `-Dwarnings` turns every local warning into a build failure, the cranelift
 # backend changes codegen, and `-Cdebuginfo=line-tables-only` drops the debug
 # info a local debugger reads.
+#
+# Opting out: set `CARGO_BUILD_RUSTFLAGS` for the command, which replaces
+# this `rustflags` list whole rather than adding to it -- for example
+# `CARGO_BUILD_RUSTFLAGS= cargo build` to link with the default linker.
+# A machine without clang or wild installed needs that: the link fails with
+# `linker 'clang' not found` or `unable to find library -lwild`, and the
+# opt-out is the fix rather than editing this file.
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
 rustflags = ["-Clink-arg=--ld-path=wild"]

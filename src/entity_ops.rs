@@ -1149,6 +1149,13 @@ const MAX_CLIPBOARD_BYTES: usize = 2 * 1024 * 1024;
 /// What a refused paste says.
 const NOT_ENTITIES: &str = "the clipboard does not hold entities";
 
+/// What a paste refused for its size says. The cap is in the sentence,
+/// because "does not hold entities" is not true of a payload that holds
+/// too many of them and leaves the reader looking for a parse error.
+fn too_large_to_paste(bytes: usize) -> String {
+    format!("the clipboard holds {bytes} bytes, past the {MAX_CLIPBOARD_BYTES} a paste reads")
+}
+
 /// Whether `text` is an entity document this editor can paste.
 ///
 /// Strict, because the alternative is spawning whatever a user happened to
@@ -1507,18 +1514,41 @@ fn open_scene_is_ui(world: &mut World) -> bool {
     crate::ui_palette::ui_scene_root(world).is_some()
 }
 
-/// Whether `ast`'s entity roots are UI nodes.
+/// What kind of scene `ast`'s entity roots belong in.
 ///
 /// A `Node` patch is what makes a root a UI node: it is laid out by a parent
 /// node and drawn on the canvas. Anything else -- a mesh, a light, a camera --
 /// is placed by a `Transform` in a world.
-fn roots_are_ui_nodes(world: &World, ast: &jackdaw_bsn::SceneBsnAst) -> bool {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PayloadKind {
+    /// Every root is a UI node.
+    Ui,
+    /// No root is.
+    World,
+    /// Some are and some are not, so there is no scene that holds all of
+    /// them: whichever way it were pasted, half the payload would be in the
+    /// wrong kind of document.
+    Mixed,
+}
+
+fn payload_kind(world: &World, ast: &jackdaw_bsn::SceneBsnAst) -> PayloadKind {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
     let node_type_path = crate::inspector::node_card::node_type_path();
-    jackdaw_bsn::entity_roots(ast, &registry)
-        .into_iter()
-        .any(|root| ast.find_patch_by_type_path(root, node_type_path).is_some())
+    let roots = jackdaw_bsn::entity_roots(ast, &registry);
+    let ui = roots
+        .iter()
+        .filter(|&&root| ast.find_patch_by_type_path(root, node_type_path).is_some())
+        .count();
+    // `World` first, so a payload with no entity roots at all reads as it
+    // did before there were three answers rather than as UI.
+    if ui == 0 {
+        PayloadKind::World
+    } else if ui == roots.len() {
+        PayloadKind::Ui
+    } else {
+        PayloadKind::Mixed
+    }
 }
 
 /// Paste entities from clipboard scene text at `target`, as one history entry.
@@ -1545,14 +1575,21 @@ fn paste_clipboard_entities(world: &mut World, text: &str, target: PasteTarget) 
     // A UI node laid out in a world, or a mesh parented into a screen, is a
     // scene that neither draws nor saves as its author meant. Both directions
     // refuse rather than pasting something the document cannot hold.
-    let payload_is_ui = roots_are_ui_nodes(world, &parsed);
+    let kind = payload_kind(world, &parsed);
     let scene_is_ui = open_scene_is_ui(world);
-    if payload_is_ui != scene_is_ui {
-        let message = if payload_is_ui {
-            "the clipboard holds UI nodes, and this is not a UI scene"
-        } else {
-            "the clipboard holds world entities, and this is a UI scene"
-        };
+    let refusal = match (kind, scene_is_ui) {
+        (PayloadKind::Mixed, _) => {
+            Some("the clipboard holds both UI nodes and world entities, and no scene holds both")
+        }
+        (PayloadKind::Ui, false) => {
+            Some("the clipboard holds UI nodes, and this is not a UI scene")
+        }
+        (PayloadKind::World, true) => {
+            Some("the clipboard holds world entities, and this is a UI scene")
+        }
+        _ => None,
+    };
+    if let Some(message) = refusal {
         crate::status_bar::notify_error(world, message);
         return Vec::new();
     }
@@ -1637,7 +1674,18 @@ fn paste_clipboard(world: &mut World, target: PasteTarget) {
     if crate::asset_ingest::paste_clipboard_image(world) {
         return;
     }
-    crate::status_bar::notify_error(world, NOT_ENTITIES);
+    // The size cap refuses before the parse, so say which of the two it
+    // was rather than reporting every refusal as a payload that does not
+    // read as entities.
+    let oversized = world
+        .get_resource_mut::<SystemClipboard>()
+        .and_then(|mut clipboard| clipboard.clipboard.get_text().ok())
+        .map(|text| text.len())
+        .filter(|&bytes| bytes > MAX_CLIPBOARD_BYTES);
+    match oversized {
+        Some(bytes) => crate::status_bar::notify_error(world, too_large_to_paste(bytes)),
+        None => crate::status_bar::notify_error(world, NOT_ENTITIES),
+    }
 }
 
 /// Copy the selection to the clipboard as BSN text.

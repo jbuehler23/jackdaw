@@ -213,7 +213,8 @@ pub fn resolve_widget_parent(world: &mut World) -> Option<Entity> {
 
 /// Where a new widget goes: as the sibling straight after `candidate`.
 ///
-/// The same rule a paste follows, and the rule Godot's Add follows. Adding
+/// The same rule a paste follows, and the rule an Add in a scene editor
+/// usually follows. Adding
 /// *into* the selection instead is what turned three presses of the Button row
 /// into a Button holding a Button holding a Button, which is neither what the
 /// press looked like nor a shape anyone builds a screen out of. Filling a

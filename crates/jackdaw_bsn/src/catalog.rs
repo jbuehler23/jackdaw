@@ -200,8 +200,16 @@ fn report_unresolved_types(world: &mut World) {
 /// components name, so a pasted `ImageNode` finds its image rather than a
 /// reference nothing backs.
 ///
+/// A name the open scene already uses is not adopted again. Two entries of
+/// the same name holding the same value are the same asset arriving twice,
+/// and the one already there answers for both; two holding *different*
+/// values are two assets with one name, and there is no spelling that
+/// reaches the second, so it is refused and reported rather than quietly
+/// taking the name off the one the scene was already using.
+///
 /// Returns the names of the entries that could not be adopted, for the caller
-/// to report: an unregistered asset type, or a value this build cannot read.
+/// to report: an unregistered asset type, a value this build cannot read, or
+/// a name already spoken for by a different value.
 pub fn adopt_asset_roots(world: &mut World, source: &SceneBsnAst) -> Vec<String> {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let roots = {
@@ -229,23 +237,46 @@ pub fn adopt_asset_roots(world: &mut World, source: &SceneBsnAst) -> Vec<String>
         }
     }
 
+    // Split by what the open document already calls each name, before any
+    // handle is published: a refused entry must not have taken the name
+    // over on its way to being refused.
+    let mut fresh = Vec::new();
+    {
+        let live = world.resource::<SceneBsnAst>();
+        for (root, entry) in adopted {
+            let existing = live
+                .roots
+                .iter()
+                .copied()
+                .find(|&existing| live.get_name(existing) == Some(entry.name.as_str()));
+            match existing {
+                None => fresh.push((Some(root), entry)),
+                Some(existing)
+                    if asset_value_from_root(live, existing)
+                        == asset_value_from_root(source, root) =>
+                {
+                    // The same asset arriving again: the root already there
+                    // answers for it, and its handle is the one to publish.
+                    fresh.push((None, entry));
+                }
+                Some(_) => dropped.push(entry.name),
+            }
+        }
+    }
+
     let mut names = world
         .get_resource::<crate::BsnSceneAssets>()
         .map(|assets| assets.0.clone())
         .unwrap_or_default();
-    for (_, entry) in &adopted {
+    for (_, entry) in &fresh {
         names.insert(format!("#{}", entry.name), entry.handle.clone());
         names.insert(format!("@{}", entry.name), entry.handle.clone());
     }
     world.insert_resource(crate::BsnSceneAssets(names));
 
     let mut live = world.resource_mut::<SceneBsnAst>();
-    for (root, entry) in adopted {
-        let already = live
-            .roots
-            .iter()
-            .any(|&existing| live.get_name(existing) == Some(entry.name.as_str()));
-        if !already {
+    for (root, _) in fresh {
+        if let Some(root) = root {
             crate::clone_subtree_into(&mut live, source, root, None);
         }
     }

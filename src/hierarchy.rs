@@ -408,7 +408,24 @@ fn is_generated_part(world: &World, child: Entity) -> bool {
 /// [`WITHHELD_ROW_PASSES`] revisits, so a scene that keeps spawning children
 /// cannot grow a list every frame walks.
 #[derive(Resource, Default)]
-struct RowsAwaitingRegistration(Vec<WithheldRow>);
+struct RowsAwaitingRegistration {
+    rows: Vec<WithheldRow>,
+    /// Entities the list gave up on, in the order it gave up on them.
+    ///
+    /// Giving up is a scene entity the outliner will never draw, which is
+    /// the kind of loss that has to leave a trace: the warning is written
+    /// from this, and [`rows_the_outliner_gave_up_on`] reads it back.
+    abandoned: Vec<Entity>,
+}
+
+/// The entities the outliner stopped waiting for a document node from, so
+/// what the warning says can be read rather than parsed out of a log.
+pub fn rows_the_outliner_gave_up_on(world: &World) -> Vec<Entity> {
+    world
+        .get_resource::<RowsAwaitingRegistration>()
+        .map(|pending| pending.abandoned.clone())
+        .unwrap_or_default()
+}
 
 /// How many passes a withheld row waits for its document node before the list
 /// gives up on it. Every path that registers an entity at all does so within a
@@ -456,13 +473,13 @@ fn withhold_row_after(world: &mut World, children_container: Entity, child: Enti
         return;
     };
     if pending
-        .0
+        .rows
         .iter()
         .any(|row| row.children_container == children_container && row.child == child)
     {
         return;
     }
-    pending.0.push(WithheldRow {
+    pending.rows.push(WithheldRow {
         children_container,
         child,
         passes,
@@ -482,11 +499,12 @@ fn spawn_rows_for_late_registrations(
     live: Query<Entity>,
     mut commands: Commands,
 ) {
-    if pending.0.is_empty() {
+    if pending.rows.is_empty() {
         return;
     }
     let mut still_waiting = Vec::new();
-    for mut row in std::mem::take(&mut pending.0) {
+    let mut abandoned: Vec<Entity> = Vec::new();
+    for mut row in std::mem::take(&mut pending.rows) {
         if !live.contains(row.child) || !live.contains(row.children_container) {
             continue;
         }
@@ -494,6 +512,17 @@ fn spawn_rows_for_late_registrations(
             row.passes += 1;
             if row.passes < WITHHELD_ROW_PASSES {
                 still_waiting.push(row);
+            } else {
+                // The bound is what stops the list growing, and giving up
+                // is a row the outliner will never draw. Say which entity,
+                // because the symptom otherwise is a scene entity with no
+                // row and nothing anywhere saying why.
+                warn!(
+                    "Outliner: {} never joined the document after \
+                     {WITHHELD_ROW_PASSES} passes; it has no row",
+                    row.child
+                );
+                abandoned.push(row.child);
             }
             continue;
         }
@@ -502,7 +531,8 @@ fn spawn_rows_for_late_registrations(
             spawn_withheld_row(world, children_container, child, passes);
         });
     }
-    pending.0 = still_waiting;
+    pending.rows = still_waiting;
+    pending.abandoned.extend(abandoned);
 }
 
 /// Spawn one withheld row, re-checking everything that could have moved

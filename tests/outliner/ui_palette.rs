@@ -1904,3 +1904,41 @@ fn every_widget_names_its_entity_without_a_space() {
         );
     }
 }
+
+/// The waiting list is bounded, so a child whose document node never
+/// arrives is eventually let go. Letting go is a scene entity the outliner
+/// will never draw, which is the kind of loss that has to leave a trace
+/// rather than a row that quietly stops being expected.
+#[test]
+fn a_row_the_list_gives_up_on_is_named_rather_than_lost_quietly() {
+    let mut app = palette_app();
+    let world = app.world_mut();
+    let root = open_ui_scene(world);
+    world.spawn((
+        HierarchyTreeContainer,
+        Node::default(),
+        Visibility::Inherited,
+    ));
+    app.update();
+    let world = app.world_mut();
+    mark_expanded(world, root);
+
+    // Named and parented into the document's tree, but never registered:
+    // the row is withheld every pass and never becomes drawable.
+    let never = world
+        .spawn((Name::new("NeverRegistered"), Node::default(), ChildOf(root)))
+        .id();
+    for _ in 0..80 {
+        app.update();
+    }
+
+    assert!(
+        jackdaw::hierarchy::rows_the_outliner_gave_up_on(app.world()).contains(&never),
+        "the list says which entity it gave up on",
+    );
+    assert_eq!(
+        rows_for(app.world_mut(), never),
+        0,
+        "and the row is indeed not there",
+    );
+}
