@@ -517,3 +517,36 @@ fn a_paste_with_nothing_selected_uses_the_open_scenes_root() {
         "the paste went to the open scene's root"
     );
 }
+
+/// A clipboard holding a UI node and a world entity at once has no scene to
+/// land in: pasting it would put a `Node` in a world or a mesh in a screen,
+/// whichever the open scene is. The mixed payload is reachable by copying a
+/// selection that spans both, and by pasting BSN written by hand, which is
+/// what this does -- one document, two roots, one of each kind.
+#[test]
+fn a_paste_refuses_a_payload_that_is_both_kinds() {
+    const MIXED: &str = "bevy_ecs::hierarchy::Children [\n\
+                             #Screen\n\
+                             bevy_ui::ui_node::Node\n\
+                             ,\n\
+                             #Thing\n\
+                             bevy_transform::components::transform::Transform\n\
+                         ]\n";
+
+    let mut app = clipboard_app();
+    run_finished(&mut app, "scene.new ui=true");
+    jackdaw::selection::clear_selection_in_world(app.world_mut());
+    app.update();
+    app.world_mut().resource_mut::<EntityClipboard>().text = MIXED.to_string();
+    let before = scene_names(&mut app);
+
+    press(&mut app, "entity.paste");
+
+    assert_eq!(before, scene_names(&mut app), "neither root was pasted");
+    let notice = app.world().resource::<jackdaw::status_bar::StatusNotice>();
+    assert!(
+        notice.text().contains("no scene holds both"),
+        "the refusal said the payload is both kinds, not {:?}",
+        notice.text(),
+    );
+}
