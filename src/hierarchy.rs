@@ -1873,6 +1873,12 @@ fn insert_dragged(world: &mut World, dragged: Entity, target: Entity, after: boo
 ///
 /// A node the drop would bury inside itself, or the drop target itself, is
 /// dropped from the group rather than refusing the whole gesture.
+///
+/// So is a node another member of the group already carries: moving a
+/// parent moves its subtree, so a selection holding both a parent and its
+/// child would move the child twice -- once with the parent, and again on
+/// its own, which lands it beside the parent instead of inside it. The
+/// subtree goes once, with its root.
 fn dragged_group(world: &mut World, dragged: Entity, target: Entity) -> Vec<Entity> {
     let selected: Vec<Entity> = world.resource::<Selection>().entities.clone();
     let mut group = if selected.contains(&dragged) && selected.len() > 1 {
@@ -1885,6 +1891,12 @@ fn dragged_group(world: &mut World, dragged: Entity, target: Entity) -> Vec<Enti
             && world.get_entity(entity).is_ok()
             && world.get::<EditorEntity>(entity).is_none()
             && !is_ancestor_of(world, entity, target)
+    });
+    let carried = group.clone();
+    group.retain(|&entity| {
+        !carried
+            .iter()
+            .any(|&other| other != entity && is_ancestor_of(world, other, entity))
     });
     group.sort_by_key(|&entity| visual_order_key(world, entity));
     group

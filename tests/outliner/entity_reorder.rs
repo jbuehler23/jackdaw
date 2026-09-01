@@ -414,6 +414,68 @@ fn a_drop_moves_the_whole_selection_in_the_order_the_tree_shows() {
     );
 }
 
+/// A selection can hold both a parent and something under it. Moving the
+/// parent moves its subtree, so carrying the child as well would move it
+/// twice: once inside the parent, and once more on its own, which lands it
+/// beside the parent instead of in it. The subtree travels once.
+#[test]
+fn a_drop_carrying_a_parent_and_its_child_moves_the_subtree_once() {
+    let mut app = util::editor_test_app();
+    let world = app.world_mut();
+    let column = world
+        .spawn((
+            Name::new("Column"),
+            Node {
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(world, column);
+    let parent = world
+        .spawn((Name::new("Parent"), Node::default(), ChildOf(column)))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(world, parent);
+    let child = world
+        .spawn((Name::new("Child"), Node::default(), ChildOf(parent)))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(world, child);
+    let last = world
+        .spawn((Name::new("Last"), Node::default(), ChildOf(column)))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(world, last);
+    app.update();
+    assert_eq!(document_order(app.world(), column), vec!["Parent", "Last"]);
+
+    app.world_mut().resource_mut::<Selection>().entities = vec![parent, child];
+    app.update();
+
+    app.world_mut().trigger(TreeRowInserted {
+        entity: parent,
+        dragged_source: parent,
+        target: last,
+        index: 1,
+    });
+    app.update();
+    app.update();
+
+    assert_eq!(
+        document_order(app.world(), column),
+        vec!["Last", "Parent"],
+        "the parent moved and the child went with it, rather than beside it",
+    );
+    assert_eq!(
+        document_order(app.world(), parent),
+        vec!["Child"],
+        "the child is still under the parent it was dragged with",
+    );
+    assert_eq!(
+        app.world().get::<ChildOf>(child).map(ChildOf::parent),
+        Some(parent),
+        "and the ECS agrees",
+    );
+}
+
 /// A multi-row drop is one thing the user did, so it is one thing to undo.
 #[test]
 fn a_multi_selection_drop_is_one_history_entry() {
