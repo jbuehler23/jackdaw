@@ -2542,17 +2542,94 @@ fn fit_panel(app: &mut App) -> Entity {
 /// the tab says a viewport is fronted, and a [`ViewportHost`] in `mode` says
 /// which of the two it is showing.
 fn fronted_viewport(app: &mut App, mode: jackdaw::viewport_host::ViewportMode) {
+    let leaf = dock_leaf(app, &[jackdaw::viewport::VIEWPORT_WINDOW_ID]);
+    let tab = tab_ids(app, leaf)[0];
+    spawn_viewport_panel(app, tab, mode);
+    app.update();
+}
+
+/// The tab ids `leaf` holds, in the order it holds them.
+fn tab_ids(app: &App, leaf: jackdaw_panels::tree::NodeId) -> Vec<jackdaw_panels::tree::TabId> {
+    app.world()
+        .resource::<jackdaw_panels::tree::DockTree>()
+        .get(leaf)
+        .and_then(|node| node.as_leaf())
+        .expect("a leaf")
+        .windows
+        .iter()
+        .map(|tab| tab.id)
+        .collect()
+}
+
+/// A viewport panel's content entity, bound to the dock tab it is drawn
+/// in. The binding is what says which panel a fronted tab is.
+fn spawn_viewport_panel(
+    app: &mut App,
+    tab: jackdaw_panels::tree::TabId,
+    mode: jackdaw::viewport_host::ViewportMode,
+) -> Entity {
     use jackdaw::viewport_host::ViewportHost;
-    dock_leaf(app, &[jackdaw::viewport::VIEWPORT_WINDOW_ID]);
     let three_d = app.world_mut().spawn_empty().id();
     let two_d = app.world_mut().spawn_empty().id();
-    app.world_mut().spawn(ViewportHost {
-        mode,
-        mode_chosen: true,
-        three_d,
-        two_d,
-    });
+    app.world_mut()
+        .spawn((
+            ViewportHost {
+                mode,
+                mode_chosen: true,
+                three_d,
+                two_d,
+            },
+            jackdaw_panels::area::DockTabContent {
+                window_id: jackdaw::viewport::VIEWPORT_WINDOW_ID.to_string(),
+                tab_id: tab,
+            },
+        ))
+        .id()
+}
+
+/// Home belongs to the panel in front, not to any panel in the workspace.
+/// With a viewport showing the world in front and a second one showing the
+/// canvas buried behind it, one press used to reach both.
+#[test]
+fn a_buried_canvas_does_not_answer_home_for_the_panel_in_front() {
+    use jackdaw::viewport_host::ViewportMode;
+
+    let mut app = util::editor_test_app();
+    world_camera(&mut app);
+    let leaf = dock_leaf(
+        app_mut(&mut app),
+        &[
+            jackdaw::viewport::VIEWPORT_WINDOW_ID,
+            jackdaw::viewport::VIEWPORT_WINDOW_ID,
+        ],
+    );
+    let tabs = tab_ids(&app, leaf);
+    spawn_viewport_panel(&mut app, tabs[0], ViewportMode::TwoD);
+    spawn_viewport_panel(&mut app, tabs[1], ViewportMode::ThreeD);
+    // The second tab is the one in front.
+    {
+        let mut tree = app
+            .world_mut()
+            .resource_mut::<jackdaw_panels::tree::DockTree>();
+        let leaf = tree.get_mut(leaf).and_then(|node| node.as_leaf_mut());
+        leaf.expect("a leaf").active = Some(tabs[1]);
+    }
     app.update();
+
+    assert!(
+        !available(&mut app, "viewport2d.frame"),
+        "the canvas is behind the panel in front, so it does not take Home",
+    );
+    assert!(
+        available(&mut app, "view.frame_all"),
+        "the panel in front does",
+    );
+}
+
+/// `dock_leaf` wants the app; naming the reborrow keeps the call above
+/// readable.
+fn app_mut(app: &mut App) -> &mut App {
+    app
 }
 
 /// A dock whose one leaf holds `windows`, in that order, so a focus

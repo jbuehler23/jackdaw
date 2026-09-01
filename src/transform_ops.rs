@@ -114,21 +114,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     });
 }
 
-/// True if any leaf in the dock tree has its active tab pointing at a
-/// window of the given kind. The active tab is keyed by `TabId`, so
-/// "is the timeline currently focused somewhere?" requires looking
-/// up the active id back to its window kind.
-pub(crate) fn active_tab_kind_present(
-    tree: &jackdaw_panels::tree::DockTree,
-    window_id: &str,
-) -> bool {
-    tree.leaves().any(|(_, leaf)| {
-        leaf.active
-            .and_then(|tab| leaf.windows.iter().find(|t| t.id == tab))
-            .is_some_and(|t| t.window_id == window_id)
-    })
-}
-
 // -- Reset ops ---------------------------------------------------
 
 #[operator(

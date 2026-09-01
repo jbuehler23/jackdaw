@@ -312,14 +312,30 @@ fn home_frames_the_canvas_only_while_a_2d_panel_is_current() {
     tree.root = Some(leaf);
     *app.world_mut()
         .resource_mut::<jackdaw_panels::tree::DockTree>() = tree;
+    // The host is bound to the tab it is drawn in, which is what says the
+    // fronted tab and the panel showing the canvas are the same panel.
+    let tab = app
+        .world()
+        .resource::<jackdaw_panels::tree::DockTree>()
+        .get(leaf)
+        .and_then(|node| node.as_leaf())
+        .expect("a leaf")
+        .windows[0]
+        .id;
     let three_d = app.world_mut().spawn_empty().id();
     let two_d = app.world_mut().spawn_empty().id();
-    app.world_mut().spawn(jackdaw::viewport_host::ViewportHost {
-        mode: jackdaw::viewport_host::ViewportMode::TwoD,
-        mode_chosen: true,
-        three_d,
-        two_d,
-    });
+    app.world_mut().spawn((
+        jackdaw::viewport_host::ViewportHost {
+            mode: jackdaw::viewport_host::ViewportMode::TwoD,
+            mode_chosen: true,
+            three_d,
+            two_d,
+        },
+        jackdaw_panels::area::DockTabContent {
+            window_id: jackdaw::viewport::VIEWPORT_WINDOW_ID.to_string(),
+            tab_id: tab,
+        },
+    ));
     app.update();
 
     assert!(

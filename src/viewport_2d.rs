@@ -2378,29 +2378,62 @@ fn viewport_2d_is_current(
     hover_map: Res<HoverMap>,
     parents: Query<&ChildOf>,
     tree: Res<jackdaw_panels::tree::DockTree>,
+    contents: Query<(Entity, &jackdaw_panels::area::DockTabContent)>,
     viewports: Query<&crate::viewport_host::ViewportHost>,
 ) -> bool {
     hosts
         .iter()
         .any(|host| entity_is_hovered(host.area, &hover_map, &parents))
-        || fronted_viewport_is(&tree, &viewports, crate::viewport_host::ViewportMode::TwoD)
+        || fronted_viewport_is(
+            &tree,
+            &contents,
+            &viewports,
+            crate::viewport_host::ViewportMode::TwoD,
+        )
 }
 
-/// Whether a viewport panel is the active tab in some dock leaf and is
+/// Whether a viewport panel that is the active tab in some dock leaf is
 /// showing `mode`.
 ///
 /// The canvas is a mode of the one viewport window rather than a window of its
 /// own, and no layout registers the 2D id, so asking the dock tree for that id
 /// never answers yes. The tab says a viewport is fronted;
 /// [`crate::viewport_host::ViewportHost::mode`] says which of the two it is
-/// showing.
+/// showing -- and the two have to be the *same* panel. Asking "is a viewport
+/// fronted" and "is any viewport in this mode" separately answers yes for a
+/// workspace holding a fronted 3D panel and a buried canvas, which makes both
+/// halves of Home fire on one press.
 pub(crate) fn fronted_viewport_is(
     tree: &jackdaw_panels::tree::DockTree,
+    contents: &Query<(Entity, &jackdaw_panels::area::DockTabContent)>,
     viewports: &Query<&crate::viewport_host::ViewportHost>,
     mode: crate::viewport_host::ViewportMode,
 ) -> bool {
-    crate::transform_ops::active_tab_kind_present(tree, crate::viewport::VIEWPORT_WINDOW_ID)
-        && viewports.iter().any(|host| host.mode == mode)
+    fronted_viewport_hosts(tree, contents)
+        .any(|entity| viewports.get(entity).is_ok_and(|host| host.mode == mode))
+}
+
+/// The content entity of every viewport panel whose tab is the active one
+/// in its dock leaf.
+fn fronted_viewport_hosts<'a>(
+    tree: &'a jackdaw_panels::tree::DockTree,
+    contents: &'a Query<(Entity, &jackdaw_panels::area::DockTabContent)>,
+) -> impl Iterator<Item = Entity> + 'a {
+    tree.leaves()
+        .filter_map(|(_, leaf)| {
+            let active = leaf.active?;
+            leaf.windows
+                .iter()
+                .find(|tab| tab.id == active)
+                .filter(|tab| tab.window_id == crate::viewport::VIEWPORT_WINDOW_ID)
+                .map(|tab| tab.id)
+        })
+        .flat_map(move |tab| {
+            contents
+                .iter()
+                .filter(move |(_, content)| content.tab_id == tab)
+                .map(|(entity, _)| entity)
+        })
 }
 
 /// Frame the UI scene in the 2D viewport: zoom and pan so the whole
