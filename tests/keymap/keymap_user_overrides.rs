@@ -653,7 +653,8 @@ fn a_shipped_co_fire_marks_its_rows_and_stays_out_of_the_paragraph() {
 }
 
 /// A conflict a rebind in this session made is new, and is the reader's
-/// to decide about, so it is named in full.
+/// to decide about, so it is named in full -- in the words the rows next
+/// to it use, not in the words the log uses.
 #[test]
 fn a_conflict_this_session_made_is_named_in_the_paragraph() {
     let mut app = headless_app();
@@ -668,7 +669,14 @@ fn a_conflict_this_session_made_is_named_in_the_paragraph() {
         &jackdaw_api_internal::keymap::KeymapLoadProblem::default(),
     );
     assert!(text.contains("you have just bound"), "{text}");
-    assert!(text.contains("KeyZ"), "{text}");
+    assert!(
+        text.contains("Ctrl + Z") && !text.contains("KeyZ"),
+        "the chord is written the way a row writes it: {text}",
+    );
+    assert!(
+        text.contains("Redo") && !text.contains("history.redo"),
+        "and the commands by the names beside them: {text}",
+    );
 }
 
 /// Several commands ship with more than one chord. A dialog that could

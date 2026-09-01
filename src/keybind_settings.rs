@@ -410,6 +410,79 @@ impl PendingKeymapChanges {
         self.shipped_conflicts().len()
     }
 
+    /// Whether any chord `operator` holds is shared with another command
+    /// because of a rebind made in this session, rather than because the
+    /// shipped keymap ships it that way.
+    ///
+    /// What the badge is for: a shipped co-fire is arbitrated and normal,
+    /// and marking it as a warning taught the user to ignore the mark.
+    pub fn has_user_conflict(&self, operator: &str) -> bool {
+        self.bindings
+            .iter()
+            .filter(|binding| binding.operator == operator)
+            .any(|binding| {
+                self.is_shared(&self.bindings, binding) && !self.is_shipped_share(binding)
+            })
+    }
+
+    /// The chords this session's rebinds made shared, said the way the
+    /// rows say them: the chord as a row shows it, and each command by the
+    /// name beside it rather than by its operator id.
+    ///
+    /// `find_conflicts` keeps its own wording for the log, where an
+    /// operator id is the name worth having; this is the dialog's.
+    pub fn user_conflict_lines(&self) -> Vec<String> {
+        let mut seen: Vec<&PresetBinding> = Vec::new();
+        let mut lines = Vec::new();
+        for binding in &self.bindings {
+            if !self.is_shared(&self.bindings, binding) || self.is_shipped_share(binding) {
+                continue;
+            }
+            if seen.iter().any(|other| Self::same_chord(other, binding)) {
+                continue;
+            }
+            seen.push(binding);
+            let mut names: Vec<String> = self
+                .bindings
+                .iter()
+                .filter(|other| Self::same_chord(other, binding))
+                .map(|other| self.label_of(&other.operator))
+                .collect();
+            names.dedup();
+            lines.push(format!(
+                "{} - {}",
+                format_preset_input(&binding.input),
+                names.join(", ")
+            ));
+        }
+        lines
+    }
+
+    /// Whether `binding`'s chord is claimed by some other command in
+    /// `bindings`.
+    fn is_shared(&self, bindings: &[PresetBinding], binding: &PresetBinding) -> bool {
+        bindings
+            .iter()
+            .any(|other| other.operator != binding.operator && Self::same_chord(other, binding))
+    }
+
+    /// Whether the shipped keymap already gives `binding`'s chord to more
+    /// than one command.
+    fn is_shipped_share(&self, binding: &PresetBinding) -> bool {
+        self.defaults
+            .iter()
+            .filter(|other| Self::same_chord(other, binding))
+            .map(|other| other.operator.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            > 1
+    }
+
+    /// Whether two bindings fire on the same press in the same place.
+    fn same_chord(left: &PresetBinding, right: &PresetBinding) -> bool {
+        left.input == right.input && left.phase == right.phase && left.context == right.context
+    }
+
     /// One line per chord of `operator` that another command also claims,
     /// naming that command the way the row next to it is named.
     ///
@@ -527,9 +600,10 @@ struct KeybindCategoryHeader(String);
 struct KeybindDisplayText(String);
 
 /// The container holding one operator row's chords, rebuilt whenever the
-/// working copy or the recording changes.
+/// working copy or the recording changes. Holds the operator, so a test
+/// can read back what a row is showing.
 #[derive(Component)]
-struct KeybindChordList(String);
+pub struct KeybindChordList(pub String);
 
 /// Remove button for one chord of an operator: (operator, index into
 /// `chords_of`).
@@ -540,9 +614,10 @@ struct KeybindRemoveChordButton(String, usize);
 #[derive(Component)]
 struct KeybindAddChordButton(String);
 
-/// The marker on a row whose chords another command also claims.
+/// The marker on a row whose chords another command also claims. Holds the
+/// operator, so a test can read back what a row is showing.
 #[derive(Component)]
-struct KeymapConflictBadge(String);
+pub struct KeymapConflictBadge(pub String);
 
 /// The text element showing a camera action's chords.
 #[derive(Component)]
@@ -762,7 +837,7 @@ pub fn advisory_text(
     if problem.is_some() {
         parts.push(problem.message.clone());
     }
-    let user = pending.user_conflicts();
+    let user = pending.user_conflict_lines();
     if !user.is_empty() {
         parts.push(format!(
             "{} chords you have just bound are claimed by more than one command; each one fires and the commands decide between them: {}",
@@ -1268,23 +1343,56 @@ fn refresh_chord_lists(
 /// and say which commands in the row's own vocabulary.
 fn refresh_conflict_badges(
     pending: Option<Res<PendingKeymapChanges>>,
-    mut badges: Query<(&KeymapConflictBadge, &mut Node, &mut Tooltip)>,
+    mut badges: Query<(
+        &KeymapConflictBadge,
+        &mut Node,
+        &mut Tooltip,
+        Option<&Children>,
+    )>,
+    mut glyphs: Query<&mut Text>,
     added: Query<(), Added<KeymapConflictBadge>>,
 ) {
     let Some(pending) = pending else { return };
-    // Same as the chord lists: a badge spawned after the working copy
-    // changed has never been told what it is about.
-    if !pending.is_changed() && added.is_empty() {
-        return;
-    }
-    for (badge, mut node, mut tooltip) in &mut badges {
+    // No early-out on "nothing changed": a badge's glyph lives in a child
+    // the button spawns a frame or two after the badge itself, so the one
+    // frame the working copy changed on is a frame with nothing to write
+    // to. Every write below is guarded on the value differing instead, so
+    // an idle frame still touches nothing.
+    let _ = added;
+    for (badge, mut node, mut tooltip, children) in &mut badges {
         let conflicts = pending.conflicts_of(&badge.0);
-        node.display = if conflicts.is_empty() {
+        let display = if conflicts.is_empty() {
             Display::None
         } else {
             Display::Flex
         };
-        tooltip.description = conflicts.join("\n");
+        if node.display != display {
+            node.display = display;
+        }
+        // A chord the shipped keymap shares is arbitrated and works; a
+        // chord this session made shared is the user's to sort out. Only
+        // the second is a warning, because a warning on every shipped
+        // co-fire is a warning nobody reads.
+        let (icon, title) = if pending.has_user_conflict(&badge.0) {
+            (Icon::TriangleAlert, "Conflicting chord")
+        } else {
+            (Icon::Info, "Shared chord")
+        };
+        if tooltip.title != title {
+            tooltip.title = title.to_string();
+        }
+        let description = conflicts.join("\n");
+        if tooltip.description != description {
+            tooltip.description = description;
+        }
+        let glyph = icon.unicode().to_string();
+        for child in children.into_iter().flatten() {
+            if let Ok(mut text) = glyphs.get_mut(*child)
+                && text.0 != glyph
+            {
+                text.0 = glyph.clone();
+            }
+        }
     }
 }
 

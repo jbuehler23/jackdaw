@@ -8,6 +8,7 @@
 mod util;
 
 mod capture_gate;
+mod keybind_dialog;
 mod keymap_presets;
 mod keymap_user_overrides;
 
