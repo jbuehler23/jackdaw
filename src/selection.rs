@@ -106,8 +106,21 @@ impl Selection {
     }
 
     /// Select multiple entities at once (for box select).
+    ///
+    /// An entity that is selected already and stays selected keeps its
+    /// [`Selected`] marker rather than losing it and being given it back:
+    /// the removal fires [`on_selected_removed`], which prunes the entity
+    /// from this very list, and the insert that follows puts the marker back
+    /// without putting the entry back.
     pub fn select_multiple(&mut self, commands: &mut Commands, entities: &[Entity]) {
-        self.clear(commands);
+        for &previous in &self.entities {
+            if !entities.contains(&previous)
+                && let Ok(mut ec) = commands.get_entity(previous)
+            {
+                ec.remove::<Selected>();
+            }
+        }
+        self.entities.clear();
         for &entity in entities {
             self.entities.push(entity);
             if let Ok(mut ec) = commands.get_entity(entity) {

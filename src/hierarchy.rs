@@ -105,6 +105,7 @@ impl Plugin for HierarchyPlugin {
             .init_resource::<RevealTarget>()
             .init_resource::<EntityIconRegistry>()
             .init_resource::<RowsAwaitingRegistration>()
+            .init_resource::<OutlinerRangeAnchor>()
             .add_systems(Startup, setup_tree_node_expanded_watcher)
             .add_systems(OnEnter(crate::AppState::Editor), setup_name_watcher)
             .add_systems(
@@ -1564,6 +1565,7 @@ fn on_tree_row_clicked(
     mut commands: Commands,
     mut selection: ResMut<Selection>,
     mut focused: ResMut<TreeFocused>,
+    mut anchor: ResMut<OutlinerRangeAnchor>,
     keyboard: Res<ButtonInput<KeyCode>>,
     parent_query: Query<&ChildOf>,
     tree_nodes: Query<Entity, With<TreeNode>>,
@@ -1592,15 +1594,23 @@ fn on_tree_row_clicked(
     }
 
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
 
     // A plain click on a row that is already selected keeps it selected.
     // Clicking the row you are working on is how a panel is brought back
     // into focus, and losing the selection there costs the inspector, the
-    // canvas outline and every gesture aimed at it. Ctrl is the deselect.
+    // canvas outline and every gesture aimed at it. Ctrl is the deselect,
+    // and Shift sweeps from the anchor to here.
     if ctrl {
         selection.toggle(&mut commands, event.source_entity);
+        anchor.0 = Some(event.source_entity);
+    } else if shift {
+        let clicked = event.entity;
+        let target = event.source_entity;
+        commands.queue(move |world: &mut World| select_row_range(world, clicked, target));
     } else {
         selection.select_single(&mut commands, event.source_entity);
+        anchor.0 = Some(event.source_entity);
     }
 
     let content_entity = event.entity;
@@ -1613,6 +1623,89 @@ fn on_tree_row_clicked(
 
 /// How long after a row click a second one still reads as a double click.
 const DOUBLE_CLICK_SECS: f64 = 0.4;
+
+/// Where a Shift-click's range starts: the row a plain click last landed on.
+///
+/// A range is stated between two rows, and only one of them is the click
+/// being handled. The other is this, and it is set by the clicks that mean
+/// "start here" -- a plain click and a Ctrl-click -- and left alone by the
+/// Shift-clicks themselves, so a run of Shift-clicks sweeps the range from
+/// one end rather than growing it a row at a time.
+#[derive(Resource, Default)]
+pub struct OutlinerRangeAnchor(pub Option<Entity>);
+
+/// The source entities of `container`'s rows, top to bottom, as the panel
+/// draws them.
+///
+/// Visible rows only, which is what a range is stated over: a collapsed
+/// row's children are not on screen to be swept, and the filter takes a row
+/// and everything under it off the list by laying it out as nothing.
+pub fn visible_row_sources(world: &World, container: Entity) -> Vec<Entity> {
+    let mut sources = Vec::new();
+    collect_visible_rows(world, container, &mut sources);
+    sources
+}
+
+fn collect_visible_rows(world: &World, entity: Entity, sources: &mut Vec<Entity>) {
+    let row = world.get::<TreeNode>(entity);
+    if row.is_some()
+        && world
+            .get::<Node>(entity)
+            .is_some_and(|node| node.display == Display::None)
+    {
+        return;
+    }
+    if let Some(row) = row {
+        sources.push(row.0);
+        if world
+            .get::<TreeNodeExpanded>(entity)
+            .is_none_or(|expanded| !expanded.0)
+        {
+            return;
+        }
+    }
+    for child in world.get::<Children>(entity).into_iter().flatten().copied() {
+        collect_visible_rows(world, child, sources);
+    }
+}
+
+/// Select every visible row between the anchor and `target`.
+///
+/// The anchor holds still, so the click's own row is what ends up primary:
+/// the inspector and the canvas outline follow the row the user pointed at,
+/// whichever end of the range it is. An anchor that is not on this panel's
+/// visible list -- never set, collapsed away, filtered out -- has no range to
+/// state, so the click selects its own row and becomes the new anchor.
+fn select_row_range(world: &mut World, clicked: Entity, target: Entity) {
+    let container = ancestor_hierarchy_root(world, clicked);
+    let anchor = world.resource::<OutlinerRangeAnchor>().0;
+    let rows = container
+        .map(|container| visible_row_sources(world, container))
+        .unwrap_or_default();
+    let span = anchor.and_then(|anchor| {
+        let from = rows.iter().position(|source| *source == anchor)?;
+        let to = rows.iter().position(|source| *source == target)?;
+        Some(if from <= to {
+            rows[from..=to].to_vec()
+        } else {
+            rows[to..=from].iter().rev().copied().collect()
+        })
+    });
+    match span {
+        Some(span) => {
+            let mut state: bevy::ecs::system::SystemState<(Commands, ResMut<Selection>)> =
+                bevy::ecs::system::SystemState::new(world);
+            if let Ok((mut commands, mut selection)) = state.get_mut(world) {
+                selection.select_multiple(&mut commands, &span);
+            }
+            state.apply(world);
+        }
+        None => {
+            crate::selection::select_only(world, target);
+            world.resource_mut::<OutlinerRangeAnchor>().0 = Some(target);
+        }
+    }
+}
 
 /// When Selected is added, highlight the corresponding row in every
 /// Outliner panel.
