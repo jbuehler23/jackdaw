@@ -1134,7 +1134,7 @@ struct Sealed(
 /// field and then has nothing to put in it.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
-struct Locked {
+struct Bolted {
     seal: Sealed,
 }
 
@@ -1796,15 +1796,15 @@ fn a_linked_type_with_no_fields_says_why_it_has_no_rows() {
 }
 
 /// The other way a linked type ends up with no rows: the editor could not build
-/// a value at all. `Locked` has a field, so the no-fields reason would be the
+/// a value at all. `Bolted` has a field, so the no-fields reason would be the
 /// wrong one to show.
 #[test]
 fn a_linked_type_the_editor_cannot_build_says_that_instead() {
-    let mut app = previewing("Locked.seal", |app| {
+    let mut app = previewing("Bolted.seal", |app| {
         app.register_type::<Sealed>();
-        app.register_type::<Locked>();
+        app.register_type::<Bolted>();
     });
-    let subject = subject_named(&mut app, "Locked");
+    let subject = subject_named(&mut app, "Bolted");
     assert_eq!(subject.availability, PreviewAvailability::Native);
     assert!(subject.fields.is_empty());
     assert_eq!(
