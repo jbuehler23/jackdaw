@@ -548,7 +548,7 @@ fn grouping_a_rotated_node_is_refused_out_loud() {
     assert_eq!(undo_depth(&app), depth, "nothing was grouped");
     assert_eq!(
         notice(&app),
-        "Second is rotated or scaled, so a container around it would not be the box it fills",
+        "Second carries a transform, so a container around it would not be the box it fills",
     );
 }
 
@@ -570,39 +570,117 @@ fn ungrouping_an_empty_node_is_refused_out_loud() {
     assert_eq!(notice(&app), "First holds nothing to lift out");
 }
 
-/// A member its parent was laying out has no rect of its own to keep, so it
-/// keeps flowing, now inside the container. The absolute member beside it
-/// keeps the exact place it had.
+/// A member its parent was laying out has no rect of its own to re-state
+/// against the container, so in the container it flows again from another
+/// origin and lands somewhere else. Grouping promises the opposite, so it
+/// refuses -- the same refusal a transformed member gets, for the same
+/// reason.
 #[test]
-fn a_flowed_member_keeps_flowing_inside_the_container() {
+fn grouping_a_flowed_member_is_refused_out_loud() {
     let mut app = util::editor_test_app();
     panel(&mut app);
     let (_root, first, second) = authored_scene(&mut app);
-    let before = node_of(&app, first);
-    let rect = rect_of(&app, second);
+    let rect = rect_of(&app, first);
     app.world_mut()
         .get_mut::<Node>(first)
         .expect("a node")
         .position_type = PositionType::Relative;
     settle(&mut app);
 
+    let depth = undo_depth(&app);
     select_both(&mut app, [first, second]);
-    run_finished(&mut app, "ui.group_into");
+    jackdaw::ui_grouping::group_selection(app.world_mut());
+    settle(&mut app);
 
-    let after = node_of(&app, first);
+    assert_eq!(undo_depth(&app), depth, "nothing was grouped");
     assert_eq!(
-        after.position_type,
-        PositionType::Relative,
-        "the flowed member is still laid out by its parent, now the container",
+        notice(&app),
+        "First is laid out by its parent, so a container would put it somewhere else; \
+         place it absolutely first",
     );
     assert_eq!(
-        (after.width, after.height),
-        (before.width, before.height),
-        "and its size is untouched",
+        app.world().get::<ChildOf>(first).map(ChildOf::parent),
+        app.world().get::<ChildOf>(second).map(ChildOf::parent),
+        "and the member is where it was, beside the one it was selected with",
     );
-    let moved = (rect_of(&app, second).min - rect.min).length();
+    let moved = (rect_of(&app, first).min - rect.min).length();
     assert!(
         moved < 0.5,
-        "the absolutely placed member beside it did not move; it went {moved} px",
+        "which is also where it lands: it went {moved} px"
+    );
+}
+
+/// A `UiTransform` that only moves the node is the same double application
+/// as one that turns it: the container is placed on the box the node was
+/// measured at, and the translation is then drawn again from the
+/// container's own corner.
+#[test]
+fn grouping_a_translated_member_is_refused_out_loud() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (_root, first, second) = authored_scene(&mut app);
+    app.world_mut()
+        .entity_mut(second)
+        .insert(bevy::ui::UiTransform::from_translation(bevy::ui::Val2::px(
+            12.0, 8.0,
+        )));
+    settle(&mut app);
+
+    let depth = undo_depth(&app);
+    select_both(&mut app, [first, second]);
+    jackdaw::ui_grouping::group_selection(app.world_mut());
+    settle(&mut app);
+
+    assert_eq!(undo_depth(&app), depth, "nothing was grouped");
+    assert_eq!(
+        notice(&app),
+        "Second carries a transform, so a container around it would not be the box it fills",
+    );
+}
+
+/// Undo is a way back to the state the command was asked for, and the
+/// selection is part of that state: grouping leaves the container selected,
+/// so undoing it has to leave the members selected again.
+#[test]
+fn undoing_a_group_selects_the_members_again() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (_root, first, second) = authored_scene(&mut app);
+    select_both(&mut app, [first, second]);
+    run_finished(&mut app, "ui.group_into");
+    settle(&mut app);
+
+    run_finished(&mut app, "history.undo");
+    settle(&mut app);
+
+    let mut selected = app.world().resource::<Selection>().entities.clone();
+    selected.sort();
+    let mut wanted = vec![first, second];
+    wanted.sort();
+    assert_eq!(selected, wanted, "the members are selected again");
+}
+
+/// The other direction: ungrouping selects the members it lifted out, so
+/// undoing it selects the container it put back.
+#[test]
+fn undoing_an_ungroup_selects_the_container_again() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (_root, first, second) = authored_scene(&mut app);
+    select_both(&mut app, [first, second]);
+    run_finished(&mut app, "ui.group_into");
+    settle(&mut app);
+    run_finished(&mut app, "ui.ungroup");
+    settle(&mut app);
+
+    run_finished(&mut app, "history.undo");
+    settle(&mut app);
+
+    let selected = app.world().resource::<Selection>().entities.clone();
+    assert_eq!(selected.len(), 1, "one thing is selected: {selected:?}");
+    assert_eq!(
+        app.world().get::<Name>(selected[0]).map(Name::as_str),
+        Some("Group"),
+        "and it is the container the undo put back",
     );
 }

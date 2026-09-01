@@ -7,14 +7,15 @@
 //! authored rect is re-expressed against its new parent's offset box, which
 //! is the same arithmetic a canvas drag writes back through.
 //!
-//! What happens to a mixed selection: an absolutely placed member keeps the
-//! rect it had, re-stated against the container. A member its parent was
-//! laying out has no rect of its own to keep, so it keeps flowing, now in
-//! the container, in the order the container holds it; the canvas may
-//! therefore move it, and the container's own flow direction decides where
-//! to. A member carrying a rotated or scaled `UiTransform` is refused: the
-//! bounding box is axis-aligned, so a container drawn around a turned node
-//! would not be the box the node occupies.
+//! What a member has to be: absolutely placed, and untransformed. Both
+//! refusals are the same promise -- grouping moves nothing on the canvas --
+//! and both are cases where it cannot be kept. A member its parent was
+//! laying out has no rect of its own to re-state, so in the container it
+//! flows again from a different origin and lands somewhere else; a member
+//! carrying a moved, rotated or scaled `UiTransform` is drawn away from the
+//! box the bounding rect was measured from, so the container would be drawn
+//! around a box the node does not occupy and the transform would be applied
+//! a second time from the container's corner.
 //!
 //! Every refusal says so in the status bar. Grouping is reached from a
 //! chord, the Edit menu and the outliner's context menu, and none of those
@@ -100,16 +101,32 @@ fn name_of(world: &World, entity: Entity) -> String {
         .map_or_else(|| "the node".to_string(), |name| name.as_str().to_owned())
 }
 
-/// Whether `entity` is rotated or scaled.
+/// Whether `entity` carries a `UiTransform` that is not the identity.
 ///
-/// Both are drawn around the node's laid-out box rather than changing it, so
-/// the rect the group is built from is the box before the turn. A container
-/// placed on that rect and given the node as a child would draw the turn
-/// again from a different origin, and the node would move.
-fn is_turned(world: &World, entity: Entity) -> bool {
+/// A translation counts, and not only a rotation or a scale: all three are
+/// drawn around the node's laid-out box rather than changing it, so the
+/// rect the group is built from is the box before the transform. A
+/// container placed on that rect and given the node as a child would draw
+/// the transform again from a different origin, and the node would move by
+/// it twice.
+fn is_transformed(world: &World, entity: Entity) -> bool {
+    let identity = UiTransform::default();
     world.get::<UiTransform>(entity).is_some_and(|transform| {
-        transform.rotation != Rot2::IDENTITY || transform.scale != Vec2::ONE
+        transform.rotation != Rot2::IDENTITY
+            || transform.scale != Vec2::ONE
+            || transform.translation != identity.translation
     })
+}
+
+/// Whether `entity` is laid out by its parent rather than placed.
+///
+/// A flowed node has no rect of its own to re-state against the container,
+/// so grouping it would leave the container's flow to decide where it goes
+/// -- which is the one thing grouping promises not to do.
+fn is_flowed(world: &World, entity: Entity) -> bool {
+    world
+        .get::<Node>(entity)
+        .is_none_or(|node| node.position_type != PositionType::Absolute)
 }
 
 /// How many entries the list `parent` names holds. `None` is the scene's own
@@ -151,21 +168,15 @@ fn offsets_against(world: &World, entity: Entity, origin: Vec2) -> Option<Vec2> 
     Some(global_node_rect(world, entity)?.min - origin)
 }
 
-/// `entity` and everything still under it, so undo can put a container back
-/// with whatever else was on it and whatever was left inside it.
+/// The container itself, so undo can put it back with whatever else was on
+/// it rather than a fresh node of the same shape.
 ///
-/// Taken after the children have been lifted out, so what it holds is what
-/// the despawn is about to take away and undo does not resurrect a second
-/// copy of a child that is now living outside.
-fn snapshot_subtree(world: &World, entity: Entity) -> DynamicWorld {
-    let mut subtree = vec![entity];
-    let mut index = 0;
-    while index < subtree.len() {
-        if let Some(children) = world.get::<Children>(subtree[index]) {
-            subtree.extend(children.iter());
-        }
-        index += 1;
-    }
+/// The container alone, and not the subtree under it: ungroup lifts every
+/// child out before this is taken, so there is nothing under it left to
+/// capture -- and capturing the children beforehand would have undo write a
+/// second copy of each one back in beside the one now living outside.
+fn snapshot_one(world: &World, entity: Entity) -> DynamicWorld {
+    let subtree = [entity];
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
     filtered_scene_builder(world, &registry)
@@ -291,6 +302,10 @@ impl EditorCommand for GroupIntoContainer {
             set_hierarchy_location(world, member, location);
         }
         crate::hierarchy::sync_outliner_row_order(world, self.parent);
+        // Back to what was selected when the group was asked for: the
+        // container the group selected is gone, and a selection of nothing
+        // is not the state the user undid to.
+        select_many(world, &self.members);
     }
 
     fn description(&self) -> &str {
@@ -340,7 +355,7 @@ impl EditorCommand for UngroupContainer {
                 write_node(world, child.entity, outside);
             }
         }
-        self.snapshot = Some(snapshot_subtree(world, self.container));
+        self.snapshot = Some(snapshot_one(world, self.container));
         crate::commands::deselect_entities(world, &[self.container]);
         despawn_scene_entity(world, self.container);
         crate::hierarchy::sync_outliner_row_order(world, self.parent);
@@ -379,6 +394,9 @@ impl EditorCommand for UngroupContainer {
             }
         }
         crate::hierarchy::sync_outliner_row_order(world, self.parent);
+        // The container is back, so it is what is selected again -- as it
+        // was when the ungroup was asked for.
+        crate::selection::select_only(world, self.container);
     }
 
     fn description(&self) -> &str {
@@ -399,12 +417,26 @@ pub fn group_selection(world: &mut World) {
     let Some((parent, members)) = group_members(world) else {
         return;
     };
-    if let Some(&turned) = members.iter().find(|&&member| is_turned(world, member)) {
+    if let Some(&turned) = members
+        .iter()
+        .find(|&&member| is_transformed(world, member))
+    {
         let name = name_of(world, turned);
         crate::status_bar::notify_error(
             world,
             format!(
-                "{name} is rotated or scaled, so a container around it would not be the box it fills"
+                "{name} carries a transform, so a container around it would not be the box it fills"
+            ),
+        );
+        return;
+    }
+    if let Some(&flowed) = members.iter().find(|&&member| is_flowed(world, member)) {
+        let name = name_of(world, flowed);
+        crate::status_bar::notify_error(
+            world,
+            format!(
+                "{name} is laid out by its parent, so a container would put it somewhere else; \
+                 place it absolutely first"
             ),
         );
         return;
@@ -446,12 +478,9 @@ pub fn group_selection(world: &mut World) {
     let after: Vec<(Entity, Node)> = members
         .iter()
         .filter_map(|&member| {
+            // Every member is absolutely placed: `is_flowed` refused the
+            // selection otherwise, so there is one case to write here.
             let mut node = world.get::<Node>(member).cloned()?;
-            if node.position_type != PositionType::Absolute {
-                // A flowed child had no offsets to keep; it flows in the
-                // container instead, in the order it was put in.
-                return Some((member, node));
-            }
             let offset = offsets_against(world, member, bounds.min)?;
             node.left = px(offset.x);
             node.top = px(offset.y);
