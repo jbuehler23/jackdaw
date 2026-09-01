@@ -1001,12 +1001,14 @@ fn populate_keybind_dialog(
                     icon_button(IconButtonProps::new(Icon::TriangleAlert), &icon_font),
                     Hovered::default(),
                     Tooltip::title("Shared chord"),
-                    Node {
-                        display: Display::None,
-                        ..Default::default()
-                    },
                 ))
                 .id();
+            commands
+                .entity(badge)
+                .entry::<Node>()
+                .and_modify(|mut node| {
+                    node.display = Display::None;
+                });
             commands.entity(right).add_child(badge);
 
             if row.is_editable() {
@@ -1175,12 +1177,13 @@ fn refresh_chord_lists(
     pending: Option<Res<PendingKeymapChanges>>,
     recording: Res<KeybindRecordingState>,
     icon_font: Option<Res<jackdaw_feathers::icons::IconFont>>,
-    lists: Query<(Entity, &KeybindChordList)>,
+    lists: Query<(Entity, &KeybindChordList, Option<&Children>)>,
 ) {
     let Some(pending) = pending else { return };
-    if !pending.is_changed() && !recording.is_changed() {
-        return;
-    }
+    // A list is spawned some frames after the working copy was put in the
+    // world, so "the copy changed" on its own would leave every row it
+    // drew for empty: a list with nothing in it has not been drawn yet.
+    let stale = pending.is_changed() || recording.is_changed();
     let icon_font = icon_font.map(|font| font.0.clone()).unwrap_or_default();
     let waiting = recording
         .target
@@ -1188,7 +1191,10 @@ fn refresh_chord_lists(
         .and_then(RecordingTarget::operator);
     let pending_confirm = recording.pending_confirm.clone();
 
-    for (entity, list) in &lists {
+    for (entity, list, drawn) in &lists {
+        if !stale && drawn.is_some_and(|children| !children.is_empty()) {
+            continue;
+        }
         let Ok(mut row) = commands.get_entity(entity) else {
             continue;
         };
@@ -1254,9 +1260,12 @@ fn refresh_chord_lists(
 fn refresh_conflict_badges(
     pending: Option<Res<PendingKeymapChanges>>,
     mut badges: Query<(&KeymapConflictBadge, &mut Node, &mut Tooltip)>,
+    added: Query<(), Added<KeymapConflictBadge>>,
 ) {
     let Some(pending) = pending else { return };
-    if !pending.is_changed() {
+    // Same as the chord lists: a badge spawned after the working copy
+    // changed has never been told what it is about.
+    if !pending.is_changed() && added.is_empty() {
         return;
     }
     for (badge, mut node, mut tooltip) in &mut badges {
