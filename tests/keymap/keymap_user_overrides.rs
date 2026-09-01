@@ -7,7 +7,7 @@ use jackdaw_api_internal::keymap::{
     DefaultKeymap, KeymapPreset, PresetBinding, PresetContext, PresetInput, PresetPhase,
     UserKeymap, apply_keymap_preset, resolve_keymap,
 };
-use jackdaw_api_internal::lifecycle::OperatorEntity;
+use jackdaw_api_internal::lifecycle::{OperatorAction, OperatorEntity};
 
 use crate::{CONFIG_DIR, CONFIG_LOCK, empty_config_dir, headless_app};
 
@@ -162,7 +162,6 @@ fn reapplying_a_resolved_keymap_is_idempotent() {
 fn applying_a_rebind_leaves_exactly_one_binding_on_the_new_chord() {
     use bevy_enhanced_input::prelude::{Binding, ModKeys};
     use jackdaw_api_internal::keymap::PresetSpawnedBinding;
-    use jackdaw_api_internal::lifecycle::OperatorAction;
 
     let mut app = headless_app();
     app.finish();
@@ -254,19 +253,31 @@ fn every_operator_is_bound_or_listed_as_unbound() {
         .map(|b| b.operator.as_str())
         .collect();
 
+    // An operator with no action entity has nothing for a binding to
+    // point at, so it is exempt by construction and needs no entry: it
+    // was registered to be reached from a menu, a button or the command
+    // palette. Deriving that half rather than listing it keeps the list
+    // to the operators that could hold a chord and deliberately do not.
+    let world = app.world_mut();
+    let with_action: std::collections::HashSet<String> = world
+        .query::<&OperatorAction>()
+        .iter(world)
+        .map(|action| action.0.to_string())
+        .collect();
     let world = app.world_mut();
     let mut unbound: Vec<&'static str> = world
         .query::<&OperatorEntity>()
         .iter(world)
         .map(OperatorEntity::id)
-        .filter(|id| !bound.contains(id))
+        .filter(|id| !bound.contains(id) && with_action.contains(*id))
         .collect();
     unbound.sort_unstable();
     unbound.dedup();
 
-    // Operators reached from a menu, a button, or the command palette,
-    // plus the ones whose chord lives at a raw binding site the preset
-    // format cannot yet express (hold-repeat, modifier-only gestures).
+    // What is left: operators that do have an action, and whose chord
+    // lives at a raw binding site the preset format cannot yet express
+    // (hold-repeat, modifier-only gestures), or that are deliberately
+    // reached only from a surface of their own.
     let known_unbound: std::collections::HashSet<&str> =
         jackdaw::keybind_settings::UNBOUND_OPERATORS
             .iter()
@@ -279,7 +290,64 @@ fn every_operator_is_bound_or_listed_as_unbound() {
         .collect();
     assert!(
         surprises.is_empty(),
-        "these operators have no chord and are not listed as deliberately unbound: {surprises:?}"
+        "these operators have an input action, no chord, and no entry saying that is deliberate: \
+         {surprises:?}\n\
+         Give each one a chord with `ctx.bind_operator`, or add its id to \
+         `UNBOUND_OPERATORS` in src/keybind_settings.rs saying it is reached from \
+         its own surface instead."
+    );
+}
+
+/// An entry that has since been given a chord is a lie the list keeps
+/// telling: it says the operator is deliberately unbound while the keymap
+/// says otherwise, and the next reader believes the list.
+#[test]
+fn no_listed_unbound_operator_actually_holds_a_chord() {
+    let mut app = headless_app();
+    app.finish();
+    app.update();
+    let defaults = classic(&mut app);
+    let resolved = resolve_keymap(&defaults, &UserKeymap::default());
+
+    let bound: std::collections::HashSet<&str> = resolved
+        .bindings
+        .iter()
+        .map(|b| b.operator.as_str())
+        .collect();
+    let stale: Vec<&str> = jackdaw::keybind_settings::UNBOUND_OPERATORS
+        .iter()
+        .copied()
+        .filter(|id| bound.contains(id))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "these operators are listed as deliberately unbound and hold a chord anyway; \
+         drop them from `UNBOUND_OPERATORS` in src/keybind_settings.rs: {stale:?}"
+    );
+}
+
+/// The other half of the same rot: an entry for an operator that has no
+/// input action at all is now derived, so the entry says nothing.
+#[test]
+fn no_listed_unbound_operator_is_already_exempt_without_an_action() {
+    let mut app = headless_app();
+    app.finish();
+    app.update();
+    let world = app.world_mut();
+    let with_action: std::collections::HashSet<String> = world
+        .query::<&OperatorAction>()
+        .iter(world)
+        .map(|action| action.0.to_string())
+        .collect();
+    let redundant: Vec<&str> = jackdaw::keybind_settings::UNBOUND_OPERATORS
+        .iter()
+        .copied()
+        .filter(|id| !with_action.contains(*id))
+        .collect();
+    assert!(
+        redundant.is_empty(),
+        "these operators have no input action, so they are exempt without being listed; \
+         drop them from `UNBOUND_OPERATORS` in src/keybind_settings.rs: {redundant:?}"
     );
 }
 
