@@ -137,6 +137,78 @@ fn a_chord_this_session_shared_is_the_warning() {
     );
 }
 
+/// A command moved onto a chord the shipped keymap already shares joins
+/// that sharing set, and a set this session changed is the user's own to
+/// sort out. Keying the neutral badge on the chord alone gave the joiner --
+/// and everyone already on the chord -- the shipped Info marker, which is
+/// exactly the case the warning exists for.
+#[test]
+fn joining_a_shipped_shared_chord_is_the_warning_for_everyone_on_it() {
+    use jackdaw_api_internal::keymap::PresetInput;
+
+    let mut app = dialog_app();
+    let (shown, glyph) = badge_of(&mut app, "entity.delete");
+    assert!(shown, "the fixture's row starts on a shipped shared chord");
+    assert_eq!(
+        glyph,
+        Icon::Info.unicode().to_string(),
+        "precondition: a shipped share is the neutral marker",
+    );
+    let shipped = app
+        .world()
+        .resource::<PendingKeymapChanges>()
+        .chords_of("entity.delete");
+
+    app.world_mut()
+        .resource_mut::<PendingKeymapChanges>()
+        .rebind("entity.duplicate", PresetInput::key("Delete"));
+    app.update();
+
+    let (shown, glyph) = badge_of(&mut app, "entity.duplicate");
+    assert!(shown, "the row that joined says the chord is claimed twice");
+    assert_eq!(
+        glyph,
+        Icon::TriangleAlert.unicode().to_string(),
+        "and says it as a warning, because this session put it there",
+    );
+    let (_, glyph) = badge_of(&mut app, "entity.delete");
+    assert_eq!(
+        glyph,
+        Icon::TriangleAlert.unicode().to_string(),
+        "and so does everyone else on the chord: the set is not the shipped one",
+    );
+    assert_eq!(
+        app.world()
+            .resource::<PendingKeymapChanges>()
+            .chords_of("entity.delete"),
+        shipped,
+        "the command already there kept the chord it had",
+    );
+}
+
+/// The other direction: a command leaving a shipped sharing set leaves the
+/// commands still on it sharing exactly what they shipped sharing, which is
+/// nothing new to decide about.
+#[test]
+fn leaving_a_shipped_shared_chord_leaves_the_rest_neutral() {
+    use jackdaw_api_internal::keymap::PresetInput;
+
+    let mut app = dialog_app();
+    app.world_mut()
+        .resource_mut::<PendingKeymapChanges>()
+        .rebind("entity.delete", PresetInput::key("F13"));
+    app.update();
+
+    let remaining: Vec<String> = app
+        .world()
+        .resource::<PendingKeymapChanges>()
+        .user_conflict_lines();
+    assert!(
+        remaining.is_empty(),
+        "taking a command off a shared chord made no conflict: {remaining:?}",
+    );
+}
+
 /// Save writes the whole keymap file, and refuses while a file nobody could
 /// read is still sitting where it would write. The dialog dismisses itself
 /// on the click either way, so a refusal it did not report was a rebind

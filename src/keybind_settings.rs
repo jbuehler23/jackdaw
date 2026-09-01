@@ -466,16 +466,31 @@ impl PendingKeymapChanges {
             .any(|other| other.operator != binding.operator && Self::same_chord(other, binding))
     }
 
-    /// Whether the shipped keymap already gives `binding`'s chord to more
-    /// than one command.
+    /// Whether the commands sharing `binding`'s chord are the ones the
+    /// editor shipped it to, and no others.
+    ///
+    /// The set, not the chord. Keying on the chord alone made a rebind onto
+    /// an already-shared chord read as shipped: Escape is shared, so a
+    /// command moved onto Escape in this session got the neutral badge and
+    /// the one thing the badge exists to say went unsaid. A command dropping
+    /// out of a shipped set is still shipped, though -- fewer claimants is
+    /// nothing new to sort out -- so it is a joiner that makes the warning,
+    /// which is what a subset rather than an equality tests for.
     fn is_shipped_share(&self, binding: &PresetBinding) -> bool {
-        self.defaults
+        let shipped = Self::sharers(&self.defaults, binding);
+        shipped.len() > 1 && Self::sharers(&self.bindings, binding).is_subset(&shipped)
+    }
+
+    /// The commands `bindings` gives `binding`'s chord to.
+    fn sharers<'a>(
+        bindings: &'a [PresetBinding],
+        binding: &PresetBinding,
+    ) -> std::collections::BTreeSet<&'a str> {
+        bindings
             .iter()
             .filter(|other| Self::same_chord(other, binding))
             .map(|other| other.operator.as_str())
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-            > 1
+            .collect()
     }
 
     /// Whether two bindings fire on the same press in the same place.
@@ -1350,15 +1365,25 @@ fn refresh_conflict_badges(
         Option<&Children>,
     )>,
     mut glyphs: Query<&mut Text>,
-    added: Query<(), Added<KeymapConflictBadge>>,
+    stirred: Query<
+        (),
+        (
+            With<KeymapConflictBadge>,
+            Or<(Added<KeymapConflictBadge>, Changed<Children>)>,
+        ),
+    >,
 ) {
     let Some(pending) = pending else { return };
-    // No early-out on "nothing changed": a badge's glyph lives in a child
-    // the button spawns a frame or two after the badge itself, so the one
-    // frame the working copy changed on is a frame with nothing to write
-    // to. Every write below is guarded on the value differing instead, so
-    // an idle frame still touches nothing.
-    let _ = added;
+    // The answer costs a pass over every binding per badge, so it is not
+    // worth having every frame the dialog is open. It cannot be the working
+    // copy changing alone, though: a badge's glyph lives in a child the
+    // button builds a frame or two after the badge itself, so the frame the
+    // copy changed on is a frame with nothing to write to. The child
+    // arriving changes the badge's `Children`, which is the second half of
+    // the gate. Every write below is still guarded on the value differing.
+    if !pending.is_changed() && stirred.is_empty() {
+        return;
+    }
     for (badge, mut node, mut tooltip, children) in &mut badges {
         let conflicts = pending.conflicts_of(&badge.0);
         let display = if conflicts.is_empty() {
