@@ -16,6 +16,7 @@ mod modeling_essentials;
 mod positionable_mirror_plane;
 mod selection_undo;
 mod ui_align;
+mod ui_drag_readout;
 mod ui_grouping;
 mod ui_layout_presets;
 mod ui_lock;

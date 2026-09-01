@@ -791,6 +791,7 @@ impl Plugin for UiStagePlugin {
                     sync_marquee_overlay,
                     sync_guide_lines,
                     sync_snap_highlights,
+                    sync_drag_readouts,
                 )
                     .chain(),
             );
@@ -1300,6 +1301,226 @@ fn sync_marquee_overlay(
             ChildOf(stage),
         ));
     }
+}
+
+/// The label a running gesture draws beside the node it is moving.
+#[derive(Component, Clone, Copy)]
+pub struct DragReadout {
+    /// The panel content entity carrying this stage's
+    /// [`Viewport2dPanelHost`].
+    pub host: Entity,
+}
+
+/// The line of the readout stating what the gesture is writing: where the
+/// node is, or how big it is.
+#[derive(Component)]
+pub struct DragReadoutMeasure;
+
+/// The line of the readout stating how far the dragged node is from its
+/// nearest neighbour on each axis.
+#[derive(Component)]
+pub struct DragReadoutSpacing;
+
+/// How far from the node's bottom-right corner the readout sits, in the
+/// stage's logical pixels. Clear of the corner handle, which is
+/// [`HANDLE_SIZE`] across and centred on it.
+const READOUT_OFFSET: f32 = HANDLE_SIZE;
+
+/// Draw order of the readout: above everything else the gesture draws,
+/// because it is the figure the user is watching.
+const READOUT_Z: i32 = OVERLAY_Z + 3;
+
+/// What a gesture's readout says this frame.
+struct Readout {
+    host: Entity,
+    stage: Entity,
+    /// Where the label goes, in the stage's logical pixels.
+    at: Vec2,
+    /// The position or the size, in authored units.
+    measure: String,
+    /// The gaps to the nearest neighbouring edge per axis, or empty when
+    /// there is no neighbour within reach on either.
+    spacing: String,
+}
+
+/// A figure the readout states: whole authored pixels, because that is
+/// what the gesture writes when the canvas is on its pixel lattice and
+/// what an author reads back off the inspector.
+fn readout_figure(value: f32) -> String {
+    format!("{}", value.round())
+}
+
+/// The distance from the dragged rect's edges on one axis to the nearest
+/// sibling edge, or `None` when no sibling offers one.
+///
+/// The gesture's own candidates, so the figure the readout shows is the
+/// same geometry the magnet lands on: the readout says how far there is
+/// to go, and the highlight says when the drag got there.
+fn nearest_sibling_gap(candidates: &[Candidate], near: f32, far: f32) -> Option<f32> {
+    candidates
+        .iter()
+        .filter(|candidate| candidate.kind == CandidateKind::SiblingSide)
+        .map(|candidate| (candidate.at - near).abs().min((candidate.at - far).abs()))
+        .min_by(f32::total_cmp)
+}
+
+/// What the running gesture wants drawn, or `None` when nothing is being
+/// dragged on a canvas being authored.
+fn gesture_readout(world: &World) -> Option<Readout> {
+    let manipulation = world.get_resource::<UiManipulation>()?;
+    let primary = manipulation.nodes.first()?;
+    let host_entity = manipulation.host?;
+    let host = world.get::<Viewport2dPanelHost>(host_entity)?;
+    if host.mode != Viewport2dMode::Edit {
+        return None;
+    }
+    let stage = world.get::<ComputedNode>(host.stage)?;
+    let target_scale = target_pixels_per_stage_pixel(stage.size(), host.target_size);
+    let scale = stage_pixels_per_target_pixel(target_scale, stage.inverse_scale_factor());
+
+    let global = global_node_rect(world, primary.entity)?;
+    let offsets = authored_rect(world, primary.entity)?;
+    let measure = if manipulation.edges == (0, 0) {
+        format!(
+            "{}, {}",
+            readout_figure(offsets.min.x),
+            readout_figure(offsets.min.y)
+        )
+    } else {
+        format!(
+            "{} x {}",
+            readout_figure(offsets.width()),
+            readout_figure(offsets.height())
+        )
+    };
+
+    let gaps = [
+        nearest_sibling_gap(&manipulation.candidates.x, offsets.min.x, offsets.max.x)
+            .map(|gap| format!("x {}", readout_figure(gap))),
+        nearest_sibling_gap(&manipulation.candidates.y, offsets.min.y, offsets.max.y)
+            .map(|gap| format!("y {}", readout_figure(gap))),
+    ];
+    let spacing = gaps.into_iter().flatten().collect::<Vec<_>>().join("  ");
+
+    Some(Readout {
+        host: host_entity,
+        stage: host.stage,
+        at: global.max * scale + Vec2::splat(READOUT_OFFSET),
+        measure,
+        spacing,
+    })
+}
+
+/// Keep one readout drawn beside the node a gesture is dragging.
+///
+/// Exclusive, so it reads the gesture's own geometry through the same
+/// helpers the gesture writes through rather than a second copy of them.
+/// It does nothing at all when no gesture is running, which is nearly
+/// always.
+fn sync_drag_readouts(world: &mut World) {
+    let wanted = gesture_readout(world);
+    let existing: Vec<(Entity, Entity)> = world
+        .query::<(Entity, &DragReadout)>()
+        .iter(world)
+        .map(|(entity, readout)| (entity, readout.host))
+        .collect();
+
+    let Some(readout) = wanted else {
+        for (entity, _) in existing {
+            world.entity_mut(entity).despawn();
+        }
+        return;
+    };
+
+    for (entity, host) in &existing {
+        if *host != readout.host {
+            world.entity_mut(*entity).despawn();
+        }
+    }
+    let label = existing
+        .iter()
+        .find(|(_, host)| *host == readout.host)
+        .map(|(entity, _)| *entity);
+
+    let label = match label {
+        Some(label) => {
+            if let Some(mut node) = world.get_mut::<Node>(label) {
+                node.left = px(readout.at.x);
+                node.top = px(readout.at.y);
+            }
+            label
+        }
+        None => spawn_readout(world, readout.host, readout.stage, readout.at),
+    };
+
+    let lines: Vec<Entity> = world
+        .get::<Children>(label)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    for line in lines {
+        let measure = world.get::<DragReadoutMeasure>(line).is_some();
+        let wanted = if measure {
+            readout.measure.clone()
+        } else {
+            readout.spacing.clone()
+        };
+        if let Some(mut text) = world.get_mut::<Text>(line)
+            && text.0 != wanted
+        {
+            text.0 = wanted.clone();
+        }
+        if let Some(mut node) = world.get_mut::<Node>(line) {
+            let display = if wanted.is_empty() {
+                Display::None
+            } else {
+                Display::Flex
+            };
+            if node.display != display {
+                node.display = display;
+            }
+        }
+    }
+}
+
+/// Spawn the two-line readout: the measure, and the gaps under it.
+fn spawn_readout(world: &mut World, host: Entity, stage: Entity, at: Vec2) -> Entity {
+    let line = |font_colour: Color| {
+        (
+            EditorEntity,
+            Text::new(String::new()),
+            TextFont {
+                font_size: tokens::TEXT_SIZE_SM,
+                ..default()
+            },
+            TextColor(font_colour),
+            Node::default(),
+            Pickable::IGNORE,
+        )
+    };
+    world
+        .spawn((
+            DragReadout { host },
+            EditorEntity,
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(at.x),
+                top: px(at.y),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::axes(px(4.0), px(2.0)),
+                ..default()
+            },
+            BackgroundColor(tokens::SHADOW_COLOR),
+            ZIndex(READOUT_Z),
+            // The label lies over the canvas the gesture is running on, and
+            // the drag it belongs to is delivered underneath it.
+            Pickable::IGNORE,
+            ChildOf(stage),
+        ))
+        .with_children(|parent| {
+            parent.spawn((DragReadoutMeasure, line(tokens::TEXT_PRIMARY)));
+            parent.spawn((DragReadoutSpacing, line(tokens::SNAP_HIGHLIGHT)));
+        })
+        .id()
 }
 
 /// Select the authored node under a press on the stage, in
