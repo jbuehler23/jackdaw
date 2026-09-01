@@ -160,6 +160,16 @@ impl Plugin for HierarchyPlugin {
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::UiSceneRoot>)
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::Scene2dRoot>)
             .add_observer(refresh_icon_on_add::<jackdaw_prefab::components::IsA>)
+            // The world kinds. A row is spawned when `Transform` lands,
+            // and the document applies a patch one component at a time,
+            // so a streamed or pasted entity's kind arrives after its
+            // row and the glyph has to catch up.
+            .add_observer(refresh_icon_on_add::<jackdaw_scene_types::Terrain>)
+            .add_observer(refresh_icon_on_add::<crate::entity_ops::SceneFogVolume>)
+            .add_observer(refresh_icon_on_add::<crate::entity_ops::SceneReflectionProbe>)
+            .add_observer(refresh_icon_on_add::<crate::entity_ops::SceneAnimationPlayer>)
+            .add_observer(refresh_icon_on_add::<crate::entity_ops::SceneAudioSource>)
+            .add_observer(refresh_icon_on_add::<crate::reference_image::ReferenceImage>)
             .add_observer(on_entity_selected)
             .add_observer(on_entity_deselected)
             .add_observer(on_tree_row_dropped)
@@ -171,6 +181,8 @@ impl Plugin for HierarchyPlugin {
             .add_observer(on_visibility_toggled)
             .add_observer(on_prefab_dialog_action)
             .add_observer(on_entity_hidden);
+        #[cfg(feature = "camera_rig")]
+        app.add_observer(refresh_icon_on_add::<jackdaw_camera_rig::CameraRig>);
     }
 }
 
@@ -2968,7 +2980,7 @@ fn apply_hierarchy_filter(
     if filter.is_empty() {
         for (tree_entity, _) in &tree_nodes {
             if let Ok(mut node) = display_query.get_mut(tree_entity) {
-                node.display = Display::Flex;
+                set_display(&mut node, Display::Flex);
             }
         }
         return;
@@ -3007,12 +3019,25 @@ fn apply_hierarchy_filter(
     // Second pass: set display on all tree rows
     for (tree_entity, _) in &tree_nodes {
         if let Ok(mut node) = display_query.get_mut(tree_entity) {
-            node.display = if visible_tree_entities.contains(&tree_entity) {
+            let wanted = if visible_tree_entities.contains(&tree_entity) {
                 Display::Flex
             } else {
                 Display::None
             };
+            set_display(&mut node, wanted);
         }
+    }
+}
+
+/// Write `display` only when it is not already what the node says.
+///
+/// Every write dirties `Node`, and a dirty `Node` is what asks the icon
+/// pass to resolve a glyph again. A filter keystroke touches every row, so
+/// writing the value each row already held would make each keystroke cost
+/// a full re-resolve of the tree for nothing.
+fn set_display(node: &mut Mut<Node>, display: Display) {
+    if node.display != display {
+        node.display = display;
     }
 }
 
@@ -3127,6 +3152,70 @@ mod tests {
         // Once despawned, the lingering id must be rejected.
         world.despawn(ghost);
         assert!(!is_outliner_child(&world, ghost));
+    }
+
+    /// Typing in the filter hides and shows rows. Writing `display` on a
+    /// row dirties its `Node`, and a dirty `Node` is what asks the icon
+    /// pass to resolve that row's glyph again, so a filter that wrote the
+    /// value each row already held would put the whole tree through the
+    /// resolver on every keystroke that changed nothing.
+    #[test]
+    fn a_filter_keystroke_that_changes_nothing_writes_no_display() {
+        use jackdaw_feathers::text_edit::TextEditValue;
+
+        let mut app = App::new();
+        app.add_systems(Update, apply_hierarchy_filter);
+        let sources: Vec<Entity> = ["Panel", "Panel2", "Button"]
+            .iter()
+            .map(|name| app.world_mut().spawn(Name::new(*name)).id())
+            .collect();
+        let rows: Vec<Entity> = sources
+            .iter()
+            .map(|&source| {
+                app.world_mut()
+                    .spawn((TreeNode(source), Node::default()))
+                    .id()
+            })
+            .collect();
+        let filter = app
+            .world_mut()
+            .spawn((HierarchyFilter, TextEditValue("Pan".to_string())))
+            .id();
+        app.update();
+
+        let ticks = |app: &App| -> Vec<bevy::ecs::change_detection::Tick> {
+            rows.iter()
+                .map(|&row| {
+                    app.world()
+                        .entity(row)
+                        .get_ref::<Node>()
+                        .expect("a row is a node")
+                        .last_changed()
+                })
+                .collect()
+        };
+        let before = ticks(&app);
+
+        // A keystroke landing on the same set of visible rows.
+        app.world_mut()
+            .get_mut::<TextEditValue>(filter)
+            .expect("the filter holds a value")
+            .0 = "Pane".to_string();
+        app.update();
+
+        assert_eq!(
+            ticks(&app),
+            before,
+            "the keystroke changed no row's visibility and must write nothing",
+        );
+
+        // And a keystroke that does change one still reaches it.
+        app.world_mut()
+            .get_mut::<TextEditValue>(filter)
+            .expect("the filter holds a value")
+            .0 = "Butt".to_string();
+        app.update();
+        assert_ne!(ticks(&app), before, "a real change still reaches the rows");
     }
 
     #[test]

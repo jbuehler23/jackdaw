@@ -36,7 +36,13 @@ pub(crate) const WORLD_ENTITY_ICONS: &[(&str, Icon)] = &[
     ("jackdaw::entity_ops::SceneReflectionProbe", Icon::Sparkles),
     ("jackdaw::entity_ops::SceneAnimationPlayer", Icon::Play),
     ("jackdaw::entity_ops::SceneAudioSource", Icon::Volume2),
-    ("jackdaw::reference_image::ReferenceImage", Icon::Image),
+    // Not `Image`: that glyph belongs to the `ui.image` widget, and a
+    // reference image is the tracing underlay behind the work rather than
+    // a picture in it.
+    (
+        "jackdaw::reference_image::ReferenceImage",
+        Icon::PictureInPicture,
+    ),
 ];
 
 /// Icon for the camera-rig component, gated to match the `camera_rig`
@@ -73,10 +79,12 @@ impl JackdawExtension for CoreWindowsExtension {
         for (type_path, icon) in world_kind_icons() {
             ctx.register_entity_icon(type_path, icon);
         }
-        for (type_path, icon) in widget_kind_icons() {
-            ctx.register_entity_icon(type_path, icon);
-        }
-        ctx.register_entity_icon_predicate(container_icon);
+        // Last resort, not merely last: every `Node` is a container of
+        // some sort, so a rule saying so would answer for an extension's
+        // own UI kind before the extension had a chance to name it. The
+        // widget rules are registered by the palette extension, which owns
+        // the definitions their glyphs come from.
+        ctx.register_entity_icon_last_resort_predicate(container_icon);
 
         ctx.register_window(
             WindowDescriptor::new(HierarchyWindow::ID)
@@ -577,6 +585,11 @@ impl JackdawExtension for UiPaletteExtension {
         for definition in builtin_widget_definitions() {
             ctx.register_widget(definition);
         }
+        for (type_path, widget_id) in widget_kind_sources() {
+            if let Some(icon) = ctx.widget_definition(widget_id).and_then(|it| it.icon) {
+                ctx.register_entity_icon(type_path, icon);
+            }
+        }
     }
 }
 
@@ -624,20 +637,22 @@ fn world_kind_icons() -> Vec<(String, Icon)> {
 }
 
 /// The component that identifies each built-in UI widget in the
-/// outliner, paired with the widget definition its icon comes from.
+/// outliner, paired with the id of the widget whose glyph it takes.
 ///
-/// The icon is read out of the definition rather than named again here,
-/// so the Add menu and the outliner cannot come to disagree about what a
-/// kind looks like. A toggle switch is a `Checkbox` in the document, so
-/// the two share a glyph; nothing on the entity separates them.
+/// The glyph itself is read back out of the registered definition rather
+/// than named again here, so the Add menu and the outliner cannot come to
+/// disagree about what a kind looks like: an extension that replaces
+/// `ui.button` moves both. A toggle switch is a `Checkbox` in the
+/// document, so the two share a glyph; nothing on the entity separates
+/// them.
 ///
 /// An id with no definition, or a definition with no icon, contributes
 /// nothing, which the outliner icon suite catches.
-fn widget_kind_icons() -> Vec<(String, Icon)> {
+fn widget_kind_sources() -> [(String, &'static str); 8] {
     use bevy::reflect::TypePath;
     use bevy::ui_widgets::{Button, Checkbox, RadioButton, ScrollArea, Slider};
 
-    let sources: [(String, &str); 8] = [
+    [
         (Button::type_path().to_string(), "ui.button"),
         (Checkbox::type_path().to_string(), "ui.checkbox"),
         (RadioButton::type_path().to_string(), "ui.radio"),
@@ -649,19 +664,7 @@ fn widget_kind_icons() -> Vec<(String, Icon)> {
         (ScrollArea::type_path().to_string(), "ui.scroll_area"),
         (Text::type_path().to_string(), "ui.label"),
         (ImageNode::type_path().to_string(), "ui.image"),
-    ];
-
-    let definitions = builtin_widget_definitions();
-    sources
-        .into_iter()
-        .filter_map(|(type_path, widget_id)| {
-            let icon = definitions
-                .iter()
-                .find(|definition| definition.id == widget_id)?
-                .icon?;
-            Some((type_path, icon))
-        })
-        .collect()
+    ]
 }
 
 /// A `Node` that is nothing more particular is a container, and only its

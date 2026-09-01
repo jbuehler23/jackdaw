@@ -533,6 +533,28 @@ impl<'a> ExtensionContext<'a> {
         self
     }
 
+    /// Register a rule asked only once every rule that names a kind has
+    /// declined, for a rule that answers for a whole shape rather than a
+    /// kind: every `Node` is a container of some sort, and a rule saying
+    /// so must not answer ahead of an extension that has a name for this
+    /// particular one.
+    pub fn register_entity_icon_last_resort_predicate(
+        &mut self,
+        predicate: crate::entity_icons::IconPredicate,
+    ) -> &mut Self {
+        self.world
+            .get_resource_or_insert_with(EntityIconRegistry::default)
+            .register_last_resort_predicate(predicate);
+        self
+    }
+
+    /// The widget definition registered under `id`, so a registration can
+    /// read what the widget vocabulary already says about a kind rather
+    /// than restating it.
+    pub fn widget_definition(&self, id: &str) -> Option<std::sync::Arc<WidgetDefinition>> {
+        self.world.get_resource::<WidgetRegistry>()?.get(id)
+    }
+
     /// Add an inspector category tab. The six built-in categories are
     /// pre-registered; this appends or replaces by id.
     pub fn register_inspector_category(

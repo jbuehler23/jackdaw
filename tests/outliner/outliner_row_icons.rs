@@ -47,6 +47,45 @@ fn add_widget(app: &mut App, parent: Entity, definition: &str) -> Entity {
     entity
 }
 
+/// The glyph the outliner is actually drawing for `source`.
+///
+/// row -> `TreeRowContent` -> `TreeRowDot` -> the glyph text, the path the
+/// outliner writes the icon down. Asserting here rather than on the
+/// resolver is what says the row caught up, which is a separate thing from
+/// the rule being right.
+fn drawn(app: &App, source: Entity) -> String {
+    use jackdaw_widgets::tree_view::{TreeNode, TreeRowContent, TreeRowDot};
+    let world = app.world();
+    let row_entity = world
+        .iter_entities()
+        .find(|entity| {
+            entity
+                .get::<TreeNode>()
+                .is_some_and(|node| node.0 == source)
+        })
+        .expect("the entity has an outliner row")
+        .id();
+    let child_with = |parent: Entity, has: &dyn Fn(Entity) -> bool| -> Option<Entity> {
+        world
+            .get::<Children>(parent)?
+            .iter()
+            .find(|&child| has(child))
+    };
+    let content = child_with(row_entity, &|e| world.get::<TreeRowContent>(e).is_some())
+        .expect("a row has content");
+    let dot = child_with(content, &|e| world.get::<TreeRowDot>(e).is_some())
+        .expect("a row draws a glyph");
+    let glyph = world
+        .get::<Children>(dot)
+        .and_then(|children| children.iter().next())
+        .expect("the glyph slot holds a text");
+    world
+        .get::<Text>(glyph)
+        .expect("the glyph slot holds a text")
+        .0
+        .clone()
+}
+
 fn icon_of(app: &App, entity: Entity) -> Option<char> {
     registered_icon(app.world(), entity).map(Icon::unicode)
 }
@@ -155,38 +194,7 @@ fn the_drawn_row_glyph_follows_the_value() {
     let (mut app, root) = outliner_app();
     let row = add_widget(&mut app, root, "ui.row");
 
-    // row -> TreeRowContent -> TreeRowDot -> the glyph text, the path
-    // the outliner writes the icon down.
-    let drawn = |app: &App| -> String {
-        use jackdaw_widgets::tree_view::{TreeNode, TreeRowContent, TreeRowDot};
-        let world = app.world();
-        let row_entity = world
-            .iter_entities()
-            .find(|entity| entity.get::<TreeNode>().is_some_and(|node| node.0 == row))
-            .expect("the widget has an outliner row")
-            .id();
-        let child_with = |parent: Entity, has: &dyn Fn(Entity) -> bool| -> Option<Entity> {
-            world
-                .get::<Children>(parent)?
-                .iter()
-                .find(|&child| has(child))
-        };
-        let content = child_with(row_entity, &|e| world.get::<TreeRowContent>(e).is_some())
-            .expect("a row has content");
-        let dot = child_with(content, &|e| world.get::<TreeRowDot>(e).is_some())
-            .expect("a row draws a glyph");
-        let glyph = world
-            .get::<Children>(dot)
-            .and_then(|children| children.iter().next())
-            .expect("the glyph slot holds a text");
-        world
-            .get::<Text>(glyph)
-            .expect("the glyph slot holds a text")
-            .0
-            .clone()
-    };
-
-    assert_eq!(drawn(&app), Icon::Columns3.unicode().to_string());
+    assert_eq!(drawn(&app, row), Icon::Columns3.unicode().to_string());
 
     app.world_mut()
         .get_mut::<Node>(row)
@@ -196,7 +204,7 @@ fn the_drawn_row_glyph_follows_the_value() {
     app.update();
 
     assert_eq!(
-        drawn(&app),
+        drawn(&app, row),
         Icon::Rows3.unicode().to_string(),
         "the drawn glyph must follow the value, not only the resolver"
     );
@@ -285,5 +293,84 @@ fn a_scene_root_and_a_prefab_instance_win_over_what_they_are_made_of() {
         icon_of(&app, instance),
         Some(Icon::Component.unicode()),
         "a prefab instance is a prefab instance before it is a mesh"
+    );
+}
+
+/// A widget's glyph reaches the row it is added to, not only the resolver:
+/// the row is spawned by one observer and the glyph written by another, and
+/// the two only agree if the second one runs.
+#[test]
+fn an_added_widget_draws_its_glyph_in_the_row() {
+    let (mut app, root) = outliner_app();
+    let button = add_widget(&mut app, root, "ui.button");
+    let label = add_widget(&mut app, root, "ui.label");
+
+    let menu_icon = |app: &App, id: &str| {
+        app.world()
+            .resource::<WidgetRegistry>()
+            .get(id)
+            .and_then(|definition| definition.icon)
+            .unwrap_or_else(|| panic!("{id} has a glyph"))
+            .unicode()
+            .to_string()
+    };
+    assert_eq!(drawn(&app, button), menu_icon(&app, "ui.button"));
+    assert_eq!(drawn(&app, label), menu_icon(&app, "ui.label"));
+}
+
+/// A row is spawned when `Transform` lands, and the document applies a
+/// patch one component at a time, so a streamed or pasted terrain's kind
+/// arrives after its row. Without an observer for it the row keeps the
+/// fallback dot for the rest of the session.
+#[test]
+fn a_terrain_gets_its_glyph_when_the_kind_lands_after_the_row() {
+    let (mut app, _root) = outliner_app();
+    let source = app
+        .world_mut()
+        .spawn((Name::new("Terrain"), Transform::default()))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), source);
+    app.update();
+    app.update();
+    assert_ne!(
+        drawn(&app, source),
+        Icon::Mountain.unicode().to_string(),
+        "nothing has said it is a terrain yet",
+    );
+
+    app.world_mut()
+        .entity_mut(source)
+        .insert(jackdaw_scene_types::Terrain::default());
+    app.update();
+    app.update();
+
+    assert_eq!(
+        drawn(&app, source),
+        Icon::Mountain.unicode().to_string(),
+        "the row caught up with the kind that landed after it",
+    );
+}
+
+/// Every `Node` is a container of some kind, so the rule saying so has to
+/// stand behind the rules that name kinds, including the ones an extension
+/// loaded after the outliner registers. It used to answer first, which made
+/// every such rule unreachable.
+#[test]
+fn an_extension_rule_on_a_node_is_reachable_past_the_container_fallback() {
+    let mut app = palette_app();
+    let spawn_point = app
+        .world_mut()
+        .spawn((
+            Name::new("Spawn"),
+            jackdaw_multiplayer::SpawnPoint::default(),
+            Node::default(),
+        ))
+        .id();
+    app.update();
+
+    assert_eq!(
+        icon_of(&app, spawn_point),
+        Some(Icon::MapPin.unicode()),
+        "the extension's rule must be reachable on an entity the fallback also matches",
     );
 }
