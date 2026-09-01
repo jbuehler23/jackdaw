@@ -214,7 +214,9 @@ fn insertion_zone(after: bool) -> impl Bundle {
             |mut over: On<Pointer<DragOver>>,
              zones: Query<&TreeRowInsertZone>,
              parents: Query<&ChildOf>,
+             children: Query<&Children>,
              tree_nodes: Query<&TreeNode>,
+             expanded: Query<&TreeNodeExpanded>,
              row_children: Query<(), With<TreeRowChildren>>,
              transforms: Query<(&ComputedNode, &UiGlobalTransform)>,
              mut line: ResMut<TreeDropLine>| {
@@ -226,7 +228,9 @@ fn insertion_zone(after: bool) -> impl Bundle {
                     cursor,
                     &zones,
                     &parents,
+                    &children,
                     &tree_nodes,
+                    &expanded,
                     &row_children,
                     &transforms,
                 )
@@ -247,7 +251,9 @@ fn insertion_zone(after: bool) -> impl Bundle {
             |mut drop: On<Pointer<DragDrop>>,
              mut commands: Commands,
              parents: Query<&ChildOf>,
+             children: Query<&Children>,
              tree_nodes: Query<&TreeNode>,
+             expanded: Query<&TreeNodeExpanded>,
              zones: Query<&TreeRowInsertZone>,
              row_children: Query<(), With<TreeRowChildren>>,
              transforms: Query<(&ComputedNode, &UiGlobalTransform)>,
@@ -264,7 +270,9 @@ fn insertion_zone(after: bool) -> impl Bundle {
                     cursor,
                     &zones,
                     &parents,
+                    &children,
                     &tree_nodes,
+                    &expanded,
                     &row_children,
                     &transforms,
                 ) else {
@@ -290,13 +298,15 @@ fn insertion_zone(after: bool) -> impl Bundle {
 
 /// Which row's gap the pointer is in, and at what depth.
 ///
-/// An expanded row's after-gap is drawn in the same place as its last
-/// descendant's, because the descendant is the last thing under it. Taking
-/// the deepest one every time makes "after the parent" unreachable: there
-/// is no pixel that means it. So the candidates are the row the zone
-/// belongs to and, walking up, each ancestor whose last child it is; the
-/// pointer's x picks between them against the indent of each level, the
-/// way it does in a file tree.
+/// An expanded row's after-gap is drawn on the same pixels as its last
+/// descendant's, because the descendant is the last thing under it. So one
+/// strip stands for several places a drop could land, and which zone
+/// entity the picking backend hands over says nothing about which of them
+/// the user meant: the zones are spawned after the rows, so the shallowest
+/// one wins the pick every time. The candidates are therefore collected
+/// from the row tree ([`coincident_after_gaps`]), and the pointer's x
+/// picks between them against the indent each level is actually drawn at,
+/// the way it does in a file tree.
 ///
 /// Returns `(row, depth)`. `None` for a zone that is not under a row.
 fn resolve_drop_depth(
@@ -304,7 +314,9 @@ fn resolve_drop_depth(
     cursor: Vec2,
     zones: &Query<&TreeRowInsertZone>,
     parents: &Query<&ChildOf>,
+    children: &Query<&Children>,
     tree_nodes: &Query<&TreeNode>,
+    expanded: &Query<&TreeNodeExpanded>,
     row_children: &Query<(), With<TreeRowChildren>>,
     transforms: &Query<(&ComputedNode, &UiGlobalTransform)>,
 ) -> Option<(Entity, usize)> {
@@ -319,29 +331,118 @@ fn resolve_drop_depth(
         return Some((row, depth));
     }
 
-    let mut candidates = vec![(row, depth)];
+    let candidates = coincident_after_gaps(
+        row,
+        depth,
+        parents,
+        children,
+        tree_nodes,
+        expanded,
+        row_children,
+    );
+    Some(level_at_cursor(&candidates, cursor.x, transforms))
+}
+
+/// Every row whose after-gap is drawn on the same pixels as `row`'s,
+/// shallowest first, `row` included.
+///
+/// Downwards: an expanded row's gap sits below its last descendant, so
+/// that descendant's own gap is the same strip. Upwards: when `row` is the
+/// last thing under its parent, the parent's gap is that strip too.
+fn coincident_after_gaps(
+    row: Entity,
+    depth: usize,
+    parents: &Query<&ChildOf>,
+    children: &Query<&Children>,
+    tree_nodes: &Query<&TreeNode>,
+    expanded: &Query<&TreeNodeExpanded>,
+    row_children: &Query<(), With<TreeRowChildren>>,
+) -> Vec<(Entity, usize)> {
+    let mut above = Vec::new();
     let mut current = row;
-    while let Some((parent_row, parent_depth)) =
-        enclosing_row_if_last(current, parents, tree_nodes, row_children)
-    {
-        candidates.push((parent_row, parent_depth));
+    let mut current_depth = depth;
+    // A tree is not deep; the bounds here guard against a cycle rather
+    // than limiting anything anyone builds.
+    for _ in 0..64 {
+        let Some(parent_row) = enclosing_row_if_last(current, parents, children, row_children)
+        else {
+            break;
+        };
+        if tree_nodes.get(parent_row).is_err() || current_depth == 0 {
+            break;
+        }
+        current_depth -= 1;
+        above.push((parent_row, current_depth));
         current = parent_row;
     }
-    if candidates.len() == 1 {
-        return candidates.pop();
-    }
+    above.reverse();
 
-    // The level the pointer is pointing at, measured from the tree's own
-    // left edge rather than the row's, so it does not move with the row.
-    let left = transforms
-        .get(zone)
-        .map(|(computed, transform)| transform.translation.x - computed.size().x / 2.0)
-        .unwrap_or(cursor.x);
-    let step = INDENT_WIDTH + tokens::SPACING_SM;
-    let pointed = ((cursor.x - left) / step).floor().max(0.0) as usize;
+    let mut candidates = above;
+    candidates.push((row, depth));
+
+    let mut current = row;
+    let mut current_depth = depth;
+    for _ in 0..64 {
+        let Some(last) =
+            last_visible_child_row(current, children, tree_nodes, expanded, row_children)
+        else {
+            break;
+        };
+        current_depth += 1;
+        candidates.push((last, current_depth));
+        current = last;
+    }
     candidates
-        .into_iter()
-        .min_by_key(|(_, depth)| depth.abs_diff(pointed))
+}
+
+/// The last row drawn under `row`, when `row` is expanded and holds any.
+fn last_visible_child_row(
+    row: Entity,
+    children: &Query<&Children>,
+    tree_nodes: &Query<&TreeNode>,
+    expanded: &Query<&TreeNodeExpanded>,
+    row_children: &Query<(), With<TreeRowChildren>>,
+) -> Option<Entity> {
+    if !expanded.get(row).is_ok_and(|expanded| expanded.0) {
+        return None;
+    }
+    let container = children
+        .get(row)
+        .ok()?
+        .iter()
+        .find(|&child| row_children.get(child).is_ok())?;
+    children
+        .get(container)
+        .ok()?
+        .iter()
+        .rev()
+        .find(|&child| tree_nodes.get(child).is_ok())
+}
+
+/// The candidate the pointer is pointing at: the deepest one whose own
+/// indent it has reached, and the shallowest when it has reached none.
+///
+/// Both sides of the comparison are logical pixels. `UiGlobalTransform`
+/// and `ComputedNode` are physical, and `Pointer::pointer_location` is
+/// logical, so at any scale factor but 1 an unconverted comparison pins
+/// every gap to the shallowest level.
+fn level_at_cursor(
+    candidates: &[(Entity, usize)],
+    cursor_x: f32,
+    transforms: &Query<(&ComputedNode, &UiGlobalTransform)>,
+) -> (Entity, usize) {
+    let mut chosen = candidates[0];
+    for &(row, depth) in candidates {
+        let Ok((computed, transform)) = transforms.get(row) else {
+            continue;
+        };
+        let scale = computed.inverse_scale_factor();
+        let left = (transform.translation.x - computed.size().x / 2.0) * scale;
+        if cursor_x >= left {
+            chosen = (row, depth);
+        }
+    }
+    chosen
 }
 
 /// How many levels deep `row` sits, counting the child containers crossed
@@ -372,14 +473,17 @@ fn row_depth(
 fn enclosing_row_if_last(
     row: Entity,
     parents: &Query<&ChildOf>,
-    tree_nodes: &Query<&TreeNode>,
+    children: &Query<&Children>,
     row_children: &Query<(), With<TreeRowChildren>>,
-) -> Option<(Entity, usize)> {
+) -> Option<Entity> {
     let &ChildOf(container) = parents.get(row).ok()?;
     row_children.get(container).ok()?;
+    let last = children.get(container).ok()?.iter().next_back()?;
+    if last != row {
+        return None;
+    }
     let &ChildOf(parent_row) = parents.get(container).ok()?;
-    tree_nodes.get(parent_row).ok()?;
-    Some((parent_row, row_depth(parent_row, parents, row_children)))
+    Some(parent_row)
 }
 
 /// The row's expand toggle container, reached as
@@ -843,9 +947,15 @@ pub fn sync_tree_drop_line(
     let side = zones.get(zone).is_ok_and(|side| side.after);
     // The gap the zone stands for is its own outer edge: the top of the
     // strip above a row, the bottom of the strip below one.
+    //
+    // Converted to logical pixels before it is written, because that is
+    // what a `Node` offset is measured in while `UiGlobalTransform` and
+    // `ComputedNode` are physical: at a scale factor of 2 the raw figure
+    // would put the line twice as far down the tree as the gap it marks.
+    let scale = root_computed.inverse_scale_factor();
     let centre =
         zone_transform.translation.y + if side { 1.0 } else { -1.0 } * zone_computed.size().y / 2.0;
-    let top = centre - (root_transform.translation.y - root_computed.size().y / 2.0);
+    let top = (centre - (root_transform.translation.y - root_computed.size().y / 2.0)) * scale;
     let left = line.indent;
 
     match indicators.iter().next() {

@@ -441,57 +441,176 @@ fn a_multi_selection_drop_is_one_history_entry() {
     );
 }
 
-/// A parent's after-gap is drawn in the same place as its last
-/// descendant's: the descendant is the last thing under it, so both gaps
-/// are the same line on screen. Taking the deepest one every time makes
-/// "after the parent" a place with no pixel, so the pointer's x picks
-/// between the levels against their indents.
+/// The gap below a nest of last children is one strip standing for
+/// several places at once, and which zone entity the pick hands over says
+/// nothing about which of them was meant: a row's own after-gap is a later
+/// sibling than the container holding its children, so it is drawn over
+/// every gap nested inside it and wins every pick there. The level is the
+/// pointer's x against each candidate row's own indent.
 #[test]
-fn the_gap_below_a_last_child_means_the_level_the_pointer_is_at() {
-    use bevy::camera::{NormalizedRenderTarget, RenderTarget};
-    use bevy::picking::events::DragDrop;
-    use bevy::picking::pointer::{Location, PointerId};
-    use bevy::window::{PrimaryWindow, WindowRef};
-    use jackdaw_widgets::tree_view::TreeRowInsertZone;
+fn the_gap_below_a_nest_of_last_children_means_the_level_the_pointer_is_at() {
+    let mut app = drop_depth_app(1.0);
+    let nest = nest_of_three(&mut app);
 
+    let (zone, gap) = picked_gap(&mut app, &nest);
+
+    // Far right: the deepest level, so the drop stays where it is.
+    drop_at(&mut app, zone, nest.leaf_row, Vec2::new(300.0, gap.y));
+    assert_eq!(
+        app.world().get::<ChildOf>(nest.leaf).map(ChildOf::parent),
+        Some(nest.middle),
+        "at its own indent the drop is a no-op among its siblings",
+    );
+
+    // One level in: after the middle row, so a sibling of it.
+    drop_at(
+        &mut app,
+        zone,
+        nest.leaf_row,
+        Vec2::new(gap.middle_indent, gap.y),
+    );
+    assert_eq!(
+        app.world().get::<ChildOf>(nest.leaf).map(ChildOf::parent),
+        Some(nest.outer),
+        "at the middle row's indent the drop means after that row",
+    );
+
+    // Far left: the outermost level, so out of the nest entirely.
+    let (zone, gap) = picked_gap(&mut app, &nest);
+    drop_at(&mut app, zone, nest.leaf_row, Vec2::new(0.0, gap.y));
+    assert_eq!(
+        app.world().get::<ChildOf>(nest.leaf).map(ChildOf::parent),
+        None,
+        "at the outer indent the drop means after the outermost row",
+    );
+}
+
+/// The pointer's position is logical pixels and a laid-out node's is
+/// physical, so the two only agree at a scale factor of 1. Unconverted,
+/// every indent reads as further right than it is drawn, and a pointer
+/// resting on one level is answered with a shallower one.
+#[test]
+fn the_level_the_pointer_is_at_survives_a_scale_factor() {
+    let mut app = drop_depth_app(2.0);
+    let nest = nest_of_three(&mut app);
+    assert_eq!(
+        app.world()
+            .get::<bevy::ui::ComputedNode>(nest.rows[2])
+            .expect("a laid-out row")
+            .inverse_scale_factor(),
+        0.5,
+        "precondition: the rows are laid out at two physical pixels per logical one",
+    );
+
+    let (zone, gap) = picked_gap(&mut app, &nest);
+    drop_at(
+        &mut app,
+        zone,
+        nest.leaf_row,
+        Vec2::new(gap.middle_indent, gap.y),
+    );
+    assert_eq!(
+        app.world().get::<ChildOf>(nest.leaf).map(ChildOf::parent),
+        Some(nest.outer),
+        "the middle row's indent still means the middle row's level",
+    );
+}
+
+/// The rows and entities of a three-level nest, deepest last.
+struct Nest {
+    outer: Entity,
+    middle: Entity,
+    leaf: Entity,
+    /// The rows of `outer`, `middle` and `leaf`, in that order.
+    rows: [Entity; 3],
+    leaf_row: Entity,
+}
+
+/// Where the one gap under the nest is, and the indents that tell its
+/// levels apart. All logical pixels, as the pointer reports them.
+struct Gap {
+    y: f32,
+    middle_indent: f32,
+}
+
+/// An Outliner panel wide enough for three indents, at `scale`.
+fn drop_depth_app(scale: f32) -> App {
     let mut app = util::editor_test_app();
     app.world_mut().insert_resource(HierarchyShowAll(true));
-    let panel = app
-        .world_mut()
-        .spawn((
-            HierarchyTreeContainer,
-            Node {
-                width: px(320.0),
-                height: px(400.0),
-                ..default()
-            },
-            Visibility::Inherited,
-        ))
+    // What the editor is laid out at on a hidpi screen: a laid-out node's
+    // figures are multiplied by this, while the pointer keeps reporting
+    // logical pixels.
+    app.world_mut().insert_resource(bevy::ui::UiScale(scale));
+    app.world_mut().spawn((
+        HierarchyTreeContainer,
+        Node {
+            width: px(320.0),
+            height: px(400.0),
+            ..default()
+        },
+        Visibility::Inherited,
+    ));
+    app.update();
+    app
+}
+
+/// Outer > Middle > Leaf, every level open, with the deepest row the last
+/// thing under each of the two above it.
+fn nest_of_three(app: &mut App) -> Nest {
+    let world = app.world_mut();
+    let outer = world.spawn((Name::new("Outer"), Node::default())).id();
+    jackdaw::scene_io::register_entity_in_ast(world, outer);
+    let middle = world
+        .spawn((Name::new("Middle"), Node::default(), ChildOf(outer)))
         .id();
+    jackdaw::scene_io::register_entity_in_ast(world, middle);
+    let leaf = world
+        .spawn((Name::new("Leaf"), Node::default(), ChildOf(middle)))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(world, leaf);
+    // A sibling of the outermost row, so "after Outer" is a place that can
+    // be told apart from "inside it".
+    let outsider = world.spawn((Name::new("Outsider"), Node::default())).id();
+    jackdaw::scene_io::register_entity_in_ast(world, outsider);
     app.update();
 
-    let (column, children) = column_of_three(&mut app);
-    let row = app
-        .world()
-        .resource::<TreeIndex>()
-        .get(panel, column)
-        .expect("the column has a row");
-    app.world_mut()
-        .entity_mut(row)
-        .insert(jackdaw_widgets::tree_view::TreeNodeExpanded(true));
+    let panel = app
+        .world_mut()
+        .query_filtered::<Entity, With<HierarchyTreeContainer>>()
+        .single(app.world())
+        .expect("the fixture built one panel");
+    let mut rows = [Entity::PLACEHOLDER; 3];
+    for (slot, source) in [outer, middle, leaf].into_iter().enumerate() {
+        for _ in 0..4 {
+            app.update();
+        }
+        let row = app
+            .world()
+            .resource::<TreeIndex>()
+            .get(panel, source)
+            .unwrap_or_else(|| panic!("the tree shows a row for {source}"));
+        app.world_mut()
+            .entity_mut(row)
+            .insert(jackdaw_widgets::tree_view::TreeNodeExpanded(true));
+        rows[slot] = row;
+    }
     for _ in 0..4 {
         app.update();
     }
+    Nest {
+        outer,
+        middle,
+        leaf,
+        rows,
+        leaf_row: rows[2],
+    }
+}
 
-    let last = *children.last().expect("three children");
-    let last_row = app
-        .world()
-        .resource::<TreeIndex>()
-        .get(panel, last)
-        .expect("the last child has a row");
-    let zone = app
-        .world()
-        .get::<Children>(last_row)
+/// The after-gap belonging to `row`.
+fn after_zone_of(app: &App, row: Entity) -> Entity {
+    use jackdaw_widgets::tree_view::TreeRowInsertZone;
+    app.world()
+        .get::<Children>(row)
         .expect("a row has children")
         .iter()
         .find(|&child| {
@@ -499,65 +618,98 @@ fn the_gap_below_a_last_child_means_the_level_the_pointer_is_at() {
                 .get::<TreeRowInsertZone>(child)
                 .is_some_and(|zone| zone.after)
         })
-        .expect("a row has an after-gap");
+        .expect("a row has an after-gap")
+}
 
-    // A sibling of the column, so a drop "after the column" has somewhere
-    // to be told apart from "after its last child".
-    let outsider = app
-        .world_mut()
-        .spawn((Name::new("Outsider"), Node::default()))
-        .id();
-    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), outsider);
-    app.update();
+/// The zone a drag lands on at the gap below the nest, and the geometry of
+/// that gap.
+///
+/// The zone is the outermost row's, because that is what the pick hands
+/// over: a row's after-gap is a later sibling than the container holding
+/// its children, so it is drawn over every gap nested inside it. That
+/// ordering is asserted here rather than assumed, so a change to it fails
+/// this test instead of quietly aiming it somewhere a drag never lands.
+fn picked_gap(app: &mut App, nest: &Nest) -> (Entity, Gap) {
+    use jackdaw_widgets::tree_view::{TreeRowChildren, TreeRowInsertZone};
 
-    let drop_at = |app: &mut App, x: f32| {
-        let window = app
-            .world_mut()
-            .query_filtered::<Entity, With<PrimaryWindow>>()
-            .single(app.world())
-            .expect("headless apps still have a primary window");
-        let target: NormalizedRenderTarget = RenderTarget::Window(WindowRef::Primary)
-            .normalize(Some(window))
-            .expect("the primary window normalizes");
-        app.world_mut().trigger(bevy::picking::events::Pointer::new(
-            PointerId::Mouse,
-            Location {
-                target,
-                position: Vec2::new(x, 0.0),
-            },
-            DragDrop {
-                button: bevy::picking::pointer::PointerButton::Primary,
-                dropped: last_row,
-                hit: bevy::picking::backend::HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
-            },
-            zone,
-        ));
-        app.update();
-        app.update();
+    for row in nest.rows {
+        let children: Vec<Entity> = app
+            .world()
+            .get::<Children>(row)
+            .expect("a row has children")
+            .iter()
+            .collect();
+        let container = children
+            .iter()
+            .position(|&child| app.world().get::<TreeRowChildren>(child).is_some())
+            .expect("a row holds its children in a container");
+        let gap = children
+            .iter()
+            .position(|&child| {
+                app.world()
+                    .get::<TreeRowInsertZone>(child)
+                    .is_some_and(|zone| zone.after)
+            })
+            .expect("a row has an after-gap");
+        assert!(
+            gap > container,
+            "a row's after-gap is drawn over what is nested in it",
+        );
+    }
+
+    let logical = |entity: Entity| -> Rect {
+        let computed = app
+            .world()
+            .get::<bevy::ui::ComputedNode>(entity)
+            .expect("a laid-out node");
+        let transform = app
+            .world()
+            .get::<bevy::ui::UiGlobalTransform>(entity)
+            .expect("a laid-out node");
+        let scale = computed.inverse_scale_factor();
+        Rect::from_center_size(transform.translation * scale, computed.size() * scale)
     };
+    let strip = logical(after_zone_of(app, nest.leaf_row));
+    let gap = Gap {
+        y: strip.center().y,
+        middle_indent: logical(nest.rows[1]).min.x,
+    };
+    (after_zone_of(app, nest.rows[0]), gap)
+}
 
-    // Far right: the deepest level, so the drop stays among the column's
-    // own children and nothing moves.
-    drop_at(&mut app, 300.0);
-    assert_eq!(
-        ecs_order(app.world(), column),
-        vec!["First", "Second", "Third"],
-        "at the child's own indent the drop is a no-op among its siblings",
-    );
+/// The primary window as a pointer location's target.
+fn window_target(app: &mut App) -> bevy::camera::NormalizedRenderTarget {
+    use bevy::camera::RenderTarget;
+    use bevy::window::{PrimaryWindow, WindowRef};
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(app.world())
+        .expect("headless apps still have a primary window");
+    RenderTarget::Window(WindowRef::Primary)
+        .normalize(Some(window))
+        .expect("the primary window normalizes")
+}
 
-    // Far left: the outer level, so the row leaves the column and lands
-    // beside it.
-    drop_at(&mut app, 0.0);
-    assert_eq!(
-        ecs_order(app.world(), column),
-        vec!["First", "Second"],
-        "at the outer indent the drop means after the column, not inside it",
-    );
-    assert_eq!(
-        app.world().get::<ChildOf>(last).map(ChildOf::parent),
-        None,
-        "and the row is a sibling of the column now",
-    );
+/// Drop `dragged` on `zone` with the pointer at `position`.
+fn drop_at(app: &mut App, zone: Entity, dragged: Entity, position: Vec2) {
+    use bevy::picking::events::DragDrop;
+    use bevy::picking::pointer::{Location, PointerId};
+
+    let target = window_target(app);
+    app.world_mut().trigger(bevy::picking::events::Pointer::new(
+        PointerId::Mouse,
+        Location { target, position },
+        DragDrop {
+            button: bevy::picking::pointer::PointerButton::Primary,
+            dropped: dragged,
+            hit: bevy::picking::backend::HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+        },
+        zone,
+    ));
+    for _ in 0..3 {
+        app.update();
+    }
 }
 
 /// A drag holds what it is carrying, so a closed parent cannot be opened
