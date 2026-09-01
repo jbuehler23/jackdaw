@@ -971,3 +971,36 @@ fn a_keymap_that_would_not_load_is_said_out_loud() {
     let _ = std::fs::remove_file(&path);
     drop(guard);
 }
+
+/// A rescue that could only empty the original leaves a file with nothing
+/// in it. Read as a parse failure, that file is rescued again on the next
+/// launch, and the one after: `.invalid.2`, `.3`, on to the end of the
+/// counter, which then writes over the rescue of the first corruption. An
+/// empty file is a keymap with no overrides, so nothing happens to it.
+#[test]
+fn an_empty_keymap_file_loads_as_no_overrides_and_is_not_rescued() {
+    use jackdaw_api_internal::keymap::load_user_keymap_reporting;
+
+    let guard = CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = empty_config_dir();
+    let path = dir.join("keymap.json");
+    std::fs::write(&path, "").expect("an empty keymap file");
+
+    let (keymap, problem) = load_user_keymap_reporting();
+
+    assert_eq!(keymap, UserKeymap::default(), "it read as no overrides");
+    assert!(
+        !problem.is_some(),
+        "and said nothing was wrong: {}",
+        problem.message,
+    );
+    assert!(
+        !dir.join("keymap.json.invalid").exists(),
+        "nothing was moved aside",
+    );
+
+    let _ = std::fs::remove_file(&path);
+    drop(guard);
+}

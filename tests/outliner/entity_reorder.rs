@@ -872,3 +872,66 @@ fn resting_a_drag_on_a_closed_row_opens_it() {
         "resting on a closed row during a drag opens it",
     );
 }
+
+/// The drop line is drawn from figures in two units: `TreeDropLine.indent`
+/// is logical pixels, while a laid-out node's transform and size are
+/// physical. On a hidpi screen a figure taken from the wrong one puts the
+/// line at twice or half the gap it marks, and every test that reads the
+/// resource rather than the drawn node passes anyway.
+#[test]
+fn the_drop_line_is_drawn_at_the_gap_it_marks_on_a_hidpi_screen() {
+    use jackdaw_feathers::tree_view::TreeDropIndicator;
+    use jackdaw_widgets::tree_view::TreeDropLine;
+
+    const SCALE: f32 = 2.0;
+    const INDENT: f32 = 48.0;
+
+    let mut app = drop_depth_app(SCALE);
+    let nest = nest_of_three(&mut app);
+    let zone = after_zone_of(&app, nest.leaf_row);
+    {
+        let mut line = app.world_mut().resource_mut::<TreeDropLine>();
+        line.zone = Some(zone);
+        line.indent = INDENT;
+    }
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let indicator = app
+        .world_mut()
+        .query_filtered::<Entity, With<TreeDropIndicator>>()
+        .single(app.world())
+        .expect("one drop line is drawn");
+    let root = app
+        .world()
+        .get::<ChildOf>(indicator)
+        .map(ChildOf::parent)
+        .expect("the line hangs off the tree root");
+
+    // Physical, as the layout leaves them: the point of the test is that
+    // the drawn line lands on the gap whatever the scale factor is.
+    let physical = |entity: Entity| -> Rect {
+        let computed = app
+            .world()
+            .get::<bevy::ui::ComputedNode>(entity)
+            .expect("a laid-out node");
+        let transform = app
+            .world()
+            .get::<bevy::ui::UiGlobalTransform>(entity)
+            .expect("a laid-out node");
+        Rect::from_center_size(transform.translation, computed.size())
+    };
+    let gap = physical(zone).max.y;
+    let drawn = physical(indicator);
+    assert!(
+        (drawn.center().y - gap).abs() < 1.5,
+        "the line sits on the gap: it is at {} and the gap is at {gap}",
+        drawn.center().y,
+    );
+    assert!(
+        (drawn.min.x - (physical(root).min.x + INDENT * SCALE)).abs() < 0.5,
+        "and starts at the indent, read as the logical figure it is: {}",
+        drawn.min.x,
+    );
+}

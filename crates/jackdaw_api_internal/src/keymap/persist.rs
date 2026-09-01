@@ -125,24 +125,46 @@ fn rescue_path(path: &std::path::Path) -> std::path::PathBuf {
 /// writes a new file rather than over the one nobody has read yet.
 ///
 /// A rename is the whole of it when it works. When it does not -- a
-/// read-only directory, or a rescue path on another filesystem -- the
-/// bytes are copied and the original is emptied instead, which leaves the
-/// same two facts on disk: a copy that can still be rescued by hand, and
-/// nothing at `path` worth losing. If even that fails the original is left
-/// exactly as it was and the failure is reported, because a half-moved
-/// file is worse than an unmoved one; [`save_user_keymap`] then refuses to
-/// write over it.
+/// read-only directory, or a rescue path on another filesystem -- the bytes
+/// are copied and the original taken away instead. If even that fails the
+/// original is left exactly as it was and the failure is reported, because a
+/// half-moved file is worse than an unmoved one; [`save_user_keymap`] then
+/// refuses to write over it.
 ///
 /// Returns where the file was kept, or why it could not be kept.
 fn rescue_unreadable(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
     let kept = rescue_path(path);
-    let rename = match std::fs::rename(path, &kept) {
-        Ok(()) => return Ok(kept),
-        Err(error) => error,
-    };
-    match std::fs::copy(path, &kept).and_then(|_| std::fs::write(path, "")) {
+    match std::fs::rename(path, &kept) {
         Ok(()) => Ok(kept),
-        Err(copy) => Err(format!("{rename}; and copying it aside failed too: {copy}")),
+        Err(rename) => copy_aside(path, &kept, &rename),
+    }
+}
+
+/// The rename's fallback: copy the bytes to `kept` and take `path` away.
+///
+/// Removing rather than emptying, because an empty file is not nothing. The
+/// next launch reads it, and an emptied keymap that still counted as content
+/// would fail to parse, be rescued a second time into `.invalid.2`, and go on
+/// climbing until the counter ran out and the rescue of the first corruption
+/// was overwritten -- destroying the one file this whole path exists to keep.
+/// Emptying is only the last resort, for a directory that allows a write but
+/// not an unlink.
+fn copy_aside(
+    path: &std::path::Path,
+    kept: &std::path::Path,
+    rename: &std::io::Error,
+) -> Result<std::path::PathBuf, String> {
+    if let Err(copy) = std::fs::copy(path, kept) {
+        return Err(format!("{rename}; and copying it aside failed too: {copy}"));
+    }
+    if std::fs::remove_file(path).is_ok() {
+        return Ok(kept.to_path_buf());
+    }
+    match std::fs::write(path, "") {
+        Ok(()) => Ok(kept.to_path_buf()),
+        Err(empty) => Err(format!(
+            "{rename}; the copy was kept but the original could not be cleared: {empty}"
+        )),
     }
 }
 
@@ -195,6 +217,12 @@ pub fn load_user_keymap_reporting() -> (UserKeymap, KeymapLoadProblem) {
             );
         }
     };
+    // An empty file is a keymap with nothing in it, not a corrupt one. It is
+    // what a rescue that could only empty the original leaves behind, and
+    // reading it as a parse failure would rescue it again every launch.
+    if data.trim().is_empty() {
+        return (UserKeymap::default(), none);
+    }
     match serde_json::from_str::<UserKeymap>(&data) {
         Ok(keymap) => (keymap, none),
         Err(e) => {
@@ -262,8 +290,66 @@ fn fail(reason: impl Into<String>) -> String {
 /// rescue could not move.
 fn unrescued(path: &std::path::Path) -> bool {
     match std::fs::read_to_string(path) {
-        Ok(data) => !data.is_empty() && serde_json::from_str::<UserKeymap>(&data).is_err(),
+        // Empty is what loading calls an empty keymap, so it is not a file
+        // with anything in it to lose.
+        Ok(data) => !data.trim().is_empty() && serde_json::from_str::<UserKeymap>(&data).is_err(),
         // An absent file is nothing to lose; an unreadable one is.
         Err(_) => path.is_file(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "jackdaw_keymap_rescue_{}_{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a directory for the rescue");
+        dir
+    }
+
+    /// The fallback a failed rename takes. Emptying the original instead of
+    /// taking it away leaves a file the next launch reads, fails to parse and
+    /// rescues again, climbing `.invalid.2`, `.3` and on until the counter
+    /// runs out and the first rescue is written over.
+    #[test]
+    fn the_copy_fallback_leaves_nothing_behind_to_be_rescued_again() {
+        let dir = temp_dir("fallback");
+        let path = dir.join("keymap.json");
+        let kept = dir.join("keymap.json.invalid");
+        std::fs::write(&path, "{ this is not json").expect("a corrupt keymap");
+        let rename = std::io::Error::other("rename refused");
+
+        let out = copy_aside(&path, &kept, &rename).expect("the bytes were copied aside");
+
+        assert_eq!(out, kept);
+        assert_eq!(
+            std::fs::read_to_string(&kept).expect("the copy is there"),
+            "{ this is not json",
+            "the bytes were kept byte for byte",
+        );
+        assert!(
+            !path.exists(),
+            "and the original is gone, not sitting there empty",
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file with nothing in it is a keymap with no overrides. Reading it as
+    /// a parse failure is what turns one emptied file into a rescue every
+    /// launch.
+    #[test]
+    fn an_empty_file_is_not_a_file_worth_rescuing() {
+        let dir = temp_dir("empty");
+        let path = dir.join("keymap.json");
+        std::fs::write(&path, "").expect("an empty keymap");
+        assert!(!unrescued(&path));
+        std::fs::write(&path, "\n  \n").expect("a blank keymap");
+        assert!(!unrescued(&path));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
