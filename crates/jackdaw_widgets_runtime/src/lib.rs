@@ -73,6 +73,16 @@ pub struct TextValue(
     pub String,
 );
 
+/// Marks an authored toggle switch.
+///
+/// A switch and a checkbox are the same `Checkbox` component with
+/// different theme tokens, so nothing on the entity says which of the two
+/// the author asked for -- and everything that has to tell them apart, the
+/// outliner's icon first among them, had to guess. This says it.
+#[derive(Component, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component, Default)]
+pub struct ToggleSwitch;
+
 /// Where a binding writes a widget's text: [`TextValue`]'s only field, spelled
 /// the way a bind path spells one.
 ///
@@ -172,6 +182,7 @@ pub fn register_widget_defaults(app: &mut App) {
     use bevy::ui_widgets::{ScrollArea, SliderRange};
 
     app.register_type::<TextValue>();
+    app.register_type::<ToggleSwitch>();
 
     app.register_type::<Button>()
         .register_type::<Checkbox>()

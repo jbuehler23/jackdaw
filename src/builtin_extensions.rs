@@ -654,12 +654,19 @@ fn world_kind_icons() -> Vec<(String, Icon)> {
 ///
 /// An id with no definition, or a definition with no icon, contributes
 /// nothing, which the outliner icon suite catches.
-fn widget_kind_sources() -> [(String, &'static str); 8] {
+fn widget_kind_sources() -> [(String, &'static str); 9] {
     use bevy::reflect::TypePath;
     use bevy::ui_widgets::{Button, Checkbox, RadioButton, ScrollArea, Slider};
 
     [
         (Button::type_path().to_string(), "ui.button"),
+        // Before the checkbox: a toggle switch is a `Checkbox` too, and
+        // the first rule that matches wins, so the narrower one is asked
+        // first or the switch shows the checkbox's icon.
+        (
+            jackdaw_widgets_runtime::ToggleSwitch::type_path().to_string(),
+            "ui.toggle",
+        ),
         (Checkbox::type_path().to_string(), "ui.checkbox"),
         (RadioButton::type_path().to_string(), "ui.radio"),
         (Slider::type_path().to_string(), "ui.slider"),
@@ -959,6 +966,7 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
                             ..default()
                         },
                         Checkbox,
+                        jackdaw_widgets_runtime::ToggleSwitch,
                         TabIndex(0),
                         FocusIndicator,
                         EntityCursor::System(SystemCursorIcon::Pointer),
