@@ -1215,7 +1215,7 @@ fn a_reloaded_text_input_keeps_its_text() {
     app.update();
 
     let mut reloaded = round_trip(&mut app);
-    let loaded = by_name(reloaded.world_mut(), "Text Input");
+    let loaded = by_name(reloaded.world_mut(), "TextInput");
     assert_eq!(
         reloaded
             .world()
@@ -1823,4 +1823,84 @@ fn a_child_of_an_unregistered_parent_is_not_remembered() {
     app.update();
     app.update();
     assert_eq!(rows_for(app.world_mut(), generated), 0);
+}
+
+/// A widget is a subtree, so a second one arrives carrying a second copy
+/// of every name inside the first. A name is what an operator clause
+/// addresses an entity by, so two `Caption`s make one of them unreachable
+/// -- the same reason a paste renames a whole pasted subtree.
+#[test]
+fn a_second_widget_uniquifies_its_descendants_too() {
+    let mut app = util::editor_test_app();
+    seed_ui_scene_root(app.world_mut());
+    app.update();
+
+    let first = instantiate_widget(app.world_mut(), "ui.button").expect("a button");
+    app.update();
+    let second = instantiate_widget(app.world_mut(), "ui.button").expect("another button");
+    app.update();
+
+    let names = |app: &App, root: Entity| -> Vec<String> {
+        let mut out = Vec::new();
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            if let Some(name) = app.world().get::<Name>(entity) {
+                out.push(name.as_str().to_string());
+            }
+            stack.extend(
+                app.world()
+                    .get::<Children>(entity)
+                    .into_iter()
+                    .flat_map(Children::iter),
+            );
+        }
+        out.sort();
+        out
+    };
+    let first_names = names(&app, first);
+    let second_names = names(&app, second);
+    assert!(
+        first_names.len() > 1,
+        "the fixture's widget is a subtree: {first_names:?}",
+    );
+    for name in &second_names {
+        assert!(
+            !first_names.contains(name),
+            "the second widget kept a name the first already had: {name} in {second_names:?}",
+        );
+    }
+}
+
+/// An entity `Name` is what a `name=` value in an operator clause carries,
+/// and a clause has no quoting, so a name with a space in it cannot be
+/// addressed at all. The menu labels keep their spaces; the entities do
+/// not.
+#[test]
+fn every_widget_names_its_entity_without_a_space() {
+    let mut app = util::editor_test_app();
+    seed_ui_scene_root(app.world_mut());
+    app.update();
+
+    let ids: Vec<String> = app
+        .world()
+        .resource::<jackdaw_api_internal::WidgetRegistry>()
+        .iter()
+        .map(|definition| definition.id.to_string())
+        .collect();
+    assert!(!ids.is_empty(), "the widget vocabulary is registered");
+
+    for id in ids {
+        let entity = instantiate_widget(app.world_mut(), &id)
+            .unwrap_or_else(|error| panic!("{id}: {error}"));
+        app.update();
+        let name = app
+            .world()
+            .get::<Name>(entity)
+            .map(|name| name.as_str().to_string())
+            .unwrap_or_else(|| panic!("{id} names its root"));
+        assert!(
+            !name.contains(' '),
+            "{id} names its entity `{name}`, which no clause can carry",
+        );
+    }
 }

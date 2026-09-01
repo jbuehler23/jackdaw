@@ -208,7 +208,9 @@ fn declared_params(world: &mut World, id: &str) -> Vec<&'static ParamSpec> {
 /// *adopts* the widget, while a bare `widget.add` puts the widget beside the
 /// selection instead (`ui_palette::instantiate_widget`). Filling `parent` in
 /// from the selection would turn every clause into the adopting form, so a
-/// run of three would build a chain rather than three siblings.
+/// run of three would build a chain rather than three siblings. It is in
+/// [`OPTIONAL_ENTITY_PARAMS`] instead, because leaving it out is the other
+/// form rather than an omission to warn about.
 pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "animation.toggle_keyframe",
     "binding.add",
@@ -221,6 +223,14 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "physics.disable",
     "physics.enable",
 ];
+
+/// `Entity` parameters that mean something by being left out, so a clause
+/// without one is complete rather than short of a target.
+///
+/// The list is `(operator, parameter)`. Everything else declaring an
+/// `Entity` needs one, from the clause or from the selection, and says so
+/// when it gets neither.
+pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] = &[("widget.add", "parent")];
 
 /// How one declared `Entity` parameter was filled in.
 ///
@@ -249,6 +259,9 @@ pub enum EntityParam {
     /// The clause named nothing and this operator does not take the
     /// selection.
     NeedsAName { param: &'static str },
+    /// The clause named nothing, and this parameter means something by
+    /// being absent, so nothing was resolved and nothing was missing.
+    LeftOut { param: &'static str },
     /// The clause named nothing, the operator does take the selection,
     /// and nothing is selected.
     NothingSelected { param: &'static str },
@@ -273,7 +286,7 @@ impl EntityParam {
     /// spelled itself.
     pub fn line(&self, op: &str) -> Option<String> {
         Some(match self {
-            Self::Given { .. } => return None,
+            Self::Given { .. } | Self::LeftOut { .. } => return None,
             Self::Named {
                 param,
                 name,
@@ -387,6 +400,9 @@ pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityPa
                 }
                 None => EntityParam::NoSuchName { param, name },
             },
+            None if OPTIONAL_ENTITY_PARAMS.contains(&(op.id.as_str(), param)) => {
+                EntityParam::LeftOut { param }
+            }
             None if !takes_selection => EntityParam::NeedsAName { param },
             None => match world
                 .get_resource::<Selection>()

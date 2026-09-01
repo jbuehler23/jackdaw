@@ -327,29 +327,42 @@ pub fn register_authored_subtree(world: &mut World, root: Entity) {
     }
 }
 
-/// Give `entity` a name no other scene entity holds, the way a duplicated
-/// subtree gets one.
+/// Give `root` and everything under it names no other scene entity holds,
+/// the way a duplicated subtree gets them.
 ///
 /// A widget definition names its root after the kind it makes, so a second
 /// Button arrives called `Button` again. Two rows reading `Button` in the
 /// outliner name nothing, and an operator clause addressing one by name
 /// reaches whichever the query answers with first.
 ///
-/// Run before the subtree is registered, so the document records the name the
-/// entity ends up with rather than the one the definition wrote.
+/// The whole subtree, not only the root, for the same reason a paste
+/// renames a whole subtree: a widget is a subtree, and a second Button
+/// carries a second `Caption` with it.
+///
+/// Run before the subtree is registered, so the document records the names
+/// the entities end up with rather than the ones the definition wrote.
 fn rename_off_collisions(
     world: &mut World,
-    entity: Entity,
+    root: Entity,
     taken: &mut std::collections::HashSet<String>,
 ) {
-    let Some(name) = world
-        .get::<Name>(entity)
-        .map(|name| name.as_str().to_owned())
-    else {
-        return;
-    };
-    if let Some(free) = crate::entity_ops::claim_free_name(taken, &name) {
-        world.entity_mut(entity).insert(Name::new(free));
+    let mut stack = vec![root];
+    while let Some(entity) = stack.pop() {
+        stack.extend(
+            world
+                .get::<Children>(entity)
+                .map(|children| children.iter().collect::<Vec<_>>())
+                .unwrap_or_default(),
+        );
+        let Some(name) = world
+            .get::<Name>(entity)
+            .map(|name| name.as_str().to_owned())
+        else {
+            continue;
+        };
+        if let Some(free) = crate::entity_ops::claim_free_name(taken, &name) {
+            world.entity_mut(entity).insert(Name::new(free));
+        }
     }
 }
 

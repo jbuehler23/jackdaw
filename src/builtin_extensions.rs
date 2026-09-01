@@ -594,6 +594,12 @@ impl JackdawExtension for UiPaletteExtension {
 }
 
 /// Spawn one authored widget under the resolved parent.
+///
+/// A widget's entity `Name` carries no space, while the name its menu row
+/// shows may: a `name=` value in an operator clause has no quoting, so a
+/// node called `Radio Button` could not be addressed from `JACKDAW_RUN_OP`
+/// or the command palette at all. The menu keeps the readable label; the
+/// entity takes the token.
 fn spawn_widget(world: &mut World, parent: Option<Entity>, bundle: impl Bundle) -> Entity {
     let mut entity = world.spawn(bundle);
     if let Some(parent) = parent {
@@ -912,7 +918,7 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
                 world,
                 context.parent,
                 (
-                    Name::new("Radio Button"),
+                    Name::new("RadioButton"),
                     Node {
                         width: px(18),
                         height: px(18),
@@ -944,7 +950,7 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
                     world,
                     context.parent,
                     (
-                        Name::new("Toggle Switch"),
+                        Name::new("ToggleSwitch"),
                         Node {
                             width: px(40),
                             height: px(22),
@@ -999,7 +1005,7 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
                     world,
                     context.parent,
                     (
-                        Name::new("Text Input"),
+                        Name::new("TextInput"),
                         Node {
                             width: px(200),
                             min_height: px(28),
@@ -1035,7 +1041,7 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
                     world,
                     context.parent,
                     (
-                        Name::new("Scroll Area"),
+                        Name::new("ScrollArea"),
                         Node {
                             width: px(220),
                             height: px(160),

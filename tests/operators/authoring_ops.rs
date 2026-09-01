@@ -1482,3 +1482,30 @@ fn a_reparent_clause_refuses_to_put_an_entity_under_itself() {
         "an entity became its own child"
     );
 }
+
+/// `widget.add` puts a widget beside the selection when no parent is
+/// named, and inside the named node when one is. Leaving `parent` out is
+/// therefore the other form of the operator, not a target the clause
+/// forgot, and the resolver used to warn on every scripted run of it.
+#[test]
+fn widget_add_without_a_parent_is_a_complete_clause() {
+    let mut app = authoring_app();
+    run_finished(&mut app, "scene.new ui=true");
+
+    let outcomes = resolve(&mut app, "widget.add name=ui.panel");
+
+    assert_eq!(
+        outcomes,
+        vec![EntityParam::LeftOut { param: "parent" }],
+        "the absent parent is the operator's other form",
+    );
+    assert!(
+        !outcomes[0].is_refusal(),
+        "so the clause is not refused for it",
+    );
+    assert_eq!(
+        outcomes[0].line("widget.add"),
+        None,
+        "and there is nothing to say about it in the log",
+    );
+}
