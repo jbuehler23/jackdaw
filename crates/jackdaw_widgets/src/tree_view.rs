@@ -89,6 +89,19 @@ pub struct TreeRowVisibilityToggled {
     pub source_entity: Entity,
 }
 
+/// Marker for the lock toggle in a tree row.
+#[derive(Component)]
+pub struct TreeRowLockToggle;
+
+/// Event fired when a lock toggle is clicked.
+#[derive(EntityEvent)]
+pub struct TreeRowLockToggled {
+    #[event_target]
+    pub entity: Entity,
+    /// The source (scene) entity to lock or unlock.
+    pub source_entity: Entity,
+}
+
 /// Marker on the text input during inline rename
 #[derive(Component)]
 pub struct TreeRowInlineRename;

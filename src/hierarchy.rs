@@ -22,8 +22,9 @@ use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuState};
 use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeFocused, TreeIndex, TreeNode, TreeNodeExpanded,
     TreeRowChildren, TreeRowClicked, TreeRowContent, TreeRowDot, TreeRowDropped,
-    TreeRowDroppedOnRoot, TreeRowInlineRename, TreeRowInserted, TreeRowLabel, TreeRowRenamed,
-    TreeRowSelected, TreeRowStartRename, TreeRowVisibilityToggle, TreeRowVisibilityToggled,
+    TreeRowDroppedOnRoot, TreeRowInlineRename, TreeRowInserted, TreeRowLabel, TreeRowLockToggle,
+    TreeRowLockToggled, TreeRowRenamed, TreeRowSelected, TreeRowStartRename,
+    TreeRowVisibilityToggle, TreeRowVisibilityToggled,
 };
 
 use crate::{
@@ -130,6 +131,7 @@ impl Plugin for HierarchyPlugin {
                     spawn_rows_for_late_registrations,
                     refresh_chevrons_on_document_change,
                     refresh_icons_on_node_change,
+                    sync_row_lock_glyphs,
                     // The drag feel: the line saying where a release
                     // would land, the rest that opens a closed row, and
                     // the scroll that reaches past the fold. Row
@@ -188,6 +190,7 @@ impl Plugin for HierarchyPlugin {
             .add_observer(on_tree_row_renamed)
             .add_observer(on_context_menu_action)
             .add_observer(on_visibility_toggled)
+            .add_observer(on_lock_toggled)
             .add_observer(on_prefab_dialog_action)
             .add_observer(on_entity_hidden);
         #[cfg(feature = "camera_rig")]
@@ -2540,6 +2543,105 @@ fn on_visibility_toggled(
         }
         refresh_row_visibility_glyph(world, source, hidden);
     });
+}
+
+/// Lock or unlock an entity from its row, and write the answer into the
+/// document.
+///
+/// The lock is scene data rather than a view state: what it is for is a
+/// backdrop that stays out of the way of every click aimed at what sits on
+/// it, and re-locking that backdrop on every open is exactly the chore the
+/// lock was set to end. So the component goes on the entity and its patch
+/// goes on the document node, and the two come back together on a reload.
+fn on_lock_toggled(event: On<TreeRowLockToggled>, mut commands: Commands) {
+    let source = event.source_entity;
+    commands.queue(move |world: &mut World| {
+        let locked = world.get::<jackdaw_scene_types::Locked>(source).is_none();
+        set_locked(world, source, locked);
+    });
+}
+
+/// Put `entity` in or out of the canvas's reach, in the ECS and in the
+/// document together.
+pub fn set_locked(world: &mut World, entity: Entity, locked: bool) {
+    if locked {
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+            entity_mut.insert(jackdaw_scene_types::Locked);
+        }
+        crate::commands::sync_component_to_ast(
+            world,
+            entity,
+            jackdaw_scene_types::LOCKED_TYPE_PATH,
+            &jackdaw_scene_types::Locked,
+        );
+    } else {
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+            entity_mut.remove::<jackdaw_scene_types::Locked>();
+        }
+        let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        if let Some(node) = ast.ast_for(entity) {
+            ast.remove_component_patch(node, jackdaw_scene_types::LOCKED_TYPE_PATH);
+        }
+    }
+}
+
+/// What a row's padlock is currently drawn as, so the sync only writes a
+/// glyph that has actually changed.
+#[derive(Component)]
+struct RowLockGlyph(bool);
+
+/// Keep every row's padlock saying whether its entity is locked.
+///
+/// A pass rather than a write at the moment the lock changes, because the
+/// two do not happen at the same time: a lock arrives with the document,
+/// before the row exists, and the row's button renders its glyph a frame
+/// after the row is spawned. A row whose glyph is not there yet is left for
+/// the next frame, and a row already saying the right thing is not written
+/// at all.
+fn sync_row_lock_glyphs(
+    mut commands: Commands,
+    rows: Query<(Entity, &TreeNode, Option<&RowLockGlyph>)>,
+    locked: Query<(), With<jackdaw_scene_types::Locked>>,
+    children: Query<&Children>,
+    contents: Query<(), With<TreeRowContent>>,
+    toggles: Query<(), With<TreeRowLockToggle>>,
+    mut glyphs: Query<(&mut Text, &mut TextColor)>,
+) {
+    use jackdaw_feathers::icons::Icon;
+    for (row, node, drawn) in &rows {
+        let wanted = locked.contains(node.0);
+        if drawn.is_some_and(|drawn| drawn.0 == wanted) {
+            continue;
+        }
+        let Some(toggle) = children
+            .get(row)
+            .into_iter()
+            .flatten()
+            .filter(|&&child| contents.contains(child))
+            .flat_map(|&content| children.get(content).into_iter().flatten())
+            .find(|&&child| toggles.contains(child))
+            .copied()
+        else {
+            continue;
+        };
+        let glyph = String::from(if wanted { Icon::Lock } else { Icon::LockOpen }.unicode());
+        let alpha = if wanted {
+            1.0
+        } else {
+            jackdaw_feathers::tree_view::LOCK_IDLE_ALPHA
+        };
+        let mut written = false;
+        for child in children.get(toggle).into_iter().flatten().copied() {
+            if let Ok((mut text, mut color)) = glyphs.get_mut(child) {
+                text.0 = glyph.clone();
+                color.0 = color.0.with_alpha(alpha);
+                written = true;
+            }
+        }
+        if written {
+            commands.entity(row).insert(RowLockGlyph(wanted));
+        }
+    }
 }
 
 /// Sync the eye toggle glyph for every Outliner row of `entity` to its

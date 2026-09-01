@@ -57,7 +57,7 @@ use bevy::{
     ui::{ComputedNode, ComputedStackIndex, ComputedUiTargetCamera, UiGlobalTransform},
 };
 use jackdaw_feathers::tokens;
-use jackdaw_scene_types::CanvasGuides;
+use jackdaw_scene_types::{CanvasGuides, Locked};
 use jackdaw_snap::{SnapLine, SnapRect, snap_edges_2d_with_winners};
 
 use crate::{
@@ -874,6 +874,7 @@ type AuthoredNodes<'w, 's> = Query<
         &'static ComputedNode,
         &'static UiGlobalTransform,
         Option<&'static ComputedStackIndex>,
+        Option<&'static Locked>,
     ),
     Without<EditorEntity>,
 >;
@@ -1214,13 +1215,22 @@ fn spawn_hover_outline(commands: &mut Commands, host: Entity, stage: Entity, rec
 
 /// Collect `entity` and its descendants in tree order, the order
 /// [`topmost_hit`] resolves ties in.
+///
+/// A [`Locked`] node contributes no hit of its own, so a press over it
+/// reaches whatever else is there: the node under it, or the canvas. Its
+/// children still do -- the lock is on the node the author locked, not on
+/// everything inside it -- and nothing is said about the press either way,
+/// because a lock is asking for the clicks to go elsewhere and a notice
+/// per click would be the noise it was set to stop.
 fn collect_stage_hits(
     entity: Entity,
     nodes: &AuthoredNodes,
     children: &Query<&Children>,
     hits: &mut Vec<StageHit>,
 ) {
-    if let Ok((computed, transform, stack)) = nodes.get(entity) {
+    if let Ok((computed, transform, stack, locked)) = nodes.get(entity)
+        && locked.is_none()
+    {
         let size = computed.size();
         if size.x > 0.0 && size.y > 0.0 {
             hits.push(StageHit {

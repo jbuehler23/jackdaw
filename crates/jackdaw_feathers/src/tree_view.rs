@@ -9,8 +9,9 @@ use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeDropLine, TreeFocused, TreeNode,
     TreeNodeExpandToggle, TreeNodeExpanded, TreeRoot, TreeRowChildren, TreeRowClicked,
     TreeRowContent, TreeRowDot, TreeRowDropped, TreeRowDroppedOnRoot, TreeRowInsertZone,
-    TreeRowInserted, TreeRowLabel, TreeRowSelected, TreeRowStartRename, TreeRowVisibilityToggle,
-    TreeRowVisibilityToggled, TreeSpringLoad, TreeView,
+    TreeRowInserted, TreeRowLabel, TreeRowLockToggle, TreeRowLockToggled, TreeRowSelected,
+    TreeRowStartRename, TreeRowVisibilityToggle, TreeRowVisibilityToggled, TreeSpringLoad,
+    TreeView,
 };
 
 use lucide_icons::Icon;
@@ -620,7 +621,8 @@ fn tree_row_content(
                 },
                 ThemedText,
             ),
-            // Visibility toggle (eye icon)
+            // Lock toggle, then the visibility toggle (eye icon)
+            lock_toggle(source, &style.icon_font),
             visibility_toggle(source, &style.icon_font)
         ],
         // Click handler for selection (left-click only)
@@ -780,6 +782,37 @@ fn expand_toggle() -> impl Bundle {
         ),
     )
 }
+
+/// The row's lock control: a tool button whose glyph says whether the
+/// canvas will pick this node up.
+///
+/// A feathers tool button rather than a bare glyph, because it is a
+/// control: it takes the focus ring, the hover and pressed treatments and
+/// the disabled state from the same place every other button in the editor
+/// does. The consumer refreshes the glyph by writing the button's own
+/// caption text; see the editor's `refresh_row_lock_glyph`.
+fn lock_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle + use<> {
+    (
+        TreeRowLockToggle,
+        crate::button::icon_button(
+            crate::button::IconButtonProps::new(Icon::LockOpen).with_alpha(LOCK_IDLE_ALPHA),
+            icon_font,
+        ),
+        observe(
+            move |click: On<crate::button::ButtonClickEvent>, mut commands: Commands| {
+                commands.trigger(TreeRowLockToggled {
+                    entity: click.entity,
+                    source_entity: source,
+                });
+            },
+        ),
+    )
+}
+
+/// How faint an unlocked row's padlock is. The control is on every row and
+/// means nothing on most of them, so it stays out of the way until it is
+/// either hovered or set.
+pub const LOCK_IDLE_ALPHA: f32 = 0.4;
 
 /// Eye icon for toggling entity visibility.
 fn visibility_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle {

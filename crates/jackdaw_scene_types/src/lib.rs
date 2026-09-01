@@ -87,7 +87,8 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<Modifier>()
             .register_type::<UiSceneRoot>()
             .register_type::<Scene2dRoot>()
-            .register_type::<CanvasGuides>();
+            .register_type::<CanvasGuides>()
+            .register_type::<Locked>();
 
         #[cfg(feature = "render")]
         {
@@ -166,6 +167,26 @@ pub struct CanvasGuides {
     /// Lines down the canvas, each fixing an x coordinate.
     pub vertical: Vec<f32>,
 }
+
+/// A node the canvas will not pick up.
+///
+/// A locked node is still there, still drawn, still in the outliner and
+/// still selectable from it; what it stops doing is answering a press on
+/// the canvas. A background image or a frame that everything else is
+/// placed against is the case for it: without a lock, every click aimed at
+/// what sits on top of it lands on the thing underneath.
+///
+/// Editor-only in effect -- a running game never reads it -- but it lives
+/// here rather than in the editor because the save filter drops every type
+/// path under `jackdaw::`, and a lock has to survive the document it was
+/// set on.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+#[reflect(Component, Default, @EditorHidden)]
+pub struct Locked;
+
+/// Reflect type path for [`Locked`], for the paths that name a component
+/// by its path rather than by its type.
+pub const LOCKED_TYPE_PATH: &str = "jackdaw_scene_types::Locked";
 
 /// Picker grouping for a component. Attach via
 /// `#[reflect(@EditorCategory("Your Group"))]`.
