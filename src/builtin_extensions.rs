@@ -1119,7 +1119,7 @@ mod tests {
                 world
                     .spawn(crate::reference_image::ReferenceImage::default())
                     .id(),
-                Icon::Image,
+                Icon::PictureInPicture,
             ),
         ];
         for (entity, expected) in cases {

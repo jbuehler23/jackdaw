@@ -463,14 +463,14 @@ fn configure_draw_brush_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
 }
 
 /// Marker action: Alt+B starts a draw that appends the new brush to
-/// the selected one. Observed by [`dispatch_start_add_append`] which
+/// the selected one. Observed by `dispatch_start_add_append`, which
 /// fires `viewport.draw_brush_modal` with `append=true`.
 #[derive(Default, InputAction)]
 #[action_output(bool)]
 pub struct StartDrawBrushAddAppendAction;
 
 /// Marker action: C starts a Cut-mode draw. Observed by
-/// [`dispatch_start_cut`] which fires `viewport.draw_brush_modal` with
+/// `dispatch_start_cut`, which fires `viewport.draw_brush_modal` with
 /// `mode="Cut"`.
 #[derive(Default, InputAction)]
 #[action_output(bool)]
