@@ -342,7 +342,7 @@ fn field_set_authors_the_document_as_one_undoable_edit() {
     run_finished(&mut app, "history.undo");
     assert_eq!(
         app.world().get::<Node>(root).map(|node| node.width),
-        Some(Val::Auto),
+        Some(percent(100.0)),
         "undo did not restore the width the root started with"
     );
 }
@@ -382,7 +382,7 @@ fn a_name_that_matches_nothing_is_refused_by_the_resolver_not_the_gate() {
     assert_eq!(result, OperatorResult::Cancelled);
     assert_eq!(
         width(&app, root),
-        Some(Val::Auto),
+        Some(percent(100.0)),
         "the selected root was edited as a consolation prize"
     );
 }

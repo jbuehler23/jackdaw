@@ -444,7 +444,8 @@ pub const UI_SCENE_ROOT_NAME: &str = "UiRoot";
 /// The three components: `UiSceneRoot` is what the 2D stage keys on, and its
 /// default `reference_size` is the design resolution that stage frames the
 /// scene at; `TabGroup` is the ancestor tab navigation gathers focusable nodes
-/// from; `Node` makes it a layout parent.
+/// from; [`ui_scene_root_node`] makes it a layout parent the size of that
+/// resolution.
 ///
 /// The name has no space in it on purpose: an operator clause has no quoting,
 /// so a `name=` value cannot carry one and a root called `UI Root` would be
@@ -456,10 +457,36 @@ pub fn seed_ui_scene_root(world: &mut World) -> Entity {
             Name::new(UI_SCENE_ROOT_NAME),
             jackdaw_scene_types::UiSceneRoot::default(),
             TabGroup::default(),
-            Node::default(),
+            ui_scene_root_node(),
         ))
         .id();
     crate::scene_io::register_entity_in_ast(world, root);
     crate::selection::select_only(world, root);
     root
+}
+
+/// The `Node` a UI scene root carries: the canvas box itself.
+///
+/// It states `100%` on both axes rather than taking `Node`'s `Auto`. A root
+/// `Node` is laid out inside the implicit viewport node Bevy puts around it,
+/// which is a grid that start-aligns its item and does not stretch it, so an
+/// `Auto` root shrinks to fit whatever is in it and parks in the top-left
+/// corner. Everything downstream then resolves against that shrunken box: an
+/// absolutely placed child reads its containing block from the root's padding
+/// box, so a preset asking for the middle of the canvas would land in the
+/// middle of one widget, and Full Rect would stretch over nothing. Stating
+/// `100%` makes the root the target's own size, which
+/// [`crate::viewport_2d::size_targets_to_reference`] holds at the scene's
+/// `reference_size`.
+///
+/// `align_items` is `Start` so a child in the root's flow keeps the height it
+/// states or measures instead of being stretched down the whole canvas, which
+/// is what `Stretch` would do to a widget dropped straight onto a fresh scene.
+pub fn ui_scene_root_node() -> Node {
+    Node {
+        width: percent(100.0),
+        height: percent(100.0),
+        align_items: AlignItems::Start,
+        ..default()
+    }
 }

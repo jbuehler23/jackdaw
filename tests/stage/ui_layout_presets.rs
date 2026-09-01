@@ -22,7 +22,6 @@ use jackdaw::status_bar::StatusNotice;
 use jackdaw::ui_layout_presets::{LAYOUT_PRESET_OP, LayoutPresetRow, presets, spawn_preset_row};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::button::ButtonOperatorCall;
-use jackdaw_scene_types::UiSceneRoot;
 
 #[track_caller]
 fn run(app: &mut App, clause: &str) -> OperatorResult {
@@ -347,9 +346,6 @@ fn the_card_row_offers_every_preset_and_dispatches_it() {
     );
 }
 
-/// The reference resolution the laid-out scene below is authored against.
-const REFERENCE: UVec2 = UVec2::new(800, 600);
-
 fn settle(app: &mut App) {
     for _ in 0..4 {
         app.update();
@@ -382,30 +378,21 @@ fn panel(app: &mut App) {
     host.fit_pending = false;
 }
 
-/// A root of a stated size holding one panel that states no size of its
-/// own, so what layout measures for it is its content and not the root.
-///
-/// `align_items: Start` matters: the default stretches a flow child across
-/// the root, and then "the size the node is" would be the root's, which is
-/// not what an anchor is meant to keep.
-fn auto_sized_panel(app: &mut App) -> (Entity, Entity) {
-    let root = app
-        .world_mut()
-        .spawn((
-            Name::new("UiRoot"),
-            UiSceneRoot {
-                reference_size: REFERENCE,
-            },
-            Node {
-                width: px(400.0),
-                height: px(300.0),
-                align_items: AlignItems::Start,
-                ..default()
-            },
-        ))
-        .id();
-    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), root);
+/// The reference resolution [`jackdaw::ui_palette::seed_ui_scene_root`]
+/// gives the root it seeds, and so the size of the canvas box every
+/// absolute preset resolves against.
+const SEEDED_REFERENCE: Vec2 = Vec2::new(1280.0, 720.0);
 
+/// The scene `scene.new kind=ui` makes: the root through the one function
+/// that seeds it, holding a flow child that states no size of its own.
+///
+/// The geometry tests are built on this rather than on a root of a stated
+/// size, because the placement a preset writes only means anything against
+/// the box the real root is: a root that shrank to fit its content would
+/// let every one of these assertions pass while nothing moved on the
+/// canvas.
+fn seeded_scene(app: &mut App) -> (Entity, Entity) {
+    let root = jackdaw::ui_palette::seed_ui_scene_root(app.world_mut());
     let panel_entity = app
         .world_mut()
         .spawn((Name::new("Panel"), Node::default(), ChildOf(root)))
@@ -441,6 +428,12 @@ fn centre_of(app: &App, entity: Entity) -> Vec2 {
         .translation
 }
 
+/// Where `entity`'s top-left corner sits inside `root`'s.
+fn top_left_in_root(app: &App, entity: Entity, root: Entity) -> Vec2 {
+    let corner = |entity| centre_of(app, entity) - computed_size(app, entity) / 2.0;
+    corner(entity) - corner(root)
+}
+
 /// An anchor keeps the node the size it is. A node that states no size has
 /// only the size layout gave it, so the preset writes that down before it
 /// states the offsets: without it the two offsets of Middle Center would
@@ -449,7 +442,12 @@ fn centre_of(app: &App, entity: Entity) -> Vec2 {
 fn middle_center_centres_an_auto_sized_panel_instead_of_stretching_it() {
     let mut app = util::editor_test_app();
     panel(&mut app);
-    let (root, panel_entity) = auto_sized_panel(&mut app);
+    let (root, panel_entity) = seeded_scene(&mut app);
+    assert_eq!(
+        computed_size(&app, root),
+        SEEDED_REFERENCE,
+        "the seeded root is the canvas box the preset resolves against",
+    );
     assert_eq!(
         computed_size(&app, panel_entity),
         Vec2::new(100.0, 40.0),
@@ -474,17 +472,30 @@ fn middle_center_centres_an_auto_sized_panel_instead_of_stretching_it() {
         (centre_of(&app, panel_entity) - centre_of(&app, root)).length() < 0.5,
         "a centred node sits at the middle of its parent, not over all of it",
     );
+    // The two centres coincide however small the root is, so the distance
+    // the node actually travelled is what says the containing block was the
+    // canvas: half the canvas, less half the node.
+    assert!(
+        (top_left_in_root(&app, panel_entity, root)
+            - (SEEDED_REFERENCE - Vec2::new(100.0, 40.0)) / 2.0)
+            .length()
+            < 0.5,
+        "and that middle is the middle of the canvas, not of a shrunken root",
+    );
 }
 
 /// Full Rect means "be the size of the parent", so it is the one preset
 /// that drops a size rather than keeping it. The anchor pressed after it
 /// captures what that stretch measured, so the node stays the size it is
 /// on screen and moves to the corner.
+///
+/// On the scene `scene.new kind=ui` seeds, "the parent" is the canvas, so
+/// this also pins what Full Rect is for: filling the reference resolution.
 #[test]
 fn full_rect_drops_the_size_and_the_next_anchor_captures_the_stretch() {
     let mut app = util::editor_test_app();
     panel(&mut app);
-    let (_root, panel_entity) = auto_sized_panel(&mut app);
+    let (root, panel_entity) = seeded_scene(&mut app);
 
     run_finished(&mut app, "ui.layout_preset name=full_rect");
     settle(&mut app);
@@ -496,8 +507,13 @@ fn full_rect_drops_the_size_and_the_next_anchor_captures_the_stretch() {
     );
     assert_eq!(
         computed_size(&app, panel_entity),
-        Vec2::new(400.0, 300.0),
-        "so it stretches over the whole parent",
+        SEEDED_REFERENCE,
+        "so it stretches over the whole canvas",
+    );
+    assert_eq!(
+        top_left_in_root(&app, panel_entity, root),
+        Vec2::ZERO,
+        "starting at the canvas corner",
     );
 
     run_finished(&mut app, "ui.layout_preset name=top_left");
@@ -505,8 +521,34 @@ fn full_rect_drops_the_size_and_the_next_anchor_captures_the_stretch() {
     let node = node_of(&app, panel_entity);
     assert_eq!(
         (node.width, node.height),
-        (px(400.0), px(300.0)),
+        (px(SEEDED_REFERENCE.x), px(SEEDED_REFERENCE.y)),
         "the anchor captured the size the stretch had reached",
+    );
+}
+
+/// An anchor on the far side of the canvas is the case that shows a
+/// shrunken containing block for what it is: against the real canvas the
+/// node keeps its size and travels the width of the reference, and against
+/// a root the size of its own content it would have nowhere to go.
+#[test]
+fn bottom_right_puts_the_node_in_the_far_corner_of_the_canvas() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (root, panel_entity) = seeded_scene(&mut app);
+
+    run_finished(&mut app, "ui.layout_preset name=bottom_right");
+    settle(&mut app);
+
+    let size = Vec2::new(100.0, 40.0);
+    assert_eq!(
+        computed_size(&app, panel_entity),
+        size,
+        "an anchor keeps the node the size it is",
+    );
+    assert_eq!(
+        top_left_in_root(&app, panel_entity, root),
+        SEEDED_REFERENCE - size,
+        "and puts it against the canvas's bottom-right corner",
     );
 }
 
@@ -517,7 +559,7 @@ fn full_rect_drops_the_size_and_the_next_anchor_captures_the_stretch() {
 fn a_preset_that_places_a_flowed_child_absolutely_says_so() {
     let mut app = util::editor_test_app();
     panel(&mut app);
-    let (_root, panel_entity) = auto_sized_panel(&mut app);
+    let (_root, panel_entity) = seeded_scene(&mut app);
     assert_eq!(
         node_of(&app, panel_entity).position_type,
         PositionType::Relative,
@@ -542,7 +584,7 @@ fn a_preset_that_places_a_flowed_child_absolutely_says_so() {
 fn center_in_flow_promotes_nothing_and_says_nothing() {
     let mut app = util::editor_test_app();
     panel(&mut app);
-    let (_root, panel_entity) = auto_sized_panel(&mut app);
+    let (_root, panel_entity) = seeded_scene(&mut app);
 
     run_finished(&mut app, "ui.layout_preset name=center");
     settle(&mut app);
