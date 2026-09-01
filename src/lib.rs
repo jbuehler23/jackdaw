@@ -120,6 +120,7 @@ pub mod terrain;
 pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod transform_ops;
+pub mod ui_align;
 pub mod ui_grouping;
 pub mod ui_layout_presets;
 pub mod ui_palette;
@@ -2280,6 +2281,15 @@ fn populate_menu(
                 separator(),
                 op_entry::<ui_grouping::UiGroupIntoOp>("Group Into Container"),
                 op_entry::<ui_grouping::UiUngroupOp>("Ungroup"),
+                separator(),
+                op_entry::<ui_align::UiAlignLeftOp>("Align Left"),
+                op_entry::<ui_align::UiAlignCenterXOp>("Align Center Horizontally"),
+                op_entry::<ui_align::UiAlignRightOp>("Align Right"),
+                op_entry::<ui_align::UiAlignTopOp>("Align Top"),
+                op_entry::<ui_align::UiAlignCenterYOp>("Align Center Vertically"),
+                op_entry::<ui_align::UiAlignBottomOp>("Align Bottom"),
+                op_entry::<ui_align::UiDistributeHorizontalOp>("Distribute Horizontally"),
+                op_entry::<ui_align::UiDistributeVerticalOp>("Distribute Vertically"),
                 separator(),
                 op_entry::<draw_brush::BrushJoinOp>("Join (Convex Merge)"),
                 op_entry::<draw_brush::BrushCsgSubtractOp>("CSG Subtract"),

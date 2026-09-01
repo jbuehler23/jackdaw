@@ -14,6 +14,7 @@ mod gltf_authoring;
 mod mesh_quick_menu;
 mod modeling_essentials;
 mod positionable_mirror_plane;
+mod ui_align;
 mod ui_grouping;
 mod ui_layout_presets;
 mod ui_stage_manipulation;

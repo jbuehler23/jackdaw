@@ -1519,7 +1519,7 @@ fn begin_manipulation(world: &World, overlay: Entity, edges: (i8, i8)) -> Option
 /// already carries the child when its container moves, so applying the
 /// gesture's delta to both would move the child twice. Only the
 /// outermost selected node of each chain is written.
-fn without_selected_ancestors(world: &World, selected: &[Entity]) -> Vec<Entity> {
+pub(crate) fn without_selected_ancestors(world: &World, selected: &[Entity]) -> Vec<Entity> {
     let set: std::collections::HashSet<Entity> = selected.iter().copied().collect();
     selected
         .iter()
@@ -1677,6 +1677,46 @@ fn authored_offset(world: &World, entity: Entity, rect: Rect) -> Vec2 {
         return Vec2::new(left, top);
     }
     rect.min
+}
+
+/// The `left`/`top` a move on `entity` starts from, in the authored
+/// offsets its own `Node` states them in.
+///
+/// The pointer's own starting figure, for a caller that moves a node
+/// without a pointer: an operator computes where the node should end up in
+/// the global pixels layout reports, and this is what that answer is added
+/// to on the way back into the node's own space.
+pub(crate) fn authored_offset_of(world: &World, entity: Entity) -> Option<Vec2> {
+    let rect = authored_rect(world, entity)?;
+    Some(authored_offset(world, entity, rect))
+}
+
+/// What `entity`'s units are measured against, read off layout.
+///
+/// [`gesture_node`] takes the viewport from the panel the drag is running
+/// on; a caller with no panel takes it from the scene's own root, which is
+/// laid out directly against the render target and so measures the canvas.
+/// A parent that measures zero on an axis falls back to that same canvas,
+/// exactly as a gesture's does.
+pub(crate) fn unit_basis_of(world: &World, entity: Entity) -> UnitBasis {
+    let viewport = world
+        .get::<ComputedNode>(scene_root(world, entity))
+        .map(ComputedNode::size)
+        .unwrap_or(Vec2::ZERO);
+    let measured = parent_offset_box(world, entity).size();
+    let parent = Vec2::new(
+        if measured.x > 0.0 {
+            measured.x
+        } else {
+            viewport.x
+        },
+        if measured.y > 0.0 {
+            measured.y
+        } else {
+            viewport.y
+        },
+    );
+    UnitBasis { parent, viewport }
 }
 
 /// The lines a gesture on `entity` can land on, in the same offset space
