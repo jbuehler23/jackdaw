@@ -766,9 +766,13 @@ impl Plugin for UiStagePlugin {
         app.init_resource::<UiManipulation>()
             .init_resource::<GuideManipulation>()
             .init_resource::<UiHoverPreselect>()
+            .init_resource::<MarqueeSelect>()
             .add_observer(on_stage_press)
             .add_observer(on_stage_hover)
             .add_observer(on_stage_leave)
+            .add_observer(on_marquee_start)
+            .add_observer(on_marquee_drag)
+            .add_observer(on_marquee_end)
             .add_observer(on_gesture_start)
             .add_observer(on_gesture_drag)
             .add_observer(on_gesture_end)
@@ -780,9 +784,11 @@ impl Plugin for UiStagePlugin {
                 Update,
                 (
                     cancel_manipulation,
+                    cancel_marquee,
                     cancel_guide_drag,
                     sync_selection_overlays,
                     sync_hover_outlines,
+                    sync_marquee_overlay,
                     sync_guide_lines,
                     sync_snap_highlights,
                 )
@@ -948,6 +954,354 @@ pub(crate) fn hit_at(
     }
 }
 
+/// The rubber band a drag from bare canvas is pulling out.
+///
+/// A drag that started on a node is that node's move; this is the other
+/// drag, the one that starts where there is nothing and gathers up
+/// whatever it is pulled across. The two never both run: the band only
+/// starts when the press under it hit nothing.
+#[derive(Resource, Default)]
+pub struct MarqueeSelect {
+    band: Option<Marquee>,
+    seed: Option<MarqueeSeed>,
+}
+
+/// What the press left behind for a band that may follow it.
+///
+/// The press runs before the drag starts and has already had its say on
+/// the selection -- a press on the backdrop selects the scene's root, the
+/// way it always has. A band built from the selection as the drag finds it
+/// would therefore carry that root, so the press records what was selected
+/// *before* it, and the band builds from that instead.
+struct MarqueeSeed {
+    /// The panel content entity the press landed on.
+    host: Entity,
+    base: Vec<Entity>,
+    extend: bool,
+    toggle: bool,
+}
+
+impl MarqueeSelect {
+    /// The band's two corners in authored pixels, or `None` when no band
+    /// is being pulled out.
+    pub fn corners(&self) -> Option<(Vec2, Vec2)> {
+        self.band.as_ref().map(|band| (band.start, band.current))
+    }
+}
+
+/// One band being pulled out over one panel's canvas.
+struct Marquee {
+    host: Entity,
+    stage: Entity,
+    /// The entity the drag events are being delivered to: the stage, or
+    /// the selection outline lying over it when the backdrop is what is
+    /// selected.
+    target: Entity,
+    /// Where the drag began, in authored pixels.
+    start: Vec2,
+    /// Where the cursor is now, in the same pixels.
+    current: Vec2,
+    /// Shift and Ctrl as of the press, the same reading
+    /// [`on_stage_press`] takes: what the band gathers is added to, or
+    /// toggled against, the selection that press left.
+    extend: bool,
+    toggle: bool,
+    /// That selection, so a band swept back and forth answers the state
+    /// the gesture started from rather than the one it last wrote.
+    base: Vec<Entity>,
+}
+
+/// The band drawn over one panel's stage.
+#[derive(Component, Clone, Copy)]
+pub struct MarqueeOverlay {
+    /// The panel content entity carrying this stage's
+    /// [`Viewport2dPanelHost`].
+    pub host: Entity,
+}
+
+/// Draw order of the band: over the canvas and over the selection
+/// outlines, because it is what the pointer is doing right now.
+const MARQUEE_Z: i32 = OVERLAY_Z + 2;
+
+/// Where `cursor` (ui-logical pixels) is on the canvas `stage` is drawing,
+/// in authored pixels, whether or not it is still over the stage.
+///
+/// Unbounded, because a band is pulled past the canvas edge as readily as
+/// across it, and a drag that stopped reporting at the edge would leave the
+/// band frozen there while the pointer went on.
+fn authored_at(
+    cursor: Vec2,
+    host: &Viewport2dPanelHost,
+    stage: (&ComputedNode, &UiGlobalTransform),
+) -> Vec2 {
+    let (computed, transform) = stage;
+    let target_scale = target_pixels_per_stage_pixel(computed.size(), host.target_size);
+    let offset = crate::viewport_2d::stage_offset_unbounded(
+        cursor,
+        transform.translation,
+        computed.inverse_scale_factor(),
+        target_scale,
+    );
+    stage_to_authored(offset, host.target_size)
+}
+
+/// Start a band when a drag begins on the canvas rather than on a node.
+///
+/// The canvas is the backdrop: bare stage, or the scene's own root, which
+/// fills it. A press on either selects the root and has done so since the
+/// canvas was built, so the band is what a drag from there means; a press
+/// on any other node is that node's move.
+///
+/// The drag can be delivered to the stage or to the selection outline
+/// lying over it, depending on what the press selected, so the band
+/// remembers which and answers only that one.
+fn on_marquee_start(
+    mut event: On<Pointer<DragStart>>,
+    ui_scale: Res<UiScale>,
+    overlays: Query<&UiSelectionOverlay>,
+    handles: Query<(), With<UiResizeHandle>>,
+    hosts: Query<(Entity, &Viewport2dPanelHost)>,
+    stages: Query<(&ComputedNode, &UiGlobalTransform), With<Scene2dViewport>>,
+    roots: Query<(Entity, &UiTargetCamera), AuthoredUiSceneRoot>,
+    nodes: AuthoredNodes,
+    children: Query<&Children>,
+    selection: Res<Selection>,
+    mut marquee: ResMut<MarqueeSelect>,
+) {
+    if event.button != PointerButton::Primary {
+        return;
+    }
+    let target = event.event_target();
+    // A handle is a resize whatever is under it.
+    if handles.contains(target) {
+        return;
+    }
+    // An outline belongs to the node it is drawn around, and a drag on it
+    // is that node's move -- unless the node is the scene's own root,
+    // whose outline covers the whole canvas and would otherwise swallow
+    // every band pulled out after the backdrop was clicked once.
+    let panel = match overlays.get(target) {
+        Ok(overlay) => selection
+            .primary()
+            .filter(|&primary| roots.contains(primary))
+            .map(|_| overlay.host),
+        Err(_) => hosts
+            .iter()
+            .find(|(_, host)| host.stage == target)
+            .map(|(panel, _)| panel),
+    };
+    let Some((panel, host)) = panel.and_then(|panel| hosts.get(panel).ok()) else {
+        return;
+    };
+    if host.mode != Viewport2dMode::Edit {
+        return;
+    }
+    let Ok(stage) = stages.get(host.stage) else {
+        return;
+    };
+    let cursor = event.pointer_location.position / ui_scale.0;
+    if let StagePick::Hit(entity) = hit_at(cursor, host, stage, &roots, &nodes, &children)
+        && !roots.contains(entity)
+    {
+        marquee.seed = None;
+        return;
+    }
+    event.propagate(false);
+    let seed = marquee
+        .seed
+        .take()
+        .filter(|seed| seed.host == panel)
+        .unwrap_or(MarqueeSeed {
+            host: panel,
+            base: Vec::new(),
+            extend: false,
+            toggle: false,
+        });
+    let at = authored_at(cursor, host, stage);
+    marquee.band = Some(Marquee {
+        host: panel,
+        stage: host.stage,
+        target,
+        start: at,
+        current: at,
+        extend: seed.extend,
+        toggle: seed.toggle,
+        base: seed.base,
+    });
+}
+
+fn on_marquee_drag(
+    mut event: On<Pointer<Drag>>,
+    ui_scale: Res<UiScale>,
+    hosts: Query<&Viewport2dPanelHost>,
+    stages: Query<(&ComputedNode, &UiGlobalTransform), With<Scene2dViewport>>,
+    mut marquee: ResMut<MarqueeSelect>,
+) {
+    let Some(band) = marquee.band.as_mut() else {
+        return;
+    };
+    if event.event_target() != band.target {
+        return;
+    }
+    event.propagate(false);
+    let Ok(host) = hosts.get(band.host) else {
+        return;
+    };
+    let Ok(stage) = stages.get(band.stage) else {
+        return;
+    };
+    band.current = authored_at(event.pointer_location.position / ui_scale.0, host, stage);
+}
+
+/// Take everything the band was pulled across.
+///
+/// Intersection rather than containment: what the band touches is what it
+/// picks up, so a container wider than the panel does not have to be swept
+/// end to end.
+///
+/// The scene's own root is never picked up. It covers the whole canvas, so
+/// every band would take it, and a band that always selects the root is a
+/// band that selects nothing in particular.
+fn on_marquee_end(
+    mut event: On<Pointer<DragEnd>>,
+    hosts: Query<&Viewport2dPanelHost>,
+    roots: Query<(Entity, &UiTargetCamera), AuthoredUiSceneRoot>,
+    nodes: AuthoredNodes,
+    children: Query<&Children>,
+    mut selection: ResMut<Selection>,
+    mut marquee: ResMut<MarqueeSelect>,
+    mut commands: Commands,
+) {
+    let Some(band) = marquee.band.take() else {
+        return;
+    };
+    if event.event_target() != band.target {
+        marquee.band = Some(band);
+        return;
+    }
+    event.propagate(false);
+    let Ok(host) = hosts.get(band.host) else {
+        return;
+    };
+    let rect = Rect::from_corners(band.start, band.current);
+
+    let mut swept = Vec::new();
+    for (root, routed) in &roots {
+        if routed.entity() != host.camera {
+            continue;
+        }
+        let mut hits = Vec::new();
+        collect_stage_hits(root, &nodes, &children, &mut hits);
+        swept.extend(
+            hits.into_iter()
+                .filter(|hit| hit.entity != root)
+                .filter(|hit| overlaps(rect, hit.rect))
+                .map(|hit| hit.entity),
+        );
+    }
+
+    let wanted = if band.extend {
+        let mut wanted = band.base.clone();
+        wanted.extend(swept.iter().filter(|entity| !band.base.contains(entity)));
+        wanted
+    } else if band.toggle {
+        let mut wanted: Vec<Entity> = band
+            .base
+            .iter()
+            .copied()
+            .filter(|entity| !swept.contains(entity))
+            .collect();
+        wanted.extend(swept.iter().filter(|entity| !band.base.contains(entity)));
+        wanted
+    } else {
+        swept
+    };
+    selection.select_multiple(&mut commands, &wanted);
+}
+
+/// Whether two rects share any area. A band pulled out with no width or
+/// height still touches what it lies across.
+fn overlaps(left: Rect, right: Rect) -> bool {
+    left.min.x <= right.max.x
+        && left.max.x >= right.min.x
+        && left.min.y <= right.max.y
+        && left.max.y >= right.min.y
+}
+
+/// Escape drops the band and leaves the selection as the press left it.
+fn cancel_marquee(
+    keys: Res<ButtonInput<KeyCode>>,
+    focus: crate::keybind_focus::KeybindFocus,
+    mut marquee: ResMut<MarqueeSelect>,
+) {
+    if focus.keyboard_is_spoken_for() {
+        return;
+    }
+    if marquee.band.is_some() && keys.just_pressed(KeyCode::Escape) {
+        marquee.band = None;
+    }
+}
+
+/// Keep one band drawn over the panel it is being pulled out on.
+fn sync_marquee_overlay(
+    mut commands: Commands,
+    marquee: Res<MarqueeSelect>,
+    hosts: Query<&Viewport2dPanelHost>,
+    stages: Query<&ComputedNode, With<Scene2dViewport>>,
+    bands: Query<(Entity, &MarqueeOverlay)>,
+    mut nodes: Query<&mut Node>,
+) {
+    let wanted = marquee.band.as_ref().and_then(|band| {
+        let host = hosts.get(band.host).ok()?;
+        let stage = stages.get(band.stage).ok()?;
+        let target_scale = target_pixels_per_stage_pixel(stage.size(), host.target_size);
+        let scale = stage_pixels_per_target_pixel(target_scale, stage.inverse_scale_factor());
+        Some((
+            band.host,
+            band.stage,
+            Rect::from_corners(band.start * scale, band.current * scale),
+        ))
+    });
+
+    for (entity, overlay) in &bands {
+        match wanted {
+            Some((host, _, rect)) if host == overlay.host => {
+                if let Ok(mut node) = nodes.get_mut(entity) {
+                    place_outline(&mut node, rect);
+                }
+            }
+            _ => {
+                if let Ok(mut entity) = commands.get_entity(entity) {
+                    entity.despawn();
+                }
+            }
+        }
+    }
+
+    if let Some((host, stage, rect)) = wanted
+        && !bands.iter().any(|(_, overlay)| overlay.host == host)
+    {
+        let mut node = Node {
+            position_type: PositionType::Absolute,
+            border: UiRect::all(px(OUTLINE_WIDTH)),
+            ..default()
+        };
+        place_outline(&mut node, rect);
+        commands.spawn((
+            MarqueeOverlay { host },
+            EditorEntity,
+            node,
+            BackgroundColor(crate::default_style::SELECTION_MARQUEE_BG),
+            BorderColor::all(crate::default_style::SELECTION_MARQUEE_BORDER),
+            ZIndex(MARQUEE_Z),
+            // The band lies over the canvas it is being pulled across, and
+            // the drag it belongs to is delivered to the stage underneath.
+            Pickable::IGNORE,
+            ChildOf(stage),
+        ));
+    }
+}
+
 /// Select the authored node under a press on the stage, in
 /// [`Viewport2dMode::Edit`].
 ///
@@ -993,12 +1347,13 @@ fn on_stage_press(
     keys: Res<ButtonInput<KeyCode>>,
     handles: Query<(), With<UiResizeHandle>>,
     overlays: Query<&UiSelectionOverlay>,
-    hosts: Query<&Viewport2dPanelHost>,
+    hosts: Query<(Entity, &Viewport2dPanelHost)>,
     stages: Query<(&ComputedNode, &UiGlobalTransform), With<Scene2dViewport>>,
     roots: Query<(Entity, &UiTargetCamera), AuthoredUiSceneRoot>,
     nodes: AuthoredNodes,
     children: Query<&Children>,
     mut selection: ResMut<Selection>,
+    mut marquee: ResMut<MarqueeSelect>,
     mut commands: Commands,
 ) {
     if event.button != PointerButton::Primary {
@@ -1014,9 +1369,9 @@ fn on_stage_press(
     }
 
     let on_overlay = overlays.get(target).ok().map(|overlay| overlay.host);
-    let Some(host) = on_overlay
+    let Some((panel, host)) = on_overlay
         .and_then(|panel| hosts.get(panel).ok())
-        .or_else(|| hosts.iter().find(|host| host.stage == target))
+        .or_else(|| hosts.iter().find(|(_, host)| host.stage == target))
     else {
         return;
     };
@@ -1032,6 +1387,19 @@ fn on_stage_press(
     let pick = hit_at(cursor, host, stage, &roots, &nodes, &children);
     let extend = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     let toggle = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+
+    // What a band that follows this press would build from. Taken here,
+    // before the press has had its say, because a press on the backdrop
+    // selects the scene's root and a band is not a selection of the root.
+    marquee.seed = match pick {
+        StagePick::Hit(entity) if !roots.contains(entity) => None,
+        _ => Some(MarqueeSeed {
+            host: panel,
+            base: selection.entities.clone(),
+            extend,
+            toggle,
+        }),
+    };
 
     if on_overlay.is_some() {
         // Only a hit on something else re-selects. A miss must not clear
@@ -1483,6 +1851,12 @@ fn begin_manipulation(world: &World, overlay: Entity, edges: (i8, i8)) -> Option
     let host = world.get::<Viewport2dPanelHost>(host_entity)?;
     let selection = world.get_resource::<Selection>()?;
     let primary = selection.primary()?;
+    // The scene's own root is the canvas, not something on it: a drag
+    // from the backdrop pulls a band out (see [`on_marquee_start`]), so
+    // there is no move here to pick up.
+    if edges == (0, 0) && is_scene_root(world, primary) {
+        return None;
+    }
     let primary_node = gesture_node(world, primary, host)?;
     let nodes = if edges == (0, 0) {
         let movable = without_selected_ancestors(world, &selection.entities);
@@ -1521,6 +1895,16 @@ fn begin_manipulation(world: &World, overlay: Entity, edges: (i8, i8)) -> Option
         last_snap: SnapOutcome::default(),
         nodes,
     })
+}
+
+/// Whether `entity` is a scene's own root rather than a node inside one.
+fn is_scene_root(world: &World, entity: Entity) -> bool {
+    world
+        .get::<jackdaw_scene_types::UiSceneRoot>(entity)
+        .is_some()
+        || world
+            .get::<jackdaw_scene_types::Scene2dRoot>(entity)
+            .is_some()
 }
 
 /// The selected entities that no other selected entity contains.

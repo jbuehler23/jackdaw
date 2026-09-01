@@ -63,6 +63,7 @@ fn escape_is_free(
     keybind_focus: crate::keybind_focus::KeybindFocus,
     ui_gesture: Res<crate::ui_stage::UiManipulation>,
     guide_gesture: Res<crate::ui_stage::GuideManipulation>,
+    marquee: Res<crate::ui_stage::MarqueeSelect>,
     box_select: Res<BoxSelectState>,
     menu_bar: Res<jackdaw_widgets::menu_bar::MenuBarState>,
     context_menu: Res<jackdaw_widgets::context_menu::ContextMenuState>,
@@ -79,7 +80,11 @@ fn escape_is_free(
     if keybind_focus.keyboard_is_spoken_for() || !add_entity_picker.is_empty() {
         return false;
     }
-    if ui_gesture.is_running() || guide_gesture.position().is_some() || box_select.active {
+    if ui_gesture.is_running()
+        || guide_gesture.position().is_some()
+        || marquee.corners().is_some()
+        || box_select.active
+    {
         return false;
     }
     if menu_bar.open_menu.is_some()

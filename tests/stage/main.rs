@@ -19,4 +19,5 @@ mod ui_align;
 mod ui_grouping;
 mod ui_layout_presets;
 mod ui_lock;
+mod ui_marquee;
 mod ui_stage_manipulation;
