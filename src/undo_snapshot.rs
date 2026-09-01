@@ -3,10 +3,16 @@
 //! The snapshot captures both the scene document and a set of editor-state
 //! resources (edit mode, gizmo mode/space, grid, view overlays, physics
 //! overlay). That way Ctrl+Z also reverts "I toggled wireframe" or "I
-//! switched to Face mode", matching user expectations. Entity-ref
-//! resources (`Selection`, `BrushSelection`) are deliberately excluded
-//! because entity ids are re-minted by the snapshot respawn and would
-//! dangle.
+//! switched to Face mode", matching user expectations.
+//!
+//! The selection rides along too, but by [`SceneNodeId`] rather than by
+//! entity: the respawn re-mints every entity id, so a recorded `Entity`
+//! would dangle. It is recorded at capture and restored at apply, which is
+//! what makes Ctrl+Z put back what was selected when the undone step was
+//! asked for -- including a node the step deleted, which nothing else can
+//! name once it is gone. It is deliberately absent from `equals`: a
+//! selection change is not an edit, and counting it as one would push a
+//! history entry every time the user clicked something.
 
 use std::any::Any;
 
@@ -83,6 +89,7 @@ impl SceneSnapshotter for BsnDocumentSnapshotter {
         Box::new(BsnDocumentSnapshot {
             text,
             editor_state: EditorStateSnapshot::capture(world),
+            selection: selected_node_ids(world),
         })
     }
 }
@@ -90,27 +97,39 @@ impl SceneSnapshotter for BsnDocumentSnapshotter {
 pub struct BsnDocumentSnapshot {
     text: String,
     editor_state: EditorStateSnapshot,
+    /// What was selected when this snapshot was taken, by document node
+    /// rather than by entity. Order is the selection's own, so the primary
+    /// is still last when it comes back.
+    selection: Vec<jackdaw_scene_types::SceneNodeId>,
+}
+
+/// The selection as node ids, dropping anything the document does not
+/// name: a brush face, an editor entity, a preview entity a running game
+/// spawned. None of those survives a respawn to be re-selected.
+fn selected_node_ids(world: &World) -> Vec<jackdaw_scene_types::SceneNodeId> {
+    world
+        .get_resource::<crate::selection::Selection>()
+        .map(|selection| {
+            selection
+                .entities
+                .iter()
+                .filter_map(|&entity| {
+                    world
+                        .get::<jackdaw_scene_types::SceneNodeId>(entity)
+                        .copied()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 impl SceneSnapshot for BsnDocumentSnapshot {
     fn apply(&self, world: &mut World) {
         // Mirror the JSN apply sequence: preserve undo history (despawn
         // directly, never through `clear_scene_entities`), drop stale
-        // selection and tree rows first, and restore selection by node
-        // id after the respawn re-mints entities.
-        let selected_node_ids: Vec<jackdaw_scene_types::SceneNodeId> = world
-            .get_resource::<crate::selection::Selection>()
-            .map(|selection| {
-                selection
-                    .entities
-                    .iter()
-                    .filter_map(|&e| world.get::<jackdaw_scene_types::SceneNodeId>(e).copied())
-                    .collect()
-            })
-            .unwrap_or_default();
-        if let Some(mut selection) = world.get_resource_mut::<crate::selection::Selection>() {
-            selection.entities.clear();
-        }
+        // selection and tree rows first, and restore this snapshot's own
+        // selection after the respawn re-mints entities.
+        crate::selection::clear_selection_in_world(world);
         if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
             error!("Failed to clear tree rows: {err}");
         }
@@ -148,22 +167,7 @@ impl SceneSnapshot for BsnDocumentSnapshot {
             error!("undo snapshot failed to reload: {err}");
         }
 
-        if !selected_node_ids.is_empty()
-            && let Some(_) = world.get_resource::<crate::selection::Selection>()
-        {
-            let restored: Vec<Entity> = {
-                let mut query = world.query::<(Entity, &jackdaw_scene_types::SceneNodeId)>();
-                query
-                    .iter(world)
-                    .filter(|(_, id)| selected_node_ids.contains(id))
-                    .map(|(e, _)| e)
-                    .collect()
-            };
-            world
-                .resource_mut::<crate::selection::Selection>()
-                .entities
-                .extend(restored);
-        }
+        restore_selection(world, &self.selection);
 
         self.editor_state.apply(world);
     }
@@ -179,11 +183,45 @@ impl SceneSnapshot for BsnDocumentSnapshot {
         Box::new(Self {
             text: self.text.clone(),
             editor_state: self.editor_state.clone(),
+            selection: self.selection.clone(),
         })
     }
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+/// Put `wanted` back as the selection, in the order it was recorded.
+///
+/// The [`Selected`](crate::selection::Selected) marker goes on with it:
+/// the outliner paints its rows off that marker, and a selection that is
+/// only a list of entities leaves every row unpainted and every observer
+/// that keys off the marker unfired.
+///
+/// A node the snapshot's own text does not spawn is skipped rather than
+/// leaving a gap: applying the other half of the pair is what brings it
+/// back, and its own snapshot names it.
+fn restore_selection(world: &mut World, wanted: &[jackdaw_scene_types::SceneNodeId]) {
+    if wanted.is_empty() {
+        return;
+    }
+    let by_id: std::collections::HashMap<jackdaw_scene_types::SceneNodeId, Entity> = world
+        .query::<(Entity, &jackdaw_scene_types::SceneNodeId)>()
+        .iter(world)
+        .map(|(entity, id)| (*id, entity))
+        .collect();
+    let restored: Vec<Entity> = wanted
+        .iter()
+        .filter_map(|id| by_id.get(id).copied())
+        .collect();
+    for &entity in &restored {
+        if let Ok(mut entity) = world.get_entity_mut(entity) {
+            entity.insert(crate::selection::Selected);
+        }
+    }
+    if let Some(mut selection) = world.get_resource_mut::<crate::selection::Selection>() {
+        selection.entities = restored;
     }
 }
 
