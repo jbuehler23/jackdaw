@@ -563,7 +563,7 @@ fn a_saved_rebind_comes_back_off_disk_and_applies() {
     let saved = UserKeymap {
         bindings: vec![row(REBOUND, "F9")],
     };
-    save_user_keymap(&saved);
+    save_user_keymap(&saved).expect("the save wrote the keymap");
 
     let path = dir.join("keymap.json");
     assert!(path.is_file(), "Save wrote nothing to {}", path.display());
@@ -921,9 +921,11 @@ fn a_save_refuses_while_an_unrescued_keymap_is_still_there() {
     // where the next Save would write.
     std::fs::write(&path, "{ this is not json").expect("write a corrupt keymap");
 
+    let refusal = save_user_keymap(&UserKeymap::default())
+        .expect_err("the save refused rather than writing over what was there");
     assert!(
-        !save_user_keymap(&UserKeymap::default()),
-        "the save refused rather than writing over what was there",
+        refusal.contains("keymap.json"),
+        "and said which file it refused over: {refusal}",
     );
     assert_eq!(
         std::fs::read_to_string(&path).expect("the file is still there"),
@@ -933,7 +935,7 @@ fn a_save_refuses_while_an_unrescued_keymap_is_still_there() {
 
     // With nothing unread in the way, the same Save writes.
     std::fs::remove_file(&path).expect("clear the corrupt file");
-    assert!(save_user_keymap(&UserKeymap::default()));
+    save_user_keymap(&UserKeymap::default()).expect("with the way clear, the save writes");
     assert!(path.is_file());
 
     let _ = std::fs::remove_file(&path);

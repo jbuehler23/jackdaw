@@ -1944,13 +1944,28 @@ fn on_keybind_settings_save(
     if let Some(pending) = pending {
         registry.bindings = pending.camera.clone();
         let user = pending.to_user_keymap();
-        save_user_keymap(&user);
+        // A refused write is not a refused rebind: the working copy still
+        // becomes this session's keymap, and reopening the dialog reads it
+        // back out of the world. What is lost is the next launch, so that
+        // is what the notice says -- the dialog is already dismissing
+        // itself by the time this runs, and a warning in the log is a place
+        // nobody looks.
+        let refusal = save_user_keymap(&user).err();
         // Re-applied from an exclusive command so it runs once the dialog
         // is gone and the working copy has been dropped, rather than in
         // the middle of the click that saved it.
         commands.queue(move |world: &mut World| {
             world.insert_resource(user);
             crate::extension_lifecycle::apply_active_keymap(world);
+            if let Some(reason) = refusal {
+                crate::status_bar::notify_error(
+                    world,
+                    format!(
+                        "Your keybinds are in use now but were not saved: {reason}. \
+                         They will be gone next launch."
+                    ),
+                );
+            }
         });
     }
     registry.recording = false;

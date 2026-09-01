@@ -136,3 +136,77 @@ fn a_chord_this_session_shared_is_the_warning() {
         "the paragraph names commands the way the rows do: {advisory}",
     );
 }
+
+/// Save writes the whole keymap file, and refuses while a file nobody could
+/// read is still sitting where it would write. The dialog dismisses itself
+/// on the click either way, so a refusal it did not report was a rebind
+/// that worked all session and was gone the next morning with nothing
+/// having said so.
+#[test]
+fn a_refused_save_says_so_and_keeps_the_rebind_for_the_session() {
+    use jackdaw_api_internal::keymap::PresetInput;
+    use jackdaw_feathers::dialog::{DialogActionEvent, EditorDialog};
+
+    let guard = crate::CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = crate::empty_config_dir();
+    let mut app = dialog_app();
+
+    // The state a failed rescue leaves, put in place after the load that
+    // would otherwise have moved it aside.
+    let path = dir.join("keymap.json");
+    std::fs::write(&path, "{ this is not json").expect("write a corrupt keymap");
+
+    app.world_mut()
+        .resource_mut::<PendingKeymapChanges>()
+        .rebind("entity.duplicate", PresetInput::key("KeyJ"));
+    app.update();
+
+    let dialog = app
+        .world_mut()
+        .query_filtered::<Entity, With<EditorDialog>>()
+        .iter(app.world())
+        .next()
+        .expect("the keybind dialog is open");
+    app.world_mut()
+        .trigger(DialogActionEvent { entity: dialog });
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let notice = app.world().resource::<jackdaw::status_bar::StatusNotice>();
+    assert!(notice.is_active(), "the refusal was reported");
+    let said = notice.text().to_string();
+    assert!(
+        said.contains("keymap.json") && said.contains("next launch"),
+        "and named the file and what it costs: {said}",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("the file is still there"),
+        "{ this is not json",
+        "the unread file was left exactly as it was",
+    );
+
+    // The rebind is this session's keymap all the same, so reopening the
+    // dialog reads it back rather than starting from the shipped chords.
+    let result = app
+        .world_mut()
+        .operator("app.open_keybinds")
+        .call()
+        .expect("the keybind dialog opens again");
+    assert_eq!(result, OperatorResult::Finished);
+    for _ in 0..4 {
+        app.update();
+    }
+    assert_eq!(
+        app.world()
+            .resource::<PendingKeymapChanges>()
+            .chords_of("entity.duplicate"),
+        vec!["J".to_string()],
+        "the working copy came back with the rebind in it",
+    );
+
+    let _ = std::fs::remove_file(&path);
+    drop(guard);
+}

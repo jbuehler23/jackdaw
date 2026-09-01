@@ -220,35 +220,42 @@ pub fn load_user_keymap_reporting() -> (UserKeymap, KeymapLoadProblem) {
 /// rescue could not move, and writing the whole file over it is exactly
 /// the loss the rescue exists to prevent.
 ///
-/// Returns whether the file was written.
-pub fn save_user_keymap(keymap: &UserKeymap) -> bool {
+/// `Ok` once the file holds the keymap, and otherwise why it does not, in a
+/// sentence the caller can put in front of the user: a refusal here means the
+/// rebinds live only until the process ends, which nobody finds out about by
+/// reading the log.
+#[must_use = "a refused save leaves the rebinds unwritten, and the user has to be told"]
+pub fn save_user_keymap(keymap: &UserKeymap) -> Result<(), String> {
     let Some(path) = jackdaw_env::paths::keymap_path() else {
-        warn!("Could not determine config directory for the keymap file");
-        return false;
+        return Err(fail("there is no config directory to write the keymap to"));
     };
     if unrescued(&path) {
-        warn!(
-            "Not writing the keymap: {} could not be read and could not be moved aside",
+        return Err(fail(format!(
+            "{} could not be read and could not be moved aside",
             path.display()
-        );
-        return false;
+        )));
     }
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    match serde_json::to_string_pretty(keymap) {
-        Ok(data) => match std::fs::write(&path, data) {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("Failed to write keymap file: {e}");
-                false
-            }
-        },
-        Err(e) => {
-            warn!("Failed to serialize the keymap: {e}");
-            false
-        }
+    let data = match serde_json::to_string_pretty(keymap) {
+        Ok(data) => data,
+        Err(e) => return Err(fail(format!("the keymap could not be serialized: {e}"))),
+    };
+    match std::fs::write(&path, data) {
+        Ok(()) => Ok(()),
+        Err(e) => Err(fail(format!(
+            "{} could not be written: {e}",
+            path.display()
+        ))),
     }
+}
+
+/// Log the reason a save refused and hand it back for the caller to show.
+fn fail(reason: impl Into<String>) -> String {
+    let reason = reason.into();
+    warn!("Not writing the keymap: {reason}");
+    reason
 }
 
 /// Whether what is at `path` is a file this build could not read and the
