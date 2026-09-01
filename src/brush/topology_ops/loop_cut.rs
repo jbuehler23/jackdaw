@@ -78,6 +78,7 @@ pub(crate) fn brush_loop_cut(
     mut preview_lines: ResMut<LoopCutPreviewLines>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    keybind_focus: crate::keybind_focus::KeybindFocus,
     modal_inputs: crate::modal_inputs::ModalInputs,
     cursor: crate::viewport::UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
@@ -162,7 +163,7 @@ pub(crate) fn brush_loop_cut(
     // Project the cursor directly onto the start edge in window space to get t.
     // cursor_pos, start_v0_window, and start_v1_window are all in window space,
     // so no coordinate conversion is needed.
-    let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let ctrl = keybind_focus.any_pressed(&keyboard, [KeyCode::ControlLeft, KeyCode::ControlRight]);
     let edge_vec = modal_state.start_v1_window - modal_state.start_v0_window;
     let edge_len_sq = edge_vec.length_squared();
     let raw_t = if edge_len_sq > 1e-6 {

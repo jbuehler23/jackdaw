@@ -101,3 +101,44 @@ fn close_menu_on_click_outside(
     state.open_menu = None;
     state.hold_open = false;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Escape closes the open menu, and Escape is also a chord somebody may
+    /// be recording. Naming a key must not close the menu the recorder is
+    /// sitting in front of.
+    #[test]
+    fn a_recorded_escape_leaves_the_open_menu_open() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.init_resource::<ButtonInput<MouseButton>>();
+        app.init_resource::<MenuBarState>();
+        app.insert_resource(KeymapCapture { recording: true });
+        let item = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<MenuBarState>().open_menu = Some(item);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+
+        app.world_mut()
+            .run_system_cached(close_menu_on_click_outside)
+            .expect("the system runs");
+        assert_eq!(
+            app.world().resource::<MenuBarState>().open_menu,
+            Some(item),
+            "the menu survived the press that was naming a chord",
+        );
+
+        app.world_mut().resource_mut::<KeymapCapture>().recording = false;
+        app.world_mut()
+            .run_system_cached(close_menu_on_click_outside)
+            .expect("the system runs");
+        assert_eq!(
+            app.world().resource::<MenuBarState>().open_menu,
+            None,
+            "and with nobody recording the same press closes it",
+        );
+    }
+}

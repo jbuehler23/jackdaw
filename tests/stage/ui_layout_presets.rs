@@ -738,3 +738,64 @@ fn a_preset_places_against_whatever_reference_the_scene_states() {
         "the corner is the scene's own canvas corner",
     );
 }
+
+/// An anchor writes down the size layout measured, and that figure comes out
+/// of two conversions: `ComputedNode` is physical where a `Node` offset is
+/// logical, and it is the border box where a `ContentBox` node's `width` is
+/// the content box. On a hidpi screen a padded node missing either conversion
+/// is written back twice the size it is, or its own size plus its padding,
+/// and either one grows every time an anchor is pressed.
+#[test]
+fn an_anchor_captures_a_padded_content_box_at_its_own_size_on_a_hidpi_screen() {
+    const SCALE: f32 = 2.0;
+    const PAD: f32 = 10.0;
+    const CONTENT: Vec2 = Vec2::new(100.0, 40.0);
+
+    let mut app = util::editor_test_app();
+    app.world_mut().insert_resource(bevy::ui::UiScale(SCALE));
+    panel(&mut app);
+    let root = jackdaw::ui_palette::seed_ui_scene_root(app.world_mut());
+    let panel_entity = app
+        .world_mut()
+        .spawn((
+            Name::new("Panel"),
+            Node {
+                box_sizing: BoxSizing::ContentBox,
+                padding: UiRect::all(px(PAD)),
+                ..default()
+            },
+            ChildOf(root),
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), panel_entity);
+    app.world_mut().spawn((
+        Name::new("Filler"),
+        Node {
+            width: px(CONTENT.x),
+            height: px(CONTENT.y),
+            ..default()
+        },
+        ChildOf(panel_entity),
+    ));
+    settle(&mut app);
+    assert_eq!(
+        app.world()
+            .get::<ComputedNode>(panel_entity)
+            .expect("a laid-out panel")
+            .inverse_scale_factor(),
+        1.0 / SCALE,
+        "precondition: the scene is laid out at two physical pixels per logical one",
+    );
+
+    jackdaw::selection::select_only(app.world_mut(), panel_entity);
+    settle(&mut app);
+    run_finished(&mut app, "ui.layout_preset name=middle_center");
+    settle(&mut app);
+
+    let node = node_of(&app, panel_entity);
+    assert_eq!(
+        (node.width, node.height),
+        (px(CONTENT.x), px(CONTENT.y)),
+        "the captured size is the content box in logical pixels",
+    );
+}

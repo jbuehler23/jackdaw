@@ -801,6 +801,9 @@ pub(crate) fn clear_scene_entities(world: &mut World) {
     if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
         error!("Failed to clear tree rows: {err}");
     }
+    // The rows the outliner was still waiting on, and the ones it gave up on,
+    // named entities in the scene that is going away.
+    crate::hierarchy::forget_withheld_rows(world);
 
     // Clear undo/redo stacks; they hold entity references that become
     // stale when the scene is dropped. Callers who want to preserve

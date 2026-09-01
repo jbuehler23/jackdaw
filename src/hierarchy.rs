@@ -418,6 +418,23 @@ struct RowsAwaitingRegistration {
     abandoned: Vec<Entity>,
 }
 
+/// Forget what the outliner was waiting for, and what it gave up on.
+///
+/// Called when the scene the entities belonged to goes away. Neither list is
+/// about the scene now open: a withheld row names an entity that has been
+/// despawned, and an abandoned one names an entity id that a later spawn will
+/// reuse, so `rows_the_outliner_gave_up_on` would name a row that is drawn
+/// perfectly well. `abandoned` is the list that mattered, since nothing else
+/// ever takes anything out of it and it would otherwise grow for the length
+/// of the session.
+pub fn forget_withheld_rows(world: &mut World) {
+    let Some(mut pending) = world.get_resource_mut::<RowsAwaitingRegistration>() else {
+        return;
+    };
+    pending.rows.clear();
+    pending.abandoned.clear();
+}
+
 /// The entities the outliner stopped waiting for a document node from, so
 /// what the warning says can be read rather than parsed out of a log.
 pub fn rows_the_outliner_gave_up_on(world: &World) -> Vec<Entity> {

@@ -461,3 +461,51 @@ fn handle_popover_close_click(
     };
     commands.entity(close_button.0).try_despawn();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Escape dismisses an open popover, and Escape is also a chord somebody
+    /// may be recording. The popover a recorder has open is often the thing
+    /// holding the recorder.
+    #[test]
+    fn a_recorded_escape_leaves_an_open_popover_open() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.init_resource::<ButtonInput<MouseButton>>();
+        app.insert_resource(KeymapCapture { recording: true });
+        let anchor = app.world_mut().spawn(Hovered::default()).id();
+        let popover = app
+            .world_mut()
+            .spawn((
+                EditorPopover,
+                PopoverAnchor {
+                    entity: anchor,
+                    position: None,
+                },
+                Hovered::default(),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+
+        app.world_mut()
+            .run_system_cached(handle_popover_dismiss)
+            .expect("the system runs");
+        assert!(
+            app.world().get_entity(popover).is_ok(),
+            "the popover survived the press that was naming a chord",
+        );
+
+        app.world_mut().resource_mut::<KeymapCapture>().recording = false;
+        app.world_mut()
+            .run_system_cached(handle_popover_dismiss)
+            .expect("the system runs");
+        assert!(
+            app.world().get_entity(popover).is_err(),
+            "and with nobody recording the same press dismisses it",
+        );
+    }
+}

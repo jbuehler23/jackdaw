@@ -291,6 +291,7 @@ pub fn mirror_plane_drag(
     _: In<OperatorParameters>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    keybind_focus: KeybindFocus,
     vp: ViewportCursor,
     hover: Res<MirrorPlaneHover>,
     mut brushes: Query<(&Brush, &GlobalTransform, &mut ModifierStack)>,
@@ -373,7 +374,7 @@ pub fn mirror_plane_drag(
     // Snap against the authored geometry: vertices and edge midpoints first,
     // then the grid when grid snapping is on. Ctrl inverts the grid toggle for
     // this gesture, matching the other drags.
-    let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let ctrl = keybind_focus.any_pressed(&keyboard, [KeyCode::ControlLeft, KeyCode::ControlRight]);
     let grid_active = snap_settings.translate_active(ctrl);
     let authored_vertices = brush
         .topology

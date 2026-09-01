@@ -33,12 +33,18 @@ rustflags = ["-Zshare-generics=no"]
 # backend changes codegen, and `-Cdebuginfo=line-tables-only` drops the debug
 # info a local debugger reads.
 #
-# Opting out: set `CARGO_BUILD_RUSTFLAGS` for the command, which replaces
-# this `rustflags` list whole rather than adding to it -- for example
-# `CARGO_BUILD_RUSTFLAGS= cargo build` to link with the default linker.
-# A machine without clang or wild installed needs that: the link fails with
-# `linker 'clang' not found` or `unable to find library -lwild`, and the
-# opt-out is the fix rather than editing this file.
+# Opting out takes two variables, because the linker and the flag pointing it
+# at wild are set separately and each is overridden on its own:
+#
+#   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc  replaces `clang` below
+#   CARGO_BUILD_RUSTFLAGS=                           replaces this `rustflags`
+#                                                    list whole
+#
+# A machine with no clang needs the first: clearing `CARGO_BUILD_RUSTFLAGS`
+# alone drops `--ld-path=wild` but still runs clang, so the link still fails
+# with `linker 'clang' not found`. A machine with clang but no wild needs the
+# second, for `unable to find library -lwild`. Either way the variables are
+# the opt-out, rather than editing this file.
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
 rustflags = ["-Clink-arg=--ld-path=wild"]

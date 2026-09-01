@@ -430,11 +430,16 @@ fn is_version_path(path: &Path) -> bool {
 
 /// Where installed extensions live.
 ///
-/// Through `jackdaw_env` rather than `dirs` directly: that is the one
-/// place the editor's own directories are decided, including the
-/// `JACKDAW_CONFIG_DIR` override a test or a scratch session points at,
-/// and a second answer here meant an installed extension landed outside
-/// the directory the rest of the session was reading.
+/// Through `jackdaw_env` rather than `dirs` directly: that is the one place
+/// the editor's own directories are decided, and a second answer here meant
+/// an installed extension landed outside the directory the rest of the
+/// session was reading.
+///
+/// The data directory, not the config one, so this is *not* moved by
+/// `JACKDAW_CONFIG_DIR`: an installed extension is a binary artefact rather
+/// than something a user edits, and a scratch session pointed at another
+/// config directory still reads the extensions this machine has installed.
+/// The trust list below is config, and does move.
 pub fn extension_root() -> Result<PathBuf, PackageError> {
     jackdaw_env::paths::data_dir()
         .map(|path| path.join("extensions"))

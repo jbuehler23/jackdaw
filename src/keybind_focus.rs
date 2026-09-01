@@ -63,6 +63,22 @@ impl KeybindFocus<'_, '_> {
         self.is_typing() || self.is_recording()
     }
 
+    /// Whether any of `keys` is held *for this gesture*.
+    ///
+    /// What a modal drag asks instead of reading `ButtonInput` itself. A
+    /// modal reads Ctrl, Shift and Alt as modifiers rather than as chords, so
+    /// the keymap's own suppression does not reach it: with a text field
+    /// focused or a rebind recording, a Shift typed into the field also
+    /// changed what the drag under way was doing, and there was nothing on
+    /// screen saying it had. The keyboard belongs to one thing at a time.
+    pub fn any_pressed(
+        &self,
+        keyboard: &ButtonInput<KeyCode>,
+        keys: impl IntoIterator<Item = KeyCode>,
+    ) -> bool {
+        !self.keyboard_is_spoken_for() && keyboard.any_pressed(keys)
+    }
+
     /// True if the input focus or the recording flag changed since the
     /// system last ran.
     pub fn is_changed(&self) -> bool {

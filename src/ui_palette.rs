@@ -215,12 +215,11 @@ pub fn resolve_widget_parent(world: &mut World) -> Option<Entity> {
 /// Where a new widget goes: as the sibling straight after `candidate`.
 ///
 /// The same rule a paste follows, and the rule an Add in a scene editor
-/// usually follows. Adding
-/// *into* the selection instead is what turned three presses of the Button row
-/// into a Button holding a Button holding a Button, which is neither what the
-/// press looked like nor a shape anyone builds a screen out of. Filling a
-/// container is still one extra press: select something inside it, or the
-/// container itself when it is the scene root.
+/// usually follows. Adding *into* the selection instead is what turned three
+/// presses of the Button row into a Button holding a Button holding a Button,
+/// which is neither what the press looked like nor a shape anyone builds a
+/// screen out of. Filling a container is still one extra press: select
+/// something inside it, or the container itself when it is the scene root.
 ///
 /// A candidate that is the scene root is the exception, since the root has no
 /// siblings to be one of: the widget becomes its last child. A candidate

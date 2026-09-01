@@ -677,3 +677,51 @@ fn is_far_side(mouse_pos: Vec2, child_pos: Vec2, parent: &Node) -> (bool, bool) 
         diff > 0.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Escape cancels a panel drag, and Escape is also a chord somebody may
+    /// be recording. A press that is naming a key must not also throw away
+    /// the drag under the pointer: the guard exists for that, and until now
+    /// nothing said so.
+    #[test]
+    fn a_recorded_escape_does_not_cancel_a_drag() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.init_resource::<DockDragState>();
+        app.insert_resource(KeymapCapture { recording: true });
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        *app.world_mut().resource_mut::<DockDragState>() = DockDragState::PendingDrag {
+            source_tab: Entity::PLACEHOLDER,
+            tab_id: TabId(1),
+            window_id: "jackdaw.outliner".to_string(),
+            window_name: "Outliner".to_string(),
+            start_pos: Vec2::ZERO,
+        };
+
+        app.world_mut()
+            .run_system_cached(cancel_drag_on_escape)
+            .expect("the system runs");
+        assert!(
+            !matches!(
+                *app.world().resource::<DockDragState>(),
+                DockDragState::Idle
+            ),
+            "the drag survived the press that was naming a chord",
+        );
+
+        // And with nobody recording, the same press cancels it.
+        app.world_mut().resource_mut::<KeymapCapture>().recording = false;
+        app.world_mut()
+            .run_system_cached(cancel_drag_on_escape)
+            .expect("the system runs");
+        assert!(matches!(
+            *app.world().resource::<DockDragState>(),
+            DockDragState::Idle
+        ));
+    }
+}

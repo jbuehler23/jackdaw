@@ -164,8 +164,8 @@ pub(crate) fn face_drag_invoke_trigger(
     if in_face_edit && gizmo_hover.hovered_axis.is_some() {
         return;
     }
-    let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+    let shift = keybind_focus.any_pressed(&keyboard, [KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let alt = keybind_focus.any_pressed(&keyboard, [KeyCode::AltLeft, KeyCode::AltRight]);
     if !(in_face_edit || shift || alt) {
         return;
     }
@@ -199,6 +199,7 @@ pub fn brush_face_drag(
     mut edit_mode: ResMut<EditMode>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    keybind_focus: KeybindFocus,
     vp: ViewportCursor,
     mut params: FacePickParams,
     selection: Res<Selection>,
@@ -232,9 +233,9 @@ pub fn brush_face_drag(
     let viewport_cursor = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)?;
 
     let in_face_edit = matches!(*edit_mode, EditMode::BrushEdit(BrushEditMode::Face));
-    let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
-    let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let ctrl = keybind_focus.any_pressed(&keyboard, [KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let alt = keybind_focus.any_pressed(&keyboard, [KeyCode::AltLeft, KeyCode::AltRight]);
+    let shift = keybind_focus.any_pressed(&keyboard, [KeyCode::ShiftLeft, KeyCode::ShiftRight]);
 
     if modal.is_none() {
         // First-invoke: pick a face under the cursor, set pending /
@@ -803,6 +804,7 @@ pub fn brush_vertex_drag(
     _: In<OperatorParameters>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    keybind_focus: KeybindFocus,
     modal_inputs: crate::modal_inputs::ModalInputs,
     vp: ViewportCursor,
     brush_transforms: Query<&GlobalTransform>,
@@ -835,8 +837,8 @@ pub fn brush_vertex_drag(
     let (camera, cam_tf) = vp.camera_for(camera_entity)?;
     let viewport_cursor = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)?;
 
-    let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let shift = keybind_focus.any_pressed(&keyboard, [KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let ctrl = keybind_focus.any_pressed(&keyboard, [KeyCode::ControlLeft, KeyCode::ControlRight]);
 
     if modal.is_none() {
         // First invoke: pick vertex / split vertex across all edit brushes.
@@ -1169,6 +1171,7 @@ pub fn brush_edge_drag(
     _: In<OperatorParameters>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    keybind_focus: KeybindFocus,
     modal_inputs: crate::modal_inputs::ModalInputs,
     vp: ViewportCursor,
     brush_transforms: Query<&GlobalTransform>,
@@ -1200,8 +1203,8 @@ pub fn brush_edge_drag(
     };
     let (camera, cam_tf) = vp.camera_for(camera_entity)?;
     let viewport_cursor = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)?;
-    let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let ctrl = keybind_focus.any_pressed(&keyboard, [KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let shift = keybind_focus.any_pressed(&keyboard, [KeyCode::ShiftLeft, KeyCode::ShiftRight]);
 
     if modal.is_none() {
         // First invoke: pick the nearest edge across all edit brushes.

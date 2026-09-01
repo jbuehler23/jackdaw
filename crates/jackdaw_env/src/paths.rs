@@ -45,6 +45,22 @@ pub fn keymap_path() -> Option<std::path::PathBuf> {
     config_dir().map(|d| d.join("keymap.json"))
 }
 
+/// Where state the editor keeps between runs but the user does not edit
+/// lives: the extension quarantine, and anything else of that kind.
+///
+/// Named here rather than reached for with `dirs` at each use, so the
+/// directory is decided in one place -- and so a session pointed at a scratch
+/// config directory keeps its quarantine there too, rather than writing into
+/// the real one.
+pub fn state_dir() -> Option<PathBuf> {
+    if let Some(overridden) = std::env::var_os(CONFIG_DIR_VAR).filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(overridden).join("state"));
+    }
+    dirs::state_dir()
+        .map(|d| d.join(DATA_DIR_NAME))
+        .or_else(data_dir_fallback)
+}
+
 fn data_dir_fallback() -> Option<PathBuf> {
     std::env::home_dir().map(|p| p.join(DATA_DIR_FALLBACK_NAME))
 }

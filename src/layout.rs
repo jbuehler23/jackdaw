@@ -919,12 +919,14 @@ fn editor_status_bar() -> impl Bundle {
                     ..Default::default()
                 },
                 children![
-                    // Fixed-width, right-aligned, clipped box: the build
-                    // status text changes length as crates compile, and a
-                    // bare text node would reflow the rest of the footer on
-                    // every frame. A stable box keeps the count visible at
-                    // the right edge and clips an over-long crate name.
+                    // Fixed-width clipped box: the build status text changes
+                    // length as crates compile, and a bare text node would
+                    // reflow the rest of the footer on every frame. Which end
+                    // is clipped is decided per message by
+                    // [`status_bar::align_status_right`], which is why the
+                    // box is marked.
                     (
+                        crate::status_bar::StatusBarRightBox,
                         Node {
                             width: Val::Px(210.0),
                             overflow: Overflow::clip(),

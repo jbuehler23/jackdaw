@@ -506,6 +506,75 @@ mod tests {
         assert_eq!(world.resource::<SceneBsnAst>().roots.len(), 1);
     }
 
+    /// One name is one asset. A second entry arriving under a name the open
+    /// scene already uses is adopted only when it holds the same value; a
+    /// different value under the same name is an asset no spelling can reach,
+    /// so it is refused -- and refusing it must not take the name off the one
+    /// the scene was already using, which is what makes the comparison, and
+    /// its place before any handle is published, load-bearing.
+    #[test]
+    fn a_second_entry_of_the_same_name_is_adopted_only_when_it_is_the_same_asset() {
+        let mut world = scalar_world();
+        world.insert_resource(SceneBsnAst::default());
+
+        let source_of = |world: &mut World, roughness: f32| {
+            let handle = world
+                .resource_mut::<Assets<TestMaterial>>()
+                .add(TestMaterial {
+                    metallic: 0.5,
+                    roughness,
+                });
+            let mut ast = SceneBsnAst::default();
+            append_assets_to_ast(
+                &mut ast,
+                world,
+                &[CatalogAssetRef {
+                    name: "Shared".into(),
+                    type_id: TypeId::of::<TestMaterial>(),
+                    asset_id: handle.id().untyped(),
+                }],
+            );
+            ast
+        };
+
+        let first = source_of(&mut world, 0.25);
+        assert!(adopt_asset_roots(&mut world, &first).is_empty());
+        let published = world.resource::<crate::BsnSceneAssets>().0["#Shared"].clone();
+        assert_eq!(get_material(&world, &published).roughness, 0.25);
+
+        // The same asset arriving again: the root already there answers for
+        // it, so nothing is refused and nothing is doubled.
+        let again = source_of(&mut world, 0.25);
+        assert!(
+            adopt_asset_roots(&mut world, &again).is_empty(),
+            "the same value under the same name is the same asset",
+        );
+        assert_eq!(world.resource::<SceneBsnAst>().roots.len(), 1);
+
+        // A different asset under the same name: there is no spelling that
+        // reaches it, so it is refused by name.
+        let other = source_of(&mut world, 0.75);
+        assert_eq!(
+            adopt_asset_roots(&mut world, &other),
+            vec!["Shared".to_string()],
+            "a different value under a name already in use is refused",
+        );
+        assert_eq!(
+            world.resource::<SceneBsnAst>().roots.len(),
+            1,
+            "and did not join the document",
+        );
+        assert_eq!(
+            get_material(
+                &world,
+                &world.resource::<crate::BsnSceneAssets>().0["#Shared"]
+            )
+            .roughness,
+            0.25,
+            "and the name still reaches the asset the scene was already using",
+        );
+    }
+
     #[test]
     fn round_trips_scalar_catalog_by_name_and_value() {
         let mut world = scalar_world();

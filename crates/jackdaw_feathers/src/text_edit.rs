@@ -894,6 +894,7 @@ fn handle_clamp_on_unfocus(
 fn handle_numeric_increment(
     focus: Res<InputFocus>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    capture: Option<Res<jackdaw_commands::KeymapCapture>>,
     mut text_edits: Query<
         (
             &TextEditVariant,
@@ -904,6 +905,12 @@ fn handle_numeric_increment(
         With<EditorTextEdit>,
     >,
 ) {
+    // A recorded chord is a key being named, not a key being pressed at the
+    // field it happens to be typed over: Up bound to something would also
+    // step the focused number by one, with nothing saying it had.
+    if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     let Some(focused_entity) = focus.get() else {
         return;
     };

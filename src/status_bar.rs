@@ -100,6 +100,7 @@ impl Plugin for StatusBarPlugin {
                 update_status_center,
                 tick_status_notice,
                 update_status_right,
+                align_status_right,
                 update_scene_stats,
                 update_build_bar,
             )
@@ -185,6 +186,39 @@ fn update_status_center(
 /// Marker for the scene stats text in the hierarchy panel footer.
 #[derive(Component)]
 pub struct SceneStatsText;
+
+/// The fixed-width clipped box holding [`StatusBarRight`].
+///
+/// Marked so `align_status_right` can say which end of an over-long line is
+/// cut off, which is not the same answer for the two things that share the
+/// slot.
+#[derive(Component)]
+pub struct StatusBarRightBox;
+
+/// Put the over-long end of the right-hand slot where it can be lost.
+///
+/// The box is 210px and clips, so whichever edge the text is pinned to is the
+/// edge that survives. A build line ends in the count of crates left, so it
+/// is pinned right and an over-long crate name is cut off its head. A notice
+/// is a sentence that opens by naming the thing it is about -- "Second
+/// carries a transform, so ..." -- and pinning that right cut off the name
+/// and left the reader the tail of an explanation about nothing. So a notice
+/// is pinned left and loses its end instead.
+fn align_status_right(
+    notice: Res<StatusNotice>,
+    mut boxes: Query<&mut Node, With<StatusBarRightBox>>,
+) {
+    let wanted = if notice.is_active() {
+        JustifyContent::FlexStart
+    } else {
+        JustifyContent::FlexEnd
+    };
+    for mut node in &mut boxes {
+        if node.justify_content != wanted {
+            node.justify_content = wanted;
+        }
+    }
+}
 
 fn update_status_right(
     mode: Res<ActiveTool>,
