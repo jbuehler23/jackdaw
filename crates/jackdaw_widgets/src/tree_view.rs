@@ -243,7 +243,33 @@ pub struct TreeRowDropped {
     pub target_source: Entity,
 }
 
-/// Marker on the thin strip that stands for the gap above or below a
+/// Where the drop line is drawn while a drag is over the tree, and what
+/// a release there would mean.
+///
+/// One entry: one pointer drags at a time. Written by the gap zones as
+/// the pointer passes over them and cleared when the drag leaves the
+/// tree, so the line follows the pointer instead of appearing once when
+/// a zone is first entered.
+#[derive(Resource, Default)]
+pub struct TreeDropLine {
+    /// The gap zone the pointer is over, if any.
+    pub zone: Option<Entity>,
+    /// How far in the line starts, in logical pixels from the tree's left
+    /// edge: the indent of the level the drop would land at.
+    pub indent: f32,
+}
+
+/// A row the pointer has been resting on during a drag, and for how long.
+///
+/// Resting over a collapsed parent opens it, so a subtree can be reached
+/// without letting go of what is being dragged.
+#[derive(Resource, Default)]
+pub struct TreeSpringLoad {
+    pub row: Option<Entity>,
+    pub waited: f32,
+}
+
+/// Marker on the strip that stands for the gap above or below a
 /// tree row. A drop there reorders; a drop on the row itself reparents.
 #[derive(Component)]
 pub struct TreeRowInsertZone {
@@ -306,6 +332,8 @@ impl Plugin for TreeViewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TreeIndex>()
             .init_resource::<TreeFocused>()
+            .init_resource::<TreeDropLine>()
+            .init_resource::<TreeSpringLoad>()
             .add_systems(PostUpdate, (maintain_tree_index,));
     }
 }

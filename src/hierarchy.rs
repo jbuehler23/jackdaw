@@ -129,6 +129,14 @@ impl Plugin for HierarchyPlugin {
                     spawn_rows_for_late_registrations,
                     refresh_chevrons_on_document_change,
                     refresh_icons_on_node_change,
+                    // The drag feel: the line saying where a release
+                    // would land, the rest that opens a closed row, and
+                    // the scroll that reaches past the fold. Row
+                    // maintenance, so it runs wherever the drop
+                    // observers do rather than only in the Editor state.
+                    jackdaw_feathers::tree_view::sync_tree_drop_line,
+                    jackdaw_feathers::tree_view::spring_load_tree_rows,
+                    jackdaw_feathers::tree_view::auto_scroll_tree_on_drag,
                     watch_selection_for_reveal,
                     drive_reveal_target,
                 )
@@ -1791,34 +1799,123 @@ fn on_tree_row_inserted(
     }
 
     commands.queue(move |world: &mut World| {
-        let landing = crate::commands::HierarchyLocation::from_world(world, target);
-        let old = crate::commands::HierarchyLocation::from_world(world, dragged);
-        let mut index = landing.index + usize::from(after);
+        insert_dragged(world, dragged, target, after);
+    });
+}
+
+/// Move what the drag was carrying into the gap beside `target`.
+///
+/// A drag that starts on a selected row carries the whole selection, the
+/// way a drag in any list does; moving only the row under the cursor
+/// would take one node out of a group the user had just made. The
+/// selection lands in the order the tree shows it, not the order it was
+/// clicked in, because that is the order the user can see.
+fn insert_dragged(world: &mut World, dragged: Entity, target: Entity, after: bool) {
+    let landing = crate::commands::HierarchyLocation::from_world(world, target);
+    let moving = dragged_group(world, dragged, target);
+    if moving.is_empty() {
+        return;
+    }
+
+    let mut moves: Vec<Box<dyn crate::commands::EditorCommand>> = Vec::new();
+    let mut lists: Vec<Option<Entity>> = Vec::new();
+    let mut slot = landing.index + usize::from(after);
+    for entity in moving {
+        let old = crate::commands::HierarchyLocation::from_world(world, entity);
+        let mut index = slot;
         // Taking the node out of the list first shifts every later slot
         // down by one, so a move further down its own list aims one short.
         if old.parent == landing.parent && old.index < index {
             index -= 1;
         }
         if old.parent == landing.parent && old.index == index {
-            return;
+            // Already where it is going, but the ones behind it still
+            // land after it.
+            slot = index + 1;
+            continue;
         }
         let mut command = crate::commands::MoveEntity::new(
             world,
-            dragged,
+            entity,
             crate::commands::HierarchyLocation {
                 parent: landing.parent,
                 index,
             },
         );
         command.execute(world);
-        world
-            .resource_mut::<CommandHistory>()
-            .push_executed(Box::new(command));
-        sync_outliner_row_order(world, old.parent);
-        if landing.parent != old.parent {
-            sync_outliner_row_order(world, landing.parent);
+        moves.push(Box::new(command));
+        if !lists.contains(&old.parent) {
+            lists.push(old.parent);
         }
+        slot = index + 1;
+    }
+
+    let entry: Box<dyn crate::commands::EditorCommand> = match moves.len() {
+        0 => return,
+        1 => moves.pop().expect("one move"),
+        _ => Box::new(crate::commands::CommandGroup {
+            commands: moves,
+            label: "Reorder entities".to_string(),
+        }),
+    };
+    world.resource_mut::<CommandHistory>().push_executed(entry);
+    if !lists.contains(&landing.parent) {
+        lists.push(landing.parent);
+    }
+    for list in lists {
+        sync_outliner_row_order(world, list);
+    }
+}
+
+/// What a drag starting on `dragged` carries, in the order the tree shows
+/// it: the whole selection when the dragged row is part of one, and that
+/// row alone otherwise.
+///
+/// A node the drop would bury inside itself, or the drop target itself, is
+/// dropped from the group rather than refusing the whole gesture.
+fn dragged_group(world: &mut World, dragged: Entity, target: Entity) -> Vec<Entity> {
+    let selected: Vec<Entity> = world.resource::<Selection>().entities.clone();
+    let mut group = if selected.contains(&dragged) && selected.len() > 1 {
+        selected
+    } else {
+        vec![dragged]
+    };
+    group.retain(|&entity| {
+        entity != target
+            && world.get_entity(entity).is_ok()
+            && world.get::<EditorEntity>(entity).is_none()
+            && !is_ancestor_of(world, entity, target)
     });
+    group.sort_by_key(|&entity| visual_order_key(world, entity));
+    group
+}
+
+/// Whether `ancestor` is somewhere above `entity`.
+fn is_ancestor_of(world: &World, ancestor: Entity, entity: Entity) -> bool {
+    let mut current = entity;
+    while let Some(parent) = world.get::<ChildOf>(current).map(ChildOf::parent) {
+        if parent == ancestor {
+            return true;
+        }
+        current = parent;
+    }
+    false
+}
+
+/// The sibling indices from the scene root down to `entity`, which sort
+/// the way the tree draws its rows.
+fn visual_order_key(world: &World, entity: Entity) -> Vec<usize> {
+    let mut path = Vec::new();
+    let mut current = entity;
+    for _ in 0..64 {
+        path.push(crate::commands::HierarchyLocation::from_world(world, current).index);
+        let Some(parent) = world.get::<ChildOf>(current).map(ChildOf::parent) else {
+            break;
+        };
+        current = parent;
+    }
+    path.reverse();
+    path
 }
 
 /// Handle tree row dropped on root container -> deparent the scene entity.

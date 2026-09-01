@@ -381,3 +381,280 @@ fn a_selection_packed_against_the_bottom_keeps_its_own_order() {
         vec!["Third", "First", "Second"],
     );
 }
+
+/// A drag that starts on a selected row carries the whole selection, the
+/// way a drag in any list does, and lands it in the order the tree shows
+/// rather than the order it was clicked in.
+#[test]
+fn a_drop_moves_the_whole_selection_in_the_order_the_tree_shows() {
+    let mut app = util::editor_test_app();
+    let (column, children) = column_of_three(&mut app);
+
+    // Clicked bottom-up, so the click order is the reverse of the tree's.
+    app.world_mut().resource_mut::<Selection>().entities = vec![children[1], children[0]];
+    app.update();
+
+    app.world_mut().trigger(TreeRowInserted {
+        entity: children[0],
+        dragged_source: children[0],
+        target: children[2],
+        index: 1,
+    });
+    app.update();
+    app.update();
+
+    assert_eq!(
+        document_order(app.world(), column),
+        vec!["Third", "First", "Second"],
+        "both selected rows moved, in the order the tree drew them",
+    );
+    assert_eq!(
+        ecs_order(app.world(), column),
+        vec!["Third", "First", "Second"],
+    );
+}
+
+/// A multi-row drop is one thing the user did, so it is one thing to undo.
+#[test]
+fn a_multi_selection_drop_is_one_history_entry() {
+    let mut app = util::editor_test_app();
+    let (column, children) = column_of_three(&mut app);
+    app.world_mut().resource_mut::<Selection>().entities = vec![children[0], children[1]];
+    app.update();
+    let before = undo_depth(&app);
+
+    app.world_mut().trigger(TreeRowInserted {
+        entity: children[0],
+        dragged_source: children[0],
+        target: children[2],
+        index: 1,
+    });
+    app.update();
+    app.update();
+
+    assert_eq!(undo_depth(&app) - before, 1);
+    run_finished(&mut app, "history.undo");
+    assert_eq!(
+        document_order(app.world(), column),
+        vec!["First", "Second", "Third"],
+        "one undo put the whole drop back",
+    );
+}
+
+/// A parent's after-gap is drawn in the same place as its last
+/// descendant's: the descendant is the last thing under it, so both gaps
+/// are the same line on screen. Taking the deepest one every time makes
+/// "after the parent" a place with no pixel, so the pointer's x picks
+/// between the levels against their indents.
+#[test]
+fn the_gap_below_a_last_child_means_the_level_the_pointer_is_at() {
+    use bevy::camera::{NormalizedRenderTarget, RenderTarget};
+    use bevy::picking::events::DragDrop;
+    use bevy::picking::pointer::{Location, PointerId};
+    use bevy::window::{PrimaryWindow, WindowRef};
+    use jackdaw_widgets::tree_view::TreeRowInsertZone;
+
+    let mut app = util::editor_test_app();
+    app.world_mut().insert_resource(HierarchyShowAll(true));
+    let panel = app
+        .world_mut()
+        .spawn((
+            HierarchyTreeContainer,
+            Node {
+                width: px(320.0),
+                height: px(400.0),
+                ..default()
+            },
+            Visibility::Inherited,
+        ))
+        .id();
+    app.update();
+
+    let (column, children) = column_of_three(&mut app);
+    let row = app
+        .world()
+        .resource::<TreeIndex>()
+        .get(panel, column)
+        .expect("the column has a row");
+    app.world_mut()
+        .entity_mut(row)
+        .insert(jackdaw_widgets::tree_view::TreeNodeExpanded(true));
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let last = *children.last().expect("three children");
+    let last_row = app
+        .world()
+        .resource::<TreeIndex>()
+        .get(panel, last)
+        .expect("the last child has a row");
+    let zone = app
+        .world()
+        .get::<Children>(last_row)
+        .expect("a row has children")
+        .iter()
+        .find(|&child| {
+            app.world()
+                .get::<TreeRowInsertZone>(child)
+                .is_some_and(|zone| zone.after)
+        })
+        .expect("a row has an after-gap");
+
+    // A sibling of the column, so a drop "after the column" has somewhere
+    // to be told apart from "after its last child".
+    let outsider = app
+        .world_mut()
+        .spawn((Name::new("Outsider"), Node::default()))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), outsider);
+    app.update();
+
+    let drop_at = |app: &mut App, x: f32| {
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .expect("headless apps still have a primary window");
+        let target: NormalizedRenderTarget = RenderTarget::Window(WindowRef::Primary)
+            .normalize(Some(window))
+            .expect("the primary window normalizes");
+        app.world_mut().trigger(bevy::picking::events::Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target,
+                position: Vec2::new(x, 0.0),
+            },
+            DragDrop {
+                button: bevy::picking::pointer::PointerButton::Primary,
+                dropped: last_row,
+                hit: bevy::picking::backend::HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+            },
+            zone,
+        ));
+        app.update();
+        app.update();
+    };
+
+    // Far right: the deepest level, so the drop stays among the column's
+    // own children and nothing moves.
+    drop_at(&mut app, 300.0);
+    assert_eq!(
+        ecs_order(app.world(), column),
+        vec!["First", "Second", "Third"],
+        "at the child's own indent the drop is a no-op among its siblings",
+    );
+
+    // Far left: the outer level, so the row leaves the column and lands
+    // beside it.
+    drop_at(&mut app, 0.0);
+    assert_eq!(
+        ecs_order(app.world(), column),
+        vec!["First", "Second"],
+        "at the outer indent the drop means after the column, not inside it",
+    );
+    assert_eq!(
+        app.world().get::<ChildOf>(last).map(ChildOf::parent),
+        None,
+        "and the row is a sibling of the column now",
+    );
+}
+
+/// A drag holds what it is carrying, so a closed parent cannot be opened
+/// by clicking it. Resting the pointer on it during the drag opens it,
+/// which is how a drop inside a closed subtree is reached at all.
+#[test]
+fn resting_a_drag_on_a_closed_row_opens_it() {
+    use bevy::camera::{NormalizedRenderTarget, RenderTarget};
+    use bevy::picking::events::DragEnter;
+    use bevy::picking::pointer::{Location, PointerId};
+    use bevy::window::{PrimaryWindow, WindowRef};
+    use jackdaw_widgets::tree_view::{TreeNodeExpanded, TreeRowContent};
+
+    let mut app = util::editor_test_app();
+    app.world_mut().insert_resource(HierarchyShowAll(true));
+    let panel = app
+        .world_mut()
+        .spawn((
+            HierarchyTreeContainer,
+            Node::default(),
+            Visibility::Inherited,
+        ))
+        .id();
+    app.update();
+    let (column, _children) = column_of_three(&mut app);
+    let row = app
+        .world()
+        .resource::<TreeIndex>()
+        .get(panel, column)
+        .expect("the column has a row");
+    assert!(
+        !app.world()
+            .get::<TreeNodeExpanded>(row)
+            .expect("a row tracks whether it is open")
+            .0,
+        "the fixture starts closed",
+    );
+
+    let content = app
+        .world()
+        .get::<Children>(row)
+        .expect("a row has children")
+        .iter()
+        .find(|&child| app.world().get::<TreeRowContent>(child).is_some())
+        .expect("a row has content");
+
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(app.world())
+        .expect("headless apps still have a primary window");
+    let target: NormalizedRenderTarget = RenderTarget::Window(WindowRef::Primary)
+        .normalize(Some(window))
+        .expect("the primary window normalizes");
+    app.world_mut().trigger(bevy::picking::events::Pointer::new(
+        PointerId::Mouse,
+        Location {
+            target,
+            position: Vec2::ZERO,
+        },
+        DragEnter {
+            button: bevy::picking::pointer::PointerButton::Primary,
+            dragged: Entity::PLACEHOLDER,
+            hit: bevy::picking::backend::HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+        },
+        content,
+    ));
+    app.update();
+    assert!(
+        !app.world()
+            .get::<TreeNodeExpanded>(row)
+            .expect("a row tracks whether it is open")
+            .0,
+        "a pointer crossing a row on its way elsewhere opens nothing",
+    );
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw_widgets::tree_view::TreeSpringLoad>()
+            .row,
+        Some(row),
+        "but the clock is running on it",
+    );
+
+    // Rest on it. The wait is a real interval, so the test hands the app
+    // a clock it controls rather than waiting on the wall.
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        std::time::Duration::from_millis(100),
+    ));
+    for _ in 0..8 {
+        app.update();
+    }
+
+    assert!(
+        app.world()
+            .get::<TreeNodeExpanded>(row)
+            .expect("a row tracks whether it is open")
+            .0,
+        "resting on a closed row during a drag opens it",
+    );
+}

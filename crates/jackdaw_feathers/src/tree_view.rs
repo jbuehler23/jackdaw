@@ -6,10 +6,11 @@ use bevy::{
 };
 use bevy_monitors::prelude::{MonitorSelf, Mutation, NotifyChanged};
 use jackdaw_widgets::tree_view::{
-    EntityCategory, TreeChildrenPopulated, TreeFocused, TreeNode, TreeNodeExpandToggle,
-    TreeNodeExpanded, TreeRowChildren, TreeRowClicked, TreeRowContent, TreeRowDot, TreeRowDropped,
-    TreeRowDroppedOnRoot, TreeRowInsertZone, TreeRowInserted, TreeRowLabel, TreeRowSelected,
-    TreeRowStartRename, TreeRowVisibilityToggle, TreeRowVisibilityToggled, TreeView,
+    EntityCategory, TreeChildrenPopulated, TreeDropLine, TreeFocused, TreeNode,
+    TreeNodeExpandToggle, TreeNodeExpanded, TreeRoot, TreeRowChildren, TreeRowClicked,
+    TreeRowContent, TreeRowDot, TreeRowDropped, TreeRowDroppedOnRoot, TreeRowInsertZone,
+    TreeRowInserted, TreeRowLabel, TreeRowSelected, TreeRowStartRename, TreeRowVisibilityToggle,
+    TreeRowVisibilityToggled, TreeSpringLoad, TreeView,
 };
 
 use lucide_icons::Icon;
@@ -20,8 +21,29 @@ pub const ROW_BG: Color = Color::NONE;
 const INDENT_WIDTH: f32 = 16.0;
 const TOGGLE_WIDTH: f32 = 18.0;
 const DOT_COLUMN_WIDTH: f32 = 14.0;
+/// How tall a tree row is: the text plus the padding and border around
+/// it. Not measured, because the gap zones are laid out before anything
+/// has been; it is what the row's own values add up to.
+const ROW_HEIGHT: f32 = tokens::TEXT_SIZE_PX + 2.0 * tokens::SPACING_XS + 2.0;
+
 /// How tall the strip standing for the gap between two rows is.
-const INSERT_ZONE_HEIGHT: f32 = 4.0;
+///
+/// A third of a row each side of the boundary, so the band that means
+/// "between these two" is two thirds of a row wide. Four pixels a side
+/// with a two-pixel overhang, which is what this was, left a dead band
+/// in the middle of the row and a gap that had to be hit rather than
+/// aimed at.
+const INSERT_ZONE_HEIGHT: f32 = ROW_HEIGHT / 3.0;
+
+/// How long the pointer rests on a collapsed row before the drag opens
+/// it. Long enough that crossing a parent on the way somewhere else
+/// opens nothing, short enough that resting on one answers promptly.
+const SPRING_LOAD_DELAY: f32 = 0.4;
+
+/// How close to the top or bottom edge of the list the pointer has to be
+/// for a drag to scroll it, and how fast it scrolls there.
+const AUTO_SCROLL_MARGIN: f32 = 24.0;
+const AUTO_SCROLL_SPEED: f32 = 320.0;
 
 /// Parameters for tree row icon font rendering
 #[derive(Clone)]
@@ -167,60 +189,91 @@ pub fn tree_row(
 /// (`after == true`) a row. Dropping there reorders the dragged entity
 /// among the row's siblings instead of making it the row's child.
 ///
-/// Placed absolutely and hanging half its height past the row's edge, so it
-/// reads as the line between two rows without taking any height from the
-/// tree. The lower strip sits under the row's whole subtree, which is where
-/// "after this row" is once the row is expanded.
+/// Placed absolutely over the top or bottom third of the row, so the two
+/// strips either side of a boundary meet with nothing between them: the
+/// gap is a band to aim at rather than a line to hit. The lower strip
+/// sits under the row's whole subtree, which is where "after this row"
+/// is once the row is expanded.
 fn insertion_zone(after: bool) -> impl Bundle {
-    let overhang = px(-INSERT_ZONE_HEIGHT / 2.0);
     (
         TreeRowInsertZone { after },
         Node {
             position_type: PositionType::Absolute,
             left: px(0.0),
             right: px(0.0),
-            top: if after { Val::Auto } else { overhang },
-            bottom: if after { overhang } else { Val::Auto },
+            top: if after { Val::Auto } else { px(0.0) },
+            bottom: if after { px(0.0) } else { Val::Auto },
             height: px(INSERT_ZONE_HEIGHT),
             ..default()
         },
         BackgroundColor(Color::NONE),
+        // Every move, not only the first: the line has to follow the
+        // pointer along the gap, and the level a release would land at
+        // changes with the pointer's x without it leaving the zone.
         observe(
-            |mut enter: On<Pointer<DragEnter>>, mut colors: Query<&mut BackgroundColor>| {
-                enter.propagate(false);
-                if let Ok(mut color) = colors.get_mut(enter.event_target()) {
-                    color.0 = tokens::SELECTED_BORDER;
-                }
+            |mut over: On<Pointer<DragOver>>,
+             zones: Query<&TreeRowInsertZone>,
+             parents: Query<&ChildOf>,
+             tree_nodes: Query<&TreeNode>,
+             row_children: Query<(), With<TreeRowChildren>>,
+             transforms: Query<(&ComputedNode, &UiGlobalTransform)>,
+             mut line: ResMut<TreeDropLine>| {
+                over.propagate(false);
+                let zone = over.event_target();
+                let cursor = over.pointer_location.position;
+                let depth = resolve_drop_depth(
+                    zone,
+                    cursor,
+                    &zones,
+                    &parents,
+                    &tree_nodes,
+                    &row_children,
+                    &transforms,
+                )
+                .map_or(0, |(_, depth)| depth);
+                line.zone = Some(zone);
+                line.indent = depth as f32 * (INDENT_WIDTH + tokens::SPACING_SM);
             },
         ),
         observe(
-            |mut leave: On<Pointer<DragLeave>>, mut colors: Query<&mut BackgroundColor>| {
+            |mut leave: On<Pointer<DragLeave>>, mut line: ResMut<TreeDropLine>| {
                 leave.propagate(false);
-                if let Ok(mut color) = colors.get_mut(leave.event_target()) {
-                    color.0 = Color::NONE;
+                if line.zone == Some(leave.event_target()) {
+                    line.zone = None;
                 }
             },
         ),
         observe(
             |mut drop: On<Pointer<DragDrop>>,
              mut commands: Commands,
-             parent_query: Query<&ChildOf>,
+             parents: Query<&ChildOf>,
              tree_nodes: Query<&TreeNode>,
              zones: Query<&TreeRowInsertZone>,
-             mut colors: Query<&mut BackgroundColor>| {
+             row_children: Query<(), With<TreeRowChildren>>,
+             transforms: Query<(&ComputedNode, &UiGlobalTransform)>,
+             mut line: ResMut<TreeDropLine>| {
                 drop.propagate(false);
                 let zone = drop.event_target();
-                if let Ok(mut color) = colors.get_mut(zone) {
-                    color.0 = Color::NONE;
-                }
-                let Ok(&ChildOf(row)) = parent_query.get(zone) else {
+                line.zone = None;
+                let Ok(side) = zones.get(zone) else {
                     return;
                 };
-                let (Ok(target), Ok(side)) = (tree_nodes.get(row), zones.get(zone)) else {
+                let cursor = drop.pointer_location.position;
+                let Some((row, _)) = resolve_drop_depth(
+                    zone,
+                    cursor,
+                    &zones,
+                    &parents,
+                    &tree_nodes,
+                    &row_children,
+                    &transforms,
+                ) else {
                     return;
                 };
-                let Some(dragged_source) =
-                    find_source_entity(drop.dropped, &parent_query, &tree_nodes)
+                let Ok(target) = tree_nodes.get(row) else {
+                    return;
+                };
+                let Some(dragged_source) = find_source_entity(drop.dropped, &parents, &tree_nodes)
                 else {
                     return;
                 };
@@ -233,6 +286,100 @@ fn insertion_zone(after: bool) -> impl Bundle {
             },
         ),
     )
+}
+
+/// Which row's gap the pointer is in, and at what depth.
+///
+/// An expanded row's after-gap is drawn in the same place as its last
+/// descendant's, because the descendant is the last thing under it. Taking
+/// the deepest one every time makes "after the parent" unreachable: there
+/// is no pixel that means it. So the candidates are the row the zone
+/// belongs to and, walking up, each ancestor whose last child it is; the
+/// pointer's x picks between them against the indent of each level, the
+/// way it does in a file tree.
+///
+/// Returns `(row, depth)`. `None` for a zone that is not under a row.
+fn resolve_drop_depth(
+    zone: Entity,
+    cursor: Vec2,
+    zones: &Query<&TreeRowInsertZone>,
+    parents: &Query<&ChildOf>,
+    tree_nodes: &Query<&TreeNode>,
+    row_children: &Query<(), With<TreeRowChildren>>,
+    transforms: &Query<(&ComputedNode, &UiGlobalTransform)>,
+) -> Option<(Entity, usize)> {
+    let Ok(&ChildOf(row)) = parents.get(zone) else {
+        return None;
+    };
+    tree_nodes.get(row).ok()?;
+    let depth = row_depth(row, parents, row_children);
+    // Only the gap below a row can coincide with anything: the gap above
+    // one is its own, whatever is nested above it.
+    if !zones.get(zone).is_ok_and(|side| side.after) {
+        return Some((row, depth));
+    }
+
+    let mut candidates = vec![(row, depth)];
+    let mut current = row;
+    while let Some((parent_row, parent_depth)) =
+        enclosing_row_if_last(current, parents, tree_nodes, row_children)
+    {
+        candidates.push((parent_row, parent_depth));
+        current = parent_row;
+    }
+    if candidates.len() == 1 {
+        return candidates.pop();
+    }
+
+    // The level the pointer is pointing at, measured from the tree's own
+    // left edge rather than the row's, so it does not move with the row.
+    let left = transforms
+        .get(zone)
+        .map(|(computed, transform)| transform.translation.x - computed.size().x / 2.0)
+        .unwrap_or(cursor.x);
+    let step = INDENT_WIDTH + tokens::SPACING_SM;
+    let pointed = ((cursor.x - left) / step).floor().max(0.0) as usize;
+    candidates
+        .into_iter()
+        .min_by_key(|(_, depth)| depth.abs_diff(pointed))
+}
+
+/// How many levels deep `row` sits, counting the child containers crossed
+/// on the way to the tree's root.
+fn row_depth(
+    row: Entity,
+    parents: &Query<&ChildOf>,
+    row_children: &Query<(), With<TreeRowChildren>>,
+) -> usize {
+    let mut depth = 0;
+    let mut current = row;
+    // A tree is not deep; the bound is a guard against a cycle, not a
+    // limit anyone reaches.
+    for _ in 0..64 {
+        let Ok(&ChildOf(parent)) = parents.get(current) else {
+            return depth;
+        };
+        if row_children.get(parent).is_ok() {
+            depth += 1;
+        }
+        current = parent;
+    }
+    depth
+}
+
+/// The row `row` is nested in, when `row` is the last thing under it, so
+/// the two share an after-gap. `None` otherwise.
+fn enclosing_row_if_last(
+    row: Entity,
+    parents: &Query<&ChildOf>,
+    tree_nodes: &Query<&TreeNode>,
+    row_children: &Query<(), With<TreeRowChildren>>,
+) -> Option<(Entity, usize)> {
+    let &ChildOf(container) = parents.get(row).ok()?;
+    row_children.get(container).ok()?;
+    let &ChildOf(parent_row) = parents.get(container).ok()?;
+    tree_nodes.get(parent_row).ok()?;
+    Some((parent_row, row_depth(parent_row, parents, row_children)))
 }
 
 /// The row's expand toggle container, reached as
@@ -373,16 +520,18 @@ fn tree_row_content(
             visibility_toggle(source, &style.icon_font)
         ],
         // Click handler for selection (left-click only)
-        observe(move |mut click: On<Pointer<Click>>, mut commands: Commands| {
-            if click.event.button != PointerButton::Primary {
-                return;
-            }
-            click.propagate(false);
-            commands.trigger(TreeRowClicked {
-                entity: click.event_target(),
-                source_entity: source,
-            });
-        }),
+        observe(
+            move |mut click: On<Pointer<Click>>, mut commands: Commands| {
+                if click.event.button != PointerButton::Primary {
+                    return;
+                }
+                click.propagate(false);
+                commands.trigger(TreeRowClicked {
+                    entity: click.event_target(),
+                    source_entity: source,
+                });
+            },
+        ),
         // Hover effects (skip selected rows)
         observe(
             |hover: On<Pointer<Over>>,
@@ -406,21 +555,31 @@ fn tree_row_content(
                 }
             },
         ),
-        // Drag-and-drop: highlight drop target with border accent
+        // Drag-and-drop: highlight drop target with border accent, and
+        // start the clock that opens a closed row rested on.
         observe(
             |mut drag_enter: On<Pointer<DragEnter>>,
-             mut query: Query<(&mut BackgroundColor, &mut Node), With<TreeRowContent>>| {
+             mut query: Query<(&mut BackgroundColor, &mut Node), With<TreeRowContent>>,
+             parents: Query<&ChildOf>,
+             mut spring: ResMut<TreeSpringLoad>| {
                 drag_enter.propagate(false);
-                if let Ok((mut bg, mut node)) = query.get_mut(drag_enter.event_target()) {
+                let content = drag_enter.event_target();
+                if let Ok((mut bg, mut node)) = query.get_mut(content) {
                     bg.0 = tokens::DROP_TARGET_BG;
                     node.border = UiRect::left(px(3.0));
+                }
+                if let Ok(&ChildOf(row)) = parents.get(content) {
+                    spring.row = Some(row);
+                    spring.waited = 0.0;
                 }
             },
         ),
         observe(
             |mut drag_leave: On<Pointer<DragLeave>>,
              mut query: Query<(&mut BackgroundColor, &mut Node), With<TreeRowContent>>,
-             selected: Query<(), With<TreeRowSelected>>| {
+             selected: Query<(), With<TreeRowSelected>>,
+             parents: Query<&ChildOf>,
+             mut spring: ResMut<TreeSpringLoad>| {
                 drag_leave.propagate(false);
                 if let Ok((mut bg, mut node)) = query.get_mut(drag_leave.event_target()) {
                     bg.0 = if selected.contains(drag_leave.event_target()) {
@@ -429,6 +588,11 @@ fn tree_row_content(
                         ROW_BG
                     };
                     node.border = UiRect::all(px(1.0));
+                }
+                if let Ok(&ChildOf(row)) = parents.get(drag_leave.event_target())
+                    && spring.row == Some(row)
+                {
+                    spring.row = None;
                 }
             },
         ),
@@ -639,6 +803,170 @@ fn find_source_entity(
     None
 }
 
+/// The line drawn where a release would put what is being dragged.
+///
+/// One per tree, reconciled from [`TreeDropLine`] rather than spawned by
+/// whichever zone was entered, so it follows the pointer along a gap and
+/// between gaps instead of appearing once and staying put.
+#[derive(Component)]
+pub struct TreeDropIndicator;
+
+/// Keep the drop line where [`TreeDropLine`] says, and nowhere when it
+/// says nothing.
+pub fn sync_tree_drop_line(
+    mut commands: Commands,
+    line: Res<TreeDropLine>,
+    zones: Query<&TreeRowInsertZone>,
+    parents: Query<&ChildOf>,
+    transforms: Query<(&ComputedNode, &UiGlobalTransform)>,
+    roots: Query<Entity, With<TreeRoot>>,
+    indicators: Query<Entity, With<TreeDropIndicator>>,
+    mut nodes: Query<&mut Node, With<TreeDropIndicator>>,
+) {
+    let wanted = line.zone.filter(|zone| zones.contains(*zone));
+    let Some(zone) = wanted else {
+        for indicator in &indicators {
+            if let Ok(mut entity) = commands.get_entity(indicator) {
+                entity.despawn();
+            }
+        }
+        return;
+    };
+    let Some(root) = ancestor_tree_root(zone, &parents, &roots) else {
+        return;
+    };
+    let (Ok((zone_computed, zone_transform)), Ok((root_computed, root_transform))) =
+        (transforms.get(zone), transforms.get(root))
+    else {
+        return;
+    };
+    let side = zones.get(zone).is_ok_and(|side| side.after);
+    // The gap the zone stands for is its own outer edge: the top of the
+    // strip above a row, the bottom of the strip below one.
+    let centre =
+        zone_transform.translation.y + if side { 1.0 } else { -1.0 } * zone_computed.size().y / 2.0;
+    let top = centre - (root_transform.translation.y - root_computed.size().y / 2.0);
+    let left = line.indent;
+
+    match indicators.iter().next() {
+        Some(indicator) => {
+            if let Ok(mut node) = nodes.get_mut(indicator) {
+                node.left = px(left);
+                node.top = px(top - 1.0);
+            }
+        }
+        None => {
+            commands.spawn((
+                TreeDropIndicator,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(left),
+                    right: px(0.0),
+                    top: px(top - 1.0),
+                    height: px(2.0),
+                    ..default()
+                },
+                BackgroundColor(tokens::SELECTED_BORDER),
+                ZIndex(10),
+                Pickable::IGNORE,
+                ChildOf(root),
+            ));
+        }
+    }
+}
+
+/// Open a collapsed row the pointer has rested on during a drag.
+///
+/// A drag holds what it is carrying, so a subtree that is closed cannot
+/// be opened by clicking it. Resting on it opens it instead, which is how
+/// a nested drop is reached without letting go.
+pub fn spring_load_tree_rows(
+    time: Res<Time>,
+    mut spring: ResMut<TreeSpringLoad>,
+    expanded: Query<&TreeNodeExpanded>,
+    mut commands: Commands,
+) {
+    let Some(row) = spring.row else { return };
+    let Ok(state) = expanded.get(row) else {
+        spring.row = None;
+        return;
+    };
+    if state.0 {
+        spring.row = None;
+        return;
+    }
+    spring.waited += time.delta_secs();
+    if spring.waited < SPRING_LOAD_DELAY {
+        return;
+    }
+    spring.row = None;
+    spring.waited = 0.0;
+    if let Ok(mut entity) = commands.get_entity(row) {
+        entity.insert(TreeNodeExpanded(true));
+    }
+}
+
+/// Scroll the list while a drag rests near its top or bottom edge, so a
+/// drop below the fold is reachable without letting go.
+pub fn auto_scroll_tree_on_drag(
+    time: Res<Time>,
+    line: Res<TreeDropLine>,
+    spring: Res<TreeSpringLoad>,
+    pointers: Query<&bevy::picking::pointer::PointerLocation>,
+    parents: Query<&ChildOf>,
+    roots: Query<Entity, With<TreeRoot>>,
+    transforms: Query<(&ComputedNode, &UiGlobalTransform)>,
+    mut scrolls: Query<&mut ScrollPosition>,
+) {
+    let over = line.zone.or(spring.row);
+    let Some(over) = over else { return };
+    let Some(root) = ancestor_tree_root(over, &parents, &roots) else {
+        return;
+    };
+    let Some(cursor) = pointers
+        .iter()
+        .find_map(|location| location.location().map(|it| it.position))
+    else {
+        return;
+    };
+    let Ok((computed, transform)) = transforms.get(root) else {
+        return;
+    };
+    let half = computed.size().y / 2.0;
+    let top = transform.translation.y - half;
+    let bottom = transform.translation.y + half;
+    let delta = if cursor.y < top + AUTO_SCROLL_MARGIN {
+        -AUTO_SCROLL_SPEED
+    } else if cursor.y > bottom - AUTO_SCROLL_MARGIN {
+        AUTO_SCROLL_SPEED
+    } else {
+        return;
+    };
+    if let Ok(mut scroll) = scrolls.get_mut(root) {
+        let content = computed.content_size().y * computed.inverse_scale_factor();
+        let view = computed.size().y * computed.inverse_scale_factor();
+        let max = (content - view).max(0.0);
+        scroll.y = (scroll.y + delta * time.delta_secs()).clamp(0.0, max);
+    }
+}
+
+/// The [`TreeRoot`] container `entity` sits under.
+fn ancestor_tree_root(
+    entity: Entity,
+    parents: &Query<&ChildOf>,
+    roots: &Query<Entity, With<TreeRoot>>,
+) -> Option<Entity> {
+    let mut current = entity;
+    for _ in 0..64 {
+        if roots.contains(current) {
+            return Some(current);
+        }
+        let &ChildOf(parent) = parents.get(current).ok()?;
+        current = parent;
+    }
+    None
+}
+
 /// Returns observers for the root tree container to handle deparenting (drop-to-root).
 pub fn tree_container_drop_observers() -> impl Bundle {
     (
@@ -651,11 +979,18 @@ pub fn tree_container_drop_observers() -> impl Bundle {
             },
         ),
         observe(
-            |mut drag_leave: On<Pointer<DragLeave>>, mut bg_query: Query<&mut BackgroundColor>| {
+            |mut drag_leave: On<Pointer<DragLeave>>,
+             mut bg_query: Query<&mut BackgroundColor>,
+             mut line: ResMut<TreeDropLine>,
+             mut spring: ResMut<TreeSpringLoad>| {
                 drag_leave.propagate(false);
                 if let Ok(mut bg) = bg_query.get_mut(drag_leave.event_target()) {
                     bg.0 = Color::NONE;
                 }
+                // The drag has left the tree, so there is nowhere it would
+                // land and nothing it is resting on.
+                line.zone = None;
+                spring.row = None;
             },
         ),
         observe(
