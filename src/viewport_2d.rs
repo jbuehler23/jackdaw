@@ -2384,33 +2384,68 @@ fn viewport_2d_is_current(
     hosts
         .iter()
         .any(|host| entity_is_hovered(host.area, &hover_map, &parents))
-        || fronted_viewport_is(
-            &tree,
-            &contents,
-            &viewports,
-            crate::viewport_host::ViewportMode::TwoD,
-        )
+        || focused_viewport_mode(&hover_map, &parents, &tree, &contents, &viewports)
+            == Some(crate::viewport_host::ViewportMode::TwoD)
 }
 
-/// Whether a viewport panel that is the active tab in some dock leaf is
-/// showing `mode`.
+/// Which viewport panel a press belongs to, as the mode that panel is
+/// showing.
 ///
 /// The canvas is a mode of the one viewport window rather than a window of its
 /// own, and no layout registers the 2D id, so asking the dock tree for that id
 /// never answers yes. The tab says a viewport is fronted;
 /// [`crate::viewport_host::ViewportHost::mode`] says which of the two it is
-/// showing -- and the two have to be the *same* panel. Asking "is a viewport
-/// fronted" and "is any viewport in this mode" separately answers yes for a
-/// workspace holding a fronted 3D panel and a buried canvas, which makes both
-/// halves of Home fire on one press.
-pub(crate) fn fronted_viewport_is(
+/// showing -- and the answer has to name one *panel*, not one mode. A
+/// workspace can front a viewport in each of two leaves, and asking each mode
+/// separately whether some fronted viewport is showing it answers yes twice,
+/// so one Home frames the canvas and moves the camera.
+///
+/// So: the viewport under the cursor, which is the panel the user is pointing
+/// at; and with the cursor over none of them, the fronted viewport when the
+/// workspace fronts only one. Two fronted viewports in different modes with
+/// the cursor over neither name no panel at all, and Home does nothing rather
+/// than doing it twice.
+pub(crate) fn focused_viewport_mode(
+    hover_map: &HoverMap,
+    parents: &Query<&ChildOf>,
     tree: &jackdaw_panels::tree::DockTree,
     contents: &Query<(Entity, &jackdaw_panels::area::DockTabContent)>,
     viewports: &Query<&crate::viewport_host::ViewportHost>,
-    mode: crate::viewport_host::ViewportMode,
-) -> bool {
-    fronted_viewport_hosts(tree, contents)
-        .any(|entity| viewports.get(entity).is_ok_and(|host| host.mode == mode))
+) -> Option<crate::viewport_host::ViewportMode> {
+    if let Some(mode) = hovered_viewport_mode(hover_map, parents, contents, viewports) {
+        return Some(mode);
+    }
+    let mut fronted = fronted_viewport_hosts(tree, contents)
+        .filter_map(|entity| viewports.get(entity).ok().map(|host| host.mode));
+    let first = fronted.next()?;
+    fronted.all(|mode| mode == first).then_some(first)
+}
+
+/// The mode of the viewport panel the cursor is inside, if it is inside one.
+fn hovered_viewport_mode(
+    hover_map: &HoverMap,
+    parents: &Query<&ChildOf>,
+    contents: &Query<(Entity, &jackdaw_panels::area::DockTabContent)>,
+    viewports: &Query<&crate::viewport_host::ViewportHost>,
+) -> Option<crate::viewport_host::ViewportMode> {
+    hover_map
+        .iter()
+        .filter(|(pointer, _)| !pointer.is_custom())
+        .flat_map(|(_, hits)| hits.keys())
+        .find_map(|&hovered| {
+            // The walk stops at the first panel it reaches: a hit inside some
+            // other panel is not a hit inside the viewport that panel sits
+            // beside.
+            core::iter::successors(Some(hovered), |entity| {
+                parents.get(*entity).ok().map(ChildOf::parent)
+            })
+            .find_map(|ancestor| {
+                contents
+                    .contains(ancestor)
+                    .then(|| viewports.get(ancestor).ok().map(|host| host.mode))
+            })
+            .flatten()
+        })
 }
 
 /// The content entity of every viewport panel whose tab is the active one

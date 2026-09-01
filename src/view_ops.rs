@@ -262,16 +262,15 @@ fn frame_selected_available(
 fn frame_all_available(
     active: Res<ActiveViewport>,
     cameras: Query<Entity, With<MainViewportCamera>>,
+    hover_map: Res<bevy::picking::hover::HoverMap>,
+    parents: Query<&ChildOf>,
     tree: Res<jackdaw_panels::tree::DockTree>,
     contents: Query<(Entity, &jackdaw_panels::area::DockTabContent)>,
     viewports: Query<&crate::viewport_host::ViewportHost>,
 ) -> bool {
-    if !crate::viewport_2d::fronted_viewport_is(
-        &tree,
-        &contents,
-        &viewports,
-        crate::viewport_host::ViewportMode::ThreeD,
-    ) {
+    if crate::viewport_2d::focused_viewport_mode(&hover_map, &parents, &tree, &contents, &viewports)
+        != Some(crate::viewport_host::ViewportMode::ThreeD)
+    {
         return false;
     }
     resolve_frame_camera(&active, &cameras).is_some()

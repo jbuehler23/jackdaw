@@ -2626,6 +2626,50 @@ fn a_buried_canvas_does_not_answer_home_for_the_panel_in_front() {
     );
 }
 
+/// A workspace can front a viewport in each of two leaves -- the canvas
+/// beside the world, which is how a screen is authored against the scene it
+/// belongs to. Asking each mode separately whether *a* fronted viewport is
+/// showing it answered yes twice, so one Home framed the canvas and moved the
+/// camera. With the cursor over neither, Home names no panel and does
+/// nothing.
+#[test]
+fn two_fronted_viewports_in_different_modes_do_not_both_answer_home() {
+    use jackdaw::viewport_host::ViewportMode;
+    use jackdaw_panels::tree::{DockTree, Edge};
+
+    let mut app = util::editor_test_app();
+    fit_panel(&mut app);
+    world_camera(&mut app);
+    let left = dock_leaf(app_mut(&mut app), &[jackdaw::viewport::VIEWPORT_WINDOW_ID]);
+    let (right, right_tab) = app
+        .world_mut()
+        .resource_mut::<DockTree>()
+        .split(
+            left,
+            Edge::Right,
+            jackdaw::viewport::VIEWPORT_WINDOW_ID.to_string(),
+        )
+        .expect("the leaf splits");
+    let left_tab = tab_ids(&app, left)[0];
+    spawn_viewport_panel(&mut app, left_tab, ViewportMode::TwoD);
+    spawn_viewport_panel(&mut app, right_tab, ViewportMode::ThreeD);
+    assert_eq!(
+        tab_ids(&app, right),
+        vec![right_tab],
+        "precondition: the split put the second viewport in its own leaf",
+    );
+    app.update();
+
+    assert!(
+        !available(&mut app, "viewport2d.frame"),
+        "with two panels fronted and the cursor over neither, the canvas names no press",
+    );
+    assert!(
+        !available(&mut app, "view.frame_all"),
+        "and neither does the world, so one press does not do both",
+    );
+}
+
 /// `dock_leaf` wants the app; naming the reborrow keeps the call above
 /// readable.
 fn app_mut(app: &mut App) -> &mut App {
