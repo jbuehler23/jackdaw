@@ -610,3 +610,233 @@ fn the_suite_reads_its_own_config_directory() {
 fn load_user_keymap_now() -> UserKeymap {
     jackdaw_api_internal::keymap::load_user_keymap()
 }
+
+/// A chord two commands have shared since the editor shipped needs no
+/// decision from the reader: their availability arbitrates. What the
+/// dialog owes is which rows those are, which the row says itself.
+#[test]
+fn a_shipped_co_fire_marks_its_rows_and_stays_out_of_the_paragraph() {
+    let mut app = headless_app();
+    app.finish();
+    app.update();
+    let pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
+
+    let shared = pending.conflicts_of("entity.copy");
+    assert!(
+        shared.iter().any(|line| line.contains("Copy Keyframes")),
+        "the row names the other command in the words the rows are named in: {shared:?}",
+    );
+    assert!(
+        shared
+            .iter()
+            .all(|line| line.contains("Ctrl") && line.contains("C -")),
+        "and names the chord it is about: {shared:?}",
+    );
+
+    assert!(
+        pending.user_conflicts().is_empty(),
+        "nothing has been rebound, so nothing is the reader's to decide",
+    );
+    let text = jackdaw::keybind_settings::advisory_text(
+        &pending,
+        &[],
+        &jackdaw_api_internal::keymap::KeymapLoadProblem::default(),
+    );
+    assert!(
+        !text.contains("you have just bound") && !text.contains("clip.copy_keyframes"),
+        "the shipped co-fires are counted, not listed one by one: {text}",
+    );
+    assert!(
+        text.contains("arbitrated"),
+        "and the count says what happens to them: {text}",
+    );
+}
+
+/// A conflict a rebind in this session made is new, and is the reader's
+/// to decide about, so it is named in full.
+#[test]
+fn a_conflict_this_session_made_is_named_in_the_paragraph() {
+    let mut app = headless_app();
+    app.finish();
+    app.update();
+    let mut pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
+    pending.rebind("history.redo", PresetInput::key("KeyZ").ctrl());
+
+    let text = jackdaw::keybind_settings::advisory_text(
+        &pending,
+        &[],
+        &jackdaw_api_internal::keymap::KeymapLoadProblem::default(),
+    );
+    assert!(text.contains("you have just bound"), "{text}");
+    assert!(text.contains("KeyZ"), "{text}");
+}
+
+/// Several commands ship with more than one chord. A dialog that could
+/// only replace turned each of those into one chord the first time it was
+/// touched, and Save wrote that loss to disk.
+#[test]
+fn an_added_chord_survives_a_save_and_a_reload() {
+    let mut app = headless_app();
+    app.finish();
+    app.update();
+    let defaults = classic(&mut app);
+    let mut pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
+
+    let before = pending.chords_of(REBOUND);
+    pending.add_chord(REBOUND, PresetInput::key("F9"));
+    let after = pending.chords_of(REBOUND);
+    assert_eq!(
+        after.len(),
+        before.len() + 1,
+        "the chord it had is still there: {after:?}",
+    );
+    assert!(after.contains(&"F9".to_string()), "{after:?}");
+
+    let user = pending.to_user_keymap();
+    let reloaded: UserKeymap =
+        serde_json::from_str(&serde_json::to_string(&user).expect("serialize")).expect("parse");
+    app.world_mut().insert_resource(reloaded);
+    let reopened = jackdaw::keybind_settings::pending_from_world(app.world_mut());
+    assert_eq!(
+        reopened.chords_of(REBOUND),
+        after,
+        "both chords came back off the saved keymap",
+    );
+    assert_eq!(
+        resolve_keymap(&defaults, &pending.to_user_keymap())
+            .bindings
+            .iter()
+            .filter(|binding| binding.operator == REBOUND)
+            .count(),
+        after.len(),
+        "and the resolved keymap holds one row per chord",
+    );
+
+    // And a chord can be taken away again, one at a time.
+    let mut reopened = reopened;
+    reopened.remove_chord(REBOUND, 0);
+    assert_eq!(reopened.chords_of(REBOUND), after[1..].to_vec());
+}
+
+/// A command that fires on release keeps firing on release when its chord
+/// is changed. The dialog used to write `Press` for everything, turning a
+/// release binding into a press one with nothing saying so.
+#[test]
+fn a_rebind_keeps_the_phase_the_command_fires_on() {
+    let mut app = headless_app();
+    app.finish();
+    app.update();
+    let mut pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
+    pending.bindings = vec![PresetBinding {
+        operator: "some.release.op".to_string(),
+        input: PresetInput::key("KeyQ"),
+        phase: PresetPhase::Release,
+        context: PresetContext::Operators,
+    }];
+
+    pending.rebind("some.release.op", PresetInput::key("F9"));
+    let row = pending
+        .bindings
+        .iter()
+        .find(|binding| binding.operator == "some.release.op")
+        .expect("the row is still there");
+    assert_eq!(
+        row.phase,
+        PresetPhase::Release,
+        "a rebind changes the chord, not when the command fires",
+    );
+
+    pending.add_chord("some.release.op", PresetInput::key("F10"));
+    assert!(
+        pending
+            .bindings
+            .iter()
+            .filter(|binding| binding.operator == "some.release.op")
+            .all(|binding| binding.phase == PresetPhase::Release),
+        "and neither does adding one",
+    );
+}
+
+/// The draw-brush modal is reached by four chords, two of them hanging
+/// off marker actions of their own. The dialog used to show the two on
+/// its own action, so the two the user actually presses were invisible.
+#[test]
+fn the_draw_brush_row_lists_the_chords_that_reach_it() {
+    let mut app = headless_app();
+    app.finish();
+    app.update();
+    let pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
+    let row = pending
+        .rows
+        .iter()
+        .find(|row| row.operator == "viewport.draw_brush_modal")
+        .expect("the modal has a row");
+
+    assert!(!row.is_editable(), "its chords are attached in code");
+    for chord in ["C", "Alt + B", "B"] {
+        assert!(
+            row.fixed.iter().any(|held| held == chord),
+            "{chord} reaches the draw-brush modal and must be listed: {:?}",
+            row.fixed,
+        );
+    }
+    assert!(
+        row.reason().contains("attached in code"),
+        "the row says why it cannot be changed: {}",
+        row.reason(),
+    );
+}
+
+/// A keymap that will not parse loads as empty, and the next Save writes
+/// the whole file: leaving the unparseable one in place would destroy
+/// whatever was in it without ever showing it to anyone.
+#[test]
+fn a_corrupt_keymap_is_kept_beside_itself_and_reported() {
+    use jackdaw_api_internal::keymap::load_user_keymap_reporting;
+
+    let guard = CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = empty_config_dir();
+    let path = dir.join("keymap.json");
+    let kept = dir.join("keymap.json.invalid");
+    let _ = std::fs::remove_file(&kept);
+    std::fs::write(&path, "{ this is not json").expect("write a corrupt keymap");
+
+    let (keymap, problem) = load_user_keymap_reporting();
+    assert_eq!(
+        keymap,
+        UserKeymap::default(),
+        "a file that will not parse is no overrides at all",
+    );
+    assert!(
+        kept.is_file(),
+        "the unreadable file is kept as {}",
+        kept.display(),
+    );
+    assert!(
+        !path.is_file(),
+        "and moved out of the way, so Save does not write over it",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&kept).expect("read the kept file"),
+        "{ this is not json",
+        "kept exactly as it was, so it can still be rescued by hand",
+    );
+    assert!(problem.is_some(), "and the dialog is told");
+    assert!(
+        problem.message.contains("keymap.json.invalid"),
+        "the notice names where it went: {}",
+        problem.message,
+    );
+
+    let advisory = jackdaw::keybind_settings::advisory_text(
+        &jackdaw::keybind_settings::PendingKeymapChanges::default(),
+        &[],
+        &problem,
+    );
+    assert!(advisory.contains("keymap.json.invalid"), "{advisory}");
+
+    let _ = std::fs::remove_file(&kept);
+    drop(guard);
+}

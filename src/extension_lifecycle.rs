@@ -1,9 +1,17 @@
 use bevy::prelude::*;
 use jackdaw_api_internal::keymap::{
     ActiveKeymapPreset, BuiltinActions, DefaultKeymap, KeymapApplyReport, KeymapCapture,
-    UserKeymap, apply_keymap_preset, load_user_keymap, resolve_keymap,
+    UserKeymap, apply_keymap_preset, load_user_keymap_reporting, resolve_keymap,
 };
 use jackdaw_api_internal::lifecycle::enable_extension;
+
+/// Load the user keymap, keeping what was wrong with it on disk in the
+/// world so the keybind dialog can say it out loud rather than leaving
+/// the overrides to look like they were never saved.
+fn insert_user_keymap(app: &mut App) {
+    let (keymap, problem) = load_user_keymap_reporting();
+    app.insert_resource(keymap).insert_resource(problem);
+}
 
 use crate::extension_resolution::resolve_enabled_list;
 use crate::input_contexts::spawn_contexts;
@@ -20,10 +28,10 @@ pub(super) fn plugin(app: &mut App) {
     // `apply_active_keymap` chains after `apply_enabled_extensions_startup`
     // so extensions have registered all DefaultKeymap entries before
     // bindings are applied.
+    insert_user_keymap(app);
     app.init_resource::<BuiltinActions>()
         .init_resource::<DefaultKeymap>()
         .init_resource::<KeymapCapture>()
-        .insert_resource(load_user_keymap())
         .add_systems(
             Startup,
             (

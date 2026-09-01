@@ -8,6 +8,12 @@
 //! re-applies the result, so a rebind takes effect in the session that
 //! made it rather than at the next launch.
 //!
+//! A command can hold more than one chord, and several ship that way, so
+//! an editable row draws each chord with a remove of its own and offers
+//! Add Chord beside Rebind. Rebind replaces every chord; both keep the
+//! phase and context the command's rows already had, because when a
+//! command fires is not something changing its chord should decide.
+//!
 //! Three kinds of row are not editable here. A *fixed* row is an
 //! operator whose chord is attached at a raw binding site rather than
 //! through the keymap (hold-repeat nudges, the draw-brush modal's own
@@ -16,24 +22,37 @@
 //! action behind it at all: it was registered to be reached from a menu,
 //! a button or the command palette, and there is nothing for a chord to
 //! attach to, so the dialog says so rather than offering a rebind that
-//! would go nowhere. The camera rows are the last users of the legacy
-//! [`KeybindRegistry`], which drives camera fly directly; they keep
-//! their old behaviour, including their own file.
+//! would go nowhere. Both carry the reason in a tooltip, because the
+//! heading alone says what the row is and not why. The camera rows are
+//! the last users of the legacy [`KeybindRegistry`], which drives camera
+//! fly directly; they keep their old behaviour, including their own file.
+//!
+//! A chord more than one command claims is marked on the rows it is
+//! about, naming the other commands the way those rows name them. The
+//! line above the list is for what the reader has to decide something
+//! about: a conflict a rebind in this session made, a keymap file that
+//! would not parse, a saved binding that could not be attached. Chords
+//! shared since the editor shipped are arbitrated by availability, so
+//! they are one line saying how many, not six saying which.
 
 use std::collections::HashMap;
 
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Binding, Bindings};
 use jackdaw_api_internal::keymap::{
-    DefaultKeymap, KeymapCapture, KeymapPreset, PresetBinding, PresetContext, PresetInput,
-    PresetPhase, PresetSpawnedBinding, UserKeymap, find_conflicts, key_code_from_name,
+    DefaultKeymap, KeymapCapture, KeymapLoadProblem, KeymapPreset, PresetBinding, PresetContext,
+    PresetInput, PresetPhase, PresetSpawnedBinding, UserKeymap, find_conflicts, key_code_from_name,
     key_code_name, mouse_button_name, resolve_keymap, save_user_keymap,
 };
-use jackdaw_api_internal::lifecycle::{OperatorAction, OperatorEntity};
+use jackdaw_api_internal::lifecycle::{OperatorAction, OperatorChordSite, OperatorEntity};
 use jackdaw_commands::keybinds::{EditorAction, Keybind, KeybindRegistry};
+use jackdaw_feathers::icons::Icon;
+use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_feathers::{
     button::{
-        ButtonClickEvent, ButtonContentText, ButtonProps, ButtonVariant, button, button_caption,
+        ButtonClickEvent, ButtonContentText, ButtonProps, ButtonVariant, IconButtonProps, button,
+        button_caption, icon_button,
     },
     dialog::{
         CloseDialogEvent, DialogActionEvent, DialogChildrenSlot, EditorDialog, OpenDialogEvent,
@@ -57,6 +76,7 @@ impl Plugin for KeybindSettingsPlugin {
             .add_observer(on_reset_click)
             .add_observer(on_reset_all_click)
             .add_observer(on_key_filter_click)
+            .add_observer(on_remove_chord_click)
             .add_systems(
                 Update,
                 (
@@ -65,6 +85,8 @@ impl Plugin for KeybindSettingsPlugin {
                     capture_key_filter,
                     apply_keybind_filter,
                     refresh_advisory,
+                    refresh_chord_lists,
+                    refresh_conflict_badges,
                     cleanup_on_dialog_close,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
@@ -162,6 +184,28 @@ impl KeybindRow {
     pub fn is_editable(&self) -> bool {
         self.bindable && self.fixed.is_empty()
     }
+
+    /// Why this row offers no rebind, for the reader who wants to know
+    /// what "Fixed" or "Menu only" is standing in for.
+    ///
+    /// Empty for an editable row. The words are in the dialog rather than
+    /// only in this module's own documentation, because the person asking
+    /// is looking at the row.
+    pub fn reason(&self) -> String {
+        if self.is_editable() {
+            return String::new();
+        }
+        if !self.bindable {
+            return "This command has no input action to attach a chord to. It is reached from a \
+                    menu, a button, or the command palette."
+                .to_string();
+        }
+        format!(
+            "This command's chords are attached in code rather than through the keymap, so they \
+             cannot be changed here: {}",
+            self.fixed.join(", ")
+        )
+    }
 }
 
 /// The dialog's working copy of the keymap.
@@ -191,18 +235,74 @@ impl PendingKeymapChanges {
             .collect()
     }
 
+    /// The phase and context `operator`'s rows are written in.
+    ///
+    /// Taken from the rows it already holds, so a command that fires on
+    /// release keeps firing on release when its chord is changed. Writing
+    /// `Press` for everything turned a release binding into a press one
+    /// the first time it was rebound, with nothing saying so.
+    fn shape_of(&self, operator: &str) -> (PresetPhase, PresetContext) {
+        self.bindings
+            .iter()
+            .chain(self.defaults.iter())
+            .find(|binding| binding.operator == operator)
+            .map_or((PresetPhase::Press, PresetContext::Operators), |binding| {
+                (binding.phase, binding.context)
+            })
+    }
+
     /// Bind `operator` to `input`, replacing every chord it had. The
     /// command whose chord this was keeps it: a shared chord is a thing
     /// the keymap allows, and taking one away from a command the user
     /// did not name is not this dialog's decision to make.
     pub fn rebind(&mut self, operator: &str, input: PresetInput) {
+        let (phase, context) = self.shape_of(operator);
         self.bindings.retain(|binding| binding.operator != operator);
         self.bindings.push(PresetBinding {
             operator: operator.to_string(),
             input,
-            phase: PresetPhase::Press,
-            context: PresetContext::Operators,
+            phase,
+            context,
         });
+    }
+
+    /// Give `operator` another chord alongside the ones it holds.
+    ///
+    /// A command can answer to more than one chord, and several ship that
+    /// way - Delete and Backspace, the two zoom keys. A dialog that could
+    /// only replace turned every one of those into a single chord the
+    /// first time it was touched.
+    pub fn add_chord(&mut self, operator: &str, input: PresetInput) {
+        if self
+            .bindings
+            .iter()
+            .any(|binding| binding.operator == operator && binding.input == input)
+        {
+            return;
+        }
+        let (phase, context) = self.shape_of(operator);
+        self.bindings.push(PresetBinding {
+            operator: operator.to_string(),
+            input,
+            phase,
+            context,
+        });
+    }
+
+    /// Drop `operator`'s chord at `index`, counting the way
+    /// [`Self::chords_of`] lists them.
+    pub fn remove_chord(&mut self, operator: &str, index: usize) {
+        let Some(at) = self
+            .bindings
+            .iter()
+            .enumerate()
+            .filter(|(_, binding)| binding.operator == operator)
+            .map(|(at, _)| at)
+            .nth(index)
+        else {
+            return;
+        };
+        self.bindings.remove(at);
     }
 
     /// Put `operator` back on the chords it ships with.
@@ -285,6 +385,53 @@ impl PendingKeymapChanges {
             bindings: self.bindings.clone(),
         })
     }
+
+    /// The chords more than one command claims in the shipped keymap.
+    fn shipped_conflicts(&self) -> Vec<String> {
+        find_conflicts(&KeymapPreset {
+            name: "classic".into(),
+            bindings: self.defaults.clone(),
+        })
+    }
+
+    /// The chords more than one command claims that the shipped keymap
+    /// did not: the ones this session's rebinds made.
+    pub fn user_conflicts(&self) -> Vec<String> {
+        let shipped: std::collections::HashSet<String> =
+            self.shipped_conflicts().into_iter().collect();
+        self.conflicts()
+            .into_iter()
+            .filter(|conflict| !shipped.contains(conflict))
+            .collect()
+    }
+
+    /// How many shipped chords are claimed by more than one command.
+    pub fn shipped_conflict_count(&self) -> usize {
+        self.shipped_conflicts().len()
+    }
+
+    /// One line per chord of `operator` that another command also claims,
+    /// naming that command the way the row next to it is named.
+    ///
+    /// The advisory used to be the only sign of a conflict, so finding
+    /// which row it was about meant reading a list of operator ids at the
+    /// top of a dialog listing labels. This is what the row itself says.
+    pub fn conflicts_of(&self, operator: &str) -> Vec<String> {
+        self.bindings
+            .iter()
+            .filter(|binding| binding.operator == operator)
+            .filter_map(|binding| {
+                let others = self.also_bound_to(operator, &binding.input);
+                (!others.is_empty()).then(|| {
+                    format!(
+                        "{} - also {}",
+                        format_preset_input(&binding.input),
+                        others.join(", ")
+                    )
+                })
+            })
+            .collect()
+    }
 }
 
 /// Tracks which operator or camera action is being re-recorded.
@@ -296,10 +443,29 @@ pub(crate) struct KeybindRecordingState {
     pending_confirm: Option<PresetInput>,
 }
 
+/// What the recorded chord does to the row it was started from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecordingMode {
+    /// Replace every chord the command holds.
+    Replace,
+    /// Keep them and add one more.
+    Add,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RecordingTarget {
-    Operator(String),
+    Operator(String, RecordingMode),
     Camera(EditorAction, usize),
+}
+
+impl RecordingTarget {
+    /// The operator this recording is for, if it is for one.
+    fn operator(&self) -> Option<&str> {
+        match self {
+            Self::Operator(operator, _) => Some(operator),
+            Self::Camera(..) => None,
+        }
+    }
 }
 
 impl KeybindRecordingState {
@@ -346,9 +512,29 @@ struct KeybindRowTarget {
 #[derive(Component)]
 struct KeybindCategoryHeader(String);
 
-/// The text element showing an operator's chords.
+/// The text element showing an operator's chords. The camera rows still
+/// draw one; an operator row draws a [`KeybindChordList`] instead, so each
+/// chord can be removed on its own.
 #[derive(Component)]
 struct KeybindDisplayText(String);
+
+/// The container holding one operator row's chords, rebuilt whenever the
+/// working copy or the recording changes.
+#[derive(Component)]
+struct KeybindChordList(String);
+
+/// Remove button for one chord of an operator: (operator, index into
+/// `chords_of`).
+#[derive(Component)]
+struct KeybindRemoveChordButton(String, usize);
+
+/// Add-another-chord button for an operator row.
+#[derive(Component)]
+struct KeybindAddChordButton(String);
+
+/// The marker on a row whose chords another command also claims.
+#[derive(Component)]
+struct KeymapConflictBadge(String);
 
 /// The text element showing a camera action's chords.
 #[derive(Component)]
@@ -397,11 +583,21 @@ fn category_of(operator_id: &str) -> String {
 /// with the chords attached to it outside the keymap.
 fn collect_rows(world: &mut World) -> Vec<KeybindRow> {
     let mut fixed: HashMap<String, Vec<String>> = HashMap::new();
-    let entries: Vec<(String, Vec<Entity>)> = world
+    let mut entries: Vec<(String, Vec<Entity>)> = world
         .query::<(&OperatorAction, &Bindings)>()
         .iter(world)
         .map(|(action, bindings)| (action.0.to_string(), bindings.iter().collect()))
         .collect();
+    // Chords that reach an operator from an action that is not its own.
+    // They are as pressable as the ones on its own action, so a dialog
+    // that left them out would show a chord the user cannot find and
+    // hide one they can press.
+    entries.extend(
+        world
+            .query::<(&OperatorChordSite, &Bindings)>()
+            .iter(world)
+            .map(|(site, bindings)| (site.0.to_string(), bindings.iter().collect())),
+    );
     for (operator, binding_entities) in entries {
         for binding_entity in binding_entities {
             if world.get::<PresetSpawnedBinding>(binding_entity).is_some() {
@@ -424,6 +620,10 @@ fn collect_rows(world: &mut World) -> Vec<KeybindRow> {
         .iter(world)
         .map(|action| action.0.to_string())
         .collect();
+    for list in fixed.values_mut() {
+        list.sort();
+        list.dedup();
+    }
 
     let mut rows: Vec<KeybindRow> = world
         .query::<&OperatorEntity>()
@@ -538,14 +738,33 @@ fn format_bindings(bindings: &[Keybind]) -> String {
 }
 
 /// What the advisory line says about a working copy and the last apply.
-pub fn advisory_text(pending: &PendingKeymapChanges, skipped: &[String]) -> String {
+///
+/// Only what the reader has to decide something about. A chord two
+/// commands have shared since the editor shipped is arbitrated by their
+/// availability and needs no decision, so it is one line saying how many
+/// there are; the rows themselves carry which. A chord a rebind in this
+/// session made shared is new, and is named in full.
+pub fn advisory_text(
+    pending: &PendingKeymapChanges,
+    skipped: &[String],
+    problem: &KeymapLoadProblem,
+) -> String {
     let mut parts = Vec::new();
-    let conflicts = pending.conflicts();
-    if !conflicts.is_empty() {
+    if problem.is_some() {
+        parts.push(problem.message.clone());
+    }
+    let user = pending.user_conflicts();
+    if !user.is_empty() {
         parts.push(format!(
-            "{} chords are claimed by more than one command; each one fires and the commands decide between them: {}",
-            conflicts.len(),
-            conflicts.join("; ")
+            "{} chords you have just bound are claimed by more than one command; each one fires and the commands decide between them: {}",
+            user.len(),
+            user.join("; ")
+        ));
+    }
+    let shipped = pending.shipped_conflict_count();
+    if shipped > 0 {
+        parts.push(format!(
+            "{shipped} shipped chords are shared by more than one command and arbitrated between them; the rows marked below say which."
         ));
     }
     if !skipped.is_empty() {
@@ -638,12 +857,16 @@ fn populate_keybind_dialog(
     mut commands: Commands,
     pending: Option<Res<PendingKeymapChanges>>,
     last_apply: Option<Res<LastKeymapApply>>,
+    problem: Option<Res<KeymapLoadProblem>>,
+    icon_font: Option<Res<jackdaw_feathers::icons::IconFont>>,
     slots: Query<Entity, (With<DialogChildrenSlot>, Added<DialogChildrenSlot>)>,
     populated: Query<(), With<KeybindDialogPopulated>>,
 ) {
     let Some(pending) = pending else { return };
     let skipped =
         last_apply.map_or_else(Vec::new, |report| report.0.skipped_unknown_operator.clone());
+    let problem = problem.map(|it| it.clone()).unwrap_or_default();
+    let icon_font = icon_font.map(|font| font.0.clone()).unwrap_or_default();
 
     for slot_entity in &slots {
         if !populated.is_empty() {
@@ -710,7 +933,7 @@ fn populate_keybind_dialog(
         let advisory = commands
             .spawn((
                 KeymapAdvisoryText,
-                Text::new(advisory_text(&pending, &skipped)),
+                Text::new(advisory_text(&pending, &skipped, &problem)),
                 TextFont {
                     font_size: tokens::TEXT_SIZE_SM,
                     ..Default::default()
@@ -769,28 +992,50 @@ fn populate_keybind_dialog(
             let name_label = commands.spawn(row_label(&row.label, 240.0)).id();
             let right = commands.spawn(row_right_node()).id();
 
-            let chord_label = commands
+            // The badge sits with the row rather than in a paragraph at
+            // the top, so which command shares a chord is answered where
+            // the question is asked.
+            let badge = commands
                 .spawn((
-                    KeybindDisplayText(row.operator.clone()),
-                    Text::new(chord_text),
-                    TextFont {
-                        font_size: tokens::TEXT_SIZE,
-                        ..Default::default()
-                    },
-                    TextColor(chord_text_color(chords.is_empty())),
+                    KeymapConflictBadge(row.operator.clone()),
+                    icon_button(IconButtonProps::new(Icon::TriangleAlert), &icon_font),
+                    Hovered::default(),
+                    Tooltip::title("Shared chord"),
                     Node {
-                        min_width: px(140.0),
+                        display: Display::None,
                         ..Default::default()
                     },
                 ))
                 .id();
-            commands.entity(right).add_child(chord_label);
+            commands.entity(right).add_child(badge);
 
             if row.is_editable() {
+                let chord_list = commands
+                    .spawn((
+                        KeybindChordList(row.operator.clone()),
+                        Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: px(tokens::SPACING_SM),
+                            min_width: px(180.0),
+                            ..Default::default()
+                        },
+                    ))
+                    .id();
                 let rebind_btn = commands
                     .spawn((
                         KeybindRebindButton(row.operator.clone()),
                         button(ButtonProps::new("Rebind").with_variant(ButtonVariant::Default)),
+                    ))
+                    .id();
+                let add_btn = commands
+                    .spawn((
+                        KeybindAddChordButton(row.operator.clone()),
+                        button(ButtonProps::new("Add Chord").with_variant(ButtonVariant::Ghost)),
+                        Hovered::default(),
+                        Tooltip::title("Add Chord").with_description(
+                            "Give this command another chord alongside the ones it holds.",
+                        ),
                     ))
                     .id();
                 let reset_btn = commands
@@ -801,8 +1046,25 @@ fn populate_keybind_dialog(
                     .id();
                 commands
                     .entity(right)
-                    .add_children(&[rebind_btn, reset_btn]);
+                    .add_children(&[chord_list, rebind_btn, add_btn, reset_btn]);
             } else {
+                let chord_label = commands
+                    .spawn((
+                        KeybindDisplayText(row.operator.clone()),
+                        Text::new(chord_text),
+                        TextFont {
+                            font_size: tokens::TEXT_SIZE,
+                            ..Default::default()
+                        },
+                        TextColor(chord_text_color(chords.is_empty())),
+                        Node {
+                            min_width: px(180.0),
+                            ..Default::default()
+                        },
+                    ))
+                    .id();
+                // The heading says the row cannot be changed; the tooltip
+                // says why, which is the part a reader is missing.
                 let note = commands
                     .spawn((
                         Text::new(row.category.clone()),
@@ -811,9 +1073,11 @@ fn populate_keybind_dialog(
                             ..Default::default()
                         },
                         TextColor(tokens::TEXT_SECONDARY),
+                        Hovered::default(),
+                        Tooltip::title(row.category.clone()).with_description(row.reason()),
                     ))
                     .id();
-                commands.entity(right).add_child(note);
+                commands.entity(right).add_children(&[chord_label, note]);
             }
 
             commands
@@ -885,18 +1149,142 @@ fn populate_keybind_dialog(
 fn refresh_advisory(
     pending: Option<Res<PendingKeymapChanges>>,
     last_apply: Option<Res<LastKeymapApply>>,
+    problem: Option<Res<KeymapLoadProblem>>,
     mut advisory: Query<&mut Text, With<KeymapAdvisoryText>>,
 ) {
     let Some(pending) = pending else { return };
     if !pending.is_changed() {
         return;
     }
+    let problem = problem.map(|it| it.clone()).unwrap_or_default();
     let skipped =
         last_apply.map_or_else(Vec::new, |report| report.0.skipped_unknown_operator.clone());
-    let text = advisory_text(&pending, &skipped);
+    let text = advisory_text(&pending, &skipped, &problem);
     for mut node_text in &mut advisory {
         node_text.0 = text.clone();
     }
+}
+
+/// Draw each editable row's chords, one removable chip per chord.
+///
+/// Driven by the working copy rather than told by whatever changed it, so
+/// a rebind, an added chord, a removed one, a reset and a reset-all all
+/// reach the row through the same path.
+fn refresh_chord_lists(
+    mut commands: Commands,
+    pending: Option<Res<PendingKeymapChanges>>,
+    recording: Res<KeybindRecordingState>,
+    icon_font: Option<Res<jackdaw_feathers::icons::IconFont>>,
+    lists: Query<(Entity, &KeybindChordList)>,
+) {
+    let Some(pending) = pending else { return };
+    if !pending.is_changed() && !recording.is_changed() {
+        return;
+    }
+    let icon_font = icon_font.map(|font| font.0.clone()).unwrap_or_default();
+    let waiting = recording
+        .target
+        .as_ref()
+        .and_then(RecordingTarget::operator);
+    let pending_confirm = recording.pending_confirm.clone();
+
+    for (entity, list) in &lists {
+        let Ok(mut row) = commands.get_entity(entity) else {
+            continue;
+        };
+        row.despawn_related::<Children>();
+
+        if waiting == Some(list.0.as_str()) {
+            let prompt = match &pending_confirm {
+                Some(input) => format!(
+                    "{} is also bound to {} - press again to bind anyway",
+                    format_preset_input(input),
+                    pending.also_bound_to(&list.0, input).join(", ")
+                ),
+                None => "Press a key...".to_string(),
+            };
+            commands.spawn((
+                Text::new(prompt),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_ACCENT),
+                ChildOf(entity),
+            ));
+            continue;
+        }
+
+        let chords = pending.chords_of(&list.0);
+        if chords.is_empty() {
+            commands.spawn((
+                Text::new("Unbound".to_string()),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE,
+                    ..Default::default()
+                },
+                TextColor(chord_text_color(true)),
+                ChildOf(entity),
+            ));
+            continue;
+        }
+        for (index, chord) in chords.into_iter().enumerate() {
+            commands.spawn((
+                Text::new(chord),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE,
+                    ..Default::default()
+                },
+                TextColor(chord_text_color(false)),
+                ChildOf(entity),
+            ));
+            commands.spawn((
+                KeybindRemoveChordButton(list.0.clone(), index),
+                icon_button(IconButtonProps::new(Icon::X), &icon_font),
+                Hovered::default(),
+                Tooltip::title("Remove Chord"),
+                ChildOf(entity),
+            ));
+        }
+    }
+}
+
+/// Show the badge on each row whose chords another command also claims,
+/// and say which commands in the row's own vocabulary.
+fn refresh_conflict_badges(
+    pending: Option<Res<PendingKeymapChanges>>,
+    mut badges: Query<(&KeymapConflictBadge, &mut Node, &mut Tooltip)>,
+) {
+    let Some(pending) = pending else { return };
+    if !pending.is_changed() {
+        return;
+    }
+    for (badge, mut node, mut tooltip) in &mut badges {
+        let conflicts = pending.conflicts_of(&badge.0);
+        node.display = if conflicts.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        tooltip.description = conflicts.join("\n");
+    }
+}
+
+fn on_remove_chord_click(
+    event: On<ButtonClickEvent>,
+    buttons: Query<&KeybindRemoveChordButton>,
+    parents: Query<&ChildOf>,
+    dialogs: Query<(), With<EditorDialog>>,
+    pending: Option<ResMut<PendingKeymapChanges>>,
+) {
+    let Ok(button) = buttons.get(event.entity) else {
+        return;
+    };
+    if !is_in_dialog(event.entity, &parents, &dialogs) {
+        return;
+    }
+    let Some(mut pending) = pending else { return };
+    pending.remove_chord(&button.0, button.1);
 }
 
 fn on_key_filter_click(
@@ -1104,16 +1492,20 @@ fn apply_keybind_filter(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one handler covering the three ways a recording starts"
+)]
 fn on_rebind_click(
     event: On<ButtonClickEvent>,
     operator_buttons: Query<&KeybindRebindButton>,
+    add_buttons: Query<&KeybindAddChordButton>,
     camera_buttons: Query<&CameraRebindButton>,
     parents: Query<&ChildOf>,
     dialogs: Query<(), With<EditorDialog>>,
     mut recording_state: ResMut<KeybindRecordingState>,
     mut capture: ResMut<KeymapCapture>,
     mut registry: ResMut<KeybindRegistry>,
-    mut texts: Query<(&KeybindDisplayText, &mut Text, &mut TextColor)>,
     mut camera_texts: Query<
         (&CameraDisplayText, &mut Text, &mut TextColor),
         Without<KeybindDisplayText>,
@@ -1123,17 +1515,19 @@ fn on_rebind_click(
         return;
     }
 
-    if let Ok(btn) = operator_buttons.get(event.entity) {
-        recording_state.target = Some(RecordingTarget::Operator(btn.0.clone()));
+    let operator = operator_buttons
+        .get(event.entity)
+        .map(|btn| (btn.0.clone(), RecordingMode::Replace))
+        .or_else(|_| {
+            add_buttons
+                .get(event.entity)
+                .map(|btn| (btn.0.clone(), RecordingMode::Add))
+        });
+    if let Ok((operator, mode)) = operator {
+        recording_state.target = Some(RecordingTarget::Operator(operator, mode));
         recording_state.pending_confirm = None;
         capture.recording = true;
         registry.recording = true;
-        for (display, mut text, mut color) in &mut texts {
-            if display.0 == btn.0 {
-                text.0 = "Press a key...".to_string();
-                color.0 = tokens::TEXT_ACCENT;
-            }
-        }
         return;
     }
 
@@ -1220,7 +1614,6 @@ fn capture_keybind_recording(
     mut capture: ResMut<KeymapCapture>,
     mut registry: ResMut<KeybindRegistry>,
     pending: Option<ResMut<PendingKeymapChanges>>,
-    mut texts: Query<(&KeybindDisplayText, &mut Text, &mut TextColor)>,
     mut camera_texts: Query<
         (&CameraDisplayText, &mut Text, &mut TextColor),
         Without<KeybindDisplayText>,
@@ -1248,7 +1641,7 @@ fn capture_keybind_recording(
         recording_state.pending_confirm = None;
         capture.recording = false;
         registry.recording = false;
-        redraw_target(&target, &pending, &mut texts, &mut camera_texts);
+        redraw_target(&target, &pending, &mut camera_texts);
         return;
     }
 
@@ -1257,25 +1650,17 @@ fn capture_keybind_recording(
     };
 
     match &target {
-        RecordingTarget::Operator(operator) => {
+        RecordingTarget::Operator(operator, mode) => {
             let confirmed = recording_state.pending_confirm.as_ref() == Some(&input);
             let others = pending.also_bound_to(operator, &input);
             if !others.is_empty() && !confirmed {
                 recording_state.pending_confirm = Some(input.clone());
-                let warning = format!(
-                    "{} is also bound to {} - press again to bind anyway",
-                    format_preset_input(&input),
-                    others.join(", ")
-                );
-                for (display, mut text, mut color) in &mut texts {
-                    if display.0 == *operator {
-                        text.0 = warning.clone();
-                        color.0 = tokens::TEXT_ACCENT;
-                    }
-                }
                 return;
             }
-            pending.rebind(operator, input);
+            match mode {
+                RecordingMode::Replace => pending.rebind(operator, input),
+                RecordingMode::Add => pending.add_chord(operator, input),
+            }
         }
         RecordingTarget::Camera(action, index) => {
             let PresetInput::Key {
@@ -1311,30 +1696,21 @@ fn capture_keybind_recording(
     recording_state.pending_confirm = None;
     capture.recording = false;
     registry.recording = false;
-    redraw_target(&target, &pending, &mut texts, &mut camera_texts);
+    redraw_target(&target, &pending, &mut camera_texts);
 }
 
 fn redraw_target(
     target: &RecordingTarget,
     pending: &PendingKeymapChanges,
-    texts: &mut Query<(&KeybindDisplayText, &mut Text, &mut TextColor)>,
     camera_texts: &mut Query<
         (&CameraDisplayText, &mut Text, &mut TextColor),
         Without<KeybindDisplayText>,
     >,
 ) {
     match target {
-        RecordingTarget::Operator(operator) => {
-            let chords = pending.chords_of(operator);
-            let text_str = format_chords(&chords);
-            let color_value = chord_text_color(chords.is_empty());
-            for (display, mut text, mut color) in texts.iter_mut() {
-                if display.0 == *operator {
-                    text.0 = text_str.clone();
-                    color.0 = color_value;
-                }
-            }
-        }
+        // An operator row's chords are drawn by `refresh_chord_lists`,
+        // which follows the working copy rather than being told.
+        RecordingTarget::Operator(..) => {}
         RecordingTarget::Camera(action, _) => {
             let binds = pending.camera.get(action).cloned().unwrap_or_default();
             let text_str = format_bindings(&binds);
@@ -1356,7 +1732,6 @@ fn on_reset_click(
     parents: Query<&ChildOf>,
     dialogs: Query<(), With<EditorDialog>>,
     pending: Option<ResMut<PendingKeymapChanges>>,
-    mut texts: Query<(&KeybindDisplayText, &mut Text, &mut TextColor)>,
     mut camera_texts: Query<
         (&CameraDisplayText, &mut Text, &mut TextColor),
         Without<KeybindDisplayText>,
@@ -1372,9 +1747,8 @@ fn on_reset_click(
     if let Ok(btn) = operator_buttons.get(event.entity) {
         pending.reset(&btn.0);
         redraw_target(
-            &RecordingTarget::Operator(btn.0.clone()),
+            &RecordingTarget::Operator(btn.0.clone(), RecordingMode::Replace),
             &pending,
-            &mut texts,
             &mut camera_texts,
         );
         return;
@@ -1387,7 +1761,6 @@ fn on_reset_click(
         redraw_target(
             &RecordingTarget::Camera(btn.0, 0),
             &pending,
-            &mut texts,
             &mut camera_texts,
         );
     }
@@ -1753,7 +2126,11 @@ mod tests {
             row("history.redo", "KeyY"),
         ]);
         pending.rebind("history.redo", PresetInput::key("KeyZ"));
-        let text = advisory_text(&pending, &["some.extension.op".to_string()]);
+        let text = advisory_text(
+            &pending,
+            &["some.extension.op".to_string()],
+            &KeymapLoadProblem::default(),
+        );
         assert!(text.contains("claimed by more than one command"), "{text}");
         assert!(text.contains("some.extension.op"), "{text}");
     }
@@ -1761,7 +2138,10 @@ mod tests {
     #[test]
     fn an_unchanged_keymap_has_nothing_to_advise() {
         let pending = pending_with(vec![row("history.undo", "KeyZ")]);
-        assert_eq!(advisory_text(&pending, &[]), "");
+        assert_eq!(
+            advisory_text(&pending, &[], &KeymapLoadProblem::default()),
+            ""
+        );
     }
 
     #[test]

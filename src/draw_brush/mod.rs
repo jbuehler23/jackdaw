@@ -6,6 +6,7 @@ use crate::{selection::Selection, viewport::ViewportCursor};
 use bevy::{input_focus::InputFocus, prelude::*};
 use bevy_enhanced_input::prelude::Press;
 use jackdaw_api_internal::keymap::{KeymapCapture, PresetInput};
+use jackdaw_api_internal::lifecycle::OperatorChordSite;
 use jackdaw_scene_types::Brush;
 
 mod build;
@@ -47,15 +48,20 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         ActionOf::<CoreExtensionInputContext>::new(ext),
         bindings![(MouseButton::Right, Press::default())],
     ));
-    // StartDrawBrushAddAppendAction / StartDrawBrushCutAction: not operators; left unchanged.
+    // Not operators of their own: each is a chord that starts the
+    // draw-brush modal with particular parameters. Tagged as a chord site
+    // for it, so the keybind dialog and the tooltips say the modal has
+    // these chords too rather than only the two on its own action.
     ctx.spawn((
         Action::<StartDrawBrushAddAppendAction>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
+        OperatorChordSite(ActivateDrawBrushModalOp::ID),
         bindings![(KeyCode::KeyB.with_mod_keys(ModKeys::ALT), Press::default(),)],
     ));
     ctx.spawn((
         Action::<StartDrawBrushCutAction>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
+        OperatorChordSite(ActivateDrawBrushModalOp::ID),
         bindings![(KeyCode::KeyC, Press::default())],
     ));
 

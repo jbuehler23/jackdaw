@@ -16,8 +16,8 @@ pub use apply::{
 // this is where the keymap is otherwise reached from.
 pub use jackdaw_commands::KeymapCapture;
 pub use persist::{
-    UserKeymap, load_active_keymap_preset, load_user_keymap, save_active_keymap_preset,
-    save_user_keymap,
+    KeymapLoadProblem, UserKeymap, load_active_keymap_preset, load_user_keymap,
+    load_user_keymap_reporting, save_active_keymap_preset, save_user_keymap,
 };
 pub use types::{
     ActiveKeymapPreset, BuiltinActions, DefaultKeymap, KeymapPreset, PresetBinding, PresetContext,
