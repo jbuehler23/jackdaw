@@ -399,6 +399,11 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
     }
     world.resource_mut::<SceneFilePath>().path = Some(path);
 
+    // A UI root authored before the root stated a size of its own shrinks to
+    // fit its content, and every placement then resolves against that box
+    // rather than against the canvas.
+    crate::ui_palette::backfill_ui_root_size(world);
+
     // Stacks were cleared by clear_scene_entities, so dirty baseline is 0
     world.resource_mut::<SceneDirtyState>().undo_len_at_save = 0;
 

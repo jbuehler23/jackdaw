@@ -598,3 +598,143 @@ fn center_in_flow_promotes_nothing_and_says_nothing() {
         "nothing was taken out of the flow, so nothing is announced",
     );
 }
+
+/// A scene of the shape the seeder used to make: a root that states no size
+/// of its own, so the implicit viewport node shrinks it to fit its content.
+fn old_shaped_scene(app: &mut App) -> Entity {
+    let root = app
+        .world_mut()
+        .spawn((
+            Name::new("UiRoot"),
+            jackdaw_scene_types::UiSceneRoot::default(),
+            Node::default(),
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), root);
+    let panel_entity = app
+        .world_mut()
+        .spawn((Name::new("Panel"), Node::default(), ChildOf(root)))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), panel_entity);
+    let filler = app
+        .world_mut()
+        .spawn((
+            Name::new("Filler"),
+            Node {
+                width: px(100.0),
+                height: px(40.0),
+                ..default()
+            },
+            ChildOf(panel_entity),
+        ))
+        .id();
+    // Registered, unlike the seeded fixture's: this scene is saved and read
+    // back, and what the document does not hold does not come back.
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), filler);
+    settle(app);
+    root
+}
+
+fn named(app: &mut App, wanted: &str) -> Entity {
+    app.world_mut()
+        .query::<(Entity, &Name)>()
+        .iter(app.world())
+        .find(|(_, name)| name.as_str() == wanted)
+        .map(|(entity, _)| entity)
+        .unwrap_or_else(|| panic!("no entity named {wanted}"))
+}
+
+/// Documents saved before the root stated its own size carry a root that
+/// shrinks to fit its content, and every placement resolves against that box:
+/// Bottom Right lands in the bottom-right corner of one widget. Opening such
+/// a document brings the root forward, so the presets mean the canvas again.
+#[test]
+fn a_document_whose_root_states_no_size_opens_with_the_canvas_sized_root() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    old_shaped_scene(&mut app);
+
+    let dir = tempfile::tempdir().expect("a directory to save into");
+    let path = dir.path().join("old.bsn");
+    let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(app.world_mut(), dir.path());
+    std::fs::write(&path, &text).expect("write the scene");
+
+    let mut reloaded = util::editor_test_app();
+    panel(&mut reloaded);
+    jackdaw::scene_io::load_scene_from_file(reloaded.world_mut(), &path);
+    // A load replaces the whole scene rather than editing one, so it is
+    // given room to settle.
+    for _ in 0..4 {
+        settle(&mut reloaded);
+    }
+
+    let root =
+        jackdaw::ui_palette::ui_scene_root(reloaded.world_mut()).expect("the root came back");
+    let node = node_of(&reloaded, root);
+    assert_eq!(
+        (node.width, node.height),
+        (percent(100.0), percent(100.0)),
+        "the root came back the size of the canvas",
+    );
+
+    let panel_entity = named(&mut reloaded, "Panel");
+    jackdaw::selection::select_only(reloaded.world_mut(), panel_entity);
+    settle(&mut reloaded);
+    run_finished(&mut reloaded, "ui.layout_preset name=bottom_right");
+    settle(&mut reloaded);
+
+    let size = Vec2::new(100.0, 40.0);
+    assert_eq!(
+        top_left_in_root(&reloaded, panel_entity, root),
+        SEEDED_REFERENCE - size,
+        "and the preset placed against the canvas, not against the panel",
+    );
+}
+
+/// The geometry suite is authored at the seeder's own reference resolution,
+/// so a root stating `1280px` by `720px` passes every one of its assertions
+/// while being the wrong thing entirely. This one states another resolution,
+/// which only a root that is a percentage of the canvas can answer.
+#[test]
+fn a_preset_places_against_whatever_reference_the_scene_states() {
+    const REFERENCE: Vec2 = Vec2::new(800.0, 600.0);
+
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let root = jackdaw::ui_palette::seed_ui_scene_root(app.world_mut());
+    app.world_mut()
+        .entity_mut(root)
+        .insert(jackdaw_scene_types::UiSceneRoot {
+            reference_size: REFERENCE.as_uvec2(),
+        });
+    let panel_entity = app
+        .world_mut()
+        .spawn((Name::new("Panel"), Node::default(), ChildOf(root)))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), panel_entity);
+    app.world_mut().spawn((
+        Name::new("Filler"),
+        Node {
+            width: px(100.0),
+            height: px(40.0),
+            ..default()
+        },
+        ChildOf(panel_entity),
+    ));
+    settle(&mut app);
+    jackdaw::selection::select_only(app.world_mut(), panel_entity);
+    settle(&mut app);
+
+    run_finished(&mut app, "ui.layout_preset name=bottom_right");
+    settle(&mut app);
+
+    assert_ne!(
+        REFERENCE, SEEDED_REFERENCE,
+        "the point of this test is a resolution the rest of the suite does not use",
+    );
+    assert_eq!(
+        top_left_in_root(&app, panel_entity, root),
+        REFERENCE - Vec2::new(100.0, 40.0),
+        "the corner is the scene's own canvas corner",
+    );
+}

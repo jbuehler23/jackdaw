@@ -177,6 +177,7 @@ fn instantiate_at(
         .and_then(|registry| registry.get(definition_id))
         .ok_or_else(|| PaletteError::UnknownDefinition(definition_id.to_string()))?;
     backfill_focus_group(world);
+    backfill_ui_root_size(world);
 
     let mut command = InstantiateWidgetCommand {
         label: format!("Add {}", definition.name),
@@ -289,6 +290,53 @@ fn backfill_focus_group(world: &mut World) {
     let group = TabGroup::default();
     world.entity_mut(root).insert(group);
     crate::commands::sync_component_to_ast(world, root, TAB_GROUP_TYPE_PATH, &group);
+}
+
+/// Give the open UI scene's root the canvas-sized box the presets resolve
+/// against, unless it states a size of its own.
+///
+/// A root authored before [`ui_scene_root_node`] stated `100%` carries
+/// `Node`'s `Auto` on both axes. The implicit viewport node Bevy puts around
+/// a root is a grid that start-aligns its item without stretching it, so such
+/// a root shrinks to fit whatever is in it and parks in the top-left corner --
+/// and every placement downstream resolves against that shrunken box. Middle
+/// Center lands in the middle of one widget and Full Rect stretches over
+/// nothing. The document is not wrong, it is old, so opening it brings it
+/// forward rather than making the user notice and fix it.
+///
+/// Only a root that states neither width nor height: a scene that asks for a
+/// size means it. Written without an undo entry, as the focus group is, so
+/// undoing the first edit after an open does not put the shrunken box back.
+pub fn backfill_ui_root_size(world: &mut World) {
+    let Some(root) = ui_scene_root(world) else {
+        return;
+    };
+    let Some(node) = world.get::<Node>(root) else {
+        return;
+    };
+    if node.width != Val::Auto || node.height != Val::Auto {
+        return;
+    }
+    let mut node = node.clone();
+    let sized = ui_scene_root_node();
+    node.width = sized.width;
+    node.height = sized.height;
+    // Once the root is the canvas's own height, its default cross-axis
+    // alignment stretches every child down the whole canvas, which is the
+    // shape the seeder states `Start` to avoid. Only when the document states
+    // nothing: an alignment somebody wrote is theirs.
+    if node.align_items == AlignItems::Default {
+        node.align_items = sized.align_items;
+    }
+    if let Some(mut live) = world.get_mut::<Node>(root) {
+        *live = node.clone();
+    }
+    crate::commands::sync_component_to_ast(
+        world,
+        root,
+        crate::inspector::node_card::node_type_path(),
+        &node,
+    );
 }
 
 /// Whether `entity` is `root` or one of its descendants, and is an authored
