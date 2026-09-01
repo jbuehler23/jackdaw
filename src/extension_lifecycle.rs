@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use jackdaw_api_internal::keymap::{
     ActiveKeymapPreset, BuiltinActions, DefaultKeymap, KeymapApplyReport, KeymapCapture,
-    UserKeymap, apply_keymap_preset, load_user_keymap_reporting, resolve_keymap,
+    KeymapLoadProblem, UserKeymap, apply_keymap_preset, load_user_keymap_reporting, resolve_keymap,
 };
 use jackdaw_api_internal::lifecycle::enable_extension;
 
@@ -40,7 +40,29 @@ pub(super) fn plugin(app: &mut App) {
                 apply_active_keymap,
             )
                 .chain(),
+        )
+        .add_systems(
+            OnEnter(crate::AppState::Editor),
+            announce_keymap_load_problem,
         );
+}
+
+/// Say out loud that the keymap on disk could not be read.
+///
+/// The dialog says it too, but only to someone who opens it, and nobody
+/// opens Preferences to find out why their chords went back to the
+/// defaults. The status bar is where the editor says what it could not do,
+/// so it says this there as well, on the first frame there is a status bar
+/// to say it in.
+fn announce_keymap_load_problem(world: &mut World) {
+    let Some(problem) = world.get_resource::<KeymapLoadProblem>() else {
+        return;
+    };
+    if !problem.is_some() {
+        return;
+    }
+    let message = problem.message.clone();
+    crate::status_bar::notify_error(world, message);
 }
 
 /// The outcome of the last keymap application: which entries named

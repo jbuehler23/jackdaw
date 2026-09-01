@@ -86,7 +86,7 @@ pub struct UserKeymap {
 /// here for the dialog to say out loud.
 #[derive(Resource, Clone, Debug, PartialEq, Eq, Default)]
 pub struct KeymapLoadProblem {
-    /// Empty when the file loaded, or was simply not there.
+    /// Empty when the file loaded, or was not there.
     pub message: String,
 }
 
@@ -98,18 +98,77 @@ impl KeymapLoadProblem {
 
 /// Where a keymap that would not parse is put, beside the file it came
 /// from, so the overrides in it can still be read and rescued by hand.
-fn invalid_path(path: &std::path::Path) -> std::path::PathBuf {
+///
+/// `keymap.json.invalid` when nothing is there, and `.invalid.2`,
+/// `.invalid.3` and so on when something is: a second corruption must not
+/// destroy the rescue of the first, which is the one thing this whole path
+/// exists to prevent.
+fn rescue_path(path: &std::path::Path) -> std::path::PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(".invalid");
-    path.with_file_name(name)
+    let first = path.with_file_name(name);
+    if !first.exists() {
+        return first;
+    }
+    for counter in 2..1000u32 {
+        let mut name = first.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".{counter}"));
+        let candidate = first.with_file_name(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    first
+}
+
+/// Move the unreadable file at `path` out of the way, so the next Save
+/// writes a new file rather than over the one nobody has read yet.
+///
+/// A rename is the whole of it when it works. When it does not -- a
+/// read-only directory, or a rescue path on another filesystem -- the
+/// bytes are copied and the original is emptied instead, which leaves the
+/// same two facts on disk: a copy that can still be rescued by hand, and
+/// nothing at `path` worth losing. If even that fails the original is left
+/// exactly as it was and the failure is reported, because a half-moved
+/// file is worse than an unmoved one; [`save_user_keymap`] then refuses to
+/// write over it.
+///
+/// Returns where the file was kept, or why it could not be kept.
+fn rescue_unreadable(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let kept = rescue_path(path);
+    let rename = match std::fs::rename(path, &kept) {
+        Ok(()) => return Ok(kept),
+        Err(error) => error,
+    };
+    match std::fs::copy(path, &kept).and_then(|_| std::fs::write(path, "")) {
+        Ok(()) => Ok(kept),
+        Err(copy) => Err(format!("{rename}; and copying it aside failed too: {copy}")),
+    }
+}
+
+/// What the user is told once the file has been dealt with.
+fn rescue_message(path: &std::path::Path, kept: Result<std::path::PathBuf, String>) -> String {
+    match kept {
+        Ok(kept) => format!(
+            "{} could not be read and was kept as {}; the shipped chords are in use.",
+            path.display(),
+            kept.display()
+        ),
+        Err(why) => format!(
+            "{} could not be read and could not be moved aside ({why}); \
+             the shipped chords are in use, and saving will not write over it.",
+            path.display()
+        ),
+    }
 }
 
 /// Read the user keymap from disk. An absent file is an empty keymap;
 /// an unreadable or corrupt one warns and is treated as empty.
 ///
-/// A corrupt file is moved aside to `keymap.json.invalid` first. The next
-/// Save writes the whole file, so leaving the unparseable one in place
-/// would silently destroy whatever was in it.
+/// Either way the file is moved aside first. The next Save writes the
+/// whole file, so leaving one that nobody could read in place would
+/// silently destroy whatever was in it -- and a file that cannot be read
+/// at all is no safer than one that will not parse.
 pub fn load_user_keymap() -> UserKeymap {
     load_user_keymap_reporting().0
 }
@@ -127,10 +186,11 @@ pub fn load_user_keymap_reporting() -> (UserKeymap, KeymapLoadProblem) {
         Ok(d) => d,
         Err(e) => {
             warn!("Failed to read keymap file {}: {e}", path.display());
+            let kept = rescue_unreadable(&path);
             return (
                 UserKeymap::default(),
                 KeymapLoadProblem {
-                    message: format!("{} could not be read: {e}", path.display()),
+                    message: rescue_message(&path, kept),
                 },
             );
         }
@@ -138,44 +198,65 @@ pub fn load_user_keymap_reporting() -> (UserKeymap, KeymapLoadProblem) {
     match serde_json::from_str::<UserKeymap>(&data) {
         Ok(keymap) => (keymap, none),
         Err(e) => {
-            let kept = invalid_path(&path);
-            let moved = std::fs::rename(&path, &kept).is_ok();
             warn!(
                 "Corrupt keymap file {}; ignoring user bindings: {e}",
                 path.display()
             );
-            let message = if moved {
-                format!(
-                    "{} could not be read and was kept as {}; the shipped chords are in use.",
-                    path.display(),
-                    kept.display()
-                )
-            } else {
-                format!(
-                    "{} could not be read; the shipped chords are in use.",
-                    path.display()
-                )
-            };
-            (UserKeymap::default(), KeymapLoadProblem { message })
+            let kept = rescue_unreadable(&path);
+            (
+                UserKeymap::default(),
+                KeymapLoadProblem {
+                    message: rescue_message(&path, kept),
+                },
+            )
         }
     }
 }
 
 /// Write the user keymap to disk.
-pub fn save_user_keymap(keymap: &UserKeymap) {
+///
+/// Refuses while a file nobody could read is still sitting there: loading
+/// moves such a file aside, so one that is still in place is one the
+/// rescue could not move, and writing the whole file over it is exactly
+/// the loss the rescue exists to prevent.
+///
+/// Returns whether the file was written.
+pub fn save_user_keymap(keymap: &UserKeymap) -> bool {
     let Some(path) = jackdaw_env::paths::keymap_path() else {
         warn!("Could not determine config directory for the keymap file");
-        return;
+        return false;
     };
+    if unrescued(&path) {
+        warn!(
+            "Not writing the keymap: {} could not be read and could not be moved aside",
+            path.display()
+        );
+        return false;
+    }
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     match serde_json::to_string_pretty(keymap) {
-        Ok(data) => {
-            if let Err(e) = std::fs::write(&path, data) {
+        Ok(data) => match std::fs::write(&path, data) {
+            Ok(()) => true,
+            Err(e) => {
                 warn!("Failed to write keymap file: {e}");
+                false
             }
+        },
+        Err(e) => {
+            warn!("Failed to serialize the keymap: {e}");
+            false
         }
-        Err(e) => warn!("Failed to serialize the keymap: {e}"),
+    }
+}
+
+/// Whether what is at `path` is a file this build could not read and the
+/// rescue could not move.
+fn unrescued(path: &std::path::Path) -> bool {
+    match std::fs::read_to_string(path) {
+        Ok(data) => !data.is_empty() && serde_json::from_str::<UserKeymap>(&data).is_err(),
+        // An absent file is nothing to lose; an unreadable one is.
+        Err(_) => path.is_file(),
     }
 }

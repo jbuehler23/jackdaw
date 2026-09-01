@@ -46,6 +46,27 @@ pub(crate) fn empty_config_dir() -> &'static std::path::Path {
     dir
 }
 
+/// Take `app` into the editor proper.
+///
+/// A headless app is parked in `AppState::ProjectSelect`, and most of the
+/// editor's systems -- the keybind dialog's, the status bar's -- are gated
+/// on the state it is not in. The panels that read the open project fail
+/// their parameter validation without one, so a project goes in first.
+pub(crate) fn enter_editor(app: &mut App) {
+    use bevy::prelude::*;
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot {
+            root: CONFIG_DIR.join("project"),
+            config: default(),
+        });
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    for _ in 0..4 {
+        app.update();
+    }
+}
+
 /// A headless editor that read an empty override file, whatever any other
 /// test is doing with that file meanwhile.
 pub(crate) fn headless_app() -> App {

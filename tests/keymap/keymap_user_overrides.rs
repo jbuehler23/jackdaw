@@ -790,6 +790,9 @@ fn the_draw_brush_row_lists_the_chords_that_reach_it() {
 /// A keymap that will not parse loads as empty, and the next Save writes
 /// the whole file: leaving the unparseable one in place would destroy
 /// whatever was in it without ever showing it to anyone.
+///
+/// A second corruption is kept too, beside the first rather than over it:
+/// a rescue that clobbers the last rescue is no rescue at all.
 #[test]
 fn a_corrupt_keymap_is_kept_beside_itself_and_reported() {
     use jackdaw_api_internal::keymap::load_user_keymap_reporting;
@@ -800,7 +803,11 @@ fn a_corrupt_keymap_is_kept_beside_itself_and_reported() {
     let dir = empty_config_dir();
     let path = dir.join("keymap.json");
     let kept = dir.join("keymap.json.invalid");
-    let _ = std::fs::remove_file(&kept);
+    let second = dir.join("keymap.json.invalid.2");
+    // The first rescue is put there by hand, so what is pinned below is
+    // that the corruption arriving now does not take it with it.
+    let _ = std::fs::remove_file(&second);
+    std::fs::write(&kept, "an earlier rescue").expect("write an earlier rescue");
     std::fs::write(&path, "{ this is not json").expect("write a corrupt keymap");
 
     let (keymap, problem) = load_user_keymap_reporting();
@@ -809,23 +816,28 @@ fn a_corrupt_keymap_is_kept_beside_itself_and_reported() {
         UserKeymap::default(),
         "a file that will not parse is no overrides at all",
     );
+    assert_eq!(
+        std::fs::read_to_string(&kept).expect("read the earlier rescue"),
+        "an earlier rescue",
+        "the rescue already there is untouched",
+    );
     assert!(
-        kept.is_file(),
-        "the unreadable file is kept as {}",
-        kept.display(),
+        second.is_file(),
+        "the unreadable file is kept beside it as {}",
+        second.display(),
     );
     assert!(
         !path.is_file(),
         "and moved out of the way, so Save does not write over it",
     );
     assert_eq!(
-        std::fs::read_to_string(&kept).expect("read the kept file"),
+        std::fs::read_to_string(&second).expect("read the kept file"),
         "{ this is not json",
         "kept exactly as it was, so it can still be rescued by hand",
     );
     assert!(problem.is_some(), "and the dialog is told");
     assert!(
-        problem.message.contains("keymap.json.invalid"),
+        problem.message.contains("keymap.json.invalid.2"),
         "the notice names where it went: {}",
         problem.message,
     );
@@ -838,5 +850,114 @@ fn a_corrupt_keymap_is_kept_beside_itself_and_reported() {
     assert!(advisory.contains("keymap.json.invalid"), "{advisory}");
 
     let _ = std::fs::remove_file(&kept);
+    let _ = std::fs::remove_file(&second);
+    drop(guard);
+}
+
+/// A file that cannot be read at all is no safer than one that will not
+/// parse: the next Save writes the whole thing, so it is moved aside too.
+#[test]
+fn a_keymap_that_cannot_be_read_is_kept_as_well() {
+    use jackdaw_api_internal::keymap::load_user_keymap_reporting;
+
+    let guard = CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = empty_config_dir();
+    let path = dir.join("keymap.json");
+    let kept = dir.join("keymap.json.invalid");
+    let _ = std::fs::remove_file(&kept);
+    // Bytes no `read_to_string` can turn into text, which is the shape a
+    // truncated or half-written file arrives in.
+    std::fs::write(&path, [0x80u8, 0x81, 0x82]).expect("write an unreadable keymap");
+
+    let (keymap, problem) = load_user_keymap_reporting();
+    assert_eq!(keymap, UserKeymap::default());
+    assert!(
+        kept.is_file(),
+        "the unreadable file is kept as {}",
+        kept.display(),
+    );
+    assert!(
+        !path.is_file(),
+        "and moved out of the way, so Save does not write over it",
+    );
+    assert_eq!(
+        std::fs::read(&kept).expect("read the kept file"),
+        vec![0x80u8, 0x81, 0x82],
+        "byte for byte, so it can still be rescued by hand",
+    );
+    assert!(
+        problem.message.contains("keymap.json.invalid"),
+        "the notice names where it went: {}",
+        problem.message,
+    );
+
+    let _ = std::fs::remove_file(&kept);
+    drop(guard);
+}
+
+/// When the rescue itself fails there is still an unread file on disk, and
+/// writing the keymap over it is the loss the rescue exists to prevent.
+/// Save refuses instead, and says so.
+#[test]
+fn a_save_refuses_while_an_unrescued_keymap_is_still_there() {
+    use jackdaw_api_internal::keymap::save_user_keymap;
+
+    let guard = CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = empty_config_dir();
+    let path = dir.join("keymap.json");
+    // The state a failed rescue leaves: a file nobody could read, still
+    // where the next Save would write.
+    std::fs::write(&path, "{ this is not json").expect("write a corrupt keymap");
+
+    assert!(
+        !save_user_keymap(&UserKeymap::default()),
+        "the save refused rather than writing over what was there",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("the file is still there"),
+        "{ this is not json",
+        "and the file is exactly as it was",
+    );
+
+    // With nothing unread in the way, the same Save writes.
+    std::fs::remove_file(&path).expect("clear the corrupt file");
+    assert!(save_user_keymap(&UserKeymap::default()));
+    assert!(path.is_file());
+
+    let _ = std::fs::remove_file(&path);
+    drop(guard);
+}
+
+/// A keymap the editor could not read costs the user every override they
+/// had. The dialog says so, but nobody opens Preferences to find out why:
+/// the status bar says it too, on the first frame there is one.
+#[test]
+fn a_keymap_that_would_not_load_is_said_out_loud() {
+    let guard = CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = empty_config_dir();
+    let path = dir.join("keymap.json");
+    let kept = dir.join("keymap.json.invalid");
+    let _ = std::fs::remove_file(&kept);
+    std::fs::write(&path, "{ this is not json").expect("write a corrupt keymap");
+
+    let mut app = crate::util::editor_test_app();
+    crate::enter_editor(&mut app);
+
+    let notice = app.world().resource::<jackdaw::status_bar::StatusNotice>();
+    assert!(notice.is_active(), "the status bar carries the refusal");
+    assert!(
+        notice.text().contains("keymap.json"),
+        "and names the file it could not read: {}",
+        notice.text(),
+    );
+
+    let _ = std::fs::remove_file(&kept);
+    let _ = std::fs::remove_file(&path);
     drop(guard);
 }
