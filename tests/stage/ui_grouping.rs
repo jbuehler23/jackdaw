@@ -3,8 +3,9 @@
 //! What is pinned here:
 //!  * the container lands on the selection's bounding rect, flowing along
 //!    whichever side of it is longer;
-//!  * every member keeps the place it had on the canvas, its authored rect
-//!    re-expressed against the container's offset box;
+//!  * an absolutely placed member keeps the place it had on the canvas, its
+//!    authored rect re-expressed against the container's offset box, while a
+//!    flowed member moves in untouched and the container lays it out again;
 //!  * ungroup puts the children back in the container's own slot, again
 //!    without moving them, and takes the empty container away;
 //!  * each is one history entry that undoes cleanly;
@@ -570,43 +571,158 @@ fn ungrouping_an_empty_node_is_refused_out_loud() {
     assert_eq!(notice(&app), "First holds nothing to lift out");
 }
 
-/// A member its parent was laying out has no rect of its own to re-state
-/// against the container, so in the container it flows again from another
-/// origin and lands somewhere else. Grouping promises the opposite, so it
-/// refuses -- the same refusal a transformed member gets, for the same
-/// reason.
+/// An absolutely placed column of the kind an author drops on the canvas and
+/// then fills from the palette.
+fn column_child(app: &mut App, parent: Entity, name: &str) -> Entity {
+    let entity = app
+        .world_mut()
+        .spawn((
+            Name::new(name.to_string()),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(100.0),
+                top: px(100.0),
+                width: px(400.0),
+                height: px(400.0),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            ChildOf(parent),
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
+    entity
+}
+
+/// A widget out of the palette, through the path the Add menu's rows use.
+fn add_button(app: &mut App, parent: Entity) -> Entity {
+    let entity =
+        jackdaw::ui_palette::instantiate_widget_under(app.world_mut(), "ui.button", Some(parent))
+            .expect("the UI scene accepts a button");
+    settle(app);
+    entity
+}
+
+/// Every palette widget spawns flowed, so a selection of them is the common
+/// case grouping has to answer -- and the answer is not a refusal. The
+/// members move into the container and the container lays them out again,
+/// which is what putting nodes in a container is for.
 #[test]
-fn grouping_a_flowed_member_is_refused_out_loud() {
+fn grouping_two_palette_buttons_moves_them_in_to_be_laid_out_again() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let (root, _first, _second) = authored_scene(&mut app);
+    let column = column_child(&mut app, root, "Column");
+    let one = add_button(&mut app, column);
+    let two = add_button(&mut app, column);
+    settle(&mut app);
+    assert_eq!(
+        node_of(&app, one).position_type,
+        PositionType::Relative,
+        "a palette widget arrives flowed",
+    );
+
+    let bounds = rect_of(&app, one).union(rect_of(&app, two));
+    let authored = [node_of(&app, one), node_of(&app, two)];
+    select_both(&mut app, [one, two]);
+    let depth = undo_depth(&app);
+
+    run_finished(&mut app, "ui.group_into");
+
+    let container = named(&mut app, "Group").expect("the group container");
+    let children: Vec<Entity> = app
+        .world()
+        .get::<Children>(container)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    assert_eq!(children, vec![one, two], "both moved in, in visual order");
+    assert_eq!(
+        app.world().get::<ChildOf>(container).map(ChildOf::parent),
+        Some(column),
+        "the container took the members' own parent",
+    );
+
+    let node = node_of(&app, container);
+    assert_eq!(node.position_type, PositionType::Absolute);
+    assert_eq!(
+        (node.width, node.height),
+        (px(bounds.width()), px(bounds.height())),
+        "the container is the box the members filled",
+    );
+    settle(&mut app);
+    let moved = (rect_of(&app, container).min - bounds.min).length();
+    assert!(moved < 0.5, "and it sits on it: it is {moved} px away");
+
+    assert_eq!(
+        [node_of(&app, one), node_of(&app, two)],
+        authored,
+        "a flowed member's authored rect is left alone for the container to lay out",
+    );
+    assert_eq!(
+        undo_depth(&app) - depth,
+        1,
+        "one group is one history entry"
+    );
+
+    run_finished(&mut app, "history.undo");
+    assert!(named(&mut app, "Group").is_none(), "the container is gone");
+    let back: Vec<Entity> = app
+        .world()
+        .get::<Children>(column)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    assert_eq!(
+        back,
+        vec![one, two],
+        "undo put the members back in the order the column held them",
+    );
+    let mut selected = app.world().resource::<Selection>().entities.clone();
+    selected.sort();
+    let mut wanted = vec![one, two];
+    wanted.sort();
+    assert_eq!(selected, wanted, "and selected them again");
+}
+
+/// A selection holding both kinds does both: the placed member keeps its
+/// spot through the offset arithmetic, the flowed one is left for the
+/// container to lay out.
+#[test]
+fn a_mixed_selection_places_one_member_and_flows_the_other() {
     let mut app = util::editor_test_app();
     panel(&mut app);
     let (_root, first, second) = authored_scene(&mut app);
-    let rect = rect_of(&app, first);
     app.world_mut()
         .get_mut::<Node>(first)
         .expect("a node")
         .position_type = PositionType::Relative;
     settle(&mut app);
+    let flowed_before = node_of(&app, first);
+    let placed_rect = rect_of(&app, second);
 
-    let depth = undo_depth(&app);
     select_both(&mut app, [first, second]);
-    jackdaw::ui_grouping::group_selection(app.world_mut());
-    settle(&mut app);
+    run_finished(&mut app, "ui.group_into");
 
-    assert_eq!(undo_depth(&app), depth, "nothing was grouped");
+    let container = named(&mut app, "Group").expect("the group container");
+    for member in [first, second] {
+        assert_eq!(
+            app.world().get::<ChildOf>(member).map(ChildOf::parent),
+            Some(container),
+            "both members moved in",
+        );
+    }
     assert_eq!(
-        notice(&app),
-        "First is laid out by its parent, so a container would put it somewhere else; \
-         place it absolutely first",
+        node_of(&app, first),
+        flowed_before,
+        "the flowed member's authored rect is untouched",
     );
-    assert_eq!(
-        app.world().get::<ChildOf>(first).map(ChildOf::parent),
-        app.world().get::<ChildOf>(second).map(ChildOf::parent),
-        "and the member is where it was, beside the one it was selected with",
-    );
-    let moved = (rect_of(&app, first).min - rect.min).length();
+
+    let placed = node_of(&app, second);
+    assert_eq!(placed.position_type, PositionType::Absolute);
+    settle(&mut app);
+    let moved = (rect_of(&app, second).min - placed_rect.min).length();
     assert!(
         moved < 0.5,
-        "which is also where it lands: it went {moved} px"
+        "the placed member kept its spot: it went {moved} px"
     );
 }
 

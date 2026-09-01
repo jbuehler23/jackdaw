@@ -3,19 +3,22 @@
 //! `ui.group_into` puts a new container where the selection's bounding box
 //! is and moves the selection into it; `ui.ungroup` lifts a container's
 //! children out into its own place and takes the empty container away. Each
-//! is one history entry, and neither moves anything on the canvas: an
-//! authored rect is re-expressed against its new parent's offset box, which
-//! is the same arithmetic a canvas drag writes back through.
+//! is one history entry.
 //!
-//! What a member has to be: absolutely placed, and untransformed. Both
-//! refusals are the same promise -- grouping moves nothing on the canvas --
-//! and both are cases where it cannot be kept. A member its parent was
-//! laying out has no rect of its own to re-state, so in the container it
-//! flows again from a different origin and lands somewhere else; a member
-//! carrying a moved, rotated or scaled `UiTransform` is drawn away from the
-//! box the bounding rect was measured from, so the container would be drawn
-//! around a box the node does not occupy and the transform would be applied
-//! a second time from the container's corner.
+//! What a member does once it is inside follows from how it was placed. An
+//! absolutely placed member keeps the spot it had: its authored rect is
+//! re-expressed against the container's offset box, which is the same
+//! arithmetic a canvas drag writes back through. A flowed member has no rect
+//! of its own to re-state, so it flows again inside the container -- which is
+//! what putting nodes in a container is for -- and is moved in the order the
+//! container's own axis reads the canvas in. A selection holding both does
+//! both.
+//!
+//! What a member cannot be is transformed. A member carrying a moved,
+//! rotated or scaled `UiTransform` is drawn away from the box the bounding
+//! rect was measured from, so the container would be drawn around a box the
+//! node does not occupy and the transform would be applied a second time
+//! from the container's corner.
 //!
 //! Every refusal says so in the status bar. Grouping is reached from a
 //! chord, the Edit menu and the outliner's context menu, and none of those
@@ -59,9 +62,9 @@ fn is_scene_root(world: &World, entity: Entity) -> bool {
 /// Selected nodes that a group can act on: authored, laid out, and under one
 /// parent, in the order the parent holds them.
 ///
-/// One parent because the members keep their place on the canvas, and a rect
-/// re-expressed against a different offset box is only the same rect when it
-/// started from the box the container replaces.
+/// One parent because an absolutely placed member keeps its place on the
+/// canvas, and a rect re-expressed against a different offset box is only the
+/// same rect when it started from the box the container replaces.
 fn group_members(world: &mut World) -> Option<(Option<Entity>, Vec<Entity>)> {
     let selected: Vec<Entity> = world.resource::<Selection>().entities.clone();
     let members: Vec<Entity> = selected
@@ -120,9 +123,9 @@ fn is_transformed(world: &World, entity: Entity) -> bool {
 
 /// Whether `entity` is laid out by its parent rather than placed.
 ///
-/// A flowed node has no rect of its own to re-state against the container,
-/// so grouping it would leave the container's flow to decide where it goes
-/// -- which is the one thing grouping promises not to do.
+/// A flowed node has no rect of its own to re-state against the container, so
+/// it moves in as it stands and the container's layout places it. Only an
+/// absolutely placed member has its `left`/`top` rewritten.
 fn is_flowed(world: &World, entity: Entity) -> bool {
     world
         .get::<Node>(entity)
@@ -430,17 +433,6 @@ pub fn group_selection(world: &mut World) {
         );
         return;
     }
-    if let Some(&flowed) = members.iter().find(|&&member| is_flowed(world, member)) {
-        let name = name_of(world, flowed);
-        crate::status_bar::notify_error(
-            world,
-            format!(
-                "{name} is laid out by its parent, so a container would put it somewhere else; \
-                 place it absolutely first"
-            ),
-        );
-        return;
-    }
     let Some(bounds) = bounding_rect(world, &members) else {
         crate::status_bar::notify_error(
             world,
@@ -475,11 +467,12 @@ pub fn group_selection(world: &mut World) {
         .collect();
     // The container has neither border nor padding, so the box its children
     // measure their offsets from starts at the bounding rect's own corner.
+    // A flowed member is absent from this list: it has no authored rect to
+    // re-state, and the container's layout is what places it now.
     let after: Vec<(Entity, Node)> = members
         .iter()
+        .filter(|&&member| !is_flowed(world, member))
         .filter_map(|&member| {
-            // Every member is absolutely placed: `is_flowed` refused the
-            // selection otherwise, so there is one case to write here.
             let mut node = world.get::<Node>(member).cloned()?;
             let offset = offsets_against(world, member, bounds.min)?;
             node.left = px(offset.x);
