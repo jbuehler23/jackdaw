@@ -7,6 +7,7 @@
 #[path = "../util/mod.rs"]
 mod util;
 
+mod capture_gate;
 mod keymap_presets;
 mod keymap_user_overrides;
 

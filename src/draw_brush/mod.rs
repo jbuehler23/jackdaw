@@ -5,7 +5,7 @@ use crate::prelude::*;
 use crate::{selection::Selection, viewport::ViewportCursor};
 use bevy::{input_focus::InputFocus, prelude::*};
 use bevy_enhanced_input::prelude::Press;
-use jackdaw_api_internal::keymap::PresetInput;
+use jackdaw_api_internal::keymap::{KeymapCapture, PresetInput};
 use jackdaw_scene_types::Brush;
 
 mod build;
@@ -461,16 +461,26 @@ fn configure_draw_brush_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
 /// fires `viewport.draw_brush_modal` with `append=true`.
 #[derive(Default, InputAction)]
 #[action_output(bool)]
-pub(crate) struct StartDrawBrushAddAppendAction;
+pub struct StartDrawBrushAddAppendAction;
 
 /// Marker action: C starts a Cut-mode draw. Observed by
 /// [`dispatch_start_cut`] which fires `viewport.draw_brush_modal` with
 /// `mode="Cut"`.
 #[derive(Default, InputAction)]
 #[action_output(bool)]
-pub(crate) struct StartDrawBrushCutAction;
+pub struct StartDrawBrushCutAction;
 
-fn dispatch_start_add_append(_: On<Start<StartDrawBrushAddAppendAction>>, mut commands: Commands) {
+fn dispatch_start_add_append(
+    _: On<Start<StartDrawBrushAddAppendAction>>,
+    capture: Option<Res<KeymapCapture>>,
+    mut commands: Commands,
+) {
+    // These two chords hang off marker actions rather than off the
+    // operator, so the dispatcher's own capture gate never sees them: the
+    // recorder would name the chord and start a brush with it.
+    if KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     commands
         .operator(ActivateDrawBrushModalOp::ID)
         .param("mode", "Add")
@@ -485,8 +495,12 @@ fn dispatch_start_add_append(_: On<Start<StartDrawBrushAddAppendAction>>, mut co
 fn dispatch_start_cut(
     _: On<Start<StartDrawBrushCutAction>>,
     edit_mode: Res<crate::brush::EditMode>,
+    capture: Option<Res<KeymapCapture>>,
     mut commands: Commands,
 ) {
+    if KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     // In a brush edit sub-mode, C opens the mesh quick-menu instead. Starting a
     // cut brush there would force Object mode and pull the user out of the edit
     // they are in; the cut gesture still works from object mode.

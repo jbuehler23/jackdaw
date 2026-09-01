@@ -2,6 +2,34 @@ pub mod keybinds;
 
 use bevy::prelude::*;
 
+/// Set while the keybind settings dialog is waiting for the user to press
+/// the chord it is about to record.
+///
+/// A chord recorded in the dialog is a chord the editor is also bound to,
+/// so without this the press that names a binding also runs whatever it
+/// currently means. Every path that turns a key into an action reads this
+/// and stands down: the operator dispatch observer, and the handful of
+/// panels that read the keyboard directly because their keys are gestures
+/// rather than commands. The bindings themselves stay in place, so
+/// nothing has to be torn down and rebuilt around a recording.
+///
+/// It lives here, in the crate every one of those readers already
+/// depends on, rather than beside the keymap: a second flag mirrored from
+/// this one would be a second thing to get wrong.
+#[derive(Resource, Default)]
+pub struct KeymapCapture {
+    pub recording: bool,
+}
+
+impl KeymapCapture {
+    /// Whether a key press belongs to the recorder rather than to the
+    /// editor. Takes the resource as an option because the panels that
+    /// call it also run in worlds that have no keymap at all.
+    pub fn is_recording(capture: Option<&Self>) -> bool {
+        capture.is_some_and(|capture| capture.recording)
+    }
+}
+
 pub trait EditorCommand: Send + Sync + 'static {
     fn execute(&mut self, world: &mut World);
     fn undo(&mut self, world: &mut World);

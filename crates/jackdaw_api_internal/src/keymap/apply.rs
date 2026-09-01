@@ -17,19 +17,6 @@ use super::types::{
     key_code_from_name, mouse_button_from_name,
 };
 
-/// Set while the keybind settings dialog is waiting for the user to
-/// press the chord it is about to record.
-///
-/// A chord recorded in the dialog is a chord the editor is also bound
-/// to, so without this the press that names a binding also runs whatever
-/// it currently means. The operator dispatch observer reads this and
-/// stands down; the bindings themselves stay in place, so nothing has to
-/// be torn down and rebuilt around a recording.
-#[derive(Resource, Default)]
-pub struct KeymapCapture {
-    pub recording: bool,
-}
-
 /// Outcome of one preset application, for conformance checks and logs.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct KeymapApplyReport {

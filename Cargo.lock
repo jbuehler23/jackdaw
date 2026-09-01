@@ -4987,6 +4987,7 @@ dependencies = [
  "bevy",
  "bevy_enhanced_input",
  "bevy_monitors",
+ "jackdaw_commands",
  "jackdaw_fuzzy",
  "jackdaw_localization",
  "jackdaw_scene_types",

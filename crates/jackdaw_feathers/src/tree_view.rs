@@ -689,8 +689,15 @@ pub fn tree_container_drop_observers() -> impl Bundle {
 }
 
 /// Keyboard navigation for tree views: arrow keys, Enter, F2, Delete
+///
+/// These keys are read here rather than through the keymap, because they
+/// are how a list is walked rather than commands of their own. That also
+/// means nothing else stands them down, so the keybind dialog's recorder
+/// has to be checked here: without it, naming a chord in the dialog walks
+/// the outliner, or renames a row.
 pub fn tree_keyboard_navigation(
     keyboard: Res<ButtonInput<KeyCode>>,
+    capture: Option<Res<jackdaw_commands::KeymapCapture>>,
     mut focused: ResMut<TreeFocused>,
     tree_view: Query<&Children, With<TreeView>>,
     tree_nodes: Query<(Entity, &TreeNodeExpanded, &Children), With<TreeNode>>,
@@ -701,6 +708,9 @@ pub fn tree_keyboard_navigation(
     tree_node_query: Query<&TreeNode>,
     input_focus: Res<bevy::input_focus::InputFocus>,
 ) {
+    if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     // Skip tree keyboard navigation when a text input is focused
     // to avoid Enter/arrow keys interfering with text editing.
     if input_focus.get().is_some() {

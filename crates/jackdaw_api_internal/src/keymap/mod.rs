@@ -9,9 +9,12 @@ mod persist;
 mod types;
 
 pub use apply::{
-    KeymapApplyReport, KeymapCapture, PresetSpawnedBinding, apply_keymap_preset, find_conflicts,
-    resolve_keymap,
+    KeymapApplyReport, PresetSpawnedBinding, apply_keymap_preset, find_conflicts, resolve_keymap,
 };
+// Defined in `jackdaw_commands` so the panels that read the keyboard
+// directly can stand down for a recording too; re-exported here because
+// this is where the keymap is otherwise reached from.
+pub use jackdaw_commands::KeymapCapture;
 pub use persist::{
     UserKeymap, load_active_keymap_preset, load_user_keymap, save_active_keymap_preset,
     save_user_keymap,
