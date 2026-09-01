@@ -37,6 +37,11 @@ pub fn spawn_window_shell<S: Component + Copy>(
 ) -> WindowShellSlots {
     commands.spawn((
         Camera2d,
+        // Without this mark, UI roots resolve their target camera by
+        // scanning window cameras, and can latch onto an inactive one
+        // (a scene camera's preview mirror) when a project opens
+        // straight from boot -- leaving every UI node invisible.
+        bevy::ui::IsDefaultUiCamera,
         Camera {
             // Transparent clear only matters where the surface is transparent
             // (Linux/FreeBSD). On the opaque Windows window it's ignored; the
