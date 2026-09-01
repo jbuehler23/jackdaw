@@ -603,8 +603,16 @@ fn sibling_count(world: &World, parent: Option<Entity>) -> usize {
 ///
 /// The order is written to the document, not only to the ECS, so a reordered
 /// row survives a save and reload and a flowed child changes place on the
-/// canvas. An entity already at the end it is moving towards stays where it
-/// is while the rest of the selection moves. The whole move is one entry.
+/// canvas. The whole move is one entry.
+///
+/// A selection moving into the end of its list packs against it rather than
+/// coming apart. Each list keeps a frontier: the nearest slot to the
+/// destination still free for a selected entity to take. An entity that
+/// cannot reach its target because the frontier has caught up with it stays
+/// where it is and pushes the frontier past itself, so the entity behind it
+/// is stopped too. Without that, the first entity would stop at the end and
+/// the ones behind it would keep moving into it, changing the selection's
+/// own order every press and changing it back on the next one.
 pub(crate) fn move_selected_siblings(world: &mut World, delta: isize) {
     let selected: Vec<Entity> = world.resource::<Selection>().entities.clone();
     let mut located: Vec<(Entity, HierarchyLocation)> = selected
@@ -626,14 +634,47 @@ pub(crate) fn move_selected_siblings(world: &mut World, delta: isize) {
 
     let mut moves: Vec<Box<dyn EditorCommand>> = Vec::new();
     let mut lists: Vec<Option<Entity>> = Vec::new();
+    // The nearest free slot to the destination, per sibling list. `None`
+    // until the first entity of that list has been decided; a selection can
+    // span lists, and each end is its own.
+    let mut frontiers: Vec<(Option<Entity>, isize)> = Vec::new();
     for (entity, _) in located {
         let old = HierarchyLocation::from_world(world, entity);
-        let Some(index) = old.index.checked_add_signed(delta) else {
-            continue;
+        let here = old.index as isize;
+        let end = if delta > 0 {
+            sibling_count(world, old.parent) as isize - 1
+        } else {
+            0
         };
-        if index >= sibling_count(world, old.parent) {
+        let frontier = frontiers
+            .iter()
+            .find(|(parent, _)| *parent == old.parent)
+            .map_or(end, |(_, at)| *at);
+        // Toward the destination, but never past the frontier.
+        let target = if delta > 0 {
+            (here + delta).min(frontier)
+        } else {
+            (here + delta).max(frontier)
+        };
+        let blocked = if delta > 0 {
+            target <= here
+        } else {
+            target >= here
+        };
+        let settled = if blocked { here } else { target };
+        // Whatever the entity settled on, the next one cannot have it.
+        let next = if delta > 0 { settled - 1 } else { settled + 1 };
+        match frontiers
+            .iter_mut()
+            .find(|(parent, _)| *parent == old.parent)
+        {
+            Some((_, at)) => *at = next,
+            None => frontiers.push((old.parent, next)),
+        }
+        if blocked {
             continue;
         }
+        let index = settled as usize;
         let mut command = MoveEntity::new(
             world,
             entity,

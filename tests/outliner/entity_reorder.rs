@@ -323,3 +323,61 @@ fn a_reorder_of_a_multi_selection_is_one_entry() {
     );
     assert_eq!(undo_depth(&app) - before, 1);
 }
+
+/// A selection packed against the end of its list stays packed. The first
+/// entity has nowhere to go, so the one behind it has nowhere to go either:
+/// letting it move into the blocked one's slot swaps the two, and the next
+/// press swaps them back, so holding the chord shuffles the selection
+/// instead of leaving it alone.
+#[test]
+fn a_selection_packed_against_the_top_keeps_its_own_order() {
+    let mut app = util::editor_test_app();
+    let (column, children) = column_of_three(&mut app);
+    app.world_mut().resource_mut::<Selection>().entities = vec![children[1], children[2]];
+    app.update();
+
+    run_finished(&mut app, "entity.move_up");
+    assert_eq!(
+        document_order(app.world(), column),
+        vec!["Second", "Third", "First"],
+        "both moved while there was room",
+    );
+
+    run_finished(&mut app, "entity.move_up");
+    assert_eq!(
+        document_order(app.world(), column),
+        vec!["Second", "Third", "First"],
+        "at the top, neither moves; the blocked one blocks the one behind it",
+    );
+    assert_eq!(
+        ecs_order(app.world(), column),
+        vec!["Second", "Third", "First"],
+    );
+}
+
+/// The same at the other end.
+#[test]
+fn a_selection_packed_against_the_bottom_keeps_its_own_order() {
+    let mut app = util::editor_test_app();
+    let (column, children) = column_of_three(&mut app);
+    app.world_mut().resource_mut::<Selection>().entities = vec![children[0], children[1]];
+    app.update();
+
+    run_finished(&mut app, "entity.move_down");
+    assert_eq!(
+        document_order(app.world(), column),
+        vec!["Third", "First", "Second"],
+        "both moved while there was room",
+    );
+
+    run_finished(&mut app, "entity.move_down");
+    assert_eq!(
+        document_order(app.world(), column),
+        vec!["Third", "First", "Second"],
+        "at the bottom, neither moves",
+    );
+    assert_eq!(
+        ecs_order(app.world(), column),
+        vec!["Third", "First", "Second"],
+    );
+}
