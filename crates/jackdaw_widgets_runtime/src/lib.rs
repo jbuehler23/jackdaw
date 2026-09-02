@@ -83,6 +83,48 @@ pub struct TextValue(
 #[reflect(Component, Default)]
 pub struct ToggleSwitch;
 
+/// Marks an authored separator: the hairline rule between two groups.
+///
+/// It is also what says which way the line runs. A separator has no axis of
+/// its own; it takes the one across the flow it sits in, so the same widget
+/// is a horizontal rule in a column and a vertical one in a row.
+/// [`separator_follows_parent_axis`] does that, and it needs a marker to know
+/// which nodes to ask about.
+#[derive(Component, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component, Default)]
+pub struct Separator;
+
+/// Marks an authored spacer: a node whose whole job is to take up the room
+/// its siblings leave.
+///
+/// A spacer is a `Node` with `flex_grow` and nothing drawn, so its values are
+/// the ones a plain container carries too, and only this says it was placed
+/// as a spacer -- which is what the outliner draws its glyph from.
+#[derive(Component, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component, Default)]
+pub struct Spacer;
+
+/// How far along a [`Progress`] bar's fill sits, as a fraction.
+///
+/// Values outside `0.0..=1.0` are clamped when the fill is written, so a bar
+/// driven from game state that overshoots stays inside its track rather than
+/// spilling past it.
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Default)]
+#[reflect(Component, Default)]
+pub struct Progress {
+    /// The fraction filled, from empty at `0.0` to full at `1.0`.
+    pub value: f32,
+}
+
+/// The child of a [`Progress`] track that draws the filled part.
+///
+/// The fill is an authored child rather than a generated one: it carries its
+/// own colour and corner radius, so a screen can restyle the bar without any
+/// of this crate knowing. Its `width` is the one value it does not own.
+#[derive(Component, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component, Default)]
+pub struct ProgressFill;
+
 /// Where a binding writes a widget's text: [`TextValue`]'s only field, spelled
 /// the way a bind path spells one.
 ///
@@ -116,6 +158,15 @@ pub struct AuthoredWidget;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AuthoredTextSystems;
 
+/// The `PostUpdate` systems that write the `Node` values an authored widget
+/// derives rather than stores: a separator's thickness and a progress bar's
+/// fill width.
+///
+/// Both run before layout so the frame that changes a value is the frame that
+/// shows it. Named so a binding evaluator can be ordered ahead of them.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AuthoredNodeSystems;
+
 /// Registers the widget defaults and attaches the self-update observers.
 ///
 /// Add this wherever authored UI is spawned. Whatever spawns that UI is
@@ -135,6 +186,12 @@ impl Plugin for AuthoredWidgetPlugin {
                 .chain()
                 .in_set(AuthoredTextSystems)
                 .after(EditableTextSystems)
+                .before(bevy::ui::UiSystems::Layout),
+        );
+        app.add_systems(
+            PostUpdate,
+            (separator_follows_parent_axis, progress_fill_follows_value)
+                .in_set(AuthoredNodeSystems)
                 .before(bevy::ui::UiSystems::Layout),
         );
         #[cfg(feature = "feathers")]
@@ -183,6 +240,10 @@ pub fn register_widget_defaults(app: &mut App) {
 
     app.register_type::<TextValue>();
     app.register_type::<ToggleSwitch>();
+    app.register_type::<Separator>();
+    app.register_type::<Spacer>();
+    app.register_type::<Progress>();
+    app.register_type::<ProgressFill>();
 
     app.register_type::<Button>()
         .register_type::<Checkbox>()
@@ -407,6 +468,76 @@ fn authored_slider_self_update(
             entity.insert(SliderValue(value));
         }
     });
+}
+
+/// Lays a [`Separator`] across the flow it sits in: a hairline the full width
+/// of a column, or the full height of a row.
+///
+/// The thickness is whichever of `width` and `height` is already a pixel
+/// value, so a screen can author a 2px rule and keep it. A separator with no
+/// parent, or one under something that is not a `Node`, is left as authored.
+fn separator_follows_parent_axis(
+    parents: Query<&Node, Without<Separator>>,
+    mut separators: Query<(&ChildOf, &mut Node), With<Separator>>,
+) {
+    for (child_of, mut node) in &mut separators {
+        let Ok(parent) = parents.get(child_of.parent()) else {
+            continue;
+        };
+        let horizontal = matches!(
+            parent.flex_direction,
+            FlexDirection::Column | FlexDirection::ColumnReverse
+        );
+        let (across, along) = if horizontal {
+            (node.height, node.width)
+        } else {
+            (node.width, node.height)
+        };
+        let thickness = match across {
+            Val::Px(px) => Val::Px(px),
+            _ => match along {
+                Val::Px(px) => Val::Px(px),
+                _ => Val::Px(1.0),
+            },
+        };
+        let (width, height) = if horizontal {
+            (Val::Percent(100.0), thickness)
+        } else {
+            (thickness, Val::Percent(100.0))
+        };
+        if node.width != width {
+            node.width = width;
+        }
+        if node.height != height {
+            node.height = height;
+        }
+        // A hairline in a flex line is squeezed to nothing without this: the
+        // default `flex_shrink` lets a 1px child give up its only pixel.
+        if node.flex_shrink != 0.0 {
+            node.flex_shrink = 0.0;
+        }
+    }
+}
+
+/// Sizes a [`ProgressFill`] to the [`Progress`] on its parent track.
+///
+/// The fill is a percentage of the track rather than a computed pixel width,
+/// so a bar keeps its proportion through a resize without this running again.
+fn progress_fill_follows_value(
+    tracks: Query<(&Progress, &Children)>,
+    mut fills: Query<&mut Node, With<ProgressFill>>,
+) {
+    for (progress, children) in &tracks {
+        let width = Val::Percent(progress.value.clamp(0.0, 1.0) * 100.0);
+        for child in children.iter() {
+            let Ok(mut node) = fills.get_mut(child) else {
+                continue;
+            };
+            if node.width != width {
+                node.width = width;
+            }
+        }
+    }
 }
 
 /// Carries a typed edit into [`TextValue`], the half a save writes and a

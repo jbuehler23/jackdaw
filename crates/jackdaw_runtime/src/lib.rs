@@ -172,6 +172,13 @@ impl Plugin for JackdawPlugin {
             PostUpdate,
             jackdaw_widgets_runtime::AuthoredTextSystems.after(jackdaw_bind::BindEvaluationSystems),
         );
+        // The same edge for the derived `Node` values: a bound progress value
+        // has to reach the fill in the frame the binding wrote it, or the bar
+        // is always one frame behind the number beside it.
+        app.configure_sets(
+            PostUpdate,
+            jackdaw_widgets_runtime::AuthoredNodeSystems.after(jackdaw_bind::BindEvaluationSystems),
+        );
 
         app.init_asset::<JackdawScene>()
             .init_asset_loader::<JackdawSceneLoader>()

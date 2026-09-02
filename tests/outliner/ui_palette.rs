@@ -27,7 +27,8 @@ use jackdaw::commands::CommandHistory;
 use jackdaw::hierarchy::HierarchyTreeContainer;
 use jackdaw::selection::Selection;
 use jackdaw::ui_palette::{
-    PaletteError, instantiate_widget, register_authored_subtree, seed_ui_scene_root,
+    PaletteError, instantiate_widget, instantiate_widget_under, register_authored_subtree,
+    seed_ui_scene_root,
 };
 use jackdaw_feathers::menu_bar::{
     SECTION_ACTION_PREFIX, SEPARATOR_ACTION, SUBMENU_ACTION_PREFIX, SUBMENU_END_ACTION,
@@ -83,6 +84,9 @@ fn the_add_menu_lists_every_built_in_widget() {
         "widget:ui.row",
         "widget:ui.column",
         "widget:ui.grid",
+        "widget:ui.spacer",
+        "widget:ui.separator",
+        "widget:ui.progress",
         "widget:ui.label",
         "widget:ui.image",
         "widget:ui.button",
@@ -1940,5 +1944,121 @@ fn a_row_the_list_gives_up_on_is_named_rather_than_lost_quietly() {
         rows_for(app.world_mut(), never),
         0,
         "and the row is indeed not there",
+    );
+}
+
+/// The pure-`Node` widgets: what a save carries and what comes back.
+///
+/// A spacer and a separator hold nothing but their marker, so a round trip
+/// that dropped the marker would leave a node that still looks right and is
+/// no longer either of them; a progress bar's value and its fill child both
+/// have to survive or the reloaded bar shows the wrong amount.
+#[test]
+fn the_node_widgets_survive_a_save_and_a_reload() {
+    use jackdaw_widgets_runtime::{Progress, ProgressFill, Separator, Spacer};
+
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    for id in ["ui.spacer", "ui.separator", "ui.progress"] {
+        instantiate_widget(app.world_mut(), id).unwrap_or_else(|error| panic!("{id}: {error}"));
+    }
+    let mut reloaded = round_trip(&mut app);
+
+    let spacer = by_name(reloaded.world_mut(), "Spacer");
+    assert!(reloaded.world().get::<Spacer>(spacer).is_some());
+    assert_eq!(
+        reloaded.world().get::<Node>(spacer).map(|n| n.flex_grow),
+        Some(1.0),
+        "a reloaded spacer still takes the slack",
+    );
+
+    let separator = by_name(reloaded.world_mut(), "Separator");
+    assert!(reloaded.world().get::<Separator>(separator).is_some());
+
+    let bar = by_name(reloaded.world_mut(), "ProgressBar");
+    assert_eq!(
+        reloaded.world().get::<Progress>(bar).map(|p| p.value),
+        Some(0.5),
+        "the authored value comes back",
+    );
+    let fill = reloaded
+        .world()
+        .get::<Children>(bar)
+        .and_then(|children| children.iter().next())
+        .expect("the bar keeps its fill child");
+    assert!(reloaded.world().get::<ProgressFill>(fill).is_some());
+    reloaded.update();
+    assert_eq!(
+        reloaded.world().get::<Node>(fill).map(|n| n.width),
+        Some(Val::Percent(50.0)),
+        "and the reloaded fill is redrawn from it",
+    );
+}
+
+/// A progress bar's fill is written from its value, in the editor and in a
+/// game, so a binding that drives the value drives the bar.
+#[test]
+fn the_progress_fill_follows_the_value() {
+    use jackdaw_widgets_runtime::Progress;
+
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    let bar = instantiate_widget(app.world_mut(), "ui.progress").expect("the scene takes a bar");
+    app.update();
+
+    let fill = app
+        .world()
+        .get::<Children>(bar)
+        .and_then(|children| children.iter().next())
+        .expect("the bar has a fill");
+
+    for (value, expected) in [(0.0, 0.0), (0.75, 75.0), (1.0, 100.0), (3.0, 100.0)] {
+        app.world_mut()
+            .get_mut::<Progress>(bar)
+            .expect("the bar keeps its value")
+            .value = value;
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(fill).map(|n| n.width),
+            Some(Val::Percent(expected)),
+            "a value of {value} fills {expected}% of the track",
+        );
+    }
+}
+
+/// A separator has no axis of its own: it lies across whatever flow it is
+/// dropped into, so the same widget rules a column and divides a row.
+#[test]
+fn a_separator_takes_its_axis_from_the_flow_it_sits_in() {
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    let column =
+        instantiate_widget(app.world_mut(), "ui.column").expect("the scene takes a column");
+    let separator = instantiate_widget_under(app.world_mut(), "ui.separator", Some(column))
+        .expect("a column takes a separator");
+    app.update();
+
+    let node = |app: &App| {
+        let node = app
+            .world()
+            .get::<Node>(separator)
+            .expect("a separator node");
+        (node.width, node.height)
+    };
+    assert_eq!(
+        node(&app),
+        (Val::Percent(100.0), Val::Px(1.0)),
+        "a separator in a column is a horizontal rule",
+    );
+
+    app.world_mut()
+        .get_mut::<Node>(column)
+        .expect("a column node")
+        .flex_direction = FlexDirection::Row;
+    app.update();
+    assert_eq!(
+        node(&app),
+        (Val::Px(1.0), Val::Percent(100.0)),
+        "and the same separator in a row is a vertical one",
     );
 }

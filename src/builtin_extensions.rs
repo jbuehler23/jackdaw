@@ -654,12 +654,27 @@ fn world_kind_icons() -> Vec<(String, Icon)> {
 ///
 /// An id with no definition, or a definition with no icon, contributes
 /// nothing, which the outliner icon suite catches.
-fn widget_kind_sources() -> [(String, &'static str); 9] {
+fn widget_kind_sources() -> [(String, &'static str); 12] {
     use bevy::reflect::TypePath;
     use bevy::ui_widgets::{Button, Checkbox, RadioButton, ScrollArea, Slider};
 
     [
         (Button::type_path().to_string(), "ui.button"),
+        // The three kinds that are a `Node` and nothing else. Without a rule
+        // each falls through to the container fallback and reads as the row
+        // or column it happens to be shaped like.
+        (
+            jackdaw_widgets_runtime::Spacer::type_path().to_string(),
+            "ui.spacer",
+        ),
+        (
+            jackdaw_widgets_runtime::Separator::type_path().to_string(),
+            "ui.separator",
+        ),
+        (
+            jackdaw_widgets_runtime::Progress::type_path().to_string(),
+            "ui.progress",
+        ),
         // Before the checkbox: a toggle switch is a `Checkbox` too, and
         // the first rule that matches wins, so the narrower one is asked
         // first or the switch shows the checkbox's icon.
@@ -794,6 +809,89 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             },
             None,
         ),
+        // Nothing is drawn, so the whole widget is the `flex_grow` and the
+        // marker saying it was placed on purpose. A zero basis is what makes
+        // the growth the entire size: a spacer beside two buttons should take
+        // the gap and no more of its own.
+        WidgetDefinition::new("ui.spacer", "Spacer", "Layout", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Spacer"),
+                    Node {
+                        flex_grow: 1.0,
+                        flex_basis: px(0),
+                        ..default()
+                    },
+                    jackdaw_widgets_runtime::Spacer,
+                    BackgroundColor(Color::NONE),
+                ),
+            ))
+        })
+        .with_icon(Icon::Space),
+        // Authored as a horizontal rule; `separator_follows_parent_axis`
+        // turns it on its side when the parent lays out in a row. The 1px
+        // here is the thickness that system keeps, whichever way it points.
+        WidgetDefinition::new("ui.separator", "Separator", "Layout", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Separator"),
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: px(1),
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
+                    jackdaw_widgets_runtime::Separator,
+                    ThemeBackgroundColor(feathers_tokens::PANE_HEADER_DIVIDER),
+                ),
+            ))
+        })
+        .with_icon(Icon::SeparatorHorizontal),
+        // The one Node composition with a child: a track and the bar inside
+        // it. The bar's width is the only value it does not own, and
+        // `progress_fill_follows_value` writes it from `Progress` in the
+        // editor and in a running game alike.
+        WidgetDefinition::new(
+            "ui.progress",
+            "Progress Bar",
+            "Display",
+            |world, context| {
+                let track = spawn_widget(
+                    world,
+                    context.parent,
+                    (
+                        Name::new("ProgressBar"),
+                        Node {
+                            width: px(180),
+                            height: px(8),
+                            border_radius: BorderRadius::all(px(4)),
+                            overflow: Overflow::clip(),
+                            ..default()
+                        },
+                        jackdaw_widgets_runtime::Progress { value: 0.5 },
+                        ThemeBackgroundColor(feathers_tokens::SLIDER_BG),
+                    ),
+                );
+                world.spawn((
+                    Name::new("Fill"),
+                    Node {
+                        width: Val::Percent(50.0),
+                        height: Val::Percent(100.0),
+                        border_radius: BorderRadius::all(px(4)),
+                        ..default()
+                    },
+                    jackdaw_widgets_runtime::ProgressFill,
+                    ThemeBackgroundColor(feathers_tokens::SLIDER_BAR),
+                    ChildOf(track),
+                ));
+                Ok(track)
+            },
+        )
+        .with_icon(Icon::Gauge),
         // `ThemeTextColor` rather than the inheritable variant: this entity
         // holds the text itself, and the inheritable one reaches descendants.
         WidgetDefinition::new("ui.label", "Label", "Display", |world, context| {
