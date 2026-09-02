@@ -374,10 +374,9 @@ fn a_lock_survives_a_save_and_a_reload() {
 }
 
 fn undo(app: &mut App) {
-    app.world_mut()
-        .resource_scope(|world, mut history: Mut<jackdaw::commands::CommandHistory>| {
-            history.undo(world)
-        });
+    app.world_mut().resource_scope(
+        |world, mut history: Mut<jackdaw::commands::CommandHistory>| history.undo(world),
+    );
     settle(app);
 }
 

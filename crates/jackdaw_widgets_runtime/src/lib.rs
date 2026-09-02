@@ -652,7 +652,12 @@ fn authored_slider_self_update(
 #[cfg(feature = "feathers")]
 fn dropdown_chrome_follows_options(
     dropdowns: Query<
-        (Entity, &Dropdown, Option<&Children>, Option<&ChromeBuiltFrom>),
+        (
+            Entity,
+            &Dropdown,
+            Option<&Children>,
+            Option<&ChromeBuiltFrom>,
+        ),
         Changed<Dropdown>,
     >,
     generated: Query<(), With<GeneratedPart>>,
@@ -943,7 +948,12 @@ fn set_chosen_index(world: &mut World, owner: Entity, index: usize) {
 #[cfg(feature = "feathers")]
 fn tab_chrome_follows_labels(
     strips: Query<
-        (Entity, &TabStrip, Option<&Children>, Option<&ChromeBuiltFrom>),
+        (
+            Entity,
+            &TabStrip,
+            Option<&Children>,
+            Option<&ChromeBuiltFrom>,
+        ),
         Changed<TabStrip>,
     >,
     generated: Query<(), With<GeneratedPart>>,

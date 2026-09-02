@@ -12,3 +12,4 @@ mod bindings_link;
 mod inspector_panel_width;
 mod inspector_preview_guard;
 mod inspector_val;
+mod widget_cards;

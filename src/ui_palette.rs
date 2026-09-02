@@ -173,7 +173,9 @@ fn instantiate_at(
     slot: WidgetSlot,
 ) -> Result<Entity, PaletteError> {
     let (entity, command) = instantiate_command_at(world, definition_id, slot)?;
-    world.resource_mut::<CommandHistory>().push_executed(command);
+    world
+        .resource_mut::<CommandHistory>()
+        .push_executed(command);
     Ok(entity)
 }
 

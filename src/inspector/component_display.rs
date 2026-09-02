@@ -158,6 +158,37 @@ fn hidden_by_namespace(full_path: &str) -> bool {
         && !full_path.starts_with("jackdaw_multiplayer")
         && !full_path.starts_with("jackdaw_bind::")
         && !SCENE_TYPES_WITH_INSPECTOR_CARDS.contains(&full_path)
+        && !authored_widget_components().contains(&full_path)
+}
+
+/// The reflected components a widget's author edits: the text an input holds,
+/// the value a progress bar shows, a dropdown's options, a tab strip's labels.
+///
+/// `jackdaw_widgets_runtime` is culled with the rest of the jackdaw namespace
+/// because most of what it holds is chrome bookkeeping -- which generated part
+/// stands for which row, which list the chrome was built from -- and none of
+/// that is the user's. These are: they are the whole of what the widget
+/// carries, and hiding them left the widgets placeable and not authorable.
+///
+/// Spelled through [`TypePath`] so a moved or renamed component takes its hole
+/// with it rather than silently losing its card.
+///
+/// [`TypePath`]: bevy::reflect::TypePath
+fn authored_widget_components() -> [&'static str; 10] {
+    use bevy::reflect::TypePath;
+    use jackdaw_widgets_runtime as widgets;
+    [
+        widgets::TextValue::type_path(),
+        widgets::ToggleSwitch::type_path(),
+        widgets::Separator::type_path(),
+        widgets::Spacer::type_path(),
+        widgets::Progress::type_path(),
+        widgets::ProgressFill::type_path(),
+        widgets::Dropdown::type_path(),
+        widgets::RadioOptions::type_path(),
+        widgets::TabStrip::type_path(),
+        widgets::NineSlice::type_path(),
+    ]
 }
 
 #[expect(
@@ -1378,5 +1409,15 @@ mod tests {
         assert!(hidden_by_namespace(std::any::type_name::<
             jackdaw_widgets_runtime::AuthoredWidget,
         >()));
+    }
+
+    /// The other side of the same cull: what a widget's author edits is not
+    /// bookkeeping, and a widget whose components are all hidden can be
+    /// placed and never authored.
+    #[test]
+    fn the_authored_widget_components_survive_the_namespace_cull() {
+        for path in super::authored_widget_components() {
+            assert!(!hidden_by_namespace(path), "{path} is hidden");
+        }
     }
 }

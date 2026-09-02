@@ -23,11 +23,14 @@ use bevy::{
     ui_widgets::{Activate, Checkbox, SliderValue, ValueChange, observe},
 };
 use jackdaw_feathers::{
+    button::{ButtonProps, ButtonSize, ButtonVariant, button},
+    icons::Icon,
     number_input::{
         NumberInputPrecision, NumberInputStep, ScrubNumberInput, ScrubNumberInputValue,
         is_scrubbing_or_focused,
     },
     tokens,
+    tooltip::Tooltip,
 };
 
 // Axis sigil colors for vector component inputs. The colored left stripe and
@@ -386,9 +389,19 @@ pub(crate) fn spawn_field_row(
                         editor_font,
                         icon_font,
                     );
+                    spawn_list_row_controls(
+                        commands,
+                        item_entity,
+                        source_entity,
+                        type_path,
+                        &field_path,
+                        i,
+                        list.len(),
+                    );
                 }
             }
         }
+        spawn_list_add_button(commands, parent, source_entity, type_path, &field_path);
         return;
     }
     if let ReflectRef::Array(array) = value.reflect_ref() {
@@ -3447,4 +3460,242 @@ mod tests {
             "no mutation since `this_run` means no change"
         );
     }
+}
+
+/// What a control beside a reflected list does to it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ListEdit {
+    Add,
+    Remove,
+    MoveUp,
+    MoveDown,
+}
+
+/// The list a control edits, which element it stands for, and what it does.
+///
+/// A list field showed its elements and let each one be typed into, but there
+/// was no way to make one or take one away. For a `Vec<String>` that is the
+/// whole of a widget's authored content -- a dropdown's options, a tab strip's
+/// labels -- so the widget could be looked at and not authored.
+#[derive(Component)]
+pub(crate) struct ReflectListControl {
+    source: Entity,
+    type_path: String,
+    field_path: String,
+    index: usize,
+    edit: ListEdit,
+}
+
+/// The move and remove controls beside one element of a list.
+fn spawn_list_row_controls(
+    commands: &mut Commands,
+    row: Entity,
+    source: Entity,
+    type_path: &str,
+    field_path: &str,
+    index: usize,
+    count: usize,
+) {
+    for (edit, icon, tip, enabled) in [
+        (ListEdit::MoveUp, Icon::ArrowUp, "Move up", index > 0),
+        (
+            ListEdit::MoveDown,
+            Icon::ArrowDown,
+            "Move down",
+            index + 1 < count,
+        ),
+        (ListEdit::Remove, Icon::Trash2, "Remove", true),
+    ] {
+        let variant = if edit == ListEdit::Remove {
+            ButtonVariant::Destructive
+        } else {
+            ButtonVariant::Ghost
+        };
+        let mut control = commands.spawn((
+            button(
+                ButtonProps::new("")
+                    .with_variant(variant)
+                    .with_size(ButtonSize::IconSM)
+                    .with_left_icon(icon),
+            ),
+            Tooltip::title(tip),
+            ChildOf(row),
+        ));
+        // An arrow at either end of the list has nowhere to go. It keeps its
+        // place so the row does not reflow, and reads as unavailable.
+        if enabled {
+            control.insert(ReflectListControl {
+                source,
+                type_path: type_path.to_string(),
+                field_path: field_path.to_string(),
+                index,
+                edit,
+            });
+        } else {
+            control.insert(bevy::ui::InteractionDisabled);
+        }
+    }
+}
+
+/// The control that puts one more element on the end of a list.
+fn spawn_list_add_button(
+    commands: &mut Commands,
+    parent: Entity,
+    source: Entity,
+    type_path: &str,
+    field_path: &str,
+) {
+    commands.spawn((
+        button(
+            ButtonProps::new("Add")
+                .with_variant(ButtonVariant::Ghost)
+                .with_size(ButtonSize::MD)
+                .with_left_icon(Icon::Plus)
+                .align_left(),
+        ),
+        Tooltip::title("Add an item to the list"),
+        ReflectListControl {
+            source,
+            type_path: type_path.to_string(),
+            field_path: field_path.to_string(),
+            index: usize::MAX,
+            edit: ListEdit::Add,
+        },
+        ChildOf(parent),
+    ));
+}
+
+pub(crate) fn on_reflect_list_button_click(
+    event: On<jackdaw_feathers::button::ButtonClickEvent>,
+    controls: Query<&ReflectListControl>,
+    mut commands: Commands,
+) {
+    let Ok(control) = controls.get(event.entity) else {
+        return;
+    };
+    let source = control.source;
+    let type_path = control.type_path.clone();
+    let field_path = control.field_path.clone();
+    let (index, edit) = (control.index, control.edit);
+    commands.queue(move |world: &mut World| {
+        edit_reflect_list(world, source, &type_path, &field_path, index, edit);
+    });
+}
+
+/// Apply one list edit and commit the whole list back through the same
+/// gesture a typed field commits with, so the document, the undo stack and a
+/// running game all hear about it once.
+fn edit_reflect_list(
+    world: &mut World,
+    source: Entity,
+    type_path: &str,
+    field_path: &str,
+    index: usize,
+    edit: ListEdit,
+) {
+    let Some(mut items) = list_items_as_json(world, source, type_path, field_path) else {
+        return;
+    };
+    match edit {
+        ListEdit::Add => {
+            let Some(item) = default_list_item(world, source, type_path, field_path) else {
+                warn!("{type_path}.{field_path}: no default is registered for its item type");
+                return;
+            };
+            items.push(item);
+        }
+        ListEdit::Remove => {
+            if index >= items.len() {
+                return;
+            }
+            items.remove(index);
+        }
+        ListEdit::MoveUp => {
+            if index == 0 || index >= items.len() {
+                return;
+            }
+            items.swap(index, index - 1);
+        }
+        ListEdit::MoveDown => {
+            if index + 1 >= items.len() {
+                return;
+            }
+            items.swap(index, index + 1);
+        }
+    }
+    crate::commands::field_edit_commit(
+        world,
+        type_path,
+        field_path,
+        &serde_json::Value::Array(items),
+        "Edit list on multiple entities",
+    );
+    // A list that changed length has no row to write the new value into: the
+    // rows are what changed. Without this the card kept showing the list as it
+    // was until the selection moved and came back.
+    if let Some(mut pending) = world.get_resource_mut::<crate::inspector::PendingInspectorRebuild>()
+    {
+        pending.0 = Some(source);
+    }
+}
+
+/// Every element of the list at `field_path`, as the JSON a field edit takes.
+fn list_items_as_json(
+    world: &World,
+    source: Entity,
+    type_path: &str,
+    field_path: &str,
+) -> Option<Vec<serde_json::Value>> {
+    use bevy::reflect::GetPath;
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let registration = registry.get_with_type_path(type_path)?;
+    let reflect_component = registration.data::<ReflectComponent>()?;
+    let component = reflect_component.reflect(world.get_entity(source).ok()?)?;
+    let field = component.reflect_path(field_path).ok()?;
+    let ReflectRef::List(list) = field.reflect_ref() else {
+        return None;
+    };
+    let mut items = Vec::with_capacity(list.len());
+    for index in 0..list.len() {
+        items.push(reflect_to_json(list.get(index)?, &registry)?);
+    }
+    Some(items)
+}
+
+/// A fresh element for the list at `field_path`, built from its item type's
+/// registered default. A type with no `ReflectDefault` cannot be made from
+/// nothing, and Add says so rather than adding something arbitrary.
+fn default_list_item(
+    world: &World,
+    source: Entity,
+    type_path: &str,
+    field_path: &str,
+) -> Option<serde_json::Value> {
+    use bevy::reflect::{GetPath, TypeInfo, prelude::ReflectDefault};
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let registration = registry.get_with_type_path(type_path)?;
+    let reflect_component = registration.data::<ReflectComponent>()?;
+    let component = reflect_component.reflect(world.get_entity(source).ok()?)?;
+    let field = component.reflect_path(field_path).ok()?;
+    let TypeInfo::List(info) = field.get_represented_type_info()? else {
+        return None;
+    };
+    let item = registry
+        .get(info.item_ty().id())?
+        .data::<ReflectDefault>()?;
+    reflect_to_json(item.default().as_partial_reflect(), &registry)
+}
+
+fn reflect_to_json(
+    value: &dyn PartialReflect,
+    registry: &bevy::reflect::TypeRegistry,
+) -> Option<serde_json::Value> {
+    serde_json::to_value(bevy::reflect::serde::TypedReflectSerializer::new(
+        value, registry,
+    ))
+    .ok()
 }

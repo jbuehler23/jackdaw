@@ -184,7 +184,8 @@ impl Plugin for JackdawPlugin {
         // one before it.
         app.configure_sets(
             PostUpdate,
-            jackdaw_widgets_runtime::AuthoredChromeSystems.after(jackdaw_bind::BindEvaluationSystems),
+            jackdaw_widgets_runtime::AuthoredChromeSystems
+                .after(jackdaw_bind::BindEvaluationSystems),
         );
 
         app.init_asset::<JackdawScene>()

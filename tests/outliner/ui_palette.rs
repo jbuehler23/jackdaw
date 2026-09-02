@@ -2410,8 +2410,10 @@ fn a_save_carries_none_of_the_values_a_widget_writes_for_itself() {
         app.update();
     }
 
-    let text =
-        jackdaw::scene_io::emit_bsn_scene_with_inline_assets(app.world_mut(), std::path::Path::new("."));
+    let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new("."),
+    );
     for absent in [
         "TextLayoutInfo",
         "ImageNodeSize",

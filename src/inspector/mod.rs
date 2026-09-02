@@ -125,6 +125,7 @@ impl Plugin for InspectorPlugin {
         app.init_resource::<category_strip::ActiveInspectorCategory>();
         app.init_resource::<InspectorCollapseState>();
         app.init_resource::<bindings_card::BindingsCardEcho>();
+        app.init_resource::<PendingInspectorRebuild>();
 
         let mut denylist = component_picker::PickerDenylist::default();
         component_picker::populate_avian_picker_denylist(&mut denylist);
@@ -151,6 +152,7 @@ impl Plugin for InspectorPlugin {
             .add_observer(node_card::on_optional_number_mode_change)
             .add_observer(bindings_card::on_binding_combobox_change)
             .add_observer(bindings_card::on_binding_button_click)
+            .add_observer(reflect_fields::on_reflect_list_button_click)
             .add_observer(bindings_card::on_binding_checkbox_change)
             .add_observer(bindings_card::on_binding_text_commit)
             .add_observer(custom_props_display::on_custom_property_checkbox_commit)
@@ -167,6 +169,7 @@ impl Plugin for InspectorPlugin {
             .add_systems(
                 Update,
                 (
+                    apply_pending_inspector_rebuild,
                     reflect_fields::refresh_inspector_fields,
                     reflect_fields::refresh_enum_variants,
                     val_field::refresh_val_fields,
@@ -479,6 +482,25 @@ pub(crate) struct InspectorDirty;
 /// Force inspector rebuild by marking the source entity dirty.
 pub(super) fn rebuild_inspector(world: &mut World, source_entity: Entity) {
     world.entity_mut(source_entity).insert(InspectorDirty);
+}
+
+/// A source whose inspector has to be rebuilt, one frame from now.
+///
+/// A control that changes the shape of its own card -- a list row added or
+/// taken away -- cannot rebuild the card inside the click: the rebuild
+/// despawns the button the click came from, and the hover and cursor commands
+/// already queued for it that frame then land on an entity that is gone. A
+/// frame's delay lets those finish first.
+#[derive(Resource, Default)]
+pub(crate) struct PendingInspectorRebuild(pub(crate) Option<Entity>);
+
+fn apply_pending_inspector_rebuild(
+    mut pending: ResMut<PendingInspectorRebuild>,
+    mut commands: Commands,
+) {
+    if let Some(source) = pending.0.take() {
+        commands.entity(source).try_insert(InspectorDirty);
+    }
 }
 
 /// Flag the inspector dirty when the displayed entity's `ModifierStack`
