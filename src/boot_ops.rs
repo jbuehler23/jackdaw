@@ -511,7 +511,19 @@ fn drive_boot_ops(world: &mut World) {
     if queue.queue.is_empty() {
         return;
     }
-    let frames = queue.frames + 1;
+    let so_far = queue.frames;
+    // A clause that drove the mouse or the keyboard is not finished when
+    // its operator returned: the gesture is a list of beats spread over
+    // frames (see `crate::test_input`). Holding the count still while
+    // those play out keeps one clause meaning one gesture, however many
+    // steps a drag was cut into.
+    if !world
+        .get_resource::<crate::test_input::SyntheticInput>()
+        .is_none_or(crate::test_input::SyntheticInput::is_idle)
+    {
+        return;
+    }
+    let frames = so_far + 1;
     world.resource_mut::<BootOpQueue>().frames = frames;
     if frames < SETTLE_FRAMES || !(frames - SETTLE_FRAMES).is_multiple_of(GAP_FRAMES) {
         return;

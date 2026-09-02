@@ -3735,6 +3735,26 @@ fn cursor_on_canvas(world: &World, host: Entity, cursor: Vec2) -> Option<Vec2> {
     Some(stage_to_authored(offset, host.target_size))
 }
 
+/// Where `authored` (canvas-global authored pixels) is showing on a
+/// panel, in ui-logical pixels: [`cursor_on_canvas`] run backwards.
+///
+/// What lets a caller aim at the canvas's own coordinates -- a node's
+/// position as the inspector states it -- rather than at wherever the
+/// panel has been docked and however far it has been panned. A degenerate
+/// stage answers `None` rather than an infinity, the same refusal
+/// [`crate::viewport_2d::target_pixels_per_stage_pixel`] guards against.
+pub(crate) fn canvas_to_cursor(world: &World, host: Entity, authored: Vec2) -> Option<Vec2> {
+    let host = world.get::<Viewport2dPanelHost>(host)?;
+    let computed = world.get::<ComputedNode>(host.stage)?;
+    let transform = world.get::<UiGlobalTransform>(host.stage)?;
+    let target_scale = target_pixels_per_stage_pixel(computed.size(), host.target_size);
+    if target_scale <= 0.0 || !target_scale.is_finite() {
+        return None;
+    }
+    let offset = authored_to_stage(authored, host.target_size);
+    Some((offset / target_scale + transform.translation) * computed.inverse_scale_factor())
+}
+
 /// Whether the cursor has gone past the stage area on the side the ruler
 /// for `axis` sits on: the top for a vertical guide, the left for a
 /// horizontal one.

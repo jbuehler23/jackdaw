@@ -117,6 +117,7 @@ pub mod selection;
 pub mod snapping;
 pub mod status_bar;
 pub mod terrain;
+pub mod test_input;
 pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod transform_ops;
@@ -599,7 +600,9 @@ impl Plugin for ExtensionPlugin {
                 .register_extension::<builtin_extensions::TimelineExtension>()
                 .register_extension::<builtin_extensions::TerminalExtension>()
                 .register_extension::<build_panel::BuildPanelExtension>()
-                .register_extension::<builtin_extensions::InspectorExtension>();
+                .register_extension::<builtin_extensions::InspectorExtension>()
+                .add_plugins(test_input::plugin)
+                .register_extension::<test_input::TestInputExtension>();
         }
 
         // Bundled behind the default-on `multiplayer` feature. Registers the

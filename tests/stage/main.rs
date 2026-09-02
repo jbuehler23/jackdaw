@@ -15,6 +15,7 @@ mod mesh_quick_menu;
 mod modeling_essentials;
 mod positionable_mirror_plane;
 mod selection_undo;
+mod synthetic_input;
 mod ui_align;
 mod ui_asset_drop;
 mod ui_drag_readout;

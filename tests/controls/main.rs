@@ -14,4 +14,5 @@ mod context_menus;
 mod lists_and_scroll;
 mod popovers;
 mod segmented_controls;
+mod synthetic_click;
 mod text_fields;
