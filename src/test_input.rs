@@ -561,14 +561,18 @@ fn pointer_button(name: &str) -> Option<MouseButton> {
         ),
         action(
             String,
-            doc = "move, press, release, click, dblclick or drag_to. Defaults to move."
+            doc = "move, press, release, click, dblclick, drag_to or rest. \
+                   Defaults to move."
         ),
         button(String, doc = "primary (default), secondary or middle."),
         mods(
             String,
             doc = "Comma list of shift, ctrl, alt, super held for the gesture."
         ),
-        steps(i64, doc = "Moves a drag_to is cut into. Defaults to 8."),
+        steps(
+            i64,
+            doc = "Moves a drag_to is cut into, or beats a rest lasts. Defaults to 8."
+        ),
         frames(i64, doc = "Frames between one event and the next. Defaults to 1.")
     )
 )]
@@ -601,7 +605,19 @@ pub(crate) fn input_pointer(
             frames,
         };
 
-        let gesture = if action == "drag_to" {
+        let gesture = if action == "rest" {
+            // Beats with nothing in them: the cursor stays where it is and
+            // the frames pass. A move to the same position would not do --
+            // a `CursorMoved` of zero delta is still a move, and a menu
+            // reads one as the pointer stirring on the row it rests on.
+            vec![
+                Beat {
+                    events: Vec::new(),
+                    frames,
+                };
+                usize::try_from(steps).unwrap_or(1)
+            ]
+        } else if action == "drag_to" {
             let Some(from) = current_position(world) else {
                 warn!("input.pointer: drag_to has no cursor position to start from");
                 return;

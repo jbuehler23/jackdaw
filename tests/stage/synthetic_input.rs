@@ -784,3 +784,49 @@ fn ctrl_arrow_up_reorders_from_the_keyboard() {
         "Ctrl+ArrowUp moved the selection up among its siblings",
     );
 }
+
+/// A rest holds the cursor still for as many frames as it names.
+///
+/// The hover a script is waiting on is the hover it already has: a move to
+/// the same point still reports a `CursorMoved`, and a menu reads that as
+/// the pointer stirring rather than dwelling. A rest emits nothing at all,
+/// so the frames pass with the pointer exactly where the last beat left it.
+#[test]
+fn a_rest_lets_frames_pass_without_moving_the_pointer() {
+    let (mut app, _panel) = canvas_app();
+    let node = authored_panel(&mut app);
+    settle(&mut app);
+
+    run(
+        &mut app,
+        "input.pointer space=canvas x=600 y=300 action=move",
+    );
+    run(
+        &mut app,
+        "input.pointer space=canvas x=605 y=305 action=move",
+    );
+    let resting = cursor(&mut app).expect("the move put the cursor somewhere");
+    let hovered = |app: &mut App| {
+        app.world_mut()
+            .query_filtered::<Entity, With<jackdaw::ui_stage::UiHoverOutline>>()
+            .iter(app.world())
+            .count()
+    };
+    assert_eq!(hovered(&mut app), 1);
+
+    let before = app.world().resource::<bevy::diagnostic::FrameCount>().0;
+    run(&mut app, "input.pointer action=rest steps=6 frames=2");
+    let after = app.world().resource::<bevy::diagnostic::FrameCount>().0;
+
+    assert_eq!(cursor(&mut app), Some(resting), "a rest moves nothing",);
+    assert!(
+        after - before >= 12,
+        "six beats two frames apart is at least twelve frames: {before} -> {after}",
+    );
+    assert_eq!(
+        hovered(&mut app),
+        1,
+        "and the hover it was resting on is still the hover",
+    );
+    let _ = node;
+}
