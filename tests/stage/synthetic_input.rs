@@ -233,9 +233,11 @@ fn a_drag_moves_the_node_it_started_on_and_records_one_entry() {
     let before = node_of(&app, node);
     let entries = history_len(&app);
 
+    // Put the cursor on the node, then drag from there: `drag_to`
+    // presses where the pointer already is, as a hand on a mouse does.
     run(
         &mut app,
-        "input.pointer space=canvas x=600 y=300 action=press",
+        "input.pointer space=canvas x=600 y=300 action=move",
     );
     run(
         &mut app,
@@ -377,8 +379,8 @@ fn typing_reaches_the_entry_the_canvas_opened() {
     );
 }
 
-/// `input.key` presses a key the editor's own chords read, and the
-/// modifier a clause names is held while it does.
+/// `input.key` presses a key the editor's own chords read, so a bare
+/// Delete deletes the selection exactly as pressing it does.
 #[test]
 fn a_key_reaches_the_editors_own_chords() {
     let (mut app, _panel) = canvas_app();
