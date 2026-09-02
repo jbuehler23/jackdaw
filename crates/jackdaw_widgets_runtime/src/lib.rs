@@ -88,7 +88,7 @@ pub struct ToggleSwitch;
 /// It is also what says which way the line runs. A separator has no axis of
 /// its own; it takes the one across the flow it sits in, so the same widget
 /// is a horizontal rule in a column and a vertical one in a row.
-/// [`separator_follows_parent_axis`] does that, and it needs a marker to know
+/// `separator_follows_parent_axis` does that, and it needs a marker to know
 /// which nodes to ask about.
 #[derive(Component, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component, Default)]
