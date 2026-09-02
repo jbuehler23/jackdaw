@@ -2580,8 +2580,41 @@ fn on_lock_toggled(event: On<TreeRowLockToggled>, mut commands: Commands) {
     let source = event.source_entity;
     commands.queue(move |world: &mut World| {
         let locked = world.get::<jackdaw_scene_types::Locked>(source).is_none();
-        set_locked(world, source, locked);
+        let mut command = SetLocked {
+            entity: source,
+            locked,
+        };
+        command.execute(world);
+        world
+            .resource_mut::<CommandHistory>()
+            .push_executed(Box::new(command));
     });
+}
+
+/// Undoable lock or unlock of one node.
+///
+/// The lock is document data, so it belongs on the undo stack beside every
+/// other document edit. Recording nothing left it under the snapshot history
+/// instead: Ctrl+Z after locking undid whatever came before the lock, and the
+/// next unrelated undo restored a state taken before it and flipped the lock
+/// back.
+struct SetLocked {
+    entity: Entity,
+    locked: bool,
+}
+
+impl EditorCommand for SetLocked {
+    fn execute(&mut self, world: &mut World) {
+        set_locked(world, self.entity, self.locked);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        set_locked(world, self.entity, !self.locked);
+    }
+
+    fn description(&self) -> &str {
+        if self.locked { "Lock" } else { "Unlock" }
+    }
 }
 
 /// Put `entity` in or out of the canvas's reach, in the ECS and in the

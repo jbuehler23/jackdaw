@@ -29,7 +29,9 @@ use jackdaw::selection::Selection;
 use jackdaw::viewport_2d::{Viewport2dPanelHost, build_viewport_2d_panel};
 use jackdaw_feathers::tokens::TOOLBAR_HEIGHT;
 use jackdaw_scene_types::{Locked, UiSceneRoot};
-use jackdaw_widgets::tree_view::{TreeNode, TreeRowClicked, TreeRowContent, TreeRowLockToggle};
+use jackdaw_widgets::tree_view::{
+    TreeNode, TreeRowClicked, TreeRowContent, TreeRowLockToggle, TreeRowLockToggled,
+};
 
 const REFERENCE: UVec2 = UVec2::new(2400, 1200);
 
@@ -368,6 +370,75 @@ fn a_lock_survives_a_save_and_a_reload() {
     assert!(
         app.world().get::<Locked>(reloaded).is_some(),
         "the lock is document data, so it comes back with the document",
+    );
+}
+
+fn undo(app: &mut App) {
+    app.world_mut()
+        .resource_scope(|world, mut history: Mut<jackdaw::commands::CommandHistory>| {
+            history.undo(world)
+        });
+    settle(app);
+}
+
+fn is_locked(app: &App, entity: Entity) -> bool {
+    app.world().get::<Locked>(entity).is_some()
+}
+
+/// Toggle the lock the way the row's padlock does.
+fn toggle_lock(app: &mut App, entity: Entity) {
+    app.world_mut().trigger(TreeRowLockToggled {
+        entity,
+        source_entity: entity,
+    });
+    settle(app);
+}
+
+/// The lock is document data, so it belongs on the undo stack: without an
+/// entry of its own, Ctrl+Z after locking undid whatever came before instead.
+#[test]
+fn undo_after_locking_unlocks() {
+    let mut app = util::editor_test_app();
+    let _panel = panel(&mut app);
+    let root = root(&mut app);
+    let node = child(&mut app, root, "Backdrop", 0.0, 0.0, 400.0, 400.0);
+    settle(&mut app);
+
+    toggle_lock(&mut app, node);
+    assert!(is_locked(&app, node), "the padlock locked it");
+
+    undo(&mut app);
+    assert!(!is_locked(&app, node), "and one undo unlocks it");
+}
+
+/// Recording nothing also left the lock under the snapshot history, where the
+/// next unrelated undo restored a state taken before the lock and flipped it
+/// back.
+#[test]
+fn an_unrelated_undo_leaves_the_lock_alone() {
+    let mut app = util::editor_test_app();
+    let _panel = panel(&mut app);
+    let root = root(&mut app);
+    let node = child(&mut app, root, "Backdrop", 0.0, 0.0, 400.0, 400.0);
+    let other = child(&mut app, root, "Card", 500.0, 0.0, 100.0, 100.0);
+    settle(&mut app);
+
+    toggle_lock(&mut app, node);
+    let before = app.world().get::<Node>(other).expect("a node").clone();
+    let mut after = before.clone();
+    after.left = px(600.0);
+    jackdaw::commands::push_layout_edit(app.world_mut(), other, before, after);
+    settle(&mut app);
+
+    undo(&mut app);
+    assert_eq!(
+        app.world().get::<Node>(other).expect("a node").left,
+        px(500.0),
+        "the undo took the edit that came after the lock",
+    );
+    assert!(
+        is_locked(&app, node),
+        "and left the lock where the author set it",
     );
 }
 
