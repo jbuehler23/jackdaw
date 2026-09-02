@@ -20,6 +20,7 @@ use crate::entity_ops::{
     TransformReset, camera_snapped_rotation_axes, can_act_on_entities, nudge_selected,
     reset_transform_selected, rotate_selected,
 };
+use jackdaw_api_internal::lifecycle::ActiveModalQuery;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TransformResetPositionOp>()
@@ -296,10 +297,40 @@ fn ui_nudge_direction(offset_direction: Vec3) -> Option<Vec2> {
     }
 }
 
+/// `is_available` for the nudge ops: everything [`can_act_on_entities`]
+/// asks, under a bare key and no other.
+///
+/// `bevy_enhanced_input` matches a binding on the modifiers it *names* and
+/// says nothing about the ones it does not, so a binding on a bare arrow
+/// answers Ctrl+Arrow too. Ctrl+Arrow is the outliner's reorder and
+/// Alt+Arrow the 90-degree rotate, and both of them moved the selection
+/// twice: once the way the chord asked, once a grid step sideways.
+pub(crate) fn can_nudge(
+    keybind_focus: crate::keybind_focus::KeybindFocus,
+    active: ActiveModalQuery,
+    modal: Res<crate::modal_transform::ModalTransformState>,
+    draw_state: Res<crate::draw_brush::DrawBrushState>,
+    edit_mode: Res<crate::brush::EditMode>,
+    panel_focus: crate::panel_focus::PanelFocus,
+    keyboard: Res<ButtonInput<KeyCode>>,
+) -> bool {
+    if crate::draw_brush::unwanted_modifier(&keyboard, false) {
+        return false;
+    }
+    can_act_on_entities(
+        keybind_focus,
+        active,
+        modal,
+        draw_state,
+        edit_mode,
+        panel_focus,
+    )
+}
+
 #[operator(
     id = "transform.nudge_x_neg",
     label = "Nudge -X",
-    is_available = can_act_on_entities
+    is_available = can_nudge
 )]
 fn transform_nudge_x_neg(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| nudge_by_axis(world, Vec3::NEG_X));
@@ -309,7 +340,7 @@ fn transform_nudge_x_neg(_: In<OperatorParameters>, mut commands: Commands) -> O
 #[operator(
     id = "transform.nudge_x_pos",
     label = "Nudge +X",
-    is_available = can_act_on_entities
+    is_available = can_nudge
 )]
 fn transform_nudge_x_pos(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| nudge_by_axis(world, Vec3::X));
@@ -319,7 +350,7 @@ fn transform_nudge_x_pos(_: In<OperatorParameters>, mut commands: Commands) -> O
 #[operator(
     id = "transform.nudge_y_neg",
     label = "Nudge -Y",
-    is_available = can_act_on_entities
+    is_available = can_nudge
 )]
 fn transform_nudge_y_neg(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| nudge_by_axis(world, Vec3::NEG_Y));
@@ -329,7 +360,7 @@ fn transform_nudge_y_neg(_: In<OperatorParameters>, mut commands: Commands) -> O
 #[operator(
     id = "transform.nudge_y_pos",
     label = "Nudge +Y",
-    is_available = can_act_on_entities
+    is_available = can_nudge
 )]
 fn transform_nudge_y_pos(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| nudge_by_axis(world, Vec3::Y));
@@ -339,7 +370,7 @@ fn transform_nudge_y_pos(_: In<OperatorParameters>, mut commands: Commands) -> O
 #[operator(
     id = "transform.nudge_z_neg",
     label = "Nudge -Z",
-    is_available = can_act_on_entities
+    is_available = can_nudge
 )]
 fn transform_nudge_z_neg(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| nudge_by_axis(world, Vec3::NEG_Z));
@@ -349,7 +380,7 @@ fn transform_nudge_z_neg(_: In<OperatorParameters>, mut commands: Commands) -> O
 #[operator(
     id = "transform.nudge_z_pos",
     label = "Nudge +Z",
-    is_available = can_act_on_entities
+    is_available = can_nudge
 )]
 fn transform_nudge_z_pos(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| nudge_by_axis(world, Vec3::Z));

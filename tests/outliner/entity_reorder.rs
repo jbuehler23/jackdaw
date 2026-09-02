@@ -935,3 +935,64 @@ fn the_drop_line_is_drawn_at_the_gap_it_marks_on_a_hidpi_screen() {
         drawn.min.x,
     );
 }
+
+/// Ctrl+Up reorders and nothing else.
+///
+/// The chord is pressed through the window's own key stream because the
+/// fault only exists there: `bevy_enhanced_input` matches a binding on the
+/// modifiers it names and ignores the rest, so the bare-arrow nudge answered
+/// Ctrl+Arrow as well and the entity moved a grid step sideways on its way
+/// up the list. A call by hand reaches one operator and would never show it.
+#[test]
+fn ctrl_up_reorders_without_nudging() {
+    use bevy::window::{PrimaryWindow, WindowResolution};
+    use jackdaw::test_input::SyntheticInput;
+
+    let mut app = util::editor_test_app();
+    {
+        let mut windows = app
+            .world_mut()
+            .query_filtered::<&mut Window, With<PrimaryWindow>>();
+        let mut window = windows
+            .single_mut(app.world_mut())
+            .expect("headless apps still have a primary window");
+        window.resolution = WindowResolution::new(1600, 1000);
+    }
+    let (column, children) = column_of_three(&mut app);
+    app.world_mut()
+        .entity_mut(children[2])
+        .insert(Transform::default());
+    jackdaw::selection::select_only(app.world_mut(), children[2]);
+    for _ in 0..8 {
+        app.update();
+    }
+    let before = *app
+        .world()
+        .get::<Transform>(children[2])
+        .expect("the third child has a transform");
+
+    let dispatched =
+        jackdaw::boot_ops::run_op_clause(app.world_mut(), "input.key key=ArrowUp mods=ctrl")
+            .expect("the clause dispatches");
+    assert_eq!(dispatched, OperatorResult::Finished);
+    for _ in 0..600 {
+        app.update();
+        if app.world().resource::<SyntheticInput>().is_idle() {
+            break;
+        }
+    }
+    for _ in 0..8 {
+        app.update();
+    }
+
+    assert_eq!(
+        ecs_order(app.world(), column),
+        vec!["First", "Third", "Second"],
+        "Ctrl+Up moves the selection up its parent's list",
+    );
+    assert_eq!(
+        app.world().get::<Transform>(children[2]).copied(),
+        Some(before),
+        "and moves it nowhere in space",
+    );
+}

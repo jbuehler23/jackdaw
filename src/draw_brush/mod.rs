@@ -490,7 +490,7 @@ pub struct StartDrawBrushCutAction;
 /// key answers a chord built on that key as well. Ctrl+C is the editor's
 /// copy; without this it also started a cut brush, and every entity
 /// operator refuses to run behind the modal that left standing.
-fn unwanted_modifier(keyboard: &ButtonInput<KeyCode>, alt_is_wanted: bool) -> bool {
+pub(crate) fn unwanted_modifier(keyboard: &ButtonInput<KeyCode>, alt_is_wanted: bool) -> bool {
     keyboard.any_pressed([
         KeyCode::ControlLeft,
         KeyCode::ControlRight,
