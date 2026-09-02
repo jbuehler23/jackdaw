@@ -140,6 +140,7 @@ impl Plugin for HierarchyPlugin {
                     jackdaw_feathers::tree_view::sync_tree_drop_line,
                     jackdaw_feathers::tree_view::spring_load_tree_rows,
                     jackdaw_feathers::tree_view::auto_scroll_tree_on_drag,
+                    jackdaw_feathers::tree_view::cancel_tree_drag_on_escape,
                     watch_selection_for_reveal,
                     drive_reveal_target,
                 )

@@ -272,6 +272,18 @@ pub struct TreeDropLine {
     pub indent: f32,
 }
 
+/// Whether the drag in progress has been called off.
+///
+/// `bevy_picking` has no notion of a cancelled drag: Escape does not stop
+/// the pointer, and the drop still arrives when the button comes up. This
+/// is what a list checks before acting on one, and the drop that reads it
+/// clears it.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreeDragCancelled(
+    /// Set while a drag has been called off and its release is still to come.
+    pub bool,
+);
+
 /// A row the pointer has been resting on during a drag, and for how long.
 ///
 /// Resting over a collapsed parent opens it, so a subtree can be reached
@@ -347,6 +359,7 @@ impl Plugin for TreeViewPlugin {
             .init_resource::<TreeFocused>()
             .init_resource::<TreeDropLine>()
             .init_resource::<TreeSpringLoad>()
+            .init_resource::<TreeDragCancelled>()
             .add_systems(PostUpdate, (maintain_tree_index,));
     }
 }

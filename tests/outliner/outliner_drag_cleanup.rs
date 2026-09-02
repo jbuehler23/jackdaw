@@ -247,3 +247,87 @@ fn a_click_on_the_gap_over_a_row_selects_that_row() {
         "the gap over a row belongs to the row",
     );
 }
+
+/// The colour a row's content is painted, which is what says whether a
+/// drag is still hanging over it.
+fn row_colour(app: &App, content: Entity) -> Color {
+    app.world()
+        .get::<BackgroundColor>(content)
+        .expect("a row paints a background")
+        .0
+}
+
+/// Escape during a drag calls it off: the row it was hanging over is
+/// painted back, no drop line is left drawn, and the release that follows
+/// moves nothing.
+#[test]
+fn escape_during_a_drag_calls_it_off() {
+    let (mut app, panel) = outliner_app();
+    let children = column_of_three(&mut app, panel);
+    settle(&mut app);
+
+    let first = row_content(&mut app, panel, children[0]);
+    let third = row_content(&mut app, panel, children[2]);
+    let from = centre_of(&app, first);
+    let to = centre_of(&app, third);
+    let column = app
+        .world()
+        .get::<ChildOf>(children[0])
+        .expect("the rows have a parent")
+        .parent();
+    let order_before = child_names(&app, column);
+
+    run(
+        &mut app,
+        &format!("input.pointer x={} y={} action=move", from.x, from.y),
+    );
+    run(
+        &mut app,
+        &format!("input.pointer x={} y={} action=press", from.x, from.y),
+    );
+    run(
+        &mut app,
+        &format!("input.pointer x={} y={} action=move", to.x, to.y),
+    );
+    assert_eq!(
+        row_colour(&app, third),
+        jackdaw_feathers::tokens::DROP_TARGET_BG,
+        "the row under the drag is tinted while it is over it",
+    );
+
+    run(&mut app, "input.key key=Escape");
+
+    assert_ne!(
+        row_colour(&app, third),
+        jackdaw_feathers::tokens::DROP_TARGET_BG,
+        "Escape paints the row back",
+    );
+    assert!(
+        app.world().resource::<TreeDropLine>().zone.is_none(),
+        "and leaves no drop line drawn",
+    );
+
+    run(
+        &mut app,
+        &format!("input.pointer x={} y={} action=release", to.x, to.y),
+    );
+    assert_eq!(
+        child_names(&app, column),
+        order_before,
+        "and the release that follows a cancelled drag moves nothing",
+    );
+}
+
+/// The names of an entity's children, in order.
+fn child_names(app: &App, entity: Entity) -> Vec<String> {
+    app.world()
+        .get::<Children>(entity)
+        .map(|children| {
+            children
+                .iter()
+                .filter_map(|child| app.world().get::<Name>(child))
+                .map(|name| name.as_str().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}

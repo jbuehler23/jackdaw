@@ -6,7 +6,7 @@ use bevy::{
 };
 use bevy_monitors::prelude::{MonitorSelf, Mutation, NotifyChanged};
 use jackdaw_widgets::tree_view::{
-    EntityCategory, TreeChildrenPopulated, TreeDropLine, TreeFocused, TreeNode,
+    EntityCategory, TreeChildrenPopulated, TreeDragCancelled, TreeDropLine, TreeFocused, TreeNode,
     TreeNodeExpandToggle, TreeNodeExpanded, TreeRoot, TreeRowChildren, TreeRowClicked,
     TreeRowContent, TreeRowDot, TreeRowDropped, TreeRowDroppedOnRoot, TreeRowInsertZone,
     TreeRowInserted, TreeRowLabel, TreeRowLockToggle, TreeRowLockToggled, TreeRowSelected,
@@ -703,12 +703,14 @@ fn tree_row_content(
             |mut drag_enter: On<Pointer<DragEnter>>,
              mut query: Query<(&mut BackgroundColor, &mut Node), With<TreeRowContent>>,
              parents: Query<&ChildOf>,
-             mut spring: ResMut<TreeSpringLoad>| {
+             mut spring: ResMut<TreeSpringLoad>,
+             mut commands: Commands| {
                 drag_enter.propagate(false);
                 let content = drag_enter.event_target();
                 if let Ok((mut bg, mut node)) = query.get_mut(content) {
                     bg.0 = tokens::DROP_TARGET_BG;
                     node.border = UiRect::left(px(3.0));
+                    commands.entity(content).insert(TreeDropPainted);
                 }
                 if let Ok(&ChildOf(row)) = parents.get(content) {
                     spring.row = Some(row);
@@ -721,7 +723,8 @@ fn tree_row_content(
              mut query: Query<(&mut BackgroundColor, &mut Node), With<TreeRowContent>>,
              selected: Query<(), With<TreeRowSelected>>,
              parents: Query<&ChildOf>,
-             mut spring: ResMut<TreeSpringLoad>| {
+             mut spring: ResMut<TreeSpringLoad>,
+             mut commands: Commands| {
                 drag_leave.propagate(false);
                 if let Ok((mut bg, mut node)) = query.get_mut(drag_leave.event_target()) {
                     bg.0 = if selected.contains(drag_leave.event_target()) {
@@ -730,6 +733,9 @@ fn tree_row_content(
                         ROW_BG
                     };
                     node.border = UiRect::all(px(1.0));
+                    commands
+                        .entity(drag_leave.event_target())
+                        .remove::<TreeDropPainted>();
                 }
                 if let Ok(&ChildOf(row)) = parents.get(drag_leave.event_target())
                     && spring.row == Some(row)
@@ -745,7 +751,8 @@ fn tree_row_content(
              parent_query: Query<&ChildOf>,
              tree_nodes: Query<&TreeNode>,
              mut query: Query<(&mut BackgroundColor, &mut Node), With<TreeRowContent>>,
-             selected_query: Query<(), With<TreeRowSelected>>| {
+             selected_query: Query<(), With<TreeRowSelected>>,
+             mut cancelled: ResMut<TreeDragCancelled>| {
                 drag_drop.propagate(false);
                 let target_content = drag_drop.event_target();
 
@@ -757,6 +764,12 @@ fn tree_row_content(
                         ROW_BG
                     };
                     node.border = UiRect::all(px(1.0));
+                    commands.entity(target_content).remove::<TreeDropPainted>();
+                }
+                // The drag was called off; the release is only the pointer
+                // catching up with a gesture that is already over.
+                if std::mem::take(&mut cancelled.0) {
+                    return;
                 }
 
                 // Resolve both target and dragged to their scene source entities
@@ -984,6 +997,60 @@ fn find_source_entity(
 #[derive(Component)]
 pub struct TreeDropIndicator;
 
+/// Marks a row or a list currently painted for a drag hanging over it.
+///
+/// `DragEnter` paints; `DragLeave` and a drop paint back. A drag called
+/// off part way through raises neither, so without a record of what is
+/// painted the tint has nothing to take it off again. This is that
+/// record, and it is also what says a drag is still live enough to cancel.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct TreeDropPainted;
+
+/// Call off a drag on Escape: paint every tinted row and list back, drop
+/// the line and the rest, and mark the lists so the release that follows
+/// moves nothing.
+///
+/// Escape is read here rather than through the keymap for the reason the
+/// arrow keys are: it is how a gesture in a list is abandoned, not a
+/// command of its own, and the operator that owns Escape elsewhere would
+/// have to know what a tree row is to answer it.
+pub fn cancel_tree_drag_on_escape(
+    keys: Res<ButtonInput<KeyCode>>,
+    painted: Query<Entity, With<TreeDropPainted>>,
+    rows: Query<(), With<TreeRowContent>>,
+    selected: Query<(), With<TreeRowSelected>>,
+    mut colours: Query<&mut BackgroundColor>,
+    mut nodes: Query<&mut Node>,
+    mut line: ResMut<TreeDropLine>,
+    mut spring: ResMut<TreeSpringLoad>,
+    mut cancelled: ResMut<TreeDragCancelled>,
+    mut commands: Commands,
+) {
+    if !keys.just_pressed(KeyCode::Escape) || painted.is_empty() {
+        return;
+    }
+    for entity in &painted {
+        if let Ok(mut colour) = colours.get_mut(entity) {
+            colour.0 = if !rows.contains(entity) {
+                Color::NONE
+            } else if selected.contains(entity) {
+                tokens::SELECTED_BG
+            } else {
+                ROW_BG
+            };
+        }
+        if rows.contains(entity)
+            && let Ok(mut node) = nodes.get_mut(entity)
+        {
+            node.border = UiRect::all(px(1.0));
+        }
+        commands.entity(entity).remove::<TreeDropPainted>();
+    }
+    line.zone = None;
+    spring.row = None;
+    cancelled.0 = true;
+}
+
 /// Keep the drop line where [`TreeDropLine`] says, and nowhere when it
 /// says nothing.
 pub fn sync_tree_drop_line(
@@ -1157,13 +1224,18 @@ fn ancestor_tree_root(
 pub fn tree_container_drop_observers() -> impl Bundle {
     (
         observe(
-            |mut drag_enter: On<Pointer<DragEnter>>, mut bg_query: Query<&mut BackgroundColor>| {
+            |mut drag_enter: On<Pointer<DragEnter>>,
+             mut bg_query: Query<&mut BackgroundColor>,
+             mut commands: Commands| {
                 drag_enter.propagate(false);
                 if drag_enter.event_target() != drag_enter.original_event_target() {
                     return;
                 }
                 if let Ok(mut bg) = bg_query.get_mut(drag_enter.event_target()) {
                     bg.0 = tokens::CONTAINER_DROP_TARGET_BG;
+                    commands
+                        .entity(drag_enter.event_target())
+                        .insert(TreeDropPainted);
                 }
             },
         ),
@@ -1171,10 +1243,14 @@ pub fn tree_container_drop_observers() -> impl Bundle {
             |mut drag_leave: On<Pointer<DragLeave>>,
              mut bg_query: Query<&mut BackgroundColor>,
              mut line: ResMut<TreeDropLine>,
-             mut spring: ResMut<TreeSpringLoad>| {
+             mut spring: ResMut<TreeSpringLoad>,
+             mut commands: Commands| {
                 drag_leave.propagate(false);
                 if let Ok(mut bg) = bg_query.get_mut(drag_leave.event_target()) {
                     bg.0 = Color::NONE;
+                    commands
+                        .entity(drag_leave.event_target())
+                        .remove::<TreeDropPainted>();
                 }
                 // The drag has left the tree, so there is nowhere it would
                 // land and nothing it is resting on.
@@ -1187,13 +1263,18 @@ pub fn tree_container_drop_observers() -> impl Bundle {
              mut commands: Commands,
              parent_query: Query<&ChildOf>,
              tree_nodes: Query<&TreeNode>,
-             mut bg_query: Query<&mut BackgroundColor>| {
+             mut bg_query: Query<&mut BackgroundColor>,
+             mut cancelled: ResMut<TreeDragCancelled>| {
                 drag_drop.propagate(false);
                 let container = drag_drop.event_target();
 
                 // Revert background
                 if let Ok(mut bg) = bg_query.get_mut(container) {
                     bg.0 = Color::NONE;
+                    commands.entity(container).remove::<TreeDropPainted>();
+                }
+                if std::mem::take(&mut cancelled.0) {
+                    return;
                 }
 
                 // Resolve the dragged entity to its scene source
