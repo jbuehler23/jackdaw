@@ -62,13 +62,51 @@ const SETTLE_FRAMES: u32 = 90;
 /// reason.
 const GAP_FRAMES: u32 = SETTLE_FRAMES;
 
+/// Overrides the default gap for the run.
+///
+/// A script that only drives the mouse and the keyboard waits a second
+/// and a half between clauses for nothing: the gesture is already held to
+/// the last beat, and no asset is loading. A
+/// menu walk of thirty clauses is the difference between a run of seconds
+/// and a run of a minute. The default is unchanged, so a script that
+/// spawns scenes and screenshots them keeps the budget it was written
+/// against.
+pub const ENV_RUN_OP_GAP: &str = "JACKDAW_RUN_OP_GAP";
+
+/// Longest gap the environment may ask for. A typo should cost a slow
+/// run, not one that never reaches its second clause.
+const MAX_GAP_FRAMES: u32 = 3600;
+
+/// The gap a [`ENV_RUN_OP_GAP`] value names, or [`GAP_FRAMES`] when it
+/// names nothing usable.
+fn gap_frames(raw: Option<&str>) -> u32 {
+    let Some(raw) = raw else {
+        return GAP_FRAMES;
+    };
+    match raw.trim().parse::<u32>() {
+        Ok(frames) => frames.min(MAX_GAP_FRAMES),
+        Err(_) => {
+            warn!("{ENV_RUN_OP_GAP}: {raw:?} is not a frame count; using {GAP_FRAMES}");
+            GAP_FRAMES
+        }
+    }
+}
+
 pub(crate) fn plugin(app: &mut App) {
     if let Some(spec) = std::env::var_os(ENV_RUN_OP).and_then(|v| v.into_string().ok()) {
         let queue = parse_run_ops(&spec);
         if queue.is_empty() {
             warn!("{ENV_RUN_OP} is set but names no operator: {spec:?}");
         }
-        app.insert_resource(BootOpQueue { queue, frames: 0 });
+        app.insert_resource(BootOpQueue {
+            queue,
+            waiting: SETTLE_FRAMES,
+            gap: gap_frames(
+                std::env::var_os(ENV_RUN_OP_GAP)
+                    .and_then(|value| value.into_string().ok())
+                    .as_deref(),
+            ),
+        });
     }
     app.add_systems(
         Update,
@@ -88,7 +126,10 @@ pub struct BootOp {
 #[derive(Resource)]
 struct BootOpQueue {
     queue: Vec<BootOp>,
-    frames: u32,
+    /// Frames still to let pass before the next clause runs.
+    waiting: u32,
+    /// Frames to wait after a clause has run, from [`ENV_RUN_OP_GAP`].
+    gap: u32,
 }
 
 /// Parse a `JACKDAW_RUN_OP` value.
@@ -502,8 +543,7 @@ pub fn run_op_clause_as_user(
     call.call()
 }
 
-/// Count settle frames, then drain the queue one clause every
-/// [`GAP_FRAMES`].
+/// Count settle frames, then drain the queue one clause every gap.
 fn drive_boot_ops(world: &mut World) {
     let Some(queue) = world.get_resource::<BootOpQueue>() else {
         return;
@@ -511,7 +551,6 @@ fn drive_boot_ops(world: &mut World) {
     if queue.queue.is_empty() {
         return;
     }
-    let so_far = queue.frames;
     // A clause that drove the mouse or the keyboard is not finished when
     // its operator returned: the gesture is a list of beats spread over
     // frames (see `crate::test_input`). Holding the count still while
@@ -523,10 +562,13 @@ fn drive_boot_ops(world: &mut World) {
     {
         return;
     }
-    let frames = so_far + 1;
-    world.resource_mut::<BootOpQueue>().frames = frames;
-    if frames < SETTLE_FRAMES || !(frames - SETTLE_FRAMES).is_multiple_of(GAP_FRAMES) {
-        return;
+    {
+        let mut queue = world.resource_mut::<BootOpQueue>();
+        if queue.waiting > 0 {
+            queue.waiting -= 1;
+            return;
+        }
+        queue.waiting = queue.gap;
     }
 
     let op = world.resource_mut::<BootOpQueue>().queue.remove(0);
@@ -542,6 +584,20 @@ mod tests {
 
     fn param(key: &str, value: PropertyValue) -> (String, PropertyValue) {
         (key.to_string(), value)
+    }
+
+    /// The gap is what makes a menu walk of thirty clauses bearable, so
+    /// a script may name it; anything that is not a frame count leaves
+    /// the default in place rather than stalling the run.
+    #[test]
+    fn the_environment_may_shorten_the_gap_between_clauses() {
+        assert_eq!(gap_frames(None), GAP_FRAMES);
+        assert_eq!(gap_frames(Some("6")), 6);
+        assert_eq!(gap_frames(Some(" 12 ")), 12);
+        assert_eq!(gap_frames(Some("0")), 0);
+        assert_eq!(gap_frames(Some("999999")), MAX_GAP_FRAMES);
+        assert_eq!(gap_frames(Some("soon")), GAP_FRAMES);
+        assert_eq!(gap_frames(Some("-4")), GAP_FRAMES);
     }
 
     #[test]
