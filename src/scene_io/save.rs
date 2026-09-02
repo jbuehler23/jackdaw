@@ -835,6 +835,65 @@ fn normalize_derived_button_styles(
     }
 }
 
+/// Take the values a widget writes for itself back out of the document.
+///
+/// Three widgets derive part of their own `Node` rather than storing it, and
+/// one derives its image mode: a progress fill's `width` is the bar's value, a
+/// separator's long axis and `flex_shrink` are the flow it sits in, and a
+/// nine-patch's `NodeImageMode::Sliced` is the border beside it spelled out as
+/// four insets. The document is synced from the live components, so each was
+/// recorded as if the author had typed it -- a second copy of a number the
+/// widget owns, and one that a document edited by hand could disagree with.
+///
+/// What stays is what the author chose: a separator's thickness is the axis
+/// the runtime reads its rule from, so only the axis it overwrites is dropped.
+///
+/// Only fields are removed, never whole patches, and only from the emission
+/// clone: the live components keep their derived values, and the systems in
+/// `jackdaw_widgets_runtime` write them again on the frame the document loads.
+///
+/// Runs last, after the handle pass: re-deriving a patch from its live
+/// component is what put the image mode back.
+fn normalize_runtime_derived_values(world: &World, ast: &mut jackdaw_bsn::SceneBsnAst) {
+    use jackdaw_widgets_runtime::{NineSlice, ProgressFill, Separator};
+
+    let node_path = crate::inspector::node_card::node_type_path();
+    let image_path = <ImageNode as bevy::reflect::TypePath>::type_path();
+    for entity in doc_entities_in_order(ast) {
+        let Ok(entity_ref) = world.get_entity(entity) else {
+            continue;
+        };
+        let Some(node) = ast.ast_for(entity) else {
+            continue;
+        };
+        for path in crate::scene_io::computed_ui_component_paths() {
+            ast.remove_component_patch(node, path);
+        }
+        if entity_ref.contains::<ProgressFill>() {
+            jackdaw_bsn::remove_bsn_field(ast, node, node_path, "width");
+        }
+        if entity_ref.contains::<Separator>() {
+            // The rule runs across the flow, so the axis the runtime fills is
+            // the one the parent's direction names.
+            let along_the_flow = entity_ref
+                .get::<ChildOf>()
+                .and_then(|child_of| world.get::<Node>(child_of.parent()))
+                .is_some_and(|parent| {
+                    matches!(
+                        parent.flex_direction,
+                        FlexDirection::Column | FlexDirection::ColumnReverse
+                    )
+                });
+            let filled = if along_the_flow { "width" } else { "height" };
+            jackdaw_bsn::remove_bsn_field(ast, node, node_path, filled);
+            jackdaw_bsn::remove_bsn_field(ast, node, node_path, "flex_shrink");
+        }
+        if entity_ref.contains::<NineSlice>() {
+            jackdaw_bsn::remove_bsn_field(ast, node, image_path, "image_mode");
+        }
+    }
+}
+
 /// Rewrite `entity`'s existing patch for `component`'s type. Adds no patch, so
 /// a component the document never recorded stays unrecorded.
 fn replace_patch(
@@ -967,6 +1026,7 @@ fn emit_bsn_scene_authored(
     // No kept component references an asset handle: the document already emits
     // faithfully once sparsified.
     if pass.touched.is_empty() {
+        normalize_runtime_derived_values(world, &mut ast);
         return jackdaw_bsn::emit_scene(&ast);
     }
 
@@ -977,6 +1037,7 @@ fn emit_bsn_scene_authored(
     // Re-derive each handle-bearing component patch with the asset context so
     // its handle fields emit reference names or asset paths.
     rederive_handle_patches(world, &mut ast, &registry, parent_path, &pass);
+    normalize_runtime_derived_values(world, &mut ast);
 
     jackdaw_bsn::emit_scene(&ast)
 }
@@ -1133,6 +1194,8 @@ fn emit_bsn_entities_authored(world: &mut World, parent_path: &Path, nodes: &[En
         rederive_handle_patches(world, &mut ast, &registry, parent_path, &pass);
     }
     let added_roots: Vec<Entity> = ast.roots[roots_before..].to_vec();
+
+    normalize_runtime_derived_values(world, &mut ast);
 
     let mut emit_list = added_roots;
     emit_list.extend_from_slice(&clone_nodes);

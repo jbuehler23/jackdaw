@@ -79,24 +79,37 @@ const SKIP_COMPONENT_PATHS: &[&str] = &[
     // `derive_world_asset_root`. Writing it into the document would put a
     // raw asset handle in a file that other machines and the runtime read.
     "bevy_world_serialization::components::WorldAssetRoot",
-    // UI layout output. Bevy recomputes all of it every frame from `Node`, and
-    // `ComputedUiTargetCamera` additionally holds a view-local camera entity
-    // that means nothing in a saved document.
-    "bevy_ui::ui_node::ComputedNode",
-    "bevy_ui::ui_node::ComputedUiTargetCamera",
     // Editor-managed routing, inserted by `route_ui_roots_to_cameras` to aim a
     // UI scene root at its view: the open 2D viewport for an authored root, the
     // 3D viewport for one a world scene imports. It names a camera entity this
     // session spawned, so a saved copy would point at nothing on reload.
     "bevy_ui::ui_node::UiTargetCamera",
-    "bevy_ui::ui_node::ComputedUiRenderTargetInfo",
-    "bevy_ui::stack::ComputedStackIndex",
-    "bevy_ui::ui_transform::UiGlobalTransform",
-    "bevy_ui::measurement::ContentSize",
-    "bevy_text::text::ComputedTextBlock",
-    "bevy_text::text::TextLayoutInfo",
-    "bevy_ui::widget::text::TextNodeFlags",
 ];
+
+/// The UI state bevy computes every frame from `Node` and the text or image
+/// beside it. None of it is authored, and a document that records it reloads
+/// carrying a measurement of the session that saved it.
+///
+/// Spelled through [`TypePath`] rather than written out: the same list held as
+/// strings went stale when `TextLayoutInfo` moved module, and a path that no
+/// longer names anything skips nothing and says nothing.
+///
+/// [`TypePath`]: bevy::reflect::TypePath
+pub fn computed_ui_component_paths() -> [&'static str; 10] {
+    use bevy::reflect::TypePath;
+    [
+        bevy::ui::ComputedNode::type_path(),
+        bevy::ui::ComputedUiTargetCamera::type_path(),
+        bevy::ui::ComputedUiRenderTargetInfo::type_path(),
+        bevy::ui::ComputedStackIndex::type_path(),
+        bevy::ui::UiGlobalTransform::type_path(),
+        bevy::ui::ContentSize::type_path(),
+        bevy::text::ComputedTextBlock::type_path(),
+        bevy::text::TextLayoutInfo::type_path(),
+        bevy::ui::widget::TextNodeFlags::type_path(),
+        bevy::ui::widget::ImageNodeSize::type_path(),
+    ]
+}
 
 /// Paths that override the skip prefixes  -- these are always saved even if
 /// they match a skip prefix.
@@ -145,7 +158,7 @@ pub fn should_skip_component(type_path: &str) -> bool {
             return true;
         }
     }
-    SKIP_COMPONENT_PATHS.contains(&type_path)
+    SKIP_COMPONENT_PATHS.contains(&type_path) || computed_ui_component_paths().contains(&type_path)
 }
 
 /// The editor's component skip policy as a [`jackdaw_bsn::BsnWriterConfig`]
@@ -163,6 +176,9 @@ pub fn editor_writer_config() -> jackdaw_bsn::BsnWriterConfig {
     }
     for path in SKIP_COMPONENT_PATHS {
         config.skip_paths.push((*path).to_string());
+    }
+    for path in computed_ui_component_paths() {
+        config.skip_paths.push(path.to_string());
     }
     for path in ALWAYS_SAVE_PATHS {
         config.always_save_paths.push((*path).to_string());

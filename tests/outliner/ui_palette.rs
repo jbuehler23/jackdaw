@@ -2390,3 +2390,94 @@ fn a_nine_patch_slices_its_image_from_its_border() {
         "the document carries the border it was authored with",
     );
 }
+
+/// A widget that derives part of itself writes those values into its live
+/// components every frame, and the document is synced from those components.
+/// Saving them records a measurement of the session that saved it: a fill
+/// width that is really the bar's value, a separator sized by the flow it
+/// happened to sit in, a nine-patch's border spelled out twice, and bevy's own
+/// per-frame text and image measurements.
+#[test]
+fn a_save_carries_none_of_the_values_a_widget_writes_for_itself() {
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    for id in ["ui.progress", "ui.separator", "ui.nine_patch", "ui.label"] {
+        instantiate_widget(app.world_mut(), id).unwrap_or_else(|err| panic!("{id}: {err}"));
+    }
+    // Far enough for the derived values to have been written and for the
+    // document to have taken them.
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let text =
+        jackdaw::scene_io::emit_bsn_scene_with_inline_assets(app.world_mut(), std::path::Path::new("."));
+    for absent in [
+        "TextLayoutInfo",
+        "ImageNodeSize",
+        "NodeImageMode::Sliced",
+        "flex_shrink",
+        "Val::Percent(50.0)",
+    ] {
+        assert!(
+            !text.contains(absent),
+            "the saved document still carries {absent}:\n{text}",
+        );
+    }
+    assert!(
+        text.contains("jackdaw_widgets_runtime::NineSlice"),
+        "the border itself is authored and stays:\n{text}",
+    );
+}
+
+/// The other half: what is left out has to come back, or the saving is a loss.
+#[test]
+fn a_reloaded_widget_is_given_its_derived_values_again() {
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    for id in ["ui.progress", "ui.separator", "ui.nine_patch"] {
+        instantiate_widget(app.world_mut(), id).unwrap_or_else(|err| panic!("{id}: {err}"));
+    }
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let mut reloaded = round_trip(&mut app);
+    for _ in 0..4 {
+        reloaded.update();
+    }
+
+    let fill = by_name(reloaded.world_mut(), "Fill");
+    assert_eq!(
+        reloaded.world().get::<Node>(fill).expect("a node").width,
+        Val::Percent(50.0),
+        "the fill is sized from the value again",
+    );
+
+    let separator = by_name(reloaded.world_mut(), "Separator");
+    let node = reloaded
+        .world()
+        .get::<Node>(separator)
+        .expect("a node")
+        .clone();
+    assert_eq!(
+        (node.width, node.height, node.flex_shrink),
+        (px(1.0), Val::Percent(100.0), 0.0),
+        "the rule runs across the row it sits in again, at its authored thickness",
+    );
+
+    let patch = by_name(reloaded.world_mut(), "NinePatch");
+    let image = reloaded
+        .world()
+        .get::<ImageNode>(patch)
+        .expect("an image node");
+    assert!(
+        matches!(
+            image.image_mode,
+            bevy::ui::widget::NodeImageMode::Sliced(ref slicer)
+                if slicer.border.min_inset.x == 12.0
+        ),
+        "the border slices the image again: {:?}",
+        image.image_mode,
+    );
+}
