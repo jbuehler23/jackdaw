@@ -135,7 +135,13 @@ fn screen_position_of(app: &mut App, panel: Entity, authored: Vec2) -> Vec2 {
 
 /// Drag an image out of the browser and drop it at an authored point.
 fn drop_image_at(app: &mut App, panel: Entity, authored: Vec2) {
-    app.world_mut().resource_mut::<ActiveAssetDrag>().image = Some(DROPPED.into());
+    drop_path_at(app, panel, authored, DROPPED.into());
+}
+
+/// [`drop_image_at`] for a drag carrying a particular path, which is how the
+/// asset browser hands one over: the file's own, and absolute.
+fn drop_path_at(app: &mut App, panel: Entity, authored: Vec2, path: std::path::PathBuf) {
+    app.world_mut().resource_mut::<ActiveAssetDrag>().image = Some(path);
     let (stage, camera) = app
         .world()
         .get::<Viewport2dPanelHost>(panel)
@@ -188,6 +194,23 @@ fn undo(app: &mut App) {
     app.world_mut()
         .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
     settle(app);
+}
+
+fn redo(app: &mut App) {
+    app.world_mut()
+        .resource_scope(|world, mut history: Mut<CommandHistory>| history.redo(world));
+    settle(app);
+}
+
+/// The scene as a save would write it.
+fn saved(app: &mut App) -> String {
+    jackdaw::scene_io::emit_bsn_scene_with_inline_assets(app.world_mut(), std::path::Path::new("."))
+}
+
+/// Where the node is placed, as the saved document spells it.
+fn placement(app: &App, entity: Entity) -> (PositionType, Val, Val) {
+    let node = app.world().get::<Node>(entity).expect("a node");
+    (node.position_type, node.left, node.top)
 }
 
 /// The image nodes under `parent`, which is what a drop adds to.
@@ -293,5 +316,91 @@ fn a_drop_on_bare_canvas_places_an_image_where_it_landed() {
         image_children(&mut app, root),
         vec![picture],
         "one undo takes the whole drop back",
+    );
+}
+
+/// The browser carries the file's own path, which is absolute. What the
+/// document has to end up with is the project-relative one: an absolute path
+/// is not an approved asset path, so the texture never loads and the save
+/// records an empty image.
+#[test]
+fn a_drop_records_the_project_relative_path_of_the_file_it_carried() {
+    let mut app = util::editor_test_app();
+    let panel = panel(&mut app);
+    let (root, picture, _container) = scene(&mut app);
+    let absolute = jackdaw::entity_ops::get_assets_base_dir()
+        .expect("the editor resolves an assets directory")
+        .join(DROPPED);
+
+    drop_path_at(&mut app, panel, Vec2::new(1400.0, 700.0), absolute);
+
+    let made: Vec<Entity> = image_children(&mut app, root)
+        .into_iter()
+        .filter(|&entity| entity != picture)
+        .collect();
+    assert_eq!(made.len(), 1, "the canvas took one image");
+    assert_eq!(
+        texture_path(&app, made[0]).as_deref(),
+        Some(DROPPED),
+        "the absolute path was reduced to the one the project reads",
+    );
+
+    let text = saved(&mut app);
+    assert!(
+        text.contains(DROPPED),
+        "the saved document carries the texture:\n{text}",
+    );
+}
+
+/// The placement is the other half of what a drop is. It reached the node but
+/// not the document, so a save wrote the palette's default position.
+#[test]
+fn a_canvas_drop_saves_where_it_landed() {
+    let mut app = util::editor_test_app();
+    let panel = panel(&mut app);
+    let _scene = scene(&mut app);
+
+    drop_image_at(&mut app, panel, Vec2::new(1400.0, 700.0));
+
+    let text = saved(&mut app);
+    assert!(
+        text.contains("left: bevy_ui::geometry::Val::Px(1400.0)")
+            && text.contains("top: bevy_ui::geometry::Val::Px(700.0)"),
+        "the saved document places the image where it was dropped:\n{text}",
+    );
+}
+
+/// Undo and redo both have to move the placement. Written outside the entry,
+/// a redo replayed the palette's spawn and left the image at the palette's
+/// default position.
+#[test]
+fn redo_puts_a_dropped_image_back_where_it_landed() {
+    let mut app = util::editor_test_app();
+    let panel = panel(&mut app);
+    let (root, picture, _container) = scene(&mut app);
+
+    drop_image_at(&mut app, panel, Vec2::new(1400.0, 700.0));
+    undo(&mut app);
+    assert_eq!(
+        image_children(&mut app, root),
+        vec![picture],
+        "undo took the whole drop back",
+    );
+
+    redo(&mut app);
+    let made: Vec<Entity> = image_children(&mut app, root)
+        .into_iter()
+        .filter(|&entity| entity != picture)
+        .collect();
+    assert_eq!(made.len(), 1, "redo put the image back");
+    assert_eq!(
+        placement(&app, made[0]),
+        (PositionType::Absolute, px(1400.0), px(700.0)),
+        "and back where it was dropped, not where the palette makes one",
+    );
+    assert_eq!(
+        texture_path(&app, made[0]).as_deref(),
+        Some(DROPPED),
+        "carrying its texture",
     );
 }

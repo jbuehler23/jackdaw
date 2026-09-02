@@ -172,6 +172,44 @@ fn instantiate_at(
     definition_id: &str,
     slot: WidgetSlot,
 ) -> Result<Entity, PaletteError> {
+    let (entity, command) = instantiate_command_at(world, definition_id, slot)?;
+    world.resource_mut::<CommandHistory>().push_executed(command);
+    Ok(entity)
+}
+
+/// Create the widget `definition_id` names inside `parent`, handing the
+/// caller the entry that undoes it rather than recording one.
+///
+/// For a caller whose own command owns the creation: a drop makes the node,
+/// places it, and gives it a texture as one thing the user did, and its
+/// `execute` runs while the history is out of the world for a redo, where
+/// recording anything is impossible. Undoing the returned command takes the
+/// node back the same way an Add does.
+pub fn instantiate_widget_command_under(
+    world: &mut World,
+    definition_id: &str,
+    parent: Option<Entity>,
+) -> Result<(Entity, Box<dyn EditorCommand>), PaletteError> {
+    let root = ui_scene_root(world).ok_or(PaletteError::NoUiScene)?;
+    let parent = match parent {
+        Some(parent) if is_in_ui_scene(world, parent, root) => parent,
+        _ => root,
+    };
+    instantiate_command_at(
+        world,
+        definition_id,
+        WidgetSlot {
+            parent,
+            index: usize::MAX,
+        },
+    )
+}
+
+fn instantiate_command_at(
+    world: &mut World,
+    definition_id: &str,
+    slot: WidgetSlot,
+) -> Result<(Entity, Box<dyn EditorCommand>), PaletteError> {
     let definition = world
         .get_resource::<WidgetRegistry>()
         .and_then(|registry| registry.get(definition_id))
@@ -195,10 +233,7 @@ fn instantiate_at(
             "the widget definition returned no entity".to_string(),
         ));
     };
-    world
-        .resource_mut::<CommandHistory>()
-        .push_executed(Box::new(command));
-    Ok(entity)
+    Ok((entity, Box::new(command)))
 }
 
 /// The node a new widget is parented to: the selection's parent when the

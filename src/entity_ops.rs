@@ -1875,7 +1875,7 @@ pub fn to_asset_path(path: &str) -> String {
 /// Get the absolute path of Bevy's assets directory.
 /// Uses the last-opened `ProjectRoot` if available, then falls back to
 /// the standard `FileAssetReader` lookup (`BEVY_ASSET_ROOT` / `CARGO_MANIFEST_DIR` / exe dir).
-fn get_assets_base_dir() -> Option<std::path::PathBuf> {
+pub fn get_assets_base_dir() -> Option<std::path::PathBuf> {
     // Try ProjectRoot via recent projects config
     if let Some(project_dir) = crate::project::read_last_project() {
         let assets = dunce::simplified(project_dir.as_path()).join("assets");

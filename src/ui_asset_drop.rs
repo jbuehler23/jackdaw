@@ -11,12 +11,11 @@
 //!   absolutely at the point the drop landed on.
 //!
 //! The new image is made through the widget palette, so a dropped image is
-//! the same node the Add menu builds and carries the same name, and the
-//! texture is folded into that one history entry rather than following it
-//! as a second.
+//! the same node the Add menu builds and carries the same name, and its
+//! placement and texture go in the same history entry rather than following
+//! it as a second.
 
 use bevy::{asset::AssetServer, prelude::*};
-use jackdaw_commands::CommandGroup;
 
 use crate::{
     EditorEntity,
@@ -96,8 +95,17 @@ fn is_scene_root(world: &World, entity: Entity) -> bool {
 }
 
 /// Land a dropped image, and say which node it ended up on.
+///
+/// The browser hands over the file's own path, which is absolute. A document
+/// records a texture as the asset path the handle carries, so loading the
+/// absolute path would write a path that resolves on this machine and nowhere
+/// else -- and under Bevy's approved-path rule does not resolve at all, leaving
+/// the saved document with an empty image. [`crate::entity_ops::to_asset_path`]
+/// is what reduces it to the project-relative path both the load and the save
+/// need.
 pub fn drop_image(world: &mut World, path: &str, landing: ImageDrop) -> Option<Entity> {
-    let texture: Handle<Image> = world.resource::<AssetServer>().load(path.to_string());
+    let asset_path = crate::entity_ops::to_asset_path(path);
+    let texture: Handle<Image> = world.resource::<AssetServer>().load(asset_path);
     match landing {
         ImageDrop::Texture(entity) => {
             set_texture(world, entity, texture);
@@ -105,6 +113,71 @@ pub fn drop_image(world: &mut World, path: &str, landing: ImageDrop) -> Option<E
         }
         ImageDrop::Inside(parent) => spawn_image(world, Some(parent), None, texture),
         ImageDrop::Canvas(at) => spawn_image(world, None, Some(at), texture),
+    }
+}
+
+/// One drop that made a node: the node, where it landed, and what it draws.
+///
+/// Making the node is the palette's own command, kept here so undo takes it
+/// back. The placement and the texture are not commands beside it: the palette
+/// respawns the node on redo, so anything addressing the old entity would write
+/// to a node that no longer exists and put the image back at the palette's
+/// default position with no texture on it. Doing all three inside one
+/// `execute` is what makes a redo land where the drop did.
+///
+/// Nothing here touches [`CommandHistory`]: a redo runs `execute` with the
+/// history taken out of the world.
+struct DropImage {
+    parent: Option<Entity>,
+    at: Option<Vec2>,
+    texture: Handle<Image>,
+    /// The palette's entry for the node this drop made.
+    made: Option<Box<dyn EditorCommand>>,
+    /// The node the last `execute` made, for the caller to select.
+    spawned: Option<Entity>,
+}
+
+impl EditorCommand for DropImage {
+    fn execute(&mut self, world: &mut World) {
+        self.spawned = None;
+        let Ok((spawned, made)) =
+            crate::ui_palette::instantiate_widget_command_under(world, IMAGE_WIDGET, self.parent)
+        else {
+            return;
+        };
+        self.made = Some(made);
+
+        if let Some(at) = self.at
+            && let Some(mut node) = world.get_mut::<Node>(spawned)
+        {
+            node.position_type = PositionType::Absolute;
+            node.left = px(at.x);
+            node.top = px(at.y);
+            let value = node.clone();
+            sync_component_to_ast(
+                world,
+                spawned,
+                crate::inspector::node_card::node_type_path(),
+                &value,
+            );
+        }
+        if let Some(mut image) = world.get_mut::<ImageNode>(spawned) {
+            image.image = self.texture.clone();
+            let value = image.clone();
+            sync_component_to_ast(world, spawned, ImageNode::type_path(), &value);
+        }
+        self.spawned = Some(spawned);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        if let Some(mut made) = self.made.take() {
+            made.undo(world);
+        }
+        self.spawned = None;
+    }
+
+    fn description(&self) -> &str {
+        DROP_LABEL
     }
 }
 
@@ -130,55 +203,28 @@ fn set_texture(world: &mut World, entity: Entity, texture: Handle<Image>) {
         .push_executed(Box::new(command));
 }
 
-/// Make a new image node, and fold the texture into the entry the palette
-/// pushed for making it.
+/// Make a new image node, place it, and give it its texture, as one entry.
 ///
-/// The palette records its own entry the moment the node exists, so the
-/// texture is executed after it and the two are taken off the stack and put
-/// back as one: a drop is one thing the user did, and undoing it should
-/// leave neither an untextured node nor a textured one with nothing to be.
+/// A drop that made no node records nothing: there is nothing to undo, and no
+/// half-made node is left outside history for an undo to miss.
 fn spawn_image(
     world: &mut World,
     parent: Option<Entity>,
     at: Option<Vec2>,
     texture: Handle<Image>,
 ) -> Option<Entity> {
-    let spawned = crate::ui_palette::instantiate_widget_under(world, IMAGE_WIDGET, parent).ok()?;
-    let made = world.resource_mut::<CommandHistory>().undo_stack.pop();
-
-    if let Some(at) = at
-        && let Some(mut node) = world.get_mut::<Node>(spawned)
-    {
-        node.position_type = PositionType::Absolute;
-        node.left = px(at.x);
-        node.top = px(at.y);
-        let value = node.clone();
-        sync_component_to_ast(
-            world,
-            spawned,
-            crate::inspector::node_card::node_type_path(),
-            &value,
-        );
-    }
-
-    let before = world
-        .get::<ImageNode>(spawned)
-        .map(|image| image.image.clone())?;
-    let mut command = SetImageTexture {
-        entity: spawned,
-        before,
-        after: texture,
+    let mut command = DropImage {
+        parent,
+        at,
+        texture,
+        made: None,
+        spawned: None,
     };
     command.execute(world);
-
-    let entry: Box<dyn EditorCommand> = match made {
-        Some(made) => Box::new(CommandGroup {
-            commands: vec![made, Box::new(command)],
-            label: DROP_LABEL.to_string(),
-        }),
-        None => Box::new(command),
-    };
-    world.resource_mut::<CommandHistory>().push_executed(entry);
+    let spawned = command.spawned?;
+    world
+        .resource_mut::<CommandHistory>()
+        .push_executed(Box::new(command));
     Some(spawned)
 }
 
