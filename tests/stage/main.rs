@@ -22,3 +22,4 @@ mod ui_layout_presets;
 mod ui_lock;
 mod ui_marquee;
 mod ui_stage_manipulation;
+mod ui_text_edit;

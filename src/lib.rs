@@ -125,6 +125,7 @@ pub mod ui_grouping;
 pub mod ui_layout_presets;
 pub mod ui_palette;
 pub mod ui_stage;
+pub mod ui_text_edit;
 pub mod undo_snapshot;
 pub mod view_modes;
 pub mod view_ops;
@@ -359,6 +360,7 @@ impl Plugin for EditorCorePlugin {
                 viewport_2d::Viewport2dPlugin,
                 viewport_host::ViewportHostPlugin,
                 ui_stage::UiStagePlugin,
+                ui_text_edit::UiTextEditPlugin,
                 preview_context::PreviewContextPlugin,
                 authored_widgets::AuthoredWidgetPlugin,
                 gizmos::TransformGizmosPlugin,

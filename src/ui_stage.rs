@@ -768,6 +768,7 @@ impl Plugin for UiStagePlugin {
             .init_resource::<UiHoverPreselect>()
             .init_resource::<MarqueeSelect>()
             .add_observer(on_stage_press)
+            .add_observer(on_stage_double_press)
             .add_observer(on_stage_hover)
             .add_observer(on_stage_leave)
             .add_observer(on_marquee_start)
@@ -1650,6 +1651,60 @@ fn on_stage_press(
     }
 }
 
+/// A second press on a node carrying text opens an entry over it.
+///
+/// The count comes off the press itself rather than off a timer of this
+/// module's own, so the canvas agrees with every other double click in the
+/// editor about what one is.
+///
+/// The press that carried the count has already selected the node, so the
+/// entry opens over what the user is looking at either way.
+fn on_stage_double_press(
+    event: On<Pointer<Press>>,
+    ui_scale: Res<UiScale>,
+    overlays: Query<&UiSelectionOverlay>,
+    handles: Query<(), With<UiResizeHandle>>,
+    hosts: Query<(Entity, &Viewport2dPanelHost)>,
+    stages: Query<(&ComputedNode, &UiGlobalTransform), With<Scene2dViewport>>,
+    roots: Query<(Entity, &UiTargetCamera), AuthoredUiSceneRoot>,
+    nodes: AuthoredNodes,
+    children: Query<&Children>,
+    mut commands: Commands,
+) {
+    if event.button != PointerButton::Primary || event.count < 2 {
+        return;
+    }
+    let target = event.event_target();
+    if handles.contains(target) {
+        return;
+    }
+    let panel = match overlays.get(target) {
+        Ok(overlay) => Some(overlay.host),
+        Err(_) => hosts
+            .iter()
+            .find(|(_, host)| host.stage == target)
+            .map(|(panel, _)| panel),
+    };
+    let Some((panel, host)) = panel.and_then(|panel| hosts.get(panel).ok()) else {
+        return;
+    };
+    if host.mode != Viewport2dMode::Edit {
+        return;
+    }
+    let Ok(stage) = stages.get(host.stage) else {
+        return;
+    };
+    let cursor = event.pointer_location.position / ui_scale.0;
+    let StagePick::Hit(entity) = hit_at(cursor, host, stage, &roots, &nodes, &children) else {
+        return;
+    };
+    commands.queue(move |world: &mut World| {
+        if crate::ui_text_edit::is_editable_text(world, entity) {
+            crate::ui_text_edit::open_text_editor(world, entity, panel);
+        }
+    });
+}
+
 /// Track the authored node under the cursor, for the pre-select outline.
 ///
 /// The same resolution the press does, on every pointer move: the panel
@@ -2332,6 +2387,20 @@ pub(crate) fn unit_basis_of(world: &World, entity: Entity) -> UnitBasis {
         },
     );
     UnitBasis { parent, viewport }
+}
+
+/// Where `entity`'s box sits on `host`'s stage, in that stage's logical
+/// pixels: the rect a piece of chrome drawn over the node is placed at.
+///
+/// The same mapping the selection outline is placed by, for chrome placed
+/// from an exclusive path rather than from the outline's own pass.
+pub(crate) fn node_overlay_rect(world: &World, entity: Entity, host: Entity) -> Option<Rect> {
+    let host = world.get::<Viewport2dPanelHost>(host)?;
+    let stage = world.get::<ComputedNode>(host.stage)?;
+    let rect = global_node_rect(world, entity)?;
+    let target_scale = target_pixels_per_stage_pixel(stage.size(), host.target_size);
+    let scale = stage_pixels_per_target_pixel(target_scale, stage.inverse_scale_factor());
+    Some(Rect::from_corners(rect.min * scale, rect.max * scale))
 }
 
 /// The lines a gesture on `entity` can land on, in the same offset space
