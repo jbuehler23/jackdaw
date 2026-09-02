@@ -208,6 +208,42 @@ fn insertion_zone(after: bool) -> impl Bundle {
             ..default()
         },
         BackgroundColor(Color::NONE),
+        // A strip covers the top and the bottom third of the row, so two
+        // thirds of every row is a gap. A click there is a click on the
+        // row: without this it would bubble past the row (which has no
+        // click observer of its own) to the container and select nothing,
+        // and only the middle third of the outliner would answer a
+        // pointer.
+        observe(
+            |mut click: On<Pointer<Click>>,
+             mut commands: Commands,
+             parents: Query<&ChildOf>,
+             children: Query<&Children>,
+             tree_nodes: Query<&TreeNode>,
+             contents: Query<(), With<TreeRowContent>>| {
+                if click.event.button != PointerButton::Primary {
+                    return;
+                }
+                click.propagate(false);
+                let Ok(&ChildOf(row)) = parents.get(click.event_target()) else {
+                    return;
+                };
+                let Ok(node) = tree_nodes.get(row) else {
+                    return;
+                };
+                let Some(content) = children
+                    .get(row)
+                    .ok()
+                    .and_then(|children| children.iter().find(|child| contents.contains(*child)))
+                else {
+                    return;
+                };
+                commands.trigger(TreeRowClicked {
+                    entity: content,
+                    source_entity: node.0,
+                });
+            },
+        ),
         // Every move, not only the first: the line has to follow the
         // pointer along the gap, and the level a release would land at
         // changes with the pointer's x without it leaving the zone.
@@ -1111,11 +1147,21 @@ fn ancestor_tree_root(
 }
 
 /// Returns observers for the root tree container to handle deparenting (drop-to-root).
+///
+/// The wash the container paints means "release here and the entity
+/// leaves its parent", so it belongs to the container's own empty space
+/// and nothing else. Pointer events bubble, and the gap strips over every
+/// row stop their `DragLeave` and `DragDrop` but let `DragEnter` through:
+/// painting on a bubbled enter would wash the whole list from a drag that
+/// only crossed a row, and nothing would ever paint it back.
 pub fn tree_container_drop_observers() -> impl Bundle {
     (
         observe(
             |mut drag_enter: On<Pointer<DragEnter>>, mut bg_query: Query<&mut BackgroundColor>| {
                 drag_enter.propagate(false);
+                if drag_enter.event_target() != drag_enter.original_event_target() {
+                    return;
+                }
                 if let Ok(mut bg) = bg_query.get_mut(drag_enter.event_target()) {
                     bg.0 = tokens::CONTAINER_DROP_TARGET_BG;
                 }

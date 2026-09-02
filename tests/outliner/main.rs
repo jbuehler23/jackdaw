@@ -12,6 +12,7 @@ mod entity_clipboard;
 mod entity_reorder;
 mod multi_outliner;
 mod new_scene_kinds;
+mod outliner_drag_cleanup;
 mod outliner_range_select;
 mod outliner_row_icons;
 mod ui_palette;
