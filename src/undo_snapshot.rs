@@ -5,7 +5,7 @@
 //! overlay). That way Ctrl+Z also reverts "I toggled wireframe" or "I
 //! switched to Face mode", matching user expectations.
 //!
-//! The selection rides along too, but by [`SceneNodeId`] rather than by
+//! The selection rides along too, but by scene node id rather than by
 //! entity: the respawn re-mints every entity id, so a recorded `Entity`
 //! would dangle. It is recorded at capture and restored at apply, which is
 //! what makes Ctrl+Z put back what was selected when the undone step was
