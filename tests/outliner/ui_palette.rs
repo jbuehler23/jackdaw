@@ -2481,3 +2481,118 @@ fn a_reloaded_widget_is_given_its_derived_values_again() {
         image.image_mode,
     );
 }
+
+/// The generated children of `entity`.
+fn generated_parts(world: &World, entity: Entity) -> Vec<Entity> {
+    world
+        .get::<Children>(entity)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|&child| {
+            world
+                .get::<jackdaw_widgets_runtime::GeneratedPart>(child)
+                .is_some()
+        })
+        .collect()
+}
+
+/// Picking an option is a caption and a marker moving, not a new menu. A
+/// rebuild throws away the row the pointer is on, taking its focus and its
+/// tab index with it.
+#[test]
+fn choosing_a_dropdown_option_keeps_the_menu_it_was_chosen_from() {
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    let dropdown =
+        instantiate_widget(app.world_mut(), "ui.dropdown").expect("the scene accepts a dropdown");
+    for _ in 0..4 {
+        app.update();
+    }
+    let before = generated_parts(app.world(), dropdown);
+    assert_eq!(before.len(), 1, "the menu is one generated child");
+
+    app.world_mut()
+        .get_mut::<jackdaw_widgets_runtime::Dropdown>(dropdown)
+        .expect("the dropdown keeps its options")
+        .selected = 2;
+    for _ in 0..4 {
+        app.update();
+    }
+
+    assert_eq!(
+        generated_parts(app.world(), dropdown),
+        before,
+        "the same menu is still there",
+    );
+}
+
+/// The same for a radio group, where the rows are what a click lands on.
+#[test]
+fn taking_a_radio_choice_keeps_the_rows_it_was_taken_from() {
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    let group = instantiate_widget(app.world_mut(), "ui.radio_group")
+        .expect("the scene accepts a radio group");
+    for _ in 0..4 {
+        app.update();
+    }
+    let before = generated_parts(app.world(), group);
+    assert_eq!(before.len(), 3, "one row per option");
+
+    app.world_mut()
+        .get_mut::<jackdaw_widgets_runtime::RadioOptions>(group)
+        .expect("the group keeps its options")
+        .selected = 2;
+    for _ in 0..4 {
+        app.update();
+    }
+
+    assert_eq!(
+        generated_parts(app.world(), group),
+        before,
+        "the same rows are still there",
+    );
+    let checked: Vec<usize> = before
+        .iter()
+        .filter(|&&row| app.world().get::<bevy::ui::Checked>(row).is_some())
+        .filter_map(|&row| {
+            app.world()
+                .get::<jackdaw_widgets_runtime::RadioOptionIndex>(row)
+                .map(|index| index.0)
+        })
+        .collect();
+    assert_eq!(checked, vec![2], "and the mark moved to the new choice");
+}
+
+/// An index past the end of the list beside it -- a list shortened by hand, a
+/// binding that overshot -- shows the last tab rather than none.
+#[test]
+fn a_tab_index_past_the_end_shows_the_last_tab() {
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    let tabs = instantiate_widget(app.world_mut(), "ui.tabs").expect("the scene accepts tabs");
+    for _ in 0..4 {
+        app.update();
+    }
+
+    app.world_mut()
+        .get_mut::<jackdaw_widgets_runtime::TabStrip>(tabs)
+        .expect("the strip keeps its labels")
+        .active = 9;
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let second = by_name(app.world_mut(), "SecondPane");
+    let first = by_name(app.world_mut(), "FirstPane");
+    assert_eq!(
+        app.world().get::<Node>(second).expect("a node").display,
+        Display::Flex,
+        "the last tab is the one in front",
+    );
+    assert_eq!(
+        app.world().get::<Node>(first).expect("a node").display,
+        Display::None,
+    );
+}

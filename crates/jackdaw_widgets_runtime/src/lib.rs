@@ -119,9 +119,16 @@ pub struct Progress {
 /// An authored option picker: the list it offers and which of them is chosen.
 ///
 /// The picker's chrome -- the button, the popup, one row per option -- is not
-/// authored. It is rebuilt from this component whenever the options or the
-/// choice change, so editing the list in the inspector redraws the widget, and
-/// a document carries the list rather than the entities that draw it.
+/// authored. It is rebuilt from this component whenever the options change, so
+/// editing the list in the inspector redraws the widget, and a document
+/// carries the list rather than the entities that draw it.
+///
+/// # The `Default` is a persisted contract
+///
+/// A component equal to its default emits as a bare type path, so a document
+/// saying `jackdaw_widgets_runtime::Dropdown` is a document saying "no options,
+/// first one chosen". Changing this `Default` reinterprets every scene already
+/// saved that way, silently. Change the authored value in the palette instead.
 #[derive(Component, Reflect, Debug, Clone, PartialEq, Eq, Default)]
 #[reflect(Component, Default)]
 pub struct Dropdown {
@@ -137,12 +144,19 @@ pub struct Dropdown {
 ///
 /// The entity carrying this is the `RadioGroup`; the rows are chrome rebuilt
 /// from the list, for the same reason a [`Dropdown`]'s popup is.
+///
+/// # The `Default` is a persisted contract
+///
+/// See [`Dropdown`]: a document saying `jackdaw_widgets_runtime::RadioOptions`
+/// and nothing else is saying no choices with the first one taken, and this is
+/// where that reading is fixed.
 #[derive(Component, Reflect, Debug, Clone, PartialEq, Eq, Default)]
 #[reflect(Component, Default)]
 pub struct RadioOptions {
     /// The choices, in the order they are shown.
     pub options: Vec<String>,
-    /// Which choice is taken, as an index into `options`.
+    /// Which choice is taken, as an index into `options`. An index past the
+    /// end is clamped to the last choice when the rows are drawn.
     pub selected: usize,
 }
 
@@ -159,12 +173,20 @@ pub struct RadioOptionIndex(
 /// authored children, in order, and `active` says which of them is shown. A
 /// screen therefore builds a tabbed panel by putting content under the tabs
 /// and nothing else.
+///
+/// # The `Default` is a persisted contract
+///
+/// See [`Dropdown`]: a document saying `jackdaw_widgets_runtime::TabStrip` and
+/// nothing else is saying no labels with the first tab in front, and this is
+/// where that reading is fixed.
 #[derive(Component, Reflect, Debug, Clone, PartialEq, Eq, Default)]
 #[reflect(Component, Default)]
 pub struct TabStrip {
     /// The tab labels, in the order the strip shows them.
     pub labels: Vec<String>,
     /// Which tab is in front, as an index into `labels` and into the panes.
+    /// An index past the end is clamped to the last tab when the strip is
+    /// drawn.
     pub active: usize,
 }
 
@@ -181,8 +203,13 @@ pub struct TabSegment(
 /// but nothing can author usefully: the four insets are almost always the same
 /// number, and that number is the only part a screen changes. This is that
 /// number, written into the image mode beside it.
+///
+/// It requires [`ImageNode`] for the same reason [`TextValue`] requires its
+/// editor: the image mode is the half this writes into, and a document
+/// carrying the border alone has nothing to write it to.
 #[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Default)]
 #[reflect(Component, Default)]
+#[require(ImageNode)]
 pub struct NineSlice {
     /// The inset, in texture pixels, of all four slicing lines.
     pub border: f32,
@@ -195,6 +222,25 @@ pub struct NineSlice {
 /// to throw away from a child the author put there by hand is this.
 #[derive(Component, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GeneratedPart;
+
+/// The list a widget's chrome was last built from.
+///
+/// A rebuild is despawn-and-respawn, which throws away the row the pointer is
+/// on: its focus, its `TabIndex` and its hover state belong to entities that
+/// no longer exist, so clicking an option left the widget with nothing
+/// focused. Only a changed *list* needs new parts; a changed choice is a
+/// caption and a `Checked` marker moving between parts already there. This is
+/// what tells the two apart.
+///
+/// Not [`Reflect`]: chrome is not authored and none of it belongs in a
+/// document.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+struct ChromeBuiltFrom(Vec<String>);
+
+/// Marks the generated menu button whose caption shows a [`Dropdown`]'s
+/// choice, so the caption can be rewritten without rebuilding the menu.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+struct DropdownCaption;
 
 /// Which option a generated [`Dropdown`] row stands for.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,6 +300,17 @@ pub struct AuthoredTextSystems;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AuthoredNodeSystems;
 
+/// The `PostUpdate` systems that rebuild the chrome a list-shaped widget is
+/// drawn from: a dropdown's menu, a radio group's rows, a tab strip's
+/// segments.
+///
+/// Named for the same reason [`AuthoredNodeSystems`] is: a binding that writes
+/// the list or the choice has to be read in the frame it wrote, or the widget
+/// draws the list it held last frame. Whoever composes this crate with a
+/// binding evaluator declares that edge; see `jackdaw_runtime`.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AuthoredChromeSystems;
+
 /// Registers the widget defaults and attaches the self-update observers.
 ///
 /// Add this wherever authored UI is spawned. Whatever spawns that UI is
@@ -287,15 +344,16 @@ impl Plugin for AuthoredWidgetPlugin {
         );
         #[cfg(feature = "feathers")]
         {
+            app.add_systems(Update, (hydrate_button_hover, authored_check_styles));
             app.add_systems(
-                Update,
+                PostUpdate,
                 (
-                    hydrate_button_hover,
-                    authored_check_styles,
                     dropdown_chrome_follows_options,
                     radio_rows_follow_options,
                     tab_chrome_follows_labels,
-                ),
+                )
+                    .in_set(AuthoredChromeSystems)
+                    .before(bevy::ui::UiSystems::Layout),
             );
             app.add_observer(dropdown_option_activated);
             app.add_observer(radio_option_chosen);
@@ -593,8 +651,14 @@ fn authored_slider_self_update(
 /// added to an entity a document loaded.
 #[cfg(feature = "feathers")]
 fn dropdown_chrome_follows_options(
-    dropdowns: Query<(Entity, &Dropdown, Option<&Children>), Changed<Dropdown>>,
+    dropdowns: Query<
+        (Entity, &Dropdown, Option<&Children>, Option<&ChromeBuiltFrom>),
+        Changed<Dropdown>,
+    >,
     generated: Query<(), With<GeneratedPart>>,
+    descendants: Query<&Children>,
+    captions: Query<(), With<DropdownCaption>>,
+    texts: Query<(), With<Text>>,
     mut commands: Commands,
 ) {
     use bevy::feathers::controls::{
@@ -602,18 +666,31 @@ fn dropdown_chrome_follows_options(
     };
     use bevy::feathers::theme::ThemedText;
 
-    for (entity, dropdown, children) in &dropdowns {
+    for (entity, dropdown, children, built) in &dropdowns {
+        let caption = dropdown
+            .options
+            .get(dropdown.selected)
+            .cloned()
+            .unwrap_or_default();
+
+        // A new choice out of the same list is a caption, not a new menu.
+        if built.is_some_and(|built| built.0 == dropdown.options) {
+            if let Some(button) =
+                find_descendant(&descendants, entity, &|child| captions.contains(child))
+                && let Some(text) =
+                    find_descendant(&descendants, button, &|child| texts.contains(child))
+            {
+                commands.entity(text).insert(Text::new(caption));
+            }
+            continue;
+        }
+
         for child in children.into_iter().flatten() {
             if generated.contains(*child) {
                 commands.entity(*child).despawn();
             }
         }
 
-        let caption = dropdown
-            .options
-            .get(dropdown.selected)
-            .cloned()
-            .unwrap_or_default();
         let menu = commands
             .spawn_scene(bsn! { @FeathersMenu })
             .insert((GeneratedPart, ChildOf(entity)))
@@ -624,7 +701,7 @@ fn dropdown_chrome_follows_options(
                     @caption: bsn! { Text({caption}) ThemedText },
                 }
             })
-            .insert(ChildOf(menu));
+            .insert((DropdownCaption, ChildOf(menu)));
         let popup = commands
             .spawn_scene(bsn! { @FeathersMenuPopup })
             .insert(ChildOf(menu))
@@ -638,7 +715,56 @@ fn dropdown_chrome_follows_options(
                 })
                 .insert((DropdownOption(index), ChildOf(popup)));
         }
+        commands
+            .entity(entity)
+            .insert(ChromeBuiltFrom(dropdown.options.clone()));
     }
+}
+
+/// The nearest descendant of `root` that `wanted` accepts, breadth first.
+///
+/// The chrome a widget builds is a scene several levels deep whose inner
+/// entities nothing outside can name, so the parts that have to be found again
+/// are found by walking to them.
+#[cfg(feature = "feathers")]
+fn find_descendant(
+    children: &Query<&Children>,
+    root: Entity,
+    wanted: &dyn Fn(Entity) -> bool,
+) -> Option<Entity> {
+    let mut frontier = vec![root];
+    // The generated scenes are a handful of levels deep; the bound stops a
+    // cycle in the hierarchy rather than bounding anything built here.
+    for _ in 0..8 {
+        let mut next = Vec::new();
+        for entity in frontier {
+            for child in children.get(entity).into_iter().flatten() {
+                if wanted(*child) {
+                    return Some(*child);
+                }
+                next.push(*child);
+            }
+        }
+        if next.is_empty() {
+            return None;
+        }
+        frontier = next;
+    }
+    None
+}
+
+/// Which entry of `entries` an index names, clamped to the last one.
+///
+/// A document can hold an index past the end of the list beside it -- a list
+/// shortened by hand, or a binding that overshot. Clamping shows the last
+/// entry rather than none, and says so once so the mismatch is not silent.
+#[cfg(feature = "feathers")]
+fn clamped_index(index: usize, len: usize, what: &str) -> usize {
+    if len == 0 || index < len {
+        return index;
+    }
+    bevy::log::warn_once!("{what} is set to {index} with only {len} to choose from");
+    len - 1
 }
 
 /// Writes a picked option back into the [`Dropdown`] it belongs to, and says
@@ -700,14 +826,42 @@ fn dropdown_option_activated(
 /// per option, and marks the taken one.
 #[cfg(feature = "feathers")]
 fn radio_rows_follow_options(
-    groups: Query<(Entity, &RadioOptions, Option<&Children>), Changed<RadioOptions>>,
+    groups: Query<
+        (
+            Entity,
+            &RadioOptions,
+            Option<&Children>,
+            Option<&ChromeBuiltFrom>,
+        ),
+        Changed<RadioOptions>,
+    >,
     generated: Query<(), With<GeneratedPart>>,
+    rows: Query<&RadioOptionIndex>,
     mut commands: Commands,
 ) {
     use bevy::feathers::controls::FeathersRadio;
     use bevy::feathers::theme::ThemedText;
 
-    for (entity, group, children) in &groups {
+    for (entity, group, children, built) in &groups {
+        let selected = clamped_index(group.selected, group.options.len(), "a radio group");
+
+        // A new choice out of the same list moves one marker; rebuilding the
+        // rows would throw away the one the user just clicked.
+        if built.is_some_and(|built| built.0 == group.options) {
+            for child in children.into_iter().flatten() {
+                let Ok(row) = rows.get(*child) else {
+                    continue;
+                };
+                let mut row_commands = commands.entity(*child);
+                if row.0 == selected {
+                    row_commands.insert(Checked);
+                } else {
+                    row_commands.remove::<Checked>();
+                }
+            }
+            continue;
+        }
+
         for child in children.into_iter().flatten() {
             if generated.contains(*child) {
                 commands.entity(*child).despawn();
@@ -720,10 +874,13 @@ fn radio_rows_follow_options(
                 }
             });
             row.insert((GeneratedPart, RadioOptionIndex(index), ChildOf(entity)));
-            if index == group.selected {
+            if index == selected {
                 row.insert(Checked);
             }
         }
+        commands
+            .entity(entity)
+            .insert(ChromeBuiltFrom(group.options.clone()));
     }
 }
 
@@ -785,8 +942,13 @@ fn set_chosen_index(world: &mut World, owner: Entity, index: usize) {
 /// the widget's own children and their order is the tab order.
 #[cfg(feature = "feathers")]
 fn tab_chrome_follows_labels(
-    strips: Query<(Entity, &TabStrip, Option<&Children>), Changed<TabStrip>>,
+    strips: Query<
+        (Entity, &TabStrip, Option<&Children>, Option<&ChromeBuiltFrom>),
+        Changed<TabStrip>,
+    >,
     generated: Query<(), With<GeneratedPart>>,
+    descendants: Query<&Children>,
+    segments: Query<&TabSegment>,
     mut nodes: Query<&mut Node>,
     mut commands: Commands,
 ) {
@@ -794,11 +956,29 @@ fn tab_chrome_follows_labels(
     use bevy::feathers::theme::ThemedText;
     use bevy::ui_widgets::RadioGroup;
 
-    for (entity, tabs, children) in &strips {
+    for (entity, tabs, children, built) in &strips {
+        let active = clamped_index(tabs.active, tabs.labels.len(), "a tab strip");
+        let in_place = built.is_some_and(|built| built.0 == tabs.labels);
+
         let mut panes = Vec::new();
         for child in children.into_iter().flatten() {
             if generated.contains(*child) {
-                commands.entity(*child).despawn();
+                if in_place {
+                    // The strip stays: only the segment in front changes.
+                    for segment_entity in descendants.get(*child).into_iter().flatten() {
+                        let Ok(segment) = segments.get(*segment_entity) else {
+                            continue;
+                        };
+                        let mut segment_commands = commands.entity(*segment_entity);
+                        if segment.0 == active {
+                            segment_commands.insert(Checked);
+                        } else {
+                            segment_commands.remove::<Checked>();
+                        }
+                    }
+                } else {
+                    commands.entity(*child).despawn();
+                }
             } else {
                 panes.push(*child);
             }
@@ -808,7 +988,7 @@ fn tab_chrome_follows_labels(
             let Ok(mut node) = nodes.get_mut(*pane) else {
                 continue;
             };
-            let display = if index == tabs.active {
+            let display = if index == active {
                 Display::Flex
             } else {
                 Display::None
@@ -816,6 +996,10 @@ fn tab_chrome_follows_labels(
             if node.display != display {
                 node.display = display;
             }
+        }
+
+        if in_place {
+            continue;
         }
 
         let strip = commands
@@ -841,10 +1025,13 @@ fn tab_chrome_follows_labels(
                 }
             });
             segment.insert((TabSegment(index), ChildOf(strip)));
-            if index == tabs.active {
+            if index == active {
                 segment.insert(Checked);
             }
         }
+        commands
+            .entity(entity)
+            .insert(ChromeBuiltFrom(tabs.labels.clone()));
     }
 }
 
@@ -1372,6 +1559,15 @@ mod tests {
             app.world().resource::<UiTheme>().color(&tokens::BUTTON_BG),
             Color::WHITE,
         );
+    }
+
+    /// A document can carry the border alone; the image mode it writes into
+    /// has to come with it, the way the text value brings its editor.
+    #[test]
+    fn a_nine_slice_brings_an_image_node_with_it() {
+        let mut app = app();
+        let panel = app.world_mut().spawn(NineSlice { border: 8.0 }).id();
+        assert!(app.world().get::<ImageNode>(panel).is_some());
     }
 
     /// A load builds the value through `ReflectDefault`, so the registry has to

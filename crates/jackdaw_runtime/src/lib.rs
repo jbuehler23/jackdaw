@@ -179,6 +179,13 @@ impl Plugin for JackdawPlugin {
             PostUpdate,
             jackdaw_widgets_runtime::AuthoredNodeSystems.after(jackdaw_bind::BindEvaluationSystems),
         );
+        // And for the chrome a bound list or choice is drawn from, so a
+        // dropdown shows the option the binding just picked rather than the
+        // one before it.
+        app.configure_sets(
+            PostUpdate,
+            jackdaw_widgets_runtime::AuthoredChromeSystems.after(jackdaw_bind::BindEvaluationSystems),
+        );
 
         app.init_asset::<JackdawScene>()
             .init_asset_loader::<JackdawSceneLoader>()

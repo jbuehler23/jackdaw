@@ -16,3 +16,4 @@ mod jsn_conversion_commit;
 mod jsn_to_bsn;
 mod scene_reopen;
 mod scenes_swap;
+mod widget_defaults;

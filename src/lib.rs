@@ -345,6 +345,11 @@ impl Plugin for EditorCorePlugin {
                 jackdaw_widgets_runtime::AuthoredNodeSystems
                     .after(jackdaw_bind::BindEvaluationSystems),
             )
+            .configure_sets(
+                PostUpdate,
+                jackdaw_widgets_runtime::AuthoredChromeSystems
+                    .after(jackdaw_bind::BindEvaluationSystems),
+            )
             .add_systems(
                 PostUpdate,
                 jackdaw_bind::evaluate_bindings
