@@ -181,12 +181,18 @@ pub struct GuideLine {
     pub index: usize,
 }
 
-/// The outline drawn around the selected authored UI node in one panel.
+/// The outline drawn around one selected authored UI node in one panel.
 #[derive(Component, Clone, Copy)]
 pub struct UiSelectionOverlay {
     /// The panel content entity carrying this stage's
     /// [`Viewport2dPanelHost`].
     pub host: Entity,
+    /// The authored node this outline is drawn around.
+    pub node: Entity,
+    /// Whether this is the primary selection's outline, which is the one
+    /// carrying the resize handles and the one the gestures are delivered
+    /// to.
+    pub primary: bool,
 }
 
 /// The outline drawn around the authored UI node under the cursor, before
@@ -1709,15 +1715,20 @@ fn on_stage_asset_drop(
 
 /// A second press on a node carrying text opens an entry over it.
 ///
-/// The count comes off the press itself rather than off a timer of this
-/// module's own, so the canvas agrees with every other double click in the
-/// editor about what one is.
+/// The pair is counted against the *authored node* the press landed on,
+/// not against the entity the picking backend handed over. The first
+/// press on an unselected node selects it, and selecting it spawns the
+/// outline over it, so the second press of the same double click lands on
+/// a different entity and arrives carrying a count of one. Counting the
+/// node instead is what makes a double click on something not yet
+/// selected open the entry, which is the gesture a user actually makes.
 ///
-/// The press that carried the count has already selected the node, so the
+/// The press that opened the pair has already selected the node, so the
 /// entry opens over what the user is looking at either way.
 fn on_stage_double_press(
     event: On<Pointer<Press>>,
     ui_scale: Res<UiScale>,
+    time: Res<Time>,
     overlays: Query<&UiSelectionOverlay>,
     handles: Query<(), With<UiResizeHandle>>,
     hosts: Query<(Entity, &Viewport2dPanelHost)>,
@@ -1725,9 +1736,10 @@ fn on_stage_double_press(
     roots: Query<(Entity, &UiTargetCamera), AuthoredUiSceneRoot>,
     nodes: AuthoredNodes,
     children: Query<&Children>,
+    mut last_press: Local<Option<(Entity, f64)>>,
     mut commands: Commands,
 ) {
-    if event.button != PointerButton::Primary || event.count < 2 {
+    if event.button != PointerButton::Primary {
         return;
     }
     let target = event.event_target();
@@ -1752,8 +1764,18 @@ fn on_stage_double_press(
     };
     let cursor = event.pointer_location.position / ui_scale.0;
     let StagePick::Hit(entity) = hit_at(cursor, host, stage, &roots, &nodes, &children) else {
+        *last_press = None;
         return;
     };
+    // A consumed pair resets, so a third press starts a new one rather
+    // than opening the entry again.
+    let now = time.elapsed_secs_f64();
+    let doubled = matches!(*last_press, Some((node, at))
+        if node == entity && now - at < crate::hierarchy::DOUBLE_CLICK_SECS);
+    *last_press = (!doubled).then_some((entity, now));
+    if !doubled {
+        return;
+    }
     commands.queue(move |world: &mut World| {
         if crate::ui_text_edit::is_editable_text(world, entity) {
             crate::ui_text_edit::open_text_editor(world, entity, panel);
@@ -1945,15 +1967,23 @@ fn collect_stage_hits(
     }
 }
 
-/// Keep exactly one overlay per panel being authored, covering the
-/// selected authored node's live rect.
+/// Keep one overlay per selected authored node per panel, covering that
+/// node's live rect.
 ///
-/// The rect is read off the selected entity every frame rather than
-/// cached, so the outline follows layout without anything having to tell
+/// Every selected node is outlined, not only the primary one: a
+/// selection of three that drew one line says the other two are not
+/// selected, and the next chord acts on all three. The primary's outline
+/// is the one that carries the resize handles and the one the gestures
+/// are delivered to; the rest are `Pickable::IGNORE` drawing, so a press
+/// on one falls through to the node under it and reselects, exactly as a
+/// press anywhere else on the canvas does.
+///
+/// The rect is read off each selected entity every frame rather than
+/// cached, so an outline follows layout without anything having to tell
 /// it that layout moved.
 ///
 /// A panel in [`Viewport2dMode::Interact`] has no overlay at all.
-/// Despawning it rather than hiding it leaves the gesture observers
+/// Despawning them rather than hiding them leaves the gesture observers
 /// nothing to fire on, whatever the selection does meanwhile.
 fn sync_selection_overlays(
     mut commands: Commands,
@@ -1964,37 +1994,63 @@ fn sync_selection_overlays(
     overlays: Query<(Entity, &UiSelectionOverlay)>,
     mut nodes: Query<&mut Node>,
 ) {
-    let selected = selection.primary();
+    let primary = selection.primary();
 
     for (host_entity, host) in &hosts {
-        let overlay = overlays
-            .iter()
-            .find(|(_, overlay)| overlay.host == host_entity)
-            .map(|(entity, _)| entity);
-
-        let placement = match (host.mode, selected) {
-            (Viewport2dMode::Edit, Some(entity)) => {
-                overlay_placement(entity, host, &stages, &authored)
-            }
-            _ => Placement::Drop,
+        let wanted: &[Entity] = if host.mode == Viewport2dMode::Edit {
+            &selection.entities
+        } else {
+            &[]
         };
+        // An outline for a node that has left the selection goes, and so
+        // does one drawn for the wrong role: the handles hang off the
+        // primary's overlay, so a change of primary is a respawn.
+        for (entity, overlay) in &overlays {
+            if overlay.host != host_entity {
+                continue;
+            }
+            let keep = wanted.contains(&overlay.node)
+                && overlay.primary == (primary == Some(overlay.node));
+            if !keep && let Ok(mut entity) = commands.get_entity(entity) {
+                entity.despawn();
+            }
+        }
 
-        match placement {
-            Placement::At(rect) => match overlay {
-                Some(overlay) => {
-                    if let Ok(mut node) = nodes.get_mut(overlay) {
-                        place_outline(&mut node, rect);
+        for node in wanted {
+            let is_primary = primary == Some(*node);
+            let overlay = overlays
+                .iter()
+                .find(|(_, overlay)| {
+                    overlay.host == host_entity
+                        && overlay.node == *node
+                        && overlay.primary == is_primary
+                })
+                .map(|(entity, _)| entity);
+
+            match overlay_placement(*node, host, &stages, &authored) {
+                Placement::At(rect) => match overlay {
+                    Some(overlay) => {
+                        if let Ok(mut node) = nodes.get_mut(overlay) {
+                            place_outline(&mut node, rect);
+                        }
                     }
-                }
-                None => spawn_overlay(&mut commands, host_entity, host.stage, rect),
-            },
-            // Nothing to move it to this frame; leave what is on screen.
-            Placement::Hold => {}
-            Placement::Drop => {
-                if let Some(overlay) = overlay
-                    && let Ok(mut entity) = commands.get_entity(overlay)
-                {
-                    entity.despawn();
+                    None => spawn_overlay(
+                        &mut commands,
+                        host_entity,
+                        host.stage,
+                        rect,
+                        *node,
+                        is_primary,
+                    ),
+                },
+                // Nothing to move it to this frame; leave what is on screen.
+                Placement::Hold => {}
+                Placement::Drop => {
+                    if let Some(overlay) = overlay
+                        && let Ok(mut entity) = commands.get_entity(overlay)
+                    {
+                        entity.despawn();
+                    }
                 }
             }
         }
@@ -2059,7 +2115,14 @@ fn overlay_placement(
 /// else. It is [`Pickable::IGNORE`] because it covers the outline body,
 /// and a press on the body is a gesture or a reselection (see
 /// [`on_stage_press`]) that must still reach the overlay underneath.
-fn spawn_overlay(commands: &mut Commands, host: Entity, stage: Entity, rect: Rect) {
+fn spawn_overlay(
+    commands: &mut Commands,
+    host: Entity,
+    stage: Entity,
+    rect: Rect,
+    authored: Entity,
+    primary: bool,
+) {
     let mut node = Node {
         position_type: PositionType::Absolute,
         border: UiRect::all(px(OUTLINE_WIDTH)),
@@ -2069,12 +2132,23 @@ fn spawn_overlay(commands: &mut Commands, host: Entity, stage: Entity, rect: Rec
 
     let overlay = commands
         .spawn((
-            UiSelectionOverlay { host },
+            UiSelectionOverlay {
+                host,
+                node: authored,
+                primary,
+            },
             EditorEntity,
             node,
             BorderColor::all(tokens::ACCENT_BLUE),
             ZIndex(OVERLAY_Z),
-            Pickable::default(),
+            // Only the primary's outline is a thing to press: a press on
+            // any other has to reach the node under it, which is how a
+            // second node in a selection is made the primary.
+            if primary {
+                Pickable::default()
+            } else {
+                Pickable::IGNORE
+            },
             ChildOf(stage),
         ))
         .id();
@@ -2094,6 +2168,10 @@ fn spawn_overlay(commands: &mut Commands, host: Entity, stage: Entity, rect: Rec
         Pickable::IGNORE,
         ChildOf(overlay),
     ));
+
+    if !primary {
+        return;
+    }
 
     for (x, y) in HANDLE_POSITIONS {
         commands.spawn((

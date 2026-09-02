@@ -3910,13 +3910,18 @@ fn pointer_at<E: std::fmt::Debug + Clone + Reflect>(
     ));
 }
 
+/// The primary selection's overlay: the one carrying the handles, and the
+/// one every gesture is delivered to. Each selected node is outlined, so a
+/// multi-selection has this one and a plain outline per other node.
 fn overlay_node(app: &mut App) -> (Entity, Node) {
     let overlays: Vec<Entity> = app
         .world_mut()
-        .query_filtered::<Entity, With<UiSelectionOverlay>>()
+        .query::<(Entity, &UiSelectionOverlay)>()
         .iter(app.world())
+        .filter(|(_, overlay)| overlay.primary)
+        .map(|(entity, _)| entity)
         .collect();
-    assert_eq!(overlays.len(), 1, "exactly one overlay per selection");
+    assert_eq!(overlays.len(), 1, "exactly one primary overlay");
     let overlay = overlays[0];
     let node = app
         .world()
@@ -4163,6 +4168,9 @@ fn ctrl_selects_at_the_press_and_inverts_the_magnet_during_the_drag() {
         "the press with Ctrl held added the node under it",
     );
 
+    // The node the press added is the primary now, so the handles moved
+    // to its outline and the gesture belongs there.
+    let (overlay, _) = overlay_node(&mut app);
     drag_authored(
         &mut app,
         panel,

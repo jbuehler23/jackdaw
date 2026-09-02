@@ -307,17 +307,46 @@ fn shift_extends_what_a_click_selected() {
 }
 
 /// A double click on a node carrying text opens the in-place editor over
-/// it.
+/// it, from cold: nothing selected, nothing clicked first.
 ///
-/// The two presses have to reach the same entity for `Pointer<Press>` to
-/// carry a count of two, and the first press on an *unselected* node
-/// spawns the selection outline over it, so the second lands on the
-/// outline and counts as a first press there. The gesture is therefore
-/// the one a user makes on a node they have already selected. That
-/// asymmetry is the editor's, not this operator's: a hand-injected pair
-/// of presses does the same thing.
+/// This is the gesture a user makes, and the one the editor used to
+/// refuse. The first press selects the node, selecting it spawns the
+/// outline over it, and the second press therefore lands on a different
+/// entity and arrives carrying a count of one. The pair is counted
+/// against the authored node under the cursor instead, so the outline
+/// appearing between the two presses is not something the user has to
+/// know about.
 #[test]
-fn a_double_click_opens_the_in_place_editor() {
+fn a_cold_double_click_opens_the_in_place_editor() {
+    let (mut app, _panel) = canvas_app();
+    let node = authored_panel(&mut app);
+    app.world_mut()
+        .entity_mut(node)
+        .insert(Text::new("Button"))
+        .insert(Name::new("Label"));
+    settle(&mut app);
+    assert!(
+        app.world().resource::<Selection>().entities.is_empty(),
+        "nothing is selected before the gesture",
+    );
+
+    run(
+        &mut app,
+        "input.pointer space=canvas x=600 y=300 action=dblclick",
+    );
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::ui_text_edit::TextEditSession>()
+            .editing(),
+        Some(node),
+        "a double click on an unselected node opens the entry over it",
+    );
+}
+
+/// One press is not two: a single click selects and opens nothing, so
+/// the test above is measuring the pair rather than the press.
+#[test]
+fn a_single_click_opens_no_entry() {
     let (mut app, _panel) = canvas_app();
     let node = authored_panel(&mut app);
     app.world_mut()
@@ -330,16 +359,50 @@ fn a_double_click_opens_the_in_place_editor() {
         &mut app,
         "input.pointer space=canvas x=600 y=300 action=click",
     );
-    run(
-        &mut app,
-        "input.pointer space=canvas x=600 y=300 action=dblclick",
+    assert_eq!(
+        app.world().resource::<Selection>().entities,
+        vec![node],
+        "the click selected the node",
     );
     assert_eq!(
         app.world()
             .resource::<jackdaw::ui_text_edit::TextEditSession>()
             .editing(),
-        Some(node),
-        "a double click opens the entry over the node it landed on",
+        None,
+        "and opened no entry",
+    );
+}
+
+/// The entry opens with the whole label selected, so the first thing
+/// typed replaces it rather than joining it.
+///
+/// The selection queued when the entry is spawned does not survive the
+/// focus arriving a frame later, which is why the label used to come out
+/// as `ButtonPlay`.
+#[test]
+fn typing_into_a_freshly_opened_entry_replaces_the_label() {
+    let (mut app, _panel) = canvas_app();
+    let node = authored_panel(&mut app);
+    app.world_mut()
+        .entity_mut(node)
+        .insert(Text::new("Button"))
+        .insert(Name::new("Label"));
+    settle(&mut app);
+
+    run(
+        &mut app,
+        "input.pointer space=canvas x=600 y=300 action=dblclick",
+    );
+    run(&mut app, "input.text text=Play");
+    run(&mut app, "input.key key=Enter");
+
+    assert_eq!(
+        app.world()
+            .get::<Text>(node)
+            .map(|text| text.0.clone())
+            .unwrap_or_default(),
+        "Play",
+        "what was typed replaced what was there",
     );
 }
 
@@ -463,5 +526,261 @@ fn a_click_draws_the_same_selection_chrome_an_operator_does() {
         app.world().resource::<Selection>().entities,
         vec![node],
         "and it is drawn over what the click selected",
+    );
+}
+
+/// A selection of two draws two outlines, and only the primary one
+/// carries the resize handles.
+///
+/// A selection that drew one line said the other node was not selected,
+/// while the next chord acted on both.
+#[test]
+fn every_selected_node_is_outlined_and_the_primary_carries_the_handles() {
+    let (mut app, _panel) = canvas_app();
+    let first = authored_panel(&mut app);
+    let root = app
+        .world()
+        .get::<ChildOf>(first)
+        .expect("the node is in a scene")
+        .parent();
+    let second = app
+        .world_mut()
+        .spawn((
+            Name::new("Second"),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(1200),
+                top: px(600),
+                width: px(300),
+                height: px(200),
+                ..default()
+            },
+            ChildOf(root),
+        ))
+        .id();
+    settle(&mut app);
+
+    run(
+        &mut app,
+        "input.pointer space=canvas x=600 y=300 action=click",
+    );
+    run(
+        &mut app,
+        "input.pointer space=canvas x=1350 y=700 action=click mods=shift",
+    );
+
+    let outlined: Vec<(Entity, bool)> = app
+        .world_mut()
+        .query::<&UiSelectionOverlay>()
+        .iter(app.world())
+        .map(|overlay| (overlay.node, overlay.primary))
+        .collect();
+    assert_eq!(outlined.len(), 2, "one outline per selected node");
+    assert!(
+        outlined.iter().any(|(node, _)| *node == first)
+            && outlined.iter().any(|(node, _)| *node == second),
+        "both selected nodes are outlined: {outlined:?}",
+    );
+    assert_eq!(
+        outlined
+            .iter()
+            .filter(|(_, primary)| *primary)
+            .map(|(node, _)| *node)
+            .collect::<Vec<_>>(),
+        vec![second],
+        "the node the last click landed on is the primary",
+    );
+
+    let primary_overlay = app
+        .world_mut()
+        .query::<(Entity, &UiSelectionOverlay)>()
+        .iter(app.world())
+        .find(|(_, overlay)| overlay.primary)
+        .map(|(entity, _)| entity)
+        .expect("a primary outline is drawn");
+    let handles: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<&ChildOf, With<jackdaw::ui_stage::UiResizeHandle>>()
+        .iter(app.world())
+        .map(bevy::prelude::ChildOf::parent)
+        .collect();
+    assert!(!handles.is_empty(), "the primary has handles");
+    assert!(
+        handles.iter().all(|parent| *parent == primary_overlay),
+        "and no other outline does",
+    );
+}
+
+/// Press a key through the window's own event stream, then run the
+/// numeric-entry reader on the frame the press lands on.
+///
+/// The reader is scheduled inside `EditorInteractionSystems`, which only
+/// runs in the editor state a headless app never enters, so the frame is
+/// driven here and the reader asked for by name -- the same arrangement
+/// `jackdaw::numeric_transform::run_numeric_transform_input` exists for.
+/// The press itself is the real one: `ButtonInput` picked it up from the
+/// window's keyboard stream.
+fn press_and_read(app: &mut App, clause: &str, key: KeyCode) {
+    jackdaw::boot_ops::run_op_clause(app.world_mut(), clause)
+        .expect("the clause dispatches")
+        .assert_finished();
+    for _ in 0..60 {
+        app.update();
+        if app
+            .world()
+            .resource::<ButtonInput<KeyCode>>()
+            .just_pressed(key)
+        {
+            jackdaw::numeric_transform::run_numeric_transform_input(app.world_mut());
+            return;
+        }
+    }
+    panic!("the synthetic press reached ButtonInput");
+}
+
+fn armed_axis(app: &App) -> Option<jackdaw::gizmos::GizmoAxis> {
+    app.world()
+        .resource::<jackdaw::numeric_transform::NumericTransformState>()
+        .axis
+}
+
+/// A letter typed with nothing focused does not arm an axis while the
+/// canvas is what the user is looking at.
+///
+/// X, Y and Z name the axes of a world that has three of them. Typing a
+/// name into a panel that has not taken the keyboard used to spell one
+/// out: `PlayButton` armed Y and put the numeric transform entry on the
+/// status bar.
+#[test]
+fn a_letter_arms_no_axis_while_the_canvas_is_in_front() {
+    let (mut app, _panel) = canvas_app();
+    let node = authored_panel(&mut app);
+    // Selected, so the numeric entry has a target; the pointer over the
+    // canvas is what says which world the keyboard belongs to.
+    app.world_mut().resource_mut::<Selection>().entities = vec![node];
+    settle(&mut app);
+
+    run(
+        &mut app,
+        "input.pointer space=canvas x=600 y=300 action=move",
+    );
+    press_and_read(&mut app, "input.key key=KeyY action=press", KeyCode::KeyY);
+    assert_eq!(
+        armed_axis(&app),
+        None,
+        "the canvas is in front, so Y is a letter",
+    );
+}
+
+/// With the pointer off the canvas and no 2D panel fronted, the same key
+/// still arms the axis: the gate is about which world is in front, not
+/// about taking the chord away.
+#[test]
+fn the_same_letter_still_arms_the_axis_away_from_the_canvas() {
+    let (mut app, _panel) = canvas_app();
+    let node = authored_panel(&mut app);
+    app.world_mut().resource_mut::<Selection>().entities = vec![node];
+    settle(&mut app);
+
+    // Off the panel entirely, into the window's bottom-right corner.
+    run(&mut app, "input.pointer x=1560 y=960 action=move");
+    press_and_read(&mut app, "input.key key=KeyY action=press", KeyCode::KeyY);
+    assert_eq!(
+        armed_axis(&app),
+        Some(jackdaw::gizmos::GizmoAxis::Y),
+        "away from the canvas the chord is the chord it always was",
+    );
+}
+
+/// Ctrl+C copies and Ctrl+V pastes, pressed on the keyboard.
+///
+/// Both used to do nothing on a canvas, and the reason was Ctrl+C: the
+/// draw brush's cut gesture is bound to a bare C, `bevy_enhanced_input`
+/// matches a binding on the modifiers it names and ignores the ones it
+/// does not, so Ctrl+C started a brush too. That modal is one every
+/// entity operator refuses to run behind, and it stayed up.
+#[test]
+fn ctrl_c_copies_and_ctrl_v_pastes_from_the_keyboard() {
+    let (mut app, _panel) = canvas_app();
+    let node = authored_panel(&mut app);
+    let root = app
+        .world()
+        .get::<ChildOf>(node)
+        .expect("the node is in a scene")
+        .parent();
+    app.world_mut().resource_mut::<Selection>().entities = vec![node];
+    settle(&mut app);
+
+    let before = app
+        .world()
+        .get::<Children>(root)
+        .map_or(0, bevy::prelude::Children::len);
+
+    run(&mut app, "input.key key=KeyC mods=ctrl");
+    assert!(
+        !app.world()
+            .resource::<jackdaw::entity_ops::EntityClipboard>()
+            .text
+            .is_empty(),
+        "Ctrl+C filled the clipboard",
+    );
+
+    run(&mut app, "input.key key=KeyV mods=ctrl");
+    assert_eq!(
+        app.world()
+            .get::<Children>(root)
+            .map_or(0, bevy::prelude::Children::len),
+        before + 1,
+        "Ctrl+V landed a copy beside it",
+    );
+}
+
+/// Ctrl+ArrowUp reorders the selection among its siblings.
+///
+/// In the walkthrough this switched the tool to Draw Brush instead. It
+/// was not Ctrl+ArrowUp that did that: the brush modal had been standing
+/// since the Ctrl+C two clauses earlier, and this was the press that
+/// made it visible.
+#[test]
+fn ctrl_arrow_up_reorders_from_the_keyboard() {
+    let (mut app, _panel) = canvas_app();
+    let first = authored_panel(&mut app);
+    let root = app
+        .world()
+        .get::<ChildOf>(first)
+        .expect("the node is in a scene")
+        .parent();
+    let second = app
+        .world_mut()
+        .spawn((
+            Name::new("Second"),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(1200),
+                top: px(600),
+                width: px(300),
+                height: px(200),
+                ..default()
+            },
+            ChildOf(root),
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), second);
+    app.world_mut().resource_mut::<Selection>().entities = vec![second];
+    settle(&mut app);
+
+    let order = |app: &App| -> Vec<Entity> {
+        app.world()
+            .get::<Children>(root)
+            .map(|children| children.iter().collect())
+            .unwrap_or_default()
+    };
+    assert_eq!(order(&app), vec![first, second], "the order to move");
+
+    run(&mut app, "input.key key=ArrowUp mods=ctrl");
+    assert_eq!(
+        order(&app),
+        vec![second, first],
+        "Ctrl+ArrowUp moved the selection up among its siblings",
     );
 }

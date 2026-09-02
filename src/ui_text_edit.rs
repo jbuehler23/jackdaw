@@ -298,6 +298,14 @@ fn follow_focus(world: &mut World) -> bool {
             if let Some(open) = world.resource_mut::<TextEditSession>().open.as_mut() {
                 open.focused = true;
             }
+            // The selection queued when the entry was spawned is spent
+            // before the entry holds the keyboard, and the widget places
+            // its own caret when the focus arrives. Selecting again on
+            // the one frame the focus settles is what makes the first
+            // thing typed replace the label rather than join it.
+            if let Some(mut editable) = world.get_mut::<EditableText>(input) {
+                editable.queue_edit(TextEdit::SelectAll);
+            }
         }
         (false, false) => {
             world

@@ -1624,8 +1624,11 @@ fn on_tree_row_clicked(
     }
 }
 
-/// How long after a row click a second one still reads as a double click.
-const DOUBLE_CLICK_SECS: f64 = 0.4;
+/// How long after a click a second one still reads as a double click.
+///
+/// The editor's one answer to that question, so the outliner and the
+/// canvas agree about what a double click is.
+pub(crate) const DOUBLE_CLICK_SECS: f64 = 0.4;
 
 /// Where a Shift-click's range starts: the row a plain click last landed on.
 ///
