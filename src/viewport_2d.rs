@@ -2373,19 +2373,60 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// Hover as well as the active tab, because a floating or side-by-side
 /// canvas can be under the cursor without being the focused tab, and that
 /// is still the panel the user means.
-fn viewport_2d_is_current(
-    hosts: Query<&Viewport2dPanelHost>,
-    hover_map: Res<HoverMap>,
-    parents: Query<&ChildOf>,
-    tree: Res<jackdaw_panels::tree::DockTree>,
-    contents: Query<(Entity, &jackdaw_panels::area::DockTabContent)>,
-    viewports: Query<&crate::viewport_host::ViewportHost>,
-) -> bool {
-    hosts
-        .iter()
-        .any(|host| entity_is_hovered(host.area, &hover_map, &parents))
-        || focused_viewport_mode(&hover_map, &parents, &tree, &contents, &viewports)
-            == Some(crate::viewport_host::ViewportMode::TwoD)
+fn viewport_2d_is_current(viewport: FrontedViewport) -> bool {
+    viewport.is_two_d()
+}
+
+/// Which of the two viewports the keyboard belongs to.
+///
+/// A `SystemParam` rather than a pair of systems, because most of the
+/// operators that ask are already asking something else -- whether a
+/// modal is running, whether a field has the focus -- and an availability
+/// gate is one system.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct FrontedViewport<'w, 's> {
+    hosts: Query<'w, 's, &'static Viewport2dPanelHost>,
+    hover_map: Res<'w, HoverMap>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    tree: Res<'w, jackdaw_panels::tree::DockTree>,
+    contents: Query<'w, 's, (Entity, &'static jackdaw_panels::area::DockTabContent)>,
+    viewports: Query<'w, 's, &'static crate::viewport_host::ViewportHost>,
+}
+
+impl FrontedViewport<'_, '_> {
+    /// Whether the canvas is what the user is looking at.
+    pub(crate) fn is_two_d(&self) -> bool {
+        self.hosts
+            .iter()
+            .any(|host| entity_is_hovered(host.area, &self.hover_map, &self.parents))
+            || focused_viewport_mode(
+                &self.hover_map,
+                &self.parents,
+                &self.tree,
+                &self.contents,
+                &self.viewports,
+            ) == Some(crate::viewport_host::ViewportMode::TwoD)
+    }
+
+    /// Whether the 3D world is what the user is looking at.
+    ///
+    /// Anything but the canvas: a workspace with no viewport open at all
+    /// still answers yes, so a chord that worked before the canvas
+    /// existed keeps working everywhere it used to.
+    pub(crate) fn is_three_d(&self) -> bool {
+        !self.is_two_d()
+    }
+}
+
+/// True while the 3D world is the one the keyboard belongs to.
+///
+/// The single-letter chords for grabbing, rotating, scaling, constraining
+/// to an axis and drawing a brush all describe something in a world with
+/// three axes and a camera flying through it. On a UI canvas they mean
+/// nothing, and a user typing a name with no field focused would
+/// otherwise arm one of them from the letters of the name.
+pub(crate) fn three_d_world_is_current(viewport: FrontedViewport) -> bool {
+    viewport.is_three_d()
 }
 
 /// Which viewport panel a press belongs to, as the mode that panel is

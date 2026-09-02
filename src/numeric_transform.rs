@@ -185,6 +185,7 @@ fn numeric_transform_input(
     selection: Res<Selection>,
     brush_selection: Res<BrushSelection>,
     keybind_focus: KeybindFocus,
+    viewport: crate::viewport_2d::FrontedViewport,
     modal: Res<ModalTransformState>,
     gizmo_drag: Res<GizmoDragState>,
     edit_gizmo_active: Res<crate::gizmos::EditGizmoDragState>,
@@ -193,8 +194,12 @@ fn numeric_transform_input(
     mut commands: Commands,
 ) {
     // Drop the armed axis entirely when the context can no longer host an
-    // entry: text focus, a running modal op, or no eligible target.
+    // entry: text focus, a running modal op, no eligible target, or a
+    // canvas in front. X, Y and Z name the axes of a world that has
+    // three of them; on the canvas they are three letters of whatever
+    // the user is typing at a panel that never took the focus.
     let hard_reset = keybind_focus.keyboard_is_spoken_for()
+        || viewport.is_two_d()
         || modal.active.is_some()
         || !numeric_entry_eligible(&edit_mode, &selection, &brush_selection);
     if hard_reset {

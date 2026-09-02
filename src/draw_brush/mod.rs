@@ -103,11 +103,18 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 }
 
 /// Draw a new brush in the viewport.
+///
+/// A brush is a solid in the 3D world, so the canvas is not somewhere it
+/// can be drawn. Without the gate, B or C typed with no field focused
+/// starts a modal that every entity operator then refuses to run behind
+/// (`can_act_on_entities`), and the editor stops answering Ctrl+C,
+/// Ctrl+V and the reorder chords with no visible cause.
 #[operator(
     id = "viewport.draw_brush_modal",
     label = "Draw Brush",
     cancel = cancel_draw_brush_modal,
     modal = true,
+    is_available = crate::viewport_2d::three_d_world_is_current,
     params(
         mode(String, default = "Add", doc = "Draw mode: \"Add\" or \"Cut\"."),
         append(bool, default = false, doc = "When true and mode = Add, fold the new brush into the selected one."),
@@ -476,15 +483,35 @@ pub struct StartDrawBrushAddAppendAction;
 #[action_output(bool)]
 pub struct StartDrawBrushCutAction;
 
+/// Whether a key the chord did not ask for is being held.
+///
+/// `bevy_enhanced_input` matches a binding on the modifiers it *names*
+/// and says nothing about the ones it does not, so a binding on a bare
+/// key answers a chord built on that key as well. Ctrl+C is the editor's
+/// copy; without this it also started a cut brush, and every entity
+/// operator refuses to run behind the modal that left standing.
+fn unwanted_modifier(keyboard: &ButtonInput<KeyCode>, alt_is_wanted: bool) -> bool {
+    keyboard.any_pressed([
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+        KeyCode::SuperLeft,
+        KeyCode::SuperRight,
+    ]) || (!alt_is_wanted && keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]))
+}
+
 fn dispatch_start_add_append(
     _: On<Start<StartDrawBrushAddAppendAction>>,
     capture: Option<Res<KeymapCapture>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
 ) {
     // These two chords hang off marker actions rather than off the
     // operator, so the dispatcher's own capture gate never sees them: the
     // recorder would name the chord and start a brush with it.
     if KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
+    if unwanted_modifier(&keyboard, true) {
         return;
     }
     commands
@@ -502,9 +529,14 @@ fn dispatch_start_cut(
     _: On<Start<StartDrawBrushCutAction>>,
     edit_mode: Res<crate::brush::EditMode>,
     capture: Option<Res<KeymapCapture>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
 ) {
     if KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
+    // Bare C, and only bare C: Ctrl+C is copy.
+    if unwanted_modifier(&keyboard, false) {
         return;
     }
     // In a brush edit sub-mode, C opens the mesh quick-menu instead. Starting a
