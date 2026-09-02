@@ -50,7 +50,7 @@
 use bevy::{
     ecs::system::SystemParam,
     picking::{
-        events::{Drag, DragEnd, DragStart, Move, Pointer, Press},
+        events::{Drag, DragDrop, DragEnd, DragStart, Move, Pointer, Press},
         prelude::Pickable,
     },
     prelude::*,
@@ -769,6 +769,7 @@ impl Plugin for UiStagePlugin {
             .init_resource::<MarqueeSelect>()
             .add_observer(on_stage_press)
             .add_observer(on_stage_double_press)
+            .add_observer(on_stage_asset_drop)
             .add_observer(on_stage_hover)
             .add_observer(on_stage_leave)
             .add_observer(on_marquee_start)
@@ -1649,6 +1650,61 @@ fn on_stage_press(
         StagePick::Miss if !extend && !toggle => selection.clear(&mut commands),
         StagePick::Miss | StagePick::Empty => {}
     }
+}
+
+/// Land an asset dragged out of the asset browser on the canvas.
+///
+/// The drop is claimed off the dock the way a press is, and only in
+/// [`Viewport2dMode::Edit`]: in `Interact` the canvas belongs to the
+/// running scene. What the drop means is decided by what is under the
+/// cursor; see [`crate::ui_asset_drop::classify_drop`].
+fn on_stage_asset_drop(
+    mut event: On<Pointer<DragDrop>>,
+    ui_scale: Res<UiScale>,
+    overlays: Query<&UiSelectionOverlay>,
+    hosts: Query<(Entity, &Viewport2dPanelHost)>,
+    stages: Query<(&ComputedNode, &UiGlobalTransform), With<Scene2dViewport>>,
+    roots: Query<(Entity, &UiTargetCamera), AuthoredUiSceneRoot>,
+    nodes: AuthoredNodes,
+    children: Query<&Children>,
+    mut drag: ResMut<crate::asset_browser::ActiveAssetDrag>,
+    mut commands: Commands,
+) {
+    let target = event.event_target();
+    let panel = match overlays.get(target) {
+        Ok(overlay) => Some(overlay.host),
+        Err(_) => hosts
+            .iter()
+            .find(|(_, host)| host.stage == target)
+            .map(|(panel, _)| panel),
+    };
+    let Some((_, host)) = panel.and_then(|panel| hosts.get(panel).ok()) else {
+        return;
+    };
+    if host.mode != Viewport2dMode::Edit {
+        return;
+    }
+    let Some(path) = drag.image.take() else {
+        return;
+    };
+    event.propagate(false);
+    let Ok(stage) = stages.get(host.stage) else {
+        return;
+    };
+    let cursor = event.pointer_location.position / ui_scale.0;
+    let under = match hit_at(cursor, host, stage, &roots, &nodes, &children) {
+        StagePick::Hit(entity) => Some(entity),
+        StagePick::Miss | StagePick::Empty => None,
+    };
+    let at = authored_at(cursor, host, stage);
+    let path = path.to_string_lossy().replace('\\', "/");
+    commands.queue(move |world: &mut World| {
+        let under = under.filter(|&entity| crate::ui_asset_drop::is_authored(world, entity));
+        let landing = crate::ui_asset_drop::classify_drop(world, under, at);
+        if let Some(spawned) = crate::ui_asset_drop::drop_image(world, &path, landing) {
+            crate::selection::select_only(world, spawned);
+        }
+    });
 }
 
 /// A second press on a node carrying text opens an entry over it.

@@ -121,6 +121,7 @@ pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod transform_ops;
 pub mod ui_align;
+pub mod ui_asset_drop;
 pub mod ui_grouping;
 pub mod ui_layout_presets;
 pub mod ui_palette;
