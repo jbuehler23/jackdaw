@@ -114,6 +114,8 @@ fn every_added_widget_shows_its_own_glyph() {
         ("ui.text_input", Icon::TextCursorInput),
         ("ui.scroll_area", Icon::ScrollText),
         ("ui.dropdown", Icon::SquareChevronDown),
+        ("ui.radio_group", Icon::ListChecks),
+        ("ui.tabs", Icon::PanelsTopLeft),
     ];
 
     for (definition, icon) in expected {
@@ -158,6 +160,8 @@ fn the_outliner_glyph_is_the_add_menus_glyph() {
         "ui.text_input",
         "ui.scroll_area",
         "ui.dropdown",
+        "ui.radio_group",
+        "ui.tabs",
     ] {
         let menu_icon = app
             .world()

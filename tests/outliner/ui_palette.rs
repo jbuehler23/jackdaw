@@ -97,6 +97,8 @@ fn the_add_menu_lists_every_built_in_widget() {
         "widget:ui.text_input",
         "widget:ui.scroll_area",
         "widget:ui.dropdown",
+        "widget:ui.radio_group",
+        "widget:ui.tabs",
     ] {
         assert!(
             widget_items.iter().any(|(action, ..)| action == expected),
@@ -2184,4 +2186,150 @@ fn a_dropdown_survives_a_save_and_a_reload() {
         .iter(reloaded.world())
         .count();
     assert_eq!(rows, 3, "and the picker is drawn again from them");
+}
+
+/// A radio group's rows are built from its options, and taking one writes
+/// the choice back the way a checkbox writes its own.
+#[test]
+fn choosing_a_radio_row_writes_the_selection() {
+    use jackdaw_widgets_runtime::{RadioOptionIndex, RadioOptions};
+
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    let group =
+        instantiate_widget(app.world_mut(), "ui.radio_group").expect("the scene takes a group");
+    app.update();
+    app.update();
+
+    let row_of = |app: &mut App, wanted: usize| {
+        app.world_mut()
+            .query::<(Entity, &RadioOptionIndex)>()
+            .iter(app.world())
+            .find_map(|(entity, row)| (row.0 == wanted).then_some(entity))
+            .unwrap_or_else(|| panic!("the group draws a row for option {wanted}"))
+    };
+
+    let first = row_of(&mut app, 0);
+    assert!(
+        app.world().get::<Checked>(first).is_some(),
+        "the authored choice is marked",
+    );
+
+    let second = row_of(&mut app, 1);
+    app.world_mut().trigger(ValueChange {
+        source: group,
+        value: second,
+        is_final: true,
+    });
+    app.update();
+    app.update();
+
+    assert_eq!(
+        app.world().get::<RadioOptions>(group).map(|o| o.selected),
+        Some(1),
+        "the pick is state",
+    );
+    let taken = row_of(&mut app, 1);
+    assert!(
+        app.world().get::<Checked>(taken).is_some(),
+        "and the rebuilt rows mark the new choice",
+    );
+}
+
+/// A tab strip shows the pane its active index names and hides the rest, so
+/// clicking a tab swaps the content under it.
+#[test]
+fn clicking_a_tab_brings_its_pane_to_the_front() {
+    use jackdaw_widgets_runtime::{TabSegment, TabStrip};
+
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    let tabs = instantiate_widget(app.world_mut(), "ui.tabs").expect("the scene takes tabs");
+    app.update();
+    app.update();
+
+    let first = by_name(app.world_mut(), "FirstPane");
+    let second = by_name(app.world_mut(), "SecondPane");
+    let display = |app: &App, pane: Entity| app.world().get::<Node>(pane).map(|node| node.display);
+    assert_eq!(display(&app, first), Some(Display::Flex));
+    assert_eq!(display(&app, second), Some(Display::None));
+
+    let (strip, segment) = app
+        .world_mut()
+        .query::<(Entity, &ChildOf, &TabSegment)>()
+        .iter(app.world())
+        .find_map(|(entity, child_of, segment)| {
+            (segment.0 == 1).then_some((child_of.parent(), entity))
+        })
+        .expect("the strip draws a segment for the second tab");
+    app.world_mut().trigger(ValueChange {
+        source: strip,
+        value: segment,
+        is_final: true,
+    });
+    app.update();
+    app.update();
+
+    assert_eq!(
+        app.world().get::<TabStrip>(tabs).map(|t| t.active),
+        Some(1),
+        "the clicked tab is the active one",
+    );
+    assert_eq!(display(&app, first), Some(Display::None));
+    assert_eq!(display(&app, second), Some(Display::Flex));
+}
+
+/// A tab strip's panes are authored content, so a save carries them and the
+/// strip above them is built again on the other side.
+#[test]
+fn tabs_and_a_radio_group_survive_a_save_and_a_reload() {
+    use jackdaw_widgets_runtime::{RadioOptionIndex, RadioOptions, TabSegment, TabStrip};
+
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    instantiate_widget(app.world_mut(), "ui.radio_group").expect("the scene takes a group");
+    instantiate_widget(app.world_mut(), "ui.tabs").expect("the scene takes tabs");
+
+    let mut reloaded = round_trip(&mut app);
+    reloaded.update();
+    reloaded.update();
+
+    let group = by_name(reloaded.world_mut(), "RadioGroup");
+    assert_eq!(
+        reloaded
+            .world()
+            .get::<RadioOptions>(group)
+            .map(|o| o.options.len()),
+        Some(3),
+    );
+    assert_eq!(
+        reloaded
+            .world_mut()
+            .query::<&RadioOptionIndex>()
+            .iter(reloaded.world())
+            .count(),
+        3,
+        "the rows are drawn again from the options",
+    );
+
+    let tabs = by_name(reloaded.world_mut(), "Tabs");
+    assert_eq!(
+        reloaded
+            .world()
+            .get::<TabStrip>(tabs)
+            .map(|t| t.labels.len()),
+        Some(2),
+    );
+    assert_eq!(
+        reloaded
+            .world_mut()
+            .query::<&TabSegment>()
+            .iter(reloaded.world())
+            .count(),
+        2,
+        "and so is the strip",
+    );
+    for pane in ["FirstPane", "SecondPane"] {
+        by_name(reloaded.world_mut(), pane);
+    }
 }

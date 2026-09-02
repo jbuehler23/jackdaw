@@ -132,6 +132,49 @@ pub struct Dropdown {
     pub selected: usize,
 }
 
+/// An authored set of radio buttons: the choices it offers and which one is
+/// taken.
+///
+/// The entity carrying this is the `RadioGroup`; the rows are chrome rebuilt
+/// from the list, for the same reason a [`Dropdown`]'s popup is.
+#[derive(Component, Reflect, Debug, Clone, PartialEq, Eq, Default)]
+#[reflect(Component, Default)]
+pub struct RadioOptions {
+    /// The choices, in the order they are shown.
+    pub options: Vec<String>,
+    /// Which choice is taken, as an index into `options`.
+    pub selected: usize,
+}
+
+/// Which choice a generated [`RadioOptions`] row stands for.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RadioOptionIndex(
+    /// The index into the group's `options`.
+    pub usize,
+);
+
+/// An authored tab strip: the tab labels and which tab is in front.
+///
+/// The strip of segments is chrome. The panes are not: they are the widget's
+/// authored children, in order, and `active` says which of them is shown. A
+/// screen therefore builds a tabbed panel by putting content under the tabs
+/// and nothing else.
+#[derive(Component, Reflect, Debug, Clone, PartialEq, Eq, Default)]
+#[reflect(Component, Default)]
+pub struct TabStrip {
+    /// The tab labels, in the order the strip shows them.
+    pub labels: Vec<String>,
+    /// Which tab is in front, as an index into `labels` and into the panes.
+    pub active: usize,
+}
+
+/// Which tab a generated [`TabStrip`] segment stands for.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabSegment(
+    /// The index into the strip's `labels`.
+    pub usize,
+);
+
 /// Marks chrome a widget's own system built, as opposed to a node a document
 /// authored.
 ///
@@ -233,9 +276,13 @@ impl Plugin for AuthoredWidgetPlugin {
                     hydrate_button_hover,
                     authored_check_styles,
                     dropdown_chrome_follows_options,
+                    radio_rows_follow_options,
+                    tab_chrome_follows_labels,
                 ),
             );
             app.add_observer(dropdown_option_activated);
+            app.add_observer(radio_option_chosen);
+            app.add_observer(tab_segment_chosen);
         }
     }
 
@@ -286,6 +333,8 @@ pub fn register_widget_defaults(app: &mut App) {
     app.register_type::<Progress>();
     app.register_type::<ProgressFill>();
     app.register_type::<Dropdown>();
+    app.register_type::<RadioOptions>();
+    app.register_type::<TabStrip>();
 
     app.register_type::<Button>()
         .register_type::<Checkbox>()
@@ -627,6 +676,183 @@ fn dropdown_option_activated(
             is_final: true,
         });
     });
+}
+
+/// Builds the rows a [`RadioOptions`] group is drawn from, one feathers radio
+/// per option, and marks the taken one.
+#[cfg(feature = "feathers")]
+fn radio_rows_follow_options(
+    groups: Query<(Entity, &RadioOptions, Option<&Children>), Changed<RadioOptions>>,
+    generated: Query<(), With<GeneratedPart>>,
+    mut commands: Commands,
+) {
+    use bevy::feathers::controls::FeathersRadio;
+    use bevy::feathers::theme::ThemedText;
+
+    for (entity, group, children) in &groups {
+        for child in children.into_iter().flatten() {
+            if generated.contains(*child) {
+                commands.entity(*child).despawn();
+            }
+        }
+        for (index, option) in group.options.iter().enumerate() {
+            let mut row = commands.spawn_scene(bsn! {
+                @FeathersRadio {
+                    @caption: bsn! { Text({option.clone()}) ThemedText },
+                }
+            });
+            row.insert((GeneratedPart, RadioOptionIndex(index), ChildOf(entity)));
+            if index == group.selected {
+                row.insert(Checked);
+            }
+        }
+    }
+}
+
+/// Writes a taken choice back into the [`RadioOptions`] it belongs to.
+///
+/// `bevy_ui_widgets` addresses a radio change to the group and names the
+/// button, so the index has to be looked up from the row that was clicked.
+#[cfg(feature = "feathers")]
+fn radio_option_chosen(
+    change: On<ValueChange<Entity>>,
+    groups: Query<(), With<RadioOptions>>,
+    rows: Query<&RadioOptionIndex>,
+    mut commands: Commands,
+) {
+    if groups.get(change.source).is_err() {
+        return;
+    }
+    let Ok(index) = rows.get(change.value).map(|row| row.0) else {
+        return;
+    };
+    let owner = change.source;
+    commands.queue(move |world: &mut World| set_chosen_index(world, owner, index));
+}
+
+/// Puts `index` into whichever list component `owner` carries and announces
+/// it, unless it is already the one taken.
+///
+/// A radio group and a tab strip differ only in which component holds the
+/// number, and both answer a click the same way.
+#[cfg(feature = "feathers")]
+fn set_chosen_index(world: &mut World, owner: Entity, index: usize) {
+    let Ok(mut entity) = world.get_entity_mut(owner) else {
+        return;
+    };
+    if let Some(mut group) = entity.get_mut::<RadioOptions>() {
+        if group.selected == index {
+            return;
+        }
+        group.selected = index;
+    } else if let Some(mut tabs) = entity.get_mut::<TabStrip>() {
+        if tabs.active == index {
+            return;
+        }
+        tabs.active = index;
+    } else {
+        return;
+    }
+    world.trigger(ValueChange {
+        source: owner,
+        value: index,
+        is_final: true,
+    });
+}
+
+/// Builds the strip of segments a [`TabStrip`] is drawn from, and shows the
+/// pane the active tab names.
+///
+/// The strip is one generated child holding the segments, so the panes stay
+/// the widget's own children and their order is the tab order.
+#[cfg(feature = "feathers")]
+fn tab_chrome_follows_labels(
+    strips: Query<(Entity, &TabStrip, Option<&Children>), Changed<TabStrip>>,
+    generated: Query<(), With<GeneratedPart>>,
+    mut nodes: Query<&mut Node>,
+    mut commands: Commands,
+) {
+    use bevy::feathers::controls::FeathersRadio;
+    use bevy::feathers::theme::ThemedText;
+    use bevy::ui_widgets::RadioGroup;
+
+    for (entity, tabs, children) in &strips {
+        let mut panes = Vec::new();
+        for child in children.into_iter().flatten() {
+            if generated.contains(*child) {
+                commands.entity(*child).despawn();
+            } else {
+                panes.push(*child);
+            }
+        }
+
+        for (index, pane) in panes.iter().enumerate() {
+            let Ok(mut node) = nodes.get_mut(*pane) else {
+                continue;
+            };
+            let display = if index == tabs.active {
+                Display::Flex
+            } else {
+                Display::None
+            };
+            if node.display != display {
+                node.display = display;
+            }
+        }
+
+        let strip = commands
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                },
+                RadioGroup,
+                GeneratedPart,
+                ChildOf(entity),
+            ))
+            .id();
+        // The strip is spawned ahead of the panes it names, which is where a
+        // reader expects a tab bar to be.
+        commands.entity(entity).insert_children(0, &[strip]);
+        for (index, label) in tabs.labels.iter().enumerate() {
+            let mut segment = commands.spawn_scene(bsn! {
+                @FeathersRadio {
+                    @caption: bsn! { Text({label.clone()}) ThemedText },
+                }
+            });
+            segment.insert((TabSegment(index), ChildOf(strip)));
+            if index == tabs.active {
+                segment.insert(Checked);
+            }
+        }
+    }
+}
+
+/// Writes a clicked tab back into the [`TabStrip`] it belongs to.
+///
+/// The `RadioGroup` is the generated strip rather than the widget, so the
+/// change arrives addressed to a child and is carried up one level.
+#[cfg(feature = "feathers")]
+fn tab_segment_chosen(
+    change: On<ValueChange<Entity>>,
+    strips: Query<&ChildOf, With<GeneratedPart>>,
+    owners: Query<(), With<TabStrip>>,
+    segments: Query<&TabSegment>,
+    mut commands: Commands,
+) {
+    let Ok(child_of) = strips.get(change.source) else {
+        return;
+    };
+    let owner = child_of.parent();
+    if owners.get(owner).is_err() {
+        return;
+    }
+    let Ok(index) = segments.get(change.value).map(|segment| segment.0) else {
+        return;
+    };
+    commands.queue(move |world: &mut World| set_chosen_index(world, owner, index));
 }
 
 /// Lays a [`Separator`] across the flow it sits in: a hairline the full width

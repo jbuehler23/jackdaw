@@ -654,7 +654,7 @@ fn world_kind_icons() -> Vec<(String, Icon)> {
 ///
 /// An id with no definition, or a definition with no icon, contributes
 /// nothing, which the outliner icon suite catches.
-fn widget_kind_sources() -> [(String, &'static str); 13] {
+fn widget_kind_sources() -> [(String, &'static str); 15] {
     use bevy::reflect::TypePath;
     use bevy::ui_widgets::{Button, Checkbox, RadioButton, ScrollArea, Slider};
 
@@ -678,6 +678,14 @@ fn widget_kind_sources() -> [(String, &'static str); 13] {
         (
             jackdaw_widgets_runtime::Dropdown::type_path().to_string(),
             "ui.dropdown",
+        ),
+        (
+            jackdaw_widgets_runtime::RadioOptions::type_path().to_string(),
+            "ui.radio_group",
+        ),
+        (
+            jackdaw_widgets_runtime::TabStrip::type_path().to_string(),
+            "ui.tabs",
         ),
         // Before the checkbox: a toggle switch is a `Checkbox` too, and
         // the first rule that matches wins, so the narrower one is asked
@@ -1193,6 +1201,78 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             ))
         })
         .with_icon(Icon::SquareChevronDown),
+        // The group is the `RadioGroup`; the rows are chrome built from the
+        // options, so a document carries the choices and which one is taken.
+        WidgetDefinition::new(
+            "ui.radio_group",
+            "Radio Group",
+            "Controls",
+            |world, context| {
+                Ok(spawn_widget(
+                    world,
+                    context.parent,
+                    (
+                        Name::new("RadioGroup"),
+                        Node {
+                            min_width: px(140),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(4),
+                            ..default()
+                        },
+                        bevy::ui_widgets::RadioGroup,
+                        jackdaw_widgets_runtime::RadioOptions {
+                            options: vec![
+                                "One".to_string(),
+                                "Two".to_string(),
+                                "Three".to_string(),
+                            ],
+                            selected: 0,
+                        },
+                        BackgroundColor(Color::NONE),
+                    ),
+                ))
+            },
+        )
+        .with_icon(Icon::ListChecks),
+        // The one widget whose children are content rather than parts: the
+        // panes are authored, in tab order, and the strip above them is built
+        // from the labels.
+        WidgetDefinition::new("ui.tabs", "Tabs", "Layout", |world, context| {
+            let tabs = spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Tabs"),
+                    Node {
+                        min_width: px(200),
+                        min_height: px(120),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(6),
+                        ..default()
+                    },
+                    jackdaw_widgets_runtime::TabStrip {
+                        labels: vec!["First".to_string(), "Second".to_string()],
+                        active: 0,
+                    },
+                    BackgroundColor(Color::NONE),
+                ),
+            );
+            for name in ["FirstPane", "SecondPane"] {
+                world.spawn((
+                    Name::new(name),
+                    Node {
+                        flex_grow: 1.0,
+                        flex_direction: FlexDirection::Column,
+                        padding: UiRect::all(px(8)),
+                        ..default()
+                    },
+                    ThemeBackgroundColor(feathers_tokens::PANE_BODY_BG),
+                    ChildOf(tabs),
+                ));
+            }
+            Ok(tabs)
+        })
+        .with_icon(Icon::PanelsTopLeft),
     ]
 }
 
