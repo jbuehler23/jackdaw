@@ -138,16 +138,24 @@ struct TooltipState {
 /// tooltip, checked before the hover lookup, so no popover sits under the
 /// cursor over a control the user is operating. The rule lives here
 /// rather than at each `Tooltip` call site.
+///
+/// An open menu blocks it for the same reason. Every operator-backed
+/// dropdown row carries a `Tooltip`, and the popover is placed below the
+/// cursor: resting on a row long enough for one to appear covers the rows
+/// under it, so travelling on down the menu travels under a popover
+/// instead of over the rows.
 fn tick_tooltip(
     time: Res<Time>,
     targets: Query<(Entity, &Tooltip, &Hovered)>,
     window: Single<&Window, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    menus: Option<Res<jackdaw_widgets::menu_bar::MenuBarState>>,
     default_font: Res<crate::icons::FeathersDefaultFont>,
     mut state: ResMut<TooltipState>,
     mut commands: Commands,
 ) {
-    if mouse.get_pressed().next().is_some() {
+    let menu_is_open = menus.is_some_and(|menus| menus.open_menu.is_some());
+    if menu_is_open || mouse.get_pressed().next().is_some() {
         if let Some(active) = state.active.take() {
             commands.entity(active).try_despawn();
         }
@@ -411,6 +419,42 @@ mod tests {
             .press(MouseButton::Left);
         tick(&mut world);
         assert_eq!(popover_count(&mut world), 0, "mouse-down must close it");
+    }
+
+    /// A menu row's tooltip would cover the rows below it, so an open
+    /// menu blocks tooltips outright and closing it re-arms them.
+    #[test]
+    fn an_open_menu_suppresses_the_tooltip_over_its_rows() {
+        let mut world = test_world();
+        world.init_resource::<jackdaw_widgets::menu_bar::MenuBarState>();
+        let row = world
+            .spawn((
+                Tooltip::title("New Scene").with_description("desc"),
+                Hovered(true),
+            ))
+            .id();
+        world
+            .resource_mut::<jackdaw_widgets::menu_bar::MenuBarState>()
+            .open_menu = Some(row);
+
+        advance(&mut world, FULL_HOVER_DELAY * 2);
+        tick(&mut world);
+        assert_eq!(
+            popover_count(&mut world),
+            0,
+            "no popover lands over the rows of an open menu",
+        );
+
+        world
+            .resource_mut::<jackdaw_widgets::menu_bar::MenuBarState>()
+            .open_menu = None;
+        advance(&mut world, SHORT_HOVER_DELAY);
+        tick(&mut world);
+        assert_eq!(
+            popover_count(&mut world),
+            1,
+            "and the same hover is answered once the menu is down",
+        );
     }
 
     /// While a button stays held (the span of a drag-scrub gesture), the
