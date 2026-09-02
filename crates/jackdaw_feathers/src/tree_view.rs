@@ -1,6 +1,7 @@
 use bevy::{
     feathers::{controls::FeathersDisclosureToggle, theme::ThemedText},
     prelude::*,
+    text::LineBreak,
     ui::Checked,
     ui_widgets::{ValueChange, observe},
 };
@@ -650,11 +651,32 @@ fn tree_row_content(
                     font_size: tokens::TEXT_SIZE,
                     ..default()
                 },
+                // One line, and no wider than the room the row has left:
+                // without the zero minimum a long name is the row's
+                // min-content width, which pushes the lock and the eye out
+                // of the panel and squeezes the rename entry to nothing.
+                // `ellipsize_tree_row_labels` cuts what is left over.
+                TextLayout {
+                    linebreak: LineBreak::NoWrap,
+                    ..default()
+                },
                 Node {
                     flex_grow: 1.0,
+                    // A floor rather than nothing: with a zero minimum the
+                    // label is the first thing a narrow panel takes the room
+                    // from, and a row that shows three letters of a name is
+                    // no better than one that shows none. This is the width
+                    // the name, and the rename entry that replaces it, are
+                    // always given.
+                    min_width: px(LABEL_MIN_WIDTH),
+                    overflow: Overflow::clip(),
                     margin: UiRect::left(px(tokens::SPACING_SM)),
                     ..default()
                 },
+                // The tooltip the cut name is read in full from needs the
+                // hover state, and picking only updates a `Hovered` that is
+                // already on the entity.
+                bevy::picking::hover::Hovered::default(),
                 ThemedText,
             ),
             // Lock toggle, then the visibility toggle (eye icon)
@@ -996,6 +1018,119 @@ fn find_source_entity(
 /// between gaps instead of appearing once and staying put.
 #[derive(Component)]
 pub struct TreeDropIndicator;
+
+/// What a row's label really says, beside what it has room to show.
+///
+/// A name too long for the panel is cut down to fit, so the full one has
+/// to be kept somewhere: this is where, and it is also what the tooltip
+/// reads. `shown` is the last text this crate wrote, which is how a name
+/// changed from outside is told apart from the cut this made.
+#[derive(Component, Debug, Clone, Default)]
+pub struct TreeRowLabelFit {
+    /// The name in full.
+    pub full: String,
+    /// The text last written into the label.
+    pub shown: String,
+}
+
+/// The narrowest a row's label is ever laid out, in logical pixels.
+///
+/// Nine or so characters of the editor's body face: enough that a cut name
+/// still says which node it is, and enough for the rename entry that
+/// stands in its place to be typed into and read back.
+const LABEL_MIN_WIDTH: f32 = 64.0;
+
+/// What the ellipsis is written with. Three ASCII dots rather than the
+/// single character, which the icon font has no glyph for.
+const ELLIPSIS: &str = "...";
+
+/// How wide one character is taken to be, as a fraction of the font size.
+///
+/// The label is one line of a proportional face, so this is an estimate
+/// and not a measurement: `TextLayoutInfo` reports the width of the text
+/// that is drawn, which after a cut is the cut text, so measuring what is
+/// drawn cannot say whether the whole name would have fitted. An estimate
+/// that is a little wide cuts a character early; one that is narrow leaves
+/// the tail clipped, which is what this is here to stop.
+const CHAR_WIDTH_RATIO: f32 = 0.55;
+
+/// Cut a row's label down to the room the row gave it, and hang the full
+/// name off it as a tooltip.
+///
+/// Bevy has no ellipsis mode, so the cut is made here. A name that fits is
+/// left exactly as it was written and carries no tooltip: a tooltip
+/// repeating what is already on screen is noise.
+pub fn ellipsize_tree_row_labels(
+    mut labels: Query<
+        (
+            Entity,
+            &mut Text,
+            &ComputedNode,
+            Option<&mut TreeRowLabelFit>,
+        ),
+        With<TreeRowLabel>,
+    >,
+    mut commands: Commands,
+) {
+    for (entity, mut text, computed, fit) in &mut labels {
+        let available = computed.size().x * computed.inverse_scale_factor();
+        if available <= 0.0 {
+            continue;
+        }
+        let full = match fit.as_deref() {
+            // The text is the one this wrote, so the name is whatever it
+            // was cut from; anything else is a fresh write from outside.
+            Some(fit) if fit.shown == text.0 => fit.full.clone(),
+            _ => text.0.clone(),
+        };
+        let budget = (available / (tokens::TEXT_SIZE_PX * CHAR_WIDTH_RATIO)).floor();
+        let budget = if budget.is_finite() && budget > 0.0 {
+            budget as usize
+        } else {
+            0
+        };
+        let wanted = cut_to_fit(&full, budget);
+        if text.0 != wanted {
+            text.0.clone_from(&wanted);
+        }
+        match fit {
+            Some(mut fit) => {
+                fit.full.clone_from(&full);
+                fit.shown.clone_from(&wanted);
+            }
+            None => {
+                commands.entity(entity).insert(TreeRowLabelFit {
+                    full: full.clone(),
+                    shown: wanted.clone(),
+                });
+            }
+        }
+        if wanted == full {
+            commands.entity(entity).remove::<crate::tooltip::Tooltip>();
+        } else {
+            commands
+                .entity(entity)
+                .insert(crate::tooltip::Tooltip::title(full));
+        }
+    }
+}
+
+/// `name` shortened to `budget` characters, ending in [`ELLIPSIS`] when
+/// anything was taken off.
+///
+/// A budget with no room for the ellipsis itself yields as many characters
+/// of the name as there is room for: a row too narrow to say anything
+/// should still say something.
+fn cut_to_fit(name: &str, budget: usize) -> String {
+    if name.chars().count() <= budget {
+        return name.to_string();
+    }
+    if budget <= ELLIPSIS.len() {
+        return name.chars().take(budget).collect();
+    }
+    let kept: String = name.chars().take(budget - ELLIPSIS.len()).collect();
+    format!("{kept}{ELLIPSIS}")
+}
 
 /// Marks a row or a list currently painted for a drag hanging over it.
 ///
