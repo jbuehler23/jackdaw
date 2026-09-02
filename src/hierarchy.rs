@@ -588,6 +588,13 @@ fn spawn_withheld_row(world: &mut World, children_container: Entity, child: Enti
         return;
     }
     spawn_single_tree_row(world, child, children_container);
+    // A withheld row joins the panel whenever its document node turns up,
+    // which for a load is not the order the document lists its children in.
+    // Appending it would leave the panel disagreeing with both the canvas and
+    // the file that was just opened.
+    if let Some(parent) = world.get::<ChildOf>(child).map(ChildOf::parent) {
+        sync_outliner_row_order(world, Some(parent));
+    }
 }
 
 /// Returns true if `entity` has `PrefabEntityId` but NOT `IsA` -- meaning
@@ -1550,6 +1557,17 @@ fn on_tree_node_expanded(
         // Spawn tree rows
         for (child_entity, _name, _category) in child_data {
             spawn_single_tree_row(world, child_entity, container);
+        }
+        // The sort above is the fallback order, for a parent the document has
+        // no say over. Where it does -- an authored node, whose child order is
+        // what the file holds and what the canvas lays out -- that order wins,
+        // or an expansion after a reload shows the rows in an order neither
+        // the file nor the canvas agrees with.
+        if world
+            .get_resource::<jackdaw_bsn::SceneBsnAst>()
+            .is_some_and(|ast| ast.ast_for(source).is_some())
+        {
+            sync_outliner_row_order(world, Some(source));
         }
     });
 }

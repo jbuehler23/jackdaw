@@ -996,3 +996,64 @@ fn ctrl_up_reorders_without_nudging() {
         "and moves it nowhere in space",
     );
 }
+
+/// Rows spawn as their entities arrive, and a load's arrivals are not the
+/// document's order: a child held back waiting for its document node joins the
+/// panel behind siblings registered after it. The outliner then disagreed with
+/// both the canvas and the file it had just opened.
+#[test]
+fn reopening_a_scene_shows_its_children_in_document_order() {
+    let mut app = util::editor_test_app();
+    app.world_mut().insert_resource(HierarchyShowAll(true));
+    let panel = app
+        .world_mut()
+        .spawn((
+            HierarchyTreeContainer,
+            Node::default(),
+            Visibility::Inherited,
+        ))
+        .id();
+    app.update();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("reordered.bsn");
+    run_finished(
+        &mut app,
+        &format!("scene.new ui=true path={}", path.display()),
+    );
+
+    let (column, children) = column_of_three(&mut app);
+    select(&mut app, children[2]);
+    run_finished(&mut app, "entity.move_up");
+    run_finished(&mut app, "scene.save");
+    run_finished(&mut app, &format!("scene.open path={}", path.display()));
+    let _ = column;
+    for _ in 0..8 {
+        app.update();
+    }
+
+    let reloaded = app
+        .world_mut()
+        .query::<(Entity, &Name)>()
+        .iter(app.world())
+        .find(|(_, name)| name.as_str() == "Column")
+        .map(|(entity, _)| entity)
+        .expect("the reloaded scene holds the column");
+    let row = app
+        .world()
+        .resource::<TreeIndex>()
+        .get(panel, reloaded)
+        .expect("the reloaded column has a row");
+    app.world_mut()
+        .entity_mut(row)
+        .insert(jackdaw_widgets::tree_view::TreeNodeExpanded(true));
+    for _ in 0..8 {
+        app.update();
+    }
+
+    assert_eq!(
+        row_order(app.world(), panel, reloaded),
+        vec!["First", "Third", "Second"],
+        "the panel shows the order the document holds",
+    );
+}

@@ -349,3 +349,54 @@ fn one_selected_node_is_not_an_alignment() {
     );
     assert_eq!(offsets(&app, boxes[0]), before);
 }
+
+/// A locked node is out of the canvas's reach. The pointer path already
+/// refuses to pick one up; an alignment that moved it anyway would be the one
+/// gesture the lock did not stop.
+#[test]
+fn an_alignment_leaves_a_locked_member_where_it_is() {
+    let mut app = util::editor_test_app();
+    let boxes = three_boxes(&mut app);
+    jackdaw::hierarchy::set_locked(app.world_mut(), boxes[1], true);
+    settle(&mut app);
+    select(&mut app, &boxes);
+
+    run_finished(&mut app, "ui.align_left");
+
+    assert_eq!(
+        offsets(&app, boxes[1]),
+        (px(400.0), px(300.0)),
+        "the locked member stayed where it was",
+    );
+    assert_eq!(
+        offsets(&app, boxes[0]).0,
+        px(100.0),
+        "and the rest of the selection still lined up",
+    );
+    assert_eq!(offsets(&app, boxes[2]).0, px(100.0));
+}
+
+/// Distributing reads the same members, so the lock has to hold there too:
+/// three selected with one locked is two to spread, which is fewer than a
+/// distribution needs.
+#[test]
+fn distributing_does_not_count_a_locked_member() {
+    let mut app = util::editor_test_app();
+    let boxes = three_boxes(&mut app);
+    jackdaw::hierarchy::set_locked(app.world_mut(), boxes[1], true);
+    settle(&mut app);
+    select(&mut app, &boxes);
+
+    run_finished(&mut app, "ui.distribute_horizontal");
+
+    assert_eq!(
+        offsets(&app, boxes[1]),
+        (px(400.0), px(300.0)),
+        "the locked member stayed where it was",
+    );
+    assert_eq!(
+        offsets(&app, boxes[0]),
+        (px(100.0), px(100.0)),
+        "and with only two left to spread, nothing moved",
+    );
+}

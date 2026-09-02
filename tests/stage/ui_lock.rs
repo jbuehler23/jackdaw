@@ -370,3 +370,40 @@ fn a_lock_survives_a_save_and_a_reload() {
         "the lock is document data, so it comes back with the document",
     );
 }
+
+/// The keyboard is the canvas too: a locked node the pointer refuses to pick
+/// up must not be moved by the arrow keys either.
+#[test]
+fn a_nudge_leaves_a_locked_node_where_it_is() {
+    let mut app = util::editor_test_app();
+    let _panel = panel(&mut app);
+    let root = root(&mut app);
+    let node = child(&mut app, root, "Backdrop", 100.0, 100.0, 400.0, 400.0);
+    settle(&mut app);
+    set_locked(app.world_mut(), node, true);
+    jackdaw::selection::select_only(app.world_mut(), node);
+    settle(&mut app);
+
+    run_op_clause_as_user(app.world_mut(), "transform.nudge_x_pos")
+        .expect("the nudge dispatches")
+        .assert_finished();
+    settle(&mut app);
+
+    assert_eq!(
+        app.world().get::<Node>(node).expect("a node").left,
+        px(100.0),
+        "the locked node stayed where it was",
+    );
+
+    set_locked(app.world_mut(), node, false);
+    settle(&mut app);
+    run_op_clause_as_user(app.world_mut(), "transform.nudge_x_pos")
+        .expect("the nudge dispatches")
+        .assert_finished();
+    settle(&mut app);
+    assert_eq!(
+        app.world().get::<Node>(node).expect("a node").left,
+        px(101.0),
+        "and the same press moves it once the lock is off",
+    );
+}

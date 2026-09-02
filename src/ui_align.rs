@@ -116,6 +116,14 @@ fn members(world: &World) -> Result<Vec<Member>, Refusal> {
         if world.get::<EditorEntity>(entity).is_some() {
             continue;
         }
+        // A locked node is out of the canvas's reach. The pointer path
+        // refuses to pick one up, so an alignment that moved it would be the
+        // one gesture the lock did not stop -- and a locked node is skipped
+        // rather than refused, so locking a backdrop does not stop the nodes
+        // on it being lined up.
+        if world.get::<jackdaw_scene_types::Locked>(entity).is_some() {
+            continue;
+        }
         let Some(node) = world.get::<Node>(entity) else {
             continue;
         };

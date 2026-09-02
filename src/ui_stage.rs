@@ -3084,8 +3084,12 @@ pub(crate) fn nudge_ui_selection(world: &mut World, direction: Vec2) -> bool {
             return false;
         };
         let step = if coarse { host.view.grid } else { 1.0 };
+        // A locked node is out of the canvas's reach, and the keys are the
+        // canvas: the pointer path already refuses to pick one up, so a nudge
+        // moving it would be the one gesture the lock did not stop.
         let nodes: Vec<GestureNode> = without_selected_ancestors(world, &selected)
             .into_iter()
+            .filter(|&entity| world.get::<Locked>(entity).is_none())
             .filter_map(|entity| gesture_node(world, entity, host))
             .collect();
         (nodes, step)
