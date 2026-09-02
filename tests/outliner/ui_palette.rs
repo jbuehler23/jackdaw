@@ -96,6 +96,7 @@ fn the_add_menu_lists_every_built_in_widget() {
         "widget:ui.slider",
         "widget:ui.text_input",
         "widget:ui.scroll_area",
+        "widget:ui.dropdown",
     ] {
         assert!(
             widget_items.iter().any(|(action, ..)| action == expected),
@@ -2061,4 +2062,126 @@ fn a_separator_takes_its_axis_from_the_flow_it_sits_in() {
         (Val::Px(1.0), Val::Percent(100.0)),
         "and the same separator in a row is a vertical one",
     );
+}
+
+/// The chrome a dropdown is drawn from is built from its options, so the
+/// document carries the list and the widget redraws when the list changes.
+#[test]
+fn a_dropdown_draws_a_row_per_option_and_redraws_when_they_change() {
+    use jackdaw_widgets_runtime::{Dropdown, DropdownOption};
+
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    let dropdown =
+        instantiate_widget(app.world_mut(), "ui.dropdown").expect("the scene takes a dropdown");
+    app.update();
+    app.update();
+
+    let rows = |app: &mut App| {
+        let mut query = app.world_mut().query::<&DropdownOption>();
+        let mut indices: Vec<usize> = query.iter(app.world()).map(|option| option.0).collect();
+        indices.sort_unstable();
+        indices
+    };
+    assert_eq!(rows(&mut app), vec![0, 1, 2], "one row per authored option");
+
+    app.world_mut()
+        .get_mut::<Dropdown>(dropdown)
+        .expect("a dropdown carries its options")
+        .options = vec!["Only".to_string()];
+    app.update();
+    app.update();
+    assert_eq!(
+        rows(&mut app),
+        vec![0],
+        "a shorter list leaves no rows behind",
+    );
+}
+
+/// Picking an option writes the choice back and says so, which is the half a
+/// binding hears. The widget is one outliner row whatever the chrome is made
+/// of.
+#[test]
+fn picking_a_dropdown_option_writes_the_selection() {
+    use bevy::ui_widgets::Activate;
+    use jackdaw_widgets_runtime::{Dropdown, DropdownOption};
+
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    let dropdown =
+        instantiate_widget(app.world_mut(), "ui.dropdown").expect("the scene takes a dropdown");
+    app.update();
+    app.update();
+
+    let heard: Vec<usize> = Vec::new();
+    app.insert_resource(HeardSelections(heard));
+    app.add_observer(
+        |change: On<ValueChange<usize>>, mut heard: ResMut<HeardSelections>| {
+            heard.0.push(change.value);
+        },
+    );
+
+    let third = app
+        .world_mut()
+        .query::<(Entity, &DropdownOption)>()
+        .iter(app.world())
+        .find_map(|(entity, option)| (option.0 == 2).then_some(entity))
+        .expect("the popup lists a third option");
+    app.world_mut().trigger(Activate { entity: third });
+    app.update();
+
+    assert_eq!(
+        app.world().get::<Dropdown>(dropdown).map(|d| d.selected),
+        Some(2),
+        "the pick is state, not just an event",
+    );
+    assert_eq!(
+        app.world().resource::<HeardSelections>().0,
+        vec![2],
+        "and it is announced the way a slider announces a value",
+    );
+    let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new("."),
+    );
+    assert!(
+        !text.contains("FeathersMenu"),
+        "the chrome is generated, so a save carries the options and not the menu: {text}",
+    );
+}
+
+#[derive(Resource)]
+struct HeardSelections(Vec<usize>);
+
+/// A dropdown's options and its choice are what a save carries; the chrome
+/// is rebuilt on the other side.
+#[test]
+fn a_dropdown_survives_a_save_and_a_reload() {
+    use jackdaw_widgets_runtime::{Dropdown, DropdownOption};
+
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    instantiate_widget(app.world_mut(), "ui.dropdown").expect("the scene takes a dropdown");
+
+    let mut reloaded = round_trip(&mut app);
+    reloaded.update();
+    let dropdown = by_name(reloaded.world_mut(), "Dropdown");
+    assert_eq!(
+        reloaded
+            .world()
+            .get::<Dropdown>(dropdown)
+            .map(|d| d.options.clone()),
+        Some(vec![
+            "One".to_string(),
+            "Two".to_string(),
+            "Three".to_string()
+        ]),
+        "the authored options come back",
+    );
+    let rows = reloaded
+        .world_mut()
+        .query::<&DropdownOption>()
+        .iter(reloaded.world())
+        .count();
+    assert_eq!(rows, 3, "and the picker is drawn again from them");
 }

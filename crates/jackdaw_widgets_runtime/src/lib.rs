@@ -116,6 +116,37 @@ pub struct Progress {
     pub value: f32,
 }
 
+/// An authored option picker: the list it offers and which of them is chosen.
+///
+/// The picker's chrome -- the button, the popup, one row per option -- is not
+/// authored. It is rebuilt from this component whenever the options or the
+/// choice change, so editing the list in the inspector redraws the widget, and
+/// a document carries the list rather than the entities that draw it.
+#[derive(Component, Reflect, Debug, Clone, PartialEq, Eq, Default)]
+#[reflect(Component, Default)]
+pub struct Dropdown {
+    /// The options, in the order the popup lists them.
+    pub options: Vec<String>,
+    /// Which option is chosen, as an index into `options`. An index past the
+    /// end shows no caption rather than refusing to draw.
+    pub selected: usize,
+}
+
+/// Marks chrome a widget's own system built, as opposed to a node a document
+/// authored.
+///
+/// Rebuilding is despawn-and-respawn, and the only thing separating the parts
+/// to throw away from a child the author put there by hand is this.
+#[derive(Component, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GeneratedPart;
+
+/// Which option a generated [`Dropdown`] row stands for.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DropdownOption(
+    /// The index into the dropdown's `options`.
+    pub usize,
+);
+
 /// The child of a [`Progress`] track that draws the filled part.
 ///
 /// The fill is an authored child rather than a generated one: it carries its
@@ -195,7 +226,17 @@ impl Plugin for AuthoredWidgetPlugin {
                 .before(bevy::ui::UiSystems::Layout),
         );
         #[cfg(feature = "feathers")]
-        app.add_systems(Update, (hydrate_button_hover, authored_check_styles));
+        {
+            app.add_systems(
+                Update,
+                (
+                    hydrate_button_hover,
+                    authored_check_styles,
+                    dropdown_chrome_follows_options,
+                ),
+            );
+            app.add_observer(dropdown_option_activated);
+        }
     }
 
     /// Gives the app a theme if nothing else did.
@@ -244,6 +285,7 @@ pub fn register_widget_defaults(app: &mut App) {
     app.register_type::<Spacer>();
     app.register_type::<Progress>();
     app.register_type::<ProgressFill>();
+    app.register_type::<Dropdown>();
 
     app.register_type::<Button>()
         .register_type::<Checkbox>()
@@ -467,6 +509,123 @@ fn authored_slider_self_update(
         if let Ok(mut entity) = world.get_entity_mut(target) {
             entity.insert(SliderValue(value));
         }
+    });
+}
+
+/// Builds the chrome a [`Dropdown`] is drawn from: a menu button showing the
+/// chosen option and a popup listing all of them.
+///
+/// The parts are generated rather than authored so that the list is the one
+/// thing a document carries. A change to the component throws the old parts
+/// away and builds them again, which is also what puts a new choice in the
+/// button's caption.
+///
+/// The menu root is a child rather than the widget entity itself: feathers
+/// hangs the observer that opens and closes the popup off the entity its
+/// `FeathersMenu` scene spawns, and an observer is not something that can be
+/// added to an entity a document loaded.
+#[cfg(feature = "feathers")]
+fn dropdown_chrome_follows_options(
+    dropdowns: Query<(Entity, &Dropdown, Option<&Children>), Changed<Dropdown>>,
+    generated: Query<(), With<GeneratedPart>>,
+    mut commands: Commands,
+) {
+    use bevy::feathers::controls::{
+        FeathersMenu, FeathersMenuButton, FeathersMenuItem, FeathersMenuPopup,
+    };
+    use bevy::feathers::theme::ThemedText;
+
+    for (entity, dropdown, children) in &dropdowns {
+        for child in children.into_iter().flatten() {
+            if generated.contains(*child) {
+                commands.entity(*child).despawn();
+            }
+        }
+
+        let caption = dropdown
+            .options
+            .get(dropdown.selected)
+            .cloned()
+            .unwrap_or_default();
+        let menu = commands
+            .spawn_scene(bsn! { @FeathersMenu })
+            .insert((GeneratedPart, ChildOf(entity)))
+            .id();
+        commands
+            .spawn_scene(bsn! {
+                @FeathersMenuButton {
+                    @caption: bsn! { Text({caption}) ThemedText },
+                }
+            })
+            .insert(ChildOf(menu));
+        let popup = commands
+            .spawn_scene(bsn! { @FeathersMenuPopup })
+            .insert(ChildOf(menu))
+            .id();
+        for (index, option) in dropdown.options.iter().enumerate() {
+            commands
+                .spawn_scene(bsn! {
+                    @FeathersMenuItem {
+                        @caption: bsn! { Text({option.clone()}) ThemedText },
+                    }
+                })
+                .insert((DropdownOption(index), ChildOf(popup)));
+        }
+    }
+}
+
+/// Writes a picked option back into the [`Dropdown`] it belongs to, and says
+/// so as a [`ValueChange`].
+///
+/// `bevy_ui_widgets` raises `Activate` for the row and closes the popup; the
+/// choice itself is state, and this is what makes it state. The change is
+/// announced the way a slider or a checkbox announces one, so a binding can
+/// hear it without knowing what a menu is.
+#[cfg(feature = "feathers")]
+fn dropdown_option_activated(
+    activate: On<bevy::ui_widgets::Activate>,
+    options: Query<&DropdownOption>,
+    parents: Query<&ChildOf>,
+    dropdowns: Query<(), With<Dropdown>>,
+    mut commands: Commands,
+) {
+    let Ok(option) = options.get(activate.entity) else {
+        return;
+    };
+    let index = option.0;
+    let mut current = activate.entity;
+    // The generated chrome is three deep; the cap stops a cycle in `ChildOf`
+    // rather than bounding anything the builder above can produce.
+    let mut owner = None;
+    for _ in 0..8 {
+        let Ok(child_of) = parents.get(current) else {
+            break;
+        };
+        current = child_of.parent();
+        if dropdowns.contains(current) {
+            owner = Some(current);
+            break;
+        }
+    }
+    let Some(owner) = owner else {
+        return;
+    };
+    commands.queue(move |world: &mut World| {
+        let Ok(mut entity) = world.get_entity_mut(owner) else {
+            return;
+        };
+        let Some(mut dropdown) = entity.get_mut::<Dropdown>() else {
+            return;
+        };
+        if dropdown.selected == index {
+            return;
+        }
+        dropdown.selected = index;
+        world.trigger(ValueChange {
+            source: owner,
+            value: index,
+            is_final: true,
+        });
     });
 }
 

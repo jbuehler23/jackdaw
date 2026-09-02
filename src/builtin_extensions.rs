@@ -654,7 +654,7 @@ fn world_kind_icons() -> Vec<(String, Icon)> {
 ///
 /// An id with no definition, or a definition with no icon, contributes
 /// nothing, which the outliner icon suite catches.
-fn widget_kind_sources() -> [(String, &'static str); 12] {
+fn widget_kind_sources() -> [(String, &'static str); 13] {
     use bevy::reflect::TypePath;
     use bevy::ui_widgets::{Button, Checkbox, RadioButton, ScrollArea, Slider};
 
@@ -674,6 +674,10 @@ fn widget_kind_sources() -> [(String, &'static str); 12] {
         (
             jackdaw_widgets_runtime::Progress::type_path().to_string(),
             "ui.progress",
+        ),
+        (
+            jackdaw_widgets_runtime::Dropdown::type_path().to_string(),
+            "ui.dropdown",
         ),
         // Before the checkbox: a toggle switch is a `Checkbox` too, and
         // the first rule that matches wins, so the narrower one is asked
@@ -1163,6 +1167,32 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             },
         )
         .with_icon(Icon::ScrollText),
+        // The options are the whole widget: the button, the popup, and one row
+        // per option are chrome `jackdaw_widgets_runtime` rebuilds from them,
+        // so editing the list here redraws the picker and a save carries the
+        // list rather than the nodes drawing it.
+        WidgetDefinition::new("ui.dropdown", "Dropdown", "Controls", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Dropdown"),
+                    Node {
+                        min_width: px(140),
+                        min_height: px(28),
+                        align_items: AlignItems::Stretch,
+                        justify_content: JustifyContent::Stretch,
+                        ..default()
+                    },
+                    jackdaw_widgets_runtime::Dropdown {
+                        options: vec!["One".to_string(), "Two".to_string(), "Three".to_string()],
+                        selected: 0,
+                    },
+                    BackgroundColor(Color::NONE),
+                ),
+            ))
+        })
+        .with_icon(Icon::SquareChevronDown),
     ]
 }
 
