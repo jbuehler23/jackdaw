@@ -12,6 +12,7 @@ mod color_picker;
 mod comboboxes;
 mod context_menus;
 mod lists_and_scroll;
+mod menu_bar_clicks;
 mod popovers;
 mod segmented_controls;
 mod synthetic_click;

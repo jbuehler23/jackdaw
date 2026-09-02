@@ -83,7 +83,7 @@ pub fn submenu_row(
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<SubmenuState>()
-        .add_observer(hold_the_menu_open_for_a_checked_row)
+        .add_observer(close_the_menu_unless_the_row_was_a_box)
         .add_observer(on_dropdown_item_click)
         .add_observer(on_menu_bar_item_click)
         .add_observer(on_menu_bar_item_over)
@@ -101,20 +101,36 @@ pub fn plugin(app: &mut App) {
         );
 }
 
-/// A click on a row that only flips a box leaves the menu open.
+/// A row that has been clicked takes the menu down with it, unless it
+/// only flips a box.
 ///
-/// Every other row is a command: it does its thing and the menu is done.
-/// A box is a setting, and settings are read and changed in runs, so the
-/// dropdown stays up and redraws itself with the new state through
+/// Every ordinary row is a command: it does its thing and the menu is
+/// done. A box is a setting, and settings are read and changed in runs,
+/// so the dropdown stays up and redraws itself with the new state through
 /// [`redraw_the_open_dropdown_on_new_rows`].
-fn hold_the_menu_open_for_a_checked_row(
+///
+/// This is where a menu closes from the inside. The press that started
+/// the click cannot close it -- the row activates on the release, a frame
+/// or more later, and a menu taken down by the press would take the row
+/// with it before it ever ran (see
+/// [`jackdaw_widgets::menu_bar::MenuBarClose`]).
+fn close_the_menu_unless_the_row_was_a_box(
     event: On<ButtonClickEvent>,
-    rows: Query<(), With<MenuCheckedRow>>,
+    rows: Query<(), With<MenuBarDropdownItem>>,
+    boxes: Query<(), With<MenuCheckedRow>>,
+    mut commands: Commands,
     mut state: ResMut<MenuBarState>,
+    mut submenus: ResMut<SubmenuState>,
 ) {
-    if state.open_menu.is_some() && rows.contains(event.entity) {
-        state.hold_open = true;
+    if state.open_menu.is_none() || !rows.contains(event.entity) {
+        return;
     }
+    if boxes.contains(event.entity) {
+        state.hold_open = true;
+        return;
+    }
+    truncate_submenus(&mut submenus, 0, &mut commands);
+    jackdaw_widgets::menu_bar::close_open_menu(&mut commands, &mut state);
 }
 
 /// Draw the open dropdown again whenever its item's rows change, so a
