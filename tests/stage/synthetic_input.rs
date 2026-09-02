@@ -406,6 +406,70 @@ fn typing_into_a_freshly_opened_entry_replaces_the_label() {
     );
 }
 
+/// A label small enough for the chrome to cover it still takes the
+/// gesture once it is selected.
+///
+/// A 40x20 node is barely bigger than the eight handles hung around it,
+/// so a press over it lands on a handle rather than on the stage. The
+/// pair is counted against the node the chrome belongs to, so the entry
+/// opens on a node selected in the outliner first, which is how a label
+/// is renamed in practice.
+#[test]
+fn a_double_click_on_a_selected_small_label_opens_the_entry() {
+    let (mut app, _panel) = canvas_app();
+    let node = small_label(&mut app);
+    app.world_mut().resource_mut::<Selection>().entities = vec![node];
+    settle(&mut app);
+
+    // Inside the label, and on the handle straddling its top edge.
+    run(
+        &mut app,
+        "input.pointer space=canvas x=420 y=204 action=dblclick",
+    );
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::ui_text_edit::TextEditSession>()
+            .editing(),
+        Some(node),
+        "a double click on a selected node opens the entry over it",
+    );
+}
+
+/// The same gesture on the same small label with nothing selected: both
+/// routes into the entry open it.
+#[test]
+fn a_double_click_on_an_unselected_small_label_opens_the_entry() {
+    let (mut app, _panel) = canvas_app();
+    let node = small_label(&mut app);
+    settle(&mut app);
+
+    // The first press selects and hangs the handles, so the second lands
+    // on one of them just as it does above.
+    run(
+        &mut app,
+        "input.pointer space=canvas x=420 y=204 action=dblclick",
+    );
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::ui_text_edit::TextEditSession>()
+            .editing(),
+        Some(node),
+        "a double click on an unselected node opens the entry over it",
+    );
+}
+
+/// A 40x20 label carrying text, at authored (400, 200): the size
+/// `Add > UI > Label` gives one.
+fn small_label(app: &mut App) -> Entity {
+    let node = authored_panel(app);
+    let mut entity = app.world_mut().entity_mut(node);
+    entity.insert((Text::new("Label"), Name::new("Label")));
+    let mut layout = entity.get_mut::<Node>().expect("the label is a node");
+    layout.width = px(40);
+    layout.height = px(20);
+    node
+}
+
 /// Typing goes through the keyboard into whatever holds the focus, so
 /// the entry a double click opened takes a new label and the commit
 /// writes it to the node.

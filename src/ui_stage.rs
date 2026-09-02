@@ -1725,12 +1725,20 @@ fn on_stage_asset_drop(
 ///
 /// The press that opened the pair has already selected the node, so the
 /// entry opens over what the user is looking at either way.
+///
+/// A press on a resize handle counts too. The eight handles hang around
+/// a rect that can be smaller than they are, so on a label the size the
+/// palette spawns one there is nowhere left to press that is not chrome,
+/// and a gesture the handles swallowed could never be made on a small
+/// node at all. The pair is still counted against the node under the
+/// cursor, so a press on the half of a handle that hangs off the node is
+/// no more a double click than a press beside it is.
 fn on_stage_double_press(
     event: On<Pointer<Press>>,
     ui_scale: Res<UiScale>,
     time: Res<Time>,
     overlays: Query<&UiSelectionOverlay>,
-    handles: Query<(), With<UiResizeHandle>>,
+    handles: Query<&ChildOf, With<UiResizeHandle>>,
     hosts: Query<(Entity, &Viewport2dPanelHost)>,
     stages: Query<(&ComputedNode, &UiGlobalTransform), With<Scene2dViewport>>,
     roots: Query<(Entity, &UiTargetCamera), AuthoredUiSceneRoot>,
@@ -1743,10 +1751,8 @@ fn on_stage_double_press(
         return;
     }
     let target = event.event_target();
-    if handles.contains(target) {
-        return;
-    }
-    let panel = match overlays.get(target) {
+    let chrome = handles.get(target).map_or(target, ChildOf::parent);
+    let panel = match overlays.get(chrome) {
         Ok(overlay) => Some(overlay.host),
         Err(_) => hosts
             .iter()
