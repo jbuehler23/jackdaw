@@ -116,6 +116,7 @@ fn every_added_widget_shows_its_own_glyph() {
         ("ui.dropdown", Icon::SquareChevronDown),
         ("ui.radio_group", Icon::ListChecks),
         ("ui.tabs", Icon::PanelsTopLeft),
+        ("ui.nine_patch", Icon::Grid2x2),
     ];
 
     for (definition, icon) in expected {
@@ -162,6 +163,7 @@ fn the_outliner_glyph_is_the_add_menus_glyph() {
         "ui.dropdown",
         "ui.radio_group",
         "ui.tabs",
+        "ui.nine_patch",
     ] {
         let menu_icon = app
             .world()

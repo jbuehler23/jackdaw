@@ -175,6 +175,19 @@ pub struct TabSegment(
     pub usize,
 );
 
+/// How wide the fixed border of a nine-patch image is.
+///
+/// `NodeImageMode::Sliced` holds a `TextureSlicer`, which a document can carry
+/// but nothing can author usefully: the four insets are almost always the same
+/// number, and that number is the only part a screen changes. This is that
+/// number, written into the image mode beside it.
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Default)]
+#[reflect(Component, Default)]
+pub struct NineSlice {
+    /// The inset, in texture pixels, of all four slicing lines.
+    pub border: f32,
+}
+
 /// Marks chrome a widget's own system built, as opposed to a node a document
 /// authored.
 ///
@@ -264,7 +277,11 @@ impl Plugin for AuthoredWidgetPlugin {
         );
         app.add_systems(
             PostUpdate,
-            (separator_follows_parent_axis, progress_fill_follows_value)
+            (
+                separator_follows_parent_axis,
+                progress_fill_follows_value,
+                nine_slice_follows_border,
+            )
                 .in_set(AuthoredNodeSystems)
                 .before(bevy::ui::UiSystems::Layout),
         );
@@ -335,6 +352,7 @@ pub fn register_widget_defaults(app: &mut App) {
     app.register_type::<Dropdown>();
     app.register_type::<RadioOptions>();
     app.register_type::<TabStrip>();
+    app.register_type::<NineSlice>();
 
     app.register_type::<Button>()
         .register_type::<Checkbox>()
@@ -853,6 +871,32 @@ fn tab_segment_chosen(
         return;
     };
     commands.queue(move |world: &mut World| set_chosen_index(world, owner, index));
+}
+
+/// Puts a [`NineSlice`]'s border into the image mode beside it, so the corners
+/// of a panel skin keep their size while the middle stretches.
+///
+/// A border of zero leaves the image whole: nothing is sliced off, and
+/// `NodeImageMode::Auto` is what says so.
+fn nine_slice_follows_border(
+    mut images: Query<(&NineSlice, &mut ImageNode), Or<(Changed<NineSlice>, Changed<ImageNode>)>>,
+) {
+    use bevy::sprite::TextureSlicer;
+    use bevy::ui::widget::NodeImageMode;
+
+    for (slice, mut image) in &mut images {
+        let wanted = if slice.border > 0.0 {
+            NodeImageMode::Sliced(TextureSlicer {
+                border: BorderRect::all(slice.border),
+                ..default()
+            })
+        } else {
+            NodeImageMode::Auto
+        };
+        if image.image_mode != wanted {
+            image.image_mode = wanted;
+        }
+    }
 }
 
 /// Lays a [`Separator`] across the flow it sits in: a hairline the full width

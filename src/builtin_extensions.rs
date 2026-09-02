@@ -654,7 +654,7 @@ fn world_kind_icons() -> Vec<(String, Icon)> {
 ///
 /// An id with no definition, or a definition with no icon, contributes
 /// nothing, which the outliner icon suite catches.
-fn widget_kind_sources() -> [(String, &'static str); 15] {
+fn widget_kind_sources() -> [(String, &'static str); 16] {
     use bevy::reflect::TypePath;
     use bevy::ui_widgets::{Button, Checkbox, RadioButton, ScrollArea, Slider};
 
@@ -686,6 +686,12 @@ fn widget_kind_sources() -> [(String, &'static str); 15] {
         (
             jackdaw_widgets_runtime::TabStrip::type_path().to_string(),
             "ui.tabs",
+        ),
+        // Before the image rule: a nine-patch is an `ImageNode` too, and the
+        // narrower kind has to be asked first or it reads as a picture.
+        (
+            jackdaw_widgets_runtime::NineSlice::type_path().to_string(),
+            "ui.nine_patch",
         ),
         // Before the checkbox: a toggle switch is a `Checkbox` too, and
         // the first rule that matches wins, so the narrower one is asked
@@ -1273,6 +1279,31 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             Ok(tabs)
         })
         .with_icon(Icon::PanelsTopLeft),
+        // A skin whose corners hold their size while the middle stretches.
+        // Which image it wears is set in the inspector like any other
+        // `ImageNode`; the border is the one value that makes it a nine-patch.
+        WidgetDefinition::new(
+            "ui.nine_patch",
+            "Nine Patch",
+            "Display",
+            |world, context| {
+                Ok(spawn_widget(
+                    world,
+                    context.parent,
+                    (
+                        Name::new("NinePatch"),
+                        Node {
+                            width: px(160),
+                            height: px(96),
+                            ..default()
+                        },
+                        ImageNode::default(),
+                        jackdaw_widgets_runtime::NineSlice { border: 12.0 },
+                    ),
+                ))
+            },
+        )
+        .with_icon(Icon::Grid2x2),
     ]
 }
 

@@ -13,6 +13,9 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_ui",
     "bevy_ui_widgets",
     "bevy_log",
+    # `TextureSlicer`, which names the nine slices of a nine-patch image.
+    # `bevy_ui` already depends on the crate; this only puts the type in reach.
+    "bevy_sprite",
 ] }
 
 [features]

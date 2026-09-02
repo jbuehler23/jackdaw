@@ -99,6 +99,7 @@ fn the_add_menu_lists_every_built_in_widget() {
         "widget:ui.dropdown",
         "widget:ui.radio_group",
         "widget:ui.tabs",
+        "widget:ui.nine_patch",
     ] {
         assert!(
             widget_items.iter().any(|(action, ..)| action == expected),
@@ -2332,4 +2333,60 @@ fn tabs_and_a_radio_group_survive_a_save_and_a_reload() {
     for pane in ["FirstPane", "SecondPane"] {
         by_name(reloaded.world_mut(), pane);
     }
+}
+
+/// A nine-patch's border is the whole authored difference between it and a
+/// picture: it is written into the image mode, and a save carries the number
+/// rather than the slicer.
+#[test]
+fn a_nine_patch_slices_its_image_from_its_border() {
+    use bevy::ui::widget::NodeImageMode;
+    use jackdaw_widgets_runtime::NineSlice;
+
+    let mut app = palette_app();
+    open_ui_scene(app.world_mut());
+    let patch =
+        instantiate_widget(app.world_mut(), "ui.nine_patch").expect("the scene takes a nine patch");
+    app.update();
+
+    let border = |app: &App| match app
+        .world()
+        .get::<ImageNode>(patch)
+        .map(|image| image.image_mode.clone())
+    {
+        Some(NodeImageMode::Sliced(slicer)) => Some(slicer.border.min_inset.x),
+        _ => None,
+    };
+    assert_eq!(border(&app), Some(12.0), "the authored border slices it");
+
+    app.world_mut()
+        .get_mut::<NineSlice>(patch)
+        .expect("a nine patch carries its border")
+        .border = 4.0;
+    app.update();
+    assert_eq!(border(&app), Some(4.0), "and a new border re-slices it");
+
+    app.world_mut()
+        .get_mut::<NineSlice>(patch)
+        .expect("a nine patch carries its border")
+        .border = 0.0;
+    app.update();
+    assert!(
+        matches!(
+            app.world()
+                .get::<ImageNode>(patch)
+                .map(|i| i.image_mode.clone()),
+            Some(NodeImageMode::Auto)
+        ),
+        "no border is no slicing",
+    );
+
+    let mut reloaded = round_trip(&mut app);
+    reloaded.update();
+    let loaded = by_name(reloaded.world_mut(), "NinePatch");
+    assert_eq!(
+        reloaded.world().get::<NineSlice>(loaded).map(|n| n.border),
+        Some(12.0),
+        "the document carries the border it was authored with",
+    );
 }
