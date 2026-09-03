@@ -116,3 +116,82 @@ fn current_handle(app: &mut App) -> String {
     );
     path
 }
+
+/// How many `AssetEvent::Modified` the glTF assets published, counted
+/// across every tick since the counter was installed.
+#[derive(Resource, Default)]
+struct GltfReloads(usize);
+
+fn count_gltf_reloads(
+    mut events: MessageReader<bevy::asset::AssetEvent<bevy::gltf::Gltf>>,
+    mut count: ResMut<GltfReloads>,
+) {
+    count.0 += events
+        .read()
+        .filter(|event| matches!(event, bevy::asset::AssetEvent::Modified { .. }))
+        .count();
+}
+
+/// Tick until every placed glTF has been asked about its clips, or the
+/// budget runs out. Returns the ticks it took.
+fn settle(app: &mut App, ticks: usize) {
+    for _ in 0..ticks {
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Clip discovery has to converge. It used to load the glTF, drop the
+/// handle, and ask again next frame, which unloaded and reloaded the
+/// asset on a loop: every reload republished `AssetEvent::Modified`, and
+/// the world-asset spawner despawned and respawned every instance of
+/// that model, every frame, for as long as the scene was open.
+///
+/// A glTF with no animations is the case that never terminated, since
+/// the old "already has clip children" guard can never be satisfied for
+/// one. Both kinds are placed here so the convergence is not bought by
+/// breaking the animated path.
+#[test]
+fn clip_discovery_settles_without_reloading_the_gltf() {
+    let mut app = util::editor_test_app();
+    // Clip discovery only runs in the editor state, which a headless app
+    // does not reach on its own, and the editor's panels expect a project
+    // to be open once it is there.
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot {
+            root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            config: default(),
+        });
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    app.init_resource::<GltfReloads>();
+    app.add_systems(Last, count_gltf_reloads);
+
+    place(&mut app, "jan/jan.gltf");
+    place(&mut app, "models/dungeon.glb");
+
+    // Long enough for both files to come off disk.
+    settle(&mut app, 120);
+
+    let animated = app
+        .world_mut()
+        .query::<(&jackdaw_animation::GltfClipRef,)>()
+        .iter(app.world())
+        .filter(|(clip,)| clip.gltf_path.contains("jan"))
+        .count();
+    assert!(
+        animated > 0,
+        "the animated glTF should still have its clips imported"
+    );
+
+    // Both are settled; from here nothing should touch the assets again.
+    app.world_mut().resource_mut::<GltfReloads>().0 = 0;
+    settle(&mut app, 60);
+
+    assert_eq!(
+        app.world().resource::<GltfReloads>().0,
+        0,
+        "a settled scene must not reload its glTFs"
+    );
+}

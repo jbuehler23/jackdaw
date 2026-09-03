@@ -2094,17 +2094,43 @@ fn register_animation_entities_in_ast(
     }
 }
 
-/// For every [`GltfSource`] entity whose underlying glTF asset is
-/// loaded but has not yet had its clips imported, spawn one
-/// [`jackdaw_animation::Clip`] + [`jackdaw_animation::GltfClipRef`]
-/// child per entry in `Gltf::named_animations`. Those child entities
-/// persist through JSN save/load (just two strings each), so this
-/// discovery step only needs to run once per glTF in a given session.
+/// Clip discovery has run for this entity, against the glTF the path
+/// names. Written whichever way it came out -- clips imported, or the
+/// file has none -- because "no clips" is an answer, and re-asking for
+/// it every frame is what made this expensive.
 ///
-/// The guard ("skip if any child already has a `GltfClipRef`") keeps
-/// us from resurrecting clips the user deleted within the session.
-/// Adding new clips to the glTF file externally requires a scene
-/// reload to rediscover them.
+/// Editor-side state, not authored: it carries no `Reflect`, so the
+/// document emitter cannot see it and it never reaches a saved scene.
+#[derive(Component)]
+struct GltfClipsDiscovered {
+    /// The `GltfSource` path this answer was reached for. A different
+    /// path is a different glTF and has to be asked again.
+    path: String,
+}
+
+/// The glTF whose clips are still being waited for.
+///
+/// The handle lives here rather than in a local, because dropping it
+/// drops the asset: the load is cancelled and restarted next frame, the
+/// reload republishes `AssetEvent::Modified`, and the world-asset
+/// spawner despawns and respawns every instance of that model. Holding
+/// it until the answer arrives is what makes discovery converge.
+#[derive(Component)]
+struct PendingGltfClips(Handle<bevy::gltf::Gltf>);
+
+/// For every [`GltfSource`] entity that has not been asked yet, spawn
+/// one [`jackdaw_animation::Clip`] + [`jackdaw_animation::GltfClipRef`]
+/// child per entry in `Gltf::named_animations`. Those child entities
+/// persist through save/load (just two strings each), so discovery only
+/// needs to run once per `GltfSource`.
+///
+/// Asked once, not once per frame. An entity is marked
+/// [`GltfClipsDiscovered`] on both outcomes, and only a change to the
+/// source path asks again; the glTF handle is held on the entity for as
+/// long as the answer is pending. Clips the user deleted within the
+/// session stay deleted, and clips already imported in an earlier
+/// session (present as `GltfClipRef` children at load) settle the
+/// question without a load at all.
 ///
 /// Lives in the main crate rather than `jackdaw_animation` because it
 /// needs to read `jackdaw_scene_types::GltfSource`, and we'd rather not wire a
@@ -2112,26 +2138,72 @@ fn register_animation_entities_in_ast(
 ///
 /// [`GltfSource`]: jackdaw_scene_types::GltfSource
 fn discover_gltf_clips(
-    sources: Query<(Entity, &jackdaw_scene_types::GltfSource, Option<&Children>)>,
+    pending: Query<
+        (
+            Entity,
+            &jackdaw_scene_types::GltfSource,
+            Option<&Children>,
+            Option<&PendingGltfClips>,
+        ),
+        Without<GltfClipsDiscovered>,
+    >,
+    answered: Query<
+        (Entity, &jackdaw_scene_types::GltfSource, &GltfClipsDiscovered),
+        Changed<jackdaw_scene_types::GltfSource>,
+    >,
     existing_refs: Query<(), With<jackdaw_animation::GltfClipRef>>,
     asset_server: Res<AssetServer>,
     gltfs: Res<Assets<bevy::gltf::Gltf>>,
     mut commands: Commands,
 ) {
-    for (entity, source, children) in &sources {
-        // Skip if this GltfSource already has any imported clip
-        // children: discovery has run at least once.
+    // A source repointed at another file has to be asked again.
+    for (entity, source, discovered) in &answered {
+        if discovered.path != source.path {
+            commands.entity(entity).remove::<GltfClipsDiscovered>();
+        }
+    }
+
+    for (entity, source, children, waiting) in &pending {
+        // Clips imported in an earlier session come back as children of
+        // the document, which is the answer; so is the user having
+        // deleted them, since the marker outlives that too.
         let any_existing = children
             .into_iter()
             .flatten()
             .any(|&c| existing_refs.contains(c));
         if any_existing {
+            commands.entity(entity).insert(GltfClipsDiscovered {
+                path: source.path.clone(),
+            });
             continue;
         }
 
-        let asset_path = crate::entity_ops::to_asset_path(&source.path);
-        let handle: Handle<bevy::gltf::Gltf> = asset_server.load(asset_path);
+        let handle = match waiting {
+            Some(PendingGltfClips(handle)) => handle.clone(),
+            None => {
+                let asset_path = crate::entity_ops::to_asset_path(&source.path);
+                let handle: Handle<bevy::gltf::Gltf> = asset_server.load(asset_path);
+                commands
+                    .entity(entity)
+                    .insert(PendingGltfClips(handle.clone()));
+                handle
+            }
+        };
+
         let Some(gltf) = gltfs.get(&handle) else {
+            // A load the server has given up on is answered too: the
+            // alternative is retrying a missing file forever.
+            if matches!(
+                asset_server.get_load_state(&handle),
+                Some(bevy::asset::LoadState::Failed(_))
+            ) {
+                commands
+                    .entity(entity)
+                    .remove::<PendingGltfClips>()
+                    .insert(GltfClipsDiscovered {
+                        path: source.path.clone(),
+                    });
+            }
             continue;
         };
 
@@ -2147,6 +2219,12 @@ fn discover_gltf_clips(
                 ChildOf(entity),
             ));
         }
+        commands
+            .entity(entity)
+            .remove::<PendingGltfClips>()
+            .insert(GltfClipsDiscovered {
+                path: source.path.clone(),
+            });
     }
 }
 
