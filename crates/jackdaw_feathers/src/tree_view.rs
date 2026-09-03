@@ -9,8 +9,9 @@ use bevy_monitors::prelude::{MonitorSelf, Mutation, NotifyChanged};
 use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeDragCancelled, TreeDropLine, TreeFocused, TreeNode,
     TreeNodeExpandToggle, TreeNodeExpanded, TreeRoot, TreeRowChildren, TreeRowClicked,
-    TreeRowContent, TreeRowDot, TreeRowDropped, TreeRowDroppedOnRoot, TreeRowInsertZone,
-    TreeRowInserted, TreeRowLabel, TreeRowLockToggle, TreeRowLockToggled, TreeRowSelected,
+    TreeRowContent, TreeRowDot, TreeRowDropped, TreeRowDroppedOnRoot, TreeRowInlineRename,
+    TreeRowInsertZone, TreeRowInserted, TreeRowLabel, TreeRowLockToggle, TreeRowLockToggled,
+    TreeRowSelected,
     TreeRowStartRename, TreeRowVisibilityToggle, TreeRowVisibilityToggled, TreeSpringLoad,
     TreeView,
 };
@@ -1058,7 +1059,7 @@ pub struct TreeRowLabelEllipsis;
 /// Nine or so characters of the editor's body face: enough that a cut name
 /// still says which node it is, and enough for the rename entry that
 /// stands in its place to be typed into and read back.
-const LABEL_MIN_WIDTH: f32 = 64.0;
+pub const LABEL_MIN_WIDTH: f32 = 64.0;
 
 /// What the ellipsis is written with. Three ASCII dots rather than the
 /// single character, which the icon font has no glyph for.
@@ -1083,6 +1084,11 @@ const CHAR_WIDTH_RATIO: f32 = 0.5;
 /// Whether a name fits is a measurement, not an estimate: the width the
 /// whole name was drawn at is kept on [`TreeRowLabelFit`] the frame it is
 /// on screen, and every cut afterwards is worked out from it.
+///
+/// A label being renamed is left alone. The entry stands in its place and
+/// the label itself is laid out to nothing, so the room it measures says
+/// nothing about the name; cutting it would only mean the name that came
+/// back on a cancel was the cut one.
 pub fn ellipsize_tree_row_labels(
     mut labels: Query<
         (
@@ -1092,7 +1098,7 @@ pub fn ellipsize_tree_row_labels(
             &TextLayoutInfo,
             Option<&mut TreeRowLabelFit>,
         ),
-        With<TreeRowLabelEllipsis>,
+        (With<TreeRowLabelEllipsis>, Without<TreeRowInlineRename>),
     >,
     mut commands: Commands,
 ) {

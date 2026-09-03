@@ -146,6 +146,129 @@ fn f2_reaches_a_selection_whose_row_is_not_open_yet() {
     );
 }
 
+/// The entry stands where the name stood: the label's own place in the
+/// row, and the label's own width.
+///
+/// Appended to the row instead, it landed past the lock and the eye in
+/// whatever room the two of them left over -- a box a couple of letters
+/// wide, at the far end of the row from the name it was replacing.
+///
+/// Typing replaces the name rather than adding to it, because the entry
+/// opens with the old name selected: a rename is nearly always a
+/// replacement, and the old name is still there for an Escape or an arrow
+/// key.
+#[test]
+fn the_entry_takes_the_labels_place_with_the_name_selected() {
+    use jackdaw_widgets::tree_view::{
+        TreeRowContent, TreeRowLabel, TreeRowLockToggle, TreeRowVisibilityToggle,
+    };
+
+    let (mut app, panel, node) = outliner_app();
+    jackdaw::selection::select_only(app.world_mut(), node);
+    settle(&mut app);
+    run(&mut app, "input.key key=F2");
+    assert!(entry_open(&mut app), "the entry is open to be measured");
+
+    let row = app
+        .world()
+        .resource::<TreeIndex>()
+        .get(panel, node)
+        .expect("the renamed node has a row");
+    let world = app.world();
+    let children_of = |parent: Entity| -> Vec<Entity> {
+        world
+            .get::<Children>(parent)
+            .map(|children| children.iter().collect())
+            .unwrap_or_default()
+    };
+    let content = children_of(row)
+        .into_iter()
+        .find(|&child| world.get::<TreeRowContent>(child).is_some())
+        .expect("a row has content");
+    let slots = children_of(content);
+    let slot_of =
+        |has: &dyn Fn(Entity) -> bool| -> Option<usize> { slots.iter().position(|&e| has(e)) };
+    let entry = slot_of(&|e| {
+        world
+            .get::<jackdaw_feathers::text_edit::TextEditConfig>(e)
+            .is_some()
+    })
+    .expect("the entry is one of the row's children");
+    let label = slot_of(&|e| world.get::<TreeRowLabel>(e).is_some()).expect("so is the label");
+    let lock = slot_of(&|e| world.get::<TreeRowLockToggle>(e).is_some()).expect("and the lock");
+    let eye = slot_of(&|e| world.get::<TreeRowVisibilityToggle>(e).is_some()).expect("and the eye");
+
+    assert_eq!(
+        entry + 1,
+        label,
+        "the entry stands immediately where the label does, not past the row's glyphs",
+    );
+    assert!(
+        entry < lock && entry < eye,
+        "and in front of the lock ({lock}) and the eye ({eye}), not after them",
+    );
+
+    let width = world
+        .get::<ComputedNode>(slots[entry])
+        .expect("the entry is laid out")
+        .size()
+        .x;
+    assert!(
+        width >= jackdaw_feathers::tree_view::LABEL_MIN_WIDTH,
+        "the entry is given the label's width, not what the glyphs left over: {width}",
+    );
+
+    // What a keystroke amounts to once the entry has the keyboard. On the
+    // old name with the caret at its end this appends; on the old name
+    // selected it replaces, which is the whole of the claim.
+    let field = descendants(app.world(), slots[entry])
+        .into_iter()
+        .find(|&e| {
+            app.world()
+                .get::<jackdaw_feathers::text_edit::EditorTextEdit>(e)
+                .is_some()
+        })
+        .expect("the entry holds an editable field");
+    // The editor's own auto-focus pass runs behind `AppState::Editor`,
+    // which a headless app does not enter; the keyboard is put on the
+    // entry here so the commit on losing it is the real one.
+    app.world_mut()
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .set(field, bevy::input_focus::FocusCause::Pressed);
+    settle(&mut app);
+    app.world_mut()
+        .get_mut::<bevy::text::EditableText>(field)
+        .expect("the field is editable")
+        .queue_edit(bevy::text::TextEdit::Insert("Title".into()));
+    settle(&mut app);
+    app.world_mut()
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .clear();
+    settle(&mut app);
+
+    assert_eq!(
+        app.world()
+            .get::<Name>(node)
+            .expect("the node keeps a name")
+            .as_str(),
+        "Title",
+        "typing replaced the selected name rather than appending to it",
+    );
+}
+
+/// Every entity under `root`, `root` itself included.
+fn descendants(world: &World, root: Entity) -> Vec<Entity> {
+    let mut found = vec![root];
+    let mut index = 0;
+    while index < found.len() {
+        if let Some(children) = world.get::<Children>(found[index]) {
+            found.extend(children.iter());
+        }
+        index += 1;
+    }
+    found
+}
+
 /// The text a row is drawing, and the tooltip hung off it.
 fn label_of(app: &mut App, panel: Entity, source: Entity) -> (String, Option<String>) {
     use jackdaw_feathers::tooltip::Tooltip;

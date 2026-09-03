@@ -117,6 +117,15 @@ struct TextEditPlaceholderNode(Entity);
 #[derive(Component)]
 struct TextEditDefaultValue(String);
 
+/// Select the value the field opens on, the moment that value arrives.
+///
+/// Queued here rather than by whoever spawned the field, because the
+/// default value is written a frame later: a selection made before it
+/// arrives selects an empty buffer, and one made after it has to guess
+/// which frame that was.
+#[derive(Component)]
+struct TextEditSelectAllOnOpen;
+
 #[derive(Component, Default)]
 struct DragHitbox {
     dragging: bool,
@@ -154,6 +163,7 @@ pub struct TextEditConfig {
     allow_empty: bool,
     drag_bottom: bool,
     disabled: bool,
+    select_all_on_open: bool,
     pub initialized: bool,
 }
 
@@ -172,6 +182,9 @@ pub struct TextEditProps {
     pub allow_empty: bool,
     pub drag_bottom: bool,
     pub grow: bool,
+    /// Whether the value the field opens on is selected, so the first
+    /// thing typed replaces it rather than being added to it.
+    pub select_all_on_open: bool,
 }
 
 impl Default for TextEditProps {
@@ -191,6 +204,7 @@ impl Default for TextEditProps {
             allow_empty: false,
             drag_bottom: false,
             grow: false,
+            select_all_on_open: false,
         }
     }
 }
@@ -226,6 +240,15 @@ impl TextEditProps {
     }
     pub fn allow_empty(mut self) -> Self {
         self.allow_empty = true;
+        self
+    }
+    /// Open with the default value selected, so typing replaces it.
+    ///
+    /// For a field that stands in for something already written: a rename
+    /// is nearly always a new name rather than a longer version of the old
+    /// one, and the old one is still there for an Escape or an arrow key.
+    pub fn select_all_on_open(mut self) -> Self {
+        self.select_all_on_open = true;
         self
     }
     pub fn drag_bottom(mut self) -> Self {
@@ -309,6 +332,7 @@ pub fn text_edit(props: TextEditProps) -> impl Bundle {
         allow_empty,
         drag_bottom,
         disabled,
+        select_all_on_open,
         grow: _,
     } = props;
 
@@ -335,6 +359,7 @@ pub fn text_edit(props: TextEditProps) -> impl Bundle {
             allow_empty,
             drag_bottom,
             disabled,
+            select_all_on_open,
             initialized: false,
         },
         TextEditValue::default(),
@@ -620,6 +645,9 @@ fn setup_text_edit_input(
 
         if let Some(ref default_value) = config.default_value {
             text_input.insert(TextEditDefaultValue(default_value.clone()));
+            if config.select_all_on_open {
+                text_input.insert(TextEditSelectAllOnOpen);
+            }
         }
 
         if is_numeric {
@@ -757,9 +785,10 @@ fn apply_default_value(
         &TextEditVariant,
         &mut EditableText,
         Option<&NumericRange>,
+        Option<&TextEditSelectAllOnOpen>,
     )>,
 ) {
-    for (entity, default_value, variant, mut editable, range) in &mut text_edits {
+    for (entity, default_value, variant, mut editable, range, select_all) in &mut text_edits {
         if editable_text_string(&editable).is_empty() {
             let text = if variant.is_numeric() {
                 let value = clamp_value(default_value.0.parse().unwrap_or(0.0), range);
@@ -768,8 +797,16 @@ fn apply_default_value(
                 default_value.0.clone()
             };
             set_text_input_value(&mut editable, text);
+            // After the value, so the selection is over the value rather
+            // than over the empty buffer it replaced.
+            if select_all.is_some() {
+                editable.queue_edit(TextEdit::SelectAll);
+            }
         }
-        commands.entity(entity).remove::<TextEditDefaultValue>();
+        commands
+            .entity(entity)
+            .remove::<TextEditDefaultValue>()
+            .remove::<TextEditSelectAllOnOpen>();
     }
 }
 

@@ -2861,27 +2861,42 @@ fn entity_name(names: &Query<&Name>, entity: Entity) -> String {
         .unwrap_or_default()
 }
 
-/// Resolve the label entity and its containing row for a scene
-/// entity's tree node. With multi-instance Outliner panels, returns
-/// the first match across all containers; the inline-rename UX
-/// targets one panel at a time and the others stay synchronised
-/// once the rename commits via `on_name_changed` / `on_name_mutated`.
+/// The label of a scene entity's tree row, the row content holding it, and
+/// the slot it occupies among that content's children.
+///
+/// With multi-instance Outliner panels, returns the first match across all
+/// containers; the inline-rename UX targets one panel at a time and the
+/// others stay synchronised once the rename commits via `on_name_changed`
+/// / `on_name_mutated`.
+struct RenameTarget {
+    label: Entity,
+    content: Entity,
+    /// Where the label sits among the row's children, so the entry can
+    /// take that place rather than being appended past the lock and the
+    /// eye.
+    slot: usize,
+}
+
 fn find_rename_targets(
     source: Entity,
     tree_index: &TreeIndex,
     tree_nodes: &Query<&Children, With<TreeNode>>,
     content_query: &Query<(Entity, &Children), With<TreeRowContent>>,
     label_query: &Query<Entity, With<TreeRowLabel>>,
-) -> Option<(Entity, Entity)> {
+) -> Option<RenameTarget> {
     for (_container, tree_entity) in tree_index.rows_for_source(source) {
         let Ok(children) = tree_nodes.get(tree_entity) else {
             continue;
         };
         for child in children.iter() {
-            if let Ok((content_e, content_children)) = content_query.get(child) {
-                for grandchild in content_children.iter() {
+            if let Ok((content, content_children)) = content_query.get(child) {
+                for (slot, grandchild) in content_children.iter().enumerate() {
                     if label_query.contains(grandchild) {
-                        return Some((grandchild, content_e));
+                        return Some(RenameTarget {
+                            label: grandchild,
+                            content,
+                            slot,
+                        });
                     }
                 }
             }
@@ -2944,13 +2959,14 @@ pub fn rename_begin(
     }
 
     let source = resolve_rename_target(&params, &selection)?;
-    let (label_entity, content_entity) = find_rename_targets(
+    let target = find_rename_targets(
         source,
         &tree_index,
         &tree_nodes,
         &content_query,
         &label_query,
     )?;
+    let label_entity = target.label;
 
     commands.entity(label_entity).insert(TreeRowInlineRename);
     commands
@@ -2960,18 +2976,35 @@ pub fn rename_begin(
             node.display = Display::None;
         });
 
-    commands.spawn((
-        InlineRenameInput {
-            label_entity,
-            source_entity: source,
-        },
-        text_edit::text_edit(
-            TextEditProps::default()
-                .with_default_value(entity_name(&names, source))
-                .allow_empty(),
-        ),
-        ChildOf(content_entity),
-    ));
+    let name = entity_name(&names, source);
+    let entry = commands
+        .spawn((
+            InlineRenameInput {
+                label_entity,
+                source_entity: source,
+            },
+            text_edit::text_edit(
+                TextEditProps::default()
+                    .with_default_value(name)
+                    .select_all_on_open()
+                    .allow_empty(),
+            ),
+        ))
+        .id();
+    // The label's own slot and the label's own width: an entry appended to
+    // the row instead lands past the lock and the eye, in whatever the two
+    // of them leave over, which on a narrow panel is a box too small to
+    // read a name back out of.
+    commands
+        .entity(entry)
+        .entry::<Node>()
+        .and_modify(|mut node| {
+            node.min_width = px(jackdaw_feathers::tree_view::LABEL_MIN_WIDTH);
+            node.margin.left = px(jackdaw_feathers::tokens::SPACING_SM);
+        });
+    commands
+        .entity(target.content)
+        .insert_children(target.slot, &[entry]);
     OperatorResult::Running
 }
 
@@ -2993,6 +3026,9 @@ fn cancel_rename_begin(
 }
 
 /// Auto-focus inline rename `text_edit` inputs one frame after spawn.
+///
+/// The name the entry opened on is already selected by then; see
+/// [`TextEditProps::select_all_on_open`].
 fn auto_focus_inline_rename(
     rename_inputs: Query<(Entity, &InlineRenameInput, &Children)>,
     wrappers: Query<&jackdaw_feathers::text_edit::TextEditConfig>,
