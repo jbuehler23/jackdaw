@@ -1879,11 +1879,7 @@ fn on_preview_toggle(
     }
     let on = event.value;
     // `FeathersCheckbox` does not self-manage `Checked`.
-    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(
-        &mut commands,
-        target,
-        on,
-    );
+    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(&mut commands, target, on);
     commands.queue(move |world: &mut World| set_preview(world, on));
 }
 
@@ -1916,11 +1912,7 @@ fn on_checkbox_commit(
     };
     let field = field.clone();
     let value = event.value;
-    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(
-        &mut commands,
-        target,
-        value,
-    );
+    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(&mut commands, target, value);
     commands.queue(move |world: &mut World| {
         report(
             write_scratch_field(world, &field, PreviewValue::Bool(value)),

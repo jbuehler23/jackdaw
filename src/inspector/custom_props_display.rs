@@ -765,11 +765,7 @@ pub(crate) fn on_custom_property_checkbox_commit(
     let checked = event.value;
     // The checkbox does not self-update `Checked`; reflect the new value so the
     // box renders the change.
-    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(
-        &mut commands,
-        target,
-        checked,
-    );
+    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(&mut commands, target, checked);
     commands.queue(move |world: &mut World| {
         apply_custom_property_with_undo(world, source, &name, PropertyValue::Bool(checked));
     });

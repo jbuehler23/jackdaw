@@ -224,6 +224,9 @@ mod tests {
         attach_or_despawn(&mut commands, parent, child);
         queued.apply(&mut world);
 
-        assert_eq!(world.get::<ChildOf>(child).map(ChildOf::parent), Some(parent));
+        assert_eq!(
+            world.get::<ChildOf>(child).map(ChildOf::parent),
+            Some(parent)
+        );
     }
 }

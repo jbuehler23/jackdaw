@@ -881,11 +881,7 @@ fn on_autoterrain_checkbox_change(
     if !boxes.contains(target) {
         return;
     }
-    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(
-        &mut commands,
-        target,
-        event.value,
-    );
+    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(&mut commands, target, event.value);
     commands
         .operator(TerrainAutoterrainEnableOp::ID)
         .param("enabled", event.value)

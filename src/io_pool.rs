@@ -99,6 +99,6 @@ mod tests {
         // to clear that by a wide margin, not by a hair.
         const OBSERVED_LEVELS: usize = 273;
         const BYTES_PER_LEVEL: usize = 8 * 1024;
-        assert!(IO_STACK_SIZE >= OBSERVED_LEVELS * BYTES_PER_LEVEL * 8);
+        const { assert!(IO_STACK_SIZE >= OBSERVED_LEVELS * BYTES_PER_LEVEL * 8) };
     }
 }

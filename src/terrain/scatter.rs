@@ -1251,11 +1251,7 @@ fn on_scatter_checkbox_value_change(
         return;
     };
 
-    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(
-        &mut commands,
-        target,
-        event.value,
-    );
+    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(&mut commands, target, event.value);
 
     commands
         .operator(op_id)
