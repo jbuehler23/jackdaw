@@ -39,15 +39,30 @@ use bevy::tasks::{IoTaskPool, TaskPoolBuilder, available_parallelism};
 /// costs no resident memory.
 const IO_STACK_SIZE: usize = 64 * 1024 * 1024;
 
-/// Bevy's default IO policy: a quarter of the cores, at least one and
-/// no more than four. Mirrored from `TaskPoolOptions::default`, whose
-/// own arithmetic is private to `bevy_app`.
-const IO_PERCENT: f32 = 0.25;
-const IO_MIN_THREADS: usize = 1;
-const IO_MAX_THREADS: usize = 4;
+/// Half the cores, at least four and no more than eight.
+///
+/// Bevy's default is a quarter of the cores clamped into `1..=4`, sized
+/// for a game streaming a few assets while it plays. An editor opening a
+/// scene does the opposite: it decodes hundreds of models and their
+/// textures at once with nothing else to do until they arrive, and that
+/// decode runs on the IO threads rather than the compute pool. Bevy's
+/// policy gives three of them on a twelve-core machine, and a capture of
+/// `assets/zone1.bsn` had all three saturated -- 6.0s of thread CPU
+/// inside a 2.4s load -- so the load was bounded by the pool and not by
+/// the disk.
+///
+/// The floor is four so a small machine still overlaps decodes with the
+/// stalls the nesting causes: a load blocked inside `TaskPool::scope`
+/// keeps its thread parked (see the module docs). The ceiling is eight
+/// because these threads compete with the render and compute pools for
+/// the same cores, and past that the editor's own frame starts paying
+/// for the scene it is opening.
+const IO_PERCENT: f32 = 0.5;
+const IO_MIN_THREADS: usize = 4;
+const IO_MAX_THREADS: usize = 8;
 
-/// How many IO threads Bevy's default policy asks for on a machine
-/// with `total_threads` cores.
+/// How many IO threads the pool asks for on a machine with
+/// `total_threads` cores.
 ///
 /// Split out from [`init`] because the pool is a process-wide global
 /// that can only be built once, which a test cannot exercise.
@@ -57,7 +72,6 @@ pub fn io_thread_count(total_threads: usize) -> usize {
     if proportion - desired as f32 >= 0.5 {
         desired += 1;
     }
-    desired = desired.min(total_threads);
     desired.clamp(IO_MIN_THREADS, IO_MAX_THREADS)
 }
 
@@ -80,17 +94,18 @@ pub fn init() {
 mod tests {
     use super::*;
 
+    /// Half the cores, floored at four and capped at eight. The
+    /// twelve-core case is the one the measurement was taken on: three
+    /// threads under Bevy's policy, six under this one.
     #[test]
-    fn matches_bevy_default_io_policy() {
-        // Bevy rounds the quarter-share, then clamps into 1..=4.
-        assert_eq!(io_thread_count(1), 1);
-        assert_eq!(io_thread_count(2), 1);
-        assert_eq!(io_thread_count(4), 1);
-        assert_eq!(io_thread_count(6), 2);
-        assert_eq!(io_thread_count(8), 2);
-        assert_eq!(io_thread_count(12), 3);
-        assert_eq!(io_thread_count(16), 4);
-        assert_eq!(io_thread_count(64), 4);
+    fn asks_for_half_the_cores_within_the_four_to_eight_band() {
+        assert_eq!(io_thread_count(1), 4);
+        assert_eq!(io_thread_count(4), 4);
+        assert_eq!(io_thread_count(8), 4);
+        assert_eq!(io_thread_count(10), 5);
+        assert_eq!(io_thread_count(12), 6);
+        assert_eq!(io_thread_count(16), 8);
+        assert_eq!(io_thread_count(64), 8);
     }
 
     #[test]
