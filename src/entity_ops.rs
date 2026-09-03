@@ -1873,10 +1873,23 @@ pub fn to_asset_path(path: &str) -> String {
 }
 
 /// Get the absolute path of Bevy's assets directory.
-/// Uses the last-opened `ProjectRoot` if available, then falls back to
-/// the standard `FileAssetReader` lookup (`BEVY_ASSET_ROOT` / `CARGO_MANIFEST_DIR` / exe dir).
+///
+/// The open project's own `assets/` when there is one, read from the
+/// mirror of [`ProjectRoot`] rather than from disk: this runs once per
+/// model per frame on a large scene, and it used to open and parse the
+/// recents file every time.
+///
+/// With no project open there is nothing resident to read, so that case
+/// still goes to the recents file and then to the standard
+/// `FileAssetReader` lookup (`BEVY_ASSET_ROOT` / `CARGO_MANIFEST_DIR` /
+/// exe dir).
+///
+/// [`ProjectRoot`]: crate::project::ProjectRoot
 pub fn get_assets_base_dir() -> Option<std::path::PathBuf> {
-    // Try ProjectRoot via recent projects config
+    if let Some(assets) = crate::project::open_project_assets_dir() {
+        return Some(dunce::simplified(assets.as_path()).to_path_buf());
+    }
+
     if let Some(project_dir) = crate::project::read_last_project() {
         let assets = dunce::simplified(project_dir.as_path()).join("assets");
         if assets.is_dir() {
@@ -3046,5 +3059,60 @@ mod tests {
             !text.contains("size:"),
             "the saved scene must not declare a size:\n{text}"
         );
+    }
+}
+
+
+#[cfg(test)]
+mod asset_path_tests {
+    use super::*;
+    use bevy::prelude::*;
+
+    /// The whole point of the mirror: an open project answers from
+    /// memory. The directory named here does not exist, so nothing that
+    /// goes to the filesystem -- the recents file, or the `is_dir` check
+    /// that used to guard it -- can produce this answer. Getting the
+    /// relative path back is therefore proof that neither ran.
+    ///
+    /// The mirror is process-global, so its set, its clear and the
+    /// system that drives it are one test rather than three that race.
+    #[test]
+    fn an_open_project_resolves_asset_paths_without_touching_the_disk() {
+        crate::project::set_open_project_assets_dir(Some(std::path::PathBuf::from(
+            "/jackdaw-no-such-project/assets",
+        )));
+
+        assert_eq!(
+            to_asset_path("/jackdaw-no-such-project/assets/models/rock.glb"),
+            "models/rock.glb"
+        );
+
+        // Cleared, the same path has no base to strip and comes back whole.
+        crate::project::set_open_project_assets_dir(None);
+        assert_eq!(
+            to_asset_path("/jackdaw-no-such-project/assets/models/rock.glb"),
+            "/jackdaw-no-such-project/assets/models/rock.glb"
+        );
+
+        // And what the mirror holds is what the resource says.
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut world = World::new();
+        world.insert_resource(crate::project::ProjectRoot {
+            root: root.clone(),
+            config: default(),
+        });
+        world
+            .run_system_cached(crate::project::mirror_open_project)
+            .expect("the mirror runs");
+        assert_eq!(
+            crate::project::open_project_assets_dir(),
+            Some(root.join("assets"))
+        );
+
+        world.remove_resource::<crate::project::ProjectRoot>();
+        world
+            .run_system_cached(crate::project::mirror_open_project)
+            .expect("the mirror runs");
+        assert_eq!(crate::project::open_project_assets_dir(), None);
     }
 }

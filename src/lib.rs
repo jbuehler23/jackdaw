@@ -517,6 +517,9 @@ impl Plugin for EditorCorePlugin {
                 .chain(),
         )
         .add_systems(OnEnter(AppState::Editor), run_config::read_run_configs)
+        // Ahead of everything that reads a path this frame, and outside
+        // the editor state: the launcher opens and closes projects too.
+        .add_systems(First, project::mirror_open_project)
         .add_systems(
             Update,
             rebuild_menu_if_dirty.run_if(in_state(AppState::Editor)),

@@ -14,6 +14,55 @@ pub struct ProjectRoot {
     pub config: ProjectConfig,
 }
 
+/// The open project's `assets/` directory, mirrored out of the ECS.
+///
+/// [`ProjectRoot`] is the answer, but the path helpers that need it are
+/// plain functions called from observers, asset loaders and scene
+/// readers that hold no `World`. Without somewhere to read it they fell
+/// back to the recents file, which meant opening and parsing
+/// `recent.json` once per call -- hundreds of times a frame on a scene
+/// with hundreds of models.
+///
+/// One process opens one project, so a static mirror says exactly what
+/// the resource does. `None` before a project is open, which is the only
+/// case that still has to go to disk.
+static OPEN_PROJECT_ASSETS: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+/// The open project's assets directory, or `None` when no project is
+/// open or its `assets/` does not exist.
+pub fn open_project_assets_dir() -> Option<PathBuf> {
+    OPEN_PROJECT_ASSETS.read().ok()?.clone()
+}
+
+/// Point the mirror at `dir`, or clear it. Only [`mirror_open_project`]
+/// should call this; it is public for tests that need the helpers to
+/// behave as though a project were open.
+pub fn set_open_project_assets_dir(dir: Option<PathBuf>) {
+    if let Ok(mut slot) = OPEN_PROJECT_ASSETS.write() {
+        *slot = dir;
+    }
+}
+
+/// Keep [`open_project_assets_dir`] in step with the resource.
+///
+/// A whole system for one comparison, rather than a write at each place
+/// that inserts [`ProjectRoot`], because a missed write there is a
+/// silent wrong answer everywhere the helpers are used.
+pub(crate) fn mirror_open_project(
+    project: Option<Res<ProjectRoot>>,
+    mut mirrored: Local<Option<PathBuf>>,
+) {
+    // Validated here, once per change, so the hot path is a lock read.
+    let current = project
+        .map(|project| project.assets_dir())
+        .filter(|assets| assets.is_dir());
+    if *mirrored == current {
+        return;
+    }
+    set_open_project_assets_dir(current.clone());
+    *mirrored = current;
+}
+
 /// Native editor project configuration persisted to `.jackdaw/project.json`.
 /// Carries the same fields the legacy JSN project config held, without the
 /// vestigial format-header wrapper.
