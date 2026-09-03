@@ -514,8 +514,13 @@ fn compute_screen_normal_dir(
     if len > 1e-4 { dir / len } else { FALLBACK }
 }
 
-pub(crate) fn can_run_extrude(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+pub(crate) fn can_run_extrude(
+    edit_mode: Res<EditMode>,
+    selection: Res<BrushSelection>,
+    viewport: crate::viewport_2d::FrontedViewport,
+) -> bool {
+    viewport.is_three_d()
+        && *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
         && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
 }
 

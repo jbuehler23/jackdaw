@@ -937,8 +937,9 @@ fn can_run_binary_brush_op(
     draw_state: Res<DrawBrushState>,
     selection: Res<Selection>,
     brushes: Query<(), With<Brush>>,
+    viewport: crate::viewport_2d::FrontedViewport,
 ) -> bool {
-    if !env_allows_brush_op(&keybind_focus, &modal, &draw_state) {
+    if !env_allows_brush_op(&keybind_focus, &modal, &draw_state) || !viewport.is_three_d() {
         return false;
     }
     selection

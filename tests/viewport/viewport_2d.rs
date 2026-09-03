@@ -3000,3 +3000,71 @@ fn available(app: &mut App, id: &'static str) -> bool {
         .is_available()
         .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"))
 }
+
+/// The chords that describe something in a world with three axes: what
+/// they are, in one list.
+///
+/// Every one is a bare letter or digit, which is also a letter a name is
+/// spelled with. Over the canvas they must all stand down, or the panel
+/// in front and the keyboard disagree about which viewport the user is
+/// working in.
+const WORLD_CHORDS: [&str; 7] = [
+    // KeyM
+    "tools.measure_distance",
+    // KeyL
+    "gizmo.space.toggle",
+    // KeyF
+    "viewport.focus_selected",
+    // Digit1 .. Digit4 and KeyK
+    "edit_mode.vertex",
+    "edit_mode.edge",
+    "edit_mode.face",
+    "edit_mode.knife",
+];
+
+/// With the canvas in front, none of the world's bare chords answer.
+#[test]
+fn the_worlds_bare_chords_stand_down_over_the_canvas() {
+    let mut app = util::editor_test_app();
+    fit_panel(&mut app);
+    world_camera(&mut app);
+    framing_selection(&mut app);
+    fronted_viewport(&mut app, ViewportMode::TwoD);
+
+    for id in WORLD_CHORDS {
+        assert!(
+            !available(&mut app, id),
+            "{id} answers a bare key the canvas needs for typing",
+        );
+    }
+}
+
+/// And with the world in front they all answer, so the gate is the panel
+/// rather than a chord that stopped working.
+#[test]
+fn the_worlds_bare_chords_answer_over_the_three_d_viewport() {
+    let mut app = util::editor_test_app();
+    world_camera(&mut app);
+    framing_selection(&mut app);
+    fronted_viewport(&mut app, ViewportMode::ThreeD);
+
+    for id in WORLD_CHORDS {
+        assert!(available(&mut app, id), "{id} still answers in the world");
+    }
+}
+
+/// Something selected, so `viewport.focus_selected` has a thing to frame
+/// and its availability turns on the panel rather than on an empty
+/// selection.
+///
+/// The focus is cleared with it, the way a press in a viewport clears it:
+/// Bevy seeds the focus with the window itself, and the edit-mode gate
+/// reads a seeded focus as a field being typed into.
+fn framing_selection(app: &mut App) {
+    let entity = app.world_mut().spawn(Transform::default()).id();
+    app.world_mut().resource_mut::<Selection>().entities = vec![entity];
+    app.world_mut()
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .clear();
+    app.update();
+}

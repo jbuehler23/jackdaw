@@ -365,7 +365,12 @@ fn apply_live_inset(
     inner_face_indices
 }
 
-pub(crate) fn can_run_inset(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+pub(crate) fn can_run_inset(
+    edit_mode: Res<EditMode>,
+    selection: Res<BrushSelection>,
+    viewport: crate::viewport_2d::FrontedViewport,
+) -> bool {
+    viewport.is_three_d()
+        && *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
         && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
 }

@@ -110,8 +110,9 @@ fn can_change_edit_mode(
     face_drag: Res<BrushDragState>,
     vertex_drag: Res<VertexDragState>,
     edge_drag: Res<EdgeDragState>,
+    viewport: crate::viewport_2d::FrontedViewport,
 ) -> bool {
-    if input_focus.get().is_some() || active.is_modal_running() {
+    if input_focus.get().is_some() || active.is_modal_running() || !viewport.is_three_d() {
         return false;
     }
     if face_drag.active || vertex_drag.active || edge_drag.active {

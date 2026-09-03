@@ -1092,9 +1092,12 @@ fn camera_bookmark_keys(
     brushes: Query<(), With<jackdaw_scene_types::Brush>>,
     modal: Res<crate::modal_transform::ModalTransformState>,
     focus: crate::keybind_focus::KeybindFocus,
+    viewport: crate::viewport_2d::FrontedViewport,
     mut commands: Commands,
 ) {
-    if modal.active.is_some() || focus.keyboard_is_spoken_for() {
+    // A bookmark is a camera in the world; over the canvas the digits
+    // are digits.
+    if modal.active.is_some() || focus.keyboard_is_spoken_for() || !viewport.is_three_d() {
         return;
     }
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
@@ -1151,8 +1154,13 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     )]);
 }
 
-fn has_primary_selection(selection: Res<Selection>) -> bool {
-    selection.primary().is_some()
+/// Framing the camera on the selection is a camera move, so the chord
+/// belongs to the world the camera flies through.
+fn has_primary_selection(
+    selection: Res<Selection>,
+    viewport: crate::viewport_2d::FrontedViewport,
+) -> bool {
+    selection.primary().is_some() && viewport.is_three_d()
 }
 
 /// Center the camera on the selected entity.
