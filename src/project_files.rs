@@ -642,7 +642,9 @@ mod tests {
         app.world_mut().run_system(system_id).unwrap();
         app.world_mut().flush();
 
-        let mut labels = app.world_mut().query_filtered::<Entity, With<TreeRowLabel>>();
+        let mut labels = app
+            .world_mut()
+            .query_filtered::<Entity, With<TreeRowLabel>>();
         let label = labels
             .iter(app.world())
             .next()

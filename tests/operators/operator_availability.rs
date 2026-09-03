@@ -392,9 +392,10 @@ fn available(app: &mut bevy::prelude::App, id: &'static str) -> bool {
 /// after is the editable buffer the keys are written into, which is what
 /// the focus lands on for a user.
 fn focus_a_field(app: &mut bevy::app::App) {
-    app.world_mut().spawn(jackdaw_feathers::text_edit::text_edit(
-        jackdaw_feathers::text_edit::TextEditProps::default().auto_focus(),
-    ));
+    app.world_mut()
+        .spawn(jackdaw_feathers::text_edit::text_edit(
+            jackdaw_feathers::text_edit::TextEditProps::default().auto_focus(),
+        ));
     app.update();
     app.update();
     let focused = app
@@ -403,7 +404,9 @@ fn focus_a_field(app: &mut bevy::app::App) {
         .get()
         .expect("the field took the focus");
     assert!(
-        app.world().get::<bevy::text::EditableText>(focused).is_some(),
+        app.world()
+            .get::<bevy::text::EditableText>(focused)
+            .is_some(),
         "the focus is on the field's own buffer",
     );
 }

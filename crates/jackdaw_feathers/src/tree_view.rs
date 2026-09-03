@@ -1401,14 +1401,24 @@ fn ancestor_tree_root(
 /// row stop their `DragLeave` and `DragDrop` but let `DragEnter` through:
 /// painting on a bubbled enter would wash the whole list from a drag that
 /// only crossed a row, and nothing would ever paint it back.
+///
+/// It also belongs to a row going somewhere. A press on the list's empty
+/// space and a drag from there is a gesture with nothing in it, and the
+/// whole panel turning green until the button came back up said the
+/// release would move something.
 pub fn tree_container_drop_observers() -> impl Bundle {
     (
         observe(
             |mut drag_enter: On<Pointer<DragEnter>>,
+             parents: Query<&ChildOf>,
+             tree_nodes: Query<&TreeNode>,
              mut bg_query: Query<&mut BackgroundColor>,
              mut commands: Commands| {
                 drag_enter.propagate(false);
                 if drag_enter.event_target() != drag_enter.original_event_target() {
+                    return;
+                }
+                if find_source_entity(drag_enter.dragged, &parents, &tree_nodes).is_none() {
                     return;
                 }
                 if let Ok(mut bg) = bg_query.get_mut(drag_enter.event_target()) {

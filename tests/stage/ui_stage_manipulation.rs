@@ -1390,9 +1390,10 @@ fn a_focused_text_field_keeps_the_arrow_keys() {
     // A whole field, which is what the focus lands on for a user: the
     // guard asks after the editable buffer the keyboard writes into, and
     // a marker with no buffer is not a field anyone can type in.
-    app.world_mut().spawn(jackdaw_feathers::text_edit::text_edit(
-        jackdaw_feathers::text_edit::TextEditProps::default().auto_focus(),
-    ));
+    app.world_mut()
+        .spawn(jackdaw_feathers::text_edit::text_edit(
+            jackdaw_feathers::text_edit::TextEditProps::default().auto_focus(),
+        ));
     settle(&mut app);
     let focused = app
         .world()
@@ -1400,7 +1401,9 @@ fn a_focused_text_field_keeps_the_arrow_keys() {
         .get()
         .expect("the field took the focus");
     assert!(
-        app.world().get::<bevy::text::EditableText>(focused).is_some(),
+        app.world()
+            .get::<bevy::text::EditableText>(focused)
+            .is_some(),
         "and it is the field's own buffer that holds the keyboard",
     );
 

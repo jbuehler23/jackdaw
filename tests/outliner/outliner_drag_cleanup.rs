@@ -331,3 +331,116 @@ fn child_names(app: &App, entity: Entity) -> Vec<String> {
         })
         .unwrap_or_default()
 }
+
+/// A drag begun on the list's own empty space paints nothing.
+///
+/// The wash means "release here and the entity leaves its parent". A
+/// press on the empty space below the rows is holding no entity at all,
+/// and the whole panel turning green until the button came back up said
+/// otherwise.
+#[test]
+fn a_drag_from_empty_space_paints_nothing() {
+    let (mut app, panel) = outliner_app();
+    let children = column_of_three(&mut app, panel);
+    settle(&mut app);
+
+    // Below the last row, which is the container's own space.
+    let last = row_content(&mut app, panel, children[2]);
+    let empty = centre_of(&app, last) + Vec2::new(0.0, row_height(&app, last) * 4.0);
+
+    run(
+        &mut app,
+        &format!("input.pointer x={} y={} action=move", empty.x, empty.y),
+    );
+    run(
+        &mut app,
+        &format!("input.pointer x={} y={} action=press", empty.x, empty.y),
+    );
+    run(
+        &mut app,
+        &format!(
+            "input.pointer x={} y={} action=move",
+            empty.x + 40.0,
+            empty.y - 10.0
+        ),
+    );
+    assert_eq!(
+        container_colour(&app, panel),
+        Color::NONE,
+        "a drag holding no row washes nothing",
+    );
+
+    run(
+        &mut app,
+        &format!(
+            "input.pointer x={} y={} action=release",
+            empty.x + 40.0,
+            empty.y - 10.0
+        ),
+    );
+    assert_eq!(
+        container_colour(&app, panel),
+        Color::NONE,
+        "and the release leaves it as it was",
+    );
+}
+
+/// A row dragged into a second list does paint that list, and the
+/// release paints it back: the gate is what is being dragged, not the
+/// wash itself.
+#[test]
+fn a_row_dragged_into_another_list_paints_it_and_clears() {
+    let (mut app, panel) = outliner_app();
+    let children = column_of_three(&mut app, panel);
+    let second = app
+        .world_mut()
+        .spawn((
+            HierarchyTreeContainer,
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(400),
+                top: px(0),
+                width: px(320),
+                height: px(600),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+            jackdaw_feathers::tree_view::tree_container_drop_observers(),
+        ))
+        .id();
+    settle(&mut app);
+
+    let first = row_content(&mut app, panel, children[0]);
+    let from = centre_of(&app, first);
+    // The second list's own space, below every row it drew.
+    let over = centre_of(&app, second) + Vec2::new(0.0, 200.0);
+
+    run(
+        &mut app,
+        &format!("input.pointer x={} y={} action=move", from.x, from.y),
+    );
+    run(
+        &mut app,
+        &format!("input.pointer x={} y={} action=press", from.x, from.y),
+    );
+    run(
+        &mut app,
+        &format!("input.pointer x={} y={} action=move", over.x, over.y),
+    );
+    assert_eq!(
+        container_colour(&app, second),
+        jackdaw_feathers::tokens::CONTAINER_DROP_TARGET_BG,
+        "a row over another list's own space is a drop out of its parent",
+    );
+
+    run(
+        &mut app,
+        &format!("input.pointer x={} y={} action=release", over.x, over.y),
+    );
+    assert_eq!(
+        container_colour(&app, second),
+        Color::NONE,
+        "and the release paints it back",
+    );
+}

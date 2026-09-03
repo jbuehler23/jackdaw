@@ -3131,4 +3131,3 @@ fn press(app: &mut App, clause: &str) {
     }
     settle(app);
 }
-

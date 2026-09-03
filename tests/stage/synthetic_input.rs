@@ -607,7 +607,7 @@ fn a_chord_typed_into_the_add_entity_search_runs_no_operator() {
 fn children_of(app: &App, parent: Entity) -> usize {
     app.world()
         .get::<Children>(parent)
-        .map_or(0, |children| children.len())
+        .map_or(0, bevy::prelude::RelationshipTarget::len)
 }
 
 /// A move is a hover: the node under the cursor gets the pre-select
