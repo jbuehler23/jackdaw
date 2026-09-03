@@ -108,10 +108,20 @@ fn assemble_recipe(ws: &Path, recipe: &Path) -> bool {
     true
 }
 
-/// Emit `cargo:rerun-if-changed` for every file under `dir`, recursively,
-/// skipping build output and VCS metadata, so a change to any recipe
-/// source re-runs the build script and refreshes the embedded hash.
+/// Emit `cargo:rerun-if-changed` for every file the recipe ships,
+/// recursively, skipping build output, VCS metadata and the target
+/// directories the recipe leaves out, so a change to any recipe source
+/// re-runs the build script and refreshes the embedded hash -- and a
+/// change to anything else does not.
+///
+/// The watch has to match [`copy_dir_filtered`]'s filter exactly. Watch
+/// less and the hash goes stale, which is silent; watch more and the
+/// script re-runs to produce the same hash, which is merely wasteful.
 fn emit_rerun_for_tree(dir: &Path) {
+    emit_rerun_at_depth(dir, 0);
+}
+
+fn emit_rerun_at_depth(dir: &Path, depth: usize) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -123,7 +133,10 @@ fn emit_rerun_for_tree(dir: &Path) {
         }
         let path = entry.path();
         if path.is_dir() {
-            emit_rerun_for_tree(&path);
+            if is_unshipped_target_dir(&name, depth) {
+                continue;
+            }
+            emit_rerun_at_depth(&path, depth + 1);
         } else {
             println!("cargo:rerun-if-changed={}", path.display());
         }
@@ -149,10 +162,41 @@ fn depends_on_editor(crate_dir: &Path) -> bool {
         })
 }
 
+/// Cargo target directories the SDK build never compiles.
+///
+/// `cargo build -p jackdaw_sdk` builds libraries. A crate's tests,
+/// examples and benches are separate targets that build only when asked
+/// for, so shipping them in the recipe adds nothing the SDK can use --
+/// and, because the recipe's content hash is the SDK cache's stamp,
+/// editing one of them invalidated the cache and cost a full release
+/// rebuild of the SDK on the next launch. Which is a common edit: they
+/// are where a crate's tests live.
+///
+/// Excluded by directory name rather than by reading each manifest,
+/// which is sound only while no crate declares an explicit `[[test]]`,
+/// `[[example]]` or `[[bench]]` target pointing outside them.
+/// `no_shipped_crate_declares_an_explicit_test_or_example_target`
+/// guards that.
+const UNSHIPPED_TARGET_DIRS: &[&str] = &["tests", "examples", "benches"];
+
+/// Whether `dir` is one of [`UNSHIPPED_TARGET_DIRS`], directly inside a
+/// crate root. Nested directories of those names (a `src/tests` module
+/// directory, say) are ordinary sources and are kept.
+fn is_unshipped_target_dir(name: &str, depth: usize) -> bool {
+    depth == 1 && UNSHIPPED_TARGET_DIRS.contains(&name)
+}
+
 /// Copy `src` into `dst`, skipping `target`/`.git` and any top-level
 /// entry `keep` rejects. `keep` is consulted only for the immediate
 /// children, which are the crate directories.
 fn copy_dir_filtered(src: &Path, dst: &Path, keep: &dyn Fn(&Path) -> bool) {
+    copy_dir_at_depth(src, dst, keep, 0);
+}
+
+/// `depth` counts directories below the `crates/` root, so depth 1 is a
+/// crate's own top level: the only place a cargo target directory
+/// counts.
+fn copy_dir_at_depth(src: &Path, dst: &Path, keep: &dyn Fn(&Path) -> bool, depth: usize) {
     fs::create_dir_all(dst).unwrap();
     let Ok(entries) = fs::read_dir(src) else {
         return;
@@ -164,12 +208,17 @@ fn copy_dir_filtered(src: &Path, dst: &Path, keep: &dyn Fn(&Path) -> bool) {
             continue;
         }
         let from = entry.path();
-        if from.is_dir() && !keep(&from) {
-            continue;
+        if from.is_dir() {
+            if depth == 0 && !keep(&from) {
+                continue;
+            }
+            if is_unshipped_target_dir(&name, depth) {
+                continue;
+            }
         }
         let to = dst.join(&*name);
         if from.is_dir() {
-            copy_dir_filtered(&from, &to, &|_| true);
+            copy_dir_at_depth(&from, &to, &|_| true, depth + 1);
         } else {
             fs::copy(&from, &to).unwrap();
         }
