@@ -1,7 +1,7 @@
 use bevy::{
     feathers::{controls::FeathersDisclosureToggle, theme::ThemedText},
     prelude::*,
-    text::LineBreak,
+    text::{LineBreak, TextLayoutInfo},
     ui::Checked,
     ui_widgets::{ValueChange, observe},
 };
@@ -646,6 +646,7 @@ fn tree_row_content(
             // Label
             (
                 TreeRowLabel,
+                TreeRowLabelEllipsis,
                 Text::new(label),
                 TextFont {
                     font_size: tokens::TEXT_SIZE,
@@ -1031,7 +1032,26 @@ pub struct TreeRowLabelFit {
     pub full: String,
     /// The text last written into the label.
     pub shown: String,
+    /// How wide the whole name was drawn, in logical pixels, from the
+    /// last frame it was the text on screen. Zero until it has been.
+    ///
+    /// Kept because a cut label measures the cut text: without the width
+    /// of the whole name a row wide enough to hold it again could only be
+    /// found by writing it back, and a name that does not fit would be
+    /// cut on the next frame and written back on the one after.
+    pub full_width: f32,
 }
+
+/// Marks a row label laid out to fill the row, and so one that may be
+/// cut down to what the row has room for.
+///
+/// [`TreeRowLabel`] is shared with trees whose labels are laid out to
+/// their own text. Cutting one of those narrows it, which lowers the
+/// budget, which cuts it again, until a name is one letter -- so only a
+/// label given the row's leftover room is one whose width says anything
+/// about how much of the name fits.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct TreeRowLabelEllipsis;
 
 /// The narrowest a row's label is ever laid out, in logical pixels.
 ///
@@ -1044,15 +1064,14 @@ const LABEL_MIN_WIDTH: f32 = 64.0;
 /// single character, which the icon font has no glyph for.
 const ELLIPSIS: &str = "...";
 
-/// How wide one character is taken to be, as a fraction of the font size.
+/// How wide one character is taken to be, as a fraction of the font
+/// size, for a label that has not been laid out yet.
 ///
-/// The label is one line of a proportional face, so this is an estimate
-/// and not a measurement: `TextLayoutInfo` reports the width of the text
-/// that is drawn, which after a cut is the cut text, so measuring what is
-/// drawn cannot say whether the whole name would have fitted. An estimate
-/// that is a little wide cuts a character early; one that is narrow leaves
-/// the tail clipped, which is what this is here to stop.
-const CHAR_WIDTH_RATIO: f32 = 0.55;
+/// Only the frames before the text has a measurement use this. It is
+/// deliberately under the average of the editor's body face: an estimate
+/// that is a little narrow shows a character too many for one frame,
+/// while one that is wide cuts a name that fits.
+const CHAR_WIDTH_RATIO: f32 = 0.5;
 
 /// Cut a row's label down to the room the row gave it, and hang the full
 /// name off it as a tooltip.
@@ -1060,20 +1079,26 @@ const CHAR_WIDTH_RATIO: f32 = 0.55;
 /// Bevy has no ellipsis mode, so the cut is made here. A name that fits is
 /// left exactly as it was written and carries no tooltip: a tooltip
 /// repeating what is already on screen is noise.
+///
+/// Whether a name fits is a measurement, not an estimate: the width the
+/// whole name was drawn at is kept on [`TreeRowLabelFit`] the frame it is
+/// on screen, and every cut afterwards is worked out from it.
 pub fn ellipsize_tree_row_labels(
     mut labels: Query<
         (
             Entity,
             &mut Text,
             &ComputedNode,
+            &TextLayoutInfo,
             Option<&mut TreeRowLabelFit>,
         ),
-        With<TreeRowLabel>,
+        With<TreeRowLabelEllipsis>,
     >,
     mut commands: Commands,
 ) {
-    for (entity, mut text, computed, fit) in &mut labels {
-        let available = computed.size().x * computed.inverse_scale_factor();
+    for (entity, mut text, computed, layout, fit) in &mut labels {
+        let scale = computed.inverse_scale_factor();
+        let available = computed.size().x * scale;
         if available <= 0.0 {
             continue;
         }
@@ -1083,13 +1108,31 @@ pub fn ellipsize_tree_row_labels(
             Some(fit) if fit.shown == text.0 => fit.full.clone(),
             _ => text.0.clone(),
         };
-        let budget = (available / (tokens::TEXT_SIZE_PX * CHAR_WIDTH_RATIO)).floor();
-        let budget = if budget.is_finite() && budget > 0.0 {
-            budget as usize
+        let drawn = layout.size.x * scale;
+        let full_width = if text.0 == full && drawn > 0.0 {
+            drawn
         } else {
-            0
+            match fit.as_deref() {
+                Some(fit) if fit.full == full => fit.full_width,
+                _ => 0.0,
+            }
         };
-        let wanted = cut_to_fit(&full, budget);
+        let per_char = if full_width > 0.0 {
+            full_width / full.chars().count().max(1) as f32
+        } else {
+            tokens::TEXT_SIZE_PX * CHAR_WIDTH_RATIO
+        };
+        let wanted = if full_width > 0.0 && full_width <= available {
+            full.clone()
+        } else {
+            let budget = (available / per_char).floor();
+            let budget = if budget.is_finite() && budget > 0.0 {
+                budget as usize
+            } else {
+                0
+            };
+            cut_to_fit(&full, budget)
+        };
         if text.0 != wanted {
             text.0.clone_from(&wanted);
         }
@@ -1097,11 +1140,13 @@ pub fn ellipsize_tree_row_labels(
             Some(mut fit) => {
                 fit.full.clone_from(&full);
                 fit.shown.clone_from(&wanted);
+                fit.full_width = full_width;
             }
             None => {
                 commands.entity(entity).insert(TreeRowLabelFit {
                     full: full.clone(),
                     shown: wanted.clone(),
+                    full_width,
                 });
             }
         }

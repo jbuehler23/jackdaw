@@ -16,4 +16,5 @@ mod outliner_drag_cleanup;
 mod outliner_range_select;
 mod outliner_rename;
 mod outliner_row_icons;
+mod tree_row_labels;
 mod ui_palette;

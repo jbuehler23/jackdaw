@@ -622,4 +622,36 @@ mod tests {
             "opening the directory expands the row"
         );
     }
+
+    /// A file row's label is laid out to its own text, so it must not opt
+    /// in to being cut down to the room the row has: a cut narrows the
+    /// label, and the narrower label lowers the budget, until "assets"
+    /// reads "a".
+    #[test]
+    fn a_row_label_does_not_opt_in_to_the_ellipsis() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+        ))
+        .init_asset::<Image>()
+        .init_resource::<RowStore>();
+
+        let system_id = app.world_mut().register_system(spawn_dir_row);
+        app.world_mut().run_system(system_id).unwrap();
+        app.world_mut().flush();
+
+        let mut labels = app.world_mut().query_filtered::<Entity, With<TreeRowLabel>>();
+        let label = labels
+            .iter(app.world())
+            .next()
+            .expect("the directory row carries a label");
+        assert!(
+            app.world()
+                .get::<jackdaw_feathers::tree_view::TreeRowLabelEllipsis>(label)
+                .is_none(),
+            "the label is never cut to fit",
+        );
+    }
 }
