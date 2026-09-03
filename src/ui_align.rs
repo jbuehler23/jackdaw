@@ -225,7 +225,18 @@ pub fn distribute_selection(world: &mut World, axis: DistributeAxis) {
         );
         return;
     }
-    members.sort_by(|left, right| axis.of(left.rect.min).total_cmp(&axis.of(right.rect.min)));
+    // By centre, not by leading edge. The pass lays the members out from
+    // the box's near edge and the last one it places lands on the far one,
+    // so the order has to put the member holding the near edge first and
+    // the member holding the far edge last -- which is what the doc above
+    // promises. A leading-edge sort breaks that as soon as one node
+    // encloses another: a wide node starting early but reaching furthest
+    // sorts before a narrow one, and the wide node -- the one the span was
+    // measured to -- is then the one that moves.
+    members.sort_by(|left, right| {
+        let centre = |member: &Member| axis.of(member.rect.min) + axis.of(member.rect.max);
+        centre(left).total_cmp(&centre(right))
+    });
 
     let bounds = bounding_rect(&members);
     let span = axis.of(bounds.max) - axis.of(bounds.min);

@@ -99,16 +99,19 @@ pub fn open_text_editor(world: &mut World, node: Entity, host: Entity) {
         commit_text_edit(world);
     }
     let Some(before) = world.get::<Text>(node).map(|text| text.0.clone()) else {
+        crate::status_bar::notify_error(world, "this node holds no text to edit");
         return;
     };
     let Some(stage) = world
         .get::<crate::viewport_2d::Viewport2dPanelHost>(host)
         .map(|host| host.stage)
     else {
+        crate::status_bar::notify_error(world, "this panel has no canvas to open an entry on");
         return;
     };
 
     let Ok(mut overlay) = world.spawn_scene(entry_scene()) else {
+        crate::status_bar::notify_error(world, "the text entry could not be built");
         return;
     };
     overlay.insert((
@@ -127,6 +130,7 @@ pub fn open_text_editor(world: &mut World, node: Entity, host: Entity) {
 
     let Some(input) = descendant_with_editable_text(world, overlay) else {
         world.entity_mut(overlay).despawn();
+        crate::status_bar::notify_error(world, "the text entry came up with nothing to type in");
         return;
     };
     if let Some(mut editable) = world.get_mut::<EditableText>(input) {
@@ -238,6 +242,13 @@ pub fn commit_text_edit(world: &mut World) {
 /// Text that came back the same as it went in writes nothing: an entry
 /// opened and dismissed is not an edit, and a history entry for it would
 /// have to be undone before the real one.
+///
+/// The write is aimed at the edited node alone and the selection is put
+/// back afterwards. A field commit writes to every selected node, so a
+/// commit made with three labels selected typed the same words onto all
+/// three; naming only the edited one instead collapsed the selection to
+/// it, and the alignment or the group the user had lined up was gone by
+/// the time they looked up.
 fn write_text_edit(world: &mut World, value: String) {
     let Some((node, before)) = world
         .resource::<TextEditSession>()
@@ -251,7 +262,11 @@ fn write_text_edit(world: &mut World, value: String) {
     if value == before {
         return;
     }
-    crate::selection::select_for_edit(world, node);
+    let selected = world
+        .get_resource::<crate::selection::Selection>()
+        .map(|selection| selection.entities.clone())
+        .unwrap_or_default();
+    crate::selection::select_only(world, node);
     crate::commands::field_edit_commit(
         world,
         Text::type_path(),
@@ -259,6 +274,9 @@ fn write_text_edit(world: &mut World, value: String) {
         &serde_json::Value::String(value),
         TEXT_EDIT_LABEL,
     );
+    if selected != [node] {
+        crate::selection::select_many(world, &selected);
+    }
 }
 
 /// Undo label an in-place text edit lands under.

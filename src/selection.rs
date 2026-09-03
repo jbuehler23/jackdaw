@@ -28,6 +28,22 @@ pub fn select_only(world: &mut World, entity: Entity) {
     state.apply(world);
 }
 
+/// Put `entities` back as the selection, in the order given.
+///
+/// For a path that had to aim a selection-wide write at one node and owes
+/// the user the selection they had: the canvas's in-place text edit
+/// commits through the inspector's field path, which writes to everything
+/// selected.
+pub fn select_many(world: &mut World, entities: &[Entity]) {
+    let mut state: bevy::ecs::system::SystemState<(Commands, ResMut<Selection>)> =
+        bevy::ecs::system::SystemState::new(world);
+    let Ok((mut commands, mut selection)) = state.get_mut(world) else {
+        return;
+    };
+    selection.select_multiple(&mut commands, entities);
+    state.apply(world);
+}
+
 /// Bring `entity` into the selection so a gesture that writes the
 /// selection writes it.
 ///
@@ -112,6 +128,12 @@ impl Selection {
     /// the removal fires the prune observer, which takes the entity out of
     /// this very list, and the insert that follows puts the marker back
     /// without putting the entry back.
+    ///
+    /// An entity that is no longer in the world is dropped rather than
+    /// listed. A band collects what it swept a frame ago, and anything
+    /// despawned since would otherwise be selected without ever being
+    /// marked: nothing would draw it, nothing would prune it, and it would
+    /// stand as the primary selection every operator then read.
     pub fn select_multiple(&mut self, commands: &mut Commands, entities: &[Entity]) {
         for &previous in &self.entities {
             if !entities.contains(&previous)
@@ -122,10 +144,11 @@ impl Selection {
         }
         self.entities.clear();
         for &entity in entities {
+            let Ok(mut ec) = commands.get_entity(entity) else {
+                continue;
+            };
+            ec.insert(Selected);
             self.entities.push(entity);
-            if let Ok(mut ec) = commands.get_entity(entity) {
-                ec.insert(Selected);
-            }
         }
     }
 
@@ -181,6 +204,40 @@ mod tests {
         assert!(world.resource::<Selection>().entities.is_empty());
         assert!(world.get::<Selected>(a).is_none());
         assert!(world.get::<Selected>(b).is_none());
+    }
+
+    /// A band collects what it swept a frame ago, and anything despawned
+    /// since is not a selection: nothing draws it, nothing prunes it, and
+    /// it stands as the primary the next operator reads.
+    #[test]
+    fn select_multiple_drops_an_entity_that_is_no_longer_there() {
+        let mut world = World::new();
+        world.insert_resource(Selection::default());
+        let live = world.spawn_empty().id();
+        let dead = world.spawn_empty().id();
+        world.despawn(dead);
+
+        let mut state: bevy::ecs::system::SystemState<Commands> =
+            bevy::ecs::system::SystemState::new(&mut world);
+        {
+            let Ok(mut commands) = state.get_mut(&mut world) else {
+                panic!("a fresh world hands out commands");
+            };
+            let mut selection = Selection::default();
+            selection.select_multiple(&mut commands, &[live, dead]);
+            assert_eq!(
+                selection.entities,
+                vec![live],
+                "the despawned entity is left out rather than listed as selected",
+            );
+            assert_eq!(
+                selection.primary(),
+                Some(live),
+                "so the primary is something that is still there",
+            );
+        }
+        state.apply(&mut world);
+        assert!(world.get::<Selected>(live).is_some());
     }
 
     #[test]

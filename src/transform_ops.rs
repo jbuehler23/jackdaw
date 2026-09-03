@@ -314,7 +314,7 @@ pub(crate) fn can_nudge(
     panel_focus: crate::panel_focus::PanelFocus,
     keyboard: Res<ButtonInput<KeyCode>>,
 ) -> bool {
-    if crate::draw_brush::unwanted_modifier(&keyboard, false) {
+    if crate::keybinds::unwanted_modifier(&keyboard, crate::draw_brush::BRUSH_CHORD) {
         return false;
     }
     can_act_on_entities(

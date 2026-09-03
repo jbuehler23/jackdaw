@@ -192,3 +192,51 @@ fn undoing_a_group_selects_what_was_grouped() {
         "undo goes back to the selection the group was asked for",
     );
 }
+
+/// Ctrl+Shift+Z is Redo's chord, so Undo stands down when Shift is held.
+///
+/// The modifier matcher is "must include these", so the Ctrl-only binding
+/// answers Ctrl+Shift+Z too and both operators fire on one press. Undo
+/// reads what the chord did not name and refuses; the check used to be a
+/// hand-rolled Shift test that said nothing about Alt or Super.
+#[test]
+fn undo_stands_down_while_shift_is_held() {
+    let mut app = util::editor_test_app();
+    let (_root, children) = scene(&mut app);
+    jackdaw::selection::select_many(app.world_mut(), &children);
+    settle(&mut app);
+
+    let before = app
+        .world()
+        .get::<Node>(children[1])
+        .expect("the node is there")
+        .left;
+    run_finished(&mut app, "ui.align_left");
+    let aligned = app
+        .world()
+        .get::<Node>(children[1])
+        .expect("the node is there")
+        .left;
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::ShiftLeft);
+    settle(&mut app);
+    undo(&mut app);
+    assert_eq!(
+        app.world().get::<Node>(children[1]).map(|node| node.left),
+        Some(aligned),
+        "Shift held is Redo's chord, so this one leaves the edit standing",
+    );
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::ShiftLeft);
+    settle(&mut app);
+    undo(&mut app);
+    assert_eq!(
+        app.world().get::<Node>(children[1]).map(|node| node.left),
+        Some(before),
+        "and with nothing else held it undoes the edit",
+    );
+}

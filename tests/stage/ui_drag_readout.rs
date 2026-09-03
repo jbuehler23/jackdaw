@@ -332,3 +332,35 @@ fn the_spacing_line_states_the_gap_to_the_nearest_sibling_edge() {
         "the spacing says how far there is to the sibling's edge; got {spacing:?}",
     );
 }
+
+/// Once the dragged node has run over its neighbour the gap is an overlap,
+/// and the readout says so with a sign.
+///
+/// Taken as an absolute the two were the same figure: `x 30` read the same
+/// whether there were thirty pixels of daylight left or thirty pixels of
+/// the neighbour already covered, which is the opposite news.
+#[test]
+fn the_spacing_line_reads_negative_once_the_nodes_overlap() {
+    let mut app = util::editor_test_app();
+    let panel = panel(&mut app);
+    let (dragged, _sibling) = scene(&mut app);
+    without_the_magnet(&mut app);
+    select(&mut app, dragged);
+    let outline = overlay(&mut app);
+
+    // Dragged 400 right: it spans 600..800 and the sibling spans 500..700,
+    // so the sibling's near edge is 100 inside it.
+    drag_to(
+        &mut app,
+        panel,
+        outline,
+        Vec2::new(300.0, 150.0),
+        Vec2::new(700.0, 150.0),
+    );
+
+    let (_, spacing) = readout_lines(&mut app).expect("the gesture draws a readout");
+    assert!(
+        spacing.contains("x -100"),
+        "the spacing says how far the nodes have run into each other; got {spacing:?}",
+    );
+}

@@ -420,7 +420,10 @@ fn a_selected_leaf_gets_a_sibling_and_a_selected_container_gets_a_child() {
         world.get::<ChildOf>(beside).map(ChildOf::parent),
         Some(button),
     );
-    assert_ne!(world.get::<ChildOf>(beside).map(ChildOf::parent), Some(root));
+    assert_ne!(
+        world.get::<ChildOf>(beside).map(ChildOf::parent),
+        Some(root)
+    );
 }
 
 #[test]

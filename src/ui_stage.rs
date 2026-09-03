@@ -210,7 +210,8 @@ pub struct UiSelectionOverlay {
     pub primary: bool,
     /// Per axis, whether the node is small enough that this axis's handles
     /// are drawn outside it. Kept so the handles are re-placed when a
-    /// resize crosses [`HANDLES_OUTSIDE_BELOW`] and not on every frame.
+    /// resize crosses the size at which they move out, and not on every
+    /// frame.
     pub handles_outside: BVec2,
 }
 
@@ -792,6 +793,8 @@ impl Plugin for UiStagePlugin {
             .init_resource::<GuideManipulation>()
             .init_resource::<UiHoverPreselect>()
             .init_resource::<MarqueeSelect>()
+            .init_resource::<StageHitCache>()
+            .add_systems(First, drop_stage_hit_cache)
             .add_observer(on_stage_press)
             .add_observer(on_stage_double_press)
             .add_observer(on_stage_asset_drop)
@@ -945,6 +948,50 @@ pub(crate) enum StagePick {
 /// The one place the stage's pixels become an authored node: resolving
 /// what a press on the overlay is over, and hit-testing a drag, both go
 /// through here rather than through a second copy of the mapping.
+/// Every authored node routed to one camera, in paint order, gathered once
+/// a frame.
+///
+/// A single press asks three separate observers what is under the cursor
+/// and every pointer move asks a fourth, and each of them walked the whole
+/// scene to answer. Layout is written once a frame and nothing an observer
+/// does moves a rect, so the walk's answer is the same every time it is
+/// asked within one frame. It is thrown away at the start of the next.
+///
+/// One camera's worth, because a frame that asks about two panels asks
+/// about one of them at a time; the second question refills it.
+#[derive(Resource, Default)]
+pub struct StageHitCache {
+    camera: Option<Entity>,
+    hits: Vec<StageHit>,
+}
+
+/// Throw last frame's hit list away, before anything reads one.
+fn drop_stage_hit_cache(mut cache: ResMut<StageHitCache>) {
+    cache.camera = None;
+    cache.hits.clear();
+}
+
+/// The hit list for `camera`, from the cache when this frame has already
+/// gathered it.
+fn stage_hits<'cache>(
+    camera: Entity,
+    roots: &Query<(Entity, &UiTargetCamera), AuthoredUiSceneRoot>,
+    nodes: &AuthoredNodes,
+    children: &Query<&Children>,
+    cache: &'cache mut StageHitCache,
+) -> &'cache [StageHit] {
+    if cache.camera != Some(camera) {
+        cache.camera = Some(camera);
+        cache.hits.clear();
+        for (root, routed) in roots {
+            if routed.entity() == camera {
+                collect_stage_hits(root, nodes, children, &mut cache.hits);
+            }
+        }
+    }
+    &cache.hits
+}
+
 pub(crate) fn hit_at(
     cursor: Vec2,
     host: &Viewport2dPanelHost,
@@ -952,6 +999,7 @@ pub(crate) fn hit_at(
     roots: &Query<(Entity, &UiTargetCamera), AuthoredUiSceneRoot>,
     nodes: &AuthoredNodes,
     children: &Query<&Children>,
+    cache: &mut StageHitCache,
 ) -> StagePick {
     let (computed, transform) = stage;
     let target_scale = target_pixels_per_stage_pixel(computed.size(), host.target_size);
@@ -966,17 +1014,12 @@ pub(crate) fn hit_at(
     };
     let point = stage_to_authored(offset, host.target_size);
 
-    let mut hits = Vec::new();
-    for (root, routed) in roots {
-        if routed.entity() == host.camera {
-            collect_stage_hits(root, nodes, children, &mut hits);
-        }
-    }
+    let hits = stage_hits(host.camera, roots, nodes, children, cache);
     if hits.is_empty() {
         return StagePick::Empty;
     }
 
-    match topmost_hit(point, &hits) {
+    match topmost_hit(point, hits) {
         Some(entity) => StagePick::Hit(entity),
         None => StagePick::Miss,
     }
@@ -1095,6 +1138,7 @@ fn on_marquee_start(
     children: Query<&Children>,
     selection: Res<Selection>,
     mut marquee: ResMut<MarqueeSelect>,
+    mut hit_cache: ResMut<StageHitCache>,
 ) {
     if event.button != PointerButton::Primary {
         return;
@@ -1128,8 +1172,15 @@ fn on_marquee_start(
         return;
     };
     let cursor = event.pointer_location.position / ui_scale.0;
-    if let StagePick::Hit(entity) = hit_at(cursor, host, stage, &roots, &nodes, &children)
-        && !roots.contains(entity)
+    if let StagePick::Hit(entity) = hit_at(
+        cursor,
+        host,
+        stage,
+        &roots,
+        &nodes,
+        &children,
+        &mut hit_cache,
+    ) && !roots.contains(entity)
     {
         marquee.seed = None;
         return;
@@ -1199,6 +1250,7 @@ fn on_marquee_end(
     mut selection: ResMut<Selection>,
     mut marquee: ResMut<MarqueeSelect>,
     mut commands: Commands,
+    mut hit_cache: ResMut<StageHitCache>,
 ) {
     let Some(band) = marquee.band.take() else {
         return;
@@ -1213,20 +1265,17 @@ fn on_marquee_end(
     };
     let rect = Rect::from_corners(band.start, band.current);
 
-    let mut swept = Vec::new();
-    for (root, routed) in &roots {
-        if routed.entity() != host.camera {
-            continue;
-        }
-        let mut hits = Vec::new();
-        collect_stage_hits(root, &nodes, &children, &mut hits);
-        swept.extend(
-            hits.into_iter()
-                .filter(|hit| hit.entity != root)
-                .filter(|hit| overlaps(rect, hit.rect))
-                .map(|hit| hit.entity),
-        );
-    }
+    let scene_roots: Vec<Entity> = roots
+        .iter()
+        .filter(|(_, routed)| routed.entity() == host.camera)
+        .map(|(root, _)| root)
+        .collect();
+    let swept: Vec<Entity> = stage_hits(host.camera, &roots, &nodes, &children, &mut hit_cache)
+        .iter()
+        .filter(|hit| !scene_roots.contains(&hit.entity))
+        .filter(|hit| overlaps(rect, hit.rect))
+        .map(|hit| hit.entity)
+        .collect();
 
     let wanted = if band.extend {
         let mut wanted = band.base.clone();
@@ -1257,6 +1306,11 @@ fn overlaps(left: Rect, right: Rect) -> bool {
 }
 
 /// Escape drops the band and leaves the selection as the press left it.
+///
+/// The seed goes with it. It is what the *next* band would build on, and a
+/// seed left behind by an abandoned gesture is a selection the user has
+/// already said they did not want, put back under a band pulled out
+/// somewhere else entirely.
 fn cancel_marquee(
     keys: Res<ButtonInput<KeyCode>>,
     focus: crate::keybind_focus::KeybindFocus,
@@ -1267,6 +1321,7 @@ fn cancel_marquee(
     }
     if marquee.band.is_some() && keys.just_pressed(KeyCode::Escape) {
         marquee.band = None;
+        marquee.seed = None;
     }
 }
 
@@ -1383,12 +1438,39 @@ fn readout_figure(value: f32) -> String {
 /// The gesture's own candidates, so the figure the readout shows is the
 /// same geometry the magnet lands on: the readout says how far there is
 /// to go, and the highlight says when the drag got there.
+///
+/// Signed, because a gap and an overlap are not the same news. A sibling
+/// edge outside the dragged rect is a gap and reads positive; one that has
+/// crossed inside it is an overlap and reads negative, by how far in it
+/// has come. Taken as an absolute the two were the same figure, and a
+/// readout saying `x 12` while the nodes sat on top of each other said the
+/// opposite of what was on screen.
+///
+/// Edges come in pairs, so an overlap of n and a gap of n are both on
+/// offer as often as not; the overlap wins the tie, because it is the half
+/// of the news the author cannot see for themselves.
 fn nearest_sibling_gap(candidates: &[Candidate], near: f32, far: f32) -> Option<f32> {
     candidates
         .iter()
         .filter(|candidate| candidate.kind == CandidateKind::SiblingSide)
-        .map(|candidate| (candidate.at - near).abs().min((candidate.at - far).abs()))
-        .min_by(f32::total_cmp)
+        .map(|candidate| edge_gap(candidate.at, near, far))
+        .min_by(|left, right| {
+            left.abs()
+                .total_cmp(&right.abs())
+                .then_with(|| left.total_cmp(right))
+        })
+}
+
+/// How far the sibling edge at `at` is from the dragged span `near..far`:
+/// positive outside it, negative once it has crossed inside.
+fn edge_gap(at: f32, near: f32, far: f32) -> f32 {
+    if at <= near {
+        near - at
+    } else if at >= far {
+        at - far
+    } else {
+        -(at - near).min(far - at)
+    }
 }
 
 /// What the running gesture wants drawn, or `None` when nothing is being
@@ -1444,10 +1526,17 @@ fn gesture_readout(world: &World) -> Option<Readout> {
 /// helpers the gesture writes through rather than a second copy of them.
 /// It does nothing at all when no gesture is running, which is nearly
 /// always.
-fn sync_drag_readouts(world: &mut World) {
+fn sync_drag_readouts(
+    world: &mut World,
+    // Kept across frames rather than built on each one: a fresh
+    // `QueryState` walks every archetype in the world to work out which
+    // ones it matches, and this system runs whether or not a gesture is
+    // going on.
+    mut drawn: Local<Option<QueryState<(Entity, &'static DragReadout)>>>,
+) {
     let wanted = gesture_readout(world);
-    let existing: Vec<(Entity, Entity)> = world
-        .query::<(Entity, &DragReadout)>()
+    let drawn = drawn.get_or_insert_with(|| world.query::<(Entity, &DragReadout)>());
+    let existing: Vec<(Entity, Entity)> = drawn
         .iter(world)
         .map(|(entity, readout)| (entity, readout.host))
         .collect();
@@ -1603,6 +1692,7 @@ fn on_stage_press(
     mut selection: ResMut<Selection>,
     mut marquee: ResMut<MarqueeSelect>,
     mut commands: Commands,
+    mut hit_cache: ResMut<StageHitCache>,
 ) {
     if event.button != PointerButton::Primary {
         return;
@@ -1632,7 +1722,15 @@ fn on_stage_press(
         return;
     };
     let cursor = event.pointer_location.position / ui_scale.0;
-    let pick = hit_at(cursor, host, stage, &roots, &nodes, &children);
+    let pick = hit_at(
+        cursor,
+        host,
+        stage,
+        &roots,
+        &nodes,
+        &children,
+        &mut hit_cache,
+    );
     let extend = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     let toggle = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
 
@@ -1694,6 +1792,7 @@ fn on_stage_asset_drop(
     children: Query<&Children>,
     mut drag: ResMut<crate::asset_browser::ActiveAssetDrag>,
     mut commands: Commands,
+    mut hit_cache: ResMut<StageHitCache>,
 ) {
     let target = event.event_target();
     let panel = match overlays.get(target) {
@@ -1717,7 +1816,15 @@ fn on_stage_asset_drop(
         return;
     };
     let cursor = event.pointer_location.position / ui_scale.0;
-    let under = match hit_at(cursor, host, stage, &roots, &nodes, &children) {
+    let under = match hit_at(
+        cursor,
+        host,
+        stage,
+        &roots,
+        &nodes,
+        &children,
+        &mut hit_cache,
+    ) {
         StagePick::Hit(entity) => Some(entity),
         StagePick::Miss | StagePick::Empty => None,
     };
@@ -1765,6 +1872,7 @@ fn on_stage_double_press(
     children: Query<&Children>,
     mut last_press: Local<Option<(Entity, f64)>>,
     mut commands: Commands,
+    mut hit_cache: ResMut<StageHitCache>,
 ) {
     if event.button != PointerButton::Primary {
         return;
@@ -1788,7 +1896,15 @@ fn on_stage_double_press(
         return;
     };
     let cursor = event.pointer_location.position / ui_scale.0;
-    let StagePick::Hit(entity) = hit_at(cursor, host, stage, &roots, &nodes, &children) else {
+    let StagePick::Hit(entity) = hit_at(
+        cursor,
+        host,
+        stage,
+        &roots,
+        &nodes,
+        &children,
+        &mut hit_cache,
+    ) else {
         *last_press = None;
         return;
     };
@@ -1829,6 +1945,7 @@ fn on_stage_hover(
     nodes: AuthoredNodes,
     children: Query<&Children>,
     mut hover: ResMut<UiHoverPreselect>,
+    mut hit_cache: ResMut<StageHitCache>,
 ) {
     let target = event.event_target();
     // A handle is part of the overlay it hangs off, so the cursor on one
@@ -1848,7 +1965,15 @@ fn on_stage_hover(
         .flatten()
         .and_then(|stage| {
             let cursor = event.pointer_location.position / ui_scale.0;
-            match hit_at(cursor, host, stage, &roots, &nodes, &children) {
+            match hit_at(
+                cursor,
+                host,
+                stage,
+                &roots,
+                &nodes,
+                &children,
+                &mut hit_cache,
+            ) {
                 StagePick::Hit(entity) => Some(entity),
                 StagePick::Miss | StagePick::Empty => None,
             }
@@ -2021,6 +2146,14 @@ fn sync_selection_overlays(
     mut nodes: Query<&mut Node>,
 ) {
     let primary = selection.primary();
+    // One pass over the outlines rather than one per selected node per
+    // panel: with three panels open on a selection of ten this was thirty
+    // scans of the whole outline list every frame, and the answer each of
+    // them wanted was a lookup.
+    let index: std::collections::HashMap<(Entity, Entity, bool), Entity> = overlays
+        .iter()
+        .map(|(entity, overlay)| ((overlay.host, overlay.node, overlay.primary), entity))
+        .collect();
 
     for (host_entity, host) in &hosts {
         let wanted: &[Entity] = if host.mode == Viewport2dMode::Edit {
@@ -2044,14 +2177,7 @@ fn sync_selection_overlays(
 
         for node in wanted {
             let is_primary = primary == Some(*node);
-            let overlay = overlays
-                .iter()
-                .find(|(_, overlay)| {
-                    overlay.host == host_entity
-                        && overlay.node == *node
-                        && overlay.primary == is_primary
-                })
-                .map(|(entity, _)| entity);
+            let overlay = index.get(&(host_entity, *node, is_primary)).copied();
 
             match overlay_placement(*node, host, &stages, &authored) {
                 Placement::At(rect) => match overlay {
@@ -3948,7 +4074,13 @@ fn handle_node(x: i8, y: i8, outside: BVec2) -> Node {
 /// Where the handle for `(x, y)` sits on an outline whose node is small
 /// on the axes `outside` names.
 fn place_handle(node: &mut Node, x: i8, y: i8, outside: BVec2) {
-    let offset = |small: bool| px(if small { -HANDLE_SIZE } else { -HANDLE_SIZE / 2.0 });
+    let offset = |small: bool| {
+        px(if small {
+            -HANDLE_SIZE
+        } else {
+            -HANDLE_SIZE / 2.0
+        })
+    };
     node.margin = UiRect::default();
     match x {
         -1 => {

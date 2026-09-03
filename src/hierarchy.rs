@@ -131,7 +131,7 @@ impl Plugin for HierarchyPlugin {
                     spawn_rows_for_late_registrations,
                     refresh_chevrons_on_document_change,
                     refresh_icons_on_node_change,
-                    sync_row_lock_glyphs,
+                    sync_row_lock_glyphs.run_if(row_lock_glyphs_are_stale),
                     // The drag feel: the line saying where a release
                     // would land, the rest that opens a closed row, and
                     // the scroll that reaches past the fold. Row
@@ -2654,6 +2654,23 @@ struct RowLockGlyph(bool);
 /// after the row is spawned. A row whose glyph is not there yet is left for
 /// the next frame, and a row already saying the right thing is not written
 /// at all.
+/// Whether anything could have changed a padlock since the last pass.
+///
+/// A lock arriving, a lock going, or a row that has not been written yet
+/// -- which covers a row spawned this frame and a row whose button had not
+/// rendered its glyph when the pass last looked. Nothing else can move a
+/// padlock, so on every other frame the walk over every row is skipped.
+fn row_lock_glyphs_are_stale(
+    pending: Query<(), (With<TreeNode>, Without<RowLockGlyph>)>,
+    locked_arrived: Query<(), Added<jackdaw_scene_types::Locked>>,
+    mut locked_left: RemovedComponents<jackdaw_scene_types::Locked>,
+) -> bool {
+    // Read rather than peeked: the queue is this reader's, and leaving a
+    // removal in it would answer "stale" on every frame afterwards.
+    let left = locked_left.read().count() > 0;
+    left || !pending.is_empty() || !locked_arrived.is_empty()
+}
+
 fn sync_row_lock_glyphs(
     mut commands: Commands,
     rows: Query<(Entity, &TreeNode, Option<&RowLockGlyph>)>,

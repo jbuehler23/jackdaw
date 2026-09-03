@@ -387,3 +387,67 @@ fn the_entry_follows_the_canvas_it_is_drawn_on() {
         "a zoom moves the entry with the node it is over",
     );
 }
+
+/// A commit writes the edited node and nothing else, and hands the
+/// selection back the way it found it.
+///
+/// A field commit writes to every selected node, so a commit made with two
+/// labels selected typed the same words onto both; naming only the edited
+/// one instead collapsed the selection to it, and the pair the user had
+/// lined up to align was gone by the time they looked up.
+#[test]
+fn a_commit_writes_one_node_and_leaves_the_selection_as_it_was() {
+    let mut app = util::editor_test_app();
+    let panel = panel(&mut app);
+    let (label, _plain) = scene(&mut app);
+    let root = app
+        .world()
+        .get::<ChildOf>(label)
+        .expect("the label has a parent")
+        .parent();
+    let other = app
+        .world_mut()
+        .spawn((
+            Name::new("Other"),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(200.0),
+                top: px(400.0),
+                width: px(400.0),
+                height: px(200.0),
+                ..default()
+            },
+            Text::new("Untouched"),
+            ChildOf(root),
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), other);
+    settle(&mut app);
+
+    open_entry(&mut app, panel, Vec2::new(400.0, 200.0));
+    // The pair the user lined up while the entry was open, which the
+    // commit is not asked to touch.
+    jackdaw::selection::select_many(app.world_mut(), &[other, label]);
+    settle(&mut app);
+    let selected = app
+        .world()
+        .resource::<jackdaw::selection::Selection>()
+        .entities
+        .clone();
+
+    type_into_entry(&mut app, "After");
+
+    assert_eq!(text_of(&app, label), "After", "the edited node took it");
+    assert_eq!(
+        text_of(&app, other),
+        "Untouched",
+        "and the rest of the selection did not",
+    );
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::selection::Selection>()
+            .entities,
+        selected,
+        "the selection the entry opened over is the selection it leaves behind",
+    );
+}

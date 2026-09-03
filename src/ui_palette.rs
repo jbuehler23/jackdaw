@@ -124,7 +124,8 @@ impl std::error::Error for PaletteError {}
 
 /// Create the widget `definition_id` names where the selection says, as one
 /// undoable step: inside it when the selection is a container, beside it
-/// when it is not. See [`widget_slot`].
+/// when it is not; a container is a Panel, a Row, a Column, a Grid or a
+/// scroll area.
 ///
 /// An unknown id, a document with no UI scene, and a definition that refuses
 /// all return an error for the caller to report.

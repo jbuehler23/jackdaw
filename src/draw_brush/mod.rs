@@ -483,21 +483,20 @@ pub struct StartDrawBrushAddAppendAction;
 #[action_output(bool)]
 pub struct StartDrawBrushCutAction;
 
-/// Whether a key the chord did not ask for is being held.
-///
-/// `bevy_enhanced_input` matches a binding on the modifiers it *names*
-/// and says nothing about the ones it does not, so a binding on a bare
-/// key answers a chord built on that key as well. Ctrl+C is the editor's
-/// copy; without this it also started a cut brush, and every entity
-/// operator refuses to run behind the modal that left standing.
-pub(crate) fn unwanted_modifier(keyboard: &ButtonInput<KeyCode>, alt_is_wanted: bool) -> bool {
-    keyboard.any_pressed([
-        KeyCode::ControlLeft,
-        KeyCode::ControlRight,
-        KeyCode::SuperLeft,
-        KeyCode::SuperRight,
-    ]) || (!alt_is_wanted && keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]))
-}
+/// The brush chords name no modifier of their own. Shift is theirs all
+/// the same: the drag reads it as the constrain key, so holding it is part
+/// of the gesture rather than a different chord.
+pub(crate) const BRUSH_CHORD: crate::keybinds::ChordModifiers = crate::keybinds::ChordModifiers {
+    ctrl: false,
+    alt: false,
+    shift: true,
+};
+
+/// The append variant, which names Alt.
+const BRUSH_CHORD_ALT: crate::keybinds::ChordModifiers = crate::keybinds::ChordModifiers {
+    alt: true,
+    ..BRUSH_CHORD
+};
 
 fn dispatch_start_add_append(
     _: On<Start<StartDrawBrushAddAppendAction>>,
@@ -511,7 +510,7 @@ fn dispatch_start_add_append(
     if KeymapCapture::is_recording(capture.as_deref()) {
         return;
     }
-    if unwanted_modifier(&keyboard, true) {
+    if crate::keybinds::unwanted_modifier(&keyboard, BRUSH_CHORD_ALT) {
         return;
     }
     commands
@@ -536,7 +535,7 @@ fn dispatch_start_cut(
         return;
     }
     // Bare C, and only bare C: Ctrl+C is copy.
-    if unwanted_modifier(&keyboard, false) {
+    if crate::keybinds::unwanted_modifier(&keyboard, BRUSH_CHORD) {
         return;
     }
     // In a brush edit sub-mode, C opens the mesh quick-menu instead. Starting a

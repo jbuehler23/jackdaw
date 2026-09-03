@@ -321,8 +321,7 @@ fn the_lock_control_says_what_a_lock_lets_through() {
     let tip = lock_tooltip(&mut app, root);
     assert_eq!(tip.title, "Lock", "the control says which control it is");
     assert!(
-        tip.description.contains("let the pointer through")
-            && tip.description.contains("marquee"),
+        tip.description.contains("let the pointer through") && tip.description.contains("marquee"),
         "and what locking is for: {}",
         tip.description,
     );
@@ -344,7 +343,11 @@ fn lock_tooltip(app: &mut App, source: Entity) -> jackdaw_feathers::tooltip::Too
         .filter(|&&child| world.get::<TreeRowContent>(child).is_some())
         .flat_map(|&content| world.get::<Children>(content).into_iter().flatten())
         .filter(|&&child| world.get::<TreeRowLockToggle>(child).is_some())
-        .find_map(|&toggle| world.get::<jackdaw_feathers::tooltip::Tooltip>(toggle).cloned())
+        .find_map(|&toggle| {
+            world
+                .get::<jackdaw_feathers::tooltip::Tooltip>(toggle)
+                .cloned()
+        })
         .expect("the lock control carries a tooltip")
 }
 

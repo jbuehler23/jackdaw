@@ -11,9 +11,8 @@ use jackdaw_widgets::tree_view::{
     TreeNodeExpandToggle, TreeNodeExpanded, TreeRoot, TreeRowChildren, TreeRowClicked,
     TreeRowContent, TreeRowDot, TreeRowDropped, TreeRowDroppedOnRoot, TreeRowInlineRename,
     TreeRowInsertZone, TreeRowInserted, TreeRowLabel, TreeRowLockToggle, TreeRowLockToggled,
-    TreeRowSelected,
-    TreeRowStartRename, TreeRowVisibilityToggle, TreeRowVisibilityToggled, TreeSpringLoad,
-    TreeView,
+    TreeRowSelected, TreeRowStartRename, TreeRowVisibilityToggle, TreeRowVisibilityToggled,
+    TreeSpringLoad, TreeView,
 };
 
 use lucide_icons::Icon;
@@ -1106,12 +1105,13 @@ pub fn ellipsize_tree_row_labels(
             &ComputedNode,
             &TextLayoutInfo,
             Option<&mut TreeRowLabelFit>,
+            Option<&crate::tooltip::Tooltip>,
         ),
         (With<TreeRowLabelEllipsis>, Without<TreeRowInlineRename>),
     >,
     mut commands: Commands,
 ) {
-    for (entity, mut text, computed, layout, fit) in &mut labels {
+    for (entity, mut text, computed, layout, fit, tooltip) in &mut labels {
         let scale = computed.inverse_scale_factor();
         let available = computed.size().x * scale;
         if available <= 0.0 {
@@ -1165,9 +1165,15 @@ pub fn ellipsize_tree_row_labels(
                 });
             }
         }
+        // Only on a change. Written every frame, the insert and the remove
+        // were two commands per row per frame for a tooltip that had said
+        // the same thing since the row was spawned.
+        let shown = tooltip.map(|tooltip| tooltip.title.as_str());
         if wanted == full {
-            commands.entity(entity).remove::<crate::tooltip::Tooltip>();
-        } else {
+            if shown.is_some() {
+                commands.entity(entity).remove::<crate::tooltip::Tooltip>();
+            }
+        } else if shown != Some(full.as_str()) {
             commands
                 .entity(entity)
                 .insert(crate::tooltip::Tooltip::title(full));

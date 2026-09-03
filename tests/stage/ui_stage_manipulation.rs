@@ -355,7 +355,7 @@ fn a_small_nodes_handles_ring_it_rather_than_cover_it() {
     use bevy::ui::UiGlobalTransform;
 
     let mut app = stage_app();
-    let panel = panel_entity(&mut app);
+    let _panel = panel_entity(&mut app);
     let (root, _, _) = authored_scene(&mut app);
     let label = app
         .world_mut()

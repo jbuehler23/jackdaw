@@ -289,6 +289,45 @@ fn distributing_evens_the_gaps_and_leaves_the_ends_alone() {
     assert_eq!(offsets(&app, boxes[2]).0, px(500.0), "the last end holds");
 }
 
+/// The two outermost members hold still even when one of them starts
+/// inside another.
+///
+/// The pass lays the members out from the box's near edge and the last one
+/// it places lands on the far edge, so the order has to end with whichever
+/// member reaches furthest. Ordered by leading edge it did not: a wide box
+/// starting early sorted before a narrow one starting later, so the box
+/// the span was measured to was the box that moved, and the span the doc
+/// promises to hold was not held.
+#[test]
+fn distributing_holds_the_member_that_reaches_furthest() {
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    let root = root_with_border(&mut app);
+    // "Wide" starts before "Narrow" and ends after it, so it is both an
+    // end of the span and not the last box by leading edge.
+    let boxes = vec![
+        child(&mut app, root, "First", 0.0, 0.0, 100.0, 50.0),
+        child(&mut app, root, "Wide", 200.0, 0.0, 400.0, 50.0),
+        child(&mut app, root, "Narrow", 300.0, 0.0, 100.0, 50.0),
+    ];
+    settle(&mut app);
+    select(&mut app, &boxes);
+
+    run_finished(&mut app, "ui.distribute_horizontal");
+
+    assert_eq!(
+        offsets(&app, boxes[0]).0,
+        px(0.0),
+        "the member holding the near edge holds still",
+    );
+    let wide = offsets(&app, boxes[1]).0;
+    assert_eq!(
+        wide,
+        px(200.0),
+        "and so does the member holding the far edge, which is the wide one",
+    );
+}
+
 #[test]
 fn distributing_the_other_way_moves_the_other_axis() {
     let mut app = util::editor_test_app();
