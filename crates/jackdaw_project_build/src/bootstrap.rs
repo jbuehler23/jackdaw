@@ -104,15 +104,71 @@ pub fn recipe_is_embedded() -> bool {
     !crate::RECIPE_FILES.is_empty()
 }
 
+/// Env var that answers [`needs_setup`] with "nothing is owed", whatever
+/// the cache holds.
+///
+/// The validity stamp carries the hash of the embedded recipe, so any edit
+/// to the workspace the recipe is cut from makes the cache stale and the
+/// editor opens on the first-run setup screen rather than on the editor.
+/// That is the right answer for a downloaded build and the wrong one for a
+/// driven session against a checkout, where the screen stands in front of
+/// every pointer script and screenshot. Set it and the check is skipped.
+///
+/// Read once, on the first call: a process either bypasses the check or
+/// does not, and a value that changed mid-run would leave one half of it
+/// on each answer.
+pub const ENV_SKIP_SETUP_CHECK: &str = "JACKDAW_SKIP_SETUP_CHECK";
+
+static SKIP_SETUP_CHECK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Whether [`ENV_SKIP_SETUP_CHECK`] was set the first time it was asked
+/// for.
+fn setup_check_skipped() -> bool {
+    *SKIP_SETUP_CHECK.get_or_init(|| std::env::var_os(ENV_SKIP_SETUP_CHECK).is_some())
+}
+
+/// Bypass the setup check for the rest of this process, the way
+/// [`ENV_SKIP_SETUP_CHECK`] does.
+///
+/// For a harness that builds editor apps inside its own process, where the
+/// binary was compiled from the very workspace the recipe is cut from and
+/// so can never match the stamp on disk. Setting the variable would mean
+/// writing the environment out from under the threads a test suite runs
+/// on; this says the same thing without touching it.
+///
+/// Has no effect once the flag has been read, so call it before the first
+/// app is built.
+pub fn skip_setup_check() {
+    let _ = SKIP_SETUP_CHECK.set(true);
+}
+
 /// Whether a first-use SDK build is still owed: this binary carries a
 /// recipe but no matching, resolvable cache exists yet. False in a dev
-/// checkout (no embedded recipe; the dev SDK is used) and once setup has
-/// run. Drives the editor's first-run setup screen and the CLI's
-/// auto-`ensure_sdk`.
+/// checkout (no embedded recipe; the dev SDK is used), once setup has
+/// run, and under [`ENV_SKIP_SETUP_CHECK`]. Drives the editor's first-run
+/// setup screen and the CLI's auto-`ensure_sdk`.
 pub fn needs_setup() -> bool {
-    if !recipe_is_embedded() {
-        return false;
-    }
+    setup_owed(setup_check_skipped(), recipe_is_embedded, sdk_is_stale)
+}
+
+/// The setup decision, with each answer behind the one before it.
+///
+/// The skip is asked first and on its own: whatever the recipe and the
+/// cache would say, a run told to bypass the check owes nothing, and
+/// neither of the other two answers is even worked out. Taking the inputs
+/// as arguments is what lets the order be checked without a stale cache on
+/// disk.
+fn setup_owed(
+    skipped: bool,
+    recipe_embedded: impl Fn() -> bool,
+    sdk_is_stale: impl Fn() -> bool,
+) -> bool {
+    !skipped && recipe_embedded() && sdk_is_stale()
+}
+
+/// Whether the SDK this binary would use is missing or built from a recipe
+/// that has moved on.
+fn sdk_is_stale() -> bool {
     // A release bundle (or an explicit JACKDAW_SDK_DIR) already ships a
     // complete SDK next to the binary; without this check every `jd
     // build` and editor first-run on a downloaded bundle recompiled the
@@ -621,6 +677,34 @@ mod tests {
         let key = cache_key();
         assert!(key.starts_with(env!("CARGO_PKG_VERSION")));
         assert!(key.ends_with(SDK_TOOLCHAIN_CHANNEL));
+    }
+
+    /// A recipe that has moved on since the cache was stamped is exactly
+    /// the case the skip exists for, and the skip is asked first: neither
+    /// the recipe nor the cache is even consulted.
+    #[test]
+    fn a_stale_recipe_hash_owes_no_setup_once_the_check_is_skipped() {
+        let stale = Stamp::current(crate::sdk_paths::host_triple(), "a-recipe-that-moved-on");
+        assert!(
+            !stale.matches(crate::sdk_paths::host_triple(), crate::RECIPE_HASH),
+            "the stamp such a run reads back is out of date",
+        );
+
+        assert!(
+            setup_owed(false, || true, || true),
+            "an embedded recipe over a stale cache owes a setup",
+        );
+        assert!(
+            !setup_owed(
+                true,
+                || panic!("the recipe was asked about after the skip"),
+                || panic!("the cache was asked about after the skip"),
+            ),
+            "and the skip answers before either of them",
+        );
+
+        skip_setup_check();
+        assert!(setup_check_skipped(), "the flag is what the skip sets");
     }
 
     #[test]

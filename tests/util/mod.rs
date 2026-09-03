@@ -12,7 +12,22 @@ use jackdaw::prelude::*;
 use jackdaw_api_internal::lifecycle::{ExtensionAppExt as _, OperatorEntity, enable_extension};
 use jackdaw_api_internal::snapshot::{ActiveSnapshotter, SceneSnapshot};
 
+/// Wave the first-run SDK setup check past, for every test process.
+///
+/// A test binary is built from the workspace the embedded recipe is cut
+/// from, so any edit to it makes the bootstrap stamp stale and every
+/// editor app a test builds would put up the setup screen and start
+/// compiling an SDK.
+///
+/// Set before the first plugin is added, which is before anything asks.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "shared across test binaries")]
+pub fn skip_setup_check() {
+    jackdaw_project_build::bootstrap::skip_setup_check();
+}
+
 pub fn headless_app() -> App {
+    skip_setup_check();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
