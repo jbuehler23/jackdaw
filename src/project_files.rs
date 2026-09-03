@@ -359,12 +359,11 @@ fn on_directory_toggled(
             if !toggles.contains(toggle) {
                 continue;
             }
-            let mut toggle = commands.entity(toggle);
-            if is_expanded {
-                toggle.insert(Checked);
-            } else {
-                toggle.remove::<Checked>();
-            }
+            jackdaw_feathers::utils::set_marker_if_alive::<Checked>(
+                &mut commands,
+                toggle,
+                is_expanded,
+            );
         }
     }
 }

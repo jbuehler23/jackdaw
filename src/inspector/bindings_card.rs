@@ -2610,11 +2610,7 @@ pub(crate) fn on_binding_checkbox_change(
     let value = event.value;
     // The checkbox does not self-manage `Checked`; reflect the new value so
     // the box renders it before the card rebuilds.
-    if value {
-        commands.entity(target).insert(Checked);
-    } else {
-        commands.entity(target).remove::<Checked>();
-    }
+    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(&mut commands, target, value);
     let control_kind = control.control;
     apply_to(
         &mut commands,

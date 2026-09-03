@@ -232,11 +232,7 @@ pub fn on_disclosure_change(
     };
     let expanded = change.value;
 
-    if expanded {
-        commands.entity(toggle).insert(Checked);
-    } else {
-        commands.entity(toggle).remove::<Checked>();
-    }
+    crate::utils::set_marker_if_alive::<Checked>(&mut commands, toggle, expanded);
 
     let Ok((mut section, children, key)) = sections.get_mut(link.0) else {
         return;

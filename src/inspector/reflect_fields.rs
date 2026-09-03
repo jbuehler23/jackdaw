@@ -2695,11 +2695,7 @@ pub(crate) fn on_checkbox_commit(
     let checked = event.value;
     // The checkbox does not self-update `Checked`; reflect the new value so
     // the box renders the change. Feathers styles the box off `Checked`.
-    if checked {
-        commands.entity(target).insert(Checked);
-    } else {
-        commands.entity(target).remove::<Checked>();
-    }
+    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(&mut commands, target, checked);
     let val = format!("{checked}");
     commands.queue(move |world: &mut World| {
         apply_field_value_with_undo(world, source, &tp, &path, &val);
@@ -2874,7 +2870,11 @@ pub(crate) fn refresh_inspector_fields(
     // Apply bool updates by inserting or removing `Checked`; the checkbox
     // renders off `Checked`. Undo/redo and external edits land here.
     for (entity, value) in bool_updates {
-        let mut ent = world.entity_mut(entity);
+        // A panel rebuild between collecting the update and applying
+        // it can have taken the row; `entity_mut` panics on that.
+        let Ok(mut ent) = world.get_entity_mut(entity) else {
+            continue;
+        };
         if value {
             ent.insert(Checked);
         } else {

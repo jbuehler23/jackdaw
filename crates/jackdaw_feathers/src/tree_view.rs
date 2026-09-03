@@ -173,12 +173,11 @@ pub fn tree_row(
                             continue;
                         };
                         for disclosure in toggle_children.iter() {
-                            let mut ec = commands.entity(disclosure);
-                            if expanded.0 {
-                                ec.insert(Checked);
-                            } else {
-                                ec.remove::<Checked>();
-                            }
+                            crate::utils::set_marker_if_alive::<Checked>(
+                                &mut commands,
+                                disclosure,
+                                expanded.0,
+                            );
                         }
                     }
                 }

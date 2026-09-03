@@ -857,12 +857,8 @@ fn radio_rows_follow_options(
                 let Ok(row) = rows.get(*child) else {
                     continue;
                 };
-                let mut row_commands = commands.entity(*child);
-                if row.0 == selected {
-                    row_commands.insert(Checked);
-                } else {
-                    row_commands.remove::<Checked>();
-                }
+                let (row_entity, checked) = (*child, row.0 == selected);
+                commands.queue(move |world: &mut World| set_checked(world, row_entity, checked));
             }
             continue;
         }
@@ -979,12 +975,10 @@ fn tab_chrome_follows_labels(
                         let Ok(segment) = segments.get(*segment_entity) else {
                             continue;
                         };
-                        let mut segment_commands = commands.entity(*segment_entity);
-                        if segment.0 == active {
-                            segment_commands.insert(Checked);
-                        } else {
-                            segment_commands.remove::<Checked>();
-                        }
+                        let (segment_entity, checked) = (*segment_entity, segment.0 == active);
+                        commands.queue(move |world: &mut World| {
+                            set_checked(world, segment_entity, checked);
+                        });
                     }
                 } else {
                     commands.entity(*child).despawn();

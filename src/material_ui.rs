@@ -520,11 +520,7 @@ pub(crate) fn on_material_checkbox_commit(
         return;
     };
     let checked = event.value;
-    if checked {
-        commands.entity(target).insert(Checked);
-    } else {
-        commands.entity(target).remove::<Checked>();
-    }
+    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(&mut commands, target, checked);
     if let Some(mut material) = materials.get_mut(&binding.material_handle) {
         (binding.apply_fn)(&mut material, checked);
     }

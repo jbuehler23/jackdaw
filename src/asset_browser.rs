@@ -661,9 +661,9 @@ fn refresh_browser_on_change(
                     },
                     BorderColor::all(Color::NONE),
                     BackgroundColor(Color::NONE),
-                    ChildOf(content_entity),
                 ))
                 .id();
+            jackdaw_feathers::utils::attach_or_despawn(&mut commands, content_entity, thumb_entity);
 
             if let Some(ref img) = tex_info.image_handle {
                 // 2D texture thumbnail
@@ -820,29 +820,29 @@ fn refresh_browser_on_change(
                         && !entry.is_directory =>
                 {
                     commands
-                        .spawn((
-                            model_grid_tile(&item, &icon_font, entry.path.clone()),
-                            ChildOf(content_entity),
-                        ))
+                        .spawn(model_grid_tile(&item, &icon_font, entry.path.clone()))
                         .id()
                 }
                 BrowserViewMode::Grid => commands
-                    .spawn((
-                        file_browser::file_browser_item_with_icon(&item, &icon_font, icon_override),
-                        ChildOf(content_entity),
+                    .spawn(file_browser::file_browser_item_with_icon(
+                        &item,
+                        &icon_font,
+                        icon_override,
                     ))
                     .id(),
                 BrowserViewMode::List => commands
-                    .spawn((
-                        file_browser::file_browser_list_item_with_icon(
-                            &item,
-                            &icon_font,
-                            icon_override,
-                        ),
-                        ChildOf(content_entity),
+                    .spawn(file_browser::file_browser_list_item_with_icon(
+                        &item,
+                        &icon_font,
+                        icon_override,
                     ))
                     .id(),
             };
+            // The rebuild queues one spawn per entry against the content
+            // container it saw this frame; a panel rebuild can despawn
+            // that container before these flush, which would orphan every
+            // row under a dead parent.
+            jackdaw_feathers::utils::attach_or_despawn(&mut commands, content_entity, item_entity);
 
             // Apply selected highlight if this item is the selected file
             let is_selected =

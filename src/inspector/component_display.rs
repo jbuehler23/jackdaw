@@ -489,9 +489,7 @@ pub(crate) fn build_inspector_displays(
                 collapse_state,
             },
         );
-        commands
-            .entity(display_entity)
-            .insert(ChildOf(inspector_entity));
+        jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, display_entity);
 
         // Try Displayable first, then reflection, then fallback
         let type_id = components
@@ -647,9 +645,7 @@ pub(crate) fn build_inspector_displays(
                     collapse_state,
                 },
             );
-            commands
-                .entity(display_entity)
-                .insert(ChildOf(inspector_entity));
+            jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, display_entity);
             super::project_component_display::spawn_project_component_fields(
                 commands,
                 body_entity,
