@@ -37,6 +37,11 @@ fn main() -> AppExit {
         std::process::exit(130);
     });
 
+    // Claim the IO task pool before `TaskPoolPlugin` can, so scenes
+    // with hundreds of models get a stack their nested glTF loads fit
+    // in. Has to run before the app is built.
+    jackdaw::io_pool::init();
+
     // The asset root is fixed at startup, so it has to agree with the
     // project this process will actually open. `jd open <path>` names
     // one explicitly; without this, opening anything other than the
