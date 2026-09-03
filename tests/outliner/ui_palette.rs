@@ -395,24 +395,32 @@ fn undoing_a_widget_removes_it_from_the_world_and_the_document() {
     );
 }
 
+/// A selected leaf gets a sibling; a selected container gets a child.
 #[test]
-fn a_selected_node_inside_the_ui_scene_gets_a_sibling() {
+fn a_selected_leaf_gets_a_sibling_and_a_selected_container_gets_a_child() {
     let mut app = palette_app();
     let world = app.world_mut();
     let root = open_ui_scene(world);
 
     let panel = instantiate_widget(world, "ui.panel").expect("the UI scene accepts a panel");
     let button = instantiate_widget(world, "ui.button").expect("the scene accepts a button");
-
     assert_eq!(
         world.get::<ChildOf>(button).map(ChildOf::parent),
-        Some(root),
-        "a widget lands beside what the user has selected, not inside it",
+        Some(panel),
+        "a container is selected in order to fill it, so the widget lands inside",
+    );
+
+    let beside = instantiate_widget(world, "ui.label").expect("the scene accepts a label");
+    assert_eq!(
+        world.get::<ChildOf>(beside).map(ChildOf::parent),
+        Some(panel),
+        "and a leaf has nothing to fill, so the next widget is its sibling",
     );
     assert_ne!(
-        world.get::<ChildOf>(button).map(ChildOf::parent),
-        Some(panel),
+        world.get::<ChildOf>(beside).map(ChildOf::parent),
+        Some(button),
     );
+    assert_ne!(world.get::<ChildOf>(beside).map(ChildOf::parent), Some(root));
 }
 
 #[test]
@@ -1711,23 +1719,23 @@ fn three_adds_from_a_fresh_scene_make_three_siblings() {
     assert_eq!(names, vec!["Button", "Button2", "Button3"]);
 }
 
-/// With a node inside the scene selected, the add is that node's sibling and
+/// With a leaf inside the scene selected, the add is that leaf's sibling and
 /// lands straight after it, the way a paste does.
 #[test]
-fn an_add_beside_a_selected_node_is_its_sibling() {
+fn an_add_beside_a_selected_leaf_is_its_sibling() {
     let mut app = palette_app();
     let root = open_ui_scene(app.world_mut());
     jackdaw::selection::select_only(app.world_mut(), root);
     app.update();
 
-    let panel = instantiate_widget(app.world_mut(), "ui.panel").expect("the panel is added");
+    let panel = instantiate_widget(app.world_mut(), "ui.label").expect("the label is added");
     let after = instantiate_widget(app.world_mut(), "ui.button").expect("the button is added");
     app.update();
 
     assert_eq!(
         app.world().get::<ChildOf>(after).map(ChildOf::parent),
         Some(root),
-        "the add went beside the panel, not inside it"
+        "the add went beside the label, not inside it"
     );
     let order: Vec<Entity> = app
         .world()
@@ -1749,6 +1757,49 @@ fn an_add_beside_a_selected_node_is_its_sibling() {
         .map(|node| ast.ecs_for_ast(node))
         .collect();
     assert_eq!(authored, vec![Some(panel), Some(after)]);
+}
+
+/// A Column selected takes the next widget in; the widget it took then
+/// takes the one after that beside it.
+///
+/// The two presses a user makes to build a stack: pick the frame, add the
+/// thing, add the next thing. Adding beside the Column both times left the
+/// Column empty and the buttons piled up outside it, and there was no
+/// gesture in the editor that put anything in a container at all.
+#[test]
+fn a_button_added_with_a_column_selected_lands_inside_it() {
+    let mut app = palette_app();
+    let root = open_ui_scene(app.world_mut());
+    jackdaw::selection::select_only(app.world_mut(), root);
+    app.update();
+
+    let column = instantiate_widget(app.world_mut(), "ui.column").expect("the column is added");
+    jackdaw::selection::select_only(app.world_mut(), column);
+    app.update();
+
+    let inside = instantiate_widget(app.world_mut(), "ui.button").expect("the button is added");
+    app.update();
+    assert_eq!(
+        app.world().get::<ChildOf>(inside).map(ChildOf::parent),
+        Some(column),
+        "the button went into the column that was selected",
+    );
+
+    jackdaw::selection::select_only(app.world_mut(), inside);
+    app.update();
+    let after = instantiate_widget(app.world_mut(), "ui.button").expect("the second is added");
+    app.update();
+    assert_eq!(
+        app.world().get::<ChildOf>(after).map(ChildOf::parent),
+        Some(column),
+        "and the next one went beside it rather than inside a button",
+    );
+    let order: Vec<Entity> = app
+        .world()
+        .get::<Children>(column)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    assert_eq!(order, vec![inside, after], "in the order they were added");
 }
 
 /// The document node and the authored name arrive on their own schedules,

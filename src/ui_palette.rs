@@ -26,8 +26,9 @@ const TAB_GROUP_TYPE_PATH: &str = "bevy_input_focus::tab_navigation::TabGroup";
 /// rows do.
 ///
 /// `name` is the definition id (`ui.button`), not an entity name. `parent` is
-/// optional; left out, it defaults to the selection, and a selection outside
-/// the UI scene falls back to the scene root.
+/// optional; left out, the widget goes inside the selection when the
+/// selection is a container and beside it when it is a leaf, and a selection
+/// outside the UI scene falls back to the scene root.
 ///
 /// Both failure modes are decided before anything is queued, so a request that
 /// did not happen reports `Cancelled`. An unknown id is reported alongside the
@@ -41,7 +42,7 @@ const TAB_GROUP_TYPE_PATH: &str = "bevy_input_focus::tab_navigation::TabGroup";
         name(String, doc = "Widget definition id, e.g. \"ui.button\"."),
         parent(
             Entity,
-            doc = "Node that adopts the widget. Left out, the widget is the sibling after the selection."
+            doc = "Node that adopts the widget. Left out, the widget goes inside the selection when it is a container and beside it when it is not."
         ),
     )
 )]
@@ -121,8 +122,9 @@ impl std::fmt::Display for PaletteError {
 
 impl std::error::Error for PaletteError {}
 
-/// Create the widget `definition_id` names beside the selection, as one
-/// undoable step.
+/// Create the widget `definition_id` names where the selection says, as one
+/// undoable step: inside it when the selection is a container, beside it
+/// when it is not. See [`widget_slot`].
 ///
 /// An unknown id, a document with no UI scene, and a definition that refuses
 /// all return an error for the caller to report.
@@ -238,10 +240,11 @@ fn instantiate_command_at(
     Ok((entity, Box::new(command)))
 }
 
-/// The node a new widget is parented to: the selection's parent when the
-/// selection is part of the open UI scene, and the scene's root otherwise, so
-/// a 3D selection does not block UI authoring. `None` means the document holds
-/// no UI scene, the one case widget creation refuses.
+/// The node a new widget is parented to: the selection itself when it is a
+/// container, its parent when it is a leaf, and the scene's root when it is
+/// outside the open UI scene, so a 3D selection does not block UI
+/// authoring. `None` means the document holds no UI scene, the one case
+/// widget creation refuses.
 pub fn resolve_widget_parent(world: &mut World) -> Option<Entity> {
     let candidate = world
         .get_resource::<Selection>()
@@ -249,18 +252,20 @@ pub fn resolve_widget_parent(world: &mut World) -> Option<Entity> {
     Some(widget_slot(world, candidate)?.parent)
 }
 
-/// Where a new widget goes: as the sibling straight after `candidate`.
+/// Where a new widget goes: inside `candidate` when `candidate` is a
+/// container, and beside it when it is not.
 ///
-/// The same rule a paste follows, and the rule an Add in a scene editor
-/// usually follows. Adding *into* the selection instead is what turned three
-/// presses of the Button row into a Button holding a Button holding a Button,
-/// which is neither what the press looked like nor a shape anyone builds a
-/// screen out of. Filling a container is still one extra press: select
-/// something inside it, or the container itself when it is the scene root.
+/// A container is selected in order to fill it -- that is what a Panel, a
+/// Row, a Column or a Grid is for -- so a widget added with one selected
+/// becomes its last child, the way dropping a control into a frame does in
+/// every layout tool. A leaf has nothing to be filled with, so the widget
+/// becomes its next sibling instead: three presses of the Button row make
+/// three buttons side by side rather than a Button holding a Button holding
+/// a Button.
 ///
-/// A candidate that is the scene root is the exception, since the root has no
-/// siblings to be one of: the widget becomes its last child. A candidate
-/// outside the open UI scene, or none at all, is the same case.
+/// A candidate that is the scene root is the container case, since the root
+/// has no siblings to be one of. A candidate outside the open UI scene, or
+/// none at all, is the same case.
 fn widget_slot(world: &mut World, candidate: Option<Entity>) -> Option<WidgetSlot> {
     let root = ui_scene_root(world)?;
     let inside = candidate.filter(|entity| is_in_ui_scene(world, *entity, root));
@@ -270,11 +275,60 @@ fn widget_slot(world: &mut World, candidate: Option<Entity>) -> Option<WidgetSlo
             index: usize::MAX,
         });
     };
+    if is_layout_container(world, primary) {
+        return Some(WidgetSlot {
+            parent: primary,
+            index: usize::MAX,
+        });
+    }
     let location = crate::commands::HierarchyLocation::from_world(world, primary);
     Some(WidgetSlot {
         parent: location.parent.unwrap_or(root),
         index: location.index + 1,
     })
+}
+
+/// Whether `entity` is a node a widget is added *into* rather than beside.
+///
+/// A container is a laid-out node with nothing more particular on it: the
+/// Panel, Row, Column and Grid presets are each a `Node` and a background
+/// and no more, and the scroll area is a column with a viewport around it.
+///
+/// Everything else is a leaf. A label, a picture and a control are not
+/// frames to put things in, and neither are the widgets whose chrome is
+/// rebuilt from their own data -- a tab strip, a radio group, a dropdown --
+/// where a child added by hand is thrown away by the next rebuild. Each is
+/// asked for by the marker it carries in the document, the same markers the
+/// outliner reads a row's kind from.
+fn is_layout_container(world: &World, entity: Entity) -> bool {
+    use bevy::ui_widgets::{Button, Checkbox, RadioButton, ScrollArea, Slider};
+    use jackdaw_widgets_runtime as runtime;
+
+    let Ok(entity) = world.get_entity(entity) else {
+        return false;
+    };
+    let Some(node) = entity.get::<Node>() else {
+        return false;
+    };
+    if entity.contains::<ScrollArea>() {
+        return true;
+    }
+    let leaf = entity.contains::<Text>()
+        || entity.contains::<ImageNode>()
+        || entity.contains::<Button>()
+        || entity.contains::<Checkbox>()
+        || entity.contains::<RadioButton>()
+        || entity.contains::<Slider>()
+        || entity.contains::<runtime::TextValue>()
+        || entity.contains::<runtime::ToggleSwitch>()
+        || entity.contains::<runtime::Dropdown>()
+        || entity.contains::<runtime::RadioOptions>()
+        || entity.contains::<runtime::TabStrip>()
+        || entity.contains::<runtime::NineSlice>()
+        || entity.contains::<runtime::Progress>()
+        || entity.contains::<runtime::Spacer>()
+        || entity.contains::<runtime::Separator>();
+    !leaf && matches!(node.display, Display::Flex | Display::Grid)
 }
 
 /// The parent and sibling slot a new widget takes.
