@@ -348,7 +348,9 @@ fn a_snapshot_entry_reports_the_document_it_holds() {
 #[test]
 fn snapshot_entries_are_trimmed_once_they_pass_the_budget() {
     let mut app = util::editor_test_app();
-    app.world_mut().resource_mut::<CommandHistory>().budget_bytes = 1;
+    app.world_mut()
+        .resource_mut::<CommandHistory>()
+        .budget_bytes = 1;
 
     for _ in 0..4 {
         app.world_mut()

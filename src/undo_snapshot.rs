@@ -198,8 +198,7 @@ impl SceneSnapshot for BsnDocumentSnapshot {
     /// the far side of the rounding from a scene measured in megabytes.
     fn heap_bytes(&self) -> usize {
         self.text.capacity()
-            + self.selection.capacity()
-                * std::mem::size_of::<jackdaw_scene_types::SceneNodeId>()
+            + self.selection.capacity() * std::mem::size_of::<jackdaw_scene_types::SceneNodeId>()
     }
 
     fn as_any(&self) -> &dyn Any {

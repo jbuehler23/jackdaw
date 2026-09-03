@@ -30,8 +30,8 @@ use jackdaw_pie_protocol::{
 
 use crate::build_status::BuildStatus;
 use crate::ext_build::BuildProgress;
-use crate::project_build::BuildLoad;
 use crate::pie_mirror::{PieInstances, PieViewMode};
+use crate::project_build::BuildLoad;
 use crate::project_build::shim::ShimSpec;
 use crate::run_config::RunConfigs;
 
@@ -2491,9 +2491,7 @@ mod prebuild_tests {
     /// the error's own text is all there is.
     #[test]
     fn a_failure_with_no_diagnostic_falls_back_to_the_error() {
-        let error = crate::project_build::ProjectBuildError::Compile {
-            log: String::new(),
-        };
+        let error = crate::project_build::ProjectBuildError::Compile { log: String::new() };
 
         assert_eq!(failure_summary(&error, ""), error.to_string());
     }

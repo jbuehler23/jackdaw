@@ -2151,7 +2151,11 @@ fn discover_gltf_clips(
         Without<GltfClipsDiscovered>,
     >,
     answered: Query<
-        (Entity, &jackdaw_scene_types::GltfSource, &GltfClipsDiscovered),
+        (
+            Entity,
+            &jackdaw_scene_types::GltfSource,
+            &GltfClipsDiscovered,
+        ),
         Changed<jackdaw_scene_types::GltfSource>,
     >,
     existing_refs: Query<(), With<jackdaw_animation::GltfClipRef>>,

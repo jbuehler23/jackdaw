@@ -3062,11 +3062,9 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod asset_path_tests {
     use super::*;
-    use bevy::prelude::*;
 
     /// The whole point of the mirror: an open project answers from
     /// memory. The directory named here does not exist, so nothing that

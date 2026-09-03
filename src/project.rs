@@ -34,7 +34,7 @@ pub fn open_project_assets_dir() -> Option<PathBuf> {
     OPEN_PROJECT_ASSETS.read().ok()?.clone()
 }
 
-/// Point the mirror at `dir`, or clear it. Only [`mirror_open_project`]
+/// Point the mirror at `dir`, or clear it. Only `mirror_open_project`
 /// should call this; it is public for tests that need the helpers to
 /// behave as though a project were open.
 pub fn set_open_project_assets_dir(dir: Option<PathBuf>) {

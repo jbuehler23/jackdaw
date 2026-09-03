@@ -52,7 +52,7 @@ pub fn background_jobs(total_threads: usize) -> usize {
 /// was chosen deliberately and must not be raised.
 fn background_jobs_env() -> usize {
     let cores = std::thread::available_parallelism()
-        .map(|n| n.get())
+        .map(std::num::NonZero::get)
         .unwrap_or(1);
     let ours = background_jobs(cores);
     match std::env::var("CARGO_BUILD_JOBS")
