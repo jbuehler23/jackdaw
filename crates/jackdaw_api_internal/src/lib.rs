@@ -434,12 +434,23 @@ impl<'a> ExtensionContext<'a> {
     /// operator stays reachable through menus and the command palette
     /// and can be bound by presets or user rebinds.
     ///
-    /// The context component `C` must live on the extension's root entity; that is where `ActionOf` points.
+    /// The context component `C` must live on the extension's root
+    /// entity; that is where `ActionOf` points. An action pointed at an
+    /// entity with no such context is in no context instance at all:
+    /// the keymap attaches the chord, the dialog lists it, and nothing
+    /// ever evaluates it. That is a chord bound and dead, and silent, so
+    /// it is said out loud here.
     ///
     /// `require_reset` guards against operators firing from already-held keys when bindings or
     /// contexts are (re)applied.
     pub fn action_for<C: bevy::prelude::Component, O: crate::Operator>(&mut self) -> &mut Self {
         let ext = self.extension_entity;
+        if self.world.get::<C>(ext).is_none() {
+            warn!(
+                "operator '{}' binds into a context its extension does not carry: the chord can never fire",
+                O::ID
+            );
+        }
         self.spawn((
             Action::<O>::new(),
             ActionOf::<C>::new(ext),

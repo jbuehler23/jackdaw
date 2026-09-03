@@ -3068,3 +3068,67 @@ fn framing_selection(app: &mut App) {
         .clear();
     app.update();
 }
+
+/// Home frames the canvas when it is pressed, not only when the operator
+/// is called by hand.
+///
+/// Every test above asks the operator whether it is available. That says
+/// nothing about the press reaching it, and the press is the whole
+/// gesture: a chord bound to an action nothing evaluates is bound and
+/// dead.
+#[test]
+fn home_frames_the_canvas_through_the_keyboard() {
+    let mut app = util::editor_test_app();
+    let panel = fit_panel(&mut app);
+    app.world_mut().spawn((
+        UiSceneRoot {
+            reference_size: UVec2::new(1920, 1080),
+        },
+        Node::default(),
+    ));
+    fronted_viewport(&mut app, ViewportMode::TwoD);
+    settle(&mut app);
+
+    // A view nothing would leave it at, so a fit is visible in the numbers.
+    {
+        let mut host = app
+            .world_mut()
+            .get_mut::<Viewport2dPanelHost>(panel)
+            .expect("host on panel parent");
+        host.view.zoom = 0.05;
+        host.fit_pending = false;
+    }
+    settle(&mut app);
+
+    press(&mut app, "input.key key=Home");
+
+    let zoom = app
+        .world()
+        .get::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .view
+        .zoom;
+    assert!(
+        (zoom - 0.05).abs() > f32::EPSILON,
+        "Home framed the canvas: the view is no longer where it was left ({zoom})",
+    );
+}
+
+/// Press a key the way the window does, and let the beats play out.
+fn press(app: &mut App, clause: &str) {
+    jackdaw::boot_ops::run_op_clause(app.world_mut(), clause)
+        .expect("the clause dispatches")
+        .assert_finished();
+    for _ in 0..600 {
+        app.update();
+        if app
+            .world()
+            .resource::<jackdaw::test_input::SyntheticInput>()
+            .is_idle()
+        {
+            break;
+        }
+    }
+    settle(app);
+}
+

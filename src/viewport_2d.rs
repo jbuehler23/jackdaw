@@ -51,7 +51,6 @@ use jackdaw_scene_types::{CanvasGuides, UiSceneRoot};
 
 use crate::{
     canvas_snap::{CanvasGuidesOp, CanvasRulersOp, CanvasSnap, CanvasSnapKind, CanvasSnapOp},
-    core_extension::CoreExtensionInputContext,
     prefab::{AuthoredUiSceneRoot, ImportedUiSceneRoot},
     prelude::*,
     selection::Selection,
@@ -2346,17 +2345,20 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<Viewport2dZoomOp>();
     ctx.register_operator::<SelectionSelectOp>();
     crate::canvas_snap::add_to_extension(ctx);
+    // These three hang off this extension's own input context, not the
+    // core one. An action belongs to the context instance on the entity
+    // it points at, and that entity is the extension registering it: a
+    // chord bound into a context living on someone else's entity is
+    // evaluated by nothing, which is how Home came to be listed in the
+    // keybind dialog and do nothing when pressed.
+    //
     // Shift+R and Shift+G: the rulers and the guides, beside the plain
     // R and G the 3D tools take.
-    ctx.bind_operator::<CoreExtensionInputContext, CanvasRulersOp>([
-        PresetInput::key("KeyR").shift()
-    ]);
-    ctx.bind_operator::<CoreExtensionInputContext, CanvasGuidesOp>([
-        PresetInput::key("KeyG").shift()
-    ]);
+    ctx.bind_operator_host::<CanvasRulersOp>([PresetInput::key("KeyR").shift()]);
+    ctx.bind_operator_host::<CanvasGuidesOp>([PresetInput::key("KeyG").shift()]);
     // Home frames the canvas, the way it jumps the playhead in the
     // timeline: `viewport_2d_is_current` is what keeps the two apart.
-    ctx.bind_operator::<CoreExtensionInputContext, Viewport2dFrameOp>([PresetInput::key("Home")]);
+    ctx.bind_operator_host::<Viewport2dFrameOp>([PresetInput::key("Home")]);
 
     crate::screenshot::add_2d_to_extension(ctx);
 }
