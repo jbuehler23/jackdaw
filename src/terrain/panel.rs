@@ -881,11 +881,11 @@ fn on_autoterrain_checkbox_change(
     if !boxes.contains(target) {
         return;
     }
-    if event.value {
-        commands.entity(target).insert(Checked);
-    } else {
-        commands.entity(target).remove::<Checked>();
-    }
+    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(
+        &mut commands,
+        target,
+        event.value,
+    );
     commands
         .operator(TerrainAutoterrainEnableOp::ID)
         .param("enabled", event.value)

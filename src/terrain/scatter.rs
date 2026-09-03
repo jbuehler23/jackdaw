@@ -1251,11 +1251,11 @@ fn on_scatter_checkbox_value_change(
         return;
     };
 
-    if event.value {
-        commands.entity(target).insert(Checked);
-    } else {
-        commands.entity(target).remove::<Checked>();
-    }
+    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(
+        &mut commands,
+        target,
+        event.value,
+    );
 
     commands
         .operator(op_id)

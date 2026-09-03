@@ -627,13 +627,11 @@ pub fn update_workspace_tab_visuals(
 
     for (tab_entity, tab) in tabs.iter() {
         let is_active = registry.active.as_ref() == Some(&tab.workspace_id);
-        if let Ok(mut tab_commands) = commands.get_entity(tab_entity) {
-            if is_active {
-                tab_commands.insert(Checked);
-            } else {
-                tab_commands.remove::<Checked>();
-            }
-        }
+        jackdaw_feathers::utils::set_marker_if_alive::<Checked>(
+            &mut commands,
+            tab_entity,
+            is_active,
+        );
 
         if let Ok(mut bg) = bg_query.get_mut(tab_entity) {
             bg.0 = if is_active {

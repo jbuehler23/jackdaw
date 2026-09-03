@@ -954,17 +954,14 @@ fn refresh_browser_on_change(
     }
 
     // Each path component is a clickable button that navigates to that directory.
-    commands
-        .spawn((
-            Node {
-                width: percent(100),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::FlexStart,
-                column_gap: Val::Px(2.0),
-                ..default()
-            },
-            ChildOf(breadcrumb_entity),
-        ))
+    let breadcrumb_row = commands
+        .spawn(Node {
+            width: percent(100),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::FlexStart,
+            column_gap: Val::Px(2.0),
+            ..default()
+        })
         .with_children(|parent| {
             let mut ancestors: Vec<_> = state.current_directory.ancestors().collect();
             ancestors.reverse();
@@ -1043,7 +1040,9 @@ fn refresh_browser_on_change(
                     ));
                 }
             }
-        });
+        })
+        .id();
+    jackdaw_feathers::utils::attach_or_despawn(&mut commands, breadcrumb_entity, breadcrumb_row);
 }
 
 fn update_asset_browser_filter(

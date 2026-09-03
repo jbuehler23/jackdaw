@@ -109,14 +109,10 @@ pub fn segment_background(checked: bool) -> Color {
 /// segment is current is the app's state, not the widget's, so every
 /// segmented control syncs it from whatever it drives.
 pub fn set_segment_checked(commands: &mut Commands, segment: Entity, checked: bool) {
-    let Ok(mut entity) = commands.get_entity(segment) else {
-        return;
-    };
-    if checked {
-        entity.insert(Checked);
-    } else {
-        entity.remove::<Checked>();
-    }
+    // `Commands::get_entity` only proves the segment was alive when the
+    // write was queued; a panel rebuild between here and the flush
+    // still takes it, so the check belongs at flush time.
+    crate::utils::set_marker_if_alive::<Checked>(commands, segment, checked);
 }
 
 #[cfg(test)]
