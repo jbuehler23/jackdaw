@@ -12,7 +12,13 @@
 //! refuses spuriously.
 //!
 //! [`KeybindFocus`] returns `is_typing()` only when the focused entity
-//! has an [`EditorTextEdit`].
+//! holds an editable text buffer.
+//!
+//! The buffer rather than the editor's own field wrapper: a field built
+//! straight out of Bevy's text input -- the canvas text entry, the Add
+//! Entity search, an inspector row -- holds the keyboard exactly as the
+//! wrapper does, and asking after the wrapper let every one of those type
+//! a name into the field and a chord into the scene at the same time.
 //!
 //! Recording a chord in the keybind settings is the same class of thing:
 //! the press names a key rather than commanding the editor with it, and
@@ -26,9 +32,9 @@
 use bevy::ecs::system::SystemParam;
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
+use bevy::text::EditableText;
 use jackdaw_api::prelude::ActionSources;
 use jackdaw_commands::KeymapCapture;
-use jackdaw_feathers::text_edit::EditorTextEdit;
 
 /// `SystemParam` that returns whether keybinds and operator dispatches
 /// should be suppressed because the keyboard belongs to something other
@@ -36,12 +42,12 @@ use jackdaw_feathers::text_edit::EditorTextEdit;
 #[derive(SystemParam)]
 pub struct KeybindFocus<'w, 's> {
     input_focus: Res<'w, InputFocus>,
-    text_inputs: Query<'w, 's, (), With<EditorTextEdit>>,
+    text_inputs: Query<'w, 's, (), With<EditableText>>,
     capture: Option<Res<'w, KeymapCapture>>,
 }
 
 impl KeybindFocus<'_, '_> {
-    /// True when the focused entity carries an `EditorTextEdit`.
+    /// True when the focused entity holds an editable text buffer.
     pub fn is_typing(&self) -> bool {
         let Some(focused) = self.input_focus.get() else {
             return false;

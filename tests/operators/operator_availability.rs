@@ -153,13 +153,7 @@ fn entity_ops_are_available_when_focus_still_sits_on_the_window() {
 #[test]
 fn entity_ops_refuse_while_a_text_field_holds_focus() {
     let mut app = util::editor_test_app();
-    let field = app
-        .world_mut()
-        .spawn(jackdaw_feathers::text_edit::EditorTextEdit)
-        .id();
-    app.world_mut()
-        .resource_mut::<bevy::input_focus::InputFocus>()
-        .set(field, bevy::input_focus::FocusCause::Pressed);
+    focus_a_field(&mut app);
     for id in CAN_ACT_ON_ENTITIES_OPS {
         let ready = app
             .world_mut()
@@ -363,13 +357,7 @@ fn escape_leaves_the_selection_alone_while_typing_or_in_the_picker() {
     );
 
     // An F2 rename: the field has focus, and Escape cancels the edit.
-    let field = app
-        .world_mut()
-        .spawn(jackdaw_feathers::text_edit::EditorTextEdit)
-        .id();
-    app.world_mut()
-        .insert_resource(bevy::input_focus::InputFocus::from_entity(field));
-    app.update();
+    focus_a_field(&mut app);
     assert!(
         !available(&mut app, "selection.clear"),
         "Escape belongs to the rename while one is in flight"
@@ -395,4 +383,27 @@ fn available(app: &mut bevy::prelude::App, id: &'static str) -> bool {
         .operator(id)
         .is_available()
         .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"))
+}
+
+/// Spawn a field and let it take the keyboard, the way a rename or a
+/// search box does.
+///
+/// A whole field rather than the marker on its frame: what the guard asks
+/// after is the editable buffer the keys are written into, which is what
+/// the focus lands on for a user.
+fn focus_a_field(app: &mut bevy::app::App) {
+    app.world_mut().spawn(jackdaw_feathers::text_edit::text_edit(
+        jackdaw_feathers::text_edit::TextEditProps::default().auto_focus(),
+    ));
+    app.update();
+    app.update();
+    let focused = app
+        .world()
+        .resource::<bevy::input_focus::InputFocus>()
+        .get()
+        .expect("the field took the focus");
+    assert!(
+        app.world().get::<bevy::text::EditableText>(focused).is_some(),
+        "the focus is on the field's own buffer",
+    );
 }

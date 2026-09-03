@@ -522,6 +522,94 @@ fn a_key_reaches_the_editors_own_chords() {
     );
 }
 
+/// A chord typed into the canvas entry commands the field, not the
+/// scene.
+///
+/// The entry is Bevy's own text input rather than the editor's field
+/// wrapper, and the keyboard guard used to ask after the wrapper: a
+/// Ctrl+D pressed while renaming a label duplicated the node under it.
+#[test]
+fn a_chord_typed_into_the_canvas_entry_runs_no_operator() {
+    let (mut app, _panel) = canvas_app();
+    let node = authored_panel(&mut app);
+    app.world_mut()
+        .entity_mut(node)
+        .insert((Text::new("Button"), Name::new("Label")));
+    settle(&mut app);
+    let root = app
+        .world()
+        .get::<ChildOf>(node)
+        .expect("the node is in a scene")
+        .parent();
+    let before = children_of(&app, root);
+
+    run(
+        &mut app,
+        "input.pointer space=canvas x=600 y=300 action=dblclick",
+    );
+    run(&mut app, "input.text text=PlayButton");
+    run(&mut app, "input.key key=KeyD mods=ctrl");
+
+    assert_eq!(
+        children_of(&app, root),
+        before,
+        "Ctrl+D typed into the entry duplicated nothing",
+    );
+    run(&mut app, "input.key key=Enter");
+    assert_eq!(
+        app.world()
+            .get::<Text>(node)
+            .map(|text| text.0.clone())
+            .unwrap_or_default(),
+        "PlayButton",
+        "and what was typed reached the field",
+    );
+}
+
+/// The same for the Add Entity picker's search field, which is built
+/// from the same bare text input.
+#[test]
+fn a_chord_typed_into_the_add_entity_search_runs_no_operator() {
+    let (mut app, _panel) = canvas_app();
+    app.world_mut()
+        .remove_resource::<jackdaw::entity_ops::SystemClipboard>();
+    let node = authored_panel(&mut app);
+    app.world_mut().resource_mut::<Selection>().entities = vec![node];
+    settle(&mut app);
+    let root = app
+        .world()
+        .get::<ChildOf>(node)
+        .expect("the node is in a scene")
+        .parent();
+    let before = children_of(&app, root);
+
+    run(&mut app, "entity.add_picker");
+    run(&mut app, "input.text text=Play");
+    run(&mut app, "input.key key=KeyD mods=ctrl");
+    run(&mut app, "input.key key=KeyC mods=ctrl");
+
+    assert_eq!(
+        children_of(&app, root),
+        before,
+        "Ctrl+D typed into the search duplicated nothing",
+    );
+    assert!(
+        app.world()
+            .resource::<jackdaw::entity_ops::EntityClipboard>()
+            .text
+            .is_empty(),
+        "and Ctrl+C copied the search text rather than the selection",
+    );
+}
+
+/// How many children `parent` has, which is what a duplicate or a paste
+/// would change.
+fn children_of(app: &App, parent: Entity) -> usize {
+    app.world()
+        .get::<Children>(parent)
+        .map_or(0, |children| children.len())
+}
+
 /// A move is a hover: the node under the cursor gets the pre-select
 /// outline before anything is clicked.
 #[test]
