@@ -93,45 +93,57 @@ fn main() -> AppExit {
         None
     };
 
+    // GPU timestamps are a device feature, so a diagnostics run has to
+    // ask for them before the device exists. `None` on every other
+    // launch, which leaves `RenderPlugin` exactly as it was.
+    let render_plugin =
+        jackdaw::render_diagnostics::wgpu_settings().map(|settings| bevy::render::RenderPlugin {
+            render_creation: settings.into(),
+            ..default()
+        });
+
+    let mut default_plugins = DefaultPlugins
+        .set(AssetPlugin {
+            file_path: project_root.join("assets").to_string_lossy().to_string(),
+            ..default()
+        })
+        .set(ImagePlugin {
+            default_sampler: ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                address_mode_w: ImageAddressMode::Repeat,
+                ..ImageSamplerDescriptor::linear()
+            },
+        })
+        // `editor_window_plugin` disables Bevy's default
+        // window-close -> AppExit wiring so `intercept_window_close`
+        // in ScenesPlugin owns the exit path, and it honors
+        // `JACKDAW_WINDOW_SIZE`. Spelling its fields out here instead
+        // would drop that override.
+        .set(editor_window_plugin())
+        // Its overlay inserts on every camera through a command
+        // buffer with no ordering against the dock reconciler, which
+        // despawns a rebuilt panel's cameras in the same frame.
+        .disable::<bevy::dev_tools::render_debug::RenderDebugOverlayPlugin>();
+    if let Some(render_plugin) = render_plugin {
+        default_plugins = default_plugins.set(render_plugin);
+    }
+
     let mut app = App::new();
     app
         // The default error handler panics, which we never *ever*
         // want to happen to the editor. Log an error instead.
         .set_error_handler(error_handler)
-        .add_plugins(
-            DefaultPlugins
-                .set(AssetPlugin {
-                    file_path: project_root.join("assets").to_string_lossy().to_string(),
-                    ..default()
-                })
-                .set(ImagePlugin {
-                    default_sampler: ImageSamplerDescriptor {
-                        address_mode_u: ImageAddressMode::Repeat,
-                        address_mode_v: ImageAddressMode::Repeat,
-                        address_mode_w: ImageAddressMode::Repeat,
-                        ..ImageSamplerDescriptor::linear()
-                    },
-                })
-                // `editor_window_plugin` disables Bevy's default
-                // window-close -> AppExit wiring so `intercept_window_close`
-                // in ScenesPlugin owns the exit path, and it honors
-                // `JACKDAW_WINDOW_SIZE`. Spelling its fields out here instead
-                // would drop that override.
-                .set(editor_window_plugin())
-                // Its overlay inserts on every camera through a command
-                // buffer with no ordering against the dock reconciler, which
-                // despawns a rebuilt panel's cameras in the same frame.
-                .disable::<bevy::dev_tools::render_debug::RenderDebugOverlayPlugin>(),
-        )
+        .add_plugins(default_plugins)
         // Ambient plugins added next to `DefaultPlugins`. The
         // editor's `EditorCorePlugin` and `PhysicsSimulationPlugin`
         // assert presence, so user `MyGamePlugin`s can add the
         // same plugins without conflict.
-        .add_plugins((
-            avian3d::prelude::PhysicsPlugins::default(),
-            bevy_enhanced_input::prelude::EnhancedInputPlugin,
-        ))
-        .add_plugins(editor_plugins);
+        .add_plugins(bevy_enhanced_input::prelude::EnhancedInputPlugin);
+    if std::env::var_os("JD_PERF_NO_PHYSICS").is_none() {
+        app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
+    }
+    app.add_plugins(editor_plugins);
 
     // The resolved asset root, so the open flow can tell whether a requested project is
     // the one this process reads assets for.

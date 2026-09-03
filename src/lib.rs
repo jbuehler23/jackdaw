@@ -86,6 +86,7 @@ pub mod modifier_ops;
 pub mod new_project;
 pub mod numeric_transform;
 pub mod operator_tooltip;
+pub mod perf_probe;
 pub mod physics_brush_bridge;
 pub mod physics_tool;
 pub mod pie;
@@ -104,6 +105,7 @@ pub mod project_types;
 pub mod reference_image;
 pub mod reflect_default;
 pub mod remote;
+pub mod render_diagnostics;
 pub mod restart;
 pub mod run_config;
 pub mod scaffold;
@@ -433,6 +435,8 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(model_thumbnail::plugin)
         .add_plugins(boot_ops::plugin)
         .add_plugins(fps_overlay::plugin)
+        .add_plugins(render_diagnostics::plugin)
+        .add_plugins(perf_probe::plugin)
         .add_systems(Update, view_ops::drive_dolly)
         .add_plugins(jackdaw_avian_integration::PhysicsOverlaysPlugin::<
             selection::Selected,
@@ -485,6 +489,7 @@ impl Plugin for EditorCorePlugin {
             JackdawDrawSystems
                 .after(bevy::transform::TransformSystems::Propagate)
                 .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+                .run_if(|| std::env::var_os("JD_PERF_NO_DRAW").is_none())
                 .run_if(in_state(crate::AppState::Editor)),
         )
         .insert_resource(UiTheme(create_dark_theme()))
