@@ -30,6 +30,7 @@ use jackdaw_pie_protocol::{
 
 use crate::build_status::BuildStatus;
 use crate::ext_build::BuildProgress;
+use crate::project_build::BuildLoad;
 use crate::pie_mirror::{PieInstances, PieViewMode};
 use crate::project_build::shim::ShimSpec;
 use crate::run_config::RunConfigs;
@@ -265,6 +266,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<PieReloadOp>()
         .register_operator::<ProjectBuildOp>()
         .register_operator::<ProjectToggleAutoBuildOp>()
+        .register_operator::<ProjectTogglePrebuildOp>()
         .register_operator::<PieWindowModeToggleOp>()
         .register_operator::<crate::live_input::PiePlayInputToggleOp>()
         .register_operator::<crate::live_edits::PieLiveEditSaveOp>()
@@ -347,7 +349,7 @@ pub(crate) fn pie_reload(_: In<OperatorParameters>, mut commands: Commands) -> O
 pub(crate) fn project_build(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         if let Some(root) = project_root(world) {
-            spawn_project_build(world, &root);
+            spawn_project_build(world, &root, BuildLoad::Foreground);
         }
     });
     OperatorResult::Finished
@@ -374,6 +376,33 @@ pub(crate) fn project_toggle_auto_build(
         persist_project_build_settings(world);
         info!(
             "PIE: auto-build {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
+    });
+    OperatorResult::Finished
+}
+
+/// Turn the open-time background pre-build on or off. On by default; the
+/// `JACKDAW_PIE_PREBUILD` environment variable overrides this for a
+/// single session.
+#[operator(
+    id = "project.toggle_prebuild",
+    label = "Toggle Prebuild On Open",
+    description = "Turn the background pre-build that runs when a project opens on or off."
+)]
+pub(crate) fn project_toggle_prebuild(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        let enabled = {
+            let mut settings = world.resource_mut::<EditorBuildSettings>();
+            settings.prebuild = !settings.prebuild;
+            settings.prebuild
+        };
+        persist_project_build_settings(world);
+        info!(
+            "PIE: pre-build on open {}",
             if enabled { "enabled" } else { "disabled" }
         );
     });
@@ -555,7 +584,7 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
         Some(BuildState::Done(_)) => unreachable!("handled above"),
         Some(BuildState::Failed) | None => {
             info!("PIE: building the game for {key}");
-            let (task, progress) = spawn_game_build(&root, spec);
+            let (task, progress) = spawn_game_build(&root, spec, BuildLoad::Foreground);
             session.builds.insert(
                 root,
                 BuildState::Running {
@@ -611,11 +640,40 @@ fn newest_mtime(dir: &Path) -> Option<std::time::SystemTime> {
     newest
 }
 
+/// One line naming what actually went wrong, for the status bar.
+///
+/// `Display` for a compile failure says only "project failed to compile",
+/// which is what the user already knows. The first real diagnostic in the
+/// log is what tells them where to look, so that is what goes in front of
+/// them; the panel still has the whole log.
+pub(crate) fn failure_summary(
+    error: &crate::project_build::ProjectBuildError,
+    detail: &str,
+) -> String {
+    /// Long enough for a rustc error line, short enough for the footer.
+    const MAX: usize = 140;
+    let Some(line) = detail
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("error"))
+    else {
+        return error.to_string();
+    };
+    let summary = if line.chars().count() > MAX {
+        let cut: String = line.chars().take(MAX).collect();
+        format!("{cut}...")
+    } else {
+        line.to_string()
+    };
+    format!("{error}: {summary}")
+}
+
 /// Start the project's game build on the compute pool, returning the
 /// task and the progress sink the footer polls.
 fn spawn_game_build(
     root: &Path,
     spec: ShimSpec,
+    load: jackdaw_project_build::BuildLoad,
 ) -> (Task<io::Result<GameBuildResult>>, Arc<Mutex<BuildProgress>>) {
     let progress = Arc::new(Mutex::new(BuildProgress::default()));
     let sink = Arc::clone(&progress);
@@ -656,7 +714,12 @@ fn spawn_game_build(
                 }
             }
         };
-        let result = crate::project_build::build_project_binary(&spec, &jackdaw_dir, &mut report);
+        let result = crate::project_build::build_project_binary_with_load(
+            &spec,
+            &jackdaw_dir,
+            load,
+            &mut report,
+        );
         match result {
             Ok(build) => {
                 if let Ok(mut p) = sink.lock() {
@@ -674,10 +737,21 @@ fn spawn_game_build(
             Err(err) => {
                 // Diagnostics already streamed into the log via the build
                 // reporter, so just note the failure and surface the error.
+                // `Display` for a compile failure is one summary line; the
+                // log it carries is the part that says what is wrong, and
+                // the panel has nowhere else to read it from when the
+                // reporter never ran (a cargo that would not start).
+                let detail = match &err {
+                    crate::project_build::ProjectBuildError::Compile { log } => log.clone(),
+                    other => other.to_string(),
+                };
                 if let Ok(mut p) = sink.lock() {
-                    p.push_log("build failed".to_string());
+                    p.push_log(format!("build failed: {err}"));
+                    if detail != err.to_string() {
+                        p.push_log(detail.clone());
+                    }
                 }
-                Err(io::Error::other(err.to_string()))
+                Err(io::Error::other(failure_summary(&err, &detail)))
             }
         }
     });
@@ -1067,6 +1141,33 @@ pub struct PiePrebuildState {
     attempted: bool,
 }
 
+/// Turns the open-time pre-build off when set to `0`, `false` or empty.
+///
+/// The pre-build is a whole cargo run started without being asked for. On
+/// a machine already busy -- the editor itself, the user's own build --
+/// the right answer is sometimes "don't", and that has to be sayable
+/// before the editor opens, not only from a menu once it has started.
+pub const ENV_PIE_PREBUILD: &str = "JACKDAW_PIE_PREBUILD";
+
+/// Whether [`ENV_PIE_PREBUILD`]'s value asks for the pre-build.
+///
+/// Absent means yes: the switch exists to turn a default off.
+fn env_allows_prebuild(raw: Option<&str>) -> bool {
+    !raw.is_some_and(|value| matches!(value.trim(), "" | "0" | "false"))
+}
+
+/// Whether this session should pre-build. The environment wins, so a
+/// scripted or CI run can suppress it whatever the project remembers.
+fn prebuild_wanted(world: &World) -> bool {
+    env_allows_prebuild(
+        std::env::var_os(ENV_PIE_PREBUILD)
+            .and_then(|value| value.into_string().ok())
+            .as_deref(),
+    ) && world
+        .get_resource::<EditorBuildSettings>()
+        .is_none_or(|settings| settings.prebuild)
+}
+
 /// Pre-build the game in the background once the editor opens, so the
 /// first Play reuses a warm artifact instead of compiling on demand.
 /// Mirrors `launch_instance`'s build but with no pending spawn: it only
@@ -1082,6 +1183,10 @@ fn prebuild_play_target(world: &mut World) {
     }
     // Run configs are loaded; this is the one-shot attempt regardless of outcome.
     world.resource_mut::<PiePrebuildState>().attempted = true;
+    if !prebuild_wanted(world) {
+        info!("PIE: pre-build disabled; the first Play will compile the game");
+        return;
+    }
     let Some(root) = project_root(world) else {
         return;
     };
@@ -1104,7 +1209,7 @@ fn prebuild_play_target(world: &mut World) {
         return; // already built or building (the user may have hit Play already)
     }
     info!("PIE: pre-building the game in the background for a fast first Play");
-    let (task, progress) = spawn_game_build(&root, spec);
+    let (task, progress) = spawn_game_build(&root, spec, BuildLoad::Background);
     session.builds.insert(
         root,
         BuildState::Running {
@@ -1131,7 +1236,7 @@ impl Default for EditRebuildThrottle {
 /// Kept at the top level of the project's settings file, where they were
 /// written before the file grew other sections; see
 /// [`crate::project_settings`].
-#[derive(Resource, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Resource, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct EditorBuildSettings {
     /// When true, the editor rebuilds the project automatically on source
@@ -1140,6 +1245,20 @@ struct EditorBuildSettings {
     /// have started themselves. When off, rebuilds come from the Rebuild
     /// action or an out-of-editor `jackdaw build`.
     auto_build: bool,
+    /// When true, the editor compiles the game once in the background as
+    /// the project opens, so the first Play is instant. On by default,
+    /// because the alternative is a minutes-long wait at the first Play;
+    /// off for anyone who would rather have the whole machine.
+    prebuild: bool,
+}
+
+impl Default for EditorBuildSettings {
+    fn default() -> Self {
+        Self {
+            auto_build: false,
+            prebuild: true,
+        }
+    }
 }
 
 fn sync_project_build_settings(
@@ -1178,7 +1297,7 @@ fn persist_project_build_settings(world: &World) {
 /// Shared by the source watcher (auto-build) and the manual Rebuild
 /// operator. The finished build persists `.jackdaw/schema.json`, which
 /// [`watch_project_schema`] picks up to refresh the editor's types.
-fn spawn_project_build(world: &mut World, root: &Path) {
+fn spawn_project_build(world: &mut World, root: &Path, load: BuildLoad) {
     if matches!(
         world.non_send::<PieSession>().builds.get(root),
         Some(BuildState::Running { .. })
@@ -1189,7 +1308,7 @@ fn spawn_project_build(world: &mut World, root: &Path) {
         return;
     };
     info!("PIE: building the game");
-    let (task, progress) = spawn_game_build(root, spec);
+    let (task, progress) = spawn_game_build(root, spec, load);
     world.non_send_mut::<PieSession>().builds.insert(
         root.to_path_buf(),
         BuildState::Running {
@@ -1231,7 +1350,7 @@ fn watch_project_source_for_edit(world: &mut World) {
     if source_is_current(&root, &built_path) {
         return;
     }
-    spawn_project_build(world, &root);
+    spawn_project_build(world, &root, BuildLoad::Background);
 }
 
 /// Throttle for the schema-file poll so it stats the file about twice a
@@ -1415,6 +1534,9 @@ fn poll_builds(world: &mut World) {
                 world
                     .resource_mut::<crate::build_status::BuildStatus>()
                     .state = crate::build_status::BuildState::Failed { at: Instant::now() };
+                // A pre-build the user never asked for fails with the Build
+                // panel closed, so the footer is the only place it can say so.
+                crate::status_bar::notify_error(world, err.to_string());
             }
         }
     }
@@ -2282,5 +2404,97 @@ mod enter_live_tests {
         assert_eq!(mode, PieWindowMode::Windowed);
         toggle_window_mode(&mut mode);
         assert_eq!(mode, PieWindowMode::Embedded);
+    }
+}
+
+#[cfg(test)]
+mod prebuild_tests {
+    use super::*;
+
+    /// A world where `prebuild_play_target` would run: run configs
+    /// loaded, a project root that names no cargo package (so the
+    /// attempt, if made, resolves nothing and blocks rather than
+    /// spawning cargo).
+    fn world_ready_to_prebuild(prebuild: bool) -> World {
+        let mut world = World::new();
+        world.init_resource::<PiePrebuildState>();
+        world.init_resource::<BuildStatus>();
+        world.insert_resource(RunConfigs::default());
+        world.insert_resource(EditorBuildSettings {
+            auto_build: false,
+            prebuild,
+        });
+        world.insert_resource(crate::project::ProjectRoot {
+            root: std::env::temp_dir().join("jackdaw-prebuild-test-no-such-project"),
+            config: default(),
+        });
+        world.insert_non_send(PieSession::default());
+        world
+    }
+
+    /// Off means nothing is attempted at all: not the cargo run, and not
+    /// the package resolution that would report a problem with a project
+    /// the user has not asked the editor to build.
+    #[test]
+    fn the_setting_off_starts_no_build() {
+        let mut world = world_ready_to_prebuild(false);
+
+        prebuild_play_target(&mut world);
+
+        assert!(world.non_send::<PieSession>().builds.is_empty());
+        assert!(matches!(
+            world.resource::<BuildStatus>().state,
+            crate::build_status::BuildState::Idle
+        ));
+        assert!(world.resource::<PiePrebuildState>().attempted);
+    }
+
+    /// On, the same world does reach the resolution step, which is what
+    /// tells the two cases apart without running cargo.
+    #[test]
+    fn the_setting_on_reaches_the_build_attempt() {
+        let mut world = world_ready_to_prebuild(true);
+
+        prebuild_play_target(&mut world);
+
+        assert!(matches!(
+            world.resource::<BuildStatus>().state,
+            crate::build_status::BuildState::Blocked { .. }
+        ));
+    }
+
+    /// The environment switch is off only for the values a shell can
+    /// leave lying around; anything else, including absence, is on.
+    #[test]
+    fn only_an_explicit_off_disables_the_prebuild() {
+        assert!(env_allows_prebuild(None));
+        assert!(env_allows_prebuild(Some("1")));
+        assert!(env_allows_prebuild(Some("yes")));
+        assert!(!env_allows_prebuild(Some("0")));
+        assert!(!env_allows_prebuild(Some("false")));
+        assert!(!env_allows_prebuild(Some(" ")));
+    }
+
+    /// The footer gets the first real diagnostic, not the summary line
+    /// the user already knows.
+    #[test]
+    fn a_compile_failure_reports_its_first_diagnostic() {
+        let log = "Compiling aldermoor-client\nerror[E0432]: unresolved import `foo`\n".to_string();
+        let error = crate::project_build::ProjectBuildError::Compile { log: log.clone() };
+
+        let summary = failure_summary(&error, &log);
+
+        assert!(summary.contains("E0432"), "{summary}");
+    }
+
+    /// With no diagnostic to point at (cargo itself would not start),
+    /// the error's own text is all there is.
+    #[test]
+    fn a_failure_with_no_diagnostic_falls_back_to_the_error() {
+        let error = crate::project_build::ProjectBuildError::Compile {
+            log: String::new(),
+        };
+
+        assert_eq!(failure_summary(&error, ""), error.to_string());
     }
 }

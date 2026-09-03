@@ -5167,6 +5167,7 @@ version = "0.19.0"
 dependencies = [
  "jackdaw_env",
  "jackdaw_schema",
+ "libc",
  "serde",
  "serde_json",
  "syn 2.0.119",

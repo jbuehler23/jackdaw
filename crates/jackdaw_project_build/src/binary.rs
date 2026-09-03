@@ -23,6 +23,68 @@ pub struct ProjectBinaryBuild {
     pub schema: Option<ProjectSchema>,
 }
 
+/// How much of the machine a build may take.
+///
+/// A build the user asked for and is waiting on gets everything. One the
+/// editor started on its own must not: it competes with the editor's own
+/// frame, and with whatever the user is running in their terminal, and
+/// nobody is waiting for it.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum BuildLoad {
+    /// All cores at normal priority.
+    #[default]
+    Foreground,
+    /// Half the cores, de-prioritized.
+    Background,
+}
+
+/// Cores a [`BuildLoad::Background`] build may use on a machine with
+/// `total_threads` of them: half, and never fewer than one.
+///
+/// Split out from the command builder because the process-wide core count
+/// is not something a test can vary.
+pub fn background_jobs(total_threads: usize) -> usize {
+    (total_threads / 2).max(1)
+}
+
+/// The `CARGO_BUILD_JOBS` value for a background build, honouring a cap
+/// this process already carries: an ambient one lower than half the cores
+/// was chosen deliberately and must not be raised.
+fn background_jobs_env() -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let ours = background_jobs(cores);
+    match std::env::var("CARGO_BUILD_JOBS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        Some(ambient) if ambient > 0 => ours.min(ambient),
+        _ => ours,
+    }
+}
+
+/// Apply `load` to a cargo invocation. Call after
+/// [`detach_from_host_build`], which clears inherited cargo variables.
+fn apply_load(command: &mut Command, load: BuildLoad) {
+    if load == BuildLoad::Foreground {
+        return;
+    }
+    command.env("CARGO_BUILD_JOBS", background_jobs_env().to_string());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // The whole cargo process group, since `setpriority` is inherited
+        // by the rustc children cargo spawns.
+        unsafe {
+            command.pre_exec(|| {
+                libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+                Ok(())
+            });
+        }
+    }
+}
+
 /// Build a project's game binary and extract its type schema.
 ///
 /// `jackdaw_dir` is the project's `.jackdaw/`, where the schema is
@@ -33,6 +95,17 @@ pub struct ProjectBinaryBuild {
 pub fn build_project_binary(
     spec: &ShimSpec,
     jackdaw_dir: &Path,
+    report: &mut dyn FnMut(BuildEvent),
+) -> Result<ProjectBinaryBuild, ProjectBuildError> {
+    build_project_binary_with_load(spec, jackdaw_dir, BuildLoad::Foreground, report)
+}
+
+/// [`build_project_binary`], with a say in how much of the machine the
+/// cargo run may take.
+pub fn build_project_binary_with_load(
+    spec: &ShimSpec,
+    jackdaw_dir: &Path,
+    load: BuildLoad,
     report: &mut dyn FnMut(BuildEvent),
 ) -> Result<ProjectBinaryBuild, ProjectBuildError> {
     report(BuildEvent::Log(format!(
@@ -57,6 +130,7 @@ pub fn build_project_binary(
         // editor was launched from.
         .stderr(Stdio::piped());
     detach_from_host_build(&mut command);
+    apply_load(&mut command, load);
     let mut child = command.spawn()?;
 
     let stdout = child.stdout.take().expect("piped stdout");
@@ -417,6 +491,16 @@ fn no_binary_message(spec: &ShimSpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A background build leaves the user half the machine, and never
+    /// asks for zero jobs on a single-core box.
+    #[test]
+    fn a_background_build_takes_half_the_cores() {
+        assert_eq!(background_jobs(1), 1);
+        assert_eq!(background_jobs(2), 1);
+        assert_eq!(background_jobs(12), 6);
+        assert_eq!(background_jobs(64), 32);
+    }
 
     /// The editor pins its own toolchain; leaking that into the
     /// project's build compiles it with the wrong compiler, which shares
