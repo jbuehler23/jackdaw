@@ -871,6 +871,15 @@ fn lock_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle + use<> 
             crate::button::IconButtonProps::new(Icon::LockOpen).with_alpha(LOCK_IDLE_ALPHA),
             icon_font,
         ),
+        // What the lock does is not obvious from the padlock: it does not
+        // grey the node out, it takes it out of the canvas's reach. The
+        // workflow that opens up is worth saying, because a background
+        // filling the canvas is the one thing that makes a marquee
+        // impossible.
+        crate::tooltip::Tooltip::title("Lock").with_description(
+            "Locked nodes let the pointer through - lock a background to marquee over it.",
+        ),
+        bevy::picking::hover::Hovered::default(),
         observe(
             move |click: On<crate::button::ButtonClickEvent>, mut commands: Commands| {
                 commands.trigger(TreeRowLockToggled {

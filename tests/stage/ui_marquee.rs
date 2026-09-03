@@ -302,6 +302,61 @@ fn a_band_takes_every_node_it_is_pulled_across() {
     );
 }
 
+/// A background panel filling the canvas swallows every band pulled out
+/// over it -- until it is locked, which is what the lock is for.
+///
+/// A press on the background is a press on a node, so it starts that
+/// node's move rather than a band, and a screen built on a full-rect panel
+/// has nowhere left to start one. Locked, the panel contributes no hit at
+/// all: the press falls through to the canvas, the band comes out over it,
+/// and the children inside it are still picked up.
+#[test]
+fn a_locked_background_lets_a_band_be_pulled_out_over_it() {
+    let mut app = util::editor_test_app();
+    let panel = panel(&mut app);
+    let (root, left, right) = two_boxes(&mut app);
+    // Last, so it is painted over the two boxes: the background a screen
+    // is built on, and the thing every press lands on.
+    let background = child(&mut app, root, "Background", 0.0, 0.0, 2400.0, 1200.0);
+    settle(&mut app);
+
+    band(
+        &mut app,
+        panel,
+        Vec2::new(50.0, 50.0),
+        Vec2::new(950.0, 400.0),
+    );
+    assert_eq!(
+        selection(&app),
+        vec![background],
+        "over an unlocked background the press is that panel's own, so no band comes out",
+    );
+
+    jackdaw::hierarchy::set_locked(app.world_mut(), background, true);
+    settle(&mut app);
+    jackdaw::selection::clear_selection_in_world(app.world_mut());
+    settle(&mut app);
+
+    band(
+        &mut app,
+        panel,
+        Vec2::new(50.0, 50.0),
+        Vec2::new(950.0, 400.0),
+    );
+    let mut caught = selection(&app);
+    caught.sort();
+    let mut wanted = vec![left, right];
+    wanted.sort();
+    assert_eq!(
+        caught, wanted,
+        "locked, it lets the press through and the band takes the two nodes over it",
+    );
+    assert!(
+        !selection(&app).contains(&background),
+        "and the locked panel is not itself taken",
+    );
+}
+
 #[test]
 fn a_band_that_crosses_nothing_empties_the_selection() {
     let mut app = util::editor_test_app();

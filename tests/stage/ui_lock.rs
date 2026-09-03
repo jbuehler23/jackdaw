@@ -298,6 +298,56 @@ fn the_row_shows_a_closed_padlock_once_the_node_is_locked() {
     );
 }
 
+/// The lock control says what locking a node buys, because the padlock on
+/// its own does not.
+///
+/// A locked node is not greyed out, it is out of the canvas's reach -- and
+/// the workflow that opens up, pulling a band out over a background that
+/// otherwise swallows every press, is the one nobody finds by pressing the
+/// button.
+#[test]
+fn the_lock_control_says_what_a_lock_lets_through() {
+    let mut app = util::editor_test_app();
+    app.world_mut().insert_resource(HierarchyShowAll(true));
+    app.world_mut().spawn((
+        HierarchyTreeContainer,
+        Node::default(),
+        Visibility::Inherited,
+    ));
+    panel(&mut app);
+    let root = root(&mut app);
+    settle(&mut app);
+
+    let tip = lock_tooltip(&mut app, root);
+    assert_eq!(tip.title, "Lock", "the control says which control it is");
+    assert!(
+        tip.description.contains("let the pointer through")
+            && tip.description.contains("marquee"),
+        "and what locking is for: {}",
+        tip.description,
+    );
+}
+
+/// The tooltip hung off the lock control on `source`'s row.
+fn lock_tooltip(app: &mut App, source: Entity) -> jackdaw_feathers::tooltip::Tooltip {
+    let mut rows = app.world_mut().query::<(Entity, &TreeNode)>();
+    let row = rows
+        .iter(app.world())
+        .find(|(_, node)| node.0 == source)
+        .map(|(row, _)| row)
+        .expect("the source has a row");
+    let world = app.world();
+    world
+        .get::<Children>(row)
+        .into_iter()
+        .flatten()
+        .filter(|&&child| world.get::<TreeRowContent>(child).is_some())
+        .flat_map(|&content| world.get::<Children>(content).into_iter().flatten())
+        .filter(|&&child| world.get::<TreeRowLockToggle>(child).is_some())
+        .find_map(|&toggle| world.get::<jackdaw_feathers::tooltip::Tooltip>(toggle).cloned())
+        .expect("the lock control carries a tooltip")
+}
+
 /// The text the lock control on `source`'s row is drawing.
 fn lock_glyph(app: &mut App, source: Entity) -> String {
     let mut rows = app.world_mut().query::<(Entity, &TreeNode)>();
