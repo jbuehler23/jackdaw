@@ -315,3 +315,56 @@ fn entity_toggle_visibility_round_trip() {
 
     assert_undo_redo_round_trip(&mut app, "entity.toggle_visibility");
 }
+
+/// The history's 256 MiB budget can only trim entries that say what they
+/// weigh. A `SnapshotDiff` holds the whole scene as text twice, and while
+/// it answered zero the budget read a history of any size as free: it
+/// never trimmed, and a long editing session grew until the editor ran
+/// out of memory.
+#[test]
+fn a_snapshot_entry_reports_the_document_it_holds() {
+    let mut app = util::editor_test_app();
+
+    app.world_mut()
+        .operator("entity.add.empty")
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        })
+        .call()
+        .expect("dispatch")
+        .assert_finished_or_panic("entity.add.empty");
+
+    let history = app.world().resource::<CommandHistory>();
+    let newest = history.undo_stack.last().expect("an entry was pushed");
+    assert!(
+        newest.heap_bytes() > 0,
+        "a snapshot entry must report the document it holds, not zero"
+    );
+}
+
+/// And a history of them is trimmed once it passes its budget, which is
+/// the whole point of the entries reporting a size.
+#[test]
+fn snapshot_entries_are_trimmed_once_they_pass_the_budget() {
+    let mut app = util::editor_test_app();
+    app.world_mut().resource_mut::<CommandHistory>().budget_bytes = 1;
+
+    for _ in 0..4 {
+        app.world_mut()
+            .operator("entity.add.empty")
+            .settings(CallOperatorSettings {
+                execution_context: ExecutionContext::Invoke,
+                creates_history_entry: true,
+            })
+            .call()
+            .expect("dispatch")
+            .assert_finished_or_panic("entity.add.empty");
+    }
+
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        1,
+        "a budget of one byte should leave only the newest entry"
+    );
+}

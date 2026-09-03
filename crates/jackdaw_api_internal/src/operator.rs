@@ -762,6 +762,12 @@ impl EditorCommand for SnapshotDiff {
     fn description(&self) -> &str {
         &self.label
     }
+    /// Both snapshots, which on a document-backed snapshotter is the
+    /// whole scene twice. Without this the history's budget reads every
+    /// entry as free and never trims, whatever the scene costs.
+    fn heap_bytes(&self) -> usize {
+        self.before.heap_bytes() + self.after.heap_bytes() + self.label.capacity()
+    }
 }
 /// Tick system added to Update by `ExtensionLoaderPlugin`. Re-runs the
 /// active modal operator's invoke system each frame; exits modal on

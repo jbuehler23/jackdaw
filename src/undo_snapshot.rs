@@ -139,26 +139,32 @@ impl SceneSnapshot for BsnDocumentSnapshot {
         // diverged fields); the resolver materializes the inherited subtrees
         // back so the respawn produces complete entities. Resolve the cache
         // borrow before the spawn borrow.
-        let resolved_text = match world.get_resource::<crate::prefab::PrefabAstCache>() {
-            Some(_) => match jackdaw_bsn::parse_bsn_text(&self.text) {
-                Ok(authored) => {
-                    let cache = world.resource::<crate::prefab::PrefabAstCache>();
-                    let get_prefab = |p: &std::path::Path| cache.get(p);
-                    match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
-                        Ok(resolved) => jackdaw_bsn::emit_scene(&resolved),
-                        Err(e) => {
-                            warn!("undo snapshot: resolver failed: {e}; spawning unresolved");
-                            self.text.clone()
+        //
+        // Borrowed unless the resolver actually rewrote the document: the
+        // captured text is the whole scene (a megabyte on a large one) and
+        // the loader below only reads it, so copying it to hand it over is
+        // a megabyte of memcpy per undo for nothing.
+        let resolved_text: std::borrow::Cow<'_, str> =
+            match world.get_resource::<crate::prefab::PrefabAstCache>() {
+                Some(_) => match jackdaw_bsn::parse_bsn_text(&self.text) {
+                    Ok(authored) => {
+                        let cache = world.resource::<crate::prefab::PrefabAstCache>();
+                        let get_prefab = |p: &std::path::Path| cache.get(p);
+                        match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
+                            Ok(resolved) => jackdaw_bsn::emit_scene(&resolved).into(),
+                            Err(e) => {
+                                warn!("undo snapshot: resolver failed: {e}; spawning unresolved");
+                                (&self.text).into()
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    warn!("undo snapshot: parse failed: {e}; spawning raw text");
-                    self.text.clone()
-                }
-            },
-            None => self.text.clone(),
-        };
+                    Err(e) => {
+                        warn!("undo snapshot: parse failed: {e}; spawning raw text");
+                        (&self.text).into()
+                    }
+                },
+                None => (&self.text).into(),
+            };
 
         if let Err(err) = crate::scene_io::despawn_scene_entities(world) {
             error!("undo snapshot: despawn_scene_entities failed: {err}");
@@ -185,6 +191,15 @@ impl SceneSnapshot for BsnDocumentSnapshot {
             editor_state: self.editor_state.clone(),
             selection: self.selection.clone(),
         })
+    }
+
+    /// The document text plus the recorded selection. The editor-state
+    /// half is a handful of small `Copy` fields and settings structs, on
+    /// the far side of the rounding from a scene measured in megabytes.
+    fn heap_bytes(&self) -> usize {
+        self.text.capacity()
+            + self.selection.capacity()
+                * std::mem::size_of::<jackdaw_scene_types::SceneNodeId>()
     }
 
     fn as_any(&self) -> &dyn Any {
