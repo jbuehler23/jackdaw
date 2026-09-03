@@ -79,7 +79,22 @@ pub const HANDLE_SIZE: f32 = 8.0;
 const OUTLINE_WIDTH: f32 = 1.0;
 
 /// Thinnest a resize may leave a node, in authored pixels.
-const MIN_NODE_SIZE: f32 = 1.0;
+///
+/// The handle's own side. A node thinner than the thing that resizes it
+/// cannot be picked up again by any of its handles, so a drag that would
+/// take it there stops at the handle instead: a resize that collapses the
+/// node is refused rather than written and left for the author to undo.
+const MIN_NODE_SIZE: f32 = HANDLE_SIZE;
+
+/// How small a node has to be on an axis before that axis's handles are
+/// drawn outside it rather than straddling its edges, in authored pixels.
+///
+/// Three handles across is the point at which the eight of them cover the
+/// whole of a node: on a 40x20 label every press landed on a handle, so
+/// the node had a resize and no move at all, and the first drag wrote a
+/// one-pixel width. Moved outward, the handles ring the node and its
+/// inside is its own again.
+const HANDLES_OUTSIDE_BELOW: f32 = 3.0 * HANDLE_SIZE;
 
 /// Draw order of the overlay inside the stage. Above the stage's own
 /// frame, and above anything else placed in the stage alongside it.
@@ -193,6 +208,10 @@ pub struct UiSelectionOverlay {
     /// carrying the resize handles and the one the gestures are delivered
     /// to.
     pub primary: bool,
+    /// Per axis, whether the node is small enough that this axis's handles
+    /// are drawn outside it. Kept so the handles are re-placed when a
+    /// resize crosses [`HANDLES_OUTSIDE_BELOW`] and not on every frame.
+    pub handles_outside: BVec2,
 }
 
 /// The outline drawn around the authored UI node under the cursor, before
@@ -1997,7 +2016,8 @@ fn sync_selection_overlays(
     hosts: Query<(Entity, &Viewport2dPanelHost)>,
     stages: Query<&ComputedNode, With<Scene2dViewport>>,
     authored: SelectedNode,
-    overlays: Query<(Entity, &UiSelectionOverlay)>,
+    mut overlays: Query<(Entity, &mut UiSelectionOverlay)>,
+    handles: Query<(Entity, &UiResizeHandle, &ChildOf)>,
     mut nodes: Query<&mut Node>,
 ) {
     let primary = selection.primary();
@@ -2039,6 +2059,7 @@ fn sync_selection_overlays(
                         if let Ok(mut node) = nodes.get_mut(overlay) {
                             place_outline(&mut node, rect);
                         }
+                        reseat_handles(overlay, rect, &mut overlays, &handles, &mut nodes);
                     }
                     None => spawn_overlay(
                         &mut commands,
@@ -2142,6 +2163,7 @@ fn spawn_overlay(
                 host,
                 node: authored,
                 primary,
+                handles_outside: handles_outside(rect),
             },
             EditorEntity,
             node,
@@ -2179,16 +2201,48 @@ fn spawn_overlay(
         return;
     }
 
+    let outside = handles_outside(rect);
     for (x, y) in HANDLE_POSITIONS {
         commands.spawn((
             UiResizeHandle { x, y },
             EditorEntity,
-            handle_node(x, y),
+            handle_node(x, y, outside),
             BackgroundColor(tokens::TEXT_PRIMARY),
             BorderColor::all(tokens::ACCENT_BLUE),
             Pickable::default(),
             ChildOf(overlay),
         ));
+    }
+}
+
+/// Move an outline's handles inside or outside the node, when a resize
+/// has taken it across [`HANDLES_OUTSIDE_BELOW`] on either axis.
+///
+/// Only on the crossing: the handles hang off the outline and follow it
+/// wherever it goes, so the only thing a change of rect can ask of them is
+/// which side of the edge they sit on.
+fn reseat_handles(
+    overlay: Entity,
+    rect: Rect,
+    overlays: &mut Query<(Entity, &mut UiSelectionOverlay)>,
+    handles: &Query<(Entity, &UiResizeHandle, &ChildOf)>,
+    nodes: &mut Query<&mut Node>,
+) {
+    let outside = handles_outside(rect);
+    let Ok((_, mut state)) = overlays.get_mut(overlay) else {
+        return;
+    };
+    if state.handles_outside == outside {
+        return;
+    }
+    state.handles_outside = outside;
+    for (entity, handle, parent) in handles {
+        if parent.parent() != overlay {
+            continue;
+        }
+        if let Ok(mut node) = nodes.get_mut(entity) {
+            place_handle(&mut node, handle.x, handle.y, outside);
+        }
     }
 }
 
@@ -3875,8 +3929,11 @@ fn past_the_rulers_edge(world: &World, host: Entity, axis: CanvasAxis, cursor: V
 /// The border is inside the square, because Bevy measures a `Node` as
 /// its border box: the handle stays [`HANDLE_SIZE`] on a side, so its
 /// hit area matches what is drawn.
-fn handle_node(x: i8, y: i8) -> Node {
-    let half = px(-HANDLE_SIZE / 2.0);
+///
+/// On an axis where `outside` is set the offset is the whole handle
+/// rather than half of it, so the handle sits clear of the node instead
+/// of over it. See [`HANDLES_OUTSIDE_BELOW`].
+fn handle_node(x: i8, y: i8, outside: BVec2) -> Node {
     let mut node = Node {
         position_type: PositionType::Absolute,
         width: px(HANDLE_SIZE),
@@ -3884,21 +3941,52 @@ fn handle_node(x: i8, y: i8) -> Node {
         border: UiRect::all(px(OUTLINE_WIDTH)),
         ..default()
     };
+    place_handle(&mut node, x, y, outside);
+    node
+}
+
+/// Where the handle for `(x, y)` sits on an outline whose node is small
+/// on the axes `outside` names.
+fn place_handle(node: &mut Node, x: i8, y: i8, outside: BVec2) {
+    let offset = |small: bool| px(if small { -HANDLE_SIZE } else { -HANDLE_SIZE / 2.0 });
+    node.margin = UiRect::default();
     match x {
-        -1 => node.left = half,
-        1 => node.right = half,
+        -1 => {
+            node.left = offset(outside.x);
+            node.right = Val::Auto;
+        }
+        1 => {
+            node.right = offset(outside.x);
+            node.left = Val::Auto;
+        }
         _ => {
             node.left = percent(50);
-            node.margin.left = half;
+            node.right = Val::Auto;
+            node.margin.left = px(-HANDLE_SIZE / 2.0);
         }
     }
     match y {
-        -1 => node.top = half,
-        1 => node.bottom = half,
+        -1 => {
+            node.top = offset(outside.y);
+            node.bottom = Val::Auto;
+        }
+        1 => {
+            node.bottom = offset(outside.y);
+            node.top = Val::Auto;
+        }
         _ => {
             node.top = percent(50);
-            node.margin.top = half;
+            node.bottom = Val::Auto;
+            node.margin.top = px(-HANDLE_SIZE / 2.0);
         }
     }
-    node
+}
+
+/// Whether each axis of a rect is small enough for its handles to be
+/// drawn outside it.
+fn handles_outside(rect: Rect) -> BVec2 {
+    BVec2::new(
+        rect.width() < HANDLES_OUTSIDE_BELOW,
+        rect.height() < HANDLES_OUTSIDE_BELOW,
+    )
 }

@@ -342,6 +342,82 @@ fn a_press_on_the_selected_nodes_own_body_still_moves_it() {
     assert_eq!(history_len(&app), entries + 1, "and is one history entry");
 }
 
+/// A node smaller than three handles across wears its handles outside
+/// itself, so the middle of it is still a place to press.
+///
+/// The eight handles are eight pixels each and straddle the outline, so on
+/// a 40x20 label they covered every pixel of it: a press anywhere on the
+/// node started a resize, the first drag wrote a one-pixel width, and there
+/// was no gesture that moved the label at all. Moved outward they ring the
+/// node instead, and its inside is its own again.
+#[test]
+fn a_small_nodes_handles_ring_it_rather_than_cover_it() {
+    use bevy::ui::UiGlobalTransform;
+
+    let mut app = stage_app();
+    let panel = panel_entity(&mut app);
+    let (root, _, _) = authored_scene(&mut app);
+    let label = app
+        .world_mut()
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(1000),
+                top: px(700),
+                width: px(40),
+                height: px(20),
+                ..default()
+            },
+            ChildOf(root),
+        ))
+        .id();
+    settle(&mut app);
+    jackdaw::selection::select_only(app.world_mut(), label);
+    settle(&mut app);
+
+    let (overlay, _) = overlay_node(&mut app);
+    let rect_of = |app: &App, entity: Entity| -> Rect {
+        let size = app
+            .world()
+            .get::<ComputedNode>(entity)
+            .expect("laid out")
+            .size();
+        let centre = app
+            .world()
+            .get::<UiGlobalTransform>(entity)
+            .expect("laid out")
+            .translation;
+        Rect::from_center_size(centre, size)
+    };
+    let outline = rect_of(&app, overlay);
+    let handles: Vec<((i8, i8), Rect)> = handle_layout(&mut app, overlay)
+        .into_iter()
+        .map(|edges| {
+            let handle = handle_entity(&mut app, overlay, edges);
+            (edges, rect_of(&app, handle))
+        })
+        .collect();
+
+    let middle = outline.center();
+    for (edges, handle) in &handles {
+        assert!(
+            !handle.contains(middle),
+            "the {edges:?} handle still covers the middle of the node: {handle:?}",
+        );
+    }
+    // The resize is not given up for the move: the corner handle is still
+    // over the corner it drags.
+    let corner = handles
+        .iter()
+        .find(|(edges, _)| *edges == (-1, -1))
+        .map(|(_, handle)| *handle)
+        .expect("the top-left handle is drawn");
+    assert!(
+        corner.contains(outline.min),
+        "the corner handle still lies on the corner it drags: {corner:?}",
+    );
+}
+
 /// Selection chrome is drawn over content the editor does not control,
 /// so a single accent colour would disappear against content of the same
 /// luminance.
@@ -778,9 +854,13 @@ fn a_zoom_mid_drag_moves_the_drag_onto_the_new_scale() {
 }
 
 /// A handle dragged past the edge opposite it stops there. The size
-/// bottoms out at a pixel, and the origin bottoms out with it: an origin
-/// that kept following the cursor would walk the node off across the
-/// canvas one pixel wide.
+/// bottoms out at the handle's own width, and the origin bottoms out with
+/// it: an origin that kept following the cursor would walk the node off
+/// across the canvas a sliver wide.
+///
+/// The handle rather than a pixel, because a node thinner than the thing
+/// that resizes it cannot be picked up by any of its handles again: the
+/// collapse is refused rather than written and left to be undone.
 #[test]
 fn a_resize_dragged_past_the_far_edge_stops_at_it() {
     let mut app = stage_app();
@@ -807,8 +887,13 @@ fn a_resize_dragged_past_the_far_edge_stops_at_it() {
     let resized = node_of(&app, front);
     assert_eq!(
         (resized.left, resized.top, resized.width, resized.height),
-        (px(799), px(399), px(1), px(1)),
-        "the dragged corner stops a pixel short of the corner it cannot pass",
+        (
+            px(800.0 - HANDLE_SIZE),
+            px(400.0 - HANDLE_SIZE),
+            px(HANDLE_SIZE),
+            px(HANDLE_SIZE),
+        ),
+        "the dragged corner stops a handle short of the corner it cannot pass",
     );
 }
 
