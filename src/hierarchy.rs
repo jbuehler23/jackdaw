@@ -665,12 +665,16 @@ fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: En
     let icon_font = world.resource::<IconFont>().0.clone();
     let style = TreeRowStyle { icon_font };
     let icon_override = registered_icon(world, source);
+    // Read rather than assumed false: a row is spawned when its branch is
+    // opened, which can be long after the entity was selected -- from the
+    // canvas, or before the branch was closed and opened again.
+    let selected = world.get::<Selected>(source).is_some();
 
     let tree_row_entity = world
         .spawn((
             tree_row(
                 &label,
-                false,
+                selected,
                 source,
                 category,
                 inherited,
@@ -681,6 +685,13 @@ fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: En
         ))
         .id();
     set_row_expand_toggle(world, tree_row_entity, has_children);
+    if selected && let Some(content) = first_child_with::<TreeRowContent>(world, tree_row_entity) {
+        // The colours came with the bundle; the marker is what every other
+        // path asks whether the row is selected, and it is inserted by the
+        // observer that watches `Selected` land -- which for this row has
+        // already been and gone.
+        world.entity_mut(content).insert(TreeRowSelected);
+    }
 
     // Register immediately under the owning Outliner panel so the
     // next caller in the same `commands.queue` flush sees the row
@@ -1458,17 +1469,32 @@ fn on_tree_node_expanded(
         &TreeChildrenPopulated,
         &TreeNode,
         &Children,
+        Has<RowsBuiltOnExpand>,
     )>,
     tree_row_children_marker: Query<Entity, With<TreeRowChildren>>,
     remote_check: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
 ) {
     let entity = trigger.event_target();
-    let Ok((expanded, populated, tree_node, children)) = tree_query.get(entity) else {
+    let Ok((expanded, populated, tree_node, children, built_on_expand)) = tree_query.get(entity)
+    else {
         return;
     };
 
+    // A closed row draws none of its subtree, so nothing under it needs to
+    // exist. Kept, the rows were a per-node cost the panel paid for every
+    // branch ever opened, for the rest of the session.
+    //
+    // Only the rows this observer built, though: a row can be populated by
+    // the late-registration pass without ever having been opened, and those
+    // rows are not this observer's to take away.
+    if !expanded.0 {
+        if built_on_expand {
+            commands.queue(move |world: &mut World| free_row_children(world, entity));
+        }
+        return;
+    }
     // Only populate on first expansion
-    if !expanded.0 || populated.0 {
+    if populated.0 {
         return;
     }
 
@@ -1558,6 +1584,9 @@ fn on_tree_node_expanded(
         for (child_entity, _name, _category) in child_data {
             spawn_single_tree_row(world, child_entity, container);
         }
+        if let Ok(mut row) = world.get_entity_mut(tree_row_entity) {
+            row.insert(RowsBuiltOnExpand);
+        }
         // The sort above is the fallback order, for a parent the document has
         // no say over. Where it does -- an authored node, whose child order is
         // what the file holds and what the canvas lays out -- that order wins,
@@ -1570,6 +1599,75 @@ fn on_tree_node_expanded(
             sync_outliner_row_order(world, Some(source));
         }
     });
+}
+
+/// Marks a row whose child rows were built by opening it, and which may
+/// therefore have them taken away again when it is closed.
+///
+/// Not every populated row is one of these. The late-registration pass
+/// puts rows under a container whose row was never opened, and freeing
+/// those on a close would lose rows nothing rebuilds.
+#[derive(Component)]
+struct RowsBuiltOnExpand;
+
+/// Despawn the rows under a collapsed row and mark it unpopulated, so
+/// re-opening it builds them again.
+///
+/// The `TreeIndex` entries go first, and for the whole subtree rather than
+/// just the top level: the index is what every other path asks whether a
+/// source already has a row, and an entry naming a despawned row is a row
+/// that can never be spawned again. `maintain_tree_index` would reach the
+/// same answer from `RemovedComponents`, but it finds each key by scanning
+/// the map, which over a branch of thousands is a stall on the frame a
+/// user closed a disclosure triangle.
+fn free_row_children(world: &mut World, row: Entity) {
+    let Some(container) = first_child_with::<TreeRowChildren>(world, row) else {
+        return;
+    };
+    let children: Vec<Entity> = world
+        .get::<Children>(container)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    let owner = ancestor_hierarchy_root(world, container);
+    for child in children {
+        forget_row_subtree(world, child, owner);
+        if let Ok(entity) = world.get_entity_mut(child) {
+            entity.despawn();
+        }
+    }
+    if let Some(mut populated) = world.get_mut::<TreeChildrenPopulated>(row) {
+        populated.0 = false;
+    }
+    if let Ok(mut entity) = world.get_entity_mut(row) {
+        entity.remove::<RowsBuiltOnExpand>();
+    }
+    // The keyboard walks the rows that are drawn, and the row it was on is
+    // no longer one of them. The row just closed is where the walk resumes,
+    // which is where the user's attention is.
+    let focused = world.resource::<TreeFocused>().0;
+    if focused.is_some_and(|focused| world.get_entity(focused).is_err()) {
+        world.resource_mut::<TreeFocused>().0 = Some(row);
+    }
+}
+
+/// Drop the `TreeIndex` entry for `row` and for every row nested under it.
+fn forget_row_subtree(world: &mut World, row: Entity, owner: Option<Entity>) {
+    let Some(&TreeNode(source)) = world.get::<TreeNode>(row) else {
+        return;
+    };
+    if let Some(owner) = owner {
+        world.resource_mut::<TreeIndex>().remove(owner, source);
+    }
+    let Some(container) = first_child_with::<TreeRowChildren>(world, row) else {
+        return;
+    };
+    let children: Vec<Entity> = world
+        .get::<Children>(container)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    for child in children {
+        forget_row_subtree(world, child, owner);
+    }
 }
 
 /// Handle tree row click -> select the source entity.
