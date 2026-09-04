@@ -82,10 +82,10 @@ pub(crate) fn spawn_type_metadata_ui(
                 padding: UiRect::all(px(tokens::SPACING_MD)),
                 row_gap: px(tokens::SPACING_SM),
                 border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::all(px(tokens::COMPONENT_CARD_RADIUS)),
+                border_radius: BorderRadius::bottom(px(tokens::COMPONENT_CARD_RADIUS)),
                 margin: UiRect::bottom(px(tokens::SPACING_SM)),
             }
-            BackgroundColor(tokens::COMPONENT_CARD_HEADER_BG)
+            BackgroundColor(tokens::COMPONENT_CARD_BG)
             BorderColor::all(tokens::COMPONENT_CARD_BORDER)
         })
         .insert((TypeMetadataPane, ChildOf(card.body)))
@@ -171,7 +171,7 @@ fn spawn_preview_row(
                 align_items: AlignItems::Start,
                 column_gap: Val::Px(tokens::SPACING_SM),
                 border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
-                ..default(),
+                ..default()
             },
             ChildOf(column),
         ))
@@ -194,7 +194,6 @@ fn spawn_preview_row(
                 height: size,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                overflow: Overflow::clip(),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
                 flex_shrink: 0.0,
@@ -518,8 +517,9 @@ fn update_preview_thumbnails(
         commands.spawn((
             ImageNode::new(handle),
             Node {
-                width: Val::Px(tokens::PREVIEW_IMAGE_SIZE),
-                height: Val::Px(tokens::PREVIEW_IMAGE_SIZE),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
                 ..default()
             },
             Pickable::IGNORE,
