@@ -73,7 +73,7 @@ const JOB_TIMEOUT_FRAMES: u32 = 600;
 /// read-back is queued. `Screenshot` swaps the target's output attachment
 /// and captures the *next* render into it, so there has to be at least one
 /// more render after the model is in place.
-const SETTLE_FRAMES: u32 = 2;
+const SETTLE_FRAMES: u32 = 8;
 
 /// How far outside the browser's scroll viewport a tile still counts as
 /// visible, in pixels. Roughly two extra rows above and below, so a slow

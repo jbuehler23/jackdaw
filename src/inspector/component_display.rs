@@ -44,6 +44,7 @@ use super::{
 };
 use crate::inspector::prefab_field_dots::{PrefabInstanceCtx, inspector_type_paths_for};
 use crate::prefab::PrefabAstCache;
+use crate::type_metadata::{TypeChrome, TypeMetadata};
 use bevy::picking::hover::Hovered;
 
 /// The live scene-document resource bundled into one param so the systems
@@ -180,6 +181,14 @@ fn authored_widget_components() -> [&'static str; 10] {
     ]
 }
 
+struct ListedComponent {
+    name: String,
+    group: String,
+    component_id: ComponentId,
+    type_path: String,
+    chrome: TypeChrome,
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "inspector rebuild needs the full system param set; bundling into a struct would just push the problem one frame down"
@@ -203,7 +212,7 @@ pub(crate) fn build_inspector_displays(
     prefab_cache: Option<&PrefabAstCache>,
     collapse_state: &super::InspectorCollapseState,
     project_types: &crate::project_types::ProjectTypes,
-    type_metadata: &crate::type_metadata::TypeMetadata,
+    type_metadata: &TypeMetadata,
 ) {
     // Show multi-selection header when multiple entities are selected
     if selection_count > 1 {
@@ -259,8 +268,7 @@ pub(crate) fn build_inspector_displays(
         })
     });
 
-    // (short_name, group, component_id, full_type_path, authored_category, description)
-    let mut comp_list: Vec<(String, String, ComponentId, String, String, String)> = archetype
+    let mut comp_list: Vec<ListedComponent> = archetype
         .iter_components()
         .filter_map(|component_id| {
             let info = components.get_info(component_id)?;
@@ -302,17 +310,15 @@ pub(crate) fn build_inspector_displays(
                 {
                     return None;
                 }
-                let short = table.short_path().to_string();
                 let chrome = type_metadata.resolve(full_path, &registry, project_types);
                 let group = chrome.group(full_path);
-                return Some((
-                    short,
+                return Some(ListedComponent {
+                    name: table.short_path().to_string(),
                     group,
                     component_id,
-                    full_path.to_string(),
-                    chrome.category,
-                    chrome.description,
-                ));
+                    type_path: full_path.to_string(),
+                    chrome,
+                });
             }
 
             // Unreflected components fall back to the `Components` name.
@@ -320,15 +326,13 @@ pub(crate) fn build_inspector_displays(
             if hidden_by_namespace(&name) {
                 return None;
             }
-            let full = name.to_string();
-            Some((
-                name.shortname().to_string(),
-                "Other".to_string(),
+            Some(ListedComponent {
+                name: name.shortname().to_string(),
+                group: "Other".to_string(),
                 component_id,
-                full,
-                String::new(),
-                String::new(),
-            ))
+                type_path: name.to_string(),
+                chrome: TypeChrome::default(),
+            })
         })
         .collect();
 
@@ -342,14 +346,24 @@ pub(crate) fn build_inspector_displays(
             )
     };
     comp_list.sort_by(|a, b| {
-        crate::type_metadata::group_order(&b.3, &b.4)
-            .cmp(&crate::type_metadata::group_order(&a.3, &a.4))
-            .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| is_derived_path(&a.3).cmp(&is_derived_path(&b.3)))
-            .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
+        crate::type_metadata::group_order(&b.type_path, &b.chrome.category)
+            .cmp(&crate::type_metadata::group_order(
+                &a.type_path,
+                &a.chrome.category,
+            ))
+            .then_with(|| a.group.cmp(&b.group))
+            .then_with(|| is_derived_path(&a.type_path).cmp(&is_derived_path(&b.type_path)))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
 
-    for (name, _group, component_id, type_path, category, description) in &comp_list {
+    for ListedComponent {
+        name,
+        component_id,
+        type_path,
+        chrome,
+        ..
+    } in &comp_list
+    {
         let component_id = *component_id;
 
         // Detect override: compare current component value vs baseline
@@ -473,8 +487,8 @@ pub(crate) fn build_inspector_displays(
             commands,
             &card,
             type_path,
-            category,
-            description,
+            chrome,
+            type_metadata,
         );
         jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, card.section);
         let body_entity = card.body;
@@ -638,8 +652,8 @@ pub(crate) fn build_inspector_displays(
                 commands,
                 &card,
                 &type_path,
-                &chrome.category,
-                &chrome.description,
+                &chrome,
+                type_metadata,
             );
             jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, card.section);
             super::project_component_display::spawn_project_component_fields(

@@ -391,8 +391,8 @@ pub(crate) fn spawn_fallback_section(
             commands,
             &card,
             type_path,
-            &chrome.category,
-            &chrome.description,
+            &chrome,
+            type_metadata,
         );
         commands.entity(card.section).insert(ChildOf(group_body));
 

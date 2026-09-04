@@ -168,6 +168,17 @@ pub(crate) fn set_description(
     })
 }
 
+pub(crate) fn set_preview(
+    world: &mut World,
+    project_root: &Path,
+    type_path: &str,
+    preview: &str,
+) -> std::io::Result<()> {
+    patch_type_meta(world, project_root, type_path, |meta| {
+        meta.preview = overlay_string(preview);
+    })
+}
+
 fn overlay_string(value: &str) -> Option<String> {
     if value.is_empty() {
         None
