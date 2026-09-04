@@ -81,10 +81,12 @@ fn is_game_type(type_path: &str) -> bool {
 /// Greater rank appears first. Game `@EditorCategory` groups, then Game,
 /// then engine groups (including engine types that have a category).
 pub fn group_order(type_path: &str, authored_category: &str) -> i32 {
-    if is_game_type(type_path) {
-        if authored_category.is_empty() { 2 } else { 3 }
+    if !authored_category.is_empty() {
+        return 3;
+    } else if is_game_type(type_path) {
+        return 2;
     } else {
-        1
+        return 1;
     }
 }
 
