@@ -1391,9 +1391,11 @@ fn on_entity_reparented(
             .ok()
             .and_then(|children| children.iter().find(|c| tree_row_children.contains(*c)));
 
+        // A row still at the panel root under a branch nobody has opened is
+        // the stranded case above, and was queued for removal there.
         if let Some(tree_entity) = tree_index.get(container, entity)
-            && !(child_of_query.get(tree_entity).map(ChildOf::parent).ok() == Some(container)
-                && !populated_query.get(parent_tree).is_ok_and(|p| p.0))
+            && (child_of_query.get(tree_entity).map(ChildOf::parent).ok() != Some(container)
+                || populated_query.get(parent_tree).is_ok_and(|p| p.0))
         {
             if let Some(parent_children_container) = parent_children_container {
                 // Rows churn with live-mode despawns; a row can die between
