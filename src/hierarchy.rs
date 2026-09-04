@@ -178,6 +178,8 @@ impl Plugin for HierarchyPlugin {
             // so a streamed or pasted entity's kind arrives after its
             // row and the glyph has to catch up.
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::Terrain>)
+            .add_observer(refresh_icon_on_add::<jackdaw_scene_types::GltfSource>)
+            .add_observer(refresh_icon_on_add::<jackdaw_scene_types::SceneRootTag>)
             .add_observer(refresh_icon_on_add::<crate::entity_ops::SceneFogVolume>)
             .add_observer(refresh_icon_on_add::<crate::entity_ops::SceneReflectionProbe>)
             .add_observer(refresh_icon_on_add::<crate::entity_ops::SceneAnimationPlayer>)
@@ -1206,9 +1208,15 @@ fn refresh_row_icon(world: &mut World, entity: Entity) {
     if rows.is_empty() {
         return;
     }
-    let Some(icon) = registered_icon(world, entity) else {
-        return;
-    };
+    // Both, not just the glyph. A row is built when `Name` lands, which for
+    // a loaded scene is before the component that says what the entity is,
+    // so the category the row was drawn with is as stale as the glyph and
+    // the colour would otherwise stay the plain-entity grey.
+    let category = classify_entity(world, entity);
+    let inherited = is_inherited_descendant(world, entity);
+    let icon = registered_icon(world, entity)
+        .unwrap_or_else(|| jackdaw_feathers::tree_view::category_icon(category));
+    let color = jackdaw_feathers::tree_view::category_color(category, inherited);
     let glyph = String::from(icon.unicode());
     for row in rows {
         // TreeNode -> TreeRowContent -> TreeRowDot -> glyph Text.
@@ -1223,6 +1231,9 @@ fn refresh_row_icon(world: &mut World, entity: Entity) {
         };
         if let Some(mut text) = world.get_mut::<Text>(glyph_text) {
             text.0 = glyph.clone();
+        }
+        if let Some(mut text_color) = world.get_mut::<TextColor>(glyph_text) {
+            text_color.0 = color;
         }
     }
 }

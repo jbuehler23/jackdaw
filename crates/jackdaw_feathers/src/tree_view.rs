@@ -57,6 +57,22 @@ pub struct TreeRowStyle {
 /// is true, the muted `CATEGORY_INHERITED` color wins; this is how
 /// resolver-materialised descendants of a prefab instance get drawn
 /// faintly regardless of their underlying category (Mesh, Light, etc.).
+/// The glyph a category is drawn with when no registered rule names a
+/// more particular one. Paired with [`category_color`]: a row that catches
+/// up with its kind after being built re-reads both from here.
+pub fn category_icon(category: EntityCategory) -> Icon {
+    match category {
+        EntityCategory::Camera => Icon::Video,
+        EntityCategory::Light => Icon::Lightbulb,
+        EntityCategory::Prefab => Icon::Package,
+        EntityCategory::Scene => Icon::Clapperboard,
+        EntityCategory::Inherited | EntityCategory::Mesh => Icon::Box,
+        EntityCategory::AssetPart => Icon::Component,
+        EntityCategory::Group => Icon::Folder,
+        EntityCategory::Entity => Icon::Dot,
+    }
+}
+
 pub fn category_color(category: EntityCategory, inherited: bool) -> Color {
     if inherited {
         return tokens::CATEGORY_INHERITED;
@@ -969,16 +985,7 @@ fn category_dot(
     icon_font: &Handle<Font>,
 ) -> impl Bundle {
     let color = category_color(category, inherited);
-    let icon_char = icon_override.unwrap_or(match category {
-        EntityCategory::Camera => Icon::Video,
-        EntityCategory::Light => Icon::Lightbulb,
-        EntityCategory::Prefab => Icon::Package,
-        EntityCategory::Scene => Icon::Clapperboard,
-        EntityCategory::Inherited | EntityCategory::Mesh => Icon::Box,
-        EntityCategory::AssetPart => Icon::Component,
-        EntityCategory::Group => Icon::Folder,
-        EntityCategory::Entity => Icon::Dot,
-    });
+    let icon_char = icon_override.unwrap_or_else(|| category_icon(category));
     (
         TreeRowDot,
         Node {

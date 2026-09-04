@@ -312,6 +312,96 @@ fn a_scene_root_and_a_prefab_instance_win_over_what_they_are_made_of() {
     );
 }
 
+/// A model instance and a scene root each name themselves. Without a rule
+/// of their own both fell back to the plain-entity dot, which is what a
+/// scene of hundreds of models looked like: a column of identical dots.
+#[test]
+fn a_model_instance_and_a_scene_root_read_as_themselves() {
+    let mut app = palette_app();
+    let world = app.world_mut();
+    let instance = world
+        .spawn((
+            jackdaw_scene_types::GltfSource {
+                path: "models/dungeon.glb".into(),
+                scene_index: 0,
+            },
+            Transform::default(),
+        ))
+        .id();
+    let scene_root = world
+        .spawn((jackdaw_scene_types::SceneRootTag, Transform::default()))
+        .id();
+    app.update();
+
+    assert_eq!(
+        icon_of(&app, instance),
+        Some(Icon::Boxes.unicode()),
+        "a model instance is several parts held under one instance, and not \
+         the single box an authored mesh gets"
+    );
+    assert_eq!(icon_of(&app, scene_root), Some(Icon::Clapperboard.unicode()));
+}
+
+/// A row is built when `Name` lands, which for a loaded scene is before the
+/// component saying what the entity is. The glyph catches up, and so does
+/// the colour: a model whose row was drawn as a plain entity kept the grey
+/// dot long after its glyph had become a model's.
+#[test]
+fn a_model_row_catches_up_with_its_kind_in_glyph_and_colour() {
+    use bevy::prelude::TextColor;
+    use jackdaw_feathers::tree_view::category_color;
+    use jackdaw_widgets::tree_view::{EntityCategory, TreeNode, TreeRowContent, TreeRowDot};
+
+    let (mut app, _root) = outliner_app();
+    let source = app
+        .world_mut()
+        .spawn((Name::new("CommonTree_1"), Transform::default()))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), source);
+    app.update();
+    app.update();
+
+    app.world_mut()
+        .entity_mut(source)
+        .insert(jackdaw_scene_types::GltfSource {
+            path: "models/dungeon.glb".into(),
+            scene_index: 0,
+        });
+    app.update();
+    app.update();
+
+    assert_eq!(drawn(&app, source), Icon::Boxes.unicode().to_string());
+
+    let world = app.world();
+    let row = world
+        .iter_entities()
+        .find(|entity| entity.get::<TreeNode>().is_some_and(|node| node.0 == source))
+        .expect("the entity has an outliner row")
+        .id();
+    let child_with = |parent: Entity, has: &dyn Fn(Entity) -> bool| -> Option<Entity> {
+        world
+            .get::<Children>(parent)?
+            .iter()
+            .find(|&child| has(child))
+    };
+    let content = child_with(row, &|e| world.get::<TreeRowContent>(e).is_some())
+        .expect("the row has content");
+    let dot =
+        child_with(content, &|e| world.get::<TreeRowDot>(e).is_some()).expect("the row has a dot");
+    let glyph = world
+        .get::<Children>(dot)
+        .and_then(|children| children.iter().next())
+        .expect("the dot holds a text");
+    assert_eq!(
+        world
+            .get::<TextColor>(glyph)
+            .expect("the glyph is coloured")
+            .0,
+        category_color(EntityCategory::Scene, false),
+        "the colour caught up with the kind as well as the glyph"
+    );
+}
+
 /// A widget's glyph reaches the row it is added to, not only the resolver:
 /// the row is spawned by one observer and the glyph written by another, and
 /// the two only agree if the second one runs.

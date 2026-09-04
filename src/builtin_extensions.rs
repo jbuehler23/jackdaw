@@ -32,6 +32,10 @@ use jackdaw_feathers::tokens;
 pub(crate) const WORLD_ENTITY_ICONS: &[(&str, Icon)] = &[
     ("jackdaw_scene_types::types::Brush", Icon::Cuboid),
     ("jackdaw_scene_types::types::Terrain", Icon::Mountain),
+    // A model instance, ahead of the `Mesh3d` rule: the instance carries no
+    // mesh of its own, and the stacked boxes say "the parts of one model"
+    // against the single `Box` an authored mesh gets.
+    ("jackdaw_scene_types::types::GltfSource", Icon::Boxes),
     ("jackdaw::entity_ops::SceneFogVolume", Icon::CloudFog),
     ("jackdaw::entity_ops::SceneReflectionProbe", Icon::Sparkles),
     ("jackdaw::entity_ops::SceneAnimationPlayer", Icon::Play),
@@ -621,6 +625,10 @@ fn scene_kind_icons() -> Vec<(String, Icon)> {
         (
             jackdaw_scene_types::Scene2dRoot::type_path().to_string(),
             Icon::Frame,
+        ),
+        (
+            jackdaw_scene_types::SceneRootTag::type_path().to_string(),
+            Icon::Clapperboard,
         ),
         (
             jackdaw_prefab::components::IsA::type_path().to_string(),
