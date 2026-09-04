@@ -390,7 +390,15 @@ fn is_generated_part(world: &World, child: Entity) -> bool {
     let Some(parent) = world.get::<ChildOf>(child).map(ChildOf::parent) else {
         return false;
     };
-    document.ast_for(child).is_none() && document.ast_for(parent).is_some()
+    if document.ast_for(child).is_some() || document.ast_for(parent).is_none() {
+        return false;
+    }
+    // What a world asset spawned under an instance is an internal, not a
+    // generated part: the instance is one row and these are what opening it
+    // shows, drawn in the muted asset-part tone. Withholding them instead
+    // would leave every model in a scene a childless row and, once the wait
+    // ran out, a warning.
+    !is_asset_part(world, child)
 }
 
 /// Children whose row was withheld because the document had no node for them
@@ -1329,6 +1337,39 @@ fn on_entity_reparented(
     // row (if this entity already has a row in that panel) or queue a
     // fresh spawn (if the parent's children are populated).
     let parent_rows: Vec<(Entity, Entity)> = tree_index.rows_for_source(new_parent).collect();
+
+    // A row built while the entity was still unparented sits at the panel
+    // root, and now that the entity has a parent it cannot stay there. A
+    // world asset's spawned root is named and unparented for the moment
+    // between the loader spawning it and the instance adopting it, which is
+    // what put a second top-level row ("Scene") beside every model in the
+    // scene. Where the parent's branch is not open there is nothing to move
+    // the row into, so it goes: opening the parent builds it again, which is
+    // how every other row below a closed branch is handled.
+    let stranded: Vec<(Entity, Entity)> = tree_index
+        .rows_for_source(entity)
+        .filter(|(container, row)| {
+            child_of_query.get(*row).map(ChildOf::parent).ok() == Some(*container)
+                && !parent_rows.iter().any(|(parent_container, parent_row)| {
+                    parent_container == container
+                        && populated_query.get(*parent_row).is_ok_and(|p| p.0)
+                })
+        })
+        .collect();
+    for (container, tree_entity) in stranded {
+        commands.queue(move |world: &mut World| {
+            if world.get::<ChildOf>(entity).is_none()
+                || world.get::<ChildOf>(tree_entity).map(ChildOf::parent) != Some(container)
+            {
+                return;
+            }
+            world.resource_mut::<TreeIndex>().remove(container, entity);
+            if let Ok(row) = world.get_entity_mut(tree_entity) {
+                row.despawn();
+            }
+        });
+    }
+
     if parent_rows.is_empty() {
         return;
     }
@@ -1339,7 +1380,10 @@ fn on_entity_reparented(
             .ok()
             .and_then(|children| children.iter().find(|c| tree_row_children.contains(*c)));
 
-        if let Some(tree_entity) = tree_index.get(container, entity) {
+        if let Some(tree_entity) = tree_index.get(container, entity)
+            && !(child_of_query.get(tree_entity).map(ChildOf::parent).ok() == Some(container)
+                && !populated_query.get(parent_tree).is_ok_and(|p| p.0))
+        {
             if let Some(parent_children_container) = parent_children_container {
                 // Rows churn with live-mode despawns; a row can die between
                 // queueing and apply, and the row sync rebuilds it anyway.
@@ -1693,12 +1737,24 @@ fn on_tree_row_clicked(
     remote_check: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
     time: Res<Time>,
     instances: Query<(), With<crate::prefab::IsA>>,
+    asset_sources: Query<(), With<jackdaw_scene_types::GltfSource>>,
+    document: Option<Res<jackdaw_bsn::SceneBsnAst>>,
     mut last_click: Local<Option<(Entity, f64)>>,
 ) {
     // Skip remote entity proxies, handled by entity_browser observer
     if remote_check.contains(event.source_entity) {
         return;
     }
+
+    // Selecting inside a world asset selects the instance. An internal has
+    // no node in the document, so there is nothing about it to inspect,
+    // move or save; the instance is the thing the click is aimed at.
+    let selected_entity = asset_instance_for_selection(
+        event.source_entity,
+        &parent_query,
+        &asset_sources,
+        document.as_deref(),
+    );
 
     // A consumed double click resets, so a third click starts a new pair
     // rather than opening the source again.
@@ -1723,15 +1779,15 @@ fn on_tree_row_clicked(
     // canvas outline and every gesture aimed at it. Ctrl is the deselect,
     // and Shift sweeps from the anchor to here.
     if ctrl {
-        selection.toggle(&mut commands, event.source_entity);
-        anchor.0 = Some(event.source_entity);
+        selection.toggle(&mut commands, selected_entity);
+        anchor.0 = Some(selected_entity);
     } else if shift {
         let clicked = event.entity;
-        let target = event.source_entity;
+        let target = selected_entity;
         commands.queue(move |world: &mut World| select_row_range(world, clicked, target));
     } else {
-        selection.select_single(&mut commands, event.source_entity);
-        anchor.0 = Some(event.source_entity);
+        selection.select_single(&mut commands, selected_entity);
+        anchor.0 = Some(selected_entity);
     }
 
     let content_entity = event.entity;
@@ -1740,6 +1796,31 @@ fn on_tree_row_clicked(
     {
         focused.0 = Some(tree_row);
     }
+}
+
+/// The entity a click on `clicked`'s row selects.
+///
+/// Everything a world asset spawned under an instance answers with the
+/// instance. Anything else, including an entity the user authored under a
+/// model, answers with itself: it has a node in the document, so it is a
+/// thing to select. The query form of [`is_asset_part`], for the observer.
+fn asset_instance_for_selection(
+    clicked: Entity,
+    parents: &Query<&ChildOf>,
+    asset_sources: &Query<(), With<jackdaw_scene_types::GltfSource>>,
+    document: Option<&jackdaw_bsn::SceneBsnAst>,
+) -> Entity {
+    if document.is_none_or(|doc| doc.ast_for(clicked).is_some()) {
+        return clicked;
+    }
+    let mut current = clicked;
+    while let Ok(&ChildOf(parent)) = parents.get(current) {
+        if asset_sources.contains(parent) {
+            return parent;
+        }
+        current = parent;
+    }
+    clicked
 }
 
 /// How long after a click a second one still reads as a double click.
