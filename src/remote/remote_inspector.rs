@@ -369,9 +369,7 @@ pub(crate) fn spawn_fallback_section(
             .next()
             .unwrap_or(type_path)
             .to_string();
-        let category = type_metadata
-            .resolve(type_path, type_registry, project_types)
-            .category;
+        let chrome = type_metadata.resolve(type_path, type_registry, project_types);
 
         let card = component_display::spawn_component_display(
             commands,
@@ -390,7 +388,11 @@ pub(crate) fn spawn_fallback_section(
             },
         );
         crate::inspector::type_metadata_pane::spawn_type_metadata_ui(
-            commands, &card, type_path, &category,
+            commands,
+            &card,
+            type_path,
+            &chrome.category,
+            &chrome.description,
         );
         commands.entity(card.section).insert(ChildOf(group_body));
 

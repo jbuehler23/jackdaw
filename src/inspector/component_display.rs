@@ -259,8 +259,8 @@ pub(crate) fn build_inspector_displays(
         })
     });
 
-    // (short_name, group, component_id, full_type_path, authored_category)
-    let mut comp_list: Vec<(String, String, ComponentId, String, String)> = archetype
+    // (short_name, group, component_id, full_type_path, authored_category, description)
+    let mut comp_list: Vec<(String, String, ComponentId, String, String, String)> = archetype
         .iter_components()
         .filter_map(|component_id| {
             let info = components.get_info(component_id)?;
@@ -311,6 +311,7 @@ pub(crate) fn build_inspector_displays(
                     component_id,
                     full_path.to_string(),
                     chrome.category,
+                    chrome.description,
                 ));
             }
 
@@ -325,6 +326,7 @@ pub(crate) fn build_inspector_displays(
                 "Other".to_string(),
                 component_id,
                 full,
+                String::new(),
                 String::new(),
             ))
         })
@@ -347,7 +349,7 @@ pub(crate) fn build_inspector_displays(
             .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
     });
 
-    for (name, _group, component_id, type_path, category) in &comp_list {
+    for (name, _group, component_id, type_path, category, description) in &comp_list {
         let component_id = *component_id;
 
         // Detect override: compare current component value vs baseline
@@ -467,7 +469,13 @@ pub(crate) fn build_inspector_displays(
                 collapse_state,
             },
         );
-        super::type_metadata_pane::spawn_type_metadata_ui(commands, &card, type_path, category);
+        super::type_metadata_pane::spawn_type_metadata_ui(
+            commands,
+            &card,
+            type_path,
+            category,
+            description,
+        );
         jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, card.section);
         let body_entity = card.body;
 
@@ -609,9 +617,7 @@ pub(crate) fn build_inspector_displays(
             let Some(schema) = project_types.component(&type_path) else {
                 continue;
             };
-            let category = type_metadata
-                .resolve(&type_path, &registry, project_types)
-                .category;
+            let chrome = type_metadata.resolve(&type_path, &registry, project_types);
             let card = spawn_component_display(
                 commands,
                 ComponentDisplaySpec {
@@ -629,7 +635,11 @@ pub(crate) fn build_inspector_displays(
                 },
             );
             super::type_metadata_pane::spawn_type_metadata_ui(
-                commands, &card, &type_path, &category,
+                commands,
+                &card,
+                &type_path,
+                &chrome.category,
+                &chrome.description,
             );
             jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, card.section);
             super::project_component_display::spawn_project_component_fields(

@@ -152,6 +152,36 @@ pub(crate) fn set_category(
     type_path: &str,
     category: &str,
 ) -> std::io::Result<()> {
+    patch_type_meta(world, project_root, type_path, |meta| {
+        meta.category = overlay_string(category);
+    })
+}
+
+pub(crate) fn set_description(
+    world: &mut World,
+    project_root: &Path,
+    type_path: &str,
+    description: &str,
+) -> std::io::Result<()> {
+    patch_type_meta(world, project_root, type_path, |meta| {
+        meta.description = overlay_string(description);
+    })
+}
+
+fn overlay_string(value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn patch_type_meta(
+    world: &mut World,
+    project_root: &Path,
+    type_path: &str,
+    patch: impl FnOnce(&mut TypeMeta),
+) -> std::io::Result<()> {
     let mut entries = match load_metadata_file(project_root) {
         LoadResult::Loaded(entries) => entries,
         LoadResult::Missing => BTreeMap::new(),
@@ -163,11 +193,7 @@ pub(crate) fn set_category(
         }
     };
     let meta = entries.entry(type_path.to_string()).or_default();
-    if category.is_empty() {
-        meta.category = None;
-    } else {
-        meta.category = Some(category.to_string());
-    }
+    patch(meta);
     if meta.is_empty() {
         entries.remove(type_path);
     }
@@ -648,5 +674,72 @@ mod tests {
             .expect_err("invalid file");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(world.resource::<TypeMetadata>().entries.is_empty());
+    }
+
+    #[test]
+    fn set_description_keeps_other_overlay_fields() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let mut world = empty_world();
+
+        set_category(&mut world, tmp.path(), "my_game::PlayerSpawn", "Actor")
+            .expect("write category");
+        set_description(
+            &mut world,
+            tmp.path(),
+            "my_game::PlayerSpawn",
+            "Where the player respawns.",
+        )
+        .expect("write description");
+
+        let meta = world
+            .resource::<TypeMetadata>()
+            .get("my_game::PlayerSpawn")
+            .cloned()
+            .expect("overlay entry");
+        assert_eq!(meta.category.as_deref(), Some("Actor"));
+        assert_eq!(
+            meta.description.as_deref(),
+            Some("Where the player respawns.")
+        );
+
+        set_description(&mut world, tmp.path(), "my_game::PlayerSpawn", "")
+            .expect("clear description");
+        assert_eq!(
+            world
+                .resource::<TypeMetadata>()
+                .get("my_game::PlayerSpawn")
+                .and_then(|m| m.category.as_deref()),
+            Some("Actor")
+        );
+        assert!(
+            world
+                .resource::<TypeMetadata>()
+                .get("my_game::PlayerSpawn")
+                .and_then(|m| m.description.as_deref())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn set_description_round_trips_newlines() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let mut world = empty_world();
+        set_description(
+            &mut world,
+            tmp.path(),
+            "my_game::PlayerSpawn",
+            "Line one.\nLine two.",
+        )
+        .expect("write description");
+        let parsed = parse_metadata_bsn(
+            &std::fs::read_to_string(metadata_path(tmp.path())).expect("read metadata"),
+        )
+        .expect("parse metadata");
+        assert_eq!(
+            parsed
+                .get("my_game::PlayerSpawn")
+                .and_then(|m| m.description.as_deref()),
+            Some("Line one.\nLine two.")
+        );
     }
 }

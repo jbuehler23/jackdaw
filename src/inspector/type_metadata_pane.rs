@@ -11,7 +11,7 @@ use jackdaw_feathers::utils::find_ancestor;
 use jackdaw_widgets::collapsible::CollapsibleSection;
 
 use crate::project::ProjectRoot;
-use crate::type_metadata::set_category;
+use crate::type_metadata::{set_category, set_description};
 
 use super::component_display::{ComponentDisplayCard, DisclosureSection};
 
@@ -21,13 +21,20 @@ struct TypeMetadataToggle;
 #[derive(Component)]
 struct TypeMetadataPane;
 
+#[derive(Clone, Copy)]
+enum TypeMetadataKind {
+    Category,
+    Description,
+}
+
 #[derive(Component)]
-struct TypeMetadataCategoryInput {
+struct TypeMetadataInput {
     type_path: String,
+    kind: TypeMetadataKind,
 }
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_observer(on_category_commit);
+    app.add_observer(on_type_metadata_commit);
 }
 
 pub(crate) fn spawn_type_metadata_ui(
@@ -35,9 +42,10 @@ pub(crate) fn spawn_type_metadata_ui(
     card: &ComponentDisplayCard,
     type_path: &str,
     category: &str,
+    description: &str,
 ) {
     let display = Display::None;
-    commands
+    let pane = commands
         .spawn_scene(bsn! {
             Node {
                 flex_direction: FlexDirection::Column,
@@ -54,18 +62,37 @@ pub(crate) fn spawn_type_metadata_ui(
             BorderColor::all(tokens::COMPONENT_CARD_BORDER)
         })
         .insert((TypeMetadataPane, ChildOf(card.body)))
-        .with_child((
-            TypeMetadataCategoryInput {
-                type_path: type_path.to_string(),
-            },
-            text_edit::text_edit(
-                TextEditProps::default()
-                    .with_label("Category")
-                    .with_placeholder("Actor, Gameplay, ...")
-                    .with_default_value(category.to_string())
-                    .allow_empty(),
-            ),
-        ));
+        .id();
+
+    commands.spawn((
+        TypeMetadataInput {
+            type_path: type_path.to_string(),
+            kind: TypeMetadataKind::Category,
+        },
+        text_edit::text_edit(
+            TextEditProps::default()
+                .with_label("Category")
+                .with_placeholder("Actor, Gameplay, ...")
+                .with_default_value(category.to_string())
+                .allow_empty(),
+        ),
+        ChildOf(pane),
+    ));
+
+    commands.spawn((
+        TypeMetadataInput {
+            type_path: type_path.to_string(),
+            kind: TypeMetadataKind::Description,
+        },
+        text_edit::text_edit(
+            TextEditProps::default()
+                .with_label("Description")
+                .with_default_value(description.to_string())
+                .allow_empty()
+                .multiline(),
+        ),
+        ChildOf(pane),
+    ));
 
     commands
         .spawn_scene(type_metadata_toggle_button())
@@ -128,9 +155,9 @@ fn on_toggle_type_metadata(
     node.display = Display::Flex;
 }
 
-fn on_category_commit(
+fn on_type_metadata_commit(
     event: On<TextEditCommitEvent>,
-    inputs: Query<&TypeMetadataCategoryInput>,
+    inputs: Query<&TypeMetadataInput>,
     child_of: Query<&ChildOf>,
     mut commands: Commands,
 ) {
@@ -138,13 +165,22 @@ fn on_category_commit(
         return;
     };
     let type_path = input.type_path.clone();
-    let category = event.text.trim().to_string();
+    let kind = input.kind;
+    let value = event.text.trim().to_string();
     commands.queue(move |world: &mut World| {
         let Some(root) = world.get_resource::<ProjectRoot>().map(|p| p.root.clone()) else {
             return;
         };
-        if let Err(err) = set_category(world, &root, &type_path, &category) {
-            warn!("failed to write type category to jackdaw_metadata.bsn: {err}");
+        let result = match kind {
+            TypeMetadataKind::Category => set_category(world, &root, &type_path, &value),
+            TypeMetadataKind::Description => set_description(world, &root, &type_path, &value),
+        };
+        if let Err(err) = result {
+            let field = match kind {
+                TypeMetadataKind::Category => "category",
+                TypeMetadataKind::Description => "description",
+            };
+            warn!("failed to write type {field} to jackdaw_metadata.bsn: {err}");
         }
     });
 }
