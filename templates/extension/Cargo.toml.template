@@ -22,4 +22,4 @@ label = "{{project-name | title_case}}"
 
 [dependencies]
 bevy = "{{bevy_version}}"
-jackdaw_extension = "{{jackdaw_version}}"
+jackdaw_extension = { {{jackdaw_extension_dep}} }

@@ -1475,6 +1475,14 @@ fn substitute_placeholders(
         )
         .replace("{{bevy_version}}", jackdaw_project_build::BEVY_VERSION)
         .replace("{{jackdaw_version}}", JACKDAW_DEP_REQ)
+        .replace(
+            "{{jackdaw_runtime_dep}}",
+            &jackdaw_dep_requirement("jackdaw_runtime"),
+        )
+        .replace(
+            "{{jackdaw_extension_dep}}",
+            &jackdaw_dep_requirement("jackdaw_extension"),
+        )
 }
 
 /// The version requirement scaffolded projects request for the public
@@ -1482,6 +1490,18 @@ fn substitute_placeholders(
 /// a project set up by this editor asks for exactly the line of
 /// releases that targets the same engine.
 const JACKDAW_DEP_REQ: &str = jackdaw_project_build::BEVY_VERSION;
+
+/// How a scaffolded project asks for one of the public jackdaw crates:
+/// the registry line when this editor was released, the exact revision
+/// when it was built from git, the crate in the workspace when it was
+/// built from a checkout.
+///
+/// A version requirement for every build asked the registry for a line
+/// only a release has, so a project set up by an editor installed from
+/// git named a crate no registry could answer for and did not resolve.
+fn jackdaw_dep_requirement(crate_name: &str) -> String {
+    jackdaw_project_build::build_source::build_source().dep_requirement(crate_name)
+}
 
 /// Title-case a kebab/snake name: `my-cool-game` becomes `My Cool Game`.
 fn title_case(name: &str) -> String {
@@ -1610,6 +1630,38 @@ mod tests {
         let lib = std::fs::read_to_string(dest.join("src/lib.rs")).unwrap();
         assert!(lib.contains("pub struct GamePlugin"));
         assert!(!lib.contains("{{"));
+    }
+
+    /// The templates state the whole jackdaw requirement rather than a
+    /// version, because a version is only resolvable for a build that was
+    /// released. Whichever form this build calls for is what a scaffolded
+    /// manifest must end up carrying, and nothing may be left unfilled.
+    #[test]
+    fn the_templates_state_the_requirement_this_build_can_resolve() {
+        for (path, dep) in [
+            ("templates/game/Cargo.toml.template", "jackdaw_runtime"),
+            (
+                "templates/extension/Cargo.toml.template",
+                "jackdaw_extension",
+            ),
+        ] {
+            let template =
+                std::fs::read_to_string(format!("{}/{path}", env!("CARGO_MANIFEST_DIR")))
+                    .unwrap_or_else(|e| panic!("read {path}: {e}"));
+            let filled = substitute_placeholders(&template, "my-game", "my_game", "", "My Game");
+            assert!(
+                !filled.contains("{{"),
+                "{path}: every placeholder is filled, got: {filled}"
+            );
+            let line = filled
+                .lines()
+                .find(|line| line.trim_start().starts_with(dep))
+                .unwrap_or_else(|| panic!("{path}: no {dep} dependency"));
+            assert!(
+                line.contains(&jackdaw_dep_requirement(dep)),
+                "{path}: {dep} must state what this build can resolve, got: {line}"
+            );
+        }
     }
 
     #[test]

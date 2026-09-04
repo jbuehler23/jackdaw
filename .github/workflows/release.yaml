@@ -199,6 +199,13 @@ jobs:
     # publishing step below is tag-gated regardless.
     if: ${{ always() && needs.plan.result == 'success' && (needs.heavy.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.skip_heavy)) }}
     runs-on: ${{ matrix.os }}
+    # The bundled editor is the one whose scaffolds ship, and this job is
+    # the only place that knows its crates are on their way to the
+    # registry. Without the flag the build reads as a git build, and
+    # every project it set up would be pinned to the release commit
+    # rather than to the release.
+    env:
+      JACKDAW_RELEASE_BUILD: "1"
     # This job builds the editor twice over: once for the binaries, then
     # an extension against the staged SDK. On Windows, with a cold cache,
     # that ran past 120 minutes and was cut off mid-smoke-test, reported

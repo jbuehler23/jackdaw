@@ -43,7 +43,7 @@ fn main() {
     fs::write(out_dir.join("recipe_data.rs"), data_rs).unwrap();
     println!("cargo:rustc-env=RECIPE_HASH={hash}");
 
-    if assembled && let Some(ws) = workspace {
+    if assembled && let Some(ws) = workspace.as_deref() {
         // Deep-watch every recipe source. `rerun-if-changed` on a
         // directory tracks only that directory entry, not nested file
         // contents, so an edit inside a crate would leave the embedded
@@ -53,10 +53,55 @@ fn main() {
         println!("cargo:rerun-if-changed={}", ws.join("Cargo.toml").display());
         println!("cargo:rerun-if-changed={}", ws.join("Cargo.lock").display());
     }
+    emit_build_source(&manifest_dir, workspace.as_deref());
+
     println!("cargo:rerun-if-changed=build.rs");
     // The embed is toggled only through this feature env, which gates no
     // code, so tell cargo to re-run the script when it flips.
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_EMBED_RECIPE");
+}
+
+/// Record where the jackdaw crates this build is made of can be fetched
+/// from, so a project it scaffolds can ask for the same ones.
+///
+/// A published build says so through `JACKDAW_RELEASE_BUILD`, which the
+/// release workflow sets: nothing readable from the source tree
+/// distinguishes the commit a release is cut from, and guessing wrong
+/// writes a version requirement no registry can answer. Otherwise the
+/// revision, which both a `cargo install --git` checkout and a
+/// developer's own tree have. Failing both -- an unpacked tarball with no
+/// git and no release -- the workspace on this machine.
+fn emit_build_source(manifest_dir: &Path, workspace: Option<&Path>) {
+    println!("cargo:rerun-if-env-changed=JACKDAW_RELEASE_BUILD");
+    let source = if env::var_os("JACKDAW_RELEASE_BUILD").is_some_and(|flag| flag == "1") {
+        "release".to_string()
+    } else if let Some(rev) = git_head(manifest_dir) {
+        if let Some(ws) = workspace {
+            // So a commit moves the embedded revision. `git rev-parse` is
+            // not a file read, so nothing else tells cargo it went stale.
+            println!("cargo:rerun-if-changed={}", ws.join(".git/HEAD").display());
+        }
+        format!("git:{rev}")
+    } else {
+        format!("path:{}", workspace.unwrap_or(manifest_dir).display())
+    };
+    println!("cargo:rustc-env=JACKDAW_BUILD_SOURCE={source}");
+}
+
+/// The full revision `dir` is checked out at, and nothing when it is not
+/// in a repository or git is not installed.
+fn git_head(dir: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let rev = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    let full = rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit());
+    full.then_some(rev)
 }
 
 /// True only for the jackdaw editor workspace with the crates present. In

@@ -49,9 +49,13 @@ fn templates_state_versions_as_placeholders() {
             .lines()
             .find(|line| line.trim_start().starts_with(dep))
             .unwrap_or_else(|| panic!("{path}: no {dep} dependency"));
+        // The whole requirement, not just a version: what a scaffolded
+        // project can reach the crate through depends on how this jackdaw
+        // was built, and a literal version is one of three answers.
+        let placeholder = format!("{{{{{dep}_dep}}}}");
         assert!(
-            dep_line.contains("{{jackdaw_version}}"),
-            "{path}: {dep} must use the {{{{jackdaw_version}}}} placeholder, got: {dep_line}"
+            dep_line.contains(&placeholder),
+            "{path}: {dep} must use the {placeholder} placeholder, got: {dep_line}"
         );
     }
 }

@@ -19,6 +19,7 @@
 //! prebuilt SDK so the artifact can be dlopened in-process.
 
 pub mod bootstrap;
+pub mod build_source;
 pub mod cargo_meta;
 pub mod detect;
 pub mod linkage;

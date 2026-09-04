@@ -352,6 +352,15 @@ fn report_project(root: &Path) -> bool {
         Err(detail) => {
             ok = false;
             println!("  [fail] dependencies: {detail}");
+            // Which jackdaw wrote the manifest decides what its jackdaw
+            // dependency can be reached through at all, and a project set
+            // up by an unreleased build names something no registry has.
+            // Nothing in the manifest says so, so say it here.
+            if let Some(note) =
+                jackdaw_project_build::build_source::build_source().resolution_note()
+            {
+                println!("         note: {note}");
+            }
             println!(
                 "         fix: check the versions in Cargo.toml; `cargo update` refreshes the \
                  index if a release is newer than your cached copy"
