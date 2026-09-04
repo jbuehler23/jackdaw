@@ -18,6 +18,7 @@ mod prefab_field_dots;
 pub(crate) mod prefab_menu;
 pub(crate) mod project_component_display;
 pub(crate) mod reflect_fields;
+pub(crate) mod type_metadata_pane;
 pub mod val_field;
 
 use crate::EditorEntity;
@@ -36,49 +37,6 @@ impl InspectorCollapseState {
     /// Collapsed state for `name`; unknown names default to collapsed (true).
     pub(crate) fn collapsed(&self, name: &str) -> bool {
         self.0.get(name).copied().unwrap_or(true)
-    }
-}
-
-/// Extract a human-readable module group name from a module path.
-/// e.g., "`bevy_pbr::material`" -> "Render", "`bevy_transform`" -> "Transform"
-fn extract_module_group(module_path: Option<&str>) -> String {
-    let Some(path) = module_path else {
-        return "Other".to_string();
-    };
-    let first = path.split("::").next().unwrap_or(path);
-    // Group jackdaw's avian wrapper alongside avian3d's own types
-    // so AvianCollider sits in the same inspector section as
-    // RigidBody, Sensor, etc. instead of getting its own
-    // `Jackdaw_avian_integration` heading.
-    if first == "avian3d" || first == "jackdaw_avian_integration" {
-        return "Avian3d".to_string();
-    }
-    // Strip "bevy_" prefix and capitalize
-    let name = first.strip_prefix("bevy_").unwrap_or(first);
-    // Map common module names to cleaner labels
-    match name {
-        "pbr" | "core_pipeline" | "render" => "Render".to_string(),
-        "transform" => "Transform".to_string(),
-        "ecs" => "ECS".to_string(),
-        "hierarchy" => "Hierarchy".to_string(),
-        "window" | "winit" => "Window".to_string(),
-        "input" | "picking" => "Input".to_string(),
-        "asset" => "Asset".to_string(),
-        "scene" => "Scene".to_string(),
-        "gltf" => "GLTF".to_string(),
-        "ui" => "UI".to_string(),
-        "text" => "Text".to_string(),
-        "audio" => "Audio".to_string(),
-        "animation" => "Animation".to_string(),
-        "sprite" => "Sprite".to_string(),
-        _ => {
-            // Capitalize first letter
-            let mut chars = name.chars();
-            match chars.next() {
-                None => "Other".to_string(),
-                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
-            }
-        }
     }
 }
 
@@ -136,6 +94,7 @@ impl Plugin for InspectorPlugin {
         app.register_type_data::<Name, ReflectDisplayable>()
             .add_plugins(component_tooltip::plugin)
             .add_plugins(prefab_menu::plugin)
+            .add_plugins(type_metadata_pane::plugin)
             .add_observer(component_display::remove_component_displays)
             .add_observer(component_display::add_component_displays)
             .add_observer(component_display::on_inspector_dirty)

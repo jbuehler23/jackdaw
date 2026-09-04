@@ -55,7 +55,7 @@ rustflags = ["-Clink-arg=--ld-path=wild"]
 # leaves references to hidden anon constants inside the SDK dylib and
 # the link fails with undefined hidden symbols. Off for every build so
 # the default `dylib` feature links without a per-command env var.
-incremental = false
+# incremental = false
 
 [alias]
 xtask = "run --quiet --package xtask --manifest-path xtask/Cargo.toml --"

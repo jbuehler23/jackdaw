@@ -11,6 +11,8 @@ use bevy::prelude::*;
 use jackdaw::inspector::component_picker::{
     PickableComponent, PickerDenylist, enumerate_pickable_components,
 };
+use jackdaw::project_types::ProjectTypes;
+use jackdaw::type_metadata::TypeMetadata;
 use jackdaw_api::op::OperatorWorldExt as _;
 use jackdaw_api::prelude::JackdawExtension as _;
 use jackdaw_bind::Bindings;
@@ -20,7 +22,13 @@ use crate::util::OperatorResultExt as _;
 fn enumerate(app: &mut App) -> Vec<PickableComponent> {
     let registry = app.world().resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
-    enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default())
+    enumerate_pickable_components(
+        &registry,
+        &HashSet::new(),
+        &PickerDenylist::default(),
+        &TypeMetadata::default(),
+        &ProjectTypes::default(),
+    )
 }
 
 fn find<'a>(pickables: &'a [PickableComponent], path: &str) -> Option<&'a PickableComponent> {

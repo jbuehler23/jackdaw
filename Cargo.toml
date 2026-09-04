@@ -211,6 +211,7 @@ version = "0.19.0"
 
 [workspace.dependencies]
 bevy = { version = "0.19", features = [
+    "dynamic_linking",
     "bevy_feathers",
     "bevy_scene",
     "bevy_dev_tools",
@@ -373,6 +374,9 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[profile.dev.package.jackdaw]
+opt-level = 0
 
 [profile.dev.package.wgpu-types]
 debug-assertions = false

@@ -13,34 +13,17 @@ use jackdaw_feathers::picker::{
     picker_item,
 };
 use jackdaw_feathers::tokens;
-
-use bevy::reflect::{TypeInfo, attributes::CustomAttributes};
 use jackdaw_feathers::tooltip::Tooltip;
-use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden};
 
 use super::ComponentPicker;
+use crate::project_types::ProjectTypes;
+use crate::type_metadata::TypeMetadata;
 
 /// Marker on the "Add Component" button inside the Components add-header.
 /// `on_add_component_button_click` guards on this to avoid reacting to
 /// unrelated button clicks.
 #[derive(Component)]
 pub struct InspectorAddComponentButton;
-
-// `custom_attributes()` lives on the variant types
-// (`StructInfo`, `EnumInfo`, etc.), not on `TypeInfo` itself.
-fn type_info_custom_attributes(info: &TypeInfo) -> Option<&CustomAttributes> {
-    match info {
-        TypeInfo::Struct(s) => Some(s.custom_attributes()),
-        TypeInfo::TupleStruct(s) => Some(s.custom_attributes()),
-        TypeInfo::Enum(e) => Some(e.custom_attributes()),
-        TypeInfo::Tuple(_)
-        | TypeInfo::List(_)
-        | TypeInfo::Array(_)
-        | TypeInfo::Map(_)
-        | TypeInfo::Set(_)
-        | TypeInfo::Opaque(_) => None,
-    }
-}
 
 /// Type-path filter consulted by [`enumerate_pickable_components`] to
 /// hide reflected components that should never appear in the picker
@@ -69,18 +52,6 @@ impl PickerDenylist {
     /// True when `type_path` is filtered.
     pub fn contains(&self, type_path: &str) -> bool {
         self.paths.contains(type_path) || self.prefixes.iter().any(|p| type_path.starts_with(p))
-    }
-}
-
-/// Picker category fallback for upstream types we don't own (and so
-/// can't tag with `@EditorCategory`). Returns `None` for types that
-/// already define their own category or fall through to the default
-/// Bevy / Game grouping.
-pub fn fallback_category_for(type_path: &str) -> Option<&'static str> {
-    if type_path.starts_with("avian3d::") || type_path.starts_with("jackdaw_avian_integration::") {
-        Some("Avian3d")
-    } else {
-        None
     }
 }
 
@@ -121,36 +92,24 @@ pub fn populate_avian_picker_denylist(denylist: &mut PickerDenylist) {
     denylist.deny_path("avian3d::collision::collider::constructor::ColliderConstructor");
 }
 
-/// Grouping key for sorting: custom categories first, then Game, then Bevy.
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
-enum GroupOrder {
-    Custom(String),
-    Game,
-    Bevy,
-}
-
-impl GroupOrder {
-    fn name(self) -> String {
-        match self {
-            GroupOrder::Custom(name) => name,
-            GroupOrder::Game => String::from("Game"),
-            GroupOrder::Bevy => String::from("Bevy"),
-        }
-    }
-
-    fn order(&self) -> i32 {
-        match *self {
-            GroupOrder::Custom(_) => 2,
-            GroupOrder::Game => 1,
-            GroupOrder::Bevy => 0,
-        }
-    }
+/// Empty group string is the Game section.
+fn picker_section(type_path: &str, authored_category: &str, group: &str) -> (String, i32) {
+    let name = if group.is_empty() {
+        String::from("Game")
+    } else {
+        group.to_string()
+    };
+    (
+        name,
+        crate::type_metadata::group_order(type_path, authored_category),
+    )
 }
 
 struct ComponentInfo {
     short_name: String,
     module_path: String,
-    group: GroupOrder,
+    group: String,
+    authored_category: String,
     description: String,
     type_path_full: String,
 }
@@ -162,6 +121,7 @@ pub struct PickableComponent {
     pub short_name: String,
     pub module_path: String,
     pub category: String,
+    pub authored_category: String,
     pub description: String,
     pub type_path_full: String,
 }
@@ -169,16 +129,16 @@ pub struct PickableComponent {
 /// Enumerate every component the picker would display for a
 /// target entity. Filters: must be a `Component`, must be
 /// default-constructible (via [`build_reflective_default`]), not
-/// already on `existing_types`, and not editor-internal. Reads
-/// `EditorCategory` / `EditorDescription` from custom reflect
-/// attributes; falls back to the reflected doc comment for
-/// description.
+/// already on `existing_types`, not editor-hidden, and not denylisted.
+/// Grouping, description, and hidden come from [`TypeMetadata`].
 ///
 /// [`build_reflective_default`]: crate::reflect_default::build_reflective_default
 pub fn enumerate_pickable_components(
     registry: &bevy::reflect::TypeRegistry,
     existing_types: &HashSet<TypeId>,
     denylist: &PickerDenylist,
+    type_metadata: &TypeMetadata,
+    project_types: &ProjectTypes,
 ) -> Vec<PickableComponent> {
     let mut out = Vec::new();
     for registration in registry.iter() {
@@ -194,18 +154,6 @@ pub fn enumerate_pickable_components(
             continue;
         }
 
-        let info = registration.type_info();
-        let custom_attrs = type_info_custom_attributes(info);
-
-        // Single mechanism for picker hiding: types opt out via the
-        // `@EditorHidden` reflect attribute (defined alongside
-        // `EditorCategory` / `EditorDescription` in `jackdaw_scene_types`).
-        // Used by jackdaw's own scene types and available to
-        // extension/game authors for their own helper Components.
-        if custom_attrs.is_some_and(|a| a.get::<EditorHidden>().is_some()) {
-            continue;
-        }
-
         let table = registration.type_info().type_path_table();
         let full_path = table.path();
 
@@ -213,26 +161,17 @@ pub fn enumerate_pickable_components(
             continue;
         }
 
-        let description = custom_attrs
-            .and_then(|a| a.get::<EditorDescription>())
-            .map(|d| d.0.to_string())
-            .or_else(|| {
-                info.docs()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-            })
-            .unwrap_or_default();
-        let category = custom_attrs
-            .and_then(|a| a.get::<EditorCategory>())
-            .map(|c| c.0.to_string())
-            .or_else(|| fallback_category_for(full_path).map(String::from))
-            .unwrap_or_default();
+        let chrome = type_metadata.resolve(full_path, registry, project_types);
+        if chrome.hidden {
+            continue;
+        }
 
         out.push(PickableComponent {
             short_name: table.short_path().to_string(),
             module_path: table.module_path().unwrap_or("").to_string(),
-            category,
-            description,
+            category: chrome.group(full_path),
+            authored_category: chrome.category.clone(),
+            description: chrome.description,
             type_path_full: full_path.to_string(),
         });
     }
@@ -245,9 +184,11 @@ impl Matchable for ComponentInfo {
     }
 
     fn category(&self) -> Category {
+        let (name, order) =
+            picker_section(&self.type_path_full, &self.authored_category, &self.group);
         Category {
-            name: Some(self.group.clone().name()),
-            order: self.group.order(),
+            name: Some(name),
+            order,
         }
     }
 }
@@ -266,6 +207,7 @@ pub(crate) fn on_add_component_button_click(
     entity_query: Query<&Archetype, (With<Selected>, Without<EditorEntity>)>,
     denylist: Res<PickerDenylist>,
     project_types: Res<crate::project_types::ProjectTypes>,
+    type_metadata: Res<crate::type_metadata::TypeMetadata>,
     doc: Res<jackdaw_bsn::SceneBsnAst>,
 ) {
     if add_buttons.get(event.entity).is_err() {
@@ -300,26 +242,23 @@ pub(crate) fn on_add_component_button_click(
 
     let registry = type_registry.read();
 
-    let mut searchable_components: Vec<ComponentInfo> =
-        enumerate_pickable_components(&registry, &existing_types, &denylist)
-            .into_iter()
-            .map(|p| {
-                let group = if !p.category.is_empty() {
-                    GroupOrder::Custom(p.category)
-                } else if p.module_path.starts_with("bevy") {
-                    GroupOrder::Bevy
-                } else {
-                    GroupOrder::Game
-                };
-                ComponentInfo {
-                    short_name: p.short_name,
-                    module_path: p.module_path,
-                    group,
-                    description: p.description,
-                    type_path_full: p.type_path_full,
-                }
-            })
-            .collect();
+    let mut searchable_components: Vec<ComponentInfo> = enumerate_pickable_components(
+        &registry,
+        &existing_types,
+        &denylist,
+        &type_metadata,
+        &project_types,
+    )
+    .into_iter()
+    .map(|p| ComponentInfo {
+        short_name: p.short_name,
+        module_path: p.module_path,
+        group: p.category,
+        authored_category: p.authored_category,
+        description: p.description,
+        type_path_full: p.type_path_full,
+    })
+    .collect();
 
     // Project (schema-reported) components are not real ECS components in the
     // editor, so they never appear in the registry pass above. They live as
@@ -330,7 +269,8 @@ pub(crate) fn on_add_component_button_click(
         .map(|node| doc.component_type_paths(node).into_iter().collect())
         .unwrap_or_default();
     for schema in project_types.components() {
-        if schema.hidden
+        let chrome = type_metadata.resolve(&schema.type_path, &registry, &project_types);
+        if chrome.hidden
             || jackdaw_bsn::type_paths_include(
                 authored.iter().map(String::as_str),
                 &schema.type_path,
@@ -338,16 +278,12 @@ pub(crate) fn on_add_component_button_click(
         {
             continue;
         }
-        let group = if !schema.category.is_empty() {
-            GroupOrder::Custom(schema.category.clone())
-        } else {
-            GroupOrder::Game
-        };
         searchable_components.push(ComponentInfo {
             short_name: schema.short_name.clone(),
             module_path: schema.module_path.clone(),
-            group,
-            description: schema.description.clone(),
+            group: chrome.group(&schema.type_path),
+            authored_category: chrome.category.clone(),
+            description: chrome.description,
             type_path_full: schema.type_path.clone(),
         });
     }
@@ -391,7 +327,7 @@ fn spawn_item(
 ) -> Result {
     let info = items.get(entities.picker)?.at(matched.index)?;
 
-    let category = info.group.clone().name();
+    let (category, _) = picker_section(&info.type_path_full, &info.authored_category, &info.group);
     let description = info.description.clone();
     let module_path = info.module_path.clone();
 

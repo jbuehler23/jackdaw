@@ -34,15 +34,13 @@ use bevy_monitors::prelude::{Addition, Monitor, NotifyAdded};
 
 use jackdaw_avian_integration::AvianCollider;
 use jackdaw_geometry::is_convex_topology;
-use jackdaw_runtime::EditorCategory;
 
 use super::{
     ComponentDisplay, ComponentDisplayBody, ComponentDisplayTypePath, ComponentName,
     ComponentPicker, Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch,
     InspectorTarget, ReflectDisplayable, bindings_card, brush_display,
     category_strip::ActiveInspectorCategory, component_tooltip::ReflectedTypeTooltip,
-    custom_props_display, extract_module_group, material_display, modifier_display, node_card,
-    reflect_fields,
+    custom_props_display, material_display, modifier_display, node_card, reflect_fields,
 };
 use crate::inspector::prefab_field_dots::{PrefabInstanceCtx, inspector_type_paths_for};
 use crate::prefab::PrefabAstCache;
@@ -54,6 +52,7 @@ use bevy::picking::hover::Hovered;
 pub(crate) struct SceneAsts<'w> {
     pub(crate) bsn: Res<'w, jackdaw_bsn::SceneBsnAst>,
     pub(crate) project_types: Res<'w, crate::project_types::ProjectTypes>,
+    pub(crate) type_metadata: Res<'w, crate::type_metadata::TypeMetadata>,
 }
 
 pub(crate) fn add_component_displays(
@@ -114,7 +113,8 @@ pub(crate) fn add_component_displays(
             Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
-            Some(&asts.project_types),
+            &asts.project_types,
+            &asts.type_metadata,
         );
 
         commands.entity(inspector).insert((
@@ -202,7 +202,8 @@ pub(crate) fn build_inspector_displays(
     scene_ast: Option<&jackdaw_bsn::SceneBsnAst>,
     prefab_cache: Option<&PrefabAstCache>,
     collapse_state: &super::InspectorCollapseState,
-    project_types: Option<&crate::project_types::ProjectTypes>,
+    project_types: &crate::project_types::ProjectTypes,
+    type_metadata: &crate::type_metadata::TypeMetadata,
 ) {
     // Show multi-selection header when multiple entities are selected
     if selection_count > 1 {
@@ -258,9 +259,8 @@ pub(crate) fn build_inspector_displays(
         })
     });
 
-    // (short_name, module_group, component_id, full_type_path)
-    let mut custom_groups = std::collections::HashSet::new();
-    let mut comp_list: Vec<(String, String, ComponentId, String)> = archetype
+    // (short_name, group, component_id, full_type_path, authored_category)
+    let mut comp_list: Vec<(String, String, ComponentId, String, String)> = archetype
         .iter_components()
         .filter_map(|component_id| {
             let info = components.get_info(component_id)?;
@@ -303,24 +303,15 @@ pub(crate) fn build_inspector_displays(
                     return None;
                 }
                 let short = table.short_path().to_string();
-                let info = registration.type_info();
-                let attrs = match info {
-                    bevy::reflect::TypeInfo::Struct(s) => Some(s.custom_attributes()),
-                    bevy::reflect::TypeInfo::TupleStruct(s) => Some(s.custom_attributes()),
-                    bevy::reflect::TypeInfo::Enum(e) => Some(e.custom_attributes()),
-                    _ => None,
-                };
-                let module_group = if let Some(cat) = attrs
-                    .and_then(|a| a.get::<EditorCategory>())
-                    .map(|c| c.0.to_string())
-                    .filter(|s| !s.is_empty())
-                {
-                    custom_groups.insert(cat.clone());
-                    cat
-                } else {
-                    extract_module_group(table.module_path())
-                };
-                return Some((short, module_group, component_id, full_path.to_string()));
+                let chrome = type_metadata.resolve(full_path, &registry, project_types);
+                let group = chrome.group(full_path);
+                return Some((
+                    short,
+                    group,
+                    component_id,
+                    full_path.to_string(),
+                    chrome.category,
+                ));
             }
 
             // Unreflected components fall back to the `Components` name.
@@ -334,12 +325,13 @@ pub(crate) fn build_inspector_displays(
                 "Other".to_string(),
                 component_id,
                 full,
+                String::new(),
             ))
         })
         .collect();
 
-    // Sort: custom-category groups first, then by group name, then
-    // authored before derived within a group, then alphabetical.
+    // Sort: game EditorCategory groups, then Game, then engine groups,
+    // then by group name, authored before derived, then alphabetical.
     let is_derived_path = |type_path: &str| -> bool {
         !authored_type_paths.is_empty()
             && !jackdaw_bsn::type_paths_include(
@@ -348,16 +340,14 @@ pub(crate) fn build_inspector_displays(
             )
     };
     comp_list.sort_by(|a, b| {
-        let a_custom = custom_groups.contains(&a.1);
-        let b_custom = custom_groups.contains(&b.1);
-        b_custom
-            .cmp(&a_custom)
+        crate::type_metadata::group_order(&b.3, &b.4)
+            .cmp(&crate::type_metadata::group_order(&a.3, &a.4))
             .then_with(|| a.1.cmp(&b.1))
             .then_with(|| is_derived_path(&a.3).cmp(&is_derived_path(&b.3)))
             .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
     });
 
-    for (name, _module_group, component_id, type_path) in &comp_list {
+    for (name, _group, component_id, type_path, category) in &comp_list {
         let component_id = *component_id;
 
         // Detect override: compare current component value vs baseline
@@ -461,7 +451,7 @@ pub(crate) fn build_inspector_displays(
             continue;
         }
 
-        let (display_entity, body_entity) = spawn_component_display(
+        let card = spawn_component_display(
             commands,
             ComponentDisplaySpec {
                 name,
@@ -477,7 +467,9 @@ pub(crate) fn build_inspector_displays(
                 collapse_state,
             },
         );
-        jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, display_entity);
+        super::type_metadata_pane::spawn_type_metadata_ui(commands, &card, type_path, category);
+        jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, card.section);
+        let body_entity = card.body;
 
         // Try Displayable first, then reflection, then fallback
         let type_id = components
@@ -610,14 +602,17 @@ pub(crate) fn build_inspector_displays(
     // document authored on this entity from its extracted schema; values come
     // from the document and edits round-trip back through the same field
     // widgets (see `project_component_display`).
-    if let (Some(project_types), Some(ast)) = (project_types, scene_ast)
+    if let Some(ast) = scene_ast
         && let Some(node) = ast.ast_for(source_entity)
     {
         for type_path in ast.component_type_paths(node) {
             let Some(schema) = project_types.component(&type_path) else {
                 continue;
             };
-            let (display_entity, body_entity) = spawn_component_display(
+            let category = type_metadata
+                .resolve(&type_path, &registry, project_types)
+                .category;
+            let card = spawn_component_display(
                 commands,
                 ComponentDisplaySpec {
                     name: &schema.short_name,
@@ -633,10 +628,13 @@ pub(crate) fn build_inspector_displays(
                     collapse_state,
                 },
             );
-            jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, display_entity);
+            super::type_metadata_pane::spawn_type_metadata_ui(
+                commands, &card, &type_path, &category,
+            );
+            jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, card.section);
             super::project_component_display::spawn_project_component_fields(
                 commands,
-                body_entity,
+                card.body,
                 schema,
                 ast,
                 node,
@@ -811,7 +809,8 @@ pub(crate) fn on_inspector_dirty(
             Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
-            Some(&asts.project_types),
+            &asts.project_types,
+            &asts.type_metadata,
         );
     }
 
@@ -859,10 +858,18 @@ pub(crate) struct ComponentDisplaySpec<'a> {
     pub collapse_state: &'a super::InspectorCollapseState,
 }
 
+/// Entities spawned by [`spawn_component_display`]. `section` is the card
+/// root; `body` is where field widgets go.
+pub(crate) struct ComponentDisplayCard {
+    pub section: Entity,
+    pub body: Entity,
+    pub header: Entity,
+}
+
 pub(crate) fn spawn_component_display(
     commands: &mut Commands,
     spec: ComponentDisplaySpec<'_>,
-) -> (Entity, Entity) {
+) -> ComponentDisplayCard {
     let ComponentDisplaySpec {
         name,
         type_path,
@@ -1168,7 +1175,11 @@ pub(crate) fn spawn_component_display(
         );
     }
 
-    (section_entity, body_entity)
+    ComponentDisplayCard {
+        section: section_entity,
+        body: body_entity,
+        header,
+    }
 }
 
 /// Filter inspector component cards based on both the active category and the
