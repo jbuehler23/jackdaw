@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::KeymapCapture;
 use jackdaw_widgets::tree_view::{
-    TreeFocused, TreeNode, TreeNodeExpanded, TreeRowContent, TreeView,
+    TreeFocused, TreeNode, TreeNodeExpanded, TreeRoot, TreeRowContent,
 };
 
 /// A tree of two rows and the navigation system, with nothing else in the
@@ -29,7 +29,7 @@ fn tree_app() -> (App, Vec<Entity>) {
             jackdaw_feathers::tree_view::tree_keyboard_navigation,
         );
 
-    let tree = app.world_mut().spawn((TreeView, Node::default())).id();
+    let tree = app.world_mut().spawn((TreeRoot, Node::default())).id();
     let rows: Vec<Entity> = (0..2)
         .map(|_| {
             let source = app.world_mut().spawn_empty().id();

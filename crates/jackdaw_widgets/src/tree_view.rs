@@ -1,9 +1,5 @@
 use bevy::prelude::*;
 
-/// Marker for the tree view container
-#[derive(Component)]
-pub struct TreeView;
-
 /// Links a tree row UI entity to the source entity it represents.
 ///
 /// Multiple `TreeNode`s may point at the same source (one per

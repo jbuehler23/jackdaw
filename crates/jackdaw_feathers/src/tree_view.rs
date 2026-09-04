@@ -12,7 +12,7 @@ use jackdaw_widgets::tree_view::{
     TreeRowContent, TreeRowDot, TreeRowDropped, TreeRowDroppedOnRoot, TreeRowInlineRename,
     TreeRowInsertZone, TreeRowInserted, TreeRowLabel, TreeRowLockToggle, TreeRowLockToggled,
     TreeRowSelected, TreeRowStartRename, TreeRowVisibilityToggle, TreeRowVisibilityToggled,
-    TreeSpringLoad, TreeView,
+    TreeSpringLoad,
 };
 
 use lucide_icons::Icon;
@@ -53,10 +53,6 @@ pub struct TreeRowStyle {
     pub icon_font: Handle<Font>,
 }
 
-/// Returns the display color for an entity category. When `inherited`
-/// is true, the muted `CATEGORY_INHERITED` color wins; this is how
-/// resolver-materialised descendants of a prefab instance get drawn
-/// faintly regardless of their underlying category (Mesh, Light, etc.).
 /// The glyph a category is drawn with when no registered rule names a
 /// more particular one. Paired with [`category_color`]: a row that catches
 /// up with its kind after being built re-reads both from here.
@@ -73,6 +69,10 @@ pub fn category_icon(category: EntityCategory) -> Icon {
     }
 }
 
+/// Returns the display color for an entity category. When `inherited`
+/// is true, the muted `CATEGORY_INHERITED` color wins; this is how
+/// resolver-materialised descendants of a prefab instance get drawn
+/// faintly regardless of their underlying category (Mesh, Light, etc.).
 pub fn category_color(category: EntityCategory, inherited: bool) -> Color {
     if inherited {
         return tokens::CATEGORY_INHERITED;
@@ -1521,26 +1521,34 @@ pub fn tree_keyboard_navigation(
     keyboard: Res<ButtonInput<KeyCode>>,
     capture: Option<Res<jackdaw_commands::KeymapCapture>>,
     mut focused: ResMut<TreeFocused>,
-    tree_view: Query<&Children, With<TreeView>>,
+    tree_roots: Query<&Children, With<TreeRoot>>,
     tree_nodes: Query<(Entity, &TreeNodeExpanded, &Children), With<TreeNode>>,
     tree_row_children: Query<&Children, With<TreeRowChildren>>,
     tree_row_contents: Query<Entity, With<TreeRowContent>>,
     node_query: Query<&Node>,
     mut commands: Commands,
     tree_node_query: Query<&TreeNode>,
+    parents: Query<&ChildOf>,
+    row_children: Query<(), With<TreeRowChildren>>,
+    text_inputs: Query<(), With<crate::text_edit::EditorTextEdit>>,
     input_focus: Res<bevy::input_focus::InputFocus>,
 ) {
     if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
         return;
     }
-    // Skip tree keyboard navigation when a text input is focused
-    // to avoid Enter/arrow keys interfering with text editing.
-    if input_focus.get().is_some() {
+    // A field being typed into takes the keys; anything else holding
+    // focus does not. Standing down for any focus at all is what left the
+    // arrow keys dead in the editor, where a button or a toolbar control
+    // has focus most of the time.
+    if input_focus
+        .get()
+        .is_some_and(|entity| text_inputs.contains(entity))
+    {
         return;
     }
     // Collect all visible tree rows in order
     let visible_rows =
-        collect_visible_rows(&tree_view, &tree_nodes, &tree_row_children, &node_query);
+        collect_visible_rows(&tree_roots, &tree_nodes, &tree_row_children, &node_query);
 
     if visible_rows.is_empty() {
         return;
@@ -1568,21 +1576,29 @@ pub fn tree_keyboard_navigation(
         focused.0 = prev;
     }
 
+    // Left closes the branch the walk is standing on, and on a row that is
+    // already closed steps out to the row holding it. Without the second
+    // half Left is dead on every leaf, which is most of a tree.
     if keyboard.just_pressed(KeyCode::ArrowLeft)
         && let Some(focused_entity) = focused.0
         && let Ok((entity, expanded, _)) = tree_nodes.get(focused_entity)
-        && expanded.0
     {
-        // Collapse the node
-        commands.entity(entity).insert(TreeNodeExpanded(false));
+        if expanded.0 {
+            commands.entity(entity).insert(TreeNodeExpanded(false));
+        } else if let Some(parent_row) = enclosing_row(entity, &parents, &row_children) {
+            focused.0 = Some(parent_row);
+        }
     }
-    // If already collapsed, could move to parent, but skipping for now.
 
     if keyboard.just_pressed(KeyCode::ArrowRight)
         && let Some(focused_entity) = focused.0
         && let Ok((entity, expanded, children)) = tree_nodes.get(focused_entity)
     {
-        let has_children = children.iter().any(|c| tree_row_children.contains(c));
+        // The marker, not its children: a branch that has not been opened
+        // yet holds an empty container, and a `&Children` query does not
+        // match an entity with none. Asked that way, Right opened nothing
+        // that had not already been opened.
+        let has_children = children.iter().any(|c| row_children.contains(c));
         if has_children && !expanded.0 {
             // Expand the node
             commands.entity(entity).insert(TreeNodeExpanded(true));
@@ -1620,16 +1636,28 @@ pub fn tree_keyboard_navigation(
     }
 }
 
+/// The row whose branch `row` sits inside: up through the
+/// `TreeRowChildren` container that holds it. `None` at the top level.
+fn enclosing_row(
+    row: Entity,
+    parents: &Query<&ChildOf>,
+    row_children: &Query<(), With<TreeRowChildren>>,
+) -> Option<Entity> {
+    let container = parents.get(row).ok()?.parent();
+    row_children.contains(container).then_some(())?;
+    Some(parents.get(container).ok()?.parent())
+}
+
 /// Collect all visible tree row entities in depth-first order
 fn collect_visible_rows(
-    tree_view: &Query<&Children, With<TreeView>>,
+    tree_roots: &Query<&Children, With<TreeRoot>>,
     tree_nodes: &Query<(Entity, &TreeNodeExpanded, &Children), With<TreeNode>>,
     tree_row_children: &Query<&Children, With<TreeRowChildren>>,
     node_query: &Query<&Node>,
 ) -> Vec<Entity> {
     let mut result = Vec::new();
 
-    for view_children in tree_view.iter() {
+    for view_children in tree_roots.iter() {
         for child in view_children.iter() {
             collect_visible_rows_recursive(
                 child,

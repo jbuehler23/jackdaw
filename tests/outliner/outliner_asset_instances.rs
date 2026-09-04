@@ -172,7 +172,8 @@ fn opening_an_instance_shows_what_the_asset_spawned() {
 
     expand(&mut app, instance, panel);
     for &internal in &internals {
-        let row = row_for(&app, internal, panel).expect("opening the instance builds its internals");
+        let row =
+            row_for(&app, internal, panel).expect("opening the instance builds its internals");
         assert_eq!(
             glyph_color(&app, row),
             category_color(EntityCategory::AssetPart, false),

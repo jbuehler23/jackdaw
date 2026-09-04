@@ -339,7 +339,10 @@ fn a_model_instance_and_a_scene_root_read_as_themselves() {
         "a model instance is several parts held under one instance, and not \
          the single box an authored mesh gets"
     );
-    assert_eq!(icon_of(&app, scene_root), Some(Icon::Clapperboard.unicode()));
+    assert_eq!(
+        icon_of(&app, scene_root),
+        Some(Icon::Clapperboard.unicode())
+    );
 }
 
 /// A row is built when `Name` lands, which for a loaded scene is before the
@@ -375,7 +378,11 @@ fn a_model_row_catches_up_with_its_kind_in_glyph_and_colour() {
     let world = app.world();
     let row = world
         .iter_entities()
-        .find(|entity| entity.get::<TreeNode>().is_some_and(|node| node.0 == source))
+        .find(|entity| {
+            entity
+                .get::<TreeNode>()
+                .is_some_and(|node| node.0 == source)
+        })
         .expect("the entity has an outliner row")
         .id();
     let child_with = |parent: Entity, has: &dyn Fn(Entity) -> bool| -> Option<Entity> {
