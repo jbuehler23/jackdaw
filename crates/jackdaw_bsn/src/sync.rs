@@ -58,6 +58,13 @@ pub fn sync_to_ast(world: &mut World, entity: Entity, component_type_id: TypeId)
 ///
 /// Inserts the node into the parent's `Children` patch (or roots if no parent).
 pub fn create_entity_in_ast(world: &mut World, entity: Entity, parent: Option<Entity>) {
+    // Nothing to author a node for, and the link would name a dead id: the
+    // node would then outlive anything that could reach it, and every later
+    // lookup of that index would find it. Checked before the resource is
+    // touched, not after, because the link goes in before the component does.
+    if world.get_entity(entity).is_err() {
+        return;
+    }
     let name = world.get::<Name>(entity).map(ToString::to_string);
 
     let mut initial_patches = Vec::new();

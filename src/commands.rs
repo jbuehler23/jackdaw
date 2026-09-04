@@ -832,7 +832,17 @@ impl EditorCommand for SpawnEntity {
 }
 
 pub struct DespawnEntity {
+    /// The entity as it stands in the world now: the one a redo despawns,
+    /// rewritten by every undo to whatever id the restore minted.
     pub entity: Entity,
+    /// The id the snapshot was taken under, which is what its entries are
+    /// keyed by and so the only id a restore's entity map answers to.
+    ///
+    /// Separate from `entity` because the two part company: a redo
+    /// despawns the id the last undo minted, and looking the snapshot up
+    /// under that one misses, leaving the next undo holding an entity the
+    /// redo has already killed.
+    snapshot_root: Entity,
     pub scene_snapshot: DynamicWorld,
     /// Where the entity sat before the despawn. Undo puts it back there,
     /// rather than leaving it stranded at the top of the scene.
@@ -854,6 +864,7 @@ impl DespawnEntity {
         crate::preview_context::resume_preview_writes(world, held);
         Self {
             entity,
+            snapshot_root: entity,
             scene_snapshot: scene,
             location,
             label: format!("Despawn entity {entity}"),
@@ -872,7 +883,7 @@ impl EditorCommand for DespawnEntity {
         let scene = snapshot_rebuild(&self.scene_snapshot);
         let mut entity_map = bevy::ecs::entity::hash_map::EntityHashMap::default();
         let _ = scene.write_to_world(world, &mut entity_map);
-        if let Some(&new_id) = entity_map.get(&self.entity) {
+        if let Some(&new_id) = entity_map.get(&self.snapshot_root) {
             self.entity = new_id;
         }
         crate::scene_io::register_entity_in_ast(world, self.entity);
@@ -2396,8 +2407,9 @@ mod bsn_doc_coherence_tests {
     use jackdaw_api_internal::snapshot::SceneSnapshotter;
     use jackdaw_bsn::{BsnValue, SceneBsnAst, get_bsn_field};
 
-    #[test]
-    fn undo_respawn_rebuilds_the_bsn_document() {
+    /// A world with the document, the history and the editor state the
+    /// snapshotter reads, and the types a scene snapshot has to reflect.
+    fn coherence_app() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
         app.init_resource::<SceneBsnAst>();
@@ -2411,6 +2423,15 @@ mod bsn_doc_coherence_tests {
         app.init_resource::<crate::view_modes::ViewModeSettings>();
         app.init_resource::<crate::viewport_overlays::OverlaySettings>();
         app.init_resource::<jackdaw_avian_integration::PhysicsOverlayConfig>();
+        app.register_type::<Name>();
+        app.register_type::<Transform>();
+        app.register_type::<jackdaw_scene_types::SceneRootTag>();
+        app
+    }
+
+    #[test]
+    fn undo_respawn_rebuilds_the_bsn_document() {
+        let mut app = coherence_app();
 
         let entity = app
             .world_mut()
@@ -2456,6 +2477,48 @@ mod bsn_doc_coherence_tests {
         assert!(
             ast.ast_for(entity).is_none() || entity == respawned,
             "no stale link to the pre-undo entity"
+        );
+    }
+
+    /// A restore mints a fresh id, so the second undo of a despawn asks the
+    /// snapshot for an entity the first undo has already renamed. Keyed by
+    /// the live id, that lookup misses and the command carries on with the
+    /// id the redo has just killed, which is what the document sync is then
+    /// handed.
+    #[test]
+    fn a_despawn_undoes_again_after_a_redo() {
+        let mut app = coherence_app();
+        let entity = app
+            .world_mut()
+            .spawn((
+                Name::new("Node"),
+                Transform::from_xyz(1.0, 0.0, 0.0),
+                jackdaw_scene_types::SceneRootTag,
+            ))
+            .id();
+        crate::scene_io::register_entity_in_ast(app.world_mut(), entity);
+
+        let mut command = DespawnEntity::from_world(app.world_mut(), entity);
+        command.execute(app.world_mut());
+        command.undo(app.world_mut());
+        assert!(
+            app.world().get_entity(command.entity).is_ok(),
+            "the first undo puts the entity back"
+        );
+
+        command.execute(app.world_mut());
+        command.undo(app.world_mut());
+
+        assert!(
+            app.world().get_entity(command.entity).is_ok(),
+            "the second undo puts the entity back too"
+        );
+        assert!(
+            app.world()
+                .resource::<SceneBsnAst>()
+                .ast_for(command.entity)
+                .is_some(),
+            "and the document links what it put back"
         );
     }
 }
