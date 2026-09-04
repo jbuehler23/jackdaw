@@ -170,7 +170,8 @@ fn spawn_preview_row(
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Start,
                 column_gap: Val::Px(tokens::SPACING_SM),
-                ..default()
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
+                ..default(),
             },
             ChildOf(column),
         ))
