@@ -334,7 +334,7 @@ fn on_type_metadata_commit(
                 TypeMetadataKind::Category => "category",
                 TypeMetadataKind::Description => "description",
             };
-            warn!("failed to write type {field} to jackdaw_metadata.bsn: {err}");
+            warn!("failed to write type {field} to jackdaw_metadata.toml: {err}");
         }
     });
 }
@@ -369,7 +369,7 @@ fn on_preview_clear_click(
             return;
         };
         if let Err(err) = set_preview(world, &root, &type_path, "") {
-            warn!("failed to clear type preview in jackdaw_metadata.bsn: {err}");
+            warn!("failed to clear type preview in jackdaw_metadata.toml: {err}");
             return;
         }
         refresh_preview_slots(world, &type_path);
@@ -424,7 +424,7 @@ fn poll_preview_pick(world: &mut World) {
     match import_preview_model(&assets_dir, &picked) {
         Ok(relative) => {
             if let Err(err) = set_preview(world, &root, &type_path, &relative) {
-                warn!("failed to write type preview to jackdaw_metadata.bsn: {err}");
+                warn!("failed to write type preview to jackdaw_metadata.toml: {err}");
                 return;
             }
             refresh_preview_slots(world, &type_path);

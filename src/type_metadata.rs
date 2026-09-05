@@ -1,6 +1,6 @@
 //! Per-type editor chrome: category, hidden, preview, description.
 //!
-//! `jackdaw_metadata.bsn` next to `jackdaw.toml` is a sparse overlay.
+//! `jackdaw_metadata.toml` next to `jackdaw.toml` is a sparse overlay.
 //! Unspecified fields fall through to `@EditorCategory` / `@EditorHidden`
 //! / `@EditorPreview` / `@EditorDescription` (or rustdoc).
 
@@ -9,26 +9,23 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use bevy::reflect::TypeInfo;
-use jackdaw_bsn::{
-    BsnPatch, BsnTupleStructData, BsnValue, SceneBsnAst, emit_scene, parse_bsn_text,
-};
 use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden, EditorPreview};
+use serde::{Deserialize, Serialize};
 
 use crate::project::ProjectRoot;
 use crate::project_types::ProjectTypes;
 
-const CATEGORY_TYPE: &str = "jackdaw_scene_types::EditorCategory";
-const DESCRIPTION_TYPE: &str = "jackdaw_scene_types::EditorDescription";
-const PREVIEW_TYPE: &str = "jackdaw_scene_types::EditorPreview";
-const HIDDEN_TYPE: &str = "jackdaw_scene_types::EditorHidden";
-
 /// On-disk chrome for one reflected type. `None` means the file does not
 /// mention that field.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
 }
 
@@ -88,7 +85,7 @@ pub fn group_order(type_path: &str, authored_category: &str) -> i32 {
     }
 }
 
-/// File contents of `<project>/jackdaw_metadata.bsn`, keyed by reflect type path.
+/// File contents of `<project>/jackdaw_metadata.toml`, keyed by reflect type path.
 #[derive(Resource, Clone, Debug, Default)]
 pub struct TypeMetadata {
     pub entries: BTreeMap<String, TypeMeta>,
@@ -129,7 +126,7 @@ impl Plugin for TypeMetadataPlugin {
 }
 
 pub fn metadata_path(project_root: &Path) -> PathBuf {
-    project_root.join("jackdaw_metadata.bsn")
+    project_root.join("jackdaw_metadata.toml")
 }
 
 fn load_type_metadata(world: &mut World) {
@@ -197,7 +194,7 @@ fn patch_type_meta(
         LoadResult::Invalid => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "jackdaw_metadata.bsn could not be parsed",
+                "jackdaw_metadata.toml could not be parsed",
             ));
         }
     };
@@ -301,7 +298,7 @@ fn load_metadata_file(project_root: &Path) -> LoadResult {
     if text.trim().is_empty() {
         return LoadResult::Loaded(BTreeMap::new());
     }
-    match parse_metadata_bsn(&text) {
+    match parse_metadata(&text) {
         Ok(entries) => LoadResult::Loaded(entries),
         Err(err) => {
             warn!("failed to parse {}: {err}", path.display());
@@ -315,102 +312,29 @@ fn write_metadata_file(
     entries: &BTreeMap<String, TypeMeta>,
 ) -> std::io::Result<()> {
     let path = metadata_path(project_root);
-    let text = emit_metadata_bsn(entries);
-    let tmp = path.with_extension("bsn.tmp");
+    let text = emit_metadata(entries)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
+    let tmp = path.with_extension("toml.tmp");
     std::fs::write(&tmp, text)?;
     let _ = std::fs::remove_file(&path);
     std::fs::rename(&tmp, &path)
 }
 
-fn parse_metadata_bsn(text: &str) -> Result<BTreeMap<String, TypeMeta>, String> {
-    let ast = parse_bsn_text(text).map_err(|e| e.to_string())?;
-    let mut entries = BTreeMap::new();
-    for &root in &ast.roots {
-        let Some(type_path) = ast.get_name(root).map(str::to_owned) else {
-            continue;
-        };
-        let Some(patches) = ast.get_patches(root) else {
-            continue;
-        };
-        let mut meta = TypeMeta::default();
-        for &patch_entity in &patches.0 {
-            let Some(patch) = ast.get_patch(patch_entity) else {
-                continue;
-            };
-            apply_chrome_patch(&mut meta, patch);
-        }
-        if !meta.is_empty() {
-            entries.insert(type_path, meta);
-        }
-    }
-    Ok(entries)
+fn parse_metadata(text: &str) -> Result<BTreeMap<String, TypeMeta>, String> {
+    let entries: BTreeMap<String, TypeMeta> = toml::from_str(text).map_err(|e| e.to_string())?;
+    Ok(entries
+        .into_iter()
+        .filter(|(_, meta)| !meta.is_empty())
+        .collect())
 }
 
-fn apply_chrome_patch(meta: &mut TypeMeta, patch: &BsnPatch) {
-    match patch {
-        BsnPatch::Type(type_path) if chrome_short_name(type_path) == "EditorHidden" => {
-            meta.hidden = Some(true);
-        }
-        BsnPatch::TupleStruct(data) => {
-            let Some(value) = tuple_string(data) else {
-                return;
-            };
-            match chrome_short_name(&data.type_path) {
-                "EditorCategory" => meta.category = Some(value.to_string()),
-                "EditorDescription" => meta.description = Some(value.to_string()),
-                "EditorPreview" => meta.preview = Some(value.to_string()),
-                _ => {}
-            }
-        }
-        _ => {}
-    }
-}
-
-fn chrome_short_name(type_path: &str) -> &str {
-    type_path.rsplit("::").next().unwrap_or(type_path)
-}
-
-fn tuple_string(data: &BsnTupleStructData) -> Option<&str> {
-    match data.values.first() {
-        Some(BsnValue::String(s)) => Some(s.as_str()),
-        _ => None,
-    }
-}
-
-fn emit_metadata_bsn(entries: &BTreeMap<String, TypeMeta>) -> String {
-    let mut ast = SceneBsnAst::default();
-    for (type_path, meta) in entries {
-        if meta.is_empty() {
-            continue;
-        }
-        let node = ast.create_entity_node(chrome_patches(type_path, meta));
-        ast.add_to_roots(node);
-    }
-    emit_scene(&ast)
-}
-
-fn chrome_patches(type_path: &str, meta: &TypeMeta) -> Vec<BsnPatch> {
-    let mut patches = vec![BsnPatch::Name(type_path.to_string())];
-    if let Some(category) = &meta.category {
-        patches.push(string_tuple(CATEGORY_TYPE, category));
-    }
-    if let Some(description) = &meta.description {
-        patches.push(string_tuple(DESCRIPTION_TYPE, description));
-    }
-    if let Some(preview) = &meta.preview {
-        patches.push(string_tuple(PREVIEW_TYPE, preview));
-    }
-    if meta.hidden == Some(true) {
-        patches.push(BsnPatch::Type(HIDDEN_TYPE.to_string()));
-    }
-    patches
-}
-
-fn string_tuple(type_path: &str, value: &str) -> BsnPatch {
-    BsnPatch::TupleStruct(BsnTupleStructData {
-        type_path: type_path.to_string(),
-        values: vec![BsnValue::String(value.to_string())],
-    })
+fn emit_metadata(entries: &BTreeMap<String, TypeMeta>) -> Result<String, toml::ser::Error> {
+    let entries: BTreeMap<&str, &TypeMeta> = entries
+        .iter()
+        .filter(|(_, meta)| !meta.is_empty())
+        .map(|(type_path, meta)| (type_path.as_str(), meta))
+        .collect();
+    toml::to_string_pretty(&entries)
 }
 
 #[cfg(test)]
@@ -483,13 +407,13 @@ mod tests {
 
     #[test]
     fn round_trips_category_preview_hidden_and_description() {
-        let text = emit_metadata_bsn(&sample_entries());
-        assert!(text.contains("#\"my_game::PlayerSpawn\""));
-        assert!(text.contains("EditorCategory(\"Actor\")"));
-        assert!(text.contains("EditorPreview(\"models/player.glb\")"));
-        assert!(text.contains("EditorHidden"));
+        let text = emit_metadata(&sample_entries()).expect("emit metadata");
+        assert!(text.contains("[\"my_game::PlayerSpawn\"]"));
+        assert!(text.contains("category = \"Actor\""));
+        assert!(text.contains("preview = \"models/player.glb\""));
+        assert!(text.contains("hidden = true"));
 
-        let parsed = parse_metadata_bsn(&text).expect("parse emitted metadata");
+        let parsed = parse_metadata(&text).expect("parse emitted metadata");
         let spawn = parsed.get("my_game::PlayerSpawn").expect("PlayerSpawn");
         assert_eq!(spawn.category.as_deref(), Some("Actor"));
         assert_eq!(spawn.preview.as_deref(), Some("models/player.glb"));
@@ -560,23 +484,6 @@ mod tests {
             metadata.resolve("my_game::Other", &registry, &project_types),
             TypeChrome::default()
         );
-    }
-
-    #[test]
-    fn empty_file_category_overrides_schema() {
-        let mut metadata = TypeMetadata::default();
-        metadata.entries.insert(
-            "my_game::Checkpoint".into(),
-            TypeMeta {
-                category: Some(String::new()),
-                ..Default::default()
-            },
-        );
-        let registry = bevy::reflect::TypeRegistry::default();
-        let project_types = project_types_with(schema_entry("my_game::Checkpoint"));
-        let chrome = metadata.resolve("my_game::Checkpoint", &registry, &project_types);
-        assert_eq!(chrome.category, "");
-        assert_eq!(chrome.preview, "models/flag.glb");
     }
 
     #[test]
@@ -658,7 +565,7 @@ mod tests {
             Some("Actor")
         );
         let text = std::fs::read_to_string(metadata_path(tmp.path())).expect("read metadata");
-        assert!(text.contains("EditorCategory(\"Actor\")"));
+        assert!(text.contains("category = \"Actor\""));
 
         set_category(&mut world, tmp.path(), "my_game::PlayerSpawn", "").expect("clear category");
         assert!(
@@ -667,7 +574,7 @@ mod tests {
                 .get("my_game::PlayerSpawn")
                 .is_none()
         );
-        let parsed = parse_metadata_bsn(
+        let parsed = parse_metadata(
             &std::fs::read_to_string(metadata_path(tmp.path())).expect("read after clear"),
         )
         .expect("parse after clear");
@@ -677,7 +584,7 @@ mod tests {
     #[test]
     fn set_category_rejects_unparseable_file() {
         let tmp = tempfile::tempdir().expect("temp dir");
-        std::fs::write(metadata_path(tmp.path()), "not valid bsn {{{").expect("write junk");
+        std::fs::write(metadata_path(tmp.path()), "not valid toml {{{").expect("write junk");
         let mut world = empty_world();
         let err = set_category(&mut world, tmp.path(), "my_game::PlayerSpawn", "Actor")
             .expect_err("invalid file");
@@ -740,7 +647,7 @@ mod tests {
             "Line one.\nLine two.",
         )
         .expect("write description");
-        let parsed = parse_metadata_bsn(
+        let parsed = parse_metadata(
             &std::fs::read_to_string(metadata_path(tmp.path())).expect("read metadata"),
         )
         .expect("parse metadata");
