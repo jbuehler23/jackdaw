@@ -482,7 +482,7 @@ pub(crate) fn view_frame_selected(
 ///
 /// Everything that moves the camera keeps it current: the framing ops put
 /// it on what they framed, `view.look_at` on what it was aimed at, and
-/// [`track_pointer_focus`] carries it along the sightline through a fly
+/// `track_pointer_focus` carries it along the sightline through a fly
 /// gesture. Without that a pointer move across the map would leave the
 /// next `view.orbit` circling a point the user left behind.
 #[derive(Component, Clone, Copy, Debug)]

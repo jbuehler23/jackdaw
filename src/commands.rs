@@ -853,7 +853,7 @@ impl EditorCommand for RemoveComponent {
 /// The remote surface answers a call with the entities it added, so it
 /// opens this before dispatching and takes the list back after. Nothing
 /// else reads it, so nothing else records into it: outside a watched call
-/// [`SpawnedEntities::record`] drops what it is handed, and a session
+/// `SpawnedEntities::record` drops what it is handed, and a session
 /// driven from the menus never accumulates ids nobody is going to ask
 /// for.
 #[derive(Resource, Default)]

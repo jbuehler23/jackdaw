@@ -5,9 +5,9 @@
 //! The layer itself lives in [`TerrainDataStore`] beside the heights and
 //! the control words, so none of this touches the scene document. What
 //! does reach a history entry is anything that changes what the terrain
-//! draws: [`TerrainTintStampOp`] and [`TerrainTintVariationOp`] push one
+//! draws: `TerrainTintStampOp` and `TerrainTintVariationOp` push one
 //! for the cells they wrote, and the two surface dials push one for the
-//! setting they moved. [`TerrainPaintTintOp`] does not, being brush state.
+//! setting they moved. `TerrainPaintTintOp` does not, being brush state.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
