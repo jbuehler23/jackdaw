@@ -8,7 +8,7 @@ impl Plugin for MenuBarPlugin {
         app.init_resource::<MenuBarState>()
             .add_observer(close_menu_on_action)
             .add_observer(note_a_press_inside_the_menu)
-            .add_systems(Update, close_menu_on_click_outside.in_set(MenuBarClose));
+            .add_systems(Update, close_menu_on_click_outside.in_set(MenuBarCloseSystems));
     }
 }
 
@@ -24,7 +24,7 @@ impl Plugin for MenuBarPlugin {
 /// Public so a click handler that wants the menu to stay open can be
 /// ordered before it and write [`MenuBarState::hold_open`] first.
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct MenuBarClose;
+pub struct MenuBarCloseSystems;
 
 /// Marker on the root menu bar node.
 #[derive(Component)]

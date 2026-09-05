@@ -113,7 +113,7 @@ pub fn plugin(app: &mut App) {
 /// the click cannot close it -- the row activates on the release, a frame
 /// or more later, and a menu taken down by the press would take the row
 /// with it before it ever ran (see
-/// [`jackdaw_widgets::menu_bar::MenuBarClose`]).
+/// [`jackdaw_widgets::menu_bar::MenuBarCloseSystems`]).
 fn close_the_menu_unless_the_row_was_a_box(
     event: On<ButtonClickEvent>,
     rows: Query<(), With<MenuBarDropdownItem>>,
