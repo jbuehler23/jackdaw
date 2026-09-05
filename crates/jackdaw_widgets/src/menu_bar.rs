@@ -8,7 +8,10 @@ impl Plugin for MenuBarPlugin {
         app.init_resource::<MenuBarState>()
             .add_observer(close_menu_on_action)
             .add_observer(note_a_press_inside_the_menu)
-            .add_systems(Update, close_menu_on_click_outside.in_set(MenuBarCloseSystems));
+            .add_systems(
+                Update,
+                close_menu_on_click_outside.in_set(MenuBarCloseSystems),
+            );
     }
 }
 
