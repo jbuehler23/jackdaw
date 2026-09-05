@@ -4,24 +4,17 @@ version = "0.1.0"
 edition = "2024"
 authors = ["{{authors}}"]
 
-# A normal Bevy project. jackdaw builds its own editor artifacts in
-# .jackdaw/ and never changes this manifest; `cargo run` works with or
-# without the editor installed.
+# jackdaw builds its editor artifacts in .jackdaw/ and never edits this
+# manifest; `cargo run` works with or without the editor installed.
 
-# Stand this project on its own even when it is created inside another
-# cargo workspace, which would otherwise adopt it and refuse to build
-# ("current package believes it's in a workspace when it's not").
-# Delete this to make it a member of the surrounding workspace instead.
+# Keeps this project out of any cargo workspace it was created inside.
+# Delete to join the surrounding workspace instead.
 [workspace]
 
 [dependencies]
 bevy = "{{bevy_version}}"
-# Loads the scenes you author in the editor (assets/*.bsn) and builds
-# physics colliders from them. An ordinary dependency; remove it if you
-# stop using authored scenes.
-#
-# `pie` adds the play-in-editor link: the editor's Play button runs this
-# binary and talks to it over IPC. Drop that feature for a shipping
-# build and the game still runs, just without the editor connection.
-jackdaw_runtime = { {{jackdaw_runtime_dep}}, features = ["physics", "pie"] }
+# Loads authored scenes (assets/*.bsn). `physics` builds colliders from
+# authored brushes and terrain, `terrain` draws authored terrain, `pie`
+# connects the editor's Play button; drop `pie` for a shipping build.
+jackdaw_runtime = { {{jackdaw_runtime_dep}}, features = ["physics", "terrain", "pie"] }
 avian3d = "0.7"
