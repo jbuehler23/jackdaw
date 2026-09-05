@@ -2,7 +2,7 @@ use crate::EditorEntity;
 use crate::custom_properties::CustomProperties;
 use crate::default_style;
 use crate::prelude::*;
-use crate::selection::{Selected, Selection};
+use crate::selection::Selection;
 use std::any::TypeId;
 
 use bevy::ecs::component::ComponentInfo;
@@ -56,14 +56,17 @@ pub(crate) struct SceneAsts<'w> {
     pub(crate) type_metadata: Res<'w, crate::type_metadata::TypeMetadata>,
 }
 
-pub(crate) fn add_component_displays(
-    _: On<Add, Selected>,
+/// Keep each inspector's cards pointed at [`Selection::primary`]. Runs
+/// when selection changes, or when a panel has no [`InspectorTarget`]
+/// yet and something is already selected (inspector spawned after the
+/// selection was written).
+pub(crate) fn sync_inspector_to_selection(
     mut commands: Commands,
     components: &Components,
     type_registry: Res<AppTypeRegistry>,
     selection: Res<Selection>,
-    entity_query: Query<(&Archetype, EntityRef), (With<Selected>, Without<EditorEntity>)>,
-    inspectors: Query<Entity, With<Inspector>>,
+    entity_query: Query<(&Archetype, EntityRef), Without<EditorEntity>>,
+    inspectors: Query<(Entity, Option<&InspectorTarget>, Option<&Children>), With<Inspector>>,
     names: Query<&Name>,
     icon_font: Res<IconFont>,
     editor_font: Res<EditorFont>,
@@ -73,29 +76,55 @@ pub(crate) fn add_component_displays(
     child_of_query: Query<&bevy::ecs::hierarchy::ChildOf>,
     isa_query: Query<&crate::prefab::IsA>,
     collapse_state: Res<super::InspectorCollapseState>,
+    displays: Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
 ) {
-    let Some(primary) = selection.primary() else {
-        return;
-    };
-    let Ok((archetype, entity_ref)) = entity_query.get(primary) else {
-        return;
-    };
+    let desired = selection.primary();
+    if !selection.is_changed() {
+        if desired.is_none() {
+            return;
+        }
+        if !inspectors.iter().any(|(_, target, _)| target.is_none()) {
+            return;
+        }
+    }
 
-    let source_entity = entity_ref.entity();
     let sel_count = selection.entities.len();
 
-    let authored_type_paths = inspector_type_paths_for(
-        &asts.bsn,
-        &prefab_cache,
-        source_entity,
-        entity_ref,
-        &child_of_query,
-        &isa_query,
-    );
+    for (inspector, target, children) in &inspectors {
+        let current = target.map(|t| t.0);
+        if current == desired && !selection.is_changed() {
+            continue;
+        }
 
-    // Multi-instance dock layouts can host more than one inspector
-    // tab; each gets its own UI subtree but mirrors the same data.
-    for inspector in &inspectors {
+        if let Some(primary) = desired
+            && current.is_none()
+            && entity_query.get(primary).is_err()
+        {
+            continue;
+        }
+
+        commands
+            .entity(inspector)
+            .remove::<(InspectorTarget, Monitor, NotifyAdded<InspectorDirty>)>();
+        despawn_inspector_display_children(&mut commands, children, &displays);
+
+        let Some(primary) = desired else {
+            continue;
+        };
+        let Ok((archetype, entity_ref)) = entity_query.get(primary) else {
+            continue;
+        };
+
+        let source_entity = entity_ref.entity();
+        let authored_type_paths = inspector_type_paths_for(
+            &asts.bsn,
+            &prefab_cache,
+            source_entity,
+            entity_ref,
+            &child_of_query,
+            &isa_query,
+        );
+
         build_inspector_displays(
             &mut commands,
             components,
@@ -696,37 +725,24 @@ pub(crate) fn build_inspector_displays(
 pub(crate) const BRUSH_MATERIAL_TYPE_PATH: &str =
     "bevy_pbr::mesh_material::MeshMaterial3d<bevy_pbr::pbr_material::StandardMaterial>";
 
-pub(crate) fn remove_component_displays(
-    _: On<Remove, Selected>,
-    mut commands: Commands,
-    inspectors: Query<(Entity, Option<&Children>), With<Inspector>>,
-    displays: Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
+/// Despawn inspector card and picker children as one queued world step so
+/// lazy combobox/button setup cannot interleave and orphan UI.
+fn despawn_inspector_display_children(
+    commands: &mut Commands,
+    children: Option<&Children>,
+    displays: &Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
 ) {
-    // Multi-instance: every inspector tab needs its own monitoring
-    // teardown and its own children despawned.
-    for (entity, children) in &inspectors {
-        commands
-            .entity(entity)
-            .remove::<(InspectorTarget, Monitor, NotifyAdded<InspectorDirty>)>();
-
-        let Some(children) = children else {
-            continue;
-        };
-
-        // Collect then despawn inside a queued world closure so the
-        // cascade runs as one atomic step at flush time. See
-        // `on_inspector_dirty` for the rationale; piecemeal deferred
-        // despawns can interleave with lazy combobox/button setup
-        // spawns and orphan UI text at the root.
-        let old_children: Vec<Entity> = displays.iter_many(children.collection()).collect();
-        commands.queue(move |world: &mut World| {
-            for child in old_children {
-                if let Ok(ec) = world.get_entity_mut(child) {
-                    ec.despawn();
-                }
+    let Some(children) = children else {
+        return;
+    };
+    let old_children: Vec<Entity> = displays.iter_many(children.collection()).collect();
+    commands.queue(move |world: &mut World| {
+        for child in old_children {
+            if let Ok(ec) = world.get_entity_mut(child) {
+                ec.despawn();
             }
-        });
-    }
+        }
+    });
 }
 
 /// Handles `Addition<InspectorDirty>` on the Inspector entity: despawn existing
@@ -758,26 +774,7 @@ pub(crate) fn on_inspector_dirty(
     for (inspector_entity, target, children) in &inspectors {
         let mut source_entity = target.0;
 
-        // Collect the old display children, then queue a
-        // world-exclusive closure that despawns them synchronously.
-        // Doing this in a single queued closure (rather than piecemeal
-        // `commands.despawn` calls) guarantees the cascade completes
-        // as one atomic unit inside `Commands` flush; no lazy
-        // `setup_button` / `setup_combobox` spawns from a previous
-        // rebuild can slip in between entity despawns and leave
-        // orphaned UI children (the source of "Inherited" floating
-        // labels + `ChildOf(...) relates to an entity that does not
-        // exist` warnings).
-        let old_children: Vec<Entity> = children
-            .map(|c| displays.iter_many(c.collection()).collect())
-            .unwrap_or_default();
-        commands.queue(move |world: &mut World| {
-            for child in old_children {
-                if let Ok(ec) = world.get_entity_mut(child) {
-                    ec.despawn();
-                }
-            }
-        });
+        despawn_inspector_display_children(&mut commands, children, &displays);
 
         // Rebuild this inspector's contents. If the monitored target is gone
         // (despawned/respawned by CSG, undo, or prefab install), fall back to

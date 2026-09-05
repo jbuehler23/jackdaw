@@ -139,9 +139,8 @@ fn seed_operator_button_on_add(_: On<Add, ButtonOperatorCall>, mut commands: Com
 /// Operator availability often depends on the selection (e.g. delete,
 /// duplicate, group). Selection lives in the [`Selection`] resource and
 /// is mutated from many sites (some bypass the `Selected` component), so
-/// resource change-detection is the one reliable signal. This bridges it
-/// to the refresh event; it recomputes nothing itself and short-circuits
-/// on frames where the selection is unchanged.
+/// resource change-detection is the one reliable signal. Freshly-spawned
+/// buttons still seed off the same event via [`seed_operator_button_on_add`].
 fn refresh_buttons_on_selection_change(selection: Res<Selection>, mut commands: Commands) {
     if selection.is_changed() {
         commands.trigger(RefreshOperatorButtons);

@@ -95,8 +95,6 @@ impl Plugin for InspectorPlugin {
             .add_plugins(component_tooltip::plugin)
             .add_plugins(prefab_menu::plugin)
             .add_plugins(type_metadata_pane::plugin)
-            .add_observer(component_display::remove_component_displays)
-            .add_observer(component_display::add_component_displays)
             .add_observer(component_display::on_inspector_dirty)
             .add_observer(material_card_routing::on_refresh_inspector_card_body)
             .add_observer(component_picker::on_add_component_button_click)
@@ -131,6 +129,8 @@ impl Plugin for InspectorPlugin {
                 Update,
                 (
                     apply_pending_inspector_rebuild,
+                    component_display::sync_inspector_to_selection
+                        .before(category_strip::resolve_active_on_rebuild),
                     reflect_fields::refresh_inspector_fields,
                     reflect_fields::refresh_enum_variants,
                     val_field::refresh_val_fields,
@@ -487,7 +487,7 @@ fn flag_inspector_dirty_on_modifier_stack_change(
 /// `AvianCollider` triggers our `PostUpdate` sync that builds a real
 /// `Collider`, after which avian's own systems insert `Position`,
 /// `Rotation`, `ColliderAabb`, mass aggregates, etc.). Without this
-/// watcher the panel built by `add_component_displays` keeps showing
+/// watcher the panel built by `sync_inspector_to_selection` keeps showing
 /// only the originally-added component until the user reselects.
 ///
 /// Comparing the cached `ArchetypeId` to the live one is O(1) and only

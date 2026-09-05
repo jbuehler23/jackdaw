@@ -1154,10 +1154,8 @@ fn pie_view_toggle(icon_font: Handle<Font>) -> impl Bundle {
                     // entities (revert respawns authored entities with new
                     // ids; reproject despawns the ephemerals), so any
                     // selected entity becomes invalid across the toggle.
-                    // Drop the selection before the teardown runs so the
-                    // `On<Remove, Selected>` -> `on_entity_deselected`
-                    // handler never tries to clear `TreeRowSelected` off a
-                    // row that `teardown_outliner_rows` already despawned.
+                    // Clear selection before teardown so we are not holding
+                    // ids that are about to be despawned.
                     crate::selection::clear_selection_in_world(world);
                     match new_mode {
                         PieViewMode::Live => {

@@ -2003,7 +2003,7 @@ fn on_timeline_keyframe_click(
     event.propagate(false);
 }
 
-/// Mirror the main [`selection::Selection`] ->the animation crate's
+/// Mirror the main [`selection::Selection`] into the animation crate's
 /// [`jackdaw_animation::SelectedKeyframes`] so the timeline
 /// highlight system can tell which diamonds to light up without
 /// the animation crate needing to import `Selection` itself.

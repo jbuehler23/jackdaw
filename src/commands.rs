@@ -985,8 +985,8 @@ pub(crate) fn filtered_scene_builder<'w>(
 }
 
 /// Deselect the given entities: remove the `Selected` component and purge them
-/// from the `Selection` resource.  Must be called **before** despawning so that
-/// observers can clean up tree-row UI while the entities still exist.
+/// from the `Selection` resource. Call this before despawn so Selection does
+/// not keep ids of entities that no longer exist.
 pub(crate) fn deselect_entities(world: &mut World, entities: &[Entity]) {
     for &entity in entities {
         if let Ok(mut ec) = world.get_entity_mut(entity) {
