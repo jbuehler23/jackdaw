@@ -57,8 +57,8 @@ fn window_chrome_theme() -> WindowChromeTheme {
 }
 
 /// `JACKDAW_WINDOW_SIZE=<width>x<height>` overrides the primary
-/// window's initial resolution (physical pixels), e.g. `1920x1080` so
-/// the `ux-audit` harness captures every screenshot at one fixed size.
+/// window's initial resolution (physical pixels), e.g. `1920x1080`, so a
+/// driven session opens at one fixed size and its screenshots compare.
 /// Same family as [`crate::project::ENV_OPEN_PROJECT`]
 /// and [`crate::screenshot::ENV_SHOT`]: read once at startup. Unset, the
 /// platform/WM default applies.
