@@ -380,7 +380,9 @@ fn open_preview_picker(world: &mut World, type_path: String) {
     if world.contains_resource::<PreviewPickTask>() {
         return;
     }
-    let assets_dir = world.get_resource::<ProjectRoot>().map(|p| p.assets_dir());
+    let assets_dir = world
+        .get_resource::<ProjectRoot>()
+        .map(ProjectRoot::assets_dir);
     let raw_handle = world
         .query_filtered::<&RawHandleWrapper, With<PrimaryWindow>>()
         .single(world)
