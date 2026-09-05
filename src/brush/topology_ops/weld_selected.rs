@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::apply_topology_edit;
 use jackdaw_geometry::halfedge::ops::remove_doubles::remove_doubles;
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 

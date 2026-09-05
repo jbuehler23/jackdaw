@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_api_internal"
-version = "0.5.0"
+version.workspace = true
 edition = "2024"
 description = "Internal implementation crate for jackdaw_api. Depend on jackdaw_api instead."
 license = "MIT OR Apache-2.0"
@@ -12,7 +12,8 @@ bevy_enhanced_input.workspace = true
 jackdaw_panels.workspace = true
 jackdaw_commands.workspace = true
 jackdaw_api_macros.workspace = true
-jackdaw_jsn.workspace = true
+jackdaw_scene_types.workspace = true
+jackdaw_env.workspace = true
 lucide-icons.workspace = true
 dirs.workspace = true
 serde.workspace = true

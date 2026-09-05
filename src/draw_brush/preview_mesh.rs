@@ -1,7 +1,7 @@
 use crate::default_style;
 use crate::draw_brush::{
-    DrawBrushState, DrawMode, DrawPhase, PUNCH_THROUGH_DEPTH, build_cutter_planes,
-    build_cutter_planes_polygon, topology_aabbs_overlap,
+    DrawBrushState, DrawMode, DrawPhase, cut_brush_from_active, drawn_brush_from_active,
+    topology_aabbs_overlap,
 };
 use crate::{EditorEntity, brush::BrushMaterialPalette, selection::Selected};
 use bevy::{
@@ -9,10 +9,8 @@ use bevy::{
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
 };
-use jackdaw_geometry::{
-    compute_brush_geometry_from_planes, compute_brush_topology, triangulate_face,
-};
-use jackdaw_jsn::Brush;
+use jackdaw_geometry::build_face_render_buffers;
+use jackdaw_scene_types::Brush;
 
 #[derive(Component)]
 pub(crate) struct DrawPreviewMesh;
@@ -33,6 +31,27 @@ pub(crate) struct CutPreviewFace {
 /// Marker on a brush whose render meshes are hidden during cut preview.
 #[derive(Component)]
 pub(crate) struct CutPreviewHidden;
+
+fn clear_draw_preview(
+    commands: &mut Commands,
+    preview_entities: impl IntoIterator<Item = Entity>,
+    result_preview_entities: impl IntoIterator<Item = Entity>,
+    hidden_entities: impl IntoIterator<Item = Entity>,
+    visibility_query: &mut Query<&mut Visibility>,
+) {
+    for entity in preview_entities {
+        commands.entity(entity).despawn();
+    }
+    for entity in result_preview_entities {
+        commands.entity(entity).despawn();
+    }
+    for entity in hidden_entities {
+        if let Ok(mut vis) = visibility_query.get_mut(entity) {
+            *vis = Visibility::Inherited;
+        }
+        commands.entity(entity).remove::<CutPreviewHidden>();
+    }
+}
 
 pub(crate) fn manage_draw_preview_mesh(
     draw_state: Res<DrawBrushState>,
@@ -56,21 +75,14 @@ pub(crate) fn manage_draw_preview_mesh(
         .as_ref()
         .is_some_and(|a| a.phase == DrawPhase::ExtrudingDepth);
 
-    // Despawn existing preview meshes if we shouldn't show
     if !should_show {
-        for entity in preview_query.iter() {
-            commands.entity(entity).despawn();
-        }
-        for entity in result_preview_query.iter() {
-            commands.entity(entity).despawn();
-        }
-        // Restore hidden brush faces
-        for entity in hidden_query.iter() {
-            if let Ok(mut vis) = visibility_query.get_mut(entity) {
-                *vis = Visibility::Inherited;
-            }
-            commands.entity(entity).remove::<CutPreviewHidden>();
-        }
+        clear_draw_preview(
+            &mut commands,
+            preview_query.iter(),
+            result_preview_query.iter(),
+            hidden_query.iter(),
+            &mut visibility_query,
+        );
         *cached_preview_key = None;
         return;
     }
@@ -103,76 +115,68 @@ pub(crate) fn manage_draw_preview_mesh(
     }
     *cached_preview_key = Some(current_key);
 
-    // Build volume planes based on draw type. For Cut mode, force a punch-
-    // through depth so the preview matches the actual subtract op (which
-    // always extends the cutter through any target).
-    let cutter_active_storage;
-    let cutter_active = if active.mode == DrawMode::Cut {
-        let mut a = active.clone();
-        a.depth = -PUNCH_THROUGH_DEPTH;
-        cutter_active_storage = a;
-        &cutter_active_storage
-    } else {
-        active
+    // Build the drawn solid from the authored ring (or footprint rect).
+    let Some((cutter_brush, cutter_transform)) = (match active.mode {
+        DrawMode::Cut => cut_brush_from_active(active),
+        DrawMode::Add => drawn_brush_from_active(active),
+    }) else {
+        clear_draw_preview(
+            &mut commands,
+            preview_query.iter(),
+            result_preview_query.iter(),
+            hidden_query.iter(),
+            &mut visibility_query,
+        );
+        return;
     };
-    let cutter_planes = if !cutter_active.polygon_vertices.is_empty() {
-        build_cutter_planes_polygon(cutter_active)
-    } else {
-        build_cutter_planes(cutter_active)
-    };
-
-    // Compute mesh geometry from planes
-    let (verts, face_polys) = compute_brush_geometry_from_planes(&cutter_planes);
-    if verts.len() < 4 {
-        for entity in preview_query.iter() {
-            commands.entity(entity).despawn();
-        }
-        for entity in result_preview_query.iter() {
-            commands.entity(entity).despawn();
-        }
-        // Restore hidden brush faces since geometry is invalid
-        for entity in hidden_query.iter() {
-            if let Ok(mut vis) = visibility_query.get_mut(entity) {
-                *vis = Visibility::Inherited;
-            }
-            commands.entity(entity).remove::<CutPreviewHidden>();
-        }
+    let (world_cutter_faces, world_cutter_topo) = jackdaw_csg::brush_to_world(
+        &cutter_brush.faces,
+        &cutter_brush.topology,
+        cutter_transform.compute_affine(),
+    );
+    if world_cutter_topo.vertices.len() < 4 {
+        clear_draw_preview(
+            &mut commands,
+            preview_query.iter(),
+            result_preview_query.iter(),
+            hidden_query.iter(),
+            &mut visibility_query,
+        );
         return;
     }
 
-    // Build triangle mesh from face polygons
-    let positions: Vec<[f32; 3]> = verts.iter().map(Vec3::to_array).collect();
+    let verts: Vec<Vec3> = world_cutter_topo
+        .vertices
+        .iter()
+        .map(|v| v.position)
+        .collect();
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut all_indices: Vec<u32> = Vec::new();
-    for polygon in &face_polys {
-        if polygon.len() < 3 {
-            continue;
+    for (face_idx, face_data) in world_cutter_faces.iter().enumerate() {
+        let ring: Vec<usize> = world_cutter_topo
+            .face_ring(face_idx)
+            .map(|v| v as usize)
+            .collect();
+        let buf = build_face_render_buffers(&verts, &ring, face_data);
+        let base = positions.len() as u32;
+        positions.extend_from_slice(&buf.positions);
+        normals.extend_from_slice(&buf.normals);
+        for index in buf.indices {
+            all_indices.push(base + index);
         }
-        let tris = triangulate_face(polygon);
-        for tri in &tris {
-            all_indices.extend_from_slice(&[tri[0], tri[1], tri[2]]);
-        }
+    }
+    if all_indices.is_empty() {
+        clear_draw_preview(
+            &mut commands,
+            preview_query.iter(),
+            result_preview_query.iter(),
+            hidden_query.iter(),
+            &mut visibility_query,
+        );
+        return;
     }
 
-    // Compute per-vertex normals by averaging face normals
-    let mut normals = vec![[0.0_f32; 3]; positions.len()];
-    for (face_idx, polygon) in face_polys.iter().enumerate() {
-        if face_idx < cutter_planes.len() {
-            let n = cutter_planes[face_idx].plane.normal.to_array();
-            for &vi in polygon {
-                normals[vi][0] += n[0];
-                normals[vi][1] += n[1];
-                normals[vi][2] += n[2];
-            }
-        }
-    }
-    for n in &mut normals {
-        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-        if len > 0.0 {
-            n[0] /= len;
-            n[1] /= len;
-            n[2] /= len;
-        }
-    }
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
@@ -231,19 +235,17 @@ pub(crate) fn manage_draw_preview_mesh(
     // targets are handled correctly; the convex-only `subtract_brush` path
     // is intentionally avoided here.
     if active.mode == DrawMode::Cut {
-        let cutter_topology = compute_brush_topology(&cutter_planes);
-        let cutter_input = jackdaw_csg::CsgInput::new(&cutter_planes, &cutter_topology);
+        let cutter_input = jackdaw_csg::CsgInput::new(&world_cutter_faces, &world_cutter_topo);
 
         for (brush_entity, brush, brush_tf, is_selected) in brushes.iter() {
-            let (_, rotation, translation) = brush_tf.to_scale_rotation_translation();
             let (world_target_faces, world_target_topo) =
-                jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, rotation, translation);
+                jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, brush_tf.affine());
 
             // Cheap AABB rejection before invoking the kernel. The plane-
             // based separating-axis test isn't sound for concave brushes
             // (a face plane can split the brush's own interior), so we use
             // a topology-vertex AABB overlap instead.
-            let intersects = topology_aabbs_overlap(&world_target_topo, &cutter_topology);
+            let intersects = topology_aabbs_overlap(&world_target_topo, &world_cutter_topo);
             if !intersects {
                 if hidden_query.get(brush_entity).is_ok() {
                     if let Ok(mut vis) = visibility_query.get_mut(brush_entity) {

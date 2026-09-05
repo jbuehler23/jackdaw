@@ -9,7 +9,7 @@ use bevy::{
 };
 use jackdaw_feathers::{
     icons::{EditorFont, Icon, IconFont},
-    panel_header, tokens,
+    tokens,
 };
 use jackdaw_widgets::collapsible::{
     CollapsibleBody, CollapsibleHeader, CollapsibleSection, ToggleCollapsible,
@@ -33,7 +33,7 @@ struct PopulatedComponents(Vec<ComponentId>);
 #[derive(Component, Clone, Copy)]
 struct PreviousRemoteSelection(Option<u64>);
 
-/// Flag that triggers phase-2 display building in a normal system context.
+/// Flag that triggers display building in a normal system context.
 #[derive(Component)]
 pub struct RemoteInspectorNeedsRebuild {
     proxy_entity: Entity,
@@ -49,23 +49,20 @@ pub fn remote_inspector() -> impl Bundle {
             ..Default::default()
         },
         BackgroundColor(tokens::PANEL_BG),
-        children![
-            panel_header::panel_header("Remote Inspector"),
-            (
-                RemoteInspector,
-                PopulatedComponents::default(),
-                PreviousRemoteSelection(None),
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(tokens::SPACING_SM),
-                    overflow: Overflow::scroll_y(),
-                    flex_grow: 1.0,
-                    min_height: Val::Px(0.0),
-                    padding: UiRect::all(Val::Px(tokens::SPACING_SM)),
-                    ..Default::default()
-                },
-            ),
-        ],
+        children![(
+            RemoteInspector,
+            PopulatedComponents::default(),
+            PreviousRemoteSelection(None),
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(tokens::SPACING_SM),
+                overflow: Overflow::scroll_y(),
+                flex_grow: 1.0,
+                min_height: Val::Px(0.0),
+                padding: UiRect::all(Val::Px(tokens::SPACING_SM)),
+                ..Default::default()
+            },
+        ),],
     )
 }
 
@@ -142,12 +139,10 @@ pub fn populate_remote_proxy(world: &mut World) {
     let (populated_ids, fallback_components) =
         populate_proxy_from_components(world, proxy_entity, &remote_components);
 
-    // Store populated component IDs for cleanup
     world
         .entity_mut(inspector_entity)
         .insert(PopulatedComponents(populated_ids));
 
-    // Set flag for phase 2
     world
         .entity_mut(inspector_entity)
         .insert(RemoteInspectorNeedsRebuild {
@@ -229,8 +224,8 @@ pub fn build_remote_inspector_displays(
         .entity(inspector_entity)
         .remove::<RemoteInspectorNeedsRebuild>();
 
-    // The proxy entity now has real components populated by phase 1.
-    // Use the shared build function.
+    // `populate_remote_proxy` has already filled the proxy entity with real
+    // components.
     let Ok((archetype, entity_ref)) = entity_query.get(proxy_entity) else {
         return;
     };
@@ -255,6 +250,7 @@ pub fn build_remote_inspector_displays(
         None,
         None,
         &collapse_state,
+        None,
     );
 
     // Spawn JSON fallback section for unregistered components
@@ -372,6 +368,7 @@ pub(crate) fn spawn_fallback_section(
                 entity: source_entity,
                 component: None,
                 is_overridden: false,
+                is_derived: false,
                 prefab_ctx: None,
                 revert_through_prefab: false,
                 icon_font: &icon_font.0,

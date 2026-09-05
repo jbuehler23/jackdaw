@@ -1,0 +1,32 @@
+[package]
+name = "jackdaw_scene_types"
+version.workspace = true
+edition = "2024"
+description = "Internal crate for the jackdaw editor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = [
+    "reflect_auto_register",
+    "std",
+    "serialize",
+] }
+jackdaw_geometry = { version = "0.19.0", path = "../jackdaw_geometry", default-features = false }
+glam.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+rand.workspace = true
+
+[features]
+default = ["render"]
+render = [
+    "bevy/bevy_pbr",
+    "bevy/bevy_render",
+    "bevy/bevy_image",
+    "bevy/bevy_asset",
+    "jackdaw_geometry/render",
+]
+
+[lints]
+workspace = true

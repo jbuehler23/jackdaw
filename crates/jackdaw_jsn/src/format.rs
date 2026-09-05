@@ -3,10 +3,6 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-fn is_zero(n: &usize) -> bool {
-    *n == 0
-}
-
 /// Top-level `.jsn` file structure.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JsnScene {
@@ -88,26 +84,15 @@ impl From<JsnVisibility> for Visibility {
 /// Only `parent` remains structural (serialization ordering).
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JsnEntity {
-    /// Stable node id (see `jackdaw_jsn::ast::JsnNodeId`). Absent in scenes
-    /// authored before node ids existed; a fresh id is minted for those on
-    /// first load.
+    /// Stable node id (see `jackdaw_scene_types::SceneNodeId`). Absent in
+    /// scenes authored before node ids existed; a fresh id is minted for
+    /// those on first load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<usize>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub components: HashMap<String, serde_json::Value>,
-}
-
-/// Clipboard payload: entities plus any inline assets they reference.
-/// Serialized to JSON text on the OS clipboard via `arboard`. Wrapping
-/// the entity list lets cross-scene paste carry material defs from the
-/// source scene's inline assets.
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
-pub struct ClipboardPayload {
-    pub entities: Vec<JsnEntity>,
-    #[serde(default)]
-    pub assets: JsnAssets,
 }
 
 /// Legacy v2 entity format, only used for migration.
@@ -272,36 +257,153 @@ pub struct JsnCatalog {
     pub assets: JsnAssets,
 }
 
-/// Top-level `project.jsn` file structure.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct JsnProject {
-    /// Format header (same as scene files).
-    pub jsn: JsnHeader,
-    /// Project configuration.
-    pub project: JsnProjectConfig,
+/// Return the current type path for a component key found in a `.jsn` file,
+/// or `None` when the key is already current. Scene component types moved out
+/// of this crate into `jackdaw_scene_types`; files written before that move
+/// still carry the old paths.
+pub fn canonical_type_path(path: &str) -> Option<String> {
+    if path == "jackdaw_jsn::ast::JsnNodeId" {
+        return Some(jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH.to_string());
+    }
+    if let Some(rest) = path.strip_prefix("jackdaw_jsn::types::") {
+        return Some(format!("jackdaw_scene_types::types::{rest}"));
+    }
+    if let Some(rest) = path.strip_prefix("jackdaw_jsn::editor_meta::") {
+        return Some(format!("jackdaw_scene_types::{rest}"));
+    }
+    None
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct JsnProjectConfig {
-    /// Human-readable project name.
-    pub name: String,
-    /// Optional description.
-    #[serde(default)]
-    pub description: String,
-    /// Default scene to open (relative to project root, e.g. "assets/scenes/level1.jsn").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_scene: Option<String>,
-    /// Persisted editor layout state (which windows in which areas, active tabs, area sizes).
-    /// Format is opaque to the JSN crate; consumers parse it as `jackdaw_panels::LayoutState`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub layout: Option<serde_json::Value>,
-    /// Scene paths (relative to project root) that were open in the
-    /// editor's tab strip when the project was last closed. Restored
-    /// in order on the next launch. Skipped if empty.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub last_open_tabs: Vec<String>,
-    /// Index into `last_open_tabs` of the tab that was active.
-    /// Clamped to range on load. Defaults to 0.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub last_active_tab: usize,
+/// Rewrite every legacy component type path in `scene` to its current path,
+/// including the keys of the asset manifest and the nested component maps
+/// inside prefab baselines. Run once at the parse boundary so everything
+/// downstream (registry lookups, AST keys) sees only current paths.
+pub fn canonicalize_scene(scene: &mut JsnScene) {
+    for entity in &mut scene.scene {
+        canonicalize_components(&mut entity.components);
+    }
+    let assets = std::mem::take(&mut scene.assets.0);
+    scene.assets.0 = assets
+        .into_iter()
+        .map(|(type_path, entries)| {
+            let key = canonical_type_path(&type_path).unwrap_or(type_path);
+            (key, entries)
+        })
+        .collect();
+}
+
+fn canonicalize_components(components: &mut HashMap<String, serde_json::Value>) {
+    let entries = std::mem::take(components);
+    for (type_path, mut value) in entries {
+        let key = canonical_type_path(&type_path).unwrap_or(type_path);
+        if key == "jackdaw_scene_types::types::JsnPrefabBaseline"
+            && let Some(baseline_components) =
+                value.get_mut("components").and_then(|c| c.as_object_mut())
+        {
+            let inner = std::mem::take(baseline_components);
+            for (inner_path, inner_value) in inner {
+                let inner_key = canonical_type_path(&inner_path).unwrap_or(inner_path);
+                baseline_components.insert(inner_key, inner_value);
+            }
+        }
+        components.insert(key, value);
+    }
+}
+
+#[cfg(test)]
+mod canonicalize_tests {
+    use super::*;
+
+    #[test]
+    fn moved_type_paths_rewrite_to_scene_types() {
+        assert_eq!(
+            canonical_type_path("jackdaw_jsn::types::Brush").as_deref(),
+            Some("jackdaw_scene_types::types::Brush")
+        );
+        assert_eq!(
+            canonical_type_path("jackdaw_jsn::ast::JsnNodeId").as_deref(),
+            Some(jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH)
+        );
+        assert_eq!(
+            canonical_type_path("jackdaw_jsn::editor_meta::EditorHidden").as_deref(),
+            Some("jackdaw_scene_types::EditorHidden")
+        );
+        assert_eq!(
+            canonical_type_path("bevy_transform::components::transform::Transform"),
+            None
+        );
+    }
+
+    #[test]
+    fn canonicalize_scene_rewrites_components_assets_and_baselines() {
+        let json = serde_json::json!({
+            "jsn": {"format_version": [3, 0, 0], "editor_version": "0.5.0", "bevy_version": "0.19"},
+            "metadata": {"name": "t"},
+            "assets": {
+                "jackdaw_jsn::types::Terrain": {"#T": {}}
+            },
+            "editor": null,
+            "scene": [{
+                "components": {
+                    "jackdaw_jsn::types::Brush": {"x": 1},
+                    "jackdaw_jsn::types::JsnPrefabBaseline": {
+                        "components": {"jackdaw_jsn::types::Terrain": {"y": 2}}
+                    }
+                }
+            }]
+        });
+        let mut scene: JsnScene = serde_json::from_value(json).expect("fixture parses");
+        canonicalize_scene(&mut scene);
+
+        let components = &scene.scene[0].components;
+        assert!(components.contains_key("jackdaw_scene_types::types::Brush"));
+        let baseline = &components["jackdaw_scene_types::types::JsnPrefabBaseline"];
+        assert!(
+            baseline["components"]
+                .as_object()
+                .expect("baseline components object")
+                .contains_key("jackdaw_scene_types::types::Terrain")
+        );
+        assert!(
+            scene
+                .assets
+                .0
+                .contains_key("jackdaw_scene_types::types::Terrain")
+        );
+    }
+}
+
+/// Header-only probe used to pick the right parser for a `.jsn` file.
+#[derive(Deserialize)]
+struct VersionProbe {
+    jsn: JsnHeader,
+}
+
+/// Parse `.jsn` text into a current-format scene, dispatching on the header's
+/// `format_version` (v2 files migrate to v3) and rewriting legacy component
+/// type paths. Returns the scene together with the file's original version.
+///
+/// Version dispatch matters: v2 and v3 share their top-level field names and
+/// every v3 entity field is optional, so v2 text also parses as v3, silently
+/// dropping the structural name/transform/visibility fields. The header is
+/// the only reliable discriminator.
+pub fn parse_scene(text: &str) -> Result<(JsnScene, [u32; 3]), serde_json::Error> {
+    let version = serde_json::from_str::<VersionProbe>(text)
+        .map(|p| p.jsn.format_version)
+        .unwrap_or([3, 0, 0]);
+
+    let mut scene = if version[0] < 3 {
+        serde_json::from_str::<JsnSceneV2>(text)?.migrate_to_v3()
+    } else {
+        match serde_json::from_str::<JsnScene>(text) {
+            Ok(scene) => scene,
+            // Belt and suspenders for files with a v3 header but a v2 body.
+            Err(v3_err) => match serde_json::from_str::<JsnSceneV2>(text) {
+                Ok(v2) => v2.migrate_to_v3(),
+                Err(_) => return Err(v3_err),
+            },
+        }
+    };
+    canonicalize_scene(&mut scene);
+    Ok((scene, version))
 }

@@ -16,9 +16,9 @@ use crate::entity_ops::EntityAddCameraRigOp;
 use crate::entity_ops::{
     EntityAddAnimationPlayerOp, EntityAddAudioSourceOp, EntityAddCameraOp, EntityAddConeOp,
     EntityAddCubeOp, EntityAddCylinderOp, EntityAddDirectionalLightOp, EntityAddEmptyOp,
-    EntityAddFogVolumeOp, EntityAddImageOp, EntityAddNavmeshOp, EntityAddPlaneOp,
-    EntityAddPointLightOp, EntityAddPrefabOp, EntityAddPyramidOp, EntityAddReflectionProbeOp,
-    EntityAddSphereOp, EntityAddSpotLightOp, EntityAddTerrainOp, EntityAddWedgeOp,
+    EntityAddFogVolumeOp, EntityAddImageOp, EntityAddPlaneOp, EntityAddPointLightOp,
+    EntityAddPrefabOp, EntityAddPyramidOp, EntityAddReflectionProbeOp, EntityAddSphereOp,
+    EntityAddSpotLightOp, EntityAddTerrainOp, EntityAddWedgeOp,
 };
 #[cfg(feature = "multiplayer")]
 use crate::entity_ops::{EntityAddNetworkRoomOp, EntityAddSpawnPointOp, EntityAddZoneTransitionOp};
@@ -173,11 +173,6 @@ fn builtin_groups() -> Vec<AddMenuItem> {
             category: cameras_entities,
         },
         AddMenuItem {
-            action: op_action::<EntityAddNavmeshOp>(),
-            label: "Navmesh Region".into(),
-            category: regions.clone(),
-        },
-        AddMenuItem {
             action: op_action::<EntityAddTerrainOp>(),
             label: "Terrain".into(),
             category: regions,
@@ -241,6 +236,31 @@ pub struct AddMenuItem {
 /// toolbar Add menu and the scene-tree Add Entity picker.
 pub fn collect_add_menu_items(world: &mut World) -> Vec<AddMenuItem> {
     let mut items: Vec<AddMenuItem> = builtin_groups();
+
+    let mut widgets = world
+        .resource::<WidgetRegistry>()
+        .iter()
+        .map(|definition| {
+            (
+                definition.category.to_string(),
+                definition.name.to_string(),
+                definition.id.to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    widgets.sort();
+    items.extend(
+        widgets
+            .into_iter()
+            .map(|(category, label, id)| AddMenuItem {
+                action: format!("widget:{id}"),
+                label,
+                category: Category {
+                    name: Some(format!("UI / {category}")),
+                    order: -8,
+                },
+            }),
+    );
 
     // Extension items grouped by owning extension so entries cluster by
     // author in the picker.

@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::dissolve_edges::dissolve_edges;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey, apply_topology_edit};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
@@ -84,5 +84,5 @@ pub(crate) fn can_run_dissolve_edges(
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushDissolveEdgesOp>();
-    // No keybind; operator is available via menu / command palette only for MVP.
+    // No keybind; operator is available via menu / command palette only.
 }

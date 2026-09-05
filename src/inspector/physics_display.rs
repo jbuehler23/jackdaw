@@ -13,46 +13,53 @@ use crate::commands::{AddComponent, CommandGroup, CommandHistory, EditorCommand}
 pub(crate) const RIGID_BODY_TYPE_PATH: &str = "avian3d::dynamics::rigid_body::RigidBody";
 pub(crate) const AVIAN_COLLIDER_TYPE_PATH: &str = "jackdaw_avian_integration::AvianCollider";
 
-/// Command that disables physics on an entity. Captures the full pre-disable
-/// state (`RigidBody`, `AvianCollider`, and all derived avian components in the
-/// AST) so undo restores them.
+/// Command that disables physics on an entity. Captures authored physics
+/// patches (`RigidBody`, `AvianCollider`, and any other avian overrides the
+/// user pinned) so undo restores them. Runtime `#[require]` companions are
+/// never in the document and are rebuilt by avian on re-enable.
 pub(crate) struct DisablePhysics {
     entity: Entity,
-    /// Snapshot of AST components that were removed, keyed by `type_path`.
-    removed_components: std::collections::HashMap<String, serde_json::Value>,
-    /// Derived components that were cleared on execute, for re-adding on undo.
-    removed_derived: std::collections::HashSet<String>,
+    /// Document patches that were removed, cloned for restore on undo.
+    removed_patches: Vec<jackdaw_bsn::BsnPatch>,
+}
+
+/// Whether a type path names one of the physics components this command
+/// removes: the canonical pair plus any authored avian overrides.
+fn is_physics_type_path(type_path: &str) -> bool {
+    type_path == RIGID_BODY_TYPE_PATH
+        || type_path == AVIAN_COLLIDER_TYPE_PATH
+        || type_path.starts_with("avian3d::")
+}
+
+/// The component type path carried by a document patch, if it is a
+/// component patch.
+fn patch_type_path(patch: &jackdaw_bsn::BsnPatch) -> Option<&str> {
+    match patch {
+        jackdaw_bsn::BsnPatch::Struct(data) => Some(&data.type_path),
+        jackdaw_bsn::BsnPatch::TupleStruct(data) => Some(&data.type_path),
+        jackdaw_bsn::BsnPatch::Type(tp) => Some(tp),
+        _ => None,
+    }
 }
 
 impl DisablePhysics {
     pub(crate) fn from_world(world: &World, entity: Entity) -> Self {
-        let mut removed_components = std::collections::HashMap::new();
-        let mut removed_derived = std::collections::HashSet::new();
-        if let Some(node) = world
-            .resource::<jackdaw_jsn::SceneJsnAst>()
-            .node_for_entity(entity)
+        let mut removed_patches = Vec::new();
+        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        if let Some(node) = ast.ast_for(entity)
+            && let Some(patches) = ast.get_patches(node)
         {
-            for (type_path, value) in &node.components {
-                if type_path == RIGID_BODY_TYPE_PATH
-                    || type_path == AVIAN_COLLIDER_TYPE_PATH
-                    || type_path.starts_with("avian3d::")
+            for &pe in &patches.0 {
+                if let Some(patch) = ast.get_patch(pe)
+                    && patch_type_path(patch).is_some_and(is_physics_type_path)
                 {
-                    removed_components.insert(type_path.clone(), value.clone());
-                }
-            }
-            for type_path in &node.derived_components {
-                if type_path == RIGID_BODY_TYPE_PATH
-                    || type_path == AVIAN_COLLIDER_TYPE_PATH
-                    || type_path.starts_with("avian3d::")
-                {
-                    removed_derived.insert(type_path.clone());
+                    removed_patches.push(patch.clone());
                 }
             }
         }
         Self {
             entity,
-            removed_components,
-            removed_derived,
+            removed_patches,
         }
     }
 }
@@ -65,55 +72,35 @@ impl EditorCommand for DisablePhysics {
             ec.remove::<AvianCollider>();
             ec.remove::<Collider>();
         }
-        // Clean up AST (matches previous behavior)
-        if let Some(node) = world
-            .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-            .node_for_entity_mut(self.entity)
-        {
-            node.components.remove(RIGID_BODY_TYPE_PATH);
-            node.components.remove(AVIAN_COLLIDER_TYPE_PATH);
-            node.derived_components.clear();
-            node.components.retain(|k, _| !k.starts_with("avian3d::"));
+        // Clean up authored physics patches from the document.
+        let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        if let Some(node) = ast.ast_for(self.entity) {
+            let physics_paths: Vec<String> = ast
+                .component_type_paths(node)
+                .into_iter()
+                .filter(|tp| is_physics_type_path(tp))
+                .collect();
+            for type_path in physics_paths {
+                ast.remove_component_patch(node, &type_path);
+            }
         }
     }
 
     fn undo(&mut self, world: &mut World) {
-        // Restore each component via AST set_component + reflection insert into ECS
-        let registry = world.resource::<AppTypeRegistry>().clone();
-        let reg = registry.read();
-        for (type_path, value) in &self.removed_components {
-            let Some(registration) = reg.get_with_type_path(type_path) else {
-                continue;
-            };
-            let Some(reflect_component) =
-                registration.data::<bevy::ecs::reflect::ReflectComponent>()
-            else {
-                continue;
-            };
-            // Deserialize JSON -> reflected value -> insert into ECS
-            let deserializer =
-                bevy::reflect::serde::TypedReflectDeserializer::new(registration, &reg);
-            use serde::de::DeserializeSeed;
-            let Ok(reflected) = deserializer.deserialize(value) else {
-                continue;
-            };
-            let Ok(mut entity_mut) = world.get_entity_mut(self.entity) else {
-                continue;
-            };
-            reflect_component.insert(&mut entity_mut, reflected.as_ref(), &reg);
-        }
-        drop(reg);
-        // Restore AST entries
-        if let Some(node) = world
-            .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-            .node_for_entity_mut(self.entity)
+        // Restore the document patches, then mirror them onto the ECS entity.
         {
-            for (type_path, value) in &self.removed_components {
-                node.components.insert(type_path.clone(), value.clone());
+            let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+            if let Some(node) = ast.ast_for(self.entity) {
+                for patch in &self.removed_patches {
+                    let pe = ast.world.spawn(patch.clone()).id();
+                    if let Some(patches) = ast.get_patches_mut(node) {
+                        patches.0.push(pe);
+                    }
+                }
             }
-            for type_path in &self.removed_derived {
-                node.derived_components.insert(type_path.clone());
-            }
+        }
+        for patch in &self.removed_patches {
+            jackdaw_bsn::apply_component_patch(world, self.entity, patch);
         }
         // Rebuild inspector to reflect restored state
         if let Ok(mut ec) = world.get_entity_mut(self.entity) {
@@ -131,11 +118,9 @@ pub(crate) fn enable_physics(world: &mut World, entity: Entity) {
     let reg = registry.read();
     let components_res = world.components();
 
-    // Build AddComponent for RigidBody
     let rb_type_id = std::any::TypeId::of::<RigidBody>();
     let rb_component_id = components_res.get_id(rb_type_id);
 
-    // Build AddComponent for AvianCollider
     let ac_type_id = std::any::TypeId::of::<AvianCollider>();
     let ac_component_id = components_res.get_id(ac_type_id);
 

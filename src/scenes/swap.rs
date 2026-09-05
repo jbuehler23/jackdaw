@@ -1,13 +1,11 @@
 //! Tab-switch mechanics. The pure pipeline lives here so it can be
 //! tested independently of UI and operator wiring.
 
-use std::collections::HashMap;
-
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 
 use crate::commands::CommandHistory;
-use crate::scene_io::{clear_scene_entities, jsn_scene_from_ast, load_scene_from_jsn};
+use crate::scene_io::clear_scene_entities;
 use crate::scenes::{Scenes, TabContent, ViewState};
 
 /// Switch the active tab to `target`. No-op if `target == active`.
@@ -62,50 +60,80 @@ pub(crate) fn respawn_scene_from_ast(world: &mut World) {
     activate_tab(world, active);
 }
 
-/// Capture the live AST into the active tab and stash the per-tab
-/// history and view state. Pre-condition: a tab exists at
+/// Capture the live scene document into the active tab and stash the
+/// per-tab history and view state. Pre-condition: a tab exists at
 /// `Scenes.active`.
 pub(crate) fn capture_active_tab(world: &mut World) {
     let active = world.resource::<Scenes>().active;
-    let ast_snapshot = std::mem::take(&mut *world.resource_mut::<jackdaw_jsn::SceneJsnAst>());
     let view_state = capture_view_state(world);
     let history = std::mem::take(&mut *world.resource_mut::<CommandHistory>());
 
-    let prefab_target = {
+    let (prefab_target, tab_path) = {
         let scenes = world.resource::<Scenes>();
-        match &scenes.tabs[active].content {
+        let tab = &scenes.tabs[active];
+        let prefab = match &tab.content {
             TabContent::Prefab(path) => Some(path.clone()),
             TabContent::Scene(_) => None,
-        }
+        };
+        (prefab, tab.path.clone())
     };
 
+    // Both branches snapshot the live document through the inline-asset
+    // emit, which embeds runtime asset handles as `#Name` roots and
+    // reduces inherited prefab-instance descendants to sparse overrides,
+    // so re-activation re-resolves them against the prefab cache.
+    let parent = tab_path
+        .as_ref()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let text = crate::scene_io::emit_bsn_scene_with_inline_assets(world, &parent);
+
     if let Some(path) = prefab_target {
-        // Prefab tab: flush the live AST into the cache entry rather
-        // than onto the tab. The `TabContent::Prefab` key keeps
-        // pointing at the same cache entry from here on.
-        if let Some(mut cache) = world.get_resource_mut::<crate::prefab::PrefabAstCache>() {
-            // `insert` overwrites or creates, bumps the epoch, and
-            // marks the path dirty. That matches the semantics we
-            // want for both the "first capture" and "subsequent
-            // re-capture" cases without branching on existence.
-            cache.insert(path.as_path(), ast_snapshot);
+        // Prefab tab: flush the snapshot into the cache entry rather than
+        // onto the tab. The `TabContent::Prefab` key keeps pointing at the
+        // same cache entry from here on. `insert` overwrites or creates,
+        // bumps the epoch, and marks the path dirty, matching both the
+        // "first capture" and "re-capture" cases without branching on
+        // existence.
+        if let Ok(bsn) = jackdaw_bsn::parse_bsn_text(&text) {
+            world
+                .resource_mut::<crate::prefab::PrefabAstCache>()
+                .insert(path.as_path(), bsn);
         }
     } else {
-        // Scene tab: store the captured AST directly on the tab.
+        // Scene tab: store the captured document directly on the tab.
+        let doc = match jackdaw_bsn::parse_bsn_text(&text) {
+            Ok(doc) => doc,
+            Err(err) => {
+                warn!("capture_active_tab: snapshot parse failed: {err}");
+                jackdaw_bsn::SceneBsnAst::default()
+            }
+        };
         let mut scenes = world.resource_mut::<Scenes>();
-        scenes.tabs[active].content = TabContent::Scene(Some(ast_snapshot));
+        scenes.tabs[active].content = TabContent::Scene(Some(Box::new(doc)));
     }
 
+    let terrain_data_store = world
+        .get_resource_mut::<crate::terrain::TerrainDataStore>()
+        .map(|mut store| std::mem::take(&mut *store));
+    let navmesh = crate::terrain::navmesh_bake::take_from_world(world);
     let mut scenes = world.resource_mut::<Scenes>();
     let tab = &mut scenes.tabs[active];
     tab.view_state = view_state;
     tab.history = history;
+    if let Some(terrain_data_store) = terrain_data_store {
+        tab.terrain_data_store = terrain_data_store;
+    }
+    if let Some(navmesh) = navmesh {
+        tab.navmesh = navmesh;
+    }
 }
 
-/// Spawn the target tab's AST into the live world and restore per-tab
+/// Spawn the target tab's document into the live world and restore per-tab
 /// history and view state.
 pub fn activate_tab(world: &mut World, target: usize) {
-    let (content, view_state, history, tab_path) = {
+    let has_terrain_data_store = world.contains_resource::<crate::terrain::TerrainDataStore>();
+    let (mut content, view_state, history, tab_path, terrain_data_store, navmesh) = {
         let mut scenes = world.resource_mut::<Scenes>();
         let tab = &mut scenes.tabs[target];
         (
@@ -113,84 +141,69 @@ pub fn activate_tab(world: &mut World, target: usize) {
             std::mem::take(&mut tab.view_state),
             std::mem::take(&mut tab.history),
             tab.path.clone(),
+            has_terrain_data_store.then(|| std::mem::take(&mut tab.terrain_data_store)),
+            std::mem::take(&mut tab.navmesh),
         )
     };
 
-    // Materialize the AST to install. For `Prefab` tabs, read from
-    // cache; for `Scene` tabs, take the captured AST (or default).
-    let new_ast = match &content {
-        TabContent::Scene(Some(ast)) => ast.clone(),
-        TabContent::Scene(None) => jackdaw_jsn::SceneJsnAst::default(),
+    // Restore the target tab's bulk terrain data before spawning its scene
+    // and importing any sidecars. `FillMissing` can now preserve unsaved
+    // edits without confusing a same-named sidecar from another tab.
+    if let Some(terrain_data_store) = terrain_data_store {
+        *world.resource_mut::<crate::terrain::TerrainDataStore>() = terrain_data_store;
+    }
+    // The bake taken from that ground, restored with it.
+    crate::terrain::navmesh_bake::install_in_world(world, navmesh);
+
+    // Materialize the document to install. For `Prefab` tabs, clone from
+    // the cache; for `Scene` tabs, take the captured document (or default).
+    let new_doc = match &mut content {
+        TabContent::Scene(slot) => slot.take().map(|b| *b).unwrap_or_default(),
         TabContent::Prefab(path) => world
             .get_resource::<crate::prefab::PrefabAstCache>()
-            .and_then(|c| c.get_canonical(path).cloned())
+            .and_then(|c| c.get_canonical(path))
+            .map(crate::prefab::resolver_bsn::clone_scene)
             .unwrap_or_default(),
     };
 
-    // Mirror `finish_load_scene`: any IsA references in the captured AST
-    // need their prefab files loaded into the cache, then resolved into a
-    // transient JsnScene with sparse-override merging applied, before we
-    // spawn. Spawning from the unresolved AST directly would feed Bevy's
-    // reflect deserializer a partial Transform like
-    // {"translation": [..]} (no rotation / scale), which fails and leaves
-    // the entity in a broken state -- previously surfaced as orphan
-    // render meshes after a tab swap.
+    // Mirror `finish_load_scene`: any IsA references in the captured
+    // document need their prefab files loaded into the cache, then resolved
+    // (materializing inherited subtrees), before the spawn. PrefabAstCache
+    // may be absent in minimal test harnesses; if so, skip the resolver
+    // step entirely (there can't be any cached prefabs to merge against).
     let parent = tab_path
         .as_ref()
         .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    // PrefabAstCache may be absent in minimal test harnesses; if so,
-    // skip the resolver step entirely (there can't be any cached
-    // prefabs to merge against). In the editor the cache is always
-    // present because PrefabPlugin initializes it.
-    let resolved_ast = if world
+    let resolved_text = if world
         .get_resource::<crate::prefab::PrefabAstCache>()
         .is_some()
     {
         {
             let mut cache = world.resource_mut::<crate::prefab::PrefabAstCache>();
-            crate::prefab::save_load::populate_cache_for_scene(&new_ast, &mut cache, &parent);
+            crate::prefab::save_load::populate_cache_for_scene_bsn(&new_doc, &mut cache, &parent);
         }
         let cache = world.resource::<crate::prefab::PrefabAstCache>();
-        match crate::prefab::resolver::resolve_scene(&new_ast, cache) {
-            Ok(r) => r,
+        let get_prefab = |p: &std::path::Path| cache.get(p);
+        match crate::prefab::resolver_bsn::resolve_scene(&new_doc, &get_prefab) {
+            Ok(resolved) => jackdaw_bsn::emit_scene(&resolved),
             Err(e) => {
                 warn!("activate_tab: prefab resolution failed: {e}; spawning unresolved");
-                new_ast.clone()
+                jackdaw_bsn::emit_scene(&new_doc)
             }
         }
     } else {
-        new_ast.clone()
+        jackdaw_bsn::emit_scene(&new_doc)
     };
-    let jsn_for_spawn = jsn_scene_from_ast(&resolved_ast);
 
-    *world.resource_mut::<jackdaw_jsn::SceneJsnAst>() = new_ast;
-
-    let local_assets = HashMap::new();
-    let spawned = load_scene_from_jsn(world, &jsn_for_spawn.scene, &parent, &local_assets);
-
-    // Re-bind the unresolved AST's per-node ecs_entity to the freshly
-    // spawned entities and rebuild ecs_to_jsn. The first N spawned entries
-    // (where N == unresolved AST node count) correspond to authored
-    // entities one-to-one; later entries are inherited-from-prefab
-    // descendants that live ECS-only until the user edits them.
-    {
-        let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
-        let authored_count = ast.nodes.len();
-        for (i, node) in ast.nodes.iter_mut().enumerate().take(authored_count) {
-            node.ecs_entity = spawned.get(i).copied();
-        }
-        let remap: HashMap<bevy::prelude::Entity, usize> = ast
-            .nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, n)| n.ecs_entity.map(|e| (e, i)))
-            .collect();
-        ast.ecs_to_jsn = remap;
+    // `load_bsn_scene` installs the resolved document as the live resource
+    // and links the spawned entities to it.
+    if let Err(err) = jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
+        error!("activate_tab: failed to spawn tab scene: {err}");
     }
 
     // Restore the per-tab content marker. For `Prefab` tabs the marker
-    // is the canonical path; for `Scene` tabs the AST is live in the
+    // is the canonical path; for `Scene` tabs the document is live in the
     // resource now, so the tab's own slot goes back to `Scene(None)`.
     {
         let mut scenes = world.resource_mut::<Scenes>();
@@ -212,17 +225,32 @@ pub fn activate_tab(world: &mut World, target: usize) {
         spath.path = tab_path.as_ref().map(|p| p.to_string_lossy().into_owned());
     }
 
+    // Hydrate any terrain sidecar the store has not seen yet. A tab opened
+    // by `scene_open_system` pushes a parsed document straight onto the
+    // tab strip and never goes through `finish_load_scene`, so this is the
+    // only place its bulk data gets read. `FillMissing` is deliberate: a
+    // swap back to a tab the user has been sculpting must keep the unsaved
+    // edits the store holds rather than re-reading the older file.
+    if let Some(path) = tab_path.as_ref() {
+        crate::scene_io::import_terrain_sidecars(
+            world,
+            &path.to_string_lossy(),
+            crate::scene_io::SidecarImport::FillMissing,
+        );
+        crate::terrain::navmesh_bake::import_beside_scene(world, &path.to_string_lossy());
+    }
+
     let mut scenes = world.resource_mut::<Scenes>();
     scenes.active = target;
     scenes.tabs[target].history_depth_at_last_check = history_depth;
 }
 
-/// Captures camera transform, edit mode, and selection as stable IDs.
+/// Captures camera transform, edit mode, and selection as scene node ids.
 fn capture_view_state(world: &mut World) -> ViewState {
     use crate::brush::{BrushSelection, EditMode};
-    use crate::draw_brush::BrushStableId;
     use crate::selection::Selected;
     use crate::viewport::MainViewportCamera;
+    use jackdaw_scene_types::SceneNodeId;
 
     let mut cam_q = world.query_filtered::<&Transform, With<MainViewportCamera>>();
     let camera_transform = cam_q.iter(world).next().copied().unwrap_or_default();
@@ -236,8 +264,8 @@ fn capture_view_state(world: &mut World) -> ViewState {
         .cloned()
         .unwrap_or_default();
 
-    let mut sel_q = world.query_filtered::<&BrushStableId, With<Selected>>();
-    let selection: Vec<BrushStableId> = sel_q.iter(world).copied().collect();
+    let mut sel_q = world.query_filtered::<&SceneNodeId, With<Selected>>();
+    let selection: Vec<SceneNodeId> = sel_q.iter(world).copied().collect();
 
     ViewState {
         camera_transform,
@@ -251,9 +279,9 @@ fn capture_view_state(world: &mut World) -> ViewState {
 /// Restores camera transform, edit mode, and selection.
 fn apply_view_state(world: &mut World, view_state: &ViewState) {
     use crate::brush::{BrushSelection, EditMode};
-    use crate::draw_brush::BrushStableId;
     use crate::selection::{Selected, Selection};
     use crate::viewport::MainViewportCamera;
+    use jackdaw_scene_types::SceneNodeId;
 
     // Camera transform.
     let mut cam_q = world.query_filtered::<&mut Transform, With<MainViewportCamera>>();
@@ -271,15 +299,15 @@ fn apply_view_state(world: &mut World, view_state: &ViewState) {
         *bs = view_state.brush_sub_selection.clone();
     }
 
-    // Object selection: rebuild from stable IDs.
-    let mut sid_q = world.query::<(Entity, &BrushStableId)>();
-    let sid_map: std::collections::HashMap<BrushStableId, Entity> =
-        sid_q.iter(world).map(|(e, sid)| (*sid, e)).collect();
+    // Object selection: rebuild from scene node ids.
+    let mut nid_q = world.query::<(Entity, &SceneNodeId)>();
+    let nid_map: std::collections::HashMap<SceneNodeId, Entity> =
+        nid_q.iter(world).map(|(e, nid)| (*nid, e)).collect();
 
     let entities: Vec<Entity> = view_state
         .selection
         .iter()
-        .filter_map(|sid| sid_map.get(sid).copied())
+        .filter_map(|nid| nid_map.get(nid).copied())
         .collect();
 
     // Clear any current Selected markers (the world was just repopulated).

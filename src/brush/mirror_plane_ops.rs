@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::ModifierStack;
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use crate::brush::interaction::{VertexDragConstraint, compute_brush_drag_offset};
 use crate::brush::mirror_plane_overlay::{MirrorPlaneHover, plane_handle_world};

@@ -14,6 +14,7 @@ pub(crate) mod ops;
 pub(crate) mod physics_display;
 mod prefab_field_dots;
 pub(crate) mod prefab_menu;
+pub(crate) mod project_component_display;
 pub(crate) mod reflect_fields;
 
 use crate::EditorEntity;
@@ -41,7 +42,6 @@ fn extract_module_group(module_path: Option<&str>) -> String {
     let Some(path) = module_path else {
         return "Other".to_string();
     };
-    // Get first path segment
     let first = path.split("::").next().unwrap_or(path);
     // Group jackdaw's avian wrapper alongside avian3d's own types
     // so AvianCollider sits in the same inspector section as
@@ -80,7 +80,7 @@ fn extract_module_group(module_path: Option<&str>) -> String {
 }
 
 // Editor display metadata as Bevy reflect custom attributes.
-// Newtypes live in `jackdaw_jsn`, re-exported here.
+// Newtypes live in `jackdaw_scene_types`, re-exported here via `jackdaw_runtime`.
 pub use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 
 #[reflect_trait]
@@ -133,7 +133,6 @@ impl Plugin for InspectorPlugin {
             .add_observer(component_display::add_component_displays)
             .add_observer(component_display::on_inspector_dirty)
             .add_observer(material_card_routing::on_refresh_inspector_card_body)
-            .add_observer(component_display::on_disclosure_change)
             .add_observer(component_picker::on_add_component_button_click)
             .add_observer(reflect_fields::on_checkbox_commit)
             .add_observer(reflect_fields::on_text_edit_commit)
@@ -145,9 +144,6 @@ impl Plugin for InspectorPlugin {
             .add_observer(custom_props_display::on_custom_property_text_commit)
             .add_observer(brush_display::on_brush_face_text_commit)
             .add_observer(on_name_field_commit)
-            .add_observer(material_display::on_material_text_commit)
-            .add_observer(material_display::on_material_checkbox_commit)
-            .add_observer(material_display::on_preview_shape_button_click)
             .add_observer(anim_diamond::on_diamond_click)
             .init_resource::<live_edit_dots::LiveEditMenuTarget>()
             .add_observer(live_edit_dots::on_live_edit_menu_action)
@@ -175,8 +171,6 @@ impl Plugin for InspectorPlugin {
                     category_strip::paint_category_tabs,
                     add_header::rebuild_add_header,
                     persist_inspector_collapse,
-                    material_display::refresh_preview_shape_buttons,
-                    material_display::preview_zoom_from_scroll,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             );
@@ -264,7 +258,7 @@ fn find_text_edit_entities_local(world: &World, outer_entity: Entity) -> Option<
 }
 
 /// Handle `TextEditCommitEvent` for Name field inputs.
-/// Pushes a `SetJsnField` command so the rename can be undone.
+/// Pushes a `SetBsnField` command so the rename can be undone.
 fn on_name_field_commit(
     event: On<jackdaw_feathers::text_edit::TextEditCommitEvent>,
     name_inputs: Query<&NameFieldInput>,
@@ -301,12 +295,17 @@ fn on_name_field_commit(
     }
 
     commands.queue(move |world: &mut World| {
-        let cmd = crate::commands::SetJsnField {
+        let old_value = if old_name.is_empty() {
+            None
+        } else {
+            Some(jackdaw_bsn::BsnValue::String(old_name))
+        };
+        let cmd = crate::commands::SetBsnField {
             entity: source_entity,
-            type_path: "bevy_ecs::name::Name".to_string(),
+            type_path: crate::commands::NAME_TYPE_PATH.to_string(),
             field_path: String::new(),
-            old_value: serde_json::Value::String(old_name),
-            new_value: serde_json::Value::String(new_name),
+            old_value,
+            new_value: jackdaw_bsn::BsnValue::String(new_name),
             was_derived: false,
         };
         let mut cmd: Box<dyn jackdaw_commands::EditorCommand> = Box::new(cmd);

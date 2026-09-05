@@ -12,12 +12,11 @@ use bevy::reflect::serde::TypedReflectDeserializer;
 use bevy::time::Virtual;
 use serde::de::DeserializeSeed;
 
-use jackdaw_jsn::JsnNodeId;
-use jackdaw_jsn::ast::JSN_NODE_ID_TYPE_PATH;
 use jackdaw_pie_protocol::event::{PieChannel, StateEvent, to_bytes};
 use jackdaw_pie_protocol::transport::PieTransport;
 use jackdaw_pie_protocol::transport_ipc::IpcChannelTransport;
 use jackdaw_pie_protocol::{ControlEvent, PieMode, build_snapshot};
+use jackdaw_scene_types::SceneNodeId;
 
 /// The active PIE link parameters, read from the environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -113,24 +112,26 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
     }
 }
 
-/// Lift the `JsnNodeId` component out of a snapshot's `components` map and
+/// Lift the `SceneNodeId` component out of a snapshot's `components` map and
 /// into its `scene_node_id` field.
 ///
 /// `build_snapshot` serializes every reflectable component it finds, including
-/// `JsnNodeId`. The editor treats `scene_node_id` as the canonical authored-
-/// node link and should not also see `JsnNodeId` as a regular user component,
+/// `SceneNodeId`. The editor treats `scene_node_id` as the canonical authored-
+/// node link and should not also see `SceneNodeId` as a regular user component,
 /// so we remove the entry from `components` and populate `scene_node_id`
-/// instead. When the entity has no `JsnNodeId` component the snapshot is left
+/// instead. When the entity has no `SceneNodeId` component the snapshot is left
 /// unchanged and `scene_node_id` stays `None`.
 fn lift_scene_node_id(
     world: &World,
     entity_bits: u64,
     remote: &mut jackdaw_pie_protocol::RemoteEntity,
 ) {
-    remote.components.remove(JSN_NODE_ID_TYPE_PATH);
+    remote
+        .components
+        .remove(jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH);
     let entity = Entity::from_bits(entity_bits);
     if let Ok(entity_ref) = world.get_entity(entity)
-        && let Some(node_id) = entity_ref.get::<JsnNodeId>()
+        && let Some(node_id) = entity_ref.get::<SceneNodeId>()
     {
         remote.scene_node_id = Some(node_id.0);
     }
@@ -159,7 +160,7 @@ fn stream_state(world: &mut World) {
     // infrastructure the editor must never project).
     type StreamFilter = (
         With<Transform>,
-        Without<jackdaw_jsn::DerivedFaceMesh>,
+        Without<jackdaw_scene_types::DerivedFaceMesh>,
         Without<crate::pie_frames::FrameCaptureCamera>,
     );
     let entities: Vec<Entity> = world
@@ -780,9 +781,9 @@ fn apply_remove_component(world: &mut World, entity_bits: u64, type_path: &str) 
 mod tests {
     use super::*;
     use bevy::app::AppExit;
-    use jackdaw_jsn::JsnNodeId;
     use jackdaw_pie_protocol::event::{ControlEvent, PieChannel, to_bytes};
     use jackdaw_pie_protocol::{IpcChannelTransport, connect, serve};
+    use jackdaw_scene_types::SceneNodeId;
 
     /// Headless app with PIE systems and a single `Name` + `Transform` entity.
     fn headless_pie_app(transport: IpcChannelTransport) -> (App, Entity) {
@@ -798,15 +799,15 @@ mod tests {
         (app, entity)
     }
 
-    /// Build a minimal app with `JsnNodeId` registered, spawn one entity that
+    /// Build a minimal app with `SceneNodeId` registered, spawn one entity that
     /// carries the id and one without, run one stream tick, and verify:
-    ///  - the entity with `JsnNodeId(42)` produces `EntitySpawned` with
-    ///    `scene_node_id == Some(42)` and no `JsnNodeId` key in `components`.
-    ///  - the entity without `JsnNodeId` produces `EntitySpawned` with
+    ///  - the entity with `SceneNodeId(42)` produces `EntitySpawned` with
+    ///    `scene_node_id == Some(42)` and no `SceneNodeId` key in `components`.
+    ///  - the entity without `SceneNodeId` produces `EntitySpawned` with
     ///    `scene_node_id == None`.
     #[test]
     fn scene_node_id_lifted_out_of_components() {
-        const JSN_NODE_ID_TYPE_PATH: &str = jackdaw_jsn::ast::JSN_NODE_ID_TYPE_PATH;
+        const JSN_NODE_ID_TYPE_PATH: &str = jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH;
 
         let (handle, rendezvous) = serve().expect("serve");
 
@@ -843,11 +844,11 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.register_type::<Name>();
         app.register_type::<Transform>();
-        app.register_type::<JsnNodeId>();
+        app.register_type::<SceneNodeId>();
 
         let with_id = app
             .world_mut()
-            .spawn((Transform::from_xyz(1.0, 0.0, 0.0), JsnNodeId(42)))
+            .spawn((Transform::from_xyz(1.0, 0.0, 0.0), SceneNodeId(42)))
             .id();
         let without_id = app
             .world_mut()
@@ -868,33 +869,33 @@ mod tests {
 
         let find_spawned = |bits: u64| -> Option<&jackdaw_pie_protocol::RemoteEntity> {
             for event in &received {
-                if let StateEvent::EntitySpawned { entity: re } = event {
-                    if re.entity == bits {
-                        return Some(re);
-                    }
+                if let StateEvent::EntitySpawned { entity: re } = event
+                    && re.entity == bits
+                {
+                    return Some(re);
                 }
             }
             None
         };
 
         let re_with = find_spawned(with_id.to_bits())
-            .expect("EntitySpawned not received for entity with JsnNodeId");
+            .expect("EntitySpawned not received for entity with SceneNodeId");
         assert_eq!(
             re_with.scene_node_id,
             Some(42),
-            "scene_node_id should be Some(42) for entity carrying JsnNodeId(42)"
+            "scene_node_id should be Some(42) for entity carrying SceneNodeId(42)"
         );
         assert!(
             !re_with.components.contains_key(JSN_NODE_ID_TYPE_PATH),
-            "JsnNodeId must not appear in the components map; keys: {:?}",
+            "SceneNodeId must not appear in the components map; keys: {:?}",
             re_with.components.keys().collect::<Vec<_>>()
         );
 
         let re_without = find_spawned(without_id.to_bits())
-            .expect("EntitySpawned not received for entity without JsnNodeId");
+            .expect("EntitySpawned not received for entity without SceneNodeId");
         assert_eq!(
             re_without.scene_node_id, None,
-            "scene_node_id should be None for entity without JsnNodeId"
+            "scene_node_id should be None for entity without SceneNodeId"
         );
     }
 

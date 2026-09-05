@@ -205,7 +205,6 @@ pub(crate) fn on_live_edit_menu_action(
         })
         .call();
 
-    // Close the menu after dispatching.
     if let Some(menu) = state.menu_entity.take()
         && let Ok(mut ec) = commands.get_entity(menu)
     {

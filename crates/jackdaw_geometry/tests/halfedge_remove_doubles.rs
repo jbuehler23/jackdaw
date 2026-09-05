@@ -1,5 +1,5 @@
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::remove_doubles::remove_doubles};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 use slotmap::Key;
 
 #[test]

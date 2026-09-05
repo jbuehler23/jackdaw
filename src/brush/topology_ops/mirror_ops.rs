@@ -9,7 +9,7 @@ use jackdaw_geometry::{
     EvaluatedBrush, MeshMirror, Modifier, ModifierEntry, ModifierStack,
     build_topology_from_face_polygons, evaluate_mirror,
 };
-use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
+use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
 
 use crate::brush::BrushHalfedge;
 use crate::clip_ops::bisect_brush;

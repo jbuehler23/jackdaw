@@ -1,0 +1,20 @@
+[profile.default]
+# Local runs: no retries, show output on failure.
+failure-output = "immediate-final"
+
+[profile.ci]
+# CI: retry the environment-flaky heavy/e2e tests, keep going to report all.
+retries = 2
+fail-fast = false
+failure-output = "immediate-final"
+final-status-level = "flaky"
+
+[profile.heavy]
+# The end-to-end tests each build a game and launch it. Run them one at a
+# time: concurrently they peak several GB past what a CI runner has, and a
+# staged bundle alone is ~3GB on disk.
+retries = 2
+fail-fast = false
+failure-output = "immediate-final"
+final-status-level = "flaky"
+test-threads = 1

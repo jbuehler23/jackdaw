@@ -1,5 +1,5 @@
 use bevy::{prelude::*, tasks::Task, tasks::futures_lite::future};
-use jackdaw_remote::schema::JsnRegistry;
+use jackdaw_remote::schema::ComponentRegistry;
 
 use super::brp;
 
@@ -30,7 +30,7 @@ pub fn poll_registry_task(
 
     match result {
         Ok(schema_value) => {
-            // Build a JsnRegistry from the raw schema response
+            // Build a ComponentRegistry from the raw schema response
             let app_info = match &manager.state {
                 super::ConnectionState::Connected { app_info } => app_info.clone(),
                 _ => return,
@@ -42,12 +42,12 @@ pub fn poll_registry_task(
                 _ => std::collections::HashMap::new(),
             };
 
-            let registry = JsnRegistry {
-                jsn: jackdaw_remote::schema::JsnRegistryHeader {
+            let registry = ComponentRegistry {
+                header: jackdaw_remote::schema::RegistryHeader {
                     format_version: [1, 0, 0],
                 },
                 extracted_at: crate::timestamps::utc_rfc3339_now(),
-                source: jackdaw_remote::schema::JsnRegistrySource {
+                source: jackdaw_remote::schema::RegistrySource {
                     app_name: Some(app_info.app_name),
                     endpoint: manager.endpoint.clone(),
                     bevy_version: app_info.bevy_version,
@@ -60,7 +60,7 @@ pub fn poll_registry_task(
 
             // Cache to disk if project is open
             if let Some(project) = project {
-                cache_registry_to_disk(&project.jsn_dir(), &registry);
+                cache_registry_to_disk(&project.jackdaw_dir(), &registry);
             }
 
             manager.registry = Some(registry);
@@ -71,10 +71,10 @@ pub fn poll_registry_task(
     }
 }
 
-/// Write registry to `.jsn/registry.jsn` for offline caching.
-fn cache_registry_to_disk(jsn_dir: &std::path::Path, registry: &JsnRegistry) {
-    let _ = std::fs::create_dir_all(jsn_dir);
-    let path = jsn_dir.join("registry.jsn");
+/// Write registry to `.jackdaw/registry.json` for offline caching.
+fn cache_registry_to_disk(jackdaw_dir: &std::path::Path, registry: &ComponentRegistry) {
+    let _ = std::fs::create_dir_all(jackdaw_dir);
+    let path = jackdaw_dir.join("registry.json");
     match serde_json::to_string_pretty(registry) {
         Ok(data) => {
             if let Err(e) = std::fs::write(&path, &data) {

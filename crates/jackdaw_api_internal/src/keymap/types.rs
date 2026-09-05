@@ -20,6 +20,8 @@ pub enum PresetInput {
         shift: bool,
         #[serde(default, skip_serializing_if = "core::ops::Not::not")]
         alt: bool,
+        #[serde(default, rename = "super", skip_serializing_if = "core::ops::Not::not")]
+        super_: bool,
     },
     /// Mouse button, optionally combined with modifier keys.
     /// `button` is one of `"Left"`, `"Right"`, `"Middle"`, `"Back"`, `"Forward"`.
@@ -31,6 +33,8 @@ pub enum PresetInput {
         shift: bool,
         #[serde(default, skip_serializing_if = "core::ops::Not::not")]
         alt: bool,
+        #[serde(default, rename = "super", skip_serializing_if = "core::ops::Not::not")]
+        super_: bool,
     },
     /// One wheel tick; `up: false` is a downward tick.
     Scroll {
@@ -41,6 +45,8 @@ pub enum PresetInput {
         shift: bool,
         #[serde(default, skip_serializing_if = "core::ops::Not::not")]
         alt: bool,
+        #[serde(default, rename = "super", skip_serializing_if = "core::ops::Not::not")]
+        super_: bool,
     },
 }
 
@@ -51,6 +57,7 @@ impl PresetInput {
             ctrl: false,
             shift: false,
             alt: false,
+            super_: false,
         }
     }
 
@@ -62,6 +69,7 @@ impl PresetInput {
             ctrl: false,
             shift: false,
             alt: false,
+            super_: false,
         }
     }
 
@@ -72,6 +80,7 @@ impl PresetInput {
             ctrl: false,
             shift: false,
             alt: false,
+            super_: false,
         }
     }
 
@@ -83,6 +92,27 @@ impl PresetInput {
             }
         }
         self
+    }
+
+    /// Set the Super modifier.
+    pub fn super_(mut self) -> Self {
+        match &mut self {
+            Self::Key { super_, .. }
+            | Self::MouseButton { super_, .. }
+            | Self::Scroll { super_, .. } => {
+                *super_ = true;
+            }
+        }
+        self
+    }
+
+    /// Set the Ctrl modifier, Super on macOS.
+    pub fn ctrl_or_super(self) -> Self {
+        if cfg!(target_os = "macos") {
+            self.super_()
+        } else {
+            self.ctrl()
+        }
     }
 
     /// Set the Shift modifier.

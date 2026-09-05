@@ -1,5 +1,5 @@
 use jackdaw_geometry::halfedge::HalfedgeMesh;
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn cuboid_round_trip_preserves_counts_and_positions() {

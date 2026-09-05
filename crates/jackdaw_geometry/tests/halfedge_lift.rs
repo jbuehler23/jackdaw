@@ -1,5 +1,5 @@
 use jackdaw_geometry::halfedge::HalfedgeMesh;
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn cuboid_lifts_to_8_verts_12_edges_24_loops_6_faces() {

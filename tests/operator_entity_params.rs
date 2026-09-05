@@ -25,7 +25,7 @@ use bevy::prelude::*;
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
 use jackdaw_avian_integration::AvianCollider;
-use jackdaw_jsn::PropertyValue;
+use jackdaw_scene_types::PropertyValue;
 
 mod util;
 

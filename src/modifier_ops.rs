@@ -6,7 +6,7 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::{Modifier, ModifierEntry, ModifierStack, evaluate_modifier_stack};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use crate::brush::BrushHalfedge;
 use crate::brush::topology_ops::mirror_ops::{authored_geometry, rebuild_brush_from_eval};

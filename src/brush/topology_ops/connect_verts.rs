@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::connect_verts::connect_verts;
 use jackdaw_geometry::halfedge::{VertKey, apply_topology_edit};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
@@ -121,5 +121,5 @@ pub(crate) fn can_run_connect_verts(
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushConnectVertsOp>();
-    // No keybind; operator is available via menu / command palette only for MVP.
+    // No keybind; operator is available via menu / command palette only.
 }

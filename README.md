@@ -11,7 +11,7 @@
 [![Discord](https://img.shields.io/discord/1486394042563428388.svg?label=&logo=discord&logoColor=ffffff&color=7389D8&labelColor=6A7EC2)](https://discord.gg/sDUPhWtGSM)
 
 A 3D editor built for and with [Bevy](https://bevyengine.org/).
-Very early in dev, expect bugs and changes! A BSN-friendly branch exists on the bsn-editor branch (the flow is to read/write to the BSN AST and then sync to the ECS for rendering the UI and viewport).
+Very early in dev, expect bugs and changes!
 
 We have also recently refactored our UX/UI to be _very_ similar to the official Bevy Editor Figma design, to keep things consistent. [Link here](https://www.figma.com/design/fkYfFPSBgnGkhbQd3HOMsL/Bevy-Editor?node-id=90-2)
 
@@ -35,10 +35,10 @@ https://github.com/user-attachments/assets/56834720-599e-4461-b712-fff7b85fb128
 
 ## Features
 
-- **Brush-based geometry** draw, edit, and CSG-combine convex brushes with vertex/edge/face/clip editing modes
+- **Brush-based geometry** draw, edit, and CSG-combine concave brushes with vertex/edge/face editing modes
 - **Material system** VERY wip - texture browser, material definitions with ORM auto-detection, per-face application
 - **Terrain** heightmap sculpting and texture painting, very WIP :)
-- **Scene serialization** save/load scenes in the `.jsn` format with full asset references. Ideally to be replaced with BSN once ready.
+- **Scene serialization** save/load scenes in the `.bsn` format with full asset references. Older `.jsn` scenes are migrated on open.
 - **Transform tools** translate, rotate, scale with grid snapping and axis constraints
 - **Undo/redo** full command history - some bugs atm with this
 - **Extensible** register custom components, add inspector panels, integrate with your game
@@ -47,32 +47,70 @@ https://github.com/user-attachments/assets/56834720-599e-4461-b712-fff7b85fb128
 
 Install cmake, via package manager, or VisualStudio on Windows
 
-Standalone install:
+Download a signed release bundle, or install all required executables from
+source:
 
 ```sh
-cargo install jackdaw
+cargo install --git https://github.com/jbuehler23/jackdaw jackdaw --locked
 ```
 
-Open Jackdaw, and point to a new project!
+Take the release bundle if you can. It ships the prebuilt SDK, so you can
+create a project straight away; `cargo install` builds that SDK first,
+which is about half an hour, once per Jackdaw version. Either way your
+project's own first build is around nine minutes, because it compiles Bevy
+like any other Bevy project. Rebuilds after that are 1 to 4 seconds.
+
+This installs `jackdaw`, `jd`, and
+`jackdaw-rustc-wrapper`. Open Jackdaw and use **New Game** or **Import Bevy
+Project**; the import preview shows every proposed change before applying it.
+The same flows are available from the terminal:
+
+```sh
+jd new my-game && jd open my-game   # create
+jd import /path/to/game             # preview integration for an existing game
+jd import /path/to/game --apply
+jd doctor --project /path/to/game   # why isn't this working?
+jd upgrade /path/to/game --apply    # after a Jackdaw update
+```
+
+Import never edits your Cargo manifest, lockfile, toolchain, or `target/`, so
+`cargo run` keeps behaving exactly as it did.
 <img width="943" height="1018" alt="image" src="https://github.com/user-attachments/assets/3bda18cc-9cad-4d2c-b976-ca2e6e454314" />
 
-Add `jackdaw` to your project:
-
-```sh
-cargo add jackdaw
-```
-
-Then add the `EditorPlugin` to your app:
+Jackdaw is a standalone editor. Game applications depend only on
+`jackdaw_runtime`. To build a custom standalone editor, depend on
+`jackdaw_editor`:
 
 ```rust
 use bevy::prelude::*;
-use jackdaw::EditorPlugin;
+use jackdaw_editor::prelude::*;
 
 fn main() -> AppExit {
     App::new()
-        .add_plugins((DefaultPlugins, EditorPlugin))
-        ...
+        .add_plugins((
+            DefaultPlugins.set(editor_window_plugin()),
+            EnhancedInputPlugin,
+            PhysicsPlugins::default(),
+            JackdawEditorPlugins::default(),
+        ))
         .run()
+}
+```
+
+Runtime extensions use the focused `jackdaw_extension` crate and install as
+signed `.jdext` bundles. In precompiled/shared-SDK builds, install, update,
+disable, and uninstall take effect without restarting; superseded native
+mappings are reclaimed when Jackdaw exits.
+
+To load a scene you authored into your own game, depend on `jackdaw_runtime`
+and spawn a `JackdawSceneRoot`:
+
+```rust
+use bevy::prelude::*;
+use jackdaw_runtime::prelude::*;
+
+fn spawn_scene(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn(JackdawSceneRoot(asset_server.load("scene.bsn")));
 }
 ```
 

@@ -6,7 +6,7 @@
 
 use bevy::math::Vec3;
 
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 pub use jackdaw_hull::{HullFace, merge_hull_triangles};
 

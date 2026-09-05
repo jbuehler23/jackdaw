@@ -29,14 +29,14 @@ impl AsRef<Path> for CanonicalPrefabPath {
 }
 
 /// Produce a `CanonicalPrefabPath` from any path-like input. Runs
-/// `std::fs::canonicalize` when the file exists; falls back to a
+/// `dunce::canonicalize` when the file exists; falls back to a
 /// best-effort normalization (absolutize + remove `.` / `..`) when
 /// it does not. The fallback path matters because callers (e.g.
 /// `spawn_instance` issued before the prefab is on disk) need stable
 /// keys before the file lands.
 pub fn canonical_prefab_path(path: impl AsRef<Path>) -> CanonicalPrefabPath {
     let p = path.as_ref();
-    if let Ok(canon) = p.canonicalize() {
+    if let Ok(canon) = dunce::canonicalize(p) {
         return CanonicalPrefabPath(canon);
     }
     let absolute = if p.is_absolute() {

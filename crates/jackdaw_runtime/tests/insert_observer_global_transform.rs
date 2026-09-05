@@ -1,5 +1,5 @@
 //! `On<Insert, UserType>` observers see the entity's final
-//! `GlobalTransform` during JSN scene load, not the
+//! `GlobalTransform` during `.bsn` scene load, not the
 //! pre-propagation identity. Verified against an actual
 //! `JackdawScene` load.
 
@@ -8,9 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
 use bevy::reflect::TypePath;
-use jackdaw_jsn::format::{JsnAssets, JsnEntity, JsnHeader, JsnMetadata, JsnScene};
 use jackdaw_runtime::{JackdawPlugin, JackdawScene, JackdawSceneRoot};
-use serde_json::json;
 
 /// User-style component the test injects into the scene. Has a
 /// field so the JSN deserializer treats it as a struct, not a
@@ -52,49 +50,22 @@ fn on_insert_observer_sees_propagated_global_transform() {
 
     // Parent at (10, 0, 0), child at local (0, 5, 0) carrying
     // PlayerSpawn. Final world translation for the child is
-    // (10, 5, 0); without the fix it would be (0, 0, 0).
-    let scene = JsnScene {
-        jsn: JsnHeader::default(),
-        metadata: JsnMetadata::default(),
-        editor: None,
-        assets: JsnAssets::default(),
-        scene: vec![
-            JsnEntity {
-                id: None,
-                parent: None,
-                components: [(
-                    "bevy_transform::components::transform::Transform".to_string(),
-                    json!({
-                        "translation": [10.0, 0.0, 0.0],
-                        "rotation": [0.0, 0.0, 0.0, 1.0],
-                        "scale": [1.0, 1.0, 1.0],
-                    }),
-                )]
-                .into_iter()
-                .collect(),
-            },
-            JsnEntity {
-                id: None,
-                parent: Some(0),
-                components: [
-                    (
-                        "bevy_transform::components::transform::Transform".to_string(),
-                        json!({
-                            "translation": [0.0, 5.0, 0.0],
-                            "rotation": [0.0, 0.0, 0.0, 1.0],
-                            "scale": [1.0, 1.0, 1.0],
-                        }),
-                    ),
-                    (
-                        <PlayerSpawn as TypePath>::type_path().to_string(),
-                        json!({ "variant": 0 }),
-                    ),
-                ]
-                .into_iter()
-                .collect(),
-            },
-        ],
-    };
+    // (10, 5, 0); without the fix it would be (0, 0, 0). The child
+    // nests under the parent via the `Children` relation.
+    let player_spawn = <PlayerSpawn as TypePath>::type_path();
+    let scene = format!(
+        "\
+bevy_transform::components::transform::Transform {{
+    translation: glam::Vec3 {{ x: 10.0, y: 0.0, z: 0.0 }},
+}}
+bevy_ecs::hierarchy::Children [
+    bevy_transform::components::transform::Transform {{
+        translation: glam::Vec3 {{ x: 0.0, y: 5.0, z: 0.0 }},
+    }}
+    {player_spawn} {{ variant: 0 }}
+]
+"
+    );
 
     let scene_handle = app
         .world_mut()

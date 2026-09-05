@@ -1,0 +1,12 @@
+[package]
+name = "ecosystem_game"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = ["reflect_auto_register"] }
+avian3d = "0.7"

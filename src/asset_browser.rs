@@ -3,17 +3,19 @@ use std::sync::{Mutex, mpsc};
 
 use bevy::{
     asset::RenderAssetUsages,
+    feathers::cursor::{EntityCursor, OverrideCursor},
+    feathers::theme::ThemedText,
     image::{CompressedImageFormats, ImageSampler, ImageType},
     picking::hover::Hovered,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureSampleType},
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
-    window::{PrimaryWindow, RawHandleWrapper},
+    window::{PrimaryWindow, RawHandleWrapper, SystemCursorIcon},
 };
 use jackdaw_feathers::button::ButtonOperatorCall;
 use jackdaw_feathers::text_edit::TextEditValue;
 use jackdaw_feathers::tooltip::Tooltip;
-use jackdaw_feathers::{file_browser, icons, icons::IconFont, tokens};
+use jackdaw_feathers::{file_browser, icons, icons::EditorFont, icons::IconFont, tokens};
 use jackdaw_widgets::file_browser::{FileBrowserItem, FileItemDoubleClicked};
 use rfd::AsyncFileDialog;
 
@@ -21,6 +23,7 @@ use crate::{
     EditorEntity,
     brush::{Brush, BrushEditMode, BrushSelection, EditMode, LastUsedMaterial},
     material_browser::MaterialRegistry,
+    model_thumbnail::ModelThumbnailSlot,
     prelude::*,
     selection::Selection,
 };
@@ -94,7 +97,16 @@ pub struct ActiveAssetDrag {
     /// point; image thumbnails aren't `FileBrowserItem` rows, so the
     /// drop handler can't recover the path from the dropped entity.
     pub image: Option<PathBuf>,
+    /// The floating drag-ghost entity that follows the cursor while a drag
+    /// is in flight. Spawned and despawned by `manage_asset_drag_ghost`,
+    /// keyed off `path`/`image`.
+    pub ghost: Option<Entity>,
 }
+
+/// Marker on the floating drag-ghost node (a dimmed icon + label that
+/// follows the cursor during an asset-browser drag).
+#[derive(Component)]
+struct AssetDragGhost;
 
 pub struct AssetBrowserPlugin;
 
@@ -116,6 +128,7 @@ impl Plugin for AssetBrowserPlugin {
                     update_asset_browser_filter,
                     toggle_prefabs_only_chip,
                     update_prefabs_only_chip_style,
+                    manage_asset_drag_ghost,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             )
@@ -123,6 +136,127 @@ impl Plugin for AssetBrowserPlugin {
             .add_observer(handle_select_asset_preview)
             .add_observer(on_asset_browser_context_action);
     }
+}
+
+/// Drive the drag-ghost and the grab cursor from the current
+/// [`ActiveAssetDrag`]: while a drag is live, force a "grabbing" cursor and
+/// float a dimmed icon + filename card under the pointer; tear both down
+/// when the drag ends. One system, no per-entry observers.
+fn manage_asset_drag_ghost(
+    mut commands: Commands,
+    mut drag: ResMut<ActiveAssetDrag>,
+    mut cursor: ResMut<OverrideCursor>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    editor_font: Res<EditorFont>,
+    icon_font: Res<IconFont>,
+    mut ghost_nodes: Query<&mut Node, With<AssetDragGhost>>,
+) {
+    let active = drag.path.as_ref().or(drag.image.as_ref()).cloned();
+    let cursor_pos = windows
+        .single()
+        .ok()
+        .and_then(bevy::prelude::Window::cursor_position);
+
+    // Grab cursor: set while dragging (without clobbering another tool's
+    // override); clear our own when the drag ends.
+    let grabbing = Some(EntityCursor::System(SystemCursorIcon::Grabbing));
+    if active.is_some() {
+        if cursor.0.is_none() {
+            cursor.0 = grabbing;
+        }
+    } else if cursor.0 == grabbing {
+        cursor.0 = None;
+    }
+
+    match (active, drag.ghost) {
+        (Some(path), None) => {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let icon = file_browser::file_icon(&name);
+            let pos = cursor_pos.unwrap_or(Vec2::ZERO);
+            let ghost = spawn_asset_drag_ghost(
+                &mut commands,
+                &editor_font.0,
+                &icon_font.0,
+                icon,
+                &name,
+                pos,
+            );
+            drag.ghost = Some(ghost);
+        }
+        (Some(_), Some(ghost)) => {
+            if let Some(pos) = cursor_pos
+                && let Ok(mut node) = ghost_nodes.get_mut(ghost)
+            {
+                node.left = Val::Px(pos.x + 14.0);
+                node.top = Val::Px(pos.y + 8.0);
+            }
+        }
+        (None, Some(ghost)) => {
+            commands.entity(ghost).try_despawn();
+            drag.ghost = None;
+        }
+        (None, None) => {}
+    }
+}
+
+/// Spawn the dimmed drag-ghost card at `pos`. `Pickable::IGNORE` so it never
+/// intercepts the drop target under the cursor.
+fn spawn_asset_drag_ghost(
+    commands: &mut Commands,
+    font: &Handle<Font>,
+    icon_font: &Handle<Font>,
+    icon: icons::Icon,
+    name: &str,
+    pos: Vec2,
+) -> Entity {
+    commands
+        .spawn((
+            AssetDragGhost,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(pos.x + 14.0),
+                top: Val::Px(pos.y + 8.0),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(6.0),
+                padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+                max_width: Val::Px(220.0),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BackgroundColor(tokens::PANEL_BG.with_alpha(0.85)),
+            BorderColor::all(tokens::BORDER_SUBTLE.with_alpha(0.8)),
+            GlobalZIndex(10_000),
+            Pickable::IGNORE,
+            children![
+                (
+                    Text::new(String::from(icon.unicode())),
+                    TextFont {
+                        font: icon_font.clone().into(),
+                        font_size: tokens::ICON_SM,
+                        ..default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY.with_alpha(0.75)),
+                    Pickable::IGNORE,
+                ),
+                (
+                    Text::new(name.to_string()),
+                    TextFont {
+                        font: font.clone().into(),
+                        font_size: tokens::TEXT_SIZE_SM,
+                        ..default()
+                    },
+                    TextColor(tokens::TEXT_PRIMARY.with_alpha(0.75)),
+                    Pickable::IGNORE,
+                ),
+            ],
+        ))
+        .id()
 }
 
 fn on_asset_browser_context_action(
@@ -177,10 +311,10 @@ pub struct AssetBrowserState {
     pub selected_file: Option<String>,
     /// Timestamp of last click for double-click detection.
     pub last_click_time: f64,
-    /// When true, only `.jsn` files that contain a `Prefab` component are
+    /// When true, only scene files that contain a `Prefab` component are
     /// shown in the grid.
     pub prefabs_only: bool,
-    /// Per-path memo of whether a `.jsn` file is a prefab. Keyed by
+    /// Per-path memo of whether a scene file is a prefab. Keyed by
     /// absolute path, valued by `(mtime, is_prefab)`; invalidated when
     /// the file's mtime changes.
     prefab_cache: PrefabCheckCache,
@@ -213,10 +347,50 @@ pub struct DirEntry {
     pub is_prefab: bool,
 }
 
-/// Returns true if `path` is a `.jsn` file whose first scene entity carries
-/// a `jackdaw::prefab::components::Prefab` component. The file is opened and
-/// parsed as JSON; any I/O or parse error returns false.
+/// Returns true if `path` is a prefab: a scene document whose root entity
+/// carries a `jackdaw::prefab::components::Prefab` component.
+///
+/// Both formats the editor can hold a prefab in are recognised. `.bsn` is
+/// what the editor writes today (`crate::prefab::operators::write_prefab_doc`
+/// redirects even a `.jsn` target to a `.bsn` file); `.jsn` is the legacy
+/// form. Anything else, and any I/O or parse error, is not a prefab.
 fn read_is_prefab(path: &Path) -> bool {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("bsn") => read_is_bsn_prefab(path),
+        Some(ext) if ext.eq_ignore_ascii_case("jsn") => read_is_jsn_prefab(path),
+        _ => false,
+    }
+}
+
+/// A `.bsn` document is a prefab when one of its roots carries the `Prefab`
+/// marker.
+///
+/// Deliberately *not* routed through `crate::prefab::save_load::read_prefab_ast`:
+/// that calls `normalize_as_prefab_source`, which wraps any plain scene into
+/// an instanceable prefab, so every `.bsn` in the project would answer yes.
+/// Detection has to see the file as authored.
+fn read_is_bsn_prefab(path: &Path) -> bool {
+    use crate::prefab::resolver_bsn::PREFAB_TYPE;
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    // Cheap reject before the parser runs: the marker's type path appears
+    // verbatim in BSN text, so a document that never mentions it cannot be a
+    // prefab. Worth having when a directory holds hundreds of scenes.
+    if !text.contains(PREFAB_TYPE) {
+        return false;
+    }
+    let Ok(ast) = jackdaw_bsn::parse_bsn_text(&text) else {
+        return false;
+    };
+    ast.roots
+        .iter()
+        .any(|&root| ast.find_patch_by_type_path(root, PREFAB_TYPE).is_some())
+}
+
+/// A legacy `.jsn` document is a prefab when its first scene entity carries
+/// the `Prefab` component. Parsed as plain JSON.
+fn read_is_jsn_prefab(path: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(path) else {
         return false;
     };
@@ -227,7 +401,7 @@ fn read_is_prefab(path: &Path) -> bool {
         .get("scene")
         .and_then(|v| v.get(0))
         .and_then(|e| e.get("components"))
-        .and_then(|c| c.get("jackdaw::prefab::components::Prefab"))
+        .and_then(|c| c.get(crate::prefab::resolver_bsn::PREFAB_TYPE))
         .is_some()
 }
 
@@ -376,9 +550,13 @@ fn refresh_browser_on_change(
                     return None;
                 }
                 let path = entry.path();
-                let is_directory = entry.file_type().ok()?.is_dir();
+                // `DirEntry::file_type` reports the link itself, so a
+                // symlinked directory used to classify as a file and render
+                // as an unopenable row. Ask the path, which follows the
+                // link: symlinking a shared art kit into a project is a
+                // normal way to avoid copying gigabytes of models.
+                let is_directory = path.is_dir();
 
-                // Build texture info for image files
                 let texture_info = if !is_directory && is_image_file_path(&path) {
                     let ext = path
                         .extension()
@@ -423,15 +601,15 @@ fn refresh_browser_on_change(
             })
             .collect();
 
-        // Compute is_prefab for `.jsn` files (cached by mtime), then apply
-        // the prefabs_only filter if it's enabled.
+        // Compute is_prefab for scene documents (cached by mtime), then
+        // apply the prefabs_only filter if it's enabled.
         for entry in entries.iter_mut() {
             if !entry.is_directory
                 && entry
                     .path
                     .extension()
                     .and_then(|e| e.to_str())
-                    .is_some_and(|e| e.eq_ignore_ascii_case("jsn"))
+                    .is_some_and(|e| e.eq_ignore_ascii_case("jsn") || e.eq_ignore_ascii_case("bsn"))
             {
                 entry.is_prefab = state.prefab_cache.check(&entry.path);
             }
@@ -631,6 +809,20 @@ fn refresh_browser_on_change(
             };
 
             let item_entity = match state.view_mode {
+                // A `.glb`/`.gltf` grid tile gets a thumbnail slot in place
+                // of the plain glyph. List mode keeps the glyph: a 16px row
+                // is too small for a rendered model to say anything.
+                BrowserViewMode::Grid
+                    if crate::model_thumbnail::is_model_path(&entry.path)
+                        && !entry.is_directory =>
+                {
+                    commands
+                        .spawn((
+                            model_grid_tile(&item, &icon_font, entry.path.clone()),
+                            ChildOf(content_entity),
+                        ))
+                        .id()
+                }
                 BrowserViewMode::Grid => commands
                     .spawn((
                         file_browser::file_browser_item_with_icon(&item, &icon_font, icon_override),
@@ -665,6 +857,7 @@ fn refresh_browser_on_change(
                 .observe(
                     move |click: On<Pointer<Click>>,
                           mut state: ResMut<AssetBrowserState>,
+                          mut commands: Commands,
                           time: Res<Time>| {
                         // Right-click is handled by the context menu observer
                         // below; let it through here.
@@ -675,14 +868,11 @@ fn refresh_browser_on_change(
                         let is_double = state.selected_file.as_deref() == Some(&path_for_click)
                             && (now - state.last_click_time) < 0.4;
 
-                        if is_double && is_dir {
-                            // Double-click on directory: navigate
-                            state.current_directory = PathBuf::from(&path_for_click);
-                            state.selected_file = None;
-                            state.needs_refresh = true;
-                        } else if is_double && !is_dir {
-                            // Double-click on file: open/apply
-                            // (handled by FileItemDoubleClicked observer)
+                        if is_double {
+                            commands.trigger(FileItemDoubleClicked {
+                                path: path_for_click.clone(),
+                                is_directory: is_dir,
+                            });
                         } else {
                             // Single-click: select
                             state.selected_file = Some(path_for_click.clone());
@@ -728,11 +918,13 @@ fn refresh_browser_on_change(
                 },
             );
 
-            // Prefab entries: track drag start so the viewport's drop
-            // handler can pull the source path out of `ActiveAssetDrag`
-            // and route through `spawn_instance`. Clear on DragEnd if
-            // nothing consumed it.
-            if entry.is_prefab {
+            // Prefab entries and hand-authored `.bsn` scenes: track drag
+            // start so the viewport's drop handler can pull the source path
+            // out of `ActiveAssetDrag` and route through `spawn_instance`,
+            // which normalizes a plain scene into an instanceable prefab.
+            // Clear on DragEnd if nothing consumed it.
+            let is_bsn_scene = entry.path.extension().is_some_and(|e| e == "bsn");
+            if entry.is_prefab || is_bsn_scene {
                 let drag_path = entry.path.clone();
                 commands.entity(item_entity).observe(
                     move |_: On<Pointer<DragStart>>, mut drag: ResMut<ActiveAssetDrag>| {
@@ -758,10 +950,7 @@ fn refresh_browser_on_change(
         }
     }
 
-    // Build breadcrumb from the full current directory path.
     // Each path component is a clickable button that navigates to that directory.
-    let current_dir = state.current_directory.to_string_lossy().to_string();
-
     commands
         .spawn((
             Node {
@@ -774,17 +963,32 @@ fn refresh_browser_on_change(
             ChildOf(breadcrumb_entity),
         ))
         .with_children(|parent| {
-            // Split the absolute path into components and build up cumulative paths
-            let components: Vec<&str> = current_dir
-                .split(std::path::MAIN_SEPARATOR)
-                .filter(|s| !s.is_empty())
-                .collect();
+            let mut ancestors: Vec<_> = state.current_directory.ancestors().collect();
+            ancestors.reverse();
 
-            let mut cumulative = String::new();
-            for (i, component) in components.iter().enumerate() {
-                cumulative += std::path::MAIN_SEPARATOR_STR;
-                cumulative += component;
-                let nav_path = cumulative.clone();
+            for (i, path) in ancestors.iter().enumerate() {
+                let component = path
+                    .file_name()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| {
+                        // Ok so we don't have a filename. This *should* only happen for the root path (e.g. /, E:\).
+                        if i != 0 {
+                            return "?".to_owned();
+                        }
+
+                        // Use the components() API to do a decent job.
+                        match path.components().next() {
+                            // Unix-style root path.
+                            // Replace with a unique string so that it's nicely clickable.
+                            Some(std::path::Component::RootDir) => "Root".to_owned(),
+                            // Anything else. Unless something went wrong, this should only be Windows prefixes (E:, \\foo\bar, etc).
+                            // We format it like this to avoid the backslash after the prefix (which `path` has).
+                            Some(comp) => comp.as_os_str().to_string_lossy().into_owned(),
+                            None => "?".to_owned(),
+                        }
+                    });
+
+                let path = path.to_string_lossy().into_owned();
 
                 // Separator (skip before first)
                 if i > 0 {
@@ -802,7 +1006,7 @@ fn refresh_browser_on_change(
                 parent
                     .spawn((
                         Button,
-                        Text::new(*component),
+                        Text::new(component),
                         Node {
                             border_radius: BorderRadius::all(Val::Px(3.0)),
                             padding: UiRect::axes(Val::Px(2.0), Val::Px(1.0)),
@@ -816,7 +1020,7 @@ fn refresh_browser_on_change(
                     ))
                     .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
                         commands.trigger(FileItemDoubleClicked {
-                            path: nav_path.clone(),
+                            path: path.clone(),
                             is_directory: true,
                         });
                     })
@@ -874,6 +1078,72 @@ fn unhighlight_on_out(out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>
     }
 }
 
+/// Grid tile for a `.glb` / `.gltf` entry.
+///
+/// Same shape as [`file_browser::file_browser_item_with_icon`] -- and it
+/// carries the same `FileBrowserItem`, so click, double-click, right-click
+/// and drag-to-viewport all keep working through the observers the caller
+/// attaches. The one difference is that the icon sits inside a fixed square
+/// tagged [`ModelThumbnailSlot`], which [`crate::model_thumbnail`] swaps for
+/// the rendered picture once there is one. The glyph is the fallback, so a
+/// pending or failed thumbnail looks exactly like the browser did before.
+fn model_grid_tile(item: &FileBrowserItem, icon_font: &IconFont, path: PathBuf) -> impl Bundle {
+    let slot_size = crate::model_thumbnail::THUMBNAIL_DISPLAY_SIZE;
+    (
+        item.clone(),
+        Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            padding: UiRect::all(Val::Px(6.0)),
+            width: Val::Px(80.0),
+            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+        children![
+            (
+                ModelThumbnailSlot::new(path),
+                Node {
+                    width: Val::Px(slot_size),
+                    height: Val::Px(slot_size),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                children![(
+                    Text::new(String::from(
+                        file_browser::file_icon(&item.file_name).unicode()
+                    )),
+                    TextFont {
+                        font: icon_font.0.clone().into(),
+                        font_size: tokens::ICON_LG,
+                        ..default()
+                    },
+                    TextColor(tokens::FILE_ICON_COLOR),
+                )],
+            ),
+            (
+                Text::new(truncate_tile_name(&item.file_name, 12)),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..default()
+                },
+                ThemedText,
+            ),
+        ],
+    )
+}
+
+/// Shorten a file name to fit a grid tile, cutting on a character boundary
+/// so a non-ASCII name cannot panic the slice.
+fn truncate_tile_name(name: &str, max_len: usize) -> String {
+    if name.chars().count() <= max_len {
+        return name.to_string();
+    }
+    let head: String = name.chars().take(max_len.saturating_sub(3)).collect();
+    format!("{head}...")
+}
+
 fn load_thumbnail(path: &Path, asset_server: &AssetServer) -> Option<Handle<Image>> {
     let fs_path = path.to_string_lossy().replace('\\', "/");
     let asset_path = crate::entity_ops::to_asset_path(&fs_path);
@@ -911,7 +1181,7 @@ fn handle_file_double_click(
     }
 
     let path_lower = event.path.to_lowercase();
-    if path_lower.ends_with(".jsn") {
+    if path_lower.ends_with(".jsn") || path_lower.ends_with(".bsn") {
         let path_owned = std::path::PathBuf::from(&event.path);
         commands.queue(move |world: &mut World| {
             crate::scenes::operators::scene_open_system(world, &path_owned);
@@ -955,7 +1225,7 @@ fn try_find_registry_material(
 
 /// Apply a texture material to the current face selection (in
 /// brush-edit face mode) or to every face of every selected brush
-/// (expanding `BrushGroup`s into their child brushes).
+/// (expanding selected non-brush parents into their child brushes).
 ///
 /// Parameter: `path`; the asset path of the texture to apply.
 ///
@@ -982,12 +1252,11 @@ pub fn apply_texture(
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     registry: Res<MaterialRegistry>,
-    brush_groups: Query<(), With<jackdaw_jsn::types::BrushGroup>>,
     children_query: Query<&Children>,
     mut commands: Commands,
 ) -> OperatorResult {
     let path: String = match params.0.get("path") {
-        Some(jackdaw_jsn::PropertyValue::String(s)) => s.to_string(),
+        Some(jackdaw_scene_types::PropertyValue::String(s)) => s.to_string(),
         _ => {
             warn!("material.apply_texture called without a String `path` parameter");
             return OperatorResult::Cancelled;
@@ -1023,21 +1292,16 @@ pub fn apply_texture(
             modified.push(entity);
         }
     } else {
-        // Collect targets, expanding BrushGroups into their child brushes.
-        let targets: Vec<Entity> = selection
-            .entities
-            .iter()
-            .flat_map(|&e| {
-                if brush_groups.contains(e) {
-                    children_query
-                        .get(e)
-                        .map(|c| c.iter().collect::<Vec<_>>())
-                        .unwrap_or_default()
-                } else {
-                    vec![e]
-                }
-            })
-            .collect();
+        let targets: Vec<Entity> = crate::brush::shown_edit_brushes(
+            &selection.entities,
+            |e| brushes.contains(e),
+            |e| {
+                children_query
+                    .get(e)
+                    .map(|c| c.iter().collect())
+                    .unwrap_or_default()
+            },
+        );
 
         for entity in targets {
             if let Ok(mut brush) = brushes.get_mut(entity) {
@@ -1429,7 +1693,6 @@ fn poll_asset_browser_folder(world: &mut World) {
         state.current_directory = path.clone();
         state.needs_refresh = true;
 
-        // Set up filesystem watcher for the new root.
         let mut commands = world.commands();
         setup_directory_watcher(&path, &mut commands);
 
@@ -1611,7 +1874,7 @@ fn prefabs_only_chip(icon_font: Handle<Font>) -> impl Bundle {
         Interaction::default(),
         Hovered::default(),
         Tooltip::title("Prefabs only")
-            .with_description("Show only `.jsn` files that define a prefab."),
+            .with_description("Show only scene files that define a prefab."),
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -1817,5 +2080,57 @@ mod tests {
         let path = tmp.path().join("g.jsn");
         std::fs::write(&path, "not json at all").unwrap();
         assert!(!read_is_prefab(&path), "invalid JSON returns false");
+    }
+
+    /// `.bsn` is the format the editor actually writes prefabs in, so it is
+    /// the case that matters most; detection used to parse every candidate
+    /// as JSON and missed all of them.
+    #[test]
+    fn read_is_prefab_detects_a_bsn_prefab() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("Cube1.bsn");
+        let body = "jackdaw::prefab::components::Prefab\n\
+                    jackdaw::prefab::components::PrefabEntityId(0)\n\
+                    #Cube1\n\
+                    bevy_camera::visibility::Visibility::Inherited\n";
+        std::fs::write(&path, body).unwrap();
+        assert!(read_is_prefab(&path), "a .bsn prefab is detected");
+    }
+
+    #[test]
+    fn read_is_prefab_rejects_a_plain_bsn_scene() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("scene.bsn");
+        let body = "#Root\n\
+                    bevy_transform::components::transform::Transform\n\
+                    bevy_camera::visibility::Visibility::Inherited\n";
+        std::fs::write(&path, body).unwrap();
+        assert!(
+            !read_is_prefab(&path),
+            "a hand-authored scene is not a prefab"
+        );
+    }
+
+    /// The marker has to be on a root. A document that only mentions the
+    /// type path in passing must not pass the filter.
+    #[test]
+    fn read_is_prefab_rejects_a_bsn_that_only_mentions_the_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("named.bsn");
+        let body = "#\"jackdaw::prefab::components::Prefab\"\n\
+                    bevy_camera::visibility::Visibility::Inherited\n";
+        std::fs::write(&path, body).unwrap();
+        assert!(
+            !read_is_prefab(&path),
+            "the marker as a name is not the marker as a component"
+        );
+    }
+
+    #[test]
+    fn read_is_prefab_returns_false_on_unparseable_bsn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("broken.bsn");
+        std::fs::write(&path, "jackdaw::prefab::components::Prefab {{{{").unwrap();
+        assert!(!read_is_prefab(&path), "a parse failure is not a prefab");
     }
 }

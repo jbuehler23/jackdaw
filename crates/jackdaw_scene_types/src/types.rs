@@ -1,0 +1,1207 @@
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, HashMap},
+};
+
+use bevy::prelude::*;
+
+// Re-export geometry types so consumers see them from jackdaw_jsn
+pub use jackdaw_geometry::{
+    BrushFaceData, BrushPlane, BrushTopology, compute_brush_topology, compute_face_tangent_axes,
+};
+
+/// Marks the entity a loaded scene's content is spawned under, so tools can
+/// show it as a scene root. Reflectable so it streams over the play-in-editor
+/// link and projects onto the editor preview entity.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug)]
+#[reflect(Component, Default)]
+pub struct SceneRootTag;
+
+/// Marker for the face-mesh child entities the runtime mesh rebuild derives
+/// from a `Brush`. They are never authored, and the PIE stream excludes them:
+/// the editor regenerates faces from the `Brush` itself, so streaming them
+/// would only project meaningless `Transform`/`ChildOf` shells (their `Mesh3d`
+/// and material are stripped as render components). Deliberately not `Reflect`
+/// so it cannot leak into a snapshot or scene file.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct DerivedFaceMesh;
+
+/// Canonical brush data. Serialized. Geometry derived from this.
+#[derive(Component, Reflect, Clone, Debug, Default)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Brush"), @crate::EditorHidden)]
+pub struct Brush {
+    pub faces: Vec<BrushFaceData>,
+    /// Explicit half-edge topology. Empty for legacy brushes loaded from `.jsn` without topology
+    /// data; they continue to use the plane-intersection path. New brushes built by constructors
+    /// have both `faces` (planes) and `topology` populated in lockstep. Defaulted when absent so
+    /// brushes saved before topology existed still deserialize.
+    #[reflect(default)]
+    pub topology: BrushTopology,
+}
+
+impl Brush {
+    /// Create a cuboid brush from 6 axis-aligned face planes.
+    ///
+    /// Vertex layout (indices 0-7):
+    ///   0: (-x, -y, -z)   1: (+x, -y, -z)   2: (+x, +y, -z)   3: (-x, +y, -z)
+    ///   4: (-x, -y, +z)   5: (+x, -y, +z)   6: (+x, +y, +z)   7: (-x, +y, +z)
+    ///
+    /// Edge layout (canonical `v[0]` < `v[1]`, indices 0-11):
+    ///   0:(0,1) 1:(1,2) 2:(2,3) 3:(0,3) - bottom ring
+    ///   4:(4,5) 5:(5,6) 6:(6,7) 7:(4,7) - top ring
+    ///   8:(0,4) 9:(1,5) 10:(2,6) 11:(3,7) - verticals
+    ///
+    /// Face order matches the existing plane order: +X, -X, +Y, -Y, +Z, -Z.
+    pub fn cuboid(half_x: f32, half_y: f32, half_z: f32) -> Self {
+        use jackdaw_geometry::{MeshEdge, MeshLoop, MeshPoly, MeshVert};
+
+        let (hx, hy, hz) = (half_x, half_y, half_z);
+
+        // --- planes (existing order: +X, -X, +Y, -Y, +Z, -Z) ---
+        let normals = [
+            Vec3::X,
+            Vec3::NEG_X,
+            Vec3::Y,
+            Vec3::NEG_Y,
+            Vec3::Z,
+            Vec3::NEG_Z,
+        ];
+        let distances = [hx, hx, hy, hy, hz, hz];
+        let faces: Vec<BrushFaceData> = normals
+            .iter()
+            .zip(distances.iter())
+            .map(|(&normal, &distance)| {
+                let (u, v) = compute_face_tangent_axes(normal);
+                BrushFaceData {
+                    plane: BrushPlane { normal, distance },
+                    uv_scale: Vec2::ONE,
+                    uv_u_axis: u,
+                    uv_v_axis: v,
+                    ..default()
+                }
+            })
+            .collect();
+
+        // --- topology ---
+        //
+        // Vertices (see doc comment for layout):
+        let vertices = vec![
+            MeshVert {
+                position: Vec3::new(-hx, -hy, -hz),
+            }, // 0
+            MeshVert {
+                position: Vec3::new(hx, -hy, -hz),
+            }, // 1
+            MeshVert {
+                position: Vec3::new(hx, hy, -hz),
+            }, // 2
+            MeshVert {
+                position: Vec3::new(-hx, hy, -hz),
+            }, // 3
+            MeshVert {
+                position: Vec3::new(-hx, -hy, hz),
+            }, // 4
+            MeshVert {
+                position: Vec3::new(hx, -hy, hz),
+            }, // 5
+            MeshVert {
+                position: Vec3::new(hx, hy, hz),
+            }, // 6
+            MeshVert {
+                position: Vec3::new(-hx, hy, hz),
+            }, // 7
+        ];
+
+        // Edges (canonical v[0] < v[1]):
+        //   bottom ring: 0:(0,1) 1:(1,2) 2:(2,3) 3:(0,3)
+        //   top ring:    4:(4,5) 5:(5,6) 6:(6,7) 7:(4,7)
+        //   verticals:   8:(0,4) 9:(1,5) 10:(2,6) 11:(3,7)
+        let edges = vec![
+            MeshEdge {
+                v: [0, 1],
+                ..default()
+            }, //  0
+            MeshEdge {
+                v: [1, 2],
+                ..default()
+            }, //  1
+            MeshEdge {
+                v: [2, 3],
+                ..default()
+            }, //  2
+            MeshEdge {
+                v: [0, 3],
+                ..default()
+            }, //  3
+            MeshEdge {
+                v: [4, 5],
+                ..default()
+            }, //  4
+            MeshEdge {
+                v: [5, 6],
+                ..default()
+            }, //  5
+            MeshEdge {
+                v: [6, 7],
+                ..default()
+            }, //  6
+            MeshEdge {
+                v: [4, 7],
+                ..default()
+            }, //  7
+            MeshEdge {
+                v: [0, 4],
+                ..default()
+            }, //  8
+            MeshEdge {
+                v: [1, 5],
+                ..default()
+            }, //  9
+            MeshEdge {
+                v: [2, 6],
+                ..default()
+            }, // 10
+            MeshEdge {
+                v: [3, 7],
+                ..default()
+            }, // 11
+        ];
+
+        // Loops: each face has 4 loops (CCW from outside).
+        // Loop layout - (vert, edge) pairs per face ring:
+        //
+        //   Face 0 (+X): verts 1,2,6,5 - edges 1,10,5,9
+        //   Face 1 (-X): verts 0,4,7,3 - edges 8,7,11,3
+        //   Face 2 (+Y): verts 2,3,7,6 - edges 2,11,6,10
+        //   Face 3 (-Y): verts 0,1,5,4 - edges 0,9,4,8
+        //   Face 4 (+Z): verts 4,5,6,7 - edges 4,5,6,7
+        //   Face 5 (-Z): verts 0,3,2,1 - edges 3,2,1,0
+        let loop_data: &[(u32, u32)] = &[
+            // Face 0 (+X)
+            (1, 1),
+            (2, 10),
+            (6, 5),
+            (5, 9),
+            // Face 1 (-X)
+            (0, 8),
+            (4, 7),
+            (7, 11),
+            (3, 3),
+            // Face 2 (+Y)
+            (2, 2),
+            (3, 11),
+            (7, 6),
+            (6, 10),
+            // Face 3 (-Y)
+            (0, 0),
+            (1, 9),
+            (5, 4),
+            (4, 8),
+            // Face 4 (+Z)
+            (4, 4),
+            (5, 5),
+            (6, 6),
+            (7, 7),
+            // Face 5 (-Z)
+            (0, 3),
+            (3, 2),
+            (2, 1),
+            (1, 0),
+        ];
+        let loops: Vec<MeshLoop> = loop_data
+            .iter()
+            .map(|&(vert, edge)| MeshLoop { vert, edge })
+            .collect();
+
+        // Polygons: each face has loop_start and loop_total = 4.
+        let polygons: Vec<MeshPoly> = (0..6u32)
+            .map(|i| MeshPoly {
+                loop_start: i * 4,
+                loop_total: 4,
+            })
+            .collect();
+
+        let topology = BrushTopology {
+            vertices,
+            edges,
+            polygons,
+            loops,
+            ..default()
+        };
+
+        Self { faces, topology }
+    }
+
+    /// Create a prism brush from a polygon base and extrusion depth along a normal.
+    ///
+    /// `vertices` are a coplanar simple polygon in local space (>= 3).
+    /// `normal` is the extrusion direction (unit vector, perpendicular to the polygon plane).
+    /// `depth` is the total extrusion distance (can be negative; absolute value is used).
+    ///
+    /// The brush is centered at the origin: the polygon base sits at -|depth|/2 along the normal,
+    /// and the top cap sits at +|depth|/2.
+    ///
+    /// Face order: top cap (index 0), bottom cap (index 1), then N side quads (indices 2..2+N).
+    /// Topology vertices: base ring (0..N), then top ring (N..2N).
+    ///
+    /// Returns `None` if fewer than 3 vertices or zero depth.
+    pub fn prism(vertices: &[Vec3], normal: Vec3, depth: f32) -> Option<Self> {
+        use jackdaw_geometry::{MeshEdge, MeshLoop, MeshPoly, MeshVert, newell_normal};
+
+        if vertices.len() < 3 || depth.abs() < 1e-6 {
+            return None;
+        }
+
+        let n = vertices.len();
+        let mut vertices = vertices.to_vec();
+        if newell_normal(&vertices).dot(normal) < 0.0 {
+            vertices.reverse();
+        }
+
+        let half_depth = depth.abs() / 2.0;
+        let mut faces = Vec::new();
+
+        let (top_u, top_v) = compute_face_tangent_axes(normal);
+        faces.push(BrushFaceData {
+            plane: BrushPlane {
+                normal,
+                distance: half_depth,
+            },
+            uv_scale: Vec2::ONE,
+            uv_u_axis: top_u,
+            uv_v_axis: top_v,
+            ..default()
+        });
+
+        let (bot_u, bot_v) = compute_face_tangent_axes(-normal);
+        faces.push(BrushFaceData {
+            plane: BrushPlane {
+                normal: -normal,
+                distance: half_depth,
+            },
+            uv_scale: Vec2::ONE,
+            uv_u_axis: bot_u,
+            uv_v_axis: bot_v,
+            ..default()
+        });
+
+        let mut valid_side_indices: Vec<usize> = Vec::new();
+        for i in 0..n {
+            let a = vertices[i];
+            let b = vertices[(i + 1) % n];
+            let edge = b - a;
+            let side_normal = edge.cross(normal).normalize_or_zero();
+            if side_normal.length_squared() < 0.5 {
+                continue;
+            }
+            let distance = side_normal.dot(a);
+            let (su, sv) = compute_face_tangent_axes(side_normal);
+            faces.push(BrushFaceData {
+                plane: BrushPlane {
+                    normal: side_normal,
+                    distance,
+                },
+                uv_scale: Vec2::ONE,
+                uv_u_axis: su,
+                uv_v_axis: sv,
+                ..default()
+            });
+            valid_side_indices.push(i);
+        }
+
+        if faces.len() < 4 {
+            return None;
+        }
+
+        // --- topology ---
+        //
+        // Vertices: base ring at offset = -normal * half_depth, top ring at +normal * half_depth.
+        // Base ring: indices 0..n
+        // Top ring:  indices n..2n
+        let mut topo_verts: Vec<MeshVert> = Vec::with_capacity(2 * n);
+        for &v in vertices.iter().take(n) {
+            topo_verts.push(MeshVert {
+                position: v - normal * half_depth,
+            });
+        }
+        for &v in vertices.iter().take(n) {
+            topo_verts.push(MeshVert {
+                position: v + normal * half_depth,
+            });
+        }
+
+        // Edges:
+        //   base ring edges:    0..n - edge i connects base[i] -> base[(i+1)%n]
+        //   top ring edges:     n..2n - edge n+i connects top[i] -> top[(i+1)%n]
+        //   vertical edges:     2n..3n - edge 2n+i connects base[i] -> top[i]
+        let mut topo_edges: Vec<MeshEdge> = Vec::with_capacity(3 * n);
+        for i in 0..n {
+            let a = i as u32;
+            let b = ((i + 1) % n) as u32;
+            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+            topo_edges.push(MeshEdge {
+                v: [lo, hi],
+                ..default()
+            });
+        }
+        for i in 0..n {
+            let a = (n + i) as u32;
+            let b = (n + (i + 1) % n) as u32;
+            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+            topo_edges.push(MeshEdge {
+                v: [lo, hi],
+                ..default()
+            });
+        }
+        for i in 0..n {
+            topo_edges.push(MeshEdge {
+                v: [i as u32, (n + i) as u32],
+                ..default()
+            });
+        }
+
+        // Loops and polygons (face order: top cap, bottom cap, then sides).
+        // total loops = n (top cap) + n (bottom cap) + n_sides * 4
+        let n_sides = valid_side_indices.len();
+        let total_loops = n + n + n_sides * 4;
+        let mut topo_loops: Vec<MeshLoop> = Vec::with_capacity(total_loops);
+        let mut topo_polys: Vec<MeshPoly> = Vec::new();
+
+        // Face 0 - top cap: top ring CCW looking along +normal (from outside).
+        // Top ring verts: n, n+1, ..., n+(n-1). Edge for loop[i] is the top ring edge n+i.
+        {
+            let loop_start = topo_loops.len() as u32;
+            for i in 0..n {
+                let vert = (n + i) as u32;
+                let edge = (n + i) as u32; // top ring edge i
+                topo_loops.push(MeshLoop { vert, edge });
+            }
+            topo_polys.push(MeshPoly {
+                loop_start,
+                loop_total: n as u32,
+            });
+        }
+
+        // Face 1 - bottom cap: base ring CW when looking along +normal = CCW from below (-normal).
+        // Use reversed base ring: n-1, n-2, ..., 0.
+        {
+            let loop_start = topo_loops.len() as u32;
+            for i in (0..n).rev() {
+                let vert = i as u32;
+                let edge = i as u32; // base ring edge i
+                topo_loops.push(MeshLoop { vert, edge });
+            }
+            topo_polys.push(MeshPoly {
+                loop_start,
+                loop_total: n as u32,
+            });
+        }
+
+        // Side faces: one quad per valid edge index.
+        // Side i (polygon base edge at valid_side_indices[si]):
+        //   verts: base[i], base[i+1], top[i+1], top[i]  (CCW from outside)
+        //   edges: base_ring[i], vert[i+1], top_ring[i], vert[i]
+        for &i in &valid_side_indices {
+            let j = (i + 1) % n;
+            let loop_start = topo_loops.len() as u32;
+            // base[i] -> edge: base ring edge i
+            topo_loops.push(MeshLoop {
+                vert: i as u32,
+                edge: i as u32,
+            });
+            // base[j] -> edge: vertical j
+            topo_loops.push(MeshLoop {
+                vert: j as u32,
+                edge: (2 * n + j) as u32,
+            });
+            // top[j] -> edge: top ring edge j (reversed direction, but we store the edge index)
+            topo_loops.push(MeshLoop {
+                vert: (n + j) as u32,
+                edge: (n + j) as u32,
+            });
+            // top[i] -> edge: vertical i
+            topo_loops.push(MeshLoop {
+                vert: (n + i) as u32,
+                edge: (2 * n + i) as u32,
+            });
+            topo_polys.push(MeshPoly {
+                loop_start,
+                loop_total: 4,
+            });
+        }
+
+        let topology = BrushTopology {
+            vertices: topo_verts,
+            edges: topo_edges,
+            polygons: topo_polys,
+            loops: topo_loops,
+            ..default()
+        };
+
+        Some(Self { faces, topology })
+    }
+
+    /// Create a sphere brush approximated as an icosahedron (20 triangular faces).
+    pub fn sphere(radius: f32) -> Self {
+        let phi = (1.0 + 5.0_f32.sqrt()) / 2.0;
+        let raw = [
+            Vec3::new(-1.0, phi, 0.0),
+            Vec3::new(1.0, phi, 0.0),
+            Vec3::new(-1.0, -phi, 0.0),
+            Vec3::new(1.0, -phi, 0.0),
+            Vec3::new(0.0, -1.0, phi),
+            Vec3::new(0.0, 1.0, phi),
+            Vec3::new(0.0, -1.0, -phi),
+            Vec3::new(0.0, 1.0, -phi),
+            Vec3::new(phi, 0.0, -1.0),
+            Vec3::new(phi, 0.0, 1.0),
+            Vec3::new(-phi, 0.0, -1.0),
+            Vec3::new(-phi, 0.0, 1.0),
+        ];
+        let verts: Vec<Vec3> = raw.iter().map(|v| v.normalize() * radius).collect();
+
+        // 20 triangular faces (standard icosahedron topology)
+        let tris: [[usize; 3]; 20] = [
+            [0, 11, 5],
+            [0, 5, 1],
+            [0, 1, 7],
+            [0, 7, 10],
+            [0, 10, 11],
+            [1, 5, 9],
+            [5, 11, 4],
+            [11, 10, 2],
+            [10, 7, 6],
+            [7, 1, 8],
+            [3, 9, 4],
+            [3, 4, 2],
+            [3, 2, 6],
+            [3, 6, 8],
+            [3, 8, 9],
+            [4, 9, 5],
+            [2, 4, 11],
+            [6, 2, 10],
+            [8, 6, 7],
+            [9, 8, 1],
+        ];
+
+        let faces: Vec<BrushFaceData> = tris
+            .iter()
+            .map(|&[a, b, c]| {
+                let normal = (verts[b] - verts[a]).cross(verts[c] - verts[a]).normalize();
+                let distance = normal.dot(verts[a]);
+                // Ensure outward-facing
+                let (normal, distance) = if distance < 0.0 {
+                    (-normal, -distance)
+                } else {
+                    (normal, distance)
+                };
+                let (u, v) = compute_face_tangent_axes(normal);
+                BrushFaceData {
+                    plane: BrushPlane { normal, distance },
+                    uv_scale: Vec2::ONE,
+                    uv_u_axis: u,
+                    uv_v_axis: v,
+                    ..default()
+                }
+            })
+            .collect();
+
+        let topology = compute_brush_topology(&faces);
+        Self { faces, topology }
+    }
+
+    /// A thin axis-aligned slab usable as a floor or wall tile. Implemented
+    /// as a `cuboid` with a small thickness along Y so it stays a closed
+    /// convex brush.
+    pub fn plane(half_x: f32, half_z: f32) -> Self {
+        const HALF_THICKNESS: f32 = 0.02;
+        Self::cuboid(half_x, HALF_THICKNESS, half_z)
+    }
+
+    /// An upright cylinder of `radius` and full height `2 * half_height`,
+    /// centered at the origin, approximated by a `sides`-gon (minimum 3).
+    /// Built by extruding the base polygon with `prism`. Falls back to a
+    /// `cuboid` only if the prism inputs are degenerate, which cannot happen
+    /// for `sides >= 3` and a non-zero height.
+    pub fn cylinder(radius: f32, half_height: f32, sides: usize) -> Self {
+        let sides = sides.max(3);
+        let ring: Vec<Vec3> = (0..sides)
+            .map(|i| {
+                let a = i as f32 / sides as f32 * std::f32::consts::TAU;
+                Vec3::new(radius * a.cos(), 0.0, radius * a.sin())
+            })
+            .collect();
+        Self::prism(&ring, Vec3::Y, half_height * 2.0)
+            .unwrap_or_else(|| Self::cuboid(radius, half_height, radius))
+    }
+
+    /// A right-triangular wedge (a ramp): a right triangle in the XY plane
+    /// extruded along Z by `2 * half_z`. The slope rises from -X to +X. Falls
+    /// back to a `cuboid` only on degenerate inputs.
+    pub fn wedge(half_x: f32, half_y: f32, half_z: f32) -> Self {
+        let tri = [
+            Vec3::new(-half_x, -half_y, 0.0),
+            Vec3::new(half_x, -half_y, 0.0),
+            Vec3::new(-half_x, half_y, 0.0),
+        ];
+        Self::prism(&tri, Vec3::Z, half_z * 2.0)
+            .unwrap_or_else(|| Self::cuboid(half_x, half_y, half_z))
+    }
+
+    /// A solid that tapers from a convex base polygon to a single apex
+    /// (cone, pyramid). `base` are the base-ring positions in winding order;
+    /// `apex` is the tip. One triangular side face per base edge, plus a base
+    /// cap. Returns `None` for fewer than 3 base vertices.
+    pub fn tapered(base: &[Vec3], apex: Vec3) -> Option<Self> {
+        let n = base.len();
+        if n < 3 {
+            return None;
+        }
+
+        let centroid: Vec3 = base.iter().sum::<Vec3>() / n as f32;
+        let mut faces = Vec::with_capacity(n + 1);
+
+        // Base cap: the plane through the base polygon, normal pointing away
+        // from the apex. Derive the polygon normal from the first non-degenerate
+        // edge pair, then flip so it points away from the apex.
+        let mut base_normal = Vec3::ZERO;
+        for i in 0..n {
+            let a = base[i] - centroid;
+            let b = base[(i + 1) % n] - centroid;
+            let cross = a.cross(b);
+            if cross.length_squared() > 1e-12 {
+                base_normal = cross.normalize();
+                break;
+            }
+        }
+        if base_normal.length_squared() < 0.5 {
+            return None;
+        }
+        // Point away from the apex (the cap faces outward, opposite the tip).
+        if base_normal.dot(apex - centroid) > 0.0 {
+            base_normal = -base_normal;
+        }
+        let base_distance = base_normal.dot(base[0]);
+        let (base_u, base_v) = compute_face_tangent_axes(base_normal);
+        faces.push(BrushFaceData {
+            plane: BrushPlane {
+                normal: base_normal,
+                distance: base_distance,
+            },
+            uv_scale: Vec2::ONE,
+            uv_u_axis: base_u,
+            uv_v_axis: base_v,
+            ..default()
+        });
+
+        // Side faces: one triangle per base edge, through (base[i], base[i+1], apex).
+        for i in 0..n {
+            let a = base[i];
+            let b = base[(i + 1) % n];
+            let side_normal = (b - a).cross(apex - a).normalize_or_zero();
+            if side_normal.length_squared() < 0.5 {
+                continue;
+            }
+            // Ensure outward-facing using the base centroid, like `prism`.
+            let side_normal = if side_normal.dot(a - centroid) < 0.0 {
+                -side_normal
+            } else {
+                side_normal
+            };
+            let distance = side_normal.dot(apex);
+            let (su, sv) = compute_face_tangent_axes(side_normal);
+            faces.push(BrushFaceData {
+                plane: BrushPlane {
+                    normal: side_normal,
+                    distance,
+                },
+                uv_scale: Vec2::ONE,
+                uv_u_axis: su,
+                uv_v_axis: sv,
+                ..default()
+            });
+        }
+
+        if faces.len() < 4 {
+            return None;
+        }
+
+        let topology = compute_brush_topology(&faces);
+        Some(Self { faces, topology })
+    }
+
+    /// Upright cone of `radius` and full height `2 * half_height`, centered at
+    /// the origin, approximated by a `sides`-gon base (min 3).
+    pub fn cone(radius: f32, half_height: f32, sides: usize) -> Self {
+        let sides = sides.max(3);
+        let base: Vec<Vec3> = (0..sides)
+            .map(|i| {
+                let a = i as f32 / sides as f32 * std::f32::consts::TAU;
+                Vec3::new(radius * a.cos(), -half_height, radius * a.sin())
+            })
+            .collect();
+        let apex = Vec3::new(0.0, half_height, 0.0);
+        Self::tapered(&base, apex).unwrap_or_else(|| Self::cuboid(radius, half_height, radius))
+    }
+
+    /// Upright rectangular pyramid: a quad base of half-extents
+    /// (`half_x`, `half_z`) at `y = -half_height`, apex at
+    /// `(0, half_height, 0)`.
+    pub fn pyramid(half_x: f32, half_z: f32, half_height: f32) -> Self {
+        let base = [
+            Vec3::new(-half_x, -half_height, -half_z),
+            Vec3::new(half_x, -half_height, -half_z),
+            Vec3::new(half_x, -half_height, half_z),
+            Vec3::new(-half_x, -half_height, half_z),
+        ];
+        let apex = Vec3::new(0.0, half_height, 0.0);
+        Self::tapered(&base, apex).unwrap_or_else(|| Self::cuboid(half_x, half_height, half_z))
+    }
+}
+
+#[derive(Component, Reflect, Default, Clone, Debug, Deref, DerefMut)]
+#[reflect(Component, Default, @crate::EditorHidden)]
+pub struct CustomProperties {
+    pub properties: BTreeMap<String, PropertyValue>,
+}
+
+/// One enum for every editor parameter value: runtime
+/// `OperatorParameters`, const operator schemas (`Operator::PARAMETERS`),
+/// concrete button-call params, and reflected `CustomProperties`
+/// fields. `String` uses `Cow<'static, str>` so the enum can sit in a
+/// `const` slice.
+#[derive(Reflect, Clone, Debug, PartialEq)]
+pub enum PropertyValue {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(Cow<'static, str>),
+    Vec2(Vec2),
+    Vec3(Vec3),
+    Color(Color),
+    Entity(Entity),
+}
+
+impl From<bool> for PropertyValue {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
+impl From<i64> for PropertyValue {
+    fn from(value: i64) -> Self {
+        Self::Int(value)
+    }
+}
+
+impl From<f64> for PropertyValue {
+    fn from(value: f64) -> Self {
+        Self::Float(value)
+    }
+}
+
+impl From<String> for PropertyValue {
+    fn from(value: String) -> Self {
+        Self::String(Cow::Owned(value))
+    }
+}
+
+impl From<&'static str> for PropertyValue {
+    fn from(value: &'static str) -> Self {
+        Self::String(Cow::Borrowed(value))
+    }
+}
+
+impl From<Cow<'static, str>> for PropertyValue {
+    fn from(value: Cow<'static, str>) -> Self {
+        Self::String(value)
+    }
+}
+
+impl From<Vec2> for PropertyValue {
+    fn from(value: Vec2) -> Self {
+        Self::Vec2(value)
+    }
+}
+
+impl From<Vec3> for PropertyValue {
+    fn from(value: Vec3) -> Self {
+        Self::Vec3(value)
+    }
+}
+
+impl From<Color> for PropertyValue {
+    fn from(value: Color) -> Self {
+        Self::Color(value)
+    }
+}
+
+impl From<Entity> for PropertyValue {
+    fn from(value: Entity) -> Self {
+        Self::Entity(value)
+    }
+}
+
+impl std::fmt::Display for PropertyValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Int(i) => write!(f, "{i}"),
+            Self::Float(x) => write!(f, "{x}"),
+            Self::String(s) => write!(f, "\"{s}\""),
+            Self::Vec2(v) => write!(f, "vec2({}, {})", v.x, v.y),
+            Self::Vec3(v) => write!(f, "vec3({}, {}, {})", v.x, v.y, v.z),
+            Self::Color(c) => {
+                let s = c.to_srgba();
+                write!(
+                    f,
+                    "Color::srgba({}, {}, {}, {})",
+                    s.red, s.green, s.blue, s.alpha
+                )
+            }
+            Self::Entity(e) => write!(f, "Entity({})", e.to_bits()),
+        }
+    }
+}
+
+impl PropertyValue {
+    /// Canonical title-case type name (`"Bool"`, `"Int"`, `"Float"`,
+    /// `"String"`, `"Vec2"`, `"Vec3"`, `"Color"`, `"Entity"`). Used by
+    /// the Custom Properties picker, operator-signature tooltips, and
+    /// matched against `ParamSpec::ty` (in `jackdaw_api_internal`).
+    pub const fn type_name(&self) -> &'static str {
+        match self {
+            Self::Bool(_) => "Bool",
+            Self::Int(_) => "Int",
+            Self::Float(_) => "Float",
+            Self::String(_) => "String",
+            Self::Vec2(_) => "Vec2",
+            Self::Vec3(_) => "Vec3",
+            Self::Color(_) => "Color",
+            Self::Entity(_) => "Entity",
+        }
+    }
+
+    /// Default value for the given [`type_name`](Self::type_name)
+    /// string. Used by the Custom Properties picker.
+    pub fn default_for_type(name: &str) -> Option<Self> {
+        match name {
+            "Bool" => Some(Self::Bool(false)),
+            "Int" => Some(Self::Int(0)),
+            "Float" => Some(Self::Float(0.0)),
+            "String" => Some(Self::String(Cow::Borrowed(""))),
+            "Vec2" => Some(Self::Vec2(Vec2::ZERO)),
+            "Vec3" => Some(Self::Vec3(Vec3::ZERO)),
+            "Color" => Some(Self::Color(Color::WHITE)),
+            "Entity" => Some(Self::Entity(Entity::PLACEHOLDER)),
+            _ => None,
+        }
+    }
+
+    /// All available type names for the UI picker, derived from one
+    /// default per variant. Adding a new `PropertyValue` variant only
+    /// requires updating [`type_name`](Self::type_name); this list and
+    /// the picker pick it up automatically.
+    pub fn all_type_names() -> &'static [&'static str] {
+        const NAMES: &[&str] = &[
+            PropertyValue::Bool(false).type_name(),
+            PropertyValue::Int(0).type_name(),
+            PropertyValue::Float(0.0).type_name(),
+            PropertyValue::String(Cow::Borrowed("")).type_name(),
+            PropertyValue::Vec2(Vec2::ZERO).type_name(),
+            PropertyValue::Vec3(Vec3::ZERO).type_name(),
+            PropertyValue::Color(Color::WHITE).type_name(),
+            PropertyValue::Entity(Entity::PLACEHOLDER).type_name(),
+        ];
+        NAMES
+    }
+}
+
+#[derive(Component, Reflect, Clone)]
+#[reflect(Component, @crate::EditorHidden)]
+pub struct GltfSource {
+    pub path: String,
+    pub scene_index: usize,
+}
+
+/// Stores the original serialized component values from a prefab at instantiation time.
+/// Used to detect overrides and support per-component revert.
+#[derive(Component, Clone, Debug, Default)]
+pub struct PrefabBaseline {
+    pub components: HashMap<String, serde_json::Value>,
+}
+
+/// Terrain shape and the descriptive parts of its data.
+///
+/// Only the small, human-editable fields live here. The bulk per-cell
+/// arrays -- heights and every paint channel -- live in a binary sidecar
+/// beside the scene (`jackdaw_terrain::sidecar`), keyed by
+/// [`Terrain::data_path`]. A 512-resolution heightmap is 262,144 floats;
+/// serializing that as scene text defeats the point of a format you can
+/// read in a `git diff`.
+#[derive(Component, Reflect, Clone, Debug)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Terrain"), @crate::EditorHidden)]
+pub struct Terrain {
+    /// World metres per grid cell edge, and the only shape this terrain
+    /// declares. The cell count is not stated anywhere: the sidecar's
+    /// allocated regions are the terrain, and sculpting past the last region
+    /// allocates another.
+    ///
+    /// This is the authoring surface, what the user edits and an undo
+    /// restores. The sidecar carries the same number beside the cells it
+    /// describes, and on load the sidecar's copy wins: a save writes the
+    /// sidecar before the scene text and cannot roll one back if the other
+    /// fails, so the geometry travels with the data.
+    ///
+    /// Cell `(0, 0)` sits at this entity's origin, offset by the sidecar's
+    /// anchor: zero for a terrain authored against this format, `-size/2` for
+    /// one migrated from a declared rectangle.
+    pub cell_size: f32,
+    /// Vertices per edge of a declared rectangle, in scenes that carry one.
+    ///
+    /// A migration inlet, not shape, like [`Terrain::heights`]. The editor
+    /// reads this and [`Terrain::size`] once on load to work out the spacing
+    /// and corner that rectangle drew its stored cells at, writes the answer
+    /// to the sidecar, and resets both to their defaults. Read the spacing
+    /// from [`Terrain::cell_size`], never from here.
+    pub resolution: u32,
+    /// World-space XZ dimensions of a declared rectangle. A migration inlet;
+    /// see [`Terrain::resolution`].
+    pub size: Vec2,
+    /// Maximum height value for normalization.
+    pub max_height: f32,
+    /// The paint channels this terrain declares, in project order.
+    ///
+    /// Descriptors only -- name, width, palette. They are small and a
+    /// person edits them, so they stay inline and diffable. The per-cell
+    /// values they describe live in the sidecar with the heights.
+    pub channels: Vec<TerrainChannel>,
+    /// Scene-relative path of this terrain's binary data sidecar.
+    ///
+    /// The editor keeps the decoded data in a resource keyed by this
+    /// string, which is why it has to travel on the component: a tab
+    /// swap round-trips the scene through BSN *text* and respawns every
+    /// entity, so a plain reflected `String` is the only thing that
+    /// survives the trip.
+    pub data_path: String,
+    /// Legacy inline heights, read from scenes written before the
+    /// sidecar existed.
+    ///
+    /// This is a migration inlet, not storage. The editor drains it into
+    /// the sidecar store on load and leaves it empty, so a scene saved by
+    /// this build writes `heights: []` and the real data goes to
+    /// [`Terrain::data_path`]. Read heights through the store, never
+    /// from here.
+    pub heights: Vec<f32>,
+    /// Optional snapping of this terrain onto the game's own metric grid.
+    ///
+    /// Off by default, and a terrain that never touches it behaves
+    /// exactly as one authored before the setting existed.
+    pub quantization: TerrainQuantization,
+    /// What this terrain's navigation mesh is baked for.
+    pub navmesh: TerrainNavmesh,
+}
+
+/// These values are a persisted contract: BSN elides a field equal to its
+/// `Default` on write and refills it from `ReflectDefault` on read, so a scene
+/// saved while a field held its default carries none of it and takes whatever
+/// this returns.
+///
+/// `resolution` and `size` therefore read 256 and 100 metres. A scene that
+/// declared a rectangle elided them at exactly these numbers, and the
+/// migration refills the same ones to work out where its stored cells were
+/// drawn. Changing either moves that ground.
+impl Default for Terrain {
+    fn default() -> Self {
+        Self {
+            cell_size: 1.0,
+            resolution: 256,
+            size: Vec2::new(100.0, 100.0),
+            max_height: 50.0,
+            channels: Vec::new(),
+            data_path: String::new(),
+            heights: Vec::new(),
+            quantization: TerrainQuantization::default(),
+            navmesh: TerrainNavmesh::default(),
+        }
+    }
+}
+
+impl Terrain {
+    /// Cell count this terrain's per-cell arrays must have.
+    pub fn cell_count(&self) -> usize {
+        (self.resolution as usize) * (self.resolution as usize)
+    }
+}
+
+/// What a terrain's navigation mesh is baked for.
+///
+/// Scene data rather than an editor preference: the navmesh beside a scene was
+/// baked for a particular character, and reopening the scene has to show which
+/// one and bake the same one again. The voxel size a bake rasterizes at is
+/// derived from the terrain's cell size and is not authored here.
+///
+/// The `Default` is a persisted contract, as with [`TerrainQuantization`]:
+/// BSN elides a field equal to it, so changing these numbers changes what
+/// every scene that never touched them bakes.
+#[derive(Reflect, Clone, Debug, PartialEq)]
+#[reflect(Default)]
+pub struct TerrainNavmesh {
+    /// Agent radius in world units. Walkable ground is eroded by this, so the
+    /// navmesh stops this far short of every wall.
+    pub agent_radius: f32,
+    /// Agent height in world units. Ground with less headroom is not
+    /// walkable.
+    pub agent_height: f32,
+    /// Steepest ground the agent may stand on, in degrees.
+    pub max_slope_degrees: f32,
+}
+
+impl Default for TerrainNavmesh {
+    fn default() -> Self {
+        Self {
+            agent_radius: 0.4,
+            agent_height: 1.8,
+            max_slope_degrees: 45.0,
+        }
+    }
+}
+
+/// Optional snapping of a terrain onto a game's own metric grid.
+///
+/// A game whose world is built out of 1 m cells and 0.25 m elevation
+/// steps wants a terrain that is exactly that, not one that happens to
+/// pass near it. With this on, sculpting snaps heights to multiples of
+/// [`TerrainQuantization::height_step`] as the user drags, the mesh is
+/// built flat-shaded so the terraces are visible, and
+/// [`TerrainQuantization::cell_size`] pins the terrain's XZ vertex
+/// spacing -- which is what makes an integer export lossless.
+///
+/// Both steps are opt-in independently: a project can want a metric cell
+/// size with continuous elevation, or terraced elevation at whatever
+/// size the terrain already is.
+/// The derived `Default` -- off, both steps zero -- is the contract: a
+/// terrain that never touches this field is byte-identical to one from
+/// before it existed.
+#[derive(Reflect, Clone, Debug, Default, PartialEq)]
+#[reflect(Default)]
+pub struct TerrainQuantization {
+    pub enabled: bool,
+    /// World units per cell edge in XZ that Apply pins the terrain to, by
+    /// writing it into [`Terrain::cell_size`]. 0 leaves the terrain's spacing
+    /// alone and quantizes elevation only.
+    ///
+    /// Distinct from `Terrain::cell_size`, which is the spacing the terrain is
+    /// drawn at. This is the spacing the project holds its terrains to, kept
+    /// whether or not Apply has been pressed.
+    pub cell_size: f32,
+    /// World units per elevation step. 0 disables height snapping.
+    pub height_step: f32,
+}
+
+impl TerrainQuantization {
+    /// The spacing to pin the terrain's cells to, or `None` when cell
+    /// quantization is off for this terrain.
+    pub fn active_cell_size(&self) -> Option<f32> {
+        if !self.enabled || !self.cell_size.is_finite() || self.cell_size <= 0.0 {
+            return None;
+        }
+        Some(self.cell_size)
+    }
+
+    /// The elevation step to snap to, or `None` when height snapping is
+    /// off for this terrain.
+    pub fn active_height_step(&self) -> Option<f32> {
+        if !self.enabled || !self.height_step.is_finite() || self.height_step <= 0.0 {
+            return None;
+        }
+        Some(self.height_step)
+    }
+}
+
+/// Storage width of a paint channel's values on disk.
+///
+/// Mirrors `jackdaw_terrain::ChannelElement`. It exists separately because
+/// `jackdaw_terrain` is deliberately dependency-light (`bevy_math` only)
+/// and this one has to be reflected to reach the scene document.
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[reflect(Default)]
+pub enum TerrainChannelElement {
+    /// One byte per cell, values `0..=255`.
+    #[default]
+    U8,
+    /// Two bytes per cell, values `0..=65535`.
+    U16,
+}
+
+impl TerrainChannelElement {
+    /// Largest value this width can hold. Painting clamps to it.
+    pub fn max_value(self) -> u16 {
+        match self {
+            Self::U8 => u8::MAX as u16,
+            Self::U16 => u16::MAX,
+        }
+    }
+
+    /// Human-readable name, for a width picker.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::U8 => "u8 (0-255)",
+            Self::U16 => "u16 (0-65535)",
+        }
+    }
+
+    /// Every width, in picker order.
+    pub const ALL: [Self; 2] = [Self::U8, Self::U16];
+}
+
+/// One entry in a paint channel's palette: a value, what the project
+/// calls it, and how the editor draws it.
+///
+/// Jackdaw never interprets `label`. It is the project's word for what
+/// this value means -- "grass", "walkable", "spawn: heavy" -- and the
+/// editor only ever displays it.
+#[derive(Reflect, Clone, Debug, PartialEq)]
+#[reflect(Default)]
+pub struct TerrainPaletteEntry {
+    /// The value written into the channel when this entry is painted.
+    pub value: u16,
+    /// Project-defined name. Display only.
+    pub label: String,
+    /// Swatch colour, and the tint the viewport draws for this value.
+    pub color: Color,
+}
+
+impl Default for TerrainPaletteEntry {
+    fn default() -> Self {
+        Self {
+            value: 0,
+            label: "unset".to_string(),
+            color: Color::srgb(0.5, 0.5, 0.5),
+        }
+    }
+}
+
+/// A named per-cell integer layer over a terrain.
+///
+/// Only the descriptor lives here. The values are `resolution^2` entries
+/// in the terrain's sidecar. Jackdaw stores the name and palette as
+/// opaque data: it never validates them, ships defaults for them, or
+/// branches on them.
+#[derive(Reflect, Clone, Debug, Default, PartialEq)]
+#[reflect(Default)]
+pub struct TerrainChannel {
+    /// Project-defined name. Also the export filename for this layer.
+    pub name: String,
+    /// Storage width, and therefore the value ceiling.
+    pub element: TerrainChannelElement,
+    /// Named values with display colours, in project order.
+    pub palette: Vec<TerrainPaletteEntry>,
+}
+
+impl TerrainChannel {
+    /// The palette entry for a stored value, if the palette names it.
+    pub fn entry(&self, value: u16) -> Option<&TerrainPaletteEntry> {
+        self.palette.iter().find(|entry| entry.value == value)
+    }
+
+    /// Colour to draw a stored value with. Values the palette does not
+    /// name draw as unpainted ground rather than as an error.
+    pub fn color_of(&self, value: u16) -> Option<Color> {
+        self.entry(value).map(|entry| entry.color)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plane_is_a_thin_six_faced_slab() {
+        let p = Brush::plane(0.5, 0.5);
+        assert_eq!(p.faces.len(), 6);
+    }
+
+    #[test]
+    fn cylinder_has_two_caps_and_one_side_per_segment() {
+        let sides = 16;
+        let c = Brush::cylinder(0.5, 1.0, sides);
+        // top cap + bottom cap + one side quad per segment
+        assert_eq!(c.faces.len(), sides + 2);
+    }
+
+    #[test]
+    fn wedge_has_two_triangle_caps_and_three_sides() {
+        let w = Brush::wedge(0.5, 0.5, 0.5);
+        assert_eq!(w.faces.len(), 5);
+    }
+
+    #[test]
+    fn cone_has_one_side_per_segment_plus_base() {
+        let c = Brush::cone(0.5, 0.5, 16);
+        assert_eq!(c.faces.len(), 17); // 16 side faces + 1 base cap
+    }
+
+    #[test]
+    fn pyramid_has_four_sides_plus_base() {
+        let p = Brush::pyramid(0.5, 0.5, 0.5);
+        assert_eq!(p.faces.len(), 5); // 4 side faces + 1 base cap
+    }
+
+    #[test]
+    fn quantization_ships_off_and_inert() {
+        let q = TerrainQuantization::default();
+        assert!(!q.enabled);
+        assert_eq!(q.cell_size, 0.0);
+        assert_eq!(q.height_step, 0.0);
+        assert_eq!(q.active_cell_size(), None);
+        assert_eq!(q.active_height_step(), None);
+        assert_eq!(Terrain::default().quantization, q);
+    }
+
+    #[test]
+    fn a_live_cell_size_is_the_spacing_to_pin_the_terrain_to() {
+        let q = TerrainQuantization {
+            enabled: true,
+            cell_size: 1.0,
+            height_step: 0.0,
+        };
+        assert_eq!(q.active_cell_size(), Some(1.0));
+
+        let q = TerrainQuantization {
+            cell_size: 2.5,
+            ..q
+        };
+        assert_eq!(q.active_cell_size(), Some(2.5));
+    }
+
+    #[test]
+    fn a_disabled_or_degenerate_quantization_pins_nothing() {
+        let live = TerrainQuantization {
+            enabled: true,
+            cell_size: 1.5,
+            height_step: 0.25,
+        };
+        assert_eq!(live.active_cell_size(), Some(1.5));
+        assert_eq!(live.active_height_step(), Some(0.25));
+
+        // Off wins over any value.
+        let off = TerrainQuantization {
+            enabled: false,
+            ..live.clone()
+        };
+        assert_eq!(off.active_cell_size(), None);
+        assert_eq!(off.active_height_step(), None);
+
+        // Zero, negative and non-finite steps each opt out on their own.
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let q = TerrainQuantization {
+                cell_size: bad,
+                height_step: bad,
+                ..live.clone()
+            };
+            assert_eq!(q.active_cell_size(), None, "cell_size {bad}");
+            assert_eq!(q.active_height_step(), None, "height_step {bad}");
+        }
+    }
+}

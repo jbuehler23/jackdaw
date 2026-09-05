@@ -3,7 +3,7 @@ use jackdaw_geometry::halfedge::{
     FaceKey, HalfedgeMesh,
     ops::face_poke::{PokeError, face_poke},
 };
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 /// Find the cuboid face whose cached normal matches `target`.
 /// Cuboid faces are 6 axis-aligned quads, so this uniquely identifies one.

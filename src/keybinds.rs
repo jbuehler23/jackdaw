@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use jackdaw_api_internal::paths::keybinds_path;
+use jackdaw_env::paths::keybinds_path;
 use serde_json::{Map, Value};
 
 pub use jackdaw_commands::keybinds::{EditorAction, Keybind, KeybindRegistry};

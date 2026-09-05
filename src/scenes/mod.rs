@@ -1,6 +1,6 @@
 //! Multi-scene editor state. Owns the tab list; the active tab's
 //! contents live in the live Bevy world, inactive tabs hold a
-//! `SceneJsnAst` snapshot plus the per-tab view state and history.
+//! scene-document snapshot plus the per-tab view state and history.
 
 pub mod confirm_dialog;
 pub mod operators;
@@ -13,6 +13,8 @@ use bevy::prelude::*;
 
 use crate::commands::CommandHistory;
 use crate::project::ProjectRoot;
+use crate::terrain::TerrainDataStore;
+use crate::terrain::navmesh_bake::TabNavmesh;
 
 pub struct ScenesPlugin;
 
@@ -66,6 +68,7 @@ pub fn intercept_window_close(
         return;
     }
     pending.active = true;
+    pending.leaving_project = false;
 
     commands.queue(|world: &mut World| {
         confirm_dialog::spawn_confirm_quit_dialog(world);
@@ -102,12 +105,13 @@ pub enum TabKind {
 pub enum TabContent {
     /// Scene document. `None` is the just-pushed / never-captured state
     /// for an untitled tab; `Some` is what `capture_active_tab` stores
-    /// during a swap.
-    Scene(Option<jackdaw_jsn::SceneJsnAst>),
+    /// during a swap. Boxed: the document holds a whole ECS world, so the
+    /// variant would otherwise dwarf `Prefab` (a path).
+    Scene(Option<Box<jackdaw_bsn::SceneBsnAst>>),
     /// Prefab document. The AST lives in `PrefabAstCache`, keyed by
-    /// this canonical path. Capturing flushes the live `SceneJsnAst`
-    /// resource into the cache entry; activating installs the cache
-    /// entry back into the resource.
+    /// this canonical path. Capturing flushes the live scene document
+    /// into the cache entry; activating installs the cache entry back
+    /// into the live world.
     Prefab(crate::prefab::CanonicalPrefabPath),
 }
 
@@ -125,6 +129,13 @@ pub struct SceneTab {
     pub content: TabContent,
     pub view_state: ViewState,
     pub history: CommandHistory,
+    /// Decoded terrain sidecars owned by this tab while it is inactive.
+    /// The active tab's store lives in the world as a resource instead.
+    pub terrain_data_store: TerrainDataStore,
+    /// This tab's baked navmesh and any bake still running for it. Held per tab,
+    /// like the terrain data: a bake describes one scene's ground and must not
+    /// follow the editor to another.
+    pub navmesh: TabNavmesh,
     /// Recorded `CommandHistory.undo_stack.len()` as of the last time
     /// the dirty-tracking system ran (or the tab was activated, or
     /// saved). If the live history is deeper than this, the user has
@@ -143,20 +154,9 @@ impl SceneTab {
             content: TabContent::default(),
             view_state: ViewState::with_default_camera(),
             history: CommandHistory::default(),
+            terrain_data_store: TerrainDataStore::default(),
+            navmesh: TabNavmesh::default(),
             history_depth_at_last_check: 0,
-        }
-    }
-
-    /// Read the tab's AST regardless of variant. For `Prefab(path)`,
-    /// reads through `cache`. Returns `None` if no AST is available
-    /// (untitled scene, or prefab whose cache entry is missing).
-    pub fn ast_view<'a>(
-        &'a self,
-        cache: &'a crate::prefab::PrefabAstCache,
-    ) -> Option<&'a jackdaw_jsn::SceneJsnAst> {
-        match &self.content {
-            TabContent::Scene(opt) => opt.as_ref(),
-            TabContent::Prefab(path) => cache.get_canonical(path),
         }
     }
 }
@@ -183,7 +183,7 @@ pub fn persist_tabs_to_project_config(
         .collect();
     let last_active_tab = scenes.active;
 
-    let cfg = &mut project_root.config.project;
+    let cfg = &mut project_root.config;
     if cfg.last_open_tabs == last_open_tabs && cfg.last_active_tab == last_active_tab {
         return;
     }
@@ -234,12 +234,9 @@ pub struct ViewState {
     /// reflect the entire `Projection` enum across tab swaps.
     pub camera_projection: Option<bevy::math::Mat4>,
     pub edit_mode: crate::brush::EditMode,
-    /// Object-level selection stored as stable IDs so it survives the
-    /// despawn / respawn cycle of a tab swap. `BrushStableId` lives in
-    /// `crate::draw_brush` since that's where the stable-ID counter is
-    /// defined; not all selected entities are brushes, but the
-    /// counter and component are the editor-wide identity mechanism.
-    pub selection: Vec<crate::draw_brush::BrushStableId>,
+    /// Object-level selection stored as scene node ids so it survives
+    /// the despawn / respawn cycle of a tab swap.
+    pub selection: Vec<jackdaw_scene_types::SceneNodeId>,
     /// Brush sub-element selection (verts, edges, faces) for whichever
     /// brush is active in `selection`.
     pub brush_sub_selection: crate::brush::BrushSelection,

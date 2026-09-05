@@ -20,6 +20,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 fn document_operators(
     _params: In<OperatorParameters>,
     ops: Query<&OperatorEntity>,
+    project: Option<Res<crate::project::ProjectRoot>>,
 ) -> OperatorResult {
     let mut md = "## Available Operators\n\n".to_string();
     for op in ops.iter() {
@@ -38,7 +39,10 @@ fn document_operators(
         }
         md.push_str(&format!("{}\n\n", op.description()));
     }
-    let path = PathBuf::from("operators.md");
+    let path = match project {
+        Some(project) => project.root.join("operators.md"),
+        None => PathBuf::from("operators.md"),
+    };
     let mut file = match File::create(&path) {
         Ok(file) => file,
         Err(e) => {
@@ -46,9 +50,8 @@ fn document_operators(
             return OperatorResult::Cancelled;
         }
     };
-    // done after creation because path.canonicalize() fails if the path doesn't exist
-    let canonical_path = path
-        .canonicalize()
+    // done after creation because canonicalize fails if the path doesn't exist
+    let canonical_path = dunce::canonicalize(&path)
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "operators.md".to_string());
     match std::io::Write::write_all(&mut file, md.as_bytes()) {

@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 use bevy::{platform::collections::HashSet, prelude::*};
 use serde::{Deserialize, Serialize};
 
-use crate::paths::config_dir;
+use jackdaw_env::paths::config_dir;
 
 /// On-disk shape. Maps extension IDs to their configuration.
 #[derive(Serialize, Deserialize, Default, Deref, DerefMut)]
@@ -46,6 +46,13 @@ pub fn init_extension(id: impl Into<String>) {
     let id = id.into();
     let mut config = read_extension_config().unwrap_or_default();
     config.entry(id).or_default().enabled = true;
+    write_enabled_list(&config);
+}
+
+/// Persist one extension's desired state without requiring a running editor.
+pub fn set_extension_enabled(id: impl Into<String>, enabled: bool) {
+    let mut config = read_extension_config().unwrap_or_default();
+    config.entry(id.into()).or_default().enabled = enabled;
     write_enabled_list(&config);
 }
 

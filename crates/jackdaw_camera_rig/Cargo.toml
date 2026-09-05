@@ -1,13 +1,20 @@
 [package]
 name = "jackdaw_camera_rig"
-version = "0.5.0"
+version.workspace = true
 edition = "2024"
 description = "Authorable third/first-person camera-rig components + runtime driver for Jackdaw scenes."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-bevy = { workspace = true }
-jackdaw_jsn = { workspace = true }
+# See `jackdaw_pie_protocol`: this crate ships inside games, so its bevy
+# features unify into theirs. Keep the list minimal and explicit.
+bevy = { version = "0.19", default-features = false, features = [
+    "std",
+    "serialize",
+    "reflect_auto_register",
+    "bevy_camera",
+] }
+jackdaw_scene_types = { workspace = true }
 
 [lints]
 workspace = true

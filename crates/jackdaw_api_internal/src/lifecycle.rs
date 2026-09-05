@@ -28,6 +28,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_observer(cleanup_window_on_remove)
         .add_observer(cleanup_workspace_on_remove)
         .add_observer(cleanup_window_extension_on_remove)
+        .add_observer(cleanup_widget_on_remove)
         .add_observer(cleanup_resource_on_remove);
     app.world_mut().register_component::<ActiveModalOperator>();
 }
@@ -84,7 +85,7 @@ pub struct OperatorEntity {
     pub(crate) execute: OperatorSystemId,
     pub(crate) invoke: OperatorSystemId,
     /// Optional system that returns whether the operator can run in
-    /// the current editor state. Equivalent to Blender's `poll`.
+    /// the current editor state.
     pub(crate) availability_check: Option<SystemId<(), bool>>,
     /// Mirrors [`crate::Operator::MODAL`]. Set at registration so the
     /// dispatcher can enter modal mode without re-resolving the generic
@@ -222,6 +223,13 @@ pub(crate) struct RegisteredWindowExtension {
     pub(crate) section_index: usize,
 }
 
+/// Tracks a widget-definition registration owned by an extension.
+#[derive(Component, Clone, Debug)]
+pub(crate) struct RegisteredWidgetDefinition {
+    pub(crate) id: String,
+    pub(crate) registration: crate::widgets::WidgetRegistrationId,
+}
+
 /// An extension-contributed entry in the editor menu bar.
 ///
 /// Spawned as a child of the [`Extension`] entity via
@@ -340,18 +348,19 @@ impl ExtensionCatalog {
     pub fn construct(&self, name: &str) -> Option<Box<dyn crate::JackdawExtension>> {
         self.entries.get(name).map(|e| (e.ctor)())
     }
+
+    pub fn unregister(&mut self, name: &str) -> bool {
+        self.entries.remove(name).is_some()
+    }
 }
 
 pub trait ExtensionAppExt {
-    /// Register an extension into the catalog and perform its one-time BEI
-    /// input-context registration.
+    /// Register a built-in extension constructor in the catalog.
     ///
-    /// Call this once per extension during app setup. Registering the constructor
-    /// lets the Plugins dialog list the extension; running
-    /// `register_input_context` ensures its BEI context types are known to the
-    /// framework. Enabling and disabling the extension later only re-runs
-    /// `register()`, never `register_input_context()` (BEI panics on duplicate
-    /// registrations).
+    /// Call this once per built-in extension during app setup. Registering the
+    /// constructor lets the Extensions dialog list it. Runtime-safe input
+    /// bindings belong in the host-owned context through
+    /// [`crate::ExtensionContext::bind_operator_host`].
     ///
     /// See also [`Self::register_extension_with`].
     fn register_extension<T: crate::JackdawExtension + Default>(&mut self) -> &mut Self {
@@ -370,13 +379,12 @@ impl ExtensionAppExt for App {
         &mut self,
         ctor: impl Fn() -> Box<dyn crate::JackdawExtension> + Send + Sync + 'static,
     ) -> &mut Self {
-        let ext = ctor();
-        ext.register_input_context(self);
+        let id = ctor().id();
         self.world_mut()
             .resource_mut::<ExtensionCatalog>()
             .register_extension_internal(ctor);
 
-        init_extension(ext.id());
+        init_extension(id);
         self
     }
 }
@@ -416,10 +424,7 @@ pub fn enable_extension(world: &mut World, id: &str) -> Option<Entity> {
 /// `extension.register()` against it, returns the entity.
 ///
 /// Takes `&mut World` (not `&mut App`) so this can be called from
-/// world-scoped contexts like observer callbacks. BEI input context
-/// registration belongs in
-/// [`crate::JackdawExtension::register_input_context`], which is called
-/// at catalog registration time with App access.
+/// world-scoped contexts like observer callbacks.
 pub fn load_static_extension(
     world: &mut World,
     extension: Box<dyn crate::JackdawExtension>,
@@ -427,7 +432,9 @@ pub fn load_static_extension(
     let id = extension.id();
     info!("Loading extension: {id}");
 
-    let extension_entity = world.spawn(Extension { id }).id();
+    let extension_entity = world
+        .spawn((Extension { id }, crate::ExtensionInputContext))
+        .id();
 
     let mut ctx = crate::ExtensionContext::new(world, extension_entity);
     extension.register(&mut ctx);
@@ -467,6 +474,12 @@ where
     world
         .resource_mut::<ExtensionCatalog>()
         .register_extension_internal(ctor);
+}
+
+/// Remove a runtime extension constructor after its live registrations have
+/// been disabled. The native library mapping remains owned by `LoadedDylibs`.
+pub fn unregister_dylib_extension(world: &mut World, id: &str) -> bool {
+    world.resource_mut::<ExtensionCatalog>().unregister(id)
 }
 
 /// Keep `OperatorIndex` in sync when an operator entity is spawned.
@@ -548,6 +561,16 @@ pub(crate) fn cleanup_window_extension_on_remove(
 ) {
     if let Ok(r) = registrations.get(trigger.event_target()) {
         registry.remove(&r.window_id, r.section_index);
+    }
+}
+
+pub(crate) fn cleanup_widget_on_remove(
+    trigger: On<Remove, RegisteredWidgetDefinition>,
+    registrations: Query<&RegisteredWidgetDefinition>,
+    mut registry: ResMut<crate::widgets::WidgetRegistry>,
+) {
+    if let Ok(registration) = registrations.get(trigger.event_target()) {
+        registry.unregister_scoped(&registration.id, registration.registration);
     }
 }
 

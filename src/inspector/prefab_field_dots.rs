@@ -9,19 +9,17 @@ use bevy::{
 
 use super::{InspectorDirty, InspectorFieldRow};
 use crate::prefab::PrefabAstCache;
-use jackdaw_jsn::SceneJsnAst;
+use jackdaw_bsn::SceneBsnAst;
 
 /// Resolved prefab-instance context for a component being inspected. When
-/// present, override info comes from the prefab AST + cache and the
-/// header's revert / right-click actions route to the new prefab
+/// present, override info comes from the live BSN document + prefab cache
+/// and the header's revert / right-click actions route to the prefab
 /// operators rather than the legacy baseline path.
 #[derive(Clone)]
 pub(crate) struct PrefabInstanceCtx {
-    pub(crate) entity_key: usize,
-    pub(crate) instance_root: usize,
-    /// ECS entity for the prefab-instance root. Prefab operators
-    /// resolve their AST keys post-snapshot-install, so dispatch sites
-    /// pass this Entity rather than the (stale) `instance_root` key.
+    /// ECS entity for the prefab-instance root. Prefab operators resolve
+    /// their document nodes post-snapshot-install, so dispatch sites pass
+    /// this Entity rather than a pre-resolved (stale) node.
     pub(crate) instance_entity: Entity,
     pub(crate) prefab_path: std::path::PathBuf,
     pub(crate) prefab_entity_id: u32,
@@ -34,11 +32,10 @@ pub(crate) struct PrefabInstanceCtx {
 #[derive(Component, Clone)]
 pub(crate) struct PrefabFieldOverrideDot {
     /// ECS entity the row belongs to. The dispatcher passes this through
-    /// to `prefab.revert_field`, which resolves the AST key inside the
-    /// operator (the live AST is rebuilt during the framework's
-    /// before-snapshot capture, so any pre-resolved key is stale).
+    /// to `prefab.revert_field`, which resolves the document node inside
+    /// the operator (the live document is rebuilt during the framework's
+    /// before-snapshot capture, so any pre-resolved node is stale).
     pub(crate) entity: Entity,
-    pub(crate) entity_key: usize,
     pub(crate) type_path: String,
     pub(crate) field_path: String,
 }
@@ -50,15 +47,15 @@ pub(crate) struct PrefabFieldOverrideDot {
 /// prefab cache so the inspector still has a baseline component set to
 /// render against.
 pub(crate) fn inspector_type_paths_for(
-    ast: &SceneJsnAst,
+    ast: &SceneBsnAst,
     prefab_cache: &PrefabAstCache,
     source_entity: Entity,
     entity_ref: bevy::ecs::world::EntityRef,
     child_of_query: &Query<&bevy::ecs::hierarchy::ChildOf>,
     isa_query: &Query<&crate::prefab::IsA>,
 ) -> HashSet<String> {
-    if let Some(node) = ast.node_for_entity(source_entity) {
-        return node.components.keys().cloned().collect();
+    if let Some(ast_node) = ast.ast_for(source_entity) {
+        return ast.component_type_paths(ast_node).into_iter().collect();
     }
     let Some(peid) = entity_ref.get::<crate::prefab::PrefabEntityId>() else {
         return HashSet::new();
@@ -79,16 +76,9 @@ pub(crate) fn inspector_type_paths_for(
         return HashSet::new();
     };
     let prefab_entity_id_type = "jackdaw::prefab::components::PrefabEntityId";
-    for node in &prefab.nodes {
-        let matches = node
-            .components
-            .get(prefab_entity_id_type)
-            .and_then(serde_json::Value::as_u64)
-            .map(|u| u as u32)
-            == Some(peid.0);
-        if matches {
-            return node.components.keys().cloned().collect();
-        }
+    if let Some(node) = prefab.find_node_by_component_int(prefab_entity_id_type, u64::from(peid.0))
+    {
+        return prefab.component_type_paths(node).into_iter().collect();
     }
     HashSet::new()
 }
@@ -102,7 +92,10 @@ pub(crate) fn revert_component_to_baseline(
     use bevy::reflect::serde::TypedReflectDeserializer;
     use serde::de::DeserializeSeed;
 
-    let Some(baseline) = world.get::<jackdaw_jsn::JsnPrefabBaseline>(entity).cloned() else {
+    let Some(baseline) = world
+        .get::<jackdaw_scene_types::PrefabBaseline>(entity)
+        .cloned()
+    else {
         return;
     };
 
@@ -162,35 +155,31 @@ fn override_dot_color(overridden: bool) -> Color {
 /// prefab instance get no dot.
 pub(crate) fn decorate_prefab_field_rows(
     new_rows: Query<(Entity, &InspectorFieldRow), Added<InspectorFieldRow>>,
-    ast: Res<SceneJsnAst>,
+    ast: Res<SceneBsnAst>,
     prefab_cache: Res<PrefabAstCache>,
     mut commands: Commands,
 ) {
     for (row_entity, row) in &new_rows {
-        let Some(key) = ast.key_for_entity(row.source_entity) else {
+        let Some(node) = ast.ast_for(row.source_entity) else {
             continue;
         };
-        if !crate::prefab::overrides::is_inside_prefab_instance(&ast, key) {
+        if !crate::prefab::overrides_bsn::is_inside_prefab_instance(&ast, node) {
             continue;
         }
-        let overridden = crate::prefab::overrides::field_is_overridden(
+        let get_prefab = |p: &std::path::Path| prefab_cache.get(p);
+        let overridden = crate::prefab::overrides_bsn::field_is_overridden(
             &ast,
-            &prefab_cache,
-            key,
+            &get_prefab,
+            node,
             &row.type_path,
             Some(&row.field_path),
         );
-        let inheritance = crate::prefab::overrides::resolve_inheritance(&ast, key);
-        let instance_root_key =
-            ast.ancestor_with_component(key, "jackdaw::prefab::components::IsA");
-        let instance_entity = instance_root_key
-            .and_then(|k| ast.nodes.get(k))
-            .and_then(|n| n.ecs_entity);
-        if let (
-            Some((prefab_path, prefab_entity_id)),
-            Some(instance_root_key),
-            Some(instance_entity),
-        ) = (inheritance, instance_root_key, instance_entity)
+        let inheritance = crate::prefab::overrides_bsn::resolve_inheritance(&ast, node);
+        let instance_entity = ast
+            .ancestor_with_component(node, "jackdaw::prefab::components::IsA")
+            .and_then(|n| ast.ecs_for_ast(n));
+        if let (Some((prefab_path, prefab_entity_id)), Some(instance_entity)) =
+            (inheritance, instance_entity)
         {
             let row_entity_param = row.source_entity;
             let row_type_path = row.type_path.clone();
@@ -216,8 +205,6 @@ pub(crate) fn decorate_prefab_field_rows(
                     }
                     target.entity = Some(row_entity_param);
                     target.instance_entity = Some(instance_entity);
-                    target.entity_key = Some(key);
-                    target.instance_root = Some(instance_root_key);
                     target.prefab_entity_id = Some(prefab_entity_id);
                     target.prefab_path = Some(prefab_path.clone());
                     target.type_path = Some(row_type_path.clone());
@@ -259,7 +246,6 @@ pub(crate) fn decorate_prefab_field_rows(
             .spawn((
                 PrefabFieldOverrideDot {
                     entity: row.source_entity,
-                    entity_key: key,
                     type_path: row.type_path.clone(),
                     field_path: row.field_path.clone(),
                 },
@@ -315,22 +301,26 @@ pub(crate) fn decorate_prefab_field_rows(
     }
 }
 
-/// Repaint every existing override dot whenever the scene AST changes.
+/// Repaint every existing override dot whenever the live document changes.
 /// Runs only on `ast.is_changed()` ticks so the per-frame cost is one
 /// resource-changed check when nothing is editing.
 pub(crate) fn refresh_prefab_field_dots(
-    ast: Res<SceneJsnAst>,
+    ast: Res<SceneBsnAst>,
     prefab_cache: Res<PrefabAstCache>,
     mut dots: Query<(&PrefabFieldOverrideDot, &mut BackgroundColor)>,
 ) {
     if !ast.is_changed() && !prefab_cache.is_changed() {
         return;
     }
+    let get_prefab = |p: &std::path::Path| prefab_cache.get(p);
     for (dot, mut bg) in &mut dots {
-        let overridden = crate::prefab::overrides::field_is_overridden(
+        let Some(node) = ast.ast_for(dot.entity) else {
+            continue;
+        };
+        let overridden = crate::prefab::overrides_bsn::field_is_overridden(
             &ast,
-            &prefab_cache,
-            dot.entity_key,
+            &get_prefab,
+            node,
             &dot.type_path,
             Some(&dot.field_path),
         );

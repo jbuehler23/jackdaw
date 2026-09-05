@@ -1,13 +1,11 @@
-//! Proxy dylib shipped with jackdaw.
+//! SDK facade dylib shipped with Jackdaw.
 //!
 //! Extensions are built via `cargo rustc` with:
 //!
 //! ```text
 //! -C prefer-dynamic
 //! --extern bevy=<jackdaw>/target/debug/libjackdaw_sdk.so
-//! --extern bevy=<jackdaw>/target/debug/deps/libjackdaw_sdk.rlib
 //! --extern jackdaw_api=<jackdaw>/target/debug/libjackdaw_sdk.so
-//! --extern jackdaw_api=<jackdaw>/target/debug/deps/libjackdaw_sdk.rlib
 //! -L dependency=<jackdaw>/target/debug/deps
 //! ```
 //!
@@ -15,8 +13,8 @@
 //! `jackdaw_api` during compilation of the extension, so extension
 //! code writes plain `use bevy::prelude::*;` and
 //! `use jackdaw_api::prelude::*;`. Both resolve to this crate's
-//! re-exports, which ultimately point at the one compilation of
-//! bevy and `jackdaw_api` that was built alongside the editor.
+//! re-exports, which ultimately point at the shared `bevy_dylib` and
+//! `jackdaw_dylib` runtimes loaded by the editor.
 //!
 //! Re-exports mirror `jackdaw_api`'s public surface. Editor-host
 //! plumbing (loader plugin, catalog, enable/disable helpers) lives
@@ -37,13 +35,11 @@ pub mod prelude {
     pub use jackdaw_api::prelude::*;
 }
 
-pub use jackdaw_api::export_extension;
-pub use jackdaw_api::export_game;
 pub use jackdaw_api::operator;
 
 pub use jackdaw_api::{
     ExtensionContext, ExtensionKind, ExtensionPoint, HierarchyWindow, InspectorWindow,
-    JackdawExtension, MenuEntryDescriptor, PanelContext, WindowDescriptor, jsn, op, pie, runtime,
+    JackdawExtension, MenuEntryDescriptor, PanelContext, WindowDescriptor, op, pie, runtime, scene,
 };
 
 /// Bevy root surface for extension code walking bevy paths beyond

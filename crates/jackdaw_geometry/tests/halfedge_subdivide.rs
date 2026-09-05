@@ -1,5 +1,5 @@
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::subdivide::subdivide};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn subdivide_all_edges_of_cube_makes_more_faces() {
@@ -11,12 +11,11 @@ fn subdivide_all_edges_of_cube_makes_more_faces() {
     let result = subdivide(&mut mesh, &all_edges).expect("subdivide");
     // 12 edges all split -> 12 new verts (one per midpoint).
     assert_eq!(mesh.vert_count(), initial_verts + 12, "+12 verts");
-    // MVP: 4-cut case uses two split_face calls per face (cross-cut pattern),
-    // producing 3 extra faces per quad (1 quad -> 3 sub-faces = +2).
-    // But due to intermediate face invalidation in sequential splits, the count
-    // may differ. Assert at least some subdivision happened.
-    //
-    // MVP: full 2x2 subdivision (4 quads per face) deferred until face_poke lands.
+    // The 4-cut case uses two split_face calls per face (cross-cut pattern),
+    // producing 3 extra faces per quad (1 quad -> 3 sub-faces = +2). Because
+    // sequential splits invalidate intermediate faces the exact count varies,
+    // so only assert that some subdivision happened. A true 2x2 split (4 quads
+    // per face) needs `face_poke`, which does not exist yet.
     assert!(
         mesh.face_count() > initial_faces,
         "at least some faces subdivided"

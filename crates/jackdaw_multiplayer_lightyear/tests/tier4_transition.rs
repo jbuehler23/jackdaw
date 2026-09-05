@@ -5,8 +5,8 @@
 //! membership (zone 1 -> zone 2) and repositions the player at the zone-2 "gate"
 //! spawn. We assert the server-side player ends in zone 2 at the gate position.
 //!
-//! This exercises the whole Phase 6 surface: AABB overlap detection (no physics),
-//! `set_zone` re-membership, and authored-spawn repositioning.
+//! Covers AABB overlap detection (no physics), `set_zone` re-membership, and
+//! authored-spawn repositioning.
 //!
 //! Run: `cargo test -p jackdaw_multiplayer_lightyear --test tier4_transition`
 use bevy::MinimalPlugins;

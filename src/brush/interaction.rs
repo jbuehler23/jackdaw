@@ -9,7 +9,7 @@ use crate::{
 
 use super::{BrushEditMode, BrushMeshCache, BrushSelection, EditMode};
 use jackdaw_geometry::{brush_planes_to_world, compute_brush_geometry_from_planes};
-use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
+use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
 
 /// Reactive cleanup: when the active brush entity is no longer
 /// selected, drop out of brush-edit mode. The digit-key mode switches

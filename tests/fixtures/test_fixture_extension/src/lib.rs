@@ -7,8 +7,7 @@
 //! coherence and lives in a separate harness.
 
 use bevy::prelude::*;
-use jackdaw_api::export_extension;
-use jackdaw_api::prelude::*;
+use jackdaw_extension::prelude::*;
 
 pub struct TestFixtureExtension;
 
@@ -17,7 +16,7 @@ impl JackdawExtension for TestFixtureExtension {
         "test_fixture".to_string()
     }
 
-    fn register(&self, ctx: &mut ExtensionContext) {
+    fn register(&self, ctx: &mut ExtensionRegistrar<'_>) {
         ctx.register_operator::<SpawnMarkerOp>();
     }
 }
@@ -28,4 +27,7 @@ fn spawn_marker(_: In<OperatorParameters>, mut commands: Commands) -> OperatorRe
     OperatorResult::Finished
 }
 
-export_extension!(TestFixtureExtension);
+#[unsafe(no_mangle)]
+pub fn jackdaw_extension_ctor() -> Box<dyn JackdawExtension> {
+    Box::new(TestFixtureExtension)
+}

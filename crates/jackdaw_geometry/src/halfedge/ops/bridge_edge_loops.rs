@@ -1,6 +1,6 @@
 //! Bridge two edge loops with a quad strip. Each loop must be a closed cycle
 //! with the same vertex count. Pairs verts in walk order (no rotation
-//! optimization in MVP); generates N quad faces.
+//! optimization); generates N quad faces.
 
 use std::collections::{HashMap, HashSet};
 

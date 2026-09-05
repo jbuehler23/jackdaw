@@ -728,10 +728,8 @@ const REFERENCE_IMAGE_TYPE_PATH: &str = "jackdaw::reference_image::ReferenceImag
 /// (always-save override for the `jackdaw::` skip prefix) and
 /// round-trip its fields through reflection.
 #[test]
-fn reference_image_round_trips_through_jsn_scene() {
-    use bevy::reflect::serde::{TypedReflectDeserializer, TypedReflectSerializer};
+fn reference_image_round_trips_through_scene_document() {
     use jackdaw::reference_image::ReferenceImage;
-    use serde::de::DeserializeSeed;
 
     let mut app = util::headless_app();
     app.finish();
@@ -742,40 +740,36 @@ fn reference_image_round_trips_through_jsn_scene() {
         opacity: 0.5,
         locked: true,
     };
-    app.world_mut().spawn((
-        Name::new("Front Board"),
-        original.clone(),
-        Transform::default(),
-        Visibility::default(),
-    ));
+    let entity = app
+        .world_mut()
+        .spawn((
+            Name::new("Front Board"),
+            original.clone(),
+            Transform::default(),
+            Visibility::default(),
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
 
-    let jsn = jackdaw::scene_io::serialize_world_to_jsn_scene(app.world_mut());
-    let component_json = jsn
-        .scene
-        .iter()
-        .find_map(|entity| entity.components.get(REFERENCE_IMAGE_TYPE_PATH))
-        .expect("ReferenceImage serialized into the scene")
-        .clone();
-
-    // Deserialize back through the same reflection registry the scene
-    // loader uses and compare every field.
+    // The document must carry the component patch; convert it back through
+    // the same reflection registry the loader uses and compare every field.
     let registry = app.world().resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
-    let registration = registry
-        .get(std::any::TypeId::of::<ReferenceImage>())
-        .expect("ReferenceImage registered");
-    let reflected = TypedReflectDeserializer::new(registration, &registry)
-        .deserialize(component_json.clone())
-        .expect("deserialize ReferenceImage from scene JSON");
-    let back = ReferenceImage::from_reflect(reflected.as_partial_reflect()).expect("from_reflect");
+    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    let node = ast.ast_for(entity).expect("registered in the document");
+    let value = jackdaw_bsn::get_bsn_field(ast, node, REFERENCE_IMAGE_TYPE_PATH, "")
+        .expect("ReferenceImage captured into the document");
+    let reflected = jackdaw_bsn::bsn_value_to_reflect(
+        &value,
+        std::any::TypeId::of::<ReferenceImage>(),
+        &registry,
+        None,
+    )
+    .expect("convert ReferenceImage back from the document");
+    let back = ReferenceImage::from_reflect(reflected.as_ref()).expect("from_reflect");
     assert_eq!(back.path, original.path);
     assert_eq!(back.opacity, original.opacity);
     assert_eq!(back.locked, original.locked);
-
-    // The serializer output matches its own round-trip input.
-    let serializer = TypedReflectSerializer::new(&original, &registry);
-    let direct = serde_json::to_value(&serializer).expect("serialize ReferenceImage");
-    assert_eq!(direct, component_json);
 }
 
 /// An empty-path reference image must get the flat placeholder

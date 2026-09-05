@@ -1,11 +1,12 @@
 use crate::core_extension::CoreExtensionInputContext;
+use crate::default_style;
 use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
 use crate::{selection::Selection, viewport::ViewportCursor};
 use bevy::{input_focus::InputFocus, prelude::*};
 use bevy_enhanced_input::prelude::Press;
 use jackdaw_api_internal::keymap::PresetInput;
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 mod build;
 mod csg_ops;
@@ -13,7 +14,6 @@ mod extend_face;
 mod interaction;
 mod plane_math;
 mod preview_mesh;
-mod stable_id;
 mod state;
 
 pub(crate) use self::build::*;
@@ -22,7 +22,6 @@ pub(crate) use self::extend_face::*;
 pub(crate) use self::interaction::*;
 pub(crate) use self::plane_math::*;
 pub(crate) use self::preview_mesh::*;
-pub(crate) use self::stable_id::*;
 pub(crate) use self::state::*;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -94,8 +93,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<DrawBrushCancelCutOp>()
         .register_menu_entry::<ActivateDrawBrushModalOp>(TopLevelMenu::Add);
 
-    ctx.init_resource::<DrawBrushState>()
-        .init_resource::<StableIdCounter>();
+    ctx.init_resource::<DrawBrushState>();
 }
 
 /// Draw a new brush in the viewport.
@@ -228,8 +226,7 @@ pub(crate) fn draw_brush_toggle_mode(
     OperatorResult::Finished
 }
 
-/// Close the in-progress polygon (via convex hull) and switch to
-/// extruding depth.
+/// Close the in-progress polygon and switch to extruding depth.
 #[operator(
     id = "viewport.draw_brush.commit_polygon",
     label = "Commit Polygon",
@@ -243,11 +240,12 @@ pub(crate) fn draw_brush_commit_polygon(
     vp: ViewportCursor,
 ) -> OperatorResult {
     let active = draw_state.active.as_mut()?;
-    let hull = convex_hull_on_plane(&active.polygon_vertices, &active.plane);
-    if hull.len() < 3 {
+    if active.polygon_vertices.len() < 3 {
         return OperatorResult::Cancelled;
     }
-    active.polygon_vertices = hull;
+    if polygon_self_intersects_on_plane(&active.polygon_vertices, &active.plane) {
+        return OperatorResult::Cancelled;
+    }
     let viewport_cursor = (|| {
         let cursor_pos = vp.cursor()?;
         let camera_entity = active.camera.or_else(|| vp.camera_entity())?;
@@ -372,20 +370,18 @@ fn confirm_draw_brush(
             }
         }
         DrawPhase::ExtrudingDepth => {
-            if active.depth.abs() < MIN_EXTRUDE_DEPTH {
+            let has_depth = match active.mode {
+                DrawMode::Cut => active.depth <= -MIN_EXTRUDE_DEPTH,
+                DrawMode::Add => active.depth.abs() >= MIN_EXTRUDE_DEPTH,
+            };
+            if !has_depth {
                 return OperatorResult::Cancelled; // No depth, keep extruding
             }
             let active = active.clone();
             draw_state.active = None;
             match active.mode {
                 DrawMode::Add => {
-                    if !active.polygon_vertices.is_empty() {
-                        if active.append_target.is_some() {
-                            append_to_brush(&active, &mut commands);
-                        } else {
-                            spawn_polygon_brush(&active, &mut commands);
-                        }
-                    } else if active.append_target.is_some() {
+                    if active.append_target.is_some() {
                         append_to_brush(&active, &mut commands);
                     } else {
                         spawn_drawn_brush(&active, &mut commands);
@@ -415,23 +411,22 @@ pub(crate) const EXTRUDE_DEPTH_SENSITIVITY: f32 = 0.003;
 pub(crate) const MIN_FOOTPRINT_SIZE: f32 = 0.01;
 pub(crate) const MIN_EXTRUDE_DEPTH: f32 = 0.01;
 pub(crate) const MIN_FRAGMENT_SIZE: f32 = 0.005;
-/// Punch-through depth used by box-cut subtract: large enough to traverse any
-/// reasonably-sized target so the user never needs to drag for depth.
-/// Matches BoxCutter-style default behavior.
-pub(crate) const PUNCH_THROUGH_DEPTH: f32 = 1000.0;
+/// Outward pad on Cut prisms so the cutter crosses the start face.
+pub(crate) const CUT_FACE_PAD: f32 = 1e-3;
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
 pub struct DrawBrushGizmoGroup;
+
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub struct DrawBrushDashedGizmoGroup;
 
 pub struct DrawBrushPlugin;
 
 impl Plugin for DrawBrushPlugin {
     fn build(&self, app: &mut App) {
         // TODO: Move *all* of this into the `extension` method and turn systems into ops on the way.
-        app.register_type::<BrushStableId>()
-            .init_resource::<StableIdCounter>()
-            .add_systems(Update, assign_missing_brush_stable_ids)
-            .init_gizmo_group::<DrawBrushGizmoGroup>()
+        app.init_gizmo_group::<DrawBrushGizmoGroup>()
+            .init_gizmo_group::<DrawBrushDashedGizmoGroup>()
             .add_systems(Startup, configure_draw_brush_gizmos)
             .add_systems(
                 Update,
@@ -455,6 +450,10 @@ impl Plugin for DrawBrushPlugin {
 fn configure_draw_brush_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
     let (config, _) = config_store.config_mut::<DrawBrushGizmoGroup>();
     config.depth_bias = -1.0;
+
+    let (config, _) = config_store.config_mut::<DrawBrushDashedGizmoGroup>();
+    config.depth_bias = -1.0;
+    config.line = default_style::DEFAULT_DASHED_LINE_CONFIG;
 }
 
 /// Marker action: Alt+B starts a draw that appends the new brush to
@@ -476,6 +475,10 @@ fn dispatch_start_add_append(_: On<Start<StartDrawBrushAddAppendAction>>, mut co
         .operator(ActivateDrawBrushModalOp::ID)
         .param("mode", "Add")
         .param("append", true)
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        })
         .call();
 }
 
@@ -493,5 +496,9 @@ fn dispatch_start_cut(
     commands
         .operator(ActivateDrawBrushModalOp::ID)
         .param("mode", "Cut")
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        })
         .call();
 }

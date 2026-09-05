@@ -1,8 +1,8 @@
 [package]
 name = "jackdaw_sdk"
-version = "0.5.0"
+version.workspace = true
 edition = "2024"
-description = "Single proxy dylib shipped with jackdaw. Extensions link against this via `cargo rustc --extern bevy=libjackdaw_sdk.so --extern jackdaw_api=libjackdaw_sdk.so` so they share one compilation of bevy + jackdaw types with the editor."
+description = "SDK facade shipped with Jackdaw. Extensions compile through it and import the shared Bevy and Jackdaw runtime libraries used by the editor."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
@@ -14,8 +14,33 @@ repository = "https://github.com/jbuehler23/jackdaw"
 crate-type = ["lib", "dylib"]
 
 [dependencies]
-bevy.workspace = true
-jackdaw_api.workspace = true
+# The SDK dylib is a facade, not the owner of Bevy or Jackdaw's runtime
+# closure. Those live in separate `bevy_dylib` and `jackdaw_dylib` shared
+# libraries so Windows stays below the PE export ceiling and marketplace
+# extensions share process-wide registries with the editor on every platform.
+# Keep the features here (rather than relying only on the editor's feature
+# unification) because first-run SDK bootstrap builds this package directly.
+bevy = { workspace = true, features = ["dynamic_linking"] }
+jackdaw_api = { workspace = true, features = ["dynamic_linking"] }
+# Every feature an extension can turn on, so the SDK's feature resolution
+# is a superset of any extension's.
+#
+# Cargo resolves features per package selection. This crate is what a
+# packaged SDK is built from, so anything an extension enables that the SDK
+# did not gets compiled against SDK rlibs that were built without it: a
+# default physics-enabled graph pulls `bevy_math/approx` through the
+# physics integration, and against an SDK whose `glam` lacks `approx`
+# that fails on missing trait impls in a crate the user never named.
+# Depending on the whole runtime here also puts its closure in the SDK
+# manifest, so extensions redirect those crates instead of rebuilding
+# them.
+jackdaw_runtime = { workspace = true, features = [
+    "render",
+    "physics",
+    "pie",
+    "terrain",
+    "navmesh",
+] }
 
 [lints]
 workspace = true

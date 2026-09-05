@@ -17,22 +17,17 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use bevy::reflect::TypePath;
-use jackdaw_jsn::format::{JsnAssets, JsnEntity, JsnHeader, JsnMetadata, JsnScene};
 use jackdaw_runtime::{JackdawPlugin, JackdawScene, JackdawSceneRoot};
-use serde_json::json;
 
-/// One face with an UNASSIGNED material (`null`), exactly as the editor
-/// serializes a face that has no material applied.
-fn unassigned_face(normal: [f32; 3], distance: f32) -> serde_json::Value {
-    json!({
-        "material": null,
-        "plane": { "normal": normal, "distance": distance },
-        "uv_offset": [0.0, 0.0],
-        "uv_scale": [1.0, 1.0],
-        "uv_rotation": 0.0,
-        "uv_u_axis": [0.0, 0.0, 1.0],
-        "uv_v_axis": [0.0, -1.0, 0.0],
-    })
+/// One face with an UNASSIGNED material: the `material` field is omitted so it
+/// reflects to the default `Handle<StandardMaterial>`, exactly as a face that
+/// has no material applied. Only the plane geometry is authored.
+fn unassigned_face(normal: [f32; 3], distance: f32) -> String {
+    format!(
+        "jackdaw_geometry::BrushFaceData {{ plane: jackdaw_geometry::BrushPlane {{ \
+normal: glam::Vec3 {{ x: {:?}, y: {:?}, z: {:?} }}, distance: {:?} }} }}",
+        normal[0] as f64, normal[1] as f64, normal[2] as f64, distance as f64,
+    )
 }
 
 #[test]
@@ -46,33 +41,18 @@ fn null_material_brush_loads_headless_under_render_feature() {
     app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
     app.add_plugins(JackdawPlugin);
 
-    let brush_type_path = <jackdaw_jsn::Brush as TypePath>::type_path().to_string();
+    let brush_type_path = <jackdaw_scene_types::Brush as TypePath>::type_path();
 
-    let scene = JsnScene {
-        jsn: JsnHeader::default(),
-        metadata: JsnMetadata::default(),
-        editor: None,
-        assets: JsnAssets::default(),
-        scene: vec![JsnEntity {
-            id: None,
-            parent: None,
-            components: [(
-                brush_type_path,
-                json!({
-                    "faces": [
-                        unassigned_face([1.0, 0.0, 0.0], 1.0),
-                        unassigned_face([-1.0, 0.0, 0.0], 1.0),
-                        unassigned_face([0.0, 1.0, 0.0], 1.0),
-                        unassigned_face([0.0, -1.0, 0.0], 1.0),
-                        unassigned_face([0.0, 0.0, 1.0], 1.0),
-                        unassigned_face([0.0, 0.0, -1.0], 1.0),
-                    ],
-                }),
-            )]
-            .into_iter()
-            .collect(),
-        }],
-    };
+    let faces = [
+        unassigned_face([1.0, 0.0, 0.0], 1.0),
+        unassigned_face([-1.0, 0.0, 0.0], 1.0),
+        unassigned_face([0.0, 1.0, 0.0], 1.0),
+        unassigned_face([0.0, -1.0, 0.0], 1.0),
+        unassigned_face([0.0, 0.0, 1.0], 1.0),
+        unassigned_face([0.0, 0.0, -1.0], 1.0),
+    ]
+    .join(",\n        ");
+    let scene = format!("{brush_type_path} {{\n    faces: [\n        {faces},\n    ],\n}}\n");
 
     let scene_handle = app
         .world_mut()
@@ -85,7 +65,7 @@ fn null_material_brush_loads_headless_under_render_feature() {
     app.update();
     app.update();
 
-    let mut brush_query = app.world_mut().query::<&jackdaw_jsn::Brush>();
+    let mut brush_query = app.world_mut().query::<&jackdaw_scene_types::Brush>();
     let brushes: Vec<_> = brush_query.iter(app.world()).collect();
     assert_eq!(
         brushes.len(),

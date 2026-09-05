@@ -1,0 +1,38 @@
+[package]
+name = "jackdaw_project_build"
+version.workspace = true
+edition = "2024"
+description = "Editor-independent project build pipeline for the Jackdaw 3D level editor: game binaries with schema extraction, plus SDK-linked extension dylibs"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[features]
+# Pulls bevy reflection for jackdaw_schema's extractors, used by a
+# process that owns the reflected types. The editor and CLI consume the
+# wire schema without it.
+reflect = ["jackdaw_schema/reflect"]
+# Bake the SDK-builder recipe into the binary so a shipped jackdaw can
+# bootstrap its SDK on first use. Off by default: assembling and
+# embedding the crate sources is only wanted in packaged release builds,
+# and it would slow ordinary dev compiles.
+embed-recipe = []
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+# Plugin detection parses the project's sources. Scanning them as text
+# cannot be made correct: comments, string literals, and nested modules
+# all defeat it, and a wrong answer here is pasted into generated code.
+syn = { version = "2", features = ["full", "parsing"] }
+toml = "0.8"
+tracing = { workspace = true }
+jackdaw_schema.workspace = true
+jackdaw_env.workspace = true
+
+[build-dependencies]
+# The build script assembles the embedded SDK-builder recipe: it parses
+# the workspace manifest to generate the recipe's `[workspace.dependencies]`.
+toml = "0.8"
+
+[lints]
+workspace = true

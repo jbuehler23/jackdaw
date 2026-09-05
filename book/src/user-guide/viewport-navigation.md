@@ -1,8 +1,7 @@
 # Viewport navigation
 
-The viewport uses a fly-camera scheme that should feel
-familiar if you have used Hammer, TrenchBroom, or Unreal's
-perspective view. Right-mouse-button to look, WASD to move.
+The viewport uses the fly-camera scheme common to level
+editors: right-mouse-button to look, WASD to move.
 
 The full key list lives in
 [Keyboard Shortcuts](keyboard-shortcuts.md); this page is the

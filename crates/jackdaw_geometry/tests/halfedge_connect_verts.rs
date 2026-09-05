@@ -1,5 +1,5 @@
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::connect_verts::connect_verts};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn connect_two_opposite_verts_of_quad_face_splits_into_two_tris() {

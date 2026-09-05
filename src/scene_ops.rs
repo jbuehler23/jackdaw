@@ -1,11 +1,10 @@
-//! Scene I/O operators: new / open / save / save as / save selection
-//! as prefab / open recent.
+//! Scene I/O operators: save / save as / save selection as prefab /
+//! open recent.
 //!
 //! These wrap the existing free functions in [`crate::scene_io`] so they
 //! can be dispatched uniformly through the operator API (menu, keybind,
 //! F3 command palette, extension code). BEI bindings for the
-//! usual Ctrl+N / Ctrl+O / Ctrl+S / Ctrl+Shift+S keybinds are attached
-//! here.
+//! usual Ctrl+S / Ctrl+Shift+S keybinds are attached here.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -14,42 +13,41 @@ use jackdaw_api_internal::keymap::PresetInput;
 use crate::core_extension::CoreExtensionInputContext;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<SceneNewOp>()
-        .register_operator::<SceneOpenOp>()
-        .register_operator::<SceneSaveOp>()
+    ctx.register_operator::<SceneSaveOp>()
         .register_operator::<SceneSaveAsOp>()
         .register_operator::<SceneSaveSelectionAsPrefabOp>()
         .register_operator::<SceneOpenRecentOp>();
 
-    ctx.bind_operator::<CoreExtensionInputContext, SceneNewOp>([PresetInput::key("KeyN")
-        .ctrl()
-        .shift()]);
-    ctx.bind_operator::<CoreExtensionInputContext, SceneOpenOp>([PresetInput::key("KeyO").ctrl()]);
-    ctx.bind_operator::<CoreExtensionInputContext, SceneSaveOp>([PresetInput::key("KeyS").ctrl()]);
+    ctx.bind_operator::<CoreExtensionInputContext, SceneSaveOp>([
+        PresetInput::key("KeyS").ctrl_or_super()
+    ]);
     ctx.bind_operator::<CoreExtensionInputContext, SceneSaveAsOp>([PresetInput::key("KeyS")
-        .ctrl()
+        .ctrl_or_super()
         .shift()]);
 }
 
-#[operator(id = "scene.new", label = "New")]
-pub(crate) fn scene_new(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        crate::scene_io::new_scene(world);
-    });
-    OperatorResult::Finished
-}
-
-#[operator(id = "scene.open", label = "Open")]
-pub fn scene_open(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        crate::scene_io::load_scene(world);
-    });
-    OperatorResult::Finished
-}
-
-#[operator(id = "scene.save", label = "Save", allows_undo = false)]
-pub fn scene_save(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(|world: &mut World| {
+#[operator(
+    id = "scene.save",
+    label = "Save",
+    allows_undo = false,
+    params(path(
+        String,
+        doc = "Where to save. Defaults to where the scene already lives, \
+               and asks when it does not live anywhere yet."
+    ))
+)]
+pub fn scene_save(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    // A named destination stands in for the Save As dialog. It renames the tab first, so
+    // everything the save writes beside the scene (terrain sidecars, the baked navmesh)
+    // lands beside the new name.
+    let path = params
+        .as_str("path")
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned);
+    commands.queue(move |world: &mut World| {
+        if let Some(path) = path {
+            crate::scene_io::retarget_active_scene(world, &path);
+        }
         crate::scene_io::save_scene(world);
     });
     OperatorResult::Finished
@@ -86,8 +84,8 @@ pub(crate) fn scene_save_selection_as_prefab(
             .and_then(|e| world.get::<Name>(*e).map(|n| n.as_str().to_string()))
             .unwrap_or_else(|| "prefab".to_string());
         let target = match world.get_resource::<crate::project::ProjectRoot>() {
-            Some(root) => root.root.join("assets/prefabs").join(format!("{name}.jsn")),
-            None => std::path::PathBuf::from(format!("{name}.jsn")),
+            Some(root) => root.root.join("assets/prefabs").join(format!("{name}.bsn")),
+            None => std::path::PathBuf::from(format!("{name}.bsn")),
         };
         crate::prefab::operators::save_as_prefab_from_selection(world, &selection, &target);
     });

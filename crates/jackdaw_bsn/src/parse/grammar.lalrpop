@@ -1,0 +1,165 @@
+// BSN grammar. The RULES track the dynamic-BSN grammar from
+// bevyengine/bevy#23576 verbatim (plus the jackdaw `map[...]` literal); the
+// ACTIONS diverge from that PR: instead of spawning a parser-only entity AST
+// that a later pass converts, they build the document types directly - owned
+// `BsnValue` trees for expressions, and document patch entities spawned into
+// the target `SceneBsnAst`. The parser's output IS the editor document.
+
+use crate::document::{
+    BsnField, BsnPatch, BsnPatches, BsnStructData, BsnStructFields, BsnTupleStructData, BsnValue,
+    SceneBsnAst,
+};
+use crate::parse::lexer;
+use bevy::ecs::entity::Entity;
+use std::cell::RefCell;
+
+grammar(ast: &RefCell<SceneBsnAst>);
+
+pub TopLevelPatches: Entity = {
+    <p:Patch*> => ast.borrow_mut().world.spawn(BsnPatches(p)).id(),
+}
+
+pub Patches: Entity = {
+    <p:Patch+> => ast.borrow_mut().world.spawn(BsnPatches(p)).id(),
+};
+
+pub Patch: Entity = {
+    <n:Name> => ast.borrow_mut().world.spawn(BsnPatch::Name(n)).id(),
+    <b:Base> => ast.borrow_mut().world.spawn(BsnPatch::Base(b)).id(),
+    <r:Relation> => ast.borrow_mut().world.spawn(BsnPatch::Children(r)).id(),
+    <a:"@"?> <s:Symbol> => {
+        let patch = if a.is_some() {
+            BsnPatch::Template(s, None)
+        } else {
+            BsnPatch::Type(s)
+        };
+        ast.borrow_mut().world.spawn(patch).id()
+    },
+    <a:"@"?> <s:Symbol> "{" <f:Fields> "}" => {
+        let patch = if a.is_some() {
+            BsnPatch::Template(s, Some(BsnStructFields(f)))
+        } else {
+            BsnPatch::Struct(BsnStructData {
+                type_path: s,
+                fields: BsnStructFields(f),
+            })
+        };
+        ast.borrow_mut().world.spawn(patch).id()
+    },
+    <a:"@"?> <s:Symbol> "(" <n:NamedTupleArgs> ")" => {
+        ast.borrow_mut().world.spawn(BsnPatch::TupleStruct(BsnTupleStructData {
+            type_path: s,
+            values: n,
+        })).id()
+    },
+};
+
+Name: String = {
+    "#" <i:"ident"> => i,
+    "#" <s:"string_lit"> => s,
+};
+
+Base: String = {
+    ":" <s:"string_lit"> => s,
+};
+
+Symbol: String = {
+    <s:Symbol> "::" <n:"ident"> => { let mut s = s; s.push_str("::"); s.push_str(&n); s },
+    <n:"ident"> => n,
+};
+
+Fields: Vec<BsnField> = {
+    => Vec::new(),
+    <f:FieldsInner> ","? => f,
+}
+
+FieldsInner: Vec<BsnField> = {
+    <t:Field> => { let mut v = Vec::new(); v.push(t); v },
+    <h:FieldsInner> "," <t:Field> => { let mut h = h; h.push(t); h },
+};
+
+Field: BsnField = {
+    <n:"ident"> ":" <e:Expr> => BsnField { name: n, value: e },
+};
+
+NamedTupleArgs: Vec<BsnValue> = {
+    => Vec::new(),
+    <n:NamedTupleArgsInner> ","? => n,
+};
+
+NamedTupleArgsInner: Vec<BsnValue> = {
+    <t:Expr> => { let mut v = Vec::new(); v.push(t); v },
+    <h:NamedTupleArgsInner> "," <t:Expr> => { let mut h = h; h.push(t); h },
+};
+
+Expr: BsnValue = {
+    <a:"@"?> <s:Symbol> => BsnValue::Type(s),
+    <a:"@"?> <s:Symbol> "{" <f:Fields> "}" => {
+        BsnValue::Struct(BsnStructData {
+            type_path: s,
+            fields: BsnStructFields(f),
+        })
+    },
+    <a:"@"?> <s:Symbol> "(" <n:NamedTupleArgs> ")" => {
+        BsnValue::TupleStruct(BsnTupleStructData {
+            type_path: s,
+            values: n,
+        })
+    },
+    <s:"string_lit"> => BsnValue::String(s),
+    <f:"float_lit"> => BsnValue::Float(f),
+    <b:"bool_lit"> => BsnValue::Bool(b),
+    <i:"int_lit"> => BsnValue::Int(i),
+    "[" <n:NamedTupleArgsInner> ","? "]" => BsnValue::List(n),
+    "[" "]" => BsnValue::List(Vec::new()),
+    "map" "[" <p:MapPairsInner> ","? "]" => BsnValue::Map(p),
+    "map" "[" "]" => BsnValue::Map(Vec::new()),
+};
+
+MapPairsInner: Vec<(BsnValue, BsnValue)> = {
+    <t:MapPair> => { let mut v = Vec::new(); v.push(t); v },
+    <h:MapPairsInner> "," <t:MapPair> => { let mut h = h; h.push(t); h },
+};
+
+MapPair: (BsnValue, BsnValue) = {
+    "(" <k:Expr> "," <v:Expr> ")" => (k, v),
+};
+
+Relation: Vec<Entity> = {
+    <s:Symbol> "[" <r:Relations> "]" => r,
+};
+
+Relations: Vec<Entity> = {
+    => Vec::new(),
+    <r:RelationsInner> ","? => r,
+};
+
+RelationsInner: Vec<Entity> = {
+    <h:RelationsInner> "," <t:Patches> => { let mut h = h; h.push(t); h },
+    <t:Patches> => { let mut v = Vec::new(); v.push(t); v },
+};
+
+extern {
+    type Location = usize;
+    type Error = lexer::Error;
+
+    enum lexer::Token {
+        "ident" => lexer::Token::Ident(<String>),
+        "string_lit" => lexer::Token::StringLit(<String>),
+        "float_lit" => lexer::Token::FloatLit(<f64>),
+        "bool_lit" => lexer::Token::BoolLit(<bool>),
+        "int_lit" => lexer::Token::IntLit(<i128>),
+        "[" => lexer::Token::LBracket,
+        "]" => lexer::Token::RBracket,
+        "(" => lexer::Token::LParen,
+        ")" => lexer::Token::RParen,
+        "{" => lexer::Token::LBrace,
+        "}" => lexer::Token::RBrace,
+        "," => lexer::Token::Comma,
+        ":" => lexer::Token::Colon,
+        "#" => lexer::Token::Hash,
+        "@" => lexer::Token::At,
+        "::" => lexer::Token::DoubleColon,
+        "map" => lexer::Token::Map,
+    }
+}

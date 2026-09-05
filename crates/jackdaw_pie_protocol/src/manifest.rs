@@ -10,20 +10,17 @@ use serde::Deserialize;
 
 use crate::event::PieMode;
 
-/// One launchable run configuration.
-#[derive(Deserialize, Clone, Debug)]
+/// One launchable run configuration. Every run launches the same
+/// game binary; configs differ only in launch environment, not in
+/// what gets built.
+#[derive(Deserialize, Clone, Debug, Default)]
 pub struct RunConfig {
-    /// cargo binary target to build and run.
-    pub bin: String,
-    /// Dropdown label; defaults to `bin`.
+    /// Dropdown label; defaults to `Play`.
     #[serde(default)]
     pub name: Option<String>,
     /// Number of individually launchable copies (`Label #1..#N`).
     #[serde(default = "one")]
     pub instances: u32,
-    /// Extra cargo features for this bin's build.
-    #[serde(default)]
-    pub features: Vec<String>,
     /// Process env vars set on the child; the game's own input surface.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
@@ -45,13 +42,18 @@ fn one() -> u32 {
 impl RunConfig {
     /// The label shown in the dropdown.
     pub fn label(&self) -> &str {
-        self.name.as_deref().unwrap_or(&self.bin)
+        self.name.as_deref().unwrap_or("Play")
     }
 }
 
 /// The parsed `jackdaw.toml`.
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Manifest {
+    /// Optional name of the project's root Bevy `Plugin`. Recorded by
+    /// import/setup and checked by doctor; Play launches the cargo
+    /// binary, which adds the plugin itself.
+    #[serde(default)]
+    pub plugin: Option<String>,
     #[serde(default, rename = "run")]
     pub runs: Vec<RunConfig>,
 }
@@ -71,39 +73,39 @@ mod tests {
     fn label_and_defaults() {
         let m: Manifest = toml::from_str(
             r#"[[run]]
-bin = "my_game""#,
+name = "My Game""#,
         )
         .unwrap();
-        assert_eq!(m.runs[0].label(), "my_game");
+        assert_eq!(m.runs[0].label(), "My Game");
         assert_eq!(m.runs[0].instances, 1);
         assert_eq!(m.runs[0].mode, PieMode::Play);
+        assert!(m.plugin.is_none());
     }
 
     #[test]
     fn full_entry_parses() {
         let m: Manifest = toml::from_str(
             r#"
+plugin = "MyGamePlugin"
+
 [[run]]
 name = "Client"
-bin = "cli"
 instances = 4
-features = ["world/pie"]
 env = { ADDR = "127.0.0.1:5000" }
 "#,
         )
         .unwrap();
+        assert_eq!(m.plugin.as_deref(), Some("MyGamePlugin"));
         assert_eq!(m.runs[0].label(), "Client");
         assert_eq!(m.runs[0].instances, 4);
-        assert_eq!(m.runs[0].features, vec!["world/pie"]);
         assert_eq!(m.runs[0].env.get("ADDR").unwrap(), "127.0.0.1:5000");
-        assert_eq!(m.run_by_name("Client").unwrap().bin, "cli");
+        assert_eq!(m.run_by_name("Client").unwrap().instances, 4);
     }
 
     #[test]
     fn editor_preview_mode_parses() {
         let m: Manifest = toml::from_str(
             r#"[[run]]
-bin = "g"
 mode = "editor-preview""#,
         )
         .unwrap();

@@ -135,7 +135,7 @@ pub(crate) fn edit_mode_vertex(
     brush_selection: ResMut<BrushSelection>,
     draw_state: ResMut<DrawBrushState>,
     selection: Res<Selection>,
-    brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    brushes: Query<(), With<jackdaw_scene_types::Brush>>,
     children: Query<&Children>,
 ) -> OperatorResult {
     switch_brush_edit_mode(
@@ -161,7 +161,7 @@ pub(crate) fn edit_mode_edge(
     brush_selection: ResMut<BrushSelection>,
     draw_state: ResMut<DrawBrushState>,
     selection: Res<Selection>,
-    brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    brushes: Query<(), With<jackdaw_scene_types::Brush>>,
     children: Query<&Children>,
 ) -> OperatorResult {
     switch_brush_edit_mode(
@@ -187,7 +187,7 @@ pub(crate) fn edit_mode_face(
     brush_selection: ResMut<BrushSelection>,
     draw_state: ResMut<DrawBrushState>,
     selection: Res<Selection>,
-    brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    brushes: Query<(), With<jackdaw_scene_types::Brush>>,
     children: Query<&Children>,
 ) -> OperatorResult {
     switch_brush_edit_mode(
@@ -213,7 +213,7 @@ pub(crate) fn edit_mode_clip(
     brush_selection: ResMut<BrushSelection>,
     draw_state: ResMut<DrawBrushState>,
     selection: Res<Selection>,
-    brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    brushes: Query<(), With<jackdaw_scene_types::Brush>>,
     children: Query<&Children>,
 ) -> OperatorResult {
     switch_brush_edit_mode(
@@ -242,7 +242,7 @@ pub(crate) fn edit_mode_knife(
     brush_selection: ResMut<BrushSelection>,
     draw_state: ResMut<DrawBrushState>,
     selection: Res<Selection>,
-    brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    brushes: Query<(), With<jackdaw_scene_types::Brush>>,
     children: Query<&Children>,
 ) -> OperatorResult {
     switch_brush_edit_mode(
@@ -262,7 +262,7 @@ fn switch_brush_edit_mode(
     mut brush_selection: ResMut<BrushSelection>,
     mut draw_state: ResMut<DrawBrushState>,
     selection: Res<Selection>,
-    brushes: Query<(), With<jackdaw_jsn::Brush>>,
+    brushes: Query<(), With<jackdaw_scene_types::Brush>>,
     children: Query<&Children>,
 ) -> OperatorResult {
     draw_state.active = None;

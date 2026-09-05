@@ -137,7 +137,7 @@ pub fn update_connection_endpoints(
         let target_local = target_screen - viewport_top_left;
 
         // Cubic Bezier control points: horizontal handles whose length is
-        // half the x-distance. Gives the familiar Unreal/Blender S-wire.
+        // half the x-distance. Gives the familiar node-graph S-wire.
         let dx = (target_local.x - source_local.x).abs().max(40.0);
         let p1 = source_local + Vec2::new(dx * 0.5, 0.0);
         let p2 = target_local - Vec2::new(dx * 0.5, 0.0);

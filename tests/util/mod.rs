@@ -23,6 +23,10 @@ pub fn headless_app() -> App {
                 })),
                 ..default()
             })
+            // Headless integration tests never exercise sound. Disabling the
+            // backend avoids attempts to connect to host ALSA/JACK services,
+            // which can otherwise block an otherwise-complete test process.
+            .disable::<bevy::audio::AudioPlugin>()
             .disable::<WinitPlugin>(),
     )
     // Ambient plugins moved to the binary entry point (matches
@@ -34,7 +38,7 @@ pub fn headless_app() -> App {
         avian3d::prelude::PhysicsPlugins::default(),
         bevy_enhanced_input::prelude::EnhancedInputPlugin,
     ))
-    .add_plugins(EditorPlugins::default());
+    .add_plugins(JackdawEditorPlugins::default());
     // Bevy 0.19's component-sync hooks (`On<Remove, SyncToRenderWorld>`) read the
     // main-world `PendingSyncEntity` resource that `SyncWorldPlugin` installs.
     // The headless `RenderPlugin` (no backend) never spins up the render world,
@@ -112,6 +116,149 @@ pub fn iter_operator_ids(app: &mut App) -> Vec<Cow<'static, str>> {
     ids
 }
 
+/// Copy a fixture crate from `tests/fixtures/<name>` into a staging dir under
+/// `target/` and return the staged path. Building one writes a lockfile, a
+/// redirect plan and a target dir, none of which belong in the committed tree.
+/// The staged target dir survives between runs so dependencies are not rebuilt.
+///
+/// Staging preserves the layout, so a fixture depending on `../sibling` works
+/// as long as the caller stages that sibling too.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "the SDK-pipeline tests use this")]
+pub fn stage_fixture(name: &str) -> std::path::PathBuf {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let src = root.join("tests/fixtures").join(name);
+    assert!(src.is_dir(), "no fixture crate at {}", src.display());
+    let dst = root.join("target/fixture-stage").join(name);
+    copy_dir(&src, &dst);
+    dst
+}
+
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "only reachable through stage_fixture")]
+fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
+    std::fs::create_dir_all(dst).expect("create staging dir");
+    for entry in std::fs::read_dir(src).expect("read fixture dir") {
+        let entry = entry.expect("fixture dir entry");
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir(&from, &to);
+        } else {
+            std::fs::copy(&from, &to)
+                .unwrap_or_else(|e| panic!("copy {} -> {}: {e}", from.display(), to.display()));
+        }
+    }
+}
+
+/// Every registered `(id, label)` pair. Two entries sharing an id means two
+/// subsystems registered that id; the dispatcher's index is last-registration
+/// -wins, so only one of them is reachable by id.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "scene op id tests use this")]
+pub fn operator_id_labels(app: &mut App) -> Vec<(&'static str, &'static str)> {
+    app.world_mut()
+        .query::<&OperatorEntity>()
+        .iter(app.world())
+        .map(|op| (op.id(), op.label()))
+        .collect()
+}
+
+/// Every label registered under `id`. More than one entry means the id is
+/// ambiguous; see [`operator_id_labels`].
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "scene op id tests use this")]
+pub fn operator_labels(app: &mut App, id: &str) -> Vec<&'static str> {
+    app.world_mut()
+        .query::<&OperatorEntity>()
+        .iter(app.world())
+        .filter(|op| op.id() == id)
+        .map(OperatorEntity::label)
+        .collect()
+}
+
+/// Launch a built game binary windowless over the PIE link, wait for
+/// the game to report `BSN_SCENE_LOADED ... has_target=true` on stderr, and
+/// return whether it did along with the captured stderr. Shared by the
+/// end-to-end Play tests.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "only the binary Play e2e tests use this")]
+pub fn run_windowless_game(
+    binary: &std::path::Path,
+    cwd: &std::path::Path,
+    extra_env: &[(&str, &std::ffi::OsStr)],
+) -> (bool, String) {
+    use std::io::BufRead as _;
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::{Duration, Instant};
+
+    let (handle, server_name) = jackdaw_pie_protocol::serve().expect("open the ipc rendezvous");
+    let mut command = std::process::Command::new(binary);
+    jackdaw_project_build::prepare_game_command(&mut command, binary);
+    command
+        .current_dir(cwd)
+        .env("JACKDAW_PIE", &server_name)
+        .env("JACKDAW_PIE_WINDOWLESS", "1")
+        .stderr(std::process::Stdio::piped());
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().expect("spawn the game");
+
+    let child_stderr = child.stderr.take().expect("piped stderr");
+    let stderr_buf = Arc::new(Mutex::new(String::new()));
+    {
+        let stderr_buf = Arc::clone(&stderr_buf);
+        std::thread::spawn(move || {
+            let reader = std::io::BufReader::new(child_stderr);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                let mut buf = stderr_buf.lock().unwrap();
+                buf.push_str(&line);
+                buf.push('\n');
+            }
+        });
+    }
+
+    // The game's JackdawPlugin connects on boot; accept so it does not block.
+    let (accept_tx, accept_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = accept_tx.send(handle.accept());
+    });
+    // On timeout the child's stderr is the only evidence of why it never
+    // got as far as connecting.
+    let accepted = accept_rx.recv_timeout(Duration::from_secs(90));
+    if accepted.is_err() {
+        let captured = stderr_buf.lock().unwrap().clone();
+        let captured = if captured.trim().is_empty() {
+            "(the game produced no output at all)".to_string()
+        } else {
+            captured
+        };
+        let _ = child.kill();
+        panic!("the game never connected to the PIE link. Its output was:\n{captured}");
+    }
+    let _transport = accepted.expect("checked above").expect("ipc accept failed");
+
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut loaded = false;
+    while Instant::now() < deadline {
+        {
+            let buf = stderr_buf.lock().unwrap();
+            if buf.contains("BSN_SCENE_LOADED") && buf.contains("has_target=true") {
+                loaded = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let stderr = stderr_buf.lock().unwrap().clone();
+    (loaded, stderr)
+}
+
 /// Capture a scene snapshot via the `ActiveSnapshotter`. Wrapper around
 /// the standard `resource_scope` dance used by the dispatcher.
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
@@ -159,4 +306,22 @@ impl OperatorResultExt for OperatorResult {
             "Operator did not enter modal Running state"
         );
     }
+}
+
+/// Make sure the SDK's manifest and its native link search paths exist
+/// before a pipeline test drives cargo directly.
+///
+/// The driver generates these on demand, but these tests bypass it and
+/// invoke `cargo rustc` with the wrapper themselves. Without the search
+/// paths a consumer cannot find import libraries the SDK's crates link
+/// by bare name, which on Windows is every `windows.*.lib` and fails the
+/// link.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "used by the SDK pipeline tests only")]
+pub fn ensure_sdk_metadata(sdk: &jackdaw::sdk_paths::SdkPaths) {
+    use jackdaw::project_build::plan::SdkManifest;
+
+    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    SdkManifest::generate(&workspace, sdk, &["-p", "jackdaw", "--features", "dylib"])
+        .expect("generate the SDK manifest for the fixture");
 }

@@ -32,7 +32,7 @@ pub use shell::{WindowShellContent, WindowShellRoot, WindowShellSlots, spawn_win
 pub use title_bar::{
     WindowTitleBarContentSlot, WindowTitleBarDragRegion, WindowTitleBarRoot, spawn_window_title_bar,
 };
-pub use window::{primary_window_attributes, primary_window_is_maximized};
+pub use window::{primary_window_attributes, primary_window_is_maximized, surface_supports_alpha};
 
 use bevy::prelude::Component;
 

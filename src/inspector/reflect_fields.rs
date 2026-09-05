@@ -1,4 +1,3 @@
-use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
 use crate::selection::Selection;
 
 use bevy::reflect::{NamedField, UnnamedField};
@@ -292,7 +291,7 @@ fn is_editable_primitive(value: &dyn PartialReflect) -> bool {
         || value.try_downcast_ref::<String>().is_some()
 }
 
-fn spawn_field_row(
+pub(crate) fn spawn_field_row(
     commands: &mut Commands,
     parent: Entity,
     name: &str,
@@ -1775,47 +1774,21 @@ fn apply_color_with_undo(
         return;
     }
 
-    let selection = world.resource::<Selection>();
-    let targets: Vec<Entity> = selection.entities.clone();
-
-    let new_json = serde_json::to_value(new_rgba).unwrap_or_default();
-
-    let reg = registry.read();
-    let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
-
-    for &target in &targets {
-        let old_json = world
-            .resource::<jackdaw_jsn::SceneJsnAst>()
-            .get_component_field(target, type_path, field_path, &reg)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-
-        sub_commands.push(Box::new(SetJsnField {
-            entity: target,
-            type_path: type_path.to_string(),
-            field_path: field_path.to_string(),
-            old_value: old_json,
-            new_value: new_json.clone(),
-            was_derived: false,
-        }));
-    }
-    drop(reg);
-
-    if sub_commands.is_empty() {
-        return;
-    }
-
-    let mut cmd: Box<dyn EditorCommand> = if sub_commands.len() == 1 {
-        sub_commands.pop().unwrap()
-    } else {
-        Box::new(CommandGroup {
-            label: "Set color on multiple entities".to_string(),
-            commands: sub_commands,
-        })
+    // The canonical reflect JSON (`{"Srgba": {..}}`) deserializes into any
+    // `Color`-typed field; the picker's raw sRGBA array does not.
+    let srgba = Srgba::new(new_rgba[0], new_rgba[1], new_rgba[2], new_rgba[3]);
+    let new_json = {
+        let reg = registry.read();
+        color_to_canonical_json(Color::Srgba(srgba), &reg)
     };
-    cmd.execute(world);
-    let mut history = world.resource_mut::<CommandHistory>();
-    history.push_executed(cmd);
+
+    crate::commands::field_edit_commit(
+        world,
+        type_path,
+        field_path,
+        &new_json,
+        "Set color on multiple entities",
+    );
 }
 
 fn spawn_numeric_field(
@@ -1943,7 +1916,7 @@ fn spawn_editable_field(
 /// When the inspector is in PIE Live mode, apply a field edit to the selected
 /// preview entity immediately (so the viewport reflects the change) and stream
 /// a `SetComponent` to the focused running game instance. Returns `true` when
-/// handled as a live edit so the caller skips the authored `SetJsnField` path.
+/// handled as a live edit so the caller skips the authored `SetBsnField` path.
 ///
 /// The preview entity IS the normal `Selection` entity in Live mode (the
 /// projection has already applied the live overlay to it). A reverse-lookup
@@ -1986,17 +1959,21 @@ fn try_route_pie_live_field_edit(
     {
         let reg = registry.read();
         let raw = field_value.clone();
-        jackdaw_jsn::ast::set_field_in_component_json(
+        crate::component_json::set_field_in_component_json(
             &mut full_value,
             type_path,
             field_path,
             field_value,
             &reg,
         );
-        field_value_for_log =
-            jackdaw_jsn::ast::get_field_in_component_json(&full_value, type_path, field_path, &reg)
-                .cloned()
-                .unwrap_or(raw);
+        field_value_for_log = crate::component_json::get_field_in_component_json(
+            &full_value,
+            type_path,
+            field_path,
+            &reg,
+        )
+        .cloned()
+        .unwrap_or(raw);
     }
 
     crate::pie::send_control_to_focused(
@@ -2034,62 +2011,27 @@ fn color_to_canonical_json(
     })
 }
 
-/// Apply a field value change with undo support -- snapshots old value, creates command.
-/// Propagates the edit to all selected entities that have the same component.
+/// Apply a field value change with undo support via the field-edit lifecycle
+/// ([`crate::commands::field_edit_commit`]). Propagates to the current selection.
 fn apply_field_value_with_undo(
     world: &mut World,
-    _entity: Entity,
+    entity: Entity,
     type_path: &str,
     field_path: &str,
     new_value_str: &str,
 ) {
     let new_json = parse_to_json_value(new_value_str);
-    if try_route_pie_live_field_edit(world, _entity, type_path, field_path, new_json.clone()) {
+    if try_route_pie_live_field_edit(world, entity, type_path, field_path, new_json.clone()) {
         return;
     }
 
-    let registry = world.resource::<AppTypeRegistry>().clone();
-
-    // Collect all selected entities
-    let selection = world.resource::<Selection>();
-    let targets: Vec<Entity> = selection.entities.clone();
-
-    let reg = registry.read();
-    let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
-
-    for &target in &targets {
-        let old_json = world
-            .resource::<jackdaw_jsn::SceneJsnAst>()
-            .get_component_field(target, type_path, field_path, &reg)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-
-        sub_commands.push(Box::new(SetJsnField {
-            entity: target,
-            type_path: type_path.to_string(),
-            field_path: field_path.to_string(),
-            old_value: old_json,
-            new_value: new_json.clone(),
-            was_derived: false,
-        }));
-    }
-    drop(reg);
-
-    if sub_commands.is_empty() {
-        return;
-    }
-
-    let mut cmd: Box<dyn EditorCommand> = if sub_commands.len() == 1 {
-        sub_commands.pop().unwrap()
-    } else {
-        Box::new(CommandGroup {
-            label: "Set field on multiple entities".to_string(),
-            commands: sub_commands,
-        })
-    };
-    cmd.execute(world);
-    let mut history = world.resource_mut::<CommandHistory>();
-    history.push_executed(cmd);
+    crate::commands::field_edit_commit(
+        world,
+        type_path,
+        field_path,
+        &new_json,
+        "Set field on multiple entities",
+    );
 }
 
 /// Parse a text field string to the most appropriate JSON value. Integer-looking
@@ -2497,11 +2439,9 @@ pub(crate) fn on_text_edit_commit(
     });
 }
 
-/// Apply a drag-tick (non-final) numeric edit. Writes only the live ECS
-/// components for the current selection so the viewport tracks the drag,
-/// without touching the `SceneJsnAst` or minting an undo entry. The pre-drag
-/// value survives in the AST for the single `SetJsnField` pushed on
-/// `is_final`. In PIE Live mode it routes through the live-edit stream instead.
+/// Apply a drag-tick (non-final) numeric edit via [`crate::commands::field_edit_preview`].
+/// Live ECS only, no document write or minting of undo. In PIE Live mode it routes
+/// through the live-edit stream instead.
 fn apply_field_value_live(
     world: &mut World,
     source_entity: Entity,
@@ -2519,10 +2459,7 @@ fn apply_field_value_live(
     ) {
         return;
     }
-    let targets: Vec<Entity> = world.resource::<Selection>().entities.clone();
-    for target in targets {
-        crate::commands::apply_jsn_field_to_ecs(world, target, type_path, field_path, &new_json);
-    }
+    crate::commands::field_edit_preview(world, type_path, field_path, &new_json);
 }
 
 /// Write path for float drag-scrub fields. The widget emits
@@ -2530,7 +2467,7 @@ fn apply_field_value_live(
 /// on drag-end, Enter, or blur with `is_final == true`, but never
 /// self-updates its value. This re-inserts `ScrubNumberInputValue` to move
 /// the display, applies live to the ECS each tick, and pushes the
-/// undo-backed `SetJsnField` only on the final event, giving one undo entry
+/// undo-backed `SetBsnField` only on the final event, giving one undo entry
 /// per drag.
 pub(crate) fn on_numeric_value_change_f64(
     event: On<ValueChange<f64>>,
@@ -3240,46 +3177,14 @@ fn apply_enum_variant_with_undo(
         return;
     }
 
-    let selection = world.resource::<Selection>();
-    let targets: Vec<Entity> = selection.entities.clone();
-
-    let reg = registry.read();
-    let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
-
-    for &target in &targets {
-        let old_json = world
-            .resource::<jackdaw_jsn::SceneJsnAst>()
-            .get_component_field(target, type_path, field_path, &reg)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-
-        sub_commands.push(Box::new(SetJsnField {
-            entity: target,
-            type_path: type_path.to_string(),
-            field_path: field_path.to_string(),
-            old_value: old_json,
-            new_value: new_json.clone(),
-            was_derived: false,
-        }));
-    }
-    drop(reg);
-
-    if sub_commands.is_empty() {
-        return;
-    }
-
-    let mut cmd: Box<dyn EditorCommand> = if sub_commands.len() == 1 {
-        sub_commands.pop().unwrap()
-    } else {
-        Box::new(CommandGroup {
-            label: "Set enum on multiple entities".to_string(),
-            commands: sub_commands,
-        })
-    };
-    cmd.execute(world);
-    let mut history = world.resource_mut::<CommandHistory>();
-    history.push_executed(cmd);
-    // No need to flag anything  -- `refresh_enum_variants` detects the ECS
+    crate::commands::field_edit_commit(
+        world,
+        type_path,
+        field_path,
+        &new_json,
+        "Set enum on multiple entities",
+    );
+    // No need to flag anything -- `refresh_enum_variants` detects the ECS
     // variant change and rebuilds the affected subtree automatically. Same
     // goes for undo/redo since the command framework mutates the ECS too.
 }

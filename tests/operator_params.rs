@@ -15,7 +15,7 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_jsn::PropertyValue;
+use jackdaw_scene_types::PropertyValue;
 
 mod util;
 

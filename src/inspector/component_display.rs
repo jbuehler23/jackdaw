@@ -17,7 +17,7 @@ use bevy::{
     prelude::*,
     reflect::serde::TypedReflectSerializer,
     ui::Checked,
-    ui_widgets::{ToggleChecked, ValueChange},
+    ui_widgets::ToggleChecked,
 };
 use jackdaw_feathers::{
     button::ButtonOperatorCall,
@@ -46,7 +46,14 @@ use super::{
 use crate::inspector::prefab_field_dots::{PrefabInstanceCtx, inspector_type_paths_for};
 use crate::prefab::PrefabAstCache;
 use bevy::picking::hover::Hovered;
-use jackdaw_jsn::SceneJsnAst;
+
+/// The live scene-document resource bundled into one param so the systems
+/// that read it stay under the system param-count limit.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SceneAsts<'w> {
+    pub(crate) bsn: Res<'w, jackdaw_bsn::SceneBsnAst>,
+    pub(crate) project_types: Res<'w, crate::project_types::ProjectTypes>,
+}
 
 pub(crate) fn add_component_displays(
     _: On<Add, Selected>,
@@ -60,7 +67,7 @@ pub(crate) fn add_component_displays(
     icon_font: Res<IconFont>,
     editor_font: Res<EditorFont>,
     materials: Res<Assets<StandardMaterial>>,
-    ast: Res<jackdaw_jsn::SceneJsnAst>,
+    asts: SceneAsts,
     prefab_cache: Res<PrefabAstCache>,
     child_of_query: Query<&bevy::ecs::hierarchy::ChildOf>,
     isa_query: Query<&crate::prefab::IsA>,
@@ -76,8 +83,8 @@ pub(crate) fn add_component_displays(
     let source_entity = entity_ref.entity();
     let sel_count = selection.entities.len();
 
-    let jsn_type_paths = inspector_type_paths_for(
-        &ast,
+    let authored_type_paths = inspector_type_paths_for(
+        &asts.bsn,
         &prefab_cache,
         source_entity,
         entity_ref,
@@ -85,7 +92,6 @@ pub(crate) fn add_component_displays(
         &isa_query,
     );
 
-    // Build the same component panel into every Inspector instance.
     // Multi-instance dock layouts can host more than one inspector
     // tab; each gets its own UI subtree but mirrors the same data.
     for inspector in &inspectors {
@@ -103,19 +109,51 @@ pub(crate) fn add_component_displays(
             &editor_font,
             false,
             &materials,
-            &jsn_type_paths,
-            Some(&ast),
+            &authored_type_paths,
+            Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
+            Some(&asts.project_types),
         );
 
-        // Set up monitoring: watch the selected entity for InspectorDirty
         commands.entity(inspector).insert((
             InspectorTarget(primary),
             Monitor(primary),
             NotifyAdded::<InspectorDirty>::default(),
         ));
     }
+}
+
+/// Scene-document components that live under `jackdaw_scene_types` and
+/// carry the inspector's dedicated tool surfaces: `Brush` mounts the
+/// mesh card (`brush_display`, and with it the whole Mesh tab), `Terrain`
+/// mounts the scatter / quantization / channel / generation sections.
+///
+/// [`hidden_by_namespace`] exists to keep jackdaw's own bookkeeping
+/// components out of the generic list. These two are not bookkeeping --
+/// they are the scene data the user selected the entity to edit -- so
+/// culling them takes their entire tool surface with them and leaves a
+/// cube or a terrain showing nothing but `Transform`.
+const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 2] = [
+    "jackdaw_scene_types::types::Brush",
+    "jackdaw_scene_types::types::Terrain",
+];
+
+/// Whether a `jackdaw*` type is editor bookkeeping rather than something
+/// the inspector should offer as a card.
+///
+/// A namespace cull with two kinds of hole punched in it: the crates whose
+/// components are user-facing wholesale, and the individual scene-data
+/// types in [`SCENE_TYPES_WITH_INSPECTOR_CARDS`].
+fn hidden_by_namespace(full_path: &str) -> bool {
+    full_path.starts_with("jackdaw")
+        && !full_path.starts_with("jackdaw_jsn")
+        && !full_path.starts_with("jackdaw_geometry")
+        && !full_path.starts_with("jackdaw::reference_image")
+        && !full_path.starts_with("jackdaw_avian_integration")
+        && !full_path.starts_with("jackdaw_animation")
+        && !full_path.starts_with("jackdaw_multiplayer")
+        && !SCENE_TYPES_WITH_INSPECTOR_CARDS.contains(&full_path)
 }
 
 #[expect(
@@ -136,10 +174,11 @@ pub(crate) fn build_inspector_displays(
     editor_font: &EditorFont,
     _read_only: bool,
     materials: &Assets<StandardMaterial>,
-    jsn_type_paths: &HashSet<String>,
-    scene_ast: Option<&SceneJsnAst>,
+    authored_type_paths: &HashSet<String>,
+    scene_ast: Option<&jackdaw_bsn::SceneBsnAst>,
     prefab_cache: Option<&PrefabAstCache>,
     collapse_state: &super::InspectorCollapseState,
+    project_types: Option<&crate::project_types::ProjectTypes>,
 ) {
     // Show multi-selection header when multiple entities are selected
     if selection_count > 1 {
@@ -169,23 +208,25 @@ pub(crate) fn build_inspector_displays(
     let registry = type_registry.read();
 
     // Check for prefab baseline (override tracking)
-    let baseline = entity_ref.get::<jackdaw_jsn::JsnPrefabBaseline>().cloned();
+    let baseline = entity_ref
+        .get::<jackdaw_scene_types::PrefabBaseline>()
+        .cloned();
 
     // Prefab-instance context: if this entity sits inside an IsA
     // subtree, override info comes from the prefab AST + cache and the
     // revert / right-click actions route to the new prefab operators.
     let prefab_ctx: Option<PrefabInstanceCtx> = scene_ast.and_then(|ast| {
         let cache = prefab_cache?;
-        let key = ast.key_for_entity(source_entity)?;
-        if !crate::prefab::overrides::is_inside_prefab_instance(ast, key) {
+        let node = ast.ast_for(source_entity)?;
+        if !crate::prefab::overrides_bsn::is_inside_prefab_instance(ast, node) {
             return None;
         }
-        let (path, prefab_entity_id) = crate::prefab::overrides::resolve_inheritance(ast, key)?;
-        let instance_root = ast.ancestor_with_component(key, "jackdaw::prefab::components::IsA")?;
-        let instance_entity = ast.nodes.get(instance_root).and_then(|n| n.ecs_entity)?;
+        let (path, prefab_entity_id) =
+            crate::prefab::overrides_bsn::resolve_inheritance(ast, node)?;
+        let instance_entity = ast
+            .ancestor_with_component(node, "jackdaw::prefab::components::IsA")
+            .and_then(|n| ast.ecs_for_ast(n))?;
         Some(PrefabInstanceCtx {
-            entity_key: key,
-            instance_root,
             instance_entity,
             has_cached_prefab: cache.get(&path).is_some(),
             prefab_path: path,
@@ -207,14 +248,7 @@ pub(crate) fn build_inspector_displays(
             {
                 let table = registration.type_info().type_path_table();
                 let full_path = table.path();
-                if full_path.starts_with("jackdaw")
-                    && !full_path.starts_with("jackdaw_jsn")
-                    && !full_path.starts_with("jackdaw_geometry")
-                    && !full_path.starts_with("jackdaw::reference_image")
-                    && !full_path.starts_with("jackdaw_avian_integration")
-                    && !full_path.starts_with("jackdaw_animation")
-                    && !full_path.starts_with("jackdaw_multiplayer")
-                {
+                if hidden_by_namespace(full_path) {
                     return None;
                 }
                 // AST filter: hide Bevy-internal components that
@@ -236,8 +270,11 @@ pub(crate) fn build_inspector_displays(
                         || full_path.starts_with("jackdaw_avian_integration")
                         || full_path.starts_with("jackdaw_multiplayer"));
                 if !is_user_type
-                    && !jsn_type_paths.is_empty()
-                    && !jsn_type_paths.contains(full_path)
+                    && !authored_type_paths.is_empty()
+                    && !jackdaw_bsn::type_paths_include(
+                        authored_type_paths.iter().map(String::as_str),
+                        full_path,
+                    )
                 {
                     return None;
                 }
@@ -283,18 +320,14 @@ pub(crate) fn build_inspector_displays(
         })
         .collect();
 
-    // Sort: custom-category groups first, then alphabetical within
-    // each tier. `AvianCollider` is pinned to the top of its group
-    // because it carries the collider-type dropdown the user reaches
-    // for most when iterating on physics; ordering it alphabetically
-    // (where it'd sit under `RigidBody` in the Avian3d group) buries
-    // it under runtime-state components.
-    let group_pin_priority = |type_path: &str| -> u8 {
-        if type_path == "jackdaw_avian_integration::AvianCollider" {
-            0
-        } else {
-            1
-        }
+    // Sort: custom-category groups first, then by group name, then
+    // authored before derived within a group, then alphabetical.
+    let is_derived_path = |type_path: &str| -> bool {
+        !authored_type_paths.is_empty()
+            && !jackdaw_bsn::type_paths_include(
+                authored_type_paths.iter().map(String::as_str),
+                type_path,
+            )
     };
     comp_list.sort_by(|a, b| {
         let a_custom = custom_groups.contains(&a.1);
@@ -302,7 +335,7 @@ pub(crate) fn build_inspector_displays(
         b_custom
             .cmp(&a_custom)
             .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| group_pin_priority(&a.3).cmp(&group_pin_priority(&b.3)))
+            .then_with(|| is_derived_path(&a.3).cmp(&is_derived_path(&b.3)))
             .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
     });
 
@@ -337,22 +370,31 @@ pub(crate) fn build_inspector_displays(
             let (Some(ast), Some(cache)) = (scene_ast, prefab_cache) else {
                 return false;
             };
-            crate::prefab::overrides::field_is_overridden(
+            let Some(node) = ast.ast_for(source_entity) else {
+                return false;
+            };
+            let get_prefab = |p: &std::path::Path| cache.get(p);
+            crate::prefab::overrides_bsn::field_is_overridden(
                 ast,
-                cache,
-                ctx.entity_key,
+                &get_prefab,
+                node,
                 type_path,
                 None,
             )
         });
 
         let is_overridden = is_overridden_baseline || is_overridden_prefab;
+        let is_derived = !authored_type_paths.is_empty()
+            && !jackdaw_bsn::type_paths_include(
+                authored_type_paths.iter().map(String::as_str),
+                type_path.as_str(),
+            );
 
         // Forward the prefab context whenever the entity sits inside a
         // prefab instance so the right-click menu can offer Revert /
         // Apply on every component. The revert ICON's routing still
         // checks `is_overridden_prefab` below so the legacy
-        // `JsnPrefabBaseline` path keeps using its existing operator
+        // `PrefabBaseline` path keeps using its existing operator
         // when both systems coexist.
         let spec_prefab_ctx = prefab_ctx.clone();
         let revert_through_prefab = is_overridden_prefab;
@@ -409,6 +451,7 @@ pub(crate) fn build_inspector_displays(
                 entity: source_entity,
                 component: Some(component_id),
                 is_overridden,
+                is_derived,
                 prefab_ctx: spec_prefab_ctx,
                 revert_through_prefab,
                 icon_font: &icon_font.0,
@@ -424,6 +467,13 @@ pub(crate) fn build_inspector_displays(
         let type_id = components
             .get_info(component_id)
             .and_then(ComponentInfo::type_id);
+
+        // A camera card leads with what the camera frames: a live
+        // render-to-texture strip fed by the editor's mirror camera
+        // (`camera_preview`), above the reflected fields.
+        if type_id == Some(TypeId::of::<Camera3d>()) {
+            crate::camera_preview::spawn_camera_preview_strip(commands, body_entity);
+        }
 
         if let Some(type_id) = type_id
             && let Some(registration) = registry.get(type_id)
@@ -485,7 +535,7 @@ pub(crate) fn build_inspector_displays(
             }
 
             // Priority 3c: Terrain, custom inspector sections
-            if type_id == TypeId::of::<jackdaw_jsn::Terrain>() {
+            if type_id == TypeId::of::<jackdaw_scene_types::Terrain>() {
                 crate::terrain::inspector::spawn_terrain_inspector_container(commands, body_entity);
                 continue;
             }
@@ -518,6 +568,52 @@ pub(crate) fn build_inspector_displays(
             TextColor(tokens::TEXT_SECONDARY),
             ChildOf(body_entity),
         ));
+    }
+
+    // Project (schema-reported) components are not real ECS components in the
+    // editor, so the archetype pass above never sees them. Render each one the
+    // document authored on this entity from its extracted schema; values come
+    // from the document and edits round-trip back through the same field
+    // widgets (see `project_component_display`).
+    if let (Some(project_types), Some(ast)) = (project_types, scene_ast)
+        && let Some(node) = ast.ast_for(source_entity)
+    {
+        for type_path in ast.component_type_paths(node) {
+            let Some(schema) = project_types.component(&type_path) else {
+                continue;
+            };
+            let (display_entity, body_entity) = spawn_component_display(
+                commands,
+                ComponentDisplaySpec {
+                    name: &schema.short_name,
+                    type_path: &type_path,
+                    entity: source_entity,
+                    component: None,
+                    is_overridden: false,
+                    is_derived: false,
+                    prefab_ctx: None,
+                    revert_through_prefab: false,
+                    icon_font: &icon_font.0,
+                    editor_font: &editor_font.0,
+                    collapse_state,
+                },
+            );
+            commands
+                .entity(display_entity)
+                .insert(ChildOf(inspector_entity));
+            super::project_component_display::spawn_project_component_fields(
+                commands,
+                body_entity,
+                schema,
+                ast,
+                node,
+                source_entity,
+                type_registry,
+                &editor_font.0,
+                &icon_font.0,
+                names,
+            );
+        }
     }
 
     // Add Component button is in the static layout header (layout.rs entity_inspector)
@@ -593,7 +689,7 @@ pub(crate) fn on_inspector_dirty(
     editor_font: Res<EditorFont>,
     displays: Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
     materials: Res<Assets<StandardMaterial>>,
-    ast: Res<jackdaw_jsn::SceneJsnAst>,
+    asts: SceneAsts,
     prefab_cache: Res<PrefabAstCache>,
     child_of_query: Query<&bevy::ecs::hierarchy::ChildOf>,
     isa_query: Query<&crate::prefab::IsA>,
@@ -655,8 +751,8 @@ pub(crate) fn on_inspector_dirty(
         }
         let sel_count = selection.entities.len();
 
-        let jsn_type_paths = inspector_type_paths_for(
-            &ast,
+        let authored_type_paths = inspector_type_paths_for(
+            &asts.bsn,
             &prefab_cache,
             source_entity,
             entity_ref,
@@ -678,10 +774,11 @@ pub(crate) fn on_inspector_dirty(
             &editor_font,
             false,
             &materials,
-            &jsn_type_paths,
-            Some(&ast),
+            &authored_type_paths,
+            Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
+            Some(&asts.project_types),
         );
     }
 
@@ -697,50 +794,9 @@ pub(crate) fn on_inspector_dirty(
     }
 }
 
-/// Links a disclosure toggle to the collapsible section it controls. Shared by
-/// component cards and material cards; both route through `on_disclosure_change`.
-#[derive(Component)]
-pub(crate) struct DisclosureSection(pub(crate) Entity);
-
-/// Drive the section's collapsed flag and body visibility from the disclosure
-/// toggle's checked state. `value` is the expanded state, so
-/// `collapsed = !value`. The toggle does not self-manage `Checked`; set it
-/// here so the chevron rotates. Writing `CollapsibleSection.collapsed` lets
-/// `persist_inspector_collapse` record the state for the next rebuild.
-pub(crate) fn on_disclosure_change(
-    change: On<ValueChange<bool>>,
-    toggles: Query<&DisclosureSection>,
-    mut sections: Query<(&mut CollapsibleSection, &Children)>,
-    mut bodies: Query<&mut Node, With<CollapsibleBody>>,
-    mut commands: Commands,
-) {
-    let toggle = change.source;
-    let Ok(link) = toggles.get(toggle) else {
-        return;
-    };
-    let expanded = change.value;
-
-    if expanded {
-        commands.entity(toggle).insert(Checked);
-    } else {
-        commands.entity(toggle).remove::<Checked>();
-    }
-
-    let Ok((mut section, children)) = sections.get_mut(link.0) else {
-        return;
-    };
-    section.collapsed = !expanded;
-
-    for child in children.iter() {
-        if let Ok(mut node) = bodies.get_mut(child) {
-            node.display = if expanded {
-                Display::Flex
-            } else {
-                Display::None
-            };
-        }
-    }
-}
+/// The disclosure link and its handler live with the shared card widget, used by
+/// both component cards and material cards.
+pub(crate) use jackdaw_feathers::panel_card::DisclosureSection;
 
 /// Inputs to [`spawn_component_display`]. Bundled into a single
 /// struct so the call site is readable as a struct literal instead of
@@ -751,6 +807,9 @@ pub(crate) struct ComponentDisplaySpec<'a> {
     pub entity: Entity,
     pub component: Option<ComponentId>,
     pub is_overridden: bool,
+    /// True when the component is on the live entity but has no authored
+    /// document patch (`#[require]` companions, runtime inserts, etc.).
+    pub is_derived: bool,
     /// When `Some`, the entity sits inside a prefab instance. Drives
     /// the right-click menu for every component on the entity.
     pub prefab_ctx: Option<PrefabInstanceCtx>,
@@ -777,6 +836,7 @@ pub(crate) fn spawn_component_display(
         entity,
         component,
         is_overridden,
+        is_derived,
         prefab_ctx,
         revert_through_prefab,
         icon_font,
@@ -793,19 +853,25 @@ pub(crate) fn spawn_component_display(
         Display::Flex
     };
 
-    // Card frame: a feathers pane holding a header and a body.
+    // Card frame: a feathers pane holding a header and a body. The card's layout is
+    // patched onto the pane's own `Node` rather than replacing it: `pane` carries the
+    // stretch alignment that makes its header and body span the card, and `pane_body`
+    // carries the padding, row gap and rounded corners that draw the frame.
     let section_entity = commands
-        .spawn_scene(pane())
+        .spawn_scene((
+            pane(),
+            bsn! {
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    width: percent(100),
+                }
+            },
+        ))
         .insert((
             ComponentDisplay,
             ComponentName(name.to_string()),
             ComponentDisplayTypePath(type_path.to_string()),
             CollapsibleSection { collapsed },
-            Node {
-                flex_direction: FlexDirection::Column,
-                width: Val::Percent(100.0),
-                ..Default::default()
-            },
         ))
         .id();
 
@@ -817,16 +883,19 @@ pub(crate) fn spawn_component_display(
         .id();
 
     let body_entity = commands
-        .spawn_scene(pane_body())
+        .spawn_scene((
+            pane_body(),
+            bsn! {
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    width: percent(100),
+                    display: {body_display},
+                }
+            },
+        ))
         .insert((
             ComponentDisplayBody,
             CollapsibleBody,
-            Node {
-                flex_direction: FlexDirection::Column,
-                width: Val::Percent(100.0),
-                display: body_display,
-                ..Default::default()
-            },
             ChildOf(section_entity),
         ))
         .id();
@@ -875,9 +944,11 @@ pub(crate) fn spawn_component_display(
         ChildOf(toggle_area),
     ));
 
-    // Component name (orange if overridden).
+    // Component name (orange if overridden; muted when derived).
     let name_color = if is_overridden {
         default_style::INSPECTOR_OVERRIDE
+    } else if is_derived {
+        tokens::TEXT_MUTED_COLOR.into()
     } else {
         tokens::TEXT_DISPLAY_COLOR.into()
     };
@@ -909,7 +980,7 @@ pub(crate) fn spawn_component_display(
 
         // Revert button (only shown for overridden prefab components).
         // Two code paths share the visual: the legacy
-        // `JsnPrefabBaseline` system dispatches through
+        // `PrefabBaseline` system dispatches through
         // `ComponentRevertBaselineOp` (and uses `ButtonOperatorCall`
         // for the rich tooltip popover); the new prefab system calls
         // `prefab::operators::revert_component` directly with the
@@ -979,29 +1050,31 @@ pub(crate) fn spawn_component_display(
 
         // Remove component button (X icon). See revert button for the
         // tooltip-data + manual-dispatch pattern.
-        let remove_path = type_path_owned.clone();
-        let remove_call = ButtonOperatorCall::new(super::ops::ComponentRemoveOp::ID)
-            .with_param("entity", entity_param)
-            .with_param("type_path", remove_path.clone());
-        commands.spawn((
-            Text::new(String::from(Icon::X.unicode())),
-            TextFont {
-                font: font.clone().into(),
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-            Hovered::default(),
-            remove_call,
-            ChildOf(header),
-            bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-                commands
-                    .operator(super::ops::ComponentRemoveOp::ID)
-                    .param("entity", entity_param)
-                    .param("type_path", type_path_owned.clone())
-                    .call();
-            }),
-        ));
+        if !is_derived {
+            let remove_path = type_path_owned.clone();
+            let remove_call = ButtonOperatorCall::new(super::ops::ComponentRemoveOp::ID)
+                .with_param("entity", entity_param)
+                .with_param("type_path", remove_path.clone());
+            commands.spawn((
+                Text::new(String::from(Icon::X.unicode())),
+                TextFont {
+                    font: font.clone().into(),
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+                Hovered::default(),
+                remove_call,
+                ChildOf(header),
+                bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                    commands
+                        .operator(super::ops::ComponentRemoveOp::ID)
+                        .param("entity", entity_param)
+                        .param("type_path", type_path_owned.clone())
+                        .call();
+                }),
+            ));
+        }
     }
 
     // Right-click context menu on prefab-instance component headers.
@@ -1032,8 +1105,6 @@ pub(crate) fn spawn_component_display(
                 }
                 target.entity = Some(entity);
                 target.instance_entity = Some(menu_ctx.instance_entity);
-                target.entity_key = Some(menu_ctx.entity_key);
-                target.instance_root = Some(menu_ctx.instance_root);
                 target.prefab_entity_id = Some(menu_ctx.prefab_entity_id);
                 target.prefab_path = Some(menu_ctx.prefab_path.clone());
                 target.type_path = Some(menu_type_path.clone());
@@ -1127,5 +1198,81 @@ pub(crate) fn filter_inspector_components(
                 Display::None
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hidden_by_namespace;
+    use bevy::prelude::*;
+
+    /// The card's layout is patched onto the feathers pane rather than replacing its
+    /// `Node`, which would drop the padding, row gap and rounded corners `pane_body`
+    /// spawns with.
+    #[test]
+    fn the_card_layout_is_added_to_the_panes_own_node_not_swapped_for_it() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+        ));
+
+        let spawn = app.world_mut().register_system(|mut commands: Commands| {
+            commands.spawn_scene((
+                bevy::feathers::containers::pane_body(),
+                bsn! {
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        width: percent(100),
+                        display: {Display::None},
+                    }
+                },
+            ));
+        });
+        app.world_mut().run_system(spawn).expect("system runs");
+        app.world_mut().flush();
+
+        let mut nodes = app.world_mut().query::<&Node>();
+        let node = nodes.iter(app.world()).next().expect("the body spawned");
+        assert_eq!(node.width, Val::Percent(100.0), "the card's own width");
+        assert_eq!(
+            node.display,
+            Display::None,
+            "the card's own collapsed state"
+        );
+        assert_eq!(
+            node.flex_direction,
+            FlexDirection::Column,
+            "the card's own direction",
+        );
+        assert_ne!(node.padding, UiRect::ZERO, "the pane's frame padding");
+        assert_ne!(node.row_gap, Val::ZERO, "the pane's row gap");
+    }
+
+    #[test]
+    fn the_scene_data_components_with_their_own_cards_survive_the_namespace_cull() {
+        // Each mounts a dedicated inspector surface; culling either one
+        // takes a whole tool panel out of the editor.
+        assert!(!hidden_by_namespace("jackdaw_scene_types::types::Brush"));
+        assert!(!hidden_by_namespace("jackdaw_scene_types::types::Terrain"));
+    }
+
+    #[test]
+    fn editor_bookkeeping_stays_out_of_the_generic_list() {
+        assert!(hidden_by_namespace(
+            "jackdaw_scene_types::node_id::SceneNodeId"
+        ));
+        // The wholesale-allowed crates are untouched by the cull.
+        assert!(!hidden_by_namespace(
+            "jackdaw_avian_integration::AvianCollider"
+        ));
+        assert!(!hidden_by_namespace(
+            "jackdaw_geometry::modifiers::ModifierStack"
+        ));
+        // Non-jackdaw types never reach this rule's business end.
+        assert!(!hidden_by_namespace(
+            "bevy_transform::components::transform::Transform"
+        ));
     }
 }

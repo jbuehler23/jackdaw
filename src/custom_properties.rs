@@ -1,13 +1,13 @@
 use bevy::prelude::*;
 
-// Re-export types from jackdaw_jsn
-pub use jackdaw_jsn::{CustomProperties, PropertyValue};
+// Re-export types from jackdaw_scene_types.
+pub use jackdaw_scene_types::{CustomProperties, PropertyValue};
 
 pub struct CustomPropertiesPlugin;
 
 impl Plugin for CustomPropertiesPlugin {
     fn build(&self, _app: &mut App) {
-        // Note: Type registration is handled by JsnPlugin
+        // Note: Type registration is handled by SceneTypesPlugin
     }
 }
 
@@ -42,7 +42,7 @@ fn sync_custom_props_to_ast(world: &mut World, entity: Entity, props: &CustomPro
     crate::commands::sync_component_to_ast(
         world,
         entity,
-        "jackdaw_jsn::types::custom_properties::CustomProperties",
+        "jackdaw_scene_types::types::custom_properties::CustomProperties",
         props,
     );
 }

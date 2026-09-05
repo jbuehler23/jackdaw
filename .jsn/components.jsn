@@ -7,151 +7,60 @@
     ]
   },
   "components": {
-    "bevy_ui_render::BoxShadowSamples": {},
-    "bevy_post_process::bloom::settings::Bloom": {
-      "fields": {
-        "low_frequency_boost": {
-          "type": "f32"
-        },
-        "intensity": {
-          "type": "f32"
-        },
-        "scale": {
-          "type": "glam::Vec2"
-        },
-        "low_frequency_boost_curvature": {
-          "type": "f32"
-        },
-        "prefilter": {
-          "type": "bevy_post_process::bloom::settings::BloomPrefilter"
-        },
-        "high_pass_frequency": {
-          "type": "f32"
-        },
-        "composite_mode": {
-          "type": "bevy_post_process::bloom::settings::BloomCompositeMode"
-        },
-        "max_mip_dimension": {
-          "type": "u32"
-        }
-      }
-    },
-    "bevy_input_focus::autofocus::AutoFocus": {},
-    "bevy_mesh::components::Mesh3d": {},
-    "bevy_camera::visibility::VisibilityClass": {},
-    "bevy_feathers::controls::checkbox::CheckboxFrame": {},
-    "bevy_camera::components::Camera3d": {
-      "fields": {
-        "depth_load_op": {
-          "type": "bevy_camera::components::Camera3dDepthLoadOp"
-        },
-        "depth_texture_usages": {
-          "type": "bevy_camera::components::Camera3dDepthTextureUsage"
-        },
-        "screen_space_specular_transmission_steps": {
-          "type": "usize"
-        },
-        "screen_space_specular_transmission_quality": {
-          "type": "bevy_camera::components::ScreenSpaceTransmissionQuality"
-        }
-      }
-    },
-    "bevy_sprite_render::tilemap_chunk::TilemapChunk": {
-      "fields": {
-        "alpha_mode": {
-          "type": "bevy_sprite_render::mesh2d::material::AlphaMode2d"
-        },
-        "tileset": {
-          "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
-        },
-        "tile_display_size": {
-          "type": "glam::UVec2"
-        },
-        "chunk_size": {
-          "type": "glam::UVec2"
-        }
-      }
-    },
     "bevy_feathers::theme::ThemeFontColor": {},
-    "bevy_gltf::assets::GltfMeshName": {},
-    "bevy_feathers::controls::color_plane::ColorPlane": {},
-    "bevy_ui_widgets::scrollbar::Scrollbar": {
+    "bevy_ui_widgets::radio::RadioGroup": {},
+    "bevy_light::ambient_light::AmbientLight": {
       "fields": {
-        "min_thumb_length": {
+        "brightness": {
           "type": "f32"
         },
-        "target": {
-          "type": "bevy_ecs::entity::Entity"
+        "affects_lightmapped_meshes": {
+          "type": "bool"
         },
-        "orientation": {
-          "type": "bevy_ui_widgets::scrollbar::ControlOrientation"
+        "color": {
+          "type": "bevy_color::color::Color"
         }
       }
     },
-    "bevy_anti_alias::smaa::Smaa": {
+    "bevy_camera::visibility::range::VisibilityRange": {
       "fields": {
-        "preset": {
-          "type": "bevy_anti_alias::smaa::SmaaPreset"
-        }
-      }
-    },
-    "bevy_light::point_light::PointLightTexture": {
-      "fields": {
-        "image": {
-          "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
+        "end_margin": {
+          "type": "core::ops::Range<f32>"
         },
-        "cubemap_layout": {
-          "type": "bevy_camera::primitives::CubemapLayout"
-        }
-      }
-    },
-    "bevy_feathers::controls::color_plane::ColorPlaneDragState": {},
-    "bevy_sprite_render::mesh2d::wireframe2d::NoWireframe2d": {},
-    "bevy_feathers::controls::checkbox::CheckboxMark": {},
-    "bevy_camera::visibility::Visibility": {},
-    "remote_game::Inventory": {
-      "fields": {
-        "weight": {
-          "type": "f32"
+        "start_margin": {
+          "type": "core::ops::Range<f32>"
         },
-        "slots": {
-          "type": "u32"
-        }
-      }
-    },
-    "bevy_anti_alias::contrast_adaptive_sharpening::DenoiseCas": {},
-    "bevy_sprite_render::mesh2d::material::MeshMaterial2d<bevy_sprite_render::tilemap_chunk::tilemap_chunk_material::TilemapChunkMaterial>": {},
-    "bevy_mesh::morph::MeshMorphWeights": {
-      "fields": {
-        "weights": {
-          "type": "alloc::vec::Vec<f32>"
-        }
-      }
-    },
-    "bevy_anti_alias::taa::TemporalAntiAliasing": {
-      "fields": {
-        "reset": {
+        "use_aabb": {
           "type": "bool"
         }
       }
     },
-    "bevy_gltf::assets::GltfMaterialExtras": {
+    "bevy_ui_widgets::slider::SliderDragState": {
       "fields": {
-        "value": {
-          "type": "alloc::string::String"
-        }
-      }
-    },
-    "bevy_light::directional_light::DirectionalLightTexture": {
-      "fields": {
-        "tiled": {
+        "dragging": {
           "type": "bool"
         },
-        "image": {
-          "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
+        "offset": {
+          "type": "f32"
         }
       }
     },
+    "bevy_feathers::controls::button::FeathersToolButton": {},
+    "bevy_feathers::cursor::DefaultCursor": {},
+    "bevy_feathers::controls::listview::FeathersListRow": {},
+    "bevy_feathers::controls::color_swatch::ColorSwatchFg": {},
+    "bevy_feathers::controls::color_plane::FeathersColorPlane": {},
+    "bevy_camera::camera::ShadowLodOrigin": {},
+    "bevy_feathers::controls::toggle_switch::FeathersToggleSwitch": {},
+    "bevy_input_focus::InputFocusVisible": {},
+    "bevy_light::probe::LightProbe": {
+      "fields": {
+        "falloff": {
+          "type": "glam::Vec3"
+        }
+      }
+    },
+    "bevy_transform::components::transform::TransformTreeChanged": {},
     "bevy_post_process::effect_stack::ChromaticAberration": {
       "fields": {
         "intensity": {
@@ -165,65 +74,133 @@
         }
       }
     },
-    "bevy_light::volumetric::VolumetricFog": {
+    "bevy_camera::visibility::DynamicSkinnedMeshBounds": {},
+    "bevy_mesh::skinning::SkinnedMesh": {
       "fields": {
-        "ambient_intensity": {
-          "type": "f32"
+        "inverse_bindposes": {
+          "type": "bevy_asset::handle::Handle<bevy_mesh::skinning::SkinnedMeshInverseBindposes>"
         },
-        "step_count": {
-          "type": "u32"
-        },
-        "ambient_color": {
-          "type": "bevy_color::color::Color"
-        },
-        "jitter": {
-          "type": "f32"
+        "joints": {
+          "type": "alloc::vec::Vec<bevy_ecs::entity::Entity>"
         }
       }
     },
-    "bevy_camera::visibility::CascadesVisibleEntities": {},
-    "bevy_gltf::assets::GltfSceneExtras": {
+    "bevy_light::cluster::ClusterConfig": {},
+    "bevy_feathers::controls::color_slider::SliderBaseColor": {},
+    "bevy_camera::camera::Camera": {
       "fields": {
-        "value": {
-          "type": "alloc::string::String"
+        "viewport": {
+          "type": "core::option::Option<bevy_camera::camera::Viewport>"
+        },
+        "output_mode": {
+          "type": "bevy_camera::camera::CameraOutputMode"
+        },
+        "order": {
+          "type": "isize"
+        },
+        "invert_culling": {
+          "type": "bool"
+        },
+        "sub_camera_view": {
+          "type": "core::option::Option<bevy_camera::camera::SubCameraView>"
+        },
+        "computed": {
+          "type": "bevy_camera::camera::ComputedCameraValues"
+        },
+        "clear_color": {
+          "type": "bevy_camera::clear_color::ClearColorConfig"
+        },
+        "msaa_writeback": {
+          "type": "bevy_camera::clear_color::MsaaWriteback"
+        },
+        "is_active": {
+          "type": "bool"
         }
       }
     },
-    "bevy_camera::primitives::CubemapFrusta": {},
-    "bevy_post_process::auto_exposure::settings::AutoExposure": {
+    "bevy_feathers::controls::checkbox::FeathersCheckbox": {},
+    "bevy_ui_render::UiAntiAlias": {},
+    "bevy_input_focus::InputFocus": {
       "fields": {
-        "compensation_curve": {
-          "type": "bevy_asset::handle::Handle<bevy_post_process::auto_exposure::compensation_curve::AutoExposureCompensationCurve>"
+        "current_focus": {
+          "type": "core::option::Option<bevy_ecs::entity::Entity>"
         },
-        "range": {
-          "type": "core::ops::RangeInclusive<f32>"
+        "original_focus": {
+          "type": "core::option::Option<bevy_ecs::entity::Entity>"
         },
-        "filter": {
-          "type": "core::ops::RangeInclusive<f32>"
+        "recorded_changes": {
+          "type": "alloc::vec::Vec<core::option::Option<(bevy_ecs::entity::Entity, bevy_input_focus::gained_and_lost::FocusCause)>>"
+        }
+      }
+    },
+    "bevy_camera::primitives::Frustum": {},
+    "bevy_feathers::controls::color_slider::ColorSliderThumb": {},
+    "bevy_sprite_render::mesh2d::material::MeshMaterial2d<bevy_sprite_render::sprite_mesh::sprite_material::SpriteMaterial>": {},
+    "bevy_ui_widgets::text_input::QueuedSelectAll": {},
+    "bevy_scene::components::SceneRoot": {},
+    "bevy_ui_widgets::text_input::SelectAllOnFocus": {},
+    "bevy_ui_widgets::menu::MenuPopup": {
+      "fields": {
+        "layout": {
+          "type": "bevy_ui_widgets::menu::MenuLayout"
+        }
+      }
+    },
+    "bevy_feathers::controls::radio::RadioOutline": {},
+    "bevy_feathers::controls::button::ButtonVariant": {},
+    "bevy_ui_widgets::scrollbar::ScrollbarThumb": {
+      "fields": {
+        "border_radius": {
+          "type": "bevy_ui::ui_node::BorderRadius"
         },
-        "speed_brighten": {
-          "type": "f32"
+        "border": {
+          "type": "bevy_ui::geometry::UiRect"
+        }
+      }
+    },
+    "bevy_camera::visibility::ViewVisibility": {},
+    "bevy_feathers::controls::color_slider::ColorSliderTrack": {},
+    "bevy_light::point_light::PointLightTexture": {
+      "fields": {
+        "cubemap_layout": {
+          "type": "bevy_camera::primitives::CubemapLayout"
         },
-        "exponential_transition_distance": {
-          "type": "f32"
-        },
-        "speed_darken": {
-          "type": "f32"
-        },
-        "metering_mask": {
+        "image": {
           "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
         }
       }
     },
-    "bevy_mesh::components::Mesh2d": {},
-    "bevy_feathers::controls::color_swatch::ColorSwatch": {},
-    "bevy_camera::visibility::ViewVisibility": {},
-    "bevy_light::cascade::CascadeShadowConfig": {
+    "bevy_post_process::effect_stack::vignette::Vignette": {
       "fields": {
-        "overlap_proportion": {
+        "intensity": {
           "type": "f32"
         },
+        "color": {
+          "type": "bevy_color::color::Color"
+        },
+        "edge_compensation": {
+          "type": "f32"
+        },
+        "radius": {
+          "type": "f32"
+        },
+        "smoothness": {
+          "type": "f32"
+        },
+        "center": {
+          "type": "glam::Vec2"
+        },
+        "roundness": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_light::cascade::CascadeShadowConfig": {
+      "fields": {
         "minimum_distance": {
+          "type": "f32"
+        },
+        "overlap_proportion": {
           "type": "f32"
         },
         "bounds": {
@@ -231,238 +208,87 @@
         }
       }
     },
-    "bevy_transform::components::transform::TransformTreeChanged": {},
-    "bevy_light::TransmittedShadowReceiver": {},
-    "bevy_light::point_light::PointLight": {
+    "bevy_light::volumetric::FogVolume": {
       "fields": {
-        "intensity": {
-          "type": "f32"
-        },
-        "shadow_map_near_z": {
-          "type": "f32"
-        },
-        "shadow_normal_bias": {
-          "type": "f32"
-        },
-        "affects_lightmapped_mesh_diffuse": {
-          "type": "bool"
-        },
-        "color": {
+        "fog_color": {
           "type": "bevy_color::color::Color"
         },
-        "shadow_depth_bias": {
+        "light_intensity": {
           "type": "f32"
         },
-        "radius": {
+        "scattering": {
           "type": "f32"
         },
-        "range": {
+        "density_factor": {
           "type": "f32"
         },
-        "shadows_enabled": {
-          "type": "bool"
-        }
-      }
-    },
-    "bevy_ui_widgets::slider::SliderStep": {},
-    "bevy_light::probe::EnvironmentMapLight": {
-      "fields": {
-        "intensity": {
+        "scattering_asymmetry": {
           "type": "f32"
         },
-        "specular_map": {
-          "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
-        },
-        "diffuse_map": {
-          "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
-        },
-        "rotation": {
-          "type": "glam::Quat"
-        },
-        "affects_lightmapped_mesh_diffuse": {
-          "type": "bool"
-        }
-      }
-    },
-    "bevy_scene::components::DynamicSceneRoot": {},
-    "bevy_mesh::morph::MorphWeights": {
-      "fields": {
-        "weights": {
-          "type": "alloc::vec::Vec<f32>"
-        },
-        "first_mesh": {
-          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_mesh::mesh::Mesh>>"
-        }
-      }
-    },
-    "bevy_feathers::controls::radio::RadioOutline": {},
-    "bevy_feathers::theme::ThemeBackgroundColor": {},
-    "bevy_ui_widgets::scrollbar::CoreScrollbarDragState": {
-      "fields": {
-        "drag_origin": {
+        "absorption": {
           "type": "f32"
         },
-        "dragging": {
-          "type": "bool"
-        }
-      }
-    },
-    "bevy_light::probe::LightProbe": {},
-    "bevy_ui_render::UiAntiAlias": {},
-    "bevy_feathers::theme::ThemeBorderColor": {},
-    "bevy_sprite_render::mesh2d::wireframe2d::Wireframe2dColor": {
-      "fields": {
-        "color": {
+        "density_texture_offset": {
+          "type": "glam::Vec3"
+        },
+        "density_texture": {
+          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_image::image::Image>>"
+        },
+        "light_tint": {
           "type": "bevy_color::color::Color"
         }
       }
     },
-    "bevy_light::cascade::Cascades": {
-      "fields": {
-        "cascades": {
-          "type": "bevy_ecs::entity::hash_map::EntityHashMap<alloc::vec::Vec<bevy_light::cascade::Cascade>>"
-        }
-      }
-    },
-    "bevy_anti_alias::fxaa::Fxaa": {
-      "fields": {
-        "edge_threshold": {
-          "type": "bevy_anti_alias::fxaa::Sensitivity"
-        },
-        "edge_threshold_min": {
-          "type": "bevy_anti_alias::fxaa::Sensitivity"
-        },
-        "enabled": {
-          "type": "bool"
-        }
-      }
-    },
-    "bevy_camera::camera::RenderTarget": {},
-    "bevy_camera::camera::CameraMainTextureUsages": {},
-    "bevy_anti_alias::contrast_adaptive_sharpening::ContrastAdaptiveSharpening": {
-      "fields": {
-        "denoise": {
-          "type": "bool"
-        },
-        "enabled": {
-          "type": "bool"
-        },
-        "sharpening_strength": {
-          "type": "f32"
-        }
-      }
-    },
-    "bevy_feathers::controls::button::ButtonVariant": {},
-    "bevy_ui_widgets::scrollbar::CoreScrollbarThumb": {},
-    "bevy_ui_widgets::slider::CoreSliderDragState": {
-      "fields": {
-        "offset": {
-          "type": "f32"
-        },
-        "dragging": {
-          "type": "bool"
-        }
-      }
-    },
-    "bevy_feathers::controls::color_plane::ColorPlaneThumb": {},
-    "bevy_light::directional_light::DirectionalLight": {
-      "fields": {
-        "shadow_depth_bias": {
-          "type": "f32"
-        },
-        "affects_lightmapped_mesh_diffuse": {
-          "type": "bool"
-        },
-        "shadow_normal_bias": {
-          "type": "f32"
-        },
-        "shadows_enabled": {
-          "type": "bool"
-        },
-        "illuminance": {
-          "type": "f32"
-        },
-        "color": {
-          "type": "bevy_color::color::Color"
-        }
-      }
-    },
-    "bevy_light::cluster::ClusterConfig": {},
-    "bevy_camera::visibility::render_layers::RenderLayers": {},
-    "bevy_light::NotShadowReceiver": {},
-    "remote_game::EnemyAi": {
-      "fields": {
-        "patrol_speed": {
-          "type": "f32"
-        },
-        "chase_speed": {
-          "type": "f32"
-        },
-        "aggro_range": {
-          "type": "f32"
-        }
-      }
-    },
-    "bevy_gltf::assets::GltfExtras": {
+    "bevy_gltf::assets::GltfMaterialExtras": {
       "fields": {
         "value": {
           "type": "alloc::string::String"
         }
       }
     },
-    "bevy_feathers::controls::color_swatch::ColorSwatchValue": {},
-    "bevy_feathers::controls::radio::RadioMark": {},
-    "bevy_light::ambient_light::AmbientLight": {
+    "bevy_dev_tools::render_debug::GlobalRenderDebugOverlay": {
       "fields": {
-        "affects_lightmapped_meshes": {
+        "mode": {
+          "type": "bevy_dev_tools::render_debug::RenderDebugMode"
+        },
+        "enabled": {
           "type": "bool"
         },
-        "brightness": {
+        "opacity": {
           "type": "f32"
-        },
-        "color": {
-          "type": "bevy_color::color::Color"
         }
       }
     },
-    "bevy_post_process::dof::DepthOfField": {
+    "bevy_light::spot_light::SpotLightTexture": {
       "fields": {
-        "max_depth": {
-          "type": "f32"
-        },
-        "max_circle_of_confusion_diameter": {
-          "type": "f32"
-        },
-        "mode": {
-          "type": "bevy_post_process::dof::DepthOfFieldMode"
-        },
-        "aperture_f_stops": {
-          "type": "f32"
-        },
-        "sensor_height": {
-          "type": "f32"
-        },
-        "focal_distance": {
-          "type": "f32"
+        "image": {
+          "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
         }
       }
     },
-    "bevy_feathers::controls::color_swatch::ColorSwatchFg": {},
-    "bevy_camera::visibility::VisibleMeshEntities": {},
-    "bevy_post_process::motion_blur::MotionBlur": {
+    "bevy_feathers::controls::listview::ActiveRowOutline": {},
+    "bevy_feathers::font_styles::InheritableFont": {
       "fields": {
-        "shutter_angle": {
+        "font_size": {
           "type": "f32"
         },
-        "samples": {
-          "type": "u32"
+        "font": {
+          "type": "bevy_feathers::handle_or_path::HandleOrPath<bevy_text::font::Font>"
+        },
+        "weight": {
+          "type": "bevy_text::text::FontWeight"
         }
       }
     },
-    "bevy_light::volumetric::VolumetricLight": {},
-    "bevy_sprite_render::mesh2d::material::MeshMaterial2d<bevy_sprite_render::mesh2d::color_material::ColorMaterial>": {},
-    "bevy_camera::components::Camera2d": {},
-    "bevy_feathers::controls::toggle_switch::ToggleSwitchSlide": {},
+    "bevy_feathers::controls::color_swatch::FeathersColorSwatch": {},
+    "bevy_feathers::controls::slider::SliderValueText": {},
+    "bevy_anti_alias::taa::TemporalAntiAliasing": {
+      "fields": {
+        "reset": {
+          "type": "bool"
+        }
+      }
+    },
     "bevy_light::probe::IrradianceVolume": {
       "fields": {
         "intensity": {
@@ -476,24 +302,507 @@
         }
       }
     },
-    "bevy_light::ShadowFilteringMethod": {},
-    "remote_game::Health": {
+    "bevy_camera::visibility::render_layers::RenderLayers": {},
+    "bevy_feathers::controls::checkbox::CheckboxMark": {},
+    "bevy_post_process::auto_exposure::settings::AutoExposure": {
       "fields": {
-        "max": {
+        "filter": {
+          "type": "core::ops::RangeInclusive<f32>"
+        },
+        "metering_mask": {
+          "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
+        },
+        "speed_darken": {
           "type": "f32"
         },
-        "current": {
+        "speed_brighten": {
+          "type": "f32"
+        },
+        "exponential_transition_distance": {
+          "type": "f32"
+        },
+        "compensation_curve": {
+          "type": "bevy_asset::handle::Handle<bevy_post_process::auto_exposure::compensation_curve::AutoExposureCompensationCurve>"
+        },
+        "range": {
+          "type": "core::ops::RangeInclusive<f32>"
+        }
+      }
+    },
+    "bevy_post_process::effect_stack::chromatic_aberration::ChromaticAberration": {
+      "fields": {
+        "intensity": {
+          "type": "f32"
+        },
+        "max_samples": {
+          "type": "u32"
+        },
+        "color_lut": {
+          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_image::image::Image>>"
+        }
+      }
+    },
+    "bevy_feathers::controls::radio::FeathersRadio": {},
+    "bevy_ui_widgets::scrollbar::Scrollbar": {
+      "fields": {
+        "target": {
+          "type": "bevy_ecs::entity::Entity"
+        },
+        "min_thumb_length": {
+          "type": "f32"
+        },
+        "orientation": {
+          "type": "bevy_ui_widgets::scrollbar::ControlOrientation"
+        }
+      }
+    },
+    "bevy_feathers::controls::slider::FeathersSlider": {},
+    "bevy_camera::camera::RenderTarget": {},
+    "bevy_input_focus::directional_navigation::AutoNavigationConfig": {
+      "fields": {
+        "min_alignment_factor": {
+          "type": "f32"
+        },
+        "max_search_distance": {
+          "type": "core::option::Option<f32>"
+        },
+        "prefer_aligned": {
+          "type": "bool"
+        }
+      }
+    },
+    "bevy_ui_widgets::slider::SliderThumb": {},
+    "bevy_feathers::controls::color_slider::ColorChannel": {},
+    "bevy_camera::visibility::VisibilityClass": {},
+    "bevy_light::directional_light::DirectionalLightShadowMap": {
+      "fields": {
+        "size": {
+          "type": "usize"
+        }
+      }
+    },
+    "bevy_sprite_render::mesh2d::material::MeshMaterial2d<bevy_sprite_render::mesh2d::color_material::ColorMaterial>": {},
+    "bevy_camera::camera::CameraMainTextureUsages": {},
+    "bevy_light::ambient_light::GlobalAmbientLight": {
+      "fields": {
+        "brightness": {
+          "type": "f32"
+        },
+        "color": {
+          "type": "bevy_color::color::Color"
+        },
+        "affects_lightmapped_meshes": {
+          "type": "bool"
+        }
+      }
+    },
+    "bevy_mesh::components::Mesh3d": {},
+    "bevy_light::probe::Skybox": {
+      "fields": {
+        "image": {
+          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_image::image::Image>>"
+        },
+        "rotation": {
+          "type": "glam::Quat"
+        },
+        "brightness": {
           "type": "f32"
         }
       }
     },
-    "bevy_light::spot_light::SpotLightTexture": {
+    "bevy_feathers::cursor::EntityCursor": {},
+    "bevy_post_process::dof::DepthOfField": {
       "fields": {
+        "mode": {
+          "type": "bevy_post_process::dof::DepthOfFieldMode"
+        },
+        "aperture_f_stops": {
+          "type": "f32"
+        },
+        "max_circle_of_confusion_diameter": {
+          "type": "f32"
+        },
+        "focal_distance": {
+          "type": "f32"
+        },
+        "max_depth": {
+          "type": "f32"
+        },
+        "sensor_height": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_gltf::assets::GltfSceneExtras": {
+      "fields": {
+        "value": {
+          "type": "alloc::string::String"
+        }
+      }
+    },
+    "bevy_camera::projection::Projection": {},
+    "bevy_feathers::controls::number_input::FeathersNumberInput": {},
+    "bevy_anti_alias::contrast_adaptive_sharpening::DenoiseCas": {},
+    "bevy_light::probe::ParallaxCorrection": {},
+    "bevy_feathers::theme::ThemeBorderColor": {},
+    "bevy_feathers::theme::ThemedText": {},
+    "bevy_light::directional_light::DirectionalLight": {
+      "fields": {
+        "shadow_depth_bias": {
+          "type": "f32"
+        },
+        "shadow_normal_bias": {
+          "type": "f32"
+        },
+        "color": {
+          "type": "bevy_color::color::Color"
+        },
+        "contact_shadows_enabled": {
+          "type": "bool"
+        },
+        "shadow_maps_enabled": {
+          "type": "bool"
+        },
+        "shadows_enabled": {
+          "type": "bool"
+        },
+        "illuminance": {
+          "type": "f32"
+        },
+        "affects_lightmapped_mesh_diffuse": {
+          "type": "bool"
+        }
+      }
+    },
+    "bevy_ui_widgets::button::Button": {},
+    "bevy_light::spot_light::SpotLight": {
+      "fields": {
+        "shadows_enabled": {
+          "type": "bool"
+        },
+        "shadow_depth_bias": {
+          "type": "f32"
+        },
+        "shadow_map_near_z": {
+          "type": "f32"
+        },
+        "intensity": {
+          "type": "f32"
+        },
+        "affects_lightmapped_mesh_diffuse": {
+          "type": "bool"
+        },
+        "radius": {
+          "type": "f32"
+        },
+        "shadow_maps_enabled": {
+          "type": "bool"
+        },
+        "inner_angle": {
+          "type": "f32"
+        },
+        "shadow_normal_bias": {
+          "type": "f32"
+        },
+        "outer_angle": {
+          "type": "f32"
+        },
+        "color": {
+          "type": "bevy_color::color::Color"
+        },
+        "range": {
+          "type": "f32"
+        },
+        "contact_shadows_enabled": {
+          "type": "bool"
+        }
+      }
+    },
+    "bevy_feathers::controls::scrollbar::FeathersScrollbar": {},
+    "bevy_dev_tools::infinite_grid::InfiniteGridSettings": {
+      "fields": {
+        "fadeout_distance": {
+          "type": "f32"
+        },
+        "x_axis_color": {
+          "type": "bevy_color::color::Color"
+        },
+        "dot_fadeout_strength": {
+          "type": "f32"
+        },
+        "scale": {
+          "type": "f32"
+        },
+        "minor_line_color": {
+          "type": "bevy_color::color::Color"
+        },
+        "z_axis_color": {
+          "type": "bevy_color::color::Color"
+        },
+        "major_line_color": {
+          "type": "bevy_color::color::Color"
+        }
+      }
+    },
+    "bevy_light::directional_light::DirectionalLightTexture": {
+      "fields": {
+        "tiled": {
+          "type": "bool"
+        },
         "image": {
           "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
         }
       }
     },
+    "bevy_feathers::controls::disclosure_toggle::FeathersDisclosureToggle": {},
+    "bevy_feathers::controls::button::FeathersButton": {},
+    "bevy_feathers::focus::FocusWithinIndicator": {},
+    "bevy_gltf::assets::GltfMeshName": {},
+    "bevy_feathers::controls::color_plane::ColorPlaneThumb": {},
+    "bevy_gizmos_render::LineGizmoEntities": {
+      "fields": {
+        "line_strip_gizmo_renderer": {
+          "type": "bevy_render::sync_world::MainEntity"
+        },
+        "line_gizmo_renderer": {
+          "type": "bevy_render::sync_world::MainEntity"
+        },
+        "line_joint_gizmo_renderer": {
+          "type": "bevy_render::sync_world::MainEntity"
+        }
+      }
+    },
+    "bevy_gltf::assets::GltfMaterialName": {},
+    "bevy_feathers::controls::listview::FeathersListView": {},
+    "bevy_dev_tools::render_debug::RenderDebugOverlay": {
+      "fields": {
+        "mode": {
+          "type": "bevy_dev_tools::render_debug::RenderDebugMode"
+        },
+        "opacity": {
+          "type": "f32"
+        },
+        "enabled": {
+          "type": "bool"
+        }
+      }
+    },
+    "bevy_ui_widgets::list::ListItem": {},
+    "bevy_input_focus::tab_navigation::TabIndex": {},
+    "bevy_feathers::focus::FocusIndicator": {},
+    "bevy_feathers::controls::text_input::FeathersTextInputContainer": {},
+    "bevy_light::NotShadowCaster": {},
+    "bevy_feathers::controls::text_input::FeathersTextInput": {},
+    "remote_game::Inventory": {
+      "fields": {
+        "slots": {
+          "type": "u32"
+        },
+        "weight": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_feathers::controls::menu::FeathersMenuItem": {},
+    "bevy_world_serialization::components::WorldAssetRoot": {},
+    "bevy_camera::visibility::CascadesVisibleEntities": {},
+    "bevy_camera::camera::Exposure": {},
+    "bevy_light::ShadowFilteringMethod": {},
+    "bevy_light::gizmos::ShowLightGizmo": {
+      "fields": {
+        "color": {
+          "type": "core::option::Option<bevy_light::gizmos::LightGizmoColor>"
+        }
+      }
+    },
+    "bevy_feathers::alpha_pattern::AlphaPattern": {},
+    "bevy_camera::visibility::CubemapVisibleEntities": {},
+    "bevy_feathers::theme::UiTheme": {},
+    "bevy_feathers::controls::menu::FeathersMenuButton": {},
+    "bevy_sprite_render::mesh2d::wireframe2d::Wireframe2dColor": {
+      "fields": {
+        "color": {
+          "type": "bevy_color::color::Color"
+        }
+      }
+    },
+    "bevy_feathers::cursor::OverrideCursor": {},
+    "bevy_ui_widgets::scrollbar::CoreScrollbarThumb": {},
+    "bevy_feathers::controls::scrollbar::FeathersScrollbarThumb": {},
+    "bevy_light::cluster::ClusteredDecal": {
+      "fields": {
+        "tag": {
+          "type": "u32"
+        },
+        "metallic_roughness_texture": {
+          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_image::image::Image>>"
+        },
+        "emissive_texture": {
+          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_image::image::Image>>"
+        },
+        "normal_map_texture": {
+          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_image::image::Image>>"
+        },
+        "base_color_texture": {
+          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_image::image::Image>>"
+        }
+      }
+    },
+    "bevy_feathers::theme::InheritableThemeTextColor": {},
+    "bevy_feathers::controls::menu::FeathersMenuPopup": {},
+    "bevy_feathers::controls::color_plane::ColorPlaneValue": {},
+    "bevy_ui_widgets::slider::SliderRange": {
+      "fields": {
+        "end": {
+          "type": "f32"
+        },
+        "start": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_mesh::morph::MorphWeights": {
+      "fields": {
+        "weights": {
+          "type": "alloc::vec::Vec<f32>"
+        },
+        "first_mesh": {
+          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_mesh::mesh::Mesh>>"
+        }
+      }
+    },
+    "bevy_time::time::Time<bevy_time::virt::Virtual>": {
+      "fields": {
+        "context": {
+          "type": "bevy_time::virt::Virtual"
+        },
+        "elapsed_secs_wrapped": {
+          "type": "f32"
+        },
+        "elapsed_secs": {
+          "type": "f32"
+        },
+        "elapsed_secs_f64": {
+          "type": "f64"
+        },
+        "wrap_period": {
+          "type": "core::time::Duration"
+        },
+        "delta_secs_f64": {
+          "type": "f64"
+        },
+        "elapsed": {
+          "type": "core::time::Duration"
+        },
+        "delta": {
+          "type": "core::time::Duration"
+        },
+        "delta_secs": {
+          "type": "f32"
+        },
+        "elapsed_secs_wrapped_f64": {
+          "type": "f64"
+        },
+        "elapsed_wrapped": {
+          "type": "core::time::Duration"
+        }
+      }
+    },
+    "bevy_ui_widgets::menu::MenuButton": {},
+    "bevy_sprite_render::tilemap_chunk::TilemapChunk": {
+      "fields": {
+        "tile_display_size": {
+          "type": "glam::UVec2"
+        },
+        "tileset": {
+          "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
+        },
+        "chunk_size": {
+          "type": "glam::UVec2"
+        },
+        "alpha_mode": {
+          "type": "bevy_sprite_render::mesh2d::material::AlphaMode2d"
+        }
+      }
+    },
+    "bevy_feathers::controls::checkbox::CheckboxFrame": {},
+    "bevy_time::time::Time<()>": {
+      "fields": {
+        "delta_secs_f64": {
+          "type": "f64"
+        },
+        "delta": {
+          "type": "core::time::Duration"
+        },
+        "wrap_period": {
+          "type": "core::time::Duration"
+        },
+        "elapsed_wrapped": {
+          "type": "core::time::Duration"
+        },
+        "delta_secs": {
+          "type": "f32"
+        },
+        "elapsed": {
+          "type": "core::time::Duration"
+        },
+        "elapsed_secs_wrapped_f64": {
+          "type": "f64"
+        },
+        "context": {
+          "type": "()"
+        },
+        "elapsed_secs_f64": {
+          "type": "f64"
+        },
+        "elapsed_secs_wrapped": {
+          "type": "f32"
+        },
+        "elapsed_secs": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_scene::components::DynamicSceneRoot": {},
+    "bevy_ui_widgets::checkbox::Checkbox": {},
+    "bevy_input_focus::directional_navigation::DirectionalNavigationMap": {
+      "fields": {
+        "neighbors": {
+          "type": "bevy_ecs::entity::hash_map::EntityHashMap<bevy_input_focus::directional_navigation::NavNeighbors>"
+        }
+      }
+    },
+    "bevy_ui_widgets::slider::CoreSliderDragState": {
+      "fields": {
+        "dragging": {
+          "type": "bool"
+        },
+        "offset": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_camera::camera::ManualTextureViewHandle": {},
+    "bevy_ui_widgets::scrollbar::CoreScrollbarDragState": {
+      "fields": {
+        "dragging": {
+          "type": "bool"
+        },
+        "drag_origin": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_gltf::assets::GltfExtras": {
+      "fields": {
+        "value": {
+          "type": "alloc::string::String"
+        }
+      }
+    },
+    "bevy_camera::clear_color::ClearColor": {},
+    "bevy_sprite_render::mesh2d::wireframe2d::NoWireframe2d": {},
+    "bevy_feathers::controls::color_plane::ColorPlaneInner": {},
     "bevy_input_focus::tab_navigation::TabGroup": {
       "fields": {
         "modal": {
@@ -504,130 +813,30 @@
         }
       }
     },
-    "remote_game::Speed": {
+    "bevy_ui_widgets::button::ActivateOnPress": {},
+    "bevy_camera::visibility::VisibleMeshEntities": {},
+    "bevy_light::point_light::PointLight": {
       "fields": {
-        "value": {
-          "type": "f32"
-        }
-      }
-    },
-    "bevy_mesh::components::MeshTag": {},
-    "bevy_gltf::assets::GltfMaterialName": {},
-    "bevy_feathers::controls::checkbox::CheckboxOutline": {},
-    "bevy_input_focus::tab_navigation::TabIndex": {},
-    "bevy_transform::components::global_transform::GlobalTransform": {},
-    "bevy_sprite_render::mesh2d::wireframe2d::Wireframe2d": {},
-    "bevy_camera::camera::ManualTextureViewHandle": {},
-    "bevy_feathers::theme::ThemedText": {},
-    "bevy_mesh::skinning::SkinnedMesh": {
-      "fields": {
-        "inverse_bindposes": {
-          "type": "bevy_asset::handle::Handle<bevy_mesh::skinning::SkinnedMeshInverseBindposes>"
-        },
-        "joints": {
-          "type": "alloc::vec::Vec<bevy_ecs::entity::Entity>"
-        }
-      }
-    },
-    "bevy_camera::visibility::InheritedVisibility": {},
-    "bevy_gltf::assets::GltfMeshExtras": {
-      "fields": {
-        "value": {
-          "type": "alloc::string::String"
-        }
-      }
-    },
-    "bevy_camera::camera::MainPassResolutionOverride": {},
-    "bevy_camera::projection::Projection": {},
-    "bevy_light::probe::GeneratedEnvironmentMapLight": {
-      "fields": {
-        "affects_lightmapped_mesh_diffuse": {
-          "type": "bool"
-        },
-        "rotation": {
-          "type": "glam::Quat"
-        },
-        "environment_map": {
-          "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
+        "color": {
+          "type": "bevy_color::color::Color"
         },
         "intensity": {
           "type": "f32"
-        }
-      }
-    },
-    "bevy_ui_widgets::radio::RadioButton": {},
-    "bevy_feathers::controls::color_plane::ColorPlaneInner": {},
-    "bevy_camera::primitives::Frustum": {},
-    "bevy_transform::components::transform::Transform": {
-      "fields": {
-        "rotation": {
-          "type": "glam::Quat"
         },
-        "translation": {
-          "type": "glam::Vec3"
-        },
-        "scale": {
-          "type": "glam::Vec3"
-        }
-      }
-    },
-    "bevy_feathers::controls::color_plane::ColorPlaneValue": {},
-    "bevy_light::volumetric::FogVolume": {
-      "fields": {
-        "light_intensity": {
-          "type": "f32"
-        },
-        "light_tint": {
-          "type": "bevy_color::color::Color"
-        },
-        "density_texture": {
-          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_image::image::Image>>"
-        },
-        "fog_color": {
-          "type": "bevy_color::color::Color"
-        },
-        "absorption": {
-          "type": "f32"
-        },
-        "density_texture_offset": {
-          "type": "glam::Vec3"
-        },
-        "scattering_asymmetry": {
-          "type": "f32"
-        },
-        "scattering": {
-          "type": "f32"
-        },
-        "density_factor": {
-          "type": "f32"
-        }
-      }
-    },
-    "bevy_light::spot_light::SpotLight": {
-      "fields": {
         "shadows_enabled": {
-          "type": "bool"
-        },
-        "affects_lightmapped_mesh_diffuse": {
           "type": "bool"
         },
         "shadow_depth_bias": {
           "type": "f32"
         },
-        "range": {
-          "type": "f32"
-        },
         "radius": {
           "type": "f32"
         },
-        "color": {
-          "type": "bevy_color::color::Color"
+        "contact_shadows_enabled": {
+          "type": "bool"
         },
-        "inner_angle": {
-          "type": "f32"
-        },
-        "intensity": {
-          "type": "f32"
+        "affects_lightmapped_mesh_diffuse": {
+          "type": "bool"
         },
         "shadow_map_near_z": {
           "type": "f32"
@@ -635,105 +844,547 @@
         "shadow_normal_bias": {
           "type": "f32"
         },
-        "outer_angle": {
+        "shadow_maps_enabled": {
+          "type": "bool"
+        },
+        "range": {
           "type": "f32"
         }
       }
     },
-    "bevy_feathers::alpha_pattern::AlphaPattern": {},
-    "bevy_camera::visibility::VisibleEntities": {},
-    "bevy_feathers::cursor::EntityCursor": {},
+    "bevy_feathers::controls::number_input::NumberFormat": {},
+    "remote_game::EnemyAi": {
+      "fields": {
+        "patrol_speed": {
+          "type": "f32"
+        },
+        "chase_speed": {
+          "type": "f32"
+        },
+        "aggro_range": {
+          "type": "f32"
+        }
+      }
+    },
     "bevy_ui_widgets::slider::SliderPrecision": {},
-    "bevy_camera::primitives::CascadesFrusta": {},
-    "bevy_sprite_render::tilemap_chunk::TilemapChunkTileData": {},
+    "bevy_camera::visibility::InheritedVisibility": {},
+    "bevy_ui_render::BoxShadowSamples": {},
+    "bevy_sprite_render::mesh2d::wireframe2d::Wireframe2dConfig": {
+      "fields": {
+        "default_color": {
+          "type": "bevy_color::color::Color"
+        },
+        "global": {
+          "type": "bool"
+        }
+      }
+    },
+    "bevy_light::probe::EnvironmentMapLight": {
+      "fields": {
+        "intensity": {
+          "type": "f32"
+        },
+        "affects_lightmapped_mesh_diffuse": {
+          "type": "bool"
+        },
+        "rotation": {
+          "type": "glam::Quat"
+        },
+        "diffuse_map": {
+          "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
+        },
+        "specular_map": {
+          "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
+        }
+      }
+    },
+    "bevy_feathers::controls::color_plane::ColorPlaneDragState": {},
+    "bevy_ui_widgets::scrollarea::ScrollArea": {},
+    "bevy_sprite_render::mesh2d::material::MeshMaterial2d<bevy_sprite_render::tilemap_chunk::tilemap_chunk_material::TilemapChunkMaterial>": {},
+    "bevy_ui_widgets::slider::Slider": {
+      "fields": {
+        "orientation": {
+          "type": "bevy_ui_widgets::slider::SliderOrientation"
+        },
+        "track_click": {
+          "type": "bevy_ui_widgets::slider::TrackClick"
+        }
+      }
+    },
+    "bevy_sprite_render::mesh2d::wireframe2d::Wireframe2d": {},
     "bevy_camera::primitives::Aabb": {
       "fields": {
-        "half_extents": {
+        "center": {
           "type": "glam::Vec3A"
         },
-        "center": {
+        "half_extents": {
           "type": "glam::Vec3A"
         }
       }
     },
-    "bevy_sprite_render::mesh2d::wireframe2d::Mesh2dWireframe": {},
-    "bevy_feathers::font_styles::InheritableFont": {
+    "bevy_camera::components::Hdr": {},
+    "bevy_light::probe::GeneratedEnvironmentMapLight": {
       "fields": {
-        "font": {
-          "type": "bevy_feathers::handle_or_path::HandleOrPath<bevy_text::font::Font>"
+        "environment_map": {
+          "type": "bevy_asset::handle::Handle<bevy_image::image::Image>"
         },
-        "font_size": {
+        "rotation": {
+          "type": "glam::Quat"
+        },
+        "intensity": {
+          "type": "f32"
+        },
+        "affects_lightmapped_mesh_diffuse": {
+          "type": "bool"
+        }
+      }
+    },
+    "bevy_dev_tools::fps_overlay::FpsOverlayConfig": {
+      "fields": {
+        "text_color": {
+          "type": "bevy_color::color::Color"
+        },
+        "refresh_interval": {
+          "type": "core::time::Duration"
+        },
+        "frame_time_graph_config": {
+          "type": "bevy_dev_tools::fps_overlay::FrameTimeGraphConfig"
+        },
+        "text_config": {
+          "type": "bevy_text::text::TextFont"
+        },
+        "enabled": {
+          "type": "bool"
+        }
+      }
+    },
+    "bevy_light::cascade::Cascades": {
+      "fields": {
+        "cascades": {
+          "type": "bevy_ecs::entity::hash_map::EntityHashMap<alloc::vec::Vec<bevy_light::cascade::Cascade>>"
+        }
+      }
+    },
+    "bevy_feathers::controls::menu::FeathersMenuDivider": {},
+    "bevy_camera::components::Camera2d": {},
+    "bevy_anti_alias::fxaa::Fxaa": {
+      "fields": {
+        "edge_threshold": {
+          "type": "bevy_anti_alias::fxaa::Sensitivity"
+        },
+        "edge_threshold_min": {
+          "type": "bevy_anti_alias::fxaa::Sensitivity"
+        },
+        "enabled": {
+          "type": "bool"
+        }
+      }
+    },
+    "bevy_ui_widgets::slider::SliderValue": {},
+    "bevy_mesh::components::MeshTag": {},
+    "bevy_camera::components::Camera3d": {
+      "fields": {
+        "screen_space_specular_transmission_quality": {
+          "type": "bevy_camera::components::ScreenSpaceTransmissionQuality"
+        },
+        "depth_texture_usages": {
+          "type": "bevy_camera::components::Camera3dDepthTextureUsage"
+        },
+        "depth_load_op": {
+          "type": "bevy_camera::components::Camera3dDepthLoadOp"
+        },
+        "screen_space_specular_transmission_steps": {
+          "type": "usize"
+        }
+      }
+    },
+    "bevy_ui_widgets::menu::MenuItem": {},
+    "bevy_gltf::assets::GltfMeshExtras": {
+      "fields": {
+        "value": {
+          "type": "alloc::string::String"
+        }
+      }
+    },
+    "remote_game::Health": {
+      "fields": {
+        "current": {
+          "type": "f32"
+        },
+        "max": {
           "type": "f32"
         }
       }
     },
-    "bevy_camera::visibility::CubemapVisibleEntities": {},
-    "bevy_camera::camera::Camera": {
+    "bevy_feathers::controls::toggle_switch::ToggleSwitchSlide": {},
+    "bevy_anti_alias::contrast_adaptive_sharpening::ContrastAdaptiveSharpening": {
       "fields": {
-        "clear_color": {
-          "type": "bevy_camera::clear_color::ClearColorConfig"
+        "sharpening_strength": {
+          "type": "f32"
         },
-        "viewport": {
-          "type": "core::option::Option<bevy_camera::camera::Viewport>"
-        },
-        "order": {
-          "type": "isize"
-        },
-        "is_active": {
+        "denoise": {
           "type": "bool"
         },
-        "msaa_writeback": {
-          "type": "bevy_camera::clear_color::MsaaWriteback"
-        },
-        "output_mode": {
-          "type": "bevy_camera::camera::CameraOutputMode"
-        },
-        "invert_culling": {
+        "enabled": {
           "type": "bool"
-        },
-        "sub_camera_view": {
-          "type": "core::option::Option<bevy_camera::camera::SubCameraView>"
         }
       }
     },
+    "bevy_mesh::components::Mesh2d": {},
+    "bevy_feathers::controls::menu::FeathersMenu": {},
+    "bevy_ui_widgets::popover::Popover": {
+      "fields": {
+        "window_margin": {
+          "type": "f32"
+        },
+        "positions": {
+          "type": "alloc::vec::Vec<bevy_ui_widgets::popover::PopoverPlacement>"
+        }
+      }
+    },
+    "bevy_dev_tools::infinite_grid::InfiniteGrid": {},
+    "bevy_feathers::controls::color_slider::ColorSlider": {
+      "fields": {
+        "channel": {
+          "type": "bevy_feathers::controls::color_slider::ColorChannel"
+        }
+      }
+    },
+    "bevy_feathers::controls::color_plane::ColorPlane": {},
+    "bevy_transform::components::transform::Transform": {
+      "fields": {
+        "translation": {
+          "type": "glam::Vec3"
+        },
+        "rotation": {
+          "type": "glam::Quat"
+        },
+        "scale": {
+          "type": "glam::Vec3"
+        }
+      }
+    },
+    "bevy_camera::primitives::CubemapFrusta": {
+      "fields": {
+        "frusta": {
+          "type": "[bevy_camera::primitives::Frustum; 6]"
+        }
+      }
+    },
+    "bevy_ui_render::debug_overlay::GlobalUiDebugOptions": {
+      "fields": {
+        "outline_content_box": {
+          "type": "bool"
+        },
+        "show_clipped": {
+          "type": "bool"
+        },
+        "line_width": {
+          "type": "f32"
+        },
+        "outline_border_box": {
+          "type": "bool"
+        },
+        "enabled": {
+          "type": "bool"
+        },
+        "show_hidden": {
+          "type": "bool"
+        },
+        "outline_scrollbars": {
+          "type": "bool"
+        },
+        "outline_padding_box": {
+          "type": "bool"
+        },
+        "ignore_border_radius": {
+          "type": "bool"
+        },
+        "line_color_override": {
+          "type": "core::option::Option<bevy_color::linear_rgba::LinearRgba>"
+        }
+      }
+    },
+    "bevy_light::volumetric::VolumetricFog": {
+      "fields": {
+        "jitter": {
+          "type": "f32"
+        },
+        "step_count": {
+          "type": "u32"
+        },
+        "ambient_intensity": {
+          "type": "f32"
+        },
+        "ambient_color": {
+          "type": "bevy_color::color::Color"
+        }
+      }
+    },
+    "bevy_input_focus::autofocus::AutoFocus": {},
+    "bevy_light::NotShadowReceiver": {},
+    "bevy_feathers::controls::radio::RadioMark": {},
+    "bevy_feathers::theme::ThemeBackgroundColor": {},
+    "bevy_camera::components::CompositingSpace": {},
+    "bevy_ui_widgets::scrollbar::ScrollbarDragState": {
+      "fields": {
+        "dragging": {
+          "type": "bool"
+        },
+        "drag_origin": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_camera::primitives::Sphere": {
+      "fields": {
+        "center": {
+          "type": "glam::Vec3A"
+        },
+        "radius": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_feathers::controls::color_swatch::ColorSwatch": {},
+    "bevy_feathers::theme::ThemeTextColor": {},
+    "bevy_sprite_render::mesh2d::wireframe2d::Mesh2dWireframe": {},
+    "bevy_feathers::controls::checkbox::CheckboxOutline": {},
+    "bevy_camera::camera::MainPassResolutionOverride": {},
+    "bevy_sprite_render::tilemap_chunk::TilemapChunkTileData": {},
+    "bevy_time::time::Time<bevy_time::fixed::Fixed>": {
+      "fields": {
+        "elapsed_wrapped": {
+          "type": "core::time::Duration"
+        },
+        "context": {
+          "type": "bevy_time::fixed::Fixed"
+        },
+        "delta_secs_f64": {
+          "type": "f64"
+        },
+        "elapsed_secs_f64": {
+          "type": "f64"
+        },
+        "elapsed_secs_wrapped_f64": {
+          "type": "f64"
+        },
+        "delta": {
+          "type": "core::time::Duration"
+        },
+        "elapsed_secs_wrapped": {
+          "type": "f32"
+        },
+        "wrap_period": {
+          "type": "core::time::Duration"
+        },
+        "delta_secs": {
+          "type": "f32"
+        },
+        "elapsed": {
+          "type": "core::time::Duration"
+        },
+        "elapsed_secs": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_camera::visibility::Visibility": {},
+    "bevy_post_process::bloom::settings::Bloom": {
+      "fields": {
+        "intensity": {
+          "type": "f32"
+        },
+        "prefilter": {
+          "type": "bevy_post_process::bloom::settings::BloomPrefilter"
+        },
+        "low_frequency_boost_curvature": {
+          "type": "f32"
+        },
+        "composite_mode": {
+          "type": "bevy_post_process::bloom::settings::BloomCompositeMode"
+        },
+        "max_mip_dimension": {
+          "type": "u32"
+        },
+        "scale": {
+          "type": "glam::Vec2"
+        },
+        "low_frequency_boost": {
+          "type": "f32"
+        },
+        "high_pass_frequency": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_camera::visibility::VisibleEntities": {},
+    "remote_game::Speed": {
+      "fields": {
+        "value": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_feathers::controls::color_swatch::ColorSwatchValue": {},
+    "bevy_ui_widgets::radio::RadioButton": {},
+    "bevy_ui_widgets::slider::SliderStep": {},
+    "bevy_ui_widgets::list::ActiveDescendant": {},
+    "bevy_world_serialization::components::DynamicWorldRoot": {},
+    "bevy_feathers::controls::color_slider::FeathersColorSlider": {},
     "bevy_camera::visibility::NoFrustumCulling": {},
-    "bevy_feathers::controls::toggle_switch::ToggleSwitchOutline": {},
-    "bevy_camera::visibility::range::VisibilityRange": {
+    "bevy_time::delayed_commands::DelayedCommandQueue": {
       "fields": {
-        "start_margin": {
-          "type": "core::ops::Range<f32>"
-        },
-        "end_margin": {
-          "type": "core::ops::Range<f32>"
-        },
-        "use_aabb": {
-          "type": "bool"
+        "submit_at": {
+          "type": "core::time::Duration"
         }
       }
     },
-    "bevy_feathers::controls::slider::SliderValueText": {},
-    "bevy_light::cluster::ClusteredDecal": {
+    "bevy_light::volumetric::VolumetricLight": {},
+    "bevy_feathers::controls::slider::SliderStyle": {},
+    "bevy_camera::primitives::CascadesFrusta": {
       "fields": {
-        "emissive_texture": {
-          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_image::image::Image>>"
+        "frusta": {
+          "type": "bevy_ecs::entity::hash_map::EntityHashMap<alloc::vec::Vec<bevy_camera::primitives::Frustum>>"
+        }
+      }
+    },
+    "bevy_ui_widgets::menu::MenuFocusState": {},
+    "bevy_ui_render::debug_overlay::UiDebugOptions": {
+      "fields": {
+        "show_clipped": {
+          "type": "bool"
         },
-        "normal_map_texture": {
-          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_image::image::Image>>"
+        "outline_border_box": {
+          "type": "bool"
         },
-        "base_color_texture": {
-          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_image::image::Image>>"
+        "enabled": {
+          "type": "bool"
         },
-        "metallic_roughness_texture": {
-          "type": "core::option::Option<bevy_asset::handle::Handle<bevy_image::image::Image>>"
+        "outline_padding_box": {
+          "type": "bool"
         },
-        "tag": {
+        "show_hidden": {
+          "type": "bool"
+        },
+        "line_color_override": {
+          "type": "core::option::Option<bevy_color::linear_rgba::LinearRgba>"
+        },
+        "ignore_border_radius": {
+          "type": "bool"
+        },
+        "outline_content_box": {
+          "type": "bool"
+        },
+        "outline_scrollbars": {
+          "type": "bool"
+        },
+        "line_width": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_light::point_light::PointLightShadowMap": {
+      "fields": {
+        "size": {
+          "type": "usize"
+        }
+      }
+    },
+    "bevy_scene::scene_component::SceneComponentInfo": {
+      "fields": {
+        "spawned_from_scene": {
+          "type": "bool"
+        },
+        "component_name": {
+          "type": "&str"
+        }
+      }
+    },
+    "bevy_sprite_render::tilemap_chunk::TilemapChunkMeshCache": {},
+    "bevy_gltf::assets::GltfSceneName": {},
+    "bevy_light::rect_light::RectLight": {
+      "fields": {
+        "intensity": {
+          "type": "f32"
+        },
+        "range": {
+          "type": "f32"
+        },
+        "width": {
+          "type": "f32"
+        },
+        "color": {
+          "type": "bevy_color::color::Color"
+        },
+        "height": {
+          "type": "f32"
+        }
+      }
+    },
+    "bevy_time::time::Time<bevy_time::real::Real>": {
+      "fields": {
+        "delta_secs": {
+          "type": "f32"
+        },
+        "elapsed_secs_wrapped_f64": {
+          "type": "f64"
+        },
+        "wrap_period": {
+          "type": "core::time::Duration"
+        },
+        "elapsed": {
+          "type": "core::time::Duration"
+        },
+        "elapsed_secs_wrapped": {
+          "type": "f32"
+        },
+        "elapsed_secs": {
+          "type": "f32"
+        },
+        "elapsed_wrapped": {
+          "type": "core::time::Duration"
+        },
+        "elapsed_secs_f64": {
+          "type": "f64"
+        },
+        "delta": {
+          "type": "core::time::Duration"
+        },
+        "context": {
+          "type": "bevy_time::real::Real"
+        },
+        "delta_secs_f64": {
+          "type": "f64"
+        }
+      }
+    },
+    "bevy_light::TransmittedShadowReceiver": {},
+    "bevy_anti_alias::smaa::Smaa": {
+      "fields": {
+        "preset": {
+          "type": "bevy_anti_alias::smaa::SmaaPreset"
+        }
+      }
+    },
+    "bevy_mesh::morph::MeshMorphWeights": {
+      "fields": {
+        "weights": {
+          "type": "alloc::vec::Vec<f32>"
+        }
+      }
+    },
+    "bevy_transform::components::global_transform::GlobalTransform": {},
+    "bevy_post_process::motion_blur::MotionBlur": {
+      "fields": {
+        "shutter_angle": {
+          "type": "f32"
+        },
+        "samples": {
           "type": "u32"
         }
       }
     },
-    "bevy_light::NotShadowCaster": {},
-    "bevy_scene::components::SceneRoot": {},
-    "bevy_camera::camera::Exposure": {},
-    "bevy_feathers::controls::slider::SliderStyle": {}
+    "bevy_feathers::controls::toggle_switch::ToggleSwitchOutline": {}
   }
 }

@@ -3,9 +3,9 @@
 //! A thin facade over [`jackdaw_api_internal`]. Only types and
 //! functions intended for third-party extension and game authors are
 //! re-exported here. Editor-host plumbing (the loader plugin, the
-//! catalog, enable/disable helpers, internal component markers, and
-//! the FFI entry structs) stays behind `jackdaw_api_internal` and is
-//! used by the editor binary and by `jackdaw_loader`.
+//! catalog, enable/disable helpers, and internal component markers)
+//! stays behind `jackdaw_api_internal` and is used by the editor
+//! binary and by `jackdaw_loader`.
 //!
 //! # Static consumer
 //!
@@ -23,23 +23,24 @@
 //! The host binary must also enable jackdaw's `dylib` feature so the
 //! editor and loaded dylibs share one compilation of the shared types.
 
-// Links against the shared proxy dylib so the editor and every
-// loaded extension share one compilation of the types that cross
-// the FFI boundary. Mirrors how `bevy/dynamic_linking` pulls in
-// `bevy_dylib`.
+// Force the Jackdaw proxy dylib into every dynamic host and extension.
+// This mirrors Bevy's own `bevy/dynamic_linking` facade: public API remains
+// available through this crate while process-wide state lives in one shared
+// runtime library.
 #[cfg(feature = "dynamic_linking")]
 #[expect(
     unused_imports,
-    reason = "used by the host binary and by loaded extensions"
+    reason = "this forces the shared Jackdaw runtime to be linked"
 )]
 use jackdaw_dylib as _;
 
 // --- Extension authoring surface ---
 
 pub use jackdaw_api_internal::{
-    DefaultArea, ExtensionContext, ExtensionPoint, HierarchyWindow, InspectorWindow,
-    JackdawExtension, MenuEntryDescriptor, PanelContext, ToAnchorId as _, TopLevelMenu,
-    WindowDescriptor,
+    DefaultArea, ExtensionContext, ExtensionInputContext, ExtensionPoint, ExtensionRegistrar,
+    HierarchyWindow, InspectorWindow, JackdawExtension, MenuEntryDescriptor, PanelContext,
+    ToAnchorId as _, TopLevelMenu, WidgetDefinition, WidgetInstantiateContext, WidgetPreviewState,
+    WidgetProperty, WidgetPropertyKind, WidgetRegistry, WidgetSlot, WindowDescriptor,
 };
 
 pub use jackdaw_api_internal::lifecycle::ExtensionKind;
@@ -60,12 +61,6 @@ pub mod inspector {
 /// `#[operator]` attribute macro. See [`jackdaw_api_macros`] for the
 /// supported keys.
 pub use jackdaw_api_macros::operator;
-
-/// Emit the FFI entry symbol a dylib extension needs.
-pub use jackdaw_api_internal::export_extension;
-
-/// Emit the FFI entry symbol a dylib game needs.
-pub use jackdaw_api_internal::export_game;
 
 // --- Sub-modules (curated) ---
 
@@ -106,24 +101,16 @@ pub mod runtime {
     };
 }
 
-/// JSN primitives re-exported for operator parameter marshalling.
-pub use jackdaw_jsn as jsn;
+/// Format-independent scene primitives re-exported for operator parameter
+/// marshalling: `PropertyValue`, `Brush`, and the other `jackdaw_scene_types`
+/// types, exposed here so extension authors have one import path.
+pub mod scene {
+    pub use jackdaw_scene_types::*;
+}
 
-/// Minimal UI primitives an extension needs to spawn editor-style
-/// widgets. Today this is just `button(ButtonProps)`; `label()` and
-/// other primitives will land here as they become first-class.
-///
-/// Designed to dovetail with the (future) UI prefab system: every
-/// type exposed here is data, every spawn fn returns a `Bundle`. A
-/// JSN-serialised `ButtonProps` should round-trip through the same
-/// constructor an extension calls at runtime, so extensions and
-/// scene-authored UI share one code path.
-///
-/// Surface stays deliberately small. If you find yourself wanting
-/// `ButtonVariant`, `ButtonSize`, or other feathers internals,
-/// either the missing primitive should be designed into the prefab
-/// schema first or `jackdaw_feathers` should grow a builder method
-/// that hides the choice.
+/// UI primitives an extension needs to spawn editor-style widgets:
+/// `button(ButtonProps)` plus the radial quick-menu below. Kept
+/// deliberately small.
 pub mod ui {
     pub use jackdaw_feathers::button::{
         button, operator_button, operator_button_variant, ButtonProps,
@@ -187,9 +174,11 @@ pub mod prelude {
     pub use crate::pie::PlayState;
     pub use crate::runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems};
     pub use crate::{
-        operator, DefaultArea, ExtensionContext, ExtensionKind, ExtensionPoint, HierarchyWindow,
-        InspectorWindow, JackdawExtension, MenuEntryDescriptor, PanelContext, TopLevelMenu,
-        WindowDescriptor,
+        DefaultArea, ExtensionContext, ExtensionInputContext, ExtensionKind, ExtensionPoint,
+        ExtensionRegistrar, HierarchyWindow, InspectorWindow, JackdawExtension,
+        MenuEntryDescriptor, PanelContext, TopLevelMenu, WidgetDefinition,
+        WidgetInstantiateContext, WidgetPreviewState, WidgetProperty, WidgetPropertyKind,
+        WidgetRegistry, WidgetSlot, WindowDescriptor, operator,
     };
 
     /// Helper [`SystemParam`](bevy::ecs::system::SystemParam) for

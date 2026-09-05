@@ -1,36 +1,35 @@
-//! `JackdawPlugin` loads `.jsn/catalog.jsn` at `Startup` and
-//! exposes its `@Name` entries via the `JackdawCatalog` resource.
-//! Without this, scene fields like `"material": "@bricks"`
-//! silently fall back to defaults at runtime.
+//! `JackdawPlugin` loads `catalog.bsn` at `Startup` and exposes its named
+//! entries via the `JackdawCatalog` resource, keyed as `@Name`. Without this,
+//! scene fields like `material: "@bricks"` silently fall back to defaults at
+//! runtime.
 
 use std::path::PathBuf;
 
+use bevy::asset::{Asset, AssetApp};
 use bevy::prelude::*;
+use bevy::reflect::TypePath;
 use jackdaw_runtime::{JackdawCatalog, JackdawCatalogPath, JackdawPlugin};
+
+/// A minimal reflectable asset stood up so the catalog has a concrete type to
+/// load. Real catalogs hold `StandardMaterial` entries, which need the render
+/// stack; this exercises the `@Name` resolution path without it.
+#[derive(Asset, Reflect, Default)]
+#[reflect(Default)]
+struct CatalogMaterial {
+    tint: f32,
+}
 
 #[test]
 fn project_catalog_populates_resource() {
-    // Catalogs reference textures by path. We use a fake path: the
-    // AssetServer returns a handle either way and we only check that
-    // `@brick` is keyed into the catalog.
-    let catalog_json = r##"{
-        "jsn": {
-            "format_version": [3, 0, 0],
-            "editor_version": "0.4.1",
-            "bevy_version": "0.18"
-        },
-        "assets": {
-            "bevy_image::image::Image": {
-                "@brick": "does-not-need-to-exist.png",
-                "#Image0": "also-fake.png"
-            }
-        }
-    }"##;
+    // A single named catalog entry. `load_bsn_assets` reads the `#Name`, builds
+    // the asset from its default, and the runtime keys it as `@brick`.
+    let type_path = <CatalogMaterial as TypePath>::type_path();
+    let catalog_bsn = format!("#brick\n{type_path}\n");
 
     let dir = unique_temp_dir("catalog-loading-resource");
     std::fs::create_dir_all(&dir).unwrap();
-    let catalog_path = dir.join("catalog.jsn");
-    std::fs::write(&catalog_path, catalog_json).unwrap();
+    let catalog_path = dir.join("catalog.bsn");
+    std::fs::write(&catalog_path, catalog_bsn).unwrap();
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -38,6 +37,8 @@ fn project_catalog_populates_resource() {
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
     app.add_plugins(bevy::image::ImagePlugin::default());
+    app.init_asset::<CatalogMaterial>();
+    app.register_asset_reflect::<CatalogMaterial>();
     app.insert_resource(JackdawCatalogPath(catalog_path.clone()));
     app.add_plugins(JackdawPlugin);
 
@@ -66,7 +67,7 @@ fn missing_catalog_leaves_resource_empty() {
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
     app.insert_resource(JackdawCatalogPath(PathBuf::from(
-        "/definitely/does/not/exist/catalog.jsn",
+        "/definitely/does/not/exist/catalog.bsn",
     )));
     app.add_plugins(JackdawPlugin);
 

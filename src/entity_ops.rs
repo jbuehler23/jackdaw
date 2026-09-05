@@ -40,14 +40,13 @@ impl SystemClipboard {
     }
 }
 
-// Re-export from jackdaw_jsn
-pub use jackdaw_jsn::GltfSource;
+pub use jackdaw_scene_types::GltfSource;
 
 pub struct EntityOpsPlugin;
 
 impl Plugin for EntityOpsPlugin {
     fn build(&self, app: &mut App) {
-        // Note: GltfSource type registration is handled by JsnPlugin
+        // Note: GltfSource type registration is handled by SceneTypesPlugin
         match arboard::Clipboard::new() {
             Ok(clipboard) => {
                 app.insert_resource(SystemClipboard {
@@ -59,7 +58,8 @@ impl Plugin for EntityOpsPlugin {
                 warn!("Failed to initialize system clipboard: {e}");
             }
         }
-        app.register_type::<EmptyEntity>()
+        app.add_observer(derive_world_asset_root)
+            .register_type::<EmptyEntity>()
             .register_type::<SceneCamera>()
             .register_type::<SceneLight>()
             .register_type::<SceneFogVolume>()
@@ -67,6 +67,38 @@ impl Plugin for EntityOpsPlugin {
             .register_type::<SceneAnimationPlayer>()
             .register_type::<SceneAudioSource>();
     }
+}
+
+/// Derive the render-side `WorldAssetRoot` from the authored `GltfSource`,
+/// the way reference images and terrains derive their render state.
+///
+/// Undo, redo, tab swaps and file loads all re-insert `GltfSource` from the
+/// document, so deriving it here is what brings the model back on each of
+/// those paths without the handle ever being written to the document.
+fn derive_world_asset_root(
+    insert: On<Insert, GltfSource>,
+    sources: Query<&GltfSource>,
+    existing: Query<&WorldAssetRoot>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+) {
+    let entity = insert.entity;
+    let Ok(source) = sources.get(entity) else {
+        return;
+    };
+    // Scenes authored before paths were normalised still hold an absolute
+    // path; `to_asset_path` reduces those and passes a relative one through.
+    let asset_path = to_asset_path(&source.path);
+    let scene: Handle<bevy::world_serialization::WorldAsset> =
+        asset_server.load(GltfAssetLabel::Scene(source.scene_index).from_asset(asset_path));
+    // Re-inserting an equal handle still trips `Changed`, and the world-asset
+    // spawner despawns and respawns the whole instance on every change.
+    // Applying the document re-inserts `GltfSource` wholesale, so without this
+    // the model is rebuilt on every undo.
+    if existing.get(entity).is_ok_and(|root| root.0 == scene) {
+        return;
+    }
+    commands.entity(entity).insert(WorldAssetRoot(scene));
 }
 
 /// Marks an entity as an intentionally-empty scene entity (`Add > Empty`).
@@ -226,7 +258,12 @@ pub fn create_entity(
                     shadow_maps_enabled: true,
                     ..default()
                 },
-                Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, 0.4, 0.0)),
+                Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, 0.4, 0.0))
+                    .with_translation(Vec3 {
+                        x: 0.0,
+                        y: 10.0,
+                        z: 0.0,
+                    }),
             ))
             .id(),
         EntityTemplate::SpotLight => commands
@@ -376,19 +413,32 @@ fn apply_last_material(entity: Entity) -> impl FnOnce(&mut World) {
     }
 }
 
+/// Spawn a template into the live world and register it in the scene document.
+pub fn spawn_template_in_document(world: &mut World, template: EntityTemplate) -> Entity {
+    let mut system_state: SystemState<(Commands, ResMut<Selection>)> = SystemState::new(world);
+    let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
+        return Entity::PLACEHOLDER;
+    };
+    let entity = create_entity(&mut commands, template, &mut selection);
+    system_state.apply(world);
+    crate::scene_io::register_entity_in_ast(world, entity);
+    entity
+}
+
+/// Seed an empty live document with a directional light.
+pub(crate) fn seed_new_scene_defaults(world: &mut World) {
+    if !world.contains_resource::<jackdaw_bsn::SceneBsnAst>() {
+        world.insert_resource(jackdaw_bsn::SceneBsnAst::default());
+    }
+    spawn_template_in_document(world, EntityTemplate::DirectionalLight);
+}
+
 /// World-access version of `create_entity`. Used from menu actions and other deferred contexts.
 /// Pushes a `SpawnEntity` command so the addition can be undone.
 pub fn create_entity_in_world(world: &mut World, template: EntityTemplate) {
     let label = format!("Add {}", template.label());
     let spawn_fn = Box::new(move |world: &mut World| -> Entity {
-        let mut system_state: SystemState<(Commands, ResMut<Selection>)> = SystemState::new(world);
-        let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
-            return Entity::PLACEHOLDER;
-        };
-        let entity = create_entity(&mut commands, template, &mut selection);
-        system_state.apply(world);
-        crate::scene_io::register_entity_in_ast(world, entity);
-        entity
+        spawn_template_in_document(world, template)
     });
 
     let mut cmd: Box<dyn EditorCommand> = Box::new(crate::commands::SpawnEntity {
@@ -402,7 +452,6 @@ pub fn create_entity_in_world(world: &mut World, template: EntityTemplate) {
 
 pub fn spawn_gltf(
     commands: &mut Commands,
-    asset_server: &AssetServer,
     path: &str,
     position: Vec3,
     selection: &mut Selection,
@@ -412,16 +461,17 @@ pub fn spawn_gltf(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "GLTF Model".to_string());
     let scene_index = 0;
+    // Store the asset-relative path, not the browser's absolute one: the
+    // runtime and other machines cannot strip this project's assets prefix,
+    // and an unapproved absolute path is refused outright by the asset server.
     let asset_path = to_asset_path(path);
-    let scene = asset_server.load(GltfAssetLabel::Scene(scene_index).from_asset(asset_path));
     let entity = commands
         .spawn((
             Name::new(file_name),
             GltfSource {
-                path: path.to_string(),
+                path: asset_path,
                 scene_index,
             },
-            WorldAssetRoot(scene),
             Transform::from_translation(position),
         ))
         .id();
@@ -429,14 +479,14 @@ pub fn spawn_gltf(
     entity
 }
 
-pub fn spawn_gltf_in_world(world: &mut World, path: &str, position: Vec3) {
-    let mut system_state: SystemState<(Commands, Res<AssetServer>, ResMut<Selection>)> =
-        SystemState::new(world);
-    let Ok((mut commands, asset_server, mut selection)) = system_state.get_mut(world) else {
+fn spawn_gltf_in_world(world: &mut World, path: &str, position: Vec3) {
+    let mut system_state: SystemState<(Commands, ResMut<Selection>)> = SystemState::new(world);
+    let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
         return;
     };
-    spawn_gltf(&mut commands, &asset_server, path, position, &mut selection);
+    let entity = spawn_gltf(&mut commands, path, position, &mut selection);
     system_state.apply(world);
+    crate::scene_io::register_entity_in_ast(world, entity);
 }
 
 pub fn delete_selected(world: &mut World) {
@@ -447,7 +497,6 @@ pub fn delete_selected(world: &mut World) {
         return;
     }
 
-    // Build commands for each entity
     let mut cmds: Vec<Box<dyn EditorCommand>> = Vec::new();
     for &entity in &entities {
         if world.get_entity(entity).is_err() {
@@ -485,6 +534,8 @@ pub fn delete_selected(world: &mut World) {
     }
 }
 
+/// Duplicate selected entities by grafting authored AST subtrees into the live
+/// document and spawning from those patches.
 pub fn duplicate_selected(world: &mut World) {
     let selection = world.resource::<Selection>();
     let entities: Vec<Entity> = selection.entities.clone();
@@ -500,111 +551,114 @@ pub fn duplicate_selected(world: &mut World) {
         }
     }
 
+    // Snapshot authored subtrees (and their live parents) before mutating the document.
+    let to_duplicate: Vec<Entity> = entities
+        .iter()
+        .copied()
+        .filter(|&entity| {
+            world.get_entity(entity).is_ok() && world.get::<EditorEntity>(entity).is_none()
+        })
+        .collect();
+    let plans: Vec<(jackdaw_bsn::SceneBsnAst, Option<Entity>)> = {
+        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        let mut plans = Vec::new();
+        for entity in to_duplicate {
+            let Some(src_node) = ast.ast_for(entity) else {
+                warn!("Duplicate: entity {entity:?} has no document node");
+                continue;
+            };
+            let parent_ast = ast.find_ast_parent_of(src_node);
+            let mut temp = jackdaw_bsn::SceneBsnAst::default();
+            jackdaw_bsn::clone_subtree_into(&mut temp, ast, src_node, None);
+            plans.push((temp, parent_ast));
+        }
+        plans
+    };
+
     let mut new_entities = Vec::new();
-
-    for &entity in &entities {
-        if world.get_entity(entity).is_err() {
-            continue;
+    for (mut temp, parent_ast) in plans {
+        prepare_authored_subtree_for_spawn(world, &mut temp);
+        let spawned = graft_and_spawn(world, &temp, parent_ast);
+        if let Some(&root) = spawned.first() {
+            new_entities.push(root);
         }
-        if world.get::<EditorEntity>(entity).is_some() {
-            continue;
-        }
-
-        // Snapshot the entity (and descendants) via DynamicSceneBuilder.
-        // `collect_entity_ids` keeps real children (e.g. a tree's trunk brush)
-        // but excludes runtime face-mesh children. The brush's `Children`
-        // component still references those excluded meshes, and `write_to_world`
-        // allocates a live placeholder entity for each unmapped reference, which
-        // would otherwise surface as empty orphan children on the clone. We
-        // despawn those placeholders below; the clone's brush regenerates its
-        // own face meshes on the next remesh.
-        let mut snapshot_entities = Vec::new();
-        crate::commands::collect_entity_ids(world, entity, &mut snapshot_entities);
-        let snapshot_set: std::collections::HashSet<Entity> =
-            snapshot_entities.iter().copied().collect();
-        let type_registry = world.resource::<AppTypeRegistry>().read();
-        let scene = DynamicWorldBuilder::from_world(world, &type_registry)
-            .extract_entities(snapshot_entities.into_iter())
-            .build();
-        drop(type_registry);
-
-        // Write the snapshot back to create a clone
-        let mut entity_map = Default::default();
-        if scene.write_to_world(world, &mut entity_map).is_err() {
-            continue;
-        }
-
-        // Despawn placeholder clones created for child references that were not
-        // part of the snapshot (the brush's runtime face meshes), so the clone
-        // does not gain empty orphan children.
-        let placeholders: Vec<Entity> = entity_map
-            .iter()
-            .filter(|(src, _)| !snapshot_set.contains(src))
-            .map(|(_, dst)| *dst)
-            .collect();
-        for placeholder in placeholders {
-            if let Ok(ec) = world.get_entity_mut(placeholder) {
-                ec.despawn();
-            }
-        }
-
-        // Find the cloned root entity
-        let Some(&new_root) = entity_map.get(&entity) else {
-            continue;
-        };
-
-        // Rename with incremented number suffix
-        if let Some(name) = world.get::<Name>(new_root) {
-            // Strip trailing " (Copy)" chains and trailing " N" to find base name
-            let mut base = name.as_str().to_string();
-            while base.ends_with(" (Copy)") {
-                base.truncate(base.len() - 7);
-            }
-            if let Some(pos) = base.rfind(' ')
-                && base[pos + 1..].parse::<u32>().is_ok()
-            {
-                base.truncate(pos);
-            }
-
-            // Find highest existing number for this base name
-            let mut max_num = 0u32;
-            let mut query = world.query::<&Name>();
-            for existing in query.iter(world) {
-                let s = existing.as_str();
-                if s == base {
-                    max_num = max_num.max(1);
-                } else if let Some(rest) = s.strip_prefix(base.as_str())
-                    && let Some(num_str) = rest.strip_prefix(' ')
-                    && let Ok(n) = num_str.parse::<u32>()
-                {
-                    max_num = max_num.max(n);
-                }
-            }
-
-            let new_name = format!("{} {}", base, max_num + 1);
-            world.entity_mut(new_root).insert(Name::new(new_name));
-        }
-
-        // Preserve parent relationship from original
-        let parent = world.get::<ChildOf>(entity).map(|c| c.0);
-        if let Some(parent) = parent {
-            world.entity_mut(new_root).insert(ChildOf(parent));
-        } else {
-            // Original was a root entity, remove any ChildOf the scene write may have added.
-            world.entity_mut(new_root).remove::<ChildOf>();
-        }
-
-        new_entities.push(new_root);
     }
 
-    // Register duplicates in AST
-    crate::scene_io::register_entities_in_ast(world, &new_entities);
-
-    // Select the new entities
     let mut selection = world.resource_mut::<Selection>();
     selection.entities = new_entities;
     for &entity in &selection.entities.clone() {
         world.entity_mut(entity).insert(Selected);
+    }
+}
+
+/// Mint fresh ids and unique root names on an authored subtree before it is
+/// grafted/spawned.
+fn prepare_authored_subtree_for_spawn(world: &mut World, ast: &mut jackdaw_bsn::SceneBsnAst) {
+    mint_scene_node_ids(world, ast);
+    assign_unique_entity_root_names(world, ast);
+}
+
+/// `SceneNodeIds` on entity roots of `ast`.
+fn entity_root_scene_node_ids(
+    world: &World,
+    ast: &jackdaw_bsn::SceneBsnAst,
+) -> Vec<jackdaw_scene_types::SceneNodeId> {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let reg = registry.read();
+    jackdaw_bsn::entity_roots(ast, &reg)
+        .into_iter()
+        .filter_map(|root| ast.stable_id_of(root).map(jackdaw_scene_types::SceneNodeId))
+        .collect()
+}
+
+/// Give each entity root in `ast` a `#Name` that does not collide with live
+/// scene-entity names (or with earlier roots in the same batch). Editor chrome
+/// (`EditorEntity`) is ignored so UI labels do not force renames. Collisions
+/// get the next `Base N` suffix.
+fn assign_unique_entity_root_names(world: &mut World, ast: &mut jackdaw_bsn::SceneBsnAst) {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let entity_roots = {
+        let reg = registry.read();
+        jackdaw_bsn::entity_roots(ast, &reg)
+    };
+
+    let mut taken: std::collections::HashSet<String> = {
+        let mut names = std::collections::HashSet::new();
+        let mut query = world.query_filtered::<&Name, Without<EditorEntity>>();
+        for existing in query.iter(world) {
+            names.insert(existing.as_str().to_owned());
+        }
+        names
+    };
+
+    for root in entity_roots {
+        let Some(name) = ast.get_name(root).map(str::to_owned) else {
+            continue;
+        };
+        if taken.insert(name.clone()) {
+            continue;
+        }
+
+        let mut base = name;
+        if let Some(pos) = base.rfind(' ')
+            && base[pos + 1..].parse::<u32>().is_ok()
+        {
+            base.truncate(pos);
+        }
+        let mut max_num = 0u32;
+        for existing in &taken {
+            if existing == &base {
+                max_num = max_num.max(1);
+            } else if let Some(rest) = existing.strip_prefix(base.as_str())
+                && let Some(num_str) = rest.strip_prefix(' ')
+                && let Ok(n) = num_str.parse::<u32>()
+            {
+                max_num = max_num.max(n);
+            }
+        }
+        let new_name = format!("{} {}", base, max_num + 1);
+        taken.insert(new_name.clone());
+        crate::commands::set_name_patch(ast, root, Some(&new_name));
     }
 }
 
@@ -809,53 +863,38 @@ pub(crate) fn rotate_selected(world: &mut World, rotation: Quat) {
     }
 }
 
-/// Copy all reflected components from the primary selected entity to the clipboard.
-/// Copy selected entities to the system clipboard as JSN text.
+/// Copy selected entities to the system clipboard as BSN text.
 fn copy_components(world: &mut World) {
     let selection = world.resource::<Selection>();
     if selection.entities.is_empty() {
         return;
     }
+    let selected: Vec<Entity> = selection.entities.clone();
 
-    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-    let jsn_entities: Vec<jackdaw_jsn::format::JsnEntity> = selection
-        .entities
-        .iter()
-        .filter_map(|&e| {
-            ast.node_for_entity(e)
-                .map(|node| jackdaw_jsn::format::JsnEntity {
-                    // Paste mints fresh node ids, so the clipboard copy drops
-                    // the source id (mirrors `remap_stable_ids`).
-                    id: None,
-                    parent: None,
-                    components: node.components.clone(),
-                })
-        })
-        .collect();
-
-    if jsn_entities.is_empty() {
-        warn!("Copy: no selected entities have AST nodes");
+    let nodes: Vec<Entity> = {
+        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        selected.iter().filter_map(|&e| ast.ast_for(e)).collect()
+    };
+    if nodes.is_empty() {
+        warn!("Copy: no selected entities have document nodes");
         return;
     }
 
-    // Build the payload: entities + a copy of the source scene's inline
-    // assets so cross-scene paste carries any referenced material defs.
-    let assets = world
-        .get_resource::<jackdaw_jsn::SceneJsnAst>()
-        .map(|ast| ast.assets.clone())
-        .unwrap_or_default();
-    let payload = jackdaw_jsn::format::ClipboardPayload {
-        entities: jsn_entities,
-        assets,
-    };
-
-    let jsn_text = match serde_json::to_string_pretty(&payload) {
-        Ok(t) => t,
-        Err(e) => {
-            warn!("Failed to serialize clipboard payload: {e}");
-            return;
-        }
-    };
+    // Clipboard text is BSN: the selected subtrees plus embedded asset
+    // entries, the same shape a saved scene uses, so it pastes into code
+    // editors readably. Paste mints fresh SceneNodeIds before grafting.
+    let parent_path = world
+        .resource::<crate::scene_io::SceneFilePath>()
+        .path
+        .as_ref()
+        .and_then(|p| Path::new(p).parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let bsn_text =
+        crate::scene_io::emit_bsn_entities_with_inline_assets(world, &parent_path, &nodes);
+    if bsn_text.trim().is_empty() {
+        warn!("Copy: selected entities emitted no BSN text");
+        return;
+    }
 
     let Some(mut cb) = world.get_resource_mut::<SystemClipboard>() else {
         return;
@@ -865,14 +904,14 @@ fn copy_components(world: &mut World) {
         std::env::var("WAYLAND_DISPLAY").ok(),
         std::env::var("DISPLAY").ok(),
     );
-    cb.last_jsn = jsn_text.clone();
-    match cb.clipboard.set_text(&jsn_text) {
+    cb.last_jsn = bsn_text.clone();
+    match cb.clipboard.set_text(&bsn_text) {
         Ok(()) => {
-            // Verify by reading back, like BSN branch does
+            // Verify by reading back
             match cb.clipboard.get_text() {
                 Ok(readback) => info!(
                     "Clipboard set+readback OK ({} bytes written, {} read back)",
-                    jsn_text.len(),
+                    bsn_text.len(),
                     readback.len(),
                 ),
                 Err(e) => warn!("Clipboard set OK but readback failed: {e}"),
@@ -882,16 +921,15 @@ fn copy_components(world: &mut World) {
     }
 }
 
-/// Undo command for a paste operation. On undo, finds each pasted entity by its
-/// `BrushStableId` and despawns it. On redo, re-spawns from the original payload
-/// and restores the same stable IDs that were assigned at first paste.
+/// Undo command for a paste operation. On undo, finds each pasted root by its
+/// `SceneNodeId` and despawns it (children go with the hierarchy). On redo,
+/// re-spawns from the remapped clipboard text that already carries those ids.
 struct PasteEntitiesCommand {
-    /// Stable IDs assigned to the pasted entities at first paste.
-    spawned_stable_ids: Vec<crate::draw_brush::BrushStableId>,
-    /// Original payload, preserved so redo can re-spawn.
-    payload: jackdaw_jsn::format::ClipboardPayload,
-    /// Pre-remapped entity list (stable IDs already replaced with fresh ones).
-    remapped_entities: Vec<jackdaw_jsn::format::JsnEntity>,
+    /// `SceneNodeIds` assigned to pasted entity roots at first paste.
+    spawned_node_ids: Vec<jackdaw_scene_types::SceneNodeId>,
+    /// Clipboard BSN with fresh ids and unique names already written in,
+    /// preserved so redo re-spawns the same authored patches.
+    remapped_text: String,
     label: String,
     /// False on first push (paste already happened); true on subsequent executes (redo).
     is_redo: bool,
@@ -900,25 +938,13 @@ struct PasteEntitiesCommand {
 impl crate::commands::EditorCommand for PasteEntitiesCommand {
     fn execute(&mut self, world: &mut World) {
         // First push: paste already happened in paste_components; nothing to do.
-        // Subsequent calls (redo): re-spawn from the remapped entity list.
+        // Subsequent calls (redo): re-spawn from the remapped text.
         if !self.is_redo {
             self.is_redo = true;
             return;
         }
 
-        // Redo path: re-spawn the entities from the saved remapped list.
-        let local_assets = std::collections::HashMap::new();
-        let parent_path = std::path::Path::new(".");
-        let spawned = crate::scene_io::load_scene_from_jsn(
-            world,
-            &self.remapped_entities,
-            parent_path,
-            &local_assets,
-        );
-        crate::scene_io::register_entities_in_ast(world, &spawned);
-
-        // Merge assets from payload into destination scene on redo as well.
-        merge_payload_assets(world, &self.payload.assets);
+        let spawned = spawn_bsn_clipboard(world, &self.remapped_text);
 
         // Re-select the redo-pasted entities.
         for &entity in &world.resource::<Selection>().entities.clone() {
@@ -936,28 +962,22 @@ impl crate::commands::EditorCommand for PasteEntitiesCommand {
     }
 
     fn undo(&mut self, world: &mut World) {
-        // Find entities by stable ID and despawn them.
         let id_to_entity: std::collections::HashMap<_, _> = world
-            .query::<(Entity, &crate::draw_brush::BrushStableId)>()
+            .query::<(Entity, &jackdaw_scene_types::SceneNodeId)>()
             .iter(world)
-            .map(|(e, sid)| (*sid, e))
+            .map(|(entity, node_id)| (*node_id, entity))
             .collect();
 
         let mut to_despawn: Vec<Entity> = Vec::new();
-        for sid in &self.spawned_stable_ids {
-            if let Some(&e) = id_to_entity.get(sid) {
-                to_despawn.push(e);
+        for node_id in &self.spawned_node_ids {
+            if let Some(&entity) = id_to_entity.get(node_id) {
+                to_despawn.push(entity);
             }
         }
 
         crate::commands::deselect_entities(world, &to_despawn);
         for e in to_despawn {
-            world
-                .resource_mut::<jackdaw_jsn::SceneJsnAst>()
-                .remove_node(e);
-            if let Ok(ec) = world.get_entity_mut(e) {
-                ec.despawn();
-            }
+            crate::commands::despawn_scene_entity(world, e);
         }
     }
 
@@ -966,55 +986,110 @@ impl crate::commands::EditorCommand for PasteEntitiesCommand {
     }
 }
 
-/// Merge `src_assets` into the destination scene's `SceneJsnAst`, preferring
-/// existing entries (never clobber a definition that is already present).
-fn merge_payload_assets(world: &mut World, src_assets: &jackdaw_jsn::format::JsnAssets) {
-    if let Some(mut ast) = world.get_resource_mut::<jackdaw_jsn::SceneJsnAst>() {
-        // JsnAssets(HashMap<type_path, HashMap<name, value>>)
-        for (type_path, name_map) in &src_assets.0 {
-            let dest_type_map = ast.assets.0.entry(type_path.clone()).or_default();
-            for (name, def) in name_map {
-                if !dest_type_map.contains_key(name) {
-                    dest_type_map.insert(name.clone(), def.clone());
-                }
+/// Graft entity roots from `source` into the live document and spawn
+/// them under `parent_ast` (`None` = scene roots).
+fn graft_and_spawn(
+    world: &mut World,
+    source: &jackdaw_bsn::SceneBsnAst,
+    parent_ast: Option<Entity>,
+) -> Vec<Entity> {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let entity_roots = {
+        let reg = registry.read();
+        jackdaw_bsn::entity_roots(source, &reg)
+    };
+
+    let ecs_parent = parent_ast.and_then(|parent| {
+        world
+            .resource::<jackdaw_bsn::SceneBsnAst>()
+            .ecs_for_ast(parent)
+    });
+
+    let mut grafted_roots = Vec::new();
+    {
+        let mut live = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        for src_root in entity_roots {
+            let new_root = jackdaw_bsn::clone_subtree_into(&mut live, source, src_root, parent_ast);
+            grafted_roots.push(new_root);
+        }
+    }
+
+    let mut spawned_roots = Vec::new();
+    let mut all_spawned = Vec::new();
+    for &ast_root in &grafted_roots {
+        let before = all_spawned.len();
+        jackdaw_bsn::spawn_ast_node(world, ast_root, ecs_parent, &mut all_spawned);
+        if let Some(&ecs_root) = all_spawned.get(before) {
+            spawned_roots.push(ecs_root);
+        }
+    }
+    jackdaw_bsn::apply_dirty_ast_patches(world);
+    spawned_roots
+}
+
+/// Parse clipboard BSN text and graft it into the live scene document.
+fn spawn_bsn_clipboard(world: &mut World, text: &str) -> Vec<Entity> {
+    let parsed = match jackdaw_bsn::parse_bsn_text(text) {
+        Ok(ast) => ast,
+        Err(e) => {
+            warn!("Paste: failed to parse clipboard BSN: {e}");
+            return Vec::new();
+        }
+    };
+    graft_and_spawn(world, &parsed, None)
+}
+
+/// Ensure every entity node in `ast` carries a fresh `SceneNodeId` patch so
+/// spawn/apply installs unique ids.
+fn mint_scene_node_ids(world: &World, ast: &mut jackdaw_bsn::SceneBsnAst) {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let asset_roots: std::collections::HashSet<Entity> = {
+        let reg = registry.read();
+        jackdaw_bsn::asset_roots(ast, &reg).into_iter().collect()
+    };
+
+    let mut stack: Vec<Entity> = ast.roots.clone();
+    let mut nodes = Vec::new();
+    while let Some(node) = stack.pop() {
+        nodes.push(node);
+        stack.extend(ast.get_children_ast(node));
+    }
+    for node in nodes {
+        if asset_roots.contains(&node) {
+            continue;
+        }
+        let existing = ast.get_patches(node).and_then(|patches| {
+            patches.0.iter().copied().find(|&pe| {
+                matches!(
+                    ast.get_patch(pe),
+                    Some(jackdaw_bsn::BsnPatch::TupleStruct(data))
+                        if data.type_path.ends_with("SceneNodeId")
+                )
+            })
+        });
+        let fresh = jackdaw_scene_types::SceneNodeId::next();
+        let patch = jackdaw_bsn::BsnPatch::TupleStruct(jackdaw_bsn::BsnTupleStructData {
+            type_path: jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH.to_string(),
+            values: vec![jackdaw_bsn::BsnValue::Int(fresh.0 as i128)],
+        });
+        if let Some(pe) = existing {
+            ast.set_patch(pe, patch);
+        } else {
+            let pe = ast.world.spawn(patch).id();
+            if let Some(patches) = ast.get_patches_mut(node) {
+                patches.0.push(pe);
             }
         }
     }
 }
 
-/// Rewrite `BrushStableId` values in a list of `JsnEntity` component maps,
-/// replacing each with a fresh ID minted from `StableIdCounter`.
-/// Returns the list of newly-assigned stable IDs (one per entity that had one).
-fn remap_stable_ids(
-    world: &mut World,
-    entities: &mut [jackdaw_jsn::format::JsnEntity],
-) -> Vec<crate::draw_brush::BrushStableId> {
-    const STABLE_ID_KEY: &str = "jackdaw::draw_brush::BrushStableId";
-    let mut assigned = Vec::new();
-    for jsn in entities.iter_mut() {
-        if jsn.components.contains_key(STABLE_ID_KEY) {
-            let fresh = crate::draw_brush::mint_stable_id(world);
-            jsn.components.insert(
-                STABLE_ID_KEY.to_string(),
-                serde_json::Value::Number(serde_json::Number::from(
-                    // BrushStableId(u64) serializes as a plain u64 number.
-                    // Access inner value via the json number representation.
-                    fresh.0,
-                )),
-            );
-            assigned.push(fresh);
-        }
-    }
-    assigned
-}
-
-/// Paste entities from system clipboard JSN text.
+/// Paste entities from system clipboard BSN text.
 fn paste_components(world: &mut World) {
     if crate::asset_ingest::paste_clipboard_image(world) {
         return;
     }
 
-    let jsn_text = {
+    let text = {
         let Some(mut cb) = world.get_resource_mut::<SystemClipboard>() else {
             return;
         };
@@ -1023,64 +1098,29 @@ fn paste_components(world: &mut World) {
             .unwrap_or_else(|_| cb.last_jsn.clone())
     };
 
-    if jsn_text.trim().is_empty() {
+    if text.trim().is_empty() {
         return;
     }
 
-    let parsed_value = match serde_json::from_str::<serde_json::Value>(&jsn_text) {
-        Ok(v) => v,
+    let mut parsed = match jackdaw_bsn::parse_bsn_text(&text) {
+        Ok(ast) => ast,
         Err(e) => {
-            warn!("Clipboard text is not valid JSON: {e}");
+            warn!("Clipboard text is not valid BSN: {e}");
             return;
         }
     };
-
-    let (mut parsed, payload_assets, full_payload) = if parsed_value.is_array() {
-        // Legacy shape: Vec<JsnEntity>
-        let entities: Vec<jackdaw_jsn::format::JsnEntity> =
-            match serde_json::from_value(parsed_value) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("Clipboard text is not valid JSN entity array: {e}");
-                    return;
-                }
-            };
-        let default_assets = jackdaw_jsn::format::JsnAssets::default();
-        let payload = jackdaw_jsn::format::ClipboardPayload {
-            entities: entities.clone(),
-            assets: default_assets.clone(),
-        };
-        (entities, default_assets, payload)
-    } else {
-        let payload: jackdaw_jsn::format::ClipboardPayload =
-            match serde_json::from_value(parsed_value) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!("Clipboard text is not a valid ClipboardPayload: {e}");
-                    return;
-                }
-            };
-        let assets = payload.assets.clone();
-        let entities = payload.entities.clone();
-        (entities, assets, payload)
-    };
-
-    if parsed.is_empty() {
+    if parsed.roots.is_empty() {
         return;
     }
 
-    // Mint fresh BrushStableIds for the pasted entities so they don't
-    // collide with their source.
-    let spawned_stable_ids = remap_stable_ids(world, &mut parsed);
+    prepare_authored_subtree_for_spawn(world, &mut parsed);
+    let spawned_node_ids = entity_root_scene_node_ids(world, &parsed);
+    let remapped_text = jackdaw_bsn::emit_scene(&parsed);
 
-    merge_payload_assets(world, &payload_assets);
-
-    let remapped_entities = parsed.clone();
-    let local_assets = std::collections::HashMap::new();
-    let parent_path = std::path::Path::new(".");
-    let spawned = crate::scene_io::load_scene_from_jsn(world, &parsed, parent_path, &local_assets);
-
-    crate::scene_io::register_entities_in_ast(world, &spawned);
+    let spawned = graft_and_spawn(world, &parsed, None);
+    if spawned.is_empty() {
+        return;
+    }
 
     for &entity in &world.resource::<Selection>().entities.clone() {
         if let Ok(mut ec) = world.get_entity_mut(entity) {
@@ -1093,12 +1133,11 @@ fn paste_components(world: &mut World) {
         world.entity_mut(entity).insert(Selected);
     }
 
-    info!("Pasted {} entities from JSN clipboard", spawned.len());
+    info!("Pasted {} entities from BSN clipboard", spawned.len());
 
     let cmd = PasteEntitiesCommand {
-        spawned_stable_ids,
-        payload: full_payload,
-        remapped_entities,
+        spawned_node_ids,
+        remapped_text,
         label: "Paste entities".to_string(),
         is_redo: false,
     };
@@ -1128,12 +1167,16 @@ fn hide_selected(world: &mut World) {
             _ => Visibility::Hidden,
         };
 
-        let mut cmd = crate::commands::SetJsnField {
+        let mut cmd = crate::commands::SetBsnField {
             entity,
             type_path: "bevy_camera::visibility::Visibility".to_string(),
             field_path: String::new(),
-            old_value: serde_json::Value::String(format!("{current:?}")),
-            new_value: serde_json::Value::String(format!("{new_visibility:?}")),
+            old_value: Some(jackdaw_bsn::BsnValue::Type(format!(
+                "bevy_camera::visibility::Visibility::{current:?}"
+            ))),
+            new_value: jackdaw_bsn::BsnValue::Type(format!(
+                "bevy_camera::visibility::Visibility::{new_visibility:?}"
+            )),
             was_derived: false,
         };
         cmd.execute(world);
@@ -1177,12 +1220,16 @@ fn unhide_all_entities(world: &mut World, scene_entities: &mut SystemState<Scene
     };
 
     for entity in hidden {
-        let mut cmd = crate::commands::SetJsnField {
+        let mut cmd = crate::commands::SetBsnField {
             entity,
             type_path: "bevy_camera::visibility::Visibility".to_string(),
             field_path: String::new(),
-            old_value: serde_json::Value::String("Hidden".to_string()),
-            new_value: serde_json::Value::String("Inherited".to_string()),
+            old_value: Some(jackdaw_bsn::BsnValue::Type(
+                "bevy_camera::visibility::Visibility::Hidden".to_string(),
+            )),
+            new_value: jackdaw_bsn::BsnValue::Type(
+                "bevy_camera::visibility::Visibility::Inherited".to_string(),
+            ),
             was_derived: false,
         };
         cmd.execute(world);
@@ -1215,12 +1262,16 @@ fn hide_all_entities(world: &mut World, scene_entities: &mut SystemState<SceneEn
     };
 
     for (entity, current) in to_hide {
-        let mut cmd = crate::commands::SetJsnField {
+        let mut cmd = crate::commands::SetBsnField {
             entity,
             type_path: "bevy_camera::visibility::Visibility".to_string(),
             field_path: String::new(),
-            old_value: serde_json::Value::String(format!("{current:?}")),
-            new_value: serde_json::Value::String("Hidden".to_string()),
+            old_value: Some(jackdaw_bsn::BsnValue::Type(format!(
+                "bevy_camera::visibility::Visibility::{current:?}"
+            ))),
+            new_value: jackdaw_bsn::BsnValue::Type(
+                "bevy_camera::visibility::Visibility::Hidden".to_string(),
+            ),
             was_derived: false,
         };
         cmd.execute(world);
@@ -1247,9 +1298,9 @@ fn hide_all_entities(world: &mut World, scene_entities: &mut SystemState<SceneEn
 /// needed). Returns the original path on a miss and warns; callers should not
 /// rely on the fallback ever loading successfully under `Forbid`.
 pub fn to_asset_path(path: &str) -> String {
-    let path = Path::new(path);
+    let path = dunce::simplified(Path::new(path));
     if let Some(assets_dir) = get_assets_base_dir()
-        && let Ok(relative) = path.strip_prefix(&assets_dir)
+        && let Ok(relative) = path.strip_prefix(dunce::simplified(&assets_dir))
     {
         return relative.to_string_lossy().to_string();
     }
@@ -1271,7 +1322,7 @@ pub fn to_asset_path(path: &str) -> String {
 fn get_assets_base_dir() -> Option<std::path::PathBuf> {
     // Try ProjectRoot via recent projects config
     if let Some(project_dir) = crate::project::read_last_project() {
-        let assets = project_dir.join("assets");
+        let assets = dunce::simplified(project_dir.as_path()).join("assets");
         if assets.is_dir() {
             return Some(assets);
         }
@@ -1284,7 +1335,7 @@ fn get_assets_base_dir() -> Option<std::path::PathBuf> {
     } else {
         std::env::current_exe().ok()?.parent()?.to_path_buf()
     };
-    Some(base.join("assets"))
+    Some(dunce::simplified(base.as_path()).join("assets"))
 }
 
 // ----------------------- Operators ----------------------------
@@ -1304,6 +1355,7 @@ use crate::core_extension::CoreExtensionInputContext;
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityDeleteOp>()
         .register_operator::<EntityDuplicateOp>()
+        .register_operator::<EntityPlaceGltfOp>()
         .register_operator::<EntityCopyComponentsOp>()
         .register_operator::<EntityPasteComponentsOp>()
         .register_operator::<EntityToggleVisibilityOp>()
@@ -1319,7 +1371,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityAddCameraRigOp>();
     ctx.register_operator::<EntityAddEmptyOp>()
         .register_operator::<EntityAddImageOp>()
-        .register_operator::<EntityAddNavmeshOp>()
         .register_operator::<EntityAddTerrainOp>()
         .register_operator::<EntityAddPrefabOp>()
         .register_operator::<EntityAddPlaneOp>()
@@ -1383,6 +1434,45 @@ fn can_act_on_entities(
 }
 
 // -- Entity lifecycle --------------------------------------------
+
+#[operator(
+    id = "entity.place_gltf",
+    label = "Place GLTF",
+    description = "Place a GLTF asset into the active scene at a world position.",
+    allows_undo = true,
+    params(
+        path(String, doc = "Path to the GLTF asset."),
+        pos_x(f64, doc = "World-space X position."),
+        pos_y(f64, doc = "World-space Y position."),
+        pos_z(f64, doc = "World-space Z position."),
+    )
+)]
+pub(crate) fn entity_place_gltf(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(path) = params.as_str("path").map(str::to_owned) else {
+        warn!("entity.place_gltf: missing `path` param");
+        return OperatorResult::Cancelled;
+    };
+    let Some(x) = params.as_float("pos_x") else {
+        warn!("entity.place_gltf: missing `pos_x` param");
+        return OperatorResult::Cancelled;
+    };
+    let Some(y) = params.as_float("pos_y") else {
+        warn!("entity.place_gltf: missing `pos_y` param");
+        return OperatorResult::Cancelled;
+    };
+    let Some(z) = params.as_float("pos_z") else {
+        warn!("entity.place_gltf: missing `pos_z` param");
+        return OperatorResult::Cancelled;
+    };
+    let position = Vec3::new(x as f32, y as f32, z as f32);
+    commands.queue(move |world: &mut World| {
+        spawn_gltf_in_world(world, &path, position);
+    });
+    OperatorResult::Finished
+}
 
 #[operator(
     id = "entity.delete",
@@ -1711,28 +1801,6 @@ pub(crate) fn entity_add_reflection_probe(
     OperatorResult::Finished
 }
 
-#[operator(id = "entity.add.navmesh", label = "Navmesh")]
-pub(crate) fn entity_add_navmesh(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
-) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        crate::spawn_undoable(world, "Add Navmesh Region", |world| {
-            let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
-                SystemState::new(world);
-            let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
-                return Entity::PLACEHOLDER;
-            };
-            let entity = crate::navmesh::spawn_navmesh_entity(&mut commands);
-            selection.select_single(&mut commands, entity);
-            system_state.apply(world);
-            crate::scene_io::register_entity_in_ast(world, entity);
-            entity
-        });
-    });
-    OperatorResult::Finished
-}
-
 #[cfg(feature = "multiplayer")]
 #[operator(id = "entity.add.spawn_point", label = "Spawn Point")]
 pub(crate) fn entity_add_spawn_point(
@@ -1832,7 +1900,12 @@ pub(crate) fn entity_add_terrain(
     mut commands: Commands,
 ) -> OperatorResult {
     commands.queue(|world: &mut World| {
-        crate::spawn_undoable(world, "Add Terrain", |world| {
+        let is_first_terrain = world
+            .query_filtered::<Entity, With<jackdaw_scene_types::Terrain>>()
+            .iter(world)
+            .next()
+            .is_none();
+        crate::spawn_undoable(world, "Add Terrain", move |world| {
             let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
                 SystemState::new(world);
             let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
@@ -1842,6 +1915,12 @@ pub(crate) fn entity_add_terrain(
             selection.select_single(&mut commands, entity);
             system_state.apply(world);
             crate::scene_io::register_entity_in_ast(world, entity);
+            // Terrain settings live in the Terrain panel rather than the Components
+            // inspector, so the document's first terrain opens it. Later adds leave the
+            // focused tab alone.
+            if is_first_terrain {
+                crate::open_window_in_default_area_if_absent(world, "jackdaw.inspector.terrain");
+            }
             entity
         });
     });
@@ -1864,77 +1943,204 @@ pub(crate) fn entity_add_prefab(
 mod tests {
     use super::*;
 
-    /// Verifies that `remap_stable_ids` replaces existing `BrushStableId` values in a
-    /// JSN entity list with fresh IDs from `StableIdCounter`, so pasted copies don't
-    /// share IDs with their originals.
+    /// `mint_scene_node_ids` replaces any existing `SceneNodeId` with a fresh
+    /// sparse id and leaves other patches alone.
     #[test]
-    fn paste_assigns_fresh_stable_ids() {
+    fn mint_scene_node_ids_replaces_existing_ids() {
         let mut world = World::new();
-        crate::draw_brush::init_stable_id_counter(&mut world);
+        world.init_resource::<AppTypeRegistry>();
 
-        const STABLE_ID_KEY: &str = "jackdaw::draw_brush::BrushStableId";
-        let original_id: u64 = 7;
+        let mut ast = jackdaw_bsn::SceneBsnAst::default();
+        let node = ast.create_entity_node(vec![
+            jackdaw_bsn::BsnPatch::TupleStruct(jackdaw_bsn::BsnTupleStructData {
+                type_path: jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH.to_string(),
+                values: vec![jackdaw_bsn::BsnValue::Int(42)],
+            }),
+            jackdaw_bsn::BsnPatch::Name("Kept".to_string()),
+        ]);
+        ast.add_to_roots(node);
 
-        let mut entities = vec![jackdaw_jsn::format::JsnEntity {
-            id: None,
-            parent: None,
-            components: {
-                let mut map = std::collections::HashMap::new();
-                map.insert(
-                    STABLE_ID_KEY.to_string(),
-                    serde_json::Value::Number(serde_json::Number::from(original_id)),
-                );
-                map
-            },
-        }];
+        mint_scene_node_ids(&world, &mut ast);
 
-        let assigned = remap_stable_ids(&mut world, &mut entities);
-
-        // One entity had a BrushStableId, so one fresh ID should have been minted.
-        assert_eq!(assigned.len(), 1);
-
-        // The freshly-assigned ID must differ from the original.
-        let fresh_id = assigned[0].0;
-        assert_ne!(
-            fresh_id, original_id,
-            "pasted entity should have a new stable ID"
+        let id = ast.stable_id_of(node).expect("id patch present");
+        assert_ne!(id, 42, "the stale id must be replaced");
+        assert!(
+            id >= jackdaw_scene_types::SPARSE_MIN,
+            "minted id must be in the sparse range"
         );
-
-        // The entity component map should hold the new value.
-        let stored = entities[0].components[STABLE_ID_KEY]
-            .as_u64()
-            .expect("BrushStableId value should be a u64 number");
-        assert_eq!(stored, fresh_id);
+        assert_eq!(ast.get_name(node), Some("Kept"), "other patches survive");
     }
 
-    /// Verifies that entities without a `BrushStableId` component are untouched
-    /// by `remap_stable_ids` and that no spurious IDs are returned.
     #[test]
-    fn paste_does_not_add_stable_ids_to_non_brush_entities() {
+    fn assign_unique_entity_root_names_keeps_free_names_and_numbers_collisions() {
         let mut world = World::new();
-        crate::draw_brush::init_stable_id_counter(&mut world);
+        world.init_resource::<AppTypeRegistry>();
+        world.spawn(Name::new("Brush"));
+        world.spawn(Name::new("Brush 2"));
+        world.spawn((Name::new("Camera"), EditorEntity));
 
-        let mut entities = vec![jackdaw_jsn::format::JsnEntity {
-            id: None,
-            parent: None,
-            components: {
-                let mut map = std::collections::HashMap::new();
-                map.insert(
-                    "bevy_ecs::name::Name".to_string(),
-                    serde_json::Value::String("Empty".to_string()),
-                );
-                map
-            },
-        }];
+        let mut ast = jackdaw_bsn::SceneBsnAst::default();
+        let free = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("Camera".to_string())]);
+        let taken = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("Brush".to_string())]);
+        let also_taken =
+            ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("Brush".to_string())]);
+        ast.add_to_roots(free);
+        ast.add_to_roots(taken);
+        ast.add_to_roots(also_taken);
 
-        let assigned = remap_stable_ids(&mut world, &mut entities);
+        assign_unique_entity_root_names(&mut world, &mut ast);
 
-        // No BrushStableId present: nothing should be assigned or added.
-        assert!(assigned.is_empty());
+        assert_eq!(
+            ast.get_name(free),
+            Some("Camera"),
+            "editor chrome names do not force renames"
+        );
+        assert_eq!(
+            ast.get_name(taken),
+            Some("Brush 3"),
+            "colliding name takes the next free number"
+        );
+        assert_eq!(
+            ast.get_name(also_taken),
+            Some("Brush 4"),
+            "batch collisions advance past names assigned earlier in the same pass"
+        );
+    }
+
+    /// The Terrain panel auto-focuses only when a document gains its first terrain. A later
+    /// add leaves the focused tab alone.
+    mod terrain_focus_guard {
+        use jackdaw_panels::DockAreaStyle;
+        use jackdaw_panels::tree::{DockLeaf, DockNode, DockTree};
+
+        use super::*;
+
+        /// Mirrors `build_default_tree`'s `right_sidebar` leaf: seeded at boot with every
+        /// registered window as a tab, Components first and therefore active.
+        fn world_with_right_sidebar_seeded() -> World {
+            let mut world = World::new();
+            world.insert_resource(CommandHistory::default());
+            world.insert_resource(Selection::default());
+            let mut tree = DockTree::new();
+            tree.set_root_leaf(
+                DockLeaf::new("right_sidebar", DockAreaStyle::TabBar).with_windows(vec![
+                    "jackdaw.inspector".to_string(),
+                    "jackdaw.inspector.terrain".to_string(),
+                    "jackdaw.inspector.materials".to_string(),
+                ]),
+            );
+            world.insert_resource(tree);
+            world
+        }
+
+        fn active_window(world: &World) -> Option<String> {
+            let tree = world.resource::<DockTree>();
+            let leaf = tree.get(tree.root?).and_then(DockNode::as_leaf)?;
+            leaf.windows
+                .iter()
+                .find(|t| Some(t.id) == leaf.active)
+                .map(|t| t.window_id.clone())
+        }
+
+        fn focus_window(world: &mut World, window_id: &str) {
+            let mut tree = world.resource_mut::<DockTree>();
+            let leaf_id = tree.root.expect("seeded tree has a root");
+            let tab_id = tree
+                .get(leaf_id)
+                .and_then(DockNode::as_leaf)
+                .and_then(|l| l.tabs().find(|(id, _)| *id == window_id))
+                .map(|(_, tab)| tab)
+                .expect("window is present as a seeded tab");
+            tree.set_active(leaf_id, tab_id);
+        }
+
+        #[test]
+        fn first_terrain_add_focuses_the_seeded_unfocused_tab() {
+            let mut world = world_with_right_sidebar_seeded();
+
+            let result = world
+                .run_system_cached_with(entity_add_terrain, OperatorParameters::default())
+                .expect("system runs");
+            assert_eq!(result, OperatorResult::Finished);
+
+            assert_eq!(
+                active_window(&world).as_deref(),
+                Some("jackdaw.inspector.terrain"),
+                "the document's first terrain should bring the panel to front"
+            );
+        }
+
+        #[test]
+        fn second_terrain_add_leaves_components_active() {
+            let mut world = world_with_right_sidebar_seeded();
+
+            let result = world
+                .run_system_cached_with(entity_add_terrain, OperatorParameters::default())
+                .expect("first add runs");
+            assert_eq!(result, OperatorResult::Finished);
+            assert_eq!(
+                active_window(&world).as_deref(),
+                Some("jackdaw.inspector.terrain"),
+                "sanity check: first add still focuses Terrain"
+            );
+
+            // The user switches back to Components.
+            focus_window(&mut world, "jackdaw.inspector");
+
+            let result = world
+                .run_system_cached_with(entity_add_terrain, OperatorParameters::default())
+                .expect("second add runs");
+            assert_eq!(result, OperatorResult::Finished);
+
+            assert_eq!(
+                active_window(&world).as_deref(),
+                Some("jackdaw.inspector"),
+                "a second terrain must not steal focus from Components"
+            );
+        }
+    }
+
+    /// A terrain's extent lives in its sidecar, so a saved scene states no rectangle beside
+    /// it. The two extent fields are read only by the load-time migration, where a stated
+    /// rectangle means a sidecar that cannot place its own grid.
+    #[test]
+    fn a_saved_terrain_declares_no_extent() {
+        use bevy::ecs::reflect::AppTypeRegistry;
+
+        let mut world = World::new();
+        world.insert_resource(CommandHistory::default());
+        world.insert_resource(Selection::default());
+        world.init_resource::<AppTypeRegistry>();
+        {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            let mut writer = registry.write();
+            writer.register::<Name>();
+            writer.register::<Transform>();
+            writer.register::<Visibility>();
+            writer.register::<jackdaw_scene_types::Terrain>();
+            writer.register::<jackdaw_scene_types::SceneNodeId>();
+        }
+        world.init_resource::<jackdaw_bsn::SceneBsnAst>();
+        world.init_resource::<jackdaw_panels::tree::DockTree>();
+        world.init_resource::<jackdaw_panels::registry::WindowRegistry>();
+
+        let result = world
+            .run_system_cached_with(entity_add_terrain, OperatorParameters::default())
+            .expect("the operator runs");
+        assert_eq!(result, OperatorResult::Finished);
+
+        let text = crate::scene_io::emit_bsn_scene_with_inline_assets(
+            &mut world,
+            std::path::Path::new("."),
+        );
+
         assert!(
-            !entities[0]
-                .components
-                .contains_key("jackdaw::draw_brush::BrushStableId")
+            !text.contains("resolution:"),
+            "the saved scene must not declare a resolution:\n{text}"
+        );
+        assert!(
+            !text.contains("size:"),
+            "the saved scene must not declare a size:\n{text}"
         );
     }
 }

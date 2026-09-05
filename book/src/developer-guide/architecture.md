@@ -1,34 +1,35 @@
 # Architecture
 
-Jackdaw is a Bevy 0.18 plugin set. The editor and the standalone
-runtime share the same scene format (JSN) and the same component
+Jackdaw is a standalone editor built from Bevy 0.19 plugin sets. The editor and the standalone
+runtime share the same scene format and the same component
 reflection. There's no separate engine; if you can write a Bevy
 plugin, you can write a jackdaw extension.
 
 ## Plugin structure
 
-The editor is delivered as `EditorPlugins`, a Bevy `PluginGroup`.
-A typical editor binary looks like:
+The composable editor is delivered by `jackdaw_editor` as
+`JackdawEditorPlugins`, a Bevy `PluginGroup`.
+The editor binary looks like:
 
 ```rust
 App::new()
     .add_plugins(DefaultPlugins.set(editor_window_plugin()))
     .add_plugins((PhysicsPlugins::default(), EnhancedInputPlugin))
-    .add_plugins(EditorPlugins::default())
-    .add_plugins(your_crate::MyGamePlugin)
+    .add_plugins(JackdawEditorPlugins::default())
     .run()
 ```
 
-`EditorPlugins` pulls in everything jackdaw needs: the launcher,
+`JackdawEditorPlugins` pulls in everything jackdaw needs: the launcher,
 viewport, hierarchy, inspector, brush tools, asset browser,
-scene IO, and the extension loader. Your `MyGamePlugin` is added
-on top of that.
+scene IO, and the extension loader. Game project code is not
+compiled into this binary; the editor builds the project's own
+cargo binary and talks to it out of process (see below).
 
-The same `MyGamePlugin` is used by the standalone runtime. The
-standalone version doesn't add `EditorPlugins`; it adds
-`JackdawPlugin` from `jackdaw_runtime`, which is a much smaller
-plugin that knows how to load `.jsn` scenes but doesn't include
-any UI.
+The game's `main` adds `JackdawPlugin` from `jackdaw_runtime`,
+which knows how to load authored scenes and answer schema
+queries, but includes none of the editor UI. Gameplay usually
+lives in a Bevy plugin (often named `GamePlugin`) that `main`
+adds alongside it.
 
 `WindowPlugin` is set by `editor_window_plugin()`.
 
@@ -45,40 +46,42 @@ machine is:
 You can read the transitions in `src/lib.rs` and
 `src/project_select.rs`.
 
-## Per-project editor binary
+## Project code in the editor
 
-When you scaffold a project from the launcher, the project
-gets its own `editor` binary at `src/bin/editor.rs`. This is
-what `cargo editor` runs. The editor binary statically links
-both `EditorPlugins` and your `MyGamePlugin`, which means your
-gameplay code is always available to the editor's reflection
-without any dynamic loading.
+A jackdaw game is a normal Bevy binary. When you open one, the
+editor runs `cargo build` in the project root (sharing the user's
+`Cargo.toml`, lockfile, target dir, and toolchain) and asks the
+freshly built executable for its reflected type schema via
+`--jackdaw-extract-schema`. The editor represents those types as
+data rather than mapping game code into its process.
 
-There's an experimental dylib path that loads game code as a
-hot-reloadable `.so` instead, but it's off by default. Static
-is the recommended path. See [Open Challenges](open-challenges.md)
-for the dylib story.
+Play is the same artifact: the editor launches the project's own
+binary as a child process and talks to it over IPC. What you Play
+is what `cargo run` would run, and a game crash cannot take down
+the editor.
+
+Editor extensions build as dylibs against the SDK so they can
+share the editor's Bevy types and load in-process.
 
 ## Scene format
 
-Scenes are stored in `assets/scene.jsn`. The format is JSON;
-each entity is a list of reflected components keyed by type
-path. The serializer skips types tagged with `@EditorHidden`,
-the entity-level `EditorHidden` marker, `NonSerializable`, and
-`EditorOnly`.
+Scenes are stored as `.bsn` files under `assets/`. Each entity
+lists its reflected components inline. The live in-editor document
+is the BSN AST (`SceneBsnAst`); saving writes it back out as
+`.bsn` text, and that is the only format anything writes. The
+serializer skips types tagged with `@EditorHidden`, the
+entity-level `EditorHidden` marker, `NonSerializable`, and
+`EditorOnly`. Legacy `.jsn` scenes can still be imported; see
+[BSN Format](bsn-format.md).
 
-The runtime loader processes JSN entities in topological order
-(parents before children) and bundles `Transform`, `Visibility`,
-`GlobalTransform`, `InheritedVisibility`, and `ChildOf` into a
-single `world.spawn` per entity. User components go in
-afterwards, so `On<Insert, T>` observers see correct
-hierarchy-derived state. The relevant code is at
-`crates/jackdaw_runtime/src/lib.rs::spawn_scene_entities`.
-
-JSN is the current format. The plan is to swap to BSN (Cart's
-Bevy 0.19 scene-document work) once that lands; jackdaw's
-JSN-first refactor was deliberately shaped to make that swap
-mechanical. See [Open Challenges](open-challenges.md).
+Outside the editor, `jackdaw_runtime` registers a Bevy
+`AssetLoader` for the `bsn` extension, since Bevy has no built-in
+loader for the format. The loader processes scene entities in
+topological order (parents before children) and bundles
+`Transform`, `Visibility`, `GlobalTransform`,
+`InheritedVisibility`, and `ChildOf` into a single `world.spawn`
+per entity. User components go in afterwards, so `On<Insert, T>`
+observers see correct hierarchy-derived state.
 
 ## Brushes
 
@@ -116,23 +119,25 @@ Code:
 
 ## Extensions
 
-The editor can be extended by writing a separate crate, building
-it as a dylib, and dropping the `.so` in the editor's extensions
-folder. Extensions can register operators, windows, menu
-entries, and keybinds. See [Extending the Editor](extending-the-editor.md)
+The editor can be extended by writing a normal Bevy library that
+depends on `jackdaw_api` and implements the `JackdawExtension`
+trait. Opening the extension project in jackdaw builds and loads
+it; the Extensions dialog installs prebuilt extension dylibs.
+Extensions can register operators, windows, menu entries, and
+keybinds. See [Extending the Editor](extending-the-editor.md)
 for the full story.
 
-The extension loader is `crates/jackdaw_loader`. The proxy
-dylib that extensions link against is `crates/jackdaw_sdk`. The
+The dylib loader is `crates/jackdaw_loader`. The proxy dylib
+that extensions link against is `crates/jackdaw_sdk`. The
 rustc wrapper at `crates/jackdaw_rustc_wrapper` rewrites
-`--extern bevy=...` so extensions and the editor share one
-compiled copy of bevy types.
+`--extern bevy=...` so loaded extensions and the editor share
+one compiled copy of bevy types.
 
 ## What's not here yet
 
 The architecture page doesn't try to cover every system. The
-big unfinished pieces (BSN migration, full PIE, dylib loading on
-Windows, animation graph, asset processing pipeline) live in
+big unfinished pieces (animation graph, asset processing
+pipeline, and the rest) live in
 [Open Challenges](open-challenges.md). The
 [Crate Structure](crate-structure.md) page lists the workspace
 crates and their roles.

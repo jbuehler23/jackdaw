@@ -20,6 +20,12 @@ pub const ACCENT_BLUE: Color = Color::srgb(0.126, 0.431, 0.784);
 pub const DESTRUCTIVE_RED: Srgba = tailwind::RED_500;
 /// Destructive hover / close-button hover background (#DC2626, Tailwind red-600).
 pub const DESTRUCTIVE_RED_HOVER: Srgba = tailwind::RED_600;
+/// Positive / success text (e.g. a build that succeeded).
+pub const TEXT_SUCCESS: Color = Color::srgb(0.36, 0.72, 0.42);
+/// Caution / warning text (e.g. modifying an existing project file).
+pub const TEXT_WARNING: Color = Color::srgb(0.92, 0.75, 0.28);
+/// Error text (e.g. a build that failed).
+pub const TEXT_ERROR: Color = Color::srgb(0.9, 0.32, 0.32);
 
 // ---------------------------------------------------------------------------
 // Backgrounds (from Figma CSS, updated palette, slightly bluer tones)
@@ -217,6 +223,10 @@ pub const CATEGORY_PREFAB: Color = Color::srgb(0.95, 0.7, 0.3);
 /// Inherited-from-prefab entity dot color (muted amber, signals "not authored here")
 pub const CATEGORY_INHERITED: Color = Color::srgba(0.65, 0.55, 0.42, 0.75);
 /// Generic entity dot color (green)
+/// Parts of a loaded asset (glTF nodes/meshes). Muted like the inherited
+/// tone: the rows are inspectable but not editable.
+pub const CATEGORY_ASSET_PART: Color = Color::srgba(0.0, 0.667, 0.733, 0.55);
+
 pub const CATEGORY_ENTITY: Color = Color::srgba(0.259, 0.725, 0.514, 1.0);
 
 // ---------------------------------------------------------------------------
@@ -336,6 +346,31 @@ pub const SPACING_LG: f32 = 12.0;
 
 pub const ROW_HEIGHT: f32 = 24.0;
 pub const HEADER_HEIGHT: f32 = 28.0;
+
+/// Label column of a label-left/control-right field row. One width for every
+/// such row, so labels line up down a panel and across panels.
+pub const FIELD_LABEL_WIDTH: f32 = 96.0;
+/// How far the label column may give way in a panel too narrow for
+/// [`FIELD_LABEL_WIDTH`], before the control starts losing room instead.
+pub const FIELD_LABEL_MIN_WIDTH: f32 = 40.0;
+/// Room a field's control keeps at any panel width. A control squeezed below
+/// this reads as an empty row rather than a value.
+pub const FIELD_CONTROL_MIN_WIDTH: f32 = 56.0;
+/// Minimum height of one field row. Uniform so rows of different control
+/// types still read as one column.
+pub const FIELD_ROW_HEIGHT: f32 = 22.0;
+/// Room a slider keeps, over and above [`FIELD_CONTROL_MIN_WIDTH`]. A slider
+/// draws its digits centred inside its own track, and a track narrower than
+/// the digits overhangs both ends rather than clipping them.
+/// Wide enough for a signed four-figure value plus the track's padding.
+pub const SLIDER_MIN_WIDTH: f32 = 76.0;
+/// Horizontal inset per nesting level, for a sub-value shown under the
+/// feature it belongs to. The label column shrinks by the same amount, so
+/// the controls stay aligned.
+pub const FIELD_INDENT: f32 = 12.0;
+/// Edge of the square asset swatch leading a swatch row.
+pub const SWATCH_SIZE: f32 = 24.0;
+
 pub const WINDOW_TITLE_BAR_HEIGHT: f32 = 36.0;
 pub const STATUS_BAR_HEIGHT: f32 = 22.0;
 pub const INPUT_HEIGHT: f32 = 28.0;
@@ -360,3 +395,17 @@ pub const SEARCH_INPUT_WIDTH: f32 = 200.0;
 pub const BORDER_RADIUS_SM: f32 = 3.0;
 pub const BORDER_RADIUS_MD: f32 = 4.0;
 pub const BORDER_RADIUS_LG: f32 = 5.0;
+
+// ---------------------------------------------------------------------------
+// Fonts
+// ---------------------------------------------------------------------------
+
+/// `bevy::feathers`'s own default body font, referenced explicitly.
+///
+/// jackdaw overrides the ambient default font (`AssetId::default()`, see
+/// `icons::IconFontPlugin`) with its own embedded copy of the same nominal
+/// typeface, which is not byte-identical to `bevy::feathers`'s bundled copy.
+/// Text beside a native feathers widget, which always loads `fonts::REGULAR`
+/// explicitly, can end up visibly mismatched. Use this constant instead of
+/// `..Default::default()` wherever that seam would show.
+pub const DEFAULT_BODY_FONT: &str = bevy::feathers::constants::fonts::REGULAR;

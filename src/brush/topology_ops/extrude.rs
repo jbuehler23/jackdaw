@@ -18,7 +18,7 @@ use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::ops::extrude_face_region::extrude_face_region;
 use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh, apply_topology_edit};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use super::modal_edit::ModalTopologyEdit;
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};

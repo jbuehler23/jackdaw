@@ -27,13 +27,13 @@ use jackdaw_widgets::tree_view::{
 
 use crate::{
     EditorEntity, EditorHidden, OP_PREFIX,
-    commands::{CommandHistory, EditorCommand, ReparentEntity, SetJsnField},
+    commands::{CommandHistory, EditorCommand, ReparentEntity, SetBsnField},
     entity_ops,
     layout::HierarchyFilter,
     selection::{Selected, Selection},
 };
 use jackdaw_feathers::dialog::{DialogActionEvent, DialogChildrenSlot};
-use jackdaw_jsn::{Brush, BrushGroup};
+use jackdaw_scene_types::Brush;
 
 /// Stores the default name for the prefab save dialog.
 #[derive(Resource, Default)]
@@ -148,17 +148,43 @@ impl Plugin for HierarchyPlugin {
     }
 }
 
+/// True when `entity` was spawned by the glTF loader under a `GltfSource`
+/// root rather than authored by the user. Authored entities parented under a
+/// model keep a document node, so the absence of one is what separates the
+/// loader's nodes from anything the user put there.
+fn is_asset_part(world: &World, entity: Entity) -> bool {
+    if world
+        .get_resource::<jackdaw_bsn::SceneBsnAst>()
+        .is_some_and(|doc| doc.ast_for(entity).is_some())
+    {
+        return false;
+    }
+    let mut current = entity;
+    while let Some(ChildOf(parent)) = world.get::<ChildOf>(current) {
+        if world
+            .get::<jackdaw_scene_types::GltfSource>(*parent)
+            .is_some()
+        {
+            return true;
+        }
+        current = *parent;
+    }
+    false
+}
+
 /// Classify a scene entity by its primary component for tree display.
 /// Returns the underlying category (Brush mesh, Camera, Light, etc.)
 /// regardless of whether the entity is inherited from a prefab. Inherited
 /// status is conveyed separately via [`is_inherited_descendant`] so the
 /// outliner can pair the right icon with a muted color.
 fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
+    // Checked before the component-based arms below: a glTF leaf carries
+    // `Mesh3d` and would otherwise read as an ordinary authored mesh.
+    if is_asset_part(world, entity) {
+        return EntityCategory::AssetPart;
+    }
     if world.get::<crate::prefab::IsA>(entity).is_some() {
         return EntityCategory::Prefab;
-    }
-    if world.get::<BrushGroup>(entity).is_some() {
-        return EntityCategory::Mesh;
     }
     if world.get::<Camera>(entity).is_some() {
         return EntityCategory::Camera;
@@ -172,10 +198,20 @@ fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
     if world.get::<Mesh3d>(entity).is_some() {
         return EntityCategory::Mesh;
     }
-    if world.get::<jackdaw_jsn::SceneRootTag>(entity).is_some() {
+    if world
+        .get::<jackdaw_scene_types::SceneRootTag>(entity)
+        .is_some()
+    {
         return EntityCategory::Scene;
     }
-    if world.get::<WorldAssetRoot>(entity).is_some() {
+    // `GltfSource` is the authored component and `WorldAssetRoot` the handle
+    // derived from it, so match the former first: otherwise the row's icon
+    // depends on whether the asset has finished loading yet.
+    if world
+        .get::<jackdaw_scene_types::GltfSource>(entity)
+        .is_some()
+        || world.get::<WorldAssetRoot>(entity).is_some()
+    {
         return EntityCategory::Scene;
     }
     // An entity with no type of its own but with children reads as a grouping
@@ -256,7 +292,10 @@ fn is_outliner_child(world: &World, child: Entity) -> bool {
     world.get_entity(child).is_ok()
         && world.get::<EditorEntity>(child).is_none()
         && world.get::<EditorHidden>(child).is_none()
-        && world.get::<jackdaw_jsn::DerivedFaceMesh>(child).is_none()
+        && world.get::<jackdaw_ui::UiGeneratedPart>(child).is_none()
+        && world
+            .get::<jackdaw_scene_types::DerivedFaceMesh>(child)
+            .is_none()
 }
 
 /// Returns true if `entity` has `PrefabEntityId` but NOT `IsA` -- meaning
@@ -402,7 +441,7 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
         roots: &mut QueryState<
             Entity,
             (
-                With<Transform>,
+                Or<(With<Transform>, With<jackdaw_ui::UiCanvas>)>,
                 Without<EditorEntity>,
                 Without<EditorHidden>,
                 Without<ChildOf>,
@@ -630,11 +669,15 @@ fn on_root_entity_added(
     mut commands: Commands,
     tree_index: Res<TreeIndex>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
+    generated_ui_check: Query<(), With<jackdaw_ui::UiGeneratedPart>>,
     child_of_check: Query<(), With<ChildOf>>,
 ) {
     let entity = trigger.event_target();
 
-    if editor_check.contains(entity) || child_of_check.contains(entity) {
+    if editor_check.contains(entity)
+        || generated_ui_check.contains(entity)
+        || child_of_check.contains(entity)
+    {
         return;
     }
     if tree_index.contains_anywhere(entity) {
@@ -649,6 +692,9 @@ fn on_root_entity_added(
         if world.get::<EditorEntity>(entity).is_some()
             || world.get::<EditorHidden>(entity).is_some()
         {
+            return;
+        }
+        if world.get::<jackdaw_ui::UiGeneratedPart>(entity).is_some() {
             return;
         }
         // In named-only mode, skip entities without a Name
@@ -679,6 +725,7 @@ fn on_name_changed(
     content_query: Query<&Children, With<TreeRowContent>>,
     mut label_query: Query<&mut Text, With<TreeRowLabel>>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
+    generated_ui_check: Query<(), With<jackdaw_ui::UiGeneratedPart>>,
     child_of_check: Query<(), With<ChildOf>>,
 ) {
     let entity = trigger.event_target();
@@ -717,7 +764,10 @@ fn on_name_changed(
     } else {
         // No row exists anywhere yet. Spawn one per container if this
         // is a visible root.
-        if editor_check.contains(entity) || child_of_check.contains(entity) {
+        if editor_check.contains(entity)
+            || generated_ui_check.contains(entity)
+            || child_of_check.contains(entity)
+        {
             return;
         }
 
@@ -728,6 +778,7 @@ fn on_name_changed(
             }
             if world.get::<EditorEntity>(entity).is_some()
                 || world.get::<EditorHidden>(entity).is_some()
+                || world.get::<jackdaw_ui::UiGeneratedPart>(entity).is_some()
             {
                 return;
             }
@@ -855,6 +906,7 @@ fn on_entity_reparented(
     mut commands: Commands,
     tree_index: Res<TreeIndex>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
+    generated_ui_check: Query<(), With<jackdaw_ui::UiGeneratedPart>>,
     tree_node_check: Query<(), With<TreeNode>>,
     child_of_query: Query<&ChildOf>,
     children_query: Query<&Children>,
@@ -864,7 +916,10 @@ fn on_entity_reparented(
     let entity = trigger.event_target();
 
     // Skip editor/hidden entities and tree row UI entities
-    if editor_check.contains(entity) || tree_node_check.contains(entity) {
+    if editor_check.contains(entity)
+        || generated_ui_check.contains(entity)
+        || tree_node_check.contains(entity)
+    {
         return;
     }
 
@@ -1125,7 +1180,6 @@ fn on_tree_row_clicked(
         selection.select_single(&mut commands, event.source_entity);
     }
 
-    // Set keyboard focus to the tree row containing this content
     let content_entity = event.entity;
     if let Ok(&ChildOf(tree_row)) = parent_query.get(content_entity)
         && tree_nodes.contains(tree_row)
@@ -1238,8 +1292,8 @@ fn on_tree_row_dropped(
                 // inside its queued closure (after the framework's
                 // before-snapshot install reshuffles indices).
                 let both_in_ast = {
-                    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-                    ast.key_for_entity(dragged).is_some() && ast.key_for_entity(target).is_some()
+                    let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+                    ast.ast_for(dragged).is_some() && ast.ast_for(target).is_some()
                 };
                 if both_in_ast {
                     let _ = world
@@ -1617,8 +1671,8 @@ fn on_context_menu_action(
                 // inside its queued closure (after the framework's
                 // before-snapshot install reshuffles indices).
                 if world
-                    .resource::<jackdaw_jsn::SceneJsnAst>()
-                    .key_for_entity(target)
+                    .resource::<jackdaw_bsn::SceneBsnAst>()
+                    .ast_for(target)
                     .is_none()
                 {
                     return;
@@ -1656,12 +1710,12 @@ fn on_context_menu_action(
                 return;
             };
             commands.queue(move |world: &mut World| {
-                let key = {
-                    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-                    ast.key_for_entity(target)
+                let node = {
+                    let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+                    ast.ast_for(target)
                 };
-                let Some(key) = key else { return };
-                crate::prefab::operators::apply_all_overrides_to_source(world, key);
+                let Some(node) = node else { return };
+                crate::prefab::operators::apply_all_overrides_to_source(world, node);
             });
         }
         "hierarchy.prefab.unbundle_instance" => {
@@ -1701,7 +1755,7 @@ fn on_context_menu_action(
 
 /// Spawn an entity from `template` and reparent it under `parent` (if
 /// provided). Goes through the AST-aware `set_parent` so the live
-/// `SceneJsnAst` stays in sync with the ECS hierarchy.
+/// scene document stays in sync with the ECS hierarchy.
 fn add_child_entity(
     commands: &mut Commands,
     parent: Option<Entity>,
@@ -2074,12 +2128,17 @@ fn on_tree_row_renamed(event: On<TreeRowRenamed>, mut commands: Commands, names:
     }
 
     commands.queue(move |world: &mut World| {
-        let cmd = SetJsnField {
+        let old_value = if old_name.is_empty() {
+            None
+        } else {
+            Some(jackdaw_bsn::BsnValue::String(old_name))
+        };
+        let cmd = SetBsnField {
             entity: source,
-            type_path: "bevy_ecs::name::Name".to_string(),
+            type_path: crate::commands::NAME_TYPE_PATH.to_string(),
             field_path: String::new(),
-            old_value: serde_json::Value::String(old_name),
-            new_value: serde_json::Value::String(new_name),
+            old_value,
+            new_value: jackdaw_bsn::BsnValue::String(new_name),
             was_derived: false,
         };
         let mut cmd = Box::new(cmd);
@@ -2189,8 +2248,8 @@ pub fn prefab_save_as_prefab(
             return;
         }
         let target = match world.get_resource::<crate::project::ProjectRoot>() {
-            Some(root) => root.root.join("assets/prefabs").join(format!("{name}.jsn")),
-            None => std::path::PathBuf::from(format!("{name}.jsn")),
+            Some(root) => root.root.join("assets/prefabs").join(format!("{name}.bsn")),
+            None => std::path::PathBuf::from(format!("{name}.bsn")),
         };
         info!(
             "prefab.save_as_prefab: bundling {} root(s) into {}",
@@ -2232,8 +2291,8 @@ pub fn prefab_save_scene_as_prefab(
 
     commands.queue(move |world: &mut World| {
         let target = match world.get_resource::<crate::project::ProjectRoot>() {
-            Some(root) => root.root.join("assets/prefabs").join(format!("{name}.jsn")),
-            None => std::path::PathBuf::from(format!("{name}.jsn")),
+            Some(root) => root.root.join("assets/prefabs").join(format!("{name}.bsn")),
+            None => std::path::PathBuf::from(format!("{name}.bsn")),
         };
         crate::prefab::operators::save_scene_as_prefab(world, &target);
         let mut pending = world.resource_mut::<PendingPrefabSave>();
@@ -2269,8 +2328,8 @@ pub fn prefab_save_as_variant(
             return;
         };
         let target = match world.get_resource::<crate::project::ProjectRoot>() {
-            Some(p) => p.root.join("assets/prefabs").join(format!("{name}.jsn")),
-            None => std::path::PathBuf::from(format!("{name}.jsn")),
+            Some(p) => p.root.join("assets/prefabs").join(format!("{name}.bsn")),
+            None => std::path::PathBuf::from(format!("{name}.bsn")),
         };
         crate::prefab::operators::save_as_variant(world, root, &target);
         let mut pending = world.resource_mut::<PendingPrefabSave>();
@@ -2424,7 +2483,7 @@ fn apply_hierarchy_filter(
 mod tests {
     use super::*;
     use jackdaw_api_internal::operator::OperatorParameters;
-    use jackdaw_jsn::PropertyValue;
+    use jackdaw_scene_types::PropertyValue;
     use std::collections::BTreeMap;
 
     fn empty_params() -> OperatorParameters {
@@ -2440,10 +2499,61 @@ mod tests {
     #[test]
     fn scene_root_tag_classifies_as_scene() {
         let mut world = World::new();
-        let root = world.spawn(jackdaw_jsn::SceneRootTag).id();
+        let root = world.spawn(jackdaw_scene_types::SceneRootTag).id();
         let plain = world.spawn_empty().id();
         assert_eq!(classify_entity(&world, root), EntityCategory::Scene);
         assert_ne!(classify_entity(&world, plain), EntityCategory::Scene);
+    }
+
+    #[test]
+    fn gltf_descendants_classify_as_asset_parts() {
+        // The glTF root is authored; everything the loader spawned under it is
+        // not, including the mesh leaf, which would otherwise read as Mesh.
+        let mut world = World::new();
+        let root = world
+            .spawn(jackdaw_scene_types::GltfSource {
+                path: "models/dungeon.glb".into(),
+                scene_index: 0,
+            })
+            .id();
+        let scene = world.spawn(ChildOf(root)).id();
+        let mesh_leaf = world.spawn((ChildOf(scene), Mesh3d::default())).id();
+
+        assert_eq!(classify_entity(&world, root), EntityCategory::Scene);
+        assert_eq!(classify_entity(&world, scene), EntityCategory::AssetPart);
+        assert_eq!(
+            classify_entity(&world, mesh_leaf),
+            EntityCategory::AssetPart
+        );
+
+        // An authored mesh outside any glTF subtree is unaffected.
+        let authored_mesh = world.spawn(Mesh3d::default()).id();
+        assert_eq!(classify_entity(&world, authored_mesh), EntityCategory::Mesh);
+    }
+
+    #[test]
+    fn authored_children_of_a_model_keep_their_own_category() {
+        // Parenting your own entity under a model is normal (a light on a lamp
+        // prop). It has a document node, so it stays editable and must not be
+        // lumped in with the nodes the loader spawned.
+        let mut world = World::new();
+        world.insert_resource(jackdaw_bsn::SceneBsnAst::default());
+        let root = world
+            .spawn(jackdaw_scene_types::GltfSource {
+                path: "models/dungeon.glb".into(),
+                scene_index: 0,
+            })
+            .id();
+
+        let loader_node = world.spawn(ChildOf(root)).id();
+        assert_eq!(
+            classify_entity(&world, loader_node),
+            EntityCategory::AssetPart
+        );
+
+        let authored = world.spawn((ChildOf(root), PointLight::default())).id();
+        jackdaw_bsn::create_entity_in_ast(&mut world, authored, None);
+        assert_eq!(classify_entity(&world, authored), EntityCategory::Light);
     }
 
     #[test]

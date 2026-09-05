@@ -3,7 +3,7 @@ use jackdaw_geometry::halfedge::{
     HalfedgeMesh,
     ops::edge_bevel::{BevelError, edge_bevel},
 };
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn bevel_cube_edge_creates_chamfer_quad() {

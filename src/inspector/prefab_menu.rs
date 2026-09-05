@@ -16,14 +16,14 @@
 //! - `inspector.prefab.apply_field_to_source` pushes the scene-side
 //!   value for a single field into the prefab source file.
 //!
-//! Routing data (entity AST key, prefab source path, etc) lives in
+//! Routing data (row entity, prefab source path, etc) lives in
 //! [`PrefabMenuTarget`] because the existing
 //! [`ContextMenuAction`] event only carries an action string and an
 //! optional entity, not the rich context the prefab operators need.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_jsn::SceneJsnAst;
+use jackdaw_bsn::{BsnValue, SceneBsnAst, get_bsn_field};
 use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuState};
 use std::path::PathBuf;
 
@@ -41,13 +41,11 @@ pub const APPLY_FIELD_TO_SOURCE: &str = "inspector.prefab.apply_field_to_source"
 #[derive(Resource, Default)]
 pub(crate) struct PrefabMenuTarget {
     /// ECS entity the row belongs to. Used to dispatch prefab operators
-    /// that resolve their AST keys post-snapshot-install.
+    /// that resolve their document nodes post-snapshot-install.
     pub(crate) entity: Option<Entity>,
     /// ECS entity of the prefab instance root the row's entity sits
     /// inside. Used for the same reason as `entity`.
     pub(crate) instance_entity: Option<Entity>,
-    pub(crate) entity_key: Option<usize>,
-    pub(crate) instance_root: Option<usize>,
     pub(crate) prefab_entity_id: Option<u32>,
     pub(crate) prefab_path: Option<PathBuf>,
     pub(crate) type_path: Option<String>,
@@ -67,9 +65,7 @@ fn on_prefab_menu_action(
 ) {
     match event.action.as_str() {
         REVERT_COMPONENT => {
-            let (Some(entity), Some(entity_key), Some(type_path)) =
-                (target.entity, target.entity_key, target.type_path.clone())
-            else {
+            let (Some(entity), Some(type_path)) = (target.entity, target.type_path.clone()) else {
                 return;
             };
             commands
@@ -81,16 +77,16 @@ fn on_prefab_menu_action(
                 .param("entity", entity)
                 .param("type_path", type_path)
                 .call();
-            commands.queue(move |world: &mut World| rebuild_inspectors_for_key(world, entity_key));
+            commands.queue(move |world: &mut World| rebuild_inspectors_for_entity(world, entity));
         }
         APPLY_TO_SOURCE => {
+            let Some(entity) = target.entity else {
+                return;
+            };
             let Some(instance_entity) = target.instance_entity else {
                 return;
             };
             let Some(prefab_entity_id) = target.prefab_entity_id else {
-                return;
-            };
-            let Some(entity_key) = target.entity_key else {
                 return;
             };
             let Some(type_path) = target.type_path.clone() else {
@@ -100,30 +96,27 @@ fn on_prefab_menu_action(
                 apply_component_to_source(
                     world,
                     instance_entity,
-                    entity_key,
+                    entity,
                     prefab_entity_id,
                     &type_path,
                 );
-                rebuild_inspectors_for_key(world, entity_key);
+                rebuild_inspectors_for_entity(world, entity);
             });
         }
         BULK_APPLY => {
-            let Some(entity_key) = target.entity_key else {
+            let Some(entity) = target.entity else {
                 return;
             };
             let Some(type_path) = target.type_path.clone() else {
                 return;
             };
             commands.queue(move |world: &mut World| {
-                bulk_apply_component_to_scene(world, entity_key, &type_path);
-                rebuild_inspectors_for_key(world, entity_key);
+                bulk_apply_component_to_scene(world, entity, &type_path);
+                rebuild_inspectors_for_entity(world, entity);
             });
         }
         REVERT_FIELD => {
             let Some(entity) = target.entity else {
-                return;
-            };
-            let Some(entity_key) = target.entity_key else {
                 return;
             };
             let Some(type_path) = target.type_path.clone() else {
@@ -142,16 +135,16 @@ fn on_prefab_menu_action(
                 .param("type_path", type_path)
                 .param("field_path", field_path)
                 .call();
-            commands.queue(move |world: &mut World| rebuild_inspectors_for_key(world, entity_key));
+            commands.queue(move |world: &mut World| rebuild_inspectors_for_entity(world, entity));
         }
         APPLY_FIELD_TO_SOURCE => {
+            let Some(entity) = target.entity else {
+                return;
+            };
             let Some(instance_entity) = target.instance_entity else {
                 return;
             };
             let Some(prefab_entity_id) = target.prefab_entity_id else {
-                return;
-            };
-            let Some(entity_key) = target.entity_key else {
                 return;
             };
             let Some(type_path) = target.type_path.clone() else {
@@ -161,13 +154,13 @@ fn on_prefab_menu_action(
                 return;
             };
             commands.queue(move |world: &mut World| {
-                let value: Option<serde_json::Value> = {
-                    let ast = world.resource::<SceneJsnAst>();
-                    ast.get_component_at(entity_key, &type_path)
-                        .and_then(|v| walk_dot_path(v, &field_path).cloned())
+                let value: Option<BsnValue> = {
+                    let ast = world.resource::<SceneBsnAst>();
+                    ast.ast_for(entity)
+                        .and_then(|node| get_bsn_field(ast, node, &type_path, &field_path))
                 };
                 let Some(value) = value else { return };
-                let value_json = match serde_json::to_string(&value) {
+                let value_json = match serde_json::to_string(&bsn_leaf_to_json(&value)) {
                     Ok(s) => s,
                     Err(err) => {
                         warn!(
@@ -188,7 +181,7 @@ fn on_prefab_menu_action(
                     .param("field_path", field_path.clone())
                     .param("value_json", value_json)
                     .call();
-                rebuild_inspectors_for_key(world, entity_key);
+                rebuild_inspectors_for_entity(world, entity);
             });
         }
         _ => return,
@@ -205,29 +198,32 @@ fn on_prefab_menu_action(
 
 /// Push every overridden field on `type_path` into the prefab source.
 /// "Overridden" means the entity's component value differs from the
-/// cached prefab value at that field path. The flattened delta object
-/// is walked recursively so nested struct fields (`translation.x`)
-/// land as dotted paths. Each leaf dispatches `prefab.apply_to_source`
-/// so the operator framework owns history / telemetry.
+/// cached prefab value at that field path. The flattened delta is walked
+/// recursively so nested struct fields (`translation.x`) land as dotted
+/// paths. Each leaf dispatches `prefab.apply_to_source` so the operator
+/// framework owns history / telemetry.
 fn apply_component_to_source(
     world: &mut World,
     instance_entity: Entity,
-    entity_key: usize,
+    entity: Entity,
     prefab_entity_id: u32,
     type_path: &str,
 ) {
-    let deltas: Vec<(String, serde_json::Value)> = {
-        let ast = world.resource::<SceneJsnAst>();
-        let Some(scene_value) = ast.get_component_at(entity_key, type_path) else {
+    let deltas: Vec<(String, BsnValue)> = {
+        let ast = world.resource::<SceneBsnAst>();
+        let Some(node) = ast.ast_for(entity) else {
+            return;
+        };
+        let Some(scene_value) = get_bsn_field(ast, node, type_path, "") else {
             return;
         };
         let cache = world.resource::<PrefabAstCache>();
-        let prefab_value = resolve_prefab_value(ast, cache, entity_key, type_path);
-        crate::prefab::overrides::collect_overridden_paths(scene_value, prefab_value.as_ref())
+        let prefab_value = resolve_prefab_value(ast, cache, node, type_path);
+        crate::prefab::overrides_bsn::collect_overridden_paths(&scene_value, prefab_value.as_ref())
     };
 
     for (field_path, value) in deltas {
-        let value_json = match serde_json::to_string(&value) {
+        let value_json = match serde_json::to_string(&bsn_leaf_to_json(&value)) {
             Ok(s) => s,
             Err(err) => {
                 warn!("apply_component_to_source: serialize value failed: {err}");
@@ -245,29 +241,35 @@ fn apply_component_to_source(
     }
 }
 
-/// For every overridden leaf on `type_path` of the entity at
-/// `entity_key`, dispatch `prefab.bulk_apply_in_scene` so all other
-/// instances in the same scene receive the same delta.
-fn bulk_apply_component_to_scene(world: &mut World, entity_key: usize, type_path: &str) {
-    let (deltas, source_path): (Vec<(String, serde_json::Value)>, PathBuf) = {
-        let ast = world.resource::<SceneJsnAst>();
-        let Some(scene_value) = ast.get_component_at(entity_key, type_path) else {
+/// For every overridden leaf on `type_path` of `entity`, dispatch
+/// `prefab.bulk_apply_in_scene` so all other instances in the same scene
+/// receive the same delta.
+fn bulk_apply_component_to_scene(world: &mut World, entity: Entity, type_path: &str) {
+    let (deltas, source_path): (Vec<(String, BsnValue)>, PathBuf) = {
+        let ast = world.resource::<SceneBsnAst>();
+        let Some(node) = ast.ast_for(entity) else {
             return;
         };
-        let Some((path, _)) = crate::prefab::overrides::resolve_inheritance(ast, entity_key) else {
+        let Some(scene_value) = get_bsn_field(ast, node, type_path, "") else {
+            return;
+        };
+        let Some((path, _)) = crate::prefab::overrides_bsn::resolve_inheritance(ast, node) else {
             return;
         };
         let cache = world.resource::<PrefabAstCache>();
-        let prefab_value = resolve_prefab_value(ast, cache, entity_key, type_path);
+        let prefab_value = resolve_prefab_value(ast, cache, node, type_path);
         (
-            crate::prefab::overrides::collect_overridden_paths(scene_value, prefab_value.as_ref()),
+            crate::prefab::overrides_bsn::collect_overridden_paths(
+                &scene_value,
+                prefab_value.as_ref(),
+            ),
             path,
         )
     };
 
     let source_str = source_path.to_string_lossy().into_owned();
     for (field_path, value) in deltas {
-        let value_json = match serde_json::to_string(&value) {
+        let value_json = match serde_json::to_string(&bsn_leaf_to_json(&value)) {
             Ok(s) => s,
             Err(err) => {
                 warn!("bulk_apply_component_to_scene: serialize value failed: {err}");
@@ -284,45 +286,65 @@ fn bulk_apply_component_to_scene(world: &mut World, entity_key: usize, type_path
     }
 }
 
-fn walk_dot_path<'a>(
-    value: &'a serde_json::Value,
-    dot_path: &str,
-) -> Option<&'a serde_json::Value> {
-    let mut cur = value;
-    for part in dot_path.split('.') {
-        cur = cur.as_object()?.get(part)?;
-    }
-    Some(cur)
-}
-
+/// The cached prefab's baseline value for `type_path` on the prefab entry
+/// that `node` inherits from.
 fn resolve_prefab_value(
-    ast: &SceneJsnAst,
+    ast: &SceneBsnAst,
     cache: &PrefabAstCache,
-    entity_key: usize,
+    node: Entity,
     type_path: &str,
-) -> Option<serde_json::Value> {
-    let (path, prefab_entity_id) = crate::prefab::overrides::resolve_inheritance(ast, entity_key)?;
-    let prefab_ast = cache.get(&path)?;
-    let prefab_key = prefab_ast.nodes.iter().enumerate().find_map(|(i, node)| {
-        let id = node
-            .components
-            .get("jackdaw::prefab::components::PrefabEntityId")
-            .and_then(serde_json::Value::as_u64)?;
-        if id as u32 == prefab_entity_id {
-            Some(i)
-        } else {
-            None
-        }
-    })?;
-    prefab_ast.get_component_at(prefab_key, type_path).cloned()
+) -> Option<BsnValue> {
+    let (path, prefab_entity_id) = crate::prefab::overrides_bsn::resolve_inheritance(ast, node)?;
+    let prefab = cache.get(&path)?;
+    let prefab_node = prefab.find_node_by_component_int(
+        "jackdaw::prefab::components::PrefabEntityId",
+        u64::from(prefab_entity_id),
+    )?;
+    get_bsn_field(prefab, prefab_node, type_path, "")
 }
 
-fn rebuild_inspectors_for_key(world: &mut World, entity_key: usize) {
-    let ast = world.resource::<SceneJsnAst>();
-    let entity = ast.nodes.get(entity_key).and_then(|node| node.ecs_entity);
-    if let Some(entity) = entity
-        && let Ok(mut ec) = world.get_entity_mut(entity)
-    {
+/// Structural JSON form of an override leaf for the `value_json` operator
+/// params. Scalars map cleanly; lists, maps, and tuple structs map to
+/// arrays / objects (the operators apply them structurally). Struct leaves
+/// do not occur: `collect_overridden_paths` recurses into structs.
+fn bsn_leaf_to_json(value: &BsnValue) -> serde_json::Value {
+    match value {
+        BsnValue::Float(f) => serde_json::json!(f),
+        BsnValue::Int(i) => serde_json::json!(*i as i64),
+        BsnValue::Bool(b) => serde_json::json!(b),
+        BsnValue::String(s) | BsnValue::Type(s) => serde_json::json!(s),
+        BsnValue::List(items) => {
+            serde_json::Value::Array(items.iter().map(bsn_leaf_to_json).collect())
+        }
+        BsnValue::TupleStruct(data) => {
+            serde_json::Value::Array(data.values.iter().map(bsn_leaf_to_json).collect())
+        }
+        BsnValue::Map(entries) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in entries {
+                let key = match k {
+                    BsnValue::String(s) => s.clone(),
+                    BsnValue::Int(i) => i.to_string(),
+                    BsnValue::Float(fl) => fl.to_string(),
+                    BsnValue::Bool(b) => b.to_string(),
+                    _ => continue,
+                };
+                map.insert(key, bsn_leaf_to_json(v));
+            }
+            serde_json::Value::Object(map)
+        }
+        BsnValue::Struct(data) => {
+            let mut map = serde_json::Map::new();
+            for field in &data.fields.0 {
+                map.insert(field.name.clone(), bsn_leaf_to_json(&field.value));
+            }
+            serde_json::Value::Object(map)
+        }
+    }
+}
+
+fn rebuild_inspectors_for_entity(world: &mut World, entity: Entity) {
+    if let Ok(mut ec) = world.get_entity_mut(entity) {
         ec.insert(super::InspectorDirty);
     }
 }
@@ -330,33 +352,86 @@ fn rebuild_inspectors_for_key(world: &mut World, entity_key: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::prefab::overrides_bsn::collect_overridden_paths;
+    use jackdaw_bsn::{BsnField, BsnStructData, BsnStructFields, bsn_value_eq};
+
+    fn f(name: &str, value: BsnValue) -> BsnField {
+        BsnField {
+            name: name.to_string(),
+            value,
+        }
+    }
+
+    fn strukt(type_path: &str, fields: Vec<BsnField>) -> BsnValue {
+        BsnValue::Struct(BsnStructData {
+            type_path: type_path.to_string(),
+            fields: BsnStructFields(fields),
+        })
+    }
+
+    fn vec3(x: f64, y: f64, z: f64) -> BsnValue {
+        strukt(
+            "glam::Vec3",
+            vec![
+                f("x", BsnValue::Float(x)),
+                f("y", BsnValue::Float(y)),
+                f("z", BsnValue::Float(z)),
+            ],
+        )
+    }
 
     #[test]
     fn flat_leaf_difference_emits_dotted_path() {
-        let scene = json!({ "translation": { "x": 1.0, "y": 0.0, "z": 0.0 } });
-        let prefab = json!({ "translation": { "x": 0.0, "y": 0.0, "z": 0.0 } });
-        let out = crate::prefab::overrides::collect_overridden_paths(&scene, Some(&prefab));
+        let scene = strukt("Transform", vec![f("translation", vec3(1.0, 0.0, 0.0))]);
+        let prefab = strukt("Transform", vec![f("translation", vec3(0.0, 0.0, 0.0))]);
+        let out = collect_overridden_paths(&scene, Some(&prefab));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0, "translation.x");
-        assert_eq!(out[0].1, json!(1.0));
+        assert!(bsn_value_eq(&out[0].1, &BsnValue::Float(1.0)));
     }
 
     #[test]
     fn equal_values_emit_nothing() {
-        let scene = json!({ "translation": { "x": 0.0 } });
-        let prefab = json!({ "translation": { "x": 0.0 } });
-        let out = crate::prefab::overrides::collect_overridden_paths(&scene, Some(&prefab));
+        let scene = strukt("Transform", vec![f("translation", vec3(0.0, 0.0, 0.0))]);
+        let prefab = strukt("Transform", vec![f("translation", vec3(0.0, 0.0, 0.0))]);
+        let out = collect_overridden_paths(&scene, Some(&prefab));
         assert!(out.is_empty());
     }
 
     #[test]
     fn missing_prefab_treats_every_leaf_as_override() {
-        let scene = json!({ "a": 1, "b": { "c": 2 } });
-        let out = crate::prefab::overrides::collect_overridden_paths(&scene, None);
+        let scene = strukt(
+            "Marker",
+            vec![
+                f("a", BsnValue::Int(1)),
+                f("b", strukt("Inner", vec![f("c", BsnValue::Int(2))])),
+            ],
+        );
+        let out = collect_overridden_paths(&scene, None);
         let names: Vec<&str> = out.iter().map(|(p, _)| p.as_str()).collect();
         assert!(names.contains(&"a"));
         assert!(names.contains(&"b.c"));
         assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn leaf_json_form_covers_scalars_and_containers() {
+        assert_eq!(
+            bsn_leaf_to_json(&BsnValue::Float(1.5)),
+            serde_json::json!(1.5)
+        );
+        assert_eq!(bsn_leaf_to_json(&BsnValue::Int(7)), serde_json::json!(7));
+        assert_eq!(
+            bsn_leaf_to_json(&BsnValue::Bool(true)),
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            bsn_leaf_to_json(&BsnValue::String("hi".into())),
+            serde_json::json!("hi")
+        );
+        assert_eq!(
+            bsn_leaf_to_json(&BsnValue::List(vec![BsnValue::Int(1), BsnValue::Int(2)])),
+            serde_json::json!([1, 2])
+        );
     }
 }

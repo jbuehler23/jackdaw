@@ -358,7 +358,8 @@ fn on_scaffold_row_click(
 
 /// Write a starter `jackdaw.toml` to the open project's root. Logs and
 /// bails on a missing project or an io error rather than failing the
-/// frame.
+/// frame. Never overwrites: an existing file holds the user's plugin,
+/// package, pins, and run configurations.
 fn write_scaffold(world: &World) {
     let Some(root) = world
         .get_resource::<crate::project::ProjectRoot>()
@@ -367,12 +368,16 @@ fn write_scaffold(world: &World) {
         warn!("PIE: scaffold requested but no project is open");
         return;
     };
+    let path = root.join("jackdaw.toml");
+    if path.is_file() {
+        warn!("PIE: {} already exists; leaving it alone", path.display());
+        return;
+    }
     let Some(meta) = CargoMeta::load(&root) else {
         warn!("PIE: cargo metadata failed for {}", root.display());
         return;
     };
     let body = scaffold_manifest(&meta);
-    let path = root.join("jackdaw.toml");
     if let Err(err) = std::fs::write(&path, body) {
         warn!("PIE: failed to write {}: {err}", path.display());
     }

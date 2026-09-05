@@ -80,7 +80,7 @@ impl Plugin for ModalTransformPlugin {
         // ModalTransformState is kept so other systems can check `modal.active.is_some()`.
         // Modal activate/constrain/update/confirm/cancel/draw systems are disabled
         // (G/R/S no longer trigger modal transforms, TrenchBroom-style keybinds instead.)
-        // The code is preserved in this file for a future Blender keymap option.
+        // The code is preserved in this file for a future alternate keymap option.
         app.init_resource::<ModalTransformState>()
             .init_resource::<ViewportDragState>()
             .add_systems(
@@ -155,7 +155,7 @@ fn viewport_drag_detect(
     (mut ray_cast, parents, brushes, editor_entities): (
         MeshRayCast,
         Query<&ChildOf>,
-        Query<(), With<jackdaw_jsn::Brush>>,
+        Query<(), With<jackdaw_scene_types::Brush>>,
         Query<(), With<crate::EditorEntity>>,
     ),
 ) {
@@ -179,11 +179,8 @@ fn viewport_drag_detect(
         return;
     }
 
-    // Block viewport drag during terrain sculpt mode
-    if matches!(
-        *terrain_edit_mode,
-        crate::terrain::TerrainEditMode::Sculpt(_)
-    ) {
+    // Block viewport drag during terrain sculpt or paint mode
+    if terrain_edit_mode.brush_active() {
         return;
     }
 
@@ -295,11 +292,8 @@ fn viewport_drag_update(
         return;
     }
 
-    // Cancel pending drag if terrain sculpt mode became active
-    if matches!(
-        *terrain_edit_mode,
-        crate::terrain::TerrainEditMode::Sculpt(_)
-    ) {
+    // Cancel pending drag if terrain sculpt or paint mode became active
+    if terrain_edit_mode.brush_active() {
         drag_state.pending = None;
         return;
     }

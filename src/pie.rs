@@ -1,15 +1,15 @@
 //! Play-In-Editor runtime.
 //!
-//! Builds a run configuration's binary with the `jackdaw_runtime/pie`
-//! feature, launches it as a child process, and drives it over an
-//! `ipc-channel` connection. Children stream `StateEvent`s back and
-//! respond to `ControlEvent`s (Pause / Resume / Stop). Stop reaps the
-//! children; the authored scene is never mutated.
+//! Builds the project with plain `cargo build`, launches the game's own
+//! executable as a child process, and drives it over an `ipc-channel`
+//! connection. Children stream `StateEvent`s back and respond to
+//! `ControlEvent`s (Pause / Resume / Stop). Stop reaps the children; the
+//! authored scene is never mutated.
 //!
 //! Instances are keyed by [`InstanceKey`] (config label plus 1-based
-//! instance number). Builds are deduped by
-//! [`BuildSpec`]: several instances of the
-//! same config wait on one build and spawn together when it finishes.
+//! instance number). All run configurations of a project share one
+//! build, keyed by the project root: several instances wait on one build
+//! and spawn together when it finishes.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, BufReader};
@@ -29,17 +29,17 @@ use jackdaw_pie_protocol::{
 };
 
 use crate::build_status::BuildStatus;
-use crate::ext_build::{BuildProgress, BuildSpec};
+use crate::ext_build::BuildProgress;
 use crate::pie_mirror::{PieInstances, PieViewMode};
-use crate::run_config::{CargoMeta, RunConfigs, resolve_build_spec};
+use crate::project_build::shim::ShimSpec;
+use crate::run_config::RunConfigs;
 
 /// How many trailing stderr lines to keep from a game process, so a
 /// crash can be reported without buffering unbounded output.
 const STDERR_TAIL_LINES: usize = 40;
 
 /// How long to wait for a launched child to connect back before giving
-/// up on it. A child that runs but never connects usually means its
-/// build lacks the `jackdaw_runtime/pie` feature.
+/// up on it.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Marker for the toolbar transport buttons. `PiePlugin` installs
@@ -51,6 +51,11 @@ pub enum PieButton {
     Pause,
     Stop,
     Reload,
+    /// Rebuild the project so new or changed game code appears in the
+    /// editor. Distinct from `Reload` (which rebuilds and relaunches the
+    /// running game): `Rebuild` is the edit-mode refresh of the component
+    /// list, and dispatches `project.build`.
+    Rebuild,
 }
 
 /// Identifies one running instance: a config label plus its 1-based
@@ -90,14 +95,22 @@ enum ChildStage {
     },
 }
 
-/// An in-flight or finished build, deduped by `BuildSpec`. Instances
+/// The product of a completed game build: the executable Play runs. The
+/// extracted type schema is persisted to `.jackdaw/schema.json` by the
+/// build itself and picked up by the editor's watcher, so it does not
+/// travel back through here.
+struct GameBuildResult {
+    binary: PathBuf,
+}
+
+/// An in-flight or finished build, deduped by project root. Instances
 /// waiting on it are spawned when it finishes.
 enum BuildState {
     /// `cargo build` is running on a task pool; `pending` lists the
     /// instances to spawn once the binary is ready. `progress` is the
     /// sink cargo writes compile progress into, surfaced in the footer.
     Running {
-        task: Task<io::Result<PathBuf>>,
+        task: Task<io::Result<GameBuildResult>>,
         pending: Vec<PendingSpawn>,
         progress: Arc<Mutex<BuildProgress>>,
     },
@@ -119,7 +132,7 @@ struct PendingSpawn {
 #[derive(Default)]
 pub struct PieSession {
     children: HashMap<InstanceKey, ChildStage>,
-    builds: HashMap<BuildSpec, BuildState>,
+    builds: HashMap<PathBuf, BuildState>,
 }
 
 impl Drop for PieSession {
@@ -175,6 +188,9 @@ impl Plugin for PiePlugin {
             .init_resource::<crate::live_highlight::LastHighlight>()
             .init_resource::<PieWindowMode>()
             .init_resource::<PiePrebuildState>()
+            .init_resource::<crate::project_types::ProjectTypes>()
+            .init_resource::<ProjectSchemaWatch>()
+            .init_resource::<EditorBuildSettings>()
             // PIE is an editor-only subsystem; gate it to the editor state so it
             // never ticks in the launcher (`ProjectSelect`). Without this,
             // `reconcile_build_status` resets the shared `BuildStatus` from
@@ -186,6 +202,9 @@ impl Plugin for PiePlugin {
                 (
                     advance_pie_session,
                     prebuild_play_target,
+                    sync_project_build_settings,
+                    watch_project_source_for_edit,
+                    watch_project_schema,
                     drain_game_events,
                     crate::live_highlight::sync_selection_highlight,
                 )
@@ -244,6 +263,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<PiePauseOp>()
         .register_operator::<PieStopOp>()
         .register_operator::<PieReloadOp>()
+        .register_operator::<ProjectBuildOp>()
+        .register_operator::<ProjectToggleAutoBuildOp>()
         .register_operator::<PieWindowModeToggleOp>()
         .register_operator::<crate::live_input::PiePlayInputToggleOp>()
         .register_operator::<crate::live_edits::PieLiveEditSaveOp>()
@@ -310,6 +331,52 @@ pub(crate) fn pie_stop(_: In<OperatorParameters>, mut commands: Commands) -> Ope
 )]
 pub(crate) fn pie_reload(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(handle_reload);
+    OperatorResult::Finished
+}
+
+/// Rebuild the game now so new or changed game code (added
+/// components, edited fields) is picked up by the editor. This is the
+/// manual counterpart to auto-build: it runs the same pipeline as an
+/// out-of-editor `jackdaw build`, persisting the schema the editor then
+/// reloads.
+#[operator(
+    id = "project.build",
+    label = "Rebuild Project",
+    description = "Rebuild the project so new or changed components appear in the editor."
+)]
+pub(crate) fn project_build(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        if let Some(root) = project_root(world) {
+            spawn_project_build(world, &root);
+        }
+    });
+    OperatorResult::Finished
+}
+
+/// Turn automatic rebuild-on-source-change on or off. Off by default so
+/// the editor never builds behind the user's back; enabling it gives
+/// live pickup for those who want it.
+#[operator(
+    id = "project.toggle_auto_build",
+    label = "Toggle Auto Build",
+    description = "Turn automatic rebuild-on-source-change on or off."
+)]
+pub(crate) fn project_toggle_auto_build(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        let enabled = {
+            let mut settings = world.resource_mut::<EditorBuildSettings>();
+            settings.auto_build = !settings.auto_build;
+            settings.auto_build
+        };
+        persist_project_build_settings(world);
+        info!(
+            "PIE: auto-build {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
+    });
     OperatorResult::Finished
 }
 
@@ -411,6 +478,7 @@ fn wire_pie_button(
         PieButton::Pause => PiePauseOp::ID,
         PieButton::Stop => PieStopOp::ID,
         PieButton::Reload => PieReloadOp::ID,
+        PieButton::Rebuild => ProjectBuildOp::ID,
     };
     commands
         .entity(entity)
@@ -453,46 +521,43 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
     let Some(root) = project_root(world) else {
         return;
     };
-    let Some(meta) = CargoMeta::load(&root) else {
-        warn!("PIE: cargo metadata failed for {}", root.display());
-        return;
-    };
-    let Some(spec) = resolve_build_spec(&meta, &run) else {
-        warn!("PIE: no buildable package for bin `{}`", run.bin);
-        return;
-    };
 
-    // If the build is cached, spawn from it immediately; the session
-    // borrow is dropped before spawn_instance reads the world.
-    if let Some(BuildState::Done(path)) = world.non_send::<PieSession>().builds.get(&spec) {
-        let path = path.clone();
-        if let Some(stage) = spawn_instance(world, &key, &run, &path) {
-            world
-                .non_send_mut::<PieSession>()
-                .children
-                .insert(key, stage);
+    // If the game binary is built AND still current, spawn from it
+    // immediately. A source edit since the last build invalidates the
+    // cache so Play runs the new code: each Play is a fresh process, so
+    // rebuilding is always safe.
+    if let Some(BuildState::Done(path)) = world.non_send::<PieSession>().builds.get(&root) {
+        if source_is_current(&root, path) {
+            let path = path.clone();
+            if let Some(stage) = spawn_instance(world, &key, &run, &path) {
+                world
+                    .non_send_mut::<PieSession>()
+                    .children
+                    .insert(key, stage);
+            }
+            return;
         }
-        return;
+        info!("PIE: project source changed; rebuilding before Play");
+        world.non_send_mut::<PieSession>().builds.remove(&root);
     }
+
+    let Some(spec) = crate::project_build::shim_spec_for_project(&root).ok() else {
+        warn!("PIE: no lib crate found in {}", root.display());
+        return;
+    };
 
     // Join an in-flight build's pending list, or start a new build.
     let mut session = world.non_send_mut::<PieSession>();
-    match session.builds.get_mut(&spec) {
+    match session.builds.get_mut(&root) {
         Some(BuildState::Running { pending, .. }) => {
             pending.push(PendingSpawn { key, run });
         }
         Some(BuildState::Done(_)) => unreachable!("handled above"),
         Some(BuildState::Failed) | None => {
-            let progress = Arc::new(Mutex::new(BuildProgress::default()));
-            let build_spec = spec.clone();
-            let sink = Arc::clone(&progress);
-            let task = AsyncComputeTaskPool::get().spawn(async move {
-                crate::ext_build::build_game_bin_with_progress(&root, &build_spec, Some(sink), None)
-                    .map_err(|err| io::Error::other(err.to_string()))
-            });
-            info!("PIE: building game for {key}");
+            info!("PIE: building the game for {key}");
+            let (task, progress) = spawn_game_build(&root, spec);
             session.builds.insert(
-                spec,
+                root,
                 BuildState::Running {
                     task,
                     pending: vec![PendingSpawn { key, run }],
@@ -501,6 +566,122 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
             );
         }
     }
+}
+
+/// Whether the built game binary is newer than the project's source. A
+/// stale binary (source edited since the build) means Play must rebuild.
+/// `Cargo.toml` and everything under `src/` are checked; a missing
+/// binary counts as stale.
+fn source_is_current(root: &Path, binary: &Path) -> bool {
+    let Ok(binary_mtime) = std::fs::metadata(binary).and_then(|m| m.modified()) else {
+        return false;
+    };
+    let newest_source = newest_mtime(&root.join("src"))
+        .into_iter()
+        .chain(
+            std::fs::metadata(root.join("Cargo.toml"))
+                .and_then(|m| m.modified())
+                .ok(),
+        )
+        .max();
+    match newest_source {
+        Some(src_mtime) => src_mtime <= binary_mtime,
+        None => true,
+    }
+}
+
+/// The newest modification time under `dir`, recursively; `None` when
+/// the directory is missing or empty.
+fn newest_mtime(dir: &Path) -> Option<std::time::SystemTime> {
+    let mut newest = None;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if entry_path.is_dir() {
+                stack.push(entry_path);
+            } else if let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) {
+                newest = Some(newest.map_or(mtime, |n: std::time::SystemTime| n.max(mtime)));
+            }
+        }
+    }
+    newest
+}
+
+/// Start the project's game build on the compute pool, returning the
+/// task and the progress sink the footer polls.
+fn spawn_game_build(
+    root: &Path,
+    spec: ShimSpec,
+) -> (Task<io::Result<GameBuildResult>>, Arc<Mutex<BuildProgress>>) {
+    let progress = Arc::new(Mutex::new(BuildProgress::default()));
+    let sink = Arc::clone(&progress);
+    let jackdaw_dir = root.join(".jackdaw");
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        if let Ok(mut p) = sink.lock() {
+            p.push_log("building the game".to_string());
+        }
+        // Stream live progress into the sink the footer bar and build log
+        // read: per-crate counts drive the bar, diagnostics fill the log.
+        let report_sink = Arc::clone(&sink);
+        let mut report = move |event: crate::project_build::BuildEvent| {
+            if let Ok(mut p) = report_sink.lock() {
+                match event {
+                    crate::project_build::BuildEvent::Compiled {
+                        crate_name,
+                        done,
+                        fresh,
+                    } => {
+                        p.artifacts_done = done;
+                        // Cached units still count toward progress but should
+                        // not read as compiling in the header or the log.
+                        if !fresh {
+                            p.current_crate = Some(crate_name.clone());
+                            p.push_log(format!("Compiling {crate_name}"));
+                        }
+                    }
+                    crate::project_build::BuildEvent::Log(line) => {
+                        // Warnings about the SDK explain the compiler
+                        // errors that follow, and a user watching the
+                        // terminal rather than the build panel would
+                        // otherwise see only the errors.
+                        if line.starts_with("warning:") || line.contains("is not usable") {
+                            warn!("{line}");
+                        }
+                        p.push_log(line);
+                    }
+                }
+            }
+        };
+        let result = crate::project_build::build_project_binary(&spec, &jackdaw_dir, &mut report);
+        match result {
+            Ok(build) => {
+                if let Ok(mut p) = sink.lock() {
+                    let types = build
+                        .schema
+                        .as_ref()
+                        .map(|s| s.components.len())
+                        .unwrap_or(0);
+                    p.push_log(format!("game ready ({types} types)"));
+                }
+                Ok(GameBuildResult {
+                    binary: build.binary,
+                })
+            }
+            Err(err) => {
+                // Diagnostics already streamed into the log via the build
+                // reporter, so just note the failure and surface the error.
+                if let Ok(mut p) = sink.lock() {
+                    p.push_log("build failed".to_string());
+                }
+                Err(io::Error::other(err.to_string()))
+            }
+        }
+    });
+    (task, progress)
 }
 
 /// Stop one instance: ask a live child to exit, reap it, and drop it.
@@ -693,48 +874,36 @@ pub(crate) fn can_save_live_to_scene(world: &World) -> bool {
     }
     // Authored entities are saveable when the AST still holds their node (Path A).
     world
-        .resource::<jackdaw_jsn::SceneJsnAst>()
-        .contains_entity(preview)
+        .resource::<jackdaw_bsn::SceneBsnAst>()
+        .ast_for(preview)
+        .is_some()
 }
 
-/// Serialize all non-skipped reflected components from `entity` into a
-/// `Vec<(type_path, json_value)>`, using the same processor and filter that
+/// Collect all non-skipped reflected components from `entity` as
+/// `(type_path, BsnValue)` pairs, using the same filter that
 /// `register_entity_in_ast` uses when it first captures a live entity.
 ///
 /// Components with no `ReflectComponent` data, types not registered in the
 /// `AppTypeRegistry`, and paths matched by [`should_skip_component`](crate::scene_io::should_skip_component) are
 /// silently omitted. The result is sorted by type path for deterministic undo
 /// batching.
-fn serialize_preview_entity_components(
+fn preview_entity_components_as_bsn(
     world: &World,
     entity: Entity,
-) -> Vec<(String, serde_json::Value)> {
-    use std::any::TypeId;
-
-    use bevy::reflect::serde::TypedReflectSerializer;
-    use bevy::{
-        ecs::reflect::AppTypeRegistry,
-        prelude::{ChildOf, Children, GlobalTransform, InheritedVisibility, ViewVisibility},
-    };
+) -> Vec<(String, jackdaw_bsn::BsnValue)> {
+    use bevy::ecs::reflect::AppTypeRegistry;
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
-    let processor = crate::scene_io::AstSerializerProcessor;
 
     let Ok(entity_ref) = world.get_entity(entity) else {
         return Vec::new();
     };
 
     // The same structural/derived components that register_entity_in_ast skips.
-    let skip_ids = [
-        TypeId::of::<GlobalTransform>(),
-        TypeId::of::<InheritedVisibility>(),
-        TypeId::of::<ViewVisibility>(),
-        TypeId::of::<ChildOf>(),
-        TypeId::of::<Children>(),
-    ];
+    let skip_ids = crate::scene_io::structural_skip_type_ids();
 
-    let mut out: Vec<(String, serde_json::Value)> = registry
+    let mut out: Vec<(String, jackdaw_bsn::BsnValue)> = registry
         .iter()
         .filter(|reg| !skip_ids.contains(&reg.type_id()))
         .filter_map(|reg| {
@@ -744,9 +913,8 @@ fn serialize_preview_entity_components(
             }
             let reflect_component = reg.data::<ReflectComponent>()?;
             let component = reflect_component.reflect(entity_ref)?;
-            let serializer =
-                TypedReflectSerializer::with_processor(component, &registry, &processor);
-            let value = serde_json::to_value(&serializer).ok()?;
+            let value =
+                jackdaw_bsn::BsnValue::from_reflect(component.as_partial_reflect(), &registry);
             Some((type_path.to_string(), value))
         })
         .collect();
@@ -761,14 +929,14 @@ fn serialize_preview_entity_components(
 /// Path A: the preview entity is already bound to an AST node (it is an
 /// authored entity with a live overlay). Each non-skipped reflected component
 /// is read from the preview entity, serialized, and written into the node
-/// through a [`SetJsnField`](crate::commands::SetJsnField) command. The commands are grouped into one
+/// through a [`SetBsnField`](crate::commands::SetBsnField) command. The commands are grouped into one
 /// undoable [`CommandGroup`](jackdaw_commands::CommandGroup) so a single Ctrl+Z reverts the whole promote.
 ///
 /// Path B: the preview entity carries [`PieEphemeral`](crate::pie_projection::PieEphemeral) (the game spawned it
-/// at runtime with no authored counterpart). A new [`JsnEntityNode`](jackdaw_jsn::ast::JsnEntityNode) is
-/// appended to the AST, its `components` filled from the preview entity's
-/// reflected components, its `ecs_entity` bound to this entity. The entity
-/// receives a [`JsnNodeId`](jackdaw_jsn::JsnNodeId) component and loses [`PieEphemeral`](crate::pie_projection::PieEphemeral) so it is
+/// at runtime with no authored counterpart). A new node is registered in the
+/// live BSN document, its patches filled from the preview entity's
+/// reflected components and bound to this entity. The entity
+/// receives a [`SceneNodeId`](jackdaw_scene_types::SceneNodeId) component and loses [`PieEphemeral`](crate::pie_projection::PieEphemeral) so it is
 /// now treated as an authored entity. Path B is not undoable in v1 (no
 /// remove-node command exists that mirrors the insert).
 ///
@@ -810,33 +978,30 @@ pub(crate) fn save_live_entity_to_scene(world: &mut World) {
     }
 }
 
-/// Path A: preview entity is bound to an existing AST node. Serialize its
-/// current component values and write them through `SetJsnField` commands.
+/// Path A: preview entity is bound to an existing AST node. Capture its
+/// current component values and write them through `SetBsnField` commands.
 fn promote_authored_overlay(world: &mut World, preview: Entity, bits: u64) {
-    use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetJsnField};
+    use crate::commands::{CommandGroup, CommandHistory, EditorCommand, SetBsnField};
 
-    let ast = world.resource::<jackdaw_jsn::SceneJsnAst>();
-    let Some(&node_idx) = ast.ecs_to_jsn.get(&preview) else {
-        warn!("save to scene: preview entity {preview:?} (bits {bits:x}) has no AST node");
-        return;
+    let node_id = {
+        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        let Some(node) = ast.ast_for(preview) else {
+            warn!("save to scene: preview entity {preview:?} (bits {bits:x}) has no AST node");
+            return;
+        };
+        ast.stable_id_of(node).unwrap_or(0)
     };
-    let node_id = ast
-        .nodes
-        .get(node_idx)
-        .and_then(|n| n.id)
-        .map(|id| id.0)
-        .unwrap_or(0);
 
-    let entries = serialize_preview_entity_components(world, preview);
+    let entries = preview_entity_components_as_bsn(world, preview);
 
     let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
     for (type_path, new_value) in entries {
-        let old_value = world
-            .resource::<jackdaw_jsn::SceneJsnAst>()
-            .get_component(preview, &type_path)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        sub_commands.push(Box::new(SetJsnField {
+        let old_value = {
+            let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+            ast.ast_for(preview)
+                .and_then(|node| jackdaw_bsn::get_bsn_field(ast, node, &type_path, ""))
+        };
+        sub_commands.push(Box::new(SetBsnField {
             entity: preview,
             type_path,
             field_path: String::new(),
@@ -867,33 +1032,19 @@ fn promote_authored_overlay(world: &mut World, preview: Entity, bits: u64) {
 }
 
 /// Path B: preview entity has no AST node (game-spawned runtime entity).
-/// Create a new authored node from its reflected components, bind it, and
-/// remove the ephemeral marker. Not undoable in v1.
+/// Mint a stable node id for it, drop the ephemeral marker, and register it
+/// in the live BSN document, which captures its reflected components as a
+/// new authored node. Not undoable in v1.
 pub(crate) fn promote_ephemeral_to_authored(world: &mut World, preview: Entity, bits: u64) {
     use crate::pie_projection::PieEphemeral;
 
-    let entries = serialize_preview_entity_components(world, preview);
-
-    let node_id = jackdaw_jsn::ast::JsnNodeId::next();
-    let idx = {
-        let mut ast = world.resource_mut::<jackdaw_jsn::SceneJsnAst>();
-        let idx = ast.nodes.len();
-        ast.nodes.push(jackdaw_jsn::ast::JsnEntityNode {
-            id: Some(node_id),
-            parent: None,
-            components: entries.into_iter().collect(),
-            derived_components: std::collections::HashSet::new(),
-            ecs_entity: Some(preview),
-        });
-        ast.ecs_to_jsn.insert(preview, idx);
-        idx
-    };
-
+    let node_id = jackdaw_scene_types::SceneNodeId::next();
     world.entity_mut(preview).remove::<PieEphemeral>();
     world.entity_mut(preview).insert(node_id);
+    crate::scene_io::register_entity_in_ast(world, preview);
 
     info!(
-        "save to scene: promoted ephemeral {preview:?} (bits {bits:x}) to new AST node {} (idx {idx})",
+        "save to scene: promoted ephemeral {preview:?} (bits {bits:x}) to new authored node {}",
         node_id.0
     );
 }
@@ -916,54 +1067,258 @@ pub struct PiePrebuildState {
     attempted: bool,
 }
 
-/// Pre-build the default Play target in the background once the editor opens, so
-/// the first Play reuses a warm cache instead of compiling the game's Bevy
-/// variant on demand. Mirrors `launch_instance`'s build but with no pending
-/// spawn: it only drives `PieSession.builds` to `Done`, which a later Play
-/// reuses immediately.
+/// Pre-build the game in the background once the editor opens, so the
+/// first Play reuses a warm artifact instead of compiling on demand.
+/// Mirrors `launch_instance`'s build but with no pending spawn: it only
+/// drives `PieSession.builds` to `Done`, which a later Play reuses
+/// immediately.
 fn prebuild_play_target(world: &mut World) {
     if world.resource::<PiePrebuildState>().attempted {
         return;
     }
     // Wait until the project's run configs have loaded.
-    let run = match world.get_resource::<RunConfigs>() {
-        None => return,
-        Some(rc) => rc.manifest.runs.first().cloned(),
-    };
+    if world.get_resource::<RunConfigs>().is_none() {
+        return;
+    }
     // Run configs are loaded; this is the one-shot attempt regardless of outcome.
     world.resource_mut::<PiePrebuildState>().attempted = true;
-    let Some(run) = run else {
-        return; // no run config to pre-build
-    };
     let Some(root) = project_root(world) else {
         return;
     };
-    let Some(meta) = CargoMeta::load(&root) else {
-        return;
-    };
-    let Some(spec) = resolve_build_spec(&meta, &run) else {
-        return;
+    let spec = match crate::project_build::shim_spec_for_project(&root) {
+        Ok(spec) => spec,
+        Err(error) => {
+            // Without a resolvable package there is nothing to compile,
+            // so the editor would otherwise open with an empty Add
+            // Component list and no explanation anywhere.
+            let reason = error.to_string();
+            warn!("PIE: cannot build {}: {reason}", root.display());
+            if let Some(mut status) = world.get_resource_mut::<BuildStatus>() {
+                status.state = crate::build_status::BuildState::Blocked { reason };
+            }
+            return;
+        }
     };
     let mut session = world.non_send_mut::<PieSession>();
-    if session.builds.contains_key(&spec) {
+    if session.builds.contains_key(&root) {
         return; // already built or building (the user may have hit Play already)
     }
-    let progress = Arc::new(Mutex::new(BuildProgress::default()));
-    let sink = Arc::clone(&progress);
-    let build_spec = spec.clone();
-    let task = AsyncComputeTaskPool::get().spawn(async move {
-        crate::ext_build::build_game_bin_with_progress(&root, &build_spec, Some(sink), None)
-            .map_err(|err| io::Error::other(err.to_string()))
-    });
-    info!("PIE: pre-building the Play target in the background for a fast first Play");
+    info!("PIE: pre-building the game in the background for a fast first Play");
+    let (task, progress) = spawn_game_build(&root, spec);
     session.builds.insert(
-        spec,
+        root,
         BuildState::Running {
             task,
             pending: Vec::new(),
             progress,
         },
     );
+}
+
+/// Throttle so the edit-mode source scan runs about once a second
+/// rather than every frame.
+#[derive(Resource)]
+struct EditRebuildThrottle(Timer);
+
+impl Default for EditRebuildThrottle {
+    fn default() -> Self {
+        Self(Timer::from_seconds(1.0, TimerMode::Repeating))
+    }
+}
+
+/// Editor-wide project build preferences.
+#[derive(Resource, Default, serde::Serialize, serde::Deserialize)]
+struct EditorBuildSettings {
+    /// When true, the editor rebuilds the project automatically on source
+    /// change. Opt-in and off by default: otherwise a rebuild fires
+    /// behind the user's back and competes with a `cargo build` they may
+    /// have started themselves. When off, rebuilds come from the Rebuild
+    /// action or an out-of-editor `jackdaw build`.
+    auto_build: bool,
+}
+
+fn sync_project_build_settings(
+    project: Option<Res<crate::project::ProjectRoot>>,
+    mut settings: ResMut<EditorBuildSettings>,
+    mut loaded_root: Local<Option<PathBuf>>,
+) {
+    let Some(project) = project else {
+        return;
+    };
+    if loaded_root.as_ref() == Some(&project.root) {
+        return;
+    }
+    *loaded_root = Some(project.root.clone());
+    let path = project.root.join(".jackdaw/settings.json");
+    *settings = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+}
+
+fn persist_project_build_settings(world: &World) {
+    let (Some(project), Some(settings)) = (
+        world.get_resource::<crate::project::ProjectRoot>(),
+        world.get_resource::<EditorBuildSettings>(),
+    ) else {
+        return;
+    };
+    let path = project.root.join(".jackdaw/settings.json");
+    if let Some(parent) = path.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        warn!("PIE: could not persist build settings: {error}");
+        return;
+    }
+    match serde_json::to_vec_pretty(settings) {
+        Ok(bytes) => {
+            if let Err(error) = std::fs::write(path, bytes) {
+                warn!("PIE: could not persist build settings: {error}");
+            }
+        }
+        Err(error) => warn!("PIE: could not encode build settings: {error}"),
+    }
+}
+
+/// Start a game build for `root` unless one is already in flight.
+/// Shared by the source watcher (auto-build) and the manual Rebuild
+/// operator. The finished build persists `.jackdaw/schema.json`, which
+/// [`watch_project_schema`] picks up to refresh the editor's types.
+fn spawn_project_build(world: &mut World, root: &Path) {
+    if matches!(
+        world.non_send::<PieSession>().builds.get(root),
+        Some(BuildState::Running { .. })
+    ) {
+        return;
+    }
+    let Some(spec) = crate::project_build::shim_spec_for_project(root).ok() else {
+        return;
+    };
+    info!("PIE: building the game");
+    let (task, progress) = spawn_game_build(root, spec);
+    world.non_send_mut::<PieSession>().builds.insert(
+        root.to_path_buf(),
+        BuildState::Running {
+            task,
+            pending: Vec::new(),
+            progress,
+        },
+    );
+}
+
+/// While editing (not playing) and only when auto-build is enabled,
+/// rebuild the game when its source changes so a newly added or
+/// edited component appears in the editor without a restart. The
+/// completed build persists the schema, which `watch_project_schema`
+/// loads. Off by default; the manual Rebuild action is the normal path.
+fn watch_project_source_for_edit(world: &mut World) {
+    if *world.resource::<State<PlayState>>().get() != PlayState::Stopped {
+        return;
+    }
+    if !world.resource::<EditorBuildSettings>().auto_build {
+        return;
+    }
+    {
+        let delta = world.resource::<Time>().delta();
+        let mut throttle = world.get_resource_or_insert_with(EditRebuildThrottle::default);
+        if !throttle.0.tick(delta).just_finished() {
+            return;
+        }
+    }
+    let Some(root) = project_root(world) else {
+        return;
+    };
+    // Only rebuild once the project has been built and loaded at least
+    // once; the initial build is driven by `prebuild_play_target`.
+    let built_path = match world.non_send::<PieSession>().builds.get(&root) {
+        Some(BuildState::Done(path)) => path.clone(),
+        _ => return,
+    };
+    if source_is_current(&root, &built_path) {
+        return;
+    }
+    spawn_project_build(world, &root);
+}
+
+/// Throttle for the schema-file poll so it stats the file about twice a
+/// second rather than every frame.
+#[derive(Resource)]
+struct ProjectSchemaWatch {
+    last_mtime: Option<std::time::SystemTime>,
+    throttle: Timer,
+}
+
+impl Default for ProjectSchemaWatch {
+    fn default() -> Self {
+        Self {
+            last_mtime: None,
+            throttle: Timer::from_seconds(0.5, TimerMode::Repeating),
+        }
+    }
+}
+
+/// Refresh the editor's known project component types from
+/// `<project>/.jackdaw/schema.json` whenever that file changes. This is
+/// the single pickup path for project types: the editor's own build and
+/// an out-of-editor `jackdaw build` both write the file, and only this
+/// system reads it into `ProjectTypes`. On editor start it also loads a
+/// schema left by a previous session, so components are known before any
+/// rebuild.
+fn watch_project_schema(world: &mut World) {
+    {
+        let delta = world.resource::<Time>().delta();
+        let mut watch = world.resource_mut::<ProjectSchemaWatch>();
+        if !watch.throttle.tick(delta).just_finished() {
+            return;
+        }
+    }
+    let Some(root) = world
+        .get_resource::<crate::project::ProjectRoot>()
+        .map(|p| p.root.clone())
+    else {
+        return;
+    };
+    let jackdaw_dir = root.join(".jackdaw");
+    let path = jackdaw_schema::schema_path(&jackdaw_dir);
+    let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+        return;
+    };
+    if world.resource::<ProjectSchemaWatch>().last_mtime == Some(mtime) {
+        return;
+    }
+    let Some(schema) = jackdaw_schema::read_schema(&jackdaw_dir) else {
+        return;
+    };
+    let native =
+        crate::project_types::native_type_paths(&world.resource::<AppTypeRegistry>().read());
+    let component_count = {
+        let mut project_types = world.resource_mut::<crate::project_types::ProjectTypes>();
+        project_types.update(&schema, &native);
+        project_types.components().count()
+    };
+    world.resource_mut::<ProjectSchemaWatch>().last_mtime = Some(mtime);
+
+    // Surface the outcome in the footer so the user knows the build
+    // finished and how many of their components loaded.
+    world
+        .resource_mut::<crate::build_status::BuildStatus>()
+        .state = crate::build_status::BuildState::Ready {
+        at: Instant::now(),
+        components: component_count,
+    };
+
+    // Repaint the open inspector: a shape change (a field added, removed,
+    // or retyped in game code) must show without a reselect.
+    let selected: Vec<Entity> = world
+        .resource::<crate::selection::Selection>()
+        .entities
+        .clone();
+    for entity in selected {
+        if let Ok(mut ec) = world.get_entity_mut(entity) {
+            ec.insert(crate::inspector::InspectorDirty);
+        }
+    }
+    info!("PIE: refreshed project types from schema ({component_count} project components)");
 }
 
 /// Mirror the active game build into the editor's `BuildStatus` so the
@@ -992,14 +1347,24 @@ fn reconcile_build_status(world: &mut World) {
                 progress,
             };
         }
-        None => {
-            if matches!(
-                status.state,
-                crate::build_status::BuildState::Building { .. }
-            ) {
+        None => match &status.state {
+            // A build ended with no outcome latched yet: go Idle.
+            // `poll_builds` (Failed) and `watch_project_schema` (Ready)
+            // set the real outcome the same or next frame.
+            crate::build_status::BuildState::Building { .. } => {
                 status.state = crate::build_status::BuildState::Idle;
             }
-        }
+            // Keep a recent outcome on screen, then let it fade to Idle.
+            crate::build_status::BuildState::Ready { at, .. }
+            | crate::build_status::BuildState::Failed { at } => {
+                if at.elapsed() > Duration::from_secs(6) {
+                    status.state = crate::build_status::BuildState::Idle;
+                }
+            }
+            // Sticky: only the user fixing their project clears it.
+            crate::build_status::BuildState::Blocked { .. }
+            | crate::build_status::BuildState::Idle => {}
+        },
     }
 }
 
@@ -1017,18 +1382,31 @@ fn poll_builds(world: &mut World) {
         };
         match future::block_on(future::poll_once(task)) {
             None => {}
-            Some(Ok(path)) => {
+            Some(Ok(result)) => {
+                // The build persisted the project's type schema to
+                // `.jackdaw/schema.json`; `watch_project_schema` picks it
+                // up and refreshes `ProjectTypes`. Pickup is deliberately
+                // decoupled from building so an out-of-editor `jackdaw
+                // build` flows through the same path. The editor never
+                // links or loads project code; it reads the schema the
+                // game reported about itself, and Play runs that same
+                // binary in a fresh process below.
                 for spawn in pending.drain(..) {
-                    if let Some(stage) = spawn_instance(world, &spawn.key, &spawn.run, &path) {
+                    if let Some(stage) =
+                        spawn_instance(world, &spawn.key, &spawn.run, &result.binary)
+                    {
                         spawned.push((spawn.key, stage));
                     }
                 }
-                *state = BuildState::Done(path);
+                *state = BuildState::Done(result.binary);
             }
             Some(Err(err)) => {
                 let keys: Vec<String> = pending.iter().map(|p| p.key.to_string()).collect();
                 error!("PIE: game build failed for {}: {err}", keys.join(", "));
                 *state = BuildState::Failed;
+                world
+                    .resource_mut::<crate::build_status::BuildStatus>()
+                    .state = crate::build_status::BuildState::Failed { at: Instant::now() };
             }
         }
     }
@@ -1171,15 +1549,71 @@ fn reconcile_play_state(world: &mut World) {
     }
 }
 
-/// Launch one instance's game binary, point it at a fresh rendezvous,
-/// start draining its stderr, and begin awaiting its connection on a
-/// task pool. Returns the `Connecting` stage; on rendezvous or spawn
-/// failure logs and returns `None` so the caller skips it.
+#[cfg(target_os = "windows")]
+mod pie_windows {
+    use std::{
+        os::{
+            raw::c_void,
+            windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+        },
+        process::Child,
+        sync::LazyLock,
+    };
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::*;
+    use windows::core::PCWSTR;
+
+    pub static PIE_JOB: LazyLock<Job> = LazyLock::new(|| unsafe {
+        let handle = OwnedHandle::from_raw_handle(
+            CreateJobObjectW(None, PCWSTR::null())
+                .expect("Failed to create job object for PIE")
+                .0,
+        );
+
+        let info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+            BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
+                LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                    | JOB_OBJECT_LIMIT_BREAKAWAY_OK
+                    | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        SetInformationJobObject(
+            HANDLE(handle.as_raw_handle()),
+            JobObjectExtendedLimitInformation,
+            (&raw const info).cast::<c_void>(),
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+        .expect("Failed to set job object info for PIE");
+
+        Job(handle)
+    });
+
+    pub struct Job(pub OwnedHandle);
+
+    impl Job {
+        pub fn assign_to_process(&self, process: &Child) {
+            let handle = process.as_raw_handle();
+            unsafe {
+                AssignProcessToJobObject(HANDLE(self.0.as_raw_handle()), HANDLE(handle))
+                    .expect("Failed to assign process to job for PIE");
+            }
+        }
+    }
+}
+
+/// Launch the project's game binary for one instance, point it at a
+/// fresh rendezvous, start draining its stderr, and begin awaiting its
+/// connection on a task pool. Returns the `Connecting` stage; on
+/// rendezvous or spawn failure logs and returns `None` so the caller
+/// skips it.
 fn spawn_instance(
     world: &World,
     key: &InstanceKey,
     run: &RunConfig,
-    bin: &Path,
+    binary: &Path,
 ) -> Option<ChildStage> {
     let root = project_root(world)?;
 
@@ -1192,16 +1626,19 @@ fn spawn_instance(
     };
 
     // A relative `cwd` is joined against the project root; an absolute
-    // path replaces it (standard `Path::join` semantics).
+    // path replaces it (standard `Path::join` semantics). Assets
+    // resolve from here, exactly as for a directly-run game binary.
     let cwd = match run.cwd.as_ref() {
         Some(dir) => root.join(dir),
         None => root.clone(),
     };
 
-    let mut command = Command::new(bin);
+    let mut command = Command::new(binary);
+    crate::project_build::prepare_game_command(&mut command, binary);
     command
         .current_dir(&cwd)
         .envs(&run.env)
+        .env("BEVY_ASSET_ROOT", &cwd)
         .env("JACKDAW_PIE", &server_name)
         .args(&run.args)
         .stderr(Stdio::piped());
@@ -1254,10 +1691,15 @@ fn spawn_instance(
     let mut child = match spawn {
         Ok(child) => child,
         Err(err) => {
-            error!("PIE: {key} failed to launch ({}): {err}", bin.display());
+            error!("PIE: {key} failed to launch ({}): {err}", binary.display());
             return None;
         }
     };
+
+    // On Windows, we use a job object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE set.
+    // Because we own the only handle to the object, if Jackdaw crashes, the job object will be closed and the game killed.
+    #[cfg(target_os = "windows")]
+    pie_windows::PIE_JOB.assign_to_process(&child);
 
     let stderr_tail: StderrTail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
     if let Some(stderr) = child.stderr.take() {
@@ -1459,10 +1901,9 @@ fn drain_game_events(world: &mut World) {
 #[cfg(test)]
 mod save_to_scene_tests {
     use bevy::ecs::reflect::AppTypeRegistry;
-    use bevy::reflect::serde::TypedReflectSerializer;
+    use jackdaw_bsn::SceneBsnAst;
     use jackdaw_commands::CommandHistory;
-    use jackdaw_jsn::SceneJsnAst;
-    use jackdaw_jsn::ast::JsnNodeId;
+    use jackdaw_scene_types::SceneNodeId;
 
     use super::*;
     use crate::pie_projection::{PieEphemeral, PieProjection};
@@ -1470,19 +1911,18 @@ mod save_to_scene_tests {
 
     const TRANSFORM_PATH: &str = "bevy_transform::components::transform::Transform";
 
-    /// Canonical reflect JSON for a Transform, matching what
-    /// `TypedReflectSerializer` produces and `SetJsnField` deserializes back.
-    fn canonical(value: &Transform, registry: &AppTypeRegistry) -> serde_json::Value {
-        let reg = registry.read();
-        let serializer = TypedReflectSerializer::new(value, &reg);
-        serde_json::to_value(&serializer).expect("serialize transform")
+    /// The whole authored Transform value stored on an entity's document node.
+    fn stored_transform(world: &World, entity: Entity) -> Option<jackdaw_bsn::BsnValue> {
+        let ast = world.resource::<SceneBsnAst>();
+        let node = ast.ast_for(entity)?;
+        jackdaw_bsn::get_bsn_field(ast, node, TRANSFORM_PATH, "")
     }
 
     /// Build a minimal world for Path A tests: an authored preview entity
-    /// carrying the LIVE transform value, bound to an AST node that stores
-    /// the authored (identity) value, and a `PieProjection` entry mapping
-    /// `bits -> preview_entity`.
-    fn setup_path_a() -> (World, Entity, u64, serde_json::Value) {
+    /// carrying the LIVE transform value, bound to a document node that
+    /// stores the authored (identity) value, and a `PieProjection` entry
+    /// mapping `bits -> preview_entity`.
+    fn setup_path_a() -> (World, Entity, u64, jackdaw_bsn::BsnValue) {
         let mut world = World::new();
         let registry = AppTypeRegistry::default();
         registry.write().register::<Transform>();
@@ -1495,12 +1935,19 @@ mod save_to_scene_tests {
         let live_transform = Transform::from_xyz(1.0, 2.0, 3.0);
         let editor_entity = world.spawn(live_transform).id();
 
-        // AST node stores the authored (identity) value.
+        // The document node stores the authored (identity) value.
         let registry = world.resource::<AppTypeRegistry>().clone();
-        let authored_json = canonical(&Transform::IDENTITY, &registry);
-        let mut ast = SceneJsnAst::default();
-        let node = ast.create_node(editor_entity, None);
-        ast.set_component(editor_entity, TRANSFORM_PATH, authored_json);
+        let (authored_patch, live_value) = {
+            let reg = registry.read();
+            (
+                jackdaw_bsn::component_to_bsn_patch(&Transform::IDENTITY, &reg),
+                jackdaw_bsn::BsnValue::from_reflect(&live_transform, &reg),
+            )
+        };
+        let mut ast = SceneBsnAst::default();
+        let node = ast.create_entity_node(vec![authored_patch]);
+        ast.add_to_roots(node);
+        ast.link(editor_entity, node);
         world.insert_resource(ast);
 
         // PieProjection: bits -> preview entity. Selection: preview entity is selected.
@@ -1513,16 +1960,14 @@ mod save_to_scene_tests {
             entities: vec![editor_entity],
         });
 
-        let live_json = canonical(&live_transform, &registry);
-        let _ = node;
-        (world, editor_entity, bits, live_json)
+        (world, editor_entity, bits, live_value)
     }
 
     // ---- Path A tests ---------------------------------------------------
 
     #[test]
     fn path_a_promote_writes_live_values_to_ast_and_preview_ecs() {
-        let (mut world, editor_entity, _bits, live_json) = setup_path_a();
+        let (mut world, editor_entity, _bits, live_value) = setup_path_a();
 
         assert!(
             can_save_live_to_scene(&world),
@@ -1531,15 +1976,15 @@ mod save_to_scene_tests {
 
         save_live_entity_to_scene(&mut world);
 
-        // AST node now holds the live Transform.
-        let stored = world
-            .resource::<SceneJsnAst>()
-            .get_component(editor_entity, TRANSFORM_PATH)
-            .cloned()
-            .expect("transform present in node after promote");
-        assert_eq!(stored, live_json);
+        // The document node now holds the live Transform.
+        let stored =
+            stored_transform(&world, editor_entity).expect("transform present after promote");
+        assert!(
+            jackdaw_bsn::bsn_value_eq(&stored, &live_value),
+            "the document holds the promoted live Transform"
+        );
 
-        // The preview ECS entity was refreshed through SetJsnField.
+        // The preview ECS entity was refreshed through SetBsnField.
         let tf = world.get::<Transform>(editor_entity).copied().unwrap();
         assert_eq!(tf.translation, Vec3::new(1.0, 2.0, 3.0));
 
@@ -1549,7 +1994,7 @@ mod save_to_scene_tests {
 
     #[test]
     fn path_a_promote_is_undoable_back_to_authored_value() {
-        let (mut world, editor_entity, _bits, _live_json) = setup_path_a();
+        let (mut world, editor_entity, _bits, _live_value) = setup_path_a();
         save_live_entity_to_scene(&mut world);
 
         let mut cmd = world
@@ -1579,7 +2024,11 @@ mod save_to_scene_tests {
         world.init_resource::<CommandHistory>();
         world.init_resource::<PieProjection>();
         world.insert_resource(PieViewMode::Live);
-        world.insert_resource(SceneJsnAst::default());
+        world.insert_resource(SceneBsnAst::default());
+        {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            registry.write().register::<SceneNodeId>();
+        }
 
         // Ephemeral entity: game-spawned at runtime, never in the AST.
         let ephemeral = world
@@ -1613,32 +2062,32 @@ mod save_to_scene_tests {
 
         save_live_entity_to_scene(&mut world);
 
-        // A new AST node should exist and be bound to the former ephemeral entity.
-        let ast = world.resource::<SceneJsnAst>();
-        assert_eq!(ast.nodes.len(), 1, "one node was created");
-        assert_eq!(
-            ast.nodes[0].ecs_entity,
-            Some(ephemeral),
-            "node is bound to the promoted entity"
-        );
+        // A new document node should exist and be bound to the former
+        // ephemeral entity.
+        let ast = world.resource::<SceneBsnAst>();
+        let node = ast
+            .ast_for(ephemeral)
+            .expect("node is bound to the promoted entity");
         assert!(
-            ast.nodes[0].components.contains_key(TRANSFORM_PATH),
-            "node carries the serialized Transform"
+            ast.component_type_paths(node)
+                .iter()
+                .any(|tp| tp == TRANSFORM_PATH),
+            "node carries the captured Transform"
         );
 
-        // The entity now has a JsnNodeId and no longer PieEphemeral.
+        // The entity now has a SceneNodeId and no longer PieEphemeral.
         assert!(
-            world.get::<JsnNodeId>(ephemeral).is_some(),
-            "promoted entity carries a JsnNodeId"
+            world.get::<SceneNodeId>(ephemeral).is_some(),
+            "promoted entity carries a SceneNodeId"
         );
         assert!(
             world.get::<PieEphemeral>(ephemeral).is_none(),
             "PieEphemeral is removed after promotion"
         );
 
-        // The AST node's id matches the entity's JsnNodeId.
-        let node_id = world.get::<JsnNodeId>(ephemeral).copied().unwrap();
-        assert_eq!(ast.nodes[0].id, Some(node_id));
+        // The document node's id matches the entity's SceneNodeId.
+        let node_id = world.get::<SceneNodeId>(ephemeral).copied().unwrap();
+        assert_eq!(ast.stable_id_of(node), Some(node_id.0));
     }
 
     // ---- guard / no-op tests -------------------------------------------
@@ -1648,7 +2097,7 @@ mod save_to_scene_tests {
         let mut world = World::new();
         world.init_resource::<PieProjection>();
         world.insert_resource(PieViewMode::Live);
-        world.insert_resource(SceneJsnAst::default());
+        world.insert_resource(SceneBsnAst::default());
         world.init_resource::<CommandHistory>();
         world.insert_resource(Selection::default());
 
@@ -1664,7 +2113,7 @@ mod save_to_scene_tests {
         let mut world = World::new();
         world.init_resource::<PieProjection>();
         world.insert_resource(PieViewMode::Live);
-        world.insert_resource(SceneJsnAst::default());
+        world.insert_resource(SceneBsnAst::default());
         world.init_resource::<CommandHistory>();
 
         // Spawn a non-projected entity and select it.
@@ -1683,9 +2132,8 @@ mod save_to_scene_tests {
 mod stop_cleanup_tests {
     use bevy::ecs::reflect::AppTypeRegistry;
     use bevy::reflect::TypePath;
+    use jackdaw_bsn::SceneBsnAst;
     use jackdaw_commands::CommandHistory;
-    use jackdaw_jsn::SceneJsnAst;
-    use jackdaw_jsn::ast::{JsnEntityNode, JsnNodeId};
 
     use super::*;
     use crate::pie_mirror::{InstanceBuffer, PieMirrorEntry};
@@ -1719,16 +2167,10 @@ mod stop_cleanup_tests {
         world.init_resource::<PieProjection>();
 
         let preview_entity = world.spawn(Mutable(0)).id();
-        let node_id = JsnNodeId::next();
-        let mut ast = SceneJsnAst::default();
-        ast.nodes.push(JsnEntityNode {
-            id: Some(node_id),
-            parent: None,
-            components: std::collections::HashMap::new(),
-            derived_components: std::collections::HashSet::new(),
-            ecs_entity: Some(preview_entity),
-        });
-        ast.ecs_to_jsn.insert(preview_entity, 0);
+        let mut ast = SceneBsnAst::default();
+        let node = ast.create_entity_node(Vec::new());
+        ast.add_to_roots(node);
+        ast.link(preview_entity, node);
         world.insert_resource(ast);
 
         world.init_resource::<CommandHistory>();

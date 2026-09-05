@@ -8,7 +8,7 @@ use jackdaw_geometry::halfedge::{
     HalfedgeMesh,
     ops::{dissolve_verts::dissolve_verts, subdivide::subdivide},
 };
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 fn fan_triangulate(n: usize) -> Vec<[u32; 3]> {
     if n < 3 {

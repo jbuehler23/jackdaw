@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_csg"
-version = "0.5.0"
+version.workspace = true
 edition = "2024"
 description = "Mesh-CSG glue between jackdaw brushes and the manifold3d kernel"
 license = "MIT OR Apache-2.0"
@@ -19,7 +19,7 @@ manifold-csg = { version = "0.1", default-features = false }
 manifold-csg-sys = { version = "=3.4.107", default-features = false }
 
 [dev-dependencies]
-jackdaw_jsn.workspace = true
+jackdaw_scene_types.workspace = true
 
 [features]
 default = ["render", "parallel"]

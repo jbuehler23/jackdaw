@@ -1,6 +1,6 @@
 use bevy::math::Vec3;
 use jackdaw_geometry::compute_brush_topology;
-use jackdaw_jsn::{Brush, BrushTopology};
+use jackdaw_scene_types::{Brush, BrushTopology};
 
 #[test]
 fn cuboid_has_8_verts_12_edges_6_polys_24_loops() {

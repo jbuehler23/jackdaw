@@ -1,10 +1,10 @@
 # Brushes
 
-A brush is jackdaw's primitive for level geometry. Think
-TrenchBroom or old-school Hammer: convex polyhedra defined by
-their faces, with per-face materials and UVs, edited in place
-without a DCC tool. They serialize directly into the scene
-`.jsn`, no external mesh files.
+A brush is jackdaw's primitive for level geometry: a convex
+polyhedron defined by its faces, with per-face materials and
+UVs, edited in place without a separate modelling tool. Brushes
+serialize directly into the scene `.bsn`, no external mesh
+files.
 
 ## The two ways to make a brush
 

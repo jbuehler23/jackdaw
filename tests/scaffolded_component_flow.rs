@@ -1,16 +1,16 @@
 //! End-to-end coverage for the scaffolded user flow: a custom
 //! component reaches the picker, `component.add` attaches it to
-//! an authored entity, and the AST records the addition so a
-//! save/load round-trip would persist it.
+//! an authored entity, and the scene document records the addition
+//! so a save/load round-trip would persist it.
 
 use std::collections::HashSet;
 
 use bevy::prelude::*;
-use jackdaw::commands::{EditorCommand, SetJsnField};
+use jackdaw::commands::{EditorCommand, SetBsnField};
 use jackdaw::inspector::component_picker::{PickerDenylist, enumerate_pickable_components};
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
-use jackdaw_jsn::SceneJsnAst;
+use jackdaw_bsn::SceneBsnAst;
 use jackdaw_runtime::{EditorCategory, EditorHidden};
 
 mod util;
@@ -41,13 +41,11 @@ fn app_with_user_components() -> App {
     app
 }
 
-/// Spawn an authored entity, register it in the scene AST so
+/// Spawn an authored entity, register it in the scene document so
 /// component edits persist, and make it the primary selection.
 fn spawn_authored_entity(app: &mut App) -> Entity {
     let entity = app.world_mut().spawn(Name::new("authored")).id();
-    app.world_mut()
-        .resource_mut::<SceneJsnAst>()
-        .create_node(entity, None);
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
     app.world_mut().resource_mut::<Selection>().entities = vec![entity];
     app.update();
     entity
@@ -133,16 +131,17 @@ fn add_component_lands_on_entity_and_in_ast() {
     assert_eq!(cube.speed, 0.0, "default-constructed value");
     assert!(!cube.enabled);
 
-    let ast = app.world().resource::<SceneJsnAst>();
+    let ast = app.world().resource::<SceneBsnAst>();
     let node = ast
-        .node_for_entity(entity)
-        .expect("authored entity must be tracked in the AST");
+        .ast_for(entity)
+        .expect("authored entity must be tracked in the document");
     assert!(
-        node.components
-            .contains_key("scaffolded_component_flow::SpinningCube"),
-        "AddComponent must record the component in the AST so \
+        ast.component_type_paths(node)
+            .iter()
+            .any(|tp| tp == "scaffolded_component_flow::SpinningCube"),
+        "AddComponent must record the component in the document so \
          scene save preserves it; node has: {:?}",
-        node.components.keys().collect::<Vec<_>>(),
+        ast.component_type_paths(node),
     );
 }
 
@@ -167,19 +166,20 @@ fn add_marker_component_round_trips_through_ast() {
 
     assert!(app.world().entity(entity).contains::<PlayerSpawn>());
 
-    let ast = app.world().resource::<SceneJsnAst>();
-    let node = ast.node_for_entity(entity).expect("tracked");
+    let ast = app.world().resource::<SceneBsnAst>();
+    let node = ast.ast_for(entity).expect("tracked");
     assert!(
-        node.components
-            .contains_key("scaffolded_component_flow::PlayerSpawn"),
-        "marker component must round-trip through the AST too",
+        ast.component_type_paths(node)
+            .iter()
+            .any(|tp| tp == "scaffolded_component_flow::PlayerSpawn"),
+        "marker component must round-trip through the document too",
     );
 }
 
 #[test]
 fn inspector_field_edit_updates_ecs_and_ast() {
-    // Inspector field commits dispatch `SetJsnField`, which must
-    // mutate both the AST (so save persists) and the ECS
+    // Inspector field commits dispatch `SetBsnField`, which must
+    // mutate both the document (so save persists) and the ECS
     // component (so play picks it up immediately).
     let mut app = app_with_user_components();
     let entity = spawn_authored_entity(&mut app);
@@ -204,12 +204,12 @@ fn inspector_field_edit_updates_ecs_and_ast() {
         .expect("SpinningCube on entity");
     assert_eq!(cube.speed, 0.0);
 
-    let mut cmd: Box<dyn EditorCommand> = Box::new(SetJsnField {
+    let mut cmd: Box<dyn EditorCommand> = Box::new(SetBsnField {
         entity,
         type_path: "scaffolded_component_flow::SpinningCube".to_string(),
         field_path: "speed".to_string(),
-        old_value: serde_json::json!(0.0),
-        new_value: serde_json::json!(1.5),
+        old_value: Some(jackdaw_bsn::BsnValue::Float(0.0)),
+        new_value: jackdaw_bsn::BsnValue::Float(1.5),
         was_derived: false,
     });
     cmd.execute(app.world_mut());
@@ -226,24 +226,18 @@ fn inspector_field_edit_updates_ecs_and_ast() {
         cube.speed,
     );
 
-    let registry = app
-        .world()
-        .resource::<bevy::ecs::reflect::AppTypeRegistry>()
-        .clone();
-    let registry = registry.read();
-    let ast = app.world().resource::<SceneJsnAst>();
-    let value = ast
-        .get_component_field(
-            entity,
-            "scaffolded_component_flow::SpinningCube",
-            "speed",
-            &registry,
-        )
-        .expect("AST must store the edited field");
-    let speed = value.as_f64().expect("speed serialises as a JSON number");
+    let ast = app.world().resource::<SceneBsnAst>();
+    let node = ast.ast_for(entity).expect("tracked");
+    let value = jackdaw_bsn::get_bsn_field(
+        ast,
+        node,
+        "scaffolded_component_flow::SpinningCube",
+        "speed",
+    )
+    .expect("document must store the edited field");
     assert!(
-        (speed - 1.5).abs() < 1e-6,
-        "AST field must update; got speed = {speed}",
+        matches!(value, jackdaw_bsn::BsnValue::Float(speed) if (speed - 1.5).abs() < 1e-6),
+        "document field must update to 1.5",
     );
 }
 
@@ -267,12 +261,12 @@ fn inspector_field_edit_undoes_back_to_original() {
     assert_eq!(result, OperatorResult::Finished);
     app.update();
 
-    let mut cmd: Box<dyn EditorCommand> = Box::new(SetJsnField {
+    let mut cmd: Box<dyn EditorCommand> = Box::new(SetBsnField {
         entity,
         type_path: "scaffolded_component_flow::SpinningCube".to_string(),
         field_path: "speed".to_string(),
-        old_value: serde_json::json!(0.0),
-        new_value: serde_json::json!(1.5),
+        old_value: Some(jackdaw_bsn::BsnValue::Float(0.0)),
+        new_value: jackdaw_bsn::BsnValue::Float(1.5),
         was_derived: false,
     });
     cmd.execute(app.world_mut());

@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use crate::brush::BrushSelection;
 use crate::brush::EditMode;

@@ -1,25 +1,25 @@
 [package]
 name = "{{project-name}}"
-authors = ["{{authors}}"]
 version = "0.1.0"
 edition = "2024"
-publish = false
+authors = ["{{authors}}"]
+# `jd extension pack` reads the publisher, license, and homepage from
+# here when it builds a signed bundle to distribute.
+license = "MIT OR Apache-2.0"
 
-# Mark as its own workspace root so it doesn't get pulled into
-# whatever parent workspace the user happens to scaffold under.
+# An editor extension is a normal Bevy library that also uses the
+# jackdaw_extension surface. jackdaw builds it in .jackdaw/ against the
+# editor's SDK; `cargo check` works standalone.
+
+# Stand this project on its own even when it is created inside another
+# cargo workspace, which would otherwise adopt it and refuse to build.
+# Delete this to make it a member of the surrounding workspace instead.
 [workspace]
 
-[lib]
-crate-type = ["cdylib"]
+[package.metadata.jackdaw]
+# Display name in the editor's extension list. Defaults to the package name.
+label = "{{project-name | title_case}}"
 
-# `bevy` is a plain crates.io dep so bevy's derive macros find it
-# in the manifest and emit correct `::bevy::…` paths. When jackdaw
-# builds this project via **File > Extensions > Build from project
-# folder…** it sets `RUSTC_WRAPPER=jackdaw-rustc-wrapper`, which
-# rewrites `--extern bevy=` at the editor's `libjackdaw_sdk.so` so
-# TypeIds match.
-#
-# `jackdaw_api` is never declared here — the wrapper injects its
-# `--extern` flag unconditionally.
 [dependencies]
-bevy = "0.19"
+bevy = "{{bevy_version}}"
+jackdaw_extension = "{{jackdaw_version}}"

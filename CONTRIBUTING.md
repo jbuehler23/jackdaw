@@ -1,6 +1,6 @@
 # Contributing to Jackdaw
 
-Thank you for your interest in contributing to Jackdaw! This document covers the basics of getting set up and submitting changes.
+How to get set up, what to check before a PR, and how editor behaviour is structured as operators.
 
 ## Development Setup
 
@@ -11,6 +11,7 @@ Thank you for your interest in contributing to Jackdaw! This document covers the
   rustup toolchain install nightly
   rustup default nightly
   ```
+- **cargo-nextest** - required for `cargo xtask` test tiers (`cargo install cargo-nextest --locked`)
 - **System dependencies** - GPU drivers with Vulkan support (or Metal on macOS)
 - **Linux extras** - `libudev-dev`, `libasound2-dev`, `libwayland-dev` (or equivalent for your distro)
 
@@ -29,29 +30,80 @@ cargo build
 cargo run --example basic
 
 # Working on extension loading? Build with the dylib feature so the
-# dylib loader is exercised end-to-end (editor binary links against
-# the shared libbevy_dylib + libjackdaw_dylib). First build is slow
-# because Bevy and the workspace's shared types recompile as
-# dylibs; subsequent incremental builds are fast.
+# dylib loader is exercised end-to-end. It builds jackdaw_sdk, whose
+# prebuilt rlibs an extension redirects its dependency edges to,
+# which is what makes the editor and every loaded extension agree on
+# TypeId. The first build is slow because bevy and the
+# workspace's shared types compile into the SDK; later incremental
+# builds are fast.
 cargo run --features dylib
 ```
 
+### Improving compile times
+
+If you intend to contribute significantly to Jackdaw, you'll likely want to make some changes to improve compile times when iterating. Jackdaw is not, by default, set up for some of these, as they conflict with other features like SDK dynamic linking.
+
+#### `Cargo.toml`
+
+You can disable optimizations for the `jackdaw` crate (or any other crates you're working on). This will significantly improve compile times:
+
+```toml
+[profile.dev.package.jackdaw]
+opt-level = 0
+```
+
+You can also enable Bevy's `dynamic_linking` feature, which can improve link times significantly, especially on Windows:
+
+```toml
+[workspace.dependencies]
+bevy = { version = "0.19", features = [
+    "dynamic_linking", # Add this line!
+    "bevy_feathers",
+    "bevy_scene",
+    "bevy_dev_tools",
+    "serialize",
+    "debug",
+    "bevy_remote",
+    "file_watcher",
+    "reflect_documentation",
+] }
+```
+
+#### `.cargo/config.toml`
+
+Under `[build]`, you can enable `incremental = true` to improve compile times after the first compile. You can also comment out the lines specifying `-Zshare-generics=no` to allow the compiler to do less work.
+
 ## Checks
 
-Before submitting a PR, make sure the following pass:
+Before submitting a PR, work through these in order. The quick set is for a fast local smoke pass; the CI set is what should pass before you open a PR.
+
+### Quick
 
 ```sh
 # Format
-cargo fmt --all --check
+cargo fmt --all -- --check
 
 # Lint
 cargo clippy --workspace -- -D warnings
 
 # Tests
-cargo test --workspace
+cargo test --workspace --lib
+```
 
-# Doc build
-cargo doc --workspace --no-deps
+### CI
+
+```sh
+# Fast tier: fmt, clippy (--all-targets --features dylib), lib tests
+cargo xtask fast
+
+# Integration tier: workspace integration tests that do not need a built SDK
+cargo xtask integration
+
+# Docs
+cargo doc --locked --workspace --document-private-items --no-deps
+
+# Doctests
+cargo test --locked --workspace --doc --features bevy/dynamic_linking
 ```
 
 ## Pull Requests
@@ -150,9 +202,7 @@ fn delete_entity(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some(entity) = params.as_entity("entity") else {
-        return OperatorResult::Cancelled;
-    };
+    let entity = params.as_entity("entity")?;
     commands.entity(entity).despawn();
     OperatorResult::Finished
 }
@@ -160,7 +210,7 @@ fn delete_entity(
 
 Each entry in `params(...)` is `name(Type, default = ..., doc = "...")`. `default` and `doc` are optional. Supported types: `bool`, `i64`, `f64`, `String`, `Vec2`, `Vec3`, `Color`, `Entity`. Defaults are supported on `bool` / `i64` / `f64` / `String` for now.
 
-The schema is informational; it does not change how parameters are extracted at call time. Continue reading values via `params.as_int("...")` / `as_str("...")` / `as_entity("...")` etc. inside the function body. The `let Some(...) = ... else { return Cancelled }` pattern is the current shape; the long-term goal is `let entity = params.as_entity("entity")?;`, which needs `OperatorResult` to implement `Try` (and `FromResidual<Option<Infallible>>`). It's not wired up yet, so use the `let-else` form for now.
+The schema is informational; it does not change how parameters are extracted at call time. Continue reading values via `params.as_int("...")` / `as_str("...")` / `as_entity("...")` etc. inside the function body. `OperatorResult` implements `Try` (`FromResidual<Option<Infallible>>` and `FromResidual<Result<Infallible, E>>`), so `?` on an `Option`- or `Result`-returning call short-circuits to `OperatorResult::Cancelled` directly -- prefer it over the older `let Some(...) = ... else { return Cancelled }` form.
 
 A `# Parameters` heading in the function's `///` doc comment is still welcome for longer prose, but the macro `params(...)` block is the primary record. Keep both in sync.
 

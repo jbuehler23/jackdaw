@@ -3,7 +3,7 @@ use jackdaw_geometry::halfedge::{
     HalfedgeMesh,
     ops::vertex_bevel::{VertexBevelError, vertex_bevel},
 };
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn vertex_bevel_cube_corner_creates_triangle_face() {

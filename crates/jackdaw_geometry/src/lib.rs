@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 #[cfg(feature = "render")]
-use bevy::prelude::{Handle, Reflect, StandardMaterial};
+use bevy::prelude::{Handle, Reflect, ReflectDefault, StandardMaterial};
 use glam::{Quat, Vec2, Vec3};
 
 pub mod mirror;
@@ -52,6 +52,7 @@ pub type FaceMaterial = String;
 
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "render", derive(Reflect))]
+#[cfg_attr(feature = "render", reflect(Default))]
 pub struct BrushPlane {
     pub normal: Vec3,
     pub distance: f32,
@@ -59,6 +60,7 @@ pub struct BrushPlane {
 
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "render", derive(Reflect))]
+#[cfg_attr(feature = "render", reflect(Default))]
 pub struct BrushFaceData {
     pub plane: BrushPlane,
     /// Material reference for this face. Serialized as an asset path or inline `#Name` reference.
@@ -157,7 +159,7 @@ pub fn point_inside_all_planes(point: Vec3, faces: &[BrushFaceData]) -> bool {
     true
 }
 
-/// Deprecated. Used only by the legacy-scene migration in jackdaw_jsn::migration. Will be removed once migration usage drops.
+/// Deprecated. Retained only for the legacy `.jsn` scene import path. Will be removed once that usage drops.
 #[doc(hidden)]
 pub fn compute_brush_geometry_from_planes(faces: &[BrushFaceData]) -> (Vec<Vec3>, Vec<Vec<usize>>) {
     let n = faces.len();

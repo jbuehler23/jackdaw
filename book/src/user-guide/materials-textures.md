@@ -22,10 +22,10 @@ What you do here:
   the `ApplyTextureOp` operator, so it goes on the undo
   stack.
 - Drag a `.glb` into the viewport to spawn a model entity.
-- Drag a `.jsn` to open it.
+- Drag a `.bsn` to open it.
 - Drop new files into `assets/` from your file manager.
-  Bevy's `file_watcher` is on in the templates, so they show
-  up without a manual refresh.
+  The editor watches `assets/`, so they show up without a
+  manual refresh.
 
 If you only need a texture and no PBR parameters, this is
 the path. The "texture browser" that older docs and tutorials
@@ -51,8 +51,8 @@ recognises common suffixes (`_albedo`, `_diffuse`, `_normal`,
 `_height`, `_displacement`).
 
 You can edit the resulting material in the inspector.
-Material values serialize into the scene's `JsnAssets`
-table (or the project-wide catalog) keyed by
+Material values serialize into the scene's asset table
+(or the project-wide catalog) keyed by
 `bevy_pbr::StandardMaterial` and ride along with save.
 
 ### Applying
@@ -74,10 +74,10 @@ geometry.
 Two storage tiers:
 
 - Scene-local: the material lives only inside the current
-  `.jsn`. References use `#Name`.
-- Project-wide: it lives in `.jsn/catalog.jsn` (legacy
-  fallback `assets/catalog.jsn`) and any scene in the
-  project can reference it. References use `@Name`.
+  `.bsn`. References use `#Name`.
+- Project-wide: it lives in `assets/catalog.bsn` and any
+  scene in the project can reference it. References use
+  `@Name`.
 
 The browser shows both, with the source labelled.
 
@@ -90,7 +90,7 @@ The browser shows both, with the source labelled.
   Filename heuristics are coarse. Rename the files or open
   the affected definition and split it manually.
 - **Material disappears in the standalone build.** Standalone
-  loads `assets/scene.jsn` plus `.jsn/catalog.jsn`. Scene-local
+  loads the scene file plus `assets/catalog.bsn`. Scene-local
   materials still ship inline; project references resolve
   from the catalog at load time, so a missing catalog file
   causes `@Name` references to fall back to defaults.

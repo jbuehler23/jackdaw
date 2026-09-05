@@ -22,20 +22,9 @@ pub fn drive_respawn_on_prefab_cache_change(world: &mut World) {
         return;
     }
 
-    let dirty_paths: Vec<crate::prefab::CanonicalPrefabPath> = {
-        let cache = world.resource::<PrefabAstCache>();
-        cache.dirty_paths().cloned().collect()
-    };
-
     crate::prefab::watcher::reload_all_instances(world);
 
     world.resource_mut::<LastResolvedEpoch>().0 = current;
-    world.resource_mut::<PrefabAstCache>().clear_dirty();
 
-    if !dirty_paths.is_empty() {
-        bevy::log::debug!(
-            "prefab cache change ({} paths) -> resolved + respawned active scene",
-            dirty_paths.len()
-        );
-    }
+    bevy::log::debug!("prefab cache epoch {last} -> {current}: resolved + respawned active scene");
 }

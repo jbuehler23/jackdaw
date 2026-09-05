@@ -16,7 +16,7 @@ use jackdaw_api::prelude::*;
 mod util;
 
 fn spawn_cuboid_brush(app: &mut App, offset: Vec3) -> Entity {
-    use jackdaw_jsn::Brush;
+    use jackdaw_scene_types::Brush;
     app.world_mut()
         .spawn((
             Name::new("TestBrush"),

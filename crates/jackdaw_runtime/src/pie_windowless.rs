@@ -37,15 +37,15 @@ pub fn windowless_requested() -> bool {
 /// and picking backend, so a headless process that shares the launch
 /// environment (the dedicated server) is never misconfigured by the env
 /// vars alone.
-pub struct WindowlessActive;
+pub struct WindowlessActivePlugin;
 
-impl Plugin for WindowlessActive {
+impl Plugin for WindowlessActivePlugin {
     fn build(&self, _app: &mut App) {}
 }
 
 /// True when this app was reconfigured by [`maybe_windowless`].
 pub(crate) fn windowless_active(app: &App) -> bool {
-    app.is_plugin_added::<WindowlessActive>()
+    app.is_plugin_added::<WindowlessActivePlugin>()
 }
 
 /// Wrap the game's plugin group for play-in-editor. When the editor asked
@@ -68,7 +68,7 @@ pub fn maybe_windowless(plugins: impl PluginGroup) -> PluginGroupBuilder {
         .add(bevy::app::ScheduleRunnerPlugin::run_loop(
             std::time::Duration::from_secs_f64(1.0 / 60.0),
         ))
-        .add(WindowlessActive)
+        .add(WindowlessActivePlugin)
 }
 
 /// Marker for the data-only window standing in for a real one.
@@ -113,7 +113,7 @@ pub(crate) fn install_windowless_world(world: &mut World) {
 }
 
 /// Point every window-targeting camera at the capture image. Because no
-/// camera renders to a window anymore, bevy_ui has no default UI camera, so
+/// camera renders to a window anymore, `bevy_ui` has no default UI camera, so
 /// exactly one retargeted camera is marked as the default; the marker is a
 /// singleton, so the rest are left unmarked. A game that already set its own
 /// default UI camera keeps it. Runs every frame: cameras spawned later (zone
@@ -227,7 +227,7 @@ mod tests {
         let app = bevy::app::App::new();
         assert!(!windowless_active(&app));
         let mut app = bevy::app::App::new();
-        app.add_plugins(WindowlessActive);
+        app.add_plugins(WindowlessActivePlugin);
         assert!(windowless_active(&app));
     }
 

@@ -1,5 +1,6 @@
 //! `brush.mesh.loop_cut` operator.
 
+use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
 use jackdaw_api::prelude::*;
@@ -7,7 +8,7 @@ use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::ops::loop_cut::loop_cut;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use super::modal_edit::ModalTopologyEdit;
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
@@ -450,6 +451,9 @@ pub fn update_loop_cut_mid_label(
                 position_type: PositionType::Absolute,
                 ..default()
             },
+            // Any hovered node other than the viewport's own suppresses
+            // viewport gestures; this badge is never a click target.
+            Pickable::IGNORE,
             Visibility::Hidden,
             ChildOf(viewport_entity),
         ));

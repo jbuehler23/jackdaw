@@ -1,0 +1,11 @@
+[package]
+name = "shape_game"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Standalone: detach from the jackdaw workspace this directory sits inside.
+[workspace]
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = ["reflect_auto_register"] }

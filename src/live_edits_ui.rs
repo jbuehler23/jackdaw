@@ -13,8 +13,8 @@ use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
 use bevy::ui_widgets::observe;
 use jackdaw_api::prelude::*;
+use jackdaw_bsn::SceneBsnAst;
 use jackdaw_feathers::tokens;
-use jackdaw_jsn::SceneJsnAst;
 
 use crate::{
     AppState,
@@ -180,7 +180,7 @@ fn rebuild_tray(
     mut commands: Commands,
     open: Res<TrayOpen>,
     log: Res<LiveEditLog>,
-    ast: Res<SceneJsnAst>,
+    ast: Res<SceneBsnAst>,
     projection: Res<PieProjection>,
     badges: Query<(&ComputedNode, &UiGlobalTransform), With<LiveEditsBadge>>,
     trays: Query<Entity, With<LiveEditsTray>>,
@@ -477,7 +477,7 @@ fn rebuild_stop_prompt(
     mut commands: Commands,
     mut prompt: ResMut<StopPrompt>,
     log: Res<LiveEditLog>,
-    ast: Res<SceneJsnAst>,
+    ast: Res<SceneBsnAst>,
     projection: Res<PieProjection>,
     overlays: Query<Entity, With<StopPromptOverlay>>,
 ) {

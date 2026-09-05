@@ -232,8 +232,7 @@ fn drain_artifact_changes(
 
 /// Exclusive system in Last. Runs the full
 /// `extensions_dialog::handle_install_from_path` pipeline: atomic
-/// rename into the per-user games dir, teardown of the prior dylib,
-/// dlopen, new `build()`, catalog update.
+/// rename into the per-user extensions dir, dlopen, catalog update.
 fn apply_pending_install(world: &mut World) {
     let artifact_opt = world
         .resource_mut::<HotReloadState>()
@@ -245,14 +244,8 @@ fn apply_pending_install(world: &mut World) {
     let outcome_arc = world.resource::<HotReloadState>().install_outcome.clone();
 
     let result = crate::extensions_dialog::handle_install_from_path(world, artifact);
-    match &result {
-        Ok(jackdaw_loader::LoadedKind::Game(name)) => {
-            info!("HotReload: game `{name}` swapped in place.");
-        }
-        Ok(jackdaw_loader::LoadedKind::Extension(name)) => {
-            info!("HotReload: extension `{name}` re-registered.");
-        }
-        Err(_) => {}
+    if let Ok(name) = &result {
+        info!("HotReload: extension `{name}` re-registered.");
     }
     if let Some(arc) = outcome_arc
         && let Ok(mut slot) = arc.lock()
@@ -283,7 +276,7 @@ fn poll_install_outcome(
         Ok(()) => {}
         Err(err) if err.is_symbol_mismatch() => {
             warn!(
-                "HotReload: SDK symbol mismatch, project was built against a different editor SDK: {err}"
+                "HotReload: SDK symbol mismatch, extension was built against a different editor SDK: {err}"
             );
             install_status.message = Some(
                 "Hot reload: the new build was compiled against an older editor SDK. \

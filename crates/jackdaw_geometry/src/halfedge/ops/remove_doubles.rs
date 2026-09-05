@@ -4,7 +4,7 @@
 //!
 //! Uses the "rebuild via topology" approach: flatten -> remap -> clean -> lift.
 //! O(n^2) pairwise distance check + union-find clustering. Brush sizes are
-//! small enough that this is fast enough for MVP.
+//! small enough that this is fast enough.
 
 use std::collections::HashMap;
 

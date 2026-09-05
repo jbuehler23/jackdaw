@@ -9,7 +9,7 @@ use bevy::ecs::system::{SystemId, SystemState};
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::InputAction;
 use jackdaw_commands::{CommandHistory, EditorCommand};
-use jackdaw_jsn::PropertyValue;
+use jackdaw_scene_types::PropertyValue;
 
 use crate::lifecycle::ActiveModalQuery;
 use crate::{
@@ -21,7 +21,7 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(Update, tick_modal_operator);
 }
 
-/// A Blender-style operator.
+/// A named, dispatchable editor action.
 ///
 /// The trait is bounded on [`InputAction`] so the operator type itself
 /// can be used as a BEI action.

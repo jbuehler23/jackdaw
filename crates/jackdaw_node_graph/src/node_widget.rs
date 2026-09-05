@@ -316,7 +316,7 @@ pub fn body_label(text: impl Into<String>) -> impl Bundle {
 ///
 /// Runs each frame under `Update` so moving a node updates on the
 /// next render. The drag system mutates `GraphNode::position` via
-/// `SetJsnField` commands, which triggers this to repaint.
+/// `SetBsnField` commands, which triggers this to repaint.
 pub fn apply_node_position(
     nodes: Query<&GraphNode>,
     mut views: Query<(&GraphNodeView, &mut Node)>,

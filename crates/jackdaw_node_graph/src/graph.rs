@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 /// Root marker for a node graph. An entity with this component owns
 /// `GraphNode` and `Connection` child entities.
 #[derive(Component, Reflect, Clone, Debug, Serialize, Deserialize, Default)]
-#[reflect(Component, @jackdaw_jsn::EditorHidden)]
+#[reflect(Component, @jackdaw_scene_types::EditorHidden)]
 pub struct NodeGraph {
     /// Human-readable title shown in the breadcrumb / graph list.
     pub title: String,
@@ -22,7 +22,7 @@ pub struct NodeGraph {
 /// Stored on the [`NodeGraph`] entity so per-graph view state persists
 /// when switching graphs. Applied to the canvas world node each frame.
 #[derive(Component, Reflect, Clone, Debug, Serialize, Deserialize)]
-#[reflect(Component, @jackdaw_jsn::EditorHidden)]
+#[reflect(Component, @jackdaw_scene_types::EditorHidden)]
 pub struct GraphCanvasView {
     /// Pan offset in canvas pixels.
     pub offset: Vec2,
@@ -47,7 +47,7 @@ impl Default for GraphCanvasView {
 /// whatever reflected components they need and edit them through the existing
 /// inspector reflect-field UI.
 #[derive(Component, Reflect, Clone, Debug, Serialize, Deserialize, Default)]
-#[reflect(Component, @jackdaw_jsn::EditorHidden)]
+#[reflect(Component, @jackdaw_scene_types::EditorHidden)]
 pub struct GraphNode {
     /// Registry key identifying the node type (e.g. `"anim.state"`).
     pub node_type: String,
@@ -57,7 +57,7 @@ pub struct GraphNode {
 
 /// Marker component added to a selected [`GraphNode`] by [`GraphSelection`](crate::GraphSelection).
 #[derive(Component, Reflect, Default, Clone, Copy, Debug)]
-#[reflect(Component, @jackdaw_jsn::EditorHidden)]
+#[reflect(Component, @jackdaw_scene_types::EditorHidden)]
 pub struct GraphNodeSelected;
 
 /// An input or output port on a [`GraphNode`].
@@ -66,7 +66,7 @@ pub struct GraphNodeSelected;
 /// the [`node()`](crate::node) bundle function according to the descriptor in
 /// the registry.
 #[derive(Component, Reflect, Clone, Debug, Serialize, Deserialize)]
-#[reflect(Component, @jackdaw_jsn::EditorHidden)]
+#[reflect(Component, @jackdaw_scene_types::EditorHidden)]
 pub struct Terminal {
     pub direction: TerminalDirection,
     /// Data-type name used for connection compatibility checks.
@@ -87,10 +87,10 @@ pub enum TerminalDirection {
 /// An edge between two terminals in a graph.
 ///
 /// Stored as a sibling entity under the owning `NodeGraph` so it serializes
-/// with the scene. The JSN serializer rewrites `Entity` fields to scene-local
-/// indices (see `src/scene_io.rs` `JsnSerializerProcessor`).
+/// with the scene. The scene serializer rewrites `Entity` fields to
+/// scene-local indices so the references survive save/load.
 #[derive(Component, Reflect, Clone, Debug, Serialize, Deserialize)]
-#[reflect(Component, @jackdaw_jsn::EditorHidden)]
+#[reflect(Component, @jackdaw_scene_types::EditorHidden)]
 pub struct Connection {
     /// The `GraphNode` entity that owns the source terminal.
     pub source_node: Entity,

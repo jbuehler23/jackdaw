@@ -1,0 +1,14 @@
+[package]
+name = "bsn_scene_game"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Detach from the jackdaw workspace this directory sits inside.
+[workspace]
+
+[dependencies]
+bevy = "0.19"
+jackdaw_runtime = { path = "../../../crates/jackdaw_runtime", features = ["pie"] }
+jackdaw_scene_types = { path = "../../../crates/jackdaw_scene_types", default-features = false }
+jackdaw_extension = { path = "../../../crates/jackdaw_extension" }

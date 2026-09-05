@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use bevy::ecs::component::ComponentId;
 use bevy::prelude::*;
 use bevy::reflect::serde::TypedReflectDeserializer;
-use jackdaw_jsn::ast::{JsnNodeId, SceneJsnAst};
+use jackdaw_bsn::SceneBsnAst;
 use jackdaw_pie_protocol::StateEvent;
 use serde::de::{DeserializeSeed, IntoDeserializer};
 
@@ -20,7 +20,7 @@ use serde::de::{DeserializeSeed, IntoDeserializer};
 pub struct PieEphemeral;
 
 /// Maps a streamed entity (game-side bits) to the preview entity representing
-/// it: an authored entity resolved via `JsnNodeId`, or an ephemeral preview
+/// it: an authored entity resolved via `SceneNodeId`, or an ephemeral preview
 /// entity this projector spawned. Cleared when play stops, focus changes, or
 /// the active tab switches (tab activation respawns authored entities with
 /// fresh ids, so the old map is stale).
@@ -263,11 +263,7 @@ pub fn project_event(world: &mut World, event: StateEvent) {
             let bits = entity.entity;
             let preview = entity
                 .scene_node_id
-                .and_then(|id| {
-                    world
-                        .resource::<SceneJsnAst>()
-                        .entity_for_node_id(JsnNodeId(id))
-                })
+                .and_then(|id| world.resource::<SceneBsnAst>().entity_for_stable_id(id))
                 .unwrap_or_else(|| {
                     // Seed Transform/Visibility so children inherit before
                     // streamed values overwrite the defaults.
@@ -513,11 +509,11 @@ mod tests {
     /// wireframe (the symptom observed in the PIE Live view).
     #[test]
     fn brush_geometry_survives_pie_round_trip() {
-        use jackdaw_jsn::Brush;
+        use jackdaw_scene_types::Brush;
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
-        app.add_plugins(jackdaw_jsn::JsnPlugin::default());
+        app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
 
         let cuboid = Brush::cuboid(1.0, 1.0, 1.0);
         let want_faces = cuboid.faces.len();
@@ -652,27 +648,26 @@ mod tests {
 
     // ---- project_event integration tests ----
 
-    use jackdaw_jsn::ast::{JsnEntityNode, JsnNodeId, SceneJsnAst};
     use jackdaw_pie_protocol::StateEvent;
     use jackdaw_pie_protocol::snapshot::RemoteEntity;
-    use std::collections::HashSet;
+    use jackdaw_scene_types::{SCENE_NODE_ID_TYPE_PATH, SceneNodeId};
 
-    fn build_projection_world() -> (World, Entity, JsnNodeId) {
+    fn build_projection_world() -> (World, Entity, SceneNodeId) {
         let mut world = build_world();
         world.init_resource::<PieProjection>();
 
-        // Build a SceneJsnAst with one authored node bound to a preview entity.
+        // Build a document with one authored node bound to a preview entity.
         let preview_entity = world.spawn(Mutable(0)).id();
-        let node_id = JsnNodeId::next();
-        let mut ast = SceneJsnAst::default();
-        ast.nodes.push(JsnEntityNode {
-            id: Some(node_id),
-            parent: None,
-            components: std::collections::HashMap::new(),
-            derived_components: HashSet::new(),
-            ecs_entity: Some(preview_entity),
-        });
-        ast.ecs_to_jsn.insert(preview_entity, 0);
+        let node_id = SceneNodeId::next();
+        let mut ast = SceneBsnAst::default();
+        let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::TupleStruct(
+            jackdaw_bsn::BsnTupleStructData {
+                type_path: SCENE_NODE_ID_TYPE_PATH.to_string(),
+                values: vec![jackdaw_bsn::BsnValue::Int(node_id.0 as i128)],
+            },
+        )]);
+        ast.add_to_roots(node);
+        ast.link(preview_entity, node);
         world.insert_resource(ast);
 
         (world, preview_entity, node_id)
@@ -1033,7 +1028,7 @@ mod tests {
     // and by_bits-clear halves of `revert_preview`; the re-spawn half is
     // covered by integration tests for `swap_active_tab`.
 
-    fn build_revert_world() -> (World, Entity, JsnNodeId) {
+    fn build_revert_world() -> (World, Entity, SceneNodeId) {
         // Same as build_projection_world but also inserts the Scenes resource
         // (empty, so respawn_scene_from_ast's tab-empty guard returns early)
         // and CommandHistory (required by capture_active_tab). With an empty
@@ -1359,7 +1354,10 @@ mod tests {
         // The asserted child is an authored scene node streamed back, so on
         // replay it resolves to the authored preview entity. The container has
         // no node id and projects as an ephemeral.
-        let child_node_id = world.resource::<SceneJsnAst>().nodes[0].id.map(|id| id.0);
+        let child_node_id = {
+            let ast = world.resource::<SceneBsnAst>();
+            ast.roots.first().and_then(|&node| ast.stable_id_of(node))
+        };
 
         let key = instance_key("A");
         let mut buf = InstanceBuffer::default();

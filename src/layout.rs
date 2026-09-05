@@ -4,7 +4,7 @@ use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::ButtonOperatorCall,
     icons::{EditorFont, IconFont, icon_scene},
-    menu_bar, split_panel, status_bar,
+    menu_bar, status_bar,
     text_edit::{self, TextEditProps},
     tokens,
     tree_view::tree_container_drop_observers,
@@ -30,7 +30,6 @@ use crate::{
     physics_tool::PhysicsActivateOp,
     pie::PieWindowModeToggleOp,
     pie_mirror::{PieViewHeader, PieViewMode, PieViewSegment},
-    remote::ConnectionManager,
     snapping::SnapSettings,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
@@ -46,10 +45,6 @@ pub enum TabKind {
     /// The live scene being edited. There's exactly one Scene tab.
     #[default]
     Scene,
-    /// The Schedule Explorer / remote debug view (replaces the old
-    /// "Remote Debug" workspace). There's exactly one Schedule Explorer
-    /// tab.
-    ScheduleExplorer,
 }
 
 impl TabKind {
@@ -57,7 +52,6 @@ impl TabKind {
     pub fn label(self) -> &'static str {
         match self {
             TabKind::Scene => "Main scene",
-            TabKind::ScheduleExplorer => "Schedule Explorer",
         }
     }
 
@@ -65,7 +59,6 @@ impl TabKind {
     pub fn accent(self) -> Color {
         match self {
             TabKind::Scene => tokens::DOC_TAB_SCENE_ACCENT,
-            TabKind::ScheduleExplorer => tokens::DOC_TAB_TOOL_ACCENT,
         }
     }
 
@@ -73,7 +66,6 @@ impl TabKind {
     pub fn icon(self) -> Icon {
         match self {
             TabKind::Scene => Icon::File,
-            TabKind::ScheduleExplorer => Icon::CalendarSearch,
         }
     }
 }
@@ -150,33 +142,6 @@ fn spawn_editor_main_area(parent: &mut ChildSpawnerCommands) {
                 ..Default::default()
             },
         )],
-    ));
-    // Schedule Explorer document (hidden by default).
-    parent.spawn((
-        DocumentRoot(TabKind::ScheduleExplorer),
-        EditorEntity,
-        Node {
-            width: percent(100),
-            flex_grow: 1.0,
-            min_height: px(0.0),
-            flex_direction: FlexDirection::Column,
-            display: Display::None,
-            ..Default::default()
-        },
-        split_panel::panel_group(
-            0.2,
-            (
-                Spawn((
-                    split_panel::panel(1),
-                    crate::remote::entity_browser::remote_debug_workspace_content(),
-                )),
-                Spawn(split_panel::panel_handle()),
-                Spawn((
-                    split_panel::panel(1),
-                    crate::remote::remote_inspector::remote_inspector(),
-                )),
-            ),
-        ),
     ));
     parent.spawn(editor_status_bar());
 }
@@ -307,6 +272,11 @@ fn play_pause_controls(icon_font: Handle<Font>) -> impl Bundle {
         BackgroundColor(tokens::HEADER_CONTROL_BG),
         BorderColor::all(tokens::HEADER_CONTROL_BORDER),
         children![
+            pie_transport_button(
+                crate::pie::PieButton::Rebuild,
+                Icon::Hammer,
+                icon_font.clone(),
+            ),
             pie_transport_button(crate::pie::PieButton::Play, Icon::Play, icon_font.clone(),),
             pie_menu_button(icon_font.clone()),
             pie_transport_button(crate::pie::PieButton::Pause, Icon::Pause, icon_font.clone(),),
@@ -436,7 +406,7 @@ pub(crate) fn viewport_with_toolbar() -> impl Bundle {
             ..Default::default()
         },
         BackgroundColor(tokens::PANEL_BG),
-        // The main editor toolbar, the navmesh toolbar, and the terrain
+        // The main editor toolbar and the terrain
         // toolbar are bsn! Scenes, which can't nest inside this Bundle
         // `children!` tree. They're spawned separately and slotted in above
         // the viewport by `build_viewport_panel`.
@@ -568,8 +538,10 @@ fn format_grid_size(size: f32) -> String {
     if size.fract() == 0.0 {
         format!("{size:.0}")
     } else {
-        // Powers of two below 1 are exact; default formatting renders
-        // them cleanly (e.g. 0.25, 0.0625).
+        // Default `f32` formatting prints the shortest string that reads
+        // back as the same value, so it renders both the power-of-two
+        // sizes (0.25, 0.0625) and an explicit metric increment (1.5,
+        // 2.5) without a trailing tail of digits.
         format!("{size}")
     }
 }
@@ -795,13 +767,12 @@ fn scene_view() -> impl Bundle {
     )
 }
 
-/// Operator ids the main viewport toolbar owns. The navmesh and terrain
-/// contextual toolbars spawn the same `ButtonOperatorCall` and
-/// `ButtonVariant` component pair and drive their own highlighters, so
-/// [`update_toolbar_button_variants`] only flips the variant on these ids
-/// and leaves everything else alone. The grid stepper actions
-/// `GridDecreaseOp` and `GridIncreaseOp` are absent by design. They never
-/// highlight, so they stay at their spawn variant.
+/// Operator ids the main viewport toolbar owns. The terrain contextual
+/// toolbar spawns the same `ButtonOperatorCall` and `ButtonVariant`
+/// component pair and drives its own highlighter, so
+/// [`update_toolbar_button_variants`] flips the variant only on these ids. The
+/// grid stepper actions `GridDecreaseOp` and `GridIncreaseOp` are absent: they
+/// never highlight, so they stay at their spawn variant.
 fn is_main_toolbar_op(id: &str) -> bool {
     id == ToolSelectOp::ID
         || id == ToolTranslateOp::ID
@@ -826,9 +797,9 @@ fn is_main_toolbar_op(id: &str) -> bool {
 /// place toolbar active-state lives; `BackgroundColor` is never mutated
 /// directly.
 ///
-/// Buttons whose id isn't a main-toolbar op are skipped, so the navmesh
-/// contextual row and this one never fight over the same `ButtonVariant`
-/// even though they share the component pair.
+/// Buttons whose id isn't a main-toolbar op are skipped, so the terrain
+/// contextual row and this one do not write the same `ButtonVariant` even
+/// though they share the component pair.
 ///
 /// This is an [`On<RefreshOperatorButtons>`] observer. Every editor-state
 /// change it reads from -- active tool, edit mode, gizmo space, snap, and
@@ -913,11 +884,9 @@ pub fn update_active_document_display(
 }
 
 /// Refresh tab-strip styling. Active tab gets its bg + border; inactive
-/// tabs go transparent. Schedule Explorer dims when Remote is
-/// disconnected.
+/// tabs go transparent.
 pub fn update_tab_strip_highlights(
     active: Res<ActiveDocument>,
-    manager: Res<ConnectionManager>,
     mut tabs: Query<(
         &DocumentTabButton,
         &mut BackgroundColor,
@@ -926,13 +895,11 @@ pub fn update_tab_strip_highlights(
     )>,
     mut texts: Query<&mut TextColor>,
 ) {
-    if !active.is_changed() && !manager.is_changed() {
+    if !active.is_changed() {
         return;
     }
-    let connected = manager.is_connected();
     for (tab, mut tab_bg, mut tab_border, children) in &mut tabs {
         let is_active = tab.0 == active.kind;
-        let is_disabled = tab.0 == TabKind::ScheduleExplorer && !connected;
 
         tab_bg.0 = if is_active {
             tokens::DOC_TAB_ACTIVE_BG
@@ -945,9 +912,7 @@ pub fn update_tab_strip_highlights(
             Color::NONE
         });
 
-        let label_color = if is_disabled {
-            Color::srgba(0.4, 0.4, 0.4, 0.5)
-        } else if is_active {
+        let label_color = if is_active {
             tokens::DOC_TAB_ACTIVE_LABEL
         } else {
             tokens::DOC_TAB_INACTIVE_LABEL
@@ -1008,14 +973,32 @@ fn editor_status_bar() -> impl Bundle {
                     ..Default::default()
                 },
                 children![
+                    // Fixed-width, right-aligned, clipped box: the build
+                    // status text changes length as crates compile, and a
+                    // bare text node would reflow the rest of the footer on
+                    // every frame. A stable box keeps the count visible at
+                    // the right edge and clips an over-long crate name.
                     (
-                        status_bar::StatusBarRight,
-                        Text::default(),
-                        TextFont {
-                            font_size: tokens::TEXT_SIZE_SM,
+                        Node {
+                            width: Val::Px(210.0),
+                            overflow: Overflow::clip(),
+                            justify_content: JustifyContent::FlexEnd,
+                            align_items: AlignItems::Center,
                             ..Default::default()
                         },
-                        TextColor(tokens::TEXT_SECONDARY),
+                        children![(
+                            status_bar::StatusBarRight,
+                            Text::default(),
+                            TextLayout {
+                                linebreak: bevy::text::LineBreak::NoWrap,
+                                ..Default::default()
+                            },
+                            TextFont {
+                                font_size: tokens::TEXT_SIZE_SM,
+                                ..Default::default()
+                            },
+                            TextColor(tokens::TEXT_SECONDARY),
+                        )],
                     ),
                     // Connection indicator
                     crate::remote::panel::connection_indicator()
@@ -1765,5 +1748,29 @@ mod live_badge_tests {
             Color::NONE,
             "the viewport border clears back to transparent in Scene mode"
         );
+    }
+}
+
+#[cfg(test)]
+mod grid_readout_tests {
+    use super::*;
+
+    #[test]
+    fn whole_sizes_lose_their_trailing_zero() {
+        assert_eq!(format_grid_size(1.0), "1");
+        assert_eq!(format_grid_size(8.0), "8");
+    }
+
+    #[test]
+    fn power_of_two_fractions_read_exactly() {
+        assert_eq!(format_grid_size(0.25), "0.25");
+        assert_eq!(format_grid_size(0.0625), "0.0625");
+    }
+
+    #[test]
+    fn an_explicit_metric_increment_reads_as_itself() {
+        assert_eq!(format_grid_size(1.5), "1.5");
+        assert_eq!(format_grid_size(2.5), "2.5");
+        assert_eq!(format_grid_size(0.75), "0.75");
     }
 }

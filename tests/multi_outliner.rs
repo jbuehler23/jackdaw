@@ -12,6 +12,7 @@
 
 use bevy::prelude::*;
 use jackdaw::hierarchy::HierarchyTreeContainer;
+use jackdaw_ui::{UiButton, UiCanvas, UiGeneratedPart};
 use jackdaw_widgets::tree_view::{TreeIndex, TreeNode};
 
 mod util;
@@ -173,5 +174,75 @@ fn despawn_scene_entity_drops_row_in_every_outliner() {
     assert!(
         !index.contains(outliner_b, entity),
         "row should be cleaned out of outliner B",
+    );
+}
+
+#[test]
+fn ui_canvas_and_authored_children_appear_but_generated_parts_do_not() {
+    let mut app = util::editor_test_app();
+    let outliner_a = spawn_outliner_container(app.world_mut());
+    let outliner_b = spawn_outliner_container(app.world_mut());
+
+    let canvas = app
+        .world_mut()
+        .spawn((Name::new("UI Canvas"), UiCanvas::default()))
+        .id();
+    app.update();
+
+    {
+        let world = app.world_mut();
+        let mut rows = world.query::<(
+            &TreeNode,
+            &mut jackdaw_widgets::tree_view::TreeChildrenPopulated,
+        )>();
+        for (row, mut populated) in rows.iter_mut(world) {
+            if row.0 == canvas {
+                populated.0 = true;
+            }
+        }
+    }
+
+    let button = app
+        .world_mut()
+        .spawn((Name::new("Button"), UiButton::default(), ChildOf(canvas)))
+        .id();
+    app.update();
+    app.update();
+
+    let world = app.world_mut();
+    let index = world.resource::<TreeIndex>();
+    for container in [outliner_a, outliner_b] {
+        assert!(index.contains(container, canvas));
+        assert!(index.contains(container, button));
+    }
+    assert!(
+        world
+            .get::<Children>(button)
+            .is_none_or(bevy::prelude::RelationshipTarget::is_empty),
+        "the editor authors UI as inert data: nothing materializes onto the authored button"
+    );
+
+    // A view-local copy opts into materialization. Its generated label is
+    // implementation-owned and must stay out of every Outliner.
+    let materialized = world
+        .spawn((
+            Name::new("Projected Button"),
+            UiButton::default(),
+            jackdaw_ui::UiMaterialize,
+        ))
+        .id();
+    app.update();
+    app.update();
+
+    let world = app.world_mut();
+    let generated = world
+        .get::<Children>(materialized)
+        .expect("a marked button materializes its label")
+        .iter()
+        .find(|child| world.get::<UiGeneratedPart>(*child).is_some())
+        .expect("button label should be materialized");
+    assert!(
+        !world.resource::<TreeIndex>().contains_anywhere(generated),
+        "implementation-owned widget parts must not leak into the authored outliner"
     );
 }

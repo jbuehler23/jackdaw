@@ -100,7 +100,6 @@ fn setup_project_files(
     state.needs_refresh = true;
     state.initialized = false;
 
-    // Set up file watcher
     let (tx, rx) = mpsc::channel();
     let watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
         if let Ok(event) = res {
@@ -210,7 +209,6 @@ fn handle_directory_expand(
     let clicked = event.event_target();
 
     // Walk up: click target -> TreeRowContent -> TreeNode
-    // Check if this is a toggle click
     let tree_node_entity = if let Ok(toggle_parent) = toggle_query.get(clicked) {
         // Clicked on the expand toggle itself
         let content_entity = toggle_parent.parent();
@@ -309,7 +307,6 @@ fn spawn_file_tree_row(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    // Create the tree node entity
     let node_entity = commands
         .spawn((
             // Use the node entity itself as the "source" since we don't have scene entities

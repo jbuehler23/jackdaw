@@ -32,10 +32,12 @@ pub(crate) fn applicable_categories<'a>(
 
 /// Category ids (in strip order) that are SHOWN for the current selection.
 ///
-/// "object" is always shown. "mesh" is shown only when a Brush card is present.
-/// "modifiers", "material", and "physics" are shown when a Brush is present OR
-/// when the category already has a card. "components" and extension ids are
-/// shown only when they have a card.
+/// "object" and "components" are always shown: every entity can receive a
+/// component, so the Components tab (which hosts the Add Component button) must
+/// stay reachable even before the entity has any generic component. "mesh" is
+/// shown only when a Brush card is present. "modifiers", "material", and
+/// "physics" are shown when a Brush is present OR when the category already has
+/// a card. Extension ids are shown only when they have a card.
 ///
 /// This is the canonical visibility rule shared by both the strip paint system
 /// and the sticky-category resolver so the two cannot drift apart.
@@ -49,7 +51,7 @@ pub(super) fn shown_categories<'a>(
         .into_iter()
         .map(|c| c.id.as_ref())
         .filter(|id| match *id {
-            "object" => true,
+            "object" | "components" => true,
             "mesh" => brush_present,
             "modifiers" | "material" | "physics" => brush_present || applicable.contains(id),
             _ => applicable.contains(id),
@@ -261,7 +263,7 @@ mod tests {
         seed_default_categories(&mut r);
         // A brush entity: Brush + Transform + a custom component.
         let present = [
-            "jackdaw_jsn::types::Brush",
+            "jackdaw_scene_types::types::Brush",
             "bevy_transform::components::transform::Transform",
             "my_game::Health",
         ];

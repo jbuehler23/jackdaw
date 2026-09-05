@@ -4,7 +4,7 @@ use bevy::feathers::theme::ThemedText;
 use bevy::input_focus::InputFocus;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use jackdaw_jsn::PropertyValue;
+use jackdaw_scene_types::PropertyValue;
 use lucide_icons::Icon;
 use std::borrow::Cow;
 

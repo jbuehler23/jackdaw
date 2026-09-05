@@ -71,7 +71,7 @@ use jackdaw_geometry::halfedge::ops::edge_split::split_edge;
 use jackdaw_geometry::halfedge::ops::face_poke::face_poke;
 use jackdaw_geometry::halfedge::ops::face_split::split_face;
 use jackdaw_geometry::halfedge::{EdgeKey, FaceKey, HalfedgeMesh, LoopKey, VertKey};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushMeshCache, BrushSelection, EditMode};
 use crate::default_style;

@@ -19,7 +19,7 @@ pub struct PrefabEntityId(pub u32);
 /// values the instance has marked as removed from the inherited
 /// subtree.
 #[derive(Component, Reflect, Clone, Debug, Default)]
-#[reflect(Component)]
+#[reflect(Component, Default)]
 pub struct IsA {
     pub source: PathBuf,
     pub deleted: Vec<u32>,

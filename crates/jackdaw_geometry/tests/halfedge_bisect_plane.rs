@@ -6,7 +6,7 @@ use jackdaw_geometry::BrushPlane;
 use jackdaw_geometry::halfedge::HalfedgeMesh;
 use jackdaw_geometry::halfedge::ops::bisect_plane::{BisectKeep, bisect_plane};
 use jackdaw_geometry::halfedge::ops::edge_bevel::edge_bevel;
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 fn side(co: Vec3, plane: &BrushPlane) -> f32 {
     co.dot(plane.normal) - plane.distance
@@ -176,7 +176,7 @@ fn clip_convex_brush_still_uses_fast_path() {
             ..Default::default()
         })
         .collect();
-    let brush = jackdaw_jsn::Brush {
+    let brush = jackdaw_scene_types::Brush {
         faces,
         topology: Default::default(),
     };

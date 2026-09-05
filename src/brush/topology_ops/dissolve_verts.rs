@@ -4,11 +4,11 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::ops::dissolve_verts::dissolve_verts;
 use jackdaw_geometry::halfedge::{VertKey, apply_topology_edit};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
-/// Remove the selected verts and merge incident faces. MVP: only valence-2 verts are
+/// Remove the selected verts and merge incident faces. Only valence-2 verts are
 /// dissolved; higher-valence verts skipped silently. Available in Vertex mode.
 #[operator(
     id = "brush.mesh.dissolve_verts",
@@ -71,7 +71,8 @@ pub(crate) fn brush_dissolve_verts(
     // Rebuild brush.faces parallel to the new polygons. For each slot, look up
     // the old appearance by the face's material_idx, falling back to the last
     // entry if the index is out of range.
-    let mut new_faces: Vec<jackdaw_jsn::BrushFaceData> = Vec::with_capacity(sorted_mat_idxes.len());
+    let mut new_faces: Vec<jackdaw_scene_types::BrushFaceData> =
+        Vec::with_capacity(sorted_mat_idxes.len());
     for &mat_idx in &sorted_mat_idxes {
         let old = old_faces
             .get(mat_idx as usize)
@@ -97,5 +98,5 @@ pub(crate) fn can_run_dissolve_verts(
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushDissolveVertsOp>();
-    // No keybind; operator is available via menu / command palette only for MVP.
+    // No keybind; operator is available via menu / command palette only.
 }

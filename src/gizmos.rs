@@ -239,6 +239,7 @@ pub(crate) fn handle_gizmo_hover(
     active: Res<crate::viewport::ActiveViewport>,
     edit_mode: Res<crate::brush::EditMode>,
     draw_state: Res<crate::draw_brush::DrawBrushState>,
+    face_drag: Res<crate::brush::BrushDragState>,
     edit_ctx: EditGizmoCtx,
 ) {
     hover.hovered_axis = None;
@@ -285,7 +286,7 @@ pub(crate) fn handle_gizmo_hover(
         return;
     }
 
-    let (gizmo_pos, rotation) = if in_brush_edit {
+    let (gizmo_pos, rotation) = if in_brush_edit && !face_drag.quick_action {
         // Sub-elements are points with no per-target frame, so world axes.
         let Some(pos) = edit_ctx.sub_element_centroid() else {
             return;
@@ -464,6 +465,7 @@ pub fn gizmo_drag(
     mut drag_state: ResMut<GizmoDragState>,
     snap_settings: Res<SnapSettings>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
+    mut commands: Commands,
 ) -> OperatorResult {
     let cursor_pos = viewport_ctx.cursor.get()?;
     // First-frame: pick the active (hovered) viewport. Subsequent
@@ -533,9 +535,10 @@ pub fn gizmo_drag(
     }
 
     if mouse.just_released(MouseButton::Left) {
-        // Undo is handled by the framework: the modal captured a
-        // before-snapshot on start; returning Finished triggers an
-        // after-snapshot + SnapshotDiff push.
+        // Sync ECS -> AST before Finished so the framework's after-snapshot
+        // (and a later save) see the dragged Transforms. Undo remains the
+        // SnapshotDiff; this only brings the document up to date.
+        queue_sync_gizmo_transforms_to_ast(&drag_state, &transforms, &mut commands);
         clear_gizmo_drag_state(&mut drag_state, &mut cursor_query);
         return OperatorResult::Finished;
     }
@@ -631,6 +634,41 @@ pub fn gizmo_drag(
     OperatorResult::Running
 }
 
+/// Mirror each gizmo target's live ECS [`Transform`] into the scene document.
+///
+/// Object gizmo mutates ECS every frame and relies on `SnapshotDiff` for undo.
+/// Save / after-snapshot emit the document, so without this the dragged pose
+/// never reaches the `.bsn`.
+fn queue_sync_gizmo_transforms_to_ast(
+    drag_state: &GizmoDragState,
+    transforms: &Query<(&GlobalTransform, &mut Transform), With<Selected>>,
+    commands: &mut Commands,
+) {
+    let to_sync: Vec<(Entity, Transform)> = drag_state
+        .targets
+        .iter()
+        .filter_map(|target| {
+            transforms
+                .get(target.entity)
+                .ok()
+                .map(|(_, transform)| (target.entity, *transform))
+        })
+        .collect();
+    if to_sync.is_empty() {
+        return;
+    }
+    commands.queue(move |world: &mut World| {
+        for (entity, transform) in to_sync {
+            crate::commands::sync_component_to_ast(
+                world,
+                entity,
+                "bevy_transform::components::transform::Transform",
+                &transform,
+            );
+        }
+    });
+}
+
 fn cancel_gizmo_drag(
     mut drag_state: ResMut<GizmoDragState>,
     mut transforms: Query<&mut Transform, With<Selected>>,
@@ -665,7 +703,7 @@ fn clear_gizmo_drag_state(
 struct EditGizmoBrushParams<'w, 's> {
     caches: Query<'w, 's, &'static crate::brush::BrushMeshCache>,
     globals: Query<'w, 's, &'static GlobalTransform>,
-    brushes: Query<'w, 's, &'static mut jackdaw_jsn::Brush>,
+    brushes: Query<'w, 's, &'static mut jackdaw_scene_types::Brush>,
     halfedges: Query<'w, 's, &'static mut crate::brush::BrushHalfedge>,
     mirrors: Query<'w, 's, &'static jackdaw_geometry::ModifierStack>,
 }
@@ -893,7 +931,7 @@ pub fn gizmo_drag_edit(
 /// Shares [`restore_captures`] with the direct vertex / edge drag cancels.
 fn cancel_gizmo_edit_drag(
     mut drag_state: ResMut<EditGizmoDragState>,
-    mut brushes: Query<&mut jackdaw_jsn::Brush>,
+    mut brushes: Query<&mut jackdaw_scene_types::Brush>,
     mut halfedges: Query<&mut crate::brush::BrushHalfedge>,
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
     mut override_cursor: ResMut<OverrideCursor>,
@@ -938,6 +976,7 @@ fn draw_gizmos(
     drag_state: Res<GizmoDragState>,
     modal: Res<ModalTransformState>,
     edit_mode: Res<crate::brush::EditMode>,
+    face_drag: Res<crate::brush::BrushDragState>,
     edit_ctx: EditGizmoCtx,
 ) {
     if matches!(*mode, ActiveTool::Select) {
@@ -956,7 +995,10 @@ fn draw_gizmos(
     // drag (translate follows; rotate/scale keep the centroid at the pivot).
     // Reading the targets' GlobalTransform / live cache glues the gizmo to
     // the meshes, which read the same data.
-    let (gizmo_pos, rotation) = if in_brush_edit {
+    //
+    // Object-mode face pull temporarily enters face edit; keep the gizmo on
+    // the entity origin for that gesture so it does not jump to the face.
+    let (gizmo_pos, rotation) = if in_brush_edit && !face_drag.quick_action {
         // Sub-elements are points with no per-target frame, so world axes.
         // During a drag use the operator's stable draw position (held at the
         // pivot for scale / rotate) so grid-snapped vertices do not make the

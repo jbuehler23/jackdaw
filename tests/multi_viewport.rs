@@ -18,7 +18,7 @@
 use bevy::{dev_tools::infinite_grid::InfiniteGrid, prelude::*};
 use jackdaw::viewport::{ActiveViewport, MainViewportCamera, ViewportConfig, ViewportGrid};
 use jackdaw_api::prelude::*;
-use jackdaw_jsn::PropertyValue;
+use jackdaw_scene_types::PropertyValue;
 
 mod util;
 
@@ -117,7 +117,7 @@ fn set_axis_rotates_only_active_viewports_grid() {
     world.resource_mut::<ActiveViewport>().camera = Some(cam_a);
     dispatch_set_axis(world, 2); // Z axis (front view)
 
-    // A's grid rotated to face the front view (world XY plane, ~90° around X).
+    // A's grid rotated to face the front view (world XY plane, ~90 degrees around X).
     let grid_a_rot = world.get::<Transform>(grid_a).unwrap().rotation;
     assert!(
         (grid_a_rot.x.abs() - (std::f32::consts::FRAC_PI_2 / 2.0).sin()).abs() < 1e-3,

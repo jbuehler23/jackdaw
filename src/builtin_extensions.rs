@@ -16,9 +16,8 @@ use jackdaw_feathers::tokens;
 /// defining module (what `TypePath` reports), not a re-export path. Tested
 /// against the real `TypePath` so a typo fails loudly.
 pub(crate) const WORLD_ENTITY_ICONS: &[(&str, Icon)] = &[
-    ("jackdaw_jsn::types::Brush", Icon::Cuboid),
-    ("jackdaw_jsn::types::Terrain", Icon::Mountain),
-    ("jackdaw_jsn::types::NavmeshRegion", Icon::Waypoints),
+    ("jackdaw_scene_types::types::Brush", Icon::Cuboid),
+    ("jackdaw_scene_types::types::Terrain", Icon::Mountain),
     ("jackdaw::entity_ops::SceneFogVolume", Icon::CloudFog),
     ("jackdaw::entity_ops::SceneReflectionProbe", Icon::Sparkles),
     ("jackdaw::entity_ops::SceneAnimationPlayer", Icon::Play),
@@ -107,6 +106,87 @@ impl JackdawExtension for CoreWindowsExtension {
                         .needs_refresh = true;
                 }),
         );
+
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.remote.entities")
+                .with_name("Remote Entities")
+                .with_default_area(DefaultArea::Left)
+                .with_priority(20)
+                .with_build(|window| {
+                    window.spawn(crate::remote::entity_browser::remote_debug_workspace_content());
+                }),
+        );
+
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.debug.diagnostics")
+                .with_name("Remote Diagnostics")
+                .with_default_area(DefaultArea::Left)
+                .with_priority(21)
+                .with_build(|window| {
+                    crate::remote::debug::diagnostics::build_diagnostics_window(window);
+                }),
+        );
+
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.debug.queries")
+                .with_name("Remote Queries")
+                .with_default_area(DefaultArea::Center)
+                .with_priority(22)
+                .with_build(|window| {
+                    window.spawn(crate::remote::debug::queries::queries_panel_content());
+                }),
+        );
+
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.debug.archetypes")
+                .with_name("Remote Archetypes")
+                .with_default_area(DefaultArea::Center)
+                .with_priority(23)
+                .with_build(|window| {
+                    window.spawn(crate::remote::debug::archetypes::archetypes_panel_content());
+                }),
+        );
+
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.debug.schedules")
+                .with_name("Remote Schedules")
+                .with_default_area(DefaultArea::Center)
+                .with_priority(24)
+                .with_build(|window| {
+                    window.spawn(crate::remote::debug::schedules::schedules_panel_content());
+                }),
+        );
+
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.debug.graph")
+                .with_name("Remote System Graph")
+                .with_default_area(DefaultArea::Center)
+                .with_priority(25)
+                .with_build(|window| {
+                    window.spawn(crate::remote::debug::depgraph::depgraph_panel_content());
+                }),
+        );
+
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.debug.relationships")
+                .with_name("Remote Relationships")
+                .with_default_area(DefaultArea::Center)
+                .with_priority(26)
+                .with_build(|window| {
+                    window
+                        .spawn(crate::remote::debug::relationships::relationships_panel_content());
+                }),
+        );
+
+        ctx.register_window(
+            WindowDescriptor::new("jackdaw.remote.inspector")
+                .with_name("Remote Inspector")
+                .with_default_area(DefaultArea::RightSidebar)
+                .with_priority(20)
+                .with_build(|window| {
+                    window.spawn(crate::remote::remote_inspector::remote_inspector());
+                }),
+        );
     }
 }
 
@@ -138,6 +218,69 @@ impl JackdawExtension for ViewportExtension {
                 .with_build(|window| {
                     let parent = window.target_entity();
                     crate::viewport::build_viewport_panel(window.world_mut(), parent);
+                }),
+        );
+    }
+}
+
+/// Generic ECS-native UI authoring windows.
+#[derive(Default)]
+pub struct UiEditorExtension;
+
+impl JackdawExtension for UiEditorExtension {
+    fn id(&self) -> String {
+        "jackdaw.ui_editor".to_string()
+    }
+
+    fn label(&self) -> String {
+        "UI Editor".to_string()
+    }
+
+    fn kind(&self) -> ExtensionKind {
+        ExtensionKind::Builtin
+    }
+
+    fn register(&self, ctx: &mut ExtensionContext) {
+        ctx.register_entity_icon("jackdaw_ui::UiCanvas", Icon::LayoutTemplate);
+        ctx.register_entity_icon("jackdaw_ui::UiButton", Icon::MousePointer);
+        ctx.register_entity_icon("jackdaw_ui::UiCheckbox", Icon::Check);
+        ctx.register_entity_icon("jackdaw_ui::UiToggle", Icon::ToggleLeft);
+        ctx.register_entity_icon("jackdaw_ui::UiSlider", Icon::SlidersHorizontal);
+        ctx.register_entity_icon("jackdaw_ui::UiTextInput", Icon::TextCursorInput);
+        for definition in [
+            crate::ui_authoring::canvas_definition(),
+            crate::ui_authoring::panel_definition(),
+            crate::ui_authoring::row_definition(),
+            crate::ui_authoring::column_definition(),
+            crate::ui_authoring::label_definition(),
+            crate::ui_authoring::button_definition(),
+            crate::ui_authoring::checkbox_definition(),
+            crate::ui_authoring::toggle_definition(),
+            crate::ui_authoring::slider_definition(),
+            crate::ui_authoring::text_input_definition(),
+        ] {
+            ctx.register_widget(definition);
+        }
+        ctx.register_window(
+            WindowDescriptor::new(crate::ui_canvas::UI_CANVAS_WINDOW_ID)
+                .with_name("UI Canvas")
+                .with_icon(Icon::LayoutTemplate.unicode())
+                .with_default_area(DefaultArea::Center)
+                .with_priority(1)
+                .with_build(|window| {
+                    let parent = window.target_entity();
+                    crate::ui_canvas::build_ui_canvas_panel(window.world_mut(), parent);
+                }),
+        );
+        ctx.register_window(
+            WindowDescriptor::new(crate::ui_widgets_panel::UI_WIDGETS_WINDOW_ID)
+                .with_name("UI Widgets")
+                .with_icon(Icon::PanelsTopLeft.unicode())
+                .with_default_area(DefaultArea::Left)
+                .with_priority(2)
+                .with_build(|window| {
+                    let parent = window.target_entity();
+                    crate::ui_widgets_panel::build_ui_widgets_panel(window.world_mut(), parent);
                 }),
         );
     }
@@ -293,7 +436,7 @@ impl JackdawExtension for TerminalExtension {
     }
 }
 
-/// Right-sidebar stack: Components, Materials, Resources, Systems.
+/// Right-sidebar stack: Components, Terrain, Materials, Resources, Systems.
 #[derive(Default)]
 pub struct InspectorExtension;
 
@@ -327,10 +470,20 @@ impl JackdawExtension for InspectorExtension {
         );
 
         ctx.register_window(
+            WindowDescriptor::new("jackdaw.inspector.terrain")
+                .with_name("Terrain")
+                .with_default_area(DefaultArea::RightSidebar)
+                .with_priority(1)
+                .with_build(|window| {
+                    window.spawn(crate::terrain::panel::terrain_panel_content());
+                }),
+        );
+
+        ctx.register_window(
             WindowDescriptor::new("jackdaw.inspector.materials")
                 .with_name("Materials")
                 .with_default_area(DefaultArea::RightSidebar)
-                .with_priority(1)
+                .with_priority(2)
                 .with_build(|window| {
                     let icon_font = window
                         .world()
@@ -349,7 +502,7 @@ impl JackdawExtension for InspectorExtension {
             WindowDescriptor::new("jackdaw.inspector.resources")
                 .with_name("Resources")
                 .with_default_area(DefaultArea::RightSidebar)
-                .with_priority(2)
+                .with_priority(3)
                 .with_build(|window| {
                     window.spawn((
                         Node {
@@ -374,7 +527,7 @@ impl JackdawExtension for InspectorExtension {
             WindowDescriptor::new("jackdaw.inspector.systems")
                 .with_name("Systems")
                 .with_default_area(DefaultArea::RightSidebar)
-                .with_priority(3)
+                .with_priority(4)
                 .with_build(|window| {
                     window.spawn((
                         Node {
@@ -414,9 +567,8 @@ mod tests {
         {
             let registry = world.resource::<AppTypeRegistry>();
             let mut registry = registry.write();
-            registry.register::<jackdaw_jsn::Brush>();
-            registry.register::<jackdaw_jsn::Terrain>();
-            registry.register::<jackdaw_jsn::NavmeshRegion>();
+            registry.register::<jackdaw_scene_types::Brush>();
+            registry.register::<jackdaw_scene_types::Terrain>();
             registry.register::<crate::entity_ops::SceneFogVolume>();
             registry.register::<crate::entity_ops::SceneReflectionProbe>();
             registry.register::<crate::entity_ops::SceneAnimationPlayer>();
@@ -436,16 +588,12 @@ mod tests {
 
         let cases: &[(Entity, Icon)] = &[
             (
-                world.spawn(jackdaw_jsn::Brush::default()).id(),
+                world.spawn(jackdaw_scene_types::Brush::default()).id(),
                 Icon::Cuboid,
             ),
             (
-                world.spawn(jackdaw_jsn::Terrain::default()).id(),
+                world.spawn(jackdaw_scene_types::Terrain::default()).id(),
                 Icon::Mountain,
-            ),
-            (
-                world.spawn(jackdaw_jsn::NavmeshRegion::default()).id(),
-                Icon::Waypoints,
             ),
             (
                 world.spawn(crate::entity_ops::SceneFogVolume).id(),

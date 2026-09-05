@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use bevy::{prelude::*, tasks::Task, tasks::futures_lite::future};
 use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_feathers::{
-    panel_header, tokens,
+    tokens,
     tree_view::{TreeRowStyle, tree_row},
 };
 use jackdaw_remote::scene_snapshot::RemoteEntity;
@@ -120,7 +120,6 @@ pub fn remote_debug_workspace_content() -> impl Bundle {
         },
         BackgroundColor(tokens::PANEL_BG),
         children![
-            panel_header::panel_header("Remote Entities"),
             // Status row
             (
                 RemoteEntityStatusText,
@@ -199,17 +198,12 @@ fn on_remote_name_mutated(
 pub fn snapshot_poll_timer(
     mut commands: Commands,
     manager: Res<ConnectionManager>,
-    active: Res<crate::layout::ActiveDocument>,
     time: Res<Time>,
     mut poll_timer: ResMut<RemoteSnapshotPollTimer>,
     existing_task: Option<Res<RemoteSnapshotTask>>,
 ) {
-    // Only poll when connected, on the Schedule Explorer tab, and no
-    // task in flight.
+    // Only poll while the connection is live and no task is in flight.
     if !manager.is_connected() {
-        return;
-    }
-    if active.kind != crate::layout::TabKind::ScheduleExplorer {
         return;
     }
     if existing_task.is_some() {
@@ -780,7 +774,6 @@ pub(crate) fn on_remote_tree_row_clicked(
 pub(crate) fn cleanup_remote_proxies(
     mut commands: Commands,
     manager: Res<ConnectionManager>,
-    mut active: ResMut<crate::layout::ActiveDocument>,
     proxies: Query<Entity, With<RemoteEntityProxy>>,
     mut proxy_index: ResMut<RemoteProxyIndex>,
     mut tree_row_index: ResMut<RemoteTreeRowIndex>,
@@ -831,12 +824,6 @@ pub(crate) fn cleanup_remote_proxies(
             }
         }
     });
-
-    // Switch back to the Scene document if the user was viewing
-    // Schedule Explorer when the connection dropped.
-    if active.kind == crate::layout::TabKind::ScheduleExplorer {
-        active.kind = crate::layout::TabKind::Scene;
-    }
 
     commands.remove_resource::<RemoteSnapshotTask>();
 }

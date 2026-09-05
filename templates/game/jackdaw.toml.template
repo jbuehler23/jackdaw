@@ -1,0 +1,17 @@
+# jackdaw project settings. Everything here has a working default;
+# delete any line you are not using.
+
+# Optional name of your game's root Bevy Plugin (for setup / `jd doctor`).
+# Play runs your cargo binary; add the plugin from `main.rs`.
+# plugin = "GamePlugin"
+
+# In a cargo workspace, the member jackdaw builds as the game.
+# package = "my-game"
+
+{{jackdaw_pins}}
+
+[[run]]
+name = "Play"
+# instances = 2
+# env = { SERVER_ADDR = "127.0.0.1:5000" }
+# args = []

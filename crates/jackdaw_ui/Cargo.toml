@@ -1,0 +1,23 @@
+[package]
+name = "jackdaw_ui"
+version.workspace = true
+edition = "2024"
+description = "Runtime-safe ECS-native UI authoring primitives for Jackdaw"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = [
+    "std",
+    "reflect_auto_register",
+    "serialize",
+    "bevy_asset",
+    "bevy_picking",
+    "bevy_ui",
+    "bevy_ui_widgets",
+    "bevy_feathers",
+] }
+bevy_scene = "0.19"
+
+[lints]
+workspace = true

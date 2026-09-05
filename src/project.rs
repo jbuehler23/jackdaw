@@ -4,27 +4,89 @@ use std::{
 };
 
 use bevy::prelude::*;
-use jackdaw_api_internal::paths::{last_new_project_location_path, recent_file_path};
-use jackdaw_jsn::format::{JsnHeader, JsnProject, JsnProjectConfig};
+use jackdaw_env::paths::{last_new_project_location_path, recent_file_path};
 use serde::{Deserialize, Serialize};
 
 /// Resource holding the active project root directory and its config.
 #[derive(Resource)]
 pub struct ProjectRoot {
     pub root: PathBuf,
-    pub config: JsnProject,
+    pub config: ProjectConfig,
+}
+
+/// Native editor project configuration persisted to `.jackdaw/project.json`.
+/// Carries the same fields the legacy JSN project config held, without the
+/// vestigial format-header wrapper.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ProjectConfig {
+    /// Human-readable project name.
+    pub name: String,
+    /// Optional description.
+    #[serde(default)]
+    pub description: String,
+    /// Default scene to open, relative to the project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_scene: Option<String>,
+    /// Persisted editor layout state. Opaque here; consumers parse it as
+    /// the `jackdaw_panels` workspace state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<serde_json::Value>,
+    /// Scene paths (relative to the project root) open in the tab strip when
+    /// the project was last closed. Restored in order on the next launch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub last_open_tabs: Vec<String>,
+    /// Index into `last_open_tabs` of the tab that was active. Clamped on load.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub last_active_tab: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// Legacy on-disk shape: `.jackdaw/project.json` and `project.jsn` files
+/// written before the native config, which wrapped the fields as
+/// `{"jsn":{..},"project":{..}}`.
+#[derive(Deserialize)]
+struct LegacyNestedProject {
+    project: ProjectConfig,
+}
+
+/// Parse a project config from either the new flat shape or the legacy
+/// nested `{"jsn":..,"project":..}` wrapper. Flat is tried first; the nested
+/// form has no top-level `name`, so it only reaches the compat fallback.
+fn parse_project_config(data: &str) -> Option<ProjectConfig> {
+    if let Ok(config) = serde_json::from_str::<ProjectConfig>(data) {
+        return Some(config);
+    }
+    serde_json::from_str::<LegacyNestedProject>(data)
+        .ok()
+        .map(|nested| nested.project)
 }
 
 impl ProjectRoot {
-    pub fn jsn_dir(&self) -> PathBuf {
-        self.root.join(".jsn")
+    pub fn new(root: impl Into<PathBuf>, config: ProjectConfig) -> Self {
+        let root = root.into();
+        Self {
+            root: dunce::simplified(&root).to_path_buf(),
+            config,
+        }
+    }
+
+    /// The `.jackdaw/` directory: gitignored, regenerated build artifacts
+    /// (schema, plan, shim, target) plus local editor state
+    /// (`project.json`) and caches (`registry.json`). Committed project data
+    /// (the manifest, scenes, the asset catalog) lives outside it.
+    pub fn jackdaw_dir(&self) -> PathBuf {
+        self.root.join(".jackdaw")
     }
     pub fn assets_dir(&self) -> PathBuf {
         self.root.join("assets")
     }
     pub fn to_relative(&self, path: impl AsRef<Path>) -> PathBuf {
-        let path = path.as_ref();
-        path.strip_prefix(&self.root).unwrap_or(path).into()
+        let path = dunce::simplified(path.as_ref());
+        let root = dunce::simplified(&self.root);
+        path.strip_prefix(root).unwrap_or(path).to_path_buf()
     }
 }
 
@@ -91,80 +153,111 @@ pub fn save_last_new_project_location(location: &Path) {
     let _ = std::fs::write(&path, location.to_string_lossy().as_bytes());
 }
 
-pub fn read_last_project() -> Option<PathBuf> {
-    let recent = read_recent_projects();
-    recent.projects.first().map(|e| e.path.clone())
+/// Environment variable naming the project the editor should open,
+/// set by `jd open <path>` on the process it spawns.
+pub const ENV_OPEN_PROJECT: &str = "JACKDAW_OPEN_PROJECT";
+
+/// The project a `jd open` invocation asked this process to open.
+pub fn requested_project() -> Option<PathBuf> {
+    std::env::var_os(ENV_OPEN_PROJECT)
+        .map(PathBuf::from)
+        .map(|path| dunce::simplified(&path).to_path_buf())
+        .filter(|path| path.is_dir())
 }
 
-pub fn save_project_config(root: &Path, project: &JsnProject) -> std::io::Result<()> {
-    let jsn_dir = root.join(".jsn");
-    std::fs::create_dir_all(&jsn_dir)?;
-    let path = jsn_dir.join("project.jsn");
-    let data = serde_json::to_string_pretty(project)
+pub fn read_last_project() -> Option<PathBuf> {
+    let recent = read_recent_projects();
+    recent
+        .projects
+        .first()
+        .map(|entry| dunce::simplified(entry.path.as_path()).to_path_buf())
+}
+
+pub fn save_project_config(root: &Path, config: &ProjectConfig) -> std::io::Result<()> {
+    let dir = root.join(".jackdaw");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("project.json");
+    let data = serde_json::to_string_pretty(config)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     std::fs::write(&path, data)
 }
 
-pub fn load_project_config(root: &Path) -> Option<JsnProject> {
-    // Prefer .jsn/ directory, fall back to legacy root location
-    let new_path = root.join(".jsn/project.jsn");
-    let legacy_path = root.join("project.jsn");
-    let path = if new_path.is_file() {
-        new_path
-    } else {
-        legacy_path
-    };
-    let data = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&data).ok()
+pub fn load_project_config(root: &Path) -> Option<ProjectConfig> {
+    // Current location: local editor state under the gitignored `.jackdaw/`.
+    let new_path = root.join(".jackdaw").join("project.json");
+    if new_path.is_file() {
+        return std::fs::read_to_string(&new_path)
+            .ok()
+            .and_then(|data| parse_project_config(&data));
+    }
+    // Legacy locations (newest first). Migrate on read so the next save
+    // writes to `.jackdaw/project.json` and the old file falls out of use.
+    for legacy in [
+        root.join(".jsn").join("project.jsn"),
+        root.join("project.jsn"),
+    ] {
+        if legacy.is_file()
+            && let Ok(data) = std::fs::read_to_string(&legacy)
+            && let Some(config) = parse_project_config(&data)
+        {
+            warn!(
+                "Migrating project config {} -> .jackdaw/project.json",
+                legacy.display()
+            );
+            let _ = save_project_config(root, &config);
+            return Some(config);
+        }
+    }
+    None
 }
 
-pub fn create_default_project(root: &Path) -> JsnProject {
+pub fn create_default_project(root: &Path) -> ProjectConfig {
     let name = root
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "Untitled Project".to_string());
 
-    let project = JsnProject {
-        jsn: JsnHeader::default(),
-        project: JsnProjectConfig {
-            name,
-            description: String::new(),
-            default_scene: None,
-            layout: None,
-            ..Default::default()
-        },
+    let config = ProjectConfig {
+        name,
+        ..Default::default()
     };
 
-    // Write to .jsn/ directory
-    let jsn_dir = root.join(".jsn");
-    let _ = std::fs::create_dir_all(&jsn_dir);
-    let path = jsn_dir.join("project.jsn");
-    if let Ok(data) = serde_json::to_string_pretty(&project) {
+    // Write local editor state under the gitignored `.jackdaw/`.
+    let dir = root.join(".jackdaw");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("project.json");
+    if let Ok(data) = serde_json::to_string_pretty(&config) {
         let _ = std::fs::write(&path, data);
     }
 
-    project
+    config
 }
 
 /// Remove a project from the recent projects list.
 pub fn remove_recent(path: &Path) {
+    let path = dunce::simplified(path);
     let mut recent = read_recent_projects();
-    recent.projects.retain(|e| e.path != path);
+    recent
+        .projects
+        .retain(|entry| dunce::simplified(entry.path.as_path()) != path);
     save_recent_projects(&recent);
 }
 
 /// Record a project in the recent projects list.
 pub fn touch_recent(root: &Path, name: &str) {
+    let root = dunce::simplified(root).to_path_buf();
     let mut recent = read_recent_projects();
 
     // Remove existing entry for this path
-    recent.projects.retain(|e| e.path != root);
+    recent
+        .projects
+        .retain(|entry| dunce::simplified(entry.path.as_path()) != root);
 
     // Insert at the front
     recent.projects.insert(
         0,
         RecentEntry {
-            path: root.to_path_buf(),
+            path: root,
             name: name.to_string(),
             last_opened: crate::timestamps::utc_rfc3339_now(),
         },

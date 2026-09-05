@@ -4,11 +4,11 @@
 //!   - 0 cuts: untouched.
 //!   - 1 cut: connect the new midpoint to the opposite ring vertex (for quads).
 //!   - 2 opposite cuts: connect the two midpoints.
-//!   - 2 adjacent cuts: connect the two midpoints (yields tri + pentagon for MVP).
-//!   - 3+ cuts: triangulate from one of the midpoints (MVP fallback).
+//!   - 2 adjacent cuts: connect the two midpoints (yields tri + pentagon).
+//!   - 3+ cuts: triangulate from one of the midpoints.
 //!   - 4 cuts (quad): 2x2 subdivision via two cross-cuts through opposite midpoints.
 //!
-//! MVP limitation: the 4-cut case does not produce 4 perfect quads because
+//! Limitation: the 4-cut case does not produce 4 perfect quads because
 //! `face_poke` (insert center vert into face interior) is not yet implemented.
 //! Instead, two sequential `split_face` calls are made, producing 3 sub-faces.
 //! Full 2x2 subdivision is deferred until `face_poke` lands.
@@ -123,9 +123,9 @@ pub fn subdivide(
             }
             4 => {
                 // Quad with all 4 edges cut: classic 2x2 subdivision.
-                // MVP: two sequential cross-cuts through opposite midpoints.
-                // This produces 3 sub-faces rather than 4 quads. Full 2x2
-                // subdivision is deferred until face_poke lands.
+                // Two sequential cross-cuts through opposite midpoints, which
+                // produces 3 sub-faces rather than 4 quads. A true 2x2 split
+                // needs `face_poke`, which does not exist yet.
                 //
                 // Attempt to find two pairs of opposite midpoints (by their ring
                 // positions) and do two split_face calls.

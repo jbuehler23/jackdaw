@@ -1,5 +1,5 @@
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::face_split::split_face};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 fn first_face_with_count_4(mesh: &HalfedgeMesh) -> jackdaw_geometry::halfedge::FaceKey {
     mesh.faces

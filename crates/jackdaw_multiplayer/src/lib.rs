@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 use bevy::reflect::std_traits::ReflectDefault;
-use jackdaw_jsn::EditorCategory;
+use jackdaw_scene_types::EditorCategory;
 use serde::{Deserialize, Serialize};
 
 /// Backend-agnostic replication intent for an entity. A designer adds this in

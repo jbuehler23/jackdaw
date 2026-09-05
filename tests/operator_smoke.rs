@@ -13,8 +13,8 @@
 use jackdaw::asset_browser::AssetSelectFolderOp;
 use jackdaw::entity_ops::EntityAddImageOp;
 use jackdaw::material_browser::MaterialSelectFolderOp;
-use jackdaw::navmesh::save_load::{NavmeshLoadOp, NavmeshSaveOp};
-use jackdaw::scene_ops::{SceneOpenOp, SceneSaveAsOp, SceneSaveOp};
+use jackdaw::scene_ops::{SceneSaveAsOp, SceneSaveOp};
+use jackdaw::scenes::operators::SceneOpenOp;
 use jackdaw_api::prelude::*;
 
 mod util;
@@ -56,14 +56,24 @@ const SMOKE_SKIP_LIST: &[SkipOp] = &[
     ),
     SkipOp::new::<AssetSelectFolderOp>("spawns native folder picker"),
     SkipOp::new::<MaterialSelectFolderOp>("spawns native folder picker"),
-    SkipOp::new::<NavmeshSaveOp>("spawns native file-save dialog"),
-    SkipOp::new::<NavmeshLoadOp>("spawns native file-open dialog"),
     SkipOp::new::<EntityAddImageOp>("spawns native image-file picker"),
 ];
 
 #[test]
 fn smoke_dispatch_every_operator() {
     let mut app = util::editor_test_app();
+
+    // The prefab-save and document operators write files under the project
+    // root; without one they fall back to the process working directory (the
+    // repo). Point them at a temp dir so the smoke run exercises them without
+    // leaving artifacts behind.
+    let project_dir = tempfile::tempdir().expect("tempdir");
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot::new(
+            project_dir.path().to_path_buf(),
+            jackdaw::project::ProjectConfig::default(),
+        ));
+
     let ids = util::iter_operator_ids(&mut app);
     // Floor catches "we forgot to register a whole module" regressions.
     // The exact count grows over time as new operators land; bump this
@@ -73,6 +83,16 @@ fn smoke_dispatch_every_operator() {
         "expected at least 60 registered operators after editor_test_app() startup, got {}",
         ids.len()
     );
+
+    // A skip entry naming an operator that no longer exists would silently stop
+    // covering anything.
+    for skip in SMOKE_SKIP_LIST {
+        assert!(
+            ids.iter().any(|id| id.as_ref() == skip.id),
+            "skip list names `{}`, which is not a registered operator",
+            skip.id
+        );
+    }
 
     let mut failures: Vec<String> = Vec::new();
     for id in ids {

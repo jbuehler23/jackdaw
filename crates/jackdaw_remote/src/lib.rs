@@ -1,4 +1,8 @@
+pub mod bsn_methods;
+pub mod diagnostics;
+pub mod ecs_methods;
 mod methods;
+pub mod playback;
 pub mod scene_snapshot;
 pub mod schema;
 
@@ -25,6 +29,10 @@ pub const DEFAULT_PORT: u16 = 15702;
 /// ```rust,ignore
 /// app.add_plugins(JackdawRemotePlugin::default());
 /// ```
+///
+/// When the host app adds `RemoteHttpPlugin` itself, it must configure CORS
+/// headers itself for the editor to reach BRP; see
+/// `RemoteHttpPlugin::with_headers`.
 pub struct JackdawRemotePlugin {
     /// BRP HTTP port (default: 15702).
     pub port: u16,
@@ -74,13 +82,46 @@ impl Plugin for JackdawRemotePlugin {
             bevy_version: "0.19".to_string(),
         });
 
+        app.init_resource::<playback::PlaybackStepState>();
+        app.add_systems(
+            First,
+            playback::playback_step_system.before(bevy::time::TimeSystems),
+        );
+
         if !app.is_plugin_added::<RemotePlugin>() {
             app.add_plugins(
                 RemotePlugin::default()
                     .with_method_main("jackdaw/app_info", jackdaw_app_info_handler)
-                    .with_method_main("jackdaw/scene_snapshot", scene_snapshot_handler),
+                    .with_method_main("jackdaw/scene_snapshot", scene_snapshot_handler)
+                    .with_method_main(
+                        "jackdaw/diagnostics",
+                        diagnostics::jackdaw_diagnostics_handler,
+                    )
+                    .with_method_main("jackdaw/playback", playback::jackdaw_playback_handler)
+                    .with_method_main("jackdaw/apply_bsn", bsn_methods::jackdaw_apply_bsn_handler)
+                    .with_method_main(
+                        "jackdaw/entity_bsn",
+                        bsn_methods::jackdaw_entity_bsn_handler,
+                    )
+                    .with_method_main(
+                        "jackdaw/archetypes",
+                        ecs_methods::jackdaw_archetypes_handler,
+                    )
+                    .with_method_main("jackdaw/schedules", ecs_methods::jackdaw_schedules_handler),
             );
-            app.add_plugins(RemoteHttpPlugin::default().with_port(self.port));
+            let cors = bevy::remote::http::Headers::new()
+                .insert("Access-Control-Allow-Origin", "*")
+                .insert("Access-Control-Allow-Headers", "Content-Type")
+                .insert("Access-Control-Allow-Methods", "POST, OPTIONS");
+            app.add_plugins(
+                RemoteHttpPlugin::default()
+                    .with_port(self.port)
+                    .with_headers(cors),
+            );
+        }
+
+        if !app.is_plugin_added::<bevy::diagnostic::FrameTimeDiagnosticsPlugin>() {
+            app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default());
         }
 
         app.add_systems(Startup, methods::generate_component_definitions);
@@ -89,34 +130,58 @@ impl Plugin for JackdawRemotePlugin {
     fn finish(&self, app: &mut App) {
         // If RemotePlugin was already added by the game before us,
         // inject our custom methods via the RemoteMethods resource.
-        // We check if our method is already registered by attempting to get it.
         use bevy::remote::RemoteMethods;
 
         let world = app.world_mut();
-
-        // Check which methods need registering (release the borrow before mutating)
-        let needs_app_info;
-        let needs_scene_snapshot;
-        if let Some(methods) = world.get_resource::<RemoteMethods>() {
-            needs_app_info = methods.get("jackdaw/app_info").is_none();
-            needs_scene_snapshot = methods.get("jackdaw/scene_snapshot").is_none();
-        } else {
+        if world.get_resource::<RemoteMethods>().is_none() {
             return;
         }
 
-        if needs_app_info {
-            let system_id = world.register_system(jackdaw_app_info_handler);
-            world.resource_mut::<RemoteMethods>().insert(
-                "jackdaw/app_info",
-                bevy::remote::RemoteMethodSystemId::Instant(system_id),
-            );
-        }
-        if needs_scene_snapshot {
-            let system_id = world.register_system(scene_snapshot_handler);
-            world.resource_mut::<RemoteMethods>().insert(
-                "jackdaw/scene_snapshot",
-                bevy::remote::RemoteMethodSystemId::Instant(system_id),
-            );
-        }
+        register_if_missing(world, "jackdaw/app_info", |w| {
+            let id = w.register_system(jackdaw_app_info_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
+        register_if_missing(world, "jackdaw/scene_snapshot", |w| {
+            let id = w.register_system(scene_snapshot_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
+        register_if_missing(world, "jackdaw/diagnostics", |w| {
+            let id = w.register_system(diagnostics::jackdaw_diagnostics_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
+        register_if_missing(world, "jackdaw/playback", |w| {
+            let id = w.register_system(playback::jackdaw_playback_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
+        register_if_missing(world, "jackdaw/apply_bsn", |w| {
+            let id = w.register_system(bsn_methods::jackdaw_apply_bsn_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
+        register_if_missing(world, "jackdaw/entity_bsn", |w| {
+            let id = w.register_system(bsn_methods::jackdaw_entity_bsn_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
+        register_if_missing(world, "jackdaw/archetypes", |w| {
+            let id = w.register_system(ecs_methods::jackdaw_archetypes_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
+        register_if_missing(world, "jackdaw/schedules", |w| {
+            let id = w.register_system(ecs_methods::jackdaw_schedules_handler);
+            bevy::remote::RemoteMethodSystemId::Instant(id)
+        });
     }
+}
+
+/// Register a BRP method into `RemoteMethods` unless the name is taken.
+fn register_if_missing(
+    world: &mut World,
+    name: &str,
+    register: impl FnOnce(&mut World) -> bevy::remote::RemoteMethodSystemId,
+) {
+    use bevy::remote::RemoteMethods;
+    if world.resource::<RemoteMethods>().get(name).is_some() {
+        return;
+    }
+    let id = register(world);
+    world.resource_mut::<RemoteMethods>().insert(name, id);
 }

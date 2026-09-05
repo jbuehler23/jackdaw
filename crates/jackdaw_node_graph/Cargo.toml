@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_node_graph"
-version = "0.5.0"
+version.workspace = true
 edition = "2024"
 description = "Generic node-graph editor widget for the Jackdaw editor"
 license = "MIT OR Apache-2.0"
@@ -14,7 +14,7 @@ bevy_enhanced_input.workspace = true
 jackdaw_widgets.workspace = true
 jackdaw_feathers.workspace = true
 jackdaw_commands.workspace = true
-jackdaw_jsn.workspace = true
+jackdaw_scene_types.workspace = true
 jackdaw_localization.workspace = true
 serde = { workspace = true, features = ["derive"] }
 

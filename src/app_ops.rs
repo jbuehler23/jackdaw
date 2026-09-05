@@ -61,9 +61,13 @@ pub(crate) fn app_toggle_hot_reload(
 #[operator(id = "app.go_home", label = "Home", allows_undo = false)]
 pub(crate) fn app_go_home(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
-        world
-            .resource_mut::<NextState<crate::AppState>>()
-            .set(crate::AppState::ProjectSelect);
+        // Leaving clears the live scene, so unsaved work raises the same dialog
+        // quitting does.
+        if crate::scenes::confirm_dialog::leave_project_or_confirm(world) {
+            world
+                .resource_mut::<NextState<crate::AppState>>()
+                .set(crate::AppState::ProjectSelect);
+        }
     });
     OperatorResult::Finished
 }

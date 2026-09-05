@@ -1,6 +1,6 @@
 use glam::Vec3;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::loop_cut::loop_cut};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn loop_cut_around_cube_at_t_0_5_adds_4_verts_and_4_loop_edges() {

@@ -4,7 +4,7 @@
 //! parent rotation does not bleed into the camera orientation.
 use bevy::prelude::*;
 use bevy::reflect::std_traits::ReflectDefault;
-use jackdaw_jsn::EditorCategory;
+use jackdaw_scene_types::EditorCategory;
 
 /// Which driving mode the rig uses.
 #[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]

@@ -38,6 +38,7 @@ impl TextureRole {
 /// each role (absent roles are `None`). Paths are whatever strings were passed
 /// in (the editor passes absolute filesystem paths).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[non_exhaustive]
 pub struct MaterialSet {
     pub base_name: String,
     pub base_color: Option<String>,
@@ -46,6 +47,11 @@ pub struct MaterialSet {
     pub emissive: Option<String>,
     pub occlusion: Option<String>,
     pub depth: Option<String>,
+    /// Whether the file bound to `metallic_roughness` carries metallic data:
+    /// a metallic-tagged file, or a packed `orm`. A roughness-only pack
+    /// binds a grayscale map whose blue channel is not metalness, so the
+    /// metallic scalar must not scale it up.
+    pub metallic_roughness_has_metallic: bool,
 }
 
 /// Sensible scalar defaults for a detected set, derived from which roles are
@@ -72,15 +78,22 @@ impl MaterialSet {
 
     /// Scalar defaults implied by the populated roles.
     ///
-    /// A metallic-roughness texture multiplies the scalar values, so both
-    /// scalars default to 1.0 to use the texture as-is (otherwise 0.0 metallic,
-    /// 0.5 roughness). A depth map enables parallax with a gentle scale and
-    /// layer cap (otherwise both zero, disabling it).
+    /// A metallic-roughness texture multiplies the scalar values, so the
+    /// roughness scalar defaults to 1.0 to use the texture as-is (otherwise
+    /// 0.5). The metallic scalar only rises to 1.0 when the bound file carries
+    /// metallic data ([`MaterialSet::metallic_roughness_has_metallic`]); a
+    /// roughness-only map would otherwise read its grayscale blue channel as
+    /// metalness. A depth map enables parallax with a gentle scale and layer
+    /// cap (otherwise both zero, disabling it).
     pub fn recommended_scalars(&self) -> PbrScalars {
         let has_mr = self.metallic_roughness.is_some();
         let has_depth = self.depth.is_some();
         PbrScalars {
-            metallic: if has_mr { 1.0 } else { 0.0 },
+            metallic: if has_mr && self.metallic_roughness_has_metallic {
+                1.0
+            } else {
+                0.0
+            },
             perceptual_roughness: if has_mr { 1.0 } else { 0.5 },
             parallax_depth_scale: if has_depth { 0.05 } else { 0.0 },
             max_parallax_layer_count: if has_depth { 32.0 } else { 0.0 },
@@ -91,11 +104,14 @@ impl MaterialSet {
 /// The compiled filename pattern. `None` only if the static pattern fails to
 /// compile (it does not, in practice).
 ///
-/// The pattern matches `<base><sep><tag>.<ext>` case-insensitively, where the
-/// separator is `_`, `-`, `.`, or a space. Group 1 captures the base name and
-/// group 2 captures the role tag.
+/// The pattern matches `<base><sep><tag><res>.<ext>` case-insensitively, where
+/// the separator is `_`, `-`, `.`, or a space. Group 1 captures the base name
+/// and group 2 captures the role tag. `<res>` is an optional resolution token
+/// (packs commonly suffix resolution onto the tag) of the form `_1k`/`-2K` or
+/// a bare pixel count like `_1024`; it is consumed but not captured, so it
+/// never becomes part of the base name.
 pub fn pbr_filename_regex() -> Option<regex::Regex> {
-    let pattern = r"(?i)^(.+?)[_\-\.\s](diffuse|diff|albedo|base|col|color|basecolor|metallic|metalness|metal|mtl|roughness|rough|rgh|normal|normaldx|normalgl|nor|nrm|nrml|norm|orm|emission|emissive|emit|ao|ambient|occlusion|ambientocclusion|displacement|displace|disp|dsp|height|heightmap|alpha|opacity|specularity|specular|spec|spc|gloss|glossy|glossiness|bump|bmp|b|n)\.(png|jpg|jpeg|ktx2|bmp|tga|webp)$";
+    let pattern = r"(?i)^(.+?)[_\-\.\s](diffuse|diff|albedo|base|col|color|basecolor|metallic|metalness|metal|mtl|roughness|rough|rgh|normal[_-]gl|normal[_-]dx|normalgl|normaldx|nor[_-]gl|nor[_-]dx|normal|nor|nrm|nrml|norm|orm|emission|emissive|emit|ao|ambient|occlusion|ambientocclusion|displacement|displace|disp|dsp|height|heightmap|alpha|opacity|specularity|specular|spec|spc|gloss|glossy|glossiness|bump|bmp|b|n)(?:[_-](?:\d+k|\d{3,5}))?\.(png|jpg|jpeg|ktx2|bmp|tga|webp)$";
     regex::Regex::new(pattern).ok()
 }
 
@@ -103,15 +119,15 @@ pub fn pbr_filename_regex() -> Option<regex::Regex> {
 /// texture role. Returns `None` for an unrecognized tag.
 ///
 /// The `orm` tag is intentionally not classified here; it maps to two roles and
-/// is handled inside [`group_texture_sets`].
+/// is handled inside [`group_texture_sets`]. `-` and `_` are interchangeable
+/// inside a tag, so `normal-gl` and `normal_gl` classify the same.
 pub fn classify_tag(tag: &str) -> Option<TextureRole> {
-    match tag.to_lowercase().as_str() {
+    match tag.to_lowercase().replace('-', "_").as_str() {
         "diffuse" | "diff" | "albedo" | "base" | "col" | "color" | "basecolor" | "b" => {
             Some(TextureRole::BaseColor)
         }
-        "normalgl" | "nor" | "nrm" | "nrml" | "norm" | "bump" | "bmp" | "n" | "normal" => {
-            Some(TextureRole::Normal)
-        }
+        "normalgl" | "normaldx" | "normal_gl" | "normal_dx" | "nor_gl" | "nor_dx" | "nor"
+        | "nrm" | "nrml" | "norm" | "bump" | "bmp" | "n" | "normal" => Some(TextureRole::Normal),
         "metallic" | "metalness" | "metal" | "mtl" | "roughness" | "rough" | "rgh" => {
             Some(TextureRole::MetallicRoughness)
         }
@@ -124,15 +140,80 @@ pub fn classify_tag(tag: &str) -> Option<TextureRole> {
     }
 }
 
+/// Which normal-map convention a tag names. `None` for a plain normal tag
+/// (`normal`, `nor`, ...) that does not commit to either convention.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum NormalConvention {
+    Gl,
+    Dx,
+}
+
+fn normal_convention(tag: &str) -> Option<NormalConvention> {
+    match tag.to_lowercase().replace('-', "_").as_str() {
+        "normalgl" | "normal_gl" | "nor_gl" => Some(NormalConvention::Gl),
+        "normaldx" | "normal_dx" | "nor_dx" => Some(NormalConvention::Dx),
+        _ => None,
+    }
+}
+
+fn is_roughness_tag(tag: &str) -> bool {
+    matches!(tag.to_lowercase().as_str(), "roughness" | "rough" | "rgh")
+}
+
+fn is_metallic_tag(tag: &str) -> bool {
+    matches!(
+        tag.to_lowercase().as_str(),
+        "metallic" | "metalness" | "metal" | "mtl"
+    )
+}
+
+/// The normal map that should win the group's normal slot: the first GL- or
+/// plain-tagged file in supply order, falling back to the first DX-tagged file
+/// only when no GL or plain candidate exists. This makes the GL/DX preference
+/// independent of supply order while leaving GL-vs-plain and plain-vs-plain
+/// collisions first-seen-wins.
+fn preferred_normal(files: &[(String, String)]) -> Option<String> {
+    let non_dx = files.iter().find(|(tag, _)| {
+        classify_tag(tag) == Some(TextureRole::Normal)
+            && normal_convention(tag) != Some(NormalConvention::Dx)
+    });
+    if let Some((_, path)) = non_dx {
+        return Some(path.clone());
+    }
+    files
+        .iter()
+        .find(|(tag, _)| normal_convention(tag) == Some(NormalConvention::Dx))
+        .map(|(_, path)| path.clone())
+}
+
+/// The file that should win the group's metallic-roughness slot: the first
+/// roughness-tagged file in supply order, falling back to the first
+/// metallic-tagged file only when no roughness candidate exists. This makes
+/// the roughness/metallic preference independent of supply order.
+fn preferred_metallic_roughness(files: &[(String, String)]) -> Option<String> {
+    let roughness = files.iter().find(|(tag, _)| is_roughness_tag(tag));
+    if let Some((_, path)) = roughness {
+        return Some(path.clone());
+    }
+    files
+        .iter()
+        .find(|(tag, _)| is_metallic_tag(tag))
+        .map(|(_, path)| path.clone())
+}
+
 /// Group a list of file paths into detected material sets.
 ///
 /// Each path's file name is matched against [`pbr_filename_regex`]; matches are
 /// grouped by the captured base name (lowercased). Within a group, each file is
-/// assigned to the role from [`classify_tag`], applying these rules: an `orm`
-/// file fills both the metallic-roughness and occlusion roles when each is still
-/// empty; metallic and roughness tags share the metallic-roughness role (the
-/// first seen wins); the first file seen for any role wins. Empty sets are
-/// dropped. The result is sorted by base name.
+/// assigned to the role from [`classify_tag`], applying these rules: a
+/// roughness tag always wins the metallic-roughness slot over a metallic tag,
+/// regardless of supply order; a GL-convention normal always wins the normal
+/// slot over a DX-convention one, regardless of supply order, with plain
+/// normal tags and GL tags otherwise competing first-seen-wins; an `orm` file
+/// fills the occlusion role when still empty and the metallic-roughness role
+/// only when no explicit metallic or roughness tag is present in the group;
+/// the first file seen for any other role wins. Empty sets are dropped. The
+/// result is sorted by base name.
 pub fn group_texture_sets(paths: &[String]) -> Vec<MaterialSet> {
     let Some(re) = pbr_filename_regex() else {
         return Vec::new();
@@ -168,12 +249,12 @@ pub fn group_texture_sets(paths: &[String]) -> Vec<MaterialSet> {
             ..MaterialSet::default()
         };
 
+        // Normal and metallic-roughness are resolved separately below so their
+        // preferred tag wins regardless of where it falls in supply order;
+        // this pass handles every other role plus the orm fallback.
         for (tag, path) in files {
             let tag_lower = tag.to_lowercase();
             if tag_lower == "orm" {
-                // ORM packs occlusion, roughness, and metallic into one image,
-                // so it fills both the metallic-roughness and occlusion roles,
-                // but only where each is still empty (an explicit map wins).
                 if set.metallic_roughness.is_none() {
                     set.metallic_roughness = Some(path.clone());
                 }
@@ -188,8 +269,7 @@ pub fn group_texture_sets(paths: &[String]) -> Vec<MaterialSet> {
             };
             let slot = match role {
                 TextureRole::BaseColor => &mut set.base_color,
-                TextureRole::Normal => &mut set.normal,
-                TextureRole::MetallicRoughness => &mut set.metallic_roughness,
+                TextureRole::Normal | TextureRole::MetallicRoughness => continue,
                 TextureRole::Emissive => &mut set.emissive,
                 TextureRole::Occlusion => &mut set.occlusion,
                 TextureRole::Depth => &mut set.depth,
@@ -197,6 +277,20 @@ pub fn group_texture_sets(paths: &[String]) -> Vec<MaterialSet> {
             if slot.is_none() {
                 *slot = Some(path.clone());
             }
+        }
+
+        set.normal = preferred_normal(files);
+        // An explicit metallic or roughness tag always outranks an orm fallback.
+        if let Some(mr) = preferred_metallic_roughness(files) {
+            // Roughness outranks metallic, so the winner is metallic-tagged
+            // only when the group holds no roughness file at all.
+            set.metallic_roughness_has_metallic =
+                !files.iter().any(|(tag, _)| is_roughness_tag(tag));
+            set.metallic_roughness = Some(mr);
+        } else {
+            // Only an orm file can have filled the slot in the pass above, and
+            // orm packs metalness in its blue channel.
+            set.metallic_roughness_has_metallic = set.metallic_roughness.is_some();
         }
 
         if set.is_empty() {
@@ -289,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn metallic_roughness_collapse_first_wins() {
+    fn metallic_roughness_collapse_roughness_wins() {
         let paths = vec![
             "/m/x_metallic.png".to_string(),
             "/m/x_roughness.png".to_string(),
@@ -297,8 +391,8 @@ mod tests {
         let sets = group_texture_sets(&paths);
         assert_eq!(sets.len(), 1);
         let s = &sets[0];
-        // Both collapse into one slot; the first seen (metallic) wins.
-        assert_eq!(s.metallic_roughness.as_deref(), Some("/m/x_metallic.png"));
+        // Both collapse into one slot; roughness wins over metallic.
+        assert_eq!(s.metallic_roughness.as_deref(), Some("/m/x_roughness.png"));
         assert_eq!(s.occlusion, None);
     }
 
@@ -343,7 +437,8 @@ mod tests {
     #[test]
     fn recommended_scalars_reflect_present_roles() {
         let with_mr = MaterialSet {
-            metallic_roughness: Some("/m/x_roughness.png".to_string()),
+            metallic_roughness: Some("/m/x_metallic.png".to_string()),
+            metallic_roughness_has_metallic: true,
             ..MaterialSet::default()
         };
         let s = with_mr.recommended_scalars();
@@ -361,6 +456,47 @@ mod tests {
         assert_eq!(s.perceptual_roughness, 0.5);
         assert_eq!(s.parallax_depth_scale, 0.05);
         assert_eq!(s.max_parallax_layer_count, 32.0);
+    }
+
+    #[test]
+    fn roughness_only_pack_keeps_metallic_scalar_at_zero() {
+        let sets = group_texture_sets(&[
+            "/m/grass_05_basecolor.png".to_string(),
+            "/m/grass_05_roughness.png".to_string(),
+        ]);
+        assert_eq!(sets.len(), 1);
+        assert!(!sets[0].metallic_roughness_has_metallic);
+        let s = sets[0].recommended_scalars();
+        assert_eq!(s.metallic, 0.0);
+        assert_eq!(s.perceptual_roughness, 1.0);
+    }
+
+    #[test]
+    fn metallic_tagged_pack_raises_metallic_scalar() {
+        let sets = group_texture_sets(&["/m/steel_metallic.png".to_string()]);
+        assert_eq!(sets.len(), 1);
+        assert!(sets[0].metallic_roughness_has_metallic);
+        assert_eq!(sets[0].recommended_scalars().metallic, 1.0);
+    }
+
+    #[test]
+    fn orm_pack_raises_metallic_scalar() {
+        let sets = group_texture_sets(&["/m/crate_orm.png".to_string()]);
+        assert_eq!(sets.len(), 1);
+        assert!(sets[0].metallic_roughness_has_metallic);
+        assert_eq!(sets[0].recommended_scalars().metallic, 1.0);
+    }
+
+    #[test]
+    fn roughness_beating_metallic_leaves_metallic_scalar_at_zero() {
+        // The roughness map wins the single slot, so no metallic data is bound.
+        let sets = group_texture_sets(&[
+            "/m/x_metallic.png".to_string(),
+            "/m/x_roughness.png".to_string(),
+        ]);
+        assert_eq!(sets.len(), 1);
+        assert!(!sets[0].metallic_roughness_has_metallic);
+        assert_eq!(sets[0].recommended_scalars().metallic, 0.0);
     }
 
     #[test]
@@ -394,5 +530,140 @@ mod tests {
         let sets = group_texture_sets(&paths);
         assert_eq!(sets.len(), 1);
         assert_eq!(sets[0].base_name, "rock");
+    }
+
+    #[test]
+    fn resolution_suffixed_packs_detect_two_full_sets() {
+        let paths = vec![
+            "/tex/grass_05_basecolor_1k.png".to_string(),
+            "/tex/grass_05_normal_gl_1k.png".to_string(),
+            "/tex/grass_05_normal_dx_1k.png".to_string(),
+            "/tex/grass_05_roughness_1k.png".to_string(),
+            "/tex/cliff_rocks_07_basecolor_1k.png".to_string(),
+            "/tex/cliff_rocks_07_ambientocclusion_1k.png".to_string(),
+            "/tex/cliff_rocks_07_height_1k.png".to_string(),
+            "/tex/cliff_rocks_07_metallic_1k.png".to_string(),
+            "/tex/cliff_rocks_07_normal_dx_1k.png".to_string(),
+            "/tex/cliff_rocks_07_normal_gl_1k.png".to_string(),
+            "/tex/cliff_rocks_07_roughness_1k.png".to_string(),
+        ];
+        let sets = group_texture_sets(&paths);
+        assert_eq!(sets.len(), 2);
+
+        // Sorted by base name: "cliff_rocks_07" precedes "grass_05".
+        let cliff = &sets[0];
+        assert_eq!(cliff.base_name, "cliff_rocks_07");
+        assert_eq!(
+            cliff.base_color.as_deref(),
+            Some("/tex/cliff_rocks_07_basecolor_1k.png")
+        );
+        assert_eq!(
+            cliff.normal.as_deref(),
+            Some("/tex/cliff_rocks_07_normal_gl_1k.png")
+        );
+        assert_eq!(
+            cliff.metallic_roughness.as_deref(),
+            Some("/tex/cliff_rocks_07_roughness_1k.png")
+        );
+        assert_eq!(
+            cliff.occlusion.as_deref(),
+            Some("/tex/cliff_rocks_07_ambientocclusion_1k.png")
+        );
+        assert_eq!(
+            cliff.depth.as_deref(),
+            Some("/tex/cliff_rocks_07_height_1k.png")
+        );
+
+        let grass = &sets[1];
+        assert_eq!(grass.base_name, "grass_05");
+        assert_eq!(
+            grass.base_color.as_deref(),
+            Some("/tex/grass_05_basecolor_1k.png")
+        );
+        assert_eq!(
+            grass.normal.as_deref(),
+            Some("/tex/grass_05_normal_gl_1k.png")
+        );
+        assert_eq!(
+            grass.metallic_roughness.as_deref(),
+            Some("/tex/grass_05_roughness_1k.png")
+        );
+        assert_eq!(grass.occlusion, None);
+        assert_eq!(grass.depth, None);
+    }
+
+    #[test]
+    fn gl_normal_wins_regardless_of_supply_order() {
+        let gl = "/m/x_normal_gl.png".to_string();
+        let dx = "/m/x_normal_dx.png".to_string();
+
+        let forward = group_texture_sets(&[gl.clone(), dx.clone()]);
+        let reversed = group_texture_sets(&[dx, gl]);
+
+        assert_eq!(forward, reversed);
+        assert_eq!(forward[0].normal.as_deref(), Some("/m/x_normal_gl.png"));
+    }
+
+    #[test]
+    fn dx_normal_fills_slot_only_when_no_gl_present() {
+        let paths = vec!["/m/x_normal_dx.png".to_string()];
+        let sets = group_texture_sets(&paths);
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0].normal.as_deref(), Some("/m/x_normal_dx.png"));
+    }
+
+    #[test]
+    fn short_normal_convention_tags_classify_as_normal() {
+        assert_eq!(classify_tag("nor_gl"), Some(TextureRole::Normal));
+        assert_eq!(classify_tag("nor-dx"), Some(TextureRole::Normal));
+        assert_eq!(classify_tag("normaldx"), Some(TextureRole::Normal));
+    }
+
+    #[test]
+    fn roughness_wins_regardless_of_supply_order() {
+        let metallic = "/m/x_metallic.png".to_string();
+        let roughness = "/m/x_roughness.png".to_string();
+
+        let forward = group_texture_sets(&[metallic.clone(), roughness.clone()]);
+        let reversed = group_texture_sets(&[roughness, metallic]);
+
+        assert_eq!(forward, reversed);
+        assert_eq!(
+            forward[0].metallic_roughness.as_deref(),
+            Some("/m/x_roughness.png")
+        );
+    }
+
+    #[test]
+    fn resolution_suffix_variants_are_stripped_from_base_name() {
+        for path in [
+            "/m/rock_basecolor_1k.png",
+            "/m/rock_basecolor-2K.png",
+            "/m/rock_basecolor_4k.png",
+            "/m/rock_basecolor_8k.png",
+            "/m/rock_basecolor_1024.png",
+            "/m/rock_basecolor_2048.png",
+            "/m/rock_basecolor_512.png",
+        ] {
+            let sets = group_texture_sets(&[path.to_string()]);
+            assert_eq!(sets.len(), 1, "{path} should match");
+            assert_eq!(sets[0].base_name, "rock", "{path} base name");
+            assert_eq!(sets[0].base_color.as_deref(), Some(path));
+        }
+    }
+
+    #[test]
+    fn resolution_digits_without_role_tag_do_not_match() {
+        let paths = vec!["/m/rock_2048.png".to_string()];
+        let sets = group_texture_sets(&paths);
+        assert!(sets.is_empty());
+    }
+
+    #[test]
+    fn short_base_color_tag_still_detects_without_resolution() {
+        let paths = vec!["/m/brick_b.png".to_string()];
+        let sets = group_texture_sets(&paths);
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0].base_color.as_deref(), Some("/m/brick_b.png"));
     }
 }

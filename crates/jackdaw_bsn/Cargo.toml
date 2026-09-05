@@ -1,0 +1,21 @@
+[package]
+name = "jackdaw_bsn"
+version.workspace = true
+edition = "2024"
+description = "Internal crate for the jackdaw editor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = ["std", "bevy_asset"] }
+lalrpop-util = "0.23"
+nom = "8"
+pathdiff.workspace = true
+thiserror = "2"
+log = "0.4"
+
+[build-dependencies]
+lalrpop = "0.23"
+
+[lints]
+workspace = true

@@ -15,7 +15,7 @@ use jackdaw_geometry::{
     brush_planes_to_world, clean_degenerate_faces, compute_brush_geometry_from_planes,
     compute_brush_topology,
 };
-use jackdaw_jsn::{Brush, BrushFaceData, BrushPlane};
+use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
 
 /// `brush.extend_face_to_brush` needs either (a) Face edit mode with a
 /// face picked and another brush selected, or (b) Object mode with >= 2

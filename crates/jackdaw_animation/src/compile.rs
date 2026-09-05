@@ -239,11 +239,11 @@ pub fn compile_blend_graphs(
         }
         let source_node = incoming[0].source_node;
 
-        // Source must be a clip_ref for the MVP passthrough case.
+        // The passthrough case requires the source to be a clip_ref.
         let Ok(clip_ref) = clip_refs.get(source_node) else {
             warn!(
-                "Blend graph {clip_entity}: only direct Clip Reference -> \
-                 Output is supported in MVP; got source node {source_node}"
+                "Blend graph {clip_entity}: only a direct Clip Reference -> \
+                 Output connection is supported; got source node {source_node}"
             );
             continue;
         };

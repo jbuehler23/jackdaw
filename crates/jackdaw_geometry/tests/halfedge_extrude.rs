@@ -1,6 +1,6 @@
 use glam::Vec3;
 use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::extrude_face_region::extrude_face_region};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn extrude_one_quad_face_of_cube_adds_4_verts_8_edges_4_faces() {

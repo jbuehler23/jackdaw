@@ -48,7 +48,7 @@ pub fn edge_slide(
     // each edge (radial[0] vs radial[1]) should be consistent across the
     // ring. Today we pick by sign(t) for each edge independently; if
     // radial walk order varies around the ring, contributions can disagree
-    // and the average will skew. That's acceptable for the MVP single-edge
+    // and the average will skew. That's acceptable for the single-edge
     // case and the loop-cut ring test (which only verifies movement, not
     // direction); a future fix would propagate a face-side hint across
     // ring-adjacent edges.

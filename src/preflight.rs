@@ -5,9 +5,9 @@
 //! of failing a multi-minute build at the end. The individual `check_*`
 //! functions each shell out or read the environment, so run them off the main
 //! thread and report results as they complete for live reporting in the
-//! launcher. `run_all_checks` batches them for the `jackdaw doctor` CLI.
+//! launcher. `run_all_checks` batches them for the setup UI.
 
-use bevy::app::AppExit;
+use jackdaw_env::rust_env_command;
 
 /// Outcome of a single check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +102,9 @@ fn classify_rustc(version: &str) -> (CheckStatus, Option<&'static str>) {
     } else {
         (
             CheckStatus::Warn,
-            Some("jackdaw targets a nightly toolchain: `rustup default nightly`"),
+            Some(
+                "jackdaw targets a nightly toolchain. Ensure Rust commands on path (rustc, cargo) are managed by rustup!",
+            ),
         )
     }
 }
@@ -144,7 +146,7 @@ fn windows_linker_status(
 
 /// Run `cmd args` and return its first stdout line, or `None` if it cannot run.
 fn first_line(cmd: &str, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new(cmd).args(args).output().ok()?;
+    let out = rust_env_command(cmd).args(args).output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -153,34 +155,6 @@ fn first_line(cmd: &str, args: &[&str]) -> Option<String> {
         .next()
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
-}
-
-/// CLI entry point for `jackdaw doctor`.
-#[expect(
-    clippy::print_stdout,
-    reason = "CLI subcommand writes its report to the terminal"
-)]
-pub fn run_doctor_cli() -> AppExit {
-    let results = run_all_checks();
-    println!("jackdaw doctor:");
-    let mut any_fail = false;
-    for r in &results {
-        let tag = match r.status {
-            CheckStatus::Ok => "ok  ",
-            CheckStatus::Warn => "warn",
-            CheckStatus::Fail => "FAIL",
-        };
-        println!("  [{tag}] {}: {}", r.label, r.detail);
-        if let Some(fix) = &r.fix {
-            println!("         fix: {fix}");
-        }
-        any_fail |= r.status == CheckStatus::Fail;
-    }
-    if any_fail {
-        AppExit::error()
-    } else {
-        AppExit::Success
-    }
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ pub mod color_picker;
 pub mod combobox;
 pub mod context_menu;
 pub mod dialog;
+pub mod field_row;
 pub mod file_browser;
 pub mod icons;
 pub mod inspector_card;
@@ -13,6 +14,7 @@ pub mod inspector_field;
 pub mod list_view;
 pub mod menu_bar;
 pub mod number_input;
+pub mod panel_card;
 pub mod panel_header;
 pub mod panel_section;
 pub mod picker;
@@ -20,8 +22,11 @@ pub mod popover;
 pub mod progress;
 pub mod scroll;
 pub mod separator;
+pub mod slider_row;
 pub mod split_panel;
 pub mod status_bar;
+pub mod swatch_row;
+pub mod tab_strip;
 pub mod text_edit;
 pub mod toast;
 pub mod tokens;
@@ -62,6 +67,7 @@ impl Plugin for EditorFeathersPlugin {
             context_menu::plugin,
             panel_header::plugin,
             picker::plugin,
+            panel_card::plugin,
         ));
     }
 }

@@ -2,14 +2,14 @@
 //! registered [`NodeTypeDescriptor`](crate::NodeTypeDescriptor).
 //!
 //! Opened by right-clicking on the canvas background or by pressing Tab
-//! while hovering the canvas (Maya Node Editor / Blender Shift+A pattern).
+//! while hovering the canvas.
 //! Clicking an entry issues [`AddGraphNodeCmd`] with the cursor position
 //! translated into canvas-space and closes the popover. An outside click
 //! or pressing Escape also closes it.
 //!
 //! The popover is intentionally lightweight; no search input, so we
 //! avoid pulling in the full `text_edit` stack. A follow-up can add
-//! filtering and keyboard navigation to match Maya's quick-add UX
+//! filtering and keyboard navigation for quick-add
 //! more closely.
 
 use bevy::picking::events::{Click, Pointer};
@@ -381,7 +381,7 @@ pub fn on_canvas_right_click(
 }
 
 /// Tab key opens the popover at the cursor when hovering the canvas
-/// (Maya / Blender quick-add pattern).
+/// (type-to-filter quick-add).
 pub fn handle_tab_quick_add(
     keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,

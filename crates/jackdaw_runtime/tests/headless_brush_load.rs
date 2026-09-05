@@ -36,35 +36,26 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use bevy::reflect::TypePath;
-use jackdaw_jsn::format::{JsnAssets, JsnEntity, JsnHeader, JsnMetadata, JsnScene};
 use jackdaw_runtime::{JackdawPlugin, JackdawScene, JackdawSceneRoot};
-use serde_json::json;
 
 /// User-style component the test injects into the scene. Has a field
-/// so the JSN deserializer treats it as a struct, not a unit type.
+/// so the BSN converter treats it as a struct, not a unit type.
 #[derive(Component, Reflect, Clone, Copy, Default)]
 #[reflect(Component, Default)]
 struct ZoneMarker {
     pub id: u32,
 }
 
-/// One face of the test brush. Field set mirrors the real reflected
-/// `BrushFaceData` layout exactly (captured from `assets/dummy.jsn`):
-/// `is_cap` is `#[reflect(ignore)]` so it is absent, and `material` is a
-/// bare `#Name` reference string just as the editor writes it.
-fn brush_face(material: &str, normal: [f32; 3], distance: f32) -> serde_json::Value {
-    json!({
-        "material": material,
-        "plane": {
-            "normal": normal,
-            "distance": distance,
-        },
-        "uv_offset": [0.0, 0.0],
-        "uv_scale": [1.0, 1.0],
-        "uv_rotation": 0.0,
-        "uv_u_axis": [0.0, 0.0, 1.0],
-        "uv_v_axis": [0.0, -1.0, 0.0],
-    })
+/// One face of the test brush, authored as a `BrushFaceData` patch with the
+/// plane geometry and a bare `#Name` material reference just as the editor
+/// writes it. UV fields default (the type is `reflect(Default)`).
+fn brush_face(material: &str, normal: [f32; 3], distance: f32) -> String {
+    format!(
+        "jackdaw_geometry::BrushFaceData {{ material: {material:?}, \
+plane: jackdaw_geometry::BrushPlane {{ \
+normal: glam::Vec3 {{ x: {:?}, y: {:?}, z: {:?} }}, distance: {:?} }} }}",
+        normal[0] as f64, normal[1] as f64, normal[2] as f64, distance as f64,
+    )
 }
 
 #[test]
@@ -80,65 +71,43 @@ fn headless_brush_load() {
     app.add_plugins(JackdawPlugin);
     app.register_type::<ZoneMarker>();
 
-    // The `Brush` component lives in `jackdaw_jsn` (type path
-    // `jackdaw_jsn::types::Brush`), re-exported as `jackdaw_jsn::Brush`.
-    // Its `faces` carry the geometry; `BrushFaceData`/`BrushPlane` come
-    // from `jackdaw_geometry`. Reference the path via `TypePath` rather
-    // than hardcoding the fragile module string.
-    let brush_type_path = <jackdaw_jsn::Brush as TypePath>::type_path().to_string();
+    // The `Brush` component (type path `jackdaw_scene_types::types::Brush`) is
+    // re-exported as `jackdaw_scene_types::Brush`. Its `faces` carry the
+    // geometry; `BrushFaceData`/`BrushPlane` come from `jackdaw_geometry`.
+    // Reference the path via `TypePath` rather than hardcoding the module
+    // string.
+    let brush_type_path = <jackdaw_scene_types::Brush as TypePath>::type_path();
+    let zone_marker = <ZoneMarker as TypePath>::type_path();
 
-    // Entity 0: a transform carrying the user marker.
-    // Entity 1: a brush whose every face references `#StoneWall` by path
-    // string. The real reflected `Brush` omits `topology` for legacy
-    // brushes loaded without it (the deserializer fills it from the
-    // type's registered default), so we omit it here too.
-    let scene = JsnScene {
-        jsn: JsnHeader::default(),
-        metadata: JsnMetadata::default(),
-        editor: None,
-        assets: JsnAssets::default(),
-        scene: vec![
-            JsnEntity {
-                id: None,
-                parent: None,
-                components: [
-                    (
-                        "bevy_transform::components::transform::Transform".to_string(),
-                        json!({
-                            "translation": [1.0, 2.0, 3.0],
-                            "rotation": [0.0, 0.0, 0.0, 1.0],
-                            "scale": [1.0, 1.0, 1.0],
-                        }),
-                    ),
-                    (
-                        <ZoneMarker as TypePath>::type_path().to_string(),
-                        json!({ "id": 7 }),
-                    ),
-                ]
-                .into_iter()
-                .collect(),
-            },
-            JsnEntity {
-                id: None,
-                parent: None,
-                components: [(
-                    brush_type_path,
-                    json!({
-                        "faces": [
-                            brush_face("#StoneWall", [1.0, 0.0, 0.0], 1.0),
-                            brush_face("#StoneWall", [-1.0, 0.0, 0.0], 1.0),
-                            brush_face("#StoneWall", [0.0, 1.0, 0.0], 1.0),
-                            brush_face("#StoneWall", [0.0, -1.0, 0.0], 1.0),
-                            brush_face("#StoneWall", [0.0, 0.0, 1.0], 1.0),
-                            brush_face("#StoneWall", [0.0, 0.0, -1.0], 1.0),
-                        ],
-                    }),
-                )]
-                .into_iter()
-                .collect(),
-            },
+    // Two sibling top-level entities under the scene root's `Children`:
+    //   0. a transform carrying the user marker,
+    //   1. a brush whose every face references `#StoneWall` by path string.
+    // `topology` is omitted (filled from the type's registered default).
+    let faces = [
+        brush_face("#StoneWall", [1.0, 0.0, 0.0], 1.0),
+        brush_face("#StoneWall", [-1.0, 0.0, 0.0], 1.0),
+        brush_face("#StoneWall", [0.0, 1.0, 0.0], 1.0),
+        brush_face("#StoneWall", [0.0, -1.0, 0.0], 1.0),
+        brush_face("#StoneWall", [0.0, 0.0, 1.0], 1.0),
+        brush_face("#StoneWall", [0.0, 0.0, -1.0], 1.0),
+    ]
+    .join(",\n            ");
+    let scene = format!(
+        "\
+bevy_ecs::hierarchy::Children [
+    bevy_transform::components::transform::Transform {{
+        translation: glam::Vec3 {{ x: 1.0, y: 2.0, z: 3.0 }},
+    }}
+    {zone_marker} {{ id: 7 }}
+    ,
+    {brush_type_path} {{
+        faces: [
+            {faces},
         ],
-    };
+    }}
+]
+"
+    );
 
     let scene_handle = app
         .world_mut()
@@ -163,7 +132,7 @@ fn headless_brush_load() {
     // deserialized into the render-free `String` field.
     let brush_count = app
         .world_mut()
-        .query::<&jackdaw_jsn::Brush>()
+        .query::<&jackdaw_scene_types::Brush>()
         .iter(app.world())
         .count();
     assert_eq!(brush_count, 1, "Brush geometry must survive headless load");
@@ -179,7 +148,7 @@ fn headless_brush_load() {
     // without the render asset machinery; that the `#StoneWall` path string
     // deserializes into the `String` field is covered implicitly by the
     // brush deserializing at all.
-    let mut brush_query = app.world_mut().query::<&jackdaw_jsn::Brush>();
+    let mut brush_query = app.world_mut().query::<&jackdaw_scene_types::Brush>();
     let brush = brush_query.iter(app.world()).next().expect("one brush");
     assert_eq!(brush.faces.len(), 6, "all six faces must load");
 }

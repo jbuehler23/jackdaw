@@ -1,154 +1,147 @@
 # Extending the editor
 
-Jackdaw extensions are plain Rust crates that you write using
-bevy-native APIs. Scaffolding, building, and installing are all
-driven from inside the editor. No custom build scripts, no cargo
-gymnastics, no hash-matching games.
+Jackdaw has two deliberate extension seams.
 
-## Prerequisite: install Bevy CLI
+## Custom standalone editors
 
-Templates are distributed via [Bevy CLI](https://github.com/TheBevyFlock/bevy_cli),
-so install that once:
-
-```sh
-cargo install --locked --git https://github.com/TheBevyFlock/bevy_cli bevy_cli
-```
-
-Jackdaw shells out to `bevy new` when you create a new project, so
-this needs to be on your `PATH`.
-
-## Author workflow
-
-### 1. Launch the editor
-
-```sh
-cargo run --features dylib
-```
-
-The launcher (project picker) opens. On first run, the Recent
-Projects list is empty.
-
-### 2. Create an extension
-
-Click **+ New Extension** on the launcher. Fill in:
-
-- **Name**: the crate name for your extension (e.g. `my_tool`).
-- **Location**: parent directory the project will be created
-  under. The `Browse` button opens a folder picker.
-
-Click **Create**. Jackdaw invokes
-`bevy new -t https://github.com/jbuehler23/jackdaw_template_extension --yes <name>`
-in the chosen location, then opens the newly-scaffolded project.
-
-### 3. Edit and build
-
-Edit `my_tool/src/lib.rs` in your preferred editor. Then, inside
-jackdaw: **File > Extensions > Build from project folder**, and
-pick `my_tool/`. Jackdaw runs `cargo rustc` with the right
-`--extern` flags and live-loads the resulting dylib. Windows,
-operators, and menu entries activate immediately.
-
-Iterate: edit code, click **Build from project folder** again,
-see the changes.
-
-### Creating a game
-
-Click **+ New Game** on the launcher instead. Same scaffold flow
-with the
-[`jackdaw_template_game`](https://github.com/jbuehler23/jackdaw_template_game)
-template. Until Play-in-Editor (PIE) lands, games load as
-extensions so you can start prototyping against the editor.
-
-## How it works
-
-Jackdaw ships a tiny proxy crate (`jackdaw_sdk`) whose dylib
-carries the one compiled copy of bevy + jackdaw types that both
-the editor and every extension link against. When jackdaw builds
-an extension it invokes `cargo rustc` with explicit
-`--extern bevy=libjackdaw_sdk.so` and
-`--extern jackdaw_api=libjackdaw_sdk.so` flags. Your extension's
-code writes plain `use bevy::prelude::*;` and
-`use jackdaw_api::prelude::*;`, and those names resolve at compile
-time through the SDK.
-
-Scaffolded projects therefore have an *empty* `[dependencies]`
-table:
-
-```toml
-[package]
-name = "my_tool"
-edition = "2024"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]  # intentionally empty
-```
-
-### BEI keybind caveat
-
-Live-load activates windows, menu entries, operators, and panel
-sections immediately. BEI input contexts are the exception:
-`add_input_context::<C>()` needs `&mut App`, which only exists at
-startup. Keybinds declared via BEI don't bind until the editor
-restarts. Extensions that don't use BEI keybinds don't need a
-restart.
-
-## Escape hatches
-
-### Install a prebuilt dylib
-
-If you already have a compatible `.so` / `.dylib` / `.dll`
-(a teammate's build, a CI artefact), use **File > Extensions >
-Install prebuilt dylib** and pick the file. The editor copies it
-into the extension directory and live-loads.
-
-### Statically link an extension
-
-For in-house tools bundled into a custom editor binary, skip the
-dylib path entirely:
+`jackdaw_editor` exposes the same Bevy plugin group used by the official GUI:
 
 ```rust
-// your_editor/src/main.rs
-fn main() {
+use bevy::prelude::*;
+use jackdaw_editor::prelude::*;
+
+fn main() -> AppExit {
     App::new()
-        .add_plugins(
-            jackdaw::EditorPlugins::default()
-                .set(ExtensionPlugin::new().with_extension::<MyExtension>())
-        )
-        .run();
+        .add_plugins(DefaultPlugins.set(editor_window_plugin()))
+        .add_plugins((EnhancedInputPlugin, PhysicsPlugins::default()))
+        .add_plugins(JackdawEditorPlugins::default())
+        .run()
 }
 ```
 
-Nothing crosses a dylib boundary; everything is normal static
-linking. Use for tools you control and ship together with the
-editor.
+Use normal `PluginGroup` controls to disable or replace editor plugins and add
+your own. This is unrestricted compile-time Rust composition and remains the
+right choice for deeply customized editor distributions.
 
-## Troubleshooting
+## Runtime extensions
 
-- *bevy CLI not found*: install it (`cargo install --locked
-  --git https://github.com/TheBevyFlock/bevy_cli bevy_cli`) and
-  make sure `bevy` is on your `PATH`.
-- *SDK dylib not found*: rebuild the editor with
-  `cargo run --features dylib`. Without that feature, jackdaw
-  doesn't produce `libjackdaw_sdk.so`.
-- *cargo exited with non-zero status* during Build: your
-  extension has a compile error. The status line shows cargo's
-  stderr.
-- *picked path has no Cargo.toml*: point at the project root,
-  not the `src/` directory.
+Marketplace extensions use the focused `jackdaw_extension` crate:
 
-## In-tree examples
+```rust
+use jackdaw_extension::prelude::*;
 
-The workspace has two example extensions you can read or
-build against:
+#[derive(Default)]
+pub struct MyTool;
 
-- `examples/extension/dynamic_extension/`: operators with
-  keybinds, availability checks, a dock window, and menu
-  entries. Good reference for what the API supports.
-- `examples/extension/viewable_camera_extension/`: heavier
-  scene manipulation through `ExtensionContext::world()`.
+impl JackdawExtension for MyTool {
+    fn id(&self) -> String { "example.my-tool".into() }
+    fn label(&self) -> String { "My Tool".into() }
 
-They build like any other workspace crate. They're there to
-exercise the API surface; day-to-day authoring should use the
-`+ New Extension` / `+ New Game` workflow described above.
+    fn register(&self, registrar: &mut ExtensionRegistrar<'_>) {
+        // register operators, panels, menus, keymaps, and host-owned state
+    }
+}
+```
+
+Everything installed through `ExtensionRegistrar` is owned by that extension.
+Disable, update, and uninstall remove those registrations immediately.
+Superseded native libraries remain safely mapped but unreachable until the
+process exits.
+
+Runtime extensions deliberately cannot install extension-owned Bevy component
+metadata or reflected Rust types. Use a custom editor build when that level of
+access is required.
+
+## Signed bundles
+
+Create one publisher key, once:
+
+```bash
+jd extension keygen
+```
+
+That writes `publisher-key.pk8` into the Jackdaw data directory and refuses to
+overwrite an existing one, because publishing an update under a new key makes
+every user repeat the trust decision. Pass a path to keep it elsewhere.
+
+Then, in the extension project, build and pack:
+
+```bash
+jd build
+jd extension pack
+jd extension verify my-tool-0.1.0-x86_64-unknown-linux-gnu.jdext
+```
+
+`pack` reads the bundle's identity, version, publisher, license, and homepage
+from the project's `Cargo.toml`:
+
+```toml
+[package]
+name = "my-tool"
+version = "0.1.0"
+authors = ["Example Studio <hello@example.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://example.com/my-tool"
+
+[package.metadata.jackdaw]
+label = "My Tool"
+```
+
+Any of those can be overridden with `--id`, `--label`, `--version`,
+`--publisher`, `--license`, `--homepage`, `--key`, `--out`, and `--library`.
+
+Build and pack separately on Linux, Windows, and macOS. A bundle records the
+target triple and the SDK ABI string it was built against, and installs only
+into a Jackdaw that matches both, so publish one bundle per target per Jackdaw
+release.
+
+Users install signed `.jdext` bundles from **Extensions** or with:
+
+```bash
+jd extension install my-tool.jdext
+jd extension list
+jd extension disable example.my-tool
+jd extension enable example.my-tool
+jd extension uninstall example.my-tool
+```
+
+The manifest and signature are checked before native code is loaded. Bundles
+must match the exact Jackdaw SDK ABI and target. Trusting a publisher is an
+explicit confirmation because native extensions run with the user's full
+permissions. Updates are staged by version and activated atomically; a failed
+activation leaves the previous version available for recovery. Inter-extension
+dependencies are not supported by this bundle format.
+
+## Distribution
+
+Jackdaw does not host a registry. It provides the pieces an external one
+needs: a signed bundle format, a compatibility key, and installation
+straight from a URL.
+
+Publish `.jdext` files wherever you like, and users install them with:
+
+```bash
+jd extension install https://example.com/my-tool-0.1.0-x86_64-unknown-linux-gnu.jdext
+```
+
+A URL and a local path go through the same gate. The signature, the library
+checksum, the ABI and target match, and the publisher trust prompt all run on
+the fetched bytes exactly as they do on a file, so a remote install is never
+less checked than a local one. Plain `http://` is refused.
+
+### Serving the right artifact
+
+A bundle only installs into a Jackdaw whose compatibility key matches, so a
+marketplace has to know the client's before it offers a download. Ask it:
+
+```bash
+$ jd extension abi --json
+{"sdk_abi":"jackdaw-0.19.0-bevy-0.19-rustc 1.90.0","target":"x86_64-unknown-linux-gnu",
+ "jackdaw":"0.19.0","bevy":"0.19"}
+```
+
+`sdk_abi` covers the Jackdaw version, the Bevy minor, and the exact rustc that
+built the SDK; `target` is the platform triple. Key your catalogue on both.
+In practice that means one bundle per target per Jackdaw release, rebuilt and
+re-signed when Jackdaw updates. `jd extension verify` reports what a given
+bundle claims, without installing it.

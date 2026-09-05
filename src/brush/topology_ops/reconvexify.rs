@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::halfedge::HalfedgeMesh;
 use jackdaw_geometry::{compute_brush_geometry_from_planes, compute_brush_topology};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use crate::brush::hull::rebuild_brush_from_vertices;
 use crate::brush::{BrushHalfedge, BrushSelection};

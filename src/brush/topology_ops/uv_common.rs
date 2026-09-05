@@ -10,8 +10,8 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::BrushFaceData;
-use jackdaw_jsn::Brush;
-use jackdaw_jsn::types::BrushTopology;
+use jackdaw_scene_types::Brush;
+use jackdaw_scene_types::types::BrushTopology;
 
 use crate::brush::{BrushEditMode, BrushSelection, EditMode};
 

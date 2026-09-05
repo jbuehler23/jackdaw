@@ -20,7 +20,11 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # This job runs the fast and integration tiers plus the scaffold,
+    # recipe and SDK-feature checks, and last took 48 minutes. A 60
+    # minute cap left twelve minutes of headroom, so the next test added
+    # here would have failed on the clock rather than on correctness.
+    timeout-minutes: 90
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,7 +43,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustc-codegen-cranelift-preview
+          components: rustc-codegen-cranelift-preview, rustfmt, clippy
           toolchain: ${{ env.toolchain }}
       - name: Set LD_LIBRARY_PATH
         run: |
@@ -53,7 +57,7 @@ jobs:
           shared-key: tests
 
       - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
@@ -64,11 +68,42 @@ jobs:
       - name: Install Wild
         run: cargo binstall wild-linker --locked --force
 
-      - name: Install nextest
-        run: cargo binstall cargo-nextest --locked --force
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
 
-      - name: Run tests
-        run: cargo nextest run --locked --workspace --lib --bins --tests --no-fail-fast --no-tests warn --features bevy/dynamic_linking
+      - name: Fast tier (fmt, clippy, lib tests)
+        run: cargo xtask fast
+
+      - name: Integration tier
+        run: cargo xtask integration
+
+      # The create/import flows as a user meets them: the `jd` binary
+      # run from outside any checkout, with only its embedded templates.
+      # Required here, so a binary that cannot scaffold fails CI instead
+      # of skipping quietly.
+      - name: Standalone scaffold and import
+        env:
+          JACKDAW_STANDALONE_REQUIRED: "1"
+        run: cargo test --locked --test standalone_scaffold
+
+      # The recipe is only unpacked on a user's machine at first run, so
+      # a malformed one passes every other check and then leaves them
+      # with no SDK and no way to build any project.
+      - name: Embedded SDK recipe is loadable
+        env:
+          JACKDAW_RECIPE_REQUIRED: "1"
+        run: cargo test --locked --test sdk_recipe
+
+      # An SDK prepared from that recipe is built from a narrower package
+      # selection than the editor, so cargo resolves it fewer features.
+      # Where a project resolves more, it compiles against SDK rlibs
+      # built without them and fails on a crate the user never named.
+      # Every other SDK test here links the dev checkout's SDK, whose
+      # selection is the whole editor and hides this entirely.
+      - name: SDK features cover a project's
+        env:
+          JACKDAW_FEATURE_SUPERSET_REQUIRED: "1"
+        run: cargo test --locked --features dylib --test sdk_feature_superset -- --nocapture
 
       - name: Run doctests
         run: cargo test --locked --workspace --doc --features bevy/dynamic_linking
@@ -95,8 +130,8 @@ jobs:
       fail-fast: false
       matrix:
         template:
-          - game-static
-          - extension-static
+          - game
+          - extension
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -119,14 +154,11 @@ jobs:
       - name: Install Wild
         run: cargo binstall wild-linker --locked --force
 
-      - name: Install cargo-generate
-        run: cargo binstall cargo-generate --locked --force
-
       - name: Install nextest
         run: cargo binstall cargo-nextest --locked --force
 
       - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
@@ -136,40 +168,41 @@ jobs:
           shared-key: template
 
       - name: Scaffold ${{ matrix.template }}
-        env:
-          # Suppress cargo-generate's interactive author prompt; the
-          # scaffolder fills `authors` from this env in CI.
-          CARGO_GENERATE_VALUE_AUTHORS: "ci@jackdaw"
         run: |
           set -euxo pipefail
           checkout="$GITHUB_WORKSPACE"
           template="${{ matrix.template }}"
-          name="test_$(echo "$template" | tr - _)"
-          rm -rf "$RUNNER_TEMP/$name"
-          cargo generate \
-            --path "$checkout/templates/$template" \
-            --name "$name" \
-            --destination "$RUNNER_TEMP" \
-            --silent
+          # `jd new` normalises the name to a cargo-legal one, so use a
+          # form it will not rewrite or the destination path stops matching.
+          name="test-$template"
+          dest="$RUNNER_TEMP/$name"
+          rm -rf "$dest"
+          # Scaffold with the shipped binary rather than reimplementing
+          # it here. The hand-rolled copy substituted four placeholders
+          # and silently stopped matching the real one when version
+          # pinning added three more, leaving `bevy = "{{bevy_version}}"`
+          # in the manifest. Using `jd new` means this job tests what a
+          # user actually gets, and cannot drift again.
+          cargo build --bin jd
+          extra=""
+          if [ "$template" = "extension" ]; then extra="--extension"; fi
+          "$checkout/target/debug/jd" new "$name" --path "$RUNNER_TEMP" --no-git $extra
           cp -r "$checkout/.cargo" "$RUNNER_TEMP/"
-          # Pin the scaffolded project's `jackdaw` / `jackdaw_runtime`
-          # deps to THIS checkout so we test the template against
-          # the PR under review, not against whatever's on crates.io
-          # (or even before 0.4.0 ships at all). `[patch.crates-io]`
-          # overrides the source: cargo resolves the version
-          # constraint against the patched path's Cargo.toml, so
-          # this works pre-publish.
-          cat >> "$RUNNER_TEMP/$name/Cargo.toml" <<EOF
+          # Pin the scaffolded project's jackdaw deps to THIS checkout
+          # so the template is tested against the PR under review.
+          cat >> "$dest/Cargo.toml" <<EOF
 
           [patch.crates-io]
-          jackdaw = { path = "$checkout" }
           jackdaw_runtime = { path = "$checkout/crates/jackdaw_runtime" }
+          jackdaw_extension = { path = "$checkout/crates/jackdaw_extension" }
+          jackdaw_api = { path = "$checkout/crates/jackdaw_api" }
+          jackdaw_api_internal = { path = "$checkout/crates/jackdaw_api_internal" }
           EOF
 
       - name: Run cargo fmt
         run: |
           set -euxo pipefail
-          name="test_$(echo "${{ matrix.template }}" | tr - _)"
+          name="test-${{ matrix.template }}"
           cd "$RUNNER_TEMP/$name"
           cargo fmt --all -- --check
 
@@ -178,21 +211,17 @@ jobs:
         # and the patched jackdaw deps would mismatch one anyway.
         run: |
           set -euxo pipefail
-          name="test_$(echo "${{ matrix.template }}" | tr - _)"
+          name="test-${{ matrix.template }}"
           cd "$RUNNER_TEMP/$name"
           cargo clippy --workspace --all-targets --target-dir "$GITHUB_WORKSPACE/target" --features bevy/dynamic_linking -- --deny warnings
 
       - name: Run tests
-        # Game-static ships a smoke test that exercises the
-        # editor's component picker against the project's own
-        # `MyGamePlugin`. Skip for templates without a `tests/`
-        # directory.
         run: |
           set -euxo pipefail
-          name="test_$(echo "${{ matrix.template }}" | tr - _)"
+          name="test-${{ matrix.template }}"
           cd "$RUNNER_TEMP/$name"
           if [[ -d tests ]]; then
-            cargo nextest run --locked --workspace --lib --bins --tests --no-fail-fast --no-tests warn --features editor,bevy/dynamic_linking --target-dir "$GITHUB_WORKSPACE/target"
+            cargo nextest run --workspace --lib --bins --tests --no-fail-fast --no-tests warn --features bevy/dynamic_linking --target-dir "$GITHUB_WORKSPACE/target"
           else
             echo "no tests/ directory in scaffolded ${{ matrix.template }}; skipping"
           fi
@@ -225,7 +254,7 @@ jobs:
         run: cargo binstall wild-linker --locked --force
 
       - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
@@ -235,7 +264,7 @@ jobs:
           shared-key: lints
 
       - name: Run clippy lints
-        run: cargo clippy --locked --workspace --all-targets --features bevy/dynamic_linking -- --deny warnings
+        run: cargo clippy --locked --workspace --all-targets --features dylib -- --deny warnings
 
   # Check formatting.
   format:
@@ -254,6 +283,47 @@ jobs:
 
       - name: Run cargo fmt
         run: cargo fmt --all -- --check
+
+  # The command shown in the installation guide must keep selecting one
+  # package and producing every public executable. Use a local path here so
+  # pull requests test their own commit without a network race against main.
+  cargo-install:
+    name: Cargo install contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.toolchain }}
+
+      - name: Install dependencies
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+
+      - name: Activate CI cargo config
+        run: mv .cargo/config_ci.toml .cargo/config.toml
+
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild
+        run: cargo binstall wild-linker --locked --force
+
+      - name: Install the public package
+        run: cargo install --path . --locked --root "$RUNNER_TEMP/jackdaw-install"
+
+      - name: Verify installed commands
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/jackdaw-install/bin"
+          for command in jackdaw jd jackdaw-rustc-wrapper; do
+            test -x "$root/$command"
+          done
+          "$root/jd" --version
+          "$root/jackdaw" --version
 
   # Check documentation.
   doc:
@@ -283,7 +353,7 @@ jobs:
         run: cargo binstall wild-linker --locked --force
 
       - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
@@ -311,7 +381,7 @@ jobs:
           toolchain: ${{ env.toolchain }}
 
       - name: Install dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2

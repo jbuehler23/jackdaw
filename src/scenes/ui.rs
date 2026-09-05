@@ -456,13 +456,6 @@ pub fn on_scene_tab_context_action(event: On<ContextMenuAction>, mut commands: C
                 spath.path = Some(path.to_string_lossy().into_owned());
             }
             crate::scene_io::save_scene(world);
-            if let Some(tab) = world
-                .resource_mut::<crate::scenes::Scenes>()
-                .tabs
-                .get_mut(idx)
-            {
-                tab.dirty = false;
-            }
         }
         "scene.tab.save_as" => {
             let current = world.resource::<crate::scenes::Scenes>().active;

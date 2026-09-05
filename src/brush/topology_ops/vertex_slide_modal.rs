@@ -20,7 +20,7 @@ use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::cycles::disk_walk;
 use jackdaw_geometry::halfedge::ops::vertex_slide::vertex_slide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 use super::modal_edit::ModalTopologyEdit;
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};

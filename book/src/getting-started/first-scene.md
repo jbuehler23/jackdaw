@@ -5,18 +5,27 @@ with one cube in it. Five minutes, give or take.
 
 ## Pick a starting point
 
-The launcher has two starting paths:
+Two starting paths:
 
-- **+ New Project** with the `game-static` template. You get
-  a `lib.rs` with a `MyGamePlugin`, a `bin/editor.rs` that
-  hosts the editor, and a `main.rs` that runs the standalone
-  game. Pick this if you want to ship a real binary later.
-- **+ New Scene** inside an already-open project. Use this
-  if you just want to author a `.jsn` next to ones you have.
+- **New Project > Game** on the launcher (or `jd new
+  my-game` from the terminal). You get a normal Bevy crate: a
+  `lib.rs` with a `GamePlugin`, a `main.rs` that runs the
+  standalone game, a starter scene, and a `jackdaw.toml`. Pick
+  this if you want to ship a real binary later.
+- **New Scene** inside an already-open project. Use this if you
+  just want to author a scene next to ones you have.
 
-If you used the static template, the launcher offers to build
-the editor binary on first open. Say yes; subsequent opens are
-fast incremental rebuilds.
+A new project opens immediately. The editor builds the project's
+cargo binary in the background (same as `cargo build` in the
+project root) and asks it for its reflected type schema. Your
+own components show up in the inspector once that finishes.
+Placing brushes and saving scenes works right away, so you do
+not have to wait for it.
+
+Expect that first build to take around nine minutes: it compiles
+Bevy from source, the same as any Bevy project. Every project
+pays it once. Rebuilds after that are 1 to 4 seconds, so this
+is the only time you will sit through it.
 
 ## Place a cube
 
@@ -38,28 +47,36 @@ do that.
 
 ## Save the scene
 
-`File > Save` (or `Ctrl+S`). The first save asks where to put
-the file; pick `assets/scene.jsn` to match what the static
-template's standalone binary expects.
+`File > Save` (or `Ctrl+S`). A project from the Game template
+already has `assets/scene.bsn` open, so this writes straight
+back to it. A scene created with `File > New Scene` asks where
+to put the file the first time; pick `assets/scene.bsn` to
+match what the template loads.
 
-Open that `.jsn` in your text editor if you want to peek. It
-is plain JSON-ish text, with one entry per entity and reflect
-component data inline. The format is documented in
-[JSN Format](../developer-guide/jsn-format.md).
+Open that `.bsn` in your text editor if you want to peek. It
+is plain text, with one entry per entity and reflected
+component data inline. See
+[BSN Format](../developer-guide/bsn-format.md) for the syntax.
 
 ## See it run outside the editor
 
-If you scaffolded with `game-static`:
+From the project folder:
 
 ```sh
 cargo run
 ```
 
-This launches the standalone binary. It loads
-`assets/scene.jsn` from disk and runs your `MyGamePlugin`. No
-editor in the loop. The cube sits where you placed it, and
-any components you attached in the inspector are alive on
-the entity.
+This launches the standalone binary. `main.rs` adds
+`jackdaw_runtime::JackdawPlugin`, which registers the asset
+loader for `.bsn` files, and the template's `GamePlugin`
+spawns a `JackdawSceneRoot` pointing at `scene.bsn`. No editor
+in the loop. The cube sits where you placed it, and any
+components you attached in the inspector are alive on the
+entity.
+
+Bevy cannot load `.bsn` on its own; the loader ships in
+`jackdaw_runtime`, which is an ordinary dependency of your
+crate.
 
 ## What you have now
 

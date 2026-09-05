@@ -1,5 +1,5 @@
 use jackdaw_geometry::halfedge::{HalfedgeMesh, select::ring_walk::ring_walk};
-use jackdaw_jsn::Brush;
+use jackdaw_scene_types::Brush;
 
 #[test]
 fn ring_walk_around_cube_returns_4_edges() {

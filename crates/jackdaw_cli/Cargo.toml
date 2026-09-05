@@ -1,0 +1,22 @@
+[package]
+name = "jackdaw_cli_internal"
+version.workspace = true
+edition = "2024"
+description = "Internal command implementations shared by jd and Jackdaw release tooling"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[features]
+# Bake the SDK-builder recipe in so `jd setup` can bootstrap the
+# SDK on a machine without the jackdaw source. Off by default; packaged
+# releases turn it on.
+embed-recipe = ["jackdaw_project_build/embed-recipe"]
+
+[dependencies]
+jackdaw_project_build.workspace = true
+jackdaw_env.workspace = true
+jackdaw_schema.workspace = true
+dunce = "1.0.5"
+
+[lints]
+workspace = true

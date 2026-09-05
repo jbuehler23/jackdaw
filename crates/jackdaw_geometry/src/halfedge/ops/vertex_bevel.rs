@@ -1,5 +1,5 @@
 //! Vertex bevel: replace a single vertex with a small N-gon face where N is
-//! the degree of that vertex. Single-vertex MVP.
+//! the degree of that vertex. Handles one vertex at a time.
 //!
 //! For a vertex `v` with incident edges `e_1, ..., e_N` reaching neighbors
 //! `other_1, ..., other_N`:
