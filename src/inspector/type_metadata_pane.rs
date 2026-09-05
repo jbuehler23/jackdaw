@@ -491,12 +491,17 @@ fn update_preview_thumbnails(
     mut commands: Commands,
     mut thumbnails: ResMut<crate::model_thumbnail::ModelThumbnails>,
     project: Option<Res<ProjectRoot>>,
-    mut slots: Query<(Entity, &mut TypeMetadataPreview, Option<&Children>)>,
+    mut slots: Query<(
+        Entity,
+        &mut TypeMetadataPreview,
+        Option<&Children>,
+        &ComputedNode,
+    )>,
 ) {
     let Some(assets_dir) = project.map(|p| p.assets_dir()) else {
         return;
     };
-    for (entity, mut slot, children) in &mut slots {
+    for (entity, mut slot, children, computed) in &mut slots {
         if slot.applied || slot.preview.is_empty() {
             continue;
         }
@@ -509,22 +514,32 @@ fn update_preview_thumbnails(
             thumbnails.request(&source);
             continue;
         };
+        // The type-settings pane starts `Display::None`. Spawning the image
+        // into that subtree (or onto a box the inspector just despawned)
+        // drops `ChildOf` and the node becomes a window-sized UI root.
+        if computed.size().cmple(Vec2::ZERO).any() {
+            continue;
+        }
         if let Some(children) = children {
             for child in children.iter() {
                 commands.entity(child).try_despawn();
             }
         }
-        commands.spawn((
-            ImageNode::new(handle),
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
-                ..default()
-            },
-            Pickable::IGNORE,
-            ChildOf(entity),
-        ));
+        let Ok(mut parent) = commands.get_entity(entity) else {
+            continue;
+        };
+        parent.with_children(|parent| {
+            parent.spawn((
+                ImageNode::new(handle),
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ));
+        });
         slot.applied = true;
     }
 }
