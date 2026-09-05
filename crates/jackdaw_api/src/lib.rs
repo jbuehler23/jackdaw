@@ -49,7 +49,7 @@ pub use jackdaw_api_internal::lifecycle::ExtensionKind;
 /// carrying them. Extensions seed it through
 /// [`ExtensionContext::register_entity_icon`].
 pub mod entity_icons {
-    pub use jackdaw_api_internal::entity_icons::{registered_icon, EntityIconRegistry};
+    pub use jackdaw_api_internal::entity_icons::{EntityIconRegistry, registered_icon};
 }
 
 /// Inspector category registry: route components to category tabs and register
@@ -82,8 +82,8 @@ pub mod op {
 /// Data-driven keymap presets for operator bindings.
 pub mod keymap {
     pub use jackdaw_api_internal::keymap::{
-        apply_keymap_preset, key_code_from_name, key_code_name, DefaultKeymap, KeymapApplyReport,
-        KeymapPreset, PresetBinding, PresetInput, PresetPhase, PresetSpawnedBinding,
+        DefaultKeymap, KeymapApplyReport, KeymapPreset, PresetBinding, PresetInput, PresetPhase,
+        PresetSpawnedBinding, apply_keymap_preset, key_code_from_name, key_code_name,
     };
 }
 
@@ -113,7 +113,7 @@ pub mod scene {
 /// deliberately small.
 pub mod ui {
     pub use jackdaw_feathers::button::{
-        button, operator_button, operator_button_variant, ButtonProps,
+        ButtonProps, button, operator_button, operator_button_variant,
     };
     pub use jackdaw_feathers::icons::Icon;
 
@@ -126,15 +126,15 @@ pub mod ui {
     /// Add [`RadialMenuPlugin`] once if the host has not already; the editor
     /// registers it for its own mesh quick-menu.
     pub use jackdaw_widgets::{
-        cancel_radial_menu, confirm_radial_menu, open_radial_menu, RadialMenuItem,
-        RadialMenuPlugin, RadialMenuSelect,
+        RadialMenuItem, RadialMenuPlugin, RadialMenuSelect, cancel_radial_menu,
+        confirm_radial_menu, open_radial_menu,
     };
 
     /// Build inspector cards matching the editor's look (header bar + bordered body)
     /// and standard field rows.
     pub use jackdaw_feathers::inspector_card::{
-        spawn_inspector_card, spawn_inspector_field_row, InspectorCardEntities, InspectorCardOpts,
-        InspectorCardRemoveButton,
+        InspectorCardEntities, InspectorCardOpts, InspectorCardRemoveButton, spawn_inspector_card,
+        spawn_inspector_field_row,
     };
 
     use crate::op::Operator;
@@ -188,12 +188,12 @@ pub mod prelude {
     /// Editor button-construction surface. The trait is in scope so
     /// `ButtonProps::from_operator::<MyOp>()` works without a manual
     /// `use jackdaw_api::ui::ButtonPropsOpExt`.
-    pub use crate::ui::{button, ButtonProps, ButtonPropsOpExt as _, Icon};
+    pub use crate::ui::{ButtonProps, ButtonPropsOpExt as _, Icon, button};
 
     /// Radial quick-menu primitives so an extension can open its own pie
     /// menu and react to selections without an explicit `ui` import.
     pub use crate::ui::{
-        cancel_radial_menu, confirm_radial_menu, open_radial_menu, RadialMenuItem, RadialMenuSelect,
+        RadialMenuItem, RadialMenuSelect, cancel_radial_menu, confirm_radial_menu, open_radial_menu,
     };
 
     /// BEI types extension authors need for `actions!` / `bindings!`
