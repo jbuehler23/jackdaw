@@ -136,26 +136,45 @@ fn resize_edge(direction: CompassOctant, node: Node) -> impl Bundle {
     )
 }
 
+/// Whether the edge strips are live, as the last sync found the window.
+///
+/// The strips lie over the outer eight pixels of the window, which is the
+/// menu bar and the outermost panel borders. A press there must reach
+/// what it landed on unless the window can actually be resized by it, and
+/// the press arrives a frame after the state the strips were painted for.
+#[derive(Resource, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ResizeEdgesLive(pub bool);
+
+/// Whether a drag on an edge strip would resize the window. A maximized
+/// or fullscreen window has no edge to pull, and neither has one the
+/// platform will not resize.
+pub(crate) fn edges_resize(mode: WindowMode, maximized: bool, resizable: bool) -> bool {
+    matches!(mode, WindowMode::Windowed) && !maximized && resizable
+}
+
 /// Disables resize-edge picking while the window cannot be resized.
 pub(crate) fn sync_resize_overlay_pickability(
     _main_thread: bevy::ecs::system::NonSendMarker,
     primary_window: Query<(Entity, &Window), With<PrimaryWindow>>,
     mut resize_edges: Query<&mut Pickable, With<WindowResizeEdge>>,
+    mut live: ResMut<ResizeEdgesLive>,
 ) {
     let Ok((window_entity, window)) = primary_window.single() else {
         return;
     };
-    let resizing_disabled = !matches!(window.mode, WindowMode::Windowed)
-        || crate::primary_window_is_maximized(window_entity);
-    let pickable = if resizing_disabled {
-        Pickable::IGNORE
-    } else {
+    let resizes = edges_resize(
+        window.mode,
+        crate::primary_window_is_maximized(window_entity),
+        window.resizable,
+    );
+    live.set_if_neq(ResizeEdgesLive(resizes));
+    let pickable = if resizes {
         Pickable::default()
+    } else {
+        Pickable::IGNORE
     };
     for mut edge_pickable in resize_edges.iter_mut() {
-        if *edge_pickable != pickable {
-            *edge_pickable = pickable;
-        }
+        edge_pickable.set_if_neq(pickable);
     }
 }
 
@@ -176,8 +195,15 @@ pub(crate) fn on_resize_edge_press(
     press: On<Pointer<Press>>,
     edges: Query<&WindowResizeEdge>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    live: Res<ResizeEdgesLive>,
 ) {
     if press.button != PointerButton::Primary {
+        return;
+    }
+    // The strips stop taking picks a frame after the window is
+    // maximized, and a press in that frame would start a drag-resize a
+    // maximized window cannot honor.
+    if !live.0 {
         return;
     }
     let Ok(edge) = edges.get(press.original_event_target()) else {
@@ -187,4 +213,28 @@ pub(crate) fn on_resize_edge_press(
         return;
     };
     window.start_drag_resize(edge.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The strips sit over the outermost eight pixels of the window,
+    /// where a maximized window has its menu bar and panel edges rather
+    /// than a border to pull.
+    #[test]
+    fn a_maximized_window_has_no_resizable_edge() {
+        assert!(edges_resize(WindowMode::Windowed, false, true));
+        assert!(!edges_resize(WindowMode::Windowed, true, true));
+    }
+
+    #[test]
+    fn a_fullscreen_or_fixed_window_has_no_resizable_edge() {
+        assert!(!edges_resize(
+            WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
+            false,
+            true
+        ));
+        assert!(!edges_resize(WindowMode::Windowed, false, false));
+    }
 }

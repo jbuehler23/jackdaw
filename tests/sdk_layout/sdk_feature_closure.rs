@@ -1,17 +1,9 @@
-//! The SDK must resolve at least the features a project resolves.
-//!
-//! Cargo resolves features per package selection, and a packaged SDK is
-//! built from `jackdaw_sdk` alone while a project's graph is rooted at
-//! the generated shim. Anything the project turns on that the SDK did
-//! not gets compiled against SDK rlibs built without it, and the error
-//! names a crate the user never mentioned: a scaffolded project pulls
-//! `bevy_math/approx` through the physics integration, and an SDK whose
-//! `glam` lacks `approx` fails with missing trait impls inside
-//! `bevy_math`.
-//!
-//! Checking the real resolution needs a full project graph. Checking the
-//! manifests is cheap, catches the way this actually regresses (a
-//! feature added to the runtime and not to the SDK), and runs offline.
+//! The SDK must resolve at least the features a project resolves. Cargo resolves
+//! features per package selection, and a packaged SDK is built from `jackdaw_sdk`
+//! alone while a project's graph is rooted at the generated shim, so anything the
+//! project turns on that the SDK did not fails inside a crate the user never
+//! mentioned. Checking the manifests is cheap, catches the way this regresses,
+//! and runs offline.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -116,6 +108,23 @@ fn the_recipe_ships_the_runtime_closure() {
             path.join("Cargo.toml").is_file(),
             "jackdaw_runtime depends on `{dependency}`, which is not under crates/ and so is \
              not in the SDK recipe"
+        );
+    }
+}
+
+/// `rand` reaches the SDK only through `bevy_math`, which asks for none
+/// of its generator features. A project that uses `rand` itself resolves
+/// the defaults, which pull `chacha20` and `getrandom` into `rand_core`'s
+/// resolution, so the SDK has to resolve them too or the project links a
+/// `rand_core` built from a different selection than its own graph.
+#[test]
+fn the_sdk_resolves_the_random_generators_a_project_gets_by_default() {
+    let requested = sdk_requests("rand");
+    for feature in ["std_rng", "thread_rng"] {
+        assert!(
+            requested.contains(feature),
+            "jackdaw_sdk must request `rand/{feature}`; without it a project using `rand` \
+             resolves `rand_core` differently from the SDK it links"
         );
     }
 }

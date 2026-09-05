@@ -1,13 +1,10 @@
-//! SDK bootstrap: build the SDK once into a per-version cache so an
-//! installed or downloaded jackdaw sets itself up on first use, without a
-//! source checkout.
+//! SDK bootstrap: build the SDK once into a per-version cache so an installed or
+//! downloaded jackdaw sets itself up on first use, without a source checkout.
 //!
-//! This module owns the cache location and its validity stamp. The cache
-//! is laid out exactly as the `JACKDAW_SDK_DIR` "installed" layout that
+//! This module owns the cache location and its validity stamp. The cache is laid
+//! out exactly as the `JACKDAW_SDK_DIR` "installed" layout that
 //! [`SdkPaths::for_installed_root`](crate::sdk_paths::SdkPaths::for_installed_root)
-//! reads, so a bootstrapped SDK is discovered with no env var. The build
-//! orchestration (extract the embedded recipe, ensure the toolchain,
-//! cargo build, arrange the artifacts) lands on top of this.
+//! reads, so a bootstrapped SDK is discovered with no env var.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -80,10 +77,9 @@ pub fn write_stamp(cache: &Path, stamp: &Stamp) -> std::io::Result<()> {
     std::fs::write(stamp_path(cache), json)
 }
 
-/// Whether the cache holds an SDK usable by the running binary: a stamp
-/// for this version/toolchain/target and a present SDK dylib. Used by
-/// `SdkPaths::compute` to auto-discover a bootstrapped SDK. The stricter
-/// recipe-hash check lives in `ensure_sdk`, which decides rebuilds.
+/// Whether the cache holds an SDK usable by the running binary: a stamp for this
+/// version/toolchain/target and a present SDK dylib. The stricter recipe-hash
+/// check lives in `ensure_sdk`, which decides rebuilds.
 pub fn cache_resolves(cache: &Path, triple: &str) -> bool {
     let stamp_ok = read_stamp(cache).is_some_and(|s| {
         s.version == env!("CARGO_PKG_VERSION")
@@ -96,50 +92,45 @@ pub fn cache_resolves(cache: &Path, triple: &str) -> bool {
             .is_file()
 }
 
-/// Whether an SDK-builder recipe is baked into this binary. False when
-/// this crate was compiled outside the workspace (for example as a
-/// crates.io dependency, or the recipe building itself), where there is
-/// nothing to bootstrap from.
+/// Whether an SDK-builder recipe is baked into this binary. False when this crate
+/// was compiled outside the workspace, where there is nothing to bootstrap from.
 pub fn recipe_is_embedded() -> bool {
     !crate::RECIPE_FILES.is_empty()
 }
 
-/// Env var that answers [`needs_setup`] with "nothing is owed", whatever
-/// the cache holds.
+/// Env var that answers [`needs_setup`] with "nothing is owed", whatever the
+/// cache holds.
 ///
-/// The validity stamp carries the hash of the embedded recipe, so any edit
-/// to the workspace the recipe is cut from makes the cache stale and the
-/// editor opens on the first-run setup screen rather than on the editor.
-/// That is the right answer for a downloaded build and the wrong one for a
-/// driven session against a checkout, where the screen stands in front of
-/// every pointer script and screenshot. Set it and the check is skipped.
+/// The validity stamp carries the hash of the embedded recipe, so any edit to the
+/// workspace makes the cache stale and the editor opens on the first-run setup
+/// screen. That is right for a downloaded build and wrong for a driven session
+/// against a checkout.
 ///
-/// Read once, on the first call: a process either bypasses the check or
-/// does not, and a value that changed mid-run would leave one half of it
-/// on each answer.
+/// Read once, on the first call, so a value that changed mid-run cannot leave one
+/// half of the process on each answer.
 pub const ENV_SKIP_SETUP_CHECK: &str = "JACKDAW_SKIP_SETUP_CHECK";
 
-static SKIP_SETUP_CHECK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+static SKIP_SETUP_CHECK: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
+    std::sync::LazyLock::new(|| {
+        std::sync::atomic::AtomicBool::new(std::env::var_os(ENV_SKIP_SETUP_CHECK).is_some())
+    });
 
-/// Whether [`ENV_SKIP_SETUP_CHECK`] was set the first time it was asked
-/// for.
+/// Whether the setup check is being skipped: [`ENV_SKIP_SETUP_CHECK`] was set
+/// when it was first asked for, or [`skip_setup_check`] has been called since.
 fn setup_check_skipped() -> bool {
-    *SKIP_SETUP_CHECK.get_or_init(|| std::env::var_os(ENV_SKIP_SETUP_CHECK).is_some())
+    SKIP_SETUP_CHECK.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Bypass the setup check for the rest of this process, the way
 /// [`ENV_SKIP_SETUP_CHECK`] does.
 ///
-/// For a harness that builds editor apps inside its own process, where the
-/// binary was compiled from the very workspace the recipe is cut from and
-/// so can never match the stamp on disk. Setting the variable would mean
-/// writing the environment out from under the threads a test suite runs
-/// on; this says the same thing without touching it.
+/// For a harness that builds editor apps in its own process, where the binary can
+/// never match the stamp on disk and setting the variable would mean writing the
+/// environment out from under the threads a test suite runs on.
 ///
-/// Has no effect once the flag has been read, so call it before the first
-/// app is built.
+/// Takes effect from the call on, whether or not the flag has already been read.
 pub fn skip_setup_check() {
-    let _ = SKIP_SETUP_CHECK.set(true);
+    SKIP_SETUP_CHECK.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Whether a first-use SDK build is still owed: this binary carries a
@@ -151,13 +142,9 @@ pub fn needs_setup() -> bool {
     setup_owed(setup_check_skipped(), recipe_is_embedded, sdk_is_stale)
 }
 
-/// The setup decision, with each answer behind the one before it.
-///
-/// The skip is asked first and on its own: whatever the recipe and the
-/// cache would say, a run told to bypass the check owes nothing, and
-/// neither of the other two answers is even worked out. Taking the inputs
-/// as arguments is what lets the order be checked without a stale cache on
-/// disk.
+/// The setup decision, with each answer behind the one before it. The skip is
+/// asked first and on its own; taking the inputs as arguments is what lets the
+/// order be checked without a stale cache on disk.
 fn setup_owed(
     skipped: bool,
     recipe_embedded: impl Fn() -> bool,
@@ -169,11 +156,9 @@ fn setup_owed(
 /// Whether the SDK this binary would use is missing or built from a recipe
 /// that has moved on.
 fn sdk_is_stale() -> bool {
-    // A release bundle (or an explicit JACKDAW_SDK_DIR) already ships a
-    // complete SDK next to the binary; without this check every `jd
-    // build` and editor first-run on a downloaded bundle recompiled the
-    // whole SDK from the embedded recipe anyway, hours of work for
-    // artifacts the download already contains.
+    // A release bundle (or an explicit JACKDAW_SDK_DIR) already ships a complete
+    // SDK next to the binary; without this check every `jd build` and editor
+    // first-run on a downloaded bundle recompiled the whole SDK.
     let resolved = crate::sdk_paths::SdkPaths::compute();
     if matches!(
         resolved.origin,
@@ -241,10 +226,9 @@ pub fn check_prerequisites() -> Vec<Prereq> {
         },
     });
 
-    // The SDK build compiles jackdaw's CSG kernel (`manifold-csg-sys`),
-    // a C++ library built with cmake. Without it the failure lands
-    // minutes into a compile, so it belongs in the same up-front report
-    // as cargo and rustup.
+    // The SDK build compiles jackdaw's CSG kernel (`manifold-csg-sys`), a C++
+    // library built with cmake. Without this check the failure lands minutes into
+    // a compile.
     out.push(match tool_version("cmake", "--version") {
         Some(version) => Prereq {
             name: "cmake",
@@ -279,9 +263,8 @@ pub fn check_prerequisites() -> Vec<Prereq> {
         });
     }
 
-    // The pinned toolchain is not a hard failure: setup installs it on
-    // demand. Report its state so `doctor` can preview whether the first
-    // build pays for a toolchain download.
+    // The pinned toolchain is not a hard failure: setup installs it on demand.
+    // Report its state so `doctor` can preview a toolchain download.
     if rustup.is_some() {
         let installed = rust_env_command("rustup")
             .args(["toolchain", "list"])
@@ -299,6 +282,22 @@ pub fn check_prerequisites() -> Vec<Prereq> {
             fix: None,
         });
     }
+
+    // The editor's own crates use unstable compiler features, so
+    // building jackdaw from source needs the same channel the SDK does.
+    // A checkout gets it from `rust-toolchain.toml`; `cargo install`
+    // builds outside any checkout and so outside that pin, and picks up
+    // whatever the default toolchain is. Say so here, because the
+    // failure it produces names a feature gate rather than a toolchain.
+    out.push(Prereq {
+        name: "editor toolchain",
+        ok: true,
+        detail: format!(
+            "jackdaw is built with {SDK_TOOLCHAIN_CHANNEL}; install from source with \
+             `cargo +{SDK_TOOLCHAIN_CHANNEL} install`"
+        ),
+        fix: None,
+    });
 
     out
 }
@@ -705,6 +704,38 @@ mod tests {
 
         skip_setup_check();
         assert!(setup_check_skipped(), "the flag is what the skip sets");
+    }
+
+    /// The editor reads the flag every frame and only calls the skip once its
+    /// own setup run finishes, so a skip that lost to the first read would
+    /// never take.
+    #[test]
+    fn skipping_after_the_flag_was_read_still_takes() {
+        let _ = setup_check_skipped();
+        skip_setup_check();
+        assert!(setup_check_skipped(), "the skip outranks the earlier read");
+    }
+
+    /// A source install builds outside the checkout's toolchain pin, and
+    /// the unstable features the editor uses fail on a stable default
+    /// with an error that names neither. The environment report is where
+    /// that is said.
+    #[test]
+    fn the_prerequisite_report_names_the_toolchain_an_install_needs() {
+        let report = check_prerequisites();
+        let toolchain = report
+            .iter()
+            .find(|check| check.name == "editor toolchain")
+            .expect("the report covers the toolchain jackdaw itself is built with");
+        assert!(toolchain.ok, "it is a note, not a gate");
+        assert!(
+            toolchain.detail.contains(SDK_TOOLCHAIN_CHANNEL)
+                && toolchain
+                    .detail
+                    .contains(&format!("cargo +{SDK_TOOLCHAIN_CHANNEL} install")),
+            "it names the channel and the command that uses it: {}",
+            toolchain.detail
+        );
     }
 
     #[test]

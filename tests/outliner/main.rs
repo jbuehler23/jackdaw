@@ -17,6 +17,7 @@ mod outliner_drag_cleanup;
 mod outliner_keyboard_walk;
 mod outliner_range_select;
 mod outliner_rename;
+mod outliner_row_drop;
 mod outliner_row_icons;
 mod outliner_row_lifecycle;
 mod tree_row_labels;

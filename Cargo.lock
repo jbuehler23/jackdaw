@@ -5340,6 +5340,7 @@ dependencies = [
  "bevy",
  "jackdaw_api",
  "jackdaw_runtime",
+ "rand 0.10.2",
 ]
 
 [[package]]

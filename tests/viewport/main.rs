@@ -8,6 +8,7 @@
 mod util;
 
 mod avian_picker_visibility;
+mod fly_cursor;
 mod multi_viewport;
 mod preview_context;
 mod viewport_2d;

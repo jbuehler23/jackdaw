@@ -45,15 +45,69 @@ pub(super) fn plugin(app: &mut App) {
             OnEnter(crate::AppState::Editor),
             announce_keymap_load_problem,
         );
+    #[cfg(feature = "dylib")]
+    app.add_systems(
+        OnEnter(crate::AppState::Editor),
+        load_installed_extensions_on_open,
+    );
 }
 
-/// Say out loud that the keymap on disk could not be read.
+/// Which installed bundles this session has yet to load: the ones the
+/// catalog does not already hold and the user has not turned off.
 ///
-/// The dialog says it too, but only to someone who opens it, and nobody
-/// opens Preferences to find out why their chords went back to the
-/// defaults. The status bar is where the editor says what it could not do,
-/// so it says this there as well, on the first frame there is a status bar
-/// to say it in.
+/// The startup scan runs while the app is being built, so a bundle
+/// installed by any other process afterwards - including the one that
+/// built the project's own extension - is invisible until the editor is
+/// restarted. Opening a project is where that is worth looking again.
+#[cfg_attr(
+    all(not(feature = "dylib"), not(test)),
+    expect(dead_code, reason = "its only caller is behind the `dylib` feature")
+)]
+fn unloaded_installed<'a>(
+    installed: impl IntoIterator<Item = (&'a str, &'a std::path::Path)>,
+    known: impl Fn(&str) -> bool,
+    turned_off: impl Fn(&str) -> bool,
+) -> Vec<std::path::PathBuf> {
+    installed
+        .into_iter()
+        .filter(|(id, _)| !known(id) && !turned_off(id))
+        .map(|(_, path)| path.to_path_buf())
+        .collect()
+}
+
+/// Load the installed extensions this session has not seen, on opening
+/// a project.
+#[cfg(feature = "dylib")]
+fn load_installed_extensions_on_open(world: &mut World) {
+    use jackdaw_api_internal::extensions_config::read_extension_config;
+    use jackdaw_api_internal::lifecycle::ExtensionCatalog;
+
+    let installed = match jackdaw_loader::package::list_installed() {
+        Ok(installed) => installed,
+        Err(error) => {
+            warn!("Could not read installed extensions: {error}");
+            return;
+        }
+    };
+    let config = read_extension_config().unwrap_or_default();
+    let catalog = world.resource::<ExtensionCatalog>();
+    let pending = unloaded_installed(
+        installed
+            .iter()
+            .map(|entry| (entry.manifest.id.as_str(), entry.library_path.as_path())),
+        |id| catalog.contains(id),
+        |id| config.get(id).is_some_and(|entry| !entry.enabled),
+    );
+    for library in pending {
+        match jackdaw_loader::load_installed_from_path(world, &library) {
+            Ok(id) => info!("Loaded extension `{id}` from {}", library.display()),
+            Err(error) => warn!("Failed to load {}: {error}", library.display()),
+        }
+    }
+}
+
+/// Report a keymap that could not be read in the status bar, on the first frame
+/// there is one. The Preferences dialog says it too, but only if opened.
 fn announce_keymap_load_problem(world: &mut World) {
     let Some(problem) = world.get_resource::<KeymapLoadProblem>() else {
         return;
@@ -107,4 +161,28 @@ pub(crate) fn apply_active_keymap(world: &mut World) {
         user.bindings.len(),
     );
     world.insert_resource(LastKeymapApply(report));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unloaded_installed;
+
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn only_bundles_the_session_has_not_seen_are_loaded() {
+        let installed = [
+            ("known", Path::new("/ext/known.so")),
+            ("fresh", Path::new("/ext/fresh.so")),
+            ("off", Path::new("/ext/off.so")),
+        ];
+        let pending = unloaded_installed(installed, |id| id == "known", |id| id == "off");
+        assert_eq!(pending, vec![PathBuf::from("/ext/fresh.so")]);
+    }
+
+    #[test]
+    fn nothing_installed_loads_nothing() {
+        let pending = unloaded_installed([], |_| false, |_| false);
+        assert!(pending.is_empty());
+    }
 }

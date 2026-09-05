@@ -1,16 +1,10 @@
-#![expect(clippy::print_stdout, reason = "test reports the matrix it checked")]
 //! Which SDK a given layout resolves to, as a table.
 //!
-//! Every SDK bug found by hand this week was a resolution bug: a release
-//! editor resolving a debug SDK, a manifest cached past the build it
-//! described, an in-tree SDK kept in preference to a usable one. Each
-//! surfaced as a rustc error naming a crate the user never wrote, nine
-//! minutes into a build, because nothing checked the layout first.
-//!
-//! These are pure path and metadata rules, so they can be checked from
-//! a directory tree in milliseconds. That is the point: the expensive
-//! end-to-end builds stay for what only they can catch (feature
-//! resolution, real linkage), and the layout contract is pinned here.
+//! Resolution bugs (a release editor resolving a debug SDK, a manifest cached
+//! past the build it described, an in-tree SDK kept over a usable one) surface as
+//! a rustc error nine minutes into a build. These are pure path and metadata
+//! rules, so the expensive end-to-end builds stay for feature resolution and real
+//! linkage.
 
 use std::path::{Path, PathBuf};
 
@@ -78,7 +72,6 @@ fn a_checkout_resolves_the_profile_it_was_built_at() {
 
         let _ = std::fs::remove_dir_all(&root);
     }
-    println!("checked debug and release resolve to matching layouts");
 }
 
 #[test]

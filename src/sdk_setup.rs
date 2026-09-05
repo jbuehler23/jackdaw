@@ -105,13 +105,32 @@ fn start_sdk_setup(
     editor_font: Res<EditorFont>,
     pending: Option<Res<crate::project_select::PendingAutoOpen>>,
 ) {
-    if pending.is_some() || setup.task.is_some() || matches!(setup.outcome, Some(Ok(()))) {
-        return;
-    }
-    if !bootstrap::needs_setup() {
+    if !setup_screen_owed(
+        pending.is_some(),
+        setup.task.is_some(),
+        setup.outcome.is_some(),
+        bootstrap::needs_setup,
+    ) {
         return;
     }
     kick_off(&mut commands, &mut setup, &editor_font.0);
+}
+
+/// Whether entering the launcher owes a setup run.
+///
+/// Setup is a once-per-process affair: the screen belongs to the first
+/// launch, not to every visit to the launcher. Once a run has settled -
+/// built the SDK, or failed and left its retry standing - going back to
+/// the launcher from an open project must not start a second one, which
+/// would stack another overlay over the first and put a project the user
+/// has already been editing back behind the first-run screen.
+fn setup_screen_owed(
+    auto_open_pending: bool,
+    running: bool,
+    settled: bool,
+    owed: impl Fn() -> bool,
+) -> bool {
+    !auto_open_pending && !running && !settled && owed()
 }
 
 /// Spawn the build task and the gating overlay.
@@ -181,6 +200,9 @@ fn poll_sdk_setup(
         match result {
             Ok(cache) => {
                 info!("SDK setup complete: {}", cache.display());
+                // Nothing further in this process is owed a setup run,
+                // whatever the stamp on disk goes on to say.
+                bootstrap::skip_setup_check();
                 setup.outcome = Some(Ok(()));
                 setup.done_at = Some(Instant::now());
                 if let Some(shared) = &setup.shared
@@ -475,4 +497,28 @@ fn spawn_overlay(commands: &mut Commands, font: &Handle<Font>) {
         .observe(|_: On<Pointer<Click>>, mut setup: ResMut<SdkSetup>| {
             setup.retry = true;
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::setup_screen_owed;
+
+    #[test]
+    fn a_first_launch_that_owes_an_sdk_build_shows_the_screen() {
+        assert!(setup_screen_owed(false, false, false, || true));
+        assert!(!setup_screen_owed(false, false, false, || false));
+    }
+
+    #[test]
+    fn returning_to_the_launcher_after_a_settled_run_shows_nothing() {
+        // Both outcomes settle it: a built SDK owes nothing, and a
+        // failure keeps the retry it already put on screen.
+        assert!(!setup_screen_owed(false, false, true, || true));
+        assert!(!setup_screen_owed(false, true, false, || true));
+    }
+
+    #[test]
+    fn an_auto_open_handoff_never_shows_the_screen() {
+        assert!(!setup_screen_owed(true, false, false, || true));
+    }
 }

@@ -126,17 +126,10 @@ impl Plugin for HierarchyPlugin {
                 PostUpdate,
                 (
                     rebuild_hierarchy_on_container_added,
-                    // Row maintenance, so it runs wherever the row-spawn
-                    // observers do rather than only in the Editor state.
                     spawn_rows_for_late_registrations,
                     refresh_chevrons_on_document_change,
                     refresh_icons_on_node_change,
                     sync_row_lock_glyphs.run_if(row_lock_glyphs_are_stale),
-                    // The drag feel: the line saying where a release
-                    // would land, the rest that opens a closed row, and
-                    // the scroll that reaches past the fold. Row
-                    // maintenance, so it runs wherever the drop
-                    // observers do rather than only in the Editor state.
                     jackdaw_feathers::tree_view::sync_tree_drop_line,
                     jackdaw_feathers::tree_view::spring_load_tree_rows,
                     jackdaw_feathers::tree_view::auto_scroll_tree_on_drag,
@@ -157,10 +150,7 @@ impl Plugin for HierarchyPlugin {
             .add_observer(on_tree_row_clicked)
             .add_observer(on_entity_removed)
             .add_observer(on_name_changed)
-            // One observer per component that decides a row's glyph. The
-            // resolver re-reads everything, so which one fired does not
-            // matter; what matters is that every deciding component has a
-            // trigger.
+            // Every component that decides a row's glyph needs a trigger.
             .add_observer(refresh_icon_on_add::<Brush>)
             .add_observer(refresh_icon_on_add::<Node>)
             .add_observer(refresh_icon_on_add::<Text>)
@@ -173,10 +163,8 @@ impl Plugin for HierarchyPlugin {
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::UiSceneRoot>)
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::Scene2dRoot>)
             .add_observer(refresh_icon_on_add::<jackdaw_prefab::components::IsA>)
-            // The world kinds. A row is spawned when `Transform` lands,
-            // and the document applies a patch one component at a time,
-            // so a streamed or pasted entity's kind arrives after its
-            // row and the glyph has to catch up.
+            // A row is spawned when `Transform` lands, so a streamed entity's
+            // kind arrives after its row.
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::Terrain>)
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::GltfSource>)
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::SceneRootTag>)
@@ -303,7 +291,7 @@ fn has_visible_children(world: &World, entity: Entity) -> bool {
     has_visible_children_in_mode(world, entity, live, &live_set)
 }
 
-/// [`has_visible_children`] with the view mode already resolved, for callers
+/// `has_visible_children` with the view mode already resolved, for callers
 /// judging many entities at once.
 fn has_visible_children_in_mode(
     world: &World,
@@ -369,16 +357,8 @@ fn is_outliner_child(world: &World, child: Entity) -> bool {
 }
 
 /// Whether `child` is a part some widget or plugin generated under an
-/// authored node rather than something the user placed.
-///
-/// The document is the test. A child the scene document has no node for,
-/// hanging off a parent it does have one for, was made after the parent was
-/// authored and will not survive a save, so it gets no row to select and
-/// edit. A UI widget assembled from several entities is the common case.
-///
-/// When the parent is *also* absent from the document (the whole live PIE
-/// tree, an unsaved scratch hierarchy) nothing was authored and the rule does
-/// not apply. "Show All" turns it off entirely.
+/// authored node rather than something the user placed: the document holds a
+/// node for the parent but none for the child. "Show All" turns it off.
 fn is_generated_part(world: &World, child: Entity) -> bool {
     if world
         .get_resource::<HierarchyShowAll>()
@@ -396,10 +376,7 @@ fn is_generated_part(world: &World, child: Entity) -> bool {
         return false;
     }
     // What a world asset spawned under an instance is an internal, not a
-    // generated part: the instance is one row and these are what opening it
-    // shows, drawn in the muted asset-part tone. Withholding them instead
-    // would leave every model in a scene a childless row and, once the wait
-    // ran out, a warning.
+    // generated part: it is what opening the instance's row shows.
     !is_asset_part(world, child)
 }
 
@@ -407,42 +384,22 @@ fn is_generated_part(world: &World, child: Entity) -> bool {
 /// *yet*, each paired with the `TreeRowChildren` container the row belongs
 /// under.
 ///
-/// Authored entities can be parented first and registered later: a new
-/// animation clip registers from an `Update` system a frame after it is
-/// spawned, and a load registers its entities after spawning them, with the
-/// row-spawn observers running in between. Judged then, those look like
-/// generated parts to [`is_generated_part`].
-///
-/// A withheld row is therefore remembered rather than dropped, and
-/// [`spawn_rows_for_late_registrations`] revisits the list on every frame it
-/// holds anything.
-///
-/// Bounded on both sides. An entry is only made for a child whose parent the
-/// document already holds, which is what tells an entity waiting for its own
-/// node apart from a generated ECS child -- a text span, a widget's internals
-/// -- that will never have one; and an entry is given up after
-/// [`WITHHELD_ROW_PASSES`] revisits, so a scene that keeps spawning children
-/// cannot grow a list every frame walks.
+/// Authored entities can be parented before they are registered, so judged
+/// then they look like generated parts. An entry is only made for a child
+/// whose parent the document already holds, and is given up after
+/// `WITHHELD_ROW_PASSES` revisits, so the list cannot grow without bound.
 #[derive(Resource, Default)]
 struct RowsAwaitingRegistration {
     rows: Vec<WithheldRow>,
-    /// Entities the list gave up on, in the order it gave up on them.
-    ///
-    /// Giving up is a scene entity the outliner will never draw, which is
-    /// the kind of loss that has to leave a trace: the warning is written
-    /// from this, and [`rows_the_outliner_gave_up_on`] reads it back.
+    /// Entities the list gave up on, in the order it gave up on them. Each
+    /// is a scene entity the outliner will never draw.
     abandoned: Vec<Entity>,
 }
 
 /// Forget what the outliner was waiting for, and what it gave up on.
 ///
-/// Called when the scene the entities belonged to goes away. Neither list is
-/// about the scene now open: a withheld row names an entity that has been
-/// despawned, and an abandoned one names an entity id that a later spawn will
-/// reuse, so `rows_the_outliner_gave_up_on` would name a row that is drawn
-/// perfectly well. `abandoned` is the list that mattered, since nothing else
-/// ever takes anything out of it and it would otherwise grow for the length
-/// of the session.
+/// Called when the scene the entities belonged to goes away: both lists name
+/// entity ids a later spawn will reuse.
 pub fn forget_withheld_rows(world: &mut World) {
     let Some(mut pending) = world.get_resource_mut::<RowsAwaitingRegistration>() else {
         return;
@@ -461,32 +418,27 @@ pub fn rows_the_outliner_gave_up_on(world: &World) -> Vec<Entity> {
 }
 
 /// How many passes a withheld row waits for its document node before the list
-/// gives up on it. Every path that registers an entity at all does so within a
-/// frame or two of the parent link.
+/// gives up on it.
 const WITHHELD_ROW_PASSES: u32 = 64;
 
-/// One row [`withhold_row`] is holding back.
+/// One row `withhold_row` is holding back.
 struct WithheldRow {
     /// The `TreeRowChildren` container the row belongs under.
     children_container: Entity,
     child: Entity,
-    /// Revisits so far, against [`WITHHELD_ROW_PASSES`].
+    /// Revisits so far, against `WITHHELD_ROW_PASSES`.
     passes: u32,
 }
 
 /// Remember a row this frame declined to spawn, in case the entity is only
-/// waiting for its document node.
-///
-/// A child whose parent is not itself in the document is not waiting for
-/// anything -- nothing registers a child before its parent -- so it is dropped
-/// here rather than joining a list every frame walks.
+/// waiting for its document node. A child whose parent is not itself in the
+/// document is not waiting for anything, so it is dropped here.
 fn withhold_row(world: &mut World, children_container: Entity, child: Entity) {
     withhold_row_after(world, children_container, child, 0);
 }
 
-/// [`withhold_row`] carrying forward how many passes the row has already
-/// spent waiting, so a row put back keeps counting towards
-/// [`WITHHELD_ROW_PASSES`] rather than starting its wait again.
+/// `withhold_row` carrying forward how many passes the row has already spent
+/// waiting, so a row put back keeps counting rather than starting over.
 fn withhold_row_after(world: &mut World, children_container: Entity, child: Entity, passes: u32) {
     if passes >= WITHHELD_ROW_PASSES {
         return;
@@ -521,11 +473,9 @@ fn withhold_row_after(world: &mut World, children_container: Entity, child: Enti
 
 /// Spawn the rows withheld from entities that have since joined the document.
 ///
-/// Revisited whenever the list holds anything, rather than only on a frame
-/// the document changes: an entity can join the document in the same frame
-/// its row is withheld, in whichever order the two land, and a pass that only
-/// looked at the changed frames would then never look again. The list is
-/// bounded by [`withhold_row`], and each entry is one lookup.
+/// Revisited whenever the list holds anything rather than only when the
+/// document changes: an entity can join the document in the same frame its
+/// row is withheld, in either order.
 fn spawn_rows_for_late_registrations(
     document: Res<jackdaw_bsn::SceneBsnAst>,
     mut pending: ResMut<RowsAwaitingRegistration>,
@@ -546,10 +496,6 @@ fn spawn_rows_for_late_registrations(
             if row.passes < WITHHELD_ROW_PASSES {
                 still_waiting.push(row);
             } else {
-                // The bound is what stops the list growing, and giving up
-                // is a row the outliner will never draw. Say which entity,
-                // because the symptom otherwise is a scene entity with no
-                // row and nothing anywhere saying why.
                 warn!(
                     "Outliner: {} never joined the document after \
                      {WITHHELD_ROW_PASSES} passes; it has no row",
@@ -585,9 +531,8 @@ fn spawn_withheld_row(world: &mut World, children_container: Entity, child: Enti
     if row_source != world.get::<ChildOf>(child).map(ChildOf::parent) {
         return;
     }
-    // The document node arrived before the authored name did. Keep waiting
-    // rather than returning: the row was withheld for the name in the first
-    // place, and dropping it here loses it for good.
+    // The document node arrived before the authored name did; keep waiting
+    // rather than dropping the row for good.
     if !world.resource::<HierarchyShowAll>().0 && world.get::<Name>(child).is_none() {
         withhold_row_after(world, children_container, child, passes + 1);
         return;
@@ -600,8 +545,6 @@ fn spawn_withheld_row(world: &mut World, children_container: Entity, child: Enti
     spawn_single_tree_row(world, child, children_container);
     // A withheld row joins the panel whenever its document node turns up,
     // which for a load is not the order the document lists its children in.
-    // Appending it would leave the panel disagreeing with both the canvas and
-    // the file that was just opened.
     if let Some(parent) = world.get::<ChildOf>(child).map(ChildOf::parent) {
         sync_outliner_row_order(world, Some(parent));
     }
@@ -675,9 +618,8 @@ fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: En
     let icon_font = world.resource::<IconFont>().0.clone();
     let style = TreeRowStyle { icon_font };
     let icon_override = registered_icon(world, source);
-    // Read rather than assumed false: a row is spawned when its branch is
-    // opened, which can be long after the entity was selected -- from the
-    // canvas, or before the branch was closed and opened again.
+    // Read rather than assumed false: a branch can be opened long after the
+    // entity was selected from the canvas.
     let selected = world.get::<Selected>(source).is_some();
 
     let tree_row_entity = world
@@ -696,10 +638,8 @@ fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: En
         .id();
     set_row_expand_toggle(world, tree_row_entity, has_children);
     if selected && let Some(content) = first_child_with::<TreeRowContent>(world, tree_row_entity) {
-        // The colours came with the bundle; the marker is what every other
-        // path asks whether the row is selected, and it is inserted by the
-        // observer that watches `Selected` land -- which for this row has
-        // already been and gone.
+        // The colours came with the bundle, but the marker the rest of the
+        // code reads is inserted by an observer that has already fired.
         world.entity_mut(content).insert(TreeRowSelected);
     }
 
@@ -775,11 +715,9 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
             return;
         }
 
-        // In Live mode the roots are the live preview entities whose parent is
-        // not itself live, shown as-is (no Name/show-all filter). In Scene mode
-        // they are the authored root scene entities (Transform or UiSceneRoot,
-        // no ChildOf, no editor markers), filtered by Name unless show-all is
-        // on.
+        // Live roots are the live preview entities whose parent is not itself
+        // live; Scene roots are the authored, unparented ones, filtered by
+        // `Name` unless show-all is on.
         let live = world
             .get_resource::<crate::pie_mirror::PieViewMode>()
             .copied()
@@ -900,11 +838,8 @@ pub(crate) struct RevealTarget {
     pub(crate) frames_left: u8,
 }
 
-/// Arm [`RevealTarget`] on the primary selection so the driver brings its row
-/// into view. Both view modes need this: a node added under a collapsed parent
-/// has no row at all, or has one hidden inside a collapsed ancestor, and in
-/// neither case can the user see what they just selected. The driver clears an
-/// already-visible target on its next tick, so no check is needed here.
+/// Arm `RevealTarget` on the primary selection so the driver brings its row
+/// into view: a node added under a collapsed parent has no visible row at all.
 fn watch_selection_for_reveal(selection: Res<Selection>, mut reveal: ResMut<RevealTarget>) {
     if !selection.is_changed() {
         return;
@@ -934,11 +869,8 @@ fn collapsed_ancestor_row(world: &World, target: Entity) -> Option<Entity> {
     None
 }
 
-/// While [`RevealTarget`] is armed, expand the highest still-collapsed ancestor
-/// row of the target each frame. Expanding a row triggers
-/// `on_tree_node_expanded`, which spawns the next level on the following flush;
-/// the driver then advances to that newly rowed ancestor on the next frame.
-/// Clears the target once its own row exists with every ancestor open, or the
+/// While `RevealTarget` is armed, expand the highest still-collapsed ancestor
+/// row of the target each frame, until the target's own row exists or the
 /// countdown runs out.
 fn drive_reveal_target(world: &mut World) {
     let target = world.resource::<RevealTarget>().entity;
@@ -992,9 +924,8 @@ fn on_root_entity_added(
     );
 }
 
-/// A UI scene root is a `bevy_ui` node: it carries `UiTransform`, never
-/// `Transform`, so [`on_root_entity_added`] cannot fire for it. This mirrors
-/// that observer on `UiSceneRoot`.
+/// A UI scene root carries `UiTransform`, never `Transform`, so
+/// `on_root_entity_added` cannot fire for it. This mirrors it on `UiSceneRoot`.
 fn on_ui_root_added(
     trigger: On<Add, UiSceneRoot>,
     mut commands: Commands,
@@ -1191,14 +1122,9 @@ fn first_child_with<C: Component>(world: &World, parent: Entity) -> Option<Entit
 
 /// Re-derive the icon glyph for every Outliner row of `entity`.
 ///
-/// What kind of thing an entity is comes out of `registered_icon`, which
-/// reads the components it carries and, for a container, their values.
-/// Both can arrive after the row does: the duplicate path streams a
-/// brush's components in one at a time, so the row can be spawned (when
-/// `Transform` lands) before `Brush` does, and a container's
-/// `flex_direction` changes long after it has a row. Refreshing the glyph
-/// here mirrors how the label refreshes on a `Name` change. Only the glyph
-/// changes: a row's category (and so its icon color) does not depend on it.
+/// What the glyph is derived from can arrive after the row does: a duplicated
+/// brush streams its components in one at a time, and a container's
+/// `flex_direction` changes long after it has a row.
 fn refresh_row_icon(world: &mut World, entity: Entity) {
     let rows: Vec<Entity> = world
         .resource::<TreeIndex>()
@@ -1208,10 +1134,8 @@ fn refresh_row_icon(world: &mut World, entity: Entity) {
     if rows.is_empty() {
         return;
     }
-    // Both, not just the glyph. A row is built when `Name` lands, which for
-    // a loaded scene is before the component that says what the entity is,
-    // so the category the row was drawn with is as stale as the glyph and
-    // the colour would otherwise stay the plain-entity grey.
+    // The category too, not just the glyph: a row is built when `Name` lands,
+    // before the component that says what the entity is.
     let category = classify_entity(world, entity);
     let inherited = is_inherited_descendant(world, entity);
     let icon = registered_icon(world, entity)
@@ -1253,12 +1177,9 @@ fn refresh_row_chevron(world: &mut World, entity: Entity) {
     }
 }
 
-/// Re-derive every row's disclosure after the document changed.
-///
-/// Whether a child counts is judged against the document (an unregistered
-/// child under a registered parent is a generated part, not a row), and a
-/// widget is parented before it is registered, so the moment the parent gains
-/// its child is too early to tell. This is the pass that catches up.
+/// Re-derive every row's disclosure after the document changed. A widget is
+/// parented before it is registered, so the frame its parent gains it is too
+/// early to tell whether it counts as a row.
 fn refresh_chevrons_on_document_change(
     document: Res<jackdaw_bsn::SceneBsnAst>,
     mut commands: Commands,
@@ -1287,12 +1208,8 @@ fn refresh_all_row_chevrons(world: &mut World) {
     }
 }
 
-/// The component that says what kind of thing an entity is can land after
-/// its row does: the duplicate path writes a brush's components into the
-/// world one at a time, so the row can be created before `Brush` arrives
-/// and shows the generic dot, and a widget's `Node` is written before the
-/// document knows it is a row or a column. Re-derive the glyph whenever a
-/// deciding component appears.
+/// Re-derive the glyph whenever a component that decides it appears: the
+/// component can land after the row does, leaving the generic dot behind.
 fn refresh_icon_on_add<C: Component>(trigger: On<Add, C>, mut commands: Commands) {
     let entity = trigger.event_target();
     commands.queue(move |world: &mut World| {
@@ -1300,10 +1217,9 @@ fn refresh_icon_on_add<C: Component>(trigger: On<Add, C>, mut commands: Commands
     });
 }
 
-/// A container's kind is a `Node` value, not a component, so flipping
-/// `flex_direction` in the inspector has to re-derive the glyph the same
-/// way an added component does. Only entities that already have a row are
-/// worth the lookup; `Node` changes on every authored layout edit.
+/// A container's kind is a `Node` value, not a component, so an inspector edit
+/// to `flex_direction` has to re-derive the glyph too. `Node` changes on every
+/// layout edit, so only entities that already have a row are worth the lookup.
 fn refresh_icons_on_node_change(
     changed: Query<Entity, Changed<Node>>,
     tree_index: Res<TreeIndex>,
@@ -1350,13 +1266,8 @@ fn on_entity_reparented(
     let parent_rows: Vec<(Entity, Entity)> = tree_index.rows_for_source(new_parent).collect();
 
     // A row built while the entity was still unparented sits at the panel
-    // root, and now that the entity has a parent it cannot stay there. A
-    // world asset's spawned root is named and unparented for the moment
-    // between the loader spawning it and the instance adopting it, which is
-    // what put a second top-level row ("Scene") beside every model in the
-    // scene. Where the parent's branch is not open there is nothing to move
-    // the row into, so it goes: opening the parent builds it again, which is
-    // how every other row below a closed branch is handled.
+    // root and cannot stay there. Where the parent's branch is not open there
+    // is nothing to move it into, so it goes; opening the parent rebuilds it.
     let stranded: Vec<(Entity, Entity)> = tree_index
         .rows_for_source(entity)
         .filter(|(container, row)| {
@@ -1439,16 +1350,14 @@ fn on_entity_reparented(
                 return;
             }
             // In named-only mode, skip entities without a Name. An authored
-            // name arrives with the document patches, which can land after
-            // the parent link does, so the row is remembered rather than
-            // dropped and revisited once the entity is in the document.
+            // name can land after the parent link, so the row is remembered
+            // rather than dropped.
             if !world.resource::<HierarchyShowAll>().0 && world.get::<Name>(entity).is_none() {
                 withhold_row(world, parent_children_container_for_spawn, entity);
                 return;
             }
-            // Same predicate the expansion path applies, so a part appearing
-            // under an already-expanded row is filtered like one under a
-            // collapsed row. A part awaiting its document node is remembered.
+            // Same predicate the expansion path applies. A part awaiting its
+            // document node is remembered.
             if !is_outliner_child(world, entity) {
                 if is_generated_part(world, entity) {
                     withhold_row(world, parent_children_container_for_spawn, entity);
@@ -1538,12 +1447,8 @@ fn on_tree_node_expanded(
     };
 
     // A closed row draws none of its subtree, so nothing under it needs to
-    // exist. Kept, the rows were a per-node cost the panel paid for every
-    // branch ever opened, for the rest of the session.
-    //
-    // Only the rows this observer built, though: a row can be populated by
-    // the late-registration pass without ever having been opened, and those
-    // rows are not this observer's to take away.
+    // exist. Only the rows this observer built, though: the late-registration
+    // pass populates rows that were never opened.
     if !expanded.0 {
         if built_on_expand {
             commands.queue(move |world: &mut World| free_row_children(world, entity));
@@ -1644,11 +1549,8 @@ fn on_tree_node_expanded(
         if let Ok(mut row) = world.get_entity_mut(tree_row_entity) {
             row.insert(RowsBuiltOnExpand);
         }
-        // The sort above is the fallback order, for a parent the document has
-        // no say over. Where it does -- an authored node, whose child order is
-        // what the file holds and what the canvas lays out -- that order wins,
-        // or an expansion after a reload shows the rows in an order neither
-        // the file nor the canvas agrees with.
+        // The sort above is only the fallback order: for an authored node the
+        // document's child order wins, so the panel agrees with the file.
         if world
             .get_resource::<jackdaw_bsn::SceneBsnAst>()
             .is_some_and(|ast| ast.ast_for(source).is_some())
@@ -1659,24 +1561,16 @@ fn on_tree_node_expanded(
 }
 
 /// Marks a row whose child rows were built by opening it, and which may
-/// therefore have them taken away again when it is closed.
-///
-/// Not every populated row is one of these. The late-registration pass
-/// puts rows under a container whose row was never opened, and freeing
-/// those on a close would lose rows nothing rebuilds.
+/// therefore have them taken away again when it is closed. Rows the
+/// late-registration pass built are not marked: freeing those would lose them.
 #[derive(Component)]
 struct RowsBuiltOnExpand;
 
 /// Despawn the rows under a collapsed row and mark it unpopulated, so
 /// re-opening it builds them again.
 ///
-/// The `TreeIndex` entries go first, and for the whole subtree rather than
-/// just the top level: the index is what every other path asks whether a
-/// source already has a row, and an entry naming a despawned row is a row
-/// that can never be spawned again. `maintain_tree_index` would reach the
-/// same answer from `RemovedComponents`, but it finds each key by scanning
-/// the map, which over a branch of thousands is a stall on the frame a
-/// user closed a disclosure triangle.
+/// The `TreeIndex` entries go first, for the whole subtree: an entry naming a
+/// despawned row is a row that can never be spawned again.
 fn free_row_children(world: &mut World, row: Entity) {
     let Some(container) = first_child_with::<TreeRowChildren>(world, row) else {
         return;
@@ -1698,9 +1592,8 @@ fn free_row_children(world: &mut World, row: Entity) {
     if let Ok(mut entity) = world.get_entity_mut(row) {
         entity.remove::<RowsBuiltOnExpand>();
     }
-    // The keyboard walks the rows that are drawn, and the row it was on is
-    // no longer one of them. The row just closed is where the walk resumes,
-    // which is where the user's attention is.
+    // The keyboard walks the rows that are drawn; the row just closed is
+    // where the walk resumes.
     let focused = world.resource::<TreeFocused>().0;
     if focused.is_some_and(|focused| world.get_entity(focused).is_err()) {
         world.resource_mut::<TreeFocused>().0 = Some(row);
@@ -1729,15 +1622,9 @@ fn forget_row_subtree(world: &mut World, row: Entity, owner: Option<Entity>) {
 
 /// Handle tree row click -> select the source entity.
 ///
-/// A plain click selects the row, whether or not it was already
-/// selected; Ctrl+click toggles it in or out of the selection.
-///
-/// A double click on a prefab instance root opens the scene it inherits
-/// from, which is the only way to edit an imported UI scene: where it is
-/// instanced its tree is inherited, not authored. The timing state is a
-/// `Local` because nothing outside this observer reads it; the window
-/// matches the other double clicks in the editor (`viewport_select`, the
-/// asset browser).
+/// Ctrl+click toggles the row in or out of the selection, Shift sweeps from
+/// the anchor. A double click on a prefab instance root opens the scene it
+/// inherits from, the only way to edit an imported UI scene.
 fn on_tree_row_clicked(
     event: On<TreeRowClicked>,
     mut commands: Commands,
@@ -1759,9 +1646,8 @@ fn on_tree_row_clicked(
         return;
     }
 
-    // Selecting inside a world asset selects the instance. An internal has
-    // no node in the document, so there is nothing about it to inspect,
-    // move or save; the instance is the thing the click is aimed at.
+    // Selecting inside a world asset selects the instance: an internal has no
+    // node in the document, so there is nothing about it to inspect or save.
     let selected_entity = asset_instance_for_selection(
         event.source_entity,
         &parent_query,
@@ -1786,11 +1672,8 @@ fn on_tree_row_clicked(
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
 
-    // A plain click on a row that is already selected keeps it selected.
-    // Clicking the row you are working on is how a panel is brought back
-    // into focus, and losing the selection there costs the inspector, the
-    // canvas outline and every gesture aimed at it. Ctrl is the deselect,
-    // and Shift sweeps from the anchor to here.
+    // A plain click on an already-selected row keeps it selected: clicking
+    // the row you are working on is how a panel is brought back into focus.
     if ctrl {
         selection.toggle(&mut commands, selected_entity);
         anchor.0 = Some(selected_entity);
@@ -1811,12 +1694,9 @@ fn on_tree_row_clicked(
     }
 }
 
-/// The entity a click on `clicked`'s row selects.
-///
-/// Everything a world asset spawned under an instance answers with the
-/// instance. Anything else, including an entity the user authored under a
-/// model, answers with itself: it has a node in the document, so it is a
-/// thing to select. The query form of [`is_asset_part`], for the observer.
+/// The entity a click on `clicked`'s row selects: the instance for anything a
+/// world asset spawned, and the entity itself otherwise. The query form of
+/// `is_asset_part`.
 fn asset_instance_for_selection(
     clicked: Entity,
     parents: &Query<&ChildOf>,
@@ -1836,28 +1716,19 @@ fn asset_instance_for_selection(
     clicked
 }
 
-/// How long after a click a second one still reads as a double click.
-///
-/// The editor's one answer to that question, so the outliner and the
-/// canvas agree about what a double click is.
+/// How long after a click a second one still reads as a double click, for the
+/// whole editor.
 pub(crate) const DOUBLE_CLICK_SECS: f64 = 0.4;
 
-/// Where a Shift-click's range starts: the row a plain click last landed on.
-///
-/// A range is stated between two rows, and only one of them is the click
-/// being handled. The other is this, and it is set by the clicks that mean
-/// "start here" -- a plain click and a Ctrl-click -- and left alone by the
-/// Shift-clicks themselves, so a run of Shift-clicks sweeps the range from
-/// one end rather than growing it a row at a time.
+/// Where a Shift-click's range starts: the row a plain click or Ctrl-click
+/// last landed on. Shift-clicks leave it alone, so a run of them sweeps the
+/// range from one end rather than growing it a row at a time.
 #[derive(Resource, Default)]
 pub struct OutlinerRangeAnchor(pub Option<Entity>);
 
-/// The source entities of `container`'s rows, top to bottom, as the panel
-/// draws them.
-///
-/// Visible rows only, which is what a range is stated over: a collapsed
-/// row's children are not on screen to be swept, and the filter takes a row
-/// and everything under it off the list by laying it out as nothing.
+/// The source entities of `container`'s visible rows, top to bottom, as the
+/// panel draws them. A range is stated over these: a collapsed row's children
+/// are not on screen to be swept.
 pub fn visible_row_sources(world: &World, container: Entity) -> Vec<Entity> {
     let mut sources = Vec::new();
     collect_visible_rows(world, container, &mut sources);
@@ -1889,11 +1760,9 @@ fn collect_visible_rows(world: &World, entity: Entity, sources: &mut Vec<Entity>
 
 /// Select every visible row between the anchor and `target`.
 ///
-/// The anchor holds still, so the click's own row is what ends up primary:
-/// the inspector and the canvas outline follow the row the user pointed at,
-/// whichever end of the range it is. An anchor that is not on this panel's
-/// visible list -- never set, collapsed away, filtered out -- has no range to
-/// state, so the click selects its own row and becomes the new anchor.
+/// The anchor holds still, so the click's own row ends up primary. An anchor
+/// that is not on this panel's visible list selects only the clicked row and
+/// becomes the new anchor.
 fn select_row_range(world: &mut World, clicked: Entity, target: Entity) {
     let container = ancestor_hierarchy_root(world, clicked);
     let anchor = world.resource::<OutlinerRangeAnchor>().0;
@@ -2006,6 +1875,16 @@ fn on_tree_row_dropped(
         return;
     }
 
+    // A row dropped on the parent it already has: the reparent would
+    // remove the child and add it back in one command, and the row
+    // observers would rebuild a row that is already where it belongs.
+    if parent_query
+        .get(dragged)
+        .is_ok_and(|child_of| child_of.0 == target)
+    {
+        return;
+    }
+
     // Cycle check: walk up from target, ensure dragged is not an ancestor
     let mut current = target;
     while let Ok(&ChildOf(parent)) = parent_query.get(current) {
@@ -2071,13 +1950,8 @@ fn on_tree_row_dropped(
 }
 
 /// Put every Outliner panel's rows for `parent`'s children back in the order
-/// the scene holds them in.
-///
-/// A reorder changes no row's parent, so none of the reparent observers hear
-/// about it; the rows would keep the order they were spawned in and disagree
-/// with both the canvas and the saved file.
-///
-/// `None` is the scene's own root list, whose order the document holds.
+/// the scene holds them in. A reorder changes no row's parent, so none of the
+/// reparent observers hear about it. `None` is the scene's own root list.
 pub fn sync_outliner_row_order(world: &mut World, parent: Option<Entity>) {
     let order: Vec<Entity> = match parent {
         Some(parent) => world
@@ -2132,9 +2006,7 @@ pub fn sync_outliner_row_order(world: &mut World, parent: Option<Entity>) {
 }
 
 /// Handle a drop in the gap between two rows: reorder rather than reparent.
-///
-/// The widget reports which row the gap sits against and which side of it;
-/// the sibling index that names is read here, where the scene is.
+/// The widget reports which row the gap sits against and which side of it.
 fn on_tree_row_inserted(
     event: On<TreeRowInserted>,
     mut commands: Commands,
@@ -2163,11 +2035,8 @@ fn on_tree_row_inserted(
 
 /// Move what the drag was carrying into the gap beside `target`.
 ///
-/// A drag that starts on a selected row carries the whole selection, the
-/// way a drag in any list does; moving only the row under the cursor
-/// would take one node out of a group the user had just made. The
-/// selection lands in the order the tree shows it, not the order it was
-/// clicked in, because that is the order the user can see.
+/// A drag that starts on a selected row carries the whole selection, and it
+/// lands in the order the tree shows it rather than the order it was clicked.
 fn insert_dragged(world: &mut World, dragged: Entity, target: Entity, after: bool) {
     let landing = crate::commands::HierarchyLocation::from_world(world, target);
     let moving = dragged_group(world, dragged, target);
@@ -2225,18 +2094,12 @@ fn insert_dragged(world: &mut World, dragged: Entity, target: Entity, after: boo
     }
 }
 
-/// What a drag starting on `dragged` carries, in the order the tree shows
-/// it: the whole selection when the dragged row is part of one, and that
-/// row alone otherwise.
+/// What a drag starting on `dragged` carries, in the order the tree shows it:
+/// the whole selection when the dragged row is part of one, and that row alone
+/// otherwise.
 ///
-/// A node the drop would bury inside itself, or the drop target itself, is
-/// dropped from the group rather than refusing the whole gesture.
-///
-/// So is a node another member of the group already carries: moving a
-/// parent moves its subtree, so a selection holding both a parent and its
-/// child would move the child twice -- once with the parent, and again on
-/// its own, which lands it beside the parent instead of inside it. The
-/// subtree goes once, with its root.
+/// A node the drop would bury inside itself, and a node another member already
+/// carries with its subtree, leave the group rather than refusing the gesture.
 fn dragged_group(world: &mut World, dragged: Entity, target: Entity) -> Vec<Entity> {
     let selected: Vec<Entity> = world.resource::<Selection>().entities.clone();
     let mut group = if selected.contains(&dragged) && selected.len() > 1 {
@@ -2761,13 +2624,8 @@ fn on_visibility_toggled(
 }
 
 /// Lock or unlock an entity from its row, and write the answer into the
-/// document.
-///
-/// The lock is scene data rather than a view state: what it is for is a
-/// backdrop that stays out of the way of every click aimed at what sits on
-/// it, and re-locking that backdrop on every open is exactly the chore the
-/// lock was set to end. So the component goes on the entity and its patch
-/// goes on the document node, and the two come back together on a reload.
+/// document. The lock is scene data rather than a view state, so it comes back
+/// on a reload.
 fn on_lock_toggled(event: On<TreeRowLockToggled>, mut commands: Commands) {
     let source = event.source_entity;
     commands.queue(move |world: &mut World| {
@@ -2783,13 +2641,8 @@ fn on_lock_toggled(event: On<TreeRowLockToggled>, mut commands: Commands) {
     });
 }
 
-/// Undoable lock or unlock of one node.
-///
-/// The lock is document data, so it belongs on the undo stack beside every
-/// other document edit. Recording nothing left it under the snapshot history
-/// instead: Ctrl+Z after locking undid whatever came before the lock, and the
-/// next unrelated undo restored a state taken before it and flipped the lock
-/// back.
+/// Undoable lock or unlock of one node. The lock is document data, so it
+/// belongs on the undo stack beside every other document edit.
 struct SetLocked {
     entity: Entity,
     locked: bool,
@@ -2838,20 +2691,9 @@ pub fn set_locked(world: &mut World, entity: Entity, locked: bool) {
 #[derive(Component)]
 struct RowLockGlyph(bool);
 
-/// Keep every row's padlock saying whether its entity is locked.
-///
-/// A pass rather than a write at the moment the lock changes, because the
-/// two do not happen at the same time: a lock arrives with the document,
-/// before the row exists, and the row's button renders its glyph a frame
-/// after the row is spawned. A row whose glyph is not there yet is left for
-/// the next frame, and a row already saying the right thing is not written
-/// at all.
-/// Whether anything could have changed a padlock since the last pass.
-///
-/// A lock arriving, a lock going, or a row that has not been written yet
-/// -- which covers a row spawned this frame and a row whose button had not
-/// rendered its glyph when the pass last looked. Nothing else can move a
-/// padlock, so on every other frame the walk over every row is skipped.
+/// Whether anything could have changed a padlock since the last pass: a lock
+/// arrived, a lock went, or a row has not been written yet. Nothing else moves
+/// a padlock, so every other frame skips the walk over every row.
 fn row_lock_glyphs_are_stale(
     pending: Query<(), (With<TreeNode>, Without<RowLockGlyph>)>,
     locked_arrived: Query<(), Added<jackdaw_scene_types::Locked>>,
@@ -2941,11 +2783,8 @@ fn refresh_row_visibility_glyph(world: &mut World, entity: Entity, hidden: bool)
 }
 
 /// Move one entity under another, the way dragging its outliner row does.
-///
 /// Both targets are named rather than taken from the selection, which cannot
-/// say which of the two it means. The move goes through [`ReparentEntity`],
-/// so the outliner, the document, and one undo entry all follow from the same
-/// command a drop pushes.
+/// say which of the two it means.
 #[operator(
     id = "entity.reparent",
     label = "Reparent Entity",
@@ -3072,19 +2911,14 @@ fn entity_name(names: &Query<&Name>, entity: Entity) -> String {
         .unwrap_or_default()
 }
 
-/// The label of a scene entity's tree row, the row content holding it, and
-/// the slot it occupies among that content's children.
-///
-/// With multi-instance Outliner panels, returns the first match across all
-/// containers; the inline-rename UX targets one panel at a time and the
-/// others stay synchronised once the rename commits via `on_name_changed`
-/// / `on_name_mutated`.
+/// The label of a scene entity's tree row, the row content holding it, and the
+/// slot it occupies among that content's children. With several Outliner panels
+/// mounted, this is the first match across all of them.
 struct RenameTarget {
     label: Entity,
     content: Entity,
-    /// Where the label sits among the row's children, so the entry can
-    /// take that place rather than being appended past the lock and the
-    /// eye.
+    /// Where the label sits among the row's children, so the entry can take
+    /// that place rather than being appended past the lock and the eye.
     slot: usize,
 }
 
@@ -3202,10 +3036,8 @@ pub fn rename_begin(
             ),
         ))
         .id();
-    // The label's own slot and the label's own width: an entry appended to
-    // the row instead lands past the lock and the eye, in whatever the two
-    // of them leave over, which on a narrow panel is a box too small to
-    // read a name back out of.
+    // The label's own slot and width: an entry appended to the row lands past
+    // the lock and the eye, in a box too small to read a name out of.
     commands
         .entity(entry)
         .entry::<Node>()
@@ -3239,7 +3071,7 @@ fn cancel_rename_begin(
 /// Auto-focus inline rename `text_edit` inputs one frame after spawn.
 ///
 /// The name the entry opened on is already selected by then; see
-/// [`TextEditProps::select_all_on_open`].
+/// `TextEditProps::select_all_on_open`.
 fn auto_focus_inline_rename(
     rename_inputs: Query<(Entity, &InlineRenameInput, &Children)>,
     wrappers: Query<&jackdaw_feathers::text_edit::TextEditConfig>,
@@ -3683,12 +3515,9 @@ fn apply_hierarchy_filter(
     }
 }
 
-/// Write `display` only when it is not already what the node says.
-///
-/// Every write dirties `Node`, and a dirty `Node` is what asks the icon
-/// pass to resolve a glyph again. A filter keystroke touches every row, so
-/// writing the value each row already held would make each keystroke cost
-/// a full re-resolve of the tree for nothing.
+/// Write `display` only when it is not already what the node says. Every write
+/// dirties `Node`, which asks the icon pass to resolve that row's glyph again,
+/// and a filter keystroke touches every row.
 fn set_display(node: &mut Mut<Node>, display: Display) {
     if node.display != display {
         node.display = display;
@@ -3808,11 +3637,8 @@ mod tests {
         assert!(!is_outliner_child(&world, ghost));
     }
 
-    /// Typing in the filter hides and shows rows. Writing `display` on a
-    /// row dirties its `Node`, and a dirty `Node` is what asks the icon
-    /// pass to resolve that row's glyph again, so a filter that wrote the
-    /// value each row already held would put the whole tree through the
-    /// resolver on every keystroke that changed nothing.
+    /// Writing `display` on a row dirties its `Node`, which puts that row
+    /// through the icon resolver again.
     #[test]
     fn a_filter_keystroke_that_changes_nothing_writes_no_display() {
         use jackdaw_feathers::text_edit::TextEditValue;
@@ -3850,7 +3676,6 @@ mod tests {
         };
         let before = ticks(&app);
 
-        // A keystroke landing on the same set of visible rows.
         app.world_mut()
             .get_mut::<TextEditValue>(filter)
             .expect("the filter holds a value")
@@ -3863,7 +3688,6 @@ mod tests {
             "the keystroke changed no row's visibility and must write nothing",
         );
 
-        // And a keystroke that does change one still reaches it.
         app.world_mut()
             .get_mut::<TextEditValue>(filter)
             .expect("the filter holds a value")

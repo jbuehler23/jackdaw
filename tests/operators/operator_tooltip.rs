@@ -1,12 +1,7 @@
-//! End-to-end tooltip pipeline coverage.
-//!
-//! Verifies that
-//! `OperatorTooltipPlugin::auto_attach_button_tooltip` reads the live
-//! BEI bindings for the operator behind a `ButtonOperatorCall` and
-//! seeds the resulting `Tooltip::keybind` with the user-visible
-//! shortcut. Also covers the auto-tagging of action entities via the
-//! `OperatorAction` marker, which is what makes the keybind lookup
-//! id-keyed instead of generic-over-`Op`.
+//! End-to-end tooltip pipeline: `auto_attach_button_tooltip` reads the live BEI
+//! bindings for the operator behind a `ButtonOperatorCall` and seeds
+//! `Tooltip::keybind`, and action entities are auto-tagged `OperatorAction` so
+//! the lookup is id-keyed.
 
 use crate::util;
 
@@ -24,10 +19,8 @@ fn operator_is_tagged(app: &mut App, operator_id: &str) -> bool {
         .any(|action| action.0 == operator_id)
 }
 
-/// Spawn a button bound to `op_id`, advance one frame so observers
-/// run, and return the `Tooltip::keybind` text the pipeline wrote.
-/// The keybind comes from BEI bindings registered by the editor's
-/// `add_to_extension` modules at startup.
+/// Spawn a button bound to `op_id`, advance one frame so observers run, and
+/// return the `Tooltip::keybind` text the pipeline wrote.
 fn keybind_for(app: &mut App, op_id: &'static str) -> String {
     let entity = app.world_mut().spawn(ButtonOperatorCall::new(op_id)).id();
     app.update();
@@ -38,11 +31,8 @@ fn keybind_for(app: &mut App, op_id: &'static str) -> String {
         .unwrap_or_default()
 }
 
-/// Sanity: the auto-tag plumbing inserted `OperatorAction(<id>)` on
-/// the action entities for representative built-in operators. Covers
-/// both registration orderings the editor uses today: `view_ops` /
-/// `entity_ops` register first then spawn, `draw_brush::add_to_extension`
-/// spawns first then registers.
+/// The auto-tag plumbing inserts `OperatorAction(<id>)` on action entities under
+/// both registration orderings the editor uses.
 #[test]
 fn action_entities_carry_operator_action_marker() {
     let mut app = util::editor_test_app();
@@ -61,8 +51,8 @@ fn action_entities_carry_operator_action_marker() {
         "entity.delete action entity should carry OperatorAction",
     );
 
-    // Spawn-then-register (draw_brush::add_to_extension): the
-    // retroactive scan in `register_operator` is what tags this one.
+    // Spawn-then-register (draw_brush::add_to_extension): the retroactive scan in
+    // `register_operator` is what tags this one.
     assert!(
         operator_is_tagged(&mut app, "viewport.draw_brush_modal"),
         "viewport.draw_brush_modal action entity should carry OperatorAction \
@@ -82,9 +72,8 @@ fn tooltip_picks_up_keyboard_modifier_binding() {
     );
 }
 
-/// `clip.delete_keyframes` binds both `Delete` and `Backspace` in the
-/// classic preset. The tooltip joins multiple bindings with `" / "`.
-/// `KeyCode::Delete` stringifies to `Del` via `key_display_name`.
+/// `clip.delete_keyframes` binds both `Delete` and `Backspace`; the tooltip joins
+/// bindings with `" / "` and `KeyCode::Delete` stringifies to `Del`.
 #[test]
 fn tooltip_joins_multiple_bindings() {
     let mut app = util::editor_test_app();
@@ -95,10 +84,8 @@ fn tooltip_joins_multiple_bindings() {
     );
 }
 
-/// `viewport.draw_brush_modal` mixes a key (`B`) with a mouse button
-/// (`Mouse Back`). Both should appear in the tooltip; mouse-button
-/// glyphs use the friendly aliases (`Mouse Left` / `Mouse Right` /
-/// `Mouse Back` / ...) instead of the raw enum name.
+/// `viewport.draw_brush_modal` mixes a key with a mouse button, and mouse-button
+/// glyphs use the friendly aliases rather than the raw enum name.
 #[test]
 fn tooltip_includes_mouse_button_bindings() {
     let mut app = util::editor_test_app();
@@ -113,11 +100,8 @@ fn tooltip_includes_mouse_button_bindings() {
     );
 }
 
-/// Buttons whose operator id has no BEI binding (here a bogus id
-/// that never resolves) should produce no `Tooltip` at all because
-/// the auto-attach skips when the operator can't be found. Acts as a
-/// regression guard against the keybind path panicking on an unknown
-/// id.
+/// A button whose operator id has no BEI binding gets no `Tooltip` at all, and
+/// the keybind path does not panic on the unknown id.
 #[test]
 fn unknown_operator_id_skips_tooltip() {
     let mut app = util::editor_test_app();
@@ -129,5 +113,29 @@ fn unknown_operator_id_skips_tooltip() {
     assert!(
         app.world().entity(entity).get::<Tooltip>().is_none(),
         "tooltip should not attach for an unknown operator id",
+    );
+}
+
+/// A chord is only discoverable if the button it mirrors says what pressing it
+/// does, so the magnet toggle's tooltip carries label, chord and description.
+#[test]
+fn the_snap_toggle_tooltip_names_its_chord_and_what_it_does() {
+    let mut app = util::editor_test_app();
+    let entity = app
+        .world_mut()
+        .spawn(ButtonOperatorCall::new("snap.toggle"))
+        .id();
+    app.update();
+    let tip = app
+        .world()
+        .entity(entity)
+        .get::<Tooltip>()
+        .expect("the snap toggle is a registered operator")
+        .clone();
+    assert_eq!(tip.title, "Toggle Snapping");
+    assert_eq!(tip.keybind, "M");
+    assert!(
+        !tip.description.is_empty(),
+        "the chord is only discoverable with a description behind it",
     );
 }

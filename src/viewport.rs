@@ -9,6 +9,7 @@ use bevy::{
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
     ui::{UiGlobalTransform, widget::ViewportNode},
+    window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused},
 };
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
@@ -35,11 +36,8 @@ pub struct MainViewportCamera;
 /// Dock window id of the viewport panel, where scenes are authored.
 pub const VIEWPORT_WINDOW_ID: &str = "jackdaw.viewport";
 
-/// Former dock window id of the separate 2D viewport panel.
-///
-/// An alias for [`VIEWPORT_WINDOW_ID`]: the canvas is a mode of the one
-/// viewport panel rather than a panel of its own. Persisted layouts and
-/// scripted runs still name it, so it resolves rather than failing.
+/// Former dock window id of the separate 2D viewport panel, kept as an alias
+/// for [`VIEWPORT_WINDOW_ID`] so persisted layouts naming it still resolve.
 pub const VIEWPORT_2D_WINDOW_ID: &str = "jackdaw.viewport_2d";
 
 /// The window id a dock request means, resolving [`VIEWPORT_2D_WINDOW_ID`]
@@ -52,9 +50,8 @@ pub fn canonical_window_id(window_id: &str) -> &str {
     }
 }
 
-/// Starting size of a viewport panel's render-target image, shared with
-/// [`crate::viewport_2d`]. Both panels allocate one before layout has measured
-/// anything, and resize it once it has.
+/// Starting size of a viewport panel's render-target image, allocated before
+/// layout has measured anything and resized once it has.
 pub(crate) const DEFAULT_VIEWPORT_WIDTH: u32 = 1280;
 /// Height paired with [`DEFAULT_VIEWPORT_WIDTH`].
 pub(crate) const DEFAULT_VIEWPORT_HEIGHT: u32 = 720;
@@ -67,16 +64,8 @@ pub(crate) const DEFAULT_VIEWPORT_HEIGHT: u32 = 720;
 pub struct SceneViewport;
 
 /// The 3D presentation's state, on the dock-leaf content entity that hosts a
-/// viewport panel.
-///
-/// Holds the camera entity that the panel's `ViewportNode` is projecting, so
-/// the despawn observer can clean up the camera (and its render-target image)
-/// when the panel content is torn down.
-///
-/// A sibling of [`crate::viewport_host::ViewportHost`], which is the panel's
-/// identity, and of `Viewport2dPanelHost`, the other presentation's state. All
-/// three sit on the same entity: a panel is one thing that can be shown two
-/// ways, not two panels.
+/// viewport panel. Holds the entities the despawn observer cleans up when the
+/// panel content is torn down.
 #[derive(Component)]
 pub struct ViewportPanelHost {
     pub camera: Entity,
@@ -147,11 +136,9 @@ impl ViewportLayerCounter {
 /// outside the viewport's bounds, so fly input stays attached to the
 /// right viewport until the user releases the mouse.
 ///
-/// A panel showing its 2D canvas is hovered like any other, and reports its
-/// [`Self::host`] and [`Self::mode`], but leaves [`Self::camera`] and
-/// [`Self::ui_node`] empty: those name the 3D presentation, which is not what
-/// the cursor is over. Every world-space tool routes through one of them, so
-/// they all stand down over a canvas without a gate of their own.
+/// A panel showing its 2D canvas reports its [`Self::host`] and [`Self::mode`]
+/// but leaves [`Self::camera`] and [`Self::ui_node`] empty, which is what makes
+/// every world-space tool stand down over a canvas.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct ActiveViewport {
     /// Camera entity of the currently-hovered viewport, when it is showing
@@ -194,9 +181,8 @@ pub(crate) struct ViewportCursor<'w, 's> {
 
 impl ViewportCursor<'_, '_> {
     /// True when UI drawn on top of the hovered viewport, such as the terrain
-    /// tool palette or the options bar, is under the cursor rather than the
-    /// viewport's own `SceneViewport` node. A click there belongs to the
-    /// overlay, not the 3D scene.
+    /// tool palette, is under the cursor rather than the viewport's own
+    /// `SceneViewport` node.
     pub fn blocked_by_overlay(&self) -> bool {
         hover_blocks_click(&self.hover_map, self.active.ui_node)
     }
@@ -275,9 +261,7 @@ impl ViewportCursor<'_, '_> {
 }
 
 /// True when the hover map contains an entity other than `viewport_entity`.
-/// With no viewport to compare against nothing can be over one, so the answer
-/// is false. Split out of [`ViewportCursor::blocked_by_overlay`] as a pure
-/// function, testable without a `World`.
+/// With no viewport to compare against, nothing can be over one.
 fn hover_blocks_click(
     hover_map: &bevy::picking::hover::HoverMap,
     viewport_entity: Option<Entity>,
@@ -380,6 +364,16 @@ impl Plugin for ViewportPlugin {
                 disable_camera_on_dialog
                     .run_if(in_state(crate::AppState::Editor))
                     .run_if(not(crate::no_dialog_open)),
+            )
+            .add_systems(OnExit(crate::AppState::Editor), end_fly)
+            .add_systems(
+                Update,
+                (
+                    end_fly_on_focus_loss,
+                    end_fly.run_if(not(crate::no_dialog_open)),
+                    hold_cursor_while_flying,
+                )
+                    .chain(),
             );
         embedded_asset!(
             app,
@@ -393,11 +387,7 @@ impl Plugin for ViewportPlugin {
 }
 
 /// One-time global setup for the editor's viewport infrastructure.
-///
-/// Per-viewport setup (camera, render-target image, `SceneViewport`
-/// UI node, infinite grid) lives in [`build_3d_presentation`], which
-/// runs each time the dock-tree reconciler instantiates a
-/// `jackdaw.viewport` panel.
+/// Per-viewport setup lives in `build_3d_presentation`.
 pub(crate) fn setup_viewport() {}
 
 /// Build a single shared [`GizmoAsset`] containing three world-axis
@@ -412,14 +402,9 @@ fn init_axis_indicator_asset(mut commands: Commands, mut assets: ResMut<Assets<G
     commands.insert_resource(AxisIndicatorAsset(assets.add(asset)));
 }
 
-/// Build closure for the `jackdaw.viewport` `DockWindowDescriptor`.
-///
-/// A panel opening in whatever mode [`ViewportModeIntent`] currently names,
-/// which is the mode the panels already open are in. The reconciler rebuilds a
-/// leaf whenever its tabs change, it is split, or the workspace switches, so
-/// starting from a fixed mode would put a rebuilt panel back in the 3D world
-/// while the tab in front is a screen. Both presentations are built either way;
-/// see [`crate::viewport_host::build_viewport_panel_in`].
+/// Build closure for the `jackdaw.viewport` `DockWindowDescriptor`, opening the
+/// panel in whatever mode [`ViewportModeIntent`] names. A rebuilt leaf must come
+/// back in the mode its tab was showing, not a fixed one.
 pub fn build_viewport_panel(world: &mut World, parent: Entity) {
     let intent = world
         .get_resource::<ViewportModeIntent>()
@@ -429,17 +414,11 @@ pub fn build_viewport_panel(world: &mut World, parent: Entity) {
 }
 
 /// Build the panel's 3D presentation: a camera rendering into its own image,
-/// the toolbar/`SceneViewport` column that projects it, and the floating
-/// chrome that overlays it. Returns the column, which the mode switch shows
-/// and hides.
-///
-/// Each viewport instance gets its own camera, so quad-view / stacked-viewport
-/// / multi-window setups all just work once the user drops more
-/// `jackdaw.viewport` panels into the tree.
+/// the toolbar/`SceneViewport` column that projects it, and the floating chrome
+/// that overlays it. Returns the column, which the mode switch shows and hides.
 ///
 /// The despawn observer on `parent` (via [`ViewportPanelHost`]) cleans up the
-/// camera when the panel content is torn down by the reconciler (panel closed,
-/// leaf rebuilt due to split, workspace switch, etc.).
+/// camera when the panel content is torn down.
 pub(crate) fn build_3d_presentation(world: &mut World, parent: Entity) -> Entity {
     // Allocate a render-target image dedicated to this viewport. The
     // size is a starting point; `ViewportNode` will resize the camera
@@ -577,9 +556,8 @@ pub(crate) fn build_3d_presentation(world: &mut World, parent: Entity) -> Entity
             toolbar.insert((crate::layout::Toolbar, crate::EditorEntity));
             let toolbar = toolbar.id();
             world.entity_mut(column).insert_children(0, &[toolbar]);
-            // The 3D/2D switch, at the toolbar's right end. The toolbar's own
-            // spacer already pushes everything after it there, so the bar
-            // needs no second one.
+            // The toolbar's own spacer already pushes everything after it to
+            // the right end, so the switch needs no second one.
             let mode_bar = world
                 .spawn((
                     crate::EditorEntity,
@@ -640,9 +618,8 @@ pub(crate) fn build_3d_presentation(world: &mut World, parent: Entity) -> Entity
     column
 }
 
-/// Walk the descendants of `root` looking for the first entity that
-/// has component `T`. Used by [`build_3d_presentation`] to locate the
-/// `SceneViewport` node spawned inside the panel content bundle.
+/// Walk the descendants of `root` looking for the first entity that has
+/// component `T`.
 fn find_descendant_with<T: Component>(world: &mut World, root: Entity) -> Option<Entity> {
     let mut stack = vec![root];
     let mut q_t = world.query_filtered::<Entity, With<T>>();
@@ -898,6 +875,59 @@ fn find_ancestor_component<'a, C: Component>(
     }
 }
 
+/// Hold the pointer still for the length of a look drag.
+///
+/// A look is a relative gesture: for its duration the pointer is not
+/// pointing at anything, and left free it walks out of the viewport and
+/// into whatever is beside it, or off the window entirely, where the
+/// drag ends against the desktop. Locking it puts it back where the drag
+/// started when the button comes up.
+fn hold_cursor_while_flying(
+    fly: Res<CameraFlyActive>,
+    mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
+) {
+    if !fly.is_changed() {
+        return;
+    }
+    let grab = if fly.0 {
+        CursorGrabMode::Locked
+    } else {
+        CursorGrabMode::None
+    };
+    for mut cursor in &mut cursors {
+        if cursor.grab_mode != grab {
+            cursor.grab_mode = grab;
+        }
+        if cursor.visible == fly.0 {
+            cursor.visible = !fly.0;
+        }
+    }
+}
+
+/// End a fly session the button release will never arrive for, so the pointer
+/// is handed back. The editor is not the window with the pointer any more, and
+/// a grab that outlives the session holds it against the desktop.
+fn end_fly_on_focus_loss(
+    mut focus_events: MessageReader<WindowFocused>,
+    windows: Query<(), With<PrimaryWindow>>,
+    mut fly: ResMut<CameraFlyActive>,
+) {
+    let lost_focus = focus_events
+        .read()
+        .any(|event| !event.focused && windows.get(event.window).is_ok());
+    if lost_focus && fly.0 {
+        fly.0 = false;
+    }
+}
+
+/// End a fly session nothing is left watching the button for: a dialog took
+/// the release, or the editor state the viewport lives in is on its way out.
+fn end_fly(mut fly: ResMut<CameraFlyActive>) {
+    if fly.0 {
+        fly.0 = false;
+    }
+}
+
 /// Enable/disable camera controls based on viewport hover, modal state, etc.
 /// Force-disable camera controls when any dialog is open.
 fn disable_camera_on_dialog(mut camera_query: Query<&mut JackdawCameraSettings>) {
@@ -931,29 +961,14 @@ struct HoveredViewport {
     three_d: Option<(Entity, Entity)>,
 }
 
-/// The one hover authority for viewport panels. Each frame:
-///
-/// 1. Walks every panel and finds the one under the cursor, rect-testing
-///    whichever presentation its mode is showing: the `SceneViewport` node in
-///    3D, the stage area in 2D.
-/// 2. Writes it into [`ActiveViewport`] so other systems can route input by
-///    panel, mode or camera entity instead of querying `Single<>` (which would
-///    panic with several viewports open).
-/// 3. Sticks during a right-click fly session, so the user can drag
-///    outside the viewport's bounds without losing camera control.
-/// 4. Sets `JackdawCameraSettings::enabled` so only the active
-///    camera responds to fly input; the others stay parked.
-///
-/// A panel showing its canvas therefore reports no camera, and every
-/// world-space tool routed through one falls silent while the cursor is there.
-///
-/// Run it on demand through [`run_active_viewport_update`].
+/// The one hover authority for viewport panels: finds the panel under the
+/// cursor, writes it into [`ActiveViewport`], and enables fly input on that
+/// panel's camera alone. A right-click fly session sticks to the camera that
+/// started it even when the cursor leaves the panel.
 ///
 /// Readers of [`ActiveViewport`] scheduled in the same set order themselves
-/// after this, so they see the panel under the cursor this frame rather than
-/// the one it was over last frame; `crate::snapping::handle_grid_size_scroll`
-/// is one, and without the edge the first scroll after the cursor enters a
-/// canvas would retune the world's grid.
+/// after this, so they see the panel under the cursor this frame rather than the
+/// one it was over last frame.
 pub(crate) fn update_active_viewport(
     windows: Query<&Window>,
     hosts: Query<(
@@ -981,8 +996,6 @@ pub(crate) fn update_active_viewport(
 
     let cursor = windows.single().ok().and_then(Window::cursor_position);
 
-    // First hit wins, as it does for any of the editor's own rect tests:
-    // panels are laid out side by side, so at most one can hold the cursor.
     let mut hovered: Option<HoveredViewport> = None;
     if let Some(cursor) = cursor {
         for (entity, host, three_d, two_d) in &hosts {
@@ -1027,8 +1040,7 @@ pub(crate) fn update_active_viewport(
             .map(|(_, camera)| camera);
     }
 
-    // A fly session belongs to the 3D world, so only a hovered world starts
-    // one.
+    // A fly session belongs to the 3D world, so only a hovered world starts one.
     let hovered_world = hovered.is_some_and(|hit| hit.three_d.is_some());
     if mouse.just_pressed(MouseButton::Right) && hovered_world {
         fly_state.0 = true;
@@ -1042,8 +1054,6 @@ pub(crate) fn update_active_viewport(
     let target_camera = active.camera;
     let fly_engaged = fly_state.0;
 
-    // Enable fly only on the active camera; disable all others. The
-    // fly session also keeps fly enabled when the cursor leaves.
     for (entity, mut settings) in &mut camera_query {
         let is_target = target_camera == Some(entity);
         let should_enable = inputs_clear && (is_target && (hovered_world || fly_engaged));
@@ -1053,11 +1063,8 @@ pub(crate) fn update_active_viewport(
     }
 }
 
-/// Run the viewport hover pass once, outside the schedule.
-///
-/// For tests: the plugin runs `update_active_viewport` inside
-/// [`crate::EditorInteractionSystems`], which never runs while a test app sits
-/// in `AppState::ProjectSelect`.
+/// Run the viewport hover pass once, outside the schedule. For tests, whose app
+/// sits in `AppState::ProjectSelect` where the scheduled pass never runs.
 pub fn run_active_viewport_update(world: &mut World) {
     if let Err(error) = world.run_system_cached(update_active_viewport) {
         warn!("viewport hover pass could not run: {error}");
@@ -1095,20 +1102,16 @@ fn camera_bookmark_keys(
     viewport: crate::viewport_2d::FrontedViewport,
     mut commands: Commands,
 ) {
-    // A bookmark is a camera in the world; over the canvas the digits
-    // are digits.
+    // A bookmark is a camera in the world; over the canvas the digits are
+    // digits.
     if modal.active.is_some() || focus.keyboard_is_spoken_for() || !viewport.is_three_d() {
         return;
     }
     let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     let in_object_mode = *edit_mode == crate::brush::EditMode::Object;
-    // Don't shadow edit-mode digit shortcuts when a brush is selected
-    // and we're in Object mode (Digit1-4 there switches to Vertex /
-    // Edge / Face / Clip), and don't shadow Alt+Digit1-8 (terrain tool
-    // palette, `terrain/ops.rs`). The `if alt { continue }` below skips every
-    // digit while Alt is held, not just 1-8, so widening the palette's range
-    // needs no change here.
+    // Don't shadow the edit-mode digit shortcuts a selected brush claims in
+    // Object mode, nor the terrain palette's Alt+digits.
     let conflicts_with_edit_mode_digits =
         in_object_mode && selection.primary().is_some_and(|e| brushes.contains(e));
     let digits = [
@@ -1154,8 +1157,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     )]);
 }
 
-/// Framing the camera on the selection is a camera move, so the chord
-/// belongs to the world the camera flies through.
 fn has_primary_selection(
     selection: Res<Selection>,
     viewport: crate::viewport_2d::FrontedViewport,
@@ -1258,8 +1259,6 @@ mod tests {
         map
     }
 
-    /// A click that hovers only the viewport's own node reaches the 3D
-    /// raycast.
     #[test]
     fn viewport_own_node_does_not_block_the_click() {
         let viewport = Entity::from_raw_u32(1).unwrap();
@@ -1267,8 +1266,6 @@ mod tests {
         assert!(!hover_blocks_click(&hover_map, Some(viewport)));
     }
 
-    /// A click that hovers another entity, such as a palette button or the
-    /// options bar, belongs to that overlay rather than the 3D scene.
     #[test]
     fn an_overlay_entity_blocks_the_click() {
         let viewport = Entity::from_raw_u32(1).unwrap();
@@ -1277,16 +1274,12 @@ mod tests {
         assert!(hover_blocks_click(&hover_map, Some(viewport)));
     }
 
-    /// No hover at all, with the cursor over empty desktop or before the hover
-    /// systems have run, must not block ordinary viewport clicks.
     #[test]
     fn an_empty_hover_map_does_not_block_the_click() {
         let viewport = Entity::from_raw_u32(1).unwrap();
         assert!(!hover_blocks_click(&HoverMap::default(), Some(viewport)));
     }
 
-    /// No active viewport, with the cursor outside every viewport, must not
-    /// block: there is nothing to compare the hover against.
     #[test]
     fn no_active_viewport_does_not_block_the_click() {
         let hover_map = hover_map_with(Entity::from_raw_u32(2).unwrap());

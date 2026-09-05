@@ -53,6 +53,7 @@ use std::{collections::BTreeMap, marker::PhantomData};
 pub use inspector::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 
 pub mod camera_preview;
+pub mod camera_settings;
 pub mod canvas_snap;
 pub mod core_extension;
 pub mod dock_ops;
@@ -147,8 +148,9 @@ pub mod workspace_dropdown;
 use bevy::{
     app::PluginGroupBuilder,
     ecs::system::SystemState,
-    feathers::{FeathersPlugins, dark_theme::create_dark_theme, theme::UiTheme},
+    feathers::{FeathersCorePlugin, dark_theme::create_dark_theme, theme::UiTheme},
     input::mouse::{MouseScrollUnit, MouseWheel},
+    input_focus::tab_navigation::TabNavigationPlugin,
     picking::hover::HoverMap,
     platform::collections::HashMap,
     prelude::*,
@@ -324,21 +326,31 @@ impl Plugin for EditorCorePlugin {
             "EditorCorePlugin requires EnhancedInputPlugin first; \
              add `EnhancedInputPlugin` in main.rs before JackdawEditorPlugins."
         );
-        app.init_state::<AppState>()
-            .add_plugins((FeathersPlugins, EditorFeathersPlugin));
-        // Binding types, plus the evaluator behind the Preview Context
-        // toggle. `JackdawBindPlugin` itself stays out: its observers would
-        // run authored actions and value writes against the editor's own
-        // world. Evaluation is the one part preview needs, so it is
-        // registered alone and gated on a live session.
+        app.init_state::<AppState>();
+        // A game whose own UI is built on feathers adds the group itself,
+        // and the editor loads that game's plugin into this app. Adding a
+        // plugin twice is a panic, so the editor takes each of these only
+        // where nothing else already has. `FeathersPlugins` is these two
+        // together, and a game may have brought either on its own.
+        if !app.is_plugin_added::<TabNavigationPlugin>() {
+            app.add_plugins(TabNavigationPlugin);
+        }
+        if !app.is_plugin_added::<FeathersCorePlugin>() {
+            app.add_plugins(FeathersCorePlugin);
+        }
+        if !app.is_plugin_added::<EditorFeathersPlugin>() {
+            app.add_plugins(EditorFeathersPlugin);
+        }
+        // `JackdawBindPlugin` itself stays out: its observers would run
+        // authored actions and value writes against the editor's own world.
+        // Only the evaluator preview needs is registered here.
         app.register_type::<jackdaw_bind::Bindings>()
             .register_type::<jackdaw_bind::Binding>()
             .register_type::<jackdaw_bind::BindPath>()
             .register_type::<jackdaw_bind::BindContext>()
             .init_resource::<jackdaw_bind::BindFailures>()
-            // Where a string Value binding writes, and the order its two
-            // halves run in. Neither crate can name the other's half, so the
-            // editor declares both, as a game does.
+            // Neither crate can name the other's half of a string Value
+            // binding, so the editor declares both, as a game does.
             .insert_resource(jackdaw_bind::ValueTextTarget(jackdaw_bind::BindPath::new(
                 jackdaw_widgets_runtime::text_value_write_path(),
             )))
@@ -435,6 +447,7 @@ impl Plugin for EditorCorePlugin {
             mesh_quick_menu::MeshQuickMenuPlugin,
             remote::RemoteConnectionPlugin,
             remote::debug::RemoteDebugPlugin,
+            camera_settings::plugin,
         ))
         .add_plugins(model_thumbnail::plugin)
         .add_plugins(boot_ops::plugin)
@@ -522,8 +535,8 @@ impl Plugin for EditorCorePlugin {
                 .chain(),
         )
         .add_systems(OnEnter(AppState::Editor), run_config::read_run_configs)
-        // Ahead of everything that reads a path this frame, and outside
-        // the editor state: the launcher opens and closes projects too.
+        // Outside the editor state, since the launcher opens and closes
+        // projects too.
         .add_systems(First, project::mirror_open_project)
         .add_systems(
             Update,
@@ -1340,12 +1353,9 @@ pub(crate) fn clip_delete_keyframes(
     OperatorResult::Finished
 }
 
-/// Keyframes are selected and the timeline is the focused window.
-///
-/// The window matters because `Ctrl+C` is the entity clipboard everywhere
-/// else, and the entity side refuses while the timeline is focused. The two
-/// checks are opposite sides of the same question, so one press copies
-/// keyframes or a subtree and never both.
+/// Keyframes are selected and the timeline is the focused window. The
+/// entity clipboard refuses under the same condition, so one `Ctrl+C`
+/// copies keyframes or a subtree and never both.
 fn has_selected_keyframes(
     input_focus: Res<bevy::input_focus::InputFocus>,
     selection: Res<selection::Selection>,
@@ -2102,27 +2112,19 @@ fn register_animation_entities_in_ast(
     }
 }
 
-/// Clip discovery has run for this entity, against the glTF the path
-/// names. Written whichever way it came out -- clips imported, or the
-/// file has none -- because "no clips" is an answer, and re-asking for
-/// it every frame is what made this expensive.
-///
-/// Editor-side state, not authored: it carries no `Reflect`, so the
-/// document emitter cannot see it and it never reaches a saved scene.
+/// Clip discovery has run for this entity, whichever way it came out.
+/// Editor-side state: it carries no `Reflect`, so it never reaches a
+/// saved scene.
 #[derive(Component)]
 struct GltfClipsDiscovered {
-    /// The `GltfSource` path this answer was reached for. A different
-    /// path is a different glTF and has to be asked again.
+    /// The `GltfSource` path this answer was reached for; a different path
+    /// has to be asked again.
     path: String,
 }
 
-/// The glTF whose clips are still being waited for.
-///
-/// The handle lives here rather than in a local, because dropping it
-/// drops the asset: the load is cancelled and restarted next frame, the
-/// reload republishes `AssetEvent::Modified`, and the world-asset
-/// spawner despawns and respawns every instance of that model. Holding
-/// it until the answer arrives is what makes discovery converge.
+/// The glTF whose clips are still being waited for. The handle is held
+/// here rather than in a local because dropping it cancels the load, and
+/// the restarted load respawns every instance of the model.
 #[derive(Component)]
 struct PendingGltfClips(Handle<bevy::gltf::Gltf>);
 
@@ -2132,13 +2134,9 @@ struct PendingGltfClips(Handle<bevy::gltf::Gltf>);
 /// persist through save/load (just two strings each), so discovery only
 /// needs to run once per `GltfSource`.
 ///
-/// Asked once, not once per frame. An entity is marked
-/// [`GltfClipsDiscovered`] on both outcomes, and only a change to the
-/// source path asks again; the glTF handle is held on the entity for as
-/// long as the answer is pending. Clips the user deleted within the
-/// session stay deleted, and clips already imported in an earlier
-/// session (present as `GltfClipRef` children at load) settle the
-/// question without a load at all.
+/// Asked once per source path, not once per frame: the entity is marked
+/// `GltfClipsDiscovered` on both outcomes, so clips the user deleted stay
+/// deleted.
 ///
 /// Lives in the main crate rather than `jackdaw_animation` because it
 /// needs to read `jackdaw_scene_types::GltfSource`, and we'd rather not wire a
@@ -2177,8 +2175,7 @@ fn discover_gltf_clips(
 
     for (entity, source, children, waiting) in &pending {
         // Clips imported in an earlier session come back as children of
-        // the document, which is the answer; so is the user having
-        // deleted them, since the marker outlives that too.
+        // the document, which is already the answer.
         let any_existing = children
             .into_iter()
             .flatten()
@@ -2203,8 +2200,8 @@ fn discover_gltf_clips(
         };
 
         let Some(gltf) = gltfs.get(&handle) else {
-            // A load the server has given up on is answered too: the
-            // alternative is retrying a missing file forever.
+            // A load the server has given up on is answered too, rather
+            // than retrying a missing file forever.
             if matches!(
                 asset_server.get_load_state(&handle),
                 Some(bevy::asset::LoadState::Failed(_))
@@ -2240,8 +2237,7 @@ fn discover_gltf_clips(
     }
 }
 
-/// One View-menu row for a canvas view toggle: a box showing where the
-/// switch is, and a call that puts it the other way.
+/// One View-menu row for a canvas view toggle.
 fn canvas_view_row<O: jackdaw_api::op::Operator>(on: bool, label: &str) -> (String, String) {
     jackdaw_feathers::menu_bar::checked_row(
         on,
@@ -2266,9 +2262,8 @@ fn populate_menu(
     // scene-tree picker present identical content.
     let mut ext_menu_entries = HashMap::<_, Vec<ExtensionMenuEntry>>::new();
     {
-        // The heading is the extension's own label, as the Add menu's
-        // sections take theirs. An id like `jackdaw.core` names the package,
-        // not the group a menu puts its entries under.
+        // The heading is the extension's own label, not its id: an id like
+        // `jackdaw.core` names the package, not a menu group.
         let extension_labels = world
             .resource::<jackdaw_api_internal::lifecycle::ExtensionCatalog>()
             .iter_with_content()
@@ -2353,14 +2348,11 @@ fn populate_menu(
         "Reset Layout".to_string(),
     ));
 
-    // Build the Add menu from the shared helper so the toolbar and the
-    // scene-tree Add Entity picker stay in lockstep. Each category opens a
-    // labelled section.
+    // Shared with the scene-tree Add Entity picker, so the two stay in
+    // lockstep.
     let add_menu = add_entity_picker::add_menu_rows(world);
 
-    // The 2D canvas's two view toggles are the same switches the
-    // canvas's own Snap menu carries, shown here as boxes so the top
-    // bar says which way each one is.
+    // The same two switches the canvas's own Snap menu carries.
     let canvas = world
         .get_resource::<canvas_snap::CanvasSnap>()
         .copied()
@@ -2489,11 +2481,7 @@ pub(crate) fn window_open(
 }
 
 /// Turn the Preview Context session on or off, and optionally scrub one
-/// numeric field of the scratch entity.
-///
-/// Takes the same path as the panel's toggle and scrub rows (`set_preview` /
-/// `write_scratch_field`). The scratch entity is editor-only state, never the
-/// document.
+/// numeric field of the scratch entity, which is editor-only state.
 #[operator(
     id = "preview.set",
     label = "Set Preview Context",
@@ -2533,10 +2521,8 @@ pub(crate) fn preview_set(
     OperatorResult::Finished
 }
 
-/// Open a top-level menu by its label, as a click on it would.
-///
-/// Writes the menu bar's own open/highlight state and nothing else: no
-/// document state, no selection.
+/// Open a top-level menu by its label, as a click on it would. Writes the
+/// menu bar's own open state and nothing else.
 #[operator(
     id = "menu.open",
     label = "Open Menu",
@@ -2577,9 +2563,7 @@ pub(crate) fn menu_open(
 }
 
 /// Expand a group of an open menu by its label, as resting the pointer on
-/// its row does.
-///
-/// Writes the menu's own open state and nothing else.
+/// its row does. Writes the menu's own open state and nothing else.
 #[operator(
     id = "menu.hover",
     label = "Expand Menu Group",
@@ -2681,20 +2665,15 @@ struct ExtensionMenuEntry {
 /// Append extension-contributed rows to a menu, each extension opening its
 /// own labelled section.
 ///
-/// A menu shows one row per operator, so an entry naming an operator the
-/// built-in list already carries is dropped rather than appended.
-///
-/// The comparison is on the operator alone, not the whole action string: a
-/// menu that offers an operator through parametrised rows -- `New`'s three
-/// scene kinds -- already carries it, and a fallback row for the bare
-/// operator underneath would offer the same command a second time, in a
-/// section named after the extension that happens to own it.
+/// An entry naming an operator the built-in list already carries is
+/// dropped. The comparison is on the operator alone, so a parametrised
+/// built-in row still counts as carrying it.
 fn append_extension_entries(
     rows: &mut Vec<(String, String)>,
     mut entries: Vec<ExtensionMenuEntry>,
 ) {
     entries.sort_by(|a, b| (&a.heading, &a.label).cmp(&(&b.heading, &b.label)));
-    // Deduplicated both against the rows already there and within the batch:
+    // Deduplicated against the rows already there and within the batch:
     // two extensions can register the same operator.
     let mut seen: std::collections::HashSet<String> = rows
         .iter()
@@ -2715,9 +2694,8 @@ fn append_extension_entries(
     }
 }
 
-/// The operator an `op:` action names, without its parameters. A row that is
-/// not an operator action answers with itself, so separators and headings
-/// stay distinct from one another.
+/// The operator an `op:` action names, without its parameters. A row that
+/// is not an operator action answers with itself.
 fn action_operator_id(action: &str) -> &str {
     let Some(rest) = action.strip_prefix(OP_PREFIX) else {
         return action;
@@ -2745,9 +2723,7 @@ fn section_label(name: &str) -> (String, String) {
     )
 }
 
-/// The File menu: entries and dividers, no headings. Its one list, the
-/// recent projects, is an expanding group rather than a heading over a run
-/// of rows.
+/// The File menu: entries and dividers, no headings.
 fn file_menu_rows(hot_reload_label: &str, recent: Vec<(String, String)>) -> Vec<(String, String)> {
     [
         new_scene_rows(),
@@ -2770,15 +2746,9 @@ fn file_menu_rows(hot_reload_label: &str, recent: Vec<(String, String)>) -> Vec<
     .concat()
 }
 
-/// The File menu's `New` group: one row per scene kind, expanding on hover.
-///
-/// A plain `op_entry` carries the operator id alone, which cannot say which
-/// kind comes out. The action encoding takes parameters -- the same
-/// `op:<id>?key=value` the recent-projects rows use -- so each row is the same
-/// operator with the one clause that decides the kind.
-///
-/// Public so a test can dispatch the row a user clicks rather than a
-/// re-spelling of it: what the row carries is the whole contract.
+/// The File menu's `New` group: one row per scene kind, expanding on
+/// hover. Each row is `scene.new` with an `op:<id>?key=value` clause naming
+/// the kind.
 pub fn new_scene_rows() -> Vec<(String, String)> {
     let kinds = ["3d", "2d", "ui"]
         .into_iter()
@@ -2801,8 +2771,7 @@ pub fn new_scene_rows() -> Vec<(String, String)> {
 const RECENT_MENU_LIMIT: usize = 10;
 
 /// The File menu's Open Recent group: a row per recent project, expanding
-/// on hover. With nothing to list it is a plain row that opens the dialog,
-/// so the menu never offers an empty group.
+/// on hover. With nothing to list it is a plain row that opens the dialog.
 fn recent_projects_rows() -> Vec<(String, String)> {
     let recent = project::read_recent_projects();
     if recent.projects.is_empty() {
@@ -2826,9 +2795,8 @@ fn recent_projects_rows() -> Vec<(String, String)> {
     jackdaw_feathers::menu_bar::submenu_row("Open Recent", projects)
 }
 
-/// Percent-escape the characters an `op:` action string gives meaning to,
-/// so a parameter carrying one arrives whole. The string splits on `?`, `&`
-/// and `=`, so a project path in a directory named `a&b` would open `a`.
+/// Percent-escape the characters an `op:` action string gives meaning to
+/// (`?`, `&`, `=`, `%`), so a parameter carrying one arrives whole.
 fn escape_action_value(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
@@ -2843,8 +2811,8 @@ fn escape_action_value(value: &str) -> String {
     escaped
 }
 
-/// Undo [`escape_action_value`]. Text that was never escaped comes back
-/// unchanged, including a bare `%` from an operator called by hand.
+/// Undo `escape_action_value`. Text that was never escaped comes back
+/// unchanged, including a bare `%`.
 fn unescape_action_value(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut rest = value;
@@ -2876,8 +2844,8 @@ fn unescape_action_value(value: &str) -> String {
 /// free-standing `op:` events. Always plain `op:OP_ID` form ;
 /// parametrised dispatch goes through `ButtonOperatorCall.params`.
 fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
-    // The Add menu's UI Widgets rows go through `instantiate_widget` so the
-    // new node is authored, undoable, and in the document.
+    // The UI Widgets rows go through `instantiate_widget` so the new node
+    // is authored, undoable, and in the document.
     if let Some(widget_id) = event
         .action
         .strip_prefix(add_entity_picker::WIDGET_ACTION_PREFIX)
@@ -2958,9 +2926,8 @@ fn cleanup_editor(world: &mut World) {
         }
     }
 
-    // 5. Reset resources. The catalog, the durable-name set and the material
-    // registry all describe the project being closed; carrying them into the
-    // next one would write its materials into that project's assets.
+    // 5. Reset resources. The catalog, the durable-name set and the
+    // material registry all describe the project being closed.
     world.insert_resource(scene_io::SceneFilePath::default());
     world.insert_resource(scene_io::SceneDirtyState::default());
     world.insert_resource(Selection::default());
@@ -3011,9 +2978,7 @@ pub(crate) fn open_recent_dialog(world: &mut World) {
         .0
         .clone();
 
-    // A first run has nothing to list, and the dialog still opens to say so:
-    // its row is what the File menu falls back to when there is no list to
-    // expand.
+    // A first run has nothing to list, and the dialog still opens to say so.
     if recent.projects.is_empty() {
         world.commands().spawn((
             Node {
@@ -3591,12 +3556,9 @@ pub fn init_layout(world: &mut World) {
     sync_active_workspace_from_live_tree(world);
 }
 
-/// Point a saved layout's tabs at the windows that answer for them today.
-///
-/// A layout saved while the canvas was a panel of its own still names that
-/// panel, and nothing registers it now. Its tabs become viewport tabs, and a
-/// leaf that already carries one keeps a single tab rather than two showing
-/// the same panel.
+/// Point a saved layout's tabs at the windows that answer for them today:
+/// a tab naming the retired canvas panel becomes a viewport tab, without
+/// giving a leaf two tabs on the same panel.
 fn canonicalise_persisted_windows(tree: &mut jackdaw_panels::tree::DockTree) {
     tree.alias_window_kind(
         viewport::VIEWPORT_2D_WINDOW_ID,
@@ -3648,18 +3610,12 @@ fn largest_visible_leaf(
 }
 
 /// Open a registered dock window, or bring its tab to the front when one
-/// already exists somewhere in the live tree. Unlike
-/// [`open_window_in_default_area`], which the Window menu uses and which
-/// always adds a fresh tab even a duplicate, this serves programmatic
-/// auto-open triggers such as the Terrain panel opening itself when a
-/// Terrain entity is added.
+/// already exists in the live tree.
 ///
-/// Focusing an existing tab rather than treating it as already open is what
-/// makes those triggers work: every fresh workspace's `right_sidebar` leaf is
-/// seeded at boot with one tab per registered window (`build_default_tree`),
-/// Terrain included but not focused (`DockLeaf::with_windows` activates the
-/// first, and priority order puts Components first). The Terrain tab
-/// therefore already exists by the time `entity.add.terrain` runs.
+/// For programmatic auto-open triggers, unlike `open_window_in_default_area`
+/// behind the Window menu, which always adds a fresh tab. A fresh workspace
+/// is seeded with a tab per registered window, so the tab usually exists
+/// already and only needs focusing.
 pub(crate) fn open_window_in_default_area_if_absent(world: &mut World, window_id: &str) {
     let window_id = viewport::canonical_window_id(window_id);
     let existing = {
@@ -3910,9 +3866,8 @@ mod dock_open_tests {
 
     use super::*;
 
-    /// Mirrors `build_default_tree`'s `right_sidebar` leaf: seeded at boot
-    /// with every registered window as a tab, Components first and therefore
-    /// active, which is the state of a from-scratch workspace.
+    /// Mirrors `build_default_tree`'s `right_sidebar` leaf: every registered
+    /// window as a tab, Components active.
     fn world_with_right_sidebar_seeded() -> World {
         let mut world = World::new();
         let mut tree = DockTree::new();
@@ -3927,9 +3882,7 @@ mod dock_open_tests {
         world
     }
 
-    /// A tab that is present but not focused is not "already open, nothing
-    /// to do": on a freshly booted workspace (Terrain tab present, Components
-    /// active) this brings Terrain to the front.
+    /// A tab that is present but not focused is brought to the front.
     #[test]
     fn a_present_but_unfocused_tab_is_brought_to_front() {
         let mut world = world_with_right_sidebar_seeded();
@@ -4024,9 +3977,8 @@ mod preset_tree_tests {
         assert_one_viewport_panel(&build_animation_tree(), "animation");
     }
 
-    /// The default tree takes its center tabs from the registry. This drives
-    /// it against a registry holding one center window; that the extensions
-    /// register no second center window is asserted where they are enabled.
+    /// The default tree takes its center tabs from the registry, driven here
+    /// against a registry holding one center window.
     #[test]
     fn the_default_tree_docks_one_viewport_panel_in_the_center() {
         let mut world = World::new();
@@ -4167,9 +4119,7 @@ mod file_menu_tests {
         );
     }
 
-    /// The three kinds a scene can be, and the only way to pick one without
-    /// typing an operator by hand. Each row is `scene.new` with the clause
-    /// that names its kind, so what the menu runs is what a scripted run runs.
+    /// Each row is `scene.new` with the clause that names its scene kind.
     #[test]
     fn the_new_group_offers_the_three_scene_kinds() {
         use jackdaw_feathers::button::ButtonOperatorCall;
@@ -4230,9 +4180,8 @@ mod extension_menu_tests {
         rows.iter().map(|(action, _)| action.as_str()).collect()
     }
 
-    /// The core extension registers menu entries for operators the built-in
-    /// File menu already lists. One row per operator, with the built-in
-    /// placement keeping its section.
+    /// An operator the built-in File menu already lists gets one row, in the
+    /// built-in placement.
     #[test]
     fn an_entry_for_an_operator_the_menu_already_lists_is_dropped() {
         let mut rows = vec![
@@ -4260,10 +4209,8 @@ mod extension_menu_tests {
         );
     }
 
-    /// The built-in `New` group offers `scene.new` through three
-    /// parametrised rows. That is the operator carried, so the core
-    /// extension's bare row for it is dropped rather than opening a section
-    /// of its own beneath the group.
+    /// The `New` group's parametrised rows carry `scene.new`, so an
+    /// extension's bare row for it is dropped.
     #[test]
     fn a_parametrised_built_in_row_carries_its_operator() {
         let mut rows = new_scene_rows();

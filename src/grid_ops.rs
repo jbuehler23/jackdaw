@@ -91,15 +91,15 @@ pub(crate) fn grid_set_increment(
     OperatorResult::Finished
 }
 
-/// The magnet of whichever canvas the pointer is over.
-///
-/// The 2D canvas keeps a master of its own, so the chord has to mean the
-/// magnet the user is looking at: over a panel showing the 2D canvas it
-/// flips [`CanvasSnap::enabled`], a project preference that is written
-/// back like the menu's own row writes it, and anywhere else the 3D
-/// tools' snapping. Dispatched on [`ActiveViewport::mode`], the same way
-/// the grid-size scroll picks which grid a wheel means.
-#[operator(id = "snap.toggle", label = "Toggle Snapping")]
+/// The magnet of whichever canvas the pointer is over: over a 2D canvas panel
+/// it flips [`CanvasSnap::enabled`], anywhere else the 3D tools' snapping.
+/// Dispatched on [`ActiveViewport::mode`].
+#[operator(
+    id = "snap.toggle",
+    label = "Toggle Snapping",
+    description = "Turn snapping on or off for the canvas the pointer is over: the grid for the \
+                   3D tools, the guides and edges for a 2D canvas"
+)]
 pub(crate) fn grid_toggle_snap(
     _: In<OperatorParameters>,
     mut snap: ResMut<SnapSettings>,

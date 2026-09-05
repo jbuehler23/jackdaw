@@ -53,6 +53,8 @@ pub struct JackdawCameraSettings {
     pub enabled: bool,
     /// Scroll movement speed (units per scroll line).
     pub scroll_speed: f32,
+    /// Pitch the view down when the pointer moves away, rather than up.
+    pub invert_y: bool,
 }
 
 impl Default for JackdawCameraSettings {
@@ -63,6 +65,7 @@ impl Default for JackdawCameraSettings {
             run_multiplier: 2.0,
             enabled: true,
             scroll_speed: 1.0,
+            invert_y: false,
         }
     }
 }
@@ -97,7 +100,7 @@ fn camera_system(
         if nav.fly_active && !is_ortho && nav.look_delta != Vec2::ZERO {
             let (mut yaw, mut pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
             yaw -= nav.look_delta.x * settings.sensitivity;
-            pitch -= nav.look_delta.y * settings.sensitivity;
+            pitch -= pitch_direction(settings.invert_y) * nav.look_delta.y * settings.sensitivity;
             pitch = pitch.clamp(
                 -std::f32::consts::FRAC_PI_2 + 0.01,
                 std::f32::consts::FRAC_PI_2 - 0.01,
@@ -140,9 +143,58 @@ fn camera_system(
     }
 }
 
+/// The sign a look delta's vertical component is applied with. Pointer
+/// coordinates grow downward, so the uninverted camera pitches up when
+/// the pointer moves away.
+fn pitch_direction(invert_y: bool) -> f32 {
+    if invert_y { -1.0 } else { 1.0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pitch a look drag of `delta` leaves, from level.
+    fn pitch_after_look(invert_y: bool, delta: Vec2) -> f32 {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, JackdawCameraPlugin))
+            .init_resource::<ButtonInput<KeyCode>>();
+        app.insert_resource(CameraNavInput {
+            fly_active: true,
+            look_delta: delta,
+            ..Default::default()
+        });
+        let camera = app
+            .world_mut()
+            .spawn((
+                JackdawCameraSettings {
+                    invert_y,
+                    ..Default::default()
+                },
+                Transform::IDENTITY,
+            ))
+            .id();
+        app.update();
+        let (_, pitch, _) = app
+            .world()
+            .get::<Transform>(camera)
+            .expect("the camera kept its transform")
+            .rotation
+            .to_euler(EulerRot::YXZ);
+        pitch
+    }
+
+    /// Pointer coordinates grow downward, so a drag away from the user
+    /// pitches the view up unless the setting says otherwise.
+    #[test]
+    fn inverting_y_reverses_the_pitch_a_look_drag_produces() {
+        let away = Vec2::new(0.0, -20.0);
+        let upright = pitch_after_look(false, away);
+        let inverted = pitch_after_look(true, away);
+        assert!(upright > 0.0, "the view pitched up: {upright}");
+        assert!(inverted < 0.0, "the view pitched down: {inverted}");
+        assert!((upright + inverted).abs() < 1e-6, "by the same amount");
+    }
 
     #[test]
     fn camera_nav_input_default_is_inactive() {
