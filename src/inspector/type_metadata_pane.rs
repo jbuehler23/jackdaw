@@ -88,7 +88,7 @@ pub(crate) fn spawn_type_metadata_ui(
             BackgroundColor(tokens::COMPONENT_CARD_BG)
             BorderColor::all(tokens::COMPONENT_CARD_BORDER)
         })
-        .insert((TypeMetadataPane, ChildOf(card.body)))
+        .insert((TypeMetadataPane, ChildOf(card.type_settings)))
         .id();
 
     spawn_preview_row(
