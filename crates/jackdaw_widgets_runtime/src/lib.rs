@@ -1,46 +1,14 @@
 //! Value behaviour and load-time defaults for authored UI widgets.
 //!
-//! `bevy_ui_widgets` is external-state: a checkbox, radio group, or slider
-//! *emits* [`ValueChange`] and changes nothing about itself. Turning that into
-//! state is an opt-in observer the consumer adds. The Jackdaw editor and a game
-//! built on `jackdaw_runtime` both need the widget markers to survive a load and
-//! the value observers to be attached; this crate holds both so the two sides
-//! cannot drift.
+//! `bevy_ui_widgets` is external-state: a widget emits [`ValueChange`] and
+//! changes nothing about itself. This crate holds the markers that survive a
+//! load and the observers that turn those events into state, so the editor and
+//! `jackdaw_runtime` cannot drift apart.
 //!
-//! # Text
-//!
-//! Every other widget value is a reflected component, so a save writes it and a
-//! load puts it back. `bevy_text::EditableText` holds the string inside a
-//! `parley::PlainEditor` and derives no `Reflect`, so a text input round-trips
-//! as an empty box. [`TextValue`] is the reflectable half, and two
-//! equality-guarded systems keep it and the editor in step. A typed edit is
-//! announced as a `ValueChange<String>`, the same way a checkbox announces a
-//! toggle, so something outside this crate can act on it.
-//!
-//! # Theme
-//!
-//! Under the `feathers` feature the plugin installs the standard dark theme when
-//! nothing else has. An empty `UiTheme` is not a neutral one: it answers every
-//! design token with the missing-token colour. A game that installs its own
-//! theme keeps it, whenever it installs it.
-//!
-//! # Global observers rather than `observe()` per widget
-//!
-//! A per-entity `observe()` attaches an observer *entity* watching that target.
-//! It is not a component, so nothing writes it to the document and nothing
-//! recreates it on load, leaving a widget inert after the session that spawned
-//! it. Global observers keyed on the widget markers are attached to the app
-//! rather than to any one entity.
-//!
-//! # Observer gating
-//!
-//! The Extensions dialog, the material panel, and the inspector run their own
-//! checkbox state machines, some of which refuse a toggle they cannot honour, so
-//! a blanket self-update would check boxes the editor left alone. The gate is
-//! [`AuthoredWidget`]: whoever spawns authored content puts it on, and the
-//! observers answer for nothing else. The editor mirrors it onto every entity
-//! its scene document has a node for; `jackdaw_runtime` puts it on every entity
-//! a scene spawns.
+//! Observers are global rather than per-entity `observe()` calls: an observer
+//! entity is not a component, so nothing would write it to a document or
+//! recreate it on load. [`AuthoredWidget`] gates them, so panels running their
+//! own checkbox state machines are left alone.
 
 #![deny(missing_docs)]
 
@@ -53,18 +21,10 @@ use bevy::{
 
 /// The text an authored input holds, in a form a scene document can carry.
 ///
-/// `bevy_text::EditableText` owns a `parley::PlainEditor` and does not derive
-/// `Reflect`, so it cannot be written to a document. This is the reflectable
-/// half: the string lives here, the editing state stays where it is, and
-/// [`AuthoredWidgetPlugin`] keeps the two in step. It is also what a binding
-/// reads and writes; a bind path names `TextValue.0`, never the editor.
-///
-/// It requires [`EditableText`] because a load has nothing else to rebuild the
-/// input from. [`TextCursorStyle`] comes with it for the same reason and one
-/// more: `bevy_ui_render`'s editable-text extract queries it *without* an
-/// `Option`, so an input rebuilt without one draws no caret and no selection.
-/// These defaults match `bevy_feathers`' own text input until a theme changes
-/// them.
+/// `bevy_text::EditableText` is not `Reflect`, so this reflectable half is what
+/// a document and a binding see; [`AuthoredWidgetPlugin`] keeps the two in
+/// step. [`TextCursorStyle`] is required because `bevy_ui_render`'s
+/// editable-text extract queries it without an `Option`.
 #[derive(Component, Reflect, Default, Debug, Clone, PartialEq, Eq)]
 #[reflect(Component, Default)]
 #[require(EditableText, TextCursorStyle)]
@@ -75,40 +35,32 @@ pub struct TextValue(
 
 /// Marks an authored toggle switch.
 ///
-/// A switch and a checkbox are the same `Checkbox` component with
-/// different theme tokens, so nothing on the entity says which of the two
-/// the author asked for -- and everything that has to tell them apart, the
-/// outliner's icon first among them, had to guess. This says it.
+/// A switch and a checkbox are the same `Checkbox` component with different
+/// theme tokens, so only this tells them apart.
 #[derive(Component, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component, Default)]
 pub struct ToggleSwitch;
 
 /// Marks an authored separator: the hairline rule between two groups.
 ///
-/// It is also what says which way the line runs. A separator has no axis of
-/// its own; it takes the one across the flow it sits in, so the same widget
-/// is a horizontal rule in a column and a vertical one in a row.
-/// `separator_follows_parent_axis` does that, and it needs a marker to know
-/// which nodes to ask about.
+/// A separator has no axis of its own; it takes the one across the flow it
+/// sits in, which `separator_follows_parent_axis` applies.
 #[derive(Component, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component, Default)]
 pub struct Separator;
 
-/// Marks an authored spacer: a node whose whole job is to take up the room
-/// its siblings leave.
+/// Marks an authored spacer: a node whose whole job is to take up the room its
+/// siblings leave.
 ///
-/// A spacer is a `Node` with `flex_grow` and nothing drawn, so its values are
-/// the ones a plain container carries too, and only this says it was placed
-/// as a spacer -- which is what the outliner draws its glyph from.
+/// Its `Node` values are the ones a plain container carries too, so only this
+/// says it was placed as a spacer.
 #[derive(Component, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component, Default)]
 pub struct Spacer;
 
 /// How far along a [`Progress`] bar's fill sits, as a fraction.
 ///
-/// Values outside `0.0..=1.0` are clamped when the fill is written, so a bar
-/// driven from game state that overshoots stays inside its track rather than
-/// spilling past it.
+/// Values outside `0.0..=1.0` are clamped when the fill is written.
 #[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Default)]
 #[reflect(Component, Default)]
 pub struct Progress {
@@ -118,17 +70,11 @@ pub struct Progress {
 
 /// An authored option picker: the list it offers and which of them is chosen.
 ///
-/// The picker's chrome -- the button, the popup, one row per option -- is not
-/// authored. It is rebuilt from this component whenever the options change, so
-/// editing the list in the inspector redraws the widget, and a document
-/// carries the list rather than the entities that draw it.
+/// The picker's chrome is not authored; it is rebuilt from this component
+/// whenever the options change.
 ///
-/// # The `Default` is a persisted contract
-///
-/// A component equal to its default emits as a bare type path, so a document
-/// saying `jackdaw_widgets_runtime::Dropdown` is a document saying "no options,
-/// first one chosen". Changing this `Default` reinterprets every scene already
-/// saved that way, silently. Change the authored value in the palette instead.
+/// A component equal to its `Default` emits as a bare type path, so changing
+/// this `Default` silently reinterprets every scene already saved that way.
 #[derive(Component, Reflect, Debug, Clone, PartialEq, Eq, Default)]
 #[reflect(Component, Default)]
 pub struct Dropdown {
@@ -143,13 +89,7 @@ pub struct Dropdown {
 /// taken.
 ///
 /// The entity carrying this is the `RadioGroup`; the rows are chrome rebuilt
-/// from the list, for the same reason a [`Dropdown`]'s popup is.
-///
-/// # The `Default` is a persisted contract
-///
-/// See [`Dropdown`]: a document saying `jackdaw_widgets_runtime::RadioOptions`
-/// and nothing else is saying no choices with the first one taken, and this is
-/// where that reading is fixed.
+/// from the list. Its `Default` is a persisted contract, as [`Dropdown`]'s is.
 #[derive(Component, Reflect, Debug, Clone, PartialEq, Eq, Default)]
 #[reflect(Component, Default)]
 pub struct RadioOptions {
@@ -169,16 +109,9 @@ pub struct RadioOptionIndex(
 
 /// An authored tab strip: the tab labels and which tab is in front.
 ///
-/// The strip of segments is chrome. The panes are not: they are the widget's
-/// authored children, in order, and `active` says which of them is shown. A
-/// screen therefore builds a tabbed panel by putting content under the tabs
-/// and nothing else.
-///
-/// # The `Default` is a persisted contract
-///
-/// See [`Dropdown`]: a document saying `jackdaw_widgets_runtime::TabStrip` and
-/// nothing else is saying no labels with the first tab in front, and this is
-/// where that reading is fixed.
+/// The strip of segments is chrome. The panes are the widget's authored
+/// children, in order, and `active` says which of them is shown. Its `Default`
+/// is a persisted contract, as [`Dropdown`]'s is.
 #[derive(Component, Reflect, Debug, Clone, PartialEq, Eq, Default)]
 #[reflect(Component, Default)]
 pub struct TabStrip {
@@ -199,14 +132,10 @@ pub struct TabSegment(
 
 /// How wide the fixed border of a nine-patch image is.
 ///
-/// `NodeImageMode::Sliced` holds a `TextureSlicer`, which a document can carry
-/// but nothing can author usefully: the four insets are almost always the same
-/// number, and that number is the only part a screen changes. This is that
-/// number, written into the image mode beside it.
-///
-/// It requires [`ImageNode`] for the same reason [`TextValue`] requires its
-/// editor: the image mode is the half this writes into, and a document
-/// carrying the border alone has nothing to write it to.
+/// A `TextureSlicer`'s four insets are almost always the same number, and that
+/// number is the only part a screen changes; this is it, written into the image
+/// mode beside it. It requires [`ImageNode`] because a document carrying the
+/// border alone has nothing to write it to.
 #[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Default)]
 #[reflect(Component, Default)]
 #[require(ImageNode)]
@@ -218,22 +147,13 @@ pub struct NineSlice {
 /// Marks chrome a widget's own system built, as opposed to a node a document
 /// authored.
 ///
-/// Rebuilding is despawn-and-respawn, and the only thing separating the parts
-/// to throw away from a child the author put there by hand is this.
+/// A rebuild despawns these and leaves authored children alone.
 #[derive(Component, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GeneratedPart;
 
-/// The list a widget's chrome was last built from.
-///
-/// A rebuild is despawn-and-respawn, which throws away the row the pointer is
-/// on: its focus, its `TabIndex` and its hover state belong to entities that
-/// no longer exist, so clicking an option left the widget with nothing
-/// focused. Only a changed *list* needs new parts; a changed choice is a
-/// caption and a `Checked` marker moving between parts already there. This is
-/// what tells the two apart.
-///
-/// Not [`Reflect`]: chrome is not authored and none of it belongs in a
-/// document.
+/// The list a widget's chrome was last built from, so a changed choice moves a
+/// marker between existing parts rather than despawning the row under the
+/// pointer.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 struct ChromeBuiltFrom(Vec<String>);
 
@@ -251,63 +171,46 @@ pub struct DropdownOption(
 
 /// The child of a [`Progress`] track that draws the filled part.
 ///
-/// The fill is an authored child rather than a generated one: it carries its
-/// own colour and corner radius, so a screen can restyle the bar without any
-/// of this crate knowing. Its `width` is the one value it does not own.
+/// It is an authored child carrying its own styling; only its `width` is
+/// written for it.
 #[derive(Component, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component, Default)]
 pub struct ProgressFill;
 
 /// Where a binding writes a widget's text: [`TextValue`]'s only field, spelled
 /// the way a bind path spells one.
-///
-/// `jackdaw_bind` does not depend on this crate and bevy has no component
-/// holding a text input's value, so the path is taken from the type here rather
-/// than written out on the binding side.
 pub fn text_value_write_path() -> String {
     format!("{}.0", <TextValue as bevy::reflect::TypePath>::type_path())
 }
 
-/// Marks an entity as authored content: something a scene document produced,
-/// as opposed to chrome the host application built for itself.
+/// Marks an entity as authored content, as opposed to chrome the host
+/// application built for itself.
 ///
 /// [`AuthoredWidgetPlugin`]'s self-update observers answer only for entities
-/// carrying this. It holds no data and is not [`Reflect`], so it cannot reach a
-/// scene document: each side re-derives it on spawn.
+/// carrying this. It is not `Reflect`; each side re-derives it on spawn.
 #[derive(Component, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuthoredWidget;
 
-/// The `PostUpdate` systems that reconcile [`TextValue`] with the editor
-/// beside it: an edit into the value, then a value written from outside into
-/// the box.
+/// The `PostUpdate` systems that reconcile [`TextValue`] with the editor beside
+/// it.
 ///
-/// Named so it can be ordered from outside: anything that writes `TextValue`
-/// belongs ahead of this pair, or a frame can reconcile the typed edit and only
-/// then take a write of the value the source held before it. `bevy_text`'s
-/// `EditableTextSystems` sits inside `UiSystems::Content`, which is chained
-/// ahead of `Layout`, so waiting on it does not by itself place this pair
-/// relative to a binding evaluator. Whoever composes this crate with one
-/// declares that edge; see `jackdaw_runtime`.
+/// Anything that writes `TextValue` belongs ahead of this set, or a frame can
+/// reconcile a typed edit and then overwrite it with a stale value.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AuthoredTextSystems;
 
 /// The `PostUpdate` systems that write the `Node` values an authored widget
-/// derives rather than stores: a separator's thickness and a progress bar's
-/// fill width.
+/// derives rather than stores, such as a progress bar's fill width.
 ///
-/// Both run before layout so the frame that changes a value is the frame that
-/// shows it. Named so a binding evaluator can be ordered ahead of them.
+/// They run before layout, and a binding evaluator belongs ahead of them.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AuthoredNodeSystems;
 
 /// The `PostUpdate` systems that rebuild the chrome a list-shaped widget is
-/// drawn from: a dropdown's menu, a radio group's rows, a tab strip's
-/// segments.
+/// drawn from: a dropdown's menu, a radio group's rows, a tab strip's segments.
 ///
-/// Named for the same reason [`AuthoredNodeSystems`] is: a binding that writes
-/// the list or the choice has to be read in the frame it wrote, or the widget
-/// draws the list it held last frame. Whoever composes this crate with a
-/// binding evaluator declares that edge; see `jackdaw_runtime`.
+/// A binding that writes the list belongs ahead of them, as with
+/// [`AuthoredNodeSystems`].
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AuthoredChromeSystems;
 
@@ -361,18 +264,11 @@ impl Plugin for AuthoredWidgetPlugin {
         }
     }
 
-    /// Gives the app a theme if nothing else did.
+    /// Installs the dark theme if nothing else did, since an empty `UiTheme`
+    /// resolves every design token to the missing-token colour.
     ///
-    /// `FeathersCorePlugin` only calls `init_resource::<UiTheme>()`, and the
-    /// default is an empty token map: every `ThemeBackgroundColor` an authored
-    /// widget carries then resolves to the missing-token colour.
-    ///
-    /// This runs in `finish` rather than `build` because the app may add
-    /// `FeathersPlugins` after this one, and the emptiness checked for here is
-    /// only settled once every plugin has built.
-    ///
-    /// A theme installed later still wins: this writes the resource once and
-    /// nothing here watches it afterwards.
+    /// In `finish` rather than `build` because `FeathersPlugins` may be added
+    /// after this plugin.
     #[cfg(feature = "feathers")]
     fn finish(&self, app: &mut App) {
         use bevy::feathers::dark_theme::create_dark_theme;
@@ -388,12 +284,9 @@ impl Plugin for AuthoredWidgetPlugin {
     }
 }
 
-/// Teaches the type registry how to build each widget marker from nothing.
-///
-/// Loading a component from a document builds it through `ReflectDefault`, and
-/// neither `bevy_ui_widgets` nor `bevy_feathers` registers that data on its
-/// markers, only `#[reflect(Component)]`. Without this the loader warns and
-/// drops the marker, leaving a styled box with no widget behaviour in it.
+/// Registers `ReflectDefault` for each widget marker, which neither
+/// `bevy_ui_widgets` nor `bevy_feathers` does, so a loaded document can rebuild
+/// them.
 ///
 /// [`AuthoredWidgetPlugin`] calls this; call it directly only when the
 /// observers are unwanted.
@@ -438,16 +331,12 @@ pub fn register_widget_defaults(app: &mut App) {
         app.register_type::<ThemedText>()
             .register_type_data::<ThemedText, ReflectDefault>();
 
-        // An authored widget names the cursor it wants, and `bevy_feathers`
-        // registers none of its own types. Without this the loader cannot find
-        // the enum behind `EntityCursor::System` and drops the cursor.
         app.register_type::<EntityCursor>();
     }
 }
 
-/// `update_button_styles` queries `&Hovered`, and `Hovered` is picking state no
-/// document records. Without this a button loaded from disk keeps its resting
-/// colour through every hover and press.
+/// Gives a loaded button the `Hovered` picking state a document does not
+/// record, without which `update_button_styles` never restyles it.
 #[cfg(feature = "feathers")]
 fn hydrate_button_hover(
     buttons: Query<
@@ -468,12 +357,8 @@ fn hydrate_button_hover(
 
 /// The resting and checked halves of one theme token pair.
 ///
-/// Named pairs rather than a per-widget lookup because the three authored
-/// two-state widgets are not distinguishable by their markers: a checkbox and
-/// a toggle switch both carry [`Checkbox`], and only the token they were
-/// spawned with says which is which. So the resting token an entity is
-/// carrying is what selects its pair, and a widget themed with something else
-/// entirely is left alone rather than guessed at.
+/// Pairs rather than a per-widget lookup because a checkbox and a toggle switch
+/// share the same marker; the token an entity carries is what identifies it.
 #[cfg(feature = "feathers")]
 type TokenPair = (
     bevy::feathers::theme::ThemeToken,
@@ -490,8 +375,7 @@ fn background_token_pairs() -> [TokenPair; 2] {
     ]
 }
 
-/// Border pairs. The radio's ring is the only part feathers themes on the one
-/// entity an authored radio is, so the border is its whole checked treatment.
+/// Border pairs, which for a radio are its whole checked treatment.
 #[cfg(feature = "feathers")]
 fn border_token_pairs() -> [TokenPair; 3] {
     use bevy::feathers::tokens;
@@ -502,9 +386,8 @@ fn border_token_pairs() -> [TokenPair; 3] {
     ]
 }
 
-/// The token `current` should be, given whether the widget is checked: its
-/// pair's other half, or `None` when it already is that or belongs to no pair
-/// here.
+/// The other half of `current`'s pair, or `None` when it is already correct or
+/// belongs to no pair here.
 #[cfg(feature = "feathers")]
 fn swapped_token(
     pairs: &[TokenPair],
@@ -518,23 +401,12 @@ fn swapped_token(
     (wanted != current).then(|| wanted.clone())
 }
 
-/// Show an authored checkbox, radio, or toggle switch in its checked colours.
+/// Shows an authored checkbox, radio, or toggle switch in its checked colours.
 ///
-/// `bevy_feathers` switches these tokens from systems that walk a multi-entity
-/// widget through private marker types (`CheckboxOutline` and friends are not
-/// public). An authored widget is one entity carrying the outline's tokens, so
-/// none of that reaches it and the box keeps its resting colours whatever
-/// [`Checked`] says -- a binding could drive the state correctly while the
-/// widget looked identical either way. This is the same swap, done on the one
-/// entity there is, using feathers' own checked tokens so an authored widget
-/// and a feathers one agree in a theme.
-///
-/// Hover and press treatments are deliberately not mirrored. Those tokens read
-/// picking state the document does not carry, and a resting-versus-checked
-/// difference is the one a person authoring a screen has to be able to see.
-///
-/// The theme components are immutable, so a change is a re-insert; the
-/// equality guard in [`swapped_token`] keeps an idle frame quiet.
+/// `bevy_feathers` does this from systems that walk a multi-entity widget
+/// through private markers, none of which reach a one-entity authored widget.
+/// Hover and press treatments are not mirrored: they read picking state a
+/// document does not carry.
 #[cfg(feature = "feathers")]
 fn authored_check_styles(
     widgets: Query<
@@ -581,9 +453,8 @@ fn authored_checkbox_self_update(
     commands.queue(move |world: &mut World| set_checked(world, target, checked));
 }
 
-/// A widget can be despawned between the event and the command that answers it:
-/// an inspector rebuild, an undo, a document swap. `EntityCommands` would panic
-/// on the missing entity, so the lookup is fallible here.
+/// A widget can be despawned between the event and the command answering it, so
+/// the lookup is fallible where `EntityCommands` would panic.
 fn set_checked(world: &mut World, entity: Entity, checked: bool) {
     let Ok(mut entity) = world.get_entity_mut(entity) else {
         return;
@@ -615,9 +486,8 @@ fn authored_radio_self_update(
     });
 }
 
-/// `SliderValue` is immutable, so a sync is a re-insert. The equality guard
-/// keeps a slider also driven by a two-way binding from re-inserting an agreed
-/// value every frame.
+/// `SliderValue` is immutable, so a sync is a re-insert; the equality guard
+/// keeps a two-way-bound slider from re-inserting every frame.
 fn authored_slider_self_update(
     change: On<ValueChange<f32>>,
     sliders: Query<&SliderValue, (With<Slider>, With<AuthoredWidget>)>,
@@ -640,15 +510,9 @@ fn authored_slider_self_update(
 /// Builds the chrome a [`Dropdown`] is drawn from: a menu button showing the
 /// chosen option and a popup listing all of them.
 ///
-/// The parts are generated rather than authored so that the list is the one
-/// thing a document carries. A change to the component throws the old parts
-/// away and builds them again, which is also what puts a new choice in the
-/// button's caption.
-///
-/// The menu root is a child rather than the widget entity itself: feathers
-/// hangs the observer that opens and closes the popup off the entity its
-/// `FeathersMenu` scene spawns, and an observer is not something that can be
-/// added to an entity a document loaded.
+/// The menu root is a child rather than the widget entity because feathers
+/// hangs the open/close observer off the entity its `FeathersMenu` scene
+/// spawns.
 #[cfg(feature = "feathers")]
 fn dropdown_chrome_follows_options(
     dropdowns: Query<
@@ -727,10 +591,6 @@ fn dropdown_chrome_follows_options(
 }
 
 /// The nearest descendant of `root` that `wanted` accepts, breadth first.
-///
-/// The chrome a widget builds is a scene several levels deep whose inner
-/// entities nothing outside can name, so the parts that have to be found again
-/// are found by walking to them.
 #[cfg(feature = "feathers")]
 fn find_descendant(
     children: &Query<&Children>,
@@ -738,8 +598,7 @@ fn find_descendant(
     wanted: &dyn Fn(Entity) -> bool,
 ) -> Option<Entity> {
     let mut frontier = vec![root];
-    // The generated scenes are a handful of levels deep; the bound stops a
-    // cycle in the hierarchy rather than bounding anything built here.
+    // The bound stops a cycle in the hierarchy; generated scenes are shallower.
     for _ in 0..8 {
         let mut next = Vec::new();
         for entity in frontier {
@@ -758,11 +617,8 @@ fn find_descendant(
     None
 }
 
-/// Which entry of `entries` an index names, clamped to the last one.
-///
-/// A document can hold an index past the end of the list beside it -- a list
-/// shortened by hand, or a binding that overshot. Clamping shows the last
-/// entry rather than none, and says so once so the mismatch is not silent.
+/// An index into a list of `len` entries, clamped to the last one and warned
+/// about once.
 #[cfg(feature = "feathers")]
 fn clamped_index(index: usize, len: usize, what: &str) -> usize {
     if len == 0 || index < len {
@@ -772,13 +628,9 @@ fn clamped_index(index: usize, len: usize, what: &str) -> usize {
     len - 1
 }
 
-/// Writes a picked option back into the [`Dropdown`] it belongs to, and says
-/// so as a [`ValueChange`].
-///
-/// `bevy_ui_widgets` raises `Activate` for the row and closes the popup; the
-/// choice itself is state, and this is what makes it state. The change is
-/// announced the way a slider or a checkbox announces one, so a binding can
-/// hear it without knowing what a menu is.
+/// Writes a picked option back into the [`Dropdown`] it belongs to and
+/// announces it as a [`ValueChange`], so a binding can hear it without knowing
+/// what a menu is.
 #[cfg(feature = "feathers")]
 fn dropdown_option_activated(
     activate: On<bevy::ui_widgets::Activate>,
@@ -792,8 +644,7 @@ fn dropdown_option_activated(
     };
     let index = option.0;
     let mut current = activate.entity;
-    // The generated chrome is three deep; the cap stops a cycle in `ChildOf`
-    // rather than bounding anything the builder above can produce.
+    // The cap stops a cycle in `ChildOf`; the generated chrome is three deep.
     let mut owner = None;
     for _ in 0..8 {
         let Ok(child_of) = parents.get(current) else {
@@ -850,8 +701,7 @@ fn radio_rows_follow_options(
     for (entity, group, children, built) in &groups {
         let selected = clamped_index(group.selected, group.options.len(), "a radio group");
 
-        // A new choice out of the same list moves one marker; rebuilding the
-        // rows would throw away the one the user just clicked.
+        // Rebuilding the rows would throw away the one just clicked.
         if built.is_some_and(|built| built.0 == group.options) {
             for child in children.into_iter().flatten() {
                 let Ok(row) = rows.get(*child) else {
@@ -906,11 +756,8 @@ fn radio_option_chosen(
     commands.queue(move |world: &mut World| set_chosen_index(world, owner, index));
 }
 
-/// Puts `index` into whichever list component `owner` carries and announces
-/// it, unless it is already the one taken.
-///
-/// A radio group and a tab strip differ only in which component holds the
-/// number, and both answer a click the same way.
+/// Puts `index` into whichever list component `owner` carries and announces it,
+/// unless it is already the one taken.
 #[cfg(feature = "feathers")]
 fn set_chosen_index(world: &mut World, owner: Entity, index: usize) {
     let Ok(mut entity) = world.get_entity_mut(owner) else {
@@ -1019,8 +866,6 @@ fn tab_chrome_follows_labels(
                 ChildOf(entity),
             ))
             .id();
-        // The strip is spawned ahead of the panes it names, which is where a
-        // reader expects a tab bar to be.
         commands.entity(entity).insert_children(0, &[strip]);
         for (index, label) in tabs.labels.iter().enumerate() {
             let mut segment = commands.spawn_scene(bsn! {
@@ -1065,10 +910,8 @@ fn tab_segment_chosen(
 }
 
 /// Puts a [`NineSlice`]'s border into the image mode beside it, so the corners
-/// of a panel skin keep their size while the middle stretches.
-///
-/// A border of zero leaves the image whole: nothing is sliced off, and
-/// `NodeImageMode::Auto` is what says so.
+/// of a panel skin keep their size while the middle stretches. A border of zero
+/// leaves the image whole.
 fn nine_slice_follows_border(
     mut images: Query<(&NineSlice, &mut ImageNode), Or<(Changed<NineSlice>, Changed<ImageNode>)>>,
 ) {
@@ -1090,12 +933,11 @@ fn nine_slice_follows_border(
     }
 }
 
-/// Lays a [`Separator`] across the flow it sits in: a hairline the full width
-/// of a column, or the full height of a row.
+/// Lays a [`Separator`] across the flow it sits in: a hairline the full width of
+/// a column, or the full height of a row.
 ///
-/// The thickness is whichever of `width` and `height` is already a pixel
-/// value, so a screen can author a 2px rule and keep it. A separator with no
-/// parent, or one under something that is not a `Node`, is left as authored.
+/// The thickness is whichever of `width` and `height` is already a pixel value,
+/// so an authored 2px rule keeps its weight.
 fn separator_follows_parent_axis(
     parents: Query<&Node, Without<Separator>>,
     mut separators: Query<(&ChildOf, &mut Node), With<Separator>>,
@@ -1131,8 +973,7 @@ fn separator_follows_parent_axis(
         if node.height != height {
             node.height = height;
         }
-        // A hairline in a flex line is squeezed to nothing without this: the
-        // default `flex_shrink` lets a 1px child give up its only pixel.
+        // The default `flex_shrink` lets a 1px child give up its only pixel.
         if node.flex_shrink != 0.0 {
             node.flex_shrink = 0.0;
         }
@@ -1160,27 +1001,14 @@ fn progress_fill_follows_value(
     }
 }
 
-/// Carries a typed edit into [`TextValue`], the half a save writes and a
-/// binding reads.
+/// Carries a typed edit into [`TextValue`] and announces it as a
+/// [`ValueChange`].
 ///
-/// Runs after the edits queued this frame have been applied and ahead of
-/// [`authored_text_follows_value`], so an edit made this frame leaves both
-/// halves agreeing in the same frame. When both move at once the edit wins;
-/// snapping the box back mid-word would take the caret with it.
-///
-/// A newly inserted editor is exempt. A load inserts both halves at once and
-/// the editor arrives empty however much text the document carried, so taking
-/// that as an edit would wipe the value on every load.
-///
-/// An edit is also announced as a [`ValueChange`], the only way something
-/// outside this crate can hear it. A value written from outside raises nothing:
-/// it is not an edit, and echoing it would hand whoever wrote it their own value
-/// back.
-///
-/// `is_final` is false because a keystroke is the middle of typing. The editor's
-/// own `ValueChange<String>` handlers return early unless the change is final,
-/// so a final change from here would point the inspector write-back paths at
-/// authored content.
+/// Runs ahead of `authored_text_follows_value`, so when both halves move at
+/// once the edit wins rather than snapping the box back mid-word. A newly
+/// inserted editor is exempt: a load inserts both halves at once and the editor
+/// arrives empty, which would otherwise read as an edit that wipes the value.
+/// `is_final` is false because a keystroke is the middle of typing.
 fn authored_text_self_update(
     mut inputs: Query<(Entity, Ref<EditableText>, &mut TextValue), Changed<EditableText>>,
     mut commands: Commands,
@@ -1201,18 +1029,10 @@ fn authored_text_self_update(
     }
 }
 
-/// Puts a [`TextValue`] written from outside, by a load, a binding or game
-/// code, into the box the user reads.
+/// Puts a [`TextValue`] written from outside into the box the user reads.
 ///
-/// The equality guard keeps this from fighting
-/// [`authored_text_self_update`]: writing the editor flags it, which would bring
-/// the other system straight back round, so the write only happens when the two
-/// disagree.
-///
-/// `set_text` clears whatever the IME was composing, so a value written while
-/// the user is mid-composition drops the preedit. The preedit is not text yet
-/// and cannot be merged, and holding the write until composition ends would
-/// leave the value and the box disagreeing for as long as the user keeps typing.
+/// The equality guard stops this and `authored_text_self_update` trading writes.
+/// `set_text` drops whatever the IME was composing, which cannot be merged.
 fn authored_text_follows_value(
     mut inputs: Query<(&mut EditableText, &TextValue), Changed<TextValue>>,
 ) {
@@ -1222,8 +1042,7 @@ fn authored_text_follows_value(
             continue;
         }
         editable.editor_mut().set_text(&value.0);
-        // Text set from outside leaves the caret wherever the old string put
-        // it, which for a shorter string is out of the text entirely.
+        // A shorter string leaves the caret outside the text entirely.
         editable.queue_edit(TextEdit::TextEnd(false));
     }
 }
@@ -1232,8 +1051,7 @@ fn authored_text_follows_value(
 mod tests {
     use super::*;
 
-    /// How often each side was written, counted over whole frames. A pair that
-    /// trades writes instead of settling shows up as a rising count.
+    /// How often each side was written, counted over whole frames.
     #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
     struct Touches {
         value: usize,
@@ -1270,11 +1088,8 @@ mod tests {
         input
     }
 
-    /// The pair with bevy's text pipeline under it. Every other test here runs
-    /// the two systems alone, where a queued [`TextEdit`] stays pending: it is
-    /// only text once `apply_text_edits` has run, the system
-    /// [`EditableTextSystems`] names and this pair orders itself against.
-    /// `authored_text_follows_value` queues an edit on every write it makes.
+    /// The pair with bevy's text pipeline under it, so a queued `TextEdit` is
+    /// actually applied; every other test here runs the two systems alone.
     fn text_pipeline_app() -> App {
         let mut app = App::new();
         app.add_plugins((
@@ -1288,8 +1103,7 @@ mod tests {
         app
     }
 
-    /// A keystroke as bevy delivers one: queued, then applied by the text
-    /// pipeline. The value follows it and nothing writes again afterwards.
+    /// A keystroke as bevy delivers one: queued, then applied by the pipeline.
     #[test]
     fn a_keystroke_through_bevys_text_pipeline_reaches_the_value_and_settles() {
         let mut app = text_pipeline_app();
@@ -1315,8 +1129,7 @@ mod tests {
         assert_still(&mut app);
     }
 
-    /// The other direction, where the queued caret fix-up is an edit the
-    /// pipeline applies. That flags `EditableText` again, which is where a pair
+    /// The queued caret fix-up flags `EditableText` again, which is where a pair
     /// that did not agree would start trading writes.
     #[test]
     fn a_written_value_settles_once_the_pipeline_has_moved_the_caret() {
@@ -1404,8 +1217,6 @@ mod tests {
         assert_still(&mut app);
     }
 
-    /// Both sides move in one frame. The edit wins and the disagreement ends
-    /// rather than alternating.
     #[test]
     fn a_typed_edit_and_a_written_value_in_one_frame_settle() {
         let mut app = app();
@@ -1427,8 +1238,8 @@ mod tests {
         assert_still(&mut app);
     }
 
-    /// The load shape: the document brings the value and nothing else, so the
-    /// editor is the empty one `require` supplies. The value wins.
+    /// The load shape: the document brings the value and `require` supplies an
+    /// empty editor.
     #[test]
     fn a_value_that_arrives_with_an_empty_editor_is_not_wiped_by_it() {
         let mut app = app();
@@ -1481,8 +1292,8 @@ mod tests {
         );
     }
 
-    /// A value written from outside is not an edit, and reporting it would send
-    /// whoever wrote it their own value back.
+    /// Reporting a write from outside would send whoever wrote it their own
+    /// value back.
     #[test]
     fn a_value_written_from_code_is_not_reported_as_an_edit() {
         let mut app = watching_app();
@@ -1505,8 +1316,6 @@ mod tests {
         assert_still(&mut app);
     }
 
-    /// An app carrying nothing but this plugin resolves its design tokens. An
-    /// empty theme answers every token with the missing-token colour.
     #[cfg(feature = "feathers")]
     #[test]
     fn a_game_that_installs_no_theme_still_resolves_its_tokens() {
@@ -1526,7 +1335,7 @@ mod tests {
     }
 
     /// `FeathersCorePlugin` inits the resource and leaves the token map empty,
-    /// so the condition checked is emptiness rather than absence.
+    /// so emptiness rather than absence is what gets filled in.
     #[cfg(feature = "feathers")]
     #[test]
     fn a_theme_that_is_there_but_holds_nothing_is_filled_in() {
@@ -1544,7 +1353,6 @@ mod tests {
         );
     }
 
-    /// A theme installed before this plugin builds is left as it is.
     #[cfg(feature = "feathers")]
     #[test]
     fn a_theme_the_game_installed_first_survives() {
@@ -1565,8 +1373,8 @@ mod tests {
         );
     }
 
-    /// A document can carry the border alone; the image mode it writes into
-    /// has to come with it, the way the text value brings its editor.
+    /// A document can carry the border alone, so the image mode has to come
+    /// with it.
     #[test]
     fn a_nine_slice_brings_an_image_node_with_it() {
         let mut app = app();
@@ -1574,8 +1382,7 @@ mod tests {
         assert!(app.world().get::<ImageNode>(panel).is_some());
     }
 
-    /// A load builds the value through `ReflectDefault`, so the registry has to
-    /// carry it.
+    /// A load builds the value through `ReflectDefault`.
     #[test]
     fn the_value_is_registered_with_a_default() {
         use bevy::reflect::prelude::ReflectDefault;
@@ -1589,10 +1396,6 @@ mod tests {
         assert!(registration.data::<ReflectComponent>().is_some());
     }
 
-    /// Gap 12: an authored checkbox showed its resting colours whatever
-    /// `Checked` said, so a correctly bound box looked identical in both
-    /// states. The tokens are feathers' own, so a themed screen agrees with
-    /// a feathers control beside it.
     #[cfg(feature = "feathers")]
     #[test]
     fn a_checked_authored_checkbox_takes_the_checked_tokens() {
@@ -1647,8 +1450,8 @@ mod tests {
         );
     }
 
-    /// A toggle switch carries the same `Checkbox` marker, so the resting
-    /// token it was spawned with is what tells the two apart.
+    /// A toggle switch carries the same `Checkbox` marker, so its resting token
+    /// is what tells the two apart.
     #[cfg(feature = "feathers")]
     #[test]
     fn a_toggle_switch_takes_the_switch_tokens_not_the_checkbox_ones() {
@@ -1684,8 +1487,6 @@ mod tests {
         );
     }
 
-    /// A radio is one entity too, and its ring is the only part feathers
-    /// themes there.
     #[cfg(feature = "feathers")]
     #[test]
     fn a_chosen_authored_radio_takes_the_checked_ring() {
@@ -1715,9 +1516,8 @@ mod tests {
         );
     }
 
-    /// Editor chrome runs its own checkbox state machines, some of which
-    /// refuse a toggle. The gate that keeps the value observers off it keeps
-    /// the styling off it too.
+    /// Editor chrome runs its own checkbox state machines, so the observer gate
+    /// keeps the styling off it too.
     #[cfg(feature = "feathers")]
     #[test]
     fn an_unauthored_checkbox_is_left_alone() {
@@ -1746,9 +1546,8 @@ mod tests {
         );
     }
 
-    /// The swap is idempotent: a settled widget is not re-inserted every
-    /// frame, which would keep change detection hot and mark the document
-    /// dirty for nothing.
+    /// Re-inserting an agreed token every frame would keep change detection hot
+    /// and mark the document dirty for nothing.
     #[cfg(feature = "feathers")]
     #[test]
     fn a_settled_widget_is_not_rewritten_every_frame() {

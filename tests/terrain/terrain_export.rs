@@ -1,25 +1,15 @@
-//! Pure-core tests for `jd export-terrain`'s output builder. Everything
-//! here exercises [`jackdaw::terrain::export::build_export`] directly on
-//! plain in-memory data -- no `.bsn` scene, no headless `World` -- per the
-//! module's pure-core/shell split.
-//!
-//! The output shape is a cross-repo contract (an importer in another repo
-//! is being built against it), so these assertions check real values, not
-//! just "it didn't panic."
+//! Pure-core tests for `jd export-terrain`'s output builder, driving
+//! `jackdaw::terrain::export::build_export` on plain in-memory data. The output
+//! shape is a cross-repo contract, so the assertions check real values.
 
 use jackdaw::terrain::export::{
     ExportChannel, ExportChannelElement, ExportInput, ExportPaletteEntry, ExportPlacement,
     build_export,
 };
 
-/// A 3x3 height field whose values are NOT symmetric under transposition:
-/// swapping x and z would change every off-diagonal value, so a writer that
-/// transposed the grid would fail the pixel-fidelity assertions below.
-///
-/// It must be SQUARE. A `Terrain` is described by a single `resolution`
-/// (vertices per edge), so a heightmap is always `resolution^2`; an earlier
-/// 3x2 fixture here supplied 6 values for a resolution of 3 and every test
-/// using it failed inside the PNG encoder with "pixel buffer size mismatch".
+/// A 3x3 height field, deliberately not symmetric under transposition, so a
+/// writer that transposed the grid fails the pixel-fidelity assertions. It must
+/// be square: a heightmap is always `resolution^2`.
 fn sample_heights() -> Vec<f32> {
     vec![
         0.0, 1.0, 2.0, // z = 0
@@ -57,9 +47,8 @@ fn base_input<'a>(
         resolution: 3,
         heights,
         channels,
-        // 3 vertices -> 2 cells per edge. x and z must agree: the exporter
-        // checks the declared cell size against size/(resolution-1) on BOTH
-        // axes, so a terrain whose axes disagree has no single cell size.
+        // 3 vertices -> 2 cells per edge. The exporter checks the declared cell
+        // size against size/(resolution-1) on both axes.
         size: (2.0, 2.0),
         terrain_origin_m: [-1.0, -1.0],
         max_height: 22.0,
@@ -80,8 +69,6 @@ fn find_file<'a>(
         .unwrap_or_else(|| panic!("missing output file {relative}"))
 }
 
-// 1. Pixel fidelity: heightmap and channel PNGs decode back to the exact
-//    in-memory arrays, in z-major row order.
 #[test]
 fn pixel_fidelity_heightmap_and_channel_round_trip_exactly() {
     let heights = sample_heights();
@@ -126,8 +113,6 @@ fn pixel_fidelity_heightmap_and_channel_round_trip_exactly() {
     }
 }
 
-// 2. Byte-stability: running the pure core twice on the same input
-//    produces byte-identical output for every file.
 #[test]
 fn byte_stability_across_repeated_runs() {
     let heights = sample_heights();
@@ -157,8 +142,6 @@ fn byte_stability_across_repeated_runs() {
     }
 }
 
-// 3. Manifest shape: parses, documented keys present, quantization null vs
-//    populated, channels sorted, palette sorted.
 #[test]
 fn manifest_shape_and_sort_order() {
     let heights = sample_heights();
@@ -215,7 +198,6 @@ fn manifest_shape_and_sort_order() {
     assert!(text.contains("\n  \""), "2-space indent");
 }
 
-// Quantized manifest: "quantization" is populated, not null.
 #[test]
 fn manifest_quantization_populated_when_quantized() {
     let heights = sample_heights();
@@ -230,12 +212,8 @@ fn manifest_quantization_populated_when_quantized() {
     assert_eq!(manifest["quantization"]["elevation_step_m"], 0.25);
 }
 
-// I1 pinning test, the exact scenario from the review finding: authored
-// heights whose span exceeds the terrain's configured `max_height` must
-// still export. The old step derivation (`max_height / 65535`) sized the
-// pixel range off the ceiling rather than the actual data, so a span
-// wider than that ceiling overflowed HeightOutOfRange on data that is
-// perfectly representable once the step is sized off the real span.
+// Heights whose span exceeds the terrain's configured `max_height` must still
+// export: the step is sized off the real span, not off the ceiling.
 #[test]
 fn heights_spanning_more_than_max_height_still_export() {
     let heights: Vec<f32> = (0..9).map(|i| i as f32 * 7.5).collect(); // 0..60
@@ -270,15 +248,9 @@ fn heights_spanning_more_than_max_height_still_export() {
     }
 }
 
-// M1: quantized heights decode back to the actual snapped value, not
-// merely to *some* multiple of the step. The previous assertion checked
-// only "decoded_h is a multiple of step_m" -- true of every pixel this
-// encoding can produce by construction (decoded_h = base_m + pixel *
-// step_m, and base_m is itself floor(min/step)*step), so it would still
-// pass even if quantize_heights were never actually applied to the
-// input. Comparing against jackdaw_terrain::quantize_height(original,
-// step) pins the real behavior: the encoded value must match what
-// quantization actually does to each input height.
+// Quantized heights decode back to the actual snapped value. Every pixel is a
+// multiple of the step by construction, so only comparing against
+// `jackdaw_terrain::quantize_height` proves the quantization ran.
 #[test]
 fn quantized_heights_decode_to_the_actual_snapped_value() {
     let heights = vec![0.1, 0.4, 0.6, -0.3, 1.55, 2.0, 0.0, -1.2, 3.05];
@@ -312,8 +284,6 @@ fn quantized_heights_decode_to_the_actual_snapped_value() {
     }
 }
 
-// 5. Refusal: a declared cell_size_m inconsistent with size/(resolution-1)
-//    is rejected, naming both values.
 #[test]
 fn cell_size_mismatch_is_refused_naming_both_values() {
     let heights = sample_heights();
@@ -328,8 +298,6 @@ fn cell_size_mismatch_is_refused_naming_both_values() {
     assert!(message.contains("1"), "names the derived value: {message}");
 }
 
-// 6. Placements determinism: an unsorted input set of placements
-//    serialises in sorted order, identically across runs.
 #[test]
 fn placements_serialize_in_sorted_order_deterministically() {
     let heights = sample_heights();
@@ -455,11 +423,9 @@ fn channel_filename_collision_is_refused_naming_both() {
     assert!(message.contains("biome_a"));
 }
 
-/// C3: two channels with the exact same name must be refused, not
-/// silently collapsed to one exported file by the last-wins writer.
-/// Reachable through the UI: add, add, remove index 0, add mints
-/// `channel-1` twice (see `channel_ops.rs`'s `mint_channel_name`, which
-/// this pins from the export side).
+/// Two channels with the exact same name are refused, not collapsed to one file
+/// by the last-wins writer. Reachable through the UI: add, add, remove index 0,
+/// add mints `channel-1` twice.
 #[test]
 fn exact_duplicate_channel_names_are_refused() {
     let heights = sample_heights();
@@ -483,9 +449,8 @@ fn exact_duplicate_channel_names_are_refused() {
     assert!(error.to_string().contains("channel-1"));
 }
 
-/// M3: a U8 channel value over 255 must saturate on export, matching
-/// sidecar.rs's own U8 encode. Wrapping (`as u8`) would turn 256 into 0
-/// -- silently the wrong palette index, not just a clipped one.
+/// A U8 channel value over 255 saturates on export, matching sidecar.rs's own
+/// encode; wrapping would turn 256 into 0, a silently wrong palette index.
 #[test]
 fn a_u8_channel_value_over_255_saturates_rather_than_wraps() {
     let heights = sample_heights();

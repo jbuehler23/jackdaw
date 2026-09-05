@@ -118,13 +118,9 @@ fn swap_round_trips_a_single_brush() {
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
     app.init_resource::<jackdaw::selection::Selection>();
 
-    // Spawn a brush on the active scene, and register a corresponding node
-    // in the AST. After T4 the swap captures the AST (not the live world),
-    // so a node needs to exist in the AST for the captured snapshot to be
-    // non-empty. Only `Name` is round-tripped through deserialization here
-    // because `Brush` carries a `Handle<StandardMaterial>` which needs the
-    // editor's full asset-aware deserializer; the brush respawn assertion
-    // is what verifies T4's AST-as-spawn-source path end-to-end.
+    // Only `Name` is round-tripped through deserialization here: `Brush`
+    // carries a `Handle<StandardMaterial>` needing the editor's asset-aware
+    // deserializer.
     let brush_entity = app
         .world_mut()
         .spawn((Brush::cuboid(1.0, 1.0, 1.0), Name::new("a")))
@@ -136,7 +132,6 @@ fn swap_round_trips_a_single_brush() {
         ast.link(brush_entity, node);
     }
 
-    // Two tabs: A (active) and B (empty).
     {
         let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
         scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(1));
@@ -144,13 +139,10 @@ fn swap_round_trips_a_single_brush() {
         scenes.active = 0;
     }
 
-    // Swap to tab B.
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
 
-    // Original brush entity is gone (clear_scene_entities ran).
     assert!(app.world().get::<Brush>(brush_entity).is_none());
 
-    // Tab A holds the AST snapshot now.
     let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
     assert_eq!(scenes.active, 1);
     let TabContent::Scene(Some(captured)) = &scenes.tabs[0].content else {
@@ -158,7 +150,6 @@ fn swap_round_trips_a_single_brush() {
     };
     assert!(!captured.roots.is_empty());
 
-    // Swap back to tab A. The Name-bearing entity respawns from the AST.
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
     let name_count: usize = app
         .world_mut()
@@ -169,12 +160,10 @@ fn swap_round_trips_a_single_brush() {
     assert_eq!(name_count, 1, "tab A's AST entity should respawn");
 }
 
-/// A tab swap round-trips the scene through BSN *text* and respawns every
-/// entity, with no disk involved. That is exactly what would destroy a
-/// sculpted heightmap if heights lived on the component, so this pins the
-/// arrangement that makes it safe: the sidecar path travels as an ordinary
-/// reflected `String`, the heights live in a `Resource`, and neither one
-/// depends on the entity surviving.
+/// A tab swap round-trips the scene through BSN text and respawns every entity,
+/// with no disk involved, which would destroy a sculpted heightmap if heights
+/// lived on the component: the sidecar path travels as a reflected `String` and
+/// the heights live in a `Resource`.
 #[test]
 fn swap_preserves_a_sculpted_terrain() {
     use bevy::prelude::*;
@@ -251,7 +240,6 @@ fn swap_preserves_a_sculpted_terrain() {
         scenes.active = 0;
     }
 
-    // Away and back.
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
     assert!(
         app.world().get::<Terrain>(terrain_entity).is_none(),
@@ -259,7 +247,6 @@ fn swap_preserves_a_sculpted_terrain() {
     );
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
 
-    // The respawned terrain still names the same sidecar...
     let respawned = app
         .world_mut()
         .query::<&Terrain>()
@@ -276,7 +263,6 @@ fn swap_preserves_a_sculpted_terrain() {
         "heights never enter the scene document"
     );
 
-    // ...and the sculpt itself is untouched.
     let store = app.world().resource::<TerrainDataStore>();
     assert_eq!(store.heights(DATA_PATH), sculpted.as_slice());
 }
@@ -426,7 +412,6 @@ fn swap_preserves_camera_transform_per_tab() {
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
     app.init_resource::<jackdaw::selection::Selection>();
 
-    // Camera tagged as the main viewport camera, placed at (1, 2, 3).
     let cam = app
         .world_mut()
         .spawn((
@@ -436,7 +421,6 @@ fn swap_preserves_camera_transform_per_tab() {
         ))
         .id();
 
-    // Two tabs.
     {
         let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
         scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(1));
@@ -444,13 +428,10 @@ fn swap_preserves_camera_transform_per_tab() {
         scenes.active = 0;
     }
 
-    // Swap to B (camera should be captured for A, reset for B).
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
-    // While on B, move the camera somewhere else.
     if let Some(mut tf) = app.world_mut().get_mut::<Transform>(cam) {
         *tf = Transform::from_xyz(10.0, 20.0, 30.0);
     }
-    // Swap back to A. The camera should return to (1, 2, 3).
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
 
     let tf = app.world().get::<Transform>(cam).unwrap();
@@ -484,8 +465,7 @@ fn scene_new_appends_an_untitled_tab() {
     app.init_resource::<jackdaw::selection::Selection>();
     app.init_resource::<jackdaw::scenes::operators::UntitledCounter>();
 
-    // Run scene_new_system twice. The first appends and activates tab 0;
-    // the second appends and swaps to tab 1.
+    // The first run appends and activates tab 0; the second swaps to tab 1.
     app.world_mut()
         .run_system_cached(jackdaw::scenes::operators::scene_new_system)
         .unwrap();
@@ -511,7 +491,6 @@ fn scene_new_appends_an_untitled_tab() {
     let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
     assert_eq!(scenes.tabs.len(), 2);
     assert_eq!(scenes.active, 1);
-    // Counter increments: distinct names.
     assert_ne!(scenes.tabs[0].display_name, scenes.tabs[1].display_name);
 }
 
@@ -542,13 +521,11 @@ fn scene_open_dedupes_by_path() {
     app.init_resource::<jackdaw::selection::Selection>();
     app.init_resource::<jackdaw::scenes::operators::UntitledCounter>();
 
-    // Make sure there is an active tab (otherwise the swap inside scene_open
-    // has nothing to capture from).
+    // The swap inside scene_open needs an active tab to capture from.
     app.world_mut()
         .run_system_cached(jackdaw::scenes::operators::scene_new_system)
         .unwrap();
 
-    // Write an empty scene to a temp file (valid JsnScene JSON).
     let tmp_dir = std::env::temp_dir();
     let path = tmp_dir.join("jackdaw_scene_open_dedupe_test.jsn");
     std::fs::write(
@@ -557,7 +534,6 @@ fn scene_open_dedupes_by_path() {
     )
     .unwrap();
 
-    // Open twice; only one tab with this path should result.
     jackdaw::scenes::operators::scene_open_system(app.world_mut(), &path);
     jackdaw::scenes::operators::scene_open_system(app.world_mut(), &path);
 
@@ -622,15 +598,13 @@ fn make_app_with_n_tabs(n: usize) -> bevy::app::App {
 #[test]
 fn scene_switch_changes_active_index() {
     let mut app = make_app_with_n_tabs(2);
-    // Active starts at 0; switch to 1.
     jackdaw::scenes::operators::scene_switch_system(app.world_mut(), 1);
     assert_eq!(app.world().resource::<jackdaw::scenes::Scenes>().active, 1);
 }
 
 #[test]
 fn scene_save_all_writes_each_path_bound_tab() {
-    // Build two tabs, both with legacy .jsn paths. Saves persist as BSN, so
-    // each tab writes its .bsn sibling on disk.
+    // Both tabs hold legacy .jsn paths, and saves persist as BSN siblings.
     let mut app = make_app_with_n_tabs(2);
     let tmp_a = std::env::temp_dir().join("jackdaw_save_all_a.jsn");
     let tmp_b = std::env::temp_dir().join("jackdaw_save_all_b.jsn");
@@ -705,13 +679,9 @@ fn scene_save_all_reports_failure_and_keeps_a_tab_dirty() {
     assert!(app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty);
 }
 
-/// Save All must not write a refused tab's file.
-///
-/// A refused tab sits in front of an empty world, its document never spawned,
-/// but its path is still set. `scene.save_all` reaches the persistence
-/// boundary without passing the single-save entry point, so the refusal has to
-/// be enforced at the write itself: otherwise Ctrl+Shift+S replaces the user's
-/// scene with the empty world the editor could not load it into.
+/// A refused tab's document never spawned, but its path is still set, and
+/// `scene.save_all` reaches the write without passing the single-save entry
+/// point: otherwise Ctrl+Shift+S replaces the user's scene with an empty world.
 #[test]
 fn scene_save_all_leaves_a_refused_tabs_file_untouched() {
     let mut app = make_app_with_n_tabs(1);
@@ -758,7 +728,6 @@ fn scene_close_blocks_closing_last_tab() {
 #[test]
 fn scene_close_drops_inactive_tab_and_shifts_active_index() {
     let mut app = make_app_with_n_tabs(2);
-    // Active = 1. Close tab 0; active should now be 0 (the surviving tab).
     {
         let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
         scenes.active = 1;
@@ -772,7 +741,6 @@ fn scene_close_drops_inactive_tab_and_shifts_active_index() {
 #[test]
 fn scene_close_drops_active_tab_and_picks_neighbor() {
     let mut app = make_app_with_n_tabs(2);
-    // Active = 1; close tab 1. Neighbor (index 0) becomes active.
     {
         let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
         scenes.active = 1;
@@ -797,15 +765,12 @@ fn pushing_to_history_marks_active_tab_dirty() {
     }
 
     let mut app = make_app_with_n_tabs(1);
-    // Confirm not yet dirty.
     assert!(!app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty);
 
-    // Push a no-op into history.
     app.world_mut()
         .resource_mut::<jackdaw::commands::CommandHistory>()
         .push_executed(Box::new(NoOpCommand));
 
-    // Run the dirty-sync system once.
     app.world_mut()
         .run_system_cached(jackdaw::scenes::mark_active_dirty_on_history_growth)
         .unwrap();
@@ -819,7 +784,6 @@ fn project_config_persists_tab_paths_and_active_index() {
 
     let mut app = make_app_with_n_tabs(0);
 
-    // Use a uniquely-named subdirectory of temp to act as the project root.
     let tmp_root = std::env::temp_dir().join("jackdaw_persist_tabs_test_root");
     std::fs::create_dir_all(&tmp_root).unwrap();
     let scene_path = tmp_root.join("level1.jsn");
@@ -838,19 +802,15 @@ fn project_config_persists_tab_paths_and_active_index() {
             },
         ));
 
-    // Open one tab.
     jackdaw::scenes::operators::scene_open_system(app.world_mut(), &scene_path);
-    // Run the persist system.
     app.world_mut()
         .run_system_cached(jackdaw::scenes::persist_tabs_to_project_config)
         .unwrap();
 
-    // The on-disk project config lists the converted path: opening the
-    // legacy file converted it to .bsn.
+    // Opening the legacy file converted it, so the config lists the .bsn path.
     let saved = jackdaw::project::load_project_config(&tmp_root).unwrap();
     assert_eq!(saved.last_open_tabs, vec!["level1.bsn".to_string()]);
 
-    // Cleanup.
     let _ = std::fs::remove_file(&scene_path);
     let _ = std::fs::remove_file(scene_path.with_extension("bsn"));
     let _ = std::fs::remove_dir_all(&tmp_root);
@@ -868,7 +828,6 @@ fn closing_dirty_tab_defers_via_pending_close_resource() {
         scenes.active = 1;
     }
 
-    // No dialog up yet.
     assert!(
         app.world()
             .resource::<jackdaw::scenes::confirm_dialog::PendingTabClose>()
@@ -878,12 +837,10 @@ fn closing_dirty_tab_defers_via_pending_close_resource() {
 
     jackdaw::scenes::operators::scene_close_system(app.world_mut(), 0);
 
-    // Tab should still be there (deferred to dialog).
     assert_eq!(
         app.world().resource::<jackdaw::scenes::Scenes>().tabs.len(),
         2
     );
-    // PendingTabClose should record index 0.
     assert_eq!(
         app.world()
             .resource::<jackdaw::scenes::confirm_dialog::PendingTabClose>()
@@ -909,7 +866,6 @@ fn window_close_with_dirty_tabs_does_not_exit() {
     app.add_message::<bevy::window::WindowCloseRequested>();
     app.add_message::<bevy::app::AppExit>();
 
-    // Fire a WindowCloseRequested.
     app.world_mut()
         .resource_mut::<bevy::ecs::message::Messages<bevy::window::WindowCloseRequested>>()
         .write(bevy::window::WindowCloseRequested {
@@ -917,7 +873,6 @@ fn window_close_with_dirty_tabs_does_not_exit() {
         });
     app.update();
 
-    // No AppExit should have been emitted.
     let exits: Vec<_> = app
         .world_mut()
         .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
@@ -925,7 +880,6 @@ fn window_close_with_dirty_tabs_does_not_exit() {
         .collect();
     assert!(exits.is_empty(), "should not have emitted AppExit");
 
-    // PendingQuit should now be active.
     assert!(
         app.world()
             .resource::<jackdaw::scenes::confirm_dialog::PendingQuit>()
@@ -936,7 +890,6 @@ fn window_close_with_dirty_tabs_does_not_exit() {
 #[test]
 fn swap_captures_ast_snapshot_into_outgoing_tab() {
     let mut app = make_app_with_n_tabs(2);
-    // Mark the live document so we can recognize it after capture.
     {
         let marker = app.world_mut().spawn(Name::new("marker")).id();
         let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
@@ -964,10 +917,8 @@ fn swap_captures_ast_snapshot_into_outgoing_tab() {
 #[test]
 fn activate_restores_ast_snapshot_from_tab() {
     let mut app = make_app_with_n_tabs(2);
-    // Pre-stash a document snapshot containing a single marker node on tab
-    // 1. After swap, activate_tab spawns fresh entities for each node and
-    // links them, so we assert on the node count and the link map rather
-    // than on any pre-existing entity id.
+    // activate_tab spawns fresh entities for each node and links them, so the
+    // assertions are on the node count and the link map, not on entity ids.
     {
         let mut prepared = jackdaw_bsn::SceneBsnAst::default();
         let node =
@@ -998,9 +949,8 @@ fn activate_restores_ast_snapshot_from_tab() {
 
 #[test]
 fn swap_does_not_keep_a_jsn_scene_snapshot_field() {
-    // Compile-only check: SceneTab no longer has a `snapshot` field.
-    // If it does, this won't compile because the struct literal omits it
-    // (Rust requires every field to be initialized).
+    // Compile-only: the literal omits `snapshot`, so a re-added field fails to
+    // build.
     let _tab = jackdaw::scenes::SceneTab {
         path: None,
         display_name: "x".to_string(),
@@ -1049,7 +999,6 @@ fn tab_swap_preserves_entity_ordering_and_components() {
         scenes.active = 0;
     }
 
-    // Seed tab 0's document with two named nodes bound to live entities.
     {
         let e1 = app.world_mut().spawn(Name::new("alpha")).id();
         let e2 = app.world_mut().spawn(Name::new("beta")).id();
@@ -1062,17 +1011,14 @@ fn tab_swap_preserves_entity_ordering_and_components() {
         ast.link(e2, n2);
     }
 
-    // Swap away and back.
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
 
-    // The document still has both nodes in order, with the right names.
     let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
     assert_eq!(ast.roots.len(), 2, "both nodes survived round-trip");
     assert_eq!(ast.get_name(ast.roots[0]), Some("alpha"));
     assert_eq!(ast.get_name(ast.roots[1]), Some("beta"));
 
-    // The freshly-spawned entities also carry the original names.
     let names: Vec<String> = app
         .world_mut()
         .query::<&Name>()
@@ -1104,7 +1050,6 @@ fn window_close_with_no_dirty_tabs_exits_cleanly() {
     app.add_message::<bevy::window::WindowCloseRequested>();
     app.add_message::<bevy::app::AppExit>();
 
-    // Fire a WindowCloseRequested with no dirty tabs.
     app.world_mut()
         .resource_mut::<bevy::ecs::message::Messages<bevy::window::WindowCloseRequested>>()
         .write(bevy::window::WindowCloseRequested {
@@ -1112,7 +1057,6 @@ fn window_close_with_no_dirty_tabs_exits_cleanly() {
         });
     app.update();
 
-    // Exactly one AppExit::Success should have been emitted.
     let exits: Vec<_> = app
         .world_mut()
         .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
@@ -1181,8 +1125,7 @@ fn scene_open_flags_dirty_when_ids_need_migration() {
     app.init_resource::<jackdaw::selection::Selection>();
     app.init_resource::<jackdaw::scenes::operators::UntitledCounter>();
 
-    // Start from an active tab so the swap inside scene_open has something to
-    // capture from.
+    // The swap inside scene_open needs an active tab to capture from.
     app.world_mut()
         .run_system_cached(jackdaw::scenes::operators::scene_new_system)
         .unwrap();
@@ -1198,8 +1141,7 @@ fn scene_open_flags_dirty_when_ids_need_migration() {
 
     jackdaw::scenes::operators::scene_open_system(app.world_mut(), &path);
 
-    // Opening converts the legacy file on disk; the healed unique ids are
-    // persisted in the written .bsn, so the tab has nothing unsaved.
+    // The healed ids are persisted in the written .bsn, so nothing is unsaved.
     let bsn_path = path.with_extension("bsn");
     let converted = std::fs::read_to_string(&bsn_path).expect("converted .bsn written");
     let doc = jackdaw_bsn::parse_bsn_text(&converted).expect("converted .bsn parses");
@@ -1255,9 +1197,6 @@ fn open_regular_scene_file_sets_tab_kind_scene() {
 
 #[test]
 fn each_tab_has_its_own_undo_stack() {
-    // Pushing history entries in tab A then swapping to tab B must
-    // leave tab B's history empty. Swapping back to A must restore
-    // A's stack.
     use bevy::prelude::*;
 
     struct CounterCommand;
@@ -1271,7 +1210,6 @@ fn each_tab_has_its_own_undo_stack() {
 
     let mut app = make_app_with_n_tabs(2);
 
-    // Tab A active. Push two entries.
     app.world_mut()
         .resource_mut::<jackdaw::commands::CommandHistory>()
         .push_executed(Box::new(CounterCommand));
@@ -1287,7 +1225,6 @@ fn each_tab_has_its_own_undo_stack() {
         "tab A has 2 entries"
     );
 
-    // Swap to tab B. Live history should be tab B's (empty).
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
     assert_eq!(
         app.world()
@@ -1298,7 +1235,6 @@ fn each_tab_has_its_own_undo_stack() {
         "tab B has its own empty undo stack"
     );
 
-    // Push an entry in tab B.
     app.world_mut()
         .resource_mut::<jackdaw::commands::CommandHistory>()
         .push_executed(Box::new(CounterCommand));
@@ -1311,7 +1247,6 @@ fn each_tab_has_its_own_undo_stack() {
         "tab B has 1 entry"
     );
 
-    // Swap back to tab A. Its 2-entry stack is restored.
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
     assert_eq!(
         app.world()
@@ -1322,7 +1257,6 @@ fn each_tab_has_its_own_undo_stack() {
         "tab A's 2-entry stack is restored after swap-back"
     );
 
-    // And swapping back to B still has its 1 entry.
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
     assert_eq!(
         app.world()
@@ -1367,11 +1301,9 @@ fn finish_load_scene_entities_and_ast_share_ids_after_heal() {
         scenes.active = 0;
     }
 
-    // Two entities sharing id 10: the heal path re-mints both to fresh sparse ids.
-    // The bug caused those healed ids in the AST to diverge from the ids stamped
-    // on the live entities, because `from_jsn_scene` was called a second time on
-    // the original (colliding) `jsn`, advancing the atomic counter past the values
-    // already assigned to the spawned entities.
+    // Two entities share id 10, so both are re-minted. `from_jsn_scene` must not
+    // run a second time on the colliding input: that advances the atomic counter
+    // past the ids already stamped on the spawned entities.
     let tmp_dir = std::env::temp_dir();
     let path = tmp_dir.join("jackdaw_finish_load_scene_id_match_test.jsn");
     std::fs::write(
@@ -1411,11 +1343,9 @@ fn finish_load_scene_entities_and_ast_share_ids_after_heal() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// Opening a UI scene brings the viewport forward on its canvas
-/// (`finish_load_scene`), and a *tab switch* into one has to behave
-/// identically. Otherwise the scene activates behind whichever panel happened
-/// to be in front and the user is looking at the wrong thing while the editor
-/// insists the scene is open.
+/// A tab switch into a UI scene has to bring the viewport forward the way
+/// `finish_load_scene` does, or the scene activates behind whichever panel was
+/// in front while the editor insists it is open.
 #[test]
 fn activating_a_ui_scene_tab_brings_the_viewport_forward() {
     let mut app = make_app_with_n_tabs(2);
@@ -1461,15 +1391,13 @@ fn activating_an_ordinary_scene_tab_leaves_the_front_panel_alone() {
     );
 }
 
-/// A document that declares a UI scene but fails to spawn has nothing to
-/// show. `finish_load_scene` returns before focusing on that path, while
-/// `activate_tab` cannot return, since the tab bookkeeping still has to run,
-/// so it gates the focus explicitly.
+/// `finish_load_scene` returns before focusing when a UI document fails to
+/// spawn. `activate_tab` cannot return, since the tab bookkeeping still has to
+/// run, so it gates the focus explicitly.
 #[test]
 fn a_ui_scene_tab_that_fails_to_spawn_does_not_steal_the_viewport() {
     let mut app = make_app_with_n_tabs(2);
     let leaf = dock_tree_with_a_viewport(&mut app);
-    // A viewport already showing the world, so a flip would read as one.
     app.world_mut()
         .insert_resource(jackdaw::viewport_host::ViewportModeIntent {
             mode: jackdaw::viewport_host::ViewportMode::ThreeD,
@@ -1518,10 +1446,8 @@ fn a_ui_scene_tab_that_fails_to_spawn_does_not_steal_the_viewport() {
     );
 }
 
-/// A tab switch installs a document the same way an open does, so it owes
-/// the user the same refusal: `finish_load_scene` rejects the removed facade
-/// UI vocabulary by name, and a session restore reaching the same document
-/// through the tab strip must not spawn half of it.
+/// A tab switch installs a document the same way an open does, so it owes the
+/// same refusal of the removed facade UI vocabulary.
 #[test]
 fn activating_a_tab_holding_retired_ui_components_spawns_nothing() {
     use bevy::prelude::Name;
@@ -1556,10 +1482,8 @@ bevy_ecs::hierarchy::Children [
     );
 }
 
-/// A prefab base carrying the retired vocabulary hands it to an instance
-/// whose own document never names it. The document the gate reads has to be
-/// the one about to spawn, or the component materializes after the check and
-/// the refusal never happens.
+/// A prefab base can hand the retired vocabulary to an instance whose own
+/// document never names it, so the gate has to read the resolved document.
 const RETIRED_BASE_BSN: &str = r#"#Overlay
 bevy_ui::ui_node::Node
 jackdaw_ui::UiCanvas
@@ -1678,11 +1602,9 @@ fn opening_a_scene_inheriting_retired_ui_components_keeps_the_open_one() {
     );
 }
 
-/// Reading the resolved document means populating the prefab cache first, and
-/// a cache that moves is a cache the on-change driver answers by respawning
-/// the active scene. Behind a refusal there is nothing to respawn: the user
-/// still has the scene they had, and a respawn a frame later would take it and
-/// their selection away, the cost the refusal exists to avoid.
+/// Reading the resolved document populates the prefab cache, and a moved cache
+/// makes the on-change driver respawn the active scene. Behind a refusal that
+/// respawn would take away the scene and selection the refusal exists to keep.
 #[test]
 fn a_refused_open_does_not_respawn_the_scene_the_user_still_has() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1732,11 +1654,8 @@ fn a_refused_open_does_not_respawn_the_scene_the_user_still_has() {
     );
 }
 
-/// A refusal answers for its own cache bumps and no one else's. The watcher
-/// reads a prefab off disk, the driver has not had its frame yet, and then the
-/// user opens a document that gets refused: taking the epoch as read wholesale
-/// would swallow the watcher's change, and the prefab edit the user made in
-/// another program would never reach their scene.
+/// A refusal answers for its own cache bumps and no one else's: taking the epoch
+/// as read wholesale would swallow a watcher's prefab change.
 #[test]
 fn a_refused_open_leaves_a_change_it_did_not_cause_still_to_answer() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1800,10 +1719,8 @@ fn a_refused_open_leaves_a_change_it_did_not_cause_still_to_answer() {
     );
 }
 
-/// A legacy scene is converted in memory and the file is only written once the
-/// document is accepted. A refusal has to leave the user's directory exactly as
-/// it found it: no `.bsn` they did not ask for, and the original still where
-/// they left it, under the name they know.
+/// A legacy scene is converted in memory and the file written only once the
+/// document is accepted, so a refusal leaves the directory as it found it.
 #[test]
 fn a_refused_legacy_scene_leaves_no_converted_file_behind() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1913,13 +1830,9 @@ fn active_window(app: &bevy::app::App, leaf: jackdaw_panels::tree::NodeId) -> Op
         .find_map(|(window, tab)| (tab == active).then(|| window.to_string()))
 }
 
-/// A document that declares no light must not gain one.
-///
-/// The editor seeds a default `Sun` so a fresh scene is not black, and
-/// the binary runs that seed on entering the editor, after the project's
-/// persisted tabs have already opened. A document the author wrote
-/// without a light must not pick one up, or the next save writes it into
-/// their file as an entity they never made.
+/// The editor seeds a default `Sun` on entering the editor, after the project's
+/// persisted tabs have opened. A document written without a light must not pick
+/// one up, or the next save writes an entity the author never made.
 #[test]
 fn an_opened_document_with_no_light_does_not_gain_a_sun() {
     let mut app = make_app_with_n_tabs(0);
@@ -2064,8 +1977,6 @@ fn leaving_a_refused_tab_does_not_capture_the_empty_world_over_its_document() {
 fn an_activation_that_works_takes_the_refusal_back_off() {
     let (mut app, _scene, _before, _tmp) = refused_tab_over_a_file();
 
-    // Fix the document the way reopening a corrected file would, then activate
-    // the tab again.
     let doc =
         jackdaw_bsn::parse_bsn_text("#Overlay\nbevy_transform::components::transform::Transform\n")
             .expect("the corrected fixture parses");

@@ -1,11 +1,6 @@
-//! The `Bindings` inspector card.
-//!
-//! A binding names two places in the game: read this, write that. These tests
-//! drive the card the way the inspector builds it, through a real selection
-//! on a real scene document, and pin what each control has to do: render one
-//! row per binding, commit a whole `Bindings` value per edit as one undoable
-//! entry, write FULL type paths into the document, badge a path that names
-//! nothing, and keep the authored order.
+//! The `Bindings` inspector card: one row per binding, each edit committing a
+//! whole `Bindings` value as one undoable entry, with full type paths in the
+//! document and the authored order kept.
 
 use crate::util;
 
@@ -64,9 +59,9 @@ fn schema_type(type_path: &str, kind: TypeKind, fields: Vec<FieldSchema>) -> Typ
     }
 }
 
-/// The fixture project: one component, one resource, three events (one of
-/// them an enum the dispatcher cannot fill, one of them unable to fill its
-/// own gaps), and two functions, only one of which a binding can call.
+/// The fixture project: one component, one resource, three events (an enum the
+/// dispatcher cannot fill, one unable to fill its own gaps), and two functions,
+/// only one of which a binding can call.
 fn fixture_schema() -> ProjectSchema {
     let mut fired = schema_type(
         "demo_game::Fired",
@@ -85,17 +80,14 @@ fn fixture_schema() -> ProjectSchema {
     );
     strict.fills_gaps = false;
 
-    // Two of the game's own markers: one reflection can build, one it cannot.
-    // Only the first is a thing a binding can put on a widget.
+    // Two of the game's own markers: only the one reflection can build is a
+    // thing a binding can put on a widget.
     let flagged = schema_type("demo_game::Flagged", TypeKind::Struct, Vec::new());
     let mut unbuildable = schema_type("demo_game::Unbuildable", TypeKind::Struct, Vec::new());
     unbuildable.fills_gaps = false;
 
-    // In both buckets, which is what an extraction reports: bevy's
-    // `Resource: Component` supertrait puts a `ReflectComponent` on every
-    // reflected resource, so the two lists overlap by construction. What the
-    // suite proves about that is that the card tolerates the overlap; no test
-    // here counts either picker's entries.
+    // Bevy's `Resource: Component` supertrait puts a `ReflectComponent` on every
+    // reflected resource, so the two lists overlap by construction.
     let audio = schema_type(
         "demo_game::AudioSettings",
         TypeKind::Struct,
@@ -154,16 +146,14 @@ fn fixture_schema() -> ProjectSchema {
 // Harness
 // ---------------------------------------------------------------------------
 
-/// A selected, document-tracked entity carrying `bindings`, with an
-/// inspector mounted and the fixture schema loaded, so the card is built by
-/// the real dispatch rather than called directly.
+/// A selected, document-tracked entity carrying `bindings`, with an inspector
+/// mounted and the fixture schema loaded, so the real dispatch builds the card.
 fn app_with_bindings(bindings: Bindings) -> (App, Entity) {
     app_with_bindings_and_project(bindings, &[])
 }
 
-/// The same, with `project_components` authored on the node: schema types the
-/// document carries but the editor has no ECS registration for, which is what
-/// every project component is.
+/// The same, plus `project_components` authored on the node: schema types the
+/// document carries but the editor has no ECS registration for.
 fn app_with_bindings_and_project(bindings: Bindings, project_components: &[&str]) -> (App, Entity) {
     let mut app = util::editor_test_app();
     {
@@ -180,8 +170,7 @@ fn app_with_bindings_and_project(bindings: Bindings, project_components: &[&str]
         .world_mut()
         .spawn((Name::new("hud"), Node::default(), bindings))
         .id();
-    // The document is the point: an authored entity is what the card has to
-    // work against, and it is also what puts `Bindings` in the inspector's
+    // An authored entity is also what puts `Bindings` in the inspector's
     // authored-type filter.
     jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
     for type_path in project_components {
@@ -198,9 +187,8 @@ fn app_with_bindings_and_project(bindings: Bindings, project_components: &[&str]
     (app, entity)
 }
 
-/// Put a project component's patch on the entity's document node. The
-/// editor never registers a project type as a real ECS component (its code
-/// lives in the game binary) so the document is the only place it exists.
+/// Put a project component's patch on the entity's document node. The editor
+/// never registers a project type, so the document is the only place it exists.
 fn author_project_component(app: &mut App, entity: Entity, type_path: &str) {
     let mut ast = app.world_mut().resource_mut::<SceneBsnAst>();
     let node = ast.ast_for(entity).expect("the entity is in the document");
@@ -300,10 +288,9 @@ fn authored_bindings(app: &App, entity: Entity) -> Vec<BsnValue> {
     }
 }
 
-/// Undo the last edit, then run the card's change-detection pass. That pass
-/// is scheduled behind `AppState::Editor`, which a headless test never
-/// enters, so it is driven directly; `run_system_cached` keeps its change
-/// tick across calls, exactly as the scheduled system would.
+/// Undo the last edit, then run the card's change-detection pass directly: it is
+/// scheduled behind `AppState::Editor`, which a headless test never enters, and
+/// `run_system_cached` keeps its change tick across calls.
 /// One named field of a binding as the document holds it.
 fn authored_field(binding: &BsnValue, name: &str) -> BsnValue {
     let BsnValue::Struct(data) = binding else {
@@ -370,9 +357,8 @@ fn field_binding(read: &str, write: &str) -> Binding {
     }
 }
 
-/// The card takes the component's name from `Bindings` itself rather than
-/// from a copy of its path, so moving the type inside the crate moves the
-/// card and the document it writes along with it.
+/// The card takes the component's name from `Bindings` itself, so moving the
+/// type inside the crate moves the card and the document it writes with it.
 #[test]
 fn the_card_names_the_component_by_the_path_the_type_declares() {
     let declared = <Bindings as bevy::reflect::TypePath>::type_path();
@@ -444,8 +430,8 @@ fn the_card_renders_one_row_per_binding_showing_its_kind() {
     );
 }
 
-/// Every kind renders. A kind whose per-kind rows were never written would
-/// show a bare header and no way to author anything.
+/// Every kind renders; a kind whose per-kind rows were never written would show
+/// a bare header and no way to author anything.
 #[test]
 fn every_binding_kind_renders_its_own_controls() {
     let (mut app, _) = app_with_bindings(Bindings(vec![
@@ -498,10 +484,8 @@ fn every_binding_kind_renders_its_own_controls() {
     );
 }
 
-/// A marker write puts a component on and takes it off again; there is no
-/// number on the other end to scale, so the row that offers `as percent`
-/// offers a control that cannot do anything. The summary already leaves the
-/// suffix off such a row.
+/// A marker write puts a component on and off again, with no number to scale, so
+/// its summary leaves the `as percent` suffix off.
 #[test]
 fn a_marker_write_row_offers_no_percent_checkbox() {
     let marker = "bevy_ui::interaction_states::InteractionDisabled";
@@ -531,11 +515,8 @@ fn a_marker_write_row_offers_no_percent_checkbox() {
 // Add a binding
 // ---------------------------------------------------------------------------
 
-/// A gesture that arrives after the component it edits has gone. The card is
-/// built from a snapshot, so its controls outlive a `Bindings` an undo or
-/// another editor took off. The edit is refused whole, rather than leaving one
-/// binding half written, and the refusal reaches the log rather than looking
-/// like a control that does nothing.
+/// The card is built from a snapshot, so a gesture can arrive after the
+/// component it edits has gone. The edit is refused whole and reaches the log.
 #[test]
 fn an_edit_aimed_at_a_component_that_is_gone_is_refused_whole() {
     let (mut app, entity) = app_with_bindings(Bindings(vec![field_binding(
@@ -625,9 +606,8 @@ fn adding_a_binding_grows_the_document_in_one_undoable_entry() {
     );
 }
 
-/// Every kind has to be constructible from the footer: `Binding` has no
-/// `Default`, so the card owns the five defaults and a missing one would be
-/// a menu entry that adds nothing.
+/// `Binding` has no `Default`, so the card owns the five defaults; a missing one
+/// would be a menu entry that adds nothing.
 #[test]
 fn the_footer_can_add_every_kind() {
     let (mut app, entity) = app_with_bindings(Bindings(Vec::new()));
@@ -689,12 +669,8 @@ fn a_component_pick_writes_the_full_type_path() {
     );
 }
 
-/// A resource read spells itself `Res(Type).field`, which is the only form
-/// the resolver takes for one.
-///
-/// This pins the SPELLING, not the list. A duplicate in the resource dropdown
-/// would leave the pick at this index answering the same way, so nothing here
-/// counts what the picker offers.
+/// A resource read spells itself `Res(Type).field`, the only form the resolver
+/// takes for one. This pins the spelling, not the picker's list.
 #[test]
 fn a_resource_pick_writes_the_res_form() {
     let (mut app, entity) = app_with_bindings(Bindings(vec![Binding::Value {
@@ -741,11 +717,9 @@ fn a_path_naming_no_known_type_badges_the_row() {
     );
 }
 
-/// What a badge on `entity` says, read the way the renderer reads it.
-///
-/// The pairing is the assertion: `Hovered` is opt-in and the tooltip system
-/// queries `(Entity, &Tooltip, &Hovered)`, so a `Tooltip` sitting on its own
-/// is a badge nobody can ever see.
+/// What a badge on `entity` says, read the way the renderer reads it. `Hovered`
+/// is opt-in and the tooltip system queries `(Entity, &Tooltip, &Hovered)`, so a
+/// `Tooltip` sitting on its own is a badge nobody can see.
 fn badge(app: &mut App, entity: Entity) -> Option<String> {
     let mut query = app.world_mut().query::<(&Tooltip, &Hovered)>();
     query
@@ -754,9 +728,8 @@ fn badge(app: &mut App, entity: Entity) -> Option<String> {
         .map(|(tooltip, _)| tooltip.title.clone())
 }
 
-/// The card's own "add read" button is one click from a `Field` the
-/// evaluator refuses, so the row says so on the spot rather than at Play
-/// time, and it needs no schema to know it.
+/// The card's own add-read button is one click from a `Field` the evaluator
+/// refuses, so the row says so on the spot rather than at Play time.
 #[test]
 fn a_second_read_with_no_via_badges_the_row() {
     let (mut app, _) = app_with_bindings(Bindings(vec![Binding::Field {
@@ -914,10 +887,8 @@ fn an_undone_add_rebuilds_the_card() {
     );
 }
 
-/// A row's remove button remembers which read it stands for, and the
-/// binding can lose reads before the click lands, through undo, a second
-/// inspector, or the running game. A slot that is not there names no read, so
-/// the click has to go nowhere rather than take the process down.
+/// A row's remove button remembers which read it stands for, and the binding can
+/// lose reads before the click lands, so a missing slot has to be a no-op.
 #[test]
 fn removing_a_read_that_is_already_gone_does_nothing() {
     let (mut app, entity) = app_with_bindings(Bindings(vec![Binding::Field {
@@ -957,10 +928,8 @@ fn removing_a_read_that_is_already_gone_does_nothing() {
     );
 }
 
-/// The other half of the same system: the card's own commits already
-/// rebuilt, so the change-detection pass must not rebuild them again. A
-/// second rebuild would throw away every widget mid-gesture, the dropdown the
-/// user is looking at included.
+/// The card's own commits already rebuilt, so the change-detection pass must not
+/// rebuild again and throw away every widget mid-gesture.
 #[test]
 fn the_card_does_not_rebuild_itself_for_its_own_edit() {
     let (mut app, _) = app_with_bindings(Bindings(vec![field_binding(
@@ -982,9 +951,8 @@ fn the_card_does_not_rebuild_itself_for_its_own_edit() {
     );
 }
 
-/// The sharp end of the same rule. After an undone reorder the rows and the
-/// bindings would disagree about who is first, and the row drawn first would
-/// quietly edit the other one.
+/// After an undone reorder the rows and the bindings would disagree about who is
+/// first, and the row drawn first would quietly edit the other one.
 #[test]
 fn an_undone_reorder_re_indexes_the_rows() {
     let (mut app, entity) = app_with_bindings(Bindings(vec![
@@ -1004,8 +972,7 @@ fn an_undone_reorder_re_indexes_the_rows() {
         "undo puts the rows back in the order the bindings are in",
     );
 
-    // And the row drawn first now edits the binding that is first. The
-    // writes differ, so which one moved is not a guess.
+    // The writes differ, so which row moved is not a guess.
     let percent = control(&mut app, 0, BindControl::AsPercent);
     app.world_mut().trigger(bevy::ui_widgets::ValueChange {
         source: percent,
@@ -1030,9 +997,8 @@ fn an_undone_reorder_re_indexes_the_rows() {
 // The schema feeds
 // ---------------------------------------------------------------------------
 
-/// `callable_by_value` is the filter, not a suggestion: a function that
-/// borrows its argument cannot be called however it is spelled, and arity
-/// has to match the reads it would combine.
+/// `callable_by_value` is the filter, not a suggestion: a function that borrows
+/// its argument cannot be called, and arity has to match the reads it combines.
 #[test]
 fn the_via_picker_offers_only_callable_functions_of_the_right_arity() {
     let (mut app, _) = app_with_bindings(Bindings(vec![Binding::Field {
@@ -1118,9 +1084,8 @@ fn an_event_that_cannot_fill_gaps_warns_while_fields_are_unmapped() {
         )],
         "picking a source maps the event field by name",
     );
-    // The mapping has to reach the document as DATA. Its `Debug` text
-    // contains the path either way, so only the shape can tell a real pair
-    // from a stringified tuple.
+    // The mapping has to reach the document as data: its `Debug` text carries the
+    // path either way, so only the shape tells a pair from a stringified tuple.
     let authored = authored_field(&authored_bindings(&app, entity)[0], "fields");
     let BsnValue::List(items) = &authored else {
         panic!("the mappings author as a list, got {authored:?}");
@@ -1151,9 +1116,8 @@ fn an_event_that_cannot_fill_gaps_warns_while_fields_are_unmapped() {
     );
 }
 
-/// The widget's own components are what a Field binding writes fields of, so
-/// the write picker is the selected entity's archetype rather than the whole
-/// registry. Markers are the one exception; the test below covers them.
+/// A `Field` binding writes fields of the widget's own components, so the write
+/// picker is the selected entity's archetype. Markers are the exception.
 #[test]
 fn the_write_picker_offers_the_selected_entitys_own_components() {
     let (mut app, _) = app_with_bindings(Bindings(vec![field_binding(
@@ -1175,10 +1139,9 @@ fn the_write_picker_offers_the_selected_entitys_own_components() {
     );
 }
 
-/// A marker is the one write target that does not have to be on the widget
-/// already: putting it on is what the binding does. So the picker offers
-/// every registered marker, and picking one leaves a path with no field: the
-/// whole component is the value.
+/// A marker does not have to be on the widget already: putting it on is what the
+/// binding does. The picker offers every registered marker, and a pick leaves a
+/// path with no field.
 #[test]
 fn the_write_picker_offers_markers_the_widget_does_not_carry_yet() {
     let (mut app, entity) = app_with_bindings(Bindings(vec![field_binding(
@@ -1206,19 +1169,14 @@ fn the_write_picker_offers_markers_the_widget_does_not_carry_yet() {
     );
 }
 
-/// A project component authored on this entity is a write target like any
-/// other. It is never a real ECS component in the editor (its code is in the
-/// game binary) so the archetype cannot see it, and judging a write by the
-/// archetype alone would badge a good path red and refuse to offer it in the
-/// first place.
+/// A project component authored on this entity is never a real ECS component in
+/// the editor, so judging a write target by the archetype alone would badge a
+/// good path red and refuse to offer it.
 #[test]
 fn a_write_to_an_authored_project_component_is_offered_and_not_badged() {
-    // Three bindings. The first has picked no write yet, so what the picker
-    // offers is the picker's own answer rather than the current value being
-    // kept in the list. The second writes to the authored project component.
-    // The third writes to a native component this entity does not carry, as
-    // game code adds `Transform` to a UI node all the time, which the
-    // archetype cannot vouch for either.
+    // The first binding has picked no write yet, the second writes to the
+    // authored project component, the third to a native component this entity
+    // does not carry.
     let (mut app, _) = app_with_bindings_and_project(
         Bindings(vec![
             field_binding("demo_game::Health.current", ""),
@@ -1265,10 +1223,8 @@ fn a_write_to_an_authored_project_component_is_offered_and_not_badged() {
     }
 }
 
-/// A game's own marker is a write target like a native one, but only when
-/// reflection can build it. Without a default the game cannot put the
-/// component on either, so offering it would author a binding that reads
-/// right and dies in the log at run time.
+/// A game's own marker is a write target only when reflection can build it:
+/// without a default the game cannot put the component on either.
 #[test]
 fn a_project_marker_is_writable_only_when_the_game_can_build_it() {
     let (mut app, entity) = app_with_bindings_and_project(
@@ -1321,9 +1277,8 @@ fn a_project_marker_is_writable_only_when_the_game_can_build_it() {
     );
 }
 
-/// An event the schema does not know still has whatever mappings were
-/// authored against it. Drawing no rows would leave those values in the
-/// document with no way to see or take them back.
+/// An event the schema does not know still has whatever mappings were authored
+/// against it, and drawing no rows would strand them in the document.
 #[test]
 fn an_action_keeps_its_mappings_when_the_event_is_unknown() {
     let (mut app, entity) = app_with_bindings(Bindings(vec![Binding::Action {
@@ -1347,11 +1302,9 @@ fn an_action_keeps_its_mappings_when_the_event_is_unknown() {
     );
 }
 
-/// A type the editor has no schema for is still a type the game may know.
-/// The picker carries it as an entry of its own, and picking it keeps the
-/// field the path already named: an empty field list means "no schema
-/// here", not "this type has no fields", and treating the two the same
-/// erases what the user authored.
+/// A type the editor has no schema for is still a type the game may know, so the
+/// picker carries it and a pick keeps the field already named: an empty field
+/// list means "no schema here", not "this type has no fields".
 #[test]
 fn a_pick_with_no_schema_to_check_it_against_keeps_the_authored_path() {
     let (mut app, entity) = app_with_bindings(Bindings(vec![field_binding(
@@ -1384,10 +1337,8 @@ fn combo_values(app: &mut App, combo: Entity) -> Vec<String> {
 // The authored case
 // ---------------------------------------------------------------------------
 
-/// The card has to work on a binding that came out of a scene file, not
-/// only on one poked into a live world. An entity in the document is
-/// filtered by its authored type paths before it reaches a card at all, and
-/// `Bindings` sits in the namespace that filter culls by default.
+/// An entity in the document is filtered by its authored type paths before it
+/// reaches a card, and `Bindings` sits in the namespace that filter culls.
 #[test]
 fn an_authored_bindings_component_still_gets_its_card() {
     let (mut app, entity) = app_with_bindings(Bindings(vec![field_binding(
@@ -1409,8 +1360,7 @@ fn an_authored_bindings_component_still_gets_its_card() {
     );
     let _ = card_body(&mut app);
 
-    // And an edit on the authored component round-trips: the picker writes,
-    // the document takes it, undo puts the authored value back.
+    // And an edit on the authored component round-trips.
     let combo = control(&mut app, 0, BindControl::PathField(PathSlot::Read(0)));
     pick(&mut app, combo, 1, "max", Some("max"));
     assert_eq!(
@@ -1429,10 +1379,8 @@ fn an_authored_bindings_component_still_gets_its_card() {
 // The document round trip
 // ---------------------------------------------------------------------------
 
-/// The card's own tests stop at the AST: they prove what an edit writes, not
-/// what a reopened file gives back. This is the other half: the editor saves a
-/// scene holding bindings, loads that file into a fresh editor, and has to find
-/// the same value it wrote.
+/// The other half of the card's AST tests: save a scene holding bindings, load
+/// that file into a fresh editor, and find the same value back.
 #[test]
 fn a_saved_binding_comes_back_off_disk_unchanged() {
     let authored = Bindings(vec![
@@ -1488,14 +1436,11 @@ const PANEL_WIDTHS: [f32; 3] = [260.0, 212.0, 120.0];
 /// The width a picker stops naming a type at.
 const PICKER_FLOOR: f32 = 72.0;
 
-/// Reparent the card under a fixed-width root and lay it out. The card the
-/// dispatch builds hangs in a panel with no width of its own in a headless
-/// app, so the panel's width is applied here instead.
+/// Reparent the card under a fixed-width root and lay it out: the dispatched
+/// card hangs in a panel with no width of its own in a headless app.
 fn laid_out_card(app: &mut App, width: f32) -> Entity {
     let body = card_body(app);
-    // The panel sizes itself to its content in a headless app, and a card
-    // opens on a pointer gesture. Both are set here, so what the row is
-    // measured in is the width the editor docks the panel at.
+    // The panel sizes to its content headless, so the docked width is set here.
     let mut root = body;
     while let Some(parent) = app.world().get::<ChildOf>(root).map(ChildOf::parent) {
         root = parent;
@@ -1526,18 +1471,10 @@ fn right_edge(app: &App, entity: Entity) -> f32 {
     centre.x + computed.size().x / 2.0
 }
 
-/// A read row carries three pickers and a write row two, all on a line the
-/// label already spent half of. They wrap rather than clip: a picker showing
-/// half a type name names nothing, and one hanging off the panel's edge is
-/// cut off by it.
-///
-/// The two halves are not equals where they meet. A panel dragged narrower
-/// than the floor itself (the dock clamps a split at 5%, not at a width a
-/// card would like) cannot give a picker [`PICKER_FLOOR`] and keep it
-/// inside the panel both. There the edge wins: a picker that took the whole
-/// narrow line is still something the user can open, and its popover names
-/// the types in full, while one hung past the edge is clipped to nothing.
-/// So the floor is asserted against the room the row actually has.
+/// A read row carries three pickers and a write row two, on a line the label
+/// already spent half of: they wrap rather than clip. Below `PICKER_FLOOR` the
+/// panel's edge wins, since a picker that took the whole narrow line can still
+/// be opened while one hung past the edge is clipped to nothing.
 #[test]
 fn a_path_rows_pickers_stay_readable_at_the_shipped_width() {
     for width in PANEL_WIDTHS {

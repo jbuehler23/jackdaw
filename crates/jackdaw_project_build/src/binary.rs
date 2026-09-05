@@ -23,12 +23,9 @@ pub struct ProjectBinaryBuild {
     pub schema: Option<ProjectSchema>,
 }
 
-/// How much of the machine a build may take.
-///
-/// A build the user asked for and is waiting on gets everything. One the
-/// editor started on its own must not: it competes with the editor's own
-/// frame, and with whatever the user is running in their terminal, and
-/// nobody is waiting for it.
+/// How much of the machine a build may take. A build the user asked for gets
+/// everything; one the editor started on its own competes with the editor's own
+/// frame and with the user's terminal.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum BuildLoad {
     /// All cores at normal priority.
@@ -39,10 +36,8 @@ pub enum BuildLoad {
 }
 
 /// Cores a [`BuildLoad::Background`] build may use on a machine with
-/// `total_threads` of them: half, and never fewer than one.
-///
-/// Split out from the command builder because the process-wide core count
-/// is not something a test can vary.
+/// `total_threads` of them: half, and never fewer than one. Split out from the
+/// command builder because the process-wide core count is not testable.
 pub fn background_jobs(total_threads: usize) -> usize {
     (total_threads / 2).max(1)
 }
@@ -87,11 +82,10 @@ fn apply_load(command: &mut Command, load: BuildLoad) {
 
 /// Build a project's game binary and extract its type schema.
 ///
-/// `jackdaw_dir` is the project's `.jackdaw/`, where the schema is
-/// persisted for the editor's watcher to pick up. The build itself runs
-/// in the project root against the user's own `Cargo.toml`, `Cargo.lock`,
-/// `target/`, and toolchain, so it shares a cache with whatever the user
-/// runs from their terminal.
+/// `jackdaw_dir` is the project's `.jackdaw/`, where the schema is persisted for
+/// the editor's watcher. The build runs in the project root against the user's
+/// own manifest, lockfile, `target/` and toolchain, so it shares a cache with
+/// whatever they run from their terminal.
 pub fn build_project_binary(
     spec: &ShimSpec,
     jackdaw_dir: &Path,
@@ -125,9 +119,8 @@ pub fn build_project_binary_with_load(
         .current_dir(&spec.project_root)
         .stdout(Stdio::piped())
         // Captured rather than inherited: cargo's own failures, such as an
-        // unresolvable dependency or a manifest it will not read, are never
-        // in the JSON stream, and inherited they reach only the terminal the
-        // editor was launched from.
+        // unresolvable dependency, are never in the JSON stream, and inherited
+        // they reach only the terminal the editor was launched from.
         .stderr(Stdio::piped());
     detach_from_host_build(&mut command);
     apply_load(&mut command, load);
@@ -150,10 +143,9 @@ pub fn build_project_binary_with_load(
             .and_then(|handle| handle.join().ok())
             .unwrap_or_default();
         let stderr = String::from_utf8_lossy(&stderr);
-        // Cargo's own account of the failure never goes through the JSON
-        // stream, so the reporter has not seen it. `Display` for `Compile`
-        // is one line, so the detail has to reach the panel line by line
-        // the way rustc's diagnostics do.
+        // Cargo's own account of the failure never goes through the JSON stream.
+        // `Display` for `Compile` is one line, so the detail has to reach the
+        // panel line by line the way rustc's diagnostics do.
         for line in stderr.lines() {
             report(BuildEvent::Log(line.to_string()));
         }
@@ -168,10 +160,8 @@ pub fn build_project_binary_with_load(
             log: no_binary_message(spec),
         })?;
 
-    // Ask the freshly built game for its types. It is a throwaway run
-    // that prints and exits, so the editor still never maps project
-    // code. A failure here is not fatal: the editor keeps its prior
-    // schema and Play still works.
+    // Ask the freshly built game for its types: a throwaway run that prints and
+    // exits. A failure here is not fatal, and the editor keeps its prior schema.
     let schema = match run_binary_extractor(&binary, &spec.project_root) {
         Ok(schema) => Some(schema),
         Err(err) => {
@@ -191,11 +181,9 @@ pub fn build_project_binary_with_load(
 
 /// What a failed build reports: rustc's diagnostics, then cargo's own stderr.
 ///
-/// The two carry different failures. rustc's arrive as `compiler-message`
-/// records on stdout; cargo's are on stderr and are the only account of a
-/// failure that happened before any code was compiled. Either can be empty,
-/// so both are carried, and the fallback line is reached only when neither
-/// said anything.
+/// rustc's arrive as `compiler-message` records on stdout; cargo's are on stderr
+/// and are the only account of a failure before any code was compiled. Either
+/// can be empty, so both are carried.
 fn compile_failure_log(diagnostics: String, stderr: &str) -> String {
     let mut log = diagnostics;
     let stderr = stderr.trim();
@@ -212,19 +200,16 @@ fn compile_failure_log(diagnostics: String, stderr: &str) -> String {
     log
 }
 
-/// How long the extractor may run before it is killed.
-///
-/// This path compiles nothing: the binary is already built and only has
-/// to report and exit, so only a stuck process reaches the deadline.
+/// How long the extractor may run before it is killed. This path compiles
+/// nothing, so only a stuck process reaches the deadline.
 const EXTRACTOR_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Overrides [`EXTRACTOR_TIMEOUT`], in whole seconds.
 const EXTRACTOR_TIMEOUT_VAR: &str = "JACKDAW_SCHEMA_EXTRACT_TIMEOUT_SECS";
 
-/// The deadline to run the extractor under, from `value` (the raw
-/// environment override). Anything unparseable or zero falls back to the
-/// default rather than disabling the deadline, so a broken override cannot
-/// reintroduce a hang.
+/// The deadline to run the extractor under, from `value` (the raw environment
+/// override). Anything unparseable or zero falls back to the default rather than
+/// disabling the deadline.
 fn extractor_timeout_from(value: Option<&str>) -> Duration {
     value
         .and_then(|raw| raw.trim().parse::<u64>().ok())
@@ -238,15 +223,13 @@ fn extractor_timeout() -> Duration {
 
 /// Ask a built project binary for its schema.
 ///
-/// The binary is the same artifact Play runs; the flag makes it report
-/// and exit before it opens a window. `cwd` is the project root so the
-/// game resolves assets exactly as it would when played.
+/// The binary is the same artifact Play runs; the flag makes it report and exit
+/// before it opens a window. `cwd` is the project root so the game resolves
+/// assets as it would when played.
 ///
-/// The run is under a deadline. The extractor answers from inside the
-/// game's own `App` build, so a project whose plugins block on a socket,
-/// a lock or a device would otherwise hang this call and with it the
-/// editor's build. Killing it becomes an ordinary extractor failure: the
-/// caller warns and keeps the previous schema.
+/// The run is under a deadline, because the extractor answers from inside the
+/// game's own `App` build and a project whose plugins block would otherwise hang
+/// the editor's build. A kill becomes an ordinary extractor failure.
 fn run_binary_extractor(binary: &Path, cwd: &Path) -> Result<ProjectSchema, String> {
     if !binary.is_file() {
         return Err(format!("game binary not found at {}", binary.display()));
@@ -316,12 +299,12 @@ fn drain_on_a_thread(mut pipe: impl Read + Send + 'static) -> std::thread::JoinH
     })
 }
 
-/// Variables that describe *this* process's build rather than the
-/// project's, removed before invoking cargo on the project.
+/// Variables that describe *this* process's build rather than the project's,
+/// removed before invoking cargo on the project.
 const HOST_BUILD_VARS: &[&str] = &[
-    // The one that matters most: the editor runs under a pinned
-    // toolchain, and an inherited `RUSTUP_TOOLCHAIN` overrides the
-    // project's own `rust-toolchain.toml`.
+    // The one that matters most: the editor runs under a pinned toolchain, and
+    // an inherited `RUSTUP_TOOLCHAIN` overrides the project's own
+    // `rust-toolchain.toml`.
     "RUSTUP_TOOLCHAIN",
     "RUSTC",
     "RUSTDOC",
@@ -339,9 +322,8 @@ const HOST_BUILD_VARS: &[&str] = &[
     "CARGO_BIN_NAME",
     "CARGO_PRIMARY_PACKAGE",
     "CARGO_TARGET_TMPDIR",
-    // Set by `cargo run` for the process it launches; inheriting them
-    // into a build would put the editor's dependency libraries on the
-    // project's search path.
+    // Set by `cargo run` for the process it launches; inheriting them would put
+    // the editor's dependency libraries on the project's search path.
     "LD_LIBRARY_PATH",
     "DYLD_LIBRARY_PATH",
     "DYLD_FALLBACK_LIBRARY_PATH",
@@ -350,21 +332,16 @@ const HOST_BUILD_VARS: &[&str] = &[
 /// Prefixes of the per-crate variables cargo exports to a build.
 const HOST_BUILD_PREFIXES: &[&str] = &["CARGO_PKG_", "CARGO_CFG_", "CARGO_FEATURE_"];
 
-/// Detach `command` from the build environment the editor is running
-/// under.
+/// Detach `command` from the build environment the editor is running under.
 ///
-/// The editor is usually itself launched by cargo, which fills the
-/// environment with variables describing the editor's build. Handing
-/// those to a build of someone else's project is wrong. Jackdaw
-/// pins its own toolchain, and `RUSTUP_TOOLCHAIN` outranks a project's
-/// `rust-toolchain.toml`. Inheriting it silently compiles the project
-/// with the editor's compiler, which shares no fingerprints with the
-/// user's own builds - so every Play recompiles the world, and so does
-/// the next `cargo build` in their terminal.
+/// The editor is usually itself launched by cargo, which fills the environment
+/// with variables describing the editor's build. `RUSTUP_TOOLCHAIN` outranks a
+/// project's `rust-toolchain.toml`, so inheriting it compiles the project with
+/// the editor's compiler, which shares no fingerprints with the user's own
+/// builds.
 ///
-/// `CARGO_HOME`, `RUSTUP_HOME`, and `PATH` are deliberately kept: those
-/// locate the toolchain and the shared package cache, which is exactly
-/// what should be shared.
+/// `CARGO_HOME`, `RUSTUP_HOME` and `PATH` are deliberately kept: they locate the
+/// toolchain and the shared package cache.
 pub fn detach_from_host_build(command: &mut Command) {
     for variable in HOST_BUILD_VARS {
         command.env_remove(variable);
@@ -387,14 +364,11 @@ fn is_host_build_var(name: &str) -> bool {
             .any(|prefix| name.starts_with(prefix))
 }
 
-/// Prepare a command that runs a built game: Play, and the schema
-/// extractor.
+/// Prepare a command that runs a built game: Play, and the schema extractor.
 ///
-/// Detaches from the editor's build environment, then puts the build's
-/// `deps/` on the dynamic library search path. Order matters, which is
-/// why this is one function rather than two calls at each site: the
-/// detach clears the library-path variables, so setting them has to
-/// come after.
+/// Detaches from the editor's build environment, then puts the build's `deps/`
+/// on the dynamic library search path. One function rather than two calls at
+/// each site, because the detach clears the library-path variables.
 pub fn prepare_game_command(command: &mut Command, binary: &Path) {
     detach_from_host_build(command);
     apply_dynamic_library_path(command, binary);
@@ -411,15 +385,12 @@ fn dynamic_library_path_var() -> &'static str {
     }
 }
 
-/// Put the build's `deps/` directory on the dynamic library search path
-/// for `command`.
+/// Put the build's `deps/` directory on the dynamic library search path for
+/// `command`.
 ///
-/// `cargo run` does this before launching a binary, and a game built
-/// with `bevy/dynamic_linking` does not start without it: the bevy dll
-/// it needs sits in `deps/`, not beside the executable. Anything that
-/// launches the artifact directly - Play, and the schema extractor -
-/// has to reproduce it, or the game dies at load with an error that
-/// names no cause.
+/// `cargo run` does this before launching a binary, and a game built with
+/// `bevy/dynamic_linking` does not start without it: the bevy dll it needs sits
+/// in `deps/`, not beside the executable.
 fn apply_dynamic_library_path(command: &mut Command, binary: &Path) {
     let Some(deps) = binary.parent().map(|dir| dir.join("deps")) else {
         return;
@@ -437,13 +408,11 @@ fn apply_dynamic_library_path(command: &mut Command, binary: &Path) {
     }
 }
 
-/// The executable path from one `compiler-artifact` line, when that
-/// artifact is a binary belonging to `package_name`.
+/// The executable path from one `compiler-artifact` line, when that artifact is
+/// a binary belonging to `package_name`.
 ///
-/// cargo emits `executable` as null for every non-binary unit, and the
-/// graph contains binaries from dependencies too, so both filters are
-/// needed to land on the game rather than a build tool that happened to
-/// compile alongside it.
+/// cargo emits `executable` as null for every non-binary unit, and the graph
+/// contains binaries from dependencies too, so both filters are needed.
 fn executable_for_package(line: &str, package_name: &str) -> Option<PathBuf> {
     let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
     if value.get("reason").and_then(serde_json::Value::as_str)? != "compiler-artifact" {

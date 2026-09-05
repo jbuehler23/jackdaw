@@ -21,10 +21,7 @@ pub enum BindValue {
 }
 
 /// Entities the search for a context looks at: the widget itself and the 63
-/// above it. A context is authored near the top of a screen and the widgets
-/// reading it near the bottom, so the number has to clear a whole authored
-/// tree, a widget's own internals included. The cap stops a cycle in `ChildOf`
-/// from hanging the frame.
+/// above it. The cap stops a cycle in `ChildOf` from hanging the frame.
 const MAX_CONTEXT_WALK: usize = 64;
 
 /// The entity a widget's component paths read from: its own
@@ -42,8 +39,6 @@ pub fn resolve_context(world: &World, entity: Entity) -> Option<Entity> {
             None => return None,
         }
     }
-    // Distinct from `NoContext`, which the caller raises next: this says the
-    // search gave up, not that the scene never named a subject.
     warn!(
         "binding on {entity}: gave up looking for a BindContext after {MAX_CONTEXT_WALK} entities \
          up the tree -- either nothing above it names a subject, or ChildOf loops"
@@ -51,10 +46,9 @@ pub fn resolve_context(world: &World, entity: Entity) -> Option<Entity> {
     None
 }
 
-/// Types register under their full path, so a binding may name either that or
-/// the trailing segment alone. A short name shared by several registered types
-/// resolves to nothing, which must read as ambiguity rather than as an unknown
-/// type. `noun` names the thing in the not-found message ("type", "event type").
+/// Looks a type up by full path or by trailing segment alone; a short name
+/// several types answer to is reported as ambiguous. `noun` names the thing in
+/// the not-found message ("type", "event type").
 pub fn lookup_registration<'a>(
     registry: &'a TypeRegistry,
     type_path: &str,
@@ -92,9 +86,8 @@ pub(crate) fn extract(value: &dyn PartialReflect, raw: &str) -> Result<BindValue
     if let Some(v) = value.try_downcast_ref::<f64>() {
         return Ok(BindValue::F32(*v as f32));
     }
-    // Every width the write side narrows back into. A two-way binding reads
-    // and writes the same field, so a width readable here but not writable
-    // there (or the reverse) is a binding that works in one direction only.
+    // Every width the write side narrows back into: a width readable here but
+    // not writable there is a binding that works in one direction only.
     macro_rules! integer_source {
         ($($ty:ty),* $(,)?) => {
             $(
@@ -146,8 +139,7 @@ fn reflect_path_error(field: &str, type_path: &str, e: impl std::fmt::Display) -
 
 /// Reads whatever a bind path names: a field of a resource, or a field of a
 /// component on the context entity. A component path with no context is an
-/// error rather than an empty read: the binding named a subject that is not
-/// there.
+/// error rather than an empty read.
 pub fn read_path(
     world: &World,
     context: Option<Entity>,
@@ -193,8 +185,7 @@ pub fn read_path(
             if reg.data::<ReflectResource>().is_none() {
                 return Err(not_a_resource());
             }
-            // Resources are entity-backed in 0.19: reach them through the
-            // resource entity and the type's ReflectComponent.
+            // Resources are entity-backed in 0.19.
             let reflect_component = reg.data::<ReflectComponent>().ok_or_else(not_a_resource)?;
             let entity = resource_entity(world, reg, &type_path)?;
             let entity_ref = world.get_entity(entity).map_err(|_| absent())?;
@@ -221,10 +212,8 @@ pub enum WriteValue {
     Str(String),
 }
 
-/// Whether a number a binding read can be narrowed into an integer field
-/// without being turned into a different number. `as` would saturate a value
-/// too large for the type and turn a NaN into zero, so a value this refuses is
-/// reported instead of written.
+/// Whether a number a binding read narrows into an integer field without
+/// becoming a different number, which `as` would silently allow.
 pub(crate) fn fits(v: f32, min: f64, max: f64) -> bool {
     let truncated = f64::from(v).trunc();
     v.is_finite() && truncated >= min && truncated <= max
@@ -233,9 +222,6 @@ pub(crate) fn fits(v: f32, min: f64, max: f64) -> bool {
 fn set_target(target: &mut dyn PartialReflect, value: &WriteValue) -> Result<bool, BindError> {
     let mismatch =
         |target: &'static str, needs: &'static str| BindError::WriteTypeMismatch { target, needs };
-    // Reads widen every integer to f32, so the way back into one is a
-    // narrowing, refused outright when the number does not fit rather than
-    // written as whatever `as` would have made of it.
     macro_rules! integer_target {
         ($ty:ty, $name:literal) => {
             if let Some(slot) = target.try_downcast_mut::<$ty>() {
@@ -255,11 +241,8 @@ fn set_target(target: &mut dyn PartialReflect, value: &WriteValue) -> Result<boo
             }
         };
     }
-    // A non-finite number is refused before it can be stored, in the float
-    // targets as much as the integer ones. NaN compares unequal to itself, so
-    // the equality guard below would report a change on every evaluation: the
-    // component would be flagged every frame forever, `SliderValue` would be
-    // reinserted every frame, and a NaN `Val` would reach layout.
+    // NaN compares unequal to itself, so the equality guard below would report
+    // a change on every evaluation and a NaN `Val` would reach layout.
     let finite = |v: f32, target: &'static str| -> Result<f32, BindError> {
         if v.is_finite() {
             Ok(v)
@@ -337,19 +320,16 @@ fn set_target(target: &mut dyn PartialReflect, value: &WriteValue) -> Result<boo
     Err(BindError::UnsupportedWriteTarget)
 }
 
-/// Writes through the reflect path on the bound entity itself (write paths
-/// always target the widget entity, not the context). The write bypasses change
+/// Writes through the reflect path on the bound entity itself; write paths
+/// always target the widget, never the context. The write bypasses change
 /// detection and flags the component only when the stored value actually
-/// changed, so a binding that re-evaluates to the same value leaves the target
-/// clean. Returns Ok(true) when the component was flagged.
+/// changed. Returns `Ok(true)` when it was flagged.
 pub fn write_path(
     world: &mut World,
     entity: Entity,
     path: &BindPath,
     value: &WriteValue,
 ) -> Result<bool, BindError> {
-    // A path with no field names the whole component: the write puts a marker
-    // on or takes it off rather than setting anything inside.
     if path.marker_type().is_some() {
         let write = resolve_write(world, path)?;
         return write_resolved(world, entity, &write, value);
@@ -385,7 +365,7 @@ fn write_component_field(
     field: &str,
     value: &WriteValue,
 ) -> Result<bool, BindError> {
-    // reflect_mut panics on immutable components, so refuse them up front. The
+    // reflect_mut panics on immutable components, so refuse them up front; the
     // type may hold no ComponentId yet, so force registration to ask at all.
     let component_id = reflect_component.register_component(world);
     if world
@@ -455,14 +435,11 @@ pub fn write_source_path(
     write_component_field(world, entity, &reflect_component, &type_path, &field, value)
 }
 
-/// One read a binding makes, with the lookups already done: which entity holds
-/// the value, which component it lives in, and where inside that component to
-/// find it. Built once by the resolver so evaluation never parses a path or
-/// takes the type registry lock.
+/// One read a binding makes, with the lookups already done, so evaluation never
+/// parses a path or takes the type registry lock.
 pub(crate) struct ResolvedSource {
-    /// The entity holding the component, or `None` for a resource. A resource
-    /// removed and inserted again is backed by a different entity, so that one
-    /// is looked up by id at read time; the id itself never moves.
+    /// The entity holding the component, or `None` for a resource, whose
+    /// backing entity can move and so is looked up by id at read time.
     pub(crate) source_entity: Option<Entity>,
     /// The component the value lives in, which for a resource path is the
     /// resource's own component. The change-tick gate asks about this id.
@@ -495,19 +472,16 @@ enum WriteTarget {
         /// How to build the component the write puts on.
         default: ReflectDefault,
         /// A registry of one, holding this marker's registration and nothing
-        /// else. See [`write_marker`] for why the insert is not handed the
-        /// app's.
+        /// else; see `write_marker` for why the app's is not handed over.
         registry: TypeRegistry,
     },
 }
 
-/// Whether a binding's write lands on exactly what one of its reads takes: the
-/// same field of the same component on the same entity. Such a binding feeds
-/// itself, and the value it writes is the value it reads next frame.
+/// Whether a binding's write lands on exactly what one of its reads takes, so
+/// the value it writes is the value it reads next frame.
 ///
-/// Only the direct case is answered here. A binding writing what a *second*
-/// binding reads and writes back is a cycle too, and nothing detects it; see
-/// the crate doc.
+/// Only the direct case is answered here; a cycle through a second binding goes
+/// undetected.
 pub(crate) fn is_self_cycle(
     entity: Entity,
     source: &ResolvedSource,
@@ -550,11 +524,8 @@ impl ResolvedSource {
     }
 
     /// Whether the value behind this read has moved since the evaluator last
-    /// ran. Resources answer through the same component ticks as anything
-    /// else, because 0.19 keeps them on an entity.
-    ///
-    /// A source that is not there at all counts as moved, so the read still
-    /// runs and still reports what is missing.
+    /// ran. A source that is not there at all counts as moved, so the read
+    /// still runs and still reports what is missing.
     pub(crate) fn changed(&self, world: &World, last_run: Tick, this_run: Tick) -> bool {
         let Ok(entity) = self.entity(world) else {
             return true;
@@ -606,9 +577,8 @@ pub(crate) fn read_resolved(
     extract(value, &source.raw)
 }
 
-/// Writes into a resolved widget field. Same discipline as [`write_path`]: the
-/// write bypasses change detection and flags the component only when the stored
-/// value actually changed.
+/// Writes into a resolved widget field, flagging the component only when the
+/// stored value actually changed.
 pub(crate) fn write_resolved(
     world: &mut World,
     entity: Entity,
@@ -652,20 +622,13 @@ pub(crate) fn write_resolved(
     Ok(changed)
 }
 
-/// Puts a marker component on the entity or takes it off, following a bool.
+/// Puts a marker component on the entity or takes it off, following a bool. A
+/// marker already there is left alone, and an immutable one is set and cleared
+/// like any other since nothing inside it is touched.
 ///
-/// The equality guard the field writes make by comparing values is presence
-/// here: a marker already on the entity is left alone, so nothing downstream
-/// sees an insert that changed nothing. Mutability is not asked about, since
-/// nothing inside the component is touched, so an immutable marker is set and
-/// cleared like any other.
-///
-/// `ReflectComponent::insert` takes a type registry by reference and holds it
-/// while the component's insert hooks run, so the one it is handed is not the
-/// app's: it is a registry of one, built when the write was resolved, holding
-/// this marker's registration. The insert reads it only to build the component
-/// from what it is given, and a hook that asks the app for its registry,
-/// mutably or otherwise, finds it unlocked.
+/// `ReflectComponent::insert` holds the registry it is given while the insert
+/// hooks run, so it is handed a registry of one rather than the app's, leaving
+/// the app's unlocked for a hook that asks for it.
 fn write_marker(
     world: &mut World,
     entity: Entity,
@@ -700,8 +663,7 @@ fn write_marker(
 }
 
 /// What a lookup found in the registry, before the world is asked for the
-/// component id. The registry lock is released between the two halves: nothing
-/// that takes it again may run while it is held.
+/// component id, so the registry lock is released between the two halves.
 struct Found {
     reflect: ReflectComponent,
     type_path: String,
@@ -753,8 +715,8 @@ fn find_source(registry: &TypeRegistry, path: &BindPath) -> Result<(Found, bool)
     }
 }
 
-/// Looks up everything a read needs. A component path with no context fails
-/// here, exactly as the read itself would.
+/// Looks up everything a read needs; a component path with no context fails
+/// here.
 pub(crate) fn resolve_source(
     world: &mut World,
     context: Option<Entity>,
@@ -818,8 +780,6 @@ pub(crate) fn resolve_write(
     };
     let parsed = FieldPath::parse(&field).map_err(|e| reflect_path_error(&field, &type_path, e))?;
     Ok(ResolvedWrite {
-        // The type may hold no ComponentId yet, so force registration to ask
-        // about mutability at all.
         component: reflect.register_component(world),
         reflect,
         type_path,
@@ -833,16 +793,10 @@ pub(crate) fn resolve_write(
 /// Looks up a write aimed at a whole marker component.
 ///
 /// A path with no field is only a marker write when the type has no fields
-/// either. Naming a component that does have them is a path missing its field
-/// half rather than an instruction to take the component off the widget:
-/// `Node` without `.width` would otherwise strip the layout off a live widget
-/// the first time it read `false`. The spelling is checked here rather than in
-/// [`BindPath::marker_type`](crate::BindPath::marker_type), which knows only
-/// what was typed; documents are hand-editable and [`write_path`] is public, so
-/// the registry is the only place the question can be answered.
-///
-/// Reflection also has to be able to build one from nothing, because putting
-/// the marker on is what `true` means.
+/// either: `Node` without `.width` is a path missing its field half, not an
+/// instruction to strip the layout off a live widget. Only the registry can
+/// answer that, so the check is here rather than at parse time. Reflection must
+/// also be able to build one from nothing, since that is what `true` means.
 fn resolve_marker_write(world: &mut World, type_path: String) -> Result<ResolvedWrite, BindError> {
     let registry_arc = world
         .get_resource::<AppTypeRegistry>()
@@ -873,8 +827,6 @@ fn resolve_marker_write(world: &mut World, type_path: String) -> Result<Resolved
                 type_path: type_path.clone(),
             })?
             .clone();
-        // The registry the insert is handed, kept here so the app's is not
-        // locked while the marker's insert hooks run.
         let mut alone = TypeRegistry::empty();
         alone.add_registration(reg.clone());
         (reflect, default, alone)
@@ -934,7 +886,7 @@ mod tests {
     }
 
     /// A context on the root, `below` entities under it, and the deepest one
-    /// returned. The root is the `below + 1`-th entity the search looks at.
+    /// returned.
     fn chain_under_a_context(world: &mut World, below: usize) -> Entity {
         let subject = world.spawn_empty().id();
         let mut current = world.spawn(BindContext(subject)).id();

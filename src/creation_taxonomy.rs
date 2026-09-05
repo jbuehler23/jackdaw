@@ -1,15 +1,5 @@
-//! The creation vocabulary: every group of things the editor can make, and
-//! every entry in those groups, in one registry.
-//!
-//! The Add menu, the Add Entity picker and the command palette all read the
-//! same taxonomy, so a new entity kind or a new UI widget reaches all three by
-//! being registered once. It is assembled from the built-in entity operators
-//! below, the [`WidgetRegistry`], and the `RegisteredMenuEntry` rows extensions
-//! contribute to the Add menu.
-//!
-//! Groups nest one level. `UI` holds the widget categories `Layout`, `Display`
-//! and `Controls`, so the Add menu's `UI` row opens a dropdown with those three
-//! as sections while the picker offers them as separate categories.
+//! The creation vocabulary read by the Add menu, the Add Entity picker and the
+//! command palette. Groups nest one level deep.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -33,27 +23,24 @@ pub const WIDGET_ACTION_PREFIX: &str = "widget:";
 /// The group holding entity kinds that belong to no other group.
 pub const GENERAL_GROUP: &str = "general";
 
-/// The group the registered UI widgets sit under; its child groups are the
-/// widget categories.
+/// The group the registered UI widgets sit under; its children are the widget
+/// categories.
 pub const UI_GROUP: &str = "ui";
 
 /// Label of [`GENERAL_GROUP`].
 pub const GENERAL_SECTION: &str = "General";
 
-/// Joins a parent group's label to a child's when the picker shows the child on
-/// its own.
+/// Joins a parent group's label to a child's.
 pub const QUALIFIED_LABEL_SEPARATOR: &str = ": ";
 
-/// Widget categories in the order their groups appear. A category outside
-/// this list still gets a group, after the known ones.
+/// Widget categories in the order their groups appear; unknown categories sort
+/// after these.
 const UI_CATEGORY_ORDER: [&str; 3] = ["Layout", "Display", "Controls"];
 
-/// Sort order of the UI group and of the first of its children, placing the
-/// widget vocabulary after the 3D vocabulary and before the extensions.
+/// Sort order of the UI group and of the first of its children.
 const UI_GROUP_ORDER: i32 = -8;
 
-/// Sort order of a widget group whose category is not in
-/// [`UI_CATEGORY_ORDER`].
+/// Sort order of a widget group whose category is not in `UI_CATEGORY_ORDER`.
 const UI_UNKNOWN_CATEGORY_ORDER: i32 = UI_GROUP_ORDER - UI_CATEGORY_ORDER.len() as i32;
 
 /// Sort order of the per-extension groups, last in the menu.
@@ -72,23 +59,21 @@ pub enum CreationSource {
     /// Part of the editor's own vocabulary.
     #[default]
     BuiltIn,
-    /// Contributed by an extension. The group's name credits that extension, so
-    /// such a group keeps a row of its own even when it holds a single entry.
+    /// Contributed by an extension.
     Extension,
 }
 
 /// One group of things that can be created.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreationGroup {
-    /// Stable key, referenced by [`CreationEntry::group`] and by
+    /// Stable key, referenced by [`CreationEntry::group`] and
     /// [`CreationGroup::parent`].
     pub id: String,
     /// The name shown in a menu or a picker heading.
     pub label: String,
-    /// Where the group sits. Greater comes first, matching the picker's category
-    /// ordering.
+    /// Where the group sits; greater comes first.
     pub order: i32,
-    /// The group this one belongs to, if any. Nesting is one level deep.
+    /// The group this one belongs to, if any.
     pub parent: Option<String>,
     /// Who contributed the group.
     pub source: CreationSource,
@@ -113,8 +98,7 @@ pub struct CreationTaxonomy {
     entries: Vec<CreationEntry>,
 }
 
-/// Build an `op:` action string for the given operator type, so callers pass
-/// the `Op` type rather than a hand-typed operator id.
+/// Build an `op:` action string for the given operator type.
 fn op_action<O: Operator>() -> String {
     format!("op:{}", O::ID)
 }
@@ -158,8 +142,6 @@ fn builtin(taxonomy: &mut CreationTaxonomy) {
 
     taxonomy.entries.extend([
         entry(GENERAL_GROUP, "Empty", op_action::<EntityAddEmptyOp>()),
-        // No ellipsis: the operator warns and does nothing, so the label must
-        // not imply that a picker opens.
         entry(GENERAL_GROUP, "Prefab", op_action::<EntityAddPrefabOp>()),
         entry(
             GENERAL_GROUP,
@@ -235,8 +217,7 @@ fn builtin(taxonomy: &mut CreationTaxonomy) {
     }
 }
 
-/// The registered UI widgets, as one child group of [`UI_GROUP`] per widget
-/// category and one entry per definition.
+/// The registered UI widgets, as one child group of [`UI_GROUP`] per category.
 fn widgets(taxonomy: &mut CreationTaxonomy, world: &mut World) {
     let mut definitions = world
         .resource::<WidgetRegistry>()
@@ -285,8 +266,7 @@ fn ui_group_order(category: &str) -> i32 {
         })
 }
 
-/// The Add entries extensions contribute, one group per extension so
-/// entries cluster by author.
+/// The Add entries extensions contribute, one group per extension.
 fn extensions(taxonomy: &mut CreationTaxonomy, world: &mut World) {
     let mut query = world.query::<(
         &jackdaw_api_internal::lifecycle::RegisteredMenuEntry,
@@ -307,8 +287,7 @@ fn extensions(taxonomy: &mut CreationTaxonomy, world: &mut World) {
         return;
     }
 
-    // Groups are headed by the extension's display label rather than its id:
-    // an id like `jackdaw.core` names the package, not a menu heading.
+    // An extension id like `jackdaw.core` names a package, not a menu heading.
     let labels = world
         .resource::<jackdaw_api_internal::lifecycle::ExtensionCatalog>()
         .iter_with_content()
@@ -379,9 +358,7 @@ impl CreationTaxonomy {
         self.groups.iter().filter(|group| group.parent.is_none())
     }
 
-    /// A group's label shown away from its parent. A nested group carries its
-    /// parent's name, so a picker heading reads "UI: Controls" rather than a
-    /// bare "Controls".
+    /// A group's label shown away from its parent, as in "UI: Controls".
     pub fn qualified_label(&self, id: &str) -> Option<String> {
         let group = self.group(id)?;
         let Some(parent) = group.parent.as_ref().and_then(|id| self.group(id)) else {
@@ -393,14 +370,13 @@ impl CreationTaxonomy {
         ))
     }
 
-    /// Whether a group's entries sit directly in the Add menu instead of
-    /// behind a row that expands.
+    /// Whether a group's entries sit directly in the Add menu.
     fn renders_inline(&self, group: &CreationGroup) -> bool {
         if group.id == GENERAL_GROUP {
             return true;
         }
-        // An extension's group name credits the extension; inlining its
-        // entries would make them look built-in.
+        // An extension's group name credits the extension; inlining would make
+        // its entries look built-in.
         if group.source == CreationSource::Extension {
             return false;
         }
@@ -410,8 +386,7 @@ impl CreationTaxonomy {
         self.entries_of(&group.id).count() <= INLINE_GROUP_MAX
     }
 
-    /// The Add menu's rows: the General entries first, then one row per group,
-    /// either expanding on hover or standing in for its single entry.
+    /// The Add menu's rows: the General entries first, then one row per group.
     pub fn menu_rows(&self) -> Vec<(String, String)> {
         let mut rows: Vec<(String, String)> = Vec::new();
         let mut extensions_opened = false;
@@ -433,8 +408,7 @@ impl CreationTaxonomy {
         rows
     }
 
-    /// One group's dropdown rows: its own entries, or its child groups as
-    /// labelled sections when it has any.
+    /// One group's dropdown rows: its entries, or its children as sections.
     fn group_rows(&self, id: &str) -> Vec<(String, String)> {
         let children = self.children_of(id).collect::<Vec<_>>();
         if children.is_empty() {
@@ -462,8 +436,7 @@ fn separator() -> (String, String) {
     (String::from(SEPARATOR_ACTION), String::new())
 }
 
-/// Push a divider, unless one is already last, so a group that contributed no
-/// rows does not leave two dividers adjacent.
+/// Push a divider, unless one is already last or the rows are empty.
 fn push_separator(rows: &mut Vec<(String, String)>) {
     if rows.last().map(|(action, _)| action.as_str()) == Some(SEPARATOR_ACTION) {
         return;
@@ -482,8 +455,7 @@ fn section_label(name: &str) -> (String, String) {
 mod tests {
     use super::*;
 
-    /// A taxonomy holding the built-in vocabulary alone, with no world behind
-    /// it.
+    /// A taxonomy holding the built-in vocabulary alone.
     fn builtin_taxonomy() -> CreationTaxonomy {
         let mut taxonomy = CreationTaxonomy::default();
         builtin(&mut taxonomy);
@@ -630,9 +602,6 @@ mod tests {
         );
     }
 
-    /// An extension's single entry keeps the extension's name above it. The
-    /// built-in rule, where a group of one collapses into its entry, would make
-    /// a contributed row look built-in.
     #[test]
     fn an_extensions_single_entry_keeps_its_byline() {
         let taxonomy = with_extension();

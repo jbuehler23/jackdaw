@@ -14,18 +14,9 @@ pub struct ProjectRoot {
     pub config: ProjectConfig,
 }
 
-/// The open project's `assets/` directory, mirrored out of the ECS.
-///
-/// [`ProjectRoot`] is the answer, but the path helpers that need it are
-/// plain functions called from observers, asset loaders and scene
-/// readers that hold no `World`. Without somewhere to read it they fell
-/// back to the recents file, which meant opening and parsing
-/// `recent.json` once per call -- hundreds of times a frame on a scene
-/// with hundreds of models.
-///
-/// One process opens one project, so a static mirror says exactly what
-/// the resource does. `None` before a project is open, which is the only
-/// case that still has to go to disk.
+/// The open project's `assets/` directory, mirrored out of [`ProjectRoot`] so
+/// the plain path helpers -- called from observers, asset loaders and scene
+/// readers that hold no `World` -- need not go to disk for it.
 static OPEN_PROJECT_ASSETS: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
 
 /// The open project's assets directory, or `None` when no project is
@@ -34,9 +25,8 @@ pub fn open_project_assets_dir() -> Option<PathBuf> {
     OPEN_PROJECT_ASSETS.read().ok()?.clone()
 }
 
-/// Point the mirror at `dir`, or clear it. Only `mirror_open_project`
-/// should call this; it is public for tests that need the helpers to
-/// behave as though a project were open.
+/// Point the mirror at `dir`, or clear it. Only `mirror_open_project` should
+/// call this; it is public for tests.
 pub fn set_open_project_assets_dir(dir: Option<PathBuf>) {
     if let Ok(mut slot) = OPEN_PROJECT_ASSETS.write() {
         *slot = dir;
@@ -44,15 +34,10 @@ pub fn set_open_project_assets_dir(dir: Option<PathBuf>) {
 }
 
 /// Keep [`open_project_assets_dir`] in step with the resource.
-///
-/// A whole system for one comparison, rather than a write at each place
-/// that inserts [`ProjectRoot`], because a missed write there is a
-/// silent wrong answer everywhere the helpers are used.
 pub(crate) fn mirror_open_project(
     project: Option<Res<ProjectRoot>>,
     mut mirrored: Local<Option<PathBuf>>,
 ) {
-    // Validated here, once per change, so the hot path is a lock read.
     let current = project
         .map(|project| project.assets_dir())
         .filter(|assets| assets.is_dir());
@@ -139,21 +124,13 @@ impl ProjectRoot {
     }
 }
 
-/// Resolve `candidate` under `root`, refusing anything that would land
-/// outside it.
+/// Resolve `candidate` under `root`, refusing anything that would land outside
+/// it. A path the project owns is relative, carries no `..`, and lands under
+/// `root` once resolved.
 ///
-/// The editor runs as the user, so a path taken verbatim from a remote
-/// caller or an operator parameter is an arbitrary write:
-/// `../.ssh/config` names the user's key config as readily as it names a
-/// scene. A path the project owns is relative, carries no `..`, and lands
-/// under `root` once resolved.
-///
-/// The file itself need not exist yet -- a write is usually about to
-/// create it -- so the deepest existing path on the way to it is what
-/// gets canonicalized, which is where a symlink would otherwise smuggle
-/// the write back out. The target is included when it exists: a write
-/// follows a symlink in the last component as readily as one in a
-/// directory above it.
+/// The file need not exist yet, so the deepest existing path on the way to it
+/// is canonicalized -- including the target itself when it exists -- to catch a
+/// symlink that would otherwise smuggle the write out.
 pub fn path_within(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
     if candidate.is_absolute() {
         return Err(format!(

@@ -1,12 +1,9 @@
 //! Clicking a menu row, with the mouse.
 //!
-//! A dropdown row is a `FeathersButton`: it activates on the *release*,
-//! a frame or more after the press that started it. The close pass used
-//! to take the menu down on any press, which despawned the row before it
-//! could fire, so no menu row in the editor could be clicked at all.
-//! Every test here drives the pointer through the window's own event
-//! streams -- nothing triggers an `Activate` or a `ButtonClickEvent` by
-//! hand, because doing that is exactly what hid the bug.
+//! A dropdown row is a `FeathersButton`, activating on the release a frame or
+//! more after the press, so the close pass leaves the menu standing for a press
+//! on one of its own rows. The pointer is driven through the window's own event
+//! streams, because triggering `Activate` by hand bypasses that path.
 
 use crate::util;
 use crate::util::OperatorResultExt as _;

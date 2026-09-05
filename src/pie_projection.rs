@@ -45,7 +45,7 @@ const CHILDREN_PATH: &str = "bevy_ecs::hierarchy::Children";
 /// camera would become an ACTIVE render camera in the editor world: the game
 /// rig's camera fights the UI camera at the same order, and a render target
 /// whose nulled asset handle resolves to the default image aborts the render
-/// pass (the default image is not renderable). New game builds no longer send
+/// pass (the default image is not renderable). Current game builds do not send
 /// these, but the projector refuses them regardless so an older game binary
 /// cannot crash the editor.
 const PROJECTION_SKIP_PREFIXES: &[&str] = &["bevy_camera::camera::", "bevy_camera::components::"];

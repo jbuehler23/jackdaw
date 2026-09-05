@@ -1,11 +1,6 @@
-//! The parametric brush stamps, which is how a caller with no pointer
-//! sculpts and paints.
-//!
-//! A stamp has to be the stroke without the drag: same kernel, same undo
-//! entry. What this pins is the shape of that entry: it covers the
-//! brushed rectangle and no more, and it restores that rectangle alone,
-//! so undoing one stamp leaves every cell painted anywhere else as it
-//! was.
+//! The parametric brush stamps, which is how a caller with no pointer sculpts and
+//! paints. A stamp is the stroke without the drag: same kernel, and an undo entry
+//! that covers the brushed rectangle and restores that alone.
 
 use std::time::Duration;
 
@@ -119,10 +114,9 @@ fn stamp(app: &mut App, x: f64, z: f64, slot: i64) {
     app.update();
 }
 
-/// A stamp records the block it brushed, not the whole map. Two dense
-/// copies of a large terrain per stamp is 134 MiB on a 4096-cell edge,
-/// which exhausts the history budget in a handful of edits and takes the
-/// user's earlier work with it.
+/// A stamp records the block it brushed, not the whole map: two dense copies of a
+/// 4096-cell-edge terrain is 134 MiB per stamp, which exhausts the history budget
+/// in a handful of edits.
 #[test]
 fn a_stamp_records_the_block_it_brushed_rather_than_the_whole_map() {
     let mut app = terrain_app();
@@ -146,9 +140,9 @@ fn a_stamp_records_the_block_it_brushed_rather_than_the_whole_map() {
     );
 }
 
-/// Undoing one stamp takes back that stamp and nothing else. The two
-/// land in different regions, so an undo entry that wrote back more than
-/// the block it recorded would wipe the first one's cells on the way past.
+/// Undoing one stamp takes back that stamp and nothing else. The two land in
+/// different regions, so an entry writing back more than its block would wipe the
+/// first one's cells.
 #[test]
 fn undoing_a_paint_stamp_leaves_paint_elsewhere_alone() {
     let mut app = terrain_app();
@@ -192,9 +186,8 @@ fn undoing_a_paint_stamp_leaves_paint_elsewhere_alone() {
     );
 }
 
-/// A sculpt stamp raises the ground where it is aimed, and one undo puts
-/// it back. Its undo entry covers only the brushed rectangle, which is
-/// what the stroke pushes too.
+/// A sculpt stamp raises the ground where it is aimed, and one undo puts it back,
+/// with an entry covering only the brushed rectangle.
 #[test]
 fn a_sculpt_stamp_raises_the_ground_and_undoes() {
     let mut app = terrain_app();
@@ -242,11 +235,7 @@ fn a_sculpt_stamp_raises_the_ground_and_undoes() {
     );
 }
 
-/// The tint layer's own stamp, and its undo.
-///
-/// Same shape as the paint stamp: the entry covers the stamped rectangle
-/// and restores that alone, so undoing one leaves every cell tinted
-/// anywhere else as it was.
+/// The tint layer's own stamp, and its undo: same shape as the paint stamp.
 mod tint {
     use super::*;
 

@@ -1,17 +1,8 @@
-//! Parameterised-operator dispatch coverage. The goal here is to
-//! exercise the param-passing path: each test passes typed params via
-//! `OperatorCallBuilder::param()` and asserts the dispatcher resolves
-//! the operator + the parameters reach the invoke system without
-//! triggering a panic, type mismatch, or `UnknownId`.
-//!
-//! For ops whose invoke-system needs a fixture we don't have (camera,
-//! viewport, registered window), we accept either `Finished` or
-//! `Cancelled` and document why. The smoke test in `operator_smoke.rs`
-//! covers the empty-param dispatch path; this file covers the typed
-//! param path.
-//!
-//! A wrong-type case proves `OperatorParameters::as_int` / `as_str`
-//! coerce or refuse the way the runtime expects.
+//! Parameterised-operator dispatch: each test passes typed params through
+//! `OperatorCallBuilder::param()` and asserts the dispatcher resolves the
+//! operator and the parameters reach the invoke system. Where the invoke system
+//! needs a fixture this app has no camera, viewport or window for, either
+//! `Finished` or `Cancelled` is accepted, with the reason given.
 
 use crate::util;
 
@@ -19,9 +10,8 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_scene_types::PropertyValue;
 
-/// Helper: dispatch an op with one named param and assert the call
-/// resolved (i.e. didn't error with `UnknownId` or panic) and produced
-/// one of the well-formed result variants.
+/// Dispatch an op with one named param and assert the call resolved into one of
+/// the well-formed result variants.
 #[track_caller]
 fn dispatch_with_param(
     app: &mut App,
@@ -39,10 +29,8 @@ fn dispatch_with_param(
 #[test]
 fn viewport_bookmark_save_with_slot_param() {
     let mut app = util::editor_test_app();
-    // No camera in headless app, so the op cancels at the camera
-    // single-query, but the dispatcher must still parse the i64
-    // `slot` param and route through the gate. Cancelled here proves
-    // the dispatch path; Finished would require a real camera fixture.
+    // No camera in a headless app, so the op cancels at the camera single-query;
+    // the dispatcher still has to parse the i64 `slot` and route through the gate.
     let result = dispatch_with_param(&mut app, "viewport.bookmark.save", "slot", 0_i64);
     assert!(
         matches!(result, OperatorResult::Finished | OperatorResult::Cancelled),
@@ -64,9 +52,8 @@ fn viewport_bookmark_save_invalid_slot_cancels() {
 
 #[test]
 fn viewport_bookmark_save_wrong_type_cancels() {
-    // Passing a string where i64 is expected: `as_int` returns None,
-    // `slot_param` returns None, op cancels. Proves the parameter
-    // type-coercion path bottoms out without panicking.
+    // A string where an i64 is expected: `as_int` returns None and the op
+    // cancels, without panicking on the coercion path.
     let mut app = util::editor_test_app();
     let result = dispatch_with_param(&mut app, "viewport.bookmark.save", "slot", "not a number");
     assert_eq!(
@@ -78,11 +65,9 @@ fn viewport_bookmark_save_wrong_type_cancels() {
 
 #[test]
 fn asset_cycle_array_layer_uses_default_direction() {
-    // `asset.cycle_array_layer` has `direction(i64, default = 1)`. It
-    // cancels via the `has_array_preview` gate when no array preview
-    // is loaded; that's expected in headless. Either Cancelled (gate)
-    // or Finished is fine; what we care about is that the dispatch
-    // resolves and doesn't panic on the default-fill path.
+    // `asset.cycle_array_layer` has `direction(i64, default = 1)` and cancels via
+    // the `has_array_preview` gate headless; either result proves the
+    // default-fill path resolves.
     let mut app = util::editor_test_app();
     let result = app
         .world_mut()
@@ -111,9 +96,8 @@ fn window_open_with_unknown_id_cancels() {
     );
 }
 
-/// The capture operators. Both stand in for a pointer gesture, so both are
-/// dispatched here with the params a capture script passes rather than empty,
-/// which is all the smoke pass can do.
+/// The capture operators stand in for a pointer gesture, so both are dispatched
+/// with the params a capture script passes rather than empty.
 #[test]
 fn menu_open_opens_the_menu_it_names() {
     let mut app = util::editor_test_app();

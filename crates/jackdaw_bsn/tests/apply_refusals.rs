@@ -1,9 +1,8 @@
 //! What the applier does with a patch it cannot honour.
 //!
-//! A document is hand-editable, so it is free to name a variant the enum does
-//! not declare (an associated constant such as `Color::WHITE` reads exactly
-//! like a unit variant) or a type nothing registered. Neither takes the editor
-//! down, and neither passes without a log line naming what was dropped.
+//! A hand-edited document is free to name a variant the enum does not declare
+//! or a type nothing registered. Neither takes the editor down, and neither
+//! passes without a log line naming what was dropped.
 
 use std::sync::Mutex;
 
@@ -32,9 +31,9 @@ impl log::Log for Capture {
     fn flush(&self) {}
 }
 
-/// Install the capture and take whatever the run logs. The logger is one per
-/// process and `cargo test` threads these tests, so the turnstile keeps one
-/// run from draining another's lines.
+/// Installs the capture and takes whatever the run logs. The logger is one per
+/// process, so the turnstile keeps one threaded test from draining another's
+/// lines.
 fn logged(run: impl FnOnce()) -> Vec<String> {
     static INSTALL: std::sync::Once = std::sync::Once::new();
     static TURN: Mutex<()> = Mutex::new(());
@@ -64,16 +63,16 @@ enum Mode {
     },
 }
 
-/// A component holding an enum in a field, the second way a variant reaches
-/// reflection: as a value rather than as a patch of its own.
+/// A component holding an enum in a field, where a variant reaches reflection
+/// as a value rather than as a patch of its own.
 #[derive(Component, Reflect, Default, Debug, PartialEq)]
 #[reflect(Component, Default)]
 struct Holder {
     mode: Mode,
 }
 
-/// The third way: an enum inside a newtype, where the write goes through the
-/// tuple-struct patch loop rather than the struct one.
+/// An enum inside a newtype, where the write goes through the tuple-struct
+/// patch loop rather than the struct one.
 #[derive(Component, Reflect, Default, Debug, PartialEq)]
 #[reflect(Component, Default)]
 struct Wrapper(Mode);
@@ -100,8 +99,8 @@ struct Pair {
     x: f32,
 }
 
-/// Load a document into a fresh world and return it with whatever the
-/// applier logged.
+/// Loads a document into a fresh world and returns it with whatever the applier
+/// logged.
 fn loaded(text: &str) -> (World, Vec<String>) {
     let mut world = World::new();
     let registry = AppTypeRegistry::default();
@@ -137,8 +136,8 @@ fn root(world: &mut World) -> bevy::ecs::entity::Entity {
 }
 
 /// A variant the enum does not declare reaches `PartialReflect::apply`, which
-/// panics rather than refusing. The document opens anyway: the bad patch is
-/// skipped, the good ones kept, and a line says which value went missing.
+/// panics rather than refusing. The document opens anyway, with the bad patch
+/// skipped and named in the log.
 #[test]
 fn a_variant_the_enum_does_not_have_is_refused_rather_than_fatal() {
     let text = format!(
@@ -187,7 +186,7 @@ fn a_variant_the_enum_does_have_still_applies() {
 }
 
 /// A tuple-struct patch naming an unregistered type is reported rather than
-/// skipped in silence, which would hide a wrong type path in a document.
+/// skipped in silence.
 #[test]
 fn a_tuple_struct_patch_on_an_unregistered_type_says_so() {
     let text = "#Root\nsome::other::crate_name::Caption(\"Start\")\n";
@@ -204,9 +203,8 @@ fn a_tuple_struct_patch_on_an_unregistered_type_says_so() {
     );
 }
 
-/// Only the editor's writer always emits a variant's full field set, so a
-/// variant named bare, or half-filled, is the shape a hand-authored document
-/// carries. Each such spelling reaches the panicking `apply`.
+/// A variant named bare, or half-filled, is the shape a hand-authored document
+/// carries, and each such spelling reaches the panicking `apply`.
 #[test]
 fn a_variant_named_without_the_fields_it_carries_is_refused() {
     let text = format!(
@@ -237,8 +235,8 @@ bevy_transform::components::transform::Transform {{
     );
 }
 
-/// The same through the other patch shape: a struct variant the document
-/// gives only some of the fields of.
+/// The same through the other patch shape: a struct variant the document gives
+/// only some of the fields of.
 #[test]
 fn a_struct_variant_missing_a_field_is_refused() {
     let text = format!(
@@ -304,9 +302,8 @@ bevy_transform::components::transform::Transform {{
     );
 }
 
-/// The same document shape as the refused struct variant above, one position
-/// over: inside a newtype, where the write lands in the tuple-struct patch
-/// loop and reaches reflection's last `apply`.
+/// The same shape inside a newtype, where the write lands in the tuple-struct
+/// patch loop and reaches reflection's last `apply`.
 #[test]
 fn a_half_filled_variant_inside_a_newtype_is_refused() {
     let text = format!(
@@ -343,8 +340,8 @@ bevy_transform::components::transform::Transform {{
     );
 }
 
-/// The same shape again on a struct component's enum field, which takes the
-/// merge path: the value is dropped with a line in the log.
+/// The same shape on a struct component's enum field, which takes the merge
+/// path.
 #[test]
 fn a_half_filled_variant_on_a_struct_field_is_refused_out_loud() {
     let text = format!(
@@ -371,8 +368,8 @@ fn a_half_filled_variant_on_a_struct_field_is_refused_out_loud() {
     );
 }
 
-/// The other half of the merge path: a variant the document fills completely,
-/// on a struct component's enum field, is a value the field takes.
+/// The other half of the merge path: a variant the document fills completely is
+/// a value the field takes.
 #[test]
 fn a_whole_variant_on_a_struct_field_lands() {
     let text = format!(
@@ -422,8 +419,8 @@ fn a_refused_write_leaves_a_list_holding_what_it_had() {
     );
 }
 
-/// The other half: a list the document fills is replaced outright rather than
-/// merged over the default, which is what the clearing is for.
+/// A list the document fills is replaced outright rather than merged over the
+/// default.
 #[test]
 fn an_authored_list_replaces_the_one_it_found() {
     let text = format!(
@@ -457,9 +454,8 @@ fn a_tuple_variant_patch_applies() {
 }
 
 /// A value of the wrong type converts to something of the wrong type rather
-/// than to nothing, so the arity check passes and only `FromReflect` can tell.
-/// Without that check the insert falls through to `apply` and dies on the
-/// mismatch.
+/// than to nothing, so only `FromReflect` can tell and the insert would
+/// otherwise fall through to `apply` and die.
 #[test]
 fn a_tuple_variant_value_of_the_wrong_type_is_refused_rather_than_fatal() {
     let text = format!(
@@ -491,9 +487,8 @@ bevy_transform::components::transform::Transform {{
     );
 }
 
-/// The variant exists but takes no values in parentheses. Nothing further down
-/// can say which of the two spellings the document got wrong, so this arm says
-/// it.
+/// The variant exists but takes no values in parentheses, which nothing further
+/// down could attribute to the right spelling.
 #[test]
 fn a_unit_variant_written_with_a_value_says_which_shape_it_takes() {
     let text = format!("#Root\n{mode}::Idle(1.0)\n", mode = Mode::type_path());

@@ -129,8 +129,7 @@ fn a_cyclic_reference_is_refused_rather_than_followed() {
     app.update();
     app.update();
 
-    // Fail-soft: the refusal costs the inherited content, not the scene. The
-    // authored node still spawns under its own name.
+    // Fail-soft: the refusal costs the inherited content, not the scene.
     assert!(
         named_entity(app.world_mut(), "Instance").is_some(),
         "the authored instance node still spawns"
@@ -144,7 +143,6 @@ fn a_cyclic_reference_is_refused_rather_than_followed() {
 #[test]
 fn a_reference_deeper_than_the_cap_is_refused() {
     let dir = tempfile::tempdir().unwrap();
-    // A chain longer than the cap: each level instances the next.
     let depth = jackdaw_prefab::MAX_PREFAB_DEPTH + 2;
     std::fs::write(
         dir.path().join(format!("level{depth}.bsn")),
@@ -204,8 +202,8 @@ fn runtime_app(assets_root: &std::path::Path) -> App {
     app.add_plugins(bevy::transform::TransformPlugin);
     app.add_plugins(AssetPlugin::default());
     app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
-    // The runtime reads prefab sources from the asset root; pointing the
-    // catalog at the temp directory is what names it.
+    // The runtime reads prefab sources from the asset root, which the catalog
+    // names.
     app.insert_resource(JackdawCatalogPath(assets_root.join("catalog.bsn")));
     app.add_plugins(JackdawPlugin);
     app
@@ -218,17 +216,15 @@ fn named_entity(world: &mut World, target: &str) -> Option<Entity> {
         .find_map(|(entity, name)| (name.as_str() == target).then_some(entity))
 }
 
-/// A game follows references only inside its own asset root. A scene file is
-/// shipped content a player can edit, and a reference is an instruction to
-/// open and parse whatever it names, so one pointing up and out would let a
-/// scene read any file the process can. The editor is laxer; `jackdaw`'s
-/// `prefab_source_paths` tests cover that side.
+/// A game follows references only inside its own asset root: a reference is an
+/// instruction to open whatever it names, and a scene file is content a player
+/// can edit. The editor is laxer, which `jackdaw`'s `prefab_source_paths`
+/// tests cover.
 #[test]
 fn a_source_outside_the_asset_root_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let assets = dir.path().join("assets");
     std::fs::create_dir_all(&assets).unwrap();
-    // A real file, so the refusal is the containment rule and not a miss.
     let outside = dir.path().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
     std::fs::write(outside.join("panel.bsn"), PANEL_BSN).unwrap();
@@ -249,19 +245,16 @@ fn a_source_outside_the_asset_root_is_refused() {
         named_entity(app.world_mut(), "Instance").is_some(),
         "the authored instance node still spawns"
     );
-    // The inherited child, not the root: an instance that names itself keeps
-    // that name either way, so the root says nothing about whether the
-    // reference was followed.
+    // The inherited child, not the root: an instance keeps its own name either
+    // way.
     assert!(
         named_entity(app.world_mut(), "Label").is_none(),
         "nothing outside the asset root was read"
     );
 }
 
-/// Containment is checked as each source comes off the queue, so a prefab
-/// that is itself inside the asset root cannot be used as a doorway to one
-/// that is not: the scene names only a local file, and the reach outside is
-/// spelled in that file rather than in the scene.
+/// Containment is checked as each source comes off the queue, so a prefab inside
+/// the asset root cannot be used as a doorway to one outside it.
 #[test]
 fn a_source_reached_through_another_prefab_is_refused_outside_the_asset_root() {
     let dir = tempfile::tempdir().unwrap();
@@ -270,7 +263,6 @@ fn a_source_reached_through_another_prefab_is_refused_outside_the_asset_root() {
     let outside = dir.path().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
     std::fs::write(outside.join("panel.bsn"), PANEL_BSN).unwrap();
-    // In the root, and reaching out of it.
     std::fs::write(
         assets.join("zones/doorway.bsn"),
         "#Doorway\n\
@@ -306,9 +298,8 @@ fn a_source_reached_through_another_prefab_is_refused_outside_the_asset_root() {
     );
 }
 
-/// A variant is a prefab whose own root inherits from the base it was cut
-/// from, so resolving one is two levels of reference. The inner one is spelled
-/// relative to the variant file, not to the scene that instances it.
+/// A variant inherits from the base it was cut from, so resolving one is two
+/// levels of reference, the inner spelled relative to the variant file.
 #[test]
 fn a_variant_resolves_through_the_base_it_was_cut_from() {
     let dir = tempfile::tempdir().unwrap();

@@ -1,29 +1,7 @@
 //! Viewport and window screenshot capture.
 //!
-//! The 3D viewport already renders off-screen into a dedicated `Image`
-//! (`crate::viewport::build_viewport_panel`), so a viewport capture is a
-//! [`Screenshot::image`] against a render target that already exists: no
-//! second render pass and no window grab. Capturing therefore works when
-//! the editor window is unfocused, partly covered, or never had a cursor
-//! over it.
-//!
-//! A window capture ([`Screenshot::primary_window`]) is the whole editor
-//! surface: palette, options bar, docked panels, and the viewport together.
-//! `viewport.screenshot` alone shows no `bevy_ui` chrome.
-//!
-//! The 2D viewport panel works the same way as the 3D one: its camera draws
-//! into an image held at the authored reference size, so
-//! `viewport2d.screenshot` is the same render-target capture aimed at a
-//! different camera, and it writes the UI scene at its authored resolution
-//! rather than at whatever the dock leaf measures.
-//!
-//! Entry points, all funneled through `spawn_capture`:
-//!
-//! - the `viewport.screenshot`, `viewport2d.screenshot` and
-//!   `window.screenshot` operators, for interactive use and scripted runs
-//!   (`JACKDAW_RUN_OP`);
-//! - the `JACKDAW_SHOT=<path>` environment variable, which waits for the
-//!   editor to settle, captures the viewport once, and exits.
+//! A viewport capture reads back the panel's existing render target; a window
+//! capture takes the whole editor surface, `bevy_ui` chrome included.
 
 use std::path::{Path, PathBuf};
 
@@ -35,21 +13,16 @@ use crate::prelude::*;
 use crate::viewport::MainViewportCamera;
 use crate::viewport_host::{ViewportHost, ViewportMode};
 
-/// Names a PNG the editor writes once the viewport has settled, then
-/// exits. Matches the other `JACKDAW_*` boot switches
-/// (`JACKDAW_OPEN_PROJECT`, `JACKDAW_AUTO_OPEN`, `JACKDAW_PIE_WINDOWLESS`).
+/// Names a PNG the editor writes once the viewport has settled, then exits.
 pub const ENV_SHOT: &str = "JACKDAW_SHOT";
 
-/// Frames to let pass after entering the editor before an unattended
-/// capture fires. The first frames after the state transition have no
-/// meshes in them, and `ViewportNode` resizes the render target to the
-/// panel a frame or two later still, so this counts frames rather than
-/// keying off `OnEnter(AppState::Editor)`.
+/// Frames to let pass after entering the editor before an unattended capture
+/// fires; the first frames hold no meshes and the render target is still being
+/// resized.
 const SETTLE_FRAMES: u32 = 90;
 
-/// Frames an unattended run keeps retrying a capture it could not start
-/// before it gives up and exits non-zero. Without it, a boot that never
-/// opens a viewport panel would hang a CI job forever.
+/// Frames an unattended run keeps retrying a capture it could not start before
+/// giving up and exiting non-zero.
 const CAPTURE_TIMEOUT_FRAMES: u32 = 900;
 
 pub(crate) fn plugin(app: &mut App) {
@@ -69,17 +42,9 @@ pub(crate) fn plugin(app: &mut App) {
 
 /// Captures that have reached the disk, by the path they were written to.
 ///
-/// A capture is queued in one frame and the GPU readback lands several
-/// frames later, so an operator returns `Finished` long before the PNG
-/// exists. A caller that has to hand the file to someone -- the remote
-/// surface, a test -- needs to know when it is really there, and the
-/// observer that writes the bytes is the only place that knows.
-///
-/// Only a caller that asked drains its entry, and captures started from
-/// the menus are never collected, so the log is capped: past
-/// [`CaptureLog::CAPACITY`] the oldest entry goes. A caller polls for its
-/// own capture within a few frames of asking, so nothing it is waiting on
-/// is ever the oldest of that many.
+/// A capture is queued frames before its GPU readback lands, so a caller that
+/// needs the file polls here. Entries past [`CaptureLog::CAPACITY`] are
+/// evicted oldest first.
 #[derive(Resource, Default)]
 pub struct CaptureLog {
     landed: bevy::platform::collections::HashMap<PathBuf, (u32, u32)>,
@@ -108,8 +73,7 @@ impl CaptureLog {
         self.landed.get(path).copied()
     }
 
-    /// Forget `path`, so the next capture written there is not answered
-    /// with this one's image.
+    /// Forget `path`, so a later capture there is not answered with this one.
     pub fn forget(&mut self, path: &Path) {
         if self.landed.remove(path).is_some() {
             self.order.retain(|held| held != path);
@@ -124,17 +88,14 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_menu_entry::<WindowScreenshotOp>(TopLevelMenu::Tools);
 }
 
-/// The 2D presentation's own capture. Registered beside the viewport
-/// panel's other 2D operators rather than here, so a workspace without a
-/// viewport is not offered a screenshot of a render target it has no
-/// camera for.
+/// The 2D presentation's own capture, registered only where a 2D viewport
+/// exists.
 pub(crate) fn add_2d_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<Viewport2dScreenshotOp>();
     ctx.register_menu_entry::<Viewport2dScreenshotOp>(TopLevelMenu::Tools);
 }
 
-/// The pending one-shot capture requested by [`ENV_SHOT`]. Absent when
-/// the variable is unset, which is every interactive run.
+/// The pending one-shot capture requested by [`ENV_SHOT`].
 #[derive(Resource)]
 struct ShotProbe {
     path: PathBuf,
@@ -164,24 +125,13 @@ impl core::fmt::Display for CaptureError {
 
 impl core::error::Error for CaptureError {}
 
-/// Queue a capture of what the viewport is showing, written to `path` as a
-/// PNG once the GPU readback lands.
+/// Queue a capture of what the first viewport panel is showing, written to
+/// `path` as a PNG once the GPU readback lands.
 ///
-/// Which surface that is follows the panel's mode: the world in
-/// [`ViewportMode::ThreeD`], the canvas in [`ViewportMode::TwoD`]. A
-/// capture asked for while the user is looking at the canvas has to be a
-/// picture of the canvas, not of a world camera pointing at nothing.
-///
-/// The panel is the first one, and never the one
-/// [`crate::viewport::ActiveViewport`] names: `ActiveViewport` tracks the
-/// viewport *under the cursor*, and in an unattended run no cursor has
-/// entered a viewport, so both its fields are `None`. With no panel at all
-/// the world camera stands in, which is what a world rendered without the
-/// dock has.
-///
-/// With `exit_when_done`, the app exits as soon as the file is written --
-/// success when it landed, failure when it did not. That is the one-shot
-/// `JACKDAW_SHOT` path; interactive captures pass `false`.
+/// The surface follows the panel's mode: the world in
+/// [`ViewportMode::ThreeD`], the canvas in [`ViewportMode::TwoD`]. With
+/// `exit_when_done`, the app exits once the file is written, reporting
+/// failure when it did not land.
 pub fn queue_capture(
     world: &mut World,
     path: PathBuf,
@@ -207,15 +157,8 @@ fn viewport_camera(world: &mut World) -> Option<Entity> {
     }
 }
 
-/// Queue a capture of a 2D viewport panel's render target, written to `path`
-/// as a PNG: the authored UI scene at its reference resolution, without the
-/// panel chrome around it.
-///
-/// The panel holds its image at the scene's reference size (see
-/// [`crate::viewport_2d::size_targets_to_reference`]), so the file holds the
-/// canvas at its authored resolution whatever the dock leaf measures and
-/// whatever the user has zoomed to. With several panels open the one
-/// answering for the canvas is captured, matching how a UI scene is routed.
+/// Queue a capture of a 2D viewport panel's render target: the authored UI
+/// scene at its reference resolution, without the panel chrome around it.
 pub fn queue_2d_capture(
     world: &mut World,
     path: PathBuf,
@@ -234,9 +177,8 @@ fn primary_2d_camera(world: &mut World) -> Option<Entity> {
         .map(|host| host.camera)
 }
 
-/// Queue a capture of the render target belonging to the first camera
-/// marked `C`. Shared by the viewport captures, which differ only in
-/// which camera they mean.
+/// Queue a capture of the render target belonging to the first camera marked
+/// `C`.
 fn queue_camera_capture<C: Component>(
     world: &mut World,
     path: PathBuf,
@@ -247,9 +189,8 @@ fn queue_camera_capture<C: Component>(
     queue_capture_of(world, camera, path, exit_when_done)
 }
 
-/// Queue a capture of `camera`'s render target, which has to be an image:
-/// a camera drawing straight to the window has no texture of its own to
-/// read back, and the window capture is the way to that picture.
+/// Queue a capture of `camera`'s render target, which has to be an image; a
+/// camera drawing straight to the window has no texture to read back.
 fn queue_capture_of(
     world: &mut World,
     camera: Entity,
@@ -267,20 +208,16 @@ fn queue_capture_of(
     Ok(())
 }
 
-/// Queue a capture of the whole primary window (palette, options bar, docked
-/// panels, and viewport together), written to `path` as a PNG once the GPU
-/// readback lands.
+/// Queue a capture of the whole primary window, written to `path` as a PNG
+/// once the GPU readback lands.
 ///
-/// Unlike [`queue_capture`] this cannot fail up front: `Screenshot` targets
-/// the primary window by `bevy_window::WindowRef::Primary`, which the
-/// renderer resolves itself, so there is no camera or render target to look
-/// up first. With no primary window at all the observer never fires.
+/// Unlike [`queue_capture`] this cannot fail up front; with no primary window
+/// the observer never fires.
 pub fn queue_window_capture(world: &mut World, path: PathBuf, exit_when_done: bool) {
     spawn_capture(world, Screenshot::primary_window(), path, exit_when_done);
 }
 
-/// Spawn the [`Screenshot`] entity shared by every capture path: write
-/// the PNG and, for unattended runs, exit once the GPU readback lands.
+/// Spawn the [`Screenshot`] entity shared by every capture path.
 fn spawn_capture(world: &mut World, screenshot: Screenshot, path: PathBuf, exit_when_done: bool) {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -292,12 +229,9 @@ fn spawn_capture(world: &mut World, screenshot: Screenshot, path: PathBuf, exit_
         move |capture: On<ScreenshotCaptured>,
               mut exit: MessageWriter<AppExit>,
               log: Option<ResMut<CaptureLog>>| {
-            // Writing the PNG here rather than through bevy's
-            // `save_to_disk` observer keeps write-then-exit in one
-            // observer. Two observers on the same entity have no
-            // ordering guarantee between them, so an exit hook added
-            // alongside `save_to_disk` could run before the bytes
-            // reached the disk.
+            // Writing here rather than through bevy's `save_to_disk` keeps
+            // write-then-exit in one observer; two observers on an entity have
+            // no ordering guarantee between them.
             let wrote = write_png(&capture.image, &path);
             if wrote && let Some(mut log) = log {
                 log.record(
@@ -317,9 +251,6 @@ fn spawn_capture(world: &mut World, screenshot: Screenshot, path: PathBuf, exit_
 }
 
 /// Encode a captured frame as a PNG on disk. Returns whether it landed.
-///
-/// Shared with [`crate::model_thumbnail`], which writes its off-screen
-/// model renders through the same encoder rather than a second one.
 pub(crate) fn write_png(image: &Image, path: &Path) -> bool {
     let dynamic = match image.clone().try_into_dynamic() {
         Ok(dynamic) => dynamic,
@@ -328,8 +259,7 @@ pub(crate) fn write_png(image: &Image, path: &Path) -> bool {
             return false;
         }
     };
-    // Drop alpha: with HDR on it carries brightness rather than opacity,
-    // and saving it straight through comes out looking wrong.
+    // Drop alpha: with HDR on it carries brightness rather than opacity.
     let rgb = dynamic.to_rgb8();
     match rgb.save_with_format(path, ::image::ImageFormat::Png) {
         Ok(()) => {
@@ -343,9 +273,8 @@ pub(crate) fn write_png(image: &Image, path: &Path) -> bool {
     }
 }
 
-/// Count settle frames for an unattended run, then fire exactly one
-/// capture. A capture that cannot start yet (the viewport panel is still
-/// building) is retried until [`CAPTURE_TIMEOUT_FRAMES`] runs out.
+/// Count settle frames for an unattended run, then fire exactly one capture,
+/// retrying until `CAPTURE_TIMEOUT_FRAMES` runs out.
 fn drive_shot_probe(world: &mut World) {
     let Some(probe) = world.get_resource::<ShotProbe>() else {
         return;
@@ -364,10 +293,8 @@ fn drive_shot_probe(world: &mut World) {
         Ok(()) => world.resource_mut::<ShotProbe>().queued = true,
         Err(err) if frames > SETTLE_FRAMES + CAPTURE_TIMEOUT_FRAMES => {
             error!("{ENV_SHOT}: {err}");
-            // Latch: `queued` doubles as "nothing left to do here", so
-            // without setting it a capture that keeps failing past the
-            // timeout re-entered this arm and re-emitted AppExit every
-            // frame from then on.
+            // `queued` doubles as "nothing left to do", so latching it keeps
+            // a failed capture from re-emitting AppExit every frame.
             world.resource_mut::<ShotProbe>().queued = true;
             world.write_message(AppExit::error());
         }
@@ -403,13 +330,8 @@ pub(crate) fn viewport_screenshot(
     OperatorResult::Finished
 }
 
-/// Capture what the 2D viewport is showing to a PNG.
-///
-/// The authored scene alone: this is a readback of the panel's render
-/// target, and the stage chrome [`crate::ui_stage`] draws -- the selection
-/// outline, the eight resize handles, the reference-size frame -- is
-/// `bevy_ui` in the editor window, on the far side of that boundary. Use
-/// `window.screenshot` to capture evidence of a gesture.
+/// Capture what the 2D viewport is showing to a PNG: the authored scene
+/// alone, without the stage chrome drawn over it.
 #[operator(
     id = "viewport2d.screenshot",
     label = "Screenshot 2D Viewport",
@@ -438,9 +360,7 @@ pub(crate) fn viewport_2d_screenshot(
     OperatorResult::Finished
 }
 
-/// Capture the whole editor window (palette, options bar, docked panels, and
-/// viewport) to a PNG. Unlike `viewport.screenshot`, this includes the
-/// `bevy_ui` chrome, not just the viewport's render target.
+/// Capture the whole editor window to a PNG, `bevy_ui` chrome included.
 #[operator(
     id = "window.screenshot",
     label = "Screenshot Window",
@@ -466,9 +386,8 @@ pub(crate) fn window_screenshot(
     OperatorResult::Finished
 }
 
-/// Where an unnamed capture goes: `screenshots/<prefix>-<timestamp>.png`
-/// under the open project, or under the working directory when no
-/// project is open.
+/// Where an unnamed capture goes: `screenshots/<prefix>-<timestamp>.png` under
+/// the open project, or under the working directory.
 fn default_shot_path(project: Option<&crate::project::ProjectRoot>, prefix: &str) -> PathBuf {
     let stamp = crate::timestamps::utc_rfc3339_now().replace(':', "-");
     let dir = project
@@ -481,9 +400,6 @@ fn default_shot_path(project: Option<&crate::project::ProjectRoot>, prefix: &str
 mod tests {
     use super::*;
 
-    /// A capture against a world with no viewport camera reports it
-    /// rather than panicking or silently doing nothing -- the operator's
-    /// whole job is producing a file, so a miss has to be visible.
     #[test]
     fn capturing_without_a_viewport_reports_no_viewport() {
         let mut world = World::new();
@@ -492,8 +408,6 @@ mod tests {
         assert_eq!(err, CaptureError::NoViewport);
     }
 
-    /// A viewport camera that renders to a window (rather than to its
-    /// own image) is not capturable through this path.
     #[test]
     fn capturing_a_window_target_reports_not_an_image_target() {
         let mut world = World::new();
@@ -506,8 +420,6 @@ mod tests {
         assert_eq!(err, CaptureError::NotAnImageTarget);
     }
 
-    /// The default path lands inside the open project, so an
-    /// interactive capture does not scatter files across the cwd.
     #[test]
     fn default_path_is_a_png_under_the_project() {
         let root = PathBuf::from("/tmp/some-project");
@@ -518,15 +430,10 @@ mod tests {
         let path = default_shot_path(Some(&project), "viewport");
         assert!(path.starts_with(root.join("screenshots")), "{path:?}");
         assert_eq!(path.extension().and_then(|e| e.to_str()), Some("png"));
-        // Colons are legal on unix and illegal on Windows; a timestamped
-        // default has to be writable on both.
+        // Colons are illegal in Windows paths.
         assert!(!path.to_string_lossy().contains(':'), "{path:?}");
     }
 
-    /// M12 pinning test: a capture that never gets a viewport keeps
-    /// failing every frame past the timeout. Before the latch,
-    /// `drive_shot_probe` re-entered the timeout arm on every subsequent
-    /// call and wrote a fresh `AppExit` each time.
     #[test]
     fn a_capture_that_never_starts_emits_app_exit_only_once() {
         let mut world = World::new();

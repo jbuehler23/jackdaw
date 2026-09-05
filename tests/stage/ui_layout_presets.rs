@@ -1,16 +1,5 @@
 //! Layout presets: `ui.layout_preset name=<id>` and the row of buttons at
 //! the top of the `Node` card.
-//!
-//! What is pinned here:
-//!  * every preset writes the whole placement, so nothing is left over from
-//!    the preset applied before it;
-//!  * an anchor captures the size layout measured, so a node that states no
-//!    size of its own is placed rather than stretched;
-//!  * Full Rect is the one preset that drops the size, and the anchor after
-//!    it captures what the stretch measured;
-//!  * a preset that takes a node out of its parent's flow says so;
-//!  * one press is one history entry that undoes to the exact `Node`;
-//!  * the card's row offers all eleven and each button dispatches its own.
 
 use crate::util;
 
@@ -32,12 +21,9 @@ fn run(app: &mut App, clause: &str) -> OperatorResult {
     result
 }
 
-/// Run one clause the way a chord runs it.
-///
-/// `creates_history_entry`, which a scripted call leaves off, is what makes
-/// the dispatcher open a snapshot span: an operator that records its own entry
-/// and one that leaves the entry to the snapshot are only told apart under a
-/// press, and this suite counts entries.
+/// Run one clause the way a chord runs it. `creates_history_entry`, which a
+/// scripted call leaves off, is what makes the dispatcher open a snapshot
+/// span, and this suite counts entries.
 #[track_caller]
 fn run_finished(app: &mut App, clause: &str) {
     let result = run(app, clause);
@@ -307,8 +293,7 @@ fn the_card_row_offers_every_preset_and_dispatches_it() {
             call.params
                 .iter()
                 .find(|(key, _)| key == "name")
-                // A `PropertyValue` prints a string in quotes; the preset id
-                // is what is inside them.
+                // A `PropertyValue` prints a string in quotes.
                 .map(|(_, value)| (entity, value.to_string().trim_matches('"').to_string()))
         })
         .collect();
@@ -322,7 +307,6 @@ fn the_card_row_offers_every_preset_and_dispatches_it() {
         "the row offers every preset once"
     );
 
-    // And the buttons are wired: activating one puts the node where it says.
     let (button, _) = offered
         .iter()
         .find(|(_, id)| id == "bottom_right")
@@ -352,8 +336,7 @@ fn settle(app: &mut App) {
     }
 }
 
-/// A 2D panel, which is what gives an authored scene a target to be laid
-/// out against.
+/// A 2D panel, which gives an authored scene a target to be laid out against.
 fn panel(app: &mut App) {
     use jackdaw::viewport_2d::{Viewport2dPanelHost, build_viewport_2d_panel};
     let parent = app
@@ -378,19 +361,15 @@ fn panel(app: &mut App) {
     host.fit_pending = false;
 }
 
-/// The reference resolution [`jackdaw::ui_palette::seed_ui_scene_root`]
-/// gives the root it seeds, and so the size of the canvas box every
-/// absolute preset resolves against.
+/// The reference resolution `jackdaw::ui_palette::seed_ui_scene_root` gives
+/// the root it seeds, and so the canvas box every absolute preset resolves
+/// against.
 const SEEDED_REFERENCE: Vec2 = Vec2::new(1280.0, 720.0);
 
-/// The scene `scene.new kind=ui` makes: the root through the one function
-/// that seeds it, holding a flow child that states no size of its own.
-///
-/// The geometry tests are built on this rather than on a root of a stated
-/// size, because the placement a preset writes only means anything against
-/// the box the real root is: a root that shrank to fit its content would
-/// let every one of these assertions pass while nothing moved on the
-/// canvas.
+/// The scene `scene.new kind=ui` makes: the root through the one function that
+/// seeds it, holding a flow child that states no size of its own. A root that
+/// shrank to fit its content would let these assertions pass while nothing
+/// moved on the canvas.
 fn seeded_scene(app: &mut App) -> (Entity, Entity) {
     let root = jackdaw::ui_palette::seed_ui_scene_root(app.world_mut());
     let panel_entity = app
@@ -434,10 +413,9 @@ fn top_left_in_root(app: &App, entity: Entity, root: Entity) -> Vec2 {
     corner(entity) - corner(root)
 }
 
-/// An anchor keeps the node the size it is. A node that states no size has
-/// only the size layout gave it, so the preset writes that down before it
-/// states the offsets: without it the two offsets of Middle Center would
-/// stretch the node over the parent instead of putting it in the middle.
+/// A node that states no size has only the size layout gave it, so the preset
+/// writes that down before it states the offsets: without it the two offsets
+/// of Middle Center would stretch the node over the parent.
 #[test]
 fn middle_center_centres_an_auto_sized_panel_instead_of_stretching_it() {
     let mut app = util::editor_test_app();
@@ -473,8 +451,7 @@ fn middle_center_centres_an_auto_sized_panel_instead_of_stretching_it() {
         "a centred node sits at the middle of its parent, not over all of it",
     );
     // The two centres coincide however small the root is, so the distance
-    // the node actually travelled is what says the containing block was the
-    // canvas: half the canvas, less half the node.
+    // travelled is what says the containing block was the canvas.
     assert!(
         (top_left_in_root(&app, panel_entity, root)
             - (SEEDED_REFERENCE - Vec2::new(100.0, 40.0)) / 2.0)
@@ -484,13 +461,9 @@ fn middle_center_centres_an_auto_sized_panel_instead_of_stretching_it() {
     );
 }
 
-/// Full Rect means "be the size of the parent", so it is the one preset
-/// that drops a size rather than keeping it. The anchor pressed after it
-/// captures what that stretch measured, so the node stays the size it is
-/// on screen and moves to the corner.
-///
-/// On the scene `scene.new kind=ui` seeds, "the parent" is the canvas, so
-/// this also pins what Full Rect is for: filling the reference resolution.
+/// Full Rect is the one preset that drops a size rather than keeping it, and
+/// the anchor pressed after it captures what that stretch measured. On the
+/// scene `scene.new kind=ui` seeds, the parent is the canvas.
 #[test]
 fn full_rect_drops_the_size_and_the_next_anchor_captures_the_stretch() {
     let mut app = util::editor_test_app();
@@ -526,10 +499,9 @@ fn full_rect_drops_the_size_and_the_next_anchor_captures_the_stretch() {
     );
 }
 
-/// An anchor on the far side of the canvas is the case that shows a
-/// shrunken containing block for what it is: against the real canvas the
-/// node keeps its size and travels the width of the reference, and against
-/// a root the size of its own content it would have nowhere to go.
+/// Against the real canvas the node keeps its size and travels the width of
+/// the reference; against a root the size of its own content it would have
+/// nowhere to go.
 #[test]
 fn bottom_right_puts_the_node_in_the_far_corner_of_the_canvas() {
     let mut app = util::editor_test_app();
@@ -552,9 +524,8 @@ fn bottom_right_puts_the_node_in_the_far_corner_of_the_canvas() {
     );
 }
 
-/// A preset is a placement, so it may take a node out of its parent's
-/// flow. The nudge refuses that; a preset does it and says so, rather than
-/// leaving the change for the user to find in the Position field.
+/// A preset is a placement, so it may take a node out of its parent's flow.
+/// The nudge refuses that; a preset does it and says so.
 #[test]
 fn a_preset_that_places_a_flowed_child_absolutely_says_so() {
     let mut app = util::editor_test_app();
@@ -578,8 +549,7 @@ fn a_preset_that_places_a_flowed_child_absolutely_says_so() {
     );
 }
 
-/// Center In Flow leaves the node where its parent puts it, so there is
-/// nothing to announce.
+/// Center In Flow leaves the node where its parent puts it.
 #[test]
 fn center_in_flow_promotes_nothing_and_says_nothing() {
     let mut app = util::editor_test_app();
@@ -599,8 +569,8 @@ fn center_in_flow_promotes_nothing_and_says_nothing() {
     );
 }
 
-/// A scene of the shape the seeder used to make: a root that states no size
-/// of its own, so the implicit viewport node shrinks it to fit its content.
+/// A scene whose root states no size of its own, so the implicit viewport node
+/// shrinks it to fit its content.
 fn old_shaped_scene(app: &mut App) -> Entity {
     let root = app
         .world_mut()
@@ -628,8 +598,7 @@ fn old_shaped_scene(app: &mut App) -> Entity {
             ChildOf(panel_entity),
         ))
         .id();
-    // Registered, unlike the seeded fixture's: this scene is saved and read
-    // back, and what the document does not hold does not come back.
+    // Registered, unlike the seeded fixture's: this scene is saved and read back.
     jackdaw::scene_io::register_entity_in_ast(app.world_mut(), filler);
     settle(app);
     root
@@ -645,9 +614,8 @@ fn named(app: &mut App, wanted: &str) -> Entity {
 }
 
 /// Documents saved before the root stated its own size carry a root that
-/// shrinks to fit its content, and every placement resolves against that box:
-/// Bottom Right lands in the bottom-right corner of one widget. Opening such
-/// a document brings the root forward, so the presets mean the canvas again.
+/// shrinks to fit its content, and every placement resolves against that box.
+/// Opening such a document brings the root forward.
 #[test]
 fn a_document_whose_root_states_no_size_opens_with_the_canvas_sized_root() {
     let mut app = util::editor_test_app();
@@ -662,8 +630,7 @@ fn a_document_whose_root_states_no_size_opens_with_the_canvas_sized_root() {
     let mut reloaded = util::editor_test_app();
     panel(&mut reloaded);
     jackdaw::scene_io::load_scene_from_file(reloaded.world_mut(), &path);
-    // A load replaces the whole scene rather than editing one, so it is
-    // given room to settle.
+    // A load replaces the whole scene rather than editing one, so give it room.
     for _ in 0..4 {
         settle(&mut reloaded);
     }
@@ -691,10 +658,9 @@ fn a_document_whose_root_states_no_size_opens_with_the_canvas_sized_root() {
     );
 }
 
-/// The geometry suite is authored at the seeder's own reference resolution,
-/// so a root stating `1280px` by `720px` passes every one of its assertions
-/// while being the wrong thing entirely. This one states another resolution,
-/// which only a root that is a percentage of the canvas can answer.
+/// The geometry suite is authored at the seeder's own reference resolution, so
+/// a root stating `1280px` by `720px` would pass it while being the wrong
+/// thing entirely. This scene states another resolution.
 #[test]
 fn a_preset_places_against_whatever_reference_the_scene_states() {
     const REFERENCE: Vec2 = Vec2::new(800.0, 600.0);
@@ -739,12 +705,10 @@ fn a_preset_places_against_whatever_reference_the_scene_states() {
     );
 }
 
-/// An anchor writes down the size layout measured, and that figure comes out
-/// of two conversions: `ComputedNode` is physical where a `Node` offset is
-/// logical, and it is the border box where a `ContentBox` node's `width` is
-/// the content box. On a hidpi screen a padded node missing either conversion
-/// is written back twice the size it is, or its own size plus its padding,
-/// and either one grows every time an anchor is pressed.
+/// The captured size comes out of two conversions: `ComputedNode` is physical
+/// where a `Node` offset is logical, and it is the border box where a
+/// `ContentBox` node's `width` is the content box. Missing either one grows
+/// the node every time an anchor is pressed.
 #[test]
 fn an_anchor_captures_a_padded_content_box_at_its_own_size_on_a_hidpi_screen() {
     const SCALE: f32 = 2.0;

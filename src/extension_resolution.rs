@@ -46,22 +46,11 @@ pub fn resolve_enabled_list(world: &World) -> Vec<String> {
     resolve_against_config(&available, &builtins, enabled_in_config.as_ref())
 }
 
-/// The startup decision, with the file already read.
-///
-/// Three rules, in order:
-///
-/// 1. No file, or a file naming no built-in at all: enable everything.
-/// 2. Otherwise the file is trusted for every extension it names.
-/// 3. A built-in the file does not name postdates the file, and arrives
-///    enabled. A file cannot name an extension that did not exist when it was
-///    written, so treating "absent" as "disabled" would keep such a built-in
-///    permanently off. Disabling it is then an explicit choice, which the next
-///    toggle records. Only built-ins get this; a third-party extension the file
-///    does not name counts as not installed.
-///
-/// [`REQUIRED_EXTENSIONS`] is a separate, stronger rule: those are
-/// force-enabled even against a file that explicitly disables them, since the
-/// editor panics without them.
+/// The startup decision, with the file already read. No file, or one naming no
+/// built-in, enables everything; otherwise the file is trusted for every
+/// extension it names, and an unnamed built-in postdates the file and arrives
+/// enabled (an unnamed third-party extension counts as not installed).
+/// [`REQUIRED_EXTENSIONS`] are force-enabled even against an explicit disable.
 fn resolve_against_config(
     available: &[String],
     builtins: &[String],

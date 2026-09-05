@@ -684,8 +684,7 @@ mod tests {
 
     /// Escape cancels a panel drag, and Escape is also a chord somebody may
     /// be recording. A press that is naming a key must not also throw away
-    /// the drag under the pointer: the guard exists for that, and until now
-    /// nothing said so.
+    /// the drag under the pointer; the guard exists for that.
     #[test]
     fn a_recorded_escape_does_not_cancel_a_drag() {
         let mut app = App::new();

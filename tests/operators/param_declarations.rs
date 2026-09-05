@@ -1,16 +1,9 @@
 //! Every parameter an operator reads is a parameter it declares.
 //!
-//! `OperatorEntity::parameters` is the whole schema an outside caller
-//! has: `jackdaw/operators` publishes it, `jackdaw/call_operator` types
-//! JSON values against it, and `boot_ops` resolves `Entity` parameters
-//! from it. A parameter read but not declared is therefore invisible --
-//! a caller cannot discover it, and a value passed for it arrives typed
-//! by its spelling rather than by what the operator declared.
-//!
-//! There is no runtime hook to catch that: the accessors take a `&str`
-//! and a miss is indistinguishable from an absent optional. So this
-//! reads the source, which is where the declaration and the read sit a
-//! few lines apart.
+//! `OperatorEntity::parameters` is the whole schema an outside caller has, so a
+//! parameter read but not declared is invisible to it. The accessors take a
+//! `&str` and a miss is indistinguishable from an absent optional, so this reads
+//! the source instead.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -50,12 +43,9 @@ fn parameters_read(body: &str) -> BTreeSet<String> {
         let is_accessor = ACCESSORS
             .iter()
             .any(|accessor| call.ends_with(&format!(".{accessor}")));
-        // `read_int_param(&params, "x")`: the helpers a few modules keep
-        // take the name as a second argument. Only the arguments of the
-        // call this literal actually sits in are read: matching anywhere in
-        // the prefix would count every later string in a body that called
-        // such a helper once, and fail an operator for a parameter it does
-        // not have.
+        // `read_int_param(&params, "x")`: only the arguments of the call this
+        // literal sits in are read, or every later string in a body that called
+        // such a helper once would count.
         let is_helper = before.ends_with(',')
             && before
                 .rfind("_param(")
@@ -172,8 +162,8 @@ fn operators() -> Vec<(String, PathBuf, BTreeSet<String>, BTreeSet<String>)> {
             let Some(id) = attribute_string(attr, "id") else {
                 continue;
             };
-            // The system body: everything up to the next item, which is
-            // the first `}` in the first column.
+            // The system body: everything up to the first `}` in the first
+            // column.
             let rest = &src[end + 1..];
             let body = match rest.find("\n}\n") {
                 Some(stop) => &rest[..stop],
@@ -190,8 +180,7 @@ fn operators() -> Vec<(String, PathBuf, BTreeSet<String>, BTreeSet<String>)> {
     found
 }
 
-/// The reader finds what it is looking for. Without this the audit below
-/// would pass by finding nothing at all.
+/// Without this the audit below would pass by finding nothing at all.
 #[test]
 fn the_source_reader_finds_operators_and_their_parameters() {
     let all = operators();

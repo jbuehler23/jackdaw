@@ -1,12 +1,9 @@
-//! The one row shape for a labeled control: label left in a fixed
-//! column, control right, uniform height.
+//! The one row shape for a labeled control: label left in a fixed column, control
+//! right, uniform height.
 //!
-//! Every panel that stacks fields down a column uses this, so a label
-//! sits at the same x whatever the control beside it is, and a row is the
-//! same height whether it holds a checkbox or a text entry. Sub-values
-//! indent under their feature via [`FieldRowProps::indented`], which takes
-//! the indent out of the label column rather than pushing the control
-//! right - so indented rows keep their controls aligned with the rest.
+//! Every panel that stacks fields down a column uses this. Sub-values indent under
+//! their feature via [`FieldRowProps::indented`], which takes the indent out of
+//! the label column rather than pushing the control right.
 
 use bevy::prelude::*;
 
@@ -67,15 +64,13 @@ impl FieldRowProps {
 #[derive(Component)]
 pub struct FieldRowNode;
 
-/// Marker on a mark hung off a field row: the prefab override dot, the
-/// live-edit dot, the keyframe diamond. Goes on the mark's own
-/// absolutely-positioned wrapper, which is a direct child of the row.
+/// Marker on a mark hung off a field row: the prefab override dot, the live-edit
+/// dot, the keyframe diamond. Goes on the mark's own absolutely-positioned
+/// wrapper, a direct child of the row.
 ///
-/// A mark anchors to the row's right edge, which is where the control
-/// otherwise ends, so a row showing one has to give up that strip. Most rows
-/// never show one (the diamond is `Transform`-only, the prefab dot needs a
-/// prefab instance), so the strip is taken only while a mark is present
-/// rather than reserved on every row that could carry one.
+/// A mark anchors to the row's right edge, so a row showing one has to give up
+/// that strip. Most rows never show one, so the strip is taken only while a mark
+/// is present rather than reserved on every row.
 #[derive(Component)]
 pub struct FieldRowDecoration;
 
@@ -137,10 +132,9 @@ pub fn spawn_field_row(commands: &mut Commands, parent: Entity, props: FieldRowP
         TextColor(tokens::TEXT_SECONDARY),
         Node {
             width: Val::Px((tokens::FIELD_LABEL_WIDTH - inset).max(0.0)),
-            // The label column is a target, not a floor: in a panel too
-            // narrow to hold it the label gives way rather than pushing
-            // the control off the edge, down to a width that still reads
-            // as a word.
+            // The label column is a target, not a floor: in a panel too narrow
+            // to hold it the label gives way rather than pushing the control off
+            // the edge.
             min_width: Val::Px(tokens::FIELD_LABEL_MIN_WIDTH),
             flex_shrink: 1.0,
             overflow: Overflow::clip(),
@@ -160,10 +154,9 @@ pub fn spawn_field_row(commands: &mut Commands, parent: Entity, props: FieldRowP
                 // The basis is what decides whether this fits beside the
                 // label or wraps under it.
                 flex_basis: Val::Px(control_min),
-                // The basis is the ask; the row's own width is the
-                // ceiling. A floor here would let a control wider than the
-                // row hang past the panel's edge, where the panel clips it
-                // away entirely.
+                // The basis is the ask; the row's own width is the ceiling. A
+                // floor here would let a control wider than the row hang past the
+                // panel's edge, where the panel clips it away.
                 min_width: Val::Px(0.0),
                 ..Default::default()
             },

@@ -1,11 +1,7 @@
-//! What a row shows of a name too long for it, and which rows are cut at
-//! all.
-//!
-//! The cut is made in the tree crate, over labels laid out to fill their
-//! row. Every other tree in the editor -- Project Files, the remote entity
-//! browser -- carries the same row-label marker on labels laid out to
-//! their own text, where a cut narrows the label, which lowers the budget,
-//! which cuts it again.
+//! What a row shows of a name too long for it, and which rows are cut at all.
+//! The cut is made in the tree crate, over labels laid out to fill their row;
+//! other trees carry the same marker on labels laid out to their own text, where
+//! a cut narrows the label, which lowers the budget, which cuts it again.
 
 use crate::util;
 
@@ -76,12 +72,10 @@ fn shown(app: &App, label: Entity) -> String {
         .clone()
 }
 
-/// A name the row has room for is shown whole.
-///
-/// "Separator" in a 145 pixel panel came out as "Separ...": the label is
-/// laid out to a 64 pixel floor there, and a character guessed at 55% of
-/// the font size makes that eight characters of room for a name that is
-/// drawn in 58 pixels.
+/// A name the row has room for is shown whole. "Separator" in a 145 pixel panel
+/// came out as "Separ...": the label is laid out to a 64 pixel floor there, and a
+/// character guessed at 55% of the font size makes that eight characters of room
+/// for a name drawn in 58 pixels.
 #[test]
 fn a_name_the_row_has_room_for_is_shown_whole() {
     let (app, root) = outliner_app(145.0, "Separator");
@@ -121,12 +115,9 @@ fn a_name_too_long_for_the_row_is_cut_and_kept_on_a_tooltip() {
     );
 }
 
-/// A tree whose labels are laid out to their own text is left alone.
-///
-/// This is the shape `project_files.rs` spawns: the shared row-label
-/// marker on a label with no room of its own. Cutting one of those is a
-/// spiral -- the cut narrows the label, the narrower label lowers the
-/// budget -- which is how "assets" came to read "a".
+/// A tree whose labels are laid out to their own text is left alone. This is the
+/// shape `project_files.rs` spawns, where cutting spirals: the cut narrows the
+/// label, the narrower label lowers the budget, and "assets" came to read "a".
 #[test]
 fn a_label_laid_out_to_its_own_text_is_never_cut() {
     let (mut app, _root) = outliner_app(145.0, "UiRoot");

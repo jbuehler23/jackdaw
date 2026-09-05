@@ -1,23 +1,16 @@
 # Remote control and jd mcp
 
-Jackdaw's rule is that everything the editor does is an operator: every menu
-item, panel button, terrain tool, bake and save dispatches one. That makes the
-whole editor scriptable from a single call, and `jd mcp` is what puts that call
-in front of an MCP client.
-
-The editor serves the Bevy Remote Protocol on loopback while a project is open.
-`jd mcp` runs `jd-mcp`, a Model Context Protocol server that speaks MCP over
-stdio to the client and BRP to the editor. It holds no state of its own: every
-tool is one BRP method, and every edit to the open document is undoable -- the
-operators through their own history, `apply_bsn` through the command the editor
-pushes for it -- so a remote edit lands on the same undo stack the user's clicks
-do. Undo does not reach the disk: an operator that saves, exports or bakes is as
-reachable here as it is from the menus.
+Every editor action is an operator, so the whole editor is scriptable through one
+call. The editor serves the Bevy Remote Protocol on loopback while a project is
+open. `jd mcp` runs `jd-mcp`, an MCP server that speaks MCP over stdio to the
+client and BRP to the editor. Each tool is one BRP method, and every edit to the
+open document lands on the editor's undo stack. Undo does not reach the disk:
+operators that save, export or bake are reachable here too.
 
 ## Setting it up
 
 Open a project in the editor, then register `jd mcp` with your MCP client as a
-stdio server. Most clients take a JSON entry of this shape:
+stdio server:
 
 ```json
 {
@@ -27,19 +20,15 @@ stdio server. Most clients take a JSON entry of this shape:
 }
 ```
 
-`--project` names the project root. Without it, `jd mcp` uses the working
-directory. It finds the editor through `<project>/.jackdaw/editor.json`, which
-the editor writes when it opens the project and removes when it exits, so
-nothing has to be configured with a port. A client that starts before the editor
-reports that no editor is running rather than failing to connect.
-
-The port defaults to 15703, one past the game's 15702, so an editor and the game
-it launches never contend for the socket. An editor that finds the port already
-taken says so and serves nothing, rather than publishing an endpoint that points
-at the editor already there; give the second one its own port with
-`JACKDAW_REMOTE_PORT`. Remote control is on by default, and a project turns it
-off with `{"remote": {"enabled": false}}` under the `remote` key of
-`.jackdaw/settings.json`.
+- `--project` names the project root; without it, the working directory is used.
+- The editor is found through `<project>/.jackdaw/editor.json`, written on open
+  and removed on exit, so no port needs configuring. A client that starts first
+  reports that no editor is running.
+- The port defaults to 15703, one past the game's 15702. An editor that finds it
+  taken serves nothing; give a second editor its own port with
+  `JACKDAW_REMOTE_PORT`.
+- Remote control is on by default. Disable it per project with
+  `{"remote": {"enabled": false}}` in `.jackdaw/settings.json`.
 
 Running the editor from a source checkout needs its libraries on the path, from
 the checkout root:
@@ -48,8 +37,8 @@ the checkout root:
 LD_LIBRARY_PATH=target/debug:target/debug/deps:$(rustc --print target-libdir)
 ```
 
-`rustc --print sysroot` is not enough on its own: `<sysroot>/lib` holds no
-`libstd`, which lives a level down in the target lib dir that command prints.
+`rustc --print sysroot` is not enough: `<sysroot>/lib` holds no `libstd`, which
+lives in the target lib dir that command prints.
 
 ## The tools
 
@@ -71,20 +60,18 @@ LD_LIBRARY_PATH=target/debug:target/debug/deps:$(rustc --print target-libdir)
 | `cancel` | End the modal operator holding the editor |
 | `assets` | Asset paths under `assets/`, by substring or `*` glob |
 
-Two read-only resources sit beside them: `jackdaw://operators` is the operator
-catalogue, and `jackdaw://scene` is the open document as BSN.
+Two read-only resources: `jackdaw://operators` is the operator catalogue, and
+`jackdaw://scene` is the open document as BSN.
 
 `save_scene` and `screenshot` are the only tools that write to disk, though
-`call_operator` reaches the operators that save, export and bake. The server only
-ever talks to loopback, and both a screenshot path and a scene path have to name
-a file inside the project: the editor runs as the user, and an unconfined path
-would let a page or a prompt aim a write anywhere they can write.
+`call_operator` reaches operators that save, export and bake. The server only
+talks to loopback, and screenshot and scene paths must name a file inside the
+project.
 
 ## Working with it
 
-Start from `list_operators`. It is the whole vocabulary, and each parameter
-carries the same documentation the editor's own tooltips show, so a caller can
-discover a tool rather than be told about it:
+Start from `list_operators`. Each parameter carries the same documentation the
+editor's tooltips show.
 
 ```text
 list_operators(prefix: "terrain.")
@@ -92,15 +79,13 @@ call_operator(id: "terrain.sculpt.stamp",
               params: { terrain: "Ground", x: 12, z: -8, radius: 6, strength: 2 })
 ```
 
-Parameters are typed from the operator's declared schema rather than from the
-JSON's own spelling, so `radius: "6"` reaches a float parameter and `name: 7`
-reaches a string one. An `Entity` parameter takes a name, and the operators that
-act on the selection take it from there when nothing is named -- the same
-resolution `JACKDAW_RUN_OP` clauses get.
+Parameters are coerced from the operator's declared schema rather than the JSON
+spelling, so `radius: "6"` reaches a float parameter and `name: 7` a string one.
+An `Entity` parameter takes a name; operators that act on the selection use it
+when nothing is named.
 
-Group a run of calls that mean one action with `batch`. Inside one span they are
-one undo entry, so one Ctrl-Z takes the whole action back rather than a
-fraction of it:
+Group calls that mean one action with `batch` -- inside one span they are a
+single undo entry:
 
 ```text
 batch(label: "Fence the north plot", calls: [
@@ -109,10 +94,9 @@ batch(label: "Fence the north plot", calls: [
 ])
 ```
 
-A call answers with the entities it added, under `entities`, so the next call
-can name what the last one made rather than guessing which node in the tree is
-new. Every call in a batch reports its own, and `apply_bsn` reports what its
-text spawned:
+A call answers with the entities it added under `entities`, so the next call can
+name what the last one made. Every call in a batch reports its own, and
+`apply_bsn` reports what its text spawned:
 
 ```text
 call_operator(id: "entity.add.cube")            -> { entities: [4294967301], ... }
@@ -120,25 +104,21 @@ call_operator(id: "entity.set_transform",
               params: { entity: 4294967301, x: 4, y: 0, z: -2 })
 ```
 
-Reads are cheap and worth doing often. `scene_tree` says what is there,
-`get_entity` says what one node holds, and `screenshot` shows the result --
-it waits for the capture to reach the disk, so the image it returns is the
-frame it captured. `scene_tree` takes a `root` as an entity id or as a name,
-and a `depth` counting generations below it: `0` is the node alone, `1` adds
-its children, and no `depth` reports the whole subtree.
+`scene_tree` takes a `root` as an entity id or a name, and a `depth` counting
+generations below it: `0` is the node alone, `1` adds its children, and no
+`depth` reports the whole subtree.
 
 ```text
 scene_tree(root: "Terrain", depth: 1)
 ```
 
-After anything that takes time (opening a scene, a navmesh
-bake, a project build), `wait(until_idle: true)` holds until nothing is running,
-including the models an opened scene is still pulling off disk.
+After anything that takes time (opening a scene, a navmesh bake, a project
+build), `wait(until_idle: true)` holds until nothing is running, including models
+an opened scene is still loading.
 
-A screenshot of a 3D scene is only worth taking once the camera is pointed at
-it. `view.frame_all` and `view.frame_selected` keep whatever orientation the
-camera already has, so a camera left level with the ground frames a terrain
-edge-on and the picture is empty. Aim it first:
+Aim the camera before screenshotting a 3D scene. `view.frame_all` and
+`view.frame_selected` keep the camera's current orientation, so a level camera
+frames a terrain edge-on.
 
 ```text
 call_operator(id: "view.look_at",
@@ -147,15 +127,15 @@ call_operator(id: "view.look_at",
 call_operator(id: "view.orbit", params: { yaw: 135, pitch: 40, distance: 200 })
 ```
 
-`view.look_at` takes an eye and a target in world metres and switches the
-viewport to perspective. `view.orbit` turns around the focus point the last
-`look_at` (or orbit) set, taking a compass `yaw` and a `pitch` above the ground
-in degrees plus a `distance` in metres. `view.dolly` moves along the sightline.
-Between them they cover the orbit, pan and dolly the pointer does, none of which
-is an operator a caller could dispatch.
+- `view.look_at` takes an eye and a target in world metres and switches the
+  viewport to perspective.
+- `view.orbit` turns around the focus point the last `look_at` or orbit set,
+  taking a compass `yaw`, a `pitch` above the ground in degrees, and a
+  `distance` in metres.
+- `view.dolly` moves along the sightline.
 
 `select` frames what it selected when asked, and `screenshot` aims before it
-captures, so each is one call rather than three:
+captures:
 
 ```text
 select(names: ["Village"], frame: true)
@@ -165,12 +145,11 @@ screenshot(look_at: { eye: [120, 90, 120], target: [0, 0, 0] })
 ## Playing the game from a client
 
 `pie.play` builds the project's game binary and launches it. In the default
-embedded mode the game streams into the editor's Game panel, so a window
-capture shows the running game rather than a separate OS window.
+embedded mode the game streams into the editor's Game panel, so a window capture
+shows the running game.
 
-The launch is a cargo build and then a process, which is minutes rather than
-frames, so `status` reports where it has got to under `pie` -- `building`,
-`running` or `stopped` -- and `wait` holds for either end of it:
+The launch is a cargo build then a process, so `status` reports progress under
+`pie` -- `building`, `running` or `stopped` -- and `wait` holds for either end:
 
 ```text
 call_operator(id: "pie.play")
@@ -180,52 +159,43 @@ call_operator(id: "pie.stop")
 wait(until: "pie_stopped")
 ```
 
-A paused game counts as running: its process is up and its frames are still
-there to capture.
+A paused game counts as running.
 
 ## Packing repeated groups
 
-`prefab.pack` writes a group out as a prefab file and leaves an instance of
-that file standing where the group stood. `prefab.pack_matching` does that
-once and then replaces every other top-level group that matches with an
-instance of the same file, each keeping the placement its group had:
+`prefab.pack` writes a group out as a prefab file and leaves an instance standing
+where the group stood. `prefab.pack_matching` does that once, then replaces every
+other matching top-level group with an instance of the same file, each keeping
+its own placement:
 
 ```text
 call_operator(id: "prefab.pack_matching",
               params: { entity: 4294967301, path: "prefabs/steading.bsn" })
 ```
 
-`match` is `structural` by default, which compares whole subtrees -- two
-groups that agree on their direct children and differ below are not copies
--- or `prefix`, which compares names against `prefix`. `path` is relative
-to the project's assets directory and cannot leave it, and an existing file
-is not replaced without `overwrite: true`.
-
-How many groups became instances comes back in the call's `reports`, which
-is where an operator says what it did when the number is the answer.
+`match` is `structural` by default, comparing whole subtrees; `prefix` compares
+names against `prefix` instead. `path` is relative to the project's assets
+directory and cannot leave it, and an existing file needs `overwrite: true`. The
+number of groups turned into instances comes back in the call's `reports`.
 
 ## When a call did not do what you asked
 
-An operator reports a parameter it could not use in the `warnings` of the call
-result, not only in the editor's log. `input.pointer` is the one to watch:
-`button` is `primary`, `secondary` or `middle` (with `left` and `right` as
-aliases), and `space` is `window` or `canvas`. Anything else is refused with a
-warning rather than quietly treated as the default, so a `space: "viewport"`
-comes back as text saying so instead of as a gesture aimed at the wrong place.
-Warnings belong to the call that produced them and do not carry over.
+An operator reports a parameter it could not use in the call result's
+`warnings`. For `input.pointer`, `button` is `primary`, `secondary` or `middle`
+(`left` and `right` are aliases) and `space` is `window` or `canvas`; anything
+else is refused with a warning rather than treated as the default. Warnings
+belong to the call that produced them.
 
 ## Operators that need a pointer
 
-A few operators are modal: they hold a gesture open across frames and end when
-the mouse button comes up. A caller with no pointer cannot drive one, so each has
-a parametric operator that does the same job -- `terrain.sculpt.stamp` for the
-sculpt brush, `entity.set_transform` for a gizmo drag, `selection.select` for a
-rubber band. The pairs are listed in `tests/operators/remote_coverage.rs`, and a
-new modal operator fails that test until someone has said what a remote caller should
-call instead.
+Modal operators hold a gesture open across frames and end when the mouse button
+comes up. A caller with no pointer cannot drive one, so each has a parametric
+equivalent -- `terrain.sculpt.stamp` for the sculpt brush,
+`entity.set_transform` for a gizmo drag, `selection.select` for a rubber band.
+The pairs are listed in `tests/operators/remote_coverage.rs`, and a new modal
+operator fails that test until its remote equivalent is named.
 
-Calling one anyway returns `running` and leaves that operator holding the
-editor, which refuses every later modal call. `status` reports it under `modal`,
-`cancel` ends it, and `batch` cancels one it started rather than walking away
-from a wedged editor. `wait(until_idle: true)` deliberately does not wait on a
-modal -- nothing is coming to finish it -- so it answers and names it instead.
+Calling one anyway returns `running` and leaves that operator holding the editor,
+which then refuses every later modal call. `status` reports it under `modal`,
+`cancel` ends it, and `batch` cancels one it started. `wait(until_idle: true)`
+does not wait on a modal -- it answers and names it instead.

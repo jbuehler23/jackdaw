@@ -1,16 +1,10 @@
 //! A model in the outliner is one row.
 //!
-//! A `GltfSource` entity is an instance of a world asset, and the loader
-//! spawns the asset's own tree under it: a scene root, its nodes, a mesh
-//! per primitive. None of that is in the document, and for a moment the
-//! scene root is a named, unparented entity - which is long enough for the
-//! outliner to give it a top-level row of its own, so every model in a
-//! scene read as two roots, the instance and a "Scene" beside it.
-//!
-//! What is pinned here: the instance is one row; what the asset spawned is
-//! below it, drawn in the asset-part tone and built only when the row is
-//! opened; a click inside selects the instance; and none of it reaches the
-//! saved document.
+//! A `GltfSource` entity is an instance of a world asset and the loader spawns
+//! the asset's own tree under it. None of that is in the document, and for a
+//! moment the scene root is a named unparented entity, which was long enough for
+//! the outliner to give it a top-level row of its own. What the asset spawned is
+//! drawn below the instance, in the asset-part tone, and reaches no saved file.
 
 use crate::util;
 
@@ -21,8 +15,7 @@ use jackdaw_widgets::tree_view::{
     EntityCategory, TreeIndex, TreeNode, TreeNodeExpanded, TreeRowContent, TreeRowDot,
 };
 
-/// A model the repository ships, so the test loads a real glTF rather than
-/// a stand-in whose spawn order might not match the loader's.
+/// A model the repository ships, so a real glTF's spawn order is exercised.
 const MODEL: &str = "models/dungeon.glb";
 
 /// An outliner panel over a scene holding `count` model instances, ticked
@@ -70,8 +63,8 @@ fn panel_over_models(count: usize) -> (App, Entity, Vec<Entity>) {
         }
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
-    // The loader's parent link and the outliner's answer to it land on
-    // later flushes; give both room before reading the rows back.
+    // The loader's parent link and the outliner's answer to it land on later
+    // flushes; give both room before reading the rows back.
     for _ in 0..8 {
         app.update();
     }
@@ -144,9 +137,8 @@ fn a_model_instance_is_one_top_level_row() {
 
 #[test]
 fn every_instance_in_a_scene_is_one_row() {
-    // The scene the owner reported this from holds 527 models and drew 1054
-    // top-level rows. The count is the assertion; a handful of instances
-    // exercises the same path.
+    // The scene this was reported from holds 527 models and drew 1054 top-level
+    // rows; a handful of instances exercises the same path.
     let (app, panel, instances) = panel_over_models(6);
     assert_eq!(top_level_sources(&app, panel).len(), instances.len());
 }
@@ -225,9 +217,8 @@ fn clicking_an_internal_selects_the_instance() {
 
 #[test]
 fn a_save_writes_the_instance_and_none_of_its_internals() {
-    // Giving the internals rows makes them look authored. The document is
-    // where that would show, so it is where it is pinned: the file names
-    // the model to load, not the tree the loader spawns from it.
+    // Giving the internals rows makes them look authored, and the document is
+    // where that would show: the file names the model, not the spawned tree.
     let (mut app, _panel, instances) = panel_over_models(1);
     let directory = std::env::temp_dir();
     let saved = jackdaw::scene_io::emit_bsn_scene_for_file(app.world_mut(), &directory);
@@ -255,9 +246,8 @@ fn a_save_writes_the_instance_and_none_of_its_internals() {
 
 #[test]
 fn show_all_still_reaches_the_internals() {
-    // "Show All" is the escape hatch from every outliner filter, and the
-    // internals stay reachable through it rather than becoming a thing the
-    // panel refuses to name.
+    // "Show All" is the escape hatch from every outliner filter, so the internals
+    // stay reachable through it.
     let (mut app, panel, instances) = panel_over_models(1);
     app.world_mut().insert_resource(HierarchyShowAll(true));
     for _ in 0..4 {

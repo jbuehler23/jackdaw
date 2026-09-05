@@ -1,34 +1,17 @@
-//! `JD_PERF_PROBE`: where the frame's CPU time went, by schedule.
+//! `JD_PERF_PROBE`: a per-schedule split of the frame's CPU time.
 //!
-//! The FPS readout says a frame took 240ms. It cannot say whether that
-//! was an editor system in `Update`, a scene respawn in `SpawnScene`, UI
-//! layout in `PostUpdate`, or the render graph -- and the fix for each
-//! is unrelated to the fix for the others. Guessing wrong here costs
-//! days.
-//!
-//! Setting the variable inserts a marker schedule after each of the main
-//! schedules and stamps the time since the frame began, then logs a
-//! five-second rolling average of each slice:
+//! Setting the variable inserts a marker schedule after each main schedule and
+//! logs a five-second rolling average of each slice, plus entity and UI node
+//! counts under `PERF_COUNT`:
 //!
 //! ```text
 //! PERF_PROBE (26 frames): First=0.1ms PreUpdate=17.9ms FixedMain=5.6ms
 //!                         Update=10.2ms SpawnScene=111.6ms PostUpdate=42.2ms Last=0.2ms
 //! ```
 //!
-//! The slices cover the main schedule only, so the shortfall against the
-//! frame time is the render sub-app.
-//!
-//! `SpawnScene` is why the split is worth having rather than reasoning
-//! about: it sits between `Update` and `PostUpdate`, it is where scene
-//! and world-asset instances are spawned, and a probe that omits it
-//! bills its cost to `PostUpdate` without saying so.
-//!
-//! `PERF_COUNT` rides along on the same timer with the entity and UI
-//! node counts, because a UI node count that climbs while nothing on
-//! screen changes is its own bug and is otherwise invisible.
-//!
-//! Off unless asked for: the marker schedules cost a dispatch each, and
-//! the counts are two full world scans.
+//! The slices cover the main schedule only, so the shortfall against the frame
+//! time is the render sub-app. Off unless asked for: the marker schedules cost
+//! a dispatch each and the counts are two full world scans.
 
 use core::time::Duration;
 use std::time::Instant;
@@ -80,11 +63,9 @@ pub fn requested() -> bool {
     )
 }
 
-/// Whether a [`ENV_PERF_PROBE`] value asks for the split.
-///
-/// A shell that exports the variable permanently still has to be able to
-/// launch an ordinary editor, so `0`, `false` and an empty value are
-/// off.
+/// Whether an `ENV_PERF_PROBE` value asks for the split. `0`, `false` and an
+/// empty value are off, so a permanently exported variable still launches an
+/// ordinary editor.
 fn enabled(raw: Option<&str>) -> bool {
     raw.is_some_and(|value| !matches!(value.trim(), "" | "0" | "false"))
 }
@@ -123,9 +104,8 @@ fn stamp<const I: usize>(mut probe: ResMut<Probe>) {
     probe.marks[I] = elapsed;
 }
 
-/// Entity and UI node counts, on the report's own timer.
-///
-/// Two full world scans, which is why they are not per frame.
+/// Entity and UI node counts, on the report's own timer rather than per frame:
+/// two full world scans.
 fn count_entities(nodes: Query<(), With<Node>>, all: Query<()>, mut last: Local<Option<Instant>>) {
     let now = Instant::now();
     if last.is_some_and(|previous| now.duration_since(previous) < REPORT_INTERVAL) {
@@ -171,10 +151,9 @@ pub(crate) fn plugin(app: &mut App) {
     }
     app.init_resource::<Probe>().add_systems(First, begin_frame);
 
-    // A marker schedule after each main schedule is the only placement
-    // that survives a multithreaded executor: a stamping system inside a
-    // schedule runs whenever the executor reaches it, which is not the
-    // schedule's boundary.
+    // A stamping system inside a schedule runs whenever the multithreaded
+    // executor reaches it, not at the schedule's boundary, so stamp from a
+    // marker schedule inserted after each one.
     let mut order = app.world_mut().resource_mut::<MainScheduleOrder>();
     order.insert_after(First, MarkFirst);
     order.insert_after(PreUpdate, MarkPreUpdate);
@@ -198,14 +177,11 @@ pub(crate) fn plugin(app: &mut App) {
 mod tests {
     use super::*;
 
-    /// An ordinary launch pays nothing: no marker schedules, no scans.
     #[test]
     fn an_unset_environment_is_off() {
         assert!(!enabled(None));
     }
 
-    /// A shell that exports the variable permanently can still launch a
-    /// normal editor.
     #[test]
     fn zero_false_and_empty_are_off() {
         assert!(!enabled(Some("0")));
@@ -213,16 +189,12 @@ mod tests {
         assert!(!enabled(Some("  ")));
     }
 
-    /// Anything else asks for the split; `=1` is what the docs say.
     #[test]
     fn anything_else_is_on() {
         assert!(enabled(Some("1")));
         assert!(enabled(Some("true")));
     }
 
-    /// `SpawnScene` keeps its own slice. Folding it into `PostUpdate` is
-    /// the one misattribution that sent this investigation down a blind
-    /// alley, so it is asserted rather than trusted.
     #[test]
     fn spawn_scene_keeps_its_own_slice() {
         assert_eq!(LABELS[4], "SpawnScene");

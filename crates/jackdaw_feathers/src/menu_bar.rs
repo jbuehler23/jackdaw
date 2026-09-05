@@ -12,11 +12,9 @@ use crate::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonVar
 use crate::icons::Icon;
 use crate::tokens;
 
-/// Action strings in menu entries that start with this prefix are
-/// interpreted as operator ids; the suffix is parsed by
-/// [`ButtonOperatorCall`]'s `TryFrom<&str>` impl into the call attached
-/// to the dropdown button so the editor dispatches through the operator
-/// API instead of firing a generic [`MenuAction`].
+/// Action strings in menu entries that start with this prefix are interpreted
+/// as operator ids; the suffix is parsed by [`ButtonOperatorCall`]'s
+/// `TryFrom<&str>` impl into the call attached to the dropdown button.
 pub const OP_ACTION_PREFIX: &str = "op:";
 
 /// Action strings in menu entries that start with this prefix render as a
@@ -26,10 +24,9 @@ pub const SECTION_ACTION_PREFIX: &str = "##";
 /// Action string for a horizontal divider row.
 pub const SEPARATOR_ACTION: &str = "---";
 
-/// Action strings in menu entries that start with this prefix open a
-/// submenu: the suffix is the group's label, and every row between it and
-/// its matching [`SUBMENU_END_ACTION`] belongs to the child dropdown that
-/// the row expands on hover. Groups nest.
+/// Action strings in menu entries that start with this prefix open a submenu:
+/// the suffix is the group's label, and every row up to its matching
+/// [`SUBMENU_END_ACTION`] belongs to the child dropdown. Groups nest.
 pub const SUBMENU_ACTION_PREFIX: &str = ">>";
 
 /// Action string closing the innermost [`SUBMENU_ACTION_PREFIX`] group.
@@ -43,10 +40,9 @@ pub const CHECKED_ACTION_PREFIX: &str = "[x]";
 /// row showing an empty box; the suffix is the action the row dispatches.
 pub const UNCHECKED_ACTION_PREFIX: &str = "[ ]";
 
-/// One dropdown row that shows `checked` beside `label` and dispatches
-/// `action` when clicked. `action` is anything a plain row takes, an
-/// [`OP_ACTION_PREFIX`] call included, so a row's state and its call are
-/// written in one place.
+/// One dropdown row that shows `checked` beside `label` and dispatches `action`
+/// when clicked. `action` is anything a plain row takes, an
+/// [`OP_ACTION_PREFIX`] call included.
 pub fn checked_row(
     checked: bool,
     action: impl Into<String>,
@@ -67,10 +63,9 @@ pub struct MenuCheckedRow {
     pub checked: bool,
 }
 
-/// One menu group as dropdown rows: an opener carrying `label`, the
-/// group's own `rows`, and the closer. Feathers renders the opener as a
-/// row with an arrow that expands `rows` in a child dropdown while the
-/// pointer rests on it.
+/// One menu group as dropdown rows: an opener carrying `label`, the group's own
+/// `rows`, and the closer. Feathers renders the opener as a row with an arrow
+/// that expands `rows` in a child dropdown on hover.
 pub fn submenu_row(
     label: &str,
     rows: impl IntoIterator<Item = (String, String)>,
@@ -101,18 +96,13 @@ pub fn plugin(app: &mut App) {
         );
 }
 
-/// A row that has been clicked takes the menu down with it, unless it
-/// only flips a box.
+/// A row that has been clicked takes the menu down with it, unless it only
+/// flips a box: a box is a setting, so the dropdown stays up and redraws with
+/// the new state through [`redraw_the_open_dropdown_on_new_rows`].
 ///
-/// Every ordinary row is a command: it does its thing and the menu is
-/// done. A box is a setting, and settings are read and changed in runs,
-/// so the dropdown stays up and redraws itself with the new state through
-/// [`redraw_the_open_dropdown_on_new_rows`].
-///
-/// This is where a menu closes from the inside. The press that started
-/// the click cannot close it -- the row activates on the release, a frame
-/// or more later, and a menu taken down by the press would take the row
-/// with it before it ever ran (see
+/// The press that started the click cannot close the menu -- the row activates
+/// on the release, and a menu taken down by the press would take the row with
+/// it before it ever ran (see
 /// [`jackdaw_widgets::menu_bar::MenuBarCloseSystems`]).
 fn close_the_menu_unless_the_row_was_a_box(
     event: On<ButtonClickEvent>,
@@ -159,10 +149,9 @@ fn redraw_the_open_dropdown_on_new_rows(
     );
 }
 
-/// When a dropdown item is clicked, fire the [`MenuAction`]; unless the
-/// item carries a [`ButtonOperatorCall`] component, in which case the editor's
-/// operator observer will handle dispatch and a `MenuAction` would
-/// double-fire.
+/// When a dropdown item is clicked, fire the [`MenuAction`]; unless the item
+/// carries a [`ButtonOperatorCall`], in which case the editor's operator
+/// observer handles dispatch and a `MenuAction` would double-fire.
 fn on_dropdown_item_click(
     event: On<ButtonClickEvent>,
     items: Query<(&MenuBarDropdownItem, Option<&ButtonOperatorCall>)>,
@@ -232,10 +221,9 @@ fn on_menu_bar_item_over(
     if open == entity {
         return;
     }
-    // Sweeping the pointer along one menu bar walks its menus. A menu
-    // button elsewhere in the editor is not on that walk: passing over it
-    // with a menu open would otherwise swap the open menu for the
-    // button's, from a pointer that was only on its way somewhere else.
+    // A menu button elsewhere in the editor is not on the menu bar's walk:
+    // passing over it with a menu open would swap the open menu for the
+    // button's.
     let bar = menu_bar_of(entity, &bars, &parents);
     if bar.is_none() || bar != menu_bar_of(open, &bars, &parents) {
         return;
@@ -314,10 +302,9 @@ fn window_height(windows: &Query<&Window>) -> f32 {
         .unwrap_or(FALLBACK_WINDOW_HEIGHT)
 }
 
-/// Open the dropdown of the menu-bar item whose label is `label`, taking
-/// the same path a click on it takes. A scripted run has no pointer, so a
-/// screenshot of an open menu is otherwise unreachable; nothing here
-/// touches document state, only the menu's own open/highlight state.
+/// Open the dropdown of the menu-bar item whose label is `label`, taking the
+/// same path a click on it takes. Nothing here touches document state, only the
+/// menu's own open and highlight state.
 ///
 /// Returns whether an item with that label was found.
 pub fn open_menu_named(
@@ -365,8 +352,8 @@ fn on_menu_bar_item_out(
     bg.0 = Color::NONE;
 }
 
-// Keep the top-level menu highlight tied to the open menu state. This covers
-// closures that happen outside pointer-out events, such as action dispatch or Escape.
+// Keep the top-level menu highlight tied to the open menu state, including
+// closures that raise no pointer-out event, such as dispatch or Escape.
 fn sync_menu_bar_item_backgrounds(
     state: Res<MenuBarState>,
     mut items: Query<(Entity, &mut BackgroundColor), With<MenuBarItem>>,
@@ -419,10 +406,9 @@ fn find_ancestor_matching<F: bevy::ecs::query::QueryFilter>(
     None
 }
 
-/// A dropdown row that expands a group of rows in a child dropdown while
-/// the pointer rests on it. Spawned for every [`SUBMENU_ACTION_PREFIX`]
-/// row; `actions` are the group's own rows, still encoded, so a child
-/// dropdown parses nested groups the same way its parent did.
+/// A dropdown row that expands a group of rows in a child dropdown while the
+/// pointer rests on it. `actions` are the group's own rows, still encoded, so a
+/// child dropdown parses nested groups the same way its parent did.
 #[derive(Component)]
 pub struct SubmenuRow {
     /// The group's label, as the row shows it.
@@ -438,18 +424,15 @@ pub struct SubmenuDropdown {
     pub row: Entity,
 }
 
-/// How long the pointer must rest on a [`SubmenuRow`] before its child
-/// dropdown opens. Long enough that crossing a group on the way to a
-/// lower row opens nothing, short enough that resting on one answers
-/// promptly: a few tens of milliseconds flashes dropdowns the pointer
-/// only swept across, and around 300ms reads as sluggish.
+/// How long the pointer must rest on a [`SubmenuRow`] before its child dropdown
+/// opens: long enough that crossing a group on the way to a lower row opens
+/// nothing, short enough that resting on one answers promptly.
 const SUBMENU_OPEN_DELAY: f32 = 0.18;
 
-/// How long an open submenu survives the pointer being on neither its row
-/// nor its own dropdown. The two do not touch along the whole edge, and
-/// the pointer crosses that gap diagonally on its way to the child rows.
-/// Closing on the first frame outside would leave the child reachable only
-/// by a right-angled path, so the menu is held open across that gap.
+/// How long an open submenu survives the pointer being on neither its row nor
+/// its own dropdown. The two do not touch along the whole edge, so closing on
+/// the first frame outside would leave the child reachable only by a
+/// right-angled path.
 const SUBMENU_CLOSE_GRACE: f32 = 0.25;
 
 /// Narrowest a dropdown gets, and the room a child dropdown needs on the
@@ -460,10 +443,8 @@ const DROPDOWN_MIN_WIDTH: f32 = 180.0;
 /// (headless runs).
 const FALLBACK_WINDOW_WIDTH: f32 = 1920.0;
 
-/// The open submenu chain, and the hover timers that grow and cut it.
-///
-/// Pointer traversal only; opening a group from the keyboard is not part
-/// of this.
+/// The open submenu chain, and the hover timers that grow and cut it. Pointer
+/// traversal only.
 #[derive(Resource, Default)]
 pub struct SubmenuState {
     /// Open child dropdowns, outermost first. Each one's dropdown owns the
@@ -542,10 +523,9 @@ fn on_menu_pointer_over(
     if row.is_none() && state.open.is_empty() && state.pending.is_none() {
         return;
     }
-    // Only a pointer back inside the menu calls off a scheduled close.
-    // The editor is pickable wall to wall, so clearing it before this
-    // guard would let any node the pointer crossed cancel the close and
-    // leave the child dropdown floating over the viewport.
+    // Only a pointer back inside the menu calls off a scheduled close. The
+    // editor is pickable wall to wall, so clearing it before this guard would
+    // let any node the pointer crossed cancel the close.
     let Some(dropdown) = find_ancestor_matching(target, &dropdowns, &parents) else {
         return;
     };
@@ -563,16 +543,14 @@ fn on_menu_pointer_over(
         }
         Some(row) => {
             // A different group: its siblings close first, so two child
-            // dropdowns are never up at once, and this one waits out the
-            // dwell.
+            // dropdowns are never up at once.
             truncate_submenus(&mut state, depth, &mut commands);
             state.pending = Some(PendingSubmenu { row, waited: 0.0 });
         }
         None => {
             // A row that opens nothing, or the menu's own background. The
-            // pointer crosses these on its way from a group to the child
-            // it opened, which is why this waits the grace out instead of
-            // closing where it stands.
+            // pointer crosses these on its way to the child it opened, so this
+            // waits the grace out instead of closing where it stands.
             state.pending = None;
             state.closing = Some(ClosingSubmenu {
                 keep: depth,
@@ -606,10 +584,9 @@ fn on_menu_pointer_out(
     if find_ancestor_matching(target, &dropdowns, &parents).is_none() {
         return;
     }
-    // The whole chain is scheduled, not the part below what the pointer
-    // left: a pointer that goes nowhere else, out of the window or onto
-    // the viewport, sends no further event to close the rest. An Over
-    // landing back in the menu shortens this to the depth it landed at.
+    // The whole chain is scheduled, not the part below what the pointer left: a
+    // pointer that goes nowhere else sends no further event to close the rest.
+    // An Over landing back in the menu shortens this to the depth it landed at.
     state.closing = Some(ClosingSubmenu {
         keep: 0,
         waited: 0.0,
@@ -713,10 +690,10 @@ fn open_submenu(
     true
 }
 
-/// Where a child dropdown opens: off the right edge of the dropdown that
-/// holds the row, its first row level with that row, flipping to the left
-/// of it when the window has no room on the right. A window too narrow for
-/// either side keeps the child on screen at the left edge.
+/// Where a child dropdown opens: off the right edge of the dropdown that holds
+/// the row, its first row level with that row, flipping to the left when the
+/// window has no room on the right. A window too narrow for either side keeps
+/// the child at the left edge.
 fn submenu_origin(row_top: f32, owner_left: f32, owner_right: f32, window_width: f32) -> Vec2 {
     let left = if owner_right + DROPDOWN_MIN_WIDTH > window_width {
         (owner_left - DROPDOWN_MIN_WIDTH).max(0.0)
@@ -726,10 +703,8 @@ fn submenu_origin(row_top: f32, owner_left: f32, owner_right: f32, window_width:
     Vec2::new(left, row_top)
 }
 
-/// Expand the submenu whose group label is `label`, as resting the
-/// pointer on its row does, but without the dwell: a scripted run has no
-/// pointer and no wall clock, so a screenshot of an expanded group is
-/// otherwise unreachable. Only menu state is touched.
+/// Expand the submenu whose group label is `label`, as resting the pointer on
+/// its row does, but without the dwell. Only menu state is touched.
 ///
 /// Returns whether a group with that label was open to expand.
 pub fn open_submenu_named(
@@ -762,12 +737,10 @@ fn window_width(windows: &Query<&Window>) -> f32 {
 #[derive(Component)]
 pub struct MenuBarRoot;
 
-/// Build the styled menu bar shell. Items are spawned by
-/// `populate_menu_bar` system.
+/// Build the styled menu bar shell. Items are spawned by `populate_menu_bar`.
 ///
-/// The shell sizes to its content width (menu items + padding) so it
-/// composes cleanly inside a horizontal flex row alongside siblings like
-/// a document tab strip or transport controls.
+/// The shell sizes to its content width so it composes inside a horizontal flex
+/// row alongside siblings such as a tab strip or transport controls.
 pub fn menu_bar_shell() -> impl Bundle {
     (
         MenuBarRoot,
@@ -776,9 +749,8 @@ pub fn menu_bar_shell() -> impl Bundle {
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
-            // Auto width so siblings (tab strips, transport pills) get
-            // their share of the row; `flex_shrink: 0` keeps our menu
-            // items from being squeezed if the window is narrow.
+            // Auto width so siblings get their share of the row;
+            // `flex_shrink: 0` keeps the menu items from being squeezed.
             width: Val::Auto,
             height: Val::Px(tokens::HEADER_CONTROL_HEIGHT),
             flex_shrink: 0.0,
@@ -788,19 +760,16 @@ pub fn menu_bar_shell() -> impl Bundle {
     )
 }
 
-/// Populate a menu bar entity with items. Call from the app layer after spawning the shell.
+/// Populate a menu bar entity with items. Call from the app layer after
+/// spawning the shell.
 ///
-/// Actions are `(action_id, label)` pairs. `action_id` can be an
-/// operator id wrapped in the [`OP_ACTION_PREFIX`] or any free-form
-/// identifier the host matches in a `MenuAction` observer. Action
-/// strings are owned so callers can pass `format!("op:{}", Op::ID)`
-/// without leaking operator-id string literals into UI code.
-/// An item already on the bar keeps its entity and takes the new rows in
-/// place; only a label that has come or gone is spawned or despawned.
-/// The open menu is named by entity, so respawning the bar under a menu
-/// that is up would leave [`MenuBarState::open_menu`] pointing at a dead
-/// item: the dropdown would stop redrawing, the bar would lose its
-/// highlight, and hovering the next item along would do nothing.
+/// Actions are `(action_id, label)` pairs. `action_id` can be an operator id
+/// wrapped in the [`OP_ACTION_PREFIX`] or any free-form identifier the host
+/// matches in a `MenuAction` observer.
+///
+/// An item already on the bar keeps its entity and takes the new rows in place,
+/// because the open menu is named by entity: respawning the bar under an open
+/// menu would leave [`MenuBarState::open_menu`] pointing at a dead item.
 pub fn populate_menu_bar(
     world: &mut World,
     menu_bar_entity: Entity,
@@ -843,17 +812,14 @@ pub fn populate_menu_bar(
     }
 }
 
-/// Take down the items a menu bar spawned, leaving every menu button
-/// that stands elsewhere in the editor where it is.
+/// Take down the items a menu bar spawned, leaving every menu button that
+/// stands elsewhere in the editor where it is.
 ///
-/// A [`menu_button`] carries the same [`MenuBarItem`] as a bar's own
-/// item, so "every item in the world" is the wrong set to clear: a bar
-/// rebuilt for a changed window registry would take a panel header's
-/// menu with it, and nothing would put that one back.
+/// A [`menu_button`] carries the same [`MenuBarItem`] as a bar's own item, so
+/// "every item in the world" is the wrong set to clear.
 ///
-/// For taking a bar down, not for changing what it offers: a bar whose
-/// menus changed goes through [`populate_menu_bar`], which keeps each
-/// item standing so an open menu stays open across the change.
+/// For taking a bar down, not for changing what it offers: use
+/// [`populate_menu_bar`] for that, which keeps an open menu open.
 pub fn clear_menu_bar_items(world: &mut World, bar: Entity) {
     let children: Vec<Entity> = world
         .get::<Children>(bar)
@@ -909,14 +875,12 @@ pub type MenuRowsFn = Arc<dyn Fn(&World) -> Vec<(String, String)> + Send + Sync>
 #[derive(Component, Clone)]
 pub struct DynamicMenuRows(pub MenuRowsFn);
 
-/// A menu that opens from a button of its own rather than from a menu
-/// bar: a ghost button carrying `icon` and `label`, whose rows `rows`
-/// builds from the world. Clicking it opens the same dropdown a menu-bar
-/// item opens, with the same hover submenus and the same outside-click
-/// close.
+/// A menu that opens from a button of its own rather than from a menu bar: a
+/// ghost button carrying `icon` and `label`, whose rows `rows` builds from the
+/// world.
 ///
-/// The button is a [`MenuBarItem`] with no [`MenuBar`] over it, which is
-/// what keeps hovering it from switching a menu bar's open menu.
+/// The button is a [`MenuBarItem`] with no [`MenuBar`] over it, which keeps
+/// hovering it from switching a menu bar's open menu.
 pub fn menu_button(label: impl Into<String>, icon: Icon, rows: MenuRowsFn) -> impl Bundle {
     let label = label.into();
     (
@@ -938,16 +902,12 @@ pub fn menu_button(label: impl Into<String>, icon: Icon, rows: MenuRowsFn) -> im
 #[derive(Component)]
 struct MenuRowsBuilt;
 
-/// Rebuild a [`DynamicMenuRows`] item's rows when they are about to be
-/// looked at, writing them only when they differ from what the item
-/// already holds so an unchanged menu leaves change detection alone.
+/// Rebuild a [`DynamicMenuRows`] item's rows when they are about to be looked
+/// at, writing them only when they differ from what the item already holds.
 ///
-/// Three occasions, and no others: the menu is open, so a row that
-/// flipped a box has to show it; the pointer is on the button, which is
-/// what precedes the click that opens it; or the rows have never been
-/// built. A closure reads a resource and walks the world, and a menu
-/// nobody is looking at is not worth that every frame of every frame the
-/// editor runs.
+/// Three occasions, and no others: the menu is open, the pointer is on the
+/// button, or the rows have never been built. A closure reads a resource and
+/// walks the world, which is not worth doing every frame.
 fn refresh_dynamic_menu_rows(
     world: &mut World,
     sources: &mut QueryState<(
@@ -1112,12 +1072,10 @@ fn spawn_dropdown(
         if let Some(checked) = checked {
             row.insert(MenuCheckedRow { checked });
         }
-        // Operator-bound menu entries dispatch through the editor's
-        // `ButtonOperatorCall` observer; the editor's tooltip renderer
-        // reads the call's id + params for the rich hover popover.
-        // Non-operator actions (legacy free-form action ids) dispatch
-        // via the `MenuAction` event and get no tooltip; these will go
-        // away once every menu entry is operator-backed.
+        // Operator-bound entries dispatch through the editor's
+        // `ButtonOperatorCall` observer, which is also what the tooltip renderer
+        // reads. Free-form action ids dispatch via `MenuAction` and get no
+        // tooltip.
         if let Ok(call) = ButtonOperatorCall::try_from(action) {
             row.insert(call);
         }
@@ -1242,9 +1200,8 @@ mod tests {
         Some(app.world().get::<Checked>(leading).is_some())
     }
 
-    /// A `---` row is the widget's own divider rather than a rule the
-    /// editor draws: the rule between two groups of entries is a menu
-    /// part, and the menu family ships one.
+    /// A `---` row is the widget's own divider rather than a rule the editor
+    /// draws.
     #[test]
     fn a_separator_row_is_the_widgets_menu_divider() {
         let (app, rows) = dropdown_app(vec![
@@ -1499,11 +1456,8 @@ mod tests {
         );
     }
 
-    /// The rows closure is not run for a menu nobody is looking at.
-    ///
-    /// It reads a resource and walks the world; a menu button sits in
-    /// the editor's chrome for the whole session, and every open panel
-    /// has one.
+    /// The rows closure is not run for a menu nobody is looking at: it reads a
+    /// resource and walks the world, and every open panel has a menu button.
     #[test]
     fn a_menu_nobody_is_looking_at_does_not_rebuild_its_rows() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1750,8 +1704,7 @@ mod tests {
     fn pointer_report(app: &mut App) -> (bevy::picking::pointer::Location, HitData) {
         let camera = app.world_mut().spawn_empty().id();
         // A real window, because pointer events propagate to the pointer's
-        // window and stop there: an entity that only stands in for one
-        // sends the traversal round again forever.
+        // window and stop there; a stand-in loops the traversal forever.
         let world = app.world_mut();
         let window = world
             .query_filtered::<Entity, With<Window>>()
@@ -1984,9 +1937,8 @@ mod tests {
             .expect("the plain entry beside the group")
     }
 
-    /// The child opens off the side of the menu, so the way to its rows
-    /// runs over the entries under the group. Crossing them is not
-    /// leaving.
+    /// The child opens off the side of the menu, so the way to its rows runs
+    /// over the entries under the group. Crossing them is not leaving.
     #[test]
     fn crossing_an_entry_on_the_way_to_the_child_is_not_leaving() {
         let (mut app, dropdown_entity, row) = hover_app(grouped_actions());

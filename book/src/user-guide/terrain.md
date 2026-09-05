@@ -79,29 +79,27 @@ density, spacing, scale, yaw, normal alignment, and an optional
 paint-channel mask. A seed produces the same placement for the
 same terrain and channel data.
 
-A stored placement is a position, a yaw and a scale, so it stands
-upright; normal alignment applies to a group that is still entities,
-and a run that stores its placements says so rather than tilting them.
-
 A run stores its placements on the terrain rather than spawning an
-entity per instance, so nothing reaches the outliner and the whole
-group is one line in the sidecar. Re-running the same group replaces
-what it placed before. The run is a single undoable edit.
+entity per instance, so nothing reaches the outliner and the group is
+one line in the sidecar. Re-running the same group replaces what it
+placed before, in a single undoable edit. A stored placement is a
+position, a yaw and a scale, so it stands upright; normal alignment
+applies only to a group that is still entities, and a run that stores
+its placements reports that it was skipped.
 
 The **Groups** list shows every group under the terrain with its
-placement count, and re-scatters or clears one. A group of models you
-placed by hand joins them with **Adopt selected group**, which stores
-each of its direct model children as a placement and removes the
-entities; one undo puts them back. To hand-edit a single placement, `terrain.scatter.promote` turns
-it back into an ordinary model entity and takes it out of the data.
+placement count, and re-scatters or clears one. **Adopt selected
+group** stores each direct model child of a hand-placed group as a
+placement and removes the entities; one undo puts them back.
+`terrain.scatter.promote` turns a single placement back into an
+ordinary model entity for hand editing.
 
 Stored placements draw as batched instances, one draw per model per
-region, and are culled a region at a time. Ground cover stops drawing
-past a distance so a meadow costs nothing on the far side of a valley.
-A navmesh bake stands an obstacle in for each placement whose palette
-entry blocks agents, so scatter needs no `NavmeshExclude` tagging. A
-placement whose model has not loaded gets a default footprint, and the
-bake summary says how many.
+region, culled a region at a time, and ground cover stops drawing past
+a distance. A navmesh bake stands an obstacle in for each placement
+whose palette entry blocks agents, so scatter needs no
+`NavmeshExclude` tagging; a placement whose model has not loaded gets a
+default footprint, counted in the bake summary.
 
 ## Sidecars and export
 

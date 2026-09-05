@@ -44,21 +44,17 @@ pub struct BsnSceneAssets(
     pub bevy::platform::collections::HashMap<String, bevy::asset::UntypedHandle>,
 );
 
-/// Type paths the open project's extracted schema reports and the editor has
-/// no ECS registration for. Project components live in the document and become
-/// real components only in the game binary, so apply skips a patch naming one
-/// without the "not in the registry" warning an unknown type earns.
+/// Type paths the open project's schema reports and the editor has no ECS
+/// registration for, so apply skips a patch naming one without the "not in the
+/// registry" warning.
 ///
-/// Absent in the game runtime, which registers the project's types and so
-/// treats an unregistered type as a fault. The set is only as fresh as the
-/// last extraction: a schema still listing a type the game has since deleted
-/// silences a document naming it, until a rebuild.
+/// Absent in the game runtime, which registers the project's types. The set is
+/// only as fresh as the last extraction.
 #[derive(Resource, Default)]
 pub struct DocumentOnlyTypes {
     types: HashSet<String>,
-    /// The enums among them. An authored variant spells a path the schema
-    /// never lists on its own (`Team::Red` against a reported `Team`), so only
-    /// these answer for a name one segment longer.
+    /// The enums among them, which alone answer for a name one segment longer
+    /// than a reported type (`Team::Red` against a reported `Team`).
     enums: HashSet<String>,
 }
 
@@ -81,16 +77,14 @@ impl DocumentOnlyTypes {
     }
 }
 
-/// Type paths the last apply resolved to nothing: absent from the registry and
-/// from [`DocumentOnlyTypes`] both. Loaders read this to report once that the
-/// project needs rebuilding. Absent in the game runtime, alongside
-/// [`DocumentOnlyTypes`].
+/// Type paths the last apply resolved to nothing, absent from the registry and
+/// from [`DocumentOnlyTypes`] both, which loaders read to report once that the
+/// project needs rebuilding.
 #[derive(Resource, Default)]
 pub struct UnresolvedTypes {
     types: std::collections::BTreeSet<String>,
-    /// What the last emitted remedy named. A scene reloads on every undo
-    /// restore and prefab watcher reload, so an unchanged remedy stays quiet
-    /// instead of repeating per reload.
+    /// What the last emitted remedy named, so an unchanged one stays quiet
+    /// across the reloads an undo restore causes.
     reported: std::collections::BTreeSet<String>,
 }
 
@@ -139,9 +133,8 @@ fn unresolved_remedy(types: &std::collections::BTreeSet<String>) -> String {
     )
 }
 
-/// Record `type_path` as unapplied and report whether it is document-only.
-/// `true` means the caller stays quiet: the type is a known project component
-/// and the document is where it belongs.
+/// Records `type_path` as unapplied and answers whether it is a known project
+/// component, in which case the caller stays quiet.
 fn note_unapplied(world: &mut World, type_path: &str) -> bool {
     if world
         .get_resource::<DocumentOnlyTypes>()
@@ -398,20 +391,14 @@ fn apply_type_patch(world: &mut World, entity: Entity, type_path: &str) {
 /// on one the enum cannot take.
 ///
 /// `PartialReflect::apply` panics on every mismatch a hand-edited document can
-/// write: a variant the type does not declare (an associated constant such as
-/// `Color::WHITE` reads exactly like a unit variant in a type path), or a
-/// variant named bare or half-filled when it carries fields. The editor's own
-/// writer always emits the full field set, so those spellings come from a
-/// person typing into the file.
+/// write, such as an associated constant like `Color::WHITE`, which reads
+/// exactly like a unit variant in a type path.
 ///
 /// Returns whether the variant was applied.
 fn apply_enum_variant(target: &mut dyn Enum, dynamic: &DynamicEnum, type_path: &str) -> bool {
     match target.try_apply(dynamic) {
         Ok(()) => true,
         Err(err) => {
-            // The error names the variant and, for an unknown one, what was
-            // looked for; the enum's own list of variants is what it cannot
-            // know to add.
             let variants = match target.get_represented_type_info() {
                 Some(bevy::reflect::TypeInfo::Enum(info)) => info.variant_names().join(", "),
                 _ => String::new(),
@@ -635,10 +622,9 @@ fn merge_bsn_value_into_reflect(
         }
         return;
     }
-    // Everything else is converted whole and written over the target,
-    // including a braced value on a field that is not a struct, which is an
-    // enum variant carrying fields. Merging field-by-field is not open to
-    // those: the target may be sitting on a different variant entirely.
+    // Everything else is converted whole and written over the target: a braced
+    // value on a non-struct field is an enum variant carrying fields, and the
+    // target may be sitting on a different variant entirely.
     let Some(type_info) = target.get_represented_type_info() else {
         log::warn!("cannot apply an authored value: the field has no type of its own");
         return;
@@ -654,13 +640,12 @@ fn merge_bsn_value_into_reflect(
 }
 
 /// Apply a tuple struct patch: merge over existing component (or default).
-/// Apply a tuple patch whose type path names an enum's tuple variant rather
-/// than a tuple struct, such as `EntityCursor::System(Pointer)`, which is how
-/// the writer spells a data variant.
+/// Applies a tuple patch whose type path names an enum's tuple variant rather
+/// than a tuple struct, such as `EntityCursor::System(Pointer)`.
 ///
 /// Answers whether the patch named such a variant, so the caller reports an
-/// unknown type only when it did not. A variant that is named but cannot be
-/// built still answers `true`: it is reported here and not again.
+/// unknown type only when it did not. One named but unbuildable still answers
+/// `true`, having been reported here.
 fn apply_tuple_variant_patch(
     world: &mut World,
     entity: Entity,
@@ -681,9 +666,6 @@ fn apply_tuple_variant_patch(
     let Some(variant) = enum_info.variant(variant_name) else {
         return false;
     };
-    // A variant of the wrong shape belongs to this arm even though it cannot
-    // be built here: the conversion below answers a kind mismatch with `None`,
-    // and nothing else would say which of the two spellings was wrong.
     if !matches!(variant, bevy::reflect::enums::VariantInfo::Tuple(_)) {
         log::warn!(
             "cannot apply '{}': '{variant_name}' is not a tuple variant of '{}', so it takes no \
@@ -703,15 +685,11 @@ fn apply_tuple_variant_patch(
     let value = BsnValue::TupleStruct(data.clone());
     let Some(built) = enum_variant_value_to_reflect(&value, enum_info, registration, reg, assets)
     else {
-        // The conversion names what it refused for every arm reachable from
-        // here: the variant's shape was checked above.
         return true;
     };
-    // The dynamic enum carries whatever the document's values converted to,
-    // and a conversion that could not read a value hands back one of the wrong
-    // type rather than nothing. `ReflectComponent::insert` would take that as
-    // far as `apply` and die on the mismatch, so the value is made concrete
-    // here first, the same guard the tuple-struct arm below uses.
+    // A conversion that could not read a value hands back one of the wrong type
+    // rather than nothing, which `ReflectComponent::insert` would carry as far
+    // as `apply` and die on, so the value is made concrete here first.
     let Some(from_reflect) = registration.data::<ReflectFromReflect>() else {
         log::warn!(
             "cannot apply '{}': no FromReflect registered",
@@ -744,10 +722,8 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
     let reg = registry.read();
 
     let Some(registration) = reg.get_with_type_path(&data.type_path) else {
-        // `Enum::Variant(value)` is not itself a registered type. The struct
-        // patch has the same fallback for a braced variant; without this one an
-        // authored `EntityCursor::System(Pointer)` reads as an unknown type and
-        // the component is dropped on load.
+        // `Enum::Variant(value)` is not itself a registered type, so without
+        // this fallback it reads as an unknown type and is dropped on load.
         if apply_tuple_variant_patch(world, entity, data, &reg, assets_ctx.as_ref()) {
             return;
         }
@@ -826,9 +802,7 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
                 }
                 dynamic.set_represented_type(Some(registration.type_info()));
                 // `ReflectComponent::insert` panics when the dynamic value
-                // cannot be made concrete, which a document is free to ask
-                // for: an opaque field with no conversion reaches here as a
-                // mismatched type, and a load must not die on that.
+                // cannot be made concrete, which a document is free to ask for.
                 let Some(from_reflect) = registration.data::<ReflectFromReflect>() else {
                     log::warn!(
                         "cannot apply '{}': no default and no FromReflect registered",
@@ -891,9 +865,8 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
 /// by position/key and never removes the rest, which would leave stale
 /// entries from the seeded default (or the previous value) behind.
 fn apply_authored_value(target: &mut dyn PartialReflect, value: &dyn PartialReflect) {
-    // What clearing is about to throw away, held until the write lands. A
-    // refused value costs the field nothing, so a cleared list or map is
-    // restored when the write is refused.
+    // Held until the write lands, so a refused value leaves a cleared list or
+    // map as it was.
     let clears = matches!(
         target.reflect_mut(),
         ReflectMut::List(_) | ReflectMut::Map(_)
@@ -907,9 +880,8 @@ fn apply_authored_value(target: &mut dyn PartialReflect, value: &dyn PartialRefl
     } else if let ReflectMut::Map(map) = target.reflect_mut() {
         map.drain();
     }
-    // Every field write funnels through here, and plain `apply` panics on a
-    // value the document shaped wrong. Refusing the write costs the field;
-    // panicking costs the document.
+    // Plain `apply` panics on a value the document shaped wrong: refusing the
+    // write costs the field, panicking costs the document.
     if let Err(err) = target.try_apply(value) {
         log::warn!("cannot apply a value to '{}': {err}", type_path_of(target));
         if let Some(prior) = prior
@@ -1037,9 +1009,8 @@ pub fn bsn_value_to_reflect(
     }
 }
 
-/// Say why a variant the document named could not be built, and refuse it. The
-/// message attributes the fault to the document rather than to the type, which
-/// is the other way round from reflection's own wording.
+/// Refuses a variant the document named and could not build, wording the
+/// message against the document rather than the type.
 fn refused_variant(
     enum_info: &bevy::reflect::enums::EnumInfo,
     variant: &str,
@@ -1103,9 +1074,6 @@ fn enum_variant_value_to_reflect(
                 };
                 dynamic_tuple.insert_boxed(reflected);
             }
-            // A variant is written whole or not at all: reflection reads a gap
-            // as "the variant has no such field", blaming the type for what
-            // the document left out.
             if dynamic_tuple.field_len() != tuple_var.field_len() {
                 return refused_variant(
                     enum_info,
@@ -1204,9 +1172,8 @@ fn int_to_reflect(i: i128, expected: TypeId) -> Option<Box<dyn PartialReflect>> 
         Some(Box::new(i as f32))
     } else if expected == TypeId::of::<f64>() {
         Some(Box::new(i as f64))
-    // `NonZero` refuses rather than wraps, unlike the casting arms above. A
-    // wrapped value would disagree with the reflect side, which refuses it;
-    // converting to nothing leaves the field as it was.
+    // `NonZero` refuses rather than wraps, unlike the casting arms above: a
+    // wrapped value would disagree with the reflect side, which refuses it.
     } else if expected == TypeId::of::<std::num::NonZeroI16>() {
         nonzero_to_reflect(i16::try_from(i).ok().and_then(std::num::NonZeroI16::new))
     } else if expected == TypeId::of::<std::num::NonZeroU16>() {
@@ -1334,9 +1301,8 @@ fn list_value_to_reflect(
 ) -> Option<Box<dyn PartialReflect>> {
     let registration = registry.get(expected)?;
 
-    // Tuples take the same `[a, b]` literal too. BSN has no tuple syntax of
-    // its own, so without this a `Vec<(String, T)>` field is authored as its
-    // `Debug` text and dropped on the way back in.
+    // BSN has no tuple syntax, so tuples take the same `[a, b]` literal;
+    // without this a `Vec<(String, T)>` round-trips as its `Debug` text.
     if let Ok(tuple_info) = registration.type_info().as_tuple() {
         let mut dynamic = bevy::reflect::tuple::DynamicTuple::default();
         for (index, item) in items.iter().enumerate() {
@@ -1362,21 +1328,15 @@ fn list_value_to_reflect(
     let list_info = registration.type_info().as_list().ok()?;
     let item_type_id = list_info.item_ty().id();
 
-    // Each element is made concrete here rather than left dynamic. Applying a
-    // dynamic list onto a real `Vec<T>` pushes through `T::from_reflect`, and
-    // bevy's `Vec` impl panics when that conversion fails, so an element the
-    // document spells wrong (a field missing from an enum variant, a value of
-    // the wrong shape) would take the editor down on load. Converting here
-    // turns that into a warning and one dropped element. An item type with no
+    // Bevy's `Vec` impl panics when `T::from_reflect` fails, so an element the
+    // document spells wrong would take the editor down on load; converting here
+    // makes that a warning and one dropped element. An item type with no
     // `FromReflect` registration keeps the dynamic value.
     let from_reflect = registry.get_type_data::<ReflectFromReflect>(item_type_id);
     let mut dynamic_list = DynamicList::default();
     let list_path = registration.type_info().type_path();
     let item_path = list_info.item_ty().path();
     for (index, item) in items.iter().enumerate() {
-        // Both drops are reported the same way: which list, which position,
-        // which element type. Dropping in silence leaves the user with a
-        // shorter list and nothing naming what went missing.
         let Some(reflected) = bsn_value_to_reflect(item, item_type_id, registry, assets) else {
             log::warn!(
                 "{list_path}[{index}]: the document's value is not a {item_path}; dropping it"
@@ -1949,8 +1909,8 @@ mod document_only_tests {
         assert!(world.resource::<UnresolvedTypes>().is_empty());
     }
 
-    /// A struct has no variants, so a name one segment longer than a reported
-    /// struct is a different type, not a shape of it.
+    /// A name one segment longer than a reported struct is a different type,
+    /// not a variant of it.
     #[test]
     fn a_name_below_a_reported_struct_is_not_a_variant_of_it() {
         let mut world = world_knowing(&["mygame::Health"], &[]);
@@ -1958,8 +1918,6 @@ mod document_only_tests {
         assert_eq!(unresolved(&world), ["mygame::Health::Bogus"]);
     }
 
-    /// The owner check does not extend to a module path: only a type the
-    /// schema reported silences the warning.
     #[test]
     fn an_unreported_type_in_a_reported_module_is_still_recorded() {
         let mut world = world_knowing(&[], &["mygame::Team"]);
@@ -1998,8 +1956,6 @@ mod document_only_tests {
         );
     }
 
-    /// A scene reloads on every undo restore and prefab reload, and the remedy
-    /// stays quiet across those reloads while it is unchanged.
     #[test]
     fn an_unchanged_remedy_is_not_repeated() {
         let mut types = UnresolvedTypes::default();
@@ -2069,8 +2025,8 @@ mod tests {
         (registry, type_path)
     }
 
-    /// Bevy stores grid lines as `NonZero`, and a value the type cannot hold
-    /// leaves the field alone rather than landing on a neighbouring number.
+    /// A value a `NonZero` cannot hold leaves the field alone rather than
+    /// landing on a neighbouring number.
     #[test]
     fn a_nonzero_field_takes_an_int_it_can_hold() {
         use std::num::{NonZeroI16, NonZeroU16};
@@ -2107,8 +2063,8 @@ mod tests {
         );
     }
 
-    /// A `NonZero` field reads back as a plain number rather than reaching the
-    /// `Debug` fallback, whose quoted string the reader above refuses.
+    /// A `NonZero` field reads back as a plain number rather than as the
+    /// quoted `Debug` fallback, which the reader refuses.
     #[test]
     fn a_nonzero_value_round_trips_through_the_document() {
         use std::num::NonZeroI16;
@@ -2120,7 +2076,6 @@ mod tests {
         let value = BsnValue::from_reflect(&line, &registry);
         assert_eq!(value, BsnValue::Int(-3), "it reads back as a plain number");
 
-        // All four widths, since all four are readable and writable.
         for (read, expected) in [
             (
                 BsnValue::from_reflect(&NonZeroU16::new(7).unwrap(), &registry),
@@ -2309,10 +2264,8 @@ mod tests {
         assert_eq!(applied.count, 3);
     }
 
-    /// A struct on the far side of a pair, so the shape under test is
-    /// `Vec<(String, BindPath)>`, how a binding maps an event's fields. A pair
-    /// of primitives would not show the second half surviving as a value
-    /// rather than as text.
+    /// A struct on the far side of the pair, so the second half is seen to
+    /// survive as a value rather than as text.
     #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
     #[reflect(Default)]
     struct Leg {
@@ -2352,9 +2305,8 @@ mod tests {
             )
         };
 
-        // The pair reaches the document as data, not as its `Debug` text. Both
-        // halves are checked: the `Debug` text contains the same words, and
-        // only the shape tells the two apart.
+        // The `Debug` text contains the same words, so only the shape tells a
+        // real pair from one.
         let BsnPatch::Struct(data) = &patch else {
             panic!("a struct component authors as a struct patch, got {patch:?}");
         };
@@ -2420,11 +2372,8 @@ mod field_navigation_matrix {
         Plain,
     }
 
-    /// A document can hold a list element that does not fit its type, from a
-    /// hand edit or a variant whose shape has changed. Applying a dynamic list
-    /// onto a real `Vec` pushes through `from_reflect`, and bevy's `Vec` impl
-    /// panics when that fails, so the element is dropped with a warning
-    /// instead.
+    /// A list element that does not fit its type is dropped with a warning
+    /// rather than panicking inside bevy's `Vec` impl.
     #[test]
     fn a_list_element_that_does_not_fit_is_dropped_not_panicked_on() {
         let mut registry = TypeRegistry::new();
@@ -2437,7 +2386,6 @@ mod field_navigation_matrix {
                 type_path: "TestChoice::Sized".into(),
                 fields: BsnStructFields(vec![BsnField {
                     name: "size".into(),
-                    // A size that is not a number: the variant cannot be built.
                     value: BsnValue::String("wide".into()),
                 }]),
             }),

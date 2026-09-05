@@ -1,20 +1,9 @@
 //! The `terrain.scatter` operator: PCG placement over paint channels.
 //!
-//! A run stamps ordinary editable entities, the same `GltfSource` +
-//! `WorldAssetRoot` + `Transform` shape a drag from the asset browser
-//! produces ([`crate::entity_ops::spawn_gltf`]), parented under one named
-//! group so the outliner shows a single collapsible node. Instances are not
-//! special-cased afterwards: move, scale, delete or add components to them.
-//!
-//! [`ScatterInstance`] is a reflected marker recording the generator, the
-//! seed, and the transform the generator produced. On re-run an instance
-//! whose live `Transform` equals its recorded one is replaced; one the user
-//! moved, rotated or scaled does not match and is preserved. Both halves
-//! are reflected data, so the rule survives a save/load round trip and
-//! needs no bookkeeping outside the scene.
-//!
-//! The random stream lives in [`jackdaw_terrain::scatter()`] and derives
-//! from `(seed, cell index)` only. Nothing in this file adds randomness.
+//! A run stamps ordinary editable entities under one named group. Each
+//! carries a `ScatterInstance` recording the generator, the seed and the
+//! transform produced; a re-run replaces instances whose live `Transform`
+//! still equals the recorded one and preserves the ones the user moved.
 
 use std::sync::{Arc, Mutex};
 
@@ -43,8 +32,7 @@ use super::ui_fields::{
 
 /// A run estimated to place more instances than this is refused rather
 /// than spawning that many entities, and that much undo history, in one
-/// click. A stray density from a pasted value or a unit mismatch would
-/// otherwise hang the editor.
+/// click.
 const MAX_SCATTER_INSTANCES: u32 = 100_000;
 use crate::commands::{CommandGroup, CommandHistory, DespawnEntity, EditorCommand, SpawnEntity};
 use crate::selection::Selection;
@@ -77,9 +65,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
 // --- Provenance ---
 
-/// Provenance is scene data, so it lives beside the other saved component
-/// types rather than in the editor: a group the editor cannot read back
-/// out of a reopened scene is a group the next run duplicates.
+/// Provenance is scene data: a group the editor cannot read back out of a
+/// reopened scene is one the next run duplicates.
 pub use jackdaw_scene_types::{ScatterGroup, ScatterInstance};
 
 // --- Panel state ---
@@ -89,8 +76,7 @@ pub use jackdaw_scene_types::{ScatterGroup, ScatterInstance};
 pub struct ScatterAsset {
     /// Project-relative or absolute path to a `.gltf` / `.glb`.
     pub path: String,
-    /// Whether this entry takes part in the next run. The list's per-row
-    /// checkbox and the grid's per-tile eye both carry this flag.
+    /// Whether this entry takes part in the next run.
     pub active: bool,
 }
 
@@ -106,9 +92,6 @@ impl ScatterAsset {
 
 /// Everything the Scatter panel edits, and the defaults every parameter
 /// of `terrain.scatter` falls back to when the caller omits it.
-///
-/// Holding the defaults in a resource lets the same operator be clicked
-/// with no arguments and scripted with all of them.
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct TerrainScatterState {
     pub seed: u64,
@@ -157,8 +140,7 @@ impl TerrainScatterState {
     }
 }
 
-/// What the last run did. Shown in the panel and logged, so a headless
-/// caller sees the same numbers a clicking user does.
+/// What the last run did, shown in the panel and logged.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
 pub struct TerrainScatterReport {
     /// Instances the run spawned.
@@ -167,8 +149,7 @@ pub struct TerrainScatterReport {
     pub kept: usize,
     /// Untouched instances the run replaced.
     pub replaced: usize,
-    /// Human-readable summary, including the reason for a run that did
-    /// nothing.
+    /// Human-readable summary, including the reason a run did nothing.
     pub message: String,
 }
 
@@ -191,9 +172,8 @@ pub(crate) enum ScatterField {
 
 /// Scatter instances across a terrain from its paint channels.
 ///
-/// `allows_undo = false` because the stamp pushes its own
-/// [`CommandGroup`] entry, and a framework scene diff would record the
-/// change twice.
+/// `allows_undo = false`: the stamp pushes its own `CommandGroup` entry, so
+/// a framework scene diff would record the change twice.
 #[operator(
     id = "terrain.scatter",
     label = "Scatter",
@@ -255,17 +235,9 @@ pub(crate) fn terrain_scatter_clear(
 
 /// Take a hand-authored group of models into the scatter loop.
 ///
-/// A group authored by a script or dragged together in the outliner sits
-/// beside the terrain in world space and carries no provenance, so a
-/// re-scatter would place a second copy of everything. This puts it under
-/// the terrain, converts its instances to terrain-local, and stamps the
-/// same provenance a run would have left, as one undo entry.
-///
-/// Only the group's direct children are taken, and only the ones carrying
-/// a `GltfSource`: a stored placement is one model at one pose, so a child
-/// that is itself a rig of parts has no single asset to become. A group
-/// whose models hang a level deeper reports that it holds none rather than
-/// adopting half of it.
+/// Reparents the group under the terrain, converts its instances to
+/// terrain-local and stamps the provenance a run would have left, as one
+/// undo entry. Only direct children carrying a `GltfSource` are taken.
 #[operator(
     id = "terrain.scatter.adopt",
     label = "Adopt Scatter Group",
@@ -296,11 +268,8 @@ pub(crate) fn terrain_scatter_adopt(
     OperatorResult::Finished
 }
 
-/// Turn one stored placement back into an editable entity.
-///
-/// The inverse of [`terrain_scatter_adopt`] for a single instance: the
-/// placement leaves the document and a model entity stands in its place,
-/// which the user can then move, rescale or replace like any other.
+/// Turn one stored placement back into an editable entity, the inverse of
+/// `terrain_scatter_adopt` for a single instance.
 #[operator(
     id = "terrain.scatter.promote",
     label = "Promote Placement",
@@ -436,9 +405,8 @@ pub(crate) fn terrain_scatter_asset_toggle(
 
 /// Include or exclude one mask palette value.
 ///
-/// Takes the palette row index, like `terrain.channel.value.select`, and
-/// resolves the value off the terrain, so the tile grid passes its own
-/// index while the stored accept set stays in palette values.
+/// Takes the palette row index and resolves the value off the terrain, so
+/// the stored accept set stays in palette values.
 #[operator(
     id = "terrain.scatter.value.toggle",
     label = "Toggle Mask Value",
@@ -507,9 +475,6 @@ pub(crate) fn terrain_scatter_toggle_align(
 
 /// Resolve the terrain a run targets: an explicit name first, the
 /// selection otherwise.
-///
-/// The name lookup makes the operator drivable with no mouse and no
-/// selection.
 pub(crate) fn resolve_terrain(world: &mut World, name: Option<&str>) -> Option<Entity> {
     if let Some(name) = name.filter(|n| !n.is_empty()) {
         let mut query = world.query::<(Entity, Option<&Name>, &jackdaw_scene_types::Terrain)>();
@@ -524,8 +489,7 @@ pub(crate) fn resolve_terrain(world: &mut World, name: Option<&str>) -> Option<E
         return Some(entity);
     }
     // A scene with exactly one terrain needs no disambiguation, and a
-    // headless caller cannot make a selection. With two or more the caller
-    // names one.
+    // headless caller cannot make a selection.
     let mut query = world.query_filtered::<Entity, With<jackdaw_scene_types::Terrain>>();
     let mut found = query.iter(world);
     let only = found.next()?;
@@ -564,8 +528,8 @@ fn is_rigid_with_uniform_scale(global: GlobalTransform) -> bool {
     if !uniform {
         return false;
     }
-    // `compute_transform` decomposes whatever it is given, so the round trip
-    // is what catches a shear: recomposing a sheared affine loses it.
+    // `compute_transform` decomposes whatever it is given, so the round
+    // trip is what catches a shear.
     let recomposed = global.compute_transform().compute_affine();
     recomposed.abs_diff_eq(global.affine(), 1e-3)
 }
@@ -573,10 +537,8 @@ fn is_rigid_with_uniform_scale(global: GlobalTransform) -> bool {
 /// An entity's world pose composed from the authored `Transform`s along
 /// its ancestor chain.
 ///
-/// [`GlobalTransform`] is written by a propagation pass, so it is a frame
-/// behind for anything spawned or reparented since the last one -- a scene
-/// that has just loaded, or a group a caller spawned in the same call.
-/// Composing the locals reads the pose the hierarchy currently states.
+/// `GlobalTransform` is a frame behind for anything spawned or reparented
+/// since the last propagation pass, so the locals are composed instead.
 fn composed_global(world: &World, entity: Entity) -> bevy::math::Affine3A {
     let mut affine = bevy::math::Affine3A::IDENTITY;
     let mut at = Some(entity);
@@ -597,16 +559,10 @@ fn composed_global(world: &World, entity: Entity) -> bevy::math::Affine3A {
 
 /// Reparent scatter groups that were saved beside their terrain onto it.
 ///
-/// A group belongs under the terrain it was scattered over, and its
-/// instances are stored in that terrain's local space. Scenes saved before
-/// that put the group beside the terrain, where [`find_group`] cannot see
-/// it: a re-scatter would miss it and place a second copy of every
-/// instance. Each child is converted to the terrain's space, so nothing
-/// moves on screen.
-///
-/// Only a group with exactly one terrain among its siblings is moved: with
-/// two, which terrain it was scattered over is not recoverable, and a
-/// group already under a terrain has nothing to do.
+/// Instances are stored in the terrain's local space, and a group the
+/// lookup cannot see is one a re-scatter duplicates. Each child is
+/// converted into the terrain's space, so nothing moves on screen. Only a
+/// group with exactly one terrain among its siblings is moved.
 pub(crate) fn migrate_legacy_scatter_groups(world: &mut World) {
     let mut group_query = world.query_filtered::<Entity, With<ScatterGroup>>();
     let groups: Vec<Entity> = group_query.iter(world).collect();
@@ -636,8 +592,7 @@ pub(crate) fn migrate_legacy_scatter_groups(world: &mut World) {
 }
 
 /// Move `group` under `terrain` at identity, holding every child's world
-/// pose. Runs the same commands the adopt operator does, without a history
-/// entry: a format migration is not an edit the user made.
+/// pose. No history entry: a format migration is not an edit the user made.
 fn reparent_group_onto_terrain(world: &mut World, group: Entity, terrain: Entity) {
     let to_terrain = composed_global(world, terrain).inverse() * composed_global(world, group);
     let children: Vec<Entity> = world
@@ -669,8 +624,7 @@ fn reparent_group_onto_terrain(world: &mut World, group: Entity, terrain: Entity
             new_transform: new,
         }));
         // The recorded pose is what a re-run compares a live transform
-        // against, so it moves into the terrain's space alongside it, and
-        // through the same command so the document learns about it.
+        // against, so it moves into the terrain's space alongside it.
         if let Some(mut instance) = world.get::<ScatterInstance>(child).cloned() {
             instance.generated = new;
             commands.push(Box::new(StampProvenance {
@@ -777,9 +731,7 @@ fn run_scatter(world: &mut World, params: &OperatorParameters) {
 
     // A mask or a weight channel only reduces the instance count, so
     // density times the full world area bounds what the kernel would
-    // produce and can be checked before running it. Without a cap, one
-    // click at a stray density queues an unbounded number of spawns onto
-    // the undo stack.
+    // produce and can be checked before running it.
     let ground = world
         .resource::<TerrainDataStore>()
         .grid_shape(&terrain)
@@ -815,9 +767,8 @@ fn run_scatter(world: &mut World, params: &OperatorParameters) {
     }
 
     // Read rather than `entry_for`: scattering writes no heights, so it
-    // does not retire the terrain's shared heightmap, which is the same
-    // heights it samples. It weighs a mask over the whole terrain at once,
-    // so the planes are gathered into the dense form it reads.
+    // does not retire the terrain's shared heightmap. It masks over the
+    // whole terrain at once, so the planes are gathered into dense form.
     let channels = {
         let mut store = world.resource_mut::<TerrainDataStore>();
         let Some(data) = store.read_for(&terrain) else {
@@ -856,9 +807,8 @@ fn run_scatter(world: &mut World, params: &OperatorParameters) {
         })
         .collect();
 
-    // A group that is still entities is replaced as entities: a scene
-    // authored before scatter became data keeps working until it is
-    // adopted, and a run that wrote both would draw everything twice.
+    // A group that is still entities is replaced as entities: a run that
+    // wrote both forms would draw everything twice.
     if find_group(world, terrain_entity, &key).is_some() {
         stamp(
             world,
@@ -874,8 +824,8 @@ fn run_scatter(world: &mut World, params: &OperatorParameters) {
     }
 
     // A stored placement is a yaw and a uniform scale, so a tilt has
-    // nowhere to live in it. Said out loud rather than dropped quietly,
-    // because the option is still there for the groups that are entities.
+    // nowhere to live in it. Said out loud, because the option still
+    // applies to the groups that are entities.
     if scatter_params.align_to_normal {
         jackdaw_api_internal::operator::warn_caller(
             world,
@@ -917,9 +867,8 @@ struct StampRequest {
 /// Existing group entity for `key` under `terrain`, if a previous run made
 /// one.
 ///
-/// Scoped to the terrain rather than matched globally: two terrains in one
-/// scene both default their stamp to `<name> Scatter`, and a global match
-/// would have the second run re-stamping the first terrain's group.
+/// Scoped to the terrain: two terrains in one scene default their stamp to
+/// the same key, and a global match would cross them.
 fn find_group(world: &mut World, terrain: Entity, key: &str) -> Option<Entity> {
     let mut query = world.query::<(Entity, &ScatterGroup, &ChildOf)>();
     query
@@ -932,7 +881,7 @@ fn find_group(world: &mut World, terrain: Entity, key: &str) -> Option<Entity> {
 /// into the ones a re-run may replace and the count it must preserve.
 ///
 /// The test is exact transform equality against the recorded `generated`
-/// transform; see [`ScatterInstance`]. A child parented under the group by
+/// transform; a child parented by hand carries no provenance and is kept.
 /// hand carries no provenance and is counted as kept, never removed.
 fn partition_existing(
     world: &mut World,
@@ -978,8 +927,7 @@ fn stamp(world: &mut World, request: StampRequest) {
     let mut cmds: Vec<Box<dyn EditorCommand>> = Vec::new();
 
     // The group entity's id is unknown until its spawn command runs, and
-    // redo re-runs it, so the instance commands read it out of a shared
-    // slot rather than capturing an id that would go stale.
+    // redo re-runs it, so the instance commands read it from a shared slot.
     let slot: Arc<Mutex<Option<Entity>>> = Arc::new(Mutex::new(existing_group));
     if existing_group.is_none() {
         let slot = slot.clone();
@@ -1186,10 +1134,8 @@ impl EditorCommand for RemovePlacement {
 
 /// Transform for one placement, in the terrain's local space.
 ///
-/// The kernel already works in that space and the group sits on the
-/// terrain with an identity transform, so a placement is stored as it
-/// comes out: moving the terrain moves its scatter with it, and a saved
-/// instance means the same thing wherever the terrain ends up.
+/// The group sits on the terrain at identity, so a placement is stored as
+/// the kernel produced it and moves with the terrain.
 fn instance_transform(placement: &jackdaw_terrain::Placement) -> Transform {
     let upright = Quat::from_rotation_arc(Vec3::Y, placement.normal);
     Transform {
@@ -1323,18 +1269,16 @@ fn clear_scatter(world: &mut World, terrain_name: Option<&str>, key: Option<&str
 
 /// Insert one reflected component, and take it away again on undo.
 ///
-/// [`crate::commands::AddComponent`] adds a component at its default,
-/// which for provenance would be an empty key: what is being recorded here
-/// is a value, so the command carries it.
+/// `AddComponent` adds a component at its default, which for provenance
+/// would be an empty key; this command carries the value.
 struct StampProvenance<T: Component + Clone + Reflect + TypePath> {
     entity: Entity,
     value: T,
     /// What the entity carried before, restored on undo.
     ///
     /// Adopting a group whose children already carry provenance under
-    /// another key overwrites it; removing the component on undo would
-    /// leave them looking hand-placed, and a re-run of the old key would
-    /// place a second copy beside each one.
+    /// another key overwrites it, and undo must not leave them looking
+    /// hand-placed.
     previous: Option<T>,
 }
 
@@ -1376,9 +1320,8 @@ impl<T: Component<Mutability = bevy::ecs::component::Mutable> + Clone + Reflect 
 
 /// Take a hand-authored group into the terrain's stored scatter.
 ///
-/// Every model child becomes a placement at the pose it already stood in,
-/// and the group itself goes. One undo entry restores both halves: the
-/// entities come back and the placements go away again.
+/// Every model child becomes a placement at the pose it already stood in
+/// and the group goes; one undo entry restores both halves.
 fn adopt_group(world: &mut World, entity: Entity, terrain_name: Option<&str>, key: Option<&str>) {
     let Some(terrain) = resolve_terrain(world, terrain_name) else {
         let available = terrain_names(world);
@@ -1405,9 +1348,8 @@ fn adopt_group(world: &mut World, entity: Entity, terrain_name: Option<&str>, ke
         );
         return;
     }
-    // A group a previous build stamped as entities keeps the key it was
-    // stamped with, so adopting it moves that key's instances into the
-    // data under the name the panel already shows.
+    // A group a previous build stamped as entities keeps that key, so
+    // adopting it moves those instances under the name the panel shows.
     let existing_key = world.get::<ScatterGroup>(entity).map(|g| g.key.clone());
     let key = match key.filter(|k| !k.is_empty()) {
         Some(key) => key.to_string(),
@@ -1433,13 +1375,12 @@ fn adopt_group(world: &mut World, entity: Entity, terrain_name: Option<&str>, ke
         return;
     }
 
-    // World poses are read before anything moves; the placements below are
-    // what reproduces them against a terrain the group is no longer under.
+    // World poses are read before anything moves; the placements below
+    // reproduce them against a terrain the group is no longer under.
     let terrain_global = GlobalTransform::from(composed_global(world, terrain));
-    // A local is a translation, a rotation and a scale, which cannot spell a
-    // shear or a non-uniform scale composed with a rotation. Under such a
-    // terrain the decomposition below is the nearest pose, not the same one,
-    // so the adoption does move things on screen and the caller is told.
+    // A local cannot spell a shear or a non-uniform scale composed with a
+    // rotation, so under such a terrain the decomposition below is the
+    // nearest pose, not the same one, and the caller is told.
     if !is_rigid_with_uniform_scale(terrain_global) {
         jackdaw_api_internal::operator::warn_caller(
             world,
@@ -1504,9 +1445,8 @@ fn adopt_group(world: &mut World, entity: Entity, terrain_name: Option<&str>, ke
 
 /// What the Scatter panel's appearance depends on.
 ///
-/// The inspector compares this rather than change-detecting the resource:
-/// the numeric fields are typed into, and rebuilding the section on every
-/// committed keystroke would take the focus away mid-edit.
+/// Compared rather than change-detected on the resource: rebuilding the
+/// section on every committed keystroke would take focus away mid-edit.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct ScatterSignature {
     assets: Vec<(String, bool)>,
@@ -1525,14 +1465,12 @@ pub(super) struct ScatterSignature {
 pub(super) struct ScatterGroupRow {
     /// Stamp identity, which is what the buttons pass back as `group=`.
     pub key: String,
-    /// The entity's own name, which a rename may have moved off the key.
-    /// The key itself for a group stored as data, which has no entity.
+    /// The entity's own name, or the key itself for a group stored as data.
     pub name: String,
-    /// Children carrying provenance, so the count is what a re-run
-    /// replaces rather than everything parented under the group.
+    /// Children carrying provenance, which is what a re-run replaces.
     pub instances: usize,
     /// Whether this group lives in the terrain's document rather than as
-    /// entities. A stored group has nothing the outliner could select.
+    /// entities.
     pub stored: bool,
 }
 
@@ -1552,8 +1490,7 @@ pub(super) struct ScatterTabRefs<'w, 's> {
 }
 
 impl ScatterTabRefs<'_, '_> {
-    /// The terrain's own name, which is how the scatter operators address
-    /// one in a scene holding more than one.
+    /// The terrain's own name, which the scatter operators address it by.
     fn terrain_name(&self, terrain: Entity) -> Option<String> {
         self.names.get(terrain).ok().map(|n| n.as_str().to_string())
     }
@@ -1665,9 +1602,6 @@ pub(super) fn groups_view(
 }
 
 /// The Scatter section of the terrain inspector.
-///
-/// Top to bottom: the asset palette, the mask, then the density and
-/// variation numerics.
 pub(super) fn spawn_scatter_ui(
     commands: &mut Commands,
     parent: Entity,
@@ -1704,8 +1638,6 @@ pub(super) fn spawn_scatter_ui(
     spawn_path_field(commands, parent, &state.asset_draft);
 
     // --- Mask ---
-    // The channel's own palette swatches, so these values read the same as
-    // the ones in the Paint Channels section.
     let empty: &[jackdaw_scene_types::TerrainChannel] = &[];
     let channels = terrain.map(|t| t.channels.as_slice()).unwrap_or(empty);
     if let Some(channel) = channels.get(state.mask_channel) {
@@ -1852,8 +1784,8 @@ pub(super) fn spawn_scatter_ui(
     spawn_groups_section(commands, parent, view);
 }
 
-/// The stamps already living under this terrain, each with the two things
-/// worth doing to one, plus the way a hand-authored group joins them.
+/// The stamps already living under this terrain, with the actions
+/// available on each.
 fn spawn_groups_section(commands: &mut Commands, parent: Entity, view: &ScatterGroupsView) {
     spawn_hint(commands, parent, "Groups under this terrain");
     if view.groups.is_empty() {
@@ -1973,9 +1905,8 @@ fn group_dispatch_settings() -> CallOperatorSettings {
     }
 }
 
-/// Dispatch settings for clicking a group's name, which changes what is
-/// selected and nothing in the document. An undo entry for it would put a
-/// step between the user and the edit they meant to take back.
+/// Dispatch settings for clicking a group's name: a selection change, not
+/// a document edit, so it takes no undo entry.
 fn selection_dispatch_settings() -> CallOperatorSettings {
     CallOperatorSettings {
         creates_history_entry: false,
@@ -2022,19 +1953,15 @@ fn spawn_path_field(commands: &mut Commands, parent: Entity, value: &str) {
     ));
 }
 
-/// Tags the Scatter section's "Random Yaw" checkbox so its commit handler
-/// can tell it apart from every other checkbox in the editor.
+/// Tags the Scatter section's "Random Yaw" checkbox.
 #[derive(Component)]
 struct RandomYawCheckbox;
 
-/// Tags the Scatter section's "Align to Normal" checkbox, same reasoning
-/// as [`RandomYawCheckbox`].
+/// Tags the Scatter section's "Align to Normal" checkbox.
 #[derive(Component)]
 struct AlignToNormalCheckbox;
 
-/// Commit handler for the Scatter section's asset-path text field. A
-/// separate observer from the numeric one, so the Scatter panel owns its
-/// bindings; each ignores fields it does not recognise.
+/// Commit handler for the Scatter section's asset-path text field.
 fn on_scatter_asset_draft_commit(
     event: On<TextEditCommitEvent>,
     bindings: Query<&ScatterField>,
@@ -2087,8 +2014,7 @@ fn apply_scatter_numeric_field(state: &mut TerrainScatterState, field: ScatterFi
 }
 
 /// Re-insert `SliderValue` on every scrub-drag numeric field whenever
-/// `TerrainScatterState` changes, closing the loop `on_scatter_value_change`
-/// opens so the fill and digits track a drag live rather than on release.
+/// `TerrainScatterState` changes, so the fill and digits track a drag live.
 fn sync_scatter_fields(
     state: Res<TerrainScatterState>,
     fields: Query<(Entity, &ScatterField)>,
@@ -2113,10 +2039,8 @@ fn sync_scatter_fields(
 }
 
 /// Commit handler for the Scatter section's two toggles.
-/// `FeathersCheckbox` does not self-manage `Checked` (see
-/// `ui_fields::spawn_checkbox`), so this reflects the new value onto the
-/// source entity before dispatching, the same two steps
-/// `options_bar.rs`'s `on_terrain_checkbox_value_change` takes.
+/// `FeathersCheckbox` does not self-manage `Checked`, so this reflects the
+/// new value onto the source entity before dispatching.
 fn on_scatter_checkbox_value_change(
     event: On<ValueChange<bool>>,
     yaw: Query<(), With<RandomYawCheckbox>>,

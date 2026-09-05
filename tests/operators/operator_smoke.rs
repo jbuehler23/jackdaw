@@ -1,14 +1,7 @@
-//! Smoke test: dispatch every registered operator with empty params
-//! and assert that:
-//!  - the dispatcher resolves the id (no `UnknownId`),
-//!  - the call doesn't panic,
-//!  - the result is one of the well-formed variants
-//!    (`Finished` / `Cancelled` / `Running`).
-//!
-//! This is the cheapest possible regression net for the operator surface.
-//! Behavioural correctness lives in `operator_modals.rs`,
-//! `operator_undo.rs`, and `operator_params.rs`; this file just ensures
-//! every id is reachable from a clean editor app.
+//! Smoke test: dispatch every registered operator with empty params and assert
+//! the dispatcher resolves the id, the call does not panic, and the result is
+//! `Finished`, `Cancelled` or `Running`. Behaviour lives in `operator_modals.rs`,
+//! `operator_undo.rs` and `operator_params.rs`.
 
 use crate::util;
 
@@ -19,15 +12,11 @@ use jackdaw::scene_ops::{SceneSaveAsOp, SceneSaveOp};
 use jackdaw::scenes::operators::SceneOpenOp;
 use jackdaw_api::prelude::*;
 
-/// One operator the smoke loop should not actually call, paired with
-/// a human-readable reason. The id is sourced from the typed
-/// `Operator::ID` constant so a rename of the underlying op breaks
-/// the build instead of silently leaving the entry stale.
+/// One operator the smoke loop should not call, with a reason. The id comes from
+/// the typed `Operator::ID`, so a rename breaks the build.
 struct SkipOp {
     id: &'static str,
-    /// Documentation only: surfaces *why* the entry exists so future
-    /// readers don't have to git-blame to find out. Not consumed by
-    /// the test logic.
+    /// Why the entry exists. Not consumed by the test logic.
     #[expect(dead_code, reason = "carried for inline documentation")]
     reason: &'static str,
 }
@@ -38,16 +27,9 @@ impl SkipOp {
     }
 }
 
-/// Operators that genuinely cannot run from a clean headless app
-/// without test fixtures we don't have here.
-///
-/// Native file/folder dialogs are spawned through `rfd::AsyncFileDialog`
-/// on a background task pool. The dialog is opened **immediately** when
-/// the operator's invoke system runs. The operator returns `Finished`
-/// synchronously, but the OS picker is already on screen and the task
-/// survives test shutdown, so without these skips a smoke run stacks
-/// one new file picker per dispatch (16 stuck folder dialogs after a
-/// single `cargo test` was the reproducer).
+/// Operators that cannot run from a clean headless app. Native file dialogs are
+/// opened immediately by the invoke system and survive test shutdown, so without
+/// these skips a smoke run stacks one stuck picker per dispatch.
 const SMOKE_SKIP_LIST: &[SkipOp] = &[
     SkipOp::new::<SceneOpenOp>("spawns native file-open dialog"),
     SkipOp::new::<SceneSaveAsOp>("spawns native file-save dialog"),
@@ -64,10 +46,8 @@ const SMOKE_SKIP_LIST: &[SkipOp] = &[
 fn smoke_dispatch_every_operator() {
     let mut app = util::editor_test_app();
 
-    // The prefab-save and document operators write files under the project
-    // root; without one they fall back to the process working directory (the
-    // repo). Point them at a temp dir so the smoke run exercises them without
-    // leaving artifacts behind.
+    // The prefab-save and document operators write files under the project root,
+    // falling back to the process working directory (the repo) without one.
     let project_dir = tempfile::tempdir().expect("tempdir");
     app.world_mut()
         .insert_resource(jackdaw::project::ProjectRoot::new(
@@ -76,9 +56,8 @@ fn smoke_dispatch_every_operator() {
         ));
 
     let ids = util::iter_operator_ids(&mut app);
-    // Floor catches "we forgot to register a whole module" regressions.
-    // The exact count grows over time as new operators land; bump this
-    // up if it ever feels stale, but keep it as a regression guard.
+    // Floor catches "a whole module went unregistered" regressions; bump it as
+    // new operators land.
     assert!(
         ids.len() >= 60,
         "expected at least 60 registered operators after editor_test_app() startup, got {}",
@@ -100,10 +79,8 @@ fn smoke_dispatch_every_operator() {
         if SMOKE_SKIP_LIST.iter().any(|skip| skip.id == id.as_ref()) {
             continue;
         }
-        // Cancel any modal that a prior iteration left running so the
-        // next dispatch isn't refused with `ModalAlreadyActive`. The
-        // built-in `modal.cancel` operator is a no-op when nothing is
-        // active.
+        // Cancel any modal a prior iteration left running, or the next dispatch
+        // is refused with `ModalAlreadyActive`.
         let _ = app.world_mut().operator("modal.cancel").call();
         match app.world_mut().operator(id.clone()).call() {
             Ok(OperatorResult::Finished | OperatorResult::Cancelled | OperatorResult::Running) => {}
@@ -115,7 +92,6 @@ fn smoke_dispatch_every_operator() {
             }
         }
     }
-    // Leave the world clean for any subsequent test sharing the binary.
     let _ = app.world_mut().operator("modal.cancel").call();
 
     assert!(

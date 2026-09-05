@@ -47,12 +47,9 @@ fn add_widget(app: &mut App, parent: Entity, definition: &str) -> Entity {
     entity
 }
 
-/// The glyph the outliner is actually drawing for `source`.
-///
-/// row -> `TreeRowContent` -> `TreeRowDot` -> the glyph text, the path the
-/// outliner writes the icon down. Asserting here rather than on the
-/// resolver is what says the row caught up, which is a separate thing from
-/// the rule being right.
+/// The glyph the outliner is actually drawing for `source`, down the path the
+/// outliner writes it: row -> `TreeRowContent` -> `TreeRowDot`. Asserting here
+/// rather than on the resolver is what says the row caught up.
 fn drawn(app: &App, source: Entity) -> String {
     use jackdaw_widgets::tree_view::{TreeNode, TreeRowContent, TreeRowDot};
     let world = app.world();
@@ -128,8 +125,8 @@ fn every_added_widget_shows_its_own_glyph() {
         );
     }
 
-    // Distinct kinds, distinct glyphs: a list of aliases would pass the
-    // per-kind assertions above and still tell the reader nothing.
+    // Distinct kinds, distinct glyphs: aliases would pass the per-kind
+    // assertions above and still tell the reader nothing.
     let mut glyphs: Vec<char> = expected.iter().map(|(_, icon)| icon.unicode()).collect();
     glyphs.sort_unstable();
     let before = glyphs.len();
@@ -312,9 +309,8 @@ fn a_scene_root_and_a_prefab_instance_win_over_what_they_are_made_of() {
     );
 }
 
-/// A model instance and a scene root each name themselves. Without a rule
-/// of their own both fell back to the plain-entity dot, which is what a
-/// scene of hundreds of models looked like: a column of identical dots.
+/// A model instance and a scene root each name themselves; without a rule of
+/// their own both fell back to the plain-entity dot.
 #[test]
 fn a_model_instance_and_a_scene_root_read_as_themselves() {
     let mut app = palette_app();
@@ -346,9 +342,8 @@ fn a_model_instance_and_a_scene_root_read_as_themselves() {
 }
 
 /// A row is built when `Name` lands, which for a loaded scene is before the
-/// component saying what the entity is. The glyph catches up, and so does
-/// the colour: a model whose row was drawn as a plain entity kept the grey
-/// dot long after its glyph had become a model's.
+/// component saying what the entity is. The glyph catches up, and so does the
+/// colour.
 #[test]
 fn a_model_row_catches_up_with_its_kind_in_glyph_and_colour() {
     use bevy::prelude::TextColor;
@@ -409,9 +404,8 @@ fn a_model_row_catches_up_with_its_kind_in_glyph_and_colour() {
     );
 }
 
-/// A widget's glyph reaches the row it is added to, not only the resolver:
-/// the row is spawned by one observer and the glyph written by another, and
-/// the two only agree if the second one runs.
+/// A widget's glyph reaches the row it is added to, not only the resolver: the
+/// row and the glyph are written by two observers.
 #[test]
 fn an_added_widget_draws_its_glyph_in_the_row() {
     let (mut app, root) = outliner_app();
@@ -431,10 +425,9 @@ fn an_added_widget_draws_its_glyph_in_the_row() {
     assert_eq!(drawn(&app, label), menu_icon(&app, "ui.label"));
 }
 
-/// A row is spawned when `Transform` lands, and the document applies a
-/// patch one component at a time, so a streamed or pasted terrain's kind
-/// arrives after its row. Without an observer for it the row keeps the
-/// fallback dot for the rest of the session.
+/// A row is spawned when `Transform` lands and the document applies a patch one
+/// component at a time, so a streamed or pasted terrain's kind arrives after its
+/// row.
 #[test]
 fn a_terrain_gets_its_glyph_when_the_kind_lands_after_the_row() {
     let (mut app, _root) = outliner_app();
@@ -464,10 +457,9 @@ fn a_terrain_gets_its_glyph_when_the_kind_lands_after_the_row() {
     );
 }
 
-/// Every `Node` is a container of some kind, so the rule saying so has to
-/// stand behind the rules that name kinds, including the ones an extension
-/// loaded after the outliner registers. It used to answer first, which made
-/// every such rule unreachable.
+/// Every `Node` is a container of some kind, so the rule saying so has to stand
+/// behind the rules that name kinds, including an extension's; answering first
+/// made every such rule unreachable.
 #[test]
 fn an_extension_rule_on_a_node_is_reachable_past_the_container_fallback() {
     let mut app = palette_app();

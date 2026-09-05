@@ -133,17 +133,12 @@ struct TooltipState {
 /// Two-stage: a glance gets the title, lingering
 /// expands to the full description + signature.
 ///
-/// Any pointer button held down (mouse-down through release, which covers
-/// the whole span of a drag-scrub gesture) tears down and blocks the
-/// tooltip, checked before the hover lookup, so no popover sits under the
-/// cursor over a control the user is operating. The rule lives here
-/// rather than at each `Tooltip` call site.
+/// Any pointer button held down tears down and blocks the tooltip, checked before
+/// the hover lookup, so no popover sits under the cursor over a control the user
+/// is operating.
 ///
-/// An open menu blocks it for the same reason. Every operator-backed
-/// dropdown row carries a `Tooltip`, and the popover is placed below the
-/// cursor: resting on a row long enough for one to appear covers the rows
-/// under it, so travelling on down the menu travels under a popover
-/// instead of over the rows.
+/// An open menu blocks it for the same reason: the popover is placed below the
+/// cursor, so a row's tooltip would cover the rows travelled to next.
 fn tick_tooltip(
     time: Res<Time>,
     targets: Query<(Entity, &Tooltip, &Hovered)>,

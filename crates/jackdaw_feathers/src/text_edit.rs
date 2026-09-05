@@ -119,10 +119,9 @@ struct TextEditDefaultValue(String);
 
 /// Select the value the field opens on, the moment that value arrives.
 ///
-/// Queued here rather than by whoever spawned the field, because the
-/// default value is written a frame later: a selection made before it
-/// arrives selects an empty buffer, and one made after it has to guess
-/// which frame that was.
+/// Queued here rather than by whoever spawned the field, because the default
+/// value is written a frame later: a selection made before it arrives selects an
+/// empty buffer.
 #[derive(Component)]
 struct TextEditSelectAllOnOpen;
 
@@ -242,11 +241,9 @@ impl TextEditProps {
         self.allow_empty = true;
         self
     }
-    /// Open with the default value selected, so typing replaces it.
-    ///
-    /// For a field that stands in for something already written: a rename
-    /// is nearly always a new name rather than a longer version of the old
-    /// one, and the old one is still there for an Escape or an arrow key.
+    /// Open with the default value selected, so typing replaces it. For a field
+    /// that stands in for something already written: a rename is nearly always a
+    /// new name, and the old one is still there for an Escape.
     pub fn select_all_on_open(mut self) -> Self {
         self.select_all_on_open = true;
         self
@@ -729,11 +726,9 @@ fn setup_text_edit_input(
     }
 }
 
-/// Put the field's two entities on the feathers text input.
-///
-/// The frame and the input each carry their own layout and text style,
-/// and both scenes write theirs over the entity, so the editor's are
-/// read off first and put back afterwards.
+/// Put the field's two entities on the feathers text input. The frame and the
+/// input each carry their own layout and text style, and both scenes write theirs
+/// over the entity, so the editor's are read off first and put back afterwards.
 fn apply_feathers_text_input(world: &mut World, frame: Entity, input: Entity) {
     let frame_node = world.get::<Node>(frame).cloned();
     let applied = match world.get_entity_mut(frame) {
@@ -1089,9 +1084,8 @@ pub fn format_numeric_value(value: f64, variant: TextEditVariant) -> String {
         // Round to integer; cast through `i64` so values that exceed
         // the `i32` range (e.g. `u32` bitmasks like
         // `CollisionLayers::filters` near `u32::MAX`) round-trip
-        // without saturation. The variant predates the wider
-        // `numeric_int()` builder; the name `NumericI32` now stands
-        // for "integer formatting", not the literal type.
+        // without saturation. The name `NumericI32` means integer
+        // formatting, not the literal type.
         TextEditVariant::NumericI32 => (value.round() as i64).to_string(),
         TextEditVariant::NumericF32 => {
             let rounded = (value * 100.0).round() / 100.0;
@@ -1166,10 +1160,9 @@ mod tests {
         );
     }
 
-    /// `u32::MAX` (`4294967295`) survives the round-trip through
-    /// `f64`. The previous implementation cast through `i32` and
-    /// saturated to `2147483647`, which corrupted the visible value
-    /// of any full-bitmask `CollisionLayers::filters`.
+    /// `u32::MAX` (`4294967295`) survives the round-trip through `f64`
+    /// instead of saturating at `2147483647`, which would corrupt the
+    /// visible value of a full-bitmask `CollisionLayers::filters`.
     #[test]
     fn integer_variant_preserves_full_u32_range() {
         let u32_max = u32::MAX as f64;
@@ -1178,7 +1171,7 @@ mod tests {
             "4294967295",
         );
 
-        // High-bit-set u32 (above i32::MAX) used to round-trip to a
+        // A high-bit-set u32 (above i32::MAX) must not round-trip to a
         // negative i32; check the most-significant bit alone.
         let high_bit = (1u32 << 31) as f64;
         assert_eq!(

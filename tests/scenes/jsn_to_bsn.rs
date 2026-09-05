@@ -12,9 +12,9 @@ use jackdaw::scene_io::{load_inline_assets, load_scene_from_jsn};
 use jackdaw_bsn::{apply_dirty_ast_patches, parse_bsn_text, spawn_from_ast};
 use jackdaw_scene_types::{CustomProperties, PropertyValue, SceneNodeId};
 
-/// Serializer processor for fixture building: emits `Handle<T>` fields as
-/// their asset path (or null for runtime handles) and `Entity` fields as
-/// null, the shape the legacy JSON scene writer produced.
+/// Serializer processor for fixture building: `Handle<T>` fields as their asset
+/// path (null for runtime handles) and `Entity` fields as null, the shape the
+/// legacy JSON scene writer produced.
 struct FixtureSerializerProcessor;
 
 impl bevy::reflect::serde::ReflectSerializerProcessor for FixtureSerializerProcessor {
@@ -49,10 +49,9 @@ impl bevy::reflect::serde::ReflectSerializerProcessor for FixtureSerializerProce
     }
 }
 
-/// Build a legacy `JsnScene` fixture from a world, the shape the editor's
-/// removed JSON writer used to produce: one entry per `Name`-bearing entity
-/// in spawn order, components reflect-serialized, `SceneNodeId` lifted to
-/// the structural `id` field.
+/// Build a legacy `JsnScene` fixture from a world, the shape the editor's removed
+/// JSON writer produced: one entry per `Name`-bearing entity in spawn order,
+/// components reflect-serialized, `SceneNodeId` lifted to the structural `id`.
 fn world_to_jsn_scene(world: &mut World) -> jackdaw_jsn::JsnScene {
     use bevy::ecs::reflect::ReflectComponent;
     use bevy::reflect::serde::TypedReflectSerializer;
@@ -126,9 +125,8 @@ fn world_to_jsn_scene(world: &mut World) -> jackdaw_jsn::JsnScene {
 }
 
 fn headless_app() -> App {
-    // Minimal plugin set: the converter needs the type registry, an asset
-    // server, and the jackdaw scene plugins. bevy_render is deliberately
-    // absent (its component sync hooks require a live render world).
+    // bevy_render is deliberately absent: its component sync hooks require a
+    // live render world.
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, AssetPlugin::default()));
     app.add_plugins(jackdaw_scene_types::SceneTypesPlugin {
@@ -164,7 +162,6 @@ fn find_by_node_id(world: &mut World, id: SceneNodeId) -> Option<Entity> {
 fn real_scene_with_legacy_type_paths_converts_semantically() {
     let text = include_str!("../fixtures/jsn_to_bsn/real_scene.jsn.bak");
 
-    // World A: the JSN load path (with canonicalized legacy type paths).
     let mut app_a = headless_app();
     let mut scene: jackdaw_jsn::JsnScene = serde_json::from_str(text).expect("fixture parses");
     jackdaw_jsn::format::canonicalize_scene(&mut scene);
@@ -177,7 +174,6 @@ fn real_scene_with_legacy_type_paths_converts_semantically() {
     );
     assert_eq!(spawned_a.len(), 2, "fixture has two entities");
 
-    // Convert (from raw text, exercising the parse + canonicalize boundary).
     let mut app_c = headless_app();
     let converted = convert_jsn_text(app_c.world_mut(), text).expect("conversion succeeds");
     assert_eq!(converted.report.entity_count, 2);
@@ -189,12 +185,10 @@ fn real_scene_with_legacy_type_paths_converts_semantically() {
         converted.scene_bsn
     );
 
-    // World B: the converted text through the BSN load path.
     let mut app_b = headless_app();
     let spawned_b = spawn_bsn(&mut app_b, &converted.scene_bsn);
     assert_eq!(spawned_b.len(), 2, "converted scene spawns both entities");
 
-    // The lit entity: light parameters and transform survive.
     let sun_a = find_by_name(app_a.world_mut(), "Sun").expect("light in world A");
     let sun_b = find_by_name(app_b.world_mut(), "Sun").expect("light in world B");
     let lum_a = app_a
@@ -223,8 +217,6 @@ fn real_scene_with_legacy_type_paths_converts_semantically() {
         .translation;
     assert!((t_a - t_b).length() < 1e-5, "translation {t_a} vs {t_b}");
 
-    // The brush entity: the Brush component (legacy type path) survives with
-    // its geometry intact.
     let brush_a = find_by_name(app_a.world_mut(), "Brush").expect("brush in world A");
     let brush_b = find_by_name(app_b.world_mut(), "Brush").expect("brush in world B");
     let faces_a = app_a
@@ -245,8 +237,6 @@ fn real_scene_with_legacy_type_paths_converts_semantically() {
 
 #[test]
 fn hierarchy_node_ids_and_custom_properties_round_trip() {
-    // Author a scene in ECS, serialize it to JSN (the editor's own writer),
-    // convert that, and compare the two loaded worlds.
     let mut app_a = headless_app();
 
     let parent_id = SceneNodeId::next();
@@ -285,7 +275,6 @@ fn hierarchy_node_ids_and_custom_properties_round_trip() {
     let mut app_b = headless_app();
     spawn_bsn(&mut app_b, &converted.scene_bsn);
 
-    // Match by stable node id; compare values.
     let parent_b = find_by_node_id(app_b.world_mut(), parent_id).expect("parent by node id");
     let child_b = find_by_node_id(app_b.world_mut(), child_id).expect("child by node id");
 
@@ -330,8 +319,7 @@ fn hierarchy_node_ids_and_custom_properties_round_trip() {
 
 #[test]
 fn legacy_v2_scene_converts() {
-    // Minimal v2 layout: structural name/transform fields instead of the v3
-    // components map.
+    // Minimal v2 layout: structural name/transform fields, no components map.
     let v2 = r#"{
         "jsn": {"format_version": [2, 0, 0], "editor_version": "0.4.0", "bevy_version": "0.18"},
         "metadata": {"name": "old"},
@@ -388,15 +376,9 @@ fn conversion_is_deterministic() {
 fn inline_material_reference_and_terrain_survive_conversion() {
     use jackdaw_scene_types::Terrain;
 
-    // Author a scene with a Terrain component, then hand it an inline
-    // material asset and a brush face that references it by name, the way the
-    // editor's save path stores catalog-less materials.
-    //
-    // The terrain here is deliberately a *legacy* one: heights inline on
-    // the component and no `data_path`, which is what every scene written
-    // before the binary sidecar looks like. Conversion has to carry those
-    // heights through untouched -- the editor drains them into the sidecar
-    // store on load, and it can only do that if they survived the trip.
+    // The terrain here is deliberately legacy: heights inline on the component
+    // and no `data_path`, which is what every scene written before the binary
+    // sidecar looks like. Conversion has to carry those heights through.
     let mut app_a = headless_app();
     let node_id = SceneNodeId::next();
     app_a.world_mut().spawn((
@@ -405,9 +387,8 @@ fn inline_material_reference_and_terrain_survive_conversion() {
         node_id,
         jackdaw_scene_types::Brush::cuboid(1.0, 1.0, 1.0),
         Terrain {
-            // A scene this old declares a rectangle rather than a cell size.
-            // The load path derives a cell size from that pair and empties it,
-            // so the pair is what has to survive the conversion.
+            // A scene this old declares a rectangle rather than a cell size, and
+            // the load path derives the cell size from that pair.
             cell_size: Terrain::default().cell_size,
             resolution: 3,
             size: Vec2::new(8.0, 8.0),
@@ -415,9 +396,8 @@ fn inline_material_reference_and_terrain_survive_conversion() {
             channels: Vec::new(),
             data_path: String::new(),
             heights: vec![0.0, 0.5, 1.0, 0.0, 0.25, 0.75, 0.1, 0.2, 0.3],
-            // A scene this old predates quantization and the navmesh agent, so
-            // it carries both defaults. Spelled out rather than `..default()`
-            // so the literal enumerates what a legacy scene holds.
+            // A scene this old predates quantization and the navmesh agent.
+            // Spelled out rather than `..default()` to enumerate what it holds.
             quantization: Default::default(),
             navmesh: Default::default(),
         },
@@ -425,7 +405,6 @@ fn inline_material_reference_and_terrain_survive_conversion() {
     ));
     let mut scene = world_to_jsn_scene(app_a.world_mut());
 
-    // Inline material asset entry, reflect-serialized like the editor writes.
     let material_json = {
         let registry = app_a
             .world()
@@ -445,7 +424,6 @@ fn inline_material_reference_and_terrain_survive_conversion() {
         std::collections::HashMap::from([("#RedMat".to_string(), material_json)]),
     );
 
-    // Point the first brush face's material at the inline asset by name.
     let entity = scene
         .scene
         .iter_mut()
@@ -464,8 +442,6 @@ fn inline_material_reference_and_terrain_survive_conversion() {
     let converted =
         convert_jsn_scene_to_bsn(app_c.world_mut(), &scene).expect("conversion succeeds");
 
-    // The scene text carries the reference name (not an empty string) on the
-    // face, and embeds the material definition as a named asset root.
     assert!(
         converted.scene_bsn.contains("\"#RedMat\""),
         "face material must emit its inline reference name:\n{}",
@@ -479,9 +455,6 @@ fn inline_material_reference_and_terrain_survive_conversion() {
     );
     assert_eq!(converted.report.asset_count, 1);
 
-    // Terrain round-trips semantically into the BSN-loaded world: the
-    // small descriptive fields, the (empty) sidecar path, and the legacy
-    // inline heights the editor migrates on next load.
     let mut app_b = headless_app();
     spawn_bsn(&mut app_b, &converted.scene_bsn);
     let ground = find_by_node_id(app_b.world_mut(), node_id).expect("ground by node id");
@@ -504,9 +477,8 @@ fn inline_material_reference_and_terrain_survive_conversion() {
     );
 }
 
-/// A terrain's quantization is a small reflected descriptor, so it has to
-/// survive the scene text the way `resolution` does. Without this the
-/// setting would look like it worked and silently reset on next load.
+/// A terrain's quantization is a small reflected descriptor, so it has to survive
+/// the scene text or the setting silently resets on the next load.
 #[test]
 fn terrain_quantization_survives_conversion() {
     use jackdaw_scene_types::{Terrain, TerrainQuantization};
@@ -559,7 +531,6 @@ fn convert_project_walks_scenes_prefabs_and_catalog() {
     std::fs::create_dir_all(root.join("assets/prefabs")).unwrap();
     std::fs::create_dir_all(root.join(".jsn")).unwrap();
 
-    // Two small scenes authored via the editor's own serializer.
     let mut app = headless_app();
     app.world_mut().spawn((
         Name::new("LevelRoot"),
@@ -572,7 +543,6 @@ fn convert_project_walks_scenes_prefabs_and_catalog() {
     std::fs::write(root.join("assets/scenes/level.jsn"), &scene_json).unwrap();
     std::fs::write(root.join("assets/prefabs/thing.jsn"), &scene_json).unwrap();
 
-    // A catalog with one project-wide material.
     let material_json = {
         let registry = app
             .world()
@@ -599,7 +569,6 @@ fn convert_project_walks_scenes_prefabs_and_catalog() {
     )
     .unwrap();
 
-    // Config and backups that must be left alone.
     std::fs::write(root.join(".jsn/project.jsn"), "{\"name\": \"t\"}").unwrap();
     std::fs::write(root.join("assets/old.jsn.bak"), "old backup").unwrap();
 
@@ -610,7 +579,6 @@ fn convert_project_walks_scenes_prefabs_and_catalog() {
     assert_eq!(report.scenes.len(), 2, "level + prefab converted");
     assert_eq!(report.catalogs.len(), 1);
 
-    // Converted outputs exist; sources renamed to .jsn.bak.
     assert!(root.join("assets/scenes/level.bsn").is_file());
     assert!(root.join("assets/scenes/level.jsn.bak").is_file());
     assert!(!root.join("assets/scenes/level.jsn").exists());
@@ -618,26 +586,22 @@ fn convert_project_walks_scenes_prefabs_and_catalog() {
     assert!(root.join(".jsn/catalog.bsn").is_file());
     assert!(root.join(".jsn/catalog.jsn.bak").is_file());
 
-    // Config untouched; pre-existing backup untouched.
     assert!(root.join(".jsn/project.jsn").is_file());
     assert_eq!(
         std::fs::read_to_string(root.join("assets/old.jsn.bak")).unwrap(),
         "old backup"
     );
 
-    // The converted catalog holds the material under its reference name.
     let catalog_bsn = std::fs::read_to_string(root.join(".jsn/catalog.bsn")).unwrap();
     assert!(catalog_bsn.contains("GreenMat"), "{catalog_bsn}");
     assert!(catalog_bsn.contains("StandardMaterial"), "{catalog_bsn}");
 
-    // The converted scene parses and spawns.
     let level_bsn = std::fs::read_to_string(root.join("assets/scenes/level.bsn")).unwrap();
     let mut app_b = headless_app();
     let spawned = spawn_bsn(&mut app_b, &level_bsn);
     assert_eq!(spawned.len(), 1);
     assert!(find_by_name(app_b.world_mut(), "LevelRoot").is_some());
 
-    // A second run finds nothing left to convert.
     let mut app_c = headless_app();
     let second = convert_project(app_c.world_mut(), root);
     assert_eq!(second.scenes.len(), 0);
@@ -649,7 +613,6 @@ fn convert_project_walks_scenes_prefabs_and_catalog() {
 fn editor_opens_and_saves_bsn_scenes() {
     use jackdaw::scene_io::{SceneFilePath, load_scene_from_file, save_scene};
 
-    // Author + convert a scene to .bsn on disk.
     let dir = tempfile::tempdir().expect("tempdir");
     let bsn_path = dir.path().join("level.bsn");
     {
@@ -675,7 +638,6 @@ fn editor_opens_and_saves_bsn_scenes() {
         app
     }
 
-    // Open the .bsn in the editor load path.
     let mut app = editor_app();
     load_scene_from_file(app.world_mut(), &bsn_path);
     let hero = find_by_name(app.world_mut(), "Hero").expect("hero loaded from .bsn");
@@ -693,8 +655,8 @@ fn editor_opens_and_saves_bsn_scenes() {
         Some(bsn_path.to_string_lossy().as_ref())
     );
 
-    // Save back to the same .bsn (async IO pool write; poll for it). The
-    // save path comes from the active tab.
+    // The save path comes from the active tab, and the write lands on the IO
+    // pool, so poll for it.
     {
         let mut scenes = jackdaw::scenes::Scenes::default();
         let mut tab = jackdaw::scenes::SceneTab::new_untitled(1);
@@ -728,7 +690,6 @@ fn editor_opens_and_saves_bsn_scenes() {
         "load then save round-trips"
     );
 
-    // Reload the saved file into a fresh editor world.
     let mut app2 = editor_app();
     load_scene_from_file(app2.world_mut(), &bsn_path);
     assert!(find_by_name(app2.world_mut(), "Hero").is_some());
@@ -756,7 +717,6 @@ fn catalog_round_trips_as_bsn() {
         app
     }
 
-    // Populate a catalog with a live material and save it.
     let mut app = project_app(dir.path());
     let handle = app
         .world_mut()
@@ -778,7 +738,6 @@ fn catalog_round_trips_as_bsn() {
     assert!(text.contains("#Steel"), "{text}");
     assert!(text.contains("metallic"), "{text}");
 
-    // A fresh app loads it back and exposes the @Name handle.
     let mut app2 = project_app(dir.path());
     load_catalog(app2.world_mut());
     let catalog = app2.world().resource::<AssetCatalog>();
@@ -799,7 +758,6 @@ fn prefab_cache_reads_bsn_prefabs_with_stale_extension_references() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("prefabs")).unwrap();
 
-    // A .bsn prefab baseline on disk.
     let mut app = headless_app();
     app.world_mut().spawn((
         Name::new("Crate"),
@@ -814,8 +772,7 @@ fn prefab_cache_reads_bsn_prefabs_with_stale_extension_references() {
         .scene_bsn;
     std::fs::write(dir.path().join("prefabs/crate.bsn"), &bsn).unwrap();
 
-    // A scene document whose IsA still references the pre-conversion .jsn
-    // path.
+    // A scene document whose IsA still references the pre-conversion .jsn path.
     let ast =
         parse_bsn_text("jackdaw::prefab::components::IsA { source: \"prefabs/crate.jsn\" }\n")
             .expect("scene document parses");
@@ -858,7 +815,6 @@ fn migration_prompt_detects_converts_and_respects_decline() {
     let scene = world_to_jsn_scene(app.world_mut());
     let scene_json = serde_json::to_string(&scene).unwrap();
     std::fs::write(dir.path().join("assets/scenes/level.jsn"), &scene_json).unwrap();
-    // Config must not count as a legacy scene file.
     std::fs::write(dir.path().join(".jsn/project.jsn"), "{}").unwrap();
 
     assert_eq!(count_legacy_files(dir.path()), 1);
@@ -870,7 +826,6 @@ fn migration_prompt_detects_converts_and_respects_decline() {
         jackdaw::project::ProjectConfig::default(),
     ));
 
-    // Decline: files stay, prompt state clears, detection still fires.
     editor
         .world_mut()
         .resource_mut::<PendingMigration>()
@@ -886,7 +841,6 @@ fn migration_prompt_detects_converts_and_respects_decline() {
     );
     assert_eq!(count_legacy_files(dir.path()), 1, "still prompts next open");
 
-    // Accept: project converts, backups kept, nothing left to prompt about.
     editor
         .world_mut()
         .resource_mut::<PendingMigration>()
@@ -924,7 +878,6 @@ fn migration_prompt_detects_and_converts_legacy_projects() {
         serde_json::to_string(&scene).unwrap(),
     )
     .unwrap();
-    // Backups and config never count as legacy files.
     std::fs::write(dir.path().join("assets/old.jsn.bak"), "x").unwrap();
     std::fs::create_dir_all(dir.path().join(".jsn")).unwrap();
     std::fs::write(dir.path().join(".jsn/project.jsn"), "{}").unwrap();
@@ -936,7 +889,6 @@ fn migration_prompt_detects_and_converts_legacy_projects() {
         jackdaw::project::ProjectConfig::default(),
     ));
 
-    // Declining leaves the project untouched and clears the pending state.
     app.world_mut()
         .resource_mut::<PendingMigration>()
         .file_count = Some(1);
@@ -949,7 +901,6 @@ fn migration_prompt_detects_and_converts_legacy_projects() {
             .is_none()
     );
 
-    // Accepting converts and backs up.
     app.world_mut()
         .resource_mut::<PendingMigration>()
         .file_count = Some(1);

@@ -493,10 +493,9 @@ fn spawn_project_selector(
 
     // Detect CWD project candidate
     let cwd = std::env::current_dir().unwrap_or_default();
-    // What actually marks a project now. The old markers predate
-    // `jackdaw.toml`: `assets/` in particular promoted any folder that
-    // happened to have one to the top of the launcher, where clicking it
-    // landed on the not-a-project card.
+    // What marks a project: a marker like `assets/` promotes any folder
+    // that happens to have one to the top of the launcher, where clicking
+    // it lands on the not-a-project card.
     let cwd_has_project = cwd.join("jackdaw.toml").is_file() || cwd.join("Cargo.toml").is_file();
 
     let slots = spawn_window_shell(
@@ -898,9 +897,8 @@ fn spawn_project_row(
                         ),
                         if_cwd_badge(is_cwd, font.clone()),
                         // A folder that has been moved or deleted is
-                        // still listed, and used to look perfectly
-                        // healthy until the click that failed. One stat
-                        // per row says so up front.
+                        // still listed, so one stat per row says so up
+                        // front rather than at the failing click.
                         missing_badge(&project_path, font.clone()),
                         // The engine a project targets decides whether
                         // this editor can build it at all, so it belongs
@@ -1117,8 +1115,8 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
         return;
     }
     // A folder that is gone (a stale recent entry) or that was never a
-    // cargo project used to open the editor rooted at it, with an
-    // untitled scene and no indication anything was wrong.
+    // cargo project gets an explanatory card instead of an editor rooted
+    // at it with an untitled scene.
     if !root.is_dir() {
         show_not_a_project_card(world, root, NotAProject::Missing);
         return;

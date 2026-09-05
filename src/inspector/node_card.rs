@@ -1,14 +1,5 @@
-//! The structured `Node` card.
-//!
-//! `Node`'s forty layout fields, grouped into sections: what kind of box it
-//! is, where it sits, how big it is, how it aligns its children, with the
-//! flex and grid details in collapsible sub-sections.
-//!
-//! No `Node` field falls through to the generic reflect renderer. Every one
-//! has its own control, described by the tables below: an enum field is one
-//! row in `NodeEnumField`, an optional number one row in `NodeOptionalField`,
-//! and each carries the closure that reads its live value, so the write path
-//! and the refresh path work off the same entry.
+//! The structured `Node` card: every layout field gets its own control,
+//! grouped into sections and described by the field tables below.
 
 use bevy::{
     ecs::system::SystemState,
@@ -31,10 +22,8 @@ use jackdaw_feathers::{
 
 use super::val_field::{spawn_ui_rect_field, spawn_val_field};
 
-/// The reflect path of the component this card stands in for. Also the
-/// card's `ComponentDisplayTypePath`, so a targeted body refresh finds it.
-/// Asked of the type rather than spelled out, so a bevy release that moves
-/// `Node` moves the card with it.
+/// The reflect path of the component this card stands in for, and the card's
+/// `ComponentDisplayTypePath`.
 pub fn node_type_path() -> &'static str {
     <Node as bevy::reflect::TypePath>::type_path()
 }
@@ -42,8 +31,7 @@ pub fn node_type_path() -> &'static str {
 /// Decimal places an optional-number row shows.
 const RATIO_PRECISION: i32 = 2;
 
-/// Marker on the card body, so a test (and a targeted refresh) can tell the
-/// structured card from the generic one.
+/// Marker telling the structured card body from the generic one.
 #[derive(Component)]
 pub struct NodeCardBody;
 
@@ -51,9 +39,7 @@ pub struct NodeCardBody;
 // Field tables
 // ---------------------------------------------------------------------------
 
-/// One enum-valued `Node` field: where it lives, what it can be, and how to
-/// read the live value. `current` returns an index into `variants`, which is
-/// both what a control shows and what a refresh compares against.
+/// One enum-valued `Node` field. `current` returns an index into `variants`.
 pub(crate) struct NodeEnumField {
     label: &'static str,
     path: &'static str,
@@ -62,14 +48,7 @@ pub(crate) struct NodeEnumField {
 }
 
 /// One `Option`-valued `Node` field. `integer` picks the JSON the commit
-/// writes, because the grid lines are `NonZero` integers and the aspect
-/// ratio is a float.
-///
-/// `range` means something different on each side of `integer`. For a grid
-/// line it is the `NonZero` width's own limit: the widget is hard-limited to
-/// it and the commit clamps into it, since a number outside it cannot become
-/// the value. For the aspect ratio it is a drag range only; a typed value may
-/// exceed it, and the commit's one rule is that a ratio be positive.
+/// writes, and makes `range` a hard limit rather than a drag range.
 pub(crate) struct NodeOptionalField {
     label: &'static str,
     path: &'static str,
@@ -80,9 +59,7 @@ pub(crate) struct NodeOptionalField {
 
 impl NodeOptionalField {
     /// The value this field would hold for `entered`, or `None` when the
-    /// answer is "absent": zero on a `NonZero` line, a ratio that is not a
-    /// positive number. The commit goes through here, so the document records
-    /// what the component will take.
+    /// answer is "absent".
     fn settle(&self, entered: f64) -> Option<f64> {
         if self.integer {
             let clamped = entered
@@ -345,9 +322,7 @@ const GRID_AUTO_FLOW: NodeEnumField = NodeEnumField {
 };
 
 /// How far a grid line may be dragged. Narrower than the `NonZeroI16` it is
-/// stored in: taffy converts grid lines into its own origin-zero space and
-/// panics near the extremes. Zero is the hole in the middle, which the row
-/// spells as "auto".
+/// stored in, because taffy panics near the extremes.
 const GRID_LINE_RANGE: core::ops::RangeInclusive<f64> = -1000.0..=1000.0;
 
 /// The same ceiling for a span, which starts at one track.
@@ -357,8 +332,6 @@ const ASPECT_RATIO: NodeOptionalField = NodeOptionalField {
     label: "aspect ratio",
     path: "aspect_ratio",
     integer: false,
-    // A drag range, not a limit on what can be typed: a ratio only has to be
-    // positive.
     range: 0.01..=1000.0,
     current: |node| node.aspect_ratio.map(f64::from),
 };
@@ -415,9 +388,8 @@ const GRID_COLUMN_END: NodeOptionalField = NodeOptionalField {
 // Card body
 // ---------------------------------------------------------------------------
 
-/// Fill the `Node` card body for `source`. World-exclusive and deferred by the
-/// caller, like the material cards: the layout is read off the live component
-/// rather than reflected field by field.
+/// Fill the `Node` card body for `source`, reading the layout off the live
+/// component. World-exclusive and deferred by the caller.
 pub(crate) fn fill_node_card_body(world: &mut World, source: Entity, body: Entity) {
     if world.get_entity(body).is_err() {
         return;
@@ -445,9 +417,8 @@ pub(crate) fn fill_node_card_body(world: &mut World, source: Entity, body: Entit
         .cloned()
         .unwrap_or_default();
 
-    // The grid track lists are handed to the generic reflect renderer, and
-    // that renderer reads entity names, so the card's one world-exclusive
-    // call needs a real `Query` beside its `Commands`.
+    // The generic reflect renderer the track lists go to reads entity names,
+    // so this needs a real `Query` beside its `Commands`.
     let mut state: SystemState<(Commands, Query<&Name>)> = SystemState::new(world);
     if let Ok((mut commands, entity_names)) = state.get_mut(world) {
         commands.entity(body).insert(NodeCardBody);
@@ -505,13 +476,8 @@ fn build_node_card(
     type_registry: &AppTypeRegistry,
     editor_font: &Handle<Font>,
 ) {
-    // The presets first: putting a node in a named place is one press, and
-    // the fields below say what that press wrote.
     crate::ui_layout_presets::spawn_preset_row(commands, body, icon_font);
 
-    // Display, position, overflow, then the lengths. The two choices that
-    // change what every field below them means are segmented controls, so the
-    // current answer reads without opening a menu.
     spawn_segments(commands, body, source, node, &DISPLAY);
     spawn_segments(commands, body, source, node, &POSITION_TYPE);
 
@@ -752,8 +718,6 @@ fn build_node_card(
     ] {
         spawn_optional_number(commands, grid, source, node, field);
     }
-    // Track lists go to the generic reflect renderer, which gives a row per
-    // track with each sizing function editable in place.
     for (label, path) in [
         ("template rows", "grid_template_rows"),
         ("template columns", "grid_template_columns"),
@@ -788,9 +752,8 @@ fn build_node_card(
 type RemoteProxies<'w, 's> =
     Query<'w, 's, (), With<crate::remote::entity_browser::RemoteEntityProxy>>;
 
-/// True when an edit must be dropped before it moves anything: the row has
-/// lost its binding, or it points at a remote proxy, which is a view of
-/// another process's world rather than a document this editor owns.
+/// True when an edit must be dropped: the row lost its binding, or it points
+/// at a read-only remote proxy.
 fn card_edit_skipped(target: Option<Entity>, remote_proxies: &RemoteProxies) -> bool {
     target.is_none_or(|entity| remote_proxies.contains(entity))
 }
@@ -811,12 +774,6 @@ pub struct NodeEnumCombo {
 }
 
 /// A `Node` enum field rendered as a segmented control.
-///
-/// Not [`jackdaw_feathers::tab_strip`]: that widget spaces its tabs apart
-/// rather than joining them in one bordered box, does not wrap, and
-/// dispatches a named operator with a string parameter. A segment here
-/// commits through the undo-backed write path below, carrying a
-/// `&'static NodeEnumField` no operator parameter can name.
 fn spawn_segments(
     commands: &mut Commands,
     parent: Entity,
@@ -828,9 +785,6 @@ fn spawn_segments(
     let bar = commands
         .spawn((
             Node {
-                // Four variants side by side are wider than the control slot
-                // at the default panel width, so the bar wraps what does not
-                // fit onto a second line rather than clipping it.
                 flex_wrap: FlexWrap::Wrap,
                 flex_shrink: 1.0,
                 min_width: px(0.0),
@@ -890,9 +844,8 @@ fn spawn_enum_combo(
         ));
 }
 
-/// Write path shared by both enum controls: the same undo-backed variant
-/// commit the generic enum menu uses, so a segment and a dropdown mint the
-/// same history entry and honour PIE Live the same way.
+/// Write path shared by both enum controls, minting the same undo-backed
+/// commit the generic enum menu does.
 fn commit_variant(
     commands: &mut Commands,
     source: Entity,
@@ -900,8 +853,6 @@ fn commit_variant(
     index: usize,
 ) {
     let Some(variant) = field.variants.get(index).copied() else {
-        // The control and the variant table disagreed, so the pick goes
-        // nowhere.
         warn!(
             "a variant pick on '{}' was dropped: no variant {index} of {}",
             field.path,
@@ -950,9 +901,7 @@ pub(crate) fn on_node_enum_change(
     commit_variant(&mut commands, combo.source, combo.field, event.selected);
 }
 
-/// Keep the segmented controls showing what the component holds. Undo, a
-/// second inspector, or the running game all move the value behind the
-/// card's back.
+/// Keep the segmented controls showing what the component holds.
 pub fn paint_node_segments(
     nodes: Query<&Node>,
     mut segments: Query<(Entity, &NodeSegment, &mut BackgroundColor, Has<Checked>)>,
@@ -973,9 +922,8 @@ pub fn paint_node_segments(
     }
 }
 
-/// Same job for the dropdowns. The widget repaints its own label from
-/// `ComboBoxSelectedIndex`, so putting the live index there is the whole
-/// refresh.
+/// Same job for the dropdowns, which repaint themselves from
+/// `ComboBoxSelectedIndex`.
 pub fn refresh_node_enum_combos(
     nodes: Query<&Node>,
     combos: Query<(Entity, &NodeEnumCombo, &ComboBoxSelectedIndex)>,
@@ -996,9 +944,8 @@ pub fn refresh_node_enum_combos(
 // Optional-number control
 // ---------------------------------------------------------------------------
 
-/// The state of one optional-number row, on the row root. Held here rather
-/// than read back off the widgets because "absent" and "zero" are different
-/// answers and only one of them is a number.
+/// The state of one optional-number row, held on the row root because
+/// "absent" and "zero" are different answers.
 #[derive(Component)]
 pub struct NodeOptionalNumber {
     source: Entity,
@@ -1017,11 +964,10 @@ pub struct NodeOptionalMode(Entity);
 /// The dropdown's two options, in index order.
 const OPTIONAL_MODES: [&str; 2] = ["auto", "set"];
 
-/// Room the auto|set dropdown asks for: what the unit dropdown on the
-/// length rows above it takes, so the two line up down the panel.
+/// Room the auto|set dropdown asks for, matching the length rows' unit
+/// dropdown so the two line up down the panel.
 const OPTIONAL_MODE_WIDTH: f32 = 70.0;
-/// How far it gives way in a narrow panel: "auto" plus the chevron still
-/// reads here, one glyph does not.
+/// Narrowest it gets before "auto" and its chevron stop reading.
 const OPTIONAL_MODE_MIN_WIDTH: f32 = 34.0;
 
 fn spawn_optional_number(
@@ -1039,8 +985,6 @@ fn spawn_optional_number(
             field,
             value,
         },
-        // The row is one property with two controls, so it takes one property
-        // marker, the way a `Vec3` row's three axes do.
         super::InspectorFieldRow {
             source_entity: source,
             type_path: node_type_path().to_string(),
@@ -1061,8 +1005,6 @@ fn spawn_optional_number(
         .insert((
             NodeOptionalMode(row.row),
             ComboBoxSelectedIndex(mode_index),
-            // Wide enough for "auto" and its chevron, and shrinkable: a fixed
-            // width would push the number beside it off the row.
             Node {
                 width: px(OPTIONAL_MODE_WIDTH),
                 min_width: px(OPTIONAL_MODE_MIN_WIDTH),
@@ -1080,9 +1022,7 @@ fn spawn_optional_number(
             ChildOf(row.control),
         ))
         .id();
-    // A grid line's range is a hard wall: a number past it is not a value the
-    // component would take. A ratio's range only bounds dragging, so it stays
-    // soft and a typed number can leave it.
+    // A grid line's range is a hard wall; a ratio's only bounds dragging.
     let low = *field.range.start();
     let high = *field.range.end();
     if field.integer {
@@ -1096,13 +1036,8 @@ fn spawn_optional_number(
 }
 
 /// Author the row's current answer. An `Option` is written as the bare value
-/// or `null`: reflect deserializes options through serde's own option path,
-/// not as a named variant. [`NodeOptionalField::settle`] decides what counts
-/// as absent, so a zeroed grid line and a degenerate ratio both land as
-/// "auto".
-///
-/// A drag tick previews on live ECS and a settled value mints one undo-backed
-/// document write, so a whole gesture is one entry in history.
+/// or `null`, since reflect deserializes options through serde's own option
+/// path; a drag tick previews and a settled value mints one undo entry.
 fn commit_optional_number(world: &mut World, root: Entity, is_final: bool) {
     let Some(state) = world.get::<NodeOptionalNumber>(root) else {
         return;
@@ -1172,8 +1107,7 @@ fn sync_optional_widgets(world: &mut World, root: Entity) {
     }
 }
 
-/// Write path for the number half. The input emits every drag tick with
-/// `is_final == false` and once on release, so only the release mints undo.
+/// Write path for the number half; only the final tick mints undo.
 pub(crate) fn on_optional_number_change(
     event: On<ValueChange<f64>>,
     inputs: Query<&NodeOptionalInput>,
@@ -1228,16 +1162,14 @@ pub(crate) fn on_optional_number_mode_change(
         if state.value.is_some() == set {
             return;
         }
-        // Leaving "auto" starts at 1 rather than 0: zero is a ratio nothing
-        // can have and a grid line that does not exist.
+        // Leaving "auto" starts at 1: zero is neither a ratio nor a line.
         state.value = if set { Some(1.0) } else { None };
         sync_optional_widgets(world, root);
         commit_optional_number(world, root, true);
     });
 }
 
-/// Pull the optional rows back in line with the live component, the same job
-/// `refresh_val_fields` does for the length rows.
+/// Pull the optional rows back in line with the live component.
 pub fn refresh_node_optional_numbers(world: &mut World) {
     let stale: Vec<(Entity, Option<f64>)> = world
         .query::<(Entity, &NodeOptionalNumber)>()
@@ -1260,8 +1192,7 @@ pub fn refresh_node_optional_numbers(world: &mut World) {
 mod tests {
     use super::*;
 
-    /// Every field of `Node` the card renders a control for. A field added
-    /// upstream is missing from this list until the card covers it.
+    /// Every field of `Node` the card renders a control for.
     const COVERED_FIELDS: &[&str] = &[
         "display",
         "box_sizing",
@@ -1327,12 +1258,9 @@ mod tests {
         );
     }
 
-    /// What the row authors for a number the user entered. The clamp keeps
-    /// the document and the component holding the same value.
+    /// What the row authors for a number the user entered.
     #[test]
     fn a_settled_value_is_one_the_field_can_hold() {
-        // A grid line clamps into range rather than wrapping through it: the
-        // reflect side refuses an out-of-range int.
         assert_eq!(GRID_ROW_SPAN.settle(90_000.0), Some(1000.0));
         assert_eq!(GRID_ROW_SPAN.settle(0.0), Some(1.0), "a span starts at one");
         assert_eq!(GRID_ROW_START.settle(-90_000.0), Some(-1000.0));
@@ -1343,8 +1271,6 @@ mod tests {
             "zero is the hole a NonZero line cannot hold; the row says auto",
         );
 
-        // A ratio only has to be positive, so a typed value past the drag
-        // range still commits.
         assert_eq!(ASPECT_RATIO.settle(1.5), Some(1.5));
         assert_eq!(ASPECT_RATIO.settle(4000.0), Some(4000.0));
         assert_eq!(ASPECT_RATIO.settle(0.0), None);
@@ -1353,8 +1279,6 @@ mod tests {
 
     #[test]
     fn the_enum_tables_index_the_variants_they_name() {
-        // A `current` closure that returns an index the variant list does
-        // not have would leave a control blank and commit the wrong name.
         let node = Node::default();
         for field in [
             &DISPLAY,

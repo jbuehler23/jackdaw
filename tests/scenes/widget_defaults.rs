@@ -1,10 +1,6 @@
-//! The `Default` of a list-shaped widget is a persisted contract.
-//!
-//! A component equal to its default emits as a bare type path, so every
-//! document that ever saved one of these at rest carries the type path and
-//! nothing else. What that path means on the way back in is the `Default`
-//! impl, which makes changing one a silent reinterpretation of scenes already
-//! on disk. This is the golden the change would have to break first.
+//! The `Default` of a list-shaped widget is a persisted contract: a component
+//! equal to its default emits as a bare type path, so changing the impl silently
+//! reinterprets every document already on disk. This is the golden it breaks.
 
 use crate::util;
 

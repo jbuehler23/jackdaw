@@ -63,15 +63,12 @@ pub fn save_active_keymap_preset(preset: &ActiveKeymapPreset) {
 }
 
 /// The user's own bindings, layered over the shipped defaults by
-/// [`super::resolve_keymap`]. Only operators the user has actually
-/// rebound appear here: an operator with no row keeps every default
-/// row it was registered with, which is what makes a "reset" a
-/// deletion rather than a copy of the defaults.
+/// [`super::resolve_keymap`]. Only rebound operators appear here, which is what
+/// makes a reset a deletion rather than a copy of the defaults.
 ///
-/// Persisted as JSON at [`jackdaw_env::paths::keymap_path`]. The file
-/// is written only from the settings dialog's own diff, never from an
-/// applied keymap, so an entry naming an operator that is not loaded
-/// right now survives the sessions that cannot resolve it.
+/// Persisted as JSON at [`jackdaw_env::paths::keymap_path`], written only from
+/// the settings dialog's own diff, so a row naming an operator this session
+/// cannot resolve still survives.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserKeymap {
     #[serde(default)]
@@ -80,10 +77,8 @@ pub struct UserKeymap {
 
 /// What was wrong with the keymap file on disk, if anything.
 ///
-/// Loading falls back to an empty keymap so a bad file costs the user
-/// their overrides and not the editor's input. That is quiet enough to
-/// look like the overrides were never saved, so what happened is recorded
-/// here for the dialog to say out loud.
+/// Loading falls back to an empty keymap, which is quiet enough to look like
+/// nothing was ever saved, so the dialog says it out loud from here.
 #[derive(Resource, Clone, Debug, PartialEq, Eq, Default)]
 pub struct KeymapLoadProblem {
     /// Empty when the file loaded, or was not there.
@@ -96,13 +91,11 @@ impl KeymapLoadProblem {
     }
 }
 
-/// Where a keymap that would not parse is put, beside the file it came
-/// from, so the overrides in it can still be read and rescued by hand.
+/// Where a keymap that would not parse is put, beside the file it came from, so
+/// it can still be rescued by hand.
 ///
-/// `keymap.json.invalid` when nothing is there, and `.invalid.2`,
-/// `.invalid.3` and so on when something is: a second corruption must not
-/// destroy the rescue of the first, which is the one thing this whole path
-/// exists to prevent.
+/// `keymap.json.invalid`, then `.invalid.2` and on, so a second corruption does
+/// not destroy the rescue of the first.
 fn rescue_path(path: &std::path::Path) -> std::path::PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(".invalid");
@@ -121,15 +114,12 @@ fn rescue_path(path: &std::path::Path) -> std::path::PathBuf {
     first
 }
 
-/// Move the unreadable file at `path` out of the way, so the next Save
-/// writes a new file rather than over the one nobody has read yet.
+/// Moves the unreadable file at `path` out of the way, so the next save writes
+/// a new file rather than over one nobody has read.
 ///
-/// A rename is the whole of it when it works. When it does not -- a
-/// read-only directory, or a rescue path on another filesystem -- the bytes
-/// are copied and the original taken away instead. If even that fails the
-/// original is left exactly as it was and the failure is reported, because a
-/// half-moved file is worse than an unmoved one; [`save_user_keymap`] then
-/// refuses to write over it.
+/// A rename, falling back to a copy and an unlink across filesystems. If even
+/// that fails the original is left exactly as it was, and
+/// [`save_user_keymap`] then refuses to write over it.
 ///
 /// Returns where the file was kept, or why it could not be kept.
 fn rescue_unreadable(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
@@ -142,13 +132,10 @@ fn rescue_unreadable(path: &std::path::Path) -> Result<std::path::PathBuf, Strin
 
 /// The rename's fallback: copy the bytes to `kept` and take `path` away.
 ///
-/// Removing rather than emptying, because an empty file is not nothing. The
-/// next launch reads it, and an emptied keymap that still counted as content
-/// would fail to parse, be rescued a second time into `.invalid.2`, and go on
-/// climbing until the counter ran out and the rescue of the first corruption
-/// was overwritten -- destroying the one file this whole path exists to keep.
-/// Emptying is only the last resort, for a directory that allows a write but
-/// not an unlink.
+/// Removing rather than emptying, since an emptied file would be rescued again
+/// every launch and climb the `.invalid.N` counter until the first rescue was
+/// overwritten. Emptying is the last resort, for a directory that allows a
+/// write but not an unlink.
 fn copy_aside(
     path: &std::path::Path,
     kept: &std::path::Path,
@@ -184,13 +171,8 @@ fn rescue_message(path: &std::path::Path, kept: Result<std::path::PathBuf, Strin
     }
 }
 
-/// Read the user keymap from disk. An absent file is an empty keymap;
-/// an unreadable or corrupt one warns and is treated as empty.
-///
-/// Either way the file is moved aside first. The next Save writes the
-/// whole file, so leaving one that nobody could read in place would
-/// silently destroy whatever was in it -- and a file that cannot be read
-/// at all is no safer than one that will not parse.
+/// Reads the user keymap from disk. An absent file is an empty keymap; an
+/// unreadable or corrupt one warns, is moved aside, and is treated as empty.
 pub fn load_user_keymap() -> UserKeymap {
     load_user_keymap_reporting().0
 }
@@ -217,9 +199,8 @@ pub fn load_user_keymap_reporting() -> (UserKeymap, KeymapLoadProblem) {
             );
         }
     };
-    // An empty file is a keymap with nothing in it, not a corrupt one. It is
-    // what a rescue that could only empty the original leaves behind, and
-    // reading it as a parse failure would rescue it again every launch.
+    // An empty file is a keymap with nothing in it, not a corrupt one; reading
+    // it as a parse failure would rescue it again every launch.
     if data.trim().is_empty() {
         return (UserKeymap::default(), none);
     }
@@ -241,17 +222,12 @@ pub fn load_user_keymap_reporting() -> (UserKeymap, KeymapLoadProblem) {
     }
 }
 
-/// Write the user keymap to disk.
+/// Writes the user keymap to disk.
 ///
-/// Refuses while a file nobody could read is still sitting there: loading
-/// moves such a file aside, so one that is still in place is one the
-/// rescue could not move, and writing the whole file over it is exactly
-/// the loss the rescue exists to prevent.
-///
-/// `Ok` once the file holds the keymap, and otherwise why it does not, in a
-/// sentence the caller can put in front of the user: a refusal here means the
-/// rebinds live only until the process ends, which nobody finds out about by
-/// reading the log.
+/// Refuses while a file nobody could read is still sitting there, since the
+/// rescue could not move it and a whole-file write would destroy it. The error
+/// is a sentence the caller can put in front of the user: a refusal means the
+/// rebinds live only until the process ends.
 #[must_use = "a refused save leaves the rebinds unwritten, and the user has to be told"]
 pub fn save_user_keymap(keymap: &UserKeymap) -> Result<(), String> {
     let Some(path) = jackdaw_env::paths::keymap_path() else {
@@ -286,12 +262,10 @@ fn fail(reason: impl Into<String>) -> String {
     reason
 }
 
-/// Whether what is at `path` is a file this build could not read and the
-/// rescue could not move.
+/// Whether what is at `path` is a file this build could not read and the rescue
+/// could not move.
 fn unrescued(path: &std::path::Path) -> bool {
     match std::fs::read_to_string(path) {
-        // Empty is what loading calls an empty keymap, so it is not a file
-        // with anything in it to lose.
         Ok(data) => !data.trim().is_empty() && serde_json::from_str::<UserKeymap>(&data).is_err(),
         // An absent file is nothing to lose; an unreadable one is.
         Err(_) => path.is_file(),
@@ -312,10 +286,8 @@ mod tests {
         dir
     }
 
-    /// The fallback a failed rename takes. Emptying the original instead of
-    /// taking it away leaves a file the next launch reads, fails to parse and
-    /// rescues again, climbing `.invalid.2`, `.3` and on until the counter
-    /// runs out and the first rescue is written over.
+    /// The fallback a failed rename takes: emptying the original instead of
+    /// removing it would have it rescued again every launch.
     #[test]
     fn the_copy_fallback_leaves_nothing_behind_to_be_rescued_again() {
         let dir = temp_dir("fallback");
@@ -339,9 +311,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A file with nothing in it is a keymap with no overrides. Reading it as
-    /// a parse failure is what turns one emptied file into a rescue every
-    /// launch.
+    /// A file with nothing in it is a keymap with no overrides, not a corrupt
+    /// one.
     #[test]
     fn an_empty_file_is_not_a_file_worth_rescuing() {
         let dir = temp_dir("empty");

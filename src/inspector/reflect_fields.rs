@@ -617,9 +617,8 @@ pub(crate) fn spawn_field_row(
         return;
     }
 
-    // Length composites. Both sit ahead of the enum arm and the struct
-    // recursion so a `Node`'s lengths stay one row each rather than a
-    // variant menu (`Val`) or four of them (`UiRect`).
+    // Ahead of the enum arm so a `Node`'s lengths stay one row each rather
+    // than a variant menu.
     if let Some(&val) = value.try_downcast_ref::<Val>() {
         super::val_field::spawn_val_field(
             commands,
@@ -1848,10 +1847,8 @@ fn apply_color_with_undo(
     );
 }
 
-/// The same number field in the shared label-left row shape, for a card that
-/// lays its properties out as a column of rows rather than as the generic
-/// renderer's label-above-control stack. The row keeps the property marker,
-/// so it carries its dots and its diamond.
+/// The same number field in the shared label-left row shape, for cards that lay
+/// their properties out as rows rather than label-above-control stacks.
 pub(super) fn spawn_numeric_field_row(
     commands: &mut Commands,
     parent: Entity,
@@ -1936,13 +1933,10 @@ pub(super) fn spawn_numeric_field(
     );
 }
 
-/// The number input itself, under whatever container the caller's row shape
-/// gives it.
+/// The number input itself, under whatever container the caller gives it.
 ///
-/// The `FieldBinding` sits on the widget root, so the `ValueChange` observers
-/// read it from `event.source`. The widget emits `ValueChange<T>` but never
-/// self-updates `ScrubNumberInputValue`, so the observers re-insert it and the
-/// refresh path syncs it from ECS.
+/// The `FieldBinding` sits on the widget root so the `ValueChange` observers
+/// read it from `event.source`.
 fn spawn_numeric_input(
     commands: &mut Commands,
     parent: Entity,
@@ -1961,11 +1955,8 @@ fn spawn_numeric_input(
         },
         ChildOf(parent),
     ));
-    // Integer source types (u32, i64, ...) funnel into the `I64` variant and
-    // float types into `F64`. Without this split a `u32` bitmask like
-    // `CollisionLayers::filters` would round through `f32` on commit. The
-    // emitted `ValueChange<T>` type follows the same variant: `I64` emits
-    // `ValueChange<i64>` and `F64` emits `ValueChange<f64>`.
+    // Without the integer/float split a `u32` bitmask like
+    // `CollisionLayers::filters` would round through `f32` on commit.
     if is_integer {
         field.insert((
             ScrubNumberInputValue::I64(value as i64),
@@ -2291,8 +2282,7 @@ fn spawn_list_item_value(
         );
         return;
     }
-    // Anything else goes through the generic renderer, whose depth guard
-    // stops the walk.
+    // The generic renderer's depth guard stops the walk.
     spawn_field_row(
         commands,
         parent,
@@ -2870,8 +2860,7 @@ pub(crate) fn refresh_inspector_fields(
     // Apply bool updates by inserting or removing `Checked`; the checkbox
     // renders off `Checked`. Undo/redo and external edits land here.
     for (entity, value) in bool_updates {
-        // A panel rebuild between collecting the update and applying
-        // it can have taken the row; `entity_mut` panics on that.
+        // A panel rebuild can have taken the row; `entity_mut` panics on that.
         let Ok(mut ent) = world.get_entity_mut(entity) else {
             continue;
         };
@@ -3472,11 +3461,6 @@ enum ListEdit {
 }
 
 /// The list a control edits, which element it stands for, and what it does.
-///
-/// A list field showed its elements and let each one be typed into, but there
-/// was no way to make one or take one away. For a `Vec<String>` that is the
-/// whole of a widget's authored content -- a dropdown's options, a tab strip's
-/// labels -- so the widget could be looked at and not authored.
 #[derive(Component)]
 pub(crate) struct ReflectListControl {
     source: Entity,
@@ -3521,8 +3505,8 @@ fn spawn_list_row_controls(
             Tooltip::title(tip),
             ChildOf(row),
         ));
-        // An arrow at either end of the list has nowhere to go. It keeps its
-        // place so the row does not reflow, and reads as unavailable.
+        // An arrow at either end of the list keeps its place, disabled, so the
+        // row does not reflow.
         if enabled {
             control.insert(ReflectListControl {
                 source,
@@ -3582,9 +3566,8 @@ pub(crate) fn on_reflect_list_button_click(
     });
 }
 
-/// Apply one list edit and commit the whole list back through the same
-/// gesture a typed field commits with, so the document, the undo stack and a
-/// running game all hear about it once.
+/// Apply one list edit and commit the whole list back through the same path a
+/// typed field commits with.
 fn edit_reflect_list(
     world: &mut World,
     source: Entity,
@@ -3631,8 +3614,7 @@ fn edit_reflect_list(
         "Edit list on multiple entities",
     );
     // A list that changed length has no row to write the new value into: the
-    // rows are what changed. Without this the card kept showing the list as it
-    // was until the selection moved and came back.
+    // rows are what changed.
     if let Some(mut pending) = world.get_resource_mut::<crate::inspector::PendingInspectorRebuild>()
     {
         pending.0 = Some(source);
@@ -3664,9 +3646,8 @@ fn list_items_as_json(
     Some(items)
 }
 
-/// A fresh element for the list at `field_path`, built from its item type's
-/// registered default. A type with no `ReflectDefault` cannot be made from
-/// nothing, and Add says so rather than adding something arbitrary.
+/// A fresh element for the list at `field_path`, from its item type's
+/// registered `ReflectDefault`. `None` when the item type has none.
 fn default_list_item(
     world: &World,
     source: Entity,

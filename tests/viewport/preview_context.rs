@@ -1,24 +1,7 @@
-//! The Preview Context panel: design-time binding preview.
-//!
-//! Preview gives the editor a scratch subject entity, points the open UI scene
-//! at it with `BindContext`, and runs `jackdaw_bind`'s evaluator for as long as
-//! the toggle is on, so scrubbing a number redraws the health bar in the
-//! viewport without building or running the game.
-//!
-//! What is pinned here:
-//!
-//! 1. Preview on spawns the scratch subject, points the scene at it, and
-//!    drives width, text, and visibility from a scrubbed field.
-//! 2. Preview off puts the authored values back, drops the context, and
-//!    stops evaluating.
-//! 3. A preview session leaves the saved document byte-identical: neither
-//!    the scratch entity nor the editor's `BindContext` reaches the AST, and
-//!    an edit gesture aimed at a bound property is refused rather than baked.
-//! 4. A type the editor knows only as schema cannot become a real component
-//!    here, so its rows render disabled instead of lying.
-//! 5. The session follows the scene it is previewing: a tab switch, a
-//!    structural undo, or a scene that stops being the open one moves the
-//!    context with it and strands nothing behind.
+//! The Preview Context panel: design-time binding preview. Preview gives the
+//! editor a scratch subject entity, points the open UI scene at it with
+//! `BindContext`, and runs `jackdaw_bind`'s evaluator for as long as the
+//! toggle is on.
 
 use crate::util;
 
@@ -40,8 +23,7 @@ use jackdaw_panels::registry::WindowRegistry;
 use jackdaw_scene_types::UiSceneRoot;
 use jackdaw_schema::{FieldSchema, ProjectSchema, TypeKind, TypeSchema};
 
-/// The subject a health bar reads. Registered natively by the test, which is
-/// exactly the case the editor can preview: a real Rust type it links.
+/// The subject a health bar reads: a real Rust type the editor links.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default)]
 struct Vitals {
@@ -326,8 +308,7 @@ fn a_preview_session_leaves_the_document_untouched() {
         !during.contains("Preview Subject") && !during.contains("BindContext"),
         "neither the scratch subject nor the editor's context is in the document:\n{during}",
     );
-    // Evaluating puts a `ResolvedBindings` on every bound widget. It is derived
-    // from what the document already says and means nothing on reload.
+    // `ResolvedBindings` is derived from what the document already says.
     assert!(
         !during.contains("ResolvedBindings"),
         "the evaluator's own bookkeeping reached the document:\n{during}",
@@ -425,8 +406,7 @@ fn a_schema_only_type_previews_as_a_disabled_row() {
         "nothing unrelated is attached to the scratch entity",
     );
 
-    // What the user actually sees: the field is there, as a row nothing can
-    // touch, under the reason it cannot be touched.
+    // The field is there, as a row nothing can touch, under the reason why.
     app.world_mut()
         .spawn(Node::default())
         .with_children(preview_context::build_preview_context_panel);
@@ -579,9 +559,8 @@ fn the_panel_toggle_and_its_rows_drive_the_scene() {
 // Following the scene
 // ---------------------------------------------------------------------------
 
-/// Swapping scenes (a tab switch, or the respawn a structural undo does)
-/// leaves a session pointing at a root that is gone. The referenced types do
-/// not change, so nothing but the root itself says the session went stale.
+/// The referenced types do not change on a scene swap, so nothing but the
+/// root itself says the session went stale.
 #[test]
 fn preview_follows_a_scene_swap() {
     let mut app = util::editor_test_app();
@@ -596,8 +575,6 @@ fn preview_follows_a_scene_swap() {
     assert_eq!(width(&app, first_fill), Val::Percent(50.0));
     let subject = scratch(&mut app).expect("a subject");
 
-    // The tab switch: the open scene is despawned and another is spawned in
-    // its place.
     app.world_mut().entity_mut(first_root).despawn();
     let (second_root, second_fill) = spawn_bound_scene(app.world_mut(), "Scene B");
     app.update();
@@ -620,9 +597,8 @@ fn preview_follows_a_scene_swap() {
     );
 }
 
-/// The same move with the old root still alive: it stopped being the open
-/// scene (parented under something else), so it must not keep a context
-/// pointing at a subject nothing maintains for it.
+/// The old root is still alive but stopped being the open scene, so it must
+/// not keep a context pointing at a subject nothing maintains for it.
 #[test]
 fn a_root_that_stops_being_the_open_scene_keeps_no_context() {
     let mut app = util::editor_test_app();
@@ -658,10 +634,9 @@ fn a_root_that_stops_being_the_open_scene_keeps_no_context() {
 // The session's write targets move under it
 // ---------------------------------------------------------------------------
 
-/// A binding authored mid-session on a widget nothing was bound to yet. Its
-/// reads name a type the panel already lists, so the session's read-derived
-/// list does not move at all, yet the evaluator owns a second widget's `Node`,
-/// which has to be snapshotted and guarded like the first.
+/// The new binding's reads name a type the panel already lists, so the
+/// read-derived list does not move at all, yet the evaluator owns a second
+/// widget's `Node`.
 #[test]
 fn a_binding_added_mid_session_is_put_back_and_guarded() {
     let (mut app, bar) = health_bar_app();
@@ -711,9 +686,8 @@ fn a_binding_added_mid_session_is_put_back_and_guarded() {
     );
 }
 
-/// The same case from the other side: the binding is the one the session
-/// started with, but its write path names a different component. The property
-/// it left keeps its snapshot and the one it moved to gets its own.
+/// The binding is the one the session started with, but its write path names
+/// a different component.
 #[test]
 fn a_write_repointed_mid_session_is_put_back_and_guarded() {
     let (mut app, bar) = health_bar_app();
@@ -765,11 +739,9 @@ fn a_write_repointed_mid_session_is_put_back_and_guarded() {
     );
 }
 
-/// A property the session gives up mid-flight: the guard over it comes down
-/// the moment the bindings stop naming it, so from then on the user can author
-/// it. The snapshot has to be spent at that moment too: held to the end of the
-/// session it would be written back over whatever the user did in between,
-/// leaving the document holding one value and the component another.
+/// The guard comes down the moment the bindings stop naming the property, so
+/// the snapshot has to be spent at that moment too: held to the end of the
+/// session it would overwrite whatever the user did in between.
 #[test]
 fn a_property_the_session_gives_up_is_put_back_before_it_can_be_edited() {
     let (mut app, bar) = health_bar_app();
@@ -795,9 +767,8 @@ fn a_property_the_session_gives_up_is_put_back_before_it_can_be_edited() {
         "and it is the user's to author again",
     );
 
-    // So they author it, with the stage gesture the guard refuses while the
-    // session owns the property: the gesture moves the live component and the
-    // commit follows it, the way a drag does.
+    // Authored with the stage gesture the guard refuses while the session owns
+    // the property.
     let before = app.world().get::<Node>(bar.fill).cloned().expect("a node");
     let after = Node {
         width: Val::Px(999.0),
@@ -825,8 +796,8 @@ fn a_property_the_session_gives_up_is_put_back_before_it_can_be_edited() {
     );
 }
 
-/// The other half of the same move: a write that leaves and comes back. What
-/// the user authored is still what the session owes them at the end.
+/// A write that leaves and comes back: what the user authored is still what
+/// the session owes them at the end.
 #[test]
 fn a_write_that_comes_back_still_gives_back_what_was_authored() {
     let (mut app, bar) = health_bar_app();
@@ -882,10 +853,9 @@ fn repoint_write_to_width(app: &mut App, fill: Entity) {
     app.update();
 }
 
-/// A scene root that stops being the open one takes the session's subject with
-/// it, but not the widgets: those are still in the world, still holding what
-/// the evaluator put there. Letting go of the subject has to put them back,
-/// because the guard that refuses an authored edit goes down with it.
+/// The widgets stay in the world holding what the evaluator put there, so
+/// letting go of the subject has to put them back: the guard that refuses an
+/// authored edit goes down with it.
 #[test]
 fn losing_the_scene_root_puts_back_what_the_session_wrote() {
     let (mut app, bar) = health_bar_app();
@@ -895,8 +865,7 @@ fn losing_the_scene_root_puts_back_what_the_session_wrote() {
     app.update();
     assert_eq!(width(&app, bar.fill), Val::Percent(50.0));
 
-    // The document closed: the root is still alive but is no longer a scene
-    // root of its own, so the session has nothing to point at.
+    // The root is still alive but is no longer a scene root of its own.
     let holder = app.world_mut().spawn(Node::default()).id();
     app.world_mut().entity_mut(bar.root).insert(ChildOf(holder));
     app.update();
@@ -922,9 +891,8 @@ fn losing_the_scene_root_puts_back_what_the_session_wrote() {
 // Bound properties are read-only during a session
 // ---------------------------------------------------------------------------
 
-/// The bake-through case: while the evaluator owns `Node.width`, an authored
-/// edit to it (a stage gesture or an inspector commit) is refused, so the
-/// previewed number cannot reach the document as if the user had typed it.
+/// While the evaluator owns `Node.width`, an authored edit to it is refused,
+/// so the previewed number cannot reach the document.
 #[test]
 fn an_edit_to_a_bound_property_is_refused_mid_preview() {
     let (mut app, bar) = health_bar_app();
@@ -977,13 +945,9 @@ fn an_edit_to_a_bound_property_is_refused_mid_preview() {
     );
 }
 
-/// Deleting a bound widget mid-preview and undoing must put back what the user
-/// authored, not what the evaluator last wrote onto it.
-///
 /// The undo entry snapshots live ECS, which during a session carries the
-/// preview's values on every bound property. Taken unsuspended, the delete/undo
-/// pair is a way to launder a previewed number into the document, the same
-/// bake-through the edit paths refuse arriving by a different route.
+/// preview's values, so taken unsuspended the delete/undo pair would launder a
+/// previewed number into the document.
 #[test]
 fn deleting_a_bound_widget_mid_preview_undoes_to_the_authored_value() {
     let (mut app, bar) = health_bar_app();
@@ -1081,12 +1045,8 @@ fn descendants(world: &mut World, root: Entity) -> Vec<Entity> {
 // ---------------------------------------------------------------------------
 
 /// One field per type the panel advertises a control for, generated from the
-/// panel's own width list so the fixture cannot fall behind what is
-/// advertised: a width added to `numeric_widths!` grows this struct, and the
-/// parity table below walks it.
-///
-/// A tuple struct, because a list of types has no field names to invent;
-/// walking it exercises the `.0` paths at the same time.
+/// panel's own width list so the fixture cannot fall behind it. A tuple
+/// struct, which also exercises the `.0` paths.
 macro_rules! every_scalar {
     ($($width:ty),*) => {
         #[derive(Component, Reflect, Default)]
@@ -1116,9 +1076,8 @@ struct Health(pub f32);
 #[reflect(Component, Default)]
 struct Beacon;
 
-/// An opaque type carrying no `ReflectDefault`, which is the one shape the
-/// default builder cannot synthesise a value for: it has no fields to recurse
-/// into and nothing to ask for a default.
+/// An opaque type carrying no `ReflectDefault`: no fields to recurse into and
+/// nothing to ask for a default.
 #[derive(Reflect, Clone, Debug)]
 #[reflect(opaque)]
 #[reflect(Clone, Debug)]
@@ -1270,10 +1229,8 @@ fn scrub_rows(app: &mut App) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The panel offers a control for a type only if that control can actually put
-/// a value into the field and get it back out. A row that advertises a number
-/// and drops it is worse than no row: the scene stops matching the panel and
-/// nothing says so.
+/// A row that advertises a number and drops it is worse than no row: the
+/// scene stops matching the panel and nothing says so.
 #[test]
 fn every_advertised_field_is_writable_and_readable_back() {
     let mut app = previewing("EveryScalar.0", |app| {
@@ -1421,10 +1378,9 @@ fn a_resource_read_previews_like_a_component() {
     );
 }
 
-/// Teardown order: the stand-in is only a resource for as long as the session
-/// runs, and taking it back out has to clear bevy's resource cache before the
-/// entity behind it goes. A despawn while it still counts as the resource
-/// entity queues a removal against an entity that is already gone.
+/// The stand-in is a resource only for as long as the session runs, and taking
+/// it back out has to clear bevy's resource cache before the entity behind it
+/// goes.
 #[test]
 fn stopping_preview_takes_the_stand_in_resource_back_out() {
     let mut app = previewing("Res(CharCreateForm).class", |app| {
@@ -1447,9 +1403,8 @@ fn stopping_preview_takes_the_stand_in_resource_back_out() {
         "and so does the entity it was standing on",
     );
 
-    // Not a one-way door: the next session stands a fresh one up, which is
-    // only possible because the cache was cleared rather than left pointing at
-    // a dead entity.
+    // Not a one-way door: the next session stands a fresh one up, which needs
+    // the cache cleared rather than left pointing at a dead entity.
     preview_context::set_preview(app.world_mut(), true);
     app.update();
     assert!(
@@ -1478,8 +1433,7 @@ fn a_resource_the_editor_claims_mid_session_survives_the_teardown() {
         .map(|(_, entity)| entity)
         .expect("the session stood one up");
 
-    // The editor takes the resource over: the session's entity stops being the
-    // one the world calls the resource entity.
+    // The session's entity stops being the one the world calls the resource entity.
     app.world_mut()
         .entity_mut(stand_in)
         .remove::<bevy::ecs::resource::IsResource>();
@@ -1536,8 +1490,7 @@ fn a_resource_the_editor_owns_is_not_stood_in_for() {
         "and the editor's own value is untouched",
     );
 
-    // Read-only is not the same as unknown: the value is really there, so the
-    // row shows it rather than the placeholder a schema-only row wears.
+    // Read-only is not unknown: the value is really there, so the row shows it.
     let shown: Vec<String> = app
         .world_mut()
         .query::<(&preview_context::PreviewDisabledField, &Text)>()
@@ -1559,12 +1512,9 @@ fn a_resource_the_editor_owns_is_not_stood_in_for() {
     );
 }
 
-/// The other half of that rule, on the side the panel does not control: a
-/// running preview cannot write the editor's resource from a binding either. A
+/// A running preview cannot write the editor's resource from a binding: a
 /// write path names a component on the widget or it does not resolve, which is
-/// why the session's guard list is built from component paths alone. The
-/// two-way write-back that does reach resources runs from observers the editor
-/// does not register.
+/// why the session's guard list is built from component paths alone.
 #[test]
 fn a_previewing_scene_cannot_write_a_resource_the_editor_holds() {
     let mut app = util::editor_test_app();
@@ -1581,8 +1531,7 @@ fn a_previewing_scene_cannot_write_a_resource_the_editor_holds() {
         .spawn((Name::new("UiRoot"), UiSceneRoot::default(), Node::default()))
         .id();
     // Two bindings off one read. The second is the control: its width really
-    // moves, so the first one's failure is the write it names and not a read
-    // that never resolved.
+    // moves, so the first one's failure is the write and not the read.
     let fill = world
         .spawn((
             Name::new("Fill"),
@@ -1634,17 +1583,11 @@ fn a_previewing_scene_cannot_write_a_resource_the_editor_holds() {
     );
 }
 
-/// The same rule on the path that really can reach a resource. A two-way
-/// `Value` binding is written back by `jackdaw_bind`'s `ValueChange`
-/// observers, which go through `write_source_path` and resolve `Res(...)` for
-/// real. The editor does not register those observers, so a widget edit during
-/// preview moves nothing; registering them without giving the session a
-/// resource guard fails this test.
-///
-/// The field this aims at is an `f32`. `set_target` writes `Val`, `f32`,
-/// `bool`, `String` and `Visibility` and refuses everything else, so a binding
-/// pointed at an integer field is turned away by the type before any guard is
-/// consulted. The `u32` field is asserted below as the type-mismatch case.
+/// A two-way `Value` binding is written back by `jackdaw_bind`'s `ValueChange`
+/// observers, which resolve `Res(...)` for real; the editor does not register
+/// those. The field aimed at is an `f32` because `set_target` writes only
+/// `Val`, `f32`, `bool`, `String` and `Visibility`, and the `u32` field below
+/// is the type-mismatch case.
 #[test]
 fn a_widget_edit_during_preview_cannot_write_a_resource_the_editor_holds() {
     let mut app = util::editor_test_app();
@@ -1718,8 +1661,8 @@ fn a_widget_edit_during_preview_cannot_write_a_resource_the_editor_holds() {
     );
 }
 
-/// The reason a section is inert has to reach the user through the same badge
-/// the bindings card uses, not only as a line of body text under the rows.
+/// The reason a section is inert reaches the user through the same badge the
+/// bindings card uses, not only as body text under the rows.
 #[test]
 fn a_degraded_section_carries_its_reason_as_a_badge() {
     let mut app = previewing_schema(
@@ -1749,9 +1692,9 @@ fn a_degraded_section_carries_its_reason_as_a_badge() {
         .spawn(Node::default())
         .with_children(preview_context::build_preview_context_panel);
     app.update();
-    // The pairing is the assertion: `Hovered` is opt-in and the tooltip
-    // renderer reads `(Entity, &Tooltip, &Hovered)`, so a badge that carries
-    // only the `Tooltip` is one nobody can ever see.
+    // `Hovered` is opt-in and the tooltip renderer reads
+    // `(Entity, &Tooltip, &Hovered)`, so a badge carrying only the `Tooltip`
+    // is one nobody can see.
     let badges: Vec<String> = app
         .world_mut()
         .query::<(&jackdaw_feathers::tooltip::Tooltip, &Hovered)>()
@@ -1795,9 +1738,9 @@ fn a_linked_type_with_no_fields_says_why_it_has_no_rows() {
     );
 }
 
-/// The other way a linked type ends up with no rows: the editor could not build
-/// a value at all. `Bolted` has a field, so the no-fields reason would be the
-/// wrong one to show.
+/// The other way a linked type ends up with no rows: the editor could not
+/// build a value at all. `Bolted` has a field, so the no-fields reason would
+/// be the wrong one to show.
 #[test]
 fn a_linked_type_the_editor_cannot_build_says_that_instead() {
     let mut app = previewing("Bolted.seal", |app| {
@@ -1822,9 +1765,9 @@ fn a_linked_type_the_editor_cannot_build_says_that_instead() {
     );
 }
 
-/// The schema names a tuple element by its bare index, so the panel has to tell
-/// an index from a name: a field called `x2` or `2x` is a name, and treating it
-/// as an index would build the path `.2x`, which resolves to nothing.
+/// The schema names a tuple element by its bare index, so a field called `x2`
+/// has to be read as a name: as an index it would build `.2x`, which resolves
+/// to nothing.
 #[test]
 fn only_an_all_digit_schema_field_is_read_as_a_tuple_index() {
     let mut app = previewing_schema(
@@ -1856,10 +1799,8 @@ fn only_an_all_digit_schema_field_is_read_as_a_tuple_index() {
     );
 }
 
-/// The binding picker offers `Res(T)` straight out of the schema, so a
-/// schema-only resource read is the ordinary case before Play. It resolves
-/// against the project's resources; looked up among its components it would
-/// resolve to a type nothing knows and render as an error.
+/// The binding picker offers `Res(T)` straight out of the schema, and it
+/// resolves against the project's resources rather than its components.
 #[test]
 fn a_schema_only_resource_previews_as_disabled_rows() {
     let mut app = previewing_schema(
@@ -1903,12 +1844,9 @@ fn a_schema_only_resource_previews_as_disabled_rows() {
 // A preview never reaches disk, including through the asset pass
 // ---------------------------------------------------------------------------
 
-/// A previewed component that also carries an asset handle.
-///
-/// The emitter re-derives every handle-bearing patch from the live world so the
-/// handle field can be spelled with an asset context, and that re-derivation is
-/// the one path a previewed value could ride to disk on. A component with no
-/// handle never gets re-derived.
+/// A previewed component that also carries an asset handle. The emitter
+/// re-derives every handle-bearing patch from the live world, which is the one
+/// path a previewed value could ride to disk on.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default)]
 struct Portrait {
@@ -2008,8 +1946,7 @@ fn a_scrubbed_value_on_a_handle_bearing_component_never_reaches_disk() {
     scrub_ratio(&mut app, PREVIEWED_OPACITY);
     app.update();
 
-    // The preview has to actually be driving the property, or the save below
-    // proves nothing.
+    // The preview has to be driving the property, or the save below proves nothing.
     assert!(
         (f64::from(opacity(&app, root)) - PREVIEWED_OPACITY).abs() < 1e-6,
         "the preview drives the component the emitter re-derives; live value is {}",
@@ -2031,8 +1968,7 @@ fn a_scrubbed_value_on_a_handle_bearing_component_never_reaches_disk() {
         "and never what the preview was showing; disk holds:\n{on_disk}",
     );
 
-    // The save is an interruption, not an end: the session carries on showing
-    // what it was showing.
+    // The save is an interruption, not an end.
     assert!(
         (f64::from(opacity(&app, root)) - PREVIEWED_OPACITY).abs() < 1e-6,
         "the preview is still running after the save; live value is {}",
@@ -2045,8 +1981,7 @@ fn a_scrubbed_value_on_a_handle_bearing_component_survives_a_tab_switch() {
     let PortraitScene { mut app, .. } = portrait_scene();
     let root = portrait_root(&mut app);
 
-    // A second tab to switch to. Nothing needs to be in it; the point is that
-    // leaving the first one captures it.
+    // A second tab to switch to; the point is that leaving the first captures it.
     app.world_mut()
         .resource_mut::<jackdaw::scenes::Scenes>()
         .push_tab(jackdaw::scenes::SceneTab::new_untitled(2));
@@ -2064,8 +1999,8 @@ fn a_scrubbed_value_on_a_handle_bearing_component_survives_a_tab_switch() {
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
     app.update();
 
-    // Stop previewing before coming back, so what the tab hands over is only
-    // what the capture stored, not something the evaluator re-derived.
+    // Stop previewing before coming back, so the tab hands over only what the
+    // capture stored.
     preview_context::set_preview(app.world_mut(), false);
     app.update();
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);

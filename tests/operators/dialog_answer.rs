@@ -37,9 +37,8 @@ fn choices(app: &mut App) -> DialogChoices {
         .expect("a dialog is up")
 }
 
-/// A dialog records what it is asking, so a caller can read the question
-/// before answering it. Drawing the labels is not enough: they live in
-/// `Text` children several levels down.
+/// A dialog records what it is asking, so a caller can read the question before
+/// answering: the drawn labels live in `Text` children several levels down.
 #[test]
 fn a_dialog_carries_the_question_and_its_buttons() {
     let mut app = util::editor_test_app();
@@ -56,9 +55,8 @@ fn a_dialog_carries_the_question_and_its_buttons() {
     assert_eq!(choices.labels(), vec!["Reload", "Cancel"]);
 }
 
-/// Answering by label takes the dialog down. The primary action is what
-/// a bare `dialog.answer` means, because that is the answer a dialog is
-/// asking for.
+/// Answering by label takes the dialog down, and a bare `dialog.answer` means the
+/// primary action, the answer a dialog is asking for.
 #[test]
 fn answering_by_label_presses_the_button_and_closes_the_dialog() {
     let mut app = util::editor_test_app();
@@ -182,9 +180,8 @@ fn answering_is_unavailable_with_no_dialog_up() {
     );
 }
 
-/// A prefix that fits two buttons is a coin toss over the user's data:
-/// `D` on Don't Save and Delete has to press neither, and say which two
-/// it could not choose between.
+/// A prefix that fits two buttons is a coin toss over the user's data: `D` on
+/// Don't Save and Delete presses neither, and says which two it could not pick.
 #[test]
 fn an_ambiguous_prefix_presses_nothing_and_names_the_candidates() {
     let mut app = util::editor_test_app();

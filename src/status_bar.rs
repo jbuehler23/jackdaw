@@ -22,12 +22,9 @@ pub struct GitInfo {
 /// How long a [`StatusNotice`] stays in front of the user, in seconds.
 const NOTICE_SECONDS: f32 = 6.0;
 
-/// A short-lived message about something the editor refused to do, or did
-/// only in part.
-///
-/// The log carries the detail; this takes over the status bar's right slot
-/// for a few seconds so a refusal is visible without a modal in the way of
-/// the next action.
+/// A short-lived message about something the editor refused to do, or did only
+/// in part. Takes over the status bar's right slot for a few seconds; the log
+/// carries the detail.
 #[derive(Resource, Default)]
 pub struct StatusNotice {
     text: String,
@@ -188,22 +185,12 @@ fn update_status_center(
 pub struct SceneStatsText;
 
 /// The fixed-width clipped box holding [`StatusBarRight`].
-///
-/// Marked so `align_status_right` can say which end of an over-long line is
-/// cut off, which is not the same answer for the two things that share the
-/// slot.
 #[derive(Component)]
 pub struct StatusBarRightBox;
 
-/// Put the over-long end of the right-hand slot where it can be lost.
-///
-/// The box is 210px and clips, so whichever edge the text is pinned to is the
-/// edge that survives. A build line ends in the count of crates left, so it
-/// is pinned right and an over-long crate name is cut off its head. A notice
-/// is a sentence that opens by naming the thing it is about -- "Second
-/// carries a transform, so ..." -- and pinning that right cut off the name
-/// and left the reader the tail of an explanation about nothing. So a notice
-/// is pinned left and loses its end instead.
+/// Pin the right-hand slot's text to the edge worth keeping: a build line ends
+/// in the crate count, so it is pinned right; a notice opens by naming its
+/// subject, so it is pinned left and loses its end instead.
 fn align_status_right(
     notice: Res<StatusNotice>,
     mut boxes: Query<&mut Node, With<StatusBarRightBox>>,
@@ -231,8 +218,6 @@ fn update_status_right(
     notice: Res<StatusNotice>,
     mut text_query: Query<(&mut Text, &mut TextColor), With<StatusBarRight>>,
 ) {
-    // A notice takes the slot for as long as it lives, ahead of the tool and
-    // mode readouts.
     if notice.is_active() {
         if let Ok((mut text, mut color)) = text_query.single_mut() {
             text.0 = notice.text.clone();
@@ -264,8 +249,7 @@ fn update_status_right(
         && !modal.is_changed()
         && !edit_mode.is_changed()
         && !draw_state.is_changed()
-        // An expired notice has to be painted over, or the slot keeps showing
-        // it until some unrelated state changes.
+        // An expired notice has to be painted over.
         && !notice.is_changed()
         && !numeric.is_changed()
     {

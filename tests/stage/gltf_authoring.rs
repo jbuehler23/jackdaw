@@ -35,7 +35,7 @@ fn place(app: &mut App, path: &str) {
         .assert_finished();
 }
 
-/// The skip list is matched by string, so a typo silently reverts the fix.
+/// The skip list is matched by string, so a typo silently disables the skip.
 #[test]
 fn world_asset_root_skip_path_matches_real_type_path() {
     assert!(
@@ -56,7 +56,6 @@ fn gltf_source_derives_world_asset_root_and_stays_out_of_the_document() {
     let (entity, source) = q.single(app.world()).expect("one GltfSource");
     assert_eq!(source.path, "models/dungeon.glb");
 
-    // Derived, not authored.
     assert!(
         app.world().get::<WorldAssetRoot>(entity).is_some(),
         "the observer should have derived WorldAssetRoot from GltfSource"
@@ -97,9 +96,8 @@ fn undo_redo_restores_a_loadable_gltf() {
     );
 }
 
-/// The asset path behind the derived handle, which is what actually decides
-/// whether anything renders. Asserting the component merely exists would pass
-/// with a defaulted handle.
+/// The asset path behind the derived handle: asserting the component merely
+/// exists would pass with a defaulted handle.
 fn current_handle(app: &mut App) -> String {
     let mut q = app
         .world_mut()
@@ -141,22 +139,15 @@ fn settle(app: &mut App, ticks: usize) {
     }
 }
 
-/// Clip discovery has to converge. It used to load the glTF, drop the
-/// handle, and ask again next frame, which unloaded and reloaded the
-/// asset on a loop: every reload republished `AssetEvent::Modified`, and
-/// the world-asset spawner despawned and respawned every instance of
-/// that model, every frame, for as long as the scene was open.
-///
-/// A glTF with no animations is the case that never terminated, since
-/// the old "already has clip children" guard can never be satisfied for
-/// one. Both kinds are placed here so the convergence is not bought by
-/// breaking the animated path.
+/// Clip discovery keeps the glTF handle rather than dropping it and asking
+/// again next frame, which republishes `AssetEvent::Modified` and respawns
+/// every instance of the model. A glTF with no animations is the case that has
+/// to settle; an animated one is placed beside it so convergence is not bought
+/// by breaking that path.
 #[test]
 fn clip_discovery_settles_without_reloading_the_gltf() {
     let mut app = util::editor_test_app();
-    // Clip discovery only runs in the editor state, which a headless app
-    // does not reach on its own, and the editor's panels expect a project
-    // to be open once it is there.
+    // Clip discovery only runs in the editor state, which needs a project open.
     app.world_mut()
         .insert_resource(jackdaw::project::ProjectRoot {
             root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),

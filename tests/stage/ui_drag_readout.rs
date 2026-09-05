@@ -1,13 +1,4 @@
 //! The label a canvas gesture draws beside the node it is dragging.
-//!
-//! What is pinned here:
-//!  * a move states where the node is, in the authored units the inspector
-//!    would show;
-//!  * a resize states how big it is instead;
-//!  * the second line states the gap to the nearest sibling edge, which is
-//!    the distance the magnet would close;
-//!  * the label goes on the release, so nothing is left standing over the
-//!    canvas afterwards.
 
 use crate::util;
 
@@ -242,9 +233,7 @@ fn select(app: &mut App, entity: Entity) {
     settle(app);
 }
 
-/// The canvas magnet off, so the drag writes the cursor's own figures and
-/// the readout can be read for what the gesture is doing rather than for
-/// what it landed on.
+/// The canvas magnet off, so the drag writes the cursor's own figures.
 fn without_the_magnet(app: &mut App) {
     let mut kinds = app
         .world_mut()
@@ -333,12 +322,9 @@ fn the_spacing_line_states_the_gap_to_the_nearest_sibling_edge() {
     );
 }
 
-/// Once the dragged node has run over its neighbour the gap is an overlap,
-/// and the readout says so with a sign.
-///
 /// Taken as an absolute the two were the same figure: `x 30` read the same
-/// whether there were thirty pixels of daylight left or thirty pixels of
-/// the neighbour already covered, which is the opposite news.
+/// whether there were thirty pixels of daylight left or thirty pixels of the
+/// neighbour already covered.
 #[test]
 fn the_spacing_line_reads_negative_once_the_nodes_overlap() {
     let mut app = util::editor_test_app();

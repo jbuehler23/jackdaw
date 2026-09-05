@@ -1,19 +1,6 @@
-//! Editing a node's text on the canvas, where it is drawn.
-//!
-//! A double click on a node carrying `Text` opens a text entry over that
-//! node's rect, seeded with what it says and with the whole of it selected,
-//! so typing replaces it. Enter and a click away commit; Escape puts back
-//! what was there.
-//!
-//! The entry is editor chrome parented into the panel's stage, like the
-//! selection outline, so it follows the canvas as it is panned and zoomed
-//! and nothing it does can reach the authored tree except through the
-//! commit.
-//!
-//! The commit goes through the same field-set path the inspector's own text
-//! row uses, so it authors the document, mints exactly one history entry,
-//! and streams to a running game. A commit that changes nothing writes
-//! nothing at all.
+//! Editing a node's text on the canvas, where it is drawn. A double click
+//! opens an entry over the node's rect; Enter and a click away commit
+//! through the inspector's field-set path, Escape restores.
 
 use bevy::{
     feathers::controls::{FeathersTextInput, FeathersTextInputContainer},
@@ -27,11 +14,7 @@ use bevy::{
 
 use crate::{EditorEntity, ui_stage::node_overlay_rect};
 
-/// The entry open over one node's text, if any.
-///
-/// One at a time: a second double click commits the first, because two
-/// entries over one canvas would both claim the keyboard and only one of
-/// them would be the one the user is looking at.
+/// The entry open over one node's text, if any. Only one at a time.
 #[derive(Resource, Default)]
 pub struct TextEditSession {
     open: Option<OpenEdit>,
@@ -53,15 +36,11 @@ struct OpenEdit {
     overlay: Entity,
     input: Entity,
     /// What the node said when the entry opened, for Escape and for the
-    /// "changed nothing" test the commit makes.
+    /// "changed nothing" test.
     before: String,
-    /// Whether the entry has actually held the keyboard yet.
-    ///
-    /// Focus does not settle on the frame the entry is spawned: the press
-    /// that opened it is still being handled, and whatever that press moves
-    /// the focus to arrives after. So the entry asks for the focus until it
-    /// has it, and only once it has held it does losing it mean a click
-    /// away -- which is the commit.
+    /// Whether the entry has actually held the keyboard yet. Focus does not
+    /// settle on the frame the entry is spawned, so losing focus only means
+    /// a click away once it has been held.
     focused: bool,
 }
 
@@ -90,10 +69,7 @@ pub fn is_editable_text(world: &World, entity: Entity) -> bool {
     world.get::<Text>(entity).is_some() && world.get::<EditorEntity>(entity).is_none()
 }
 
-/// Open the entry over `node`, closing whatever was open before.
-///
-/// A second double click while an entry is open commits the first: the
-/// user has moved on, and the text they typed is what they meant.
+/// Open the entry over `node`, committing whatever was open before.
 pub fn open_text_editor(world: &mut World, node: Entity, host: Entity) {
     if world.resource::<TextEditSession>().open.is_some() {
         commit_text_edit(world);
@@ -121,9 +97,6 @@ pub fn open_text_editor(world: &mut World, node: Entity, host: Entity) {
         ChildOf(stage),
     ));
     let overlay = overlay.id();
-    // The container's own node is the frame the entry is drawn in; the
-    // sync pass puts it over the node's rect on the next frame, and this
-    // is what makes it absolute so that placement means anything.
     if let Some(mut node) = world.get_mut::<Node>(overlay) {
         node.position_type = PositionType::Absolute;
     }
@@ -237,18 +210,10 @@ pub fn commit_text_edit(world: &mut World) {
 }
 
 /// Write `value` onto the edited node through the inspector's own field
-/// path, then take the entry down.
+/// path, then take the entry down. Unchanged text writes nothing.
 ///
-/// Text that came back the same as it went in writes nothing: an entry
-/// opened and dismissed is not an edit, and a history entry for it would
-/// have to be undone before the real one.
-///
-/// The write is aimed at the edited node alone and the selection is put
-/// back afterwards. A field commit writes to every selected node, so a
-/// commit made with three labels selected typed the same words onto all
-/// three; naming only the edited one instead collapsed the selection to
-/// it, and the alignment or the group the user had lined up was gone by
-/// the time they looked up.
+/// A field commit writes to every selected node, so the selection is
+/// narrowed to the edited node for the write and put back afterwards.
 fn write_text_edit(world: &mut World, value: String) {
     let Some((node, before)) = world
         .resource::<TextEditSession>()
@@ -292,8 +257,6 @@ pub fn cancel_text_edit(
         return;
     }
     commands.queue(|world: &mut World| {
-        // The node was never written while the entry was open, so putting
-        // it back is only a matter of taking the entry away.
         close_text_edit(world);
     });
 }
@@ -316,11 +279,8 @@ fn follow_focus(world: &mut World) -> bool {
             if let Some(open) = world.resource_mut::<TextEditSession>().open.as_mut() {
                 open.focused = true;
             }
-            // The selection queued when the entry was spawned is spent
-            // before the entry holds the keyboard, and the widget places
-            // its own caret when the focus arrives. Selecting again on
-            // the one frame the focus settles is what makes the first
-            // thing typed replace the label rather than join it.
+            // The widget places its own caret when focus arrives; selecting
+            // again on that frame is what makes typing replace the label.
             if let Some(mut editable) = world.get_mut::<EditableText>(input) {
                 editable.queue_edit(TextEdit::SelectAll);
             }
@@ -380,8 +340,6 @@ fn sync_text_edit_overlay(world: &mut World) {
         value.width = px(rect.width().max(1.0));
         value.height = px(rect.height().max(1.0));
     }
-    // The frame lies over the node it is editing; the press that dismisses
-    // it belongs to whatever is under it, not to the frame.
     if let Ok(mut entity) = world.get_entity_mut(overlay)
         && entity.get::<Pickable>().is_none()
     {

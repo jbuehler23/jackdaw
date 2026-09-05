@@ -259,16 +259,10 @@ fn transform_rotate_90_roll_cw(
 
 // -- Nudge ops ---------------------------------------------------
 
-/// Nudge the selection, by whichever of the two writers it is made of.
-///
-/// The arrow keys are one binding over two kinds of selection. A 3D
-/// selection is translated through `Transform`; a UI selection has none, and
-/// a canvas moves its nodes through `Node` in authored pixels. The canvas
-/// answers first and reports whether the selection was its to move. Routing
-/// is by the selection, not by which panel has focus.
-///
-/// [`crate::ui_stage::nudge_ui_selection`] holds the canvas half,
-/// including what Shift means there.
+/// Nudge the selection: a 3D selection moves through `Transform`, a UI
+/// selection through `Node` in authored pixels. The canvas answers first and
+/// reports whether the selection was its to move; routing is by the selection,
+/// not by panel focus.
 fn nudge_by_axis(world: &mut World, offset_direction: Vec3) {
     if let Some(direction) = ui_nudge_direction(offset_direction)
         && crate::ui_stage::nudge_ui_selection(world, direction)
@@ -297,14 +291,10 @@ fn ui_nudge_direction(offset_direction: Vec3) -> Option<Vec2> {
     }
 }
 
-/// `is_available` for the nudge ops: everything [`can_act_on_entities`]
-/// asks, under a bare key and no other.
-///
-/// `bevy_enhanced_input` matches a binding on the modifiers it *names* and
-/// says nothing about the ones it does not, so a binding on a bare arrow
-/// answers Ctrl+Arrow too. Ctrl+Arrow is the outliner's reorder and
-/// Alt+Arrow the 90-degree rotate, and both of them moved the selection
-/// twice: once the way the chord asked, once a grid step sideways.
+/// `is_available` for the nudge ops: everything [`can_act_on_entities`] asks,
+/// under a bare key and no other. `bevy_enhanced_input` only matches the
+/// modifiers a binding names, so a bare arrow would otherwise answer
+/// Ctrl+Arrow (outliner reorder) and Alt+Arrow (90-degree rotate) as well.
 pub(crate) fn can_nudge(
     keybind_focus: crate::keybind_focus::KeybindFocus,
     active: ActiveModalQuery,

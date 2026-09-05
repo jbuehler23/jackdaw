@@ -1,10 +1,9 @@
 //! Answering the editor's "what types do you have?" question from
 //! inside the game.
 //!
-//! The request is an ordinary command line argument: the editor
-//! runs it with [`SCHEMA_FLAG`], and [`JackdawPlugin`](crate::JackdawPlugin)
-//! answers it, writes the schema to stdout and exits. Games do not need
-//! to handle the flag themselves.
+//! The editor runs the game with [`SCHEMA_FLAG`], and
+//! [`JackdawPlugin`](crate::JackdawPlugin) answers it, writes the schema to
+//! stdout and exits.
 
 #![expect(
     clippy::print_stdout,
@@ -27,10 +26,9 @@ pub fn schema_extraction_requested() -> bool {
     std::env::args().any(|arg| arg == SCHEMA_FLAG)
 }
 
-/// This binary's reflected types, read from the link-time inventory
-/// alone, as the JSON wire format the editor reads.
-///
-/// No `App` is involved, so this cannot see registered functions.
+/// This binary's reflected types, read from the link-time inventory alone, as
+/// the JSON wire format the editor reads. No `App` is involved, so this cannot
+/// see registered functions.
 pub fn extract_schema_json() -> Result<String, serde_json::Error> {
     let schema = jackdaw_schema::extract_derived_schema();
     serde_json::to_string(&schema)
@@ -38,11 +36,9 @@ pub fn extract_schema_json() -> Result<String, serde_json::Error> {
 
 /// The schema of a built app's `World`.
 ///
-/// Reads the app's own type registry rather than the link-time
-/// inventory (it is a superset: auto-registered types plus anything the
-/// game registered by hand) and the function registry, which exists
-/// only on a built `App`. Falls back to the inventory if the world has
-/// no type registry.
+/// Reads the app's own type registry, a superset of the link-time inventory,
+/// plus the function registry, which exists only on a built `App`. Falls back
+/// to the inventory if the world has no type registry.
 pub fn extract_schema_from_world(world: &World) -> ProjectSchema {
     let mut schema = match world.get_resource::<AppTypeRegistry>() {
         Some(registry) => jackdaw_schema::extract_from_registry(&registry.read()),
@@ -54,7 +50,7 @@ pub fn extract_schema_from_world(world: &World) -> ProjectSchema {
     schema
 }
 
-/// Print `schema` on stdout and end the process. Never returns.
+/// Prints `schema` on stdout and ends the process. Never returns.
 fn print_and_exit(schema: &ProjectSchema) -> ! {
     match serde_json::to_string(schema) {
         Ok(json) => {
@@ -68,32 +64,15 @@ fn print_and_exit(schema: &ProjectSchema) -> ! {
     }
 }
 
-/// Dump and exit once the game's `App` is fully built, when the flag
-/// was passed; otherwise leave `app` untouched so startup continues.
+/// Dumps the schema and exits once the game's `App` is fully built, when the
+/// flag was passed; otherwise leaves `app` untouched.
 ///
-/// Functions are registered by the game's own plugins, so a dump taken
-/// while `JackdawPlugin` is building would miss every plugin added
-/// after it. The dump therefore happens in the app runner: `App::run`
-/// hands the built app to its runner *before* `finish`, so every
-/// plugin's `build` has run, leaving the type and function registries
-/// complete, while nothing has opened a window or started a frame.
-///
-/// Letting the rest of the app build is what buys the function
-/// registry, and is also where the risk sits, so two fallbacks cover it:
-///
-/// - A panic hook prints the link-time inventory schema and exits 0, so
-///   a game that panics while building still reports its components and
-///   resources. It cannot report functions, since nothing has
-///   registered them yet, and it does not help if a plugin *blocks*
-///   rather than panics; the driver's deadline covers that.
-/// - A `PreStartup` system catches a plugin added after this one
-///   replacing the runner (`WinitPlugin` does). Reaching `PreStartup`
-///   means the app ran `finish` and `cleanup` and opened a window, which
-///   is what the runner swap exists to avoid, and on a machine that
-///   cannot open one this system never runs. It turns a hung build into
-///   a window flash where a window is possible, and into a non-zero exit
-///   (plus the inventory fallback, if the failure is a panic) where it
-///   is not.
+/// The dump happens in the app runner, which `App::run` reaches after every
+/// plugin's `build` and before `finish`, so the function registry the game's
+/// own plugins fill is complete and no window has opened. Two fallbacks cover
+/// a build that never gets there: a panic hook printing the inventory-only
+/// schema and exiting 0, and a `PreStartup` system for a later plugin that
+/// replaces the runner.
 pub fn extract_schema_and_exit_if_requested(app: &mut App) {
     if !schema_extraction_requested() {
         return;
@@ -109,15 +88,12 @@ fn inventory_fallback_json() -> Option<String> {
     extract_schema_json().ok()
 }
 
-/// Print the inventory schema and exit 0 if the app panics on its way
-/// to the dump.
+/// Prints the inventory schema and exits 0 if the app panics on its way to the
+/// dump.
 ///
 /// Exit 0 is load-bearing: the driver discards stdout entirely when the
-/// extractor exits non-zero, so a fallback payload behind a failing
-/// status would never be read. The panic itself still reaches stderr
-/// through the previous hook, and the editor's schema is only ever as
-/// good as the last parseable line on stdout, so a runner dump that
-/// lands later supersedes this one.
+/// extractor exits non-zero. The panic still reaches stderr through the
+/// previous hook, and a runner dump landing later supersedes this one.
 fn install_inventory_fallback_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -138,8 +114,8 @@ mod tests {
     use super::*;
     use bevy::prelude::*;
 
-    /// A function a binding could call, registered the way a game
-    /// registers its own.
+    /// A function a binding could call, registered the way a game registers its
+    /// own.
     fn double(value: f32) -> f32 {
         value * 2.0
     }
@@ -174,10 +150,8 @@ mod tests {
         assert_eq!(found.return_type_path, "f32");
     }
 
-    /// The hook's own body cannot run in-process (it ends the
-    /// process), so what is pinned here is the payload it prints: a
-    /// parseable schema line carrying the types the link-time inventory
-    /// knows.
+    /// The hook's own body ends the process, so what is pinned here is the
+    /// payload it prints.
     #[test]
     fn the_panic_fallback_prints_a_populated_schema_line() {
         let line = inventory_fallback_json().expect("the inventory serializes");

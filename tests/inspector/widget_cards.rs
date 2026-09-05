@@ -1,12 +1,8 @@
-//! The authored widget components in the inspector.
-//!
-//! `jackdaw_widgets_runtime` holds everything a list-shaped widget carries: a
-//! progress bar's value, a dropdown's options, a tab strip's labels. The
-//! namespace cull that keeps jackdaw's bookkeeping out of the generic card
-//! list swallowed them too, so the widgets could be placed and never authored.
-//!
-//! The list controls are the other half of the same job: a `Vec<String>` shown
-//! but not added to is a list nobody can write.
+//! The authored widget components in the inspector. `jackdaw_widgets_runtime`
+//! holds everything a list-shaped widget carries, and the namespace cull that
+//! keeps jackdaw's bookkeeping out of the generic card list swallowed them too.
+//! The list controls are the other half: a `Vec<String>` shown but not added to
+//! is a list nobody can write.
 
 use crate::util;
 

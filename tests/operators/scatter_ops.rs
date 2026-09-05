@@ -1,11 +1,7 @@
-//! The scatter ops a caller with no pointer needs: moving a hand-authored
-//! group into the terrain's stored scatter, naming a group to act on, and
-//! taking one placement back out again.
-//!
-//! This is how a script or a remote client reaches a scene that was
-//! generated rather than scattered: the groups are already in the file as
-//! entities, beside the terrain, and every re-scatter would double them
-//! until one of these has been run.
+//! The scatter ops a caller with no pointer needs: adopting a hand-authored group
+//! into the terrain's stored scatter, naming a group to act on, and taking one
+//! placement back out. Until one has been run, every re-scatter doubles the
+//! groups a generated scene already holds as entities.
 
 use crate::util;
 
@@ -30,10 +26,9 @@ fn run(app: &mut App, clause: &str) {
     app.update();
 }
 
-/// A scene with one terrain that has a document to store scatter in.
-///
-/// The sidecar path is minted here rather than by the editor's own system,
-/// which is gated on a state a headless test never enters.
+/// A scene with one terrain that has a document to store scatter in. The sidecar
+/// path is minted here: the editor's own system is gated on a state a headless
+/// test never enters.
 fn scene_with_a_terrain() -> (App, Entity) {
     let mut app = util::editor_test_app();
     run(&mut app, "scene.new");
@@ -102,9 +97,8 @@ fn stored_groups(app: &App, terrain: Entity) -> Vec<(String, usize)> {
     )
 }
 
-/// Adoption moves the group into the terrain's document, from the
-/// selection alone: the entities go and a placement stands where each
-/// model stood.
+/// Adoption moves the group into the terrain's document from the selection alone:
+/// the entities go and a placement stands where each model stood.
 #[test]
 fn an_adopt_clause_stores_the_selected_group_on_the_terrain() {
     let (mut app, terrain) = scene_with_a_terrain();
@@ -218,9 +212,8 @@ fn an_adoption_is_one_undo_entry() {
     );
 }
 
-/// A group a previous build stamped as entities is adopted under the key
-/// it already carries, which is how such a scene moves to stored scatter
-/// without its groups changing name.
+/// A group a previous build stamped as entities is adopted under the key it
+/// already carries, so its groups do not change name.
 #[test]
 fn adopting_a_group_that_is_already_stamped_keeps_its_key() {
     let (mut app, terrain) = scene_with_a_terrain();
@@ -281,16 +274,15 @@ fn a_group_select_clause_selects_the_group_with_that_key() {
     assert_eq!(app.world().resource::<Selection>().primary(), Some(group));
 }
 
-/// The clause form of adoption acts on the selection, so the operator has
-/// to be in the fallback list or every scripted run of it is short a target.
+/// The clause form of adoption acts on the selection, so the operator has to be
+/// in the fallback list or every scripted run is short a target.
 #[test]
 fn adopt_takes_its_target_from_the_selection() {
     assert!(SELECTION_FALLBACK_OPS.contains(&"terrain.scatter.adopt"));
 }
 
-/// A scripted clear names its group and has no selection to fall back on.
-/// Finishing silently there reads as "the group is gone", which is the
-/// one answer the caller must not be given.
+/// A scripted clear names its group and has no selection to fall back on;
+/// finishing silently there reads as "the group is gone".
 #[test]
 fn clearing_with_no_terrain_says_so_rather_than_finishing_quietly() {
     let mut app = util::editor_test_app();

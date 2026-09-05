@@ -2,22 +2,8 @@
 //!
 //! Splitting a binding's paths and looking up its types happens once and lands
 //! in a `ResolvedBindings` sibling component, which the evaluator reads instead
-//! of parsing the paths again on every frame.
-//!
-//! Keeping a lookup means keeping it true. What is pinned here:
-//!
-//! 1. A widget moved under a different `BindContext` reads the new subject,
-//!    not the one it was resolved against.
-//! 2. A frame in which no source moved reads nothing at all.
-//! 3. A widget moved out of its context, or one whose context is taken away,
-//!    stops reading the subject it was resolved against.
-//! 4. A despawned widget takes its resolution with it.
-//! 5. The resolution cannot reach a document: it is not a reflected type, so
-//!    nothing that writes a scene can see it.
-//! 6. A widget whose target component arrives late still binds, rather than
-//!    failing once and staying failed.
-//! 7. A `Value` binding keeps its widget in step every frame, gate or no gate.
-//! 8. What one binding writes reaches a binding that reads it.
+//! of parsing the paths again on every frame. These tests pin that the kept
+//! lookup stays true as the scene moves under it.
 
 use bevy::prelude::*;
 use jackdaw_bind::{
@@ -64,8 +50,7 @@ fn app() -> App {
 struct Evaluating(bool);
 
 /// The editor's registration: the evaluator alone, behind a run condition that
-/// can park it. `JackdawBindPlugin` runs it every frame, so a parked frame
-/// cannot be shown against an app built with the plugin.
+/// can park it, which `JackdawBindPlugin` has no way to do.
 fn parked_app() -> App {
     let mut app = App::new();
     app.add_plugins((
@@ -94,10 +79,9 @@ fn set_evaluating(app: &mut App, on: bool) {
     app.world_mut().resource_mut::<Evaluating>().0 = on;
 }
 
-/// A widget that leaves its context while the evaluator is parked is the one
-/// case nothing else catches. Reparenting is reported through a removal queue
-/// bevy clears every frame, so the removal is gone before the evaluator runs
-/// again, and only the reader's missed-message cursor still knows it happened.
+/// Reparenting is reported through a removal queue bevy clears every frame, so
+/// a widget that leaves its context while the evaluator is parked is known only
+/// through the reader's missed-message cursor.
 #[test]
 fn a_widget_that_left_its_context_while_parked_is_looked_up_again_on_resume() {
     let mut app = parked_app();
@@ -111,7 +95,6 @@ fn a_widget_that_left_its_context_while_parked_is_looked_up_again_on_resume() {
 
     set_evaluating(&mut app, false);
     app.world_mut().entity_mut(widget).remove::<ChildOf>();
-    // Long enough for bevy to drop the removal nothing read.
     for _ in 0..4 {
         app.update();
     }
@@ -267,11 +250,10 @@ fn resolutions(app: &mut App) -> usize {
         .count()
 }
 
-/// The resolution holds entity ids, component ids and reflect handles, none of
-/// which mean anything in a saved scene. It stays out of documents by not being
-/// a reflected type at all: this build turns on `reflect_auto_register`, so a
-/// `Reflect` derive on it would put it in the registry, and every writer the
-/// editor has works from the registry.
+/// The resolution holds ids and reflect handles that mean nothing in a saved
+/// scene. It stays out of documents by not being a reflected type: with
+/// `reflect_auto_register` on, a `Reflect` derive would put it in the registry
+/// every writer works from.
 #[test]
 fn the_resolution_cannot_reach_a_document() {
     let mut app = app();
@@ -296,10 +278,6 @@ fn the_resolution_cannot_reach_a_document() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// A context that goes away
-// ---------------------------------------------------------------------------
-
 #[test]
 fn a_widget_moved_out_of_its_context_stops_reading_the_old_subject() {
     let mut app = app();
@@ -310,7 +288,6 @@ fn a_widget_moved_out_of_its_context_stops_reading_the_old_subject() {
     app.update();
     assert_eq!(width(&app, widget), Val::Px(10.0));
 
-    // What the outliner does when a widget is dragged to the scene root.
     app.world_mut().entity_mut(widget).remove::<ChildOf>();
     app.world_mut()
         .get_mut::<Health>(hero)
@@ -347,13 +324,8 @@ fn a_context_taken_away_above_a_widget_is_noticed() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Failures that fix themselves
-// ---------------------------------------------------------------------------
-
 /// A widget hydrated over two frames, its bindings landing before the component
-/// they write. The first frame has nothing to write to and says so; the second
-/// has to bind rather than stay dead, because nothing about the source moves.
+/// they write. The second frame has to bind rather than stay dead.
 #[test]
 fn a_widget_whose_target_arrives_late_still_binds() {
     let mut app = app();
@@ -383,13 +355,8 @@ fn a_widget_whose_target_arrives_late_still_binds() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Value bindings
-// ---------------------------------------------------------------------------
-
-/// A one-way `Value` binding says the widget follows the value. A click that
-/// moves the widget and not the value has to be put back, which means the arm
-/// runs whether or not the source moved.
+/// A click that moves the widget and not the value has to be put back, so a
+/// one-way `Value` binding runs whether or not the source moved.
 #[test]
 fn a_one_way_value_binding_puts_the_widget_back() {
     let mut app = app();
@@ -420,14 +387,9 @@ fn a_one_way_value_binding_puts_the_widget_back() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// One binding reading another's target
-// ---------------------------------------------------------------------------
-
-/// The evaluator decides what is due before it writes anything, so a chain
-/// advances one link per frame. What it must never do is stall: a write has to
-/// land on a later tick than the one the gate just read, or the binding
-/// downstream of it is skipped for good.
+/// A chain advances one link per frame, but must never stall: a write has to
+/// land on a later tick than the gate just read, or the binding downstream of
+/// it is skipped for good.
 #[test]
 fn a_binding_reading_what_another_wrote_follows_it() {
     let mut app = app();

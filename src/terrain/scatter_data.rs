@@ -1,14 +1,13 @@
 //! Scatter kept in the terrain's document rather than as scene entities.
 //!
 //! A stored placement is twenty-four bytes in the sidecar and one batched
-//! draw among thousands. An instance entity is a name, a scene node, an
-//! AST row, an undo snapshot, a glTF scene spawn and an outliner line. The
-//! editor's scatter operators write the former; the latter is what a hand
-//! places, and what [`nth_in_group`] and [`remove`] turn one placement back
-//! into when a hand wants to edit it.
+//! draw among thousands, where an instance entity is a scene node, an AST
+//! row, an undo snapshot and an outliner line. The editor's scatter
+//! operators write the former, and turn one back into an entity when a hand
+//! wants to edit it.
 //!
 //! An older scene whose scatter is entities keeps working: nothing here
-//! touches those groups until [`adopt`] converts one.
+//! touches those groups until `adopt` converts one.
 
 use bevy::prelude::*;
 use jackdaw_terrain::region::RegionCoord;
@@ -21,10 +20,9 @@ use super::TerrainDataStore;
 
 /// A terrain's whole stored scatter, as an undo entry holds it.
 ///
-/// Whole rather than per region: a run replaces one group across every
-/// region it reaches, so the regions an entry would have to name are the
-/// ones it changed, and at twenty-four bytes a placement the copy is
-/// cheaper than working out which those were.
+/// Whole rather than per region: a run replaces one group across every region
+/// it reaches, and at twenty-four bytes a placement the copy is cheaper than
+/// working out which regions changed.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ScatterSnapshot {
     palette: ScatterPalette,
@@ -45,10 +43,9 @@ impl ScatterSnapshot {
 
     fn apply(&self, data: &mut RegionTerrainData) {
         data.scatter = self.palette.clone();
-        // A region the snapshot does not name is one an edit since it
-        // allocated. Allocating is how a stamp stores a placement past the
-        // terrain's edge, so leaving it behind would let an undone stamp
-        // grow the terrain's extent, its mesh and its file for good.
+        // A region the snapshot does not name is one an edit since allocated.
+        // Leaving it behind would let an undone stamp grow the terrain's
+        // extent, its mesh and its file for good.
         let extra: Vec<RegionCoord> = data
             .regions
             .iter_sorted()
@@ -61,9 +58,8 @@ impl ScatterSnapshot {
         for (_, region) in data.regions.iter_sorted_mut() {
             region.placements_mut().clear();
         }
-        // A snapshot region the document does not hold is one an undone
-        // edit took away: a placement lives in the region covering it, so
-        // putting the placements back puts the region back with them.
+        // A snapshot region the document does not hold is one an undone edit
+        // took away, so putting the placements back puts the region back.
         for (coord, placements) in &self.regions {
             if placements.is_empty() {
                 continue;
@@ -416,15 +412,11 @@ fn push(world: &mut World, command: SetScatterData) {
 /// Keep what the renderer draws out of the outliner and out of the saved
 /// scene.
 ///
-/// A drawn placement is derived from the terrain's document the same way a
-/// surface level is derived from its heights, so it is marked the same
-/// way: the document already holds it, and a second copy in the scene text
-/// would be spawned beside it on the next load.
+/// A drawn placement is derived from the terrain's document, so a second copy
+/// in the scene text would be spawned beside it on the next load.
 ///
-/// The chunk alone carries the mark. Its children are unnamed, so neither
-/// the outliner nor the scene writer reaches them on their own, and a mark
-/// per drawn entity would be two component inserts and an archetype move
-/// per placement on every rebuild.
+/// The chunk alone carries the mark: its children are unnamed, and a mark per
+/// drawn entity would be an archetype move per placement on every rebuild.
 pub fn hide_drawn_scatter(add: On<Add, ScatterChunk>, mut commands: Commands) {
     commands
         .entity(add.entity)
@@ -433,11 +425,10 @@ pub fn hide_drawn_scatter(add: On<Add, ScatterChunk>, mut commands: Commands) {
 
 /// Keep each terrain's drawn scatter in step with its document.
 ///
-/// The renderer works off components on the terrain entity; the store is
-/// where the editor's documents live. This is the one place the two meet.
-/// A terrain with neither is brought up to date whatever the store says,
-/// so a scene reopened in the same tab draws its scatter without waiting
-/// for another edit to mark it.
+/// The renderer works off components on the terrain entity and the store is
+/// where the editor's documents live; this is the one place the two meet. A
+/// terrain with neither is brought up to date whatever the store says, so a
+/// reopened scene draws its scatter without waiting for another edit.
 pub fn sync_terrain_scatter(
     mut commands: Commands,
     store: Res<TerrainDataStore>,
@@ -458,8 +449,7 @@ pub fn sync_terrain_scatter(
             .map(TerrainScatter::from_document)
             .unwrap_or_default();
         // Merged rather than replaced: a mark the renderer has not run
-        // against yet is still owed a rebuild, and this frame's edit is
-        // not the only region waiting.
+        // against yet is still owed a rebuild.
         let mut mark = dirty.unwrap_or_else(ScatterDirty::all);
         if let Some(pending) = pending {
             mark.merge(pending);

@@ -231,8 +231,7 @@ fn the_header_snap_menu_lists_every_kind_with_its_state() {
     );
 
     set_kind(&mut app, "other_nodes", true);
-    // The rows are read when the menu is being looked at, so opening it
-    // is what asks for them.
+    // The rows are read when the menu is being looked at, so opening it asks for them.
     open_snap_menu(&mut app);
     app.update();
     assert!(
@@ -267,7 +266,6 @@ fn clicking_a_snap_row_flips_the_kind_and_leaves_the_menu_open() {
         checked_rows(&mut app),
     );
 
-    // A row that is a command rather than a box is done with the menu.
     click_row(
         &mut app,
         &format!("op:viewport2d.grid?size=4&panel={}", panel.to_bits()),
@@ -278,11 +276,9 @@ fn clicking_a_snap_row_flips_the_kind_and_leaves_the_menu_open() {
     );
 }
 
-/// A `panel` that names no open panel is the same as naming none.
-///
-/// The figure is written by hand in a capture script, so bits that are
-/// not an entity at all, and a handle left over from an earlier run,
-/// both reach the operator as readily as a live panel.
+/// A `panel` that names no open panel is the same as naming none. The figure
+/// is written by hand in a capture script, so bits that are not an entity at
+/// all reach the operator as readily as a live panel.
 #[test]
 fn a_grid_row_naming_no_open_panel_moves_every_panel() {
     for (bits, sense) in [
@@ -309,11 +305,8 @@ fn a_grid_row_naming_no_open_panel_moves_every_panel() {
     }
 }
 
-/// The magnet chord means the magnet of the canvas under the pointer.
-///
-/// One key for one idea: over a 2D panel it is the canvas's master, and
-/// over the 3D world it is the tools' own snapping, and neither reaches
-/// across into the other.
+/// Over a 2D panel the magnet chord is the canvas's master, and over the 3D
+/// world it is the tools' own snapping; neither reaches into the other.
 #[test]
 fn the_magnet_chord_flips_the_canvas_under_the_pointer() {
     use jackdaw::snapping::SnapSettings;
@@ -350,11 +343,9 @@ fn the_magnet_chord_flips_the_canvas_under_the_pointer() {
     }
 }
 
-/// A checked row reached without a mouse press holds nothing over.
-///
-/// A scripted or keyboard click fires the row without the press the
-/// close pass spends the hold on; a hold left standing would eat the
-/// next click outside a later menu, and that menu would not go down.
+/// A scripted or keyboard click fires the row without the press the close pass
+/// spends the hold on, and a hold left standing would eat the next click
+/// outside a later menu.
 #[test]
 fn a_checked_row_clicked_without_a_press_does_not_swallow_a_later_click() {
     use jackdaw_widgets::menu_bar::MenuBarState;
@@ -459,9 +450,8 @@ fn open_snap_menu(app: &mut App) {
     );
 }
 
-/// Click the open dropdown's row whose action is `action`: the button
-/// click, and the press that made it, on the one frame the editor sees
-/// them on.
+/// Click the open dropdown's row whose action is `action`: the button click,
+/// and the press that made it, on the one frame the editor sees them on.
 fn click_row(app: &mut App, action: &str) {
     use bevy::input::{ButtonState, mouse::MouseButtonInput};
     use bevy::ui_widgets::Activate;
@@ -487,8 +477,7 @@ fn click_row(app: &mut App, action: &str) {
         window,
     });
     app.update();
-    // Let the button go, so the next click is a press the editor sees
-    // rather than one already held down.
+    // Let the button go, so the next click is a press rather than one already held.
     app.world_mut().write_message(MouseButtonInput {
         button: MouseButton::Left,
         state: ButtonState::Released,
@@ -520,12 +509,9 @@ fn checked_rows(app: &mut App) -> Vec<(String, bool)> {
         .collect()
 }
 
-/// A grid row in one panel's menu moves that panel's lattice alone.
-///
-/// The stepper beside the menu is per panel, and the row saying the same
-/// thing has to mean the same thing: two panels open on the same scene
-/// are two framings of it, and coarsening one is not a statement about
-/// the other.
+/// The stepper beside the menu is per panel, and the row saying the same thing
+/// has to mean the same thing: two panels open on one scene are two framings
+/// of it.
 #[test]
 fn a_grid_row_moves_the_panel_whose_menu_it_is_in() {
     let (mut app, first) = snap_menu_app();
@@ -598,8 +584,8 @@ fn descends_from(app: &App, entity: Entity, ancestor: Entity) -> bool {
 #[test]
 fn the_view_menu_carries_the_canvas_view_toggles() {
     let mut app = util::editor_test_app();
-    // The bar is built behind the editor state, which a headless run
-    // enters only with a project open.
+    // The bar is built behind the editor state, which a headless run enters
+    // only with a project open.
     let root = project_with_settings("view-menu", "{}");
     open_project(&mut app, &root);
     app.world_mut()
@@ -644,12 +630,9 @@ fn the_view_menu_carries_the_canvas_view_toggles() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A checked row in the top bar leaves the menu it was clicked in
-/// standing, and the bar walkable.
-///
-/// The row flags the bar for rebuilding, and the open menu is named by
-/// entity: an item respawned under its own open dropdown would take the
-/// dropdown's redraw, the bar's highlight and the hover walk with it.
+/// The row flags the bar for rebuilding, and the open menu is named by entity:
+/// an item respawned under its own open dropdown would take the dropdown's
+/// redraw, the bar's highlight and the hover walk with it.
 #[test]
 fn a_checked_row_in_the_top_bar_leaves_its_menu_open_and_the_bar_walkable() {
     use jackdaw_widgets::menu_bar::MenuBarState;
@@ -724,8 +707,8 @@ fn open_menu_named(app: &mut App, label: &str) {
     app.update();
 }
 
-/// Put the pointer on a menu-bar item, which is what switches the open
-/// menu while another one is up.
+/// Put the pointer on a menu-bar item, which is what switches the open menu
+/// while another one is up.
 fn hover_menu_bar_item(app: &mut App, target: Entity) {
     use bevy::picking::pointer::{Location, PointerId};
     use bevy::window::{PrimaryWindow, WindowRef};

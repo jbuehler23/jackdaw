@@ -31,14 +31,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<InspectorCardOp>();
 }
 
-/// Open or close one inspector card.
-///
-/// Writes the same collapse state the header's disclosure toggle writes,
-/// and marks the panel for the rebuild that reads it.
-///
-/// A name no card carries still applies, the same way `inspector.category`
-/// takes an id no tab exists for: the entry sits in the collapse state until
-/// a selection brings that card up.
+/// Open or close one inspector card, writing the same collapse state the
+/// header's disclosure toggle writes. A name no card carries still applies:
+/// the entry waits until a selection brings that card up.
 #[operator(
     id = "inspector.card",
     label = "Open Inspector Card",
@@ -69,10 +64,9 @@ pub(crate) fn inspector_card(
 
 /// Show one of the inspector's category tabs.
 ///
-/// The strip's own tabs write the same resource, so a click and a
-/// scripted call take the same path. An id no tab exists for still
-/// applies: the strip resolves back to an applicable category on its next
-/// rebuild, the same as it does when a selection changes.
+/// The strip's own tabs write the same resource, so a click and a scripted
+/// call take the same path. An id no tab exists for still applies: the strip
+/// resolves back to an applicable category on its next rebuild.
 #[operator(
     id = "inspector.category",
     label = "Inspector Category",
@@ -295,8 +289,7 @@ pub(crate) fn component_remove(
             );
             return;
         }
-        // A running preview owns the components its evaluator writes, so
-        // removing one is refused the same way the field rows refuse an edit.
+        // A running preview owns the components its evaluator writes.
         if crate::preview_context::preview_writes_type_path(world, entity, &type_path) {
             warn!(
                 "{}: `{type_path}` on {entity}",
@@ -315,12 +308,9 @@ pub(crate) fn component_remove(
     OperatorResult::Finished
 }
 
-/// Read a parameter as the JSON a field edit commits.
-///
-/// A harness types its values, so `120` arrives as an `Int` and `true` as
-/// a `Bool`; a string is tried as JSON first so a composite value such as
-/// `{"Px": 120}` reaches the field as the enum variant it spells, and
-/// falls back to being the string it is (`Auto`, or a `Name`'s text).
+/// Read a parameter as the JSON a field edit commits. A string is parsed as
+/// JSON first, so `{"Px": 120}` arrives as the enum variant it spells, and
+/// falls back to being the string it is.
 fn param_json(params: &OperatorParameters, key: &str) -> Option<serde_json::Value> {
     use jackdaw_scene_types::PropertyValue;
     match params.get(key)? {
@@ -335,18 +325,12 @@ fn param_json(params: &OperatorParameters, key: &str) -> Option<serde_json::Valu
     }
 }
 
-/// Set one field of one component, through the gesture the inspector's
-/// own rows commit with.
+/// Set one field of one component, through the same commit the inspector's own
+/// rows use.
 ///
-/// Commits through [`crate::commands::field_edit_commit`], which authors the
-/// scene document, mints one undo entry, and streams the edit to a running
-/// game. A raw reflection write would move the ECS and none of the three.
-///
-/// The commit acts on the selection, so the target is selected first. A
-/// target already in the selection leaves it alone, and a multi-entity
-/// selection takes the edit on every member as one undo entry. A target
-/// outside the selection replaces it: after `field.set entity=<unselected
-/// node>`, that node is the whole selection.
+/// The commit acts on the selection, so a target outside it replaces the
+/// selection; a multi-entity selection takes the edit on every member as one
+/// undo entry.
 #[operator(
     id = "field.set",
     label = "Set Field",
@@ -448,9 +432,7 @@ pub(crate) fn physics_disable(
 ) -> OperatorResult {
     let entity = params.as_entity("entity")?;
     commands.queue(move |world: &mut World| {
-        // Refused like a component removal: a running preview owns the
-        // components its evaluator writes, and this removes three of them
-        // and rewrites the document.
+        // A running preview owns the components its evaluator writes.
         if let Some(owned) = super::physics_display::preview_owned_physics(world, entity) {
             warn!(
                 "{}: `{owned}` on {entity}",

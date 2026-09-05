@@ -1,20 +1,5 @@
-//! Widget creation: the registry feeds the Add menu's UI Widgets section,
-//! and one row turns a definition into an authored entity in the open UI
-//! scene.
-//!
-//! Four contracts are pinned here:
-//!
-//! 1. Every registered definition reaches the Add menu, in its `UI Widgets`
-//!    section, and activating one of those rows creates the widget.
-//! 2. Creating a widget parents it inside the open UI scene, registers the
-//!    whole subtree in the document parent-first (so a save nests it), selects
-//!    the new root, and lands as exactly one undo entry.
-//! 3. A document with no UI scene refuses the request instead of spawning a
-//!    stray node somewhere the user cannot see.
-//! 4. A widget is one outliner row, not one row per entity it is built from.
-//!    The button is the one widget with a child, and that child is authored
-//!    too: its caption is an editable node with its own row, not a generated
-//!    part.
+//! Widget creation: the registry feeds the Add menu's UI Widgets section, and
+//! activating a row authors the widget into the open UI scene.
 
 use crate::util;
 
@@ -35,9 +20,7 @@ use jackdaw_feathers::menu_bar::{
 };
 use jackdaw_scene_types::UiSceneRoot;
 
-/// The widget vocabulary ships as its own extension, which an on-disk
-/// extension config may leave off. Force it on so the test exercises the
-/// shipped vocabulary rather than whatever the local config enables.
+/// Force the widget extension on: an on-disk extension config may leave it off.
 fn palette_app() -> App {
     let mut app = util::editor_test_app();
     jackdaw_api_internal::lifecycle::enable_extension(app.world_mut(), "jackdaw.ui_palette");
@@ -209,8 +192,7 @@ fn every_registered_widget_sits_in_the_ui_group() {
     );
 }
 
-/// The menu opens on the entries themselves, groups everything else
-/// behind a row that expands, and never leaves a divider stranded.
+/// The menu opens on the entries themselves and never strands a divider.
 #[test]
 fn the_add_menu_opens_on_entries_and_groups_the_rest() {
     let mut app = palette_app();
@@ -262,8 +244,7 @@ fn the_add_menu_opens_on_entries_and_groups_the_rest() {
     );
 }
 
-/// A group of one entry says what the entry is; a group worth expanding
-/// keeps its own name.
+/// A group of one entry says what the entry is; a bigger group keeps its name.
 #[test]
 fn a_group_of_one_stands_in_for_its_entry() {
     let mut app = palette_app();
@@ -301,8 +282,8 @@ fn activating_a_ui_group_row_creates_the_widget_undoably() {
     app.update();
 
     let world = app.world_mut();
-    // The editor's own chrome is built from buttons too, so the widget
-    // the row made is the one parented to the open scene's root.
+    // The editor's own chrome is built from buttons too, so match on the one
+    // parented to the open scene's root.
     let button = world
         .query_filtered::<Entity, bevy::prelude::With<bevy::ui_widgets::Button>>()
         .iter(world)
@@ -353,8 +334,7 @@ fn creating_a_widget_authors_it_under_the_open_ui_scene() {
     );
     assert!(world.get::<Name>(button).is_some(), "every widget is named");
 
-    // The document nests the widget under the root, so a save round-trips it
-    // as part of the scene rather than as a second top-level node.
+    // The document nests the widget under the root, so a save round-trips it.
     let text =
         jackdaw::scene_io::emit_bsn_scene_with_inline_assets(world, std::path::Path::new("."));
     assert!(
@@ -511,9 +491,7 @@ fn a_subtree_is_registered_parent_before_children() {
     );
 }
 
-/// Rows for children are spawned lazily, so a test that wants to see them
-/// has to mark the parent row as already expanded, as `multi_outliner`
-/// does.
+/// Child rows spawn lazily, so mark the parent row expanded to see them.
 fn mark_expanded(world: &mut World, source: Entity) {
     let mut rows = world.query::<(
         &jackdaw_widgets::tree_view::TreeNode,
@@ -558,8 +536,8 @@ fn a_widget_is_one_outliner_row_and_its_internals_are_none() {
         "a button is one outliner row in the one open outliner",
     );
 
-    // What a widget implementation adds under an authored node at runtime:
-    // a child the document has no node for.
+    // What a widget adds under an authored node at runtime: a child the
+    // document has no node for.
     mark_expanded(world, button);
     let internal = world
         .spawn((Name::new("Button Label"), Node::default(), ChildOf(button)))
@@ -575,12 +553,8 @@ fn a_widget_is_one_outliner_row_and_its_internals_are_none() {
     assert_eq!(rows_for(world, button), 1, "the button is still one row",);
 }
 
-/// Plenty of authored entities are parented first and registered a frame or
-/// more later: a new animation clip registers from an `Update` system after
-/// `spawn_new_clip_for_selection` parents it, and a load registers its
-/// entities after spawning them. Judged at the moment the row-spawn observer
-/// runs, those are indistinguishable from a generated part, so the row is
-/// withheld and has to arrive once the document catches up.
+/// Entities are often parented a frame or more before they register (a new clip,
+/// a load), so a withheld row has to arrive once the document catches up.
 #[test]
 fn a_child_registered_a_frame_later_still_gets_its_row() {
     let mut app = palette_app();
@@ -620,10 +594,8 @@ fn a_child_registered_a_frame_later_still_gets_its_row() {
     );
 }
 
-/// The other half of the same rule: a part that is derived rather than merely
-/// late, such as a GLTF instance's children or a terrain's chunks, never
-/// registers, so it never gets a row, no matter how many times the document
-/// changes around it.
+/// A derived part (a GLTF instance's children, a terrain's chunks) never
+/// registers, so it never gets a row.
 #[test]
 fn a_derived_child_stays_rowless_across_later_registrations() {
     let mut app = palette_app();
@@ -677,9 +649,7 @@ fn tree_row_of(world: &mut World, source: Entity) -> Option<Entity> {
         .map(|(row, _)| row)
 }
 
-/// The row's disclosure control, reached as
-/// row -> `TreeRowContent` -> `TreeNodeExpandToggle` -> the toggle. `None`
-/// when the row advertises no children.
+/// The row's disclosure toggle, or `None` when the row advertises no children.
 fn disclosure_of(world: &World, row: Entity) -> Option<Entity> {
     let content = world.get::<Children>(row)?.iter().find(|&child| {
         world
@@ -713,9 +683,8 @@ fn outliner_app() -> (App, Entity) {
     (app, root)
 }
 
-/// A row spawned before its source had children still has to become
-/// expandable when the first child arrives, or a node added from the Add menu
-/// is unreachable: its own row only spawns once the parent row is expanded.
+/// A row spawned before its source had children has to become expandable when
+/// the first child arrives, or the child's own row can never spawn.
 #[test]
 fn a_row_that_gains_a_child_becomes_expandable() {
     let (mut app, root) = outliner_app();
@@ -760,8 +729,7 @@ fn a_row_that_gains_a_child_becomes_expandable() {
     );
 }
 
-/// The other direction: a row that loses its last child stops offering an
-/// expansion that would open onto nothing.
+/// A row that loses its last child stops offering an expansion onto nothing.
 #[test]
 fn a_row_that_loses_its_last_child_stops_advertising_children() {
     let (mut app, root) = outliner_app();
@@ -790,9 +758,8 @@ fn a_row_that_loses_its_last_child_stops_advertising_children() {
     );
 }
 
-/// Adding a widget selects it, and the selection has to bring its row into
-/// view in Scene mode too, where the parent row may never have been expanded
-/// and so holds no child rows at all.
+/// Adding a widget selects it, so its row has to be brought into view even in
+/// Scene mode, where the parent row may hold no child rows at all.
 #[test]
 fn a_new_widget_is_revealed_in_the_scene_tree() {
     let (mut app, root) = outliner_app();
@@ -832,9 +799,8 @@ use bevy::feathers::{
 use bevy::ui::Checked;
 use bevy::ui_widgets::{Slider, SliderValue, ToggleChecked, ValueChange};
 
-/// The feathers styling paths the save allowlist names as string literals.
-/// A rename upstream turns each literal into a silent no-op, so they are
-/// pinned against the real `TypePath` here.
+/// The feathers styling paths the save allowlist names as string literals; an
+/// upstream rename would turn each literal into a silent no-op.
 #[test]
 fn the_allowlisted_feathers_paths_are_the_real_type_paths() {
     use bevy::reflect::TypePath;
@@ -881,9 +847,7 @@ fn the_allowlisted_feathers_paths_are_the_real_type_paths() {
     }
 }
 
-/// A palette button is a themed feathers button, not a flat coloured box:
-/// it carries the styling set `update_button_styles` keys on, plus the
-/// focus and cursor treatment the deprecated `button_bundle` spawned.
+/// A palette button is a themed feathers button, not a flat coloured box.
 #[test]
 fn a_created_button_carries_the_feathers_styling_set() {
     let mut app = palette_app();
@@ -959,8 +923,7 @@ fn by_name(world: &mut World, name: &str) -> Entity {
         .unwrap_or_else(|| panic!("no entity named {name} after the reload"))
 }
 
-/// Theming is not a spawn-time paint job: a document that comes back from
-/// disk must be re-themed by feathers' own systems.
+/// A document that comes back from disk must be re-themed by feathers' systems.
 #[test]
 fn a_reloaded_button_is_re_themed() {
     let mut app = palette_app();
@@ -984,9 +947,8 @@ fn a_reloaded_button_is_re_themed() {
     );
 }
 
-/// A checkbox authored in the editor, saved, and loaded back still toggles.
-/// Observers are not components, so the behaviour cannot ride along in the
-/// document and has to be attached by a plugin.
+/// Observers are not components, so a loaded checkbox's behaviour cannot ride
+/// along in the document and has to be re-attached by a plugin.
 #[test]
 fn a_reloaded_checkbox_still_toggles() {
     let mut app = palette_app();
@@ -1019,10 +981,8 @@ fn a_reloaded_checkbox_still_toggles() {
     );
 }
 
-/// Editor chrome runs its own checkbox state machines (the Extensions dialog
-/// refuses a toggle it cannot honour, the inspector mirrors a reflected
-/// field). The authored-widget observers must not reach into them, and what
-/// tells the two apart is a node in the scene document.
+/// The authored-widget observers must not reach into editor chrome's own
+/// checkboxes; a node in the scene document is what tells the two apart.
 #[test]
 fn the_self_update_observers_leave_editor_chrome_alone() {
     let mut app = palette_app();
@@ -1044,9 +1004,8 @@ fn the_self_update_observers_leave_editor_chrome_alone() {
     );
 }
 
-/// A slider that self-updates and a two-way `Value` binding write the same
-/// number: the binding's equality guards mean the pair settles instead of
-/// ping-ponging.
+/// A self-updating slider and a two-way `Value` binding settle on the same
+/// number instead of ping-ponging.
 #[test]
 fn a_bound_slider_settles_when_it_also_self_updates() {
     #[derive(Resource, Reflect, Default)]
@@ -1119,13 +1078,9 @@ fn a_bound_slider_settles_when_it_also_self_updates() {
     );
 }
 
-/// Feathers swaps a button's theme tokens in place for hover, pressed, and
-/// disabled: `set_button_styles` writes `ThemeBackgroundColor` and
-/// `InheritableThemeTextColor` on the button itself. Any path that captures a
-/// button's live components into the document, such as a paste, a late
-/// registration, or a re-registration after an undo, can therefore catch it
-/// mid-interaction and record `feathers.button.bg.pressed` as the colour the
-/// user authored. Emission normalises that back.
+/// Feathers swaps a button's theme tokens in place while it is pressed, so any
+/// path that captures live components into the document can record
+/// `feathers.button.bg.pressed` as the authored colour. Emission normalises it.
 #[test]
 fn a_pressed_button_saves_its_resting_colour() {
     let mut app = palette_app();
@@ -1137,8 +1092,6 @@ fn a_pressed_button_saves_its_resting_colour() {
     // `Update`; let that land before the press.
     app.update();
 
-    // What a mouse-down does: feathers rewrites both theme components to the
-    // pressed tokens, in place.
     app.world_mut().entity_mut(button).insert(bevy::ui::Pressed);
     app.update();
     assert_eq!(
@@ -1149,9 +1102,8 @@ fn a_pressed_button_saves_its_resting_colour() {
         "feathers really did swap the live token; otherwise this test proves nothing",
     );
 
-    // Re-register the button while it is held down: this is the capture step
-    // a paste or a late registration performs, and it snapshots whatever the
-    // live components say.
+    // Re-register while held down: the capture a paste or a late registration
+    // performs, snapshotting whatever the live components say.
     let world = app.world_mut();
     world
         .resource_mut::<jackdaw_bsn::SceneBsnAst>()
@@ -1171,8 +1123,7 @@ fn a_pressed_button_saves_its_resting_colour() {
         "and not the pressed colour: {text}",
     );
 
-    // The live component is untouched: emission works on a clone, and the
-    // button on screen is still pressed.
+    // Emission works on a clone, so the live component is untouched.
     assert_eq!(
         app.world()
             .get::<ThemeBackgroundColor>(button)
@@ -1181,8 +1132,8 @@ fn a_pressed_button_saves_its_resting_colour() {
     );
 }
 
-/// The caption is authored content, not a generated part: it survives the
-/// round trip with its text and its themed-text opt-in.
+/// The caption is authored content: it survives the round trip with its text
+/// and its themed-text opt-in.
 #[test]
 fn a_reloaded_button_keeps_its_caption() {
     let mut app = palette_app();
@@ -1207,9 +1158,8 @@ fn a_reloaded_button_keeps_its_caption() {
     );
 }
 
-/// A text input's text is authored state, and `bevy_text::EditableText`
-/// cannot carry it: it is not `Reflect`, so the document holds `TextValue`
-/// and the widget crate puts an editor back and fills it on load.
+/// `bevy_text::EditableText` is not `Reflect`, so the document holds
+/// `TextValue` and the widget crate refills the editor on load.
 #[test]
 fn a_reloaded_text_input_keeps_its_text() {
     use jackdaw_widgets_runtime::TextValue;
@@ -1222,8 +1172,6 @@ fn a_reloaded_text_input_keeps_its_text() {
         .get_mut::<TextValue>(input)
         .expect("the palette's input carries a text value")
         .0 = "Ada Lovelace".to_string();
-    // The save writes the document, so the edit reaches it the way every
-    // editor edit does rather than living in the world alone.
     let typed = app.world().get::<TextValue>(input).cloned().unwrap();
     jackdaw::commands::sync_component_to_ast(
         app.world_mut(),
@@ -1256,10 +1204,8 @@ fn a_reloaded_text_input_keeps_its_text() {
     );
 }
 
-/// The authored cursor is written as `EntityCursor::System(Pointer)`, an
-/// enum's tuple variant, which is not itself a registered type. Loading it
-/// takes both halves: `bevy_feathers` registers none of its own types, and the
-/// loader needs a fallback for a tuple patch naming a variant.
+/// `EntityCursor::System(Pointer)` is an enum tuple variant, not a registered
+/// type: loading it needs the feathers registrations and a tuple-patch fallback.
 #[test]
 fn a_reloaded_button_keeps_its_cursor() {
     use bevy::window::SystemCursorIcon;
@@ -1277,8 +1223,8 @@ fn a_reloaded_button_keeps_its_cursor() {
     );
 }
 
-/// A `Field` binding that writes a marker component is authored as a path
-/// with no field, which is a spelling the document has to carry exactly.
+/// A `Field` binding that writes a marker component is authored as a path with
+/// no field, a spelling the document has to carry exactly.
 #[test]
 fn a_marker_write_binding_survives_the_round_trip() {
     use jackdaw_bind::{BindPath, Binding, Bindings};
@@ -1311,10 +1257,8 @@ fn a_marker_write_binding_survives_the_round_trip() {
     );
 }
 
-/// Tab navigation gathers focusables from a `TabGroup` ancestor, so a
-/// screen authored without one is keyboard-unreachable however many
-/// buttons it holds. The root a new UI scene starts from is where that
-/// group belongs, next to the reference size the 2D stage frames against.
+/// Tab navigation gathers focusables from a `TabGroup` ancestor, so a new UI
+/// scene's root has to declare one or the screen is keyboard-unreachable.
 #[test]
 fn a_seeded_ui_root_carries_the_focus_group_and_the_reference_size() {
     let mut app = palette_app();
@@ -1337,8 +1281,7 @@ fn a_seeded_ui_root_carries_the_focus_group_and_the_reference_size() {
     );
 }
 
-/// The group is authored state, not a session decoration: it has to be in
-/// the document, which means the type has to be reflected and unskipped.
+/// The group is authored state, so the type has to be reflected and unskipped.
 #[test]
 fn a_seeded_ui_root_saves_its_focus_group() {
     let mut app = palette_app();
@@ -1361,9 +1304,7 @@ fn a_seeded_ui_root_saves_its_focus_group() {
     );
 }
 
-/// A scene whose root declares no group can be hand-authored or older than
-/// the seeding rule, and the first widget added to it is the moment to put
-/// the group back.
+/// A root that declares no group gets one when the first widget is added.
 #[test]
 fn the_first_widget_into_a_groupless_root_backfills_the_focus_group() {
     let mut app = palette_app();
@@ -1395,9 +1336,7 @@ fn the_first_widget_into_a_groupless_root_backfills_the_focus_group() {
     );
 }
 
-/// Idempotent, and it defers: a root that already declares a group keeps
-/// the one it declares, order and modality intact, however many widgets
-/// arrive after it.
+/// Idempotent: a root that already declares a group keeps the one it declares.
 #[test]
 fn a_root_that_already_has_a_focus_group_keeps_the_one_it_has() {
     let mut app = palette_app();
@@ -1419,13 +1358,9 @@ fn a_root_that_already_has_a_focus_group_keeps_the_one_it_has() {
     );
 }
 
-/// Gap 12: an authored checkbox is one entity standing in for feathers'
-/// multi-entity control, and feathers switches the checked colours from
-/// systems that walk that structure through private markers. Without a
-/// jackdaw-side swap a bound checkbox drove `Checked` correctly and looked
-/// identical either way. Checked here through the real palette, so the
-/// spawned tokens and the swap have to agree about which pair the widget
-/// is on.
+/// Feathers switches the checked colours from systems that walk its
+/// multi-entity control through private markers, so an authored one-entity
+/// checkbox needs a jackdaw-side token swap.
 #[test]
 fn a_checked_authored_checkbox_shows_it() {
     use bevy::feathers::theme::ThemeBackgroundColor;
@@ -1457,9 +1392,8 @@ fn a_checked_authored_checkbox_shows_it() {
     );
 }
 
-/// The toggle switch carries the same `Checkbox` marker as the checkbox, so
-/// a swap keyed on the marker would put checkbox colours on a switch. It is
-/// keyed on the resting token instead.
+/// The toggle switch carries the same `Checkbox` marker, so the swap is keyed
+/// on the resting token rather than the marker.
 #[test]
 fn a_toggled_authored_switch_shows_it_in_switch_colours() {
     use bevy::feathers::theme::ThemeBackgroundColor;
@@ -1482,8 +1416,7 @@ fn a_toggled_authored_switch_shows_it_in_switch_colours() {
     );
 }
 
-/// And the radio, whose ring is the only part feathers themes on the one
-/// entity an authored radio is.
+/// And the radio, whose ring is the only part feathers themes.
 #[test]
 fn a_chosen_authored_radio_shows_it_on_its_ring() {
     use bevy::feathers::theme::ThemeBorderColor;
@@ -1506,10 +1439,8 @@ fn a_chosen_authored_radio_shows_it_on_its_ring() {
     );
 }
 
-/// A definition names its root after the kind it makes, so three Buttons
-/// would all arrive called `Button`. Two rows reading the same thing name
-/// nothing, and an operator clause addressing one by name reaches
-/// whichever the query answers with first.
+/// A definition names its root after the kind it makes, so repeated adds have
+/// to be renamed: two rows reading the same thing address nothing.
 #[test]
 fn each_added_widget_gets_a_name_of_its_own() {
     let mut app = palette_app();
@@ -1531,8 +1462,7 @@ fn each_added_widget_gets_a_name_of_its_own() {
         .collect();
     assert_eq!(live, vec!["Button", "Button2", "Button3"]);
 
-    // The document records what each entity ended up called, so a save
-    // and a reload keep the three apart too.
+    // The document records the names too, so a save and reload keep them apart.
     let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
     let saved: Vec<String> = added
         .iter()
@@ -1570,11 +1500,7 @@ fn row_reads_selected(app: &mut App, source: Entity) -> bool {
         })
 }
 
-/// Clicking the row you are already working on keeps it selected.
-///
-/// Deselecting there costs the inspector, the canvas outline and every
-/// gesture aimed at the node, for a click whose whole intent was to come
-/// back to it. Ctrl is the deselect.
+/// Clicking the row you are already working on keeps it selected; Ctrl deselects.
 #[test]
 fn clicking_a_selected_outliner_row_keeps_the_selection() {
     let (mut app, root) = outliner_app();
@@ -1601,9 +1527,7 @@ fn clicking_a_selected_outliner_row_keeps_the_selection() {
     );
 }
 
-/// Duplicating and deleting a UI node are the two operators a screen is
-/// actually built with, and both have to be undoable: the document is
-/// what the outliner, the canvas and the save all read.
+/// Duplicating and deleting a UI node both have to be undoable.
 #[test]
 fn a_ui_node_duplicates_and_deletes_and_undo_takes_both_back() {
     let mut app = palette_app();
@@ -1678,11 +1602,7 @@ fn undo(app: &mut App) {
     app.update();
 }
 
-/// Three presses of the Button row make three buttons, side by side.
-///
-/// They used to nest: each add parented the new widget to the selection, and
-/// the selection was the widget the press before had made, so the outliner
-/// read `UiRoot > Button > Button2 > Button3`.
+/// Three presses of the Button row make three siblings, not a nest.
 #[test]
 fn three_adds_from_a_fresh_scene_make_three_siblings() {
     let mut app = palette_app();
@@ -1722,8 +1642,7 @@ fn three_adds_from_a_fresh_scene_make_three_siblings() {
     assert_eq!(names, vec!["Button", "Button2", "Button3"]);
 }
 
-/// With a leaf inside the scene selected, the add is that leaf's sibling and
-/// lands straight after it, the way a paste does.
+/// With a leaf selected, the add lands as that leaf's sibling, as a paste does.
 #[test]
 fn an_add_beside_a_selected_leaf_is_its_sibling() {
     let mut app = palette_app();
@@ -1762,13 +1681,8 @@ fn an_add_beside_a_selected_leaf_is_its_sibling() {
     assert_eq!(authored, vec![Some(panel), Some(after)]);
 }
 
-/// A Column selected takes the next widget in; the widget it took then
-/// takes the one after that beside it.
-///
-/// The two presses a user makes to build a stack: pick the frame, add the
-/// thing, add the next thing. Adding beside the Column both times left the
-/// Column empty and the buttons piled up outside it, and there was no
-/// gesture in the editor that put anything in a container at all.
+/// A Column selected takes the next widget in; that widget then takes the one
+/// after it beside itself.
 #[test]
 fn a_button_added_with_a_column_selected_lands_inside_it() {
     let mut app = palette_app();
@@ -1805,12 +1719,8 @@ fn a_button_added_with_a_column_selected_lands_inside_it() {
     assert_eq!(order, vec![inside, after], "in the order they were added");
 }
 
-/// The document node and the authored name arrive on their own schedules,
-/// and the row has to survive whichever order they land in.
-///
-/// The pass that spawns a withheld row re-checks the name, and used to give
-/// the row up when the name had not arrived yet: a load that registered the
-/// entity before applying its `Name` patch lost that row for good.
+/// The document node and the authored name arrive on their own schedules, and
+/// the row-spawn retry must not give up on a row whose name has not landed.
 #[test]
 fn a_row_withheld_for_its_name_arrives_when_the_name_does() {
     let mut app = palette_app();
@@ -1849,9 +1759,8 @@ fn a_row_withheld_for_its_name_arrives_when_the_name_does() {
     );
 }
 
-/// A generated ECS child whose parent the document does not hold cannot be
-/// waiting for a document node of its own, so it never joins the list the
-/// row pass walks every frame.
+/// A generated child whose parent the document does not hold never joins the
+/// waiting list the row pass walks.
 #[test]
 fn a_child_of_an_unregistered_parent_is_not_remembered() {
     let mut app = palette_app();
@@ -1877,8 +1786,7 @@ fn a_child_of_an_unregistered_parent_is_not_remembered() {
         0,
         "a generated child of an unregistered parent has no row"
     );
-    // And giving it a name later does not conjure one, because it was never
-    // on the list in the first place.
+    // Naming it later does not conjure a row: it was never on the list.
     app.world_mut()
         .entity_mut(generated)
         .insert(Name::new("Generated"));
@@ -1887,10 +1795,8 @@ fn a_child_of_an_unregistered_parent_is_not_remembered() {
     assert_eq!(rows_for(app.world_mut(), generated), 0);
 }
 
-/// A widget is a subtree, so a second one arrives carrying a second copy
-/// of every name inside the first. A name is what an operator clause
-/// addresses an entity by, so two `Caption`s make one of them unreachable
-/// -- the same reason a paste renames a whole pasted subtree.
+/// A second widget arrives carrying a second copy of every name inside the
+/// first, so the subtree is renamed the way a paste renames one.
 #[test]
 fn a_second_widget_uniquifies_its_descendants_too() {
     let mut app = util::editor_test_app();
@@ -1933,10 +1839,8 @@ fn a_second_widget_uniquifies_its_descendants_too() {
     }
 }
 
-/// An entity `Name` is what a `name=` value in an operator clause carries,
-/// and a clause has no quoting, so a name with a space in it cannot be
-/// addressed at all. The menu labels keep their spaces; the entities do
-/// not.
+/// An operator clause has no quoting, so an entity name cannot contain a space.
+/// The menu labels keep their spaces; the entities do not.
 #[test]
 fn every_widget_names_its_entity_without_a_space() {
     let mut app = util::editor_test_app();
@@ -1967,10 +1871,8 @@ fn every_widget_names_its_entity_without_a_space() {
     }
 }
 
-/// The waiting list is bounded, so a child whose document node never
-/// arrives is eventually let go. Letting go is a scene entity the outliner
-/// will never draw, which is the kind of loss that has to leave a trace
-/// rather than a row that quietly stops being expected.
+/// The waiting list is bounded, and letting a child go loses a scene entity the
+/// outliner will never draw, so it has to leave a trace.
 #[test]
 fn a_row_the_list_gives_up_on_is_named_rather_than_lost_quietly() {
     let mut app = palette_app();
@@ -1985,8 +1887,8 @@ fn a_row_the_list_gives_up_on_is_named_rather_than_lost_quietly() {
     let world = app.world_mut();
     mark_expanded(world, root);
 
-    // Named and parented into the document's tree, but never registered:
-    // the row is withheld every pass and never becomes drawable.
+    // Named and parented in the document's tree but never registered, so the
+    // row is withheld every pass.
     let never = world
         .spawn((Name::new("NeverRegistered"), Node::default(), ChildOf(root)))
         .id();
@@ -2005,11 +1907,8 @@ fn a_row_the_list_gives_up_on_is_named_rather_than_lost_quietly() {
     );
 }
 
-/// The pure-`Node` widgets: what a save carries and what comes back.
-///
-/// A spacer and a separator hold nothing but their marker, so a round trip
-/// that dropped the marker would leave a node that still looks right and is
-/// no longer either of them; a progress bar's value and its fill child both
+/// A spacer and a separator hold nothing but their marker, and a progress bar's
+/// value and fill child both have to survive a round trip.
 /// have to survive or the reloaded bar shows the wrong amount.
 #[test]
 fn the_node_widgets_survive_a_save_and_a_reload() {
@@ -2155,9 +2054,7 @@ fn a_dropdown_draws_a_row_per_option_and_redraws_when_they_change() {
     );
 }
 
-/// Picking an option writes the choice back and says so, which is the half a
-/// binding hears. The widget is one outliner row whatever the chrome is made
-/// of.
+/// Picking an option writes the choice back, and the widget stays one row.
 #[test]
 fn picking_a_dropdown_option_writes_the_selection() {
     use bevy::ui_widgets::Activate;
@@ -2389,9 +2286,8 @@ fn tabs_and_a_radio_group_survive_a_save_and_a_reload() {
     }
 }
 
-/// A nine-patch's border is the whole authored difference between it and a
-/// picture: it is written into the image mode, and a save carries the number
-/// rather than the slicer.
+/// A nine-patch's border is written into the image mode, so a save carries the
+/// number rather than the slicer.
 #[test]
 fn a_nine_patch_slices_its_image_from_its_border() {
     use bevy::ui::widget::NodeImageMode;
@@ -2446,11 +2342,8 @@ fn a_nine_patch_slices_its_image_from_its_border() {
 }
 
 /// A widget that derives part of itself writes those values into its live
-/// components every frame, and the document is synced from those components.
-/// Saving them records a measurement of the session that saved it: a fill
-/// width that is really the bar's value, a separator sized by the flow it
-/// happened to sit in, a nine-patch's border spelled out twice, and bevy's own
-/// per-frame text and image measurements.
+/// components every frame, and the document syncs from those components; saving
+/// them would record a measurement of the session that saved it.
 #[test]
 fn a_save_carries_none_of_the_values_a_widget_writes_for_itself() {
     let mut app = palette_app();
@@ -2553,9 +2446,8 @@ fn generated_parts(world: &World, entity: Entity) -> Vec<Entity> {
         .collect()
 }
 
-/// Picking an option is a caption and a marker moving, not a new menu. A
-/// rebuild throws away the row the pointer is on, taking its focus and its
-/// tab index with it.
+/// Picking an option is a caption and a marker moving: a rebuild would throw
+/// away the row the pointer is on, with its focus and tab index.
 #[test]
 fn choosing_a_dropdown_option_keeps_the_menu_it_was_chosen_from() {
     let mut app = palette_app();

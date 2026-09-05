@@ -1,21 +1,13 @@
 //! The inspector takes the width the dock gives it.
 //!
-//! A panel's width belongs to the dock: the user drags a split, the leaf
-//! resizes, and every card inside follows. Flexbox's automatic minimum
-//! size works against that. Without a `min_width` on the column holding
-//! the cards its floor is its own min-content width, so one unbreakable
-//! component title (`Inherited<ComputedUiRenderTargetInfo>` measures about
-//! 250 px in the shipped font) lifts that floor above the sidebar's width.
-//! Every card, row and control below the column then lays out at the wider
-//! figure and the surplus is cut off at the panel's edge, down to a `Val`
-//! row's unit dropdown rendering as a single clipped glyph.
+//! Without a `min_width` on the column holding the cards, flexbox's automatic
+//! minimum size makes its floor its own min-content width, so one unbreakable
+//! component title lifts that floor above the sidebar's width and everything
+//! below lays out wider than the panel and is clipped at its edge.
 //!
-//! The `inspector_val` matrix cannot see this. It parents a row to an
-//! absolutely-positioned `width: Px(212)` column, definite by
-//! construction, so where the width comes from is answered there by the
-//! harness. The wide unshrinkable child is the load-bearing case: the
-//! headless stand-in for a title a real font has measured, since headless
-//! text measures nothing.
+//! The `inspector_val` matrix cannot see this: it parents a row to a column that
+//! is definite by construction. The wide unshrinkable child here is the headless
+//! stand-in for a title a real font has measured.
 
 use crate::util;
 
@@ -32,7 +24,6 @@ const PANEL_WIDTH: f32 = 231.0;
 const LONG_TITLE_WIDTH: f32 = 250.0;
 
 /// The width a unit dropdown stops reading at: "vmin" plus the chevron.
-/// The floor `inspector_val` pins; read here to prove the row reached it.
 const UNIT_DROPDOWN_FLOOR: f32 = 34.0;
 
 /// The inspector panel mounted in a dock leaf of a fixed width, with a
@@ -137,9 +128,8 @@ fn descendants(app: &mut App, root: Entity) -> Vec<Entity> {
 }
 
 /// How far past `leaf`'s right edge anything under `root` reaches. The scan
-/// starts at the card, not at the leaf: the stand-in title is a 250 px
-/// unshrinkable box hung on the card list by hand, so it overhangs by
-/// construction. What must not overhang is the card it widens.
+/// starts at the card, not the leaf: the stand-in title overhangs by
+/// construction, and what must not overhang is the card it widens.
 fn overhang(app: &mut App, leaf: Entity, root: Entity) -> f32 {
     let leaf_right = right_edge(app, leaf);
     descendants(app, root)
@@ -158,9 +148,9 @@ fn right_edge(app: &App, entity: Entity) -> f32 {
     transform.translation.x + computed.size().x / 2.0
 }
 
-/// One child that will not shrink must not widen the column it sits in.
-/// Without a `min_width` floor on that column a 250 px child takes the card
-/// list to 258 px inside a 231 px panel, and every card with it.
+/// One child that will not shrink must not widen the column it sits in: without a
+/// `min_width` floor a 250 px child takes the card list to 258 px in a 231 px
+/// panel.
 #[test]
 fn a_title_too_wide_for_the_panel_does_not_widen_the_panel() {
     let (mut app, _, body) = panel_with_a_node_card();
@@ -175,9 +165,8 @@ fn a_title_too_wide_for_the_panel_does_not_widen_the_panel() {
     );
 }
 
-/// Nothing under the leaf may reach past the panel's edge, whatever a title
-/// asks for. This covers every card the inspector stacks in that column,
-/// including the bindings card's chips and summary line.
+/// Nothing under the leaf may reach past the panel's edge, whatever a title asks
+/// for, including the bindings card's chips and summary line.
 #[test]
 fn no_control_hangs_off_the_panels_edge() {
     let (mut app, leaf, body) = panel_with_a_node_card();
@@ -196,18 +185,15 @@ fn no_control_hangs_off_the_panels_edge() {
     );
 }
 
-/// A length's unit dropdown keeps a width its labels read at, which it only
-/// does if the row was handed the panel's width rather than a wider
-/// column's.
+/// A length's unit dropdown keeps a width its labels read at, which it only does
+/// if the row was handed the panel's width rather than a wider column's.
 #[test]
 fn a_unit_dropdown_still_reads_with_a_wide_title_on_the_list() {
     let (mut app, _, body) = panel_with_a_node_card();
     add_an_unshrinkable_child(&mut app, LONG_TITLE_WIDTH);
 
-    // A card's collapsed groups keep their rows in the tree with
-    // `display: None`, and those lay out at nothing on both axes. Only a
-    // dropdown that is on screen was handed a width, so the ones with no
-    // height are skipped.
+    // A card's collapsed groups keep their rows in the tree with `display: None`,
+    // laying out at nothing, so only dropdowns with a height were handed a width.
     let dropdowns: Vec<Entity> = descendants(&mut app, body)
         .into_iter()
         .filter(|entity| {
@@ -232,13 +218,9 @@ fn a_unit_dropdown_still_reads_with_a_wide_title_on_the_list() {
     }
 }
 
-/// A selected UI node opens on a tab that says something about it.
-///
-/// The inspector opens on Object, and a UI node's layout is what the node
-/// is: its box, its place in its parent, its size. Routed anywhere else,
-/// the first thing shown for a selected screen is a Transform card, and
-/// the whole of the layout sits behind a second tab beside the computed
-/// read-only components.
+/// A selected UI node opens on a tab that says something about it: the inspector
+/// opens on Object, and a UI node's layout is what the node is. Routed elsewhere,
+/// a selected screen shows a Transform card first.
 #[test]
 fn the_node_card_is_on_the_tab_the_inspector_opens_on() {
     use jackdaw_api_internal::inspector::InspectorRegistry;

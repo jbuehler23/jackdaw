@@ -26,20 +26,15 @@ pub fn populate_cache_for_scene_bsn(
     paths
 }
 
-/// Cache `path` and every prefab it transitively inherits from.
-///
-/// The resolver expands a whole `IsA` chain in one pass and fails on the first
-/// source it cannot look up, so caching only the file an instance names leaves
-/// a two-level prefab unresolvable: the base's entities never materialize, and
-/// the ids inherited through the middle prefab have no baseline to revert to.
+/// Cache `path` and every prefab it transitively inherits from. The resolver
+/// expands a whole `IsA` chain in one pass, so a partly cached chain fails.
 pub(crate) fn cache_prefab_tree(path: &Path, cache: &mut PrefabAstCache) {
     cache_prefab_tree_inner(path, cache, 0);
 }
 
 fn cache_prefab_tree_inner(path: &Path, cache: &mut PrefabAstCache, depth: usize) {
-    // The same bound the resolver enforces. It also terminates an `IsA` cycle,
-    // which the cache alone cannot: an already-cached document is not re-read
-    // but is still walked, so a -> b -> a would recurse without end.
+    // The same bound the resolver enforces; it also terminates an `IsA` cycle,
+    // since an already-cached document is still walked.
     if depth >= crate::prefab::resolver_bsn::MAX_PREFAB_DEPTH {
         return;
     }
@@ -50,7 +45,7 @@ fn cache_prefab_tree_inner(path: &Path, cache: &mut PrefabAstCache, depth: usize
         }
     }
     // `read_prefab_document` absolutizes each `IsA` source against the prefab's
-    // own directory, so nested sources are already resolvable as written.
+    // own directory.
     let Some(prefab_ast) = cache.get(path) else {
         return;
     };
@@ -66,14 +61,8 @@ fn cache_prefab_tree_inner(path: &Path, cache: &mut PrefabAstCache, depth: usize
     }
 }
 
-/// Point every `IsA` source at the file the editor is going to read.
-///
-/// A scene written before its prefab converted formats names the `.jsn`, and
-/// the editor follows the `.bsn` sibling instead (`resolve_source_path`).
-/// Retargeting in the document rather than only at the cache lookup keeps the
-/// document, the cache, the resolver, and the next save naming the same file;
-/// otherwise the resolver asks for a path nothing cached and every inherited
-/// entity is missing from the opened scene.
+/// Point every `IsA` source at the file the editor is going to read, so the
+/// document, the cache, the resolver and the next save all name the same file.
 pub fn retarget_isa_sources(ast: &mut SceneBsnAst, scene_dir: &Path) {
     for node in ast.entities_with_component(ISA_TYPE) {
         let Some(source) = jackdaw_prefab::read_isa_source(ast, node) else {
@@ -93,9 +82,8 @@ pub fn retarget_isa_sources(ast: &mut SceneBsnAst, scene_dir: &Path) {
     }
 }
 
-/// The prefab file an instance's `source` names, resolved as the shared
-/// vocabulary defines, with a fallback for a scene naming the other scene
-/// format.
+/// The prefab file an instance's `source` names, with a fallback for a scene
+/// naming the other scene format.
 pub(crate) fn resolve_source_path(source: &Path, scene_dir: &Path) -> PathBuf {
     let resolved = jackdaw_prefab::source_path(source, scene_dir);
     // Scenes written before (or after) their prefab converted formats may
@@ -116,10 +104,6 @@ pub(crate) fn resolve_source_path(source: &Path, scene_dir: &Path) -> PathBuf {
 }
 
 /// Read a prefab file into a document.
-///
-/// Public rather than crate-private for the integration tests, which put
-/// a new version of a prefab into the cache the way the watcher does
-/// before asking for a reload.
 pub fn read_prefab_ast(path: &Path) -> Result<SceneBsnAst, std::io::Error> {
     if path.extension().is_some_and(|e| e == "bsn") {
         return jackdaw_prefab::source::read_prefab_document(path);

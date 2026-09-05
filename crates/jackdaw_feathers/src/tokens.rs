@@ -43,10 +43,8 @@ pub const TOOLBAR_BG: Color = Color::srgb(0.165, 0.165, 0.180);
 pub const INPUT_BG: Color = Color::srgb(0.212, 0.216, 0.231);
 /// Context menu / dropdown background (#2A2A2E).
 ///
-/// Opaque. Even a few percent of translucency lets panel text ghost up
-/// through a dropdown, worst where a submenu overlaps the menu it opened
-/// from; a translucent surface needs a backdrop blur behind it, which
-/// `bevy_ui` has no way to draw.
+/// Opaque: even a few percent of translucency lets panel text ghost up through a
+/// dropdown, and a backdrop blur is not something `bevy_ui` can draw.
 pub const MENU_BG: Color = Color::srgb(0.165, 0.165, 0.180);
 /// Status bar background (#2A2A2E)
 pub const STATUS_BAR_BG: Color = Color::srgb(0.165, 0.165, 0.180);
@@ -192,16 +190,13 @@ pub const CONNECTION_LINE: Color = Color::srgba(1.0, 1.0, 1.0, 0.2);
 pub const TEXT_DISABLED: Color = Color::srgba(0.4, 0.4, 0.4, 0.5);
 /// A guide pulled off a canvas ruler, and a snap landing on one.
 ///
-/// Cyan rather than the accent blue the selection chrome uses: a guide
-/// is a line the author placed, and it has to stay apart from the
-/// outline and the handles drawn over the node beside it.
+/// Cyan rather than the accent blue the selection chrome uses, so a guide stays
+/// apart from the outline and handles drawn over the node beside it.
 pub const GUIDE_LINE: Color = Color::srgb(0.24, 0.78, 0.85);
 /// The line a snapped drag came to rest against.
 ///
-/// Warm, and a colour of its own: the selection outline drawn over the
-/// node is [`ACCENT_BLUE`] and a guide is [`GUIDE_LINE`], so a landing
-/// painted in either would be a line the user cannot tell apart from
-/// the thing it landed on.
+/// Warm, and a colour of its own: a landing painted in [`ACCENT_BLUE`] or
+/// [`GUIDE_LINE`] could not be told apart from the thing it landed on.
 pub const SNAP_HIGHLIGHT: Color = Color::srgb(0.96, 0.62, 0.22);
 
 // ---------------------------------------------------------------------------
@@ -378,16 +373,12 @@ pub const FIELD_CONTROL_MIN_WIDTH: f32 = 56.0;
 /// Minimum height of one field row. Uniform so rows of different control
 /// types still read as one column.
 pub const FIELD_ROW_HEIGHT: f32 = 22.0;
-/// Room a slider keeps, over and above [`FIELD_CONTROL_MIN_WIDTH`]. A
-/// slider draws its digits centred inside its own track, so a track
-/// squeezed narrower than the digits does not clip them: they overhang
-/// both ends, over the label on one side and the row edge on the other.
-/// Wide enough for a signed four-figure value plus the track's padding.
+/// Room a slider keeps, over and above [`FIELD_CONTROL_MIN_WIDTH`]. A slider
+/// draws its digits centred inside its own track, so a narrower track lets them
+/// overhang both ends. Wide enough for a signed four-figure value plus padding.
 pub const SLIDER_MIN_WIDTH: f32 = 76.0;
-/// Room a field row keeps clear at its right edge for the marks an editor
-/// hangs off a property: the prefab override dot, the live-edit dot, the
-/// keyframe diamond. A row that can carry them reserves this, so a mark
-/// never lands on top of the control it describes.
+/// Room a field row keeps clear at its right edge for the marks an editor hangs
+/// off a property, so a mark never lands on top of the control it describes.
 pub const FIELD_DECORATION_GUTTER: f32 = 44.0;
 /// Horizontal inset per nesting level, for a sub-value shown under the
 /// feature it belongs to. The label column shrinks by the same amount, so
@@ -427,11 +418,8 @@ pub const BORDER_RADIUS_LG: f32 = 5.0;
 
 /// `bevy::feathers`'s own default body font, referenced explicitly.
 ///
-/// jackdaw separately overrides the *ambient* default font
-/// (`AssetId::default()`, see `icons::IconFontPlugin`) with its own
-/// embedded copy of the same nominal typeface, which is not byte-identical
-/// to `bevy::feathers`'s bundled copy. Text that sits next to a native
-/// feathers widget (which always loads `fonts::REGULAR` explicitly, never
-/// the ambient default) can end up visibly mismatched. Use this constant
-/// instead of `..Default::default()` wherever that seam would show.
+/// jackdaw separately overrides the ambient default font with its own embedded
+/// copy of the same nominal typeface, which is not byte-identical to
+/// `bevy::feathers`'s bundled copy. Use this constant rather than
+/// `..Default::default()` wherever text sits next to a native feathers widget.
 pub const DEFAULT_BODY_FONT: &str = bevy::feathers::constants::fonts::REGULAR;

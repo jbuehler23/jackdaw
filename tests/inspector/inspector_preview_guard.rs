@@ -1,14 +1,9 @@
 //! What the inspector refuses while a preview session is running.
 //!
-//! A preview evaluator owns the components it writes: for as long as the
-//! session is on, the number in `Node.width` belongs to the binding, not to
-//! the document. The field rows refuse an authored edit to one, and so does
-//! the component header's remove button: taking the whole component away is
-//! the same edit, only larger, and letting it through would leave the
-//! session driving a component that is not there.
-//!
-//! `physics.disable` is the same edit again, larger still: three removals
-//! and a rewrite of the document's physics patches in one entry.
+//! A preview evaluator owns the components it writes, so the field rows refuse an
+//! authored edit to one, and so does the component header's remove button:
+//! letting it through would leave the session driving a component that is gone.
+//! `physics.disable` is the same edit again, larger still.
 
 use crate::util;
 
@@ -55,8 +50,8 @@ fn scene_with_a_bound_width() -> (App, Entity) {
         .id();
     jackdaw::scene_io::register_entity_in_ast(world, root);
     jackdaw::scene_io::register_entity_in_ast(world, fill);
-    // The operator is only available with a primary selection, so a test
-    // that never selects would pass on the dispatch being refused.
+    // The operator is only available with a primary selection, so a test that
+    // never selects would pass on the dispatch being refused.
     app.world_mut().resource_mut::<Selection>().entities = vec![fill];
     app.update();
     (app, fill)
@@ -74,9 +69,8 @@ fn remove_component(app: &mut App, entity: Entity, type_path: &str) {
         .param("type_path", type_path.to_string())
         .call()
         .expect("dispatch");
-    // The operator takes the call and queues the work either way, so this
-    // says the dispatch was accepted. Without it, an unavailable operator
-    // would look the same as the guard doing its job.
+    // The operator takes the call and queues the work either way, so this says
+    // the dispatch was accepted rather than the operator being unavailable.
     assert!(
         matches!(outcome, OperatorResult::Finished),
         "the removal has to be dispatched before anything can refuse it",
@@ -84,9 +78,8 @@ fn remove_component(app: &mut App, entity: Entity, type_path: &str) {
     app.update();
 }
 
-/// The guard and its other half in one test, so neither half can pass by
-/// doing nothing: mid-preview the removal is refused, and with the session
-/// over the same removal goes through.
+/// Both halves in one test, so neither can pass by doing nothing: mid-preview the
+/// removal is refused, and with the session over it goes through.
 #[test]
 fn a_previewed_component_cannot_be_removed_until_the_session_ends() {
     let (mut app, fill) = scene_with_a_bound_width();
@@ -158,9 +151,7 @@ fn disable_physics(app: &mut App, entity: Entity) {
     app.update();
 }
 
-/// Both halves again: mid-preview the disable is refused with the
-/// components left where they are, and with the session over the same call
-/// takes them off.
+/// Both halves again, for the disable.
 #[test]
 fn previewed_physics_cannot_be_disabled_until_the_session_ends() {
     let (mut app, solid) = scene_with_a_bound_collider();

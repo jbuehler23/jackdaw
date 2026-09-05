@@ -1,18 +1,14 @@
 //! An MCP server that drives a running Jackdaw editor.
 //!
 //! `jd mcp` speaks the Model Context Protocol over stdio and the editor's
-//! remote-control BRP over loopback HTTP. It holds no editor state of its
-//! own: every tool here is a thin translation of one BRP method, and
-//! every write is undoable -- the operators through their own history,
-//! `apply_bsn` through the command the editor pushes for it -- so
-//! anything a client does lands on the same undo stack a person's clicks
-//! do.
+//! remote-control BRP over loopback HTTP. It holds no editor state of its own:
+//! every tool is a thin translation of one BRP method, and every write is
+//! undoable, so anything a client does lands on the same undo stack a person's
+//! clicks do.
 //!
-//! The editor is found through `<project>/.jackdaw/editor.json`, which the
-//! editor writes when it opens a project and takes back when it exits (see
-//! [`jackdaw_env::editor_endpoint`]). Nothing has to be configured with a
-//! port, and a client that starts before the editor gets a plain "no
-//! editor is running" rather than a connection refused.
+//! The editor is found through `<project>/.jackdaw/editor.json` (see
+//! [`jackdaw_env::editor_endpoint`]), so nothing has to be configured with a
+//! port.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,12 +29,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-/// Longest a single BRP call may take.
-///
-/// `jackdaw/screenshot` and `jackdaw/wait` hold the connection open until
-/// the editor has caught up, and a bake or a big scene load is slow, so
-/// this is generous. It exists so a wedged editor produces an error
-/// rather than a session that never answers again.
+/// Longest a single BRP call may take. Generous, because
+/// `jackdaw/screenshot` and `jackdaw/wait` hold the connection open until the
+/// editor has caught up; it exists so a wedged editor produces an error rather
+/// than a session that never answers.
 const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The resource URI for the operator catalogue.
@@ -67,11 +61,9 @@ impl JackdawMcp {
         }
     }
 
-    /// An id no other call of this session uses.
-    ///
-    /// The editor's waiting methods are re-run every frame with the same
-    /// parameters, so without an id two identical `wait` calls would
-    /// share one countdown and the second would answer early.
+    /// An id no other call of this session uses. The editor's waiting methods
+    /// are re-run every frame with the same parameters, so two identical `wait`
+    /// calls would otherwise share one countdown.
     fn next_request_id(&self) -> String {
         format!(
             "{}-{}",
@@ -649,10 +641,8 @@ pub async fn serve_stdio(project: PathBuf) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-/// [`serve_stdio`] with its own runtime, for a caller that has none.
-///
-/// `jd` is a plain synchronous CLI; the async runtime belongs to this
-/// crate, which is the only part of the workspace that needs one.
+/// [`serve_stdio`] with its own runtime, for a caller that has none: `jd` is a
+/// plain synchronous CLI.
 pub fn serve_stdio_blocking(project: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()

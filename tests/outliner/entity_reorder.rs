@@ -1,13 +1,5 @@
 //! Sibling reorder: the gap between two Outliner rows, and the
 //! `entity.move_up` / `entity.move_down` chords.
-//!
-//! What is pinned here:
-//!  * a reorder writes the document's child order, not only the ECS one, so
-//!    it survives a save and a reload;
-//!  * the ECS order moves with it, which is what makes a flowed child change
-//!    place on the canvas;
-//!  * every Outliner panel's rows follow;
-//!  * one reorder is one undo entry, and undo puts the order back.
 
 use crate::util;
 
@@ -20,12 +12,9 @@ use jackdaw_api::prelude::*;
 use jackdaw_bsn::SceneBsnAst;
 use jackdaw_widgets::tree_view::{TreeIndex, TreeNode, TreeRowChildren, TreeRowInserted};
 
-/// Run one clause the way a chord runs it.
-///
-/// `creates_history_entry`, which a scripted call leaves off, is what makes
-/// the dispatcher open a snapshot span: an operator that records its own entry
-/// and one that leaves the entry to the snapshot are only told apart under a
-/// press, and this suite counts entries.
+/// Run one clause the way a chord runs it. `creates_history_entry`, which a
+/// scripted call leaves off, is what makes the dispatcher open a snapshot span,
+/// and this suite counts entries.
 #[track_caller]
 fn run_finished(app: &mut App, clause: &str) {
     let result = run_op_clause_as_user(app.world_mut(), clause)
@@ -216,7 +205,6 @@ fn a_drop_in_the_gap_between_two_rows_reorders_the_siblings() {
         "dropping below the last row lands the dragged node after it"
     );
 
-    // And back the other way: above the first row.
     app.world_mut().trigger(TreeRowInserted {
         entity: children[0],
         dragged_source: children[0],
@@ -249,7 +237,6 @@ fn a_reorder_moves_the_row_in_every_outliner_panel() {
     app.update();
 
     let (column, children) = column_of_three(&mut app);
-    // Expand the column so its children have rows to reorder.
     for panel in &panels {
         let row = app
             .world()
@@ -324,11 +311,9 @@ fn a_reorder_of_a_multi_selection_is_one_entry() {
     assert_eq!(undo_depth(&app) - before, 1);
 }
 
-/// A selection packed against the end of its list stays packed. The first
-/// entity has nowhere to go, so the one behind it has nowhere to go either:
-/// letting it move into the blocked one's slot swaps the two, and the next
-/// press swaps them back, so holding the chord shuffles the selection
-/// instead of leaving it alone.
+/// A selection packed against the end of its list stays packed: if the entity
+/// behind a blocked one could take its slot, holding the chord would shuffle the
+/// selection instead of leaving it alone.
 #[test]
 fn a_selection_packed_against_the_top_keeps_its_own_order() {
     let mut app = util::editor_test_app();
@@ -382,9 +367,8 @@ fn a_selection_packed_against_the_bottom_keeps_its_own_order() {
     );
 }
 
-/// A drag that starts on a selected row carries the whole selection, the
-/// way a drag in any list does, and lands it in the order the tree shows
-/// rather than the order it was clicked in.
+/// A drag that starts on a selected row carries the whole selection and lands it
+/// in the order the tree shows, not the order it was clicked in.
 #[test]
 fn a_drop_moves_the_whole_selection_in_the_order_the_tree_shows() {
     let mut app = util::editor_test_app();
@@ -414,10 +398,8 @@ fn a_drop_moves_the_whole_selection_in_the_order_the_tree_shows() {
     );
 }
 
-/// A selection can hold both a parent and something under it. Moving the
-/// parent moves its subtree, so carrying the child as well would move it
-/// twice: once inside the parent, and once more on its own, which lands it
-/// beside the parent instead of in it. The subtree travels once.
+/// Moving a parent moves its subtree, so a selection holding both a parent and
+/// its child must travel once, or the child lands beside the parent.
 #[test]
 fn a_drop_carrying_a_parent_and_its_child_moves_the_subtree_once() {
     let mut app = util::editor_test_app();
@@ -503,12 +485,10 @@ fn a_multi_selection_drop_is_one_history_entry() {
     );
 }
 
-/// The gap below a nest of last children is one strip standing for
-/// several places at once, and which zone entity the pick hands over says
-/// nothing about which of them was meant: a row's own after-gap is a later
-/// sibling than the container holding its children, so it is drawn over
-/// every gap nested inside it and wins every pick there. The level is the
-/// pointer's x against each candidate row's own indent.
+/// The gap below a nest of last children is one strip standing for several
+/// places at once: a row's after-gap is drawn over every gap nested inside it and
+/// wins every pick, so the level comes from the pointer's x against each
+/// candidate row's indent.
 #[test]
 fn the_gap_below_a_nest_of_last_children_means_the_level_the_pointer_is_at() {
     let mut app = drop_depth_app(1.0);
@@ -547,10 +527,8 @@ fn the_gap_below_a_nest_of_last_children_means_the_level_the_pointer_is_at() {
     );
 }
 
-/// The pointer's position is logical pixels and a laid-out node's is
-/// physical, so the two only agree at a scale factor of 1. Unconverted,
-/// every indent reads as further right than it is drawn, and a pointer
-/// resting on one level is answered with a shallower one.
+/// The pointer's position is logical pixels and a laid-out node's is physical,
+/// so unconverted every indent reads further right than it is drawn.
 #[test]
 fn the_level_the_pointer_is_at_survives_a_scale_factor() {
     let mut app = drop_depth_app(2.0);
@@ -599,9 +577,8 @@ struct Gap {
 fn drop_depth_app(scale: f32) -> App {
     let mut app = util::editor_test_app();
     app.world_mut().insert_resource(HierarchyShowAll(true));
-    // What the editor is laid out at on a hidpi screen: a laid-out node's
-    // figures are multiplied by this, while the pointer keeps reporting
-    // logical pixels.
+    // What the editor is laid out at on a hidpi screen: a laid-out node's figures
+    // are multiplied by this, while the pointer keeps reporting logical pixels.
     app.world_mut().insert_resource(bevy::ui::UiScale(scale));
     app.world_mut().spawn((
         HierarchyTreeContainer,
@@ -616,8 +593,7 @@ fn drop_depth_app(scale: f32) -> App {
     app
 }
 
-/// Outer > Middle > Leaf, every level open, with the deepest row the last
-/// thing under each of the two above it.
+/// Outer > Middle > Leaf, every level open, the deepest row last under each.
 fn nest_of_three(app: &mut App) -> Nest {
     let world = app.world_mut();
     let outer = world.spawn((Name::new("Outer"), Node::default())).id();
@@ -683,14 +659,9 @@ fn after_zone_of(app: &App, row: Entity) -> Entity {
         .expect("a row has an after-gap")
 }
 
-/// The zone a drag lands on at the gap below the nest, and the geometry of
-/// that gap.
-///
-/// The zone is the outermost row's, because that is what the pick hands
-/// over: a row's after-gap is a later sibling than the container holding
-/// its children, so it is drawn over every gap nested inside it. That
-/// ordering is asserted here rather than assumed, so a change to it fails
-/// this test instead of quietly aiming it somewhere a drag never lands.
+/// The zone a drag lands on at the gap below the nest, and that gap's geometry.
+/// The zone is the outermost row's: a row's after-gap is drawn over every gap
+/// nested inside it. That ordering is asserted rather than assumed.
 fn picked_gap(app: &mut App, nest: &Nest) -> (Entity, Gap) {
     use jackdaw_widgets::tree_view::{TreeRowChildren, TreeRowInsertZone};
 
@@ -774,9 +745,8 @@ fn drop_at(app: &mut App, zone: Entity, dragged: Entity, position: Vec2) {
     }
 }
 
-/// A drag holds what it is carrying, so a closed parent cannot be opened
-/// by clicking it. Resting the pointer on it during the drag opens it,
-/// which is how a drop inside a closed subtree is reached at all.
+/// A drag holds what it is carrying, so a closed parent is opened by resting the
+/// pointer on it, which is how a drop inside a closed subtree is reached.
 #[test]
 fn resting_a_drag_on_a_closed_row_opens_it() {
     use bevy::camera::{NormalizedRenderTarget, RenderTarget};
@@ -855,8 +825,8 @@ fn resting_a_drag_on_a_closed_row_opens_it() {
         "but the clock is running on it",
     );
 
-    // Rest on it. The wait is a real interval, so the test hands the app
-    // a clock it controls rather than waiting on the wall.
+    // The wait is a real interval, so the app is handed a clock the test
+    // controls rather than waiting on the wall.
     app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
         std::time::Duration::from_millis(100),
     ));
@@ -873,11 +843,9 @@ fn resting_a_drag_on_a_closed_row_opens_it() {
     );
 }
 
-/// The drop line is drawn from figures in two units: `TreeDropLine.indent`
-/// is logical pixels, while a laid-out node's transform and size are
-/// physical. On a hidpi screen a figure taken from the wrong one puts the
-/// line at twice or half the gap it marks, and every test that reads the
-/// resource rather than the drawn node passes anyway.
+/// `TreeDropLine.indent` is logical pixels while a laid-out node's transform and
+/// size are physical, so on a hidpi screen a figure from the wrong one puts the
+/// line at twice or half the gap it marks.
 #[test]
 fn the_drop_line_is_drawn_at_the_gap_it_marks_on_a_hidpi_screen() {
     use jackdaw_feathers::tree_view::TreeDropIndicator;
@@ -909,8 +877,8 @@ fn the_drop_line_is_drawn_at_the_gap_it_marks_on_a_hidpi_screen() {
         .map(ChildOf::parent)
         .expect("the line hangs off the tree root");
 
-    // Physical, as the layout leaves them: the point of the test is that
-    // the drawn line lands on the gap whatever the scale factor is.
+    // Physical, as the layout leaves them: the drawn line must land on the gap
+    // whatever the scale factor is.
     let physical = |entity: Entity| -> Rect {
         let computed = app
             .world()
@@ -936,13 +904,10 @@ fn the_drop_line_is_drawn_at_the_gap_it_marks_on_a_hidpi_screen() {
     );
 }
 
-/// Ctrl+Up reorders and nothing else.
-///
-/// The chord is pressed through the window's own key stream because the
-/// fault only exists there: `bevy_enhanced_input` matches a binding on the
-/// modifiers it names and ignores the rest, so the bare-arrow nudge answered
-/// Ctrl+Arrow as well and the entity moved a grid step sideways on its way
-/// up the list. A call by hand reaches one operator and would never show it.
+/// Ctrl+Up reorders and nothing else. Pressed through the window's own key
+/// stream because the fault only exists there: `bevy_enhanced_input` matches a
+/// binding on the modifiers it names and ignores the rest, so the bare-arrow
+/// nudge answered Ctrl+Arrow too.
 #[test]
 fn ctrl_up_reorders_without_nudging() {
     use bevy::window::{PrimaryWindow, WindowResolution};
@@ -998,9 +963,8 @@ fn ctrl_up_reorders_without_nudging() {
 }
 
 /// Rows spawn as their entities arrive, and a load's arrivals are not the
-/// document's order: a child held back waiting for its document node joins the
-/// panel behind siblings registered after it. The outliner then disagreed with
-/// both the canvas and the file it had just opened.
+/// document's order: a child held back waiting for its document node would
+/// otherwise join the panel behind siblings registered after it.
 #[test]
 fn reopening_a_scene_shows_its_children_in_document_order() {
     let mut app = util::editor_test_app();

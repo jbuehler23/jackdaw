@@ -1,15 +1,7 @@
-//! Every operator stays reachable without a pointer.
-//!
-//! Jackdaw's rule is that everything the editor does is an operator, and
-//! the remote surface (`src/remote/server.rs`) turns that into the whole
-//! remote vocabulary: `jackdaw/call_operator` reaches every menu item,
-//! panel button, entity op, terrain tool, bake and save.
-//!
-//! Two things can quietly break that. A new parameter type the remote
-//! cannot spell from JSON would make its operator uncallable, and a new
-//! *modal* operator continues a pointer gesture across frames, so a
-//! caller with no pointer cannot drive it at all. This test fails on
-//! either until someone has decided what a remote caller should do instead.
+//! Every operator stays reachable without a pointer. `jackdaw/call_operator` is
+//! the whole remote vocabulary, and two things quietly break that: a parameter
+//! type the remote cannot spell from JSON, and a modal operator that only a
+//! pointer can drive.
 
 use jackdaw::remote::server::property_from_json;
 use jackdaw_api_internal::lifecycle::OperatorEntity;
@@ -19,19 +11,9 @@ use serde_json::json;
 use crate::util;
 
 /// Modal operators, and the parametric operator a remote caller uses instead.
-///
-/// A modal operator holds a gesture open across frames -- a drag, a
-/// rubber band, a brush stroke -- and the thing that ends it is the
-/// mouse button coming up. There is nothing for a caller with no pointer
-/// to do with one, so each is listed here with the operator that does
-/// the same job from parameters, or with `None` and the reason no such
-/// operator exists yet.
-///
-/// Adding a modal operator without adding a row here fails
-/// [`every_modal_operator_has_a_parametric_answer`]. That is the point:
-/// the decision belongs with the person adding the tool, who knows what
-/// its parametric form would be, rather than with whoever next tries to
-/// drive the editor from a script.
+/// Each is listed with the operator that does the same job from parameters, or
+/// with `None` and the reason no such operator exists yet; adding a modal
+/// operator without a row here fails `every_modal_operator_has_a_parametric_answer`.
 const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
     (
         "brush.box_select",
@@ -142,15 +124,10 @@ const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
     ),
 ];
 
-/// Camera gestures that are not operators at all, and the operator an
-/// remote caller uses instead.
-///
-/// Orbit, pan and dolly are raw input on the viewport's camera
-/// controller rather than dispatched operators, so
-/// [`POINTER_ONLY`] -- which audits modal operators -- never sees them.
-/// They still have to be reachable: `view.frame_all` keeps whatever
-/// orientation it finds, so a camera left level with the ground frames a
-/// terrain edge-on and shows nothing.
+/// Camera gestures that are not operators at all, and the operator a remote
+/// caller uses instead. Orbit, pan and dolly are raw input on the viewport's
+/// camera controller, so `POINTER_ONLY` never sees them, but they still have to
+/// be reachable: `view.frame_all` keeps whatever orientation it finds.
 const POINTER_CAMERA_GESTURES: &[(&str, &str, &str)] = &[
     (
         "orbit",
@@ -193,12 +170,9 @@ fn every_pointer_camera_gesture_has_a_parametric_operator() {
     }
 }
 
-/// A value of each declared parameter type, as a client would send it.
-///
-/// Every operator parameter is reachable from a text-shaped client, so
-/// each type here has a spelling the remote can read. A new
+/// A value of each declared parameter type, as a client would send it. A new
 /// `ParamSpec::ty` with no entry fails
-/// [`every_parameter_type_can_be_written_as_text`].
+/// `every_parameter_type_can_be_written_as_text`.
 fn text_for(ty: &str) -> Option<serde_json::Value> {
     Some(match ty {
         "Bool" => json!("true"),
@@ -224,9 +198,8 @@ fn registered(app: &mut bevy::prelude::App) -> Vec<OperatorEntity> {
     all
 }
 
-/// A pointer-driven operator is either answered by a parametric twin or
-/// declared out of a remote caller's reach. Nothing gets to be silently
-/// undrivable.
+/// A pointer-driven operator is either answered by a parametric twin or declared
+/// out of a remote caller's reach.
 #[test]
 fn every_modal_operator_has_a_parametric_answer() {
     let mut app = util::editor_test_app();
@@ -285,11 +258,9 @@ fn the_pointer_only_table_names_operators_that_exist() {
     }
 }
 
-/// Every parameter of every non-modal operator can be written as text,
-/// which is what makes `call_operator` reach the whole editor.
-/// An operator kept out of the remote vocabulary says why, and the
-/// reason is readable. `remote_hidden` is the one way past the coverage
-/// test, so a bare flag would be a silencer nobody had to argue for.
+/// Every parameter of every non-modal operator can be written as text. An
+/// operator kept out of the remote vocabulary says why: `remote_hidden` is the
+/// one way past this test, so a bare flag would be a silencer.
 #[test]
 fn a_hidden_operator_gives_a_reason() {
     let mut app = util::editor_test_app();

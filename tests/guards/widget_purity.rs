@@ -1,12 +1,7 @@
-//! Every control in the editor is a `bevy_feathers` / `bevy_ui_widgets`
-//! widget. The legacy `bevy_ui::widget::Button` and the `Interaction`
-//! state it requires are the shape a hand-rolled control takes, so a
-//! source scan for them is the cheapest way to keep new ones out.
-//!
-//! The scan is textual and deliberately narrow: it looks for the spawn
-//! shape (a bare tuple element), not for every mention of the type, so
-//! reading `Interaction` in a system the editor does not own still
-//! compiles and still reads.
+//! Every control in the editor is a `bevy_feathers` / `bevy_ui_widgets` widget,
+//! and a source scan for the legacy `bevy_ui::widget::Button` and `Interaction`
+//! is the cheapest way to keep hand-rolled ones out. The scan is textual and
+//! narrow: it looks for the spawn shape, not for every mention of the type.
 
 use std::path::{Path, PathBuf};
 

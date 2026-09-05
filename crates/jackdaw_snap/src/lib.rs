@@ -40,9 +40,8 @@ pub struct SnapSettings {
     /// decided, and no power of two will ever be its cell. This is the
     /// way to say the number outright.
     ///
-    /// `#[serde(default)]` because settings written before this field
-    /// existed have to keep loading, and its default is exactly the old
-    /// behaviour.
+    /// `#[serde(default)]` so settings without this field keep loading;
+    /// the zero default falls back to the `2^grid_power` ladder.
     #[serde(default)]
     pub grid_increment: f32,
 }

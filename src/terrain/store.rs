@@ -3,13 +3,11 @@
 //! Heights, control words, the material list and paint-channel values never
 //! enter the scene document. They live here as the same region document the
 //! sidecar holds, keyed by the scene-relative sidecar path the `Terrain`
-//! component carries, and are written to that sidecar when the scene is saved.
+//! component carries, and reach that sidecar when the scene is saved.
 //!
-//! This resource holds the active tab's decoded data. Inactive
-//! [`crate::scenes::SceneTab`]s own their stores directly: tab capture moves the
-//! live resource into the outgoing tab and activation restores the incoming
-//! tab's store before importing sidecars (`src/scenes/swap.rs`), which keeps
-//! identical scene-relative paths isolated between tabs.
+//! This resource holds the active tab's decoded data; inactive tabs own their
+//! stores directly, which keeps identical scene-relative paths isolated
+//! between tabs.
 
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -104,50 +102,41 @@ impl core::error::Error for TerrainMaterialError {}
 #[derive(Resource, Default)]
 pub struct TerrainDataStore {
     entries: HashMap<String, RegionTerrainData>,
-    /// Sidecar paths whose most recent read attempt found a file but could not
-    /// decode it (corrupt bytes, a newer format version), mapped to the reason.
+    /// Sidecar paths whose most recent read found a file it could not decode,
+    /// mapped to the reason.
     ///
-    /// Distinct from a path with no entry, which means never loaded or created
-    /// and stays lenient. Real data exists on disk for a load-failed path, and
-    /// this store must not fabricate a zeroed replacement for it, either for
-    /// editing or for save to write back over the original. The reason is kept
-    /// so the Textures tab and the inspector can show why the terrain is
-    /// quarantined.
+    /// Distinct from a path with no entry: real data exists on disk for a
+    /// load-failed path, and this store must not fabricate a zeroed
+    /// replacement a later save would write back over it.
     load_failed: HashMap<String, String>,
     /// Which block of each terrain's control map has been written since the
     /// renderer last uploaded it.
     ///
-    /// Kept beside [`Self::entries`] rather than in the document, which is what
-    /// gets persisted. Behind a lock for the reason [`Self::heightmaps`] is:
-    /// the renderer asks every frame, and asking must not read as writing.
+    /// Behind a lock for the reason [`Self::heightmaps`] is: the renderer asks
+    /// every frame, and asking must not read as writing.
     control_dirty: Mutex<HashMap<String, GridRect>>,
     /// Which block of each terrain's colour layer has been written since the
     /// renderer last uploaded it. Kept beside [`Self::control_dirty`], and
     /// behind a lock for the same reason.
     tint_dirty: Mutex<HashMap<String, GridRect>>,
-    /// Which of each terrain's regions have had their stored scatter
-    /// written since the renderer last drew them.
-    ///
-    /// Beside the other dirty marks, and behind a lock for the same
-    /// reason: the renderer asks every frame, and asking must not read as
-    /// writing the store.
+    /// Which of each terrain's regions have had their stored scatter written
+    /// since the renderer last drew them. Beside the other dirty marks, and
+    /// behind a lock for the same reason.
     scatter_dirty: Mutex<HashMap<String, ScatterDirty>>,
     /// Sampling views handed out by [`Self::heightmap`], keyed the same way
     /// [`Self::entries`] is.
     ///
-    /// Behind a lock so that reading one takes `&self`. Through `&mut` it would
-    /// flag the whole resource written on every frame a brush hovers a terrain,
-    /// and everything gated on `is_changed`, such as the material tiling
-    /// fields, would run against a store nobody had written.
+    /// Behind a lock so that reading one takes `&self`. Through `&mut` it
+    /// would flag the whole resource written on every frame a brush hovers a
+    /// terrain, and everything gated on `is_changed` would run against a store
+    /// nobody had written.
     heightmaps: Mutex<HashMap<String, CachedHeightmap>>,
     /// When each sidecar path was last read off disk.
     ///
-    /// The store is the live document and outlives the file it came from:
-    /// a tab holds its terrain data while another program rewrites the
-    /// sidecar underneath, and re-reading unconditionally would throw away
-    /// sculpting the user has not saved. This is how a reload tells the
-    /// two apart -- a file whose mtime has not moved holds nothing the
-    /// store does not already have.
+    /// The store is the live document and outlives the file it came from, so
+    /// re-reading unconditionally would throw away sculpting the user has not
+    /// saved: a file whose mtime has not moved holds nothing the store does
+    /// not already have.
     read_mtimes: HashMap<String, std::time::SystemTime>,
 }
 
@@ -155,20 +144,17 @@ pub struct TerrainDataStore {
 /// available on demand.
 ///
 /// Shared rather than owned: the brush target, the ring gizmo and the meshers
-/// all read the same allocation and none of them may write it. A reader takes a
-/// clone for the frame it needs and drops it again; one held across frames
-/// keeps the store from reusing the allocation and from patching it in place,
-/// forcing a full copy on every write.
+/// all read the same allocation and none of them may write it. A clone held
+/// across frames keeps the store from patching in place, forcing a full copy
+/// on every write.
 #[derive(Clone)]
 pub struct SharedHeightmap {
     pub map: Arc<jackdaw_terrain::Heightmap>,
-    /// [`jackdaw_terrain::Heightmap::height_bounds`] of [`Self::map`],
-    /// behind [`Self::bounds`].
+    /// [`jackdaw_terrain::Heightmap::height_bounds`] of [`Self::map`], behind
+    /// [`Self::bounds`].
     ///
     /// Derived rather than stored, so it cannot drift from the map it
-    /// describes, and scanned lazily: only the brush-target raycast wants it,
-    /// and a drag writes the heights far more often than a raycast asks their
-    /// range.
+    /// describes, and scanned lazily: only the brush-target raycast wants it.
     bounds: Arc<OnceLock<(f32, f32)>>,
 }
 
@@ -210,8 +196,7 @@ impl CachedHeightmap {
     /// stroke costs its brush footprint rather than a whole rebuild.
     ///
     /// `false` when the map cannot be written, because a reader is still
-    /// holding it or it was built at another length, leaving the caller to
-    /// retire it instead.
+    /// holding it or it was built at another length.
     fn patch(&mut self, heights: &[f32], rect: GridRect, resolution: u32) -> bool {
         let Some(map) = Arc::get_mut(&mut self.shared.map) else {
             return false;
@@ -242,11 +227,9 @@ impl CachedHeightmap {
 
     /// Whether this still describes the terrain it was built for.
     ///
-    /// The shape is compared as well as the stale mark. Cell size and max
-    /// height live on the component, which the store never sees change; the
-    /// resolution and origin come from the stored regions, so allocating one by
-    /// sculpting past the edge retires the map too, or the added ground would
-    /// never be gathered into it.
+    /// The shape is compared as well as the stale mark: the resolution and
+    /// origin come from the stored regions, so allocating one by sculpting
+    /// past the edge retires the map too.
     fn matches(&self, terrain: &jackdaw_scene_types::Terrain, shape: GridShape) -> bool {
         !self.stale
             && self.resolution == shape.resolution
@@ -271,9 +254,8 @@ impl TerrainDataStore {
     /// Vertices per edge of the dense grid a terrain presents.
     ///
     /// However far this document's stored regions reach, squared off to the
-    /// longer axis so the dense machinery downstream keeps to a single number.
-    /// This *is* the terrain's extent, since nothing declares one, so a
-    /// document holding no regions has no grid and reads as a terrain with no
+    /// longer axis. This *is* the terrain's extent, since nothing declares
+    /// one, so a document holding no regions reads as a terrain with no
     /// ground until an edit allocates the first region.
     pub fn grid_resolution(&self, data_path: &str) -> u32 {
         self.entries
@@ -283,10 +265,8 @@ impl TerrainDataStore {
     }
 
     /// The dense grid a terrain presents: its stored extent, placed and scaled
-    /// by the geometry its cells are drawn at.
-    ///
-    /// The one place the two halves are put together; extent comes from the
-    /// regions and placement from the sidecar.
+    /// by the geometry its cells are drawn at. Extent comes from the regions,
+    /// placement from the sidecar.
     pub fn grid_shape(&self, terrain: &jackdaw_scene_types::Terrain) -> GridShape {
         match self.entries.get(&terrain.data_path) {
             Some(data) => Self::shape_of(data, terrain),
@@ -317,26 +297,21 @@ impl TerrainDataStore {
         self.retire_heightmap(data_path);
     }
 
-    /// Records the geometry a document's cells are drawn at.
-    ///
-    /// The load path writes down what a sidecar without stored geometry had its
-    /// cells placed by, so every later reader takes it from the document rather
-    /// than re-deriving it.
+    /// Records the geometry a document's cells are drawn at, so every later
+    /// reader takes it from the document rather than re-deriving it.
     pub fn set_grid(&mut self, data_path: &str, grid: jackdaw_terrain::sidecar::GridGeometry) {
         if let Some(data) = self.entries.get_mut(data_path) {
             data.grid = Some(grid);
         }
     }
 
-    /// Heights for a sidecar path, or an empty slice when absent.
-    ///
-    /// A terrain with no data reads as flat, which is what a missing sidecar
-    /// looks like.
+    /// Heights for a sidecar path, or an empty slice when absent, which is
+    /// what a missing sidecar looks like and reads as flat.
     ///
     /// Borrowed whenever the grid is one whole region, which is every
-    /// power-of-two resolution. A grid that runs past its region, such as the
-    /// `129` shape, is gathered from the regions holding it, and the caller
-    /// cannot tell the two apart.
+    /// power-of-two resolution. A grid that runs past its region is gathered
+    /// from the regions holding it, and the caller cannot tell the two
+    /// apart.
     pub fn heights(&self, data_path: &str) -> Cow<'_, [f32]> {
         match self.entries.get(data_path) {
             Some(data) => match data.contiguous_grid() {
@@ -349,14 +324,12 @@ impl TerrainDataStore {
 
     /// A terrain's heights as a heightmap to sample and raycast against.
     ///
-    /// Heights come from this store, never from the component, whose `heights`
-    /// field is empty except on a scene old enough to still be migrated. A
-    /// terrain missing from the store reads as flat.
+    /// Heights come from this store, never from the component. A terrain
+    /// missing from the store reads as flat.
     ///
     /// Rebuilt only when the document was written or the terrain's dimensions
-    /// moved. The per-frame brush work, the target raycast and the ring
-    /// following the surface, reads this rather than copying a large terrain's
-    /// heights out and rescanning them for the raycast's bounds.
+    /// moved, so the per-frame brush work does not copy a large terrain's
+    /// heights out and rescan them for the raycast's bounds.
     pub fn heightmap(&self, terrain: &jackdaw_scene_types::Terrain) -> SharedHeightmap {
         let shape = self.grid_shape(terrain);
         let mut cache = self.cached();
@@ -433,8 +406,8 @@ impl TerrainDataStore {
     /// Brushes one frame of a stroke into a terrain's heights.
     ///
     /// `edit` is handed the dense height grid to write where it lives, so a
-    /// frame of a drag neither copies the heights out nor copies them back, and
-    /// the shared heightmap is patched over `rect` instead of being retired.
+    /// frame of a drag copies nothing and the shared heightmap is patched over
+    /// `rect` instead of being retired.
     ///
     /// `rect` must cover every cell `edit` writes ([`GridRect::brush`] gives
     /// the brush's own bounds); cells outside it keep whatever the cached map
@@ -442,12 +415,9 @@ impl TerrainDataStore {
     ///
     /// A cached height range is only widened here, never narrowed, so a stroke
     /// that flattens the terrain's one peak leaves the range taller than the
-    /// terrain. That costs the brush-target raycast marching steps, since it
-    /// marches the slab the range spans, but only a range thousands of cells
-    /// tall would lose a hit. The next full rebuild tightens it again.
+    /// terrain until the next full rebuild tightens it.
     ///
-    /// `false` when the terrain has no document to write: the cases
-    /// [`Self::entry_for`] refuses, and a terrain with no editable window.
+    /// `false` when the terrain has no document to write.
     pub fn brush_heights(
         &mut self,
         terrain: &jackdaw_scene_types::Terrain,
@@ -465,8 +435,7 @@ impl TerrainDataStore {
         };
         // A grid that is one whole region is brushed where it lives. One that
         // spans regions has no single slice to hand out, so it is gathered,
-        // brushed and scattered back, charging the copy to the terrains whose
-        // resolution runs past a region rather than to every stroke.
+        // brushed and scattered back.
         let gathered = match data.contiguous_grid_mut() {
             Some(region) => {
                 edit(region.heights_mut());
@@ -513,10 +482,8 @@ impl TerrainDataStore {
 
     /// Drops cached heightmaps for every path `live` does not name.
     ///
-    /// The documents stay, because an undo can bring a deleted terrain back and
-    /// its heights have to still be there. The cached map is derived data,
-    /// costs `resolution^2 * 4` bytes (a megabyte for a 512-resolution
-    /// terrain), and nothing else frees it.
+    /// The documents stay, because an undo can bring a deleted terrain back.
+    /// The cached map is derived data and nothing else frees it.
     pub fn retain_heightmaps(&self, live: impl Fn(&str) -> bool) {
         self.cached().retain(|path, _| live(path));
     }
@@ -539,9 +506,8 @@ impl TerrainDataStore {
     /// Marks one terrain's cached heightmap as not describing what is stored.
     /// Called wherever that terrain's bulk data may have been written.
     ///
-    /// Per path, not global: sculpting one terrain says nothing about any other
-    /// terrain's heights, and retiring theirs would charge every open terrain a
-    /// full rebuild for a stroke on one.
+    /// Per path, not global: retiring every terrain's map would charge them
+    /// all a full rebuild for a stroke on one.
     fn retire_heightmap(&self, data_path: &str) {
         if let Some(cached) = self.cached().get_mut(data_path) {
             cached.stale = true;
@@ -574,8 +540,7 @@ impl TerrainDataStore {
     }
 
     /// Marks a sidecar path as failed to load: a file exists but its contents
-    /// could not be decoded. The `load_failed` field's docs cover why this is
-    /// kept separate from having no entry.
+    /// could not be decoded.
     pub fn mark_load_failed(&mut self, data_path: impl Into<String>, reason: impl Into<String>) {
         self.load_failed.insert(data_path.into(), reason.into());
     }
@@ -611,13 +576,12 @@ impl TerrainDataStore {
         }
     }
 
-    /// Whether the file at `full` has been written since this store last
-    /// read `data_path` from it.
+    /// Whether the file at `full` has been written since this store last read
+    /// `data_path` from it.
     ///
-    /// A path the store has never read is stale by definition: there is
-    /// nothing to keep. A file that cannot be stat'd is not, because
-    /// re-reading it would fail anyway and dropping the entry would lose
-    /// the only copy.
+    /// A path the store has never read is stale by definition. A file that
+    /// cannot be stat'd is not, since dropping the entry would lose the only
+    /// copy.
     pub fn sidecar_is_stale(&self, data_path: &str, full: &std::path::Path) -> bool {
         let Some(read_at) = self.read_mtimes.get(data_path) else {
             return true;
@@ -640,11 +604,9 @@ impl TerrainDataStore {
     /// never be a different length than the terrain claims, and a newly added
     /// channel is zeroed at the right length before anything paints it.
     ///
-    /// See [`Self::entry_for`] for the cases this refuses. Every refusal
-    /// happens before anything is written, leaving the document as it loaded.
-    ///
-    /// Takes its fields rather than `&mut self` so a caller can hold the
-    /// returned borrow and still touch `control_dirty`.
+    /// Every refusal happens before anything is written, leaving the document
+    /// as it loaded. Takes its fields rather than `&mut self` so a caller can
+    /// hold the returned borrow and still touch `control_dirty`.
     fn document_in<'a>(
         entries: &'a mut HashMap<String, RegionTerrainData>,
         load_failed: &HashMap<String, String>,
@@ -674,10 +636,9 @@ impl TerrainDataStore {
     /// The dense editing view of a terrain's document.
     ///
     /// `None`, refusing the edit, for a terrain with no sidecar path and for
-    /// one whose data failed to load. Nothing here reshapes a document to fit a
-    /// declared grid: a terrain's extent is the regions it holds. A refusal
-    /// leaves the document, and the file behind it, as it was; minting or
-    /// trimming data here would lose data silently.
+    /// one whose data failed to load. Nothing here reshapes a document to fit
+    /// a declared grid: a terrain's extent is the regions it holds, and
+    /// minting or trimming data here would lose data silently.
     pub fn entry_for(
         &mut self,
         terrain: &jackdaw_scene_types::Terrain,
@@ -714,22 +675,18 @@ impl TerrainDataStore {
     /// Replaces a terrain's whole material list.
     ///
     /// Whole-list rather than per-slot: order *is* the id space, so every
-    /// mutation (add, remove, reorder, retile) is a list rewrite and an undo
-    /// entry only has to hold the two lists.
+    /// mutation is a list rewrite and an undo entry only has to hold the two
+    /// lists.
     ///
     /// A name the sidecar encoder would reject is refused rather than stored,
-    /// since it would otherwise sit in the store and fail every later save.
-    /// Whether a name is *saved* is checked by the caller, which is what can
-    /// see the material registry.
+    /// since it would otherwise fail every later save. Whether a name is
+    /// *saved* is checked by the caller, which can see the material registry.
     ///
     /// Nothing here rewrites paint or renumbers an id: a removed material
-    /// leaves a tombstone ([`TerrainMaterialSlot::tombstone`]) rather than
-    /// closing the gap, so every cell in the control map keeps drawing what it
-    /// drew. A reorder is the exception, being a renumbering asked for by name.
-    ///
-    /// Trailing tombstones are dropped: an id past the end of the list is no
-    /// different from an id held open at the end of it, and keeping them would
-    /// let the list grow against [`MAX_TEXTURES`] on nothing.
+    /// leaves a tombstone rather than closing the gap, so every cell keeps
+    /// drawing what it drew. A reorder is the exception, being a renumbering
+    /// asked for by name. Trailing tombstones are dropped, an id past the end
+    /// of the list being no different from one held open at the end of it.
     pub fn set_materials(
         &mut self,
         data_path: impl Into<String>,
@@ -843,8 +800,9 @@ impl TerrainDataStore {
     /// One rect of a terrain's control words, row-major over the rect.
     ///
     /// What the renderer patches an uploaded control map from after a stroke.
-    /// Reading the rect rather than [`Self::control`]'s whole grid is the
-    /// difference between a hundred cells and a million on the default terrain.
+    /// Reading the rect rather than the whole grid is the difference between a
+    /// hundred cells and a million. Cells outside the terrain's own grid read
+    /// as the default word.
     /// Cells outside the terrain's own grid read as the default word.
     pub fn control_rect(&self, data_path: &str, resolution: u32, rect: GridRect) -> Vec<Control> {
         let Some(data) = self.entries.get(data_path) else {
@@ -864,13 +822,11 @@ impl TerrainDataStore {
     }
 
     /// Control words for a terrain, sized to its resolution. `None` wherever
-    /// [`Self::entry_for`] is `None`, and for the same reasons: paint is stored
-    /// in the same document as everything else.
+    /// [`Self::entry_for`] is `None`, and for the same reasons.
     ///
-    /// Handing out `&mut` marks the map dirty whether or not the caller writes,
-    /// the alternative being a per-cell setter a brush would call thousands of
-    /// times a stroke. A spurious re-upload costs one texture write; a missed
-    /// one leaves the terrain rendering paint that is not in the document.
+    /// Handing out `&mut` marks the map dirty whether or not the caller
+    /// writes: a spurious re-upload costs one texture write, a missed one
+    /// leaves the terrain rendering paint that is not in the document.
     pub fn control_mut(
         &mut self,
         terrain: &jackdaw_scene_types::Terrain,
@@ -879,23 +835,20 @@ impl TerrainDataStore {
         self.control_rect_mut(terrain, GridRect::whole(resolution))
     }
 
-    /// [`Self::control_mut`] for a caller that knows which block it is
-    /// about to write.
+    /// [`Self::control_mut`] for a caller that knows which block it is about
+    /// to write.
     ///
     /// Only `rect` is marked for upload, so a paint stroke costs the renderer
-    /// its brush footprint per frame rather than the whole map. A write outside
-    /// `rect` leaves that part of the uploaded texture unchanged, so the rect
-    /// has to cover every cell the caller touches.
+    /// its brush footprint per frame rather than the whole map, and `rect` has
+    /// to cover every cell the caller touches.
     pub fn control_rect_mut(
         &mut self,
         terrain: &jackdaw_scene_types::Terrain,
         rect: GridRect,
     ) -> Option<ControlGrid<'_>> {
         // The cached heightmap stands. A resolution change is caught by
-        // `CachedHeightmap::matches`, which compares the dimensions it was
-        // built for. At an unchanged resolution the only heights `document_in`
-        // can move are the ones it mints, a freshly ensured region or a window
-        // carried across by prefix copy, and both leave zeroes where
+        // `CachedHeightmap::matches`, and at an unchanged resolution the only
+        // heights `document_in` can move are the zeroes it mints, where
         // `heightmap` already pads with them.
         let Self {
             entries,
@@ -1092,14 +1045,13 @@ impl TerrainDataStore {
 
 /// One terrain's colour layer as a dense grid, writable.
 ///
-/// [`ControlGrid`]'s two shapes over the tint. A terrain stored as one
-/// region that has already been painted is written where it lives; anything
-/// else is gathered over `rect` and scattered back on drop.
+/// [`ControlGrid`]'s two shapes over the tint: a terrain stored as one region
+/// that has already been painted is written where it lives, anything else is
+/// gathered over `rect` and scattered back on drop.
 ///
 /// A region with no colour layer is never borrowed: the layer allocates on
-/// first paint, and a stroke that reads the tint or erases back to white
-/// must not grow the sidecar. The scatter writes only the cells that
-/// actually changed, so such a stroke allocates nothing.
+/// first paint, and a stroke that only reads the tint or erases back to white
+/// must not grow the sidecar.
 ///
 /// Outside `rect` the dense view reads as white rather than as what is
 /// stored, so `rect` has to cover every cell the caller reads as well as
@@ -1205,14 +1157,12 @@ impl Drop for ColorGrid<'_> {
     }
 }
 
-/// The region side a terrain of `resolution` vertices per edge is stored
-/// at: [`RegionSize::for_resolution`], never coarser than
-/// [`RegionSize::DEFAULT`].
+/// The region side a terrain of `resolution` vertices per edge is stored at:
+/// [`RegionSize::for_resolution`], never coarser than [`RegionSize::DEFAULT`].
 ///
 /// `for_resolution` alone gives a power-of-two grid exactly one region, which
 /// leaves a terrain nothing to author region by region. The cap puts a grid of
-/// regions under a large terrain (a 1024 grid is 4x4 of them) and is a no-op at
-/// every resolution of 256 or below, where the seam rule decides the size.
+/// regions under a large terrain and is a no-op at 256 or below.
 #[cfg(test)]
 fn editor_region_size(resolution: u32) -> RegionSize {
     let derived = RegionSize::for_resolution(resolution);
@@ -1229,11 +1179,9 @@ fn editor_region_size(resolution: u32) -> RegionSize {
 /// regions is gathered here and scattered back on drop, so a caller writes a
 /// dense grid either way without knowing which shape it got.
 ///
-/// The gather and the scatter both cover `rect` only, which for a stroke is its
-/// brush footprint: a hundred cells against a million on the default terrain.
-/// Outside `rect` the dense view reads as the default word rather than as what
-/// is stored, so `rect` has to cover every cell the caller reads as well as
-/// every cell it writes.
+/// The gather and the scatter both cover `rect` only. Outside `rect` the dense
+/// view reads as the default word rather than as what is stored, so `rect` has
+/// to cover every cell the caller reads as well as every cell it writes.
 pub struct ControlGrid<'a> {
     words: ControlWords<'a>,
 }
@@ -1255,9 +1203,8 @@ impl<'a> ControlGrid<'a> {
         // The row stride is the document's own grid: the words handed out have
         // to be indexable at the same resolution the caller brushes at.
         let resolution = document.grid_resolution();
-        // Split in two steps because the contiguous case reborrows the document
-        // for the whole guard, so the gathered case cannot also hold it in the
-        // same match.
+        // Split in two steps because the contiguous case reborrows the
+        // document for the whole guard.
         if document.contiguous_grid().is_some() {
             let words = document
                 .contiguous_grid_mut()
@@ -1332,23 +1279,13 @@ impl Drop for ControlGrid<'_> {
 /// all address a terrain as a single dense grid, whatever the document stores
 /// it as.
 ///
-/// Which shape that is comes from the document's own region size, not from
-/// the resolution alone. A terrain of 256 vertices per edge or fewer is one
-/// region, so [`RegionTerrainData::contiguous_grid`] is `Some` once the
-/// origin region exists (true of every such document reached through
-/// [`TerrainDataStore::entry_for`], which allocates it) and the dense grid is
-/// that region's own layer, handed over without a copy. A whole-array write
-/// goes through [`Self::set_heights`], which fills or truncates rather than
-/// letting the region change shape.
-///
-/// Anything wider spans regions, and the same calls gather and scatter through
-/// [`RegionTerrainData::grid_heights`] and
-/// [`RegionTerrainData::set_grid_heights`] instead. Those walk the sparse
-/// addressing cell by cell, so a whole-grid gather is a million lookups on the
-/// default terrain: affordable for a load or a generate, not per frame. The
-/// paths a stroke runs every frame take a rect instead
-/// ([`TerrainDataStore::control_rect_mut`], [`TerrainDataStore::control_rect`])
-/// and touch only the cells the brush covers.
+/// Which shape that is comes from the document's own region size, not from the
+/// resolution alone. A terrain of 256 vertices per edge or fewer is one
+/// region, and the dense grid is that region's own layer, handed over without
+/// a copy. Anything wider spans regions and is gathered and scattered cell by
+/// cell instead, which is a million lookups on the default terrain:
+/// affordable for a load or a generate, not per frame. The paths a stroke runs
+/// every frame take a rect instead.
 ///
 /// A zero-resolution terrain has no grid; its heights read as empty and writes
 /// to them go nowhere.
@@ -1382,10 +1319,9 @@ impl<'a> TerrainEntry<'a> {
     /// tail of a long one.
     ///
     /// A dense grid states its own extent: handing over `n * n` heights says
-    /// the terrain has `n` cells a side, so writing one to a terrain holding no
-    /// regions allocates the regions to hold it. A grid smaller than what is
-    /// stored overwrites its corner and leaves the rest; nothing here removes
-    /// ground.
+    /// the terrain has `n` cells a side, so writing one to a terrain holding
+    /// no regions allocates the regions to hold it. A smaller grid overwrites
+    /// its corner and leaves the rest; nothing here removes ground.
     pub fn set_heights(&mut self, heights: &[f32]) {
         let side = (heights.len() as f64).sqrt().round() as u32;
         if side * side == heights.len() as u32 {
@@ -1441,10 +1377,8 @@ impl<'a> TerrainEntry<'a> {
     /// of them.
     ///
     /// Nothing allocates implicitly: a terrain is the regions it holds, so a
-    /// first edit on a terrain with no regions goes through here.
-    ///
-    /// Refused as a whole when it would take the terrain past the region cap,
-    /// leaving the document as it was.
+    /// first edit on a terrain with no regions goes through here. Refused as a
+    /// whole when it would take the terrain past the region cap.
     pub fn ensure_extent(
         &mut self,
         cells: u32,
@@ -1479,10 +1413,9 @@ impl<'a> TerrainEntry<'a> {
 
 /// One terrain's document, for a caller that only reads it.
 ///
-/// The read half of [`TerrainEntry`]. The scatter operator wants a terrain's
-/// channels reconciled against its component, which only
-/// `TerrainDataStore::document_in` does, but it writes no heights and so must
-/// not cost the shared heightmap a rebuild.
+/// The read half of [`TerrainEntry`], for a caller that wants a terrain's
+/// channels reconciled but writes no heights and so must not cost the shared
+/// heightmap a rebuild.
 pub struct TerrainRead<'a> {
     data: &'a RegionTerrainData,
 }
@@ -1512,14 +1445,11 @@ impl<'a> TerrainRead<'a> {
 /// Brings a terrain's stored channel values in line with the channel
 /// descriptors on its component.
 ///
-/// The component owns the channel table (names, widths, order) and the sidecar
-/// owns the values. When the user adds, removes, renames or reorders a channel
-/// in the inspector, this carries the values along, matched by name, so a
-/// rename keeps what was painted and a reorder moves it rather than shuffling
-/// it into the wrong layer.
-///
-/// A channel added to a terrain that already has heights is initialised to zero
-/// at `resolution^2` here.
+/// The component owns the channel table and the sidecar owns the values, so
+/// this carries the values along, matched by name: a rename keeps what was
+/// painted and a reorder moves it rather than shuffling it into the wrong
+/// layer. A channel added to a terrain that already has heights is initialised
+/// to zero at `resolution^2`.
 fn reconcile_channels(data: &mut RegionTerrainData, terrain: &jackdaw_scene_types::Terrain) {
     use jackdaw_terrain::ChannelElement;
 
@@ -1566,13 +1496,10 @@ fn reconcile_channels(data: &mut RegionTerrainData, terrain: &jackdaw_scene_type
 /// Mints a sidecar path for a new terrain in `scene_stem`'s scene, unique
 /// against everything the store already holds.
 ///
-/// Uniqueness is checked against the whole store, not just the terrains spawned
-/// in the scene, because the store can hold an entry for a terrain the scene
-/// does not have live: one an undo brought back, or a delete not yet redone
-/// past. Checking only live terrains could mint a path that collides with one
-/// of those once it resurfaces. Collisions across tabs are not covered: each
-/// inactive [`crate::scenes::SceneTab`] owns a separate [`TerrainDataStore`],
-/// so this sees one tab's store at a time.
+/// Uniqueness is checked against the whole store rather than the terrains live
+/// in the scene, since an undo can bring back a terrain the scene does not
+/// currently have. Collisions across tabs are not covered: each inactive tab
+/// owns a separate store.
 pub fn mint_data_path(store: &TerrainDataStore, scene_stem: &str) -> String {
     let stem = if scene_stem.is_empty() {
         "untitled"
@@ -1617,9 +1544,8 @@ mod tests {
     /// A store already holding a document for `terrain`, stored in regions
     /// small enough that the terrain is a handful of cells.
     ///
-    /// Region size is fixed when a document is created and a real one uses
-    /// [`RegionSize::DEFAULT`], which would make every fixture here a quarter
-    /// of a million cells.
+    /// A real document uses [`RegionSize::DEFAULT`], which would make every
+    /// fixture here a quarter of a million cells.
     fn store_for(terrain: &jackdaw_scene_types::Terrain) -> TerrainDataStore {
         let mut regions =
             jackdaw_terrain::TerrainRegions::new(editor_region_size(terrain.resolution));
@@ -2310,9 +2236,8 @@ mod tests {
     }
 
     /// A path marked load-failed refuses every write rather than minting data
-    /// that a later save would write over the real file. Paint and the material
-    /// list live in that same document, so they are refused on the same terms
-    /// as sculpting.
+    /// that a later save would write over the real file. Paint and the
+    /// material list live in that same document.
     #[test]
     fn a_load_failed_path_refuses_every_write() {
         let mut store = TerrainDataStore::default();

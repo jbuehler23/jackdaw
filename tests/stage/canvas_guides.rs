@@ -1,12 +1,9 @@
-//! Guides on the 2D canvas: the operators that draw them and take them
-//! away, the one history entry an edit is, and what a saved document
-//! carries.
+//! Guides on the 2D canvas: the operators that draw them and take them away,
+//! the one history entry an edit is, and what a saved document carries.
 //!
-//! Guides live in the scene rather than beside it, on the UI root, so a
-//! layout opens with the lines it was drawn against. What a document
-//! must never carry is an empty `CanvasGuides`: a component equal to its
-//! default emits as a bare type path, so one left behind would sit in
-//! every scene that ever had a guide.
+//! Guides live on the UI root, so a layout opens with the lines it was drawn
+//! against. What a document must never carry is an empty `CanvasGuides`: a
+//! component equal to its default emits as a bare type path.
 
 use crate::util;
 

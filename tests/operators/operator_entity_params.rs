@@ -1,25 +1,9 @@
-//! Inspector / hierarchy operators that act on a target `Entity` all
-//! read it from `OperatorParameters::as_entity("entity")`. That helper
-//! ONLY matches `PropertyValue::Entity` (see
-//! `crates/jackdaw_api_internal/src/operator.rs:180`); a `PropertyValue::Int`
-//! produced by `entity.to_bits() as i64` falls through to `None`, so
-//! the operator early-returns `Cancelled` and the user-visible action
-//! becomes a silent no-op.
-//!
-//! That regression hit every inspector and hierarchy call site at once
-//! when the codebase had `.param("entity", entity.to_bits() as i64)`
-//! sprinkled around. The fix was to pass `Entity` directly so the
-//! `From<Entity> for PropertyValue` conversion produces
-//! `PropertyValue::Entity`.
-//!
-//! The tests in this file pin both directions:
-//!  * Happy path: dispatching with a real `Entity` actually mutates the
-//!    ECS (the component lands, physics components attach/detach, etc.).
-//!  * Regression guard: dispatching the same op with `entity.to_bits()
-//!    as i64` returns `Cancelled` and leaves the world untouched. If a
-//!    future refactor "helpfully" extends `as_entity` to coerce
-//!    `PropertyValue::Int`, that's a deliberate behaviour change and
-//!    these tests will demand attention.
+//! Operators that act on a target `Entity` read it from
+//! `OperatorParameters::as_entity("entity")`, which only matches
+//! `PropertyValue::Entity`. An `entity.to_bits() as i64` falls through to `None`,
+//! so the operator early-returns `Cancelled` and the action is a silent no-op.
+//! Both directions are pinned here, so extending `as_entity` to coerce
+//! `PropertyValue::Int` has to be a deliberate change.
 
 use crate::util;
 
@@ -29,19 +13,15 @@ use jackdaw_api::prelude::*;
 use jackdaw_avian_integration::AvianCollider;
 use jackdaw_scene_types::PropertyValue;
 
-/// Test-only component used by the component.add/remove tests. Lives
-/// here (instead of a fixture crate) because we just need a reflected
-/// type the picker can resolve by `type_path`.
+/// Test-only reflected component the picker can resolve by `type_path`.
 #[derive(Component, Reflect, Default, Debug, PartialEq)]
 #[reflect(Component, Default)]
 struct OperatorParamTestMarker {
     value: i32,
 }
 
-/// Minimum-viable component shape: derive + reflect, no
-/// `Default`. The bool/String/f32 fields exercise three
-/// different primitive `ReflectDefault` paths through
-/// `build_reflective_default`.
+/// Deliberately no `Default`. The bool/String/f32 fields exercise three primitive
+/// `ReflectDefault` paths through `build_reflective_default`.
 #[derive(Component, Reflect, Debug, PartialEq)]
 #[reflect(Component)]
 struct OperatorParamNoDefaultMarker {
@@ -50,11 +30,9 @@ struct OperatorParamNoDefaultMarker {
     c: f32,
 }
 
-/// Build the editor test app and register `OperatorParamTestMarker`
-/// for reflection so `component_id_for_path` can find it. The
-/// component starts unseen by the world (no entity has it), so this
-/// also exercises the `register_type`-only path that `component.add`
-/// must handle.
+/// Build the editor test app and register `OperatorParamTestMarker` so
+/// `component_id_for_path` can find it. No entity has the component, so this also
+/// exercises the `register_type`-only path `component.add` must handle.
 fn app_with_test_marker() -> App {
     let mut app = util::editor_test_app();
     app.register_type::<OperatorParamTestMarker>();
@@ -62,9 +40,8 @@ fn app_with_test_marker() -> App {
     app
 }
 
-/// Spawn a target entity and make it the primary selection. Inspector
-/// operators gate on `has_primary_selection`, so without this they
-/// short-circuit before ever inspecting their params.
+/// Spawn a target entity and make it the primary selection: inspector operators
+/// gate on `has_primary_selection` before they ever inspect their params.
 fn spawn_selected_target(app: &mut App) -> Entity {
     let entity = app.world_mut().spawn(Name::new("op-param-target")).id();
     app.world_mut().resource_mut::<Selection>().entities = vec![entity];
@@ -93,9 +70,8 @@ fn component_add_with_entity_param_inserts_component() {
         "component.add should report Finished with valid params"
     );
 
-    // The dispatcher queues the actual insert via `commands.queue`, so
-    // we have to drain pending commands by ticking a frame before the
-    // ECS reflects the change.
+    // The dispatcher queues the insert via `commands.queue`, so a frame has to
+    // tick before the ECS reflects the change.
     app.update();
 
     assert!(
@@ -108,9 +84,8 @@ fn component_add_with_entity_param_inserts_component() {
 
 #[test]
 fn component_add_inserts_component_without_default_derive() {
-    // Regression guard: components without a `Default` derive
-    // must still reach the picker and insert via
-    // `build_reflective_default` (which walks field defaults).
+    // Components without a `Default` derive must still insert via
+    // `build_reflective_default`, which walks field defaults.
     let mut app = app_with_test_marker();
     let entity = spawn_selected_target(&mut app);
 
@@ -139,10 +114,8 @@ fn component_add_inserts_component_without_default_derive() {
 
 #[test]
 fn component_add_with_int_entity_param_cancels() {
-    // Regression guard for the silent-fail bug: passing the entity as
-    // `i64` (the old broken pattern from inspector/hierarchy UI code)
-    // must NOT mutate the world. `as_entity` rejects `PropertyValue::Int`
-    // and the operator should return `Cancelled` cleanly.
+    // Passing the entity as `i64` must not mutate the world: `as_entity` rejects
+    // `PropertyValue::Int` and the operator returns `Cancelled` cleanly.
     let mut app = app_with_test_marker();
     let entity = spawn_selected_target(&mut app);
     let entity_as_int: i64 = entity.to_bits() as i64;
@@ -276,17 +249,10 @@ fn physics_disable_with_entity_param_detaches_components() {
     );
 }
 
-/// Sweep guard: every operator that reads `entity` from params via
-/// `as_entity("entity")` must reject a `PropertyValue::Int`, because
-/// the inspector/hierarchy UI used to pass `entity.to_bits() as i64`
-/// and got silent no-ops across the board. Looping the contract on
-/// every entity-taking op is cheaper than per-op happy-path tests and
-/// would catch a future call site that adds an `as_entity` impl on
-/// `PropertyValue::Int`.
-///
-/// `type_path` / `field_path` etc. are filled with valid placeholders
-/// so the only thing that can drive the call to `Cancelled` is the
-/// rejected entity param.
+/// Every operator reading `entity` through `as_entity("entity")` must reject a
+/// `PropertyValue::Int`. `type_path` / `field_path` are filled with valid
+/// placeholders so the rejected entity param is the only thing that can drive
+/// the call to `Cancelled`.
 #[test]
 fn entity_param_rejects_int_across_inspector_and_hierarchy_ops() {
     let mut app = app_with_test_marker();

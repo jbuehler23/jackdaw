@@ -1,14 +1,6 @@
-//! One viewport panel, two modes.
-//!
-//! A panel builds both presentations and shows one. These tests pin what the
-//! mode does: which column is in layout, which camera renders, that the switch
-//! is reachable from either bar and reads back the mode it is in, and that the
-//! `viewport.mode` operator moves every open panel and records the choice as
-//! the user's rather than the scene kind's.
-//!
-//! Also what a layout saved while the canvas was a panel of its own loads
-//! as, which panel a UI scene is routed into when several are open, and
-//! which surface a capture of the viewport aims at.
+//! One viewport panel, two modes: which column is in layout and which camera
+//! renders, the switch in either bar, the `viewport.mode` operator, and how
+//! saved layouts, scene routing and captures follow the mode.
 
 use crate::util;
 
@@ -113,8 +105,7 @@ fn assert_showing(app: &App, panel: Entity, mode: ViewportMode) {
 }
 
 /// Both presentations exist from the start and the mode picks between them,
-/// rather than a switch rebuilding the panel: the camera pose, the canvas
-/// framing and the per-panel chrome all have to survive a flip.
+/// so the camera pose, the canvas framing and the per-panel chrome survive a flip.
 #[test]
 fn switching_the_mode_shows_one_column_and_lets_only_its_camera_render() {
     let mut app = util::editor_test_app();
@@ -133,8 +124,8 @@ fn switching_the_mode_shows_one_column_and_lets_only_its_camera_render() {
     }
 }
 
-/// The switch is in whichever bar the mode is showing, so there is always a way
-/// back out. Both bars carry one, and both read back the mode the panel is in.
+/// The switch is in whichever bar the mode is showing, so there is always a
+/// way back out.
 #[test]
 fn each_bar_carries_the_switch_and_highlights_the_current_mode() {
     let mut app = util::editor_test_app();
@@ -183,9 +174,7 @@ fn each_bar_carries_the_switch_and_highlights_the_current_mode() {
     }
 }
 
-/// The switch is a radio group: the bar is the group, each segment is a
-/// radio button, and the segment the panel is in carries `Checked`. No
-/// segment is a hand-rolled `Interaction` control.
+/// The switch is a radio group, and the segment the panel is in carries `Checked`.
 #[test]
 fn the_switch_is_a_radio_group_and_checks_the_current_mode() {
     use bevy::ui::Checked;
@@ -230,9 +219,8 @@ fn the_switch_is_a_radio_group_and_checks_the_current_mode() {
     }
 }
 
-/// An operator call names no panel, so it answers for all of them, the way
-/// `viewport2d.mode` does. It also records the mode as chosen: a mode the user
-/// asked for outranks the one the scene's kind implies.
+/// An operator call names no panel, so it answers for all of them, and records
+/// the mode as chosen: the user's choice outranks the scene kind's.
 #[test]
 fn the_mode_operator_reaches_every_open_panel_and_records_the_choice() {
     let mut app = util::editor_test_app();
@@ -304,8 +292,8 @@ fn laid_out_panel(app: &mut App) -> Entity {
 
 const PANEL_SIZE: Vec2 = Vec2::new(800.0, 600.0);
 
-/// Low enough in the panel to clear the toolbars above the 3D viewport and the
-/// header above the 2D stage, so one position is inside either presentation.
+/// Low enough to clear the 3D toolbars and the 2D header, so one position is
+/// inside either presentation.
 const INSIDE_THE_PANEL: Vec2 = Vec2::new(400.0, 450.0);
 
 fn place_cursor(app: &mut App, position: Vec2) {
@@ -324,10 +312,8 @@ fn settle(app: &mut App) {
     }
 }
 
-/// One hover authority answers for both modes. It always names the panel and
-/// what that panel is showing; it names a camera and a viewport node only in
-/// 3D, because those are the 3D presentation's and every world-space tool
-/// routes through one of them. That is what makes the 3D tools stand down over
+/// One hover authority answers for both modes. It names a camera and a
+/// viewport node only in 3D, which is what makes the 3D tools stand down over
 /// a canvas without a gate of their own.
 #[test]
 fn hovering_a_panel_reports_the_mode_it_is_in() {
@@ -424,12 +410,8 @@ fn switch_mode(app: &mut App, mode: &'static str) {
 }
 
 /// A tab opens in the mode its scene's kind asks for, and a mode the user
-/// picked outranks that for the tab it was picked in.
-///
-/// One contract with two halves, because the second is what makes the first
-/// safe to keep applying: the override lives in the tab's view state, so it
-/// survives a swap; a tab nobody switched stores none, so it goes on taking
-/// its kind's answer instead of being frozen in whatever mode it was left in.
+/// picked outranks that. The override lives in the tab's view state, so a tab
+/// nobody switched stores none and goes on taking its kind's answer.
 #[test]
 fn a_chosen_mode_is_remembered_per_tab_and_an_unchosen_one_is_recomputed() {
     let mut app = util::editor_test_app();
@@ -482,8 +464,8 @@ fn a_chosen_mode_is_remembered_per_tab_and_an_unchosen_one_is_recomputed() {
     assert_showing(&app, panel, ViewportMode::ThreeD);
 }
 
-/// The same rule from the other side: a second UI tab that nobody switched
-/// still opens on its canvas, however the tab beside it was overruled.
+/// A second UI tab that nobody switched still opens on its canvas, however the
+/// tab beside it was overruled.
 #[test]
 fn a_tab_that_was_never_switched_follows_its_scenes_kind() {
     let mut app = util::editor_test_app();
@@ -567,9 +549,8 @@ fn loaded_leaf(app: &App) -> (Vec<String>, Option<String>) {
     (windows, active)
 }
 
-/// A layout saved while the canvas was a panel of its own docked both of
-/// them in one leaf. Reopening it must not show two tabs for the panel
-/// they have become, and the tab the user left in front stays in front.
+/// A layout saved while the canvas was a panel of its own docked both in one
+/// leaf, and must not now show two tabs for the panel they have become.
 #[test]
 fn a_saved_layout_holding_both_viewports_loads_as_one_tab() {
     let mut app = util::editor_test_app();
@@ -600,8 +581,7 @@ fn a_saved_layout_holding_both_viewports_loads_as_one_tab() {
     );
 }
 
-/// A layout that docked only the canvas keeps its leaf, showing the panel
-/// the canvas is now a mode of.
+/// A layout that docked only the canvas keeps its leaf.
 #[test]
 fn a_saved_layout_holding_only_the_canvas_loads_the_viewport() {
     let mut app = util::editor_test_app();
@@ -616,9 +596,8 @@ fn a_saved_layout_holding_only_the_canvas_loads_the_viewport() {
     assert_eq!(active.as_deref(), Some("jackdaw.viewport"));
 }
 
-/// With two panels open, the UI scene goes to the one showing the canvas.
-/// Routing it into the first panel regardless would leave the user looking
-/// at an empty stage while a panel they cannot see holds the scene.
+/// Routing a UI scene into the first panel regardless would leave the user
+/// looking at an empty stage while a panel they cannot see holds the scene.
 #[test]
 fn a_ui_scene_routes_into_the_panel_showing_the_canvas() {
     use bevy::ui::UiTargetCamera;
@@ -663,10 +642,8 @@ fn a_ui_scene_routes_into_the_panel_showing_the_canvas() {
     );
 }
 
-/// A capture of the viewport is a picture of what the user is looking at,
-/// so it follows the mode: the world camera's image in 3D, the canvas
-/// camera's in 2D. Aiming at the world camera either way would hand back a
-/// picture of an empty world to someone editing a screen.
+/// A capture follows the mode: the world camera's image in 3D, the canvas
+/// camera's in 2D.
 #[test]
 fn the_viewport_capture_aims_at_the_surface_the_mode_is_showing() {
     use bevy::camera::RenderTarget;
@@ -688,8 +665,8 @@ fn the_viewport_capture_aims_at_the_surface_the_mode_is_showing() {
     for (mode, camera) in [
         ("3d", world_camera),
         ("2d", canvas_camera),
-        // Back again, so the second aim is a change rather than the state
-        // the panel happened to settle in.
+        // Back again, so the second aim is a change rather than the state the
+        // panel happened to settle in.
         ("3d", world_camera),
     ] {
         switch_mode(&mut app, mode);
@@ -722,10 +699,9 @@ fn the_viewport_capture_aims_at_the_surface_the_mode_is_showing() {
     }
 }
 
-/// A panel is built in whatever mode the tab is already in. The dock
-/// reconciler rebuilds a leaf whenever its tabs change, it is split, or the
-/// workspace switches, so a panel that always started in the 3D world would
-/// drop a screen's canvas on any of them.
+/// The dock reconciler rebuilds a leaf whenever its tabs change, it is split,
+/// or the workspace switches, so a panel that always started in the 3D world
+/// would drop a screen's canvas on any of them.
 #[test]
 fn a_panel_built_while_the_canvas_is_showing_opens_on_the_canvas() {
     let mut app = util::editor_test_app();
@@ -744,9 +720,8 @@ fn a_panel_built_while_the_canvas_is_showing_opens_on_the_canvas() {
     );
 }
 
-/// The same rule through the machinery that actually rebuilds panels: adding a
-/// tab to the viewport's leaf makes the reconciler tear the panel down and
-/// build it again, and the mode has to come back with it.
+/// The same rule through the machinery that rebuilds panels: adding a tab to
+/// the leaf tears the panel down and builds it again.
 #[test]
 fn a_rebuilt_leaf_brings_the_panel_back_on_the_canvas() {
     use jackdaw_api::prelude::JackdawExtension as _;
@@ -805,8 +780,7 @@ fn only_panel(app: &mut App) -> Entity {
 }
 
 /// Asking for a mode with no panel open is not a refusal: the request is what
-/// the next panel opens in, so a run that sets the mode before the dock has a
-/// viewport leaf still lands.
+/// the next panel opens in.
 #[test]
 fn the_mode_operator_records_a_mode_with_no_panel_to_move() {
     let mut app = util::editor_test_app();
@@ -825,10 +799,8 @@ fn the_mode_operator_records_a_mode_with_no_panel_to_move() {
     assert_showing(&app, panel, ViewportMode::TwoD);
 }
 
-/// A world scene's imported overlay belongs to the world, so it is routed into
-/// a panel showing the world. Sending it to the panel answering for the canvas
-/// would aim it at a camera that panel's mode has switched off, and the overlay
-/// would vanish from the panel still showing the world.
+/// A world scene's imported overlay is routed into a panel showing the world;
+/// the panel answering for the canvas has that camera switched off.
 #[test]
 fn an_imported_overlay_routes_into_the_panel_showing_the_world() {
     use bevy::ui::UiTargetCamera;
@@ -850,8 +822,7 @@ fn an_imported_overlay_routes_into_the_panel_showing_the_world() {
     assert_eq!(host(&app, in_3d).mode, ViewportMode::ThreeD);
 
     // Imported rather than authored: an `IsA` instance root with no `Prefab`
-    // of its own, which is what tells the routing it is an overlay a world
-    // scene pulled in rather than the document being edited.
+    // of its own, which is what marks it as an overlay.
     let root = app
         .world_mut()
         .spawn((
@@ -884,9 +855,8 @@ fn an_imported_overlay_routes_into_the_panel_showing_the_world() {
     );
 }
 
-/// Every segment of the switch that names `panel` and `mode`. There is one in
-/// each presentation's bar, because whichever bar is showing has to carry the
-/// way back out.
+/// Every segment of the switch that names `panel` and `mode`: one in each
+/// presentation's bar.
 fn segments_for(app: &mut App, panel: Entity, mode: ViewportMode) -> Vec<Entity> {
     let found: Vec<Entity> = app
         .world_mut()
@@ -945,9 +915,8 @@ fn click(app: &mut App, segment: Entity) {
     ));
 }
 
-/// Clicking a segment moves the panel it names and records the mode as one the
-/// user asked for. The panel is carried on the segment rather than looked up,
-/// so a switch in one panel's bar leaves the panel beside it alone.
+/// The panel is carried on the segment rather than looked up, so a switch in
+/// one panel's bar leaves the panel beside it alone.
 #[test]
 fn clicking_a_segment_moves_only_the_panel_it_names() {
     let mut app = util::editor_test_app();
@@ -979,8 +948,8 @@ fn clicking_a_segment_moves_only_the_panel_it_names() {
     );
 }
 
-/// A disabled segment is not a switch. The observer reads the flag itself,
-/// because a `Pointer<Click>` reaches an entity whatever its interaction state.
+/// The observer reads the disabled flag itself, because a `Pointer<Click>`
+/// reaches an entity whatever its interaction state.
 #[test]
 fn a_disabled_segment_does_not_switch_the_mode() {
     let mut app = util::editor_test_app();
@@ -1002,13 +971,10 @@ fn a_disabled_segment_does_not_switch_the_mode() {
     );
 }
 
-/// Everything the `Update` schedule orders after `system`.
-///
-/// An ordering may be stated against the system, against a set holding it, or
-/// against a set holding that: `.after(a_system)` names the anonymous set of
-/// everything with that system's type. So the walk starts from the system and
-/// every set that contains it, follows the dependency edges out, and expands
-/// each set it lands on into its members.
+/// Everything the `Update` schedule orders after `system`. An ordering may be
+/// stated against the system or against a set holding it, so the walk starts
+/// from the system and every set containing it, follows the dependency edges
+/// out, and expands each set it lands on into its members.
 fn ordered_after(app: &App, system: &str) -> std::collections::HashSet<String> {
     use bevy::ecs::schedule::{NodeId, Schedules};
     use std::collections::HashSet;
@@ -1073,10 +1039,9 @@ fn ordered_after(app: &App, system: &str) -> std::collections::HashSet<String> {
         .collect()
 }
 
-/// The grid-size chord reads the hovered panel's mode, so it has to read this
-/// frame's answer. Both systems sit in one set with no edge of their own, so
-/// without the ordering the executor is free to run the chord first, and the
-/// first scroll after the cursor moves onto a canvas retunes the world's grid.
+/// Both systems sit in one set with no edge of their own, so without the
+/// ordering the executor may run the chord first and the first scroll after
+/// the cursor moves onto a canvas retunes the world's grid.
 #[test]
 fn the_grid_size_chord_runs_after_the_hover_pass() {
     let app = util::editor_test_app();

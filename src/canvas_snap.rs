@@ -1,16 +1,7 @@
 //! What the 2D canvas snaps a dragged node to, and the two view toggles
-//! that go with it.
-//!
-//! Project-wide rather than per tab or per document: the answer to "what
-//! do my drags land on" is a way of working, so it lives beside the other
-//! project settings in `.jackdaw/settings.json` (see
-//! [`crate::project_settings`]) and follows the project rather than the
-//! scene. The grid a tab snaps to stays per tab, on `Ui2dView`.
-//!
-//! Deliberately outside the undo snapshot: Ctrl+Z after a drag puts the
-//! node back, and taking the user's snap preferences with it would be a
-//! surprise. That is what keeps [`CanvasSnap`] off both
-//! `EditorStateSnapshot` and `SnapSettings`.
+//! that go with it. Project-wide settings, stored in
+//! `.jackdaw/settings.json` (see [`crate::project_settings`]) and kept out
+//! of the undo snapshot so Ctrl+Z leaves them alone.
 
 use std::path::PathBuf;
 
@@ -43,9 +34,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<CanvasGuideRemoveOp>();
 }
 
-/// How near, in authored pixels, a position has to be to a guide to name
-/// it. Half a pixel: guides are placed by hand and read back as exact
-/// numbers, so naming one is naming its position.
+/// How near, in authored pixels, a position has to be to a guide to name it.
 pub(crate) const GUIDE_MATCH: f32 = 0.5;
 
 /// One switch on the canvas's snapping: the master, the pixel rounding,
@@ -72,8 +61,7 @@ pub enum CanvasSnapKind {
 }
 
 impl CanvasSnapKind {
-    /// Every kind, in the order the canvas offers them and the menu lists
-    /// them.
+    /// Every kind, in the order the canvas offers them.
     pub const ALL: [Self; 8] = [
         Self::Enabled,
         Self::Pixel,
@@ -91,8 +79,7 @@ impl CanvasSnapKind {
         Self::ALL.into_iter().find(|kind| kind.id() == id)
     }
 
-    /// How a caller names this kind: the `kind` parameter of the
-    /// `canvas.snap` operator.
+    /// How a caller names this kind, as the `canvas.snap` operator's `kind`.
     pub fn id(self) -> &'static str {
         match self {
             Self::Enabled => "enabled",
@@ -121,17 +108,10 @@ impl CanvasSnapKind {
     }
 }
 
-/// Which kinds of line the 2D canvas offers a drag, and whether the
-/// rulers and guides are drawn.
-///
-/// Everything is on out of the box except [`CanvasSnapKind::OtherNodes`],
-/// which reaches across the scene and would otherwise pull a node towards
-/// something the user cannot see next to it.
-///
-/// [`CanvasSnap::enabled`] is the canvas's own master, separate from the
-/// 3D tools' `SnapSettings`: the two answer different questions, and a
-/// canvas whose magnet followed the 3D toolbar would not snap at all
-/// until the user found a control that says nothing about the canvas.
+/// Which kinds of line the 2D canvas offers a drag, and whether the rulers
+/// and guides are drawn. Everything is on by default except
+/// [`CanvasSnapKind::OtherNodes`]. [`CanvasSnap::enabled`] is the canvas's
+/// own master, separate from the 3D tools' `SnapSettings`.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CanvasSnap {
@@ -190,9 +170,8 @@ impl CanvasSnap {
         }
     }
 
-    /// Whether a gesture snaps at all, with `ctrl` held or not: the
-    /// master, inverted by Ctrl for the length of the gesture, the way
-    /// the 3D tools invert their own magnet.
+    /// Whether a gesture snaps at all: the master, inverted by Ctrl for the
+    /// length of the gesture.
     pub fn magnet(&self, ctrl: bool) -> bool {
         self.enabled != ctrl
     }
@@ -229,9 +208,8 @@ fn sync_project_canvas_snap(
     *snap = load_section(&project.root, Section::Key(CANVAS_SECTION));
 }
 
-/// Rebuild the top menu bar whenever the canvas settings move, so the
-/// View menu's boxes say where the two view toggles are rather than
-/// where they were when the bar was last built.
+/// Rebuild the top menu bar whenever the canvas settings move, so the View
+/// menu's boxes stay current.
 fn flag_menu_dirty_on_change(snap: Res<CanvasSnap>, mut dirty: ResMut<crate::MenuBarDirty>) {
     if snap.is_changed() {
         dirty.0 = true;
@@ -247,10 +225,8 @@ pub(crate) fn persist(project: Option<&ProjectRoot>, snap: &CanvasSnap) {
     store_section(&project.root, Section::Key(CANVAS_SECTION), snap);
 }
 
-/// Turn one kind of canvas snapping on or off.
-///
-/// Preferences rather than scene data, so no history entry: undo after a
-/// drag moves the node back and leaves the user's snapping alone.
+/// Turn one kind of canvas snapping on or off. A preference, so no history
+/// entry.
 #[operator(
     id = "canvas.snap",
     label = "Set Canvas Snapping",
@@ -315,12 +291,8 @@ pub(crate) fn canvas_guides(
     OperatorResult::Finished
 }
 
-/// Add a guide to the open UI scene, or remove the one nearest a
-/// position.
-///
-/// One history entry per edit, and none at all when the scene already
-/// says what the caller asked for: adding a guide where one already sits
-/// or removing one from empty canvas changes nothing.
+/// Add a guide to the open UI scene, or remove the one nearest a position.
+/// One history entry per edit, and none when nothing changes.
 fn edit_guides(world: &mut World, root: Entity, axis: CanvasAxis, position: f32, add: bool) {
     let before = world.get::<CanvasGuides>(root).cloned();
     let mut next = before.clone().unwrap_or_default();
@@ -349,17 +321,14 @@ fn edit_guides(world: &mut World, root: Entity, axis: CanvasAxis, position: f32,
     record_guides(world, root, before, held(next));
 }
 
-/// The guides a scene carries, or `None` for a set with nothing in it.
-///
-/// The component goes off the root with its last guide, so an empty one
-/// never reaches a saved document.
+/// The guides a scene carries, or `None` for a set with nothing in it: the
+/// component goes off the root with its last guide.
 pub(crate) fn held(guides: CanvasGuides) -> Option<CanvasGuides> {
     (!guides.horizontal.is_empty() || !guides.vertical.is_empty()).then_some(guides)
 }
 
 /// Put `guides` on the root without telling the history, for a gesture
-/// showing what it is about to do. What the history is told is
-/// [`commit_guides`], once, when the gesture is released.
+/// showing what it is about to do. [`commit_guides`] records the release.
 pub(crate) fn preview_guides(world: &mut World, root: Entity, guides: Option<CanvasGuides>) {
     let Ok(mut entity) = world.get_entity_mut(root) else {
         return;
@@ -405,8 +374,7 @@ fn record_guides(
 }
 
 /// The open UI scene's root, or `None` when no UI scene is open. A
-/// malformed document holding several picks the lowest entity, so which
-/// one is chosen does not follow archetype order.
+/// malformed document holding several picks the lowest entity.
 fn guide_root(roots: &Query<Entity, crate::prefab::AuthoredUiSceneRoot>) -> Option<Entity> {
     roots.iter().min()
 }

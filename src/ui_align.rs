@@ -1,19 +1,6 @@
-//! Aligning a selection to its bounding box, and spreading it evenly
-//! between the two ends of that box.
-//!
-//! Both act on the box the selection occupies: aligning moves each node to
-//! one of the box's six lines, distributing leaves the outermost two where
-//! they are and evens out the gaps between the rest. Neither changes a
-//! node's size.
-//!
-//! What moves is `left`/`top` written back through the scheme the node's
-//! author wrote, the same projection a canvas drag commits through, so a
-//! node pinned in percentages stays in percentages.
-//!
-//! A node its parent lays out has no offsets to move, so a selection
-//! holding one is refused and the status bar says which node it was. The
-//! alternative is promoting it to absolute placement, which is a change to
-//! the layout rather than the nudge along one axis that was asked for.
+//! Aligning a selection to its bounding box, and spreading it evenly between
+//! the two ends of that box. Offsets are written back through the node's
+//! authored unit scheme; a node its parent lays out is refused.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -40,9 +27,8 @@ pub enum AlignEdge {
 }
 
 impl AlignEdge {
-    /// Where `rect` goes so that it sits on this line of `bounds`, in the
-    /// global authored pixels both are measured in. Only the axis this
-    /// edge names moves.
+    /// Where `rect` goes so it sits on this line of `bounds`, in global
+    /// authored pixels. Only the axis this edge names moves.
     fn place(self, rect: Rect, bounds: Rect) -> Vec2 {
         let size = rect.size();
         match self {
@@ -101,10 +87,8 @@ fn name_of(world: &World, entity: Entity) -> String {
         .map_or_else(|| "a node".to_string(), |name| name.as_str().to_owned())
 }
 
-/// The selected nodes an alignment acts on, or why it cannot act.
-///
-/// A node inside another selected node is left out: layout already carries
-/// it when its container moves, so aligning both would move it twice.
+/// The selected nodes an alignment acts on, or why it cannot act. A node
+/// inside another selected node is left out; layout already carries it.
 fn members(world: &World) -> Result<Vec<Member>, Refusal> {
     let selected: Vec<Entity> = world
         .get_resource::<Selection>()
@@ -116,11 +100,8 @@ fn members(world: &World) -> Result<Vec<Member>, Refusal> {
         if world.get::<EditorEntity>(entity).is_some() {
             continue;
         }
-        // A locked node is out of the canvas's reach. The pointer path
-        // refuses to pick one up, so an alignment that moved it would be the
-        // one gesture the lock did not stop -- and a locked node is skipped
-        // rather than refused, so locking a backdrop does not stop the nodes
-        // on it being lined up.
+        // Skipped rather than refused, so a locked backdrop does not block
+        // aligning the nodes on it.
         if world.get::<jackdaw_scene_types::Locked>(entity).is_some() {
             continue;
         }
@@ -169,8 +150,6 @@ fn move_member(world: &mut World, member: &Member, min: Vec2) -> Option<(Entity,
         ),
         (0, 0),
         basis,
-        // Whole pixels: an alignment is a statement about edges meeting,
-        // and a figure carrying a fraction of a pixel says they nearly do.
         PixelRounding::Whole,
         ExactPercent::default(),
     );
@@ -207,12 +186,8 @@ pub fn align_selection(world: &mut World, edge: AlignEdge) {
     push_layout_edits(world, edits);
 }
 
-/// Even out the gaps between the selected nodes along one axis.
-///
-/// The two outermost nodes hold still -- they are what the span is -- and
-/// everything between them is placed so that every gap is the same. Fewer
-/// than three nodes have no gap to even out, so nothing moves and the
-/// status bar says so rather than leaving a press that did nothing.
+/// Even out the gaps between the selected nodes along one axis, holding the
+/// two outermost still.
 pub fn distribute_selection(world: &mut World, axis: DistributeAxis) {
     let mut members = match members(world) {
         Ok(members) => members,
@@ -225,14 +200,8 @@ pub fn distribute_selection(world: &mut World, axis: DistributeAxis) {
         );
         return;
     }
-    // By centre, not by leading edge. The pass lays the members out from
-    // the box's near edge and the last one it places lands on the far one,
-    // so the order has to put the member holding the near edge first and
-    // the member holding the far edge last -- which is what the doc above
-    // promises. A leading-edge sort breaks that as soon as one node
-    // encloses another: a wide node starting early but reaching furthest
-    // sorts before a narrow one, and the wide node -- the one the span was
-    // measured to -- is then the one that moves.
+    // By centre, not leading edge: a wide node enclosing a narrow one must
+    // still sort last if it holds the far edge of the span.
     members.sort_by(|left, right| {
         let centre = |member: &Member| axis.of(member.rect.min) + axis.of(member.rect.max);
         centre(left).total_cmp(&centre(right))
@@ -281,8 +250,7 @@ fn can_align(
     id = "ui.align_left",
     label = "Align Left",
     description = "Move the selection onto the left edge of its bounding box.",
-    // `push_layout_edits` records the entry; the dispatcher's snapshot pair
-    // would be a second one over the same edit.
+    // `push_layout_edits` already records the undo entry.
     allows_undo = false,
     is_available = can_align
 )]
@@ -295,8 +263,7 @@ pub(crate) fn ui_align_left(_: In<OperatorParameters>, mut commands: Commands) -
     id = "ui.align_center_x",
     label = "Align Center Horizontally",
     description = "Centre the selection horizontally in its bounding box.",
-    // `push_layout_edits` records the entry; the dispatcher's snapshot pair
-    // would be a second one over the same edit.
+    // `push_layout_edits` already records the undo entry.
     allows_undo = false,
     is_available = can_align
 )]
@@ -312,8 +279,7 @@ pub(crate) fn ui_align_center_x(
     id = "ui.align_right",
     label = "Align Right",
     description = "Move the selection onto the right edge of its bounding box.",
-    // `push_layout_edits` records the entry; the dispatcher's snapshot pair
-    // would be a second one over the same edit.
+    // `push_layout_edits` already records the undo entry.
     allows_undo = false,
     is_available = can_align
 )]
@@ -326,8 +292,7 @@ pub(crate) fn ui_align_right(_: In<OperatorParameters>, mut commands: Commands) 
     id = "ui.align_top",
     label = "Align Top",
     description = "Move the selection onto the top edge of its bounding box.",
-    // `push_layout_edits` records the entry; the dispatcher's snapshot pair
-    // would be a second one over the same edit.
+    // `push_layout_edits` already records the undo entry.
     allows_undo = false,
     is_available = can_align
 )]
@@ -340,8 +305,7 @@ pub(crate) fn ui_align_top(_: In<OperatorParameters>, mut commands: Commands) ->
     id = "ui.align_center_y",
     label = "Align Center Vertically",
     description = "Centre the selection vertically in its bounding box.",
-    // `push_layout_edits` records the entry; the dispatcher's snapshot pair
-    // would be a second one over the same edit.
+    // `push_layout_edits` already records the undo entry.
     allows_undo = false,
     is_available = can_align
 )]
@@ -357,8 +321,7 @@ pub(crate) fn ui_align_center_y(
     id = "ui.align_bottom",
     label = "Align Bottom",
     description = "Move the selection onto the bottom edge of its bounding box.",
-    // `push_layout_edits` records the entry; the dispatcher's snapshot pair
-    // would be a second one over the same edit.
+    // `push_layout_edits` already records the undo entry.
     allows_undo = false,
     is_available = can_align
 )]

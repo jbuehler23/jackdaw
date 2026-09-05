@@ -1,12 +1,7 @@
 //! The floating chrome a 3D viewport panel carries: the terrain tool palette,
-//! the terrain options bar, and the main toolbar.
-//!
-//! Each is spawned by `build_viewport_panel` rather than authored into the dock
-//! tree, so nothing but that function decides how many of each a panel gets.
-//! These tests pin the count at one per panel, and pin it across a mode switch
-//! and across tab switches: a swap tears the scene down and spawns another, and
-//! the chrome belongs to the panel rather than to the scene, so it has to come
-//! through untouched.
+//! the terrain options bar, and the main toolbar. Each is spawned by
+//! `build_viewport_panel`, so these tests pin the count at one per panel and
+//! pin it across a mode switch and across tab switches.
 
 use crate::util;
 
@@ -35,9 +30,8 @@ fn count<C: Component>(app: &mut App) -> usize {
     app.world_mut().query::<&C>().iter(app.world()).count()
 }
 
-/// How many buttons in the world call the palette's raise operator. One per
-/// palette, so this is the palette count read off its contents rather than off
-/// its root marker.
+/// How many buttons in the world call the palette's raise operator: one per
+/// palette, so this is the palette count read off its contents.
 fn raise_buttons(app: &mut App) -> usize {
     app.world_mut()
         .query::<&ButtonOperatorCall>()
@@ -48,8 +42,7 @@ fn raise_buttons(app: &mut App) -> usize {
 
 /// A panel switched into `mode`, on a fresh editor app. The switch happens on
 /// a built panel rather than at build time, because that is the flip the chrome
-/// has to survive: both presentations are built either way, and the mode only
-/// decides which is shown.
+/// has to survive.
 fn panel_in(app: &mut App, mode: ViewportMode) -> Entity {
     let parent = app.world_mut().spawn(Node::default()).id();
     build_viewport_panel(app.world_mut(), parent);
@@ -76,9 +69,8 @@ fn app_with_panel_and_two_tabs(mode: ViewportMode) -> App {
     app
 }
 
-/// A panel carries exactly one terrain tool palette, holding exactly one
-/// button per entry. A panel's mode is which of its two presentations is
-/// shown, not how much chrome it builds, so the count holds in either.
+/// A panel carries exactly one terrain tool palette, holding exactly one button
+/// per entry, in either mode.
 #[test]
 fn a_viewport_panel_builds_one_terrain_palette() {
     for mode in MODES {
@@ -110,8 +102,7 @@ fn a_viewport_panel_builds_one_terrain_palette_in(mode: ViewportMode) {
     }
 }
 
-/// The rest of the panel's chrome is single too, in either mode. Same class of
-/// bug as a doubled palette, so it is pinned in the same place.
+/// The rest of the panel's chrome is single too, in either mode.
 #[test]
 fn a_viewport_panel_builds_one_options_bar_toolbar_and_title() {
     for mode in MODES {
@@ -124,8 +115,7 @@ fn a_viewport_panel_builds_one_options_bar_toolbar_and_title() {
     }
 }
 
-/// Swapping back and forth between two scenes leaves the palette alone. The
-/// chrome belongs to the panel, and a swap replaces the scene under it.
+/// The chrome belongs to the panel, and a swap replaces the scene under it.
 #[test]
 fn swapping_tabs_does_not_multiply_the_terrain_palette() {
     for mode in MODES {

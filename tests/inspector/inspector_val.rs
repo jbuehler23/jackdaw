@@ -1,15 +1,5 @@
-//! The inspector's `Val` and `UiRect` composite fields.
-//!
-//! A `Node`'s `Val` fields are edited as one row, a scrub number plus a unit
-//! dropdown, rather than a nested enum-variant menu. These tests drive that
-//! row's widgets directly and pin what a real edit must do: move the ECS
-//! component, author the scene document, mint exactly one undo entry per
-//! commit, and restore on undo. They also pin the unit-switch semantics and
-//! that `Auto` takes the number away.
-//!
-//! The `Node` card is here too: the same lengths, plus the segmented and
-//! dropdown controls the card gives the rest of the component, driven through
-//! the real inspector dispatch.
+//! The inspector's `Val` and `UiRect` composite fields, and the structured
+//! `Node` card built from them.
 
 use crate::util;
 
@@ -158,10 +148,9 @@ fn pick_unit(app: &mut App, widget: Entity, unit: &str) {
     app.update();
 }
 
-/// Undo the last edit, then run the composite's refresh pass. The pass is
-/// registered behind `AppState::Editor`, which a headless test never enters,
-/// so it is driven directly; `run_system_cached` keeps its `Local` change
-/// tick across calls, as the scheduled system would.
+/// Undo the last edit, then run the composite's refresh pass directly: it is
+/// registered behind `AppState::Editor`, which a headless test never enters, and
+/// `run_system_cached` keeps its `Local` change tick across calls.
 fn undo_and_refresh(app: &mut App) {
     app.world_mut()
         .resource_scope(|world, mut history: Mut<CommandHistory>| {
@@ -198,12 +187,9 @@ fn assert_authored_val(value: Option<BsnValue>, variant: &str, magnitude: f32) {
     );
 }
 
-/// A field the user only looked at commits nothing.
-///
-/// The text is drawn to the field's own two places, so it stands for the
-/// value rather than being it. A click focuses a field without typing in
-/// it, so a blur that committed the text back would author `33.33` over
-/// the exact third of the parent box a percent landing writes.
+/// A field the user only looked at commits nothing. The text stands for the
+/// value rather than being it, so a blur that committed it back would author
+/// `33.33` over the exact third a percent landing writes.
 #[test]
 fn a_val_field_blurred_without_an_edit_keeps_the_value_it_was_shown() {
     let exact = 100.0 / 3.0;
@@ -233,8 +219,8 @@ fn a_val_field_blurred_without_an_edit_keeps_the_value_it_was_shown() {
     );
 }
 
-/// Text the user did type commits, even when the field it replaces shows
-/// more digits than were typed: `2` over a readout of `12.00` is an edit.
+/// Typed text commits even when the field it replaces shows more digits than
+/// were typed: `2` over a readout of `12.00` is an edit.
 #[test]
 fn a_val_field_typed_into_commits_what_was_typed() {
     use bevy::text::TextEdit;
@@ -332,14 +318,10 @@ fn scrubbing_a_val_commits_to_ecs_document_and_history() {
     );
 }
 
-/// Where a readout that does not fit loses its digits.
-///
-/// A `UiRect` cell is at its floor at the shipped panel width, so a
-/// five-character value is wider than the field it sits in. An unfocused field
-/// is scrolled to wherever its caret is, and a caret left after the last digit
-/// shows the tail and cuts the leading digit, turning "12.00" into a plausible
-/// "2.00". The caret is parked at the start, so what falls off the end is the
-/// trailing decimals.
+/// Where a readout that does not fit loses its digits. A `UiRect` cell is at its
+/// floor at the shipped panel width, and an unfocused field is scrolled to its
+/// caret: a caret after the last digit would turn "12.00" into a plausible
+/// "2.00", so the caret is parked at the start and the decimals fall off.
 #[test]
 fn a_readout_shows_its_leading_digits_when_it_cannot_show_them_all() {
     use bevy::text::EditableText;
@@ -370,8 +352,7 @@ fn a_readout_shows_its_leading_digits_when_it_cannot_show_them_all() {
         "with the caret at the first digit, so the field is scrolled to it",
     );
 
-    // Every value the field is handed parks the same way, not only the one it
-    // spawns with: a value a drag pushes in parks too.
+    // Every value the field is handed parks the same way, a drag's included.
     scrub(&mut app, number, 123.0, true);
     app.update();
     let editable = app
@@ -388,10 +369,8 @@ fn a_readout_shows_its_leading_digits_when_it_cannot_show_them_all() {
 
 #[test]
 fn a_unit_pick_after_undo_carries_the_restored_magnitude() {
-    // The field's own state is not the source of truth for what the component
-    // holds. An undo (or a gizmo, or another editor) moves the component behind
-    // the row's back, and the next edit must build on the restored value rather
-    // than authoring the magnitude the user already took back.
+    // An undo (or a gizmo, or another editor) moves the component behind the
+    // row's back, and the next edit must build on the restored value.
     let (mut app, entity) = app_with_node(Node {
         width: Val::Px(100.0),
         ..default()
@@ -589,9 +568,8 @@ fn a_ui_rect_edits_its_four_sides_independently() {
     assert_eq!(app.world().resource::<CommandHistory>().undo_stack.len(), 1,);
 }
 
-/// Entities in `root`'s subtree (root included) that are field rows. The
-/// shared row shape is the only thing here carrying the field row's minimum
-/// height, so counting them counts rows without rendering a frame.
+/// Entities in `root`'s subtree that are field rows. The shared row shape is the
+/// only thing here carrying the field row's minimum height.
 fn field_rows(app: &mut App, root: Entity) -> usize {
     let mut all = descendants(app.world_mut(), root);
     all.push(root);
@@ -612,9 +590,8 @@ fn row_label_width(app: &mut App, row: Entity) -> Val {
 
 #[test]
 fn a_ui_rect_is_one_row_not_a_column_of_five() {
-    // Twelve stacked length rows for one `Node`'s margin/padding/border is
-    // the whole spacing story pushed off the bottom of the panel. A rect is
-    // one labelled row with its four sides inside it.
+    // Twelve stacked length rows for one `Node`'s margin/padding/border pushes
+    // the whole spacing story off the bottom of the panel.
     let (mut app, entity) = app_with_node(Node {
         margin: UiRect::all(Val::Px(4.0)),
         ..default()
@@ -656,8 +633,8 @@ fn a_long_label_does_not_push_its_control_out_of_the_column() {
 
 #[test]
 fn a_selected_nodes_lengths_reach_the_inspector_as_unit_rows() {
-    // The dispatch, not the widgets: selecting a UI node has to build its
-    // `Node` card out of these composites rather than variant menus.
+    // The dispatch, not the widgets: selecting a UI node has to build its `Node`
+    // card out of these composites rather than variant menus.
     let mut app = util::editor_test_app();
     app.world_mut()
         .spawn(jackdaw::layout::inspector_components_content(default()));
@@ -755,9 +732,8 @@ fn node_card_body(app: &mut App) -> Entity {
         .expect("a Node selection builds the structured card")
 }
 
-/// The card section titled `title`, found by the key it remembers its
-/// collapsed state under: the section's own identity, not a word that might
-/// also be a segment label.
+/// The card section titled `title`, found by the key it remembers its collapsed
+/// state under rather than by a word that might also be a segment label.
 fn card_section(app: &mut App, title: &str) -> Entity {
     let body = node_card_body(app);
     let key = format!("node_card::{title}");
@@ -777,8 +753,7 @@ fn section_combos(app: &mut App, title: &str) -> Vec<Entity> {
     widgets_with::<EditorComboBox>(app.world_mut(), section)
 }
 
-/// The row labelled `label` inside the `title` section, the one a user would
-/// reach for, rather than an index into the section.
+/// The row labelled `label` inside the `title` section, rather than an index.
 fn row_of_label(app: &mut App, title: &str, label: &str) -> Entity {
     let section = card_section(app, title);
     for entity in descendants(app.world_mut(), section) {
@@ -896,10 +871,9 @@ fn pick_option(app: &mut App, combo: Entity, index: usize, label: &str) {
     app.update();
 }
 
-/// The card is the whole of `Node`'s inspector surface. Nothing about the
-/// component may reach the generic renderer: `EnumVariantHost` is that
-/// renderer's own marker, and a `Node` that produced one would be showing
-/// variant menus where the card promises controls.
+/// Nothing about `Node` may reach the generic renderer: `EnumVariantHost` is
+/// that renderer's marker, and a `Node` producing one would be showing variant
+/// menus where the card promises controls.
 #[test]
 fn a_node_selection_builds_the_card_and_nothing_generic() {
     let (mut app, _) = app_with_node_card(Node {
@@ -919,8 +893,8 @@ fn a_node_selection_builds_the_card_and_nothing_generic() {
     );
 }
 
-/// The segmented control is the card's headline claim: one click changes
-/// the layout model, and it lands as one undoable document edit.
+/// One click on the segmented control changes the layout model, as one undoable
+/// document edit.
 #[test]
 fn a_display_segment_click_commits_and_undoes() {
     let (mut app, entity) = app_with_node_card(Node::default());
@@ -963,9 +937,8 @@ fn a_display_segment_click_commits_and_undoes() {
     );
 }
 
-/// The card's segmented controls are radio groups: each bar is the group,
-/// each segment a radio button, and the variant the component holds is the
-/// checked one.
+/// The card's segmented controls are radio groups, and the variant the component
+/// holds is the checked one.
 #[test]
 fn the_card_segments_are_a_radio_group() {
     use bevy::ui::Checked;
@@ -1009,8 +982,7 @@ fn the_card_segments_are_a_radio_group() {
     assert!(app.world().get::<Checked>(flex).is_none());
 }
 
-/// A segment that does not match the component is not the lit one, however
-/// the component moved.
+/// A segment that does not match the component is not the lit one.
 #[test]
 fn the_lit_segment_follows_the_component() {
     let (mut app, entity) = app_with_node_card(Node::default());
@@ -1085,8 +1057,8 @@ fn an_align_combobox_commit_updates_align_items() {
     );
 }
 
-/// The justify group is a separate set of fields with some of the same row
-/// labels, so picking in one must not move the other.
+/// The justify group shares row labels with the align group, so picking in one
+/// must not move the other.
 #[test]
 fn the_justify_group_writes_its_own_fields() {
     let (mut app, entity) = app_with_node_card(Node::default());
@@ -1104,9 +1076,8 @@ fn the_justify_group_writes_its_own_fields() {
     );
 }
 
-/// `aspect_ratio` is an `Option`, which the generic renderer shows as a
-/// variant menu with a nested field. The card asks one question, auto or a
-/// number, and authors the option either way.
+/// `aspect_ratio` is an `Option`, which the generic renderer shows as a variant
+/// menu. The card asks one question, auto or a number, and authors either.
 #[test]
 fn the_aspect_ratio_row_switches_between_auto_and_a_number() {
     let (mut app, entity) = app_with_node_card(Node::default());
@@ -1128,8 +1099,8 @@ fn the_aspect_ratio_row_switches_between_auto_and_a_number() {
     );
 }
 
-/// Scrubbing the number half of an optional row authors the value, and the
-/// grid lines take it as the `NonZero` they are.
+/// Scrubbing the number half of an optional row authors the value, and the grid
+/// lines take it as the `NonZero` they are.
 #[test]
 fn an_optional_rows_number_commits_and_a_grid_line_takes_it() {
     let (mut app, entity) = app_with_node_card(Node::default());
@@ -1155,9 +1126,8 @@ fn an_optional_rows_number_commits_and_a_grid_line_takes_it() {
     );
 }
 
-/// A drag across an optional row is one edit, not one per tick. The ticks
-/// preview on live ECS and only the release mints history, as with every
-/// other scrub field in the inspector.
+/// A drag across an optional row is one edit: ticks preview on live ECS and only
+/// the release mints history.
 #[test]
 fn an_optional_number_drag_lands_as_one_history_entry() {
     let (mut app, entity) = app_with_node_card(Node::default());
@@ -1194,10 +1164,9 @@ fn an_optional_number_drag_lands_as_one_history_entry() {
     );
 }
 
-/// A grid line stops at a number the layout engine survives. Truncating
-/// instead would leave the document holding a value the component refused,
-/// and letting the raw `NonZeroU16` ceiling through panics taffy, which a
-/// scrub must never be able to do.
+/// A grid line stops at a number the layout engine survives: truncating would
+/// leave the document holding a value the component refused, and the raw
+/// `NonZeroU16` ceiling panics taffy.
 #[test]
 fn a_grid_line_scrub_stops_where_the_layout_engine_does() {
     let (mut app, entity) = app_with_node_card(Node::default());
@@ -1220,8 +1189,8 @@ fn a_grid_line_scrub_stops_where_the_layout_engine_does() {
     );
 }
 
-/// Zero is not a ratio. Rather than authoring a degenerate box, the row goes
-/// back to `auto`, and the refresh pass puts the dropdown there too.
+/// Zero is not a ratio, so the row goes back to `auto` rather than authoring a
+/// degenerate box.
 #[test]
 fn a_ratio_scrubbed_to_zero_goes_back_to_auto() {
     let (mut app, entity) = app_with_node_card(Node::default());
@@ -1256,9 +1225,8 @@ fn field_widget(app: &mut App, field_path: &str) -> Entity {
         .unwrap_or_else(|| panic!("no control on the card writes `{field_path}`"))
 }
 
-/// The four grid track lists go through the generic reflect renderer, so a
-/// track is a row of controls and an edit lands on the component like any
-/// other field, rather than a count in disabled text.
+/// The four grid track lists go through the generic reflect renderer, so a track
+/// is a row of controls rather than a count in disabled text.
 #[test]
 fn a_grid_track_list_is_edited_rather_than_counted() {
     let (mut app, entity) = app_with_node_card(Node {
@@ -1284,8 +1252,7 @@ fn a_grid_track_list_is_edited_rather_than_counted() {
     );
 }
 
-/// The same for a plain track list, whose items are sizing functions rather
-/// than repeats: the other shape `Node` stores tracks in.
+/// The same for a plain track list, whose items are sizing functions.
 #[test]
 fn an_auto_track_list_is_edited_rather_than_counted() {
     let (mut app, entity) = app_with_node_card(Node {
@@ -1321,17 +1288,11 @@ fn an_auto_track_list_is_edited_rather_than_counted() {
 // The decoration gutter
 // ---------------------------------------------------------------------------
 
-/// Widths the rows are measured at: a docked inspector at the width the
-/// editor ships it, and the same panel dragged narrower, down to where the
-/// strip a mark needs costs the control room it was using. Below the last of
-/// these the label column alone outgrows the row and everything overflows.
-///
-/// 212 px is the shipped right sidebar, and the worst of the five: it is the
-/// widest panel that still keeps label and control on one line, so the
-/// control has the least room it ever gets. What a control gets is not
-/// monotonic in the panel's width: 150 px covers the wrap point, where a
-/// narrower panel drops the control onto its own line and hands it more room
-/// than a wider one that did not.
+/// Widths the rows are measured at, from the shipped docked inspector down to
+/// where a mark's strip costs the control the room it was using. What a control
+/// gets is not monotonic in the panel's width: 212 px is the widest panel that
+/// still keeps label and control on one line, and 150 px covers the wrap point
+/// where the control drops onto its own line with more room.
 const PANEL_WIDTHS: [f32; 5] = [260.0, 212.0, 150.0, 120.0, 100.0];
 
 /// The width a unit dropdown stops reading at: "vmin" plus the chevron.
@@ -1413,8 +1374,7 @@ fn laid_out_length_row(
         ));
     }
     // The editor test app sits in `ProjectSelect`, so the inspector's Update
-    // systems are not running: the gutter pass is invoked the same way the
-    // card refreshes are.
+    // systems are not running; the gutter pass is invoked by hand.
     app.update();
     app.world_mut()
         .run_system_cached(jackdaw_feathers::field_row::reserve_decoration_gutters)
@@ -1463,11 +1423,9 @@ fn right_edge(app: &App, entity: Entity) -> f32 {
     centre.x + computed.size().x / 2.0
 }
 
-/// The gutter is only worth reserving if the control really stops short of
-/// it: a mark anchored to the row's right edge otherwise lands on top of the
-/// control it is supposed to describe. Measured against a layout pass, not
-/// against the padding value, because a control that refuses to shrink
-/// overflows the reduced box and ends where it always did.
+/// The gutter is only worth reserving if the control really stops short of it.
+/// Measured against a layout pass, not the padding value: a control that refuses
+/// to shrink overflows the reduced box and ends where it always did.
 #[test]
 fn a_marked_row_keeps_its_control_clear_of_the_mark() {
     for kind in [LengthRow::One, LengthRow::Rect] {
@@ -1484,17 +1442,12 @@ fn a_marked_row_keeps_its_control_clear_of_the_mark() {
     }
 }
 
-/// Fitting is not the same as reading. Both halves of a length have a width
-/// they stop saying anything at: a dropdown clipped to one glyph names no
-/// unit, and a magnitude with no room shows no digits. Neither may be paid
-/// for by the other, and neither may be paid for by hanging off the row.
+/// Both halves of a length have a width they stop reading at, and neither may be
+/// paid for by the other or by hanging off the row.
 ///
-/// The number fields are crowded because a headless app has no font: digits
-/// measure nothing, so the row never runs out of room the way the shipped
-/// panel does. The stand-in child gives the field the width its glyphs take,
-/// at two sizes: a short value and the ~87 px a full one measures. The narrow
-/// one is the adversarial half, leaving the row room to keep more cells on a
-/// line, which is where the cells get thinnest.
+/// A headless app has no font, so digits measure nothing and the row never runs
+/// out of room. The stand-in child gives each field the width its glyphs take,
+/// at a short value and at the ~87 px a full one measures.
 #[test]
 fn both_halves_of_a_length_keep_a_width_they_read_at() {
     for kind in [LengthRow::One, LengthRow::Rect] {
@@ -1512,10 +1465,8 @@ fn both_halves_of_a_length_keep_a_width_they_read_at() {
                          it got {dropdown} px in {panel}",
                     );
                 }
-                // A rect's four cells carry no hard floor: on a marked
-                // narrow row there is not room for four of both, and the
-                // unit stops meaning anything first, so what is pinned here
-                // is what the layout leaves them.
+                // A rect's four cells carry no hard floor: on a marked narrow
+                // row the unit stops meaning anything first.
                 let floor = match kind {
                     LengthRow::One => NUMBER_FLOOR,
                     LengthRow::Rect => RECT_NUMBER_FLOOR,
@@ -1527,9 +1478,8 @@ fn both_halves_of_a_length_keep_a_width_they_read_at() {
                          it got {number} px in {panel}",
                     );
                 }
-                // Width alone is not readability: a control that keeps its
-                // size by hanging off the row is clipped at the panel's
-                // edge, down to a single glyph.
+                // A control that keeps its size by hanging off the row is
+                // clipped at the panel's edge, down to a single glyph.
                 let clearance = control_clearance(&mut app, row);
                 assert!(
                     clearance >= 0.0,
@@ -1577,9 +1527,8 @@ fn number_widths(app: &mut App, row: Entity) -> Vec<f32> {
         .collect()
 }
 
-/// The other half: a row with no mark on it keeps the width instead of paying
-/// for a strip nothing is using. Most rows are that row: the diamond is
-/// `Transform`-only, and the prefab dot needs a prefab instance.
+/// A row with no mark keeps the width instead of paying for a strip nothing is
+/// using: the diamond is `Transform`-only and the prefab dot needs an instance.
 #[test]
 fn an_unmarked_row_spends_the_gutter_on_its_control() {
     for kind in [LengthRow::One, LengthRow::Rect] {

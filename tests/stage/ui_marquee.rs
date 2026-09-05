@@ -1,13 +1,4 @@
 //! The rubber band a drag from bare canvas pulls out.
-//!
-//! What is pinned here:
-//!  * a drag that begins where there is nothing selects every node it is
-//!    pulled across, and nothing it is not;
-//!  * Shift adds the band's catch to what was selected and Ctrl toggles it;
-//!  * a drag that begins on a node is still that node's move, so the band
-//!    never starts there;
-//!  * Escape drops the band and leaves the selection alone;
-//!  * the band is a node over the stage, drawn where the drag put it.
 
 use crate::util;
 
@@ -302,21 +293,16 @@ fn a_band_takes_every_node_it_is_pulled_across() {
     );
 }
 
-/// A background panel filling the canvas swallows every band pulled out
-/// over it -- until it is locked, which is what the lock is for.
-///
-/// A press on the background is a press on a node, so it starts that
-/// node's move rather than a band, and a screen built on a full-rect panel
-/// has nowhere left to start one. Locked, the panel contributes no hit at
-/// all: the press falls through to the canvas, the band comes out over it,
-/// and the children inside it are still picked up.
+/// A press on the background is a press on a node, so a screen built on a
+/// full-rect panel has nowhere left to start a band. Locked, the panel
+/// contributes no hit at all and the press falls through to the canvas.
 #[test]
 fn a_locked_background_lets_a_band_be_pulled_out_over_it() {
     let mut app = util::editor_test_app();
     let panel = panel(&mut app);
     let (root, left, right) = two_boxes(&mut app);
-    // Last, so it is painted over the two boxes: the background a screen
-    // is built on, and the thing every press lands on.
+    // Last, so it is painted over the two boxes: the background a screen is
+    // built on, and the thing every press lands on.
     let background = child(&mut app, root, "Background", 0.0, 0.0, 2400.0, 1200.0);
     settle(&mut app);
 
@@ -470,10 +456,8 @@ fn the_band_is_drawn_over_the_stage_where_the_drag_put_it() {
     );
 }
 
-/// Once the backdrop has been clicked, its own outline covers the whole
-/// canvas, so the next drag is delivered to that outline rather than to
-/// the stage. It is still a band: the backdrop is the canvas, not a node
-/// on it.
+/// Once the backdrop has been clicked its own outline covers the whole canvas,
+/// so the next drag is delivered to that outline rather than to the stage.
 #[test]
 fn a_drag_on_the_backdrops_own_outline_is_still_a_band() {
     let mut app = util::editor_test_app();

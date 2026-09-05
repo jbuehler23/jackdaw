@@ -44,10 +44,9 @@ fn main() -> ExitCode {
 
 /// One subcommand's accepted options, for rejecting the rest.
 ///
-/// Unrecognised options used to be ignored, so `jd new x --ext` (a typo
-/// for `--extension`) silently produced a game project and `jd new x
-/// --path` with no value created it in the working directory. A user
-/// only discovers either much later.
+/// Unrecognised options are errors, so `jd new x --ext` (a typo for
+/// `--extension`) or `jd new x --path` with no value fails loudly
+/// rather than quietly doing the wrong thing.
 struct CommandSpec {
     name: &'static str,
     /// Options that stand alone.
@@ -163,9 +162,8 @@ fn report_option_error(spec: &CommandSpec, message: &str) {
     eprintln!("usage: {}", spec.usage);
 }
 
-/// Name the real command list. The fallthrough used to reach a second,
-/// older usage string that listed neither `new` nor `import`, which is
-/// the worst possible moment to hide them.
+/// Report an unknown command against the real command list, so `new` and
+/// `import` are listed at the moment the user needs them.
 #[expect(clippy::print_stderr, reason = "CLI errors are written to stderr")]
 fn unknown_command(name: &str) {
     eprintln!("jd: unknown command `{name}`\n");
@@ -179,16 +177,11 @@ fn exit(value: bevy::app::AppExit) -> ExitCode {
     }
 }
 
-/// Run `jd-mcp`, which serves the Model Context Protocol over stdio and
-/// drives the editor that has this project open.
-///
-/// A separate process, not a module: the MCP stack (rmcp, tokio, reqwest)
-/// belongs to `jackdaw_mcp` alone, and linking it here would put all of
-/// it in the editor's dependency graph, which needs none of it. The
-/// binary is looked for beside this one first, so a checkout runs the
-/// `jd-mcp` it just built rather than one on `PATH`.
-///
-/// stdin and stdout are inherited: stdout is the protocol channel.
+/// Run `jd-mcp`, which serves the Model Context Protocol over stdio and drives
+/// the editor that has this project open. A separate process so the MCP stack
+/// stays out of the editor's dependency graph; the binary is looked for beside
+/// this one before `PATH`. stdin and stdout are inherited, stdout being the
+/// protocol channel.
 #[expect(clippy::print_stderr, reason = "MCP owns stdout; errors go to stderr")]
 fn mcp_command(args: &[String]) -> ExitCode {
     let beside = std::env::current_exe()

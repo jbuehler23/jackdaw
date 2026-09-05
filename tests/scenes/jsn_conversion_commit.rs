@@ -1,10 +1,7 @@
-//! Legacy `.jsn` conversion is committed to disk only once the converted
-//! document has been read back and accepted.
-//!
-//! Writing the `.bsn` sibling and renaming the original to `.jsn.bak` before
-//! anything has looked at the result would leave a user whose document the
-//! editor then refuses with a converted file they never asked for and no
-//! `.jsn` to go back to.
+//! Legacy `.jsn` conversion is committed to disk only once the converted document
+//! has been read back and accepted: writing the `.bsn` sibling and renaming the
+//! original first would leave a user whose document is then refused with a file
+//! they never asked for and no `.jsn` to go back to.
 
 use bevy::prelude::*;
 use jackdaw::jsn_to_bsn::{commit_conversion, convert_scene_file_pending};

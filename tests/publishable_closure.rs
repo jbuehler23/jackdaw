@@ -1,12 +1,9 @@
 //! The crates a scaffolded project depends on must stay publishable to
 //! crates.io, or `jd new` produces a project that cannot resolve.
 //!
-//! This is not hypothetical: the editor depends on `bevy_rerecast` by
-//! git, crates.io rejects git dependencies, and the release workflow
-//! used to gate the whole workspace publish on that one crate. The
-//! result was templates requesting versions that were never published.
-//! The editor is excluded from the publish for that reason; these tests
-//! pin the property that lets the rest go out without it.
+//! The editor depends on `bevy_rerecast` by git and crates.io rejects
+//! git dependencies, so the editor is excluded from the publish; these
+//! tests pin the property that lets the rest go out without it.
 
 use std::collections::{BTreeSet, HashMap};
 

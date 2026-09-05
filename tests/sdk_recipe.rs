@@ -72,7 +72,7 @@ fn the_embedded_recipe_is_a_loadable_workspace() {
 
 /// Unpacking is otherwise additive, so a crate dropped between
 /// versions would linger as a workspace member and keep breaking the
-/// cache after the fix that removed it had already shipped.
+/// cache.
 #[test]
 fn unpacking_removes_a_crate_the_recipe_no_longer_ships() {
     let Some(dir) = unpack("prune") else {
@@ -121,14 +121,10 @@ fn the_recipe_contains_every_package_the_sdk_build_names() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The recipe's content hash is the SDK cache's stamp: a hash that moves
-/// costs a full release rebuild of the SDK on the next launch. It must
-/// move for the sources the SDK build compiles, and for nothing else.
-///
-/// Tests, examples and benches are separate cargo targets that `cargo
-/// build -p jackdaw_sdk` never touches, and they are where most edits in
-/// a library crate land, so shipping them made routine work invalidate
-/// the SDK.
+/// The recipe's content hash is the SDK cache's stamp, so it must move for the
+/// sources the SDK build compiles and for nothing else. Tests, examples and
+/// benches are separate cargo targets `cargo build -p jackdaw_sdk` never touches,
+/// and shipping them made routine work invalidate the SDK.
 #[test]
 fn the_recipe_ships_no_test_or_example_targets() {
     let Some(dir) = unpack("targets") else {

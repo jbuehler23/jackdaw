@@ -528,15 +528,12 @@ impl NumberInputPrecision {
 
 /// The digits a field shows for `value`.
 ///
-/// A fractional value is shown to its field's own precision rather than
-/// to whatever `f32`'s full decimal expansion happens to be: a value
-/// arriving from a scroll-wheel resize or a scaled drag is float noise
-/// several places down (`1.889105`), and a field that prints it raw
-/// reads as broken. Whole-number kinds pass a precision of 0 and so show
-/// no decimal point at all.
+/// A fractional value is shown to its field's own precision rather than to
+/// whatever `f32`'s full decimal expansion happens to be: a value arriving from a
+/// scaled drag is float noise several places down (`1.889105`). Whole-number
+/// kinds pass a precision of 0 and show no decimal point.
 ///
-/// Shared by the initial spawn and every later re-insert, so a field's
-/// digits never depend on which of the two last wrote them.
+/// Shared by the initial spawn and every later re-insert.
 pub(crate) fn display_digits(
     value: &ScrubNumberInputValue,
     precision: Option<&NumberInputPrecision>,
@@ -633,13 +630,10 @@ fn number_input_on_insert_value(
             editable_text.queue_edit(TextEdit::SelectAll);
             editable_text.queue_edit(TextEdit::Insert(new_digits.into()));
             // Insert leaves the caret after the last digit, and an unfocused
-            // field is scrolled to wherever its caret is, so a value too long
-            // for the field shows its tail and cuts the LEADING digits:
-            // "12.00" reads as a plausible "2.00" with nothing on screen
-            // saying a digit was dropped. Parked at the start, the cut lands
-            // on the trailing decimals instead, where it reads as truncation.
-            // `justify` cannot do this: parley start-aligns any line wider
-            // than its bounds whatever the alignment says.
+            // field is scrolled to wherever its caret is, so a value too long for
+            // the field would show its tail and cut the LEADING digits. Parked at
+            // the start, the cut lands on the trailing decimals. `justify` cannot
+            // do this: parley start-aligns any line wider than its bounds.
             editable_text.queue_edit(TextEdit::TextStart(false));
         }
 
@@ -737,9 +731,9 @@ fn number_input_init(
         if old_digits != new_digits {
             editable_text.queue_edit(TextEdit::SelectAll);
             editable_text.queue_edit(TextEdit::Insert(new_digits.into()));
-            // Parked at the first digit, as on every other write of the
-            // readout: a field spawned holding a value too long for it would
-            // otherwise open showing its tail with the leading digits cut.
+            // Parked at the first digit, as on every other write of the readout:
+            // otherwise a field spawned holding a value too long for it opens
+            // showing its tail with the leading digits cut.
             editable_text.queue_edit(TextEdit::TextStart(false));
         }
 
@@ -825,17 +819,13 @@ fn number_input_on_enter_key(
     }
 }
 
-/// The field's text when the user has changed it, and `None` when it
-/// still reads as the value the field was given.
+/// The field's text when the user has changed it, and `None` when it still reads
+/// as the value the field was given.
 ///
-/// The text is drawn to the field's own precision, so it stands for the
-/// value rather than being it: a magnitude with more decimals behind it
-/// than the field shows -- a third of a parent box, say -- reads back as
-/// the rounded figure. A field is focused by a click alone, so an Enter
-/// or a blur reaches one nobody typed in, and committing its text would
-/// author that rounding over a value the user never touched. Retyping
-/// the shown figure over such a value reads the same way and commits
-/// nothing; a different figure is what commits.
+/// The text is drawn to the field's own precision, so it stands for the value
+/// rather than being it. A field is focused by a click alone, so an Enter or a
+/// blur reaches one nobody typed in, and committing its text would author that
+/// rounding over a value the user never touched.
 fn typed_text(
     editable_text: &EditableText,
     value: &ScrubNumberInputValue,
@@ -973,13 +963,10 @@ fn scrubber_on_release(
     }
 }
 
-/// Conversion factor from pixels dragged to value change, in priority
-/// order: a [`SoftLimit`] maps the full slider width to the full range
-/// (dragging edge to edge covers the range exactly, regardless of how
-/// wide or narrow that range is); failing that, [`NumberInputStep`] or
-/// integer formatting give a step-sized nudge per pixel; failing that,
-/// [`NumberInputPrecision`] or the value's own magnitude are used as a
-/// last-resort guess.
+/// Conversion factor from pixels dragged to value change, in priority order: a
+/// [`SoftLimit`] maps the full slider width to the full range; failing that,
+/// [`NumberInputStep`] or integer formatting give a step-sized nudge per pixel;
+/// failing that, [`NumberInputPrecision`] or the value's own magnitude.
 fn compute_drag_speed(
     soft_limit: Option<&SoftLimit>,
     step: Option<&NumberInputStep>,
@@ -1399,16 +1386,12 @@ pub fn is_scrubbing_or_focused(world: &World, root: Entity, focus: Option<Entity
     walk(world, root, focus)
 }
 
-/// Returns `true` while `root`'s editable-text descendant holds keyboard
-/// focus, i.e. the user is mid-type. Unlike [`is_scrubbing_or_focused`],
-/// does *not* also guard an in-progress drag: a resync while dragging is
-/// safe here because the caller's re-inserted value and the drag's own
-/// relative math (`ScrubberDragState::base_value` + `value_offset`, on a
-/// private child entity untouched by inserting `ScrubNumberInputValue`)
-/// never read from each other, so there is no clobbering to avoid. Use
-/// this for callers where the drag gesture itself is the source of the
-/// resync (`ValueChange` -> app state -> resync, same frame's gesture),
-/// so live drag feedback isn't suppressed for the whole span of the drag.
+/// Returns `true` while `root`'s editable-text descendant holds keyboard focus.
+///
+/// Unlike [`is_scrubbing_or_focused`], this does not also guard an in-progress
+/// drag: the caller's re-inserted value and the drag's own relative math never
+/// read from each other, so there is nothing to clobber. For callers where the
+/// drag gesture itself is the source of the resync.
 pub fn is_focused_for_editing(world: &World, root: Entity, focus: Option<Entity>) -> bool {
     fn walk(world: &World, entity: Entity, focus: Option<Entity>) -> bool {
         if focus == Some(entity) && world.get::<EditableText>(entity).is_some() {

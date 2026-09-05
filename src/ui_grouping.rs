@@ -1,28 +1,12 @@
 //! Wrapping a selection in a container, and taking one apart again.
 //!
-//! `ui.group_into` puts a new container where the selection's bounding box
-//! is and moves the selection into it; `ui.ungroup` lifts a container's
-//! children out into its own place and takes the empty container away. Each
-//! is one history entry.
-//!
-//! What a member does once it is inside follows from how it was placed. An
-//! absolutely placed member keeps the spot it had: its authored rect is
-//! re-expressed against the container's offset box, which is the same
-//! arithmetic a canvas drag writes back through. A flowed member has no rect
-//! of its own to re-state, so it flows again inside the container -- which is
-//! what putting nodes in a container is for -- and is moved in the order the
-//! container's own axis reads the canvas in. A selection holding both does
-//! both.
-//!
-//! What a member cannot be is transformed. A member carrying a moved,
-//! rotated or scaled `UiTransform` is drawn away from the box the bounding
-//! rect was measured from, so the container would be drawn around a box the
-//! node does not occupy and the transform would be applied a second time
-//! from the container's corner.
-//!
-//! Every refusal says so in the status bar. Grouping is reached from a
-//! chord, the Edit menu and the outliner's context menu, and none of those
-//! leaves a place for a silent no-op to be understood as success.
+//! `ui.group_into` puts a new container where the selection's bounding box is
+//! and moves the selection into it; `ui.ungroup` lifts a container's children
+//! out into its own place and takes the empty container away. Each is one
+//! history entry. An absolutely placed member keeps its spot by having its
+//! rect re-expressed against the container; a flowed member flows again
+//! inside it. A transformed member is refused, since the bounding rect is
+//! measured before the transform. Every refusal says so in the status bar.
 
 use bevy::{
     ecs::entity::hash_map::EntityHashMap, math::Rot2, prelude::*, ui::UiTransform,
@@ -44,12 +28,7 @@ use crate::{
 const GROUP_NAME: &str = "Group";
 
 /// Whether `entity` is a scene's own root rather than a node inside one.
-///
-/// A scene root is the document's anchor: the 2D stage keys on it, the paste
-/// and add paths resolve it as the fallback parent, and the outliner hangs
-/// the scene off it. Grouping it would bury it under a container, and
-/// ungrouping it would delete it and leave the editor with an open scene it
-/// cannot draw, so both refuse.
+/// Both operators refuse a root, which the document is anchored on.
 fn is_scene_root(world: &World, entity: Entity) -> bool {
     world
         .get::<jackdaw_scene_types::UiSceneRoot>(entity)
@@ -61,10 +40,6 @@ fn is_scene_root(world: &World, entity: Entity) -> bool {
 
 /// Selected nodes that a group can act on: authored, laid out, and under one
 /// parent, in the order the parent holds them.
-///
-/// One parent because an absolutely placed member keeps its place on the
-/// canvas, and a rect re-expressed against a different offset box is only the
-/// same rect when it started from the box the container replaces.
 fn group_members(world: &mut World) -> Option<(Option<Entity>, Vec<Entity>)> {
     let selected: Vec<Entity> = world.resource::<Selection>().entities.clone();
     let members: Vec<Entity> = selected
@@ -104,14 +79,9 @@ fn name_of(world: &World, entity: Entity) -> String {
         .map_or_else(|| "the node".to_string(), |name| name.as_str().to_owned())
 }
 
-/// Whether `entity` carries a `UiTransform` that is not the identity.
-///
-/// A translation counts, and not only a rotation or a scale: all three are
-/// drawn around the node's laid-out box rather than changing it, so the
-/// rect the group is built from is the box before the transform. A
-/// container placed on that rect and given the node as a child would draw
-/// the transform again from a different origin, and the node would move by
-/// it twice.
+/// Whether `entity` carries a `UiTransform` that is not the identity. A
+/// translation counts: all three are drawn around the laid-out box, so the
+/// container would apply the transform a second time.
 fn is_transformed(world: &World, entity: Entity) -> bool {
     let identity = UiTransform::default();
     world.get::<UiTransform>(entity).is_some_and(|transform| {
@@ -121,10 +91,7 @@ fn is_transformed(world: &World, entity: Entity) -> bool {
     })
 }
 
-/// Whether `entity` is laid out by its parent rather than placed.
-///
-/// A flowed node has no rect of its own to re-state against the container, so
-/// it moves in as it stands and the container's layout places it. Only an
+/// Whether `entity` is laid out by its parent rather than placed. Only an
 /// absolutely placed member has its `left`/`top` rewritten.
 fn is_flowed(world: &World, entity: Entity) -> bool {
     world
@@ -172,12 +139,8 @@ fn offsets_against(world: &World, entity: Entity, origin: Vec2) -> Option<Vec2> 
 }
 
 /// The container itself, so undo can put it back with whatever else was on
-/// it rather than a fresh node of the same shape.
-///
-/// The container alone, and not the subtree under it: ungroup lifts every
-/// child out before this is taken, so there is nothing under it left to
-/// capture -- and capturing the children beforehand would have undo write a
-/// second copy of each one back in beside the one now living outside.
+/// it. The container alone: ungroup lifts every child out before this is
+/// taken.
 fn snapshot_one(world: &World, entity: Entity) -> DynamicWorld {
     let subtree = [entity];
     let registry = world.resource::<AppTypeRegistry>().clone();
@@ -272,16 +235,10 @@ impl EditorCommand for GroupIntoContainer {
         crate::selection::select_only(world, container);
     }
 
-    /// Undo in three passes, because the slot a member goes back to is an
-    /// index into the list as it was, and the list only reads that way once
-    /// the container has left it.
-    ///
-    /// Moving the members out first is what lets the container be despawned
-    /// without taking them with it. Replaying the slots afterwards, lowest
-    /// first, puts each member back where it was even when siblings that
-    /// were never selected sat between them: a member restored at its old
-    /// index while a lower one is still missing would land one slot early
-    /// and push the sibling past it.
+    /// Undo in three passes: move the members out, despawn the container,
+    /// then replay the slots lowest first. A slot is an index into the list
+    /// as it was, so the container has to be gone and every lower member
+    /// back before the next one is placed.
     fn undo(&mut self, world: &mut World) {
         for (member, location, node) in self.before.clone() {
             write_node(world, member, &node);
@@ -305,9 +262,6 @@ impl EditorCommand for GroupIntoContainer {
             set_hierarchy_location(world, member, location);
         }
         crate::hierarchy::sync_outliner_row_order(world, self.parent);
-        // Back to what was selected when the group was asked for: the
-        // container the group selected is gone, and a selection of nothing
-        // is not the state the user undid to.
         select_many(world, &self.members);
     }
 
@@ -316,13 +270,9 @@ impl EditorCommand for GroupIntoContainer {
     }
 }
 
-/// One child on its way out of a container.
-///
-/// `layout` is `None` for a child that carries no `Node`: a marker component,
-/// an authored data entity, anything a widget definition put inside. It has no
-/// rect to re-express, so it is moved as it is. It still moves, because a
-/// child left behind is despawned with the container and no snapshot of a
-/// childless container could bring it back.
+/// One child on its way out of a container. `layout` is `None` for a child
+/// carrying no `Node`, which is moved as it is; it still moves, since a child
+/// left behind is despawned with the container.
 #[derive(Clone)]
 struct UngroupChild {
     entity: Entity,
@@ -335,9 +285,8 @@ struct UngroupContainer {
     container: Entity,
     parent: Option<Entity>,
     index: usize,
-    /// The container and whatever is still under it once the children are out,
-    /// so undo puts back what was there and not merely a node of the same
-    /// shape. Taken during `execute`, since what is left is only known then.
+    /// The container and whatever is still under it once the children are
+    /// out. Taken during `execute`, since what is left is only known then.
     snapshot: Option<DynamicWorld>,
     children: Vec<UngroupChild>,
     label: String,
@@ -397,8 +346,6 @@ impl EditorCommand for UngroupContainer {
             }
         }
         crate::hierarchy::sync_outliner_row_order(world, self.parent);
-        // The container is back, so it is what is selected again -- as it
-        // was when the ungroup was asked for.
         crate::selection::select_only(world, self.container);
     }
 
@@ -442,8 +389,6 @@ pub fn group_selection(world: &mut World) {
     };
     let node = container_node(world, &members, bounds);
 
-    // Along the axis the container flows, so the order the outliner shows
-    // matches the order the canvas does.
     let mut members = members;
     let horizontal = node.flex_direction == FlexDirection::Row;
     members.sort_by(|&left, &right| {
@@ -465,10 +410,9 @@ pub fn group_selection(world: &mut World) {
             )
         })
         .collect();
-    // The container has neither border nor padding, so the box its children
-    // measure their offsets from starts at the bounding rect's own corner.
-    // A flowed member is absent from this list: it has no authored rect to
-    // re-state, and the container's layout is what places it now.
+    // The container has neither border nor padding, so its children measure
+    // their offsets from the bounding rect's own corner. A flowed member is
+    // absent: the container's layout places it.
     let after: Vec<(Entity, Node)> = members
         .iter()
         .filter(|&&member| !is_flowed(world, member))
@@ -645,8 +589,7 @@ fn can_ungroup(
     id = "ui.group_into",
     label = "Group Into Container",
     description = "Wrap the selection in a container at its bounding rect.",
-    // The command it queues pushes the entry; the dispatcher's snapshot pair
-    // would be a second one, and the first undo would only half the job.
+    // The command it queues pushes the undo entry itself.
     allows_undo = false,
     is_available = can_group
 )]

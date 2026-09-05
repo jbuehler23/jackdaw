@@ -72,16 +72,9 @@ pub fn add_menu_rows(world: &mut World) -> Vec<(String, String)> {
     CreationTaxonomy::collect(world).menu_rows()
 }
 
-/// Open the searchable Add Entity picker, the way the scene tree's Add
-/// Entity button does.
-///
-/// The Add menu is a walk through nested sections; this is the same
-/// vocabulary with a search field over it, which is the faster way in
-/// once the vocabulary is larger than a screen. Both read
-/// [`collect_add_menu_items`], so neither can offer something the other
-/// does not.
-///
-/// Calling it again closes it, matching the button.
+/// Open the searchable Add Entity picker, the way the scene tree's Add Entity
+/// button does. Shares [`collect_add_menu_items`] with the Add menu, so the two
+/// offer the same vocabulary. Calling it again closes it.
 #[operator(
     id = "entity.add_picker",
     label = "Add Entity",

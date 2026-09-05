@@ -22,12 +22,8 @@ fn prefab_cache_epoch(world: &World) -> Option<u64> {
 }
 
 /// Mark the prefab-cache bumps this load caused as answered, so a refused load
-/// does not respawn the scene that is still open.
-///
-/// Reading a document's prefabs puts them in the cache, and a moved cache makes
-/// the on-change driver re-resolve and respawn the active scene, discarding the
-/// selection with it. Only this load's own bumps are taken as answered; one that
-/// was already pending stays pending.
+/// does not respawn the scene that is still open. A bump that was already
+/// pending stays pending.
 fn forget_prefab_cache_bump(world: &mut World, before: Option<u64>) {
     let (Some(before), Some(now)) = (before, prefab_cache_epoch(world)) else {
         return;
@@ -51,11 +47,8 @@ pub(super) enum SceneDialogTask {
     Save(Task<Option<FileHandle>>),
 }
 
-/// Whether a load put its document in the world.
-///
-/// Every refusal is fail-soft: the scene already open is left standing. Callers
-/// that offered the load, such as the external-edit reload prompt, report the
-/// refusal to the user.
+/// Whether a load put its document in the world. Every refusal is fail-soft:
+/// the scene already open is left standing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadOutcome {
     Loaded,
@@ -70,8 +63,7 @@ pub struct LoadRefusal {
     pub message: String,
 }
 
-/// The kinds of refusal, so a caller can lead with what went wrong before
-/// showing the log sentence.
+/// The kinds of refusal, so a caller can lead with what went wrong.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefusalCategory {
     /// The file could not be read.
@@ -173,10 +165,8 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
         // Scenes load through the BSN document path. Legacy `.jsn` files are
         // not imported directly: they convert to a `.bsn` document, and the
         // editor opens that. The conversion is held in memory until the
-        // document below is accepted, so a refused scene leaves neither a
-        // converted file nor a renamed original behind. Interactive open paths
-        // confirm with the user before reaching here. The legacy metadata and
-        // camera framing carry over below.
+        // document below is accepted, so a refused scene leaves nothing behind.
+        // The legacy metadata and camera framing carry over below.
         let (bsn_text, legacy_jsn, pending_conversion) = if path.ends_with(".bsn") {
             (json, None, None)
         } else {
@@ -215,10 +205,8 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
             (pending.scene_bsn.clone(), Some(jsn), Some(pending))
         };
 
-        // Hash of the file this load becomes: the `.bsn` just read, or the one
-        // the conversion below writes. Taken from what was read rather than
-        // from a later look at disk, so an edit landing in between still
-        // registers as an external edit.
+        // Hash of what was read rather than of a later look at disk, so an edit
+        // landing in between still registers as an external edit.
         loaded_hash = Some(crate::scenes::external_watch::hash_bytes(
             bsn_text.as_bytes(),
         ));
@@ -246,16 +234,13 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
             }
         };
 
-        // A saved scene names its prefabs relative to itself, so the file
-        // travels. In memory they are absolute: the cache is keyed by path, and
-        // readers would otherwise each need this scene's directory to resolve a
-        // reference.
+        // A saved scene names its prefabs relative to itself; in memory they
+        // are absolute, since the cache is keyed by path.
         jackdaw_prefab::absolutize_isa_sources(&mut authored, &parent_path);
 
         // A legacy scene's prefabs may be legacy too, and the cache reads
-        // `.bsn` only. They convert here rather than with the rest of the
-        // conversion below, because the resolve that needs them comes next and
-        // the retarget after it looks the converted files up on disk.
+        // `.bsn` only. They convert here because the resolve that needs them
+        // comes next.
         if let Some(pending) = &pending_conversion {
             crate::jsn_to_bsn::convert_prefab_dependencies(world, pending);
         }
@@ -267,9 +252,9 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
         // the editor stays usable. Worlds without a prefab cache (headless
         // harnesses) spawn the authored text directly.
         //
-        // This runs before the retired-component gate below, and before the
-        // open scene is cleared: components merged in from a prefab are subject
-        // to that gate too, and a refusal must leave the open scene standing.
+        // Runs before the retired-component gate and before the open scene is
+        // cleared: merged-in components face that gate too, and a refusal must
+        // leave the open scene standing.
         let epoch_before = prefab_cache_epoch(world);
         let resolved: Option<jackdaw_bsn::SceneBsnAst> =
             if world.contains_resource::<crate::prefab::PrefabAstCache>() {
@@ -309,8 +294,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
             None => bsn_text.clone(),
         };
 
-        // The document parsed and passed the gate, so the conversion can be
-        // written to disk.
+        // The document passed the gate, so the conversion can be written.
         if let Some(pending) = pending_conversion {
             let bsn_path = pending.bsn_path.clone();
             if let Err(err) = crate::jsn_to_bsn::commit_conversion(world, pending) {
@@ -352,10 +336,8 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
             }
         }
 
-        // The document's own kind picks the mode, so a reopened flat scene
-        // comes back on its canvas. Only a UI screen also fronts the panel:
-        // an ordinary scene must not yank the viewport over whatever the user
-        // was working in.
+        // The document's own kind picks the mode. Only a UI screen also fronts
+        // the panel; an ordinary scene must not yank the viewport.
         let mode = crate::viewport_host::ViewportMode::for_scene_kind(scene_kind);
         if scene_kind == crate::scenes::operators::SceneKind::Ui {
             crate::viewport_host::focus_viewport(world, mode);
@@ -399,9 +381,8 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
     }
     world.resource_mut::<SceneFilePath>().path = Some(path);
 
-    // A UI root authored before the root stated a size of its own shrinks to
-    // fit its content, and every placement then resolves against that box
-    // rather than against the canvas.
+    // A UI root authored before roots stated a size shrinks to fit its
+    // content, and every placement then resolves against that box.
     crate::ui_palette::backfill_ui_root_size(world);
 
     // Stacks were cleared by clear_scene_entities, so dirty baseline is 0
@@ -414,51 +395,39 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
 /// a hand-authored document may name it short or fully qualified.
 const UI_SCENE_ROOT_TYPE: &str = "UiSceneRoot";
 
-/// [`UI_SCENE_ROOT_TYPE`] as the tail of a qualified path.
+/// `UI_SCENE_ROOT_TYPE` as the tail of a qualified path.
 const UI_SCENE_ROOT_PATH_TAIL: &str = "::UiSceneRoot";
 
 /// Does this document declare a UI scene?
 ///
 /// Walks every patch component rather than following `Children` from the roots,
-/// so a root nested inside a subtree is still found. Callers use this to decide
-/// whether an open or a tab switch brings the viewport forward, and read the
-/// mode to put it in from [`declared_scene_kind`]; live routing uses a
-/// `UiSceneRoot` query on the spawned world instead.
+/// so a root nested inside a subtree is still found.
 pub fn declares_ui_scene_root(ast: &jackdaw_bsn::SceneBsnAst) -> bool {
     ast.all_patch_type_paths().any(is_ui_scene_root_type_path)
 }
 
-/// Does this component type path name the UI scene root marker?
-///
-/// Shared with [`declares_ui_scene_root`] so that a caller asking about a
-/// single entity, such as the prefab importer, matches the document-wide walk.
+/// Does this component type path name the UI scene root marker? Shared with
+/// [`declares_ui_scene_root`] so a per-entity caller matches the document walk.
 pub fn is_ui_scene_root_type_path(path: &str) -> bool {
     path == UI_SCENE_ROOT_TYPE || path.ends_with(UI_SCENE_ROOT_PATH_TAIL)
 }
 
 /// Type name of the 2D world scene root marker, matched the same way as
-/// [`UI_SCENE_ROOT_TYPE`].
+/// `UI_SCENE_ROOT_TYPE`.
 const SCENE_2D_ROOT_TYPE: &str = "Scene2dRoot";
 
-/// [`SCENE_2D_ROOT_TYPE`] as the tail of a qualified path.
+/// `SCENE_2D_ROOT_TYPE` as the tail of a qualified path.
 const SCENE_2D_ROOT_PATH_TAIL: &str = "::Scene2dRoot";
 
 /// Which kind of scene this document is, read from the root markers a save
-/// writes.
-///
-/// The counterpart of the kind a `scene.new` was given: a reopened document
-/// carries no operator parameter, so its kind has to be read back out of it.
-/// Walks every patch component, like [`declares_ui_scene_root`], so a marker
-/// nested inside a subtree still counts. A document carrying neither marker is
-/// a 3D scene, which is what the editor has always assumed.
+/// writes. A document carrying neither marker is a 3D scene.
 pub fn declared_scene_kind(ast: &jackdaw_bsn::SceneBsnAst) -> crate::scenes::operators::SceneKind {
     use crate::scenes::operators::SceneKind;
 
     let mut two_d = false;
     for path in ast.all_patch_type_paths() {
         if is_ui_scene_root_type_path(path) {
-            // A UI screen is the more specific kind: a document declaring both
-            // is authored as UI.
+            // A document declaring both is authored as UI.
             return SceneKind::Ui;
         }
         two_d |= path == SCENE_2D_ROOT_TYPE || path.ends_with(SCENE_2D_ROOT_PATH_TAIL);
@@ -479,14 +448,9 @@ pub(crate) enum SidecarImport {
     /// activation, where the store may be holding unsaved sculpting that
     /// the file on disk does not have yet.
     FillMissing,
-    /// Fill paths the store has never heard of, and re-read the ones
-    /// whose file has been written since the store last read it.
-    ///
-    /// Between [`Self::Reload`] and [`Self::FillMissing`]: the store's
-    /// copy is the truth while it holds edits nobody has written, and the
-    /// file is the truth once someone has written it. Used when returning
-    /// to a tab with nothing unsaved in it, where a sidecar rewritten in
-    /// the meantime is the newer of the two.
+    /// Fill paths the store has never heard of, and re-read the ones whose
+    /// file has been written since the store last read it. Used when returning
+    /// to a tab with nothing unsaved in it.
     RefreshChanged,
 }
 
@@ -562,8 +526,7 @@ pub(crate) fn import_terrain_sidecars(
         };
         match std::fs::read(&full) {
             // `load` takes either format version: a sidecar written before
-            // regions existed migrates on the way in, and the next save
-            // writes it back as the current version.
+            // regions existed migrates on the way in.
             Ok(bytes) => match sidecar::load(&bytes) {
                 Ok(data) => {
                     let mtime = std::fs::metadata(&full)
@@ -599,8 +562,8 @@ pub(crate) fn import_terrain_sidecars(
     }
 
     settle_terrain_grids(world);
-    // Terrains are placed by now, which is what a group saved beside one
-    // has to be moved into the space of.
+    // Terrains are placed by now, which a group saved beside one is moved
+    // into the space of.
     crate::terrain::scatter::migrate_legacy_scatter_groups(world);
     imported.into_iter().collect()
 }
@@ -680,14 +643,10 @@ pub(crate) fn settle_terrain_grids(world: &mut World) {
 /// light + no ambient). The ambient override is always applied since
 /// it is a `Resource` mutation, not a spawn.
 ///
-/// The Sun is a new-scene template, not an editor fixture: it is registered in
-/// the document and saved like any other authored entity. It is therefore
-/// seeded only into a world holding no document, since the binary calls this on
-/// entering the editor, after the project's persisted tabs have opened, and a
-/// document whose author kept no light must not gain one on the next save.
-///
-/// Also skipped when a `DirectionalLight` already exists, so a scene that
-/// carries its own lighting does not get a second one.
+/// The Sun is registered in the document and saved like any authored entity,
+/// so it is seeded only into a world holding no document and no
+/// `DirectionalLight`: a scene whose author kept no light must not gain one on
+/// the next save.
 pub fn spawn_default_lighting(world: &mut World) {
     world.insert_resource(GlobalAmbientLight::NONE);
 
@@ -769,10 +728,8 @@ fn collect_editor_entities(
 
 /// Drop every drag that is holding on to a scene entity.
 ///
-/// A drag remembers the entity ids it grabbed and keeps writing transforms onto
-/// them every frame. A reload or a tab switch replaces the whole scene, leaving
-/// those ids either despawned or reused by unrelated entities, so every drag
-/// ends with the scene it belongs to.
+/// A drag keeps writing transforms onto the ids it grabbed, which a reload or
+/// tab switch leaves despawned or reused by unrelated entities.
 fn forget_dragged_entities(world: &mut World) {
     if let Some(mut drag) = world.get_resource_mut::<crate::modal_transform::ViewportDragState>() {
         drag.pending = None;
@@ -787,8 +744,7 @@ fn forget_dragged_entities(world: &mut World) {
     }
 
     // Every other gesture that parks entity ids in a resource for the length of
-    // a drag: the canvas gesture on the 2D stage, and the brush sub-element
-    // modals, which also hold the brush they were started on.
+    // a drag.
     use crate::brush::topology_ops as topo;
     forget_drag_resource::<crate::ui_stage::UiManipulation>(world);
     forget_drag_resource::<topo::extrude::ExtrudeModalState>(world);
@@ -910,10 +866,9 @@ pub(super) fn poll_scene_dialog(world: &mut World) {
                 let path = file.path().to_path_buf();
                 let last_dir = path.parent().map(std::path::Path::to_path_buf);
 
-                // The dialog resolves against the active tab, which need not be
-                // the one it was opened over: the user may switch tabs while
-                // the picker is up. Re-check before the retarget below renames
-                // a tab whose world is not its file.
+                // The dialog resolves against the active tab, which need not
+                // be the one it was opened over, so re-check before the
+                // retarget below renames a tab whose world is not its file.
                 if let Some(reason) = crate::scene_io::save::active_tab_refusal(world) {
                     error!(
                         "Cannot save this tab: its scene was not loaded ({reason}). \
@@ -944,9 +899,7 @@ pub(super) fn poll_scene_dialog(world: &mut World) {
 }
 
 /// Tests for the UI-scene detection that decides whether opening or activating
-/// a document brings the 2D viewport forward. Covers the cases a roots-only
-/// walk would miss: a root nested in a subtree, and the short type path a
-/// hand-authored document may use.
+/// a document brings the 2D viewport forward.
 #[cfg(test)]
 mod ui_scene_detection_tests {
     use super::declares_ui_scene_root;
@@ -968,8 +921,8 @@ jackdaw_scene_types::UiSceneRoot
 
     #[test]
     fn the_short_form_a_hand_authored_document_may_use_is_detected() {
-        // The runtime resolver accepts a short type path, so the editor has to
-        // agree with it about what counts as a UI scene.
+        // The runtime resolver accepts a short type path, so the editor agrees
+        // with it about what counts as a UI scene.
         assert!(declares(
             r#"
 #Overlay
@@ -1010,8 +963,7 @@ bevy_camera::visibility::Visibility::Inherited
 
     #[test]
     fn a_type_merely_ending_in_the_name_is_not_a_ui_root() {
-        // Suffix matching is on a whole path segment, so a longer type name
-        // ending in the same letters must not focus the panel.
+        // Suffix matching is on a whole path segment.
         assert!(!declares(
             r#"
 #World
@@ -1021,8 +973,7 @@ some_crate::NotAUiSceneRoot
     }
 }
 
-/// Tests for reading a saved document's kind back out of it, which is how a
-/// reopened scene reaches the viewport mode it was authored in.
+/// Tests for reading a saved document's kind back out of it.
 #[cfg(test)]
 mod declared_scene_kind_tests {
     use super::declared_scene_kind;
@@ -1108,11 +1059,9 @@ some_crate::NotAScene2dRoot
 
 /// Tests for reading terrain sidecars back into the store.
 ///
-/// A terrain reaches the world by two routes: `finish_load_scene` for an
-/// explicit open, and `scenes::swap::activate_tab` for a tab pushed onto the
-/// strip by `scene_open_system`. Only the first takes disk as the truth;
-/// treating the second as a reload would discard unsaved sculpting on every tab
-/// switch.
+/// A terrain reaches the world by two routes, and only an explicit open takes
+/// disk as the truth: reloading on a tab switch would discard unsaved
+/// sculpting.
 #[cfg(test)]
 mod terrain_sidecar_import_tests {
     use std::path::PathBuf;
@@ -1141,9 +1090,8 @@ mod terrain_sidecar_import_tests {
         RegionTerrainData::from_legacy_v1(data).expect("a power-of-two resolution migrates")
     }
 
-    /// A world with one terrain naming `data_path`, and a sidecar for it
-    /// written beside `zone.bsn` in a fresh temp dir. The sidecar is in the
-    /// pre-region format, which is the migration path existing projects take.
+    /// A world with one terrain naming `data_path`, and a pre-region-format
+    /// sidecar for it written beside `zone.bsn` in a fresh temp dir.
     fn world_and_scene(label: &str, data_path: &str) -> (World, PathBuf) {
         let tmp = unique_tmp_dir(label);
         let bytes = sidecar::encode(&on_disk()).expect("encodes");

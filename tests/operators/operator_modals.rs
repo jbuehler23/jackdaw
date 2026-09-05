@@ -1,21 +1,10 @@
-//! Modal-operator coverage. Iterates every operator declared
-//! `modal = true` and round-trips each:
-//!  1. Dispatch starts the operator.
-//!  2. Either the call returns `Running` (modal session active), or
-//!     `Cancelled` because its availability gate refused.
-//!     `Finished` is invalid for `modal = true`.
-//!  3. If we got `Running`, `world.operator(id).cancel()` ends the
-//!     session and clears `ActiveModalOperator`.
-//!  4. After cancel the snapshot equals the pre-dispatch snapshot
-//!     (modal cancellation is rollback, not commit).
+//! Modal-operator coverage: every operator declared `modal = true` is
+//! dispatched, must answer `Running` or `Cancelled` (never `Finished`), and
+//! cancelling must roll back to the pre-dispatch snapshot and clear
+//! `ActiveModalOperator`. The sweep picks up new modal operators on its own.
 //!
-//! The sweep auto-picks up new modal operators, so coverage scales
-//! with the codebase without per-modal hand-rolled tests.
-//!
-//! Per-modal round-trip helpers ([`assert_modal_round_trip_op`]) take
-//! an `Op: Operator` type parameter rather than a raw id string, so
-//! call sites compile-fail when the operator is renamed instead of
-//! silently going stale.
+//! `assert_modal_round_trip_op` takes an `Op: Operator` type parameter rather
+//! than an id string, so a rename is a compile error.
 
 use crate::util;
 
@@ -66,10 +55,8 @@ fn assert_modal_round_trip_id(app: &mut App, id: &'static str) {
             assert!(before.equals(&*after), "{id}: cancel left state mutated");
         }
         OperatorResult::Cancelled => {
-            // Gate refused. Acceptable for modals that need a real
-            // cursor or scene fixture (no viewport camera, no
-            // selection, etc.); the smoke test still proved dispatch
-            // doesn't panic.
+            // Gate refused: acceptable for modals needing a real cursor or
+            // scene fixture; dispatch still did not panic.
         }
         OperatorResult::Finished => {
             panic!("{id}: modal operator returned Finished, expected Running or Cancelled");
@@ -77,9 +64,7 @@ fn assert_modal_round_trip_id(app: &mut App, id: &'static str) {
     }
 }
 
-/// Typed round-trip for a specific modal operator. Resolves the id
-/// from `O::ID` so a rename of `O` is a build error, not a stale
-/// string literal.
+/// Typed round-trip for one modal operator, resolving the id from `O::ID`.
 #[expect(
     dead_code,
     reason = "exposed for future per-modal tests that need extra fixtures around the round-trip"
@@ -88,10 +73,7 @@ fn assert_modal_round_trip<O: Operator>(app: &mut App) {
     assert_modal_round_trip_id(app, O::ID);
 }
 
-/// Sweep: enumerate every operator declared `modal = true` and run
-/// the round-trip on each. New modal operators get coverage
-/// automatically; CI flags any modal that panics on dispatch or
-/// fails to clear `ActiveModalOperator` on cancel.
+/// Every operator declared `modal = true`, round-tripped.
 #[test]
 fn every_modal_operator_round_trips() {
     let mut app = util::editor_test_app();
@@ -115,18 +97,14 @@ fn every_modal_operator_round_trips() {
     }
 }
 
-/// Regression: while a modal operator runs, its toolbar button is the
-/// only one carrying `ButtonVariant::Primary`. Mode and gizmo buttons
-/// drop to `Plain` so the user sees a single active tool. Covers the
-/// case where Object Mode stayed highlighted while Draw Brush was
-/// armed.
+/// While a modal operator runs, its toolbar button is the only one carrying
+/// `ButtonVariant::Primary`.
 #[test]
 fn modal_dispatch_steals_toolbar_highlight() {
     let mut app = util::editor_test_app();
 
-    // Synthetic toolbar buttons. The real toolbar mounts behind
-    // `OnEnter(Editor)`, so model just the surface the highlight
-    // observer reads: a `ButtonOperatorCall` and a `ButtonVariant`.
+    // The real toolbar mounts behind `OnEnter(Editor)`, so model only what the
+    // highlight observer reads: a `ButtonOperatorCall` and a `ButtonVariant`.
     let object_button = app
         .world_mut()
         .spawn((
@@ -149,15 +127,13 @@ fn modal_dispatch_steals_toolbar_highlight() {
         ))
         .id();
 
-    // Activate the Draw Brush modal.
     let _ = app
         .world_mut()
         .operator(ActivateDrawBrushModalOp::ID)
         .call()
         .unwrap_or_else(|err| panic!("draw brush dispatch errored: {err}"));
 
-    // The highlight is an `On<RefreshOperatorButtons>` observer. Fire
-    // the event so it flips the variants against the running modal.
+    // The highlight is an `On<RefreshOperatorButtons>` observer.
     app.world_mut().trigger(RefreshOperatorButtons);
 
     let variant_of = |app: &mut App, e: Entity| {

@@ -30,14 +30,9 @@ struct PrefabWatchState {
 
 const DEBOUNCE: Duration = Duration::from_millis(150);
 
-/// Every prefab file to watch, taken from the open documents rather than from
-/// the cache.
-///
-/// Deriving the list from the cache alone loses a file as soon as it stops
-/// parsing: the failed reload drops the entry, the path falls off the watch
-/// list, and the edit that repairs the file goes unnoticed. The scene's `IsA`
-/// sources and the open prefab tabs survive a parse failure, so a broken prefab
-/// stays watched until nothing refers to it.
+/// Every prefab file to watch, taken from the open documents as well as the
+/// cache: a file that stops parsing falls out of the cache, and the edit that
+/// repairs it still has to be noticed.
 fn prefab_paths_to_watch(
     cache: &PrefabAstCache,
     live: Option<&jackdaw_bsn::SceneBsnAst>,
@@ -68,9 +63,8 @@ fn prefab_paths_to_watch(
     paths
 }
 
-/// Paths an open prefab tab holds. A write to one of those is an edit to an
-/// open document, which `crate::scenes::external_watch` prompts about; handling
-/// it here as well would apply the edit twice.
+/// Paths an open prefab tab holds; `crate::scenes::external_watch` prompts
+/// about writes to those, so this path must not also apply them.
 fn open_prefab_tab_paths(world: &World) -> Vec<PathBuf> {
     let Some(scenes) = world.get_resource::<crate::scenes::Scenes>() else {
         return Vec::new();
@@ -90,9 +84,8 @@ fn refresh_watch_list(
     live: Option<Res<jackdaw_bsn::SceneBsnAst>>,
     scenes: Option<Res<crate::scenes::Scenes>>,
 ) {
-    // Walking the live document's `IsA` nodes costs a query per call, and the
-    // result can only differ when one of the three inputs changed. A watcher
-    // that never installed counts as stale.
+    // Walking the live document's `IsA` nodes costs a query, and the result can
+    // only differ when one of the three inputs changed.
     let stale = state.watcher.is_none()
         || cache.is_changed()
         || live.as_ref().is_some_and(DetectChanges::is_changed)
@@ -176,9 +169,8 @@ fn drain_changes(world: &mut World) {
     let open_prefab_tabs = open_prefab_tab_paths(world);
     let mut reloaded = false;
     for path in to_reload {
-        // An open prefab is an edited document, not only a source this scene
-        // reads. The external-scene watcher prompts about it, so applying the
-        // edit here would pre-empt that prompt.
+        // The external-scene watcher prompts about an open document; applying
+        // the edit here would pre-empt that prompt.
         if open_prefab_tabs.contains(&path) {
             continue;
         }
@@ -232,11 +224,9 @@ fn drain_changes(world: &mut World) {
                     .insert(cache_key.clone(), new_ast);
             }
             Err(e) => {
-                // Keep the last copy that parsed. Dropping it would leave the
-                // next capture with no baseline to sparsify against, rewriting
-                // every inherited value in the scene as an authored override,
-                // which a later valid version of the file could not undo since
-                // overrides win over inherited values.
+                // Keep the last copy that parsed: without a baseline to
+                // sparsify against, every inherited value in the scene would be
+                // rewritten as an authored override.
                 warn!(
                     "prefab reload parse failed for {}: {e}; keeping the last \
                      copy that parsed",
@@ -257,27 +247,21 @@ fn drain_changes(world: &mut World) {
         }
     }
 
-    // Once for the batch: a rebuild per changed file would walk the whole
-    // scene again for each one, and only the last walk's rows survive.
+    // Once for the batch; only the last walk's rows would survive anyway.
     if reloaded {
         rebuild_outliner(world);
     }
 }
 
-/// What a per-file reload did, which is what decides whether the caller
-/// has anything left to do.
+/// What a per-file reload did, and so what the caller has left to do.
 pub enum PrefabReload {
-    /// The file's instances were respawned in place; every other entity
-    /// kept its id.
+    /// The file's instances were respawned in place; other entities kept
+    /// their ids.
     Instances,
-    /// Not something this path can do: nothing in the live document
-    /// inherits from the file directly (a prefab another prefab
-    /// references has no instance node of its own), or an instance is not
-    /// a document root and does not line up with a resolved root. The
-    /// caller respawns the whole scene.
+    /// Nothing inherits from the file directly, or an instance does not line
+    /// up with a resolved root. The caller respawns the whole scene.
     Unhandled,
-    /// The new text did not parse or resolve. The scene is untouched and
-    /// respawning it would only rebuild what is already there.
+    /// The new text did not parse or resolve, and the scene is untouched.
     Nothing,
 }
 
@@ -303,8 +287,8 @@ pub fn reload_instances_of(world: &mut World, sparse_text: &str, changed: &Path)
             })
             .collect()
     };
-    // A prefab only another prefab file references has no instance node
-    // here to respawn; the whole-scene path picks it up through the cache.
+    // A prefab only another prefab references has no instance node here; the
+    // whole-scene path picks it up through the cache.
     if instances.is_empty() {
         return PrefabReload::Unhandled;
     }
@@ -338,9 +322,8 @@ pub fn reload_instances_of(world: &mut World, sparse_text: &str, changed: &Path)
         let reg = registry.read();
         jackdaw_bsn::entity_roots(&resolved, &reg)
     };
-    // The sparse emit keeps document order, so a root's index carries over.
-    // Anything else means the two documents disagree about the scene's shape,
-    // and a whole-scene respawn is the honest answer.
+    // The sparse emit keeps document order, so a root's index carries over;
+    // anything else means the two documents disagree about the scene's shape.
     let mut pairs = Vec::with_capacity(instances.len());
     for (&node, &index) in instances.iter().zip(&at_root) {
         let Some(&counterpart) = resolved_roots.get(index) else {
@@ -377,9 +360,8 @@ pub fn reload_instances_of(world: &mut World, sparse_text: &str, changed: &Path)
     }
     jackdaw_bsn::apply_dirty_ast_patches(world);
 
-    // An entity the reload despawned is out of the selection, and its
-    // `Selected` marker went with it; re-selecting the survivors puts the
-    // resource and the markers back in step.
+    // Re-select the survivors, so the resource and the `Selected` markers the
+    // despawn took with it are back in step.
     let alive: Vec<Entity> = world
         .resource::<crate::selection::Selection>()
         .entities
@@ -400,10 +382,9 @@ fn despawn_document_subtree(world: &mut World, root: Entity) {
             .filter_map(|node| live.ecs_for_ast(node))
             .collect()
     };
-    // Every mapped entity, not only the first: a subtree whose root has no
-    // ECS mapping would otherwise leave its descendants in the world with
-    // nothing in the document naming them. Despawning a root takes its
-    // children with it, so a later id in the list may already be gone.
+    // Every mapped entity, not only the first: a root with no ECS mapping would
+    // otherwise strand its descendants. Despawning a root takes its children,
+    // so a later id may already be gone.
     for &entity in &entities {
         if let Ok(entity) = world.get_entity_mut(entity) {
             entity.despawn();
@@ -429,10 +410,8 @@ fn graft_subtree(
     grafted
 }
 
-/// Rebuild the outliner from scratch. Observer-driven row creation can fire
-/// mid-apply (`Add<Transform>` before `IsA` / `Name` land) and pin the wrong
-/// category icon; a clean rebuild classifies every row against the final
-/// archetype.
+/// Rebuild the outliner from scratch, so every row is classified against the
+/// final archetype rather than a mid-apply one.
 fn rebuild_outliner(world: &mut World) {
     if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
         bevy::log::warn!("prefab reload: clear_all_tree_rows failed: {err}");
@@ -442,10 +421,8 @@ fn rebuild_outliner(world: &mut World) {
     }
 }
 
-/// Emit the live BSN document to sparse text against the CURRENT prefab
-/// cache: inherited descendants reduce to override entries and instance
-/// roots shed values still matching their baselines. `None` when there is
-/// no live document.
+/// Emit the live BSN document to sparse text against the current prefab cache.
+/// `None` when there is no live document.
 pub fn capture_sparse_scene_text(world: &mut World) -> Option<String> {
     world.get_resource::<jackdaw_bsn::SceneBsnAst>()?;
     // Inline runtime assets are embedded so material handles resolve across
@@ -460,17 +437,8 @@ pub fn capture_sparse_scene_text(world: &mut World) -> Option<String> {
     ))
 }
 
-/// Re-resolve every `IsA` instance in the live BSN document against the
-/// prefab cache, despawn the existing preview entities, and respawn the
-/// scene from the resolved document.
-///
-/// The live [`jackdaw_bsn::SceneBsnAst`] is a full linked document (one node
-/// per spawned entity). Its authored mutations (a new instance root, an
-/// override on an inherited descendant) are captured by emitting it to sparse
-/// text, which the resolver reads back and expands: new `IsA` nodes
-/// materialize their prefab subtrees, and inherited values re-derive from the
-/// cached baselines. `load_bsn_scene` then reinstalls the resolved document
-/// as the live source of truth.
+/// Re-resolve every `IsA` instance in the live BSN document against the prefab
+/// cache, then despawn and respawn the scene from the resolved document.
 pub fn reload_all_instances(world: &mut World) {
     let Some(sparse_text) = capture_sparse_scene_text(world) else {
         return;
@@ -489,8 +457,6 @@ pub fn respawn_from_sparse_text(world: &mut World, sparse_text: &str) {
 /// [`respawn_from_sparse_text`] without the outliner rebuild, for a caller
 /// respawning more than once before the tree is read.
 fn respawn_scene(world: &mut World, sparse_text: &str) {
-    // Parse the sparse form back and resolve every `IsA` instance against
-    // the prefab cache.
     let resolved_text = {
         let authored = match jackdaw_bsn::parse_bsn_text(sparse_text) {
             Ok(a) => a,
@@ -510,10 +476,8 @@ fn respawn_scene(world: &mut World, sparse_text: &str) {
         }
     };
 
-    // Inlined despawn + clear that preserves `CommandHistory`.
-    // `clear_scene_entities` truncates the undo stack (intended for
-    // scene-file loads); prefab reloads must not lose history pushed
-    // before this point or undo of preceding operators breaks.
+    // Inlined despawn + clear that preserves `CommandHistory`, which
+    // `clear_scene_entities` would truncate.
     world
         .resource_mut::<crate::selection::Selection>()
         .entities
@@ -525,14 +489,9 @@ fn respawn_scene(world: &mut World, sparse_text: &str) {
         bevy::log::error!("reload_all_instances: despawn_scene_entities failed: {err}");
     }
 
-    // Respawn from the resolved document. `load_bsn_scene` installs the
-    // resolved document as the live `SceneBsnAst`, re-adds inline assets, and
-    // applies patches, producing a full linked document once more.
+    // `load_bsn_scene` installs the resolved document as the live
+    // `SceneBsnAst`, re-adds inline assets, and applies patches.
     if let Err(err) = jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
         bevy::log::error!("reload_all_instances: load_bsn_scene failed: {err}");
     }
-
-    // History is preserved across the inline despawn above, so the
-    // dirty-state baselines stay valid and the status bar / per-tab
-    // dirty dot keep tracking the correct undo depth.
 }

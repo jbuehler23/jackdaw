@@ -1,19 +1,5 @@
-//! A whole authoring session driven the way a script drives it: no
-//! pointer, no dialog, one `JACKDAW_RUN_OP` clause at a time.
-//!
-//! What is pinned here:
-//!  * `scene.new ui=true` leaves a UI root the next clause can build on.
-//!  * `scene.open path=` opens a file without asking for one.
-//!  * An `Entity` parameter resolves from `name=`, and from the selection
-//!    for the operators that act on it, and refuses, out loud, for the
-//!    ones that do not.
-//!  * `field.set` goes through the real field-edit gesture, so the
-//!    document is authored, exactly one undo entry appears, and undo puts
-//!    the value back.
-//!  * `widget.add`, `binding.add`/`binding.set` and `entity.reparent`
-//!    reach the widget palette, the bindings card's commit funnel and the
-//!    reparent command, and a whole bound scene authored from clauses
-//!    loads like the same scene authored by hand.
+//! A whole authoring session driven the way a script drives it: no pointer, no
+//! dialog, one `JACKDAW_RUN_OP` clause at a time.
 
 use crate::util;
 
@@ -33,17 +19,16 @@ use jackdaw_scene_types::UiSceneRoot;
 
 const NODE: &str = "bevy_ui::ui_node::Node";
 
-/// A reflected component to hang on an authored entity. The authoring ops
-/// care about the plumbing, not the type, so the smallest one that can be
-/// added, saved, and read back does.
+/// A reflected component to hang on an authored entity: the smallest one that
+/// can be added, saved, and read back.
 #[derive(Component, Reflect, Default, Debug, PartialEq)]
 #[reflect(Component, Default)]
 struct AuthoringMarker {
     value: i32,
 }
 
-/// Game state for a binding to read. `current` is a fraction so a
-/// percentage write has something to be a percentage of.
+/// Game state for a binding to read. `current` is a fraction so a percentage
+/// write has something to be a percentage of.
 #[derive(Component, Reflect, Default, Debug, PartialEq)]
 #[reflect(Component, Default)]
 struct AuthoringHealth {
@@ -91,9 +76,8 @@ fn authored(app: &App, entity: Entity, type_path: &str, field_path: &str) -> Opt
     jackdaw_bsn::get_bsn_field(ast, node, type_path, field_path)
 }
 
-/// Resolve one clause's entity parameters without dispatching it, so a
-/// test can tell a resolver refusal from an availability gate that would
-/// have refused anyway.
+/// Resolve one clause's entity parameters without dispatching, so a resolver
+/// refusal can be told from an availability gate that would refuse anyway.
 #[track_caller]
 fn resolve(app: &mut App, clause: &str) -> Vec<EntityParam> {
     let mut op = parse_run_ops(clause)
@@ -245,8 +229,8 @@ fn a_component_lands_on_the_selection_when_the_clause_names_no_entity() {
     );
 }
 
-/// The other half of the resolver: `name=` picks a target the selection
-/// is not on, so a script can act on a node without clicking it first.
+/// The other half of the resolver: `name=` picks a target the selection is not
+/// on, so a script can act on a node without clicking it first.
 #[test]
 fn a_component_lands_on_the_entity_a_clause_names() {
     let mut app = authoring_app();
@@ -347,11 +331,8 @@ fn field_set_authors_the_document_as_one_undoable_edit() {
     );
 }
 
-/// The resolver's own refusal, told apart from the availability gate's.
-///
-/// Something is selected here, so `has_primary_selection` would wave the
-/// clause through; the only thing that can stop it is the resolver
-/// refusing a name no entity answers to.
+/// The resolver's own refusal, told apart from the availability gate's: something
+/// is selected, so only a name no entity answers to can stop the clause.
 #[test]
 fn a_name_that_matches_nothing_is_refused_by_the_resolver_not_the_gate() {
     let mut app = authoring_app();
@@ -387,8 +368,7 @@ fn a_name_that_matches_nothing_is_refused_by_the_resolver_not_the_gate() {
     );
 }
 
-/// A `name=` that resolves also selects, so a clause lands from a cold
-/// start, the state a boot run is in before anything clicks.
+/// A `name=` that resolves also selects, so a clause lands from a cold start.
 #[test]
 fn a_named_target_becomes_the_selection_so_a_cold_clause_lands() {
     let mut app = authoring_app();
@@ -419,11 +399,9 @@ fn a_named_target_becomes_the_selection_so_a_cold_clause_lands() {
     );
 }
 
-/// An operator whose gate is not the selection never guesses from it.
-///
-/// `prefab.apply_to_source` writes the prefab source document to disk, so
-/// a guessed target in an unattended run edits a file the author never
-/// pointed at.
+/// An operator whose gate is not the selection never guesses from it:
+/// `prefab.apply_to_source` writes to disk, so a guessed target in an unattended
+/// run edits a file the author never pointed at.
 #[test]
 fn an_ungated_prefab_op_refuses_to_guess_its_target_from_the_selection() {
     let mut app = authoring_app();
@@ -452,8 +430,8 @@ fn an_ungated_prefab_op_refuses_to_guess_its_target_from_the_selection() {
     assert_eq!(run(&mut app, clause), OperatorResult::Cancelled);
 }
 
-/// Two entity parameters means no answer to which one is "the" target, so
-/// both are named explicitly and neither touches the selection.
+/// Two entity parameters means no answer to which one is the target, so both are
+/// named explicitly and neither touches the selection.
 #[test]
 fn a_two_entity_op_takes_both_targets_by_name_and_neither_from_the_selection() {
     let mut app = authoring_app();
@@ -542,12 +520,9 @@ fn a_number_where_an_entity_belongs_is_refused_on_the_boot_path_too() {
     );
 }
 
-/// Every operator declaring an `Entity` parameter, and whether the
-/// resolver may fill it from the selection.
-///
-/// Each operator has to be classified here explicitly. Left to a default
-/// it would inherit whichever behaviour the resolver happens to have, and
-/// for the prefab family the wrong default writes files.
+/// Every operator declaring an `Entity` parameter, and whether the resolver may
+/// fill it from the selection. Each is classified explicitly: left to a default,
+/// the prefab family would inherit one that writes files.
 const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
     ("animation.toggle_keyframe", &["entity"], true),
     ("binding.add", &["entity"], true),
@@ -622,8 +597,8 @@ fn every_entity_taking_operator_is_classified() {
     );
 }
 
-/// A target outside the selection takes the selection over. Documented on
-/// the operator, pinned here, because a later clause reads that selection.
+/// A target outside the selection takes the selection over, because a later
+/// clause reads that selection.
 #[test]
 fn field_set_takes_over_a_selection_that_was_somewhere_else() {
     let mut app = authoring_app();
@@ -713,12 +688,9 @@ fn field_set_broadcasts_across_a_multi_selection_as_one_entry() {
     );
 }
 
-/// A new untitled tab must not inherit the last file's save path, or the
-/// next save writes an empty scene over the file the user was editing.
-///
-/// Pinned at the resource rather than by calling `scene.save`: an untitled
-/// tab sends `scene.save` to the native Save As dialog, which a headless
-/// run must not open.
+/// A new untitled tab must not inherit the last file's save path, or the next
+/// save writes an empty scene over the file the user was editing. Pinned at the
+/// resource: an untitled tab sends `scene.save` to the native Save As dialog.
 #[test]
 fn a_new_untitled_scene_stops_pointing_at_the_file_that_was_open() {
     let mut app = authoring_app();
@@ -740,9 +712,8 @@ fn a_new_untitled_scene_stops_pointing_at_the_file_that_was_open() {
     );
 }
 
-/// The second UI scene of a session goes down the tab-swap path, where the
-/// seeding order matters: a root spawned before the swap leaves with the
-/// scene the swap puts away.
+/// The second UI scene of a session goes down the tab-swap path, where a root
+/// spawned before the swap leaves with the scene the swap puts away.
 #[test]
 fn a_second_new_ui_scene_in_a_session_still_arrives_with_its_root() {
     let mut app = authoring_app();
@@ -774,9 +745,8 @@ fn a_second_new_ui_scene_in_a_session_still_arrives_with_its_root() {
 
 // --- Widgets, bindings, reparenting ---------------------------------------
 
-/// The widget vocabulary ships as its own extension, which an on-disk
-/// config may leave off. Force it on so `widget.add` has definitions to
-/// name, the way `tests/ui_palette.rs` does.
+/// Force the widget extension on: an on-disk config may leave it off, and
+/// `widget.add` needs definitions to name.
 fn widget_app() -> App {
     let mut app = authoring_app();
     jackdaw_api_internal::lifecycle::enable_extension(app.world_mut(), "jackdaw.ui_palette");
@@ -797,8 +767,8 @@ fn named(app: &mut App, wanted: &str) -> Entity {
     found[0]
 }
 
-/// The bindings the scene document holds for `entity`, as authored
-/// values. What survives a save, as opposed to what the ECS carries.
+/// The bindings the scene document holds for `entity`: what survives a save, as
+/// opposed to what the ECS carries.
 fn authored_bindings(app: &App, entity: Entity) -> Vec<BsnValue> {
     let ast = app.world().resource::<SceneBsnAst>();
     let node = ast.ast_for(entity).expect("the entity is in the document");
@@ -822,8 +792,8 @@ fn bindings_of(app: &App, entity: Entity) -> Vec<Binding> {
         .unwrap_or_default()
 }
 
-/// Put an empty `Bindings` on `entity` the way the Add Component picker
-/// does, since that is what a binding clause requires to be there first.
+/// Put an empty `Bindings` on `entity` the way the Add Component picker does,
+/// since a binding clause requires it to be there first.
 #[track_caller]
 fn give_bindings(app: &mut App, name: &str) {
     run_finished(
@@ -899,9 +869,8 @@ fn a_widget_takes_the_parent_the_clause_names() {
     );
 }
 
-/// The palette's own rule, whichever way the parent arrived: a node that
-/// is not part of the UI scene cannot adopt a widget, so the scene root
-/// does. Pinned here because a clause can name a parent a click cannot.
+/// A node that is not part of the UI scene cannot adopt a widget, so the scene
+/// root does. Pinned here because a clause can name a parent a click cannot.
 #[test]
 fn a_parent_outside_the_ui_scene_hands_the_widget_to_the_root() {
     let mut app = widget_app();
@@ -924,13 +893,9 @@ fn a_parent_outside_the_ui_scene_hands_the_widget_to_the_root() {
     );
 }
 
-/// Three scripted adds make three siblings, the same as three presses of the
-/// palette row.
-///
-/// A bare `widget.add` names no parent, so the widget goes beside the
-/// selection; the selection after each add is the widget it made. Filling
-/// `parent` in from the selection would turn each clause into the adopting
-/// form and build a chain instead.
+/// Three scripted adds make three siblings, as three presses of the palette row
+/// do. A bare `widget.add` names no parent, so filling `parent` in from the
+/// selection would turn each clause into the adopting form and build a chain.
 #[test]
 fn three_widget_clauses_make_three_siblings() {
     let mut app = widget_app();
@@ -1053,10 +1018,8 @@ fn a_binding_clause_edits_one_binding_by_index() {
     );
 }
 
-/// Every shape the card's own Add Binding menu offers, spelled as a
-/// clause. These five plus the index edits above are the whole clause
-/// vocabulary for authoring a bound scene; anything finer stays a pointer
-/// gesture.
+/// Every shape the card's Add Binding menu offers, spelled as a clause. These
+/// plus the index edits above are the whole clause vocabulary for a bound scene.
 #[test]
 fn every_binding_shape_the_card_offers_is_reachable_from_a_clause() {
     let mut app = widget_app();
@@ -1164,8 +1127,8 @@ fn a_reparent_clause_moves_a_child_and_undo_puts_it_back() {
     );
 }
 
-/// The selection may only fill in a sole target, so with two entity
-/// parameters both are named and the selection is left alone.
+/// The selection may only fill in a sole target, so with two entity parameters
+/// both are named and the selection is left alone.
 #[test]
 fn a_reparent_clause_names_both_targets_and_takes_neither_from_the_selection() {
     let mut app = authoring_app();
@@ -1220,8 +1183,8 @@ fn a_reparent_clause_names_both_targets_and_takes_neither_from_the_selection() {
     );
 }
 
-/// A clause can name a parent no drag could reach. A subtree adopting its
-/// own ancestor is not a hierarchy, so the clause refuses instead.
+/// A clause can name a parent no drag could reach, and a subtree adopting its
+/// own ancestor is refused.
 #[test]
 fn a_reparent_clause_refuses_to_put_a_parent_under_its_own_child() {
     let mut app = authoring_app();
@@ -1246,13 +1209,9 @@ fn a_reparent_clause_refuses_to_put_a_parent_under_its_own_child() {
     assert!(app.world().get::<ChildOf>(outer).is_none());
 }
 
-/// A bound two-widget scene authored purely by clauses loads and behaves
-/// like the same scene authored by hand.
-///
-/// "By hand" means the palette and document APIs the editor's own pointer
-/// gestures call, with no operator involved. Both scenes are saved, loaded
-/// back into fresh editors, and compared on the components they carry and
-/// the value the binding evaluates to.
+/// A bound two-widget scene authored purely by clauses loads and behaves like
+/// the same scene authored through the palette and document APIs a pointer
+/// gesture calls. Both are saved, reloaded, and compared.
 #[test]
 fn a_scripted_scene_loads_and_evaluates_like_a_hand_authored_one() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1296,15 +1255,14 @@ fn a_scripted_scene_loads_and_evaluates_like_a_hand_authored_one() {
 }
 
 /// The same scene as the scripted arm, built through the palette and document
-/// APIs a pointer gesture drives. The authoring is operator-free: making the
-/// tab and pointing it at a file are still `scene.new` and the tab's own path,
-/// which is what the File menu does on either arm.
+/// APIs a pointer gesture drives. Making the tab and pointing it at a file are
+/// still `scene.new` and the tab's own path, as the File menu does either way.
 fn hand_author(app: &mut App, path: &std::path::Path) {
     run_finished(app, "scene.new ui=true");
     let world = app.world_mut();
     let panel = jackdaw::ui_palette::instantiate_widget(world, "ui.panel").expect("a panel");
-    // Naming the parent, as the scripted arm's `parent=Panel` does: a widget
-    // added with no parent named is the selection's sibling, not its child.
+    // A widget added with no parent named is the selection's sibling, not its
+    // child.
     jackdaw::ui_palette::instantiate_widget_under(world, "ui.label", Some(panel))
         .expect("a label under the panel");
     let bindings = Bindings(vec![Binding::Field {
@@ -1330,9 +1288,8 @@ fn hand_author(app: &mut App, path: &std::path::Path) {
     node.height = Val::Px(24.0);
     let node = node.clone();
     jackdaw::commands::sync_component_to_ast(app.world_mut(), label, NODE, &node);
-    // The active tab is what a save reads for its target. An untitled one
-    // sends `save_scene` to the native Save As dialog, which a headless
-    // run must not open.
+    // The active tab is what a save reads for its target; an untitled one sends
+    // `save_scene` to the native Save As dialog.
     let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
     let active = scenes.active;
     scenes.tabs[active].path = Some(path.to_path_buf());
@@ -1343,8 +1300,8 @@ fn hand_author(app: &mut App, path: &std::path::Path) {
     app.update();
 }
 
-/// What a loaded scene is, for the purposes of the diff: the components
-/// each authored node carries and what the binding does once it runs.
+/// What a loaded scene is for the diff: the components each authored node
+/// carries and what the binding does once it runs.
 #[derive(Debug, PartialEq)]
 struct LoadedScene {
     panel_components: Vec<String>,
@@ -1388,8 +1345,8 @@ fn load_and_evaluate(path: &std::path::Path) -> LoadedScene {
     }
 }
 
-/// The authored component type paths on one entity, sorted. `BindContext`
-/// is dropped: the test puts it there, the scene does not.
+/// The authored component type paths on one entity, sorted. `BindContext` is
+/// dropped: the test puts it there, the scene does not.
 fn component_paths(app: &App, entity: Entity) -> Vec<String> {
     let mut paths: Vec<String> = app
         .world()
@@ -1402,17 +1359,14 @@ fn component_paths(app: &App, entity: Entity) -> Vec<String> {
     paths
 }
 
-/// How many entities the open document holds. A refused clause is one
-/// the document never heard about; counting live entities instead would
-/// count the editor's own chrome, which a frame tick spawns and drops
-/// whatever the clause did.
+/// How many entities the open document holds. Counting live entities instead
+/// would count the editor's own chrome, which a frame tick spawns and drops.
 fn document_size(app: &App) -> usize {
     app.world().resource::<SceneBsnAst>().ecs_to_ast.len()
 }
 
-/// A name the registry does not answer to gets a refusal, not a
-/// `Finished` with a warning nobody reads. The clause did not happen, and
-/// the run's own record has to say so.
+/// A name the registry does not answer to gets a refusal, not a `Finished` with
+/// a warning nobody reads.
 #[test]
 fn a_widget_name_that_names_no_definition_is_refused() {
     let mut app = widget_app();
@@ -1445,8 +1399,8 @@ fn a_widget_clause_with_no_ui_scene_to_put_it_in_is_refused() {
     );
 }
 
-/// An index the clause spelled but nothing can read is a typo, and a typo
-/// that edits binding zero is worse than one that edits nothing.
+/// An index the clause spelled but nothing can read is a typo, and a typo that
+/// edits binding zero is worse than one that edits nothing.
 #[test]
 fn a_binding_index_that_is_no_position_is_refused() {
     let mut app = widget_app();
@@ -1489,10 +1443,9 @@ fn a_reparent_clause_refuses_to_put_an_entity_under_itself() {
     );
 }
 
-/// `widget.add` puts a widget beside the selection when no parent is
-/// named, and inside the named node when one is. Leaving `parent` out is
-/// therefore the other form of the operator, not a target the clause
-/// forgot, and the resolver used to warn on every scripted run of it.
+/// `widget.add` puts a widget beside the selection when no parent is named, and
+/// inside the named node when one is: leaving `parent` out is the other form of
+/// the operator, not a target the clause forgot.
 #[test]
 fn widget_add_without_a_parent_is_a_complete_clause() {
     let mut app = authoring_app();

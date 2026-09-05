@@ -1,37 +1,24 @@
-//! The colour layer: a per-cell tint the splat material multiplies its
-//! finished albedo by.
+//! The colour layer: a per-cell tint the splat material multiplies its finished
+//! albedo by. White is the identity, so an older sidecar carrying no colour
+//! layer renders unchanged.
 //!
-//! White is the identity, so a terrain that has never been tinted draws
-//! exactly what its textures say. That is what lets an older sidecar,
-//! which carries no colour layer at all, render unchanged.
-//!
-//! Two ways in. [`apply_color_brush`] is the hand: a circular brush that
-//! eases each cell toward a chosen colour, mirroring
-//! [`crate::control::apply_control_brush`] so a tint stroke and a texture
-//! stroke of the same length cover the same ground at the same rate.
-//! [`fill_color_variation`] is the machine: low-frequency noise running
-//! down from white across the whole layer, which is what breaks up a large
-//! flat field of one texture without painting a thing.
+//! Two ways in. [`apply_color_brush`] is a circular brush easing each cell
+//! toward a chosen colour, mirroring [`crate::control::apply_control_brush`].
+//! [`fill_color_variation`] lays low-frequency noise down from white across the
+//! whole layer, which breaks up a large flat field of one texture.
 
 use bevy_math::Vec2;
 
 /// Ease a colour into the tint layer under a circular brush.
 ///
-/// `center` and `radius` are in grid cells. `opacity` is how far a cell
-/// crosses toward `tint` per second at full brush strength, scaled here
-/// by frame `dt`, so a slow machine and a fast one paint the same stroke
-/// at the same rate.
+/// `center` and `radius` are in grid cells. `opacity` is how far a cell crosses
+/// toward `tint` per second at full brush strength, scaled here by frame `dt`.
+/// `hardness` is the fraction of the radius that gets full strength before the
+/// falloff starts; `falloff` shapes what is left, as for every other brush here.
 ///
-/// `hardness` is the fraction of the radius that gets full strength
-/// before the falloff starts: 0 falls off from the centre, 1 is a flat
-/// disc with no soft edge at all. `falloff` shapes what is left, as it
-/// does for every other brush in this crate.
+/// Alpha is left as it is: the shader reads only RGB.
 ///
-/// Alpha is left as it is. The shader reads only RGB, and the layer's
-/// alpha is what the sidecar round-trips.
-///
-/// Returns the number of cells changed, so a caller can skip an undo
-/// entry for a stroke that did nothing.
+/// Returns the number of cells changed.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors apply_control_brush's flat parameter list"
@@ -107,9 +94,8 @@ fn brush_weight(dist: f32, radius: f32, falloff: f32, hardness: f32) -> f32 {
     if dist <= plateau {
         return 1.0;
     }
-    // Everything past the plateau falls off across what is left of the
-    // radius, so raising hardness widens the flat middle rather than
-    // steepening the edge twice over.
+    // Everything past the plateau falls off across what is left of the radius, so
+    // raising hardness widens the flat middle rather than steepening the edge.
     let band = radius - plateau;
     if band <= 0.0 {
         return 1.0;
@@ -125,11 +111,9 @@ fn brush_weight(dist: f32, radius: f32, falloff: f32, hardness: f32) -> f32 {
 
 /// One channel eased `t` of the way from `from` to `to`, rounded.
 ///
-/// A step that rounds back to `from` is nudged one level toward `to`
-/// instead, so a brush held on a cell converges on the colour it is
-/// painting rather than stalling tens of levels short of it; the result
-/// never passes `to`, so the cell settles exactly on the target and an
-/// eraser stroke restores white.
+/// A step that rounds back to `from` is nudged one level toward `to` instead, so
+/// a brush held on a cell converges rather than stalling short of it. The result
+/// never passes `to`, so an eraser stroke restores white exactly.
 fn mix_channel(from: u8, to: u8, t: f32) -> u8 {
     if from == to || !t.is_finite() || t <= 0.0 {
         return from;
@@ -143,24 +127,17 @@ fn mix_channel(from: u8, to: u8, t: f32) -> u8 {
     value.clamp(from_f.min(to_f), from_f.max(to_f)) as u8
 }
 
-/// Lay low-frequency noise over the whole colour layer.
+/// Lay low-frequency noise over the whole colour layer: a slow wander of light
+/// and shade that stops a large field of one texture reading flat. Every cell of
+/// the dense `resolution`-per-edge grid is written, so the layer is replaced
+/// rather than blended into.
 ///
-/// What a large field of one texture needs to stop reading flat: a slow
-/// wander of light and shade rather than anything anyone painted. Every
-/// cell of the dense `resolution`-per-edge grid is written, so the layer
-/// is replaced rather than blended into, and a caller wanting it undoable
-/// snapshots first.
+/// The wash runs from white down, not around it: the layer multiplies the albedo,
+/// so a wash centred on white would flatten its bright half against that ceiling
+/// and read as one-sided blotching. `amount` is how far the darkest cell falls,
+/// `0..1` of the full range; `frequency` is noise cycles per cell.
 ///
-/// The wash runs from white down, not around it: the layer multiplies the
-/// albedo, so white is the brightest a cell can be and a wash centred on
-/// it would flatten its whole bright half against that ceiling and read as
-/// one-sided blotching. `amount` is how far the darkest cell falls, `0..1`
-/// of the full range: 0 writes plain white and 1 reaches black.
-/// `frequency` is noise cycles per cell, so a small number is a broad wash
-/// and a large one is speckle.
-///
-/// Deterministic in `seed`: the same seed and shape write the same layer,
-/// which is what lets a scripted zone be regenerated.
+/// Deterministic in `seed`.
 #[cfg(feature = "procgen")]
 pub fn fill_color_variation(
     regions: &mut crate::region::TerrainRegions,
@@ -173,12 +150,9 @@ pub fn fill_color_variation(
     regions.write_grid_color(resolution, &grid);
 }
 
-/// [`fill_color_variation`] as a dense grid, for a caller that already
-/// holds one.
-///
-/// The editor writes the layer through its own dirty-rect plumbing, so it
-/// wants the texels rather than a second copy of the regions to copy back
-/// out of.
+/// [`fill_color_variation`] as a dense grid, for a caller that already holds
+/// one: the editor writes the layer through its own dirty-rect plumbing and
+/// wants the texels rather than a second copy of the regions.
 #[cfg(feature = "procgen")]
 pub fn color_variation(resolution: u32, seed: u32, frequency: f32, amount: f32) -> Vec<[u8; 4]> {
     use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
@@ -196,9 +170,8 @@ pub fn color_variation(resolution: u32, seed: u32, frequency: f32, amount: f32) 
     } else {
         0.01
     };
-    // Two octaves: enough to keep the wash from reading as one smooth
-    // gradient, few enough that it stays the large-scale variation the
-    // ground wants rather than a texture of its own.
+    // Two octaves: enough that the wash does not read as one smooth gradient,
+    // few enough that it stays large-scale variation rather than a texture.
     let noise = Fbm::<Perlin>::new(seed)
         .set_frequency(frequency)
         .set_octaves(2)
@@ -210,9 +183,8 @@ pub fn color_variation(resolution: u32, seed: u32, frequency: f32, amount: f32) 
         for gx in 0..resolution {
             let value = noise.get([gx as f64, gz as f64]) as f32;
             let mut texel = crate::region::DEFAULT_COLOR;
-            // Noise arrives in -1..1 and is mapped onto 1-amount..1 of
-            // white, so both lobes are drawn rather than the bright one
-            // clamping flat against white.
+            // Noise arrives in -1..1 and is mapped onto 1-amount..1 of white, so
+            // both lobes are drawn rather than the bright one clamping flat.
             let lit = (value.clamp(-1.0, 1.0) + 1.0) * 0.5;
             let level = (255.0 * (1.0 - amount * (1.0 - lit)))
                 .round()
@@ -437,10 +409,9 @@ mod tests {
             assert!(spread > 0, "the variation has to vary");
         }
 
-        /// The wash spreads across the band rather than piling up against
-        /// white. A wash centred on white loses its whole bright lobe to
-        /// the 255 ceiling, which reads as blotches on a flat field
-        /// instead of a slow wander.
+        /// The wash spreads across the band rather than piling up against white:
+        /// a wash centred on white loses its whole bright lobe to the 255
+        /// ceiling.
         #[test]
         fn the_variation_spreads_across_the_band_rather_than_clamping_flat() {
             let amount = 0.4_f32;

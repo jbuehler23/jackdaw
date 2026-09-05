@@ -1,12 +1,7 @@
 //! What a terrain's tools reach after the scene it lives in has been saved and
-//! opened again.
-//!
-//! A terrain's extent is its regions', not anything the component declares, and
-//! the component's two extent fields are drained back to their defaults on
-//! every load. A tool that strides the grid by those fields works while
-//! spawning has left them large and addresses only a 256-cell corner once the
-//! scene is reloaded. These run through the save and load paths and then edit
-//! past cell 255.
+//! opened again. A terrain's extent is its regions', and the component's two
+//! extent fields are drained back to their defaults on every load, so a tool
+//! that strides the grid by them addresses only a 256-cell corner.
 
 use crate::util;
 
@@ -39,12 +34,9 @@ fn advance_a_frame(app: &mut App) {
         .advance_by(Duration::from_millis(16));
 }
 
-/// Give every terrain in the world its sidecar path and its dirty-chunk
-/// tracking.
-///
-/// The editor's schedule runs these every frame gated on `AppState::Editor`,
-/// which a headless test never enters, and without them a terrain has no
-/// document to edit.
+/// Give every terrain in the world its sidecar path and dirty-chunk tracking.
+/// The editor's schedule runs these gated on `AppState::Editor`, which a headless
+/// test never enters, and without them a terrain has no document to edit.
 fn settle_terrain(app: &mut App) {
     app.world_mut()
         .run_system_cached(jackdaw::terrain::ensure_terrain_dirty_chunks)
@@ -228,7 +220,6 @@ fn tools_reach_the_far_extent_after_a_reload() {
         .resource_mut::<TerrainBrushSettings>()
         .radius = 8.0;
 
-    // --- Painting a texture reaches the far cell.
     app.world_mut()
         .resource_mut::<TerrainDataStore>()
         .set_materials(
@@ -264,7 +255,6 @@ fn tools_reach_the_far_extent_after_a_reload() {
 
     end_stroke(&mut app);
 
-    // --- Sculpting reaches the far cell.
     let before = heights(&app, &data_path);
     *app.world_mut().resource_mut::<TerrainEditMode>() =
         TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Raise);
@@ -282,12 +272,9 @@ fn tools_reach_the_far_extent_after_a_reload() {
     end_stroke(&mut app);
     *app.world_mut().resource_mut::<TerrainEditMode>() = TerrainEditMode::None;
 
-    // --- Eroding works the whole grid, not a wrapped band of it.
-    //
     // Striding the real heights by a smaller resolution walks a window over the
-    // front of the array and leaves everything past it unchanged, so the
-    // signature to rule out is nothing beyond row `resolution` moving. Droplets
-    // land at random, so this counts cells rather than pinning any one of them.
+    // front of the array, so the signature to rule out is nothing beyond row
+    // `resolution` moving. Droplets land at random, so this counts cells.
     let before = heights(&app, &data_path);
     app.world_mut().resource_mut::<Selection>().entities = vec![entity];
     dispatch(&mut app, "terrain.erode");
@@ -303,12 +290,9 @@ fn tools_reach_the_far_extent_after_a_reload() {
     );
 }
 
-/// A sidecar rewritten on disk is what a reopened scene shows.
-///
-/// The store is the live terrain document and outlives the file it came
-/// from, so a clean tab returning to the foreground has to take what the
-/// file says: a sidecar another program rewrote is the newer of the two,
-/// and reusing what the store holds would hide it until a restart.
+/// A sidecar rewritten on disk is what a reopened scene shows. The store is the
+/// live terrain document and outlives the file it came from, so a clean tab
+/// returning to the foreground has to take what the file says.
 #[test]
 fn a_sidecar_rewritten_on_disk_reaches_a_reopened_scene() {
     let stage = stage_dir();
@@ -374,11 +358,8 @@ fn a_sidecar_rewritten_on_disk_reaches_a_reopened_scene() {
     );
 }
 
-/// A tab with unsaved sculpting keeps it when the user comes back to it.
-///
-/// The refresh above must not become "disk always wins": a tab holding
-/// edits nobody has written is the newer of the two, and re-reading the
-/// file would throw them away silently.
+/// A tab with unsaved sculpting keeps it: the refresh above must not become
+/// "disk always wins" and throw away edits nobody has written.
 #[test]
 fn returning_to_a_dirty_tab_keeps_its_unsaved_heights() {
     let stage = stage_dir();
@@ -436,12 +417,9 @@ fn swap_to(app: &mut App, target: usize) {
     app.update();
 }
 
-/// A scatter run survives a save and a reload, and running it again
-/// re-stamps the same group instead of placing a second copy of it.
-///
-/// The placements live in the sidecar, so what carries them across a
-/// reload is the file rather than the scene text; the group key is what
-/// makes the second run replace them.
+/// A scatter run survives a save and a reload, and running it again re-stamps the
+/// same group instead of placing a second copy. The placements live in the
+/// sidecar, and the group key is what makes the second run replace them.
 #[test]
 fn scatter_groups_round_trip_and_a_rescatter_does_not_duplicate() {
     let stage = stage_dir();
@@ -524,11 +502,8 @@ fn group_key(app: &mut App) -> Option<String> {
     .map(|(key, _)| key)
 }
 
-/// A tint stroke and the surface dials survive a save and a reopen.
-///
-/// The colour layer and the surface block are both sidecar data, so this
-/// is what says the sidecar carries them: a stroke, a dial, save, reopen,
-/// and the ground still reads the same.
+/// The colour layer and the surface block are both sidecar data, so a stroke and
+/// a dial have to survive a save and a reopen.
 #[test]
 fn the_tint_layer_and_its_dials_survive_a_save_and_reload() {
     let stage = stage_dir();

@@ -1,11 +1,7 @@
-//! An editor button carrying a `ButtonOperatorCall` runs its operator
-//! when it is activated.
-//!
-//! The whole chain is under test: `button()` builds a `FeathersButton`,
-//! `bevy_ui_widgets` raises `Activate` on it, and the core extension's
-//! `dispatch_activate_operator` observer turns that into an operator
-//! call. It is the one dispatch path every toolbar, menu row and panel
-//! button in the editor shares, so nothing else covers it end to end.
+//! An editor button carrying a `ButtonOperatorCall` runs its operator when it is
+//! activated: `button()` builds a `FeathersButton`, `bevy_ui_widgets` raises
+//! `Activate`, and `dispatch_activate_operator` turns that into an operator call.
+//! Every toolbar, menu row and panel button shares that path.
 
 use crate::util;
 

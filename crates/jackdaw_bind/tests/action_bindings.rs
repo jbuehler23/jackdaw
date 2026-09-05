@@ -97,9 +97,8 @@ impl Default for UnlistedField {
     }
 }
 
-/// An event whose target field is named by `#[event_target]` rather than by
-/// the literal name `entity`. The attribute is a derive helper: it leaves no
-/// trace in the type registry, so reflection cannot find this field.
+/// An event whose target field is named by `#[event_target]` rather than by the
+/// literal name `entity`, which leaves no trace in the type registry.
 #[derive(EntityEvent, Reflect, Clone)]
 #[reflect(Event, Default)]
 struct Aimed {
@@ -325,10 +324,8 @@ fn field_not_declared_on_the_event_is_an_error() {
     assert!(app.world().resource::<Casts>().0.is_empty());
 }
 
-/// A widget with nothing above it naming a subject has no entity to send.
-/// The event's `Default` supplies `Entity::PLACEHOLDER`, which is not an
-/// entity: an observer handed it would look up a subject that does not exist.
-/// The dispatch is refused instead.
+/// A widget with nothing above it naming a subject has no entity to send, and
+/// the `Default` placeholder is not one an observer could look up.
 #[test]
 fn an_action_with_no_resolved_context_sends_nothing() {
     let mut app = app();
@@ -351,8 +348,7 @@ fn an_action_with_no_resolved_context_sends_nothing() {
     );
 }
 
-/// The same widget with a context resolves and sends, so the refusal above
-/// is about the missing context and nothing else.
+/// The same widget with a context resolves and sends.
 #[test]
 fn an_action_with_a_resolved_context_still_sends() {
     let mut app = app();
@@ -374,9 +370,8 @@ fn an_action_with_a_resolved_context_still_sends() {
     assert_eq!(app.world().resource::<Casts>().0, vec![(subject, 0)]);
 }
 
-/// `#[event_target]` is a derive helper attribute and leaves nothing in the
-/// type registry, so an entity target under any other name is invisible here.
-/// The event must not go out with the `Default` placeholder in that field.
+/// An entity target under a name other than `entity` is invisible to
+/// reflection, and the event must not go out with the placeholder in it.
 #[test]
 fn an_entity_target_the_registry_cannot_see_is_refused_not_defaulted() {
     let mut app = app();
@@ -413,10 +408,8 @@ fn unknown_event_type_warns_instead_of_panicking() {
     assert!(app.world().resource::<Casts>().0.is_empty());
 }
 
-/// A binding fills an event's fields by name. A tuple struct has none, so every
-/// guard the dispatch makes would pass on an empty list and reflection would be
-/// handed a struct it cannot build the event from, which panics rather than
-/// erroring.
+/// A tuple struct has no field names, so every guard would pass on an empty
+/// list and reflection would panic building the event.
 #[test]
 fn a_tuple_struct_event_is_refused_instead_of_panicking() {
     let mut app = app();
@@ -459,9 +452,8 @@ fn an_enum_event_is_refused_instead_of_panicking() {
     assert_eq!(app.world().resource::<Stray>().0, 0);
 }
 
-/// The refusal is not the click's to make: the binding is wrong the moment it
-/// is resolved, and it is reported there so the failure reaches the ledger
-/// without anyone pressing the button.
+/// The binding is wrong the moment it is resolved, and is reported there rather
+/// than waiting for a click.
 #[test]
 fn an_event_with_no_named_fields_is_reported_before_the_first_click() {
     let mut app = app();
@@ -477,9 +469,8 @@ fn an_event_with_no_named_fields_is_reported_before_the_first_click() {
     );
 }
 
-/// `as` narrows 300 into a `u8` as 44 and a NaN as 0, and the observer has no
-/// way of telling either from a number the game meant. The mapping is refused
-/// instead.
+/// `as` narrows 300 into a `u8` as 44 and a NaN as 0, neither of which an
+/// observer could tell from a number the game meant.
 #[test]
 fn a_number_too_big_for_the_field_is_refused_not_wrapped() {
     let mut app = app();

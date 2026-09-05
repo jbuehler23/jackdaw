@@ -32,17 +32,12 @@ use jackdaw_feathers::tokens;
 pub(crate) const WORLD_ENTITY_ICONS: &[(&str, Icon)] = &[
     ("jackdaw_scene_types::types::Brush", Icon::Cuboid),
     ("jackdaw_scene_types::types::Terrain", Icon::Mountain),
-    // A model instance, ahead of the `Mesh3d` rule: the instance carries no
-    // mesh of its own, and the stacked boxes say "the parts of one model"
-    // against the single `Box` an authored mesh gets.
+    // Ahead of the `Mesh3d` rule: an instance carries no mesh of its own.
     ("jackdaw_scene_types::types::GltfSource", Icon::Boxes),
     ("jackdaw::entity_ops::SceneFogVolume", Icon::CloudFog),
     ("jackdaw::entity_ops::SceneReflectionProbe", Icon::Sparkles),
     ("jackdaw::entity_ops::SceneAnimationPlayer", Icon::Play),
     ("jackdaw::entity_ops::SceneAudioSource", Icon::Volume2),
-    // Not `Image`: that glyph belongs to the `ui.image` widget, and a
-    // reference image is the tracing underlay behind the work rather than
-    // a picture in it.
     (
         "jackdaw::reference_image::ReferenceImage",
         Icon::PictureInPicture,
@@ -83,11 +78,8 @@ impl JackdawExtension for CoreWindowsExtension {
         for (type_path, icon) in world_kind_icons() {
             ctx.register_entity_icon(type_path, icon);
         }
-        // Last resort, not merely last: every `Node` is a container of
-        // some sort, so a rule saying so would answer for an extension's
-        // own UI kind before the extension had a chance to name it. The
-        // widget rules are registered by the palette extension, which owns
-        // the definitions their glyphs come from.
+        // Every `Node` is a container of some sort, so this must not answer
+        // before an extension has named its own UI kind.
         ctx.register_entity_icon_last_resort_predicate(container_icon);
 
         ctx.register_window(
@@ -228,11 +220,8 @@ impl JackdawExtension for CoreWindowsExtension {
 
 /// The viewport, registered as a regular dock panel so multiple
 /// instances (quad-view, stacked viewports for animation work, etc.)
-/// can coexist in the dock tree.
-///
-/// One panel shows either the 3D world or the 2D canvas, so the operators
-/// addressing the canvas are registered here too rather than on a panel of
-/// their own.
+/// can coexist in the dock tree. One panel shows either the 3D world or the
+/// 2D canvas, so the canvas operators are registered here too.
 #[derive(Default)]
 pub struct ViewportExtension;
 
@@ -538,37 +527,10 @@ impl JackdawExtension for InspectorExtension {
 
 /// The UI widget vocabulary the Add menu's UI Widgets section lists.
 ///
-/// # Bevy UI components rather than feathers controls
-///
-/// A UI widget is authored content: it is written into the scene document and
-/// spawned again from that document on load. The `bevy_feathers` controls do
-/// not survive that round trip. They are `SceneComponent`s, which only
-/// `spawn_scene` can materialise; re-inserting one from a reflected patch logs
-/// an error and leaves a bare marker. The editor's save policy also skips the
-/// `bevy_feathers::` prefix as widget implementation detail. The definitions
-/// below therefore assemble `bevy_ui` and `bevy_ui_widgets`.
-///
-/// # Theming
-///
-/// The feathers styling components are plain `Reflect` components:
-/// `ThemeBackgroundColor`, `ThemeBorderColor`, `ThemeTextColor`,
-/// `InheritableThemeTextColor`, `ButtonVariant`, `FocusIndicator`, and
-/// `EntityCursor`. A definition spawns them directly, and
-/// [`crate::scene_io`]'s always-save list carries them through a round trip, so
-/// a UI widget names a design token rather than a colour and is repainted when
-/// the theme changes.
-///
-/// The dynamic styling of the multi-entity controls does not carry over.
-/// `update_button_styles` operates on one entity, so a button gets its full
-/// hover, pressed, disabled, and focus treatment. A checkbox, radio, or toggle
-/// switch drives its checked and hover states from generated children
-/// (`CheckboxMark`, `RadioOutline`, `ToggleSwitchSlide`) whose marker types are
-/// private to feathers, so those widgets get the theme-token surface
-/// (background, border, focus ring, cursor) and nothing that responds to
-/// `Checked`.
-///
-/// Value behaviour comes from [`crate::authored_widgets`], which attaches the
-/// `bevy_ui_widgets` self-update observers globally.
+/// Definitions assemble `bevy_ui` and `bevy_ui_widgets` rather than
+/// `bevy_feathers` controls, which are `SceneComponent`s and do not survive a
+/// document round trip; feathers' theme-token components are plain `Reflect`
+/// components and are spawned directly.
 #[derive(Default)]
 pub struct UiPaletteExtension;
 
@@ -599,11 +561,8 @@ impl JackdawExtension for UiPaletteExtension {
 
 /// Spawn one authored widget under the resolved parent.
 ///
-/// A widget's entity `Name` carries no space, while the name its menu row
-/// shows may: a `name=` value in an operator clause has no quoting, so a
-/// node called `Radio Button` could not be addressed from `JACKDAW_RUN_OP`
-/// or the command palette at all. The menu keeps the readable label; the
-/// entity takes the token.
+/// An entity `Name` carries no space even where the menu label does: an
+/// operator clause's `name=` value has no quoting.
 fn spawn_widget(world: &mut World, parent: Option<Entity>, bundle: impl Bundle) -> Entity {
     let mut entity = world.spawn(bundle);
     if let Some(parent) = parent {
@@ -612,9 +571,8 @@ fn spawn_widget(world: &mut World, parent: Option<Entity>, bundle: impl Bundle) 
     entity.id()
 }
 
-/// The scene-shaped kinds, which win over everything an entity is also
-/// made of: a UI scene's root is a `Node` too, and a prefab instance is
-/// whatever it inherits.
+/// Scene-shaped kinds, registered first so they win over the components an
+/// entity is also made of.
 fn scene_kind_icons() -> Vec<(String, Icon)> {
     use bevy::reflect::TypePath;
     vec![
@@ -650,27 +608,15 @@ fn world_kind_icons() -> Vec<(String, Icon)> {
     ]
 }
 
-/// The component that identifies each built-in UI widget in the
-/// outliner, paired with the id of the widget whose glyph it takes.
-///
-/// The glyph itself is read back out of the registered definition rather
-/// than named again here, so the Add menu and the outliner cannot come to
-/// disagree about what a kind looks like: an extension that replaces
-/// `ui.button` moves both. A toggle switch is a `Checkbox` in the
-/// document, so the two share a glyph; nothing on the entity separates
-/// them.
-///
-/// An id with no definition, or a definition with no icon, contributes
-/// nothing, which the outliner icon suite catches.
+/// The component that identifies each built-in UI widget in the outliner,
+/// paired with the id of the widget whose glyph it takes. An id with no
+/// definition, or a definition with no icon, contributes nothing.
 fn widget_kind_sources() -> [(String, &'static str); 16] {
     use bevy::reflect::TypePath;
     use bevy::ui_widgets::{Button, Checkbox, RadioButton, ScrollArea, Slider};
 
     [
         (Button::type_path().to_string(), "ui.button"),
-        // The three kinds that are a `Node` and nothing else. Without a rule
-        // each falls through to the container fallback and reads as the row
-        // or column it happens to be shaped like.
         (
             jackdaw_widgets_runtime::Spacer::type_path().to_string(),
             "ui.spacer",
@@ -695,15 +641,12 @@ fn widget_kind_sources() -> [(String, &'static str); 16] {
             jackdaw_widgets_runtime::TabStrip::type_path().to_string(),
             "ui.tabs",
         ),
-        // Before the image rule: a nine-patch is an `ImageNode` too, and the
-        // narrower kind has to be asked first or it reads as a picture.
+        // Before the image rule: a nine-patch is an `ImageNode` too.
         (
             jackdaw_widgets_runtime::NineSlice::type_path().to_string(),
             "ui.nine_patch",
         ),
-        // Before the checkbox: a toggle switch is a `Checkbox` too, and
-        // the first rule that matches wins, so the narrower one is asked
-        // first or the switch shows the checkbox's icon.
+        // Before the checkbox: a toggle switch is a `Checkbox` too.
         (
             jackdaw_widgets_runtime::ToggleSwitch::type_path().to_string(),
             "ui.toggle",
@@ -721,10 +664,8 @@ fn widget_kind_sources() -> [(String, &'static str); 16] {
     ]
 }
 
-/// A `Node` that is nothing more particular is a container, and only its
-/// own values say which kind: a grid, a row, a column, or a panel. Runs
-/// after every component rule, so a control or a piece of text never
-/// reaches it.
+/// A `Node` that is nothing more particular is a container; its own values say
+/// which kind.
 fn container_icon(entity: bevy::ecs::world::EntityRef) -> Option<Icon> {
     let node = entity.get::<Node>()?;
     if node.display == Display::Grid {
@@ -732,9 +673,7 @@ fn container_icon(entity: bevy::ecs::world::EntityRef) -> Option<Icon> {
     }
     match node.flex_direction {
         FlexDirection::Row | FlexDirection::RowReverse => Some(Icon::Columns3),
-        // The Panel preset is a column with a surface behind it, so the
-        // theme token is the only value separating a panel from a plain
-        // column. A row with a background is still a row.
+        // A surface behind a column is what separates a panel from a plain one.
         FlexDirection::Column | FlexDirection::ColumnReverse => {
             if entity.contains::<ThemeBackgroundColor>() {
                 Some(Icon::PanelTop)
@@ -769,10 +708,6 @@ fn container_definition(
 }
 
 /// The widgets Jackdaw ships in the Add menu.
-///
-/// Each is a single entity, except the button, whose caption is a child because
-/// `InheritableThemeTextColor` colours descendants and not the entity holding
-/// it. No other definition spawns children.
 fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
     use bevy::ui_widgets::{
         Button, Checkbox, RadioButton, ScrollArea, Slider, SliderRange, SliderValue,
@@ -835,10 +770,6 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             },
             None,
         ),
-        // Nothing is drawn, so the whole widget is the `flex_grow` and the
-        // marker saying it was placed on purpose. A zero basis is what makes
-        // the growth the entire size: a spacer beside two buttons should take
-        // the gap and no more of its own.
         WidgetDefinition::new("ui.spacer", "Spacer", "Layout", |world, context| {
             Ok(spawn_widget(
                 world,
@@ -856,9 +787,8 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             ))
         })
         .with_icon(Icon::Space),
-        // Authored as a horizontal rule; `separator_follows_parent_axis`
-        // turns it on its side when the parent lays out in a row. The 1px
-        // here is the thickness that system keeps, whichever way it points.
+        // Authored as a horizontal rule; `separator_follows_parent_axis` turns
+        // it on its side under a row parent, keeping this thickness.
         WidgetDefinition::new("ui.separator", "Separator", "Layout", |world, context| {
             Ok(spawn_widget(
                 world,
@@ -877,10 +807,8 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             ))
         })
         .with_icon(Icon::SeparatorHorizontal),
-        // The one Node composition with a child: a track and the bar inside
-        // it. The bar's width is the only value it does not own, and
-        // `progress_fill_follows_value` writes it from `Progress` in the
-        // editor and in a running game alike.
+        // A track and the bar inside it; `progress_fill_follows_value` writes
+        // the bar's width from `Progress`.
         WidgetDefinition::new(
             "ui.progress",
             "Progress Bar",
@@ -919,7 +847,7 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
         )
         .with_icon(Icon::Gauge),
         // `ThemeTextColor` rather than the inheritable variant: this entity
-        // holds the text itself, and the inheritable one reaches descendants.
+        // holds the text itself.
         WidgetDefinition::new("ui.label", "Label", "Display", |world, context| {
             Ok(spawn_widget(
                 world,
@@ -952,13 +880,7 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             ))
         })
         .with_icon(Icon::Image),
-        // The one widget feathers styles entirely on one entity:
-        // `update_button_styles` reads `ButtonVariant`, `Hovered`,
-        // `ThemeBackgroundColor`, and `InheritableThemeTextColor` from the
-        // button itself, so an authored button gets hover, pressed, disabled,
-        // and focus treatment. `Button` is the headless widget, which is
-        // what puts `Pressed` on the entity and emits `Activate`. The
-        // caption is a child because the inheritable text colour
+        // The caption is a child because the inheritable text colour
         // propagates downward only.
         WidgetDefinition::new("ui.button", "Button", "Controls", |world, context| {
             let button = spawn_widget(
@@ -1002,15 +924,8 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
         })
         .with_icon(Icon::MousePointerClick),
         // Unchecked is the absence of `Checked`, so a fresh checkbox spawns
-        // without it.
-        //
-        // The tokens are the ones feathers puts on its checkbox outline child,
-        // which this one-entity checkbox stands in for. Feathers switches them
-        // from systems that query private marker types, so none of that reaches
-        // a one-entity box; `jackdaw_widgets_runtime::authored_check_styles`
-        // does the resting/checked half of the swap here instead, using the
-        // same tokens. The hover and press treatments are still feathers-only:
-        // they read picking state a document does not carry.
+        // without it. The tokens match feathers' outline child, which
+        // `jackdaw_widgets_runtime::authored_check_styles` swaps here instead.
         WidgetDefinition::new("ui.checkbox", "Checkbox", "Controls", |world, context| {
             Ok(spawn_widget(
                 world,
@@ -1034,16 +949,8 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             ))
         })
         .with_icon(Icon::SquareCheck),
-        // A radio spawns without `Checked` and outside a `RadioGroup`, since
-        // which radios belong together is a structural authoring decision. Its
-        // ring is the only part feathers themes on one entity; the filled mark
-        // is a generated child. So the ring is the whole chosen treatment here,
-        // taken from `RADIO_BORDER_CHECKED` once `Checked` lands.
-        //
-        // A radio on its own therefore never self-updates: `bevy_ui_widgets`
-        // addresses a radio change to the group, so the observer in
-        // `crate::authored_widgets` does nothing until a `RadioGroup` ancestor
-        // exists, which is added through the inspector.
+        // Spawned outside a `RadioGroup`, so it does not self-update until one
+        // is added: `bevy_ui_widgets` addresses a radio change to the group.
         WidgetDefinition::new("ui.radio", "Radio Button", "Controls", |world, context| {
             Ok(spawn_widget(
                 world,
@@ -1067,11 +974,8 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             ))
         })
         .with_icon(Icon::CircleDot),
-        // The feathers toggle switch carries these two tokens on its root, so
-        // the authored one matches it at rest; the sliding knob is the
-        // generated child this lacks. With the knob missing, the track taking
-        // `SWITCH_BG_CHECKED` is the only thing that says the switch is on --
-        // which is what these tokens, and not the checkbox ones, get it.
+        // Without feathers' generated knob, the track taking `SWITCH_BG_CHECKED`
+        // is the only thing that shows the switch is on.
         WidgetDefinition::new(
             "ui.toggle",
             "Toggle Switch",
@@ -1102,10 +1006,7 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
         )
         .with_icon(Icon::ToggleLeft),
         // `SliderValue` and `SliderRange` are spawned explicitly rather than
-        // left to `Slider`'s required components, so the document states the
-        // displayed value rather than inheriting an upstream default. The
-        // track takes the theme token; the filled bar is a generated child
-        // feathers styles privately.
+        // left to required components, so the document states the value.
         WidgetDefinition::new("ui.slider", "Slider", "Controls", |world, context| {
             Ok(spawn_widget(
                 world,
@@ -1147,8 +1048,7 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
                         },
                         bevy::text::EditableText::default(),
                         // `EditableText` is not reflectable, so the document
-                        // carries the text here instead; the widget crate
-                        // keeps the two in sync.
+                        // carries the text here instead.
                         jackdaw_widgets_runtime::TextValue::default(),
                         TextFont {
                             font_size: FontSize::Px(14.0),
@@ -1189,10 +1089,8 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             },
         )
         .with_icon(Icon::ScrollText),
-        // The options are the whole widget: the button, the popup, and one row
-        // per option are chrome `jackdaw_widgets_runtime` rebuilds from them,
-        // so editing the list here redraws the picker and a save carries the
-        // list rather than the nodes drawing it.
+        // The options are the whole widget: `jackdaw_widgets_runtime` rebuilds
+        // the button, popup, and rows from them.
         WidgetDefinition::new("ui.dropdown", "Dropdown", "Controls", |world, context| {
             Ok(spawn_widget(
                 world,
@@ -1215,8 +1113,8 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             ))
         })
         .with_icon(Icon::SquareChevronDown),
-        // The group is the `RadioGroup`; the rows are chrome built from the
-        // options, so a document carries the choices and which one is taken.
+        // The rows are built from the options, so the document carries only the
+        // choices and the selection.
         WidgetDefinition::new(
             "ui.radio_group",
             "Radio Group",
@@ -1248,9 +1146,8 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             },
         )
         .with_icon(Icon::ListChecks),
-        // The one widget whose children are content rather than parts: the
-        // panes are authored, in tab order, and the strip above them is built
-        // from the labels.
+        // The panes are authored children, in tab order; the strip above them
+        // is built from the labels.
         WidgetDefinition::new("ui.tabs", "Tabs", "Layout", |world, context| {
             let tabs = spawn_widget(
                 world,
@@ -1287,9 +1184,6 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
             Ok(tabs)
         })
         .with_icon(Icon::PanelsTopLeft),
-        // A skin whose corners hold their size while the middle stretches.
-        // Which image it wears is set in the inspector like any other
-        // `ImageNode`; the border is the one value that makes it a nine-patch.
         WidgetDefinition::new(
             "ui.nine_patch",
             "Nine Patch",

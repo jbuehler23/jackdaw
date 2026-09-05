@@ -2,8 +2,6 @@
 //! field inside one: the bool it reads puts the component on and takes it off.
 //!
 //! This is what "Create is disabled until the form is valid" is made of.
-//! `InteractionDisabled` holds nothing, so there is no field to drive and the
-//! only question a binding can answer about it is whether it is there.
 
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
@@ -20,14 +18,13 @@ struct Form {
     filled_fields: f32,
 }
 
-/// A marker reflection cannot build, which is what rules it out as a write
-/// target: putting it on is the whole of what `true` means.
+/// A marker reflection cannot build, which rules it out as a write target.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
 struct Undefaultable;
 
-/// A marker declared immutable. Nothing inside it is touched either way, so
-/// unlike a field write this is still a write a binding can make.
+/// A marker declared immutable, which unlike a field write a binding can still
+/// make: nothing inside it is touched.
 #[derive(Component, Reflect, Default)]
 #[component(immutable)]
 #[reflect(Component, Default)]
@@ -94,9 +91,8 @@ fn a_true_read_puts_the_marker_on_and_a_false_read_takes_it_off() {
     );
 }
 
-/// Presence is the equality guard: a binding that re-evaluates to the answer
-/// already on the entity has to leave it alone, or every observer watching for
-/// the marker fires on every frame the source is touched.
+/// Presence is the equality guard, or every observer watching for the marker
+/// fires on every frame the source is touched.
 #[test]
 fn re_evaluating_the_same_answer_does_not_put_the_marker_on_again() {
     #[derive(Resource, Default)]
@@ -117,8 +113,6 @@ fn re_evaluating_the_same_answer_does_not_put_the_marker_on_again() {
     assert_eq!(app.world().resource::<Insertions>().0, 1);
     assert!(app.world().get::<InteractionDisabled>(button).is_some());
 
-    // Touching the source without moving the value is what gets the binding
-    // past the change-tick gate and onto the guard being tested.
     for _ in 0..3 {
         let _ = app.world_mut().get_mut::<Form>(subject).unwrap();
         app.update();
@@ -130,9 +124,7 @@ fn re_evaluating_the_same_answer_does_not_put_the_marker_on_again() {
     );
 }
 
-/// A marker is a whole component, not a field, so mutability never comes into
-/// it, which is the one way a marker write can do something a field write
-/// cannot.
+/// A marker is a whole component, so mutability never comes into it.
 #[test]
 fn an_immutable_marker_is_still_set_and_cleared() {
     let mut app = app();
@@ -192,8 +184,8 @@ fn a_marker_reflection_cannot_build_is_a_typed_error() {
     );
 }
 
-/// The non-bool case through the evaluator rather than the write helper: it
-/// has to reach the warn-once ledger and leave every other binding alone.
+/// The non-bool case through the evaluator: it reaches the warn-once ledger and
+/// leaves every other binding alone.
 #[test]
 fn a_non_bool_source_warns_once_and_does_not_panic() {
     let mut app = app();
@@ -217,8 +209,7 @@ fn a_non_bool_source_warns_once_and_does_not_panic() {
     assert!(app.world().get::<InteractionDisabled>(button).is_none());
 }
 
-/// A short name is what the picker offers when only one type answers to it,
-/// and the marker arm resolves it the same way every other path does.
+/// The marker arm resolves a short name the same way every other path does.
 #[test]
 fn a_marker_named_by_its_short_path_resolves() {
     let mut app = app();
@@ -230,10 +221,8 @@ fn a_marker_named_by_its_short_path_resolves() {
     assert!(app.world().resource::<BindFailures>().0.is_empty());
 }
 
-/// A path with no field is a marker write only when the type has no fields
-/// either. `Node` without `.width` is a path missing its field half, and
-/// taking it as one would strip the layout off a live widget the first time
-/// the binding read `false`.
+/// `Node` without `.width` is a path missing its field half, and taking it as a
+/// marker write would strip the layout off a live widget.
 #[test]
 fn a_component_with_fields_is_not_a_marker_however_the_path_is_spelled() {
     let mut app = app();
@@ -260,9 +249,9 @@ fn a_component_with_fields_is_not_a_marker_however_the_path_is_spelled() {
     );
 }
 
-/// The write follows the source's change ticks like any other `Field` binding:
-/// the marker mirrors the source, and nothing else is meant to be toggling it.
-/// Something that does is not put back until the source moves again.
+/// The write follows the source's change ticks like any other `Field` binding,
+/// so something else toggling the marker is not put back until the source
+/// moves.
 #[test]
 fn a_marker_removed_by_hand_stays_off_until_the_source_moves() {
     let mut app = app();

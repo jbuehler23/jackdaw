@@ -1,12 +1,9 @@
-//! Overlay a prefab BSN document under an instance node to produce a
-//! resolved scene document. Each `IsA` node in the input document gets its
-//! inherited subtree materialized, with the instance's sparse field deltas
-//! applied on top.
+//! Overlay a prefab BSN document under an instance node to produce a resolved
+//! scene document. Each `IsA` node gets its inherited subtree materialized, with
+//! the instance's sparse field deltas applied on top.
 //!
 //! Prefabs are supplied through a caller-owned lookup closure rather than a
 //! cache type, so the resolver depends on nothing but the document model.
-//! The editor passes its prefab cache's getter; a game passes a reader that
-//! parses the source file from the asset root.
 
 use std::path::{Path, PathBuf};
 
@@ -22,10 +19,8 @@ use std::fmt;
 
 use crate::components::{ISA_TYPE, PREFAB_ENTITY_ID_TYPE, PREFAB_TYPE};
 
-/// How many prefab references one resolve follows before it stops.
-///
-/// The cap bounds the work a hand-edited or generated document can ask for.
-/// Cycles have their own detector; this catches non-cyclic runaway nesting.
+/// How many prefab references one resolve follows before it stops. Cycles have
+/// their own detector; this catches non-cyclic runaway nesting.
 pub const MAX_PREFAB_DEPTH: usize = 8;
 
 /// A prefab that inherits from itself, directly or through other prefabs.
@@ -47,9 +42,8 @@ impl fmt::Display for CycleError {
 
 impl std::error::Error for CycleError {}
 
-/// Returns `Some(err)` if visiting `next` while currently resolving
-/// the entries in `chain` would form a cycle. The detector treats
-/// `chain` as an inclusive list of paths currently being expanded.
+/// Returns `Some(err)` if visiting `next` while resolving the entries in `chain`
+/// would form a cycle. `chain` is the inclusive list of paths being expanded.
 pub fn would_cycle(chain: &[PathBuf], next: &Path) -> Option<CycleError> {
     if chain.iter().any(|p| p.as_path() == next) {
         let mut cycle = chain.to_vec();
@@ -92,9 +86,7 @@ impl fmt::Display for ResolveError {
 impl std::error::Error for ResolveError {}
 
 /// A prefab source lookup: maps the path an `IsA` names to that prefab's BSN
-/// document. Tests back this with a `HashMap<PathBuf, SceneBsnAst>`, the
-/// editor with its prefab cache, and a game with documents parsed from the
-/// asset root.
+/// document.
 pub type PrefabLookup<'a> = dyn Fn(&Path) -> Option<&'a SceneBsnAst> + 'a;
 
 /// Resolve all `IsA` instances in `scene` against `get_prefab`. Returns a
@@ -211,11 +203,9 @@ fn inherit_root_components(
         }
     }
 
-    // The prefab root's name is stored as a name-reference patch, not a
-    // component patch, so the loop above never copies it. Inherit it when the
-    // instance authors no name of its own; scene lifecycle (persistable-root
-    // queries, despawn collection) keys off named roots, so an unnamed
-    // instance would leak on reload and drop out of saves.
+    // The prefab root's name is a name-reference patch, not a component patch,
+    // so the loop above never copies it. Scene lifecycle keys off named roots, so
+    // an unnamed instance would leak on reload and drop out of saves.
     if ast.get_name(instance_root).is_none()
         && let Some(name) = prefab.get_name(prefab_root).map(str::to_owned)
     {
@@ -226,11 +216,9 @@ fn inherit_root_components(
     }
 }
 
-/// Clone every prefab descendant the instance does not already carry into
-/// the scene, keyed by `PrefabEntityId`. Skips ids in `deleted` and ids the
-/// instance already provides. A running prefab-node to scene-node map,
-/// seeded with the prefab root mapped to the instance root, tracks where
-/// each cloned node's parent landed.
+/// Clone every prefab descendant the instance does not already carry into the
+/// scene, keyed by `PrefabEntityId`, skipping ids in `deleted`. A running
+/// prefab-node to scene-node map tracks where each cloned node's parent landed.
 fn materialize_descendants(
     ast: &mut SceneBsnAst,
     instance_root: Entity,
@@ -334,14 +322,12 @@ fn merge_descendant_overrides(
     }
 }
 
-/// Reduce inherited descendants of prefab instances to sparse override
-/// entries by stripping components that match the matching prefab entry's
-/// baseline. A node qualifies when it carries a `PrefabEntityId`, does not
-/// carry `IsA`, and has an `IsA` ancestor whose source resolves to a known
-/// prefab. `PrefabEntityId` is kept unconditionally.
+/// Reduce inherited descendants of prefab instances to sparse override entries
+/// by stripping components that match the prefab entry's baseline. A node
+/// qualifies when it carries a `PrefabEntityId`, does not carry `IsA`, and has an
+/// `IsA` ancestor resolving to a known prefab. `PrefabEntityId` is always kept.
 ///
-/// This is the capture-path inverse of [`resolve_scene`], mirroring
-/// `prefabify_inherited_descendants` in `scene_io`.
+/// The capture-path inverse of [`resolve_scene`].
 pub fn sparsify_inherited_descendants(ast: &mut SceneBsnAst, get_prefab: &PrefabLookup) {
     let mut nodes: Vec<Entity> = Vec::new();
     for &root in &ast.roots {
@@ -350,12 +336,10 @@ pub fn sparsify_inherited_descendants(ast: &mut SceneBsnAst, get_prefab: &Prefab
     }
 
     for node in nodes {
-        // Instance roots sparsify against their own prefab's root entry:
-        // resolve materializes the prefab root's components (and name) onto
-        // the instance, so the inverse strips whatever still matches that
-        // baseline. Without this, materialized values read as authored
-        // overrides on the next resolve and prefab root edits never
-        // propagate to existing instances.
+        // Instance roots sparsify against their own prefab's root entry: resolve
+        // materializes the prefab root's components onto the instance, so without
+        // the inverse those values read as authored overrides and prefab root
+        // edits never propagate.
         if ast.find_patch_by_type_path(node, ISA_TYPE).is_some() {
             sparsify_instance_root(ast, node, get_prefab);
             continue;
@@ -389,11 +373,10 @@ pub fn sparsify_inherited_descendants(ast: &mut SceneBsnAst, get_prefab: &Prefab
     }
 }
 
-/// Reduce one node's components to sparse deltas against a prefab baseline
-/// entry. Components equal to the baseline are removed; diverged components
-/// keep only the fields that differ ([`shallow_diff`]); components absent
-/// from the baseline stay whole. A name matching the baseline's name is
-/// stripped too.
+/// Reduce one node's components to sparse deltas against a prefab baseline entry:
+/// components equal to the baseline are removed, diverged ones keep only the
+/// fields that differ ([`shallow_diff`]), and ones absent from the baseline stay
+/// whole. A name matching the baseline's is stripped too.
 fn sparsify_node_against_baseline(
     ast: &mut SceneBsnAst,
     node: Entity,

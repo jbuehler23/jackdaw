@@ -116,9 +116,7 @@ fn quat_value(x: f32, y: f32, z: f32, w: f32) -> BsnValue {
     })
 }
 
-/// A whole `Transform` struct patch. An instance that stands in for a group
-/// takes over its rotation and scale as well as its position, so the delta it
-/// carries names all three.
+/// A whole `Transform` struct patch: translation, rotation and scale.
 fn transform_patch(transform: Transform) -> BsnPatch {
     let (t, r, s) = (transform.translation, transform.rotation, transform.scale);
     BsnPatch::Struct(BsnStructData {
@@ -223,15 +221,11 @@ fn back_up_legacy_prefab(original: &Path) {
 /// `.bsn` sibling, backing up the legacy file. Returns the path actually
 /// written, or `None` on write failure.
 ///
-/// A prefab can carry an `IsA` of its own (a variant is a `Prefab` root
-/// pointing at the base it was cut from), so the reference is written relative
-/// to the file being written, as at any disk boundary. Done on a clone, so the
-/// caller's document, and the cache entry it usually becomes, keeps absolute
-/// paths.
-/// `replace` says whether a file already at the path may be written over.
-/// A refusal is the open itself rather than a prior `exists()`: a prefab
-/// other scenes instance is not something to lose to whoever wrote it
-/// between the check and the write.
+/// A prefab's own `IsA` reference is rewritten relative to the file being
+/// written, on a clone so the caller's document keeps absolute paths.
+///
+/// `replace` says whether a file already at the path may be written over;
+/// the refusal is the open itself rather than a prior `exists()`.
 fn write_prefab_doc(
     target_path: &Path,
     prefab: &SceneBsnAst,
@@ -418,8 +412,7 @@ struct PackedPrefab {
     /// an instance of the file stands for the scene to look as it did.
     centroid: Vec3,
     /// The live-document entities that went into the file. Still in the
-    /// document: dropping them is [`remove_packed_from_document`], which a
-    /// caller runs once it is satisfied the file it just wrote reads back.
+    /// document; dropping them is `remove_packed_from_document`.
     entities: Vec<Entity>,
 }
 
@@ -524,12 +517,8 @@ pub(crate) enum GroupMatch {
     Prefix(String),
 }
 
-/// How far two placements may differ and still count as the same.
-///
-/// Relative to the distance involved, so it means the same thing for a
-/// child sitting 0.2m from its parent as for a group standing 5km out:
-/// an absolute millimetre is below float precision at that range, and
-/// every copy of a distant group would read as different.
+/// How far two placements may differ and still count as the same, relative
+/// to the distance involved so it holds at any scale.
 const MATCH_TOLERANCE: f32 = 1e-3;
 
 /// Whether two placements are the same within [`MATCH_TOLERANCE`].
@@ -547,22 +536,16 @@ fn placements_match(a: &Transform, b: &Transform) -> bool {
 /// parent, and the same for its own children in order.
 struct SubtreeSignature {
     /// The glTF file the entity draws, or the sorted type paths of the
-    /// components it carries when it draws none. A group of two lights
-    /// and a group of two empties both have no source; without the
-    /// component set standing in for one they would read as the same
-    /// shape.
+    /// components it carries when it draws none, so two source-less groups
+    /// do not read as the same shape.
     identity: Vec<String>,
     at: Transform,
     children: Vec<SubtreeSignature>,
 }
 
-/// A group's shape, to the bottom of its subtree. Editor-internal
-/// children are left out, as they are when the group is packaged.
-///
-/// The whole subtree, because [`pack_matching_groups`] deletes what it
-/// matches: two groups that agree on their direct children and differ
-/// below are not copies, and calling them copies drops the chimney off
-/// one of the roofs.
+/// A group's shape, to the bottom of its subtree, since `pack_matching_groups`
+/// deletes what it matches. Editor-internal children are left out, as they
+/// are when the group is packaged.
 fn group_signature(world: &World, root: Entity) -> Vec<SubtreeSignature> {
     let Some(children) = world.get::<Children>(root) else {
         return Vec::new();
@@ -631,12 +614,10 @@ fn target_group(world: &World, entity: Option<Entity>, op_id: &str) -> Option<En
 /// Resolve a caller-supplied prefab path against the open project's assets
 /// directory, refusing one that would land outside it.
 ///
-/// `path` reaches these operators from a remote caller, and `prefab.pack`
-/// writes where it points, so the confinement
-/// [`crate::project::path_within`] applies is what makes "relative to the
-/// project's assets directory" true rather than only documented. A path
-/// that already names `assets/` is taken from the project root, so both
-/// spellings reach the same file.
+/// `path` reaches these operators from a remote caller, so the confinement
+/// is enforced by [`crate::project::path_within`]. A path that already names
+/// `assets/` is taken from the project root, so both spellings reach the
+/// same file.
 fn resolve_asset_path(world: &mut World, path: &str, op_id: &str) -> Option<PathBuf> {
     let Some(root) = world
         .get_resource::<crate::project::ProjectRoot>()
@@ -697,12 +678,7 @@ fn remove_subtree_from_document(world: &mut World, root: Entity) {
 }
 
 /// Record the last `count` document roots as entities this call added.
-///
-/// An instance goes into the document as a node and the scene is rebuilt
-/// from it, which mints a fresh id for every entity in the document. So
-/// the id worth reporting is the one the rebuild left standing, read back
-/// after it from the position the node went in at, rather than the one
-/// that existed while the node was being written.
+/// Read back after the rebuild, which mints a fresh id for every entity.
 fn record_spawned_roots(world: &mut World, count: usize) {
     let added: Vec<Entity> = {
         let live = world.resource::<SceneBsnAst>();
@@ -735,11 +711,8 @@ fn add_instance_node(world: &mut World, source: &Path, transform: Transform) {
 /// The scale an instance carries to stand at `target`'s size, given that
 /// the prefab already holds `packed`'s own scale.
 ///
-/// `None` when the ratio is not the same on every axis. The instance
-/// applies its scale under its rotation, so an uneven ratio composed with
-/// a rotation is a shear, not the placement the group had, and
-/// [`pack_matching_groups`] leaves such a group alone rather than move it
-/// somewhere it never stood.
+/// `None` when the ratio is not the same on every axis: the instance applies
+/// its scale under its rotation, so an uneven ratio would shear it.
 fn instance_scale(packed: Vec3, target: Vec3) -> Option<Vec3> {
     let ratio = |target: f32, packed: f32| {
         if packed.abs() > f32::EPSILON {
@@ -832,15 +805,14 @@ pub(crate) fn pack_matching_groups(
     forget_cached_prefab(world, target_path);
     let written = write_prefab_from_roots(world, &[root], target_path, overwrite)?;
     // The instances go in as document nodes rather than through
-    // `spawn_instance`, so the file has to be in the cache before the one
-    // respawn at the end resolves them.
+    // `spawn_instance`, so the file has to be cached before the respawn at
+    // the end resolves them.
     crate::prefab::save_load::cache_prefab_tree(
         &written.path,
         &mut world.resource_mut::<PrefabAstCache>(),
     );
     // Nothing comes out of the document until the file it would inherit
-    // from is known to read back: the alternative is a scene with the
-    // group gone and no instance standing where it was.
+    // from is known to read back.
     if world
         .resource::<PrefabAstCache>()
         .get(&written.path)
@@ -1148,11 +1120,9 @@ pub fn save_scene_as_prefab(world: &mut World, target_path: &Path) {
     }
 }
 
-/// Pending prefab file-pick dialog for `entity.add.prefab`.
-///
-/// The dialog is asynchronous because `pick_file` blocks until the user
-/// answers. The operator returns as soon as the dialog is up, and
-/// [`poll_prefab_pick`] spawns the instance when the answer arrives.
+/// Pending prefab file-pick dialog for `entity.add.prefab`. The operator
+/// returns as soon as the dialog is up, and [`poll_prefab_pick`] spawns the
+/// instance when the answer arrives.
 #[derive(Resource)]
 pub struct PrefabPickTask(bevy::tasks::Task<Option<rfd::FileHandle>>);
 
@@ -1211,15 +1181,12 @@ pub fn poll_prefab_pick(world: &mut World) {
 /// `IsA + PrefabEntityId + Transform` (a translation-only sparse delta), then
 /// resolves + respawns the scene preview.
 ///
-/// Importing a UI scene into a world scene goes through this same call: a UI
-/// scene is an ordinary `.bsn`, and `read_prefab_ast` marks a single-rooted
-/// document as a prefab source in place, so the instance root inherits the
-/// authored `UiSceneRoot` and remains a valid Bevy UI root. Only the placement
-/// differs; see `source_root_is_ui_scene`.
+/// Importing a UI scene goes through this same call: a UI scene is an
+/// ordinary `.bsn`, and only the placement differs; see
+/// `source_root_is_ui_scene`.
 pub fn spawn_instance(world: &mut World, prefab_path: &Path, world_pos: Vec3) {
     // Caches the prefab's own `IsA` ancestry alongside it, without which a
-    // two-level prefab resolves to nothing. Cached entries are left untouched,
-    // so a second spawn reuses the first one's copy.
+    // two-level prefab resolves to nothing.
     crate::prefab::save_load::cache_prefab_tree(
         prefab_path,
         &mut world.resource_mut::<PrefabAstCache>(),
@@ -1256,17 +1223,12 @@ pub fn spawn_instance(world: &mut World, prefab_path: &Path, world_pos: Vec3) {
     record_spawned_roots(world, 1);
 }
 
-/// Whether instancing this source produces a UI scene root.
+/// Whether instancing this source produces a UI scene root, asked of the
+/// source's root because only the root's components are inherited onto the
+/// instance.
 ///
-/// Asked of the source's root rather than of the whole document, since only the
-/// root's components are inherited onto the instance: a world scene with a UI
-/// overlay in a subtree instances as an ordinary prefab, with its overlay still
-/// a descendant.
-///
-/// Callers use this to decide placement. A 3D instance is placed by a
-/// `Transform` delta; a UI root is placed by layout against its target camera's
-/// viewport, so a `Transform` authored on one would be a scene-file component
-/// nothing reads.
+/// Callers use this to decide placement: a 3D instance is placed by a
+/// `Transform` delta, a UI root by layout against its camera's viewport.
 fn source_root_is_ui_scene(prefab: &SceneBsnAst) -> bool {
     prefab.roots.first().is_some_and(|&root| {
         prefab
@@ -1276,16 +1238,11 @@ fn source_root_is_ui_scene(prefab: &SceneBsnAst) -> bool {
     })
 }
 
-/// Open the scene an instance root inherits from, in its own tab.
+/// Open the scene an instance root inherits from, in its own tab. Bound to
+/// double-clicking a UI prefab instance, whose overlay is read-only in place.
 ///
-/// Bound to double-clicking a UI prefab instance, whose imported overlay is
-/// read-only in place and is edited through its source file.
-/// `scene_open_system` de-dupes against the open tabs, so a second double-click
-/// activates the tab the first one opened.
-///
-/// Returns whether a source was found and opened. A missing file warns rather
-/// than opening an empty tab, since an instance whose source moved is still
-/// resolvable from the prefab cache.
+/// Returns whether a source was found and opened; a missing file warns rather
+/// than opening an empty tab.
 pub fn open_instance_source(world: &mut World, instance_root: Entity) -> bool {
     let Some(source) = world
         .get::<crate::prefab::IsA>(instance_root)
@@ -1313,12 +1270,8 @@ pub fn open_instance_source(world: &mut World, instance_root: Entity) -> bool {
 }
 
 /// The prefab document a baseline lookup must read, with the prefab's own
-/// `IsA` chain already expanded.
-///
-/// The raw file carries only the ids the prefab itself authors. Ids inherited
-/// through that prefab, such as a two-level prefab's base subtree, exist only
-/// once the source is resolved, so a baseline looked up in the unexpanded
-/// document misses every transitively inherited id.
+/// `IsA` chain already expanded: the raw file carries only the ids the prefab
+/// itself authors, not the ones it inherits.
 fn expanded_prefab_source(world: &World, source: &Path) -> Option<SceneBsnAst> {
     let cache = world.resource::<PrefabAstCache>();
     let raw = cache.get(source)?;
@@ -1342,13 +1295,9 @@ fn instance_source_of(world: &World, node: Entity) -> Option<PathBuf> {
     read_isa_source(live, isa_node)
 }
 
-/// Cache the source's own `IsA` ancestry before a baseline is resolved against
-/// it.
-///
-/// A prefab cached by a route that read only the file it names has none of its
-/// ancestry behind it, and the resolver refuses a document whose chain it
-/// cannot follow rather than expanding part of it, which would make a
-/// revertable nested instance read as unresolvable.
+/// Cache the source's own `IsA` ancestry before a baseline is resolved
+/// against it. The resolver refuses a document whose chain it cannot follow,
+/// so a nested instance would otherwise read as unresolvable.
 fn prime_source_ancestry(world: &mut World, source: &Path) {
     crate::prefab::save_load::cache_prefab_tree(
         source,
@@ -1468,11 +1417,10 @@ pub fn revert_all(world: &mut World, instance_root_node: Entity) -> RevertReport
         }
     }
 
-    // Expand the source once and reuse it for every target. The expansion is
-    // what makes a nested prefab's inherited ids findable; doing it per node
-    // would re-resolve the whole `IsA` chain for each entity in the subtree.
-    // Baselines are read while borrowing the cache immutably and applied
-    // afterwards, so the cache is never cloned.
+    // Expanded once and reused for every target: doing it per node would
+    // re-resolve the whole `IsA` chain for each entity. Baselines are read
+    // under an immutable borrow and applied afterwards, so the cache is
+    // never cloned.
     prime_source_ancestry(world, &source);
     let expanded = expanded_prefab_source(world, &source);
     let Some(prefab) = expanded else {

@@ -14,10 +14,6 @@ impl Plugin for SelectionPlugin {
 pub struct Selected;
 
 /// Make `entity` the whole selection, from an exclusive-world caller.
-///
-/// [`Selection::select_single`] needs `Commands` to move the [`Selected`]
-/// marker; this is that call plus the `SystemState` a `&mut World` path
-/// has to build to get them.
 pub fn select_only(world: &mut World, entity: Entity) {
     let mut state: bevy::ecs::system::SystemState<(Commands, ResMut<Selection>)> =
         bevy::ecs::system::SystemState::new(world);
@@ -29,11 +25,6 @@ pub fn select_only(world: &mut World, entity: Entity) {
 }
 
 /// Put `entities` back as the selection, in the order given.
-///
-/// For a path that had to aim a selection-wide write at one node and owes
-/// the user the selection they had: the canvas's in-place text edit
-/// commits through the inspector's field path, which writes to everything
-/// selected.
 pub fn select_many(world: &mut World, entities: &[Entity]) {
     let mut state: bevy::ecs::system::SystemState<(Commands, ResMut<Selection>)> =
         bevy::ecs::system::SystemState::new(world);
@@ -44,14 +35,9 @@ pub fn select_many(world: &mut World, entities: &[Entity]) {
     state.apply(world);
 }
 
-/// Bring `entity` into the selection so a gesture that writes the
-/// selection writes it.
-///
-/// The inspector's write paths act on the selection rather than on an entity
-/// handed to them (`commands::field_edit_commit`, and every control on the
-/// bindings card), so an operator naming a target puts it there first. A
-/// target outside the selection replaces it; a target already inside a
-/// multi-selection leaves the selection alone.
+/// Bring `entity` into the selection, because the inspector's write paths act
+/// on the selection rather than on an entity handed to them. A target outside
+/// the selection replaces it; one already inside leaves the selection alone.
 pub fn select_for_edit(world: &mut World, entity: Entity) {
     let already_selected = world
         .get_resource::<Selection>()
@@ -123,17 +109,10 @@ impl Selection {
 
     /// Select multiple entities at once (for box select).
     ///
-    /// An entity that is selected already and stays selected keeps its
-    /// [`Selected`] marker rather than losing it and being given it back:
-    /// the removal fires the prune observer, which takes the entity out of
-    /// this very list, and the insert that follows puts the marker back
-    /// without putting the entry back.
-    ///
-    /// An entity that is no longer in the world is dropped rather than
-    /// listed. A band collects what it swept a frame ago, and anything
-    /// despawned since would otherwise be selected without ever being
-    /// marked: nothing would draw it, nothing would prune it, and it would
-    /// stand as the primary selection every operator then read.
+    /// An entity that stays selected keeps its [`Selected`] marker rather than
+    /// losing it and being given it back: the removal fires the prune observer,
+    /// which would take it out of this very list. An entity no longer in the
+    /// world is dropped rather than listed.
     pub fn select_multiple(&mut self, commands: &mut Commands, entities: &[Entity]) {
         for &previous in &self.entities {
             if !entities.contains(&previous)
@@ -206,9 +185,6 @@ mod tests {
         assert!(world.get::<Selected>(b).is_none());
     }
 
-    /// A band collects what it swept a frame ago, and anything despawned
-    /// since is not a selection: nothing draws it, nothing prunes it, and
-    /// it stands as the primary the next operator reads.
     #[test]
     fn select_multiple_drops_an_entity_that_is_no_longer_there() {
         let mut world = World::new();

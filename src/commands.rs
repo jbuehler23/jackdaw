@@ -168,9 +168,7 @@ pub(crate) fn field_edit_preview(
 /// baselines, execute them, push history, and clear the gesture session.
 ///
 /// A target whose component the running binding preview drives is dropped
-/// here: that value is rewritten every frame, so committing an authored one
-/// would bake whichever write landed last into the document. See
-/// [`crate::preview_context`].
+/// here: the evaluator rewrites that value every frame.
 pub(crate) fn field_edit_commit(
     world: &mut World,
     type_path: &str,
@@ -227,13 +225,9 @@ pub(crate) fn field_edit_commit(
     world.resource_mut::<CommandHistory>().push_executed(cmd);
 }
 
-/// Set one field on one entity's component, as one undo entry.
-///
-/// [`field_edit_commit`] writes through the field-edit *session*, which is
-/// the whole selection: an inspector edit means "every entity I have
-/// selected". A caller that names its target -- a remote or scripted call --
-/// means that entity and no other, and must not widen to whatever the user
-/// last clicked.
+/// Set one field on one entity's component, as one undo entry. Unlike
+/// [`field_edit_commit`], which writes the whole selection, this writes only
+/// the named entity.
 ///
 /// Returns whether a value was written; `false` when the JSON does not
 /// convert to the field's type.
@@ -383,9 +377,8 @@ impl HierarchyLocation {
     }
 }
 
-/// Undoable reparent/reorder to an exact ordered location. The outliner
-/// reparents through `ReparentEntity` instead, which carries no sibling
-/// index.
+/// Undoable reparent/reorder to an exact ordered location. `ReparentEntity`
+/// is the same move without a sibling index.
 pub struct MoveEntity {
     pub entity: Entity,
     pub old: HierarchyLocation,
@@ -443,13 +436,11 @@ pub(crate) fn set_parent(world: &mut World, entity: Entity, parent: Option<Entit
 /// new parent.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum WorldTransform {
-    /// The entity is already somewhere: keep it there, which means writing a
-    /// new local `Transform` measured against the new parent.
+    /// The entity is already somewhere: keep it there by writing a new local
+    /// `Transform` measured against the new parent.
     Keep,
-    /// The entity has just been spawned and has not been laid out or
-    /// propagated, so it is nowhere yet and its `GlobalTransform` still reads
-    /// identity. Preserving that would write an identity `Transform` into the
-    /// document for a node that authored none.
+    /// The entity is freshly spawned, so its `GlobalTransform` still reads
+    /// identity and there is no position worth preserving.
     Unplaced,
 }
 
@@ -478,9 +469,8 @@ pub fn place_entity(
 
     match location.parent {
         Some(parent) => {
-            // `insert_children` takes the entity out of the list before it
-            // puts it back, so a child already under this parent is one slot
-            // shorter than the list reads.
+            // `insert_children` removes the entity before re-inserting it,
+            // so a child already under this parent shifts one slot.
             let index = world
                 .get::<Children>(parent)
                 .map(|children| {
@@ -848,14 +838,8 @@ impl EditorCommand for RemoveComponent {
     }
 }
 
-/// Scene entities spawned during the call being watched.
-///
-/// The remote surface answers a call with the entities it added, so it
-/// opens this before dispatching and takes the list back after. Nothing
-/// else reads it, so nothing else records into it: outside a watched call
-/// `SpawnedEntities::record` drops what it is handed, and a session
-/// driven from the menus never accumulates ids nobody is going to ask
-/// for.
+/// Scene entities spawned during the call being watched. Outside a watched
+/// call nothing is recorded.
 #[derive(Resource, Default)]
 pub struct SpawnedEntities {
     /// Whether a caller is waiting for this list.
@@ -888,8 +872,6 @@ impl SpawnedEntities {
     }
 
     /// Forget `entity`, for a command that has just taken its spawn back.
-    /// An undo inside a watched call leaves nothing for the caller to be
-    /// told about, and a redo records the id it mints afresh.
     fn forget(world: &mut World, entity: Entity) {
         if let Some(mut spawned) = world.get_resource_mut::<Self>() {
             spawned.entities.retain(|&recorded| recorded != entity);
@@ -926,31 +908,21 @@ impl EditorCommand for SpawnEntity {
 }
 
 pub struct DespawnEntity {
-    /// The entity as it stands in the world now: the one a redo despawns,
-    /// rewritten by every undo to whatever id the restore minted.
+    /// The entity as it stands in the world now, rewritten by every undo to
+    /// whatever id the restore minted.
     pub entity: Entity,
-    /// The id the snapshot was taken under, which is what its entries are
-    /// keyed by and so the only id a restore's entity map answers to.
-    ///
-    /// Separate from `entity` because the two part company: a redo
-    /// despawns the id the last undo minted, and looking the snapshot up
-    /// under that one misses, leaving the next undo holding an entity the
-    /// redo has already killed.
+    /// The id the snapshot was taken under, and so the only id a restore's
+    /// entity map answers to. Parts company with `entity` after a redo.
     snapshot_root: Entity,
     pub scene_snapshot: DynamicWorld,
-    /// Where the entity sat before the despawn. Undo puts it back there,
-    /// rather than leaving it stranded at the top of the scene.
+    /// Where the entity sat before the despawn, so undo can put it back.
     pub location: HierarchyLocation,
     pub label: String,
 }
 
 impl DespawnEntity {
-    /// Snapshot `entity` as it was authored, so undo puts back what the user
-    /// wrote rather than what a running preview last evaluated onto it.
-    ///
-    /// The snapshot is live ECS, which during a preview session holds the
-    /// evaluator's values on every bound property, so preview writes are
-    /// suspended around it. That is why this takes `&mut World`.
+    /// Snapshot `entity` as it was authored. Preview writes are suspended
+    /// around the read, so a running preview's values are not captured.
     pub fn from_world(world: &mut World, entity: Entity) -> Self {
         let location = HierarchyLocation::from_world(world, entity);
         let held = crate::preview_context::suspend_preview_writes(world);
@@ -981,9 +953,7 @@ impl EditorCommand for DespawnEntity {
             self.entity = new_id;
         }
         crate::scene_io::register_entity_in_ast(world, self.entity);
-        // The snapshot carries the old parent's entity id, which the write
-        // cannot resolve because the parent was never part of the snapshot.
-        // A parent that has itself gone since leaves the entity at the top.
+        // A parent that has gone since leaves the entity at the top.
         let location = HierarchyLocation {
             parent: self
                 .location
@@ -1529,9 +1499,8 @@ pub(crate) fn apply_json_to_reflect(
             } else if let Some(i) = field.try_downcast_mut::<u64>() {
                 *i = n.as_u64().unwrap_or_default();
             } else {
-                // Not a bare primitive: a number can still be the whole of an
-                // `Option<f32>` or a `NonZero`, which reflect deserializes
-                // through serde's own paths rather than as a named variant.
+                // A number can still be the whole of an `Option<f32>` or a
+                // `NonZero`, which reflect takes through serde's own paths.
                 try_typed_deserialize(field, value, registry);
             }
         }
@@ -1553,8 +1522,6 @@ pub(crate) fn apply_json_to_reflect(
             // Structs, tuple structs, enum struct/tuple variants, lists, etc.
             try_typed_deserialize(field, value, registry);
         }
-        // Null means "absent", which only an `Option` accepts; for anything
-        // else the typed deserializer refuses and the field keeps its value.
         serde_json::Value::Null => try_typed_deserialize(field, value, registry),
     }
 }
@@ -1733,16 +1700,9 @@ pub fn sync_component_to_ast<T: bevy::reflect::Reflect>(
     sync_component_to_bsn_doc(world, entity, value.as_partial_reflect(), &registry);
 }
 
-/// Record an authored layout edit that a live gesture already applied to
-/// the ECS.
-///
-/// One gesture is one history entry: the drag writes `Node` every frame, and
-/// only the settled value reaches the document and the undo stack. A gesture
-/// that ended where it began records nothing.
-///
-/// A gesture on a `Node` the running binding preview drives is refused, and
-/// the live value put back: the evaluator owns that property until preview
-/// stops. See [`crate::preview_context`].
+/// Record an authored layout edit a live gesture already applied to the ECS,
+/// as one history entry. A gesture on a `Node` the running binding preview
+/// drives is refused and the live value put back.
 pub fn push_layout_edit(world: &mut World, entity: Entity, before: Node, after: Node) {
     push_layout_edits(world, vec![(entity, before, after)]);
 }
@@ -1750,12 +1710,8 @@ pub fn push_layout_edit(world: &mut World, entity: Entity, before: Node, after: 
 /// Undo label a layout gesture on more than one node lands under.
 const LAYOUT_GROUP_LABEL: &str = "Edit UI layout";
 
-/// [`push_layout_edit`] for a gesture that moved a whole selection.
-///
-/// One gesture is still one history entry however many nodes it moved, so
-/// one undo puts all of them back. Nodes the gesture left where they were
-/// drop out, and so does one the preview owns: that node alone is refused and
-/// its live value put back, while the rest of the gesture stands.
+/// [`push_layout_edit`] for a gesture that moved a whole selection, still as
+/// one history entry. Nodes the gesture left where they were drop out.
 pub fn push_layout_edits(world: &mut World, edits: Vec<(Entity, Node, Node)>) {
     let mut commands: Vec<Box<dyn EditorCommand>> = Vec::new();
     for (entity, before, after) in edits {
@@ -1782,7 +1738,6 @@ pub fn push_layout_edits(world: &mut World, edits: Vec<(Entity, Node, Node)>) {
     }
     let entry: Box<dyn EditorCommand> = match commands.len() {
         0 => return,
-        // A single node records as itself rather than as a group of one.
         1 => commands.pop().expect("one command"),
         _ => Box::new(CommandGroup {
             commands,
@@ -1840,12 +1795,8 @@ impl EditorCommand for SetUiNode {
 }
 
 /// Undoable edit of one UI scene root's [`jackdaw_scene_types::CanvasGuides`].
-///
-/// `None` on either side means the component is not there at all. The
-/// first guide inserts it and the last one takes it off again, document
-/// patch included: a component equal to its default emits as a bare type
-/// path, so an empty `CanvasGuides` left behind would sit in every
-/// document that ever carried a guide.
+/// `None` on either side means the component is absent, so the first guide
+/// inserts it and the last one takes it off again.
 pub struct SetCanvasGuides {
     pub root: Entity,
     pub before: Option<jackdaw_scene_types::CanvasGuides>,
@@ -2546,8 +2497,7 @@ mod bsn_doc_coherence_tests {
     use jackdaw_api_internal::snapshot::SceneSnapshotter;
     use jackdaw_bsn::{BsnValue, SceneBsnAst, get_bsn_field};
 
-    /// A world with the document, the history and the editor state the
-    /// snapshotter reads, and the types a scene snapshot has to reflect.
+    /// A world holding what the snapshotter reads.
     fn coherence_app() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
@@ -2619,11 +2569,8 @@ mod bsn_doc_coherence_tests {
         );
     }
 
-    /// A restore mints a fresh id, so the second undo of a despawn asks the
-    /// snapshot for an entity the first undo has already renamed. Keyed by
-    /// the live id, that lookup misses and the command carries on with the
-    /// id the redo has just killed, which is what the document sync is then
-    /// handed.
+    /// A restore mints a fresh id, so a second undo must still find the
+    /// snapshot under the id it was taken with.
     #[test]
     fn a_despawn_undoes_again_after_a_redo() {
         let mut app = coherence_app();

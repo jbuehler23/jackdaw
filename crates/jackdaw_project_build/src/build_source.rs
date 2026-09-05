@@ -1,11 +1,9 @@
 //! Where the jackdaw crates this build is made of can be fetched from.
 //!
-//! A scaffolded project depends on `jackdaw_runtime`, and the dependency
-//! has to name somewhere cargo can actually reach. Asking the registry
-//! for the anchored version is right only when that version is published:
-//! an editor installed straight from git carries crates no registry has,
-//! and a project it writes a `version = "0.19"` for cannot resolve at
-//! all. So the editor records what it was built from, and the scaffold
+//! A scaffolded project depends on `jackdaw_runtime`, and the dependency has to
+//! name somewhere cargo can reach. The anchored registry version is right only
+//! when it is published: an editor installed straight from git carries crates no
+//! registry has. So the editor records what it was built from, and the scaffold
 //! states the matching dependency form.
 
 use std::path::{Path, PathBuf};
@@ -15,9 +13,8 @@ use std::path::{Path, PathBuf};
 pub enum BuildSource {
     /// A published release: the anchored version line is on crates.io.
     Release,
-    /// A git build, at a revision. Pinned to the revision rather than a
-    /// branch, so a project keeps building against the editor that made
-    /// it after the branch has moved on.
+    /// A git build, pinned to a revision rather than a branch, so a project keeps
+    /// building against the editor that made it.
     Git {
         /// The repository the crates are published from.
         repository: String,
@@ -38,9 +35,8 @@ pub fn build_source() -> BuildSource {
 }
 
 impl BuildSource {
-    /// Read back what `build.rs` recorded. An unreadable record reads as
-    /// a release, which is the form every published build wants and the
-    /// only one that says nothing about this machine.
+    /// Read back what `build.rs` recorded. An unreadable record reads as a
+    /// release, which says nothing about this machine.
     fn parse(raw: &str, repository: &str) -> Self {
         if let Some(rev) = raw.strip_prefix("git:") {
             return Self::Git {
@@ -72,10 +68,8 @@ impl BuildSource {
         }
     }
 
-    /// Why this project's jackdaw dependency may be the thing that failed
-    /// to resolve, for a build that could not work out its dependencies.
-    /// `None` for a release, where the registry has the answer and a
-    /// resolution failure is about something else.
+    /// Why this project's jackdaw dependency may be the thing that failed to
+    /// resolve. `None` for a release, where the registry has the answer.
     pub fn resolution_note(&self) -> Option<String> {
         match self {
             Self::Release => None,

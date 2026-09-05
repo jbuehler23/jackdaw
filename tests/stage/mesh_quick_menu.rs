@@ -21,8 +21,6 @@ fn action_equals_operator_id_and_labels_present() {
     let cfg = MeshQuickMenu::default();
     let face = items_for_submode(&cfg, BrushEditMode::Face);
     assert!(!face.is_empty());
-    // Every mapped item carries a non-empty label and an action equal to a
-    // configured operator id.
     for item in &face {
         assert!(!item.label.is_empty());
         assert!(item.action.starts_with("brush.mesh."));

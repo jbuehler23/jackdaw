@@ -1,15 +1,13 @@
-//! Where a running editor can be reached, published under the project it
-//! has open.
+//! Where a running editor can be reached, published under the project it has
+//! open.
 //!
-//! A client driving the editor has to find it first, and the editor is
-//! the only process that knows which port it bound and which project it
-//! opened. It writes both to `<project>/.jackdaw/editor.json` when the
-//! project opens and removes the file on exit; a reader that finds one
-//! left behind by a crash tells by the pid.
+//! The editor is the only process that knows which port it bound and which
+//! project it opened. It writes both to `<project>/.jackdaw/editor.json` when the
+//! project opens and removes the file on exit; a reader that finds one left
+//! behind by a crash tells by the pid.
 //!
-//! The type lives here, in the dependency-light environment crate,
-//! because the writer (the editor) and the readers (`jd mcp`, tooling)
-//! share nothing heavier.
+//! The type lives in the dependency-light environment crate because the writer
+//! and its readers share nothing heavier.
 
 use std::path::{Path, PathBuf};
 
@@ -27,11 +25,9 @@ pub struct EditorEndpoint {
     pub pid: u32,
     /// The editor executable's name, as the kernel reports it.
     ///
-    /// A pid alone is not identity: pids wrap, and by the time a client
-    /// reads a file a crashed editor left behind, something else may hold
-    /// that number. Checked against the live process before the endpoint
-    /// is believed. Absent in a file written before this field existed,
-    /// which then falls back to the pid alone.
+    /// A pid alone is not identity: pids wrap, so this is checked against the
+    /// live process before the endpoint is believed. Absent in a file written
+    /// before this field existed, which falls back to the pid alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<String>,
     /// Loopback port of the editor's BRP server.
@@ -54,12 +50,10 @@ impl EditorEndpoint {
     /// Whether the editor that wrote this file is still the process
     /// holding that pid.
     ///
-    /// Answered from `/proc` on Linux: the pid has to exist *and* its
-    /// `comm` has to be the executable that wrote the file, because pids
-    /// wrap and the number a crashed editor left behind is handed out
-    /// again. Elsewhere there is no dependency-free way to ask, and
-    /// reporting "gone" for a live editor is the worse mistake, so the
-    /// endpoint is taken at its word.
+    /// Answered from `/proc` on Linux: the pid has to exist and its `comm` has to
+    /// be the executable that wrote the file. Elsewhere there is no
+    /// dependency-free way to ask, and reporting "gone" for a live editor is the
+    /// worse mistake, so the endpoint is taken at its word.
     pub fn is_running(&self) -> bool {
         #[cfg(target_os = "linux")]
         {
@@ -125,9 +119,8 @@ pub fn read_endpoint(root: &Path) -> Option<EditorEndpoint> {
 
 /// Publish `endpoint` under `root`, creating `.jackdaw/` if it is missing.
 ///
-/// Written beside the file and renamed over it, so a client reading while
-/// the editor republishes sees the old endpoint or the new one and never a
-/// half-written file it would refuse to parse.
+/// Written beside the file and renamed over it, so a client reading while the
+/// editor republishes never sees a half-written file.
 pub fn write_endpoint(root: &Path, endpoint: &EditorEndpoint) -> std::io::Result<()> {
     let path = endpoint_path(root);
     if let Some(parent) = path.parent() {

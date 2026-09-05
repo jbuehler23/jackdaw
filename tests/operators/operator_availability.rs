@@ -1,23 +1,9 @@
-//! Availability-gate coverage. Each `#[operator(is_available = fn)]`
-//! refuses to run when its predicate returns `false`; the dispatcher
-//! reports that as `Ok(OperatorResult::Cancelled)`. We exercise the
-//! highest-volume gate predicates against fixtures that toggle their
-//! precondition, and rely on `OperatorWorldExt::is_available()` to
-//! report the gate decision without actually dispatching.
+//! Availability-gate coverage: each `#[operator(is_available = fn)]` refuses to
+//! run when its predicate returns `false`, checked through
+//! `OperatorWorldExt::is_available()` rather than by dispatching.
 //!
-//! Strategy per gate:
-//!   1. Set the world to the precondition-false state.
-//!      Assert `is_available()` returns `Ok(false)` for every operator
-//!      that uses this gate.
-//!   2. Set the world to the precondition-true state.
-//!      Assert `is_available()` returns `Ok(true)` for the same set.
-//!
-//! Skipped: gates whose state requires a real cursor / modal state /
-//! UI fixture (`picker_open`, `is_drawing`, `measure_tool_active`,
-//! etc.). Those are exercised by the modal tests in
-//! `operator_modals.rs`. The list here covers the three biggest gates
-//! by op count: `has_primary_selection`, `can_act_on_entities`, and
-//! `can_change_gizmo`.
+//! Gates needing a real cursor, modal or UI fixture are covered by
+//! `operator_modals.rs`; the ones here are the three biggest by op count.
 
 use crate::util;
 
@@ -39,9 +25,8 @@ const HAS_PRIMARY_SELECTION_OPS: &[&str] = &[
     "binding.set",
 ];
 
-/// Operators gated on `can_act_on_entities`. A fresh editor refuses
-/// none of them: no modal is running, no text field is focused, and
-/// the edit mode is `Object`.
+/// Operators gated on `can_act_on_entities`. A fresh editor refuses none: no
+/// modal is running, no text field is focused, and the edit mode is `Object`.
 const CAN_ACT_ON_ENTITIES_OPS: &[&str] = &[
     "entity.delete",
     "entity.duplicate",
@@ -118,12 +103,9 @@ fn tool_and_gizmo_ops_available_in_clean_app() {
     }
 }
 
-/// Bevy's `set_initial_focus` parks `InputFocus` on the primary window
-/// in `PostStartup`, so "nothing is focused" reads as `Some(window)`.
-/// A gate that asks `input_focus.get().is_some()` therefore refuses
-/// every entity operator until something clears focus, which in the
-/// running editor means the first viewport click. `KeybindFocus` exists
-/// to avoid that, and this pins the entity gate onto it.
+/// Bevy's `set_initial_focus` parks `InputFocus` on the primary window in
+/// `PostStartup`, so "nothing is focused" reads as `Some(window)`. `KeybindFocus`
+/// exists so the entity gate is not refused until the first viewport click.
 #[test]
 fn entity_ops_are_available_when_focus_still_sits_on_the_window() {
     let mut app = util::editor_test_app();
@@ -167,9 +149,8 @@ fn entity_ops_refuse_while_a_text_field_holds_focus() {
     }
 }
 
-/// The gate decides whether the operator runs at all, so the dispatch
-/// it was blocking is worth one pass end to end: a selected entity is
-/// gone after `entity.delete` reports `Finished`.
+/// The gate decides whether the operator runs at all, so the dispatch it was
+/// blocking is worth one pass end to end.
 #[test]
 fn a_dispatched_delete_takes_the_selected_entity_with_it() {
     let mut app = util::editor_test_app();
@@ -199,12 +180,9 @@ fn a_dispatched_delete_takes_the_selected_entity_with_it() {
     );
 }
 
-/// Ctrl+C outside the timeline is the entity clipboard, not the keyframe one.
-///
-/// Both sides are bound to the chord (see `tests/keymap_presets.rs`) and
-/// their availability checks are disjoint on the timeline being the focused
-/// window. With a UI node selected on a canvas the keyframe side stands
-/// down and the entity side answers. The same for Ctrl+V.
+/// Ctrl+C outside the timeline is the entity clipboard, not the keyframe one:
+/// both are bound to the chord and their availability checks are disjoint on the
+/// timeline being the focused window. The same for Ctrl+V.
 #[test]
 fn the_clipboard_chord_finds_nothing_to_run_outside_the_timeline() {
     let mut app = util::editor_test_app();
@@ -277,9 +255,8 @@ fn escape_clears_the_selection_only_when_nothing_else_claims_it() {
     );
 }
 
-/// Home frames the canvas, and only while the canvas is what the user is
-/// looking at: elsewhere the press belongs to the timeline's jump to
-/// start, which shares the key.
+/// Home frames the canvas, and only while the canvas is what the user is looking
+/// at: elsewhere the press belongs to the timeline's jump to start.
 #[test]
 fn home_frames_the_canvas_only_while_a_2d_panel_is_current() {
     let mut app = util::editor_test_app();
@@ -341,9 +318,8 @@ fn home_frames_the_canvas_only_while_a_2d_panel_is_current() {
     );
 }
 
-/// Escape ends a rename before it means anything else, and closes the Add
-/// Entity picker before it means anything else again. Neither is about the
-/// selection, and both used to take it with them on the way out.
+/// Escape ends a rename, and closes the Add Entity picker, before it means
+/// anything else. Neither is about the selection, so neither clears it.
 #[test]
 fn escape_leaves_the_selection_alone_while_typing_or_in_the_picker() {
     let mut app = util::editor_test_app();
@@ -385,12 +361,9 @@ fn available(app: &mut bevy::prelude::App, id: &'static str) -> bool {
         .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"))
 }
 
-/// Spawn a field and let it take the keyboard, the way a rename or a
-/// search box does.
-///
-/// A whole field rather than the marker on its frame: what the guard asks
-/// after is the editable buffer the keys are written into, which is what
-/// the focus lands on for a user.
+/// Spawn a field and let it take the keyboard, the way a rename or a search box
+/// does. A whole field rather than the marker on its frame: the guard asks after
+/// the editable buffer the keys are written into.
 fn focus_a_field(app: &mut bevy::app::App) {
     app.world_mut()
         .spawn(jackdaw_feathers::text_edit::text_edit(

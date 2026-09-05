@@ -24,9 +24,8 @@ fn app_with_a_camera() -> (App, Entity) {
             Projection::Orthographic(OrthographicProjection::default_3d()),
         ))
         .id();
-    // `view.set_axis` reads `ActiveViewport` directly rather than falling
-    // back to the sole camera, so a headless test has to say which
-    // viewport is in front.
+    // `view.set_axis` reads `ActiveViewport` rather than falling back to the sole
+    // camera, so a headless test has to say which viewport is in front.
     app.world_mut()
         .resource_mut::<jackdaw::viewport::ActiveViewport>()
         .camera = Some(camera);
@@ -40,9 +39,8 @@ fn camera_transform(app: &App, camera: Entity) -> Transform {
         .expect("the camera has a transform")
 }
 
-/// `view.look_at` puts the camera where it is told and points it where
-/// it is told, which is the whole point: an eye above the ground looking
-/// down at it is the shot a terrain needs.
+/// `view.look_at` puts the camera where it is told and points it where it is
+/// told: an eye above the ground looking down is the shot a terrain needs.
 #[test]
 fn look_at_places_the_camera_and_aims_it() {
     let (mut app, camera) = app_with_a_camera();
@@ -74,9 +72,8 @@ fn look_at_places_the_camera_and_aims_it() {
     );
 }
 
-/// Aiming somewhere arbitrary is a perspective shot. The orthographic
-/// projection this viewport may be left in belongs to the axis snaps,
-/// and an eye at an angle is not one of those.
+/// Aiming somewhere arbitrary is a perspective shot; the orthographic projection
+/// this viewport may be left in belongs to the axis snaps.
 #[test]
 fn look_at_switches_to_perspective() {
     let (mut app, camera) = app_with_a_camera();
@@ -99,9 +96,8 @@ fn look_at_switches_to_perspective() {
     );
 }
 
-/// An eye that is also the target names no direction, so the call is
-/// refused rather than leaving the camera pointing at whatever
-/// `looking_at` makes of a zero-length vector.
+/// An eye that is also the target names no direction, so the call is refused
+/// rather than handing `looking_at` a zero-length vector.
 #[test]
 fn look_at_refuses_an_eye_that_is_the_target() {
     let (mut app, camera) = app_with_a_camera();
@@ -210,9 +206,8 @@ fn orbits_keep_turning_around_the_same_focus() {
     }
 }
 
-/// Straight down is a legal thing to ask for. Clamped short of the pole
-/// so the orientation still has a roll to pick, rather than degenerating
-/// into whatever `looking_at` does with a parallel up vector.
+/// Straight down is legal, clamped short of the pole so the orientation still has
+/// a roll to pick.
 #[test]
 fn orbit_looking_straight_down_stays_a_valid_orientation() {
     let (mut app, camera) = app_with_a_camera();
@@ -244,8 +239,8 @@ fn orbit_looking_straight_down_stays_a_valid_orientation() {
     );
 }
 
-/// The axis snaps read `axis` and `sign`, and now declare them, so a
-/// caller can discover them and a value arrives typed by the schema.
+/// The axis snaps read `axis` and `sign` and declare them, so a caller
+/// can discover them and a value arrives typed by the schema.
 #[test]
 fn set_axis_takes_the_axis_and_sign_it_declares() {
     let (mut app, camera) = app_with_a_camera();
@@ -271,9 +266,8 @@ fn set_axis_takes_the_axis_and_sign_it_declares() {
     );
 }
 
-/// `view.orbit` circles the focus point, so every gesture that moves the
-/// camera has to leave a current one behind. Framing something is the
-/// clearest case: the thing just framed is what the next orbit is about.
+/// `view.orbit` circles the focus point, so every gesture that moves the camera
+/// has to leave a current one behind; the thing just framed is the clearest case.
 #[test]
 fn frame_selected_leaves_the_orbit_focus_on_what_it_framed() {
     let (mut app, camera) = app_with_a_camera();

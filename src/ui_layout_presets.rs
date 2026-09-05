@@ -1,27 +1,7 @@
-//! Layout presets: one press puts a node in a named place in its parent.
-//!
-//! The nine anchors are the corners, edges and middle of the parent box; a
-//! node takes one of them by being placed absolutely with the offsets that
-//! name it, and by letting an automatic margin take the centring on any axis
-//! it is centred on.
-//!
-//! An anchor keeps the node the size it is. A node that states no size of
-//! its own is as wide as its content, and stating a `left` and a `right`
-//! for it would stretch it over the parent instead of putting it where the
-//! anchor says; so before the offsets are written the preset captures the
-//! size layout measured and states it in pixels. Center In Flow captures
-//! the same way. Full Rect is the one preset that means "be the size of the
-//! parent", so it drops any size the node states and lets the four zero
-//! offsets do the stretching.
-//!
-//! An anchor also places the node absolutely, which takes a node its parent
-//! was laying out out of that flow. That is what the press asked for, so it
-//! happens, and the status bar says so rather than leaving the change to be
-//! discovered.
-//!
-//! Each preset states every field it touches, so applying one twice, or
-//! applying two in a row, leaves the node saying exactly what the last
-//! preset says and nothing left over from the one before.
+//! Layout presets: one press puts a node in a named place in its parent, by
+//! placing it absolutely with the offsets and automatic margins that name
+//! that place. Each preset states every field it touches, so applying two in
+//! a row leaves nothing over from the first.
 
 use bevy::{prelude::*, ui::ComputedNode};
 use jackdaw_api::prelude::*;
@@ -40,10 +20,8 @@ pub const LAYOUT_PRESET_OP: &str = "ui.layout_preset";
 /// What a preset does to the size the node states.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum PresetSize {
-    /// Keep the node the size it is. A node stating `Auto` on an axis has
-    /// no size to keep, so the size layout measured is written in its
-    /// place; without that the preset's two offsets would stretch the node
-    /// over the parent instead of placing it.
+    /// Keep the node the size it is, writing the measured size in place of
+    /// an `Auto` so the preset's offsets place rather than stretch it.
     Capture,
     /// State this size, whatever the node said before.
     Stated(Val, Val),
@@ -71,9 +49,7 @@ impl LayoutPreset {
     /// `node` with this preset's fields written over it.
     ///
     /// `measured` is the size layout last gave the node, which a capturing
-    /// preset writes in place of an `Auto`. `None` when layout has not
-    /// measured it yet; the `Auto` then stands, because a made-up number
-    /// would be worse than the stretch.
+    /// preset writes in place of an `Auto`. `None` leaves the `Auto`.
     pub fn applied(&self, node: &Node, measured: Option<Vec2>) -> Node {
         let mut node = node.clone();
         node.position_type = self.position_type;
@@ -258,9 +234,8 @@ pub const WIDE_PRESETS: [LayoutPreset; 2] = [
         top: ZERO,
         bottom: ZERO,
         margin: NO_MARGIN,
-        // Wiped, not captured: a node with a size of its own would keep it
-        // and stretch nowhere, and stretching is the whole of what this
-        // preset means.
+        // Wiped, not captured: a node keeping its own size would stretch
+        // nowhere.
         size: PresetSize::Stated(FREE, FREE),
     },
     LayoutPreset {
@@ -303,14 +278,9 @@ pub fn preset(id: &str) -> Option<&'static LayoutPreset> {
 /// The size layout last gave `entity`, said the way `Node::width` says a
 /// size, or `None` when it has not been laid out.
 ///
-/// Two conversions, because `ComputedNode` and `Node` do not speak the same
-/// units. `ComputedNode::size` is the border box in physical pixels, and a
-/// `Node` offset is logical, so the scale factor comes off first. Then the
-/// box: `width` states the border box under Bevy's default `BorderBox`
-/// sizing, and the content box under `ContentBox`, so a node stating the
-/// latter has its padding and border taken off before the figure is
-/// written -- otherwise capturing a padded node grows it by its padding
-/// every time an anchor is pressed.
+/// `ComputedNode::size` is the border box in physical pixels, so the scale
+/// factor comes off, and a node using `ContentBox` sizing also has its
+/// padding and border taken off.
 fn measured_size(world: &World, entity: Entity) -> Option<Vec2> {
     let computed = world.get::<ComputedNode>(entity)?;
     let scale = computed.inverse_scale_factor();
@@ -332,9 +302,6 @@ fn name_of(world: &World, entity: Entity) -> String {
 }
 
 /// Write `preset` over every selected node's `Node`, as one history entry.
-///
-/// The one path every preset takes, so what a press does to a node its
-/// parent was laying out is decided and said once.
 fn apply_preset(world: &mut World, preset: &'static LayoutPreset) {
     let selected: Vec<Entity> = world.resource::<Selection>().entities.clone();
     let mut edits: Vec<(Entity, Node, Node)> = Vec::new();
@@ -357,13 +324,10 @@ fn apply_preset(world: &mut World, preset: &'static LayoutPreset) {
         }
         edits.push((entity, before, after));
     }
-    // One entry however many nodes the selection held, so one undo puts the
-    // whole press back.
     push_layout_edits(world, edits);
 
     // A preset is a placement, so it is allowed to take a node out of its
-    // parent's flow; the nudge refuses instead, because a keystroke has no
-    // rect to promote against. Either way the user is told which it was.
+    // parent's flow, and says so.
     match promoted.len() {
         0 => {}
         1 => crate::status_bar::notify_warn(
@@ -396,8 +360,7 @@ fn has_selected_node(
     id = "ui.layout_preset",
     label = "Layout Preset",
     description = "Put the selected nodes in a named place in their parent.",
-    // `push_layout_edits` records the entry; the dispatcher's snapshot pair
-    // would be a second one over the same edit.
+    // `push_layout_edits` already records the undo entry.
     allows_undo = false,
     is_available = has_selected_node,
     params(name(

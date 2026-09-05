@@ -92,17 +92,15 @@ fn rebuild_on_region_view_change(
 
 /// Keep every terrain's LOD levels following the camera.
 ///
-/// One entity per level, holding that level's mesh. A level is rebuilt
-/// when it snaps to a new origin, when the heights under it were edited, or
-/// when the whole terrain is asked to rebuild; otherwise it keeps its mesh.
+/// One entity per level, holding that level's mesh. A level is rebuilt when it
+/// snaps to a new origin, when the heights under it were edited, or when the
+/// whole terrain is asked to rebuild; otherwise it keeps its mesh.
 ///
-/// Three things bound the cost of a gesture that crosses many snap
-/// boundaries in a row, such as a zoom-out:
+/// A gesture crossing many snap boundaries at once is bounded three ways:
 /// [`jackdaw_terrain::plan_rebuilds`] rations how many levels follow the
-/// camera per frame, a level that only handed a different square to the
-/// finer one takes a new index buffer rather than a new surface, and a
-/// rebuild writes over the mesh asset the level owns instead of minting
-/// another.
+/// camera per frame, a level that only handed a different square to the finer
+/// one takes a new index buffer rather than a new surface, and a rebuild
+/// writes over the mesh asset the level owns.
 #[expect(
     clippy::too_many_arguments,
     reason = "the surface is built from the store, the camera and both materials"
@@ -268,10 +266,9 @@ fn sync_terrain_surface(
 
             // Write over the mesh this level owns rather than minting
             // another asset: a new handle costs the renderer a buffer
-            // allocation and a rebuilt bind group every frame of a gesture,
-            // and nothing else refers to this one. Bevy's
-            // `calculate_bounds` watches `AssetChanged<Mesh3d>`, so the
-            // `Aabb` follows a write through the handle.
+            // allocation and a rebuilt bind group every frame of a gesture.
+            // `calculate_bounds` watches `AssetChanged<Mesh3d>`, so the `Aabb`
+            // follows a write through the handle.
             if let Some((_, _, _, handle)) = held
                 && let Some(mut slot) = meshes.get_mut(handle)
             {
@@ -303,11 +300,9 @@ fn sync_terrain_surface(
         }
 
         // Every level this terrain still has, not only the ones this frame
-        // rebuilt. A material arrives once and the levels standing under it
-        // outlive any one rebuild: a level the budget skipped, or one that
-        // only ever moves its hole, would otherwise keep drawing with the
-        // handle it was given when it was last built whole - the plain
-        // fallback, for a terrain whose textures had not loaded yet.
+        // rebuilt: a level the budget skipped, or one that only ever moves its
+        // hole, would otherwise keep the handle it was given when it was last
+        // built whole.
         for (entity, _, _, _) in &existing {
             point_at_material(&mut commands.entity(*entity), &splat_handle, &fallback);
         }
@@ -316,16 +311,14 @@ fn sync_terrain_surface(
 
 /// Point one surface at the material its terrain draws with now.
 ///
-/// Every path that leaves a surface standing has to run this, not only the
-/// one that rebuilds its mesh: a level whose ground did not change still
-/// has to follow its terrain onto a rebuilt material, and a level that
-/// only moves its hole would otherwise keep the handle it was given when
-/// it was last built whole - which is the fallback material for a terrain
-/// whose textures had not finished loading yet.
+/// Every path that leaves a surface standing has to run this, not only the one
+/// that rebuilds its mesh: a level that only moves its hole would otherwise
+/// keep the fallback material it was given while its terrain's textures were
+/// still loading.
 ///
 /// The two material types are different components, so the unused one is
-/// removed: a terrain whose last texture slot was removed would otherwise
-/// keep drawing the arrays.
+/// removed: a terrain whose last texture slot was removed would otherwise keep
+/// drawing the arrays.
 fn point_at_material(
     entity: &mut EntityCommands,
     splat: &Option<Handle<jackdaw_terrain::render::TerrainSplatMaterial>>,
@@ -489,10 +482,8 @@ mod tests {
 
     /// Which levels the last [`run`] rebuilt, in level order.
     ///
-    /// A rebuild writes [`BuiltLevel`], whether the level was remeshed
-    /// whole or only took a new index buffer. Mesh handles cannot answer
-    /// this: a rebuilt level writes over the mesh it owns, so its handle is
-    /// unchanged either way.
+    /// Mesh handles cannot answer this: a rebuilt level writes over the mesh
+    /// it owns, so its handle is unchanged either way.
     fn rebuilt_levels(world: &mut World) -> Vec<u32> {
         let mut query = world.query_filtered::<&TerrainSurface, Changed<BuiltLevel>>();
         let mut levels: Vec<u32> = query.iter(world).map(|surface| surface.level).collect();
@@ -500,16 +491,14 @@ mod tests {
         levels
     }
 
-    /// A level that only moves its hole still has to be handed the
-    /// terrain's current material.
+    /// A level that only moves its hole still has to be handed the terrain's
+    /// current material.
     ///
-    /// The hole-only path rewrites an index buffer and leaves everything
-    /// else standing, so it has to pick the material up as well: a level
-    /// built while the textures were still loading would otherwise keep the
-    /// plain fallback for as long as it kept taking that path, and the
-    /// ground would draw untextured wherever that level reached. Nothing
-    /// about the mesh says so - the handle does not change either way - so
-    /// this is asserted on the component.
+    /// The hole-only path rewrites an index buffer and leaves everything else
+    /// standing, so a level built while the textures were still loading would
+    /// otherwise keep the plain fallback for as long as it kept taking that
+    /// path. The handle does not change either way, so this is asserted on the
+    /// component.
     #[test]
     fn a_hole_only_rebuild_still_follows_the_terrain_onto_its_material() {
         let (mut world, _) = world_with_terrain(65, vec![0.0; 65 * 65]);
@@ -927,15 +916,10 @@ mod tests {
 
     /// A whole-terrain rebuild never costs the screen a level.
     ///
-    /// `rebuild_all` says the ground under every level changed, not that
-    /// the levels stop drawing while their replacements are built. A level
-    /// whose mesh or material were dropped up front and restored under the
-    /// per-frame budget would show background and grid through the ground
-    /// for as many frames as the budget took.
-    ///
-    /// Checked while the camera moves, since a standing camera would let
-    /// every level be rebuilt the frame it was invalidated whatever the
-    /// ordering.
+    /// `rebuild_all` says the ground under every level changed, not that the
+    /// levels stop drawing while their replacements are built. Checked while
+    /// the camera moves, since a standing camera would let every level be
+    /// rebuilt the frame it was invalidated whatever the ordering.
     #[test]
     fn a_forced_rebuild_never_takes_a_level_off_the_screen() {
         let (mut world, entity) = world_with_terrain(1025, vec![0.0; 1025 * 1025]);

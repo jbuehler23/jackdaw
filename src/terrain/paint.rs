@@ -2,28 +2,22 @@
 //! gameplay data) or splat control words (base/overlay texture ids and
 //! blend).
 //!
-//! One modal operator drives both, switching on
-//! [`TerrainPaintState::domain`] (`terrain.paint.target`,
-//! `texture_ops.rs`): driven by LMB, one history entry pushed on release,
-//! Escape restoring the pre-stroke snapshot, Shift+scroll resizing the
-//! brush.
+//! One modal operator drives both, switching on [`TerrainPaintState::domain`]:
+//! driven by LMB, one history entry pushed on release, Escape restoring the
+//! pre-stroke snapshot, Shift+scroll resizing the brush.
 //!
-//! [`PaintDomain::Channels`] is the "Scatter Masks" target: gameplay data
-//! deciding where scatter places objects, which the terrain does not
-//! render. Values are integers, so the brush is a threshold stamp rather
-//! than an accumulation: a cell inside the falloff is written, a cell
-//! outside is left alone. Holding Ctrl paints 0 (erase).
+//! [`PaintDomain::Channels`] values are integers, so the brush is a threshold
+//! stamp rather than an accumulation: a cell inside the falloff is written, a
+//! cell outside is left alone, and Ctrl paints 0.
 //!
 //! [`PaintDomain::Textures`] control words blend continuously, so the brush
-//! nudges each cell every frame it is held rather than stamping it
-//! (`jackdaw_terrain::apply_control_brush`). Primary paints the base
-//! texture id and lowers blend toward it; Ctrl paints the overlay id and
-//! raises blend toward it rather than erasing.
+//! nudges each cell every frame it is held. Primary paints the base texture
+//! id and lowers blend toward it; Ctrl paints the overlay id and raises blend
+//! toward it rather than erasing.
 //!
-//! [`PaintDomain::Color`] is the tint layer the splat material multiplies
-//! its finished albedo by (`jackdaw_terrain::apply_color_brush`). It
-//! accumulates like the texture brush rather than stamping, and Ctrl
-//! paints white, which is the layer's identity and so its eraser.
+//! [`PaintDomain::Color`] is the tint layer the splat material multiplies its
+//! albedo by. It accumulates like the texture brush, and Ctrl paints white,
+//! the layer's identity and so its eraser.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -141,8 +135,7 @@ impl Default for TerrainPaintState {
             texture_opacity: 0.5,
             stroke_control_snapshot: Vec::new(),
             // Not white: white is the layer's identity, so a brush loaded
-            // with it would read as broken on the first stroke. A warm
-            // mid tone is what a macro tint is usually reached for.
+            // with it would read as broken on the first stroke.
             tint_color: [153, 140, 115],
             tint_opacity: 0.5,
             tint_hardness: 0.5,
@@ -221,14 +214,12 @@ impl EditorCommand for SetTerrainChannel {
     }
 }
 
-/// One layer edit's before and after: the whole grid, or the block of it
-/// that changed.
+/// One layer edit's before and after: the whole grid, or the block of it that
+/// changed.
 ///
-/// A stroke writes a disc a few dozen cells across into an array that is
-/// `resolution^2`, so a whole-layer entry holds two dense copies of the
-/// terrain however little it touched -- 134 MiB a stroke on a 4096-cell
-/// edge. The rect form is what [`super::sculpt::SetTerrainHeights`]
-/// already records; this is the same bargain for the two byte layers.
+/// A stroke writes a disc a few dozen cells across into a `resolution^2`
+/// array, so a whole-layer entry holds two dense copies of the terrain however
+/// little it touched -- 134 MiB a stroke on a 4096-cell edge.
 enum LayerPatch<T> {
     Whole {
         old: Vec<T>,
@@ -259,10 +250,9 @@ impl<T> LayerPatch<T> {
 /// The smallest rect covering every cell where `old` and `new` differ, or
 /// nothing when they are the same.
 ///
-/// A pointer stroke accumulates its footprint over many frames, so the
-/// brush rect of any one frame does not describe it. Comparing the two
-/// snapshots once at release names the block exactly, and tighter than the
-/// union of the brush rects would.
+/// A pointer stroke accumulates its footprint over many frames, so comparing
+/// the two snapshots once at release names the block exactly, and tighter than
+/// the union of the brush rects would.
 fn changed_rect<T: PartialEq>(old: &[T], new: &[T], resolution: u32) -> Option<GridRect> {
     if resolution == 0 {
         return None;
@@ -674,8 +664,7 @@ pub fn terrain_paint(
             if !active.is_modal_running() {
                 // `control_mut` marks the whole map for upload, which puts
                 // paint that arrived by a load or an undo on screen, and is
-                // where a terrain the store refuses turns the stroke away
-                // before it starts.
+                // where a terrain the store refuses turns the stroke away.
                 paint_state.stroke_control_snapshot = store.control_mut(&terrain)?.to_vec();
                 paint_state.active = true;
                 paint_state.stroke_restores = paint_state.restore_auto;
@@ -703,18 +692,14 @@ pub fn terrain_paint(
                 return OperatorResult::Finished;
             }
 
-            // `active_texture_id` can be stale against the live list, from
-            // a removed slot or from painting before the terrain has any,
-            // and `terrain.texture.select`'s clamp (`MAX_TEXTURE_ID`, 31)
-            // is looser than the list ceiling (`texture_set::MAX_TEXTURES`,
-            // 16), so it cannot catch this. The write is refused rather
-            // than clamped to an id other than the one displayed; the
-            // options bar's texture hint reads "(pick one in the Terrain
-            // panel)" for this id.
+            // `active_texture_id` can be stale against the live list, and
+            // `terrain.texture.select`'s clamp (31) is looser than the list
+            // ceiling (16), so it cannot catch this. The write is refused
+            // rather than clamped to an id other than the one displayed.
             //
-            // A restoring stroke lays down no texture, so it has no id to
-            // be stale about: it clears the manual bit and leaves every
-            // cell's ids and blend alone.
+            // A restoring stroke lays down no texture, so it has no id to be
+            // stale about: it clears the manual bit and leaves every cell's
+            // ids and blend alone.
             let texture_valid = restoring || (texture_id as usize) < slot_count;
 
             if texture_valid
@@ -764,10 +749,9 @@ pub fn terrain_paint(
             };
 
             if !active.is_modal_running() {
-                // `tint_mut` marks the whole layer for upload, which puts
-                // a tint that arrived by a load or an undo on screen, and
-                // is where a terrain the store refuses turns the stroke
-                // away before it starts.
+                // `tint_mut` marks the whole layer for upload, which puts a
+                // tint that arrived by a load or an undo on screen, and is
+                // where a terrain the store refuses turns the stroke away.
                 paint_state.stroke_color_snapshot = store.tint_mut(&terrain)?.to_vec();
                 paint_state.active = true;
             }
@@ -1320,9 +1304,8 @@ mod tests {
     }
 
     /// A quarantined (load-failed) terrain refuses every write, so
-    /// `terrain_paint` is a no-op through the same `TerrainDataStore`
-    /// refusal every other terrain edit goes through (see `store.rs`'s
-    /// `document_in`).
+    /// `terrain_paint` is a no-op through the same `TerrainDataStore` refusal
+    /// every other terrain edit goes through.
     #[test]
     fn painting_a_quarantined_terrain_is_a_no_op() {
         let (mut world, entity) = paint_op_world();

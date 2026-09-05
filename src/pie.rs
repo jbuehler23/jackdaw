@@ -118,10 +118,8 @@ enum BuildState {
     /// The binary is built and cached at this path; later instances of
     /// the same spec spawn from it without rebuilding.
     Done(PathBuf),
-    /// The build failed; its pending instances were dropped. `launch`
-    /// says whether any were waiting: a background rebuild that fails
-    /// leaves the editor where it was, while a failed launch is a play
-    /// the caller is still waiting on and has to be told about.
+    /// The build failed; its pending instances were dropped. `launch` says
+    /// whether any were waiting, which a background rebuild's are not.
     Failed { launch: bool },
 }
 
@@ -177,8 +175,7 @@ impl PieSession {
         })
     }
 
-    /// Whether an instance is waiting on a build to finish before it
-    /// spawns.
+    /// Whether an instance is waiting on a build before it spawns.
     fn is_launching(&self) -> bool {
         self.builds.values().any(
             |build| matches!(build, BuildState::Running { pending, .. } if !pending.is_empty()),
@@ -194,14 +191,9 @@ impl PieSession {
 }
 
 /// What play-in-editor is doing: `building` while a launch waits on its
-/// cargo build, `running` once a game process is up, `failed` when the
-/// build a launch was waiting on did not compile, `stopped` otherwise.
-///
-/// A paused game is running: its process is alive and its window is still
-/// there to capture. Reported by `jackdaw/status`, and the state
-/// `jackdaw/wait` holds on, so a caller that pressed play has something
-/// to wait for other than a frame count it guessed -- including an end
-/// that is not the one it asked for.
+/// cargo build, `running` once a game process is up (a paused game
+/// included), `failed` when a launch's build did not compile, `stopped`
+/// otherwise.
 pub(crate) fn play_status(world: &World) -> &'static str {
     let session = world.get_non_send::<PieSession>();
     let playing = world
@@ -453,8 +445,7 @@ pub(crate) fn project_toggle_prebuild(
     OperatorResult::Finished
 }
 
-/// Input capture needs a focused instance and a fresh frame to forward to;
-/// it no longer depends on the outliner view mode.
+/// Input capture needs a focused instance and a fresh frame to forward to.
 pub(crate) fn focused_with_fresh_stream(
     stream: Res<crate::live_frame::LiveFrameStream>,
     instances: Res<PieInstances>,
@@ -684,12 +675,8 @@ fn newest_mtime(dir: &Path) -> Option<std::time::SystemTime> {
     newest
 }
 
-/// One line naming what actually went wrong, for the status bar.
-///
-/// `Display` for a compile failure says only "project failed to compile",
-/// which is what the user already knows. The first real diagnostic in the
-/// log is what tells them where to look, so that is what goes in front of
-/// them; the panel still has the whole log.
+/// One line naming what actually went wrong, for the status bar: the first
+/// real diagnostic in the log rather than `Display`'s summary line.
 pub(crate) fn failure_summary(
     error: &crate::project_build::ProjectBuildError,
     detail: &str,
@@ -781,10 +768,6 @@ fn spawn_game_build(
             Err(err) => {
                 // Diagnostics already streamed into the log via the build
                 // reporter, so just note the failure and surface the error.
-                // `Display` for a compile failure is one summary line; the
-                // log it carries is the part that says what is wrong, and
-                // the panel has nowhere else to read it from when the
-                // reporter never ran (a cargo that would not start).
                 let detail = match &err {
                     crate::project_build::ProjectBuildError::Compile { log } => log.clone(),
                     other => other.to_string(),
@@ -1186,16 +1169,10 @@ pub struct PiePrebuildState {
 }
 
 /// Turns the open-time pre-build off when set to `0`, `false` or empty.
-///
-/// The pre-build is a whole cargo run started without being asked for. On
-/// a machine already busy -- the editor itself, the user's own build --
-/// the right answer is sometimes "don't", and that has to be sayable
-/// before the editor opens, not only from a menu once it has started.
 pub const ENV_PIE_PREBUILD: &str = "JACKDAW_PIE_PREBUILD";
 
-/// Whether [`ENV_PIE_PREBUILD`]'s value asks for the pre-build.
-///
-/// Absent means yes: the switch exists to turn a default off.
+/// Whether [`ENV_PIE_PREBUILD`]'s value asks for the pre-build. Absent
+/// means yes.
 fn env_allows_prebuild(raw: Option<&str>) -> bool {
     !raw.is_some_and(|value| matches!(value.trim(), "" | "0" | "false"))
 }
@@ -1290,9 +1267,7 @@ struct EditorBuildSettings {
     /// action or an out-of-editor `jackdaw build`.
     auto_build: bool,
     /// When true, the editor compiles the game once in the background as
-    /// the project opens, so the first Play is instant. On by default,
-    /// because the alternative is a minutes-long wait at the first Play;
-    /// off for anyone who would rather have the whole machine.
+    /// the project opens, so the first Play is instant. On by default.
     prebuild: bool,
 }
 
@@ -1425,10 +1400,6 @@ impl Default for ProjectSchemaWatch {
 /// the document-only set, returning the component count when the file was
 /// newer than the last read. `None` means nothing changed and callers
 /// should not re-announce.
-///
-/// Project open calls this directly: it restores persisted tabs in the
-/// same exclusive run that sets the editor state, so the first scene of a
-/// session loads before `watch_project_schema` has ever ticked.
 pub fn refresh_project_types(world: &mut World) -> Option<usize> {
     let root = world
         .get_resource::<crate::project::ProjectRoot>()
@@ -1580,8 +1551,6 @@ fn poll_builds(world: &mut World) {
                 world
                     .resource_mut::<crate::build_status::BuildStatus>()
                     .state = crate::build_status::BuildState::Failed { at: Instant::now() };
-                // A pre-build the user never asked for fails with the Build
-                // panel closed, so the footer is the only place it can say so.
                 crate::status_bar::notify_error(world, err.to_string());
             }
         }
@@ -2078,9 +2047,6 @@ fn drain_game_events(world: &mut World) {
 mod play_status_tests {
     use super::*;
 
-    /// A wait held on `pie_running` would otherwise run to its frame cap
-    /// over a build that is never going to produce a game. The failure is
-    /// a state of its own so the wait can end with it.
     #[test]
     fn a_launch_whose_build_failed_reads_as_failed() {
         let mut world = World::new();
@@ -2094,8 +2060,6 @@ mod play_status_tests {
         assert_eq!(play_status(&world), "failed");
     }
 
-    /// A background rebuild is not a launch: it fails without anyone
-    /// waiting on a game, and the editor is where it was.
     #[test]
     fn a_background_build_that_failed_leaves_the_editor_stopped() {
         let mut world = World::new();
@@ -2493,10 +2457,8 @@ mod enter_live_tests {
 mod prebuild_tests {
     use super::*;
 
-    /// A world where `prebuild_play_target` would run: run configs
-    /// loaded, a project root that names no cargo package (so the
-    /// attempt, if made, resolves nothing and blocks rather than
-    /// spawning cargo).
+    /// A world where `prebuild_play_target` would run, over a project root
+    /// naming no cargo package so nothing is actually spawned.
     fn world_ready_to_prebuild(prebuild: bool) -> World {
         let mut world = World::new();
         world.init_resource::<PiePrebuildState>();
@@ -2514,9 +2476,6 @@ mod prebuild_tests {
         world
     }
 
-    /// Off means nothing is attempted at all: not the cargo run, and not
-    /// the package resolution that would report a problem with a project
-    /// the user has not asked the editor to build.
     #[test]
     fn the_setting_off_starts_no_build() {
         let mut world = world_ready_to_prebuild(false);
@@ -2531,8 +2490,6 @@ mod prebuild_tests {
         assert!(world.resource::<PiePrebuildState>().attempted);
     }
 
-    /// On, the same world does reach the resolution step, which is what
-    /// tells the two cases apart without running cargo.
     #[test]
     fn the_setting_on_reaches_the_build_attempt() {
         let mut world = world_ready_to_prebuild(true);
@@ -2545,8 +2502,6 @@ mod prebuild_tests {
         ));
     }
 
-    /// The environment switch is off only for the values a shell can
-    /// leave lying around; anything else, including absence, is on.
     #[test]
     fn only_an_explicit_off_disables_the_prebuild() {
         assert!(env_allows_prebuild(None));
@@ -2557,8 +2512,6 @@ mod prebuild_tests {
         assert!(!env_allows_prebuild(Some(" ")));
     }
 
-    /// The footer gets the first real diagnostic, not the summary line
-    /// the user already knows.
     #[test]
     fn a_compile_failure_reports_its_first_diagnostic() {
         let log = "Compiling aldermoor-client\nerror[E0432]: unresolved import `foo`\n".to_string();
@@ -2569,8 +2522,6 @@ mod prebuild_tests {
         assert!(summary.contains("E0432"), "{summary}");
     }
 
-    /// With no diagnostic to point at (cargo itself would not start),
-    /// the error's own text is all there is.
     #[test]
     fn a_failure_with_no_diagnostic_falls_back_to_the_error() {
         let error = crate::project_build::ProjectBuildError::Compile { log: String::new() };

@@ -1,37 +1,6 @@
-//! 2D viewport panel and navigation coverage.
-//!
-//! `build_viewport_2d_panel` builds a viewport panel opening on the
-//! canvas, which is what a UI scene asks for. These tests call it
-//! directly against a headless editor app (the reconciler itself only
-//! runs after entering `AppState::Editor`) and pin these contracts:
-//!
-//! 1. The panel wires a `Camera2d` rendering into its own render-target
-//!    image, and records the camera plus the stage node it projects into
-//!    on a `Viewport2dPanelHost` sitting on the panel content entity.
-//! 2. Tearing the panel down despawns that camera, so a closed or
-//!    re-split panel doesn't leak a camera and its image.
-//! 3. The pan/zoom math is pure: zooming keeps the authored point under
-//!    the cursor fixed, panning keeps it under the moving cursor, and
-//!    zoom stays inside its usable range. No camera involved.
-//! 4. The cursor reaches that math in the stage area's logical pixels,
-//!    and reaches the *canvas* in render-target pixels, so both hold at
-//!    any UI scale factor and at any reference resolution.
-//! 5. That view is per-scene-tab state, and the stage is placed from it:
-//!    pan and zoom are the stage node's position and size, because a
-//!    camera cannot move a UI scene at all.
-//! 6. An authored UI scene is routed into the panel and laid out at its
-//!    own reference resolution, and the routing is editor state that
-//!    neither outlives the panel nor reaches disk.
-//! 7. The header's Edit|Interact control decides what a pointer over the
-//!    stage means, per panel: Edit authors the scene and the live widgets
-//!    never see the pointer, Interact hands it to them and the authoring
-//!    chrome stands down.
-//! 8. Opening a UI scene frames it: the canvas is fitted to the stage
-//!    area rather than shown at 100% and cropped, and `viewport2d.frame`
-//!    puts a panned and zoomed panel back there. The header names the
-//!    scene being edited and reads the zoom back.
-//! 9. The two screenshot operators aim at their own surfaces and write
-//!    real PNGs.
+//! 2D viewport panel and navigation: building and tearing the panel down,
+//! the pan/zoom and cursor math, routing an authored UI scene into it, the
+//! Edit/Interact mode, framing, and the screenshot operators.
 
 use crate::util;
 
@@ -82,9 +51,7 @@ fn building_the_panel_wires_camera_target_and_host() {
         .expect("host on panel parent");
     assert_eq!(host.mode, Viewport2dMode::Edit);
 
-    // The panel is one thing shown two ways: the 2D presentation's state sits
-    // beside the panel's own identity, which opens on the canvas here and lets
-    // only that camera render.
+    // The 2D presentation's state sits beside the panel's own identity.
     let panel = app
         .world()
         .get::<ViewportHost>(parent)
@@ -118,10 +85,8 @@ fn building_the_panel_wires_camera_target_and_host() {
 
     let stage = app.world().entity(host.stage);
     assert!(stage.contains::<Scene2dViewport>());
-    // The stage shows the camera's image with an `ImageNode`, not a
-    // `ViewportNode`: the stage node carries the view's zoom, and Bevy
-    // resizes a `ViewportNode`'s render target to its node's size, which
-    // would reallocate the image to `reference * zoom` mid-gesture.
+    // An `ImageNode`, not a `ViewportNode`: Bevy resizes a `ViewportNode`'s
+    // render target to its node's size, reallocating the image mid-gesture.
     let shown = stage
         .get::<ImageNode>()
         .expect("stage shows the camera's image");
@@ -133,9 +98,8 @@ fn building_the_panel_wires_camera_target_and_host() {
         "the stage shows exactly the image its camera draws into",
     );
 
-    // The canvas edge is the one line saying where the authored scene
-    // stops, drawn over a dark letterbox and often over a dark scene, so
-    // it is the strong border rather than a separator.
+    // The canvas edge is the one line saying where the authored scene stops,
+    // so it is the strong border rather than a separator.
     let frame = app
         .world()
         .get::<Children>(host.stage)
@@ -212,24 +176,16 @@ fn panning_drags_the_scene_along_with_the_cursor() {
     let after = pan_by(view, drag);
     assert_eq!(after.zoom, view.zoom, "a pan never changes the zoom");
 
-    // Whatever was under the cursor when the drag started is under the
-    // cursor where the drag ended.
     let start = Vec2::new(5.0, -8.0);
     assert!((world_at(view, start) - world_at(after, start + drag)).length() < 1e-3);
 }
 
-/// The unit contract between the cursor and the canvas, half of it: an
-/// image target renders at scale factor 1, so the authored tree measures
-/// in the image's own pixels. A cursor offset left in ui-logical pixels
-/// would be off by a factor of `scale_factor`, and every click would land
-/// off the node the user aimed at on any high-DPI display or after
-/// `view.ui_zoom_in`.
+/// An image target renders at scale factor 1, so a cursor offset left in
+/// ui-logical pixels would be off by exactly `scale_factor`.
 #[test]
 fn the_cursor_lifts_into_render_target_pixels_before_it_reaches_the_canvas() {
-    // A stage 400x200 physical px centred at (200, 100) physical. At a UI
-    // scale factor of 2 that is 200x100 logical px: logical x runs 0..200,
-    // logical y runs 0..100. The image is the stage's own size here, so
-    // the second factor is 1 and only the scale factor is in play.
+    // A stage 400x200 physical px centred at (200, 100), at UI scale 2. The
+    // image is the stage's own size, so only the scale factor is in play.
     let inverse_scale = 0.5;
     let centre = Vec2::new(200.0, 100.0);
     let size = Vec2::new(400.0, 200.0);
@@ -239,8 +195,7 @@ fn the_cursor_lifts_into_render_target_pixels_before_it_reaches_the_canvas() {
         .expect("the cursor is inside the stage");
     assert_eq!(offset, Vec2::new(100.0, 0.0));
 
-    // The hit test still bounds the cursor by the node's logical rect,
-    // exactly as `update_active_viewport` does.
+    // Bounded by the node's logical rect, as `update_active_viewport` does.
     assert!(
         cursor_stage_offset(Vec2::new(200.0, 50.0), centre, size, inverse_scale, 1.0).is_some()
     );
@@ -252,16 +207,10 @@ fn the_cursor_lifts_into_render_target_pixels_before_it_reaches_the_canvas() {
     );
 }
 
-/// The other half: the panel's image is held at the authored reference
-/// size, not the stage's size, so a stage measurement is one factor short
-/// of the authored pixels a click has to name. The two factors compose in
-/// `cursor_stage_offset` and nowhere else, and the bounds test stays in
-/// stage pixels because it is a question about the node.
-///
-/// This second factor is also where the view's zoom lives, because
-/// `place_stage` sizes the stage node to `reference * zoom`: a 2x zoom
-/// halves this scale, and every consumer of it follows without being
-/// told.
+/// The panel's image is held at the authored reference size, not the stage's,
+/// so a stage measurement is one factor short of authored pixels. That second
+/// factor is also where the view's zoom lives, because `place_stage` sizes
+/// the stage node to `reference * zoom`.
 #[test]
 fn the_cursor_also_lifts_through_the_reference_resolution_scale() {
     // A 1280x720 reference shown in a 640x360 stage: every stage pixel is
@@ -282,8 +231,7 @@ fn the_cursor_also_lifts_through_the_reference_resolution_scale() {
     assert!(cursor_stage_offset(Vec2::new(320.0, 90.0), centre, stage, 0.5, scale).is_some());
     assert!(cursor_stage_offset(Vec2::new(321.0, 90.0), centre, stage, 0.5, scale).is_none());
 
-    // A degenerate stage must not hand the view an infinity: this runs on
-    // every cursor move, including the frame a panel is first laid out.
+    // Runs on every cursor move, including a panel's first layout frame.
     assert_eq!(target_pixels_per_stage_pixel(Vec2::ZERO, target), 1.0);
     // With no UI scene open the image is the stage's own size, so the
     // factor drops out.
@@ -294,11 +242,8 @@ fn the_cursor_also_lifts_through_the_reference_resolution_scale() {
     );
 }
 
-/// The scale-factor conversion on the pan path. `MouseMotion` reports
-/// stage *physical* pixels and the view is driven in *logical* ones, so a
-/// middle-drag that crosses N physical pixels crosses `N * inverse_scale`
-/// logical ones. Dropping that factor leaves panning wrong by exactly the
-/// display's scale factor: twice as fast on a `HiDPI` screen.
+/// `MouseMotion` reports stage physical pixels and the view is driven in
+/// logical ones, so dropping the factor pans twice as fast at 2x scale.
 #[test]
 fn a_drag_pans_by_the_authored_pixels_the_cursor_crossed() {
     // A display at scale factor 2: two physical pixels per logical one.
@@ -318,17 +263,13 @@ fn a_drag_pans_by_the_authored_pixels_the_cursor_crossed() {
     // the cursor, so the canvas travels the other way.
     assert_eq!(after.pan, Vec2::new(-10.0, -6.0));
 
-    // The size of the mistake, not just the formula: forgetting the
-    // factor pans twice as far.
+    // The size of the mistake: forgetting the factor pans twice as far.
     assert_eq!(
         pan_by(view, drag).pan,
         after.pan * 2.0,
         "an unconverted delta pans by exactly the scale factor too much",
     );
 
-    // The property under test: whatever was under the cursor when the
-    // drag started is under the cursor where it ended, with both cursor
-    // positions measured in the logical pixels the view is driven in.
     let start = Vec2::new(12.0, 5.0);
     assert!(
         (world_at(view, start * inverse_scale) - world_at(after, (start + drag) * inverse_scale))
@@ -337,9 +278,7 @@ fn a_drag_pans_by_the_authored_pixels_the_cursor_crossed() {
     );
 }
 
-/// The view is driven against the stage *area*, which is a plain logical
-/// rect test: the area never moves with the view, which is what makes it
-/// a usable anchor (see `the_zoom_anchor_holds_over_repeated_ticks...`).
+/// The area never moves with the view, which is what makes it a usable anchor.
 #[test]
 fn the_cursor_reaches_the_view_in_the_areas_logical_pixels() {
     // An area 400x200 physical px centred at (200, 100), on a display at
@@ -358,8 +297,8 @@ fn the_cursor_reaches_the_view_in_the_areas_logical_pixels() {
         Some(Vec2::new(0.0, -25.0)),
     );
 
-    // Bounded by the area's own logical rect, so a cursor over another
-    // panel never drives this one.
+    // Bounded by the area's own logical rect, so a cursor over another panel
+    // never drives this one.
     assert!(cursor_area_offset(Vec2::new(200.0, 50.0), centre, size, inverse_scale).is_some());
     assert!(cursor_area_offset(Vec2::new(201.0, 50.0), centre, size, inverse_scale).is_none());
     assert!(cursor_area_offset(Vec2::new(150.0, 101.0), centre, size, inverse_scale).is_none());
@@ -413,9 +352,7 @@ fn world_at_maps_area_pixels_through_pan_and_zoom() {
     assert_eq!(world_at(view, Vec2::new(40.0, 40.0)), Vec2::new(30.0, 0.0));
 }
 
-/// The 2D view is per-tab state: switching scenes parks it with the
-/// outgoing tab and brings the incoming tab's back. The 3D camera
-/// round-trip runs alongside it and must be unaffected.
+/// The 2D view is per-tab state; the 3D camera round-trip runs alongside it.
 #[test]
 fn tab_switch_round_trips_the_2d_view() {
     use jackdaw::scenes::{SceneTab, Scenes};
@@ -427,9 +364,8 @@ fn tab_switch_round_trips_the_2d_view() {
         .id();
     build_viewport_2d_panel(app.world_mut(), parent);
 
-    // The panel's own 3D camera, rather than one spawned beside it: every panel
-    // builds both presentations now, so "the first viewport camera" would find
-    // the panel's and leave a second one untouched.
+    // The panel's own 3D camera: every panel builds both presentations, so
+    // "the first viewport camera" could find a different one.
     let camera_3d = app
         .world()
         .get::<ViewportPanelHost>(parent)
@@ -453,7 +389,7 @@ fn tab_switch_round_trips_the_2d_view() {
         ..default()
     };
     // Through `set_view`, because a framing only travels with a tab once
-    // something has chosen it; see `an_unframed_tab_is_not_stamped_...`.
+    // something has chosen it.
     app.world_mut()
         .get_mut::<Viewport2dPanelHost>(parent)
         .expect("host on panel parent")
@@ -499,8 +435,7 @@ fn tab_switch_round_trips_the_2d_view() {
     );
 }
 
-/// `apply_2d_view` is what makes the stored view visible: it is the only
-/// writer of the 2D camera's transform and ortho scale.
+/// `apply_2d_view` is the only writer of the 2D camera's transform and ortho scale.
 #[test]
 fn applying_the_view_moves_the_camera_and_scales_the_projection() {
     let mut app = util::editor_test_app();
@@ -522,9 +457,8 @@ fn applying_the_view_moves_the_camera_and_scales_the_projection() {
             host.camera
         })
         .expect("host on panel parent");
-    // The plugin schedules this inside `EditorInteractionSystems`, which
-    // is gated on `AppState::Editor`; the test app never leaves
-    // `ProjectSelect`, so run the system directly.
+    // Scheduled inside `EditorInteractionSystems`, gated on `AppState::Editor`,
+    // which this app never enters, so run the system directly.
     app.world_mut()
         .run_system_cached(jackdaw::viewport_2d::apply_2d_view)
         .expect("apply_2d_view ran");
@@ -541,10 +475,8 @@ fn applying_the_view_moves_the_camera_and_scales_the_projection() {
     );
 }
 
-/// The canvas is a mode of the viewport panel, so it is not a dock window
-/// of its own any more. Its old id still reaches the panel that answers
-/// for it: a saved layout and a scripted run both name it, and neither
-/// should meet a window nobody registers.
+/// The canvas is a mode of the viewport panel rather than a dock window of
+/// its own, but its old id still has to reach the panel that answers for it.
 #[test]
 fn the_old_2d_window_id_opens_the_viewport_panel() {
     let mut app = op_app();
@@ -574,8 +506,7 @@ fn the_old_2d_window_id_opens_the_viewport_panel() {
 }
 
 /// The same id on a workspace where the panel is not docked at all docks it,
-/// once, and brings it forward: a scripted run naming the canvas must not
-/// meet an empty dock and a window nobody registers.
+/// once, and brings it forward.
 #[test]
 fn the_old_2d_window_id_docks_the_viewport_panel_when_none_is_open() {
     let mut app = op_app();
@@ -613,14 +544,10 @@ fn the_old_2d_window_id_docks_the_viewport_panel_when_none_is_open() {
     );
 }
 
-/// The reference-resolution contract. The panel's render-target image is
-/// held at the active UI scene's `UiSceneRoot::reference_size`, so the
-/// authored tree lays out at exactly the resolution it was designed for,
-/// whatever shape the dock leaf happens to be. Bevy derives a root's
-/// layout viewport from its target camera's physical viewport size, and
-/// an image target's is the image's own size, so the assertion below is
-/// the whole contract in one number: half of a 1280-wide reference is
-/// 640, not half of the panel.
+/// The panel's render-target image is held at the scene's
+/// `UiSceneRoot::reference_size`, and Bevy derives a root's layout viewport
+/// from its target camera's physical size, so half of a 1280-wide reference
+/// is 640, not half of the panel.
 #[test]
 fn a_routed_ui_scene_lays_out_at_reference_resolution() {
     let mut app = util::editor_test_app();
@@ -686,11 +613,9 @@ fn a_routed_ui_scene_lays_out_at_reference_resolution() {
     );
 }
 
-/// Closing the last panel must not *unroute* the scene. An unrouted UI
-/// root falls back to `DefaultUiCamera`, the editor's own window, and
-/// draws the authored scene straight over the editor chrome. So it parks
-/// on an inactive 1x1 image camera instead: still routed, still off the
-/// window, and collapsed small enough that nothing of it is on screen.
+/// An unrouted UI root falls back to `DefaultUiCamera`, the editor's own
+/// window, and draws over the editor chrome, so it parks on an inactive 1x1
+/// image camera instead.
 #[test]
 fn closing_the_last_panel_parks_the_ui_scene_root() {
     let mut app = util::editor_test_app();
@@ -762,8 +687,7 @@ fn closing_the_last_panel_parks_the_ui_scene_root() {
         "the root must stay routed, on the parking camera",
     );
 
-    // The parking camera is not, and can never be picked as, the window
-    // camera Bevy would otherwise hand this root back to.
+    // The parking camera can never be picked as the window camera.
     let camera = app.world().get::<Camera>(parking).expect("parking camera");
     assert!(!camera.is_active, "the parking camera must never draw");
     assert!(
@@ -814,9 +738,8 @@ fn window_cameras(app: &mut App) -> Vec<Entity> {
         .collect()
 }
 
-/// Routing must never reach disk. `UiTargetCamera` names a camera entity
-/// the editor spawned for a panel; saved into a document it would point
-/// at nothing on the next load.
+/// `UiTargetCamera` names a camera entity the editor spawned, so saved into a
+/// document it would point at nothing on the next load.
 #[test]
 fn a_routed_ui_scene_saves_without_its_routing() {
     let mut app = util::editor_test_app();
@@ -838,9 +761,8 @@ fn a_routed_ui_scene_saves_without_its_routing() {
             },
         ))
         .id();
-    // Routed first, registered second: `register_entity_in_ast` is where
-    // the skip policy is applied, so registering before the routing
-    // landed would prove nothing.
+    // Routed first, registered second: `register_entity_in_ast` is where the
+    // skip policy is applied.
     app.update();
     assert!(
         app.world().get::<bevy::ui::UiTargetCamera>(root).is_some(),
@@ -862,20 +784,12 @@ fn a_routed_ui_scene_saves_without_its_routing() {
     );
 }
 
-/// Pan and zoom are the stage's size and position, because the camera
-/// cannot move a UI scene at all: Bevy renders UI through its own
-/// origin-parked view (`bevy_ui_render::extract_ui_camera_view`), so
-/// `apply_2d_view` moves nothing the user is looking at here.
-///
-/// Two things follow, and both are load-bearing for `ui_stage`: the stage
-/// carries the reference aspect exactly, and `target_pixels_per_stage_pixel`
-/// reads the zoom straight back off the laid-out node, so the cursor
-/// mapping never has to name it.
+/// Pan and zoom are the stage's size and position, because the camera cannot
+/// move a UI scene at all: Bevy renders UI through its own origin-parked view.
 #[test]
 fn the_view_places_and_scales_the_stage() {
     let mut app = util::editor_test_app();
-    // An absolute panel frame, so the stage's computed size below is the
-    // placement result rather than an empty headless render target.
+    // An absolute panel frame, so the stage's computed size below is the placement result.
     let parent = app
         .world_mut()
         .spawn((
@@ -888,8 +802,7 @@ fn the_view_places_and_scales_the_stage() {
         ))
         .id();
     build_viewport_2d_panel(app.world_mut(), parent);
-    // Stated at zoom 1, so the placement below reads as the authored
-    // numbers it names rather than as whatever a fit picked.
+    // Stated at zoom 1, so the placement reads as the authored numbers it names.
     hold_view(&mut app, parent);
 
     let (stage, area) = app
@@ -915,8 +828,6 @@ fn the_view_places_and_scales_the_stage() {
         .expect("area is laid out")
         .size();
 
-    // At the default view the canvas is drawn at its authored size,
-    // centred in the area.
     let size = stage_size(&app, stage);
     assert_eq!(size, Vec2::new(800.0, 400.0));
     assert_eq!(
@@ -930,9 +841,8 @@ fn the_view_places_and_scales_the_stage() {
         "at zoom 1 a stage pixel is an authored pixel",
     );
 
-    // Zoom doubles the stage and halves the authored-pixels-per-stage-
-    // pixel factor, which is the whole reason the cursor mapping needs no
-    // zoom term of its own.
+    // Zoom doubles the stage and halves the authored-pixels-per-stage-pixel
+    // factor, which is why the cursor mapping needs no zoom term of its own.
     app.world_mut()
         .get_mut::<Viewport2dPanelHost>(parent)
         .expect("host on panel parent")
@@ -957,11 +867,8 @@ fn the_view_places_and_scales_the_stage() {
         "the stage keeps the reference aspect at any zoom, got {size:?}",
     );
 
-    // The pan names the authored point at the centre of the area, in
-    // authored pixels from the canvas centre, y up. Looking at (100, -50)
-    // means looking right and *down* the canvas, so the canvas itself
-    // slides the other way: 100 authored px left and 50 up, times the
-    // zoom.
+    // The pan names the authored point at the centre of the area, y up, so
+    // looking at (100, -50) slides the canvas 100 left and 50 up, times the zoom.
     assert_eq!(
         stage_centre(&app, stage) - area_centre(&app, area),
         Vec2::new(-200.0, -100.0),
@@ -1011,9 +918,8 @@ fn area_centre(app: &App, area: Entity) -> Vec2 {
         .translation
 }
 
-/// Reference resolution for the mode tests. It is exactly the panel's
-/// stage area, and the view is left at zoom 1, so an authored pixel is a
-/// window pixel and every position below reads as the number it names.
+/// Reference resolution for the mode tests: exactly the panel's stage area,
+/// at zoom 1, so an authored pixel is a window pixel.
 const MODE_REFERENCE: UVec2 = UVec2::new(1200, 600);
 
 /// Centre of the authored button the mode tests aim at.
@@ -1022,18 +928,16 @@ const BUTTON_CENTRE: Vec2 = Vec2::new(500.0, 250.0);
 /// Lifts the test panel over the project-select screen; see `mode_panel`.
 const PANEL_ON_TOP: i32 = 1000;
 
-/// What the authored button under test has heard from the pointer. The
-/// signal a live widget runs on: `bevy_ui_widgets` buttons are observers
-/// on `Pointer<Press>` and `Pointer<Click>`, not readers of editor state.
+/// What the authored button has heard from the pointer. `bevy_ui_widgets`
+/// buttons are observers on `Pointer<Press>` and `Pointer<Click>`, not readers
+/// of editor state.
 #[derive(Resource, Default)]
 struct WidgetEvents {
     presses: usize,
     clicks: usize,
 }
 
-/// Edit is the authoring mode: a press on the stage selects the authored
-/// node under it and outlines it, and the live widget never hears about
-/// the pointer at all.
+/// Edit is the authoring mode: the live widget never hears the pointer.
 #[test]
 fn edit_mode_selects_the_authored_node_and_never_wakes_the_widget() {
     let mut app = mode_app();
@@ -1070,8 +974,7 @@ fn edit_mode_selects_the_authored_node_and_never_wakes_the_widget() {
     );
 }
 
-/// Interact hands the same press to the scene being edited: the widget
-/// reacts, the selection the user made stands, and the authoring overlay
+/// Interact hands the same press to the scene, and the authoring overlay
 /// gets out of the way.
 #[test]
 fn interact_mode_hands_the_pointer_to_the_live_widget() {
@@ -1102,10 +1005,8 @@ fn interact_mode_hands_the_pointer_to_the_live_widget() {
     );
 }
 
-/// A press the scene is holding runs to its release wherever the cursor
-/// goes, because a stream cut off at the stage's edge leaves the widget
-/// latched down: `PointerPress` never clears, no `Click` ever resolves,
-/// and the next entry onto the stage opens mid-drag.
+/// A stream cut off at the stage's edge leaves the widget latched down:
+/// `PointerPress` never clears and no `Click` ever resolves.
 #[test]
 fn a_press_dragged_off_the_stage_is_released_rather_than_stranded() {
     let mut app = mode_app();
@@ -1153,11 +1054,8 @@ fn a_press_dragged_off_the_stage_is_released_rather_than_stranded() {
     );
 }
 
-/// The forwarder is not a rect test. The pointer only enters the scene
-/// when the *editor's* own hit test says the stage is what is under the
-/// cursor, and when no editor interaction is in flight. Otherwise a popup
-/// drawn over the stage, or a drag the user is in the middle of, would
-/// leak clicks into the live scene behind it.
+/// The forwarder is not a rect test: a popup drawn over the stage, or a drag
+/// already in flight, would otherwise leak clicks into the live scene.
 #[test]
 fn a_click_over_editor_chrome_never_reaches_the_scene() {
     let mut app = mode_app();
@@ -1205,10 +1103,8 @@ fn a_click_over_editor_chrome_never_reaches_the_scene() {
     );
 }
 
-/// The wheel over the panel is the canvas's only while the canvas is what
-/// the cursor is over. A popup or a docked panel drawn over the stage is
-/// what the user is scrolling, and the canvas underneath it must hold
-/// still; a rect test alone cannot tell the two apart.
+/// A popup or a docked panel drawn over the stage is what the user is
+/// scrolling; a rect test alone cannot tell the two apart.
 #[test]
 fn a_panel_over_the_stage_takes_the_scroll_from_the_canvas() {
     let mut app = mode_app();
@@ -1254,10 +1150,8 @@ fn a_panel_over_the_stage_takes_the_scroll_from_the_canvas() {
     );
 }
 
-/// A pan runs to the button coming up, wherever the pointer goes.
-/// Reaching the far corner of a canvas larger than its window means
-/// dragging past the panel's edge, and a pan resolved by hover every
-/// frame stops dead there under a cursor that is still moving.
+/// A pan resolved by hover every frame stops dead at the panel's edge under
+/// a cursor that is still moving.
 #[test]
 fn a_middle_drag_keeps_panning_after_the_cursor_leaves_the_panel() {
     let mut app = mode_app();
@@ -1324,17 +1218,14 @@ fn mouse_travelled(app: &mut App, delta: Vec2) {
 }
 
 /// Run the panel's navigation pass and whatever it wrote. Frames are not
-/// stepped around it: `ButtonInput::just_pressed` lasts exactly until the
-/// next input pass, and a press has to still be one when this reads it.
+/// stepped around it: `just_pressed` lasts only until the next input pass.
 fn run_pan_zoom(app: &mut App) {
     jackdaw::viewport_2d::run_2d_pan_zoom(app.world_mut());
 }
 
-/// The wheel over a viewport showing its canvas belongs to that canvas. The
-/// 3D grid stepper is a modifier-gated wheel handler with no viewport of its
-/// own, so without a gate the user zooming a canvas with Shift+Scroll retunes
-/// the world grid of the scene in the other panel at the same time. The gate
-/// is the hover authority: the panel under the cursor, and what it is showing.
+/// The 3D grid stepper is a modifier-gated wheel handler with no viewport of
+/// its own, so the gate is the hover authority: the panel under the cursor,
+/// and what it is showing.
 #[test]
 fn scrolling_over_the_2d_viewport_leaves_the_world_grid_alone() {
     let mut app = mode_app();
@@ -1363,8 +1254,7 @@ fn scrolling_over_the_2d_viewport_leaves_the_world_grid_alone() {
     );
     drop_ignored_scroll(&mut app);
 
-    // The same chord anywhere else still steps the world grid, so the
-    // gate is the panel and not the whole editor.
+    // The same chord anywhere else still steps the world grid.
     let off_panel = on_stage + Vec2::new(0.0, MODE_REFERENCE.y as f32 * 2.0);
     hover_the_cursor(&mut app, off_panel);
     assert_eq!(
@@ -1382,8 +1272,7 @@ fn scrolling_over_the_2d_viewport_leaves_the_world_grid_alone() {
 }
 
 /// Drop a wheel tick the handler ignored. It returns at the gate without
-/// reading the stream, so a tick meant for the canvas would otherwise be read
-/// by the next pass on top of the one that pass is measuring.
+/// reading the stream, so the next pass would otherwise read it too.
 fn drop_ignored_scroll(app: &mut App) {
     app.world_mut()
         .resource_mut::<bevy::ecs::message::Messages<bevy::input::mouse::MouseWheel>>()
@@ -1414,9 +1303,8 @@ fn scroll_up(app: &mut App) {
         });
 }
 
-/// Run the 3D grid's scroll handler and whatever it queued. The plugin
-/// schedules it inside `EditorInteractionSystems`, which never runs while
-/// a test app sits in `AppState::ProjectSelect`.
+/// Run the 3D grid's scroll handler. It is scheduled inside
+/// `EditorInteractionSystems`, which never runs in `AppState::ProjectSelect`.
 fn step_the_world_grid(app: &mut App) {
     app.world_mut()
         .run_system_cached(jackdaw::snapping::handle_grid_size_scroll)
@@ -1424,8 +1312,8 @@ fn step_the_world_grid(app: &mut App) {
     settle(app);
 }
 
-/// The mode lives on the panel, not in a resource: two 2D viewports can
-/// show the same scene with one being authored and the other tried out.
+/// The mode lives on the panel, so two viewports can show the same scene with
+/// one being authored and the other tried out.
 #[test]
 fn each_panel_holds_its_own_mode() {
     let mut app = mode_app();
@@ -1461,8 +1349,7 @@ fn each_panel_holds_its_own_mode() {
     assert_eq!(mode_of(&app, second), Viewport2dMode::Interact);
 }
 
-/// The Edit|Interact control is a radio group: the header bar is the
-/// group, each segment is a radio button, and the mode the panel is in
+/// The Edit|Interact control is a radio group, and the mode the panel is in
 /// carries `Checked`.
 #[test]
 fn the_mode_control_is_a_radio_group_and_checks_the_current_mode() {
@@ -1514,17 +1401,15 @@ fn mode_app() -> App {
     app
 }
 
-/// A panel whose stage area is exactly [`MODE_REFERENCE`], so the canvas
+/// A panel whose stage area is exactly `MODE_REFERENCE`, so the canvas
 /// is shown 1:1 and an authored pixel is a window pixel.
 fn mode_panel(app: &mut App) -> Entity {
     let parent = app
         .world_mut()
         .spawn((
             jackdaw::EditorEntity,
-            // A docked panel is the topmost thing under the cursor. This
-            // app is parked in `AppState::ProjectSelect`, whose screen
-            // would otherwise sit over the panel and take the hover that
-            // decides whether the scene may be reached at all.
+            // A docked panel is the topmost thing under the cursor:
+            // `AppState::ProjectSelect`'s screen would otherwise take the hover.
             GlobalZIndex(PANEL_ON_TOP),
             Node {
                 position_type: PositionType::Absolute,
@@ -1537,8 +1422,7 @@ fn mode_panel(app: &mut App) -> Entity {
         ))
         .id();
     build_viewport_2d_panel(app.world_mut(), parent);
-    // The panel is sized 1:1, so the arriving scene must not be fitted
-    // (and margined) into it.
+    // The panel is sized 1:1, so the arriving scene must not be fitted into it.
     hold_view(app, parent);
     parent
 }
@@ -1612,15 +1496,10 @@ fn overlays(app: &mut App) -> usize {
         .count()
 }
 
-/// Move the mouse over the point on screen showing `authored`, then press
-/// it, over the whole production path, starting from the `PointerInput`
-/// the winit backend writes.
-///
-/// The press is also delivered to the stage node directly, because what
-/// the *editor's* pointer reaches through its own window camera is not
-/// something a headless app can be made to reproduce. That second
-/// delivery is what puts `on_stage_press` under test in both modes: in
-/// Edit it must select, in Interact it must stand down.
+/// Move the mouse over the point on screen showing `authored`, then press it,
+/// over the whole production path. The press is also delivered to the stage
+/// node directly, because what the editor's pointer reaches through its own
+/// window camera cannot be reproduced headless.
 fn press_over_authored(app: &mut App, panel: Entity, authored: Vec2) {
     let position = screen_position_of(app, panel, authored);
     send_pointer(app, position, PointerAction::Move { delta: Vec2::ZERO });
@@ -1694,9 +1573,8 @@ fn send_pointer(app: &mut App, position: Vec2, action: PointerAction) {
 // The header's canvas-grid stepper
 // ---------------------------------------------------------------------------
 
-/// The ladder: powers of two, both ends held, and an off-ladder size
-/// pulled back onto it by the first press rather than doubled as it
-/// stands.
+/// Powers of two, both ends held, and an off-ladder size pulled back onto the
+/// ladder by the first press rather than doubled as it stands.
 #[test]
 fn the_grid_stepper_walks_the_power_of_two_ladder() {
     assert_eq!(stepped_ui_grid(8.0, 1), 16.0);
@@ -1723,9 +1601,7 @@ fn the_grid_stepper_walks_the_power_of_two_ladder() {
     );
 }
 
-/// The stepper edits the panel it sits in, the readout says what it
-/// edited, and a second panel's grid is left alone: the grid is per
-/// panel, and rides with the tab's view state from there.
+/// The grid is per panel, and rides with the tab's view state from there.
 #[test]
 fn the_header_stepper_edits_its_own_panels_grid() {
     let mut app = util::editor_test_app();
@@ -1759,8 +1635,8 @@ fn the_header_stepper_edits_its_own_panels_grid() {
     );
 }
 
-/// The operator says the same thing for a scripted run, and takes a size
-/// off the ladder as given.
+/// The operator says the same thing for a scripted run, and takes a size off
+/// the ladder as given.
 #[test]
 fn the_grid_operator_sets_the_canvas_lattice() {
     let mut app = util::editor_test_app();
@@ -1800,10 +1676,8 @@ fn the_grid_operator_sets_the_canvas_lattice() {
     );
 }
 
-/// Gap 4: `viewport2d.frame` framed every open panel while
-/// `viewport2d.mode` and `viewport2d.grid` moved whichever one the query
-/// happened to yield first. An operator has no panel to be called on, so
-/// all three answer for all of them.
+/// An operator has no panel to be called on, so all three answer for every
+/// open panel.
 #[test]
 fn the_per_panel_operators_reach_every_open_panel() {
     let mut app = util::editor_test_app();
@@ -1959,13 +1833,11 @@ fn click_segment(app: &mut App, panel: Entity, mode: Viewport2dMode) {
     ));
 }
 
-/// The fit is pure: the canvas at the largest zoom that leaves it and its
-/// margin inside the area, centred, and never outside the usable zoom
-/// range.
+/// The fit is pure: the largest zoom that leaves the canvas and its margin
+/// inside the area, centred, and inside the usable zoom range.
 #[test]
 fn fitting_sizes_the_canvas_to_the_smaller_axis_of_the_area() {
-    // A 16:9 canvas in a square area: width is what runs out first, so
-    // the fit is set by the width and the height has slack to spare.
+    // A 16:9 canvas in a square area: width is what runs out first.
     let view = fit_view(
         Ui2dView::default(),
         UVec2::new(1600, 900),
@@ -1991,8 +1863,8 @@ fn fitting_sizes_the_canvas_to_the_smaller_axis_of_the_area() {
     );
     assert!(tall.zoom < 400.0 / 1600.0);
 
-    // A canvas far larger than any area still lands inside the range, and
-    // a degenerate area must not produce a zero or negative zoom.
+    // A canvas far larger than any area still lands inside the range, and a
+    // degenerate area must not produce a zero or negative zoom.
     assert!(
         fit_view(
             Ui2dView::default(),
@@ -2006,9 +1878,8 @@ fn fitting_sizes_the_canvas_to_the_smaller_axis_of_the_area() {
     assert!(fit_view(Ui2dView::default(), UVec2::new(1600, 900), Vec2::ZERO).zoom >= MIN_ZOOM);
 }
 
-/// Opening a UI scene frames it. Shown at 100% instead, a 1920x1080
-/// reference in a small dock leaf gives the user the top-left corner of
-/// their scene and nothing else.
+/// Shown at 100% instead, a 1920x1080 reference in a small dock leaf gives
+/// the user the top-left corner of their scene and nothing else.
 #[test]
 fn opening_a_ui_scene_fits_the_canvas_into_the_stage_area() {
     let mut app = util::editor_test_app();
@@ -2068,18 +1939,9 @@ fn opening_a_ui_scene_fits_the_canvas_into_the_stage_area() {
     );
 }
 
-/// The `viewport2d.frame` operator is the Fit control: it puts a panel
-/// panned and zoomed away back where opening the scene put it.
-///
-/// The viewport panel is made the active tab first, in 2D mode: Home is
-/// bound to this operator and to the timeline's jump-to-start, and what
-/// keeps the two apart is that the canvas answers only while it is the
-/// panel in front.
-///
-/// The tab carries the one viewport window id, which is the id a layout
-/// actually registers; the canvas is a mode of that panel rather than a
-/// window of its own, so a fixture naming the 2D id is a dock no layout
-/// can produce.
+/// The `viewport2d.frame` operator is the Fit control. The viewport panel is
+/// made the active tab first: Home is bound to this operator and to the
+/// timeline's jump-to-start, and the canvas answers only while it is in front.
 #[test]
 fn the_frame_op_returns_a_panned_and_zoomed_panel_to_the_fit() {
     let mut app = util::editor_test_app();
@@ -2126,9 +1988,8 @@ fn the_frame_op_returns_a_panned_and_zoomed_panel_to_the_fit() {
     );
 }
 
-/// The header says what is being edited and how far in the view is. The
-/// dock tab already says "Viewport", so repeating it in the header spends
-/// the one line of chrome the panel has on nothing.
+/// The dock tab already says "Viewport", so the header names the scene being
+/// edited and reads the zoom back instead.
 #[test]
 fn the_header_names_the_scene_and_reads_the_zoom_back() {
     use jackdaw::scenes::{SceneTab, Scenes};
@@ -2158,8 +2019,8 @@ fn the_header_names_the_scene_and_reads_the_zoom_back() {
         },
         Node::default(),
     ));
-    // A framing of the panel's own, so the readout reports a zoom nobody
-    // is about to fit away.
+    // A framing of the panel's own, so the readout reports a zoom nobody is
+    // about to fit away.
     hold_view(&mut app, parent);
     app.world_mut()
         .get_mut::<Viewport2dPanelHost>(parent)
@@ -2181,15 +2042,9 @@ fn the_header_names_the_scene_and_reads_the_zoom_back() {
     );
 }
 
-/// The panel's two captures: the whole editor window, for the chrome
-/// around the stage, and the panel's own render target, for what the
-/// stage is showing. Both resolve their path parameter, aim at their own
-/// surface, and write a PNG through the shared encoder.
-///
-/// A headless app has no render device, so no GPU readback ever lands.
-/// `ScreenshotCaptured` is triggered directly in place of the frame the
-/// renderer would have handed back, which puts the dispatch, the aim, the
-/// observer and the encoder under test.
+/// The panel's two captures: the whole editor window, and the panel's own
+/// render target. A headless app has no render device, so `ScreenshotCaptured`
+/// is triggered directly in place of the frame the renderer would hand back.
 #[test]
 fn the_screenshot_ops_aim_at_the_window_and_the_panel_and_write_pngs() {
     let mut app = util::editor_test_app();
@@ -2263,17 +2118,9 @@ fn the_screenshot_ops_aim_at_the_window_and_the_panel_and_write_pngs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Session restore opens its scenes before it has a workspace to show
-/// them in, so both halves of "show me the UI scene" have to survive the
-/// panel arriving late.
-///
-/// `project_select::transition_to_editor` runs `scene_open_system`
-/// synchronously right after setting `AppState::Editor`: the dock
-/// reconciler has not built a leaf, so the focus the scene asks for finds
-/// no tab, and no panel exists, so the fit it asks for finds no host.
-/// The focus is held until there is a leaf to honour it on, and a new
-/// panel starts with a fit pending, so a restored session opens with the
-/// UI scene in front and its canvas framed.
+/// Session restore opens its scenes before it has a workspace to show them
+/// in, so the focus a scene asks for is held until there is a leaf to honour
+/// it on, and a new panel starts with a fit pending.
 #[test]
 fn a_ui_scene_opened_before_the_workspace_exists_is_still_fronted_and_framed() {
     use jackdaw::viewport_host::{PendingViewportFocus, focus_viewport};
@@ -2297,8 +2144,7 @@ fn a_ui_scene_opened_before_the_workspace_exists_is_still_fronted_and_framed() {
         "a focus the dock cannot honour yet is held, not dropped",
     );
 
-    // Then the workspace materialises: the leaf, with the viewport behind
-    // another tab, and the panel the reconciler builds into it.
+    // Then the workspace materialises, with the panel the reconciler builds.
     let leaf = dock_leaf(&mut app, &["jackdaw.outliner", VIEWPORT_WINDOW_ID]);
     let panel = fit_panel(&mut app);
     for _ in 0..3 {
@@ -2340,14 +2186,8 @@ fn a_ui_scene_opened_before_the_workspace_exists_is_still_fronted_and_framed() {
     );
 }
 
-/// A held focus is owed to the tab that asked for it, and to no other.
-///
-/// Restore opens *every* persisted tab in turn, activating each as it
-/// goes, and only then switches to the one the user left in front. So a
-/// UI-scene tab that is not the last active one still asks for a focus
-/// while the dock is empty. Left standing, that request is honoured once
-/// the leaf is built, and the 2D viewport comes forward over the ordinary
-/// scene the user restored.
+/// Restore opens every persisted tab in turn, so a UI-scene tab that is not
+/// the last active one still asks for a focus while the dock is empty.
 #[test]
 fn a_focus_asked_for_by_a_tab_the_user_left_does_not_front_the_panel() {
     use jackdaw::scenes::swap::swap_active_tab;
@@ -2410,8 +2250,7 @@ fn a_focus_asked_for_by_a_tab_the_user_left_does_not_front_the_panel() {
     );
 }
 
-/// The two operators a scripted capture of this panel needs. Both are
-/// gestures a headless run cannot perform: the mode is a click on a
+/// Both are gestures a headless run cannot perform: the mode is a click on a
 /// header segment, and a stage selection is a click at an authored pixel.
 #[test]
 fn the_harness_ops_flip_the_mode_and_select_by_name() {
@@ -2445,9 +2284,7 @@ fn the_harness_ops_flip_the_mode_and_select_by_name() {
     );
 }
 
-/// `selection.select` resolves a name against the authored scene, and
-/// refuses anything it cannot resolve to exactly one node: a capture of
-/// the wrong node is worse than a capture that did not happen.
+/// A capture of the wrong node is worse than a capture that did not happen.
 #[test]
 fn selecting_by_name_needs_exactly_one_match() {
     let mut app = op_app();
@@ -2483,8 +2320,7 @@ fn selecting_by_name_needs_exactly_one_match() {
         .expect("selection.select dispatches")
         .assert_cancelled();
 
-    // A second `Play` makes the name ambiguous, and an ambiguous name is
-    // refused rather than resolved to whichever entity comes first.
+    // A second `Play` makes the name ambiguous.
     app.world_mut()
         .spawn((Name::new("Play"), Node::default(), ChildOf(root)));
     app.update();
@@ -2501,12 +2337,9 @@ fn selecting_by_name_needs_exactly_one_match() {
     );
 }
 
-/// An editor app with the viewport panel's extension on.
-///
-/// The canvas operators are registered by `ViewportExtension`, and the
-/// startup resolver only enables what the developer's on-disk
-/// extensions.json lists, so an op test that skips this passes or fails by
-/// the machine it runs on, and by which other tests started beside it.
+/// An editor app with the viewport panel's extension on. The startup resolver
+/// only enables what the developer's on-disk extensions.json lists, so an op
+/// test that skips this passes or fails by the machine it runs on.
 fn op_app() -> App {
     let mut app = util::editor_test_app();
     jackdaw_api_internal::lifecycle::enable_extension(
@@ -2536,11 +2369,8 @@ fn fit_panel(app: &mut App) -> Entity {
 }
 
 /// The dock a real layout builds when a viewport panel is in front, showing
-/// `mode`.
-///
-/// Two halves, because the editor has one viewport *window* with two modes:
-/// the tab says a viewport is fronted, and a [`ViewportHost`] in `mode` says
-/// which of the two it is showing.
+/// `mode`. The editor has one viewport window with two modes: the tab says a
+/// viewport is fronted, and a `ViewportHost` says which of the two it shows.
 fn fronted_viewport(app: &mut App, mode: jackdaw::viewport_host::ViewportMode) {
     let leaf = dock_leaf(app, &[jackdaw::viewport::VIEWPORT_WINDOW_ID]);
     let tab = tab_ids(app, leaf)[0];
@@ -2588,8 +2418,6 @@ fn spawn_viewport_panel(
 }
 
 /// Home belongs to the panel in front, not to any panel in the workspace.
-/// With a viewport showing the world in front and a second one showing the
-/// canvas buried behind it, one press used to reach both.
 #[test]
 fn a_buried_canvas_does_not_answer_home_for_the_panel_in_front() {
     use jackdaw::viewport_host::ViewportMode;
@@ -2626,12 +2454,8 @@ fn a_buried_canvas_does_not_answer_home_for_the_panel_in_front() {
     );
 }
 
-/// A workspace can front a viewport in each of two leaves -- the canvas
-/// beside the world, which is how a screen is authored against the scene it
-/// belongs to. Asking each mode separately whether *a* fronted viewport is
-/// showing it answered yes twice, so one Home framed the canvas and moved the
-/// camera. With the cursor over neither, Home names no panel and does
-/// nothing.
+/// A workspace can front a viewport in each of two leaves. Asking each mode
+/// separately whether a fronted viewport is showing it answered yes twice.
 #[test]
 fn two_fronted_viewports_in_different_modes_do_not_both_answer_home() {
     use jackdaw::viewport_host::ViewportMode;
@@ -2713,9 +2537,8 @@ fn captured_frame() -> Image {
     )
 }
 
-/// Withdraw the fit a new panel starts with, as a restored framing does:
-/// the tests below that state their positions in authored pixels want the
-/// view they set, not the one an arriving scene would frame for them.
+/// Withdraw the fit a new panel starts with, as a restored framing does, so
+/// the tests below get the view they set.
 fn hold_view(app: &mut App, panel: Entity) {
     app.world_mut()
         .get_mut::<Viewport2dPanelHost>(panel)
@@ -2771,17 +2594,9 @@ fn zoom_text(app: &mut App, panel: Entity) -> String {
     found[0].clone()
 }
 
-/// A view nobody moved is not a framing the tab chose, and capturing it
-/// as one is how a tab loses its framing permanently.
-///
-/// The scenario that costs a user their fit: a UI scene opens while no 2D
-/// viewport is docked, so the fit its activation asks for finds no panel
-/// and is lost. A panel docked afterwards sits at 100%, untouched.
-/// Capturing *that* on the way out as the tab's chosen framing, which the
-/// restore then honours, leaves every later activation withdrawing the
-/// fit it just asked for and the tab stuck at 100% for the session.
-///
-/// So `ViewState::ui_view` stays `None` until something moves the view.
+/// A view nobody moved is not a framing the tab chose. Capturing it as one
+/// leaves every later activation withdrawing the fit it just asked for, so
+/// `ViewState::ui_view` stays `None` until something moves the view.
 #[test]
 fn a_ui_tab_that_never_got_framed_is_framed_when_a_panel_arrives() {
     use jackdaw::scenes::swap::swap_active_tab;
@@ -2794,22 +2609,20 @@ fn a_ui_tab_that_never_got_framed_is_framed_when_a_panel_arrives() {
         scenes.tabs.push(SceneTab::new_untitled(1));
         scenes.tabs.push(SceneTab::new_untitled(2));
         scenes.active = 0;
-        // Tab 1 is the UI scene, carried as a document so activating it
-        // goes through the real spawn-and-frame path.
+        // Tab 1 is the UI scene, carried as a document so activating it takes
+        // the real spawn-and-frame path.
         scenes.tabs[1].content = TabContent::Scene(Some(Box::new(
             jackdaw_bsn::parse_bsn_text("#Overlay\njackdaw_scene_types::UiSceneRoot\n")
                 .expect("the fixture parses"),
         )));
     }
 
-    // Opened with no 2D panel docked: the fit this activation asks for
-    // has nothing to land on, and is lost.
+    // Opened with no 2D panel docked: the fit this activation asks for is lost.
     swap_active_tab(app.world_mut(), 1);
     app.update();
     assert_eq!(ui_scene_roots(&mut app), 1, "the UI scene spawned");
 
-    // The panel arrives afterwards, and frames what it finds: a panel
-    // that came late is still a panel nobody has framed.
+    // The panel arrives afterwards, and frames what it finds.
     let panel = fit_panel(&mut app);
     for _ in 0..2 {
         app.update();
@@ -2869,11 +2682,9 @@ fn ui_scene_roots(app: &mut App) -> usize {
         .count()
 }
 
-/// The op's selection is a real selection, not a resource write nobody
-/// hears: `Selection::select_single` inserts `Selected`, and the panels
-/// that show a selection (the inspector's card list, the outliner's row
-/// highlight) are both `On<Add, Selected>` observers, so a scripted
-/// selection lights the editor up as a click does.
+/// The op's selection is a real selection: the inspector's card list and the
+/// outliner's row highlight are both `On<Add, Selected>` observers, so a
+/// scripted selection lights the editor up as a click does.
 #[test]
 fn selecting_by_name_builds_the_inspector_for_the_selected_node() {
     let mut app = op_app();
@@ -2938,12 +2749,8 @@ fn component_card_labels(app: &mut App) -> Vec<String> {
     labels
 }
 
-/// Home reaches the canvas from the layout the editor actually builds.
-///
-/// The gate used to ask the dock tree for `jackdaw.viewport_2d`, an id
-/// `canonical_window_id` maps away and no layout registers, so the answer was
-/// always no and Home did nothing unless the cursor happened to be over a
-/// stage.
+/// The gate asks the dock tree for an id a layout actually registers, not
+/// `jackdaw.viewport_2d`, which `canonical_window_id` maps away.
 #[test]
 fn the_canvas_answers_home_while_its_panel_is_in_front() {
     use jackdaw::viewport_host::ViewportMode;
@@ -3001,13 +2808,8 @@ fn available(app: &mut App, id: &'static str) -> bool {
         .unwrap_or_else(|err| panic!("{id}: is_available errored: {err}"))
 }
 
-/// The chords that describe something in a world with three axes: what
-/// they are, in one list.
-///
-/// Every one is a bare letter or digit, which is also a letter a name is
-/// spelled with. Over the canvas they must all stand down, or the panel
-/// in front and the keyboard disagree about which viewport the user is
-/// working in.
+/// The chords that describe something in a world with three axes. Every one
+/// is a bare letter or digit, so over the canvas they must all stand down.
 const WORLD_CHORDS: [&str; 7] = [
     // KeyM
     "tools.measure_distance",
@@ -3053,13 +2855,10 @@ fn the_worlds_bare_chords_answer_over_the_three_d_viewport() {
     }
 }
 
-/// Something selected, so `viewport.focus_selected` has a thing to frame
-/// and its availability turns on the panel rather than on an empty
-/// selection.
-///
-/// The focus is cleared with it, the way a press in a viewport clears it:
-/// Bevy seeds the focus with the window itself, and the edit-mode gate
-/// reads a seeded focus as a field being typed into.
+/// Something selected, so `viewport.focus_selected` has a thing to frame. The
+/// focus is cleared with it, the way a press in a viewport does: Bevy seeds
+/// the focus with the window, which the edit-mode gate reads as a field being
+/// typed into.
 fn framing_selection(app: &mut App) {
     let entity = app.world_mut().spawn(Transform::default()).id();
     app.world_mut().resource_mut::<Selection>().entities = vec![entity];
@@ -3069,13 +2868,8 @@ fn framing_selection(app: &mut App) {
     app.update();
 }
 
-/// Home frames the canvas when it is pressed, not only when the operator
-/// is called by hand.
-///
-/// Every test above asks the operator whether it is available. That says
-/// nothing about the press reaching it, and the press is the whole
-/// gesture: a chord bound to an action nothing evaluates is bound and
-/// dead.
+/// Home frames the canvas when it is pressed, not only when the operator is
+/// called by hand: a chord bound to an action nothing evaluates is dead.
 #[test]
 fn home_frames_the_canvas_through_the_keyboard() {
     let mut app = util::editor_test_app();

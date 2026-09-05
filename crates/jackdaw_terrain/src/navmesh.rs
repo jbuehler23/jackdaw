@@ -188,11 +188,10 @@ impl BakeParams {
     /// this refuses instead.
     pub const ADDRESSABLE_GRID: f32 = u16::MAX as f32;
 
-    /// Tallest step a bake will take a walking character over, in world
-    /// units.
     ///
-    /// The same ceiling the options bar's dial clamps to: without it the
-    /// upper end is open, and a climb taller than the terrain's own relief
+    /// The same ceiling the options bar's dial clamps to: without it a climb
+    /// taller than the terrain's own relief walks the whole surface flat while
+    /// reading as plausible.
     /// walks the whole surface flat while reading as plausible.
     pub const MAX_CLIMB: f32 = 2.0;
 
@@ -628,11 +627,9 @@ impl SourceHasher {
 
     /// Every stored placement, and what the palette says each one is.
     ///
-    /// Placements are obstacles a bake routes round, so a stamp, a clear
-    /// or an adoption moves the navmesh as surely as a sculpt does. The
-    /// palette goes in as the asset each index names and whether it blocks
-    /// an agent: an entry flipped to ground cover takes its placements out
-    /// of the bake without any of them changing.
+    /// Placements are obstacles a bake routes round, so a stamp or a clear moves
+    /// the navmesh as surely as a sculpt does. An entry flipped to ground cover
+    /// takes its placements out of the bake without any of them changing.
     pub fn eat_placements(&mut self, palette: &ScatterPalette, regions: &TerrainRegions) {
         self.eat_u32(palette.assets.len() as u32);
         for entry in &palette.assets {

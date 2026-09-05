@@ -179,9 +179,8 @@ pub fn load_bsn_scene(world: &mut World, text: &str) -> Result<LoadedBsnScene, B
     Ok(LoadedBsnScene { entities, assets })
 }
 
-/// Report once, after a load, that the missing types come from the editor's
-/// picture of the project being older than the scene, and that a rebuild
-/// refreshes it.
+/// Reports once, after a load, that the editor's picture of the project is
+/// older than the scene and a rebuild refreshes it.
 fn report_unresolved_types(world: &mut World) {
     let Some(mut unresolved) = world.get_resource_mut::<crate::UnresolvedTypes>() else {
         return;
@@ -191,25 +190,15 @@ fn report_unresolved_types(world: &mut World) {
     }
 }
 
-/// Adopt `source`'s named asset entries into the open scene.
+/// Adopts `source`'s named asset entries into the open scene.
 ///
-/// Each entry's value goes into its `Assets<T>` store, both of its reference
-/// spellings join [`crate::BsnSceneAssets`] so a `#Name` in a pasted patch
-/// resolves, and the entry joins the live document as a root unless a root of
-/// that name is already there. A copied subtree carries the assets its
-/// components name, so a pasted `ImageNode` finds its image rather than a
-/// reference nothing backs.
+/// Each entry's value goes into its `Assets<T>` store, both reference spellings
+/// join [`crate::BsnSceneAssets`], and the entry joins the live document as a
+/// root unless a root of that name is already there.
 ///
-/// A name the open scene already uses is not adopted again. Two entries of
-/// the same name holding the same value are the same asset arriving twice,
-/// and the one already there answers for both; two holding *different*
-/// values are two assets with one name, and there is no spelling that
-/// reaches the second, so it is refused and reported rather than quietly
-/// taking the name off the one the scene was already using.
-///
-/// Returns the names of the entries that could not be adopted, for the caller
-/// to report: an unregistered asset type, a value this build cannot read, or
-/// a name already spoken for by a different value.
+/// A name the scene already uses is adopted again only when the value matches;
+/// a different value under the same name is unreachable by any spelling and is
+/// refused. Returns the names of the entries that could not be adopted.
 pub fn adopt_asset_roots(world: &mut World, source: &SceneBsnAst) -> Vec<String> {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let roots = {
@@ -237,9 +226,8 @@ pub fn adopt_asset_roots(world: &mut World, source: &SceneBsnAst) -> Vec<String>
         }
     }
 
-    // Split by what the open document already calls each name, before any
-    // handle is published: a refused entry must not have taken the name
-    // over on its way to being refused.
+    // Split before any handle is published: a refused entry must not have taken
+    // the name over on its way to being refused.
     let mut fresh = Vec::new();
     {
         let live = world.resource::<SceneBsnAst>();
@@ -255,8 +243,6 @@ pub fn adopt_asset_roots(world: &mut World, source: &SceneBsnAst) -> Vec<String>
                     if asset_value_from_root(live, existing)
                         == asset_value_from_root(source, root) =>
                 {
-                    // The same asset arriving again: the root already there
-                    // answers for it, and its handle is the one to publish.
                     fresh.push((None, entry));
                 }
                 Some(_) => dropped.push(entry.name),
@@ -457,9 +443,8 @@ mod tests {
             .expect("asset should exist")
     }
 
-    /// A copied subtree carries the assets its components name. Paste adopts
-    /// them: into the asset store, into the reference names an apply
-    /// resolves, and into the open document so a save keeps them.
+    /// A copied subtree carries the assets its components name, and paste
+    /// adopts them into the store, the reference names and the document.
     #[test]
     fn adopting_a_clipboard_document_s_assets_makes_its_references_resolvable() {
         let mut world = scalar_world();
@@ -501,17 +486,12 @@ mod tests {
             "the entry joined the open document, so a save keeps it"
         );
 
-        // A second paste of the same entry does not add a second root.
         adopt_asset_roots(&mut world, &source);
         assert_eq!(world.resource::<SceneBsnAst>().roots.len(), 1);
     }
 
-    /// One name is one asset. A second entry arriving under a name the open
-    /// scene already uses is adopted only when it holds the same value; a
-    /// different value under the same name is an asset no spelling can reach,
-    /// so it is refused -- and refusing it must not take the name off the one
-    /// the scene was already using, which is what makes the comparison, and
-    /// its place before any handle is published, load-bearing.
+    /// A different value under a name the scene already uses is refused, and
+    /// refusing it must not take the name off the one already there.
     #[test]
     fn a_second_entry_of_the_same_name_is_adopted_only_when_it_is_the_same_asset() {
         let mut world = scalar_world();
@@ -542,8 +522,6 @@ mod tests {
         let published = world.resource::<crate::BsnSceneAssets>().0["#Shared"].clone();
         assert_eq!(get_material(&world, &published).roughness, 0.25);
 
-        // The same asset arriving again: the root already there answers for
-        // it, so nothing is refused and nothing is doubled.
         let again = source_of(&mut world, 0.25);
         assert!(
             adopt_asset_roots(&mut world, &again).is_empty(),
@@ -551,8 +529,6 @@ mod tests {
         );
         assert_eq!(world.resource::<SceneBsnAst>().roots.len(), 1);
 
-        // A different asset under the same name: there is no spelling that
-        // reaches it, so it is refused by name.
         let other = source_of(&mut world, 0.75);
         assert_eq!(
             adopt_asset_roots(&mut world, &other),

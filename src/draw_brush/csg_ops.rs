@@ -402,7 +402,7 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
 
     // Join (Convex Merge) wraps all selected brushes' vertices in a single
     // convex hull. This is well-defined for both convex and concave inputs:
-    // we simply gather every vertex from each brush's topology (rather than
+    // gather every vertex from each brush's topology (rather than
     // re-deriving them from face planes, which was the convex-paradigm path
     // and is undefined for non-convex shapes), then call parry's convex_hull
     // on the combined set.

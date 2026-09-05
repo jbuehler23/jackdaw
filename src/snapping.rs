@@ -87,14 +87,9 @@ pub struct SnapSettings(pub jackdaw_snap::SnapSettings);
 /// chord and predates the keymap engine; migrates with the binding-layer
 /// follow-up.
 ///
-/// This grid is the 3D world's, in world units, so the wheel is ignored while
-/// the hovered viewport is showing its 2D canvas: there the same chord zooms
-/// that canvas, which has a pixel grid of its own
-/// ([`crate::viewport_2d::Ui2dView::grid`]).
-///
-/// Public so tests can run it directly: the plugin schedules it inside
-/// [`crate::EditorInteractionSystems`], which never runs while a test app
-/// sits in `AppState::ProjectSelect`.
+/// This grid is the 3D world's, so the wheel is ignored while the hovered
+/// viewport shows its 2D canvas, where the same chord zooms instead. Public so
+/// tests can run it directly.
 pub fn handle_grid_size_scroll(
     keyboard: Res<ButtonInput<KeyCode>>,
     keybind_focus: crate::keybind_focus::KeybindFocus,

@@ -1,16 +1,13 @@
-//! The file an instance points at: where it lives, how a saved document
-//! spells it, and what shape it has to be in to be instanced.
+//! The file an instance points at: where it lives, how a saved document spells
+//! it, and what shape it has to be in to be instanced.
 //!
-//! A source is written relative to the directory of the document that names
-//! it, the only spelling both sides can honour: an authoring machine's
-//! absolute path exists in neither a shipped game nor another checkout.
-//! Absolute sources are read, never written.
+//! A source is written relative to the directory of the document that names it,
+//! the only spelling both sides can honour. Absolute sources are read, never
+//! written.
 //!
-//! The two sides differ in what they follow. The editor follows a source
-//! anywhere on the machine. A game refuses anything outside its asset root,
-//! since a scene file there is shipped content a player can replace and a
-//! reference is an instruction to read and parse whatever it names. The
-//! game's half is enforced in `jackdaw_runtime::resolve_prefab_references`.
+//! The editor follows a source anywhere on the machine; a game refuses anything
+//! outside its asset root, enforced in
+//! `jackdaw_runtime::resolve_prefab_references`.
 
 use std::path::{Path, PathBuf};
 
@@ -66,10 +63,8 @@ fn normalize(path: &Path) -> PathBuf {
 /// `document_dir`, so the saved document travels.
 ///
 /// Call it on the copy being emitted, never on the live document: the editor
-/// holds instance sources as the absolute paths its file dialogs and cache
-/// keys are made of. A source that cannot be expressed relative to
-/// `document_dir` is left as it stands rather than mangled, which is also
-/// what happens when the document has no real directory yet.
+/// holds instance sources as absolute paths. A source that cannot be expressed
+/// relative to `document_dir` is left as it stands.
 pub fn relativize_isa_sources(ast: &mut SceneBsnAst, document_dir: &Path) {
     if !document_dir.is_absolute() {
         return;
@@ -90,17 +85,14 @@ pub fn relativize_isa_sources(ast: &mut SceneBsnAst, document_dir: &Path) {
     }
 }
 
-/// Rewrite every relative `IsA.source` in `ast` to the file it names, given
-/// the directory `ast` was read from.
+/// Rewrite every relative `IsA.source` in `ast` to the file it names, given the
+/// directory `ast` was read from.
 ///
-/// This is the read half of the pair [`relativize_isa_sources`] writes. A
-/// document in memory holds sources as real paths, so a cache keyed by file
-/// or a reader opening one can look a prefab up without also carrying the
-/// document's directory.
+/// The read half of the pair [`relativize_isa_sources`] writes, so a cache keyed
+/// by file can look a prefab up without carrying the document's directory.
 ///
-/// A source that was already absolute is folded rather than left alone, so
-/// every source in the document afterwards is one a caller can compare: a
-/// key, a cycle, or a containment check all read `..` as text otherwise.
+/// An already-absolute source is folded rather than left alone, so every source
+/// afterwards is one a caller can compare.
 pub fn absolutize_isa_sources(ast: &mut SceneBsnAst, document_dir: &Path) {
     for node in ast.entities_with_component(ISA_TYPE) {
         let Some(source) = read_isa_source(ast, node) else {
@@ -144,16 +136,14 @@ pub fn isa_value(source: &str, deleted: &[u32]) -> BsnValue {
 
 /// Make a source document instanceable as a prefab.
 ///
-/// The resolver only materializes an `IsA` reference whose target has a
-/// single root carrying the `Prefab` marker, so a plain scene (no marker,
-/// possibly several roots) is wrapped into that shape here: a lone root is
-/// marked in place, several roots are reparented under a synthetic `Prefab`
-/// root, and every entity gets a sequential `PrefabEntityId`. A file that is
-/// already a prefab passes through untouched.
+/// The resolver only materializes an `IsA` reference whose target has a single
+/// root carrying the `Prefab` marker, so a plain scene is wrapped into that
+/// shape: a lone root is marked in place, several roots are reparented under a
+/// synthetic `Prefab` root, and every entity gets a sequential `PrefabEntityId`.
+/// A file that is already a prefab passes through untouched.
 ///
-/// The wrapping happens on the in-memory document; the authored file is
-/// never rewritten. `display_name` names the synthetic root when one is
-/// made.
+/// The wrapping happens on the in-memory document; the authored file is never
+/// rewritten. `display_name` names the synthetic root when one is made.
 pub fn normalize_as_prefab_source(ast: &mut SceneBsnAst, display_name: &str) {
     let roots = ast.roots.clone();
     if roots.is_empty()

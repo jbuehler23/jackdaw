@@ -1,28 +1,11 @@
 //! The 2D presentation of a viewport panel: a `Camera2d` rendered into a
-//! texture and shown in a UI node, mirroring the 3D presentation's
-//! camera-to-texture pattern (see [`crate::viewport`]).
+//! texture and shown in a UI node, one of the two presentations every viewport
+//! panel builds (the mode lives in [`crate::viewport_host`]).
 //!
-//! One of the two presentations every viewport panel builds; which of them
-//! is displayed is the panel's mode, in [`crate::viewport_host`].
-//!
-//! Holds the stage skeleton, its camera, the teardown that keeps a closed
-//! panel from leaking either, and the stage's navigation: an [`Ui2dView`]
-//! per panel that scroll and middle-drag move, that `place_stage` turns
-//! into the stage node's size and position, and that rides along with the
-//! scene tab it was framed for. [`route_ui_roots_to_cameras`] points
-//! authored UI roots at this camera and
-//! [`size_targets_to_reference`] holds that camera's image at the authored
-//! reference size. Selection and the editing overlays live in
-//! [`crate::ui_stage`].
-//!
-//! In [`Viewport2dMode::Interact`], `forward_pointer_into_stage` drives a
-//! pointer of the panel's own across the render target, so `bevy_ui`'s
-//! picking backend finds the authored widgets there.
-//!
-//! Framing is a request ([`request_2d_fit`], the `viewport2d.frame`
-//! operator) rather than a computation: the two numbers a fit needs are
-//! only settled after layout, and [`size_targets_to_reference`] honours
-//! the request where it already holds both.
+//! Holds the stage skeleton, its camera, its teardown, and the stage's
+//! navigation: an [`Ui2dView`] per panel that scroll and middle-drag move and
+//! that rides along with the scene tab it was framed for. Selection and the
+//! editing overlays live in [`crate::ui_stage`].
 
 use bevy::{
     asset::uuid::Uuid,
@@ -81,9 +64,8 @@ const PIXEL_TICKS: f32 = 0.01;
 /// spans `near = -1000`, so everything the scene draws at Z 0 is in view.
 const CAMERA_Z: f32 = 999.0;
 
-/// Draw order of the parking camera. Behind every panel camera, and it
-/// never draws anyway (`is_active: false`); distinct so a camera-order
-/// collision warning cannot point here.
+/// Draw order of the parking camera: behind every panel camera, and distinct so
+/// a camera-order collision warning cannot point here.
 const PARKING_CAMERA_ORDER: isize = -2;
 
 /// Gap, in stage logical pixels, left between a fitted canvas and each
@@ -108,24 +90,15 @@ pub struct Scene2dViewport;
 #[derive(Component)]
 pub struct Scene2dStageArea;
 
-/// Marker for the editor's single parking camera. An authored UI scene
-/// root points here whenever no 2D viewport panel is open, so it is never
-/// handed back to the editor's own window camera. Spawned on demand by
-/// `park_ui_scene_roots`; one per session, never per panel.
+/// Marker for the editor's single parking camera. An authored UI scene root
+/// points here whenever no 2D viewport panel is open, so it is never handed back
+/// to the editor's own window camera.
 #[derive(Component)]
 pub struct UiSceneParkingCamera;
 
-/// What a 2D viewport panel does with pointer input.
-///
-/// `Edit` is the authoring mode: clicks select and manipulate the scene
-/// being edited, and the live widgets never hear about the pointer.
-/// `Interact` hands input to the scene itself so the user can try the UI
-/// they are building, and the authoring chrome stands down.
-///
-/// It sits on [`Viewport2dPanelHost`], one per panel, so two viewports
-/// can show the same scene with one being authored and the other tried
-/// out. Readers reach it through the host the stage belongs to, never
-/// through a resource.
+/// What a 2D viewport panel does with pointer input: `Edit` selects and
+/// manipulates the scene being authored, `Interact` hands the pointer to the
+/// live widgets. One per panel, on [`Viewport2dPanelHost`].
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Viewport2dMode {
     #[default]
@@ -133,36 +106,20 @@ pub enum Viewport2dMode {
     Interact,
 }
 
-/// How a 2D viewport is framed over the scene it edits.
+/// How a 2D viewport is framed over the scene it edits: `place_stage` derives
+/// the stage node's size and position from it, and it travels with a scene tab
+/// across a swap.
 ///
-/// The panel's navigation state: `place_stage` derives the stage node's
-/// size and position from it, and it travels with a scene tab across a
-/// swap.
+/// The view moves the stage, not the camera. Bevy pins a routed UI scene to its
+/// render target and builds its own view from the target's rect, so no camera
+/// transform can pan or zoom it. The panel's image stays at the authored
+/// reference size while the stage node grows and slides around it, and
+/// [`target_pixels_per_stage_pixel`] reads the zoom back off the laid-out node.
 ///
-/// **The view moves the stage, not the camera.** Bevy renders UI through
-/// a view of its own (`bevy_ui_render::extract_ui_camera_view` builds an
-/// orthographic projection straight from the target's viewport rect and
-/// parks the view transform at the origin), so a routed UI scene is
-/// pinned to its render target and no camera transform can pan or zoom
-/// it. The panel's image stays at the authored reference size while the
-/// stage node grows and slides around it, so
-/// [`target_pixels_per_stage_pixel`] reads the zoom back off the laid-out
-/// node and nothing downstream needs a zoom term.
-///
-/// Two cursor spaces meet here:
-///
-/// - the view is *driven* in the stage **area**'s logical pixels
-///   ([`cursor_area_offset`]). The area is the fixed window the scene
-///   moves behind, so an offset measured against it does not change when
-///   the view does, which is what makes [`zoom_toward`]'s anchor hold.
-///   Raw `MouseMotion` deltas are stage physical pixels and take
-///   `ComputedNode::inverse_scale_factor()` alone to get there.
-/// - a click is *resolved* in authored pixels
-///   ([`cursor_stage_offset`] against the stage **node**, then
-///   `ui_stage::stage_to_authored`). The stage node is the canvas and
-///   already carries the view, so that path composes the two standing
-///   conversions (ui-logical to stage physical, then stage physical to
-///   render-target) and needs nothing from [`Ui2dView`].
+/// The view is driven in the stage area's logical pixels
+/// ([`cursor_area_offset`]); a click is resolved in authored pixels
+/// ([`cursor_stage_offset`] against the stage node, then
+/// `ui_stage::stage_to_authored`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Ui2dView {
     /// Authored point shown at the centre of the stage area, in authored
@@ -171,33 +128,25 @@ pub struct Ui2dView {
     /// Stage logical pixels per authored pixel. `1.0` draws the canvas
     /// at its authored size, whatever the display's scale factor.
     pub zoom: f32,
-    /// Lattice a manipulated node lands on, in **authored pixels**.
-    ///
-    /// Separate from the 3D grid, whose lattice is measured in world
-    /// units and cannot express whole authored pixels. It rides on the
-    /// view because that is the struct a scene tab captures and restores
-    /// (`ViewState::ui_view`).
+    /// Lattice a manipulated node lands on, in authored pixels. Separate from
+    /// the 3D grid, which is measured in world units. It rides on the view
+    /// because that is what a scene tab captures and restores.
     pub grid: f32,
 }
 
-/// Default [`Ui2dView::grid`]: eight authored pixels, the step UI
-/// layouts are usually spaced on, and coarse enough that the magnet is
-/// visible the moment it is switched on.
+/// Default [`Ui2dView::grid`]: eight authored pixels, the step UI layouts are
+/// usually spaced on.
 pub const DEFAULT_UI_GRID: f32 = 8.0;
 
-/// Finest [`Ui2dView::grid`] the stepper reaches: a whole authored
-/// pixel, which is as fine as a canvas measured in pixels goes.
+/// Finest [`Ui2dView::grid`] the stepper reaches: a whole authored pixel.
 pub const MIN_UI_GRID: f32 = 1.0;
 
 /// Coarsest [`Ui2dView::grid`] the stepper reaches.
 pub const MAX_UI_GRID: f32 = 64.0;
 
-/// `grid` stepped `steps` powers of two, clamped to the ladder's ends.
-///
-/// The step goes through the power rather than multiplying the value, so
-/// a grid set off the ladder (a scripted `viewport2d.grid` of 10) comes
-/// back onto it on the first press instead of walking the ladder in tens.
-/// Same rule as the 3D grid stepper (`crate::grid_ops`).
+/// `grid` stepped `steps` powers of two, clamped to the ladder's ends. The step
+/// goes through the power rather than multiplying the value, so a grid set off
+/// the ladder comes back onto it on the first press.
 pub fn stepped_ui_grid(grid: f32, steps: i32) -> f32 {
     let current = if grid.is_finite() && grid > 0.0 {
         grid
@@ -218,21 +167,15 @@ impl Default for Ui2dView {
     }
 }
 
-/// Authored point under a cursor sitting `area_offset` logical pixels
-/// from the centre of the stage area (see [`cursor_area_offset`]), in
-/// authored pixels from the centre of the canvas.
-///
-/// Screen pixels run y-down (UI convention); the view's pan runs y-up,
-/// hence the flip.
+/// Authored point under a cursor sitting `area_offset` logical pixels from the
+/// centre of the stage area (see [`cursor_area_offset`]), in authored pixels
+/// from the centre of the canvas. Screen pixels run y-down and the pan y-up.
 pub fn world_at(view: Ui2dView, area_offset: Vec2) -> Vec2 {
     view.pan + Vec2::new(area_offset.x, -area_offset.y) / view.zoom
 }
 
-/// Zoom by `ticks` wheel steps about the point under the cursor.
-///
-/// The pan is re-solved so [`world_at`] returns the same authored point
-/// before and after: the scene grows and shrinks around the cursor
-/// rather than around the centre of the area.
+/// Zoom by `ticks` wheel steps about the point under the cursor: the pan is
+/// re-solved so [`world_at`] returns the same authored point before and after.
 pub fn zoom_toward(view: Ui2dView, area_offset: Vec2, ticks: f32) -> Ui2dView {
     let zoom = (view.zoom * ZOOM_PER_TICK.powf(ticks)).clamp(MIN_ZOOM, MAX_ZOOM);
     let anchor = world_at(view, area_offset);
@@ -244,16 +187,10 @@ pub fn zoom_toward(view: Ui2dView, area_offset: Vec2, ticks: f32) -> Ui2dView {
 }
 
 /// The view that shows the whole of a `reference`-sized canvas inside an
-/// `area`-sized window, centred, with `FIT_MARGIN` to spare on each
-/// edge.
-///
-/// The binding axis is whichever runs out first, so the canvas keeps its
-/// authored aspect.
-///
-/// The usable box is floored at one pixel and the zoom clamped to the
-/// same range every other zoom path uses: this runs on the frame a panel
-/// is first laid out, and a zoom of zero would divide through every
-/// mapping downstream. `view.grid` rides through untouched.
+/// `area`-sized window, centred, with `FIT_MARGIN` to spare on each edge. The
+/// usable box is floored at one pixel and the zoom clamped, since this runs on
+/// the frame a panel is first laid out and a zoom of zero would divide through
+/// every mapping downstream.
 pub fn fit_view(view: Ui2dView, reference: UVec2, area: Vec2) -> Ui2dView {
     let canvas = reference.as_vec2().max(Vec2::ONE);
     let usable = (area - Vec2::splat(FIT_MARGIN * 2.0)).max(Vec2::ONE);
@@ -264,13 +201,9 @@ pub fn fit_view(view: Ui2dView, reference: UVec2, area: Vec2) -> Ui2dView {
     }
 }
 
-/// Ask every 2D viewport panel to frame the UI scene it is showing.
-///
-/// The fit is requested rather than computed here because both numbers it
-/// needs (the scene's reference size and the panel area's laid-out size)
-/// are only settled after layout. [`size_targets_to_reference`] reads
-/// both and honours the request there, so a scene that has not spawned
-/// yet frames itself when it arrives.
+/// Ask every 2D viewport panel to frame the UI scene it is showing. Requested
+/// rather than computed here, because the reference size and the area's
+/// laid-out size are only settled after layout.
 pub fn request_2d_fit(world: &mut World) {
     let mut hosts = world.query::<&mut Viewport2dPanelHost>();
     for mut host in hosts.iter_mut(world) {
@@ -289,20 +222,10 @@ pub fn pan_by(view: Ui2dView, area_delta: Vec2) -> Ui2dView {
     }
 }
 
-/// Render-target pixels per stage physical pixel: authored pixels per
-/// stage pixel, which is the reciprocal of the view's zoom.
-///
-/// The stage node displays the panel's image across its whole area, so
-/// this factor turns a stage measurement into authored pixels. It is
-/// derived from the laid-out node rather than read off [`Ui2dView`]:
-/// `place_stage` puts the zoom into the node, so no second copy of the
-/// zoom can drift. Both axes agree, because the stage
-/// carries the reference aspect exactly; the smaller is taken so the
-/// tick after a resize, when they briefly disagree, under-reads rather
-/// than over-reads.
-///
-/// A degenerate stage returns `1.0` rather than an infinity: this runs
-/// on every cursor move, including the frame a panel is first laid out.
+/// Render-target pixels per stage physical pixel, which turns a stage
+/// measurement into authored pixels. Derived from the laid-out node rather than
+/// read off [`Ui2dView`], so no second copy of the zoom can drift. A degenerate
+/// stage returns `1.0` rather than an infinity.
 pub fn target_pixels_per_stage_pixel(stage_size: Vec2, target_size: UVec2) -> f32 {
     if stage_size.x <= 0.0 || stage_size.y <= 0.0 {
         return 1.0;
@@ -310,22 +233,13 @@ pub fn target_pixels_per_stage_pixel(stage_size: Vec2, target_size: UVec2) -> f3
     (target_size.as_vec2() / stage_size).min_element()
 }
 
-/// Offset of `cursor` from the centre of a stage node, in the panel's
-/// render-target pixels, or `None` when the cursor is outside it.
+/// Offset of `cursor` (ui-logical) from the centre of a stage node, in the
+/// panel's render-target pixels, or `None` when the cursor is outside it.
 ///
-/// `cursor` is ui-logical, the space `UiCursorPos` reports in.
-/// `centre` and `size` are the node's physical values, straight off
-/// `UiGlobalTransform::translation` and `ComputedNode::size()`,
-/// `inverse_scale_factor` is `ComputedNode::inverse_scale_factor()`, and
-/// `target_scale` is [`target_pixels_per_stage_pixel`] for this panel.
-///
-/// The cursor is lifted into physical space rather than the node pushed
-/// into logical space: an image render target has a scale factor of 1, so
-/// the authored tree measures in the image's own pixels, and converting
-/// the node instead would land the hit test a factor of `scale_factor`
-/// off on any high-DPI display or after `view.ui_zoom_in`. The bounds
-/// test itself stays in stage pixels, being a question about the node
-/// rather than about the image.
+/// The cursor is lifted into physical space rather than the node pushed into
+/// logical space: an image render target has a scale factor of 1, so converting
+/// the node instead would land the hit test a factor of `scale_factor` off on
+/// any high-DPI display.
 pub fn cursor_stage_offset(
     cursor: Vec2,
     centre: Vec2,
@@ -338,12 +252,9 @@ pub fn cursor_stage_offset(
     inside.then_some(offset)
 }
 
-/// [`cursor_stage_offset`]'s mapping without its refusal: the offset
-/// clamped to the stage's edge, and whether the cursor was really on it.
-///
-/// A gesture the scene is already holding has to be followed off the
-/// canvas (see `forward_pointer_into_stage`), so the edge stands in for
-/// wherever the cursor went.
+/// [`cursor_stage_offset`]'s mapping without its refusal: the offset clamped to
+/// the stage's edge, and whether the cursor was really on it. A gesture the
+/// scene is already holding has to be followed off the canvas.
 pub fn stage_offset_clamped(
     cursor: Vec2,
     centre: Vec2,
@@ -357,14 +268,9 @@ pub fn stage_offset_clamped(
     (offset.clamp(-half, half) * target_scale, inside)
 }
 
-/// [`cursor_stage_offset`]'s mapping with neither its refusal nor its
-/// clamp: where the cursor is over the canvas, whether or not it is on
-/// it.
-///
-/// What a gesture placing a line on the canvas reads. Those run off the
-/// edge by design, a guide dragged back onto its ruler to drop it being
-/// the whole point of the gesture, and the clamp would answer with the
-/// edge for every position past it.
+/// [`cursor_stage_offset`]'s mapping with neither its refusal nor its clamp,
+/// for gestures that run off the canvas by design, such as dragging a guide
+/// back onto its ruler to drop it.
 pub fn stage_offset_unbounded(
     cursor: Vec2,
     centre: Vec2,
@@ -374,15 +280,10 @@ pub fn stage_offset_unbounded(
     (cursor / inverse_scale_factor - centre) * target_scale
 }
 
-/// Offset of `cursor` from the centre of a panel's stage **area**, in
-/// that area's own logical pixels, or `None` when the cursor is outside
-/// it.
-///
-/// The space [`Ui2dView`] is driven in. The area is the fixed window the
-/// scene moves behind, so an offset measured against it does not change
-/// when the view does, which is what makes [`zoom_toward`]'s anchor hold.
-/// The stage node grows with the zoom and slides with the pan, so a zoom
-/// step measured against it would move its own anchor.
+/// Offset of `cursor` from the centre of a panel's stage area, in that area's
+/// own logical pixels, or `None` when the cursor is outside it. The space
+/// [`Ui2dView`] is driven in: the area is the fixed window the scene moves
+/// behind, which is what makes [`zoom_toward`]'s anchor hold.
 pub fn cursor_area_offset(
     cursor: Vec2,
     centre: Vec2,
@@ -394,11 +295,9 @@ pub fn cursor_area_offset(
     (offset.x.abs() <= half.x && offset.y.abs() <= half.y).then_some(offset)
 }
 
-/// Sits on the dock-leaf content entity that hosts a 2D viewport panel.
-/// Holds the camera the panel draws with, the stage node that displays
-/// it, the area that clips and frames that stage, and how the panel is
-/// currently framed over the scene, so teardown can clean the camera up
-/// and callers can find the stage without walking the panel's children.
+/// Sits on the dock-leaf content entity that hosts a 2D viewport panel, holding
+/// the camera, the stage node, the area that clips it, and how the panel is
+/// framed, so teardown and callers need not walk the panel's children.
 #[derive(Component)]
 pub struct Viewport2dPanelHost {
     pub camera: Entity,
@@ -415,40 +314,28 @@ pub struct Viewport2dPanelHost {
     /// rather than by assignment, so [`Self::view_touched`] stays in
     /// step.
     pub view: Ui2dView,
-    /// Whether [`Self::view`] is a framing something chose, rather than
-    /// the default it was built with.
-    ///
-    /// A tab swap captures the panel's framing into `ViewState::ui_view`;
-    /// capturing an untouched panel would stamp the default onto the tab
-    /// as a chosen framing, after which the tab reads as framed forever
-    /// and a fit can never reach it. Only a real move sets it: pan, zoom,
-    /// an applied fit, or a framing restored from a tab that had one.
+    /// Whether [`Self::view`] is a framing something chose, rather than the
+    /// default it was built with. A tab swap captures the panel's framing, and
+    /// capturing an untouched panel would stamp the default onto the tab as a
+    /// chosen framing that no fit could ever reach.
     pub view_touched: bool,
-    /// Set when something has asked this panel to frame its scene (a UI
-    /// scene was opened, or the user pressed Fit), cleared by
-    /// [`size_targets_to_reference`] on the first frame it can compute
-    /// the fit. See [`request_2d_fit`].
+    /// Set when something has asked this panel to frame its scene, cleared on
+    /// the first frame the fit can be computed. See [`request_2d_fit`].
     ///
-    /// A new panel starts with one pending, so it frames the first UI
-    /// scene it is given whether or not anything asked: a restored
-    /// session opens its tabs before the dock has built a leaf, so the
-    /// panel can arrive after the scene did. A tab that was framed
-    /// withdraws this on restore ([`crate::scenes::swap`]'s
-    /// `apply_view_state`), so the default never outranks a framing the
-    /// user chose.
+    /// A new panel starts with one pending, since a restored session can open
+    /// its tabs before the dock has built a leaf. A tab that was framed
+    /// withdraws this on restore, so the default never outranks a chosen
+    /// framing.
     pub fit_pending: bool,
-    /// Size of the camera's render-target image, in its own pixels.
-    /// Written by [`size_targets_to_reference`]; the reference size of
-    /// the active UI scene, or the stage's own size when no UI scene is
-    /// open. Cached here so the pan/zoom pass converts stage pixels
-    /// without touching `Assets<Image>`.
+    /// Size of the camera's render-target image, in its own pixels: the
+    /// reference size of the active UI scene, or the stage's own size when none
+    /// is open. Cached here so the pan/zoom pass need not touch `Assets<Image>`.
     pub target_size: UVec2,
 }
 
 impl Viewport2dPanelHost {
     /// Frame the panel, recording that its framing is chosen rather than
-    /// default. Every writer of the view goes through here, so the two
-    /// stay in step.
+    /// default. Every writer of the view goes through here.
     pub fn set_view(&mut self, view: Ui2dView) {
         self.view = view;
         self.view_touched = true;
@@ -466,16 +353,14 @@ pub struct Viewport2dPlugin;
 
 impl Plugin for Viewport2dPlugin {
     fn build(&self, app: &mut App) {
-        // A panel is built from the dock reconciler, which can run before
-        // `crate::viewport`'s plugin has been added at all: the counter is
-        // shared, so whichever plugin lands first installs it.
+        // The layer counter is shared with `crate::viewport`, whose plugin may
+        // not have been added yet: whichever lands first installs it.
         app.init_resource::<ViewportLayerCounter>()
             .init_resource::<Ui2dPanActive>()
             .add_observer(on_viewport_2d_panel_despawn)
-            // Where `bevy_ui` runs its own `viewport_picking`: after the
-            // input pass has written this frame's `PointerInput`, and
-            // early enough that the forwarded copy is a real input to
-            // every picking system downstream of it.
+            // Where `bevy_ui` runs its own `viewport_picking`: after this
+            // frame's `PointerInput` is written, and early enough that the
+            // forwarded copy is a real input to every picking system after it.
             .add_systems(
                 First,
                 forward_pointer_into_stage.in_set(PickingSystems::PostInput),
@@ -498,17 +383,14 @@ impl Plugin for Viewport2dPlugin {
             .add_systems(
                 PostUpdate,
                 (
-                    // Routing must land before layout reads a root's
-                    // target camera, or the scene spends a frame laid
-                    // out against whatever the default UI camera is.
+                    // Before layout reads a root's target camera, or the scene
+                    // spends a frame laid out against the default UI camera.
                     route_ui_roots_to_cameras.before(UiSystems::Prepare),
-                    // After layout, so the stage is placed from the
-                    // area's measured size and the image is held at the
-                    // authored reference size the panel exists to show.
+                    // After layout, so the stage is placed from the area's
+                    // measured size.
                     size_targets_to_reference.after(UiSystems::PostLayout),
-                    // After the placement, so a ruler's marks are
-                    // measured against the area the canvas was just laid
-                    // into.
+                    // After the placement, so a ruler's marks are measured
+                    // against the area the canvas was just laid into.
                     sync_rulers.after(size_targets_to_reference),
                     sync_ruler_guide_marks.after(sync_rulers),
                 ),
@@ -516,36 +398,18 @@ impl Plugin for Viewport2dPlugin {
     }
 }
 
-/// Tracks the panel a middle-drag pan started on. While one is running
-/// that panel keeps the gesture wherever the pointer goes, the way
-/// [`crate::viewport::CameraFlyActive`] keeps a fly session with the
-/// viewport it started in.
-///
-/// Without the latch the pan would be resolved by hover on every frame,
-/// so dragging past the panel's edge would drop the gesture mid-motion,
-/// or carry it into a second 2D viewport. Panning past the edges is the
-/// ordinary way to reach a corner of a canvas larger than its window.
+/// Tracks the panel a middle-drag pan started on, so the gesture stays with it
+/// wherever the pointer goes. Panning past the panel's edge is the ordinary way
+/// to reach a corner of a canvas larger than its window.
 #[derive(Resource, Default)]
 pub struct Ui2dPanActive(pub Option<Entity>);
 
-/// Scroll to zoom, middle-drag to pan, for whichever 2D viewport the
-/// cursor is over, while that viewport is in [`Viewport2dMode::Edit`].
+/// Scroll to zoom, middle-drag to pan, for whichever 2D viewport the cursor is
+/// over, while that viewport is in [`Viewport2dMode::Edit`].
 ///
-/// Hover is resolved against the panel's stage **area**, not its stage
-/// node: under a zoom the stage runs past the area and is clipped by it,
-/// so the area is what the cursor is over. The 3D viewport's
-/// `ActiveViewport` is left untouched, so a 2D panel cannot steal
-/// fly-camera routing from a scene viewport.
-///
-/// The pan follows [`Ui2dPanActive`] and the zoom follows the cursor: a
-/// drag belongs to the panel it started on until the button comes up,
-/// while a wheel tick belongs to whatever is under the cursor.
-///
-/// In [`Viewport2dMode::Interact`] the wheel and the middle drag belong
-/// to the scene instead, and [`forward_pointer_into_stage`] hands both
-/// over.
-///
-/// Run it on demand through [`run_2d_pan_zoom`].
+/// Hover is resolved against the panel's stage area rather than its stage node,
+/// which a zoom pushes past the area. The pan follows [`Ui2dPanActive`] and the
+/// zoom follows the cursor.
 fn viewport_2d_pan_zoom(
     cursor: UiCursorPos,
     guards: InteractionGuards,
@@ -628,18 +492,12 @@ pub fn run_2d_pan_zoom(world: &mut World) {
     }
 }
 
-/// The panel whose stage area is under `cursor` (ui-logical pixels), and
-/// the cursor's offset from that area's centre in the area's logical
-/// pixels.
+/// The panel whose stage area is under `cursor` (ui-logical pixels), and the
+/// cursor's offset from that area's centre in the area's logical pixels.
 ///
-/// The [`HoverMap`] and a rect test both have to agree. The hover map is
-/// the editor's own hit test, so it accounts for a popup or docked panel
-/// sitting over the stage; the rect test turns that hover into the offset
-/// [`zoom_toward`] anchors on.
-///
-/// Panels are walked rather than areas so each hit test uses its own
-/// panel's scale factor. First hit wins, and neither a panel showing its 3D
-/// world nor one not in [`Viewport2dMode::Edit`] is a hit at all.
+/// The [`HoverMap`] and a rect test both have to agree: the hover map accounts
+/// for a popup or docked panel over the stage, the rect test turns that hover
+/// into the offset [`zoom_toward`] anchors on.
 fn hovered_area(
     cursor: Vec2,
     areas: &Query<(&ComputedNode, &UiGlobalTransform), With<Scene2dStageArea>>,
@@ -669,20 +527,12 @@ fn hovered_area(
     None
 }
 
-/// Push each panel's [`Ui2dView`] onto its camera. The view is the
-/// authority; the camera transform and ortho scale are derived, so
-/// nothing else should write them.
+/// Push each panel's [`Ui2dView`] onto its camera, which is where the transform
+/// and ortho scale come from.
 ///
-/// This does **not** move the authored UI: Bevy renders UI through a view
-/// of its own, so a routed scene ignores this camera (see [`Ui2dView`],
-/// and `place_stage` for what does move it). It applies to 2D *world*
-/// content drawn into this panel (sprites, gizmos, guides), which does
-/// follow the camera, so that content and the authored canvas stay framed
-/// alike.
-///
-/// Public so tests can run it directly: the plugin schedules it inside
-/// [`crate::EditorInteractionSystems`], which never runs while a test app
-/// sits in `AppState::ProjectSelect`.
+/// This does not move the authored UI, which Bevy renders through a view of its
+/// own (`place_stage` moves that). It applies to 2D world content drawn into
+/// this panel, so sprites, gizmos and guides stay framed with the canvas.
 pub fn apply_2d_view(
     hosts: Query<&Viewport2dPanelHost>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Viewport2dCamera>>,
@@ -706,60 +556,19 @@ pub fn apply_2d_view(
     }
 }
 
-/// Drive each `Interact` panel's own pointer across its render target,
-/// so the authored widgets showing there can be used.
+/// Drive each `Interact` panel's own pointer across its render target, so the
+/// authored widgets showing there can be used. Bevy's `viewport_picking` does
+/// not apply, the stage being an `ImageNode` whose frame child keeps it out of
+/// the `HoverMap` that system reads.
 ///
-/// Bevy's `viewport_picking` does not apply here: the stage is an
-/// [`ImageNode`] rather than a [`bevy::ui::widget::ViewportNode`] (see
-/// [`build_viewport_2d_panel`]), and the stage's frame child would keep
-/// the stage out of the `HoverMap` that system reads. The mechanism
-/// underneath it is enough:
+/// The pointer may enter the scene only while the panel is hovered per the
+/// [`HoverMap`] and no editor interaction is in flight, or a rect test alone
+/// would send clicks through an open modal into the live scene. The hover map
+/// read here is one frame old, so entering takes one pointer input to warm up.
 ///
-/// - a pointer is an entity with a [`PointerId`] and a
-///   [`PointerLocation`]. Each panel spawns one with a `Custom` id, the
-///   variant Bevy reserves for software-driven pointers.
-/// - `bevy_ui`'s picking backend hit-tests every pointer against every
-///   camera whose render target matches the pointer's *location target*.
-///   Pointing this one at the panel's image picks the authored tree: the
-///   authored roots are routed to that camera, and an image target has a
-///   scale factor of 1, so the position handed over is in the authored
-///   pixels the tree laid out in.
-/// - a written [`PointerInput`] turns that hover into events:
-///   `PointerInput::receive` moves the pointer, and `pointer_events`
-///   replays the action onto whatever the hover map found.
-///
-/// # What may start, and what may not stop
-///
-/// Two conditions decide whether the pointer may *enter* the scene: the
-/// panel has to be hovered according to the editor's own hit test in the
-/// [`HoverMap`], which honours whatever popup or dialog is over the
-/// stage; and no editor interaction may be in flight, the same
-/// [`InteractionGuards`] the pan/zoom pass checks. Without both, a rect
-/// test alone would send clicks straight through an open modal into the
-/// live scene.
-///
-/// The [`HoverMap`] read here is one frame old, because it is written in
-/// `PreUpdate` and this runs in `First`, the same lag Bevy's
-/// `viewport_picking` works under. Entering the stage therefore takes one
-/// pointer input to warm up.
-///
-/// A press already under way is the exception: once the scene's pointer
-/// is down, its stream runs to the release wherever the cursor goes, with
-/// positions clamped to the stage's edge. Dropping it at the boundary
-/// would leave the widget latched down forever, since `PointerPress`
-/// never clears, `pointer_events` keeps the entity in
-/// `pressing`/`dragging`, no `Click` ever resolves, and the next entry
-/// onto the stage opens mid-drag. Bevy's `viewport_picking` does the same
-/// when it re-adds entities found in `PointerState::dragging`.
-///
-/// # Lifting
-///
-/// With no press live, the pointer is lifted (location cleared) as soon
-/// as the cursor leaves the stage or either condition above fails.
-/// Lifting unwinds the aggregate state, so the next `generate_hovermap`
-/// finds nothing and `PickingInteraction` falls back to `None`, but it is
-/// not a pointer *movement*, so an authored `On<Pointer<Out>>` observer
-/// does not fire.
+/// A press already under way runs to its release wherever the cursor goes, with
+/// positions clamped to the stage's edge: dropping it at the boundary would
+/// leave the widget latched down with no `Click` ever resolving.
 fn forward_pointer_into_stage(
     mut commands: Commands,
     ui_scale: Res<UiScale>,
@@ -772,9 +581,9 @@ fn forward_pointer_into_stage(
     mut pointers: Query<(&PointerId, &mut PointerLocation, &PointerPress)>,
     mut inputs: MessageReader<PointerInput>,
 ) {
-    // Only the editor's real pointers, which are the ones on a window.
-    // Filtering by target rather than by id is also what keeps a
-    // forwarded input from being forwarded again.
+    // Only the editor's real pointers, which are the ones on a window. Filtering
+    // by target rather than by id also keeps a forwarded input from being
+    // forwarded again.
     let real: Vec<PointerInput> = inputs
         .read()
         .filter(|input| matches!(input.location.target, NormalizedRenderTarget::Window(_)))
@@ -796,8 +605,8 @@ fn forward_pointer_into_stage(
         }
 
         let stage = stages.get(host.stage);
-        // No primary window to resolve against: a panel camera always
-        // targets an image, which normalises on its own.
+        // No primary window to resolve against: a panel camera always targets
+        // an image, which normalises on its own.
         let target = targets
             .get(host.camera)
             .ok()
@@ -834,15 +643,9 @@ fn forward_pointer_into_stage(
     }
 }
 
-/// Whether one of the editor's real pointers is over `entity` or
-/// anything inside it.
-///
-/// The stage's own frame child covers it, so what lands in the
-/// [`HoverMap`] is usually the frame rather than the stage; walking up
-/// the ancestors makes either answer the same question. Custom pointers
-/// are skipped: one caller decides this *for* a custom pointer hovering
-/// the authored tree, and reading it back would keep the panel hovered by
-/// its own reflection.
+/// Whether one of the editor's real pointers is over `entity` or anything inside
+/// it. Custom pointers are skipped, or a panel would be kept hovered by the
+/// pointer it is itself driving.
 fn entity_is_hovered(entity: Entity, hover_map: &HoverMap, parents: &Query<&ChildOf>) -> bool {
     hover_map
         .iter()
@@ -856,37 +659,18 @@ fn entity_is_hovered(entity: Entity, hover_map: &HoverMap, parents: &Query<&Chil
         })
 }
 
-/// Point every UI scene root at the camera whose view it belongs in: an
-/// authored root at a 2D viewport's camera, so its layout resolves against
-/// that panel's render target rather than the editor's own window, and an
-/// imported one at the 3D viewport's, where a world scene's UI shows as a
-/// screen-space overlay.
+/// Point every UI scene root at the camera whose view it belongs in: an authored
+/// root at a 2D viewport's camera, an imported one at the 3D viewport's, where a
+/// world scene's UI shows as a screen-space overlay.
 ///
-/// The runtime leaves a `UiSceneRoot` unparented, because Bevy only lays
-/// out a `Node` tree that starts at an ECS root
-/// (`jackdaw_runtime::spawn`), and the editor keeps it that way: routing
-/// is an inserted [`UiTargetCamera`], never a reparent. That component
-/// names a camera entity this session spawned, so it is on the `scene_io`
-/// skip list and never reaches disk.
+/// Routing is an inserted [`UiTargetCamera`], never a reparent, naming a camera
+/// this session spawned that `scene_io` skips on save.
 ///
-/// The two groups are told apart here rather than in each caller, because
-/// a world scene's imported overlay is `UiSceneRoot` without `ChildOf`
-/// exactly like the scene a 2D panel edits (see [`AuthoredUiSceneRoot`]),
-/// and routing an import to the panel would draw a world scene's HUD on
-/// the canvas being edited.
-///
-/// A root is *always* routed somewhere, even with no view to route it to:
-/// removing the component would hand the root back to `DefaultUiCamera`,
-/// the editor's own window camera, and the scene would draw itself over
-/// the editor chrome. A group with no view parks on
-/// [`UiSceneParkingCamera`] instead (see `park_ui_scene_roots`). Both
-/// groups are routed in one system so a session needing to park cannot
-/// spawn two parking cameras in a single frame's command queue.
-///
-/// With several panels open one answers for the canvas
-/// ([`crate::viewport_host::primary_2d_host`]) and one for the world
-/// ([`crate::viewport_host::primary_3d_host`]), matching how `ViewState`
-/// captures a single `ui_view`.
+/// A root is always routed somewhere: removing the component would hand it back
+/// to the editor's own window camera and draw the scene over the editor chrome.
+/// A group with no view parks on [`UiSceneParkingCamera`] instead, and both
+/// groups are routed in one system so a session cannot spawn two parking
+/// cameras in one frame's command queue.
 pub fn route_ui_roots_to_cameras(
     mut commands: Commands,
     panels: Query<(Entity, &ViewportHost)>,
@@ -944,18 +728,9 @@ fn aim_ui_roots<'a>(
     }
 }
 
-/// Spawn the parking camera: where an authored UI scene root points while
-/// no 2D viewport panel is open.
-///
-/// It is inactive, so it draws nothing, and it targets a 1x1 image, so the
-/// layout viewport a parked root resolves against collapses to a single
-/// pixel. `bevy_camera`'s `camera_system` computes target info for
-/// inactive cameras too, so a parked root still resolves against that
-/// pixel. Targeting an image also keeps this camera out of
-/// `DefaultUiCamera`, which only ever picks window cameras.
-///
-/// Spawned lazily, on the first frame an unrouted root exists, so a
-/// session that never opens a UI scene never pays for it.
+/// Spawn the parking camera: where an authored UI scene root points while no 2D
+/// viewport panel is open. Inactive and targeting a 1x1 image, so a parked root
+/// resolves against a single pixel and `DefaultUiCamera` never picks it up.
 fn park_ui_scene_roots(commands: &mut Commands, images: &mut Assets<Image>) -> Entity {
     let mut image = Image::new_fill(
         Extent3d {
@@ -988,26 +763,17 @@ fn park_ui_scene_roots(commands: &mut Commands, images: &mut Assets<Image>) -> E
         .id()
 }
 
-/// Hold each panel's render-target image at the active UI scene's
-/// reference size, and place the stage over it for the current view.
+/// Hold each panel's render-target image at the active UI scene's reference
+/// size, and place the stage over it for the current view.
 ///
-/// The reference-resolution contract. Bevy derives a UI root's layout
-/// viewport from its target camera's physical viewport size
-/// (`bevy_ui::update::propagate_ui_target_cameras`), and for an image
-/// target that is the image's own size, so sizing the image to
-/// `reference_size` makes authored layout compute at the resolution it
-/// was designed for: a 50%-wide child of a 1280-wide reference is 640px
-/// whatever the dock leaf measures. The stage displays that image at
-/// whatever size `place_stage` gives it, so the stage-to-authored mapping
-/// is a single scale factor ([`target_pixels_per_stage_pixel`]) that
-/// already carries the zoom.
+/// This is the reference-resolution contract: Bevy derives a UI root's layout
+/// viewport from its target's size, so sizing the image to `reference_size`
+/// makes authored layout compute at the resolution it was designed for whatever
+/// the dock leaf measures. With no UI scene open the stage fills its area and
+/// the panel is a plain 1:1 viewport.
 ///
-/// With no UI scene open there is nothing to hold the image at, so the
-/// stage fills its area and the panel is a plain 1:1 viewport.
-///
-/// A pending fit ([`request_2d_fit`]) lands here too, this being the one
-/// place that holds both the scene's reference size and the area's
-/// laid-out size.
+/// A pending fit ([`request_2d_fit`]) lands here too, this being the one place
+/// holding both the reference size and the area's laid-out size.
 pub fn size_targets_to_reference(
     roots: Query<&UiSceneRoot, AuthoredUiSceneRoot>,
     mut hosts: Query<&mut Viewport2dPanelHost>,
@@ -1034,8 +800,8 @@ pub fn size_targets_to_reference(
             .unwrap_or(Vec2::ZERO);
 
         // The first point in the frame where both numbers a fit needs are
-        // settled. A request outlives a frame with nothing to fit,
-        // because opening a scene asks before the scene has spawned.
+        // settled. A request outlives a frame with nothing to fit, because
+        // opening a scene asks before the scene has spawned.
         if host.fit_pending
             && let Some(reference) = reference
             && area.x > 0.0
@@ -1067,21 +833,14 @@ pub fn size_targets_to_reference(
     }
 }
 
-/// Place a panel's stage inside its area for the current view: the
-/// canvas at `reference_size * zoom` logical pixels, positioned so the
-/// authored point the view is panned to lands at the centre of the area.
+/// Place a panel's stage inside its area for the current view: the canvas at
+/// `reference_size * zoom` logical pixels, positioned so the authored point the
+/// view is panned to lands at the centre of the area.
 ///
-/// Pan and zoom are this placement; the camera cannot do it (see
-/// [`Ui2dView`]). Placing here rather than with a `UiTransform` keeps the
-/// zoom inside `ComputedNode::size()`, where
-/// [`target_pixels_per_stage_pixel`] and the cursor mapping and selection
-/// overlay downstream of it pick it up without naming it. The area clips
-/// whatever falls outside, so zooming in grows
-/// the canvas past its window instead of scaling anything the cursor math
-/// has to know about.
-///
-/// With no UI scene open there is no canvas to place, so the stage fills
-/// its area and the panel is a plain 1:1 viewport.
+/// Pan and zoom are this placement, not a camera move (see [`Ui2dView`]).
+/// Placing rather than transforming keeps the zoom inside
+/// `ComputedNode::size()`, where the cursor mapping and the selection overlay
+/// pick it up without naming it.
 fn place_stage(node: &mut Node, reference: Option<UVec2>, view: Ui2dView, area: Vec2) {
     let (left, top, width, height) = match reference {
         Some(reference) => {
@@ -1115,24 +874,16 @@ fn place_stage(node: &mut Node, reference: Option<UVec2>, view: Ui2dView, area: 
     }
 }
 
-/// Where the canvas's top-left corner sits inside an `area`-sized stage
-/// area, in that area's own logical pixels.
-///
-/// The one place the view becomes a position: the stage node is placed
-/// there, and the rulers measure their marks from it, so a mark and the
-/// pixel it names cannot drift apart.
-///
-/// The view pans in authored pixels from the canvas centre, y up; layout
-/// places from the canvas's top-left, y down, hence the flip.
+/// Where the canvas's top-left corner sits inside an `area`-sized stage area, in
+/// that area's own logical pixels. The one place the view becomes a position,
+/// so a ruler's mark and the pixel it names cannot drift apart.
 pub fn stage_origin(reference: UVec2, view: Ui2dView, area: Vec2) -> Vec2 {
     let canvas = reference.as_vec2().max(Vec2::ONE);
     let focus = canvas / 2.0 + Vec2::new(view.pan.x, -view.pan.y);
     area / 2.0 - focus * view.zoom
 }
 
-/// Thickness of a ruler, in the panel's logical pixels. It comes off the
-/// stage area the way the header does, so the area stays the one node
-/// the stage is placed inside and measured against.
+/// Thickness of a ruler, in the panel's logical pixels.
 pub const RULER_SIZE: f32 = 18.0;
 
 /// Authored pixels between labelled marks, before the ruler coarsens the
@@ -1152,26 +903,21 @@ const RULER_LABEL_TICK: f32 = 6.0;
 /// How far an unlabelled mark reaches in.
 const RULER_TICK: f32 = 3.0;
 
-/// Marks a ruler keeps beyond the one per [`RULER_TICK_GAP`] its length
-/// has room for: the pair at either end that a pan can bring in.
+/// Marks a ruler keeps beyond the one per `RULER_TICK_GAP` its length has room
+/// for: the pair at either end that a pan can bring in.
 const RULER_MARK_MARGIN: usize = 8;
 
-/// How much room a label needs along the ruler it is written on. The
-/// left ruler turns its labels on their side, so this is the box they
-/// are turned inside.
+/// How much room a label needs along the ruler it is written on, which for the
+/// left ruler is the box its turned labels sit inside.
 const RULER_LABEL_BOX: f32 = 40.0;
 
 /// How far in from the ruler's outer edge a turned label's centre sits,
 /// leaving the marks the rest of the gutter.
 const RULER_LABEL_INSET: f32 = 6.0;
 
-/// Most marks a ruler `length` logical pixels long draws.
-///
-/// A canvas zoomed all the way out is hundreds of thousands of authored
-/// pixels wide and every mark is a node, so there has to be a ceiling;
-/// what the ceiling must not do is stop the marks partway across a wide
-/// panel, which a fixed count does. Two marks never come closer than
-/// [`RULER_TICK_GAP`], so the length itself says how many there can be.
+/// Most marks a ruler `length` logical pixels long draws. Derived from the
+/// length rather than fixed, since a fixed count would stop the marks partway
+/// across a wide panel.
 fn ruler_mark_budget(length: f32) -> usize {
     let per_length = (length / RULER_TICK_GAP).ceil();
     let per_length = if per_length.is_finite() && per_length > 0.0 {
@@ -1182,32 +928,25 @@ fn ruler_mark_budget(length: f32) -> usize {
     per_length + RULER_MARK_MARGIN
 }
 
-/// One of the three nodes making up a panel's ruler gutter: the two
-/// rulers and the corner between them. Hidden together when the canvas
-/// settings say the rulers are off, which gives the gutter back to the
-/// stage area.
+/// One of the three nodes making up a panel's ruler gutter: the two rulers and
+/// the corner between them. Hidden together when the rulers are off.
 #[derive(Component, Clone, Copy)]
 pub struct CanvasRulerPart {
     pub host: Entity,
 }
 
-/// A ruler along one edge of a panel's stage area.
-///
-/// `axis` is the axis of the guides pulled off it: the ruler along the
-/// top measures x and drops [`CanvasAxis::Vertical`] guides, the one
-/// down the left measures y and drops horizontal ones.
+/// A ruler along one edge of a panel's stage area. `axis` is the axis of the
+/// guides pulled off it, so the top ruler measures x and drops
+/// [`CanvasAxis::Vertical`] guides.
 #[derive(Component, Clone, Copy)]
 pub struct CanvasRuler {
     pub host: Entity,
     pub axis: CanvasAxis,
 }
 
-/// What one ruler's marks currently read: the authored figure each one
-/// names and whether it carries it.
-///
-/// A pan moves every mark and changes none of this, so the mark nodes
-/// are kept and moved; only a reading that names different figures, or
-/// a different number of them, respawns them.
+/// What one ruler's marks currently read: the authored figure each one names and
+/// whether it carries it. A pan changes none of this, so only a different
+/// reading respawns the mark nodes.
 #[derive(Component, Clone, PartialEq)]
 struct RulerMarks(Vec<(f32, bool)>);
 
@@ -1220,11 +959,8 @@ struct RulerMarkNode {
     label: bool,
 }
 
-/// A guide's position, marked on the ruler it came off.
-///
-/// A guide is removed by dragging it back onto its ruler, so the ruler
-/// has to say where each one is: without the mark the target of that
-/// drag is a stretch of empty gutter.
+/// A guide's position, marked on the ruler it came off, which is the target of
+/// the drag that removes it.
 #[derive(Component, Clone, Copy)]
 pub struct RulerGuideMark {
     /// The panel content entity carrying this stage's
@@ -1247,13 +983,10 @@ pub struct RulerMark {
     pub labelled: bool,
 }
 
-/// The marks a ruler `length` logical pixels long draws, given the
-/// canvas origin sitting `origin` pixels along it at `zoom`.
-///
-/// Labels every hundred authored pixels, or a coarser multiple of a
-/// hundred once that step would bring two labels within forty pixels of
-/// each other, with nine unlabelled marks between each pair while those
-/// stay four pixels apart.
+/// The marks a ruler `length` logical pixels long draws, given the canvas origin
+/// sitting `origin` pixels along it at `zoom`. Labels every hundred authored
+/// pixels, coarsened until two labels stand apart, with nine unlabelled marks
+/// between each pair while those stay `RULER_TICK_GAP` apart.
 pub fn ruler_marks(origin: f32, zoom: f32, length: f32) -> Vec<RulerMark> {
     let mut marks = Vec::new();
     if !zoom.is_finite() || zoom <= 0.0 || !origin.is_finite() || length <= 0.0 {
@@ -1267,9 +1000,8 @@ pub fn ruler_marks(origin: f32, zoom: f32, length: f32) -> Vec<RulerMark> {
     {
         (tick_step, 10)
     } else {
-        // Over budget, the unlabelled ticks are what goes: a ruler that
-        // reads the whole panel with fewer marks on it is worth more
-        // than one that stops partway across with all of them.
+        // Over budget, the unlabelled ticks are what goes: a ruler that reads
+        // the whole panel is worth more than one that stops partway across.
         (label_step, 1)
     };
 
@@ -1347,11 +1079,9 @@ mod ruler_label_step_tests {
     }
 }
 
-/// Draw each panel's rulers for the view it is showing, and take the
-/// gutter down when the canvas settings say the rulers are off.
-///
-/// Runs after the stage has been placed, so a ruler measures against the
-/// same area size the canvas was laid into.
+/// Draw each panel's rulers for the view it is showing, and take the gutter down
+/// when the rulers are off. Runs after the stage has been placed, so a ruler
+/// measures against the same area size the canvas was laid into.
 fn sync_rulers(
     snap: Res<CanvasSnap>,
     roots: Query<(Entity, &UiSceneRoot), AuthoredUiSceneRoot>,
@@ -1379,8 +1109,8 @@ fn sync_rulers(
         return;
     }
 
-    // A malformed document holding several roots picks the lowest
-    // entity, the same one the guide operators write.
+    // A malformed document holding several roots picks the lowest entity, the
+    // same one the guide operators write.
     let reference = roots
         .iter()
         .min_by_key(|(entity, _)| *entity)
@@ -1414,9 +1144,8 @@ fn sync_rulers(
                 .collect(),
         );
 
-        // A pan slides every mark and leaves the reading alone, so the
-        // nodes are moved rather than thrown away and made again: a
-        // respawn per frame of a drag is a respawn per frame of the pan.
+        // A pan slides every mark and leaves the reading alone, so the nodes
+        // are moved rather than respawned every frame of the drag.
         if drawn == Some(&reading) {
             for child in children.into_iter().flatten() {
                 let Ok(mark_node) = mark_nodes.get(*child) else {
@@ -1463,13 +1192,9 @@ fn despawn_ruler_marks(
     }
 }
 
-/// Draw every guide on the ruler it was pulled off, so the drag that
-/// takes one away has somewhere to aim.
-///
-/// The guides are scene data and the rulers are per panel, so every
-/// panel showing the scene marks the same set, and a guide following the
-/// cursor moves its mark with it: the drag writes the scene on every
-/// event.
+/// Draw every guide on the ruler it was pulled off, so the drag that takes one
+/// away has somewhere to aim. The guides are scene data and the rulers are per
+/// panel, so every panel showing the scene marks the same set.
 fn sync_ruler_guide_marks(
     mut commands: Commands,
     snap: Res<CanvasSnap>,
@@ -1557,12 +1282,9 @@ fn sync_ruler_guide_marks(
     }
 }
 
-/// How far into the gutter a guide's mark reaches, measured from the
-/// stage edge the ticks are drawn against.
-///
-/// The band the ticks stand in, and no further: the labels are written
-/// in the rest of the gutter, and a mark drawn the whole depth of it
-/// would be painted over whichever label it happened to coincide with.
+/// How far into the gutter a guide's mark reaches, measured from the stage edge
+/// the ticks are drawn against: the band the ticks stand in and no further, so
+/// a mark is never painted over a label.
 const RULER_GUIDE_MARK_REACH: f32 = RULER_LABEL_TICK;
 
 /// How wide a guide's mark on the ruler is, across the ruler's own
@@ -1636,15 +1358,10 @@ fn place_ruler_mark(node: &mut Node, axis: CanvasAxis, mark: RulerMark) {
     }
 }
 
-/// The authored figure a labelled mark carries, tucked against the
-/// outer edge so the marks themselves stay readable.
-///
-/// The ruler down the left is 18 logical pixels wide and a four-figure
-/// reading is wider than that, so its labels are turned on their side
-/// and read up the gutter. They are turned inside a box of their own,
-/// wide enough for the figure and as thick as the ruler, so what the
-/// turn puts across the gutter is a known width rather than whatever
-/// the text happened to measure.
+/// The authored figure a labelled mark carries, tucked against the outer edge so
+/// the marks stay readable. The left ruler is narrower than a four-figure
+/// reading, so its labels are turned on their side inside a box of known width
+/// rather than whatever the text happened to measure.
 fn ruler_label(axis: CanvasAxis, mark: RulerMark, index: usize) -> impl Bundle {
     let mut node = Node {
         position_type: PositionType::Absolute,
@@ -1683,9 +1400,8 @@ fn place_ruler_label(node: &mut Node, axis: CanvasAxis, mark: RulerMark) {
             node.height = Val::Auto;
         }
         CanvasAxis::Horizontal => {
-            // Turned a quarter turn about its own centre, so the box is
-            // placed by where that centre has to end up: on the mark,
-            // and RULER_LABEL_INSET in from the ruler's outer edge.
+            // Turned a quarter turn about its own centre, so the box is placed
+            // by where that centre has to end up.
             node.left = px(RULER_LABEL_INSET - RULER_LABEL_BOX / 2.0);
             node.top = px(mark.at - RULER_SIZE / 2.0);
             node.width = px(RULER_LABEL_BOX);
@@ -1696,13 +1412,9 @@ fn place_ruler_label(node: &mut Node, axis: CanvasAxis, mark: RulerMark) {
     }
 }
 
-/// The gutter around a panel's stage area: the corner, the ruler along
-/// the top, and the ruler down the left, with the area itself filling
-/// what is left.
-///
-/// The area is untouched by this, still the node the stage is placed
-/// inside and measured against, so the cursor mapping, the hover test
-/// and the framing all keep reading the same node they always did.
+/// The gutter around a panel's stage area: the corner, the ruler along the top,
+/// and the ruler down the left, with the area itself filling what is left. The
+/// area is untouched, still the node the stage is placed inside.
 fn build_ruler_frame(world: &mut World, host: Entity, stage_area: Entity) -> Entity {
     let corner = world
         .spawn((
@@ -1822,10 +1534,9 @@ pub fn build_viewport_2d_panel(world: &mut World, parent: Entity) {
 /// The despawn observer on `parent` (via [`Viewport2dPanelHost`]) cleans
 /// the camera up when the reconciler tears the panel down.
 pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity {
-    // A render-target image dedicated to this panel. The size is only a
-    // starting point: `size_targets_to_reference` holds it at the
-    // authored reference size while a UI scene is open, and nothing else
-    // ever resizes it.
+    // A render-target image dedicated to this panel. The size is only a starting
+    // point: `size_targets_to_reference` holds it at the authored reference size
+    // while a UI scene is open.
     let image_handle = {
         let size = Extent3d {
             width: DEFAULT_VIEWPORT_WIDTH,
@@ -1846,9 +1557,9 @@ pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity
         world.resource_mut::<Assets<Image>>().add(image)
     };
 
-    // A private render layer per panel, so per-viewport overlays can be
-    // drawn to this camera alone. Layer 0 stays in the mask so
-    // default-layer scene content still draws here.
+    // A private render layer per panel, so per-viewport overlays can be drawn to
+    // this camera alone. Layer 0 stays in the mask so default-layer scene
+    // content still draws here.
     let viewport_layer = world.resource_mut::<ViewportLayerCounter>().next();
     let camera_layers = RenderLayers::from_layers(&[0, viewport_layer]);
 
@@ -1867,30 +1578,21 @@ pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity
         ))
         .id();
 
-    // The panel's own pointer: what `Interact` mode drives across the
-    // camera's image (see `forward_pointer_into_stage`). `Custom` is the
-    // id Bevy reserves for software-driven pointers, and it is per panel
-    // because two panels can be hovered independently.
+    // The panel's own pointer, driven across the camera's image in `Interact`
+    // mode. Per panel, because two panels can be hovered independently.
     let pointer = world
         .spawn((crate::EditorEntity, PointerId::Custom(Uuid::new_v4())))
         .id();
 
-    // The camera's image is shown with an `ImageNode` rather than a
-    // `ViewportNode`: the stage node carries the view's zoom (see
-    // `place_stage`), and Bevy's `update_viewport_render_target_size`
-    // resizes a `ViewportNode`'s image to its node's computed size, which
-    // would reallocate the render target to `reference * zoom` every
-    // frame of a zoom gesture, gigabytes of it at the far end of
-    // `MAX_ZOOM`. An `ImageNode` stretches the image it is given and
-    // never resizes the source. The cost is Bevy's pointer forwarding
-    // into the target (`viewport_picking`), which the frame child below
-    // would keep out of the hover map in any case, so Interact mode
-    // forwards the pointer itself.
+    // An `ImageNode` rather than a `ViewportNode`: the stage node carries the
+    // view's zoom, and Bevy resizes a `ViewportNode`'s image to its node's
+    // computed size, reallocating the render target to `reference * zoom` every
+    // frame of a zoom gesture. The cost is Bevy's pointer forwarding, which
+    // `forward_pointer_into_stage` does instead.
     //
-    // The frame is an absolutely positioned child rather than a border
-    // on the stage itself: `ComputedNode::size()` includes the border, so
-    // a border here would put the canvas bounds two pixels off the
-    // image bounds and skew every measurement taken from the node.
+    // The frame is an absolutely positioned child rather than a border on the
+    // stage: `ComputedNode::size()` includes the border, which would put the
+    // canvas bounds two pixels off the image bounds.
     let stage = world
         .spawn((
             crate::EditorEntity,
@@ -1913,18 +1615,16 @@ pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity
                     border: UiRect::all(px(1)),
                     ..default()
                 },
-                // The canvas edge: the line saying where the authored
-                // scene stops and the panel begins. A subtle border
-                // against a dark scene on a dark letterbox is hard to
-                // find.
+                // The canvas edge: where the authored scene stops and the panel
+                // begins.
                 BorderColor::all(tokens::BORDER_STRONG),
             )],
         ))
         .id();
 
-    // The panel's fixed window onto the canvas. It clips, because the
-    // stage inside it is placed absolutely and runs past its bounds at
-    // any zoom that does not fit.
+    // The panel's fixed window onto the canvas. It clips, because the stage
+    // inside it is placed absolutely and runs past its bounds at any zoom that
+    // does not fit.
     let stage_area = world
         .spawn((
             crate::EditorEntity,
@@ -1975,16 +1675,9 @@ pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity
     column
 }
 
-/// Header row above the 2D viewport stage: what is being edited on the
-/// left, then the zoom readout, the Fit control and Edit|Interact on the
-/// right.
-///
-/// The title names the scene rather than the panel; the dock tab above it
-/// already says "Viewport".
-///
-/// Sized like the 3D viewport's toolbar (`crate::layout::toolbar`): 30px
-/// tall, 1px border, top corners rounded against the stage below, and its
-/// own padding on each edge.
+/// Header row above the 2D viewport stage: what is being edited on the left,
+/// then the zoom readout, the Fit control and Edit|Interact on the right. Sized
+/// like the 3D viewport's toolbar.
 fn viewport_2d_header(host: Entity) -> impl Bundle {
     (
         crate::EditorEntity,
@@ -2055,14 +1748,10 @@ fn viewport_2d_header(host: Entity) -> impl Bundle {
     )
 }
 
-/// The canvas's snapping menu: what a dragged node lands on, whether the
-/// rulers and the guides are drawn, and the panel's own grid.
-///
-/// The rows are built from the world each time the menu asks for them,
-/// so every box shows the setting it is about. The kinds and the two
-/// view toggles are project-wide and go through their operators; the
-/// grid is this panel's own, so its rows call the grid operator with the
-/// figure the stepper beside them would move to.
+/// The canvas's snapping menu: what a dragged node lands on, whether the rulers
+/// and the guides are drawn, and the panel's own grid. The rows are built from
+/// the world each time the menu asks for them, so every box shows the setting it
+/// is about.
 fn viewport_2d_snap_menu(host: Entity) -> impl Bundle {
     (
         menu_button(
@@ -2077,12 +1766,6 @@ fn viewport_2d_snap_menu(host: Entity) -> impl Bundle {
 }
 
 /// The rows the Snap menu shows for the world as it stands.
-///
-/// The master leads, so the switch that governs the menu is the first
-/// thing in it; pixel snapping follows, because it is about what a drag
-/// writes rather than what it lands on. The six kinds that offer a line
-/// sit flat under a heading rather than behind a hover submenu: their
-/// whole point is being read at a glance.
 fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
     let snap = world
         .get_resource::<CanvasSnap>()
@@ -2139,9 +1822,8 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
         String::new(),
     ));
     for (steps, label) in [(-1, "Finer"), (1, "Coarser")] {
-        // Named on this panel, like the stepper beside the menu: the
-        // grid is per panel, so a row in one panel's header must not
-        // move another panel's lattice.
+        // Named on this panel: the grid is per panel, so a row in one panel's
+        // header must not move another panel's lattice.
         rows.push((
             format!(
                 "{OP_ACTION_PREFIX}{}?size={}&panel={}",
@@ -2155,14 +1837,10 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
     rows
 }
 
-/// The canvas grid control: finer, the current lattice, coarser.
-///
-/// Shaped like the 3D toolbar's grid stepper (`crate::layout::toolbar`),
-/// and wired like the Edit|Interact bar beside it: the buttons write
-/// this panel's own [`Ui2dView`] through an observer rather than
-/// dispatching an operator, because the grid is per-panel state and a
-/// stepper in one panel's header must never move another panel's. The
-/// `viewport2d.grid` operator is how a scripted run says the same thing.
+/// The canvas grid control: finer, the current lattice, coarser. The buttons
+/// write this panel's own [`Ui2dView`] through an observer rather than
+/// dispatching an operator, the grid being per-panel state; `viewport2d.grid` is
+/// how a scripted run says the same thing.
 fn viewport_2d_grid_stepper(host: Entity) -> impl Bundle {
     (
         Node {
@@ -2231,9 +1909,8 @@ fn viewport_2d_grid_step(
     )
 }
 
-/// Marker on one end of the grid stepper, naming the panel it steps and
-/// which way. Per panel, like [`Viewport2dModeSegment`], because the
-/// grid is per-panel state.
+/// Marker on one end of the grid stepper, naming the panel it steps and which
+/// way. Per panel, because the grid is per-panel state.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Viewport2dGridStep {
     pub host: Entity,
@@ -2248,9 +1925,8 @@ pub struct Viewport2dGridReadout {
     pub host: Entity,
 }
 
-/// A canvas grid as the user reads it: authored pixels, with the unit
-/// spelled out so it cannot be mistaken for the zoom percentage beside
-/// it.
+/// A canvas grid as the user reads it: authored pixels, with the unit spelled
+/// out so it cannot be mistaken for the zoom percentage beside it.
 fn grid_label(grid: f32) -> String {
     format!("{grid:.0} px")
 }
@@ -2279,10 +1955,8 @@ const PANEL_TITLE_FALLBACK: &str = "Viewport";
 #[derive(Component)]
 pub struct Viewport2dTitle;
 
-/// Marker on the header's zoom readout, naming the panel it reports for.
-///
-/// Per panel, like [`Viewport2dModeSegment`], because the zoom is per
-/// panel: two viewports on the same scene are framed independently.
+/// Marker on the header's zoom readout, naming the panel it reports for: two
+/// viewports on the same scene are framed independently.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Viewport2dZoomReadout {
     pub host: Entity,
@@ -2293,11 +1967,9 @@ fn zoom_percent(zoom: f32) -> String {
     format!("{:.0}%", zoom * 100.0)
 }
 
-/// Name the scene each 2D viewport is editing, falling back to the
-/// panel's own name when no UI scene is open.
-///
-/// The name comes from the scene tab rather than the root entity, so it
-/// matches what the tab strip shows.
+/// Name the scene each 2D viewport is editing, falling back to the panel's own
+/// name when no UI scene is open. Taken from the scene tab rather than the root
+/// entity, so it matches what the tab strip shows.
 fn update_viewport_2d_title(
     scenes: Option<Res<crate::scenes::Scenes>>,
     roots: Query<(), AuthoredUiSceneRoot>,
@@ -2346,46 +2018,30 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<SelectionSelectOp>();
     ctx.register_operator::<SelectionExtendOp>();
     crate::canvas_snap::add_to_extension(ctx);
-    // These three hang off this extension's own input context, not the
-    // core one. An action belongs to the context instance on the entity
-    // it points at, and that entity is the extension registering it: a
-    // chord bound into a context living on someone else's entity is
-    // evaluated by nothing, which is how Home came to be listed in the
-    // keybind dialog and do nothing when pressed.
-    //
-    // Shift+R and Shift+G: the rulers and the guides, beside the plain
-    // R and G the 3D tools take.
+    // These three hang off this extension's own input context, not the core
+    // one: an action belongs to the context instance on the entity registering
+    // it, and a chord bound into a context on someone else's entity is
+    // evaluated by nothing.
     ctx.bind_operator_host::<CanvasRulersOp>([PresetInput::key("KeyR").shift()]);
     ctx.bind_operator_host::<CanvasGuidesOp>([PresetInput::key("KeyG").shift()]);
-    // Home frames the canvas, the way it jumps the playhead in the
-    // timeline: `viewport_2d_is_current` is what keeps the two apart.
+    // Home frames the canvas the way it jumps the playhead in the timeline;
+    // `viewport_2d_is_current` keeps the two apart.
     ctx.bind_operator_host::<Viewport2dFrameOp>([PresetInput::key("Home")]);
 
     crate::screenshot::add_2d_to_extension(ctx);
 }
 
-/// True while the 2D viewport is the panel the keys belong to: its tab is
-/// the active one in some dock leaf, or the cursor is over one of its
-/// stages.
-///
-/// Home is the framing key in the 2D viewport and the jump-to-start key
-/// in the timeline. Both stay bound; this is the half that says the
-/// canvas is what the user is looking at, so the two never answer the
-/// same press.
-///
-/// Hover as well as the active tab, because a floating or side-by-side
-/// canvas can be under the cursor without being the focused tab, and that
-/// is still the panel the user means.
+/// True while the 2D viewport is the panel the keys belong to: its tab is the
+/// active one in some dock leaf, or the cursor is over one of its stages. Hover
+/// counts as well, since a side-by-side canvas can be under the cursor without
+/// being the focused tab.
 fn viewport_2d_is_current(viewport: FrontedViewport) -> bool {
     viewport.is_two_d()
 }
 
-/// Which of the two viewports the keyboard belongs to.
-///
-/// A `SystemParam` rather than a pair of systems, because most of the
-/// operators that ask are already asking something else -- whether a
-/// modal is running, whether a field has the focus -- and an availability
-/// gate is one system.
+/// Which of the two viewports the keyboard belongs to. A `SystemParam` because
+/// an availability gate is one system, and the operators that ask are already
+/// asking something else.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct FrontedViewport<'w, 's> {
     hosts: Query<'w, 's, &'static Viewport2dPanelHost>,
@@ -2411,44 +2067,27 @@ impl FrontedViewport<'_, '_> {
             ) == Some(crate::viewport_host::ViewportMode::TwoD)
     }
 
-    /// Whether the 3D world is what the user is looking at.
-    ///
-    /// Anything but the canvas: a workspace with no viewport open at all
-    /// still answers yes, so a chord that worked before the canvas
-    /// existed keeps working everywhere it used to.
+    /// Whether the 3D world is what the user is looking at: anything but the
+    /// canvas, so a workspace with no viewport open still answers yes.
     pub(crate) fn is_three_d(&self) -> bool {
         !self.is_two_d()
     }
 }
 
-/// True while the 3D world is the one the keyboard belongs to.
-///
-/// The single-letter chords for grabbing, rotating, scaling, constraining
-/// to an axis and drawing a brush all describe something in a world with
-/// three axes and a camera flying through it. On a UI canvas they mean
-/// nothing, and a user typing a name with no field focused would
-/// otherwise arm one of them from the letters of the name.
+/// True while the 3D world is the one the keyboard belongs to. The single-letter
+/// transform and brush chords mean nothing on a UI canvas, where a user typing a
+/// name with no field focused would otherwise arm one of them.
 pub(crate) fn three_d_world_is_current(viewport: FrontedViewport) -> bool {
     viewport.is_three_d()
 }
 
-/// Which viewport panel a press belongs to, as the mode that panel is
-/// showing.
+/// Which viewport panel a press belongs to, as the mode that panel is showing.
 ///
-/// The canvas is a mode of the one viewport window rather than a window of its
-/// own, and no layout registers the 2D id, so asking the dock tree for that id
-/// never answers yes. The tab says a viewport is fronted;
-/// [`crate::viewport_host::ViewportHost::mode`] says which of the two it is
-/// showing -- and the answer has to name one *panel*, not one mode. A
-/// workspace can front a viewport in each of two leaves, and asking each mode
-/// separately whether some fronted viewport is showing it answers yes twice,
-/// so one Home frames the canvas and moves the camera.
-///
-/// So: the viewport under the cursor, which is the panel the user is pointing
-/// at; and with the cursor over none of them, the fronted viewport when the
-/// workspace fronts only one. Two fronted viewports in different modes with
-/// the cursor over neither name no panel at all, and Home does nothing rather
-/// than doing it twice.
+/// The answer has to name one panel, not one mode: a workspace can front a
+/// viewport in each of two leaves, and asking each mode separately whether some
+/// fronted viewport is showing it answers yes twice. So the viewport under the
+/// cursor, else the fronted viewport when the workspace fronts only one, else
+/// no panel at all.
 pub(crate) fn focused_viewport_mode(
     hover_map: &HoverMap,
     parents: &Query<&ChildOf>,
@@ -2478,8 +2117,7 @@ fn hovered_viewport_mode(
         .flat_map(|(_, hits)| hits.keys())
         .find_map(|&hovered| {
             // The walk stops at the first panel it reaches: a hit inside some
-            // other panel is not a hit inside the viewport that panel sits
-            // beside.
+            // other panel is not a hit inside the viewport beside it.
             core::iter::successors(Some(hovered), |entity| {
                 parents.get(*entity).ok().map(ChildOf::parent)
             })
@@ -2515,14 +2153,9 @@ fn fronted_viewport_hosts<'a>(
         })
 }
 
-/// Frame the UI scene in the 2D viewport: zoom and pan so the whole
-/// canvas is in view.
-///
-/// Every open 2D panel is framed, not just one: the editor routes a
-/// single UI scene into every 2D viewport (see
-/// [`route_ui_roots_to_cameras`]), and an operator has no panel to be
-/// called on. The header's Fit control is a plain operator button,
-/// identical to the menu entry and to a scripted run.
+/// Frame the UI scene in the 2D viewport: zoom and pan so the whole canvas is in
+/// view. Every open 2D panel is framed, an operator having no panel to be called
+/// on.
 #[operator(
     id = "viewport2d.frame",
     label = "Fit 2D View",
@@ -2538,19 +2171,9 @@ pub(crate) fn viewport_2d_frame(
     OperatorResult::Finished
 }
 
-/// Put the 2D viewport into Edit or Interact mode.
-///
-/// The header's segmented control is a pointer gesture on a node, which a
-/// scripted run has no way to perform. This is that control as an
-/// operator, so a capture of the panel in either mode is one call rather
-/// than a synthesised click.
-///
-/// Every open panel is moved, the way [`viewport_2d_frame`] frames every
-/// one. An operator is not called on a panel -- there is no pointer in it
-/// to say which -- so the alternative is picking one arbitrarily, and a
-/// scripted run that set the mode on a panel the user could not identify
-/// would be worse than one that set it everywhere. The header's own
-/// control stays per panel: that gesture does name its panel.
+/// Put the 2D viewport into Edit or Interact mode: the header's segmented
+/// control as an operator, so a scripted run need not synthesise a click. Moves
+/// every open panel, since an operator names none.
 #[operator(
     id = "viewport2d.mode",
     label = "Set 2D Viewport Mode",
@@ -2578,14 +2201,9 @@ pub(crate) fn viewport_2d_mode(
     OperatorResult::Finished
 }
 
-/// Set the canvas grid the 2D viewport snaps and nudges on.
-///
-/// The header's stepper for a scripted run. Like `viewport2d.mode` and
-/// `viewport2d.frame` it acts on every open panel.
-///
-/// A size off the power-of-two ladder is taken as given; the header's
-/// stepper pulls it back onto the ladder from there. See
-/// [`stepped_ui_grid`].
+/// Set the canvas grid the 2D viewport snaps and nudges on, on every open panel.
+/// A size off the power-of-two ladder is taken as given; the header's stepper
+/// pulls it back onto the ladder from there. See [`stepped_ui_grid`].
 #[operator(
     id = "viewport2d.grid",
     label = "Set 2D Canvas Grid",
@@ -2625,13 +2243,9 @@ pub(crate) fn viewport_2d_grid(
     OperatorResult::Finished
 }
 
-/// Set the 2D viewport's zoom, in stage logical pixels per authored
-/// pixel.
-///
-/// Named on one panel or, with no `panel`, on every open one, like
-/// `viewport2d.grid`. A stated zoom stands a pending fit down: the fit
-/// is the framing a panel falls back to, and it would otherwise land on
-/// the next frame and overwrite the framing that was just asked for.
+/// Set the 2D viewport's zoom, in stage logical pixels per authored pixel, on
+/// one named panel or on every open one. A stated zoom stands a pending fit
+/// down, which would otherwise land next frame over the framing just asked for.
 #[operator(
     id = "viewport2d.zoom",
     label = "Set 2D Canvas Zoom",
@@ -2674,13 +2288,8 @@ pub(crate) fn viewport_2d_zoom(
     OperatorResult::Finished
 }
 
-/// The panels of `open` a `panel` parameter names.
-///
-/// Bits that name no open panel -- malformed, or a handle left over from
-/// an earlier run -- are the same answer as no parameter at all. The
-/// figure is written by hand in a capture script, so the operator has
-/// more to say by acting on what is open than by bringing the editor
-/// down over it.
+/// The panels of `open` a `panel` parameter names. A value naming no open panel
+/// is the same answer as no parameter at all.
 fn named_panels(params: &OperatorParameters, operator: &str, open: &[Entity]) -> Vec<Entity> {
     let Some(bits) = params.as_int("panel") else {
         return open.to_vec();
@@ -2703,12 +2312,8 @@ fn parse_viewport_2d_mode(mode: &str) -> Option<Viewport2dMode> {
     }
 }
 
-/// Select the authored entity with this name.
-///
-/// The counterpart to `selection.clear` for a scripted run: selecting on
-/// the 2D stage is otherwise a click at an authored pixel, which a
-/// headless capture cannot aim. Editor chrome is excluded, so the name
-/// resolves against the authored scene alone, and an ambiguous name is
+/// Select the authored entity with this name. Editor chrome is excluded, so the
+/// name resolves against the authored scene alone, and an ambiguous name is
 /// refused rather than guessed.
 #[operator(
     id = "selection.select",
@@ -2738,12 +2343,8 @@ pub(crate) fn selection_select(
     OperatorResult::Finished
 }
 
-/// Add the authored entity with this name to the selection.
-///
-/// `selection.select` replaces the selection, which is what one click
-/// means. Building a multi-entity selection is otherwise Ctrl-click, and
-/// a scripted or remote caller has no pointer to hold Ctrl with, so the
-/// operators that act on several entities at once were out of reach.
+/// Add the authored entity with this name to the selection, which
+/// `selection.select` would replace. The scripted stand-in for Ctrl-click.
 #[operator(
     id = "selection.extend",
     label = "Add To Selection By Name",
@@ -2769,25 +2370,18 @@ pub(crate) fn selection_extend(
     OperatorResult::Finished
 }
 
-/// Marker on one Edit|Interact segment, naming the panel it drives.
-///
-/// The panel is carried rather than looked up, because the mode is
-/// per-panel state on [`Viewport2dPanelHost`] and a segment in one
-/// panel's header must never move another panel's.
+/// Marker on one Edit|Interact segment, naming the panel it drives, so a segment
+/// in one panel's header never moves another panel's mode.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Viewport2dModeSegment {
     pub host: Entity,
     pub mode: Viewport2dMode,
 }
 
-/// The two-segment Edit|Interact control, built like the Game panel's
-/// Play/Select bar (`crate::game_panel::game_mode_bar`).
-///
-/// Not [`jackdaw_feathers::tab_strip`]: that widget spaces its tabs apart
-/// rather than joining them inside one bordered box, and dispatches a
-/// named operator with a string parameter. These segments write per-panel
-/// state on a specific [`Viewport2dPanelHost`] entity, which no operator
-/// parameter carries, so each one holds its own target and observer.
+/// The two-segment Edit|Interact control. Not [`jackdaw_feathers::tab_strip`],
+/// which spaces its tabs apart and dispatches a named operator: these segments
+/// write per-panel state on a specific [`Viewport2dPanelHost`] entity, which no
+/// operator parameter carries.
 fn viewport_2d_mode_bar(host: Entity) -> impl Bundle {
     (
         segmented::segmented_bar(),
@@ -2862,10 +2456,9 @@ fn update_viewport_2d_mode_bar(
     }
 }
 
-/// Despawn a 2D viewport panel's camera and its pointer when the panel
-/// content entity goes away (panel closed, leaf rebuilt on split,
-/// workspace switch). The stage node is a descendant of the panel, so it
-/// is torn down with it and needs no explicit cleanup.
+/// Despawn a 2D viewport panel's camera and its pointer when the panel content
+/// entity goes away. The stage node is a descendant of the panel, so it is torn
+/// down with it.
 pub(crate) fn on_viewport_2d_panel_despawn(
     trigger: On<Despawn, Viewport2dPanelHost>,
     hosts: Query<&Viewport2dPanelHost>,

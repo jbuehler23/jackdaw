@@ -1,12 +1,13 @@
 //! Binary sidecar format for a terrain's bulk per-cell data.
 //!
-//! A terrain's heights and paint channels are too large for a text scene
-//! file: a 512-resolution heightmap is 262,144 floats. They live in a
-//! versioned binary file beside the scene, and the scene keeps only the
-//! descriptive parts: resolution, world size, the channel table.
+//! A terrain's heights, paint channels and scatter live in a versioned binary
+//! file beside the scene; the scene text keeps only the descriptive parts.
+//! Every integer and float is little-endian, and encoding is a pure function of
+//! the data. There is no checksum: decode catches structural corruption, not bit
+//! rot in otherwise well-formed bytes, and the file must end exactly where the
+//! declared structure ends or it is [`SidecarError::Truncated`].
 //!
-//! An external pipeline can read the format in any language without linking
-//! jackdaw:
+//! # Format version 1
 //!
 //! ```text
 //! offset  size          field
@@ -24,24 +25,11 @@
 //!         w*res*res     values, u8 or u16 per the tag
 //! ```
 //!
-//! Every integer and float is little-endian. Encoding is a pure function of
-//! the data: the same terrain always produces the same bytes.
-//!
-//! There is no checksum. Decode catches structural corruption (bad magic,
-//! an unreadable version, a length that does not fit the claimed shape),
-//! not silent bit rot within otherwise well-formed bytes.
-//!
-//! Decode requires the file to end exactly where the declared structure
-//! ends: trailing bytes, and a header that under-claims a count, are both
-//! rejected as [`SidecarError::Truncated`].
-//!
 //! # Format version 2
 //!
-//! Format version 1 is the layout above: one dense heightmap plus channels,
-//! sized to a single `resolution`. Format version 2 places heights, the
-//! control map, and an optional color layer in sparse regions (see
-//! [`crate::region`]), addressed by [`RegionCoord`]. Channels stay dense at
-//! `channel_resolution`.
+//! Heights, the control map and an optional color layer move into sparse
+//! regions (see [`crate::region`]), addressed by [`RegionCoord`]. Channels stay
+//! dense at `channel_resolution`.
 //!
 //! ```text
 //! offset  size          field
@@ -78,16 +66,15 @@
 //!         4*size^2      color RGBA8 -- only present if flag bit 0 is set
 //! ```
 //!
-//! Format version 3 is version 2 with one more `f32` per material slot:
-//! the per-slot detiling strength. A version-2 file reads as strength 0,
-//! which is off.
+//! # Format version 3
+//!
+//! Version 2 with one more `f32` per material slot: the per-slot detiling
+//! strength. A version-2 file reads as strength 0, which is off.
 //!
 //! # Format version 4
 //!
-//! Version 4 is version 3 with one fixed-size block between the material
-//! table and the region table: the terrain's autoterrain settings. It sits
-//! beside the material slots because that is what its two slot ids address,
-//! and it leaves the region stream at the end of the file.
+//! Version 3 with one fixed-size block between the material table and the
+//! region table: the terrain's autoterrain settings.
 //!
 //! ```text
 //! offset  size          field
@@ -100,29 +87,24 @@
 //!         4             slope range end in degrees, f32
 //! ```
 //!
-//! A version-2 or version-3 file has no such block and reads as disabled
-//! at the default range.
+//! An older file has no such block and reads as disabled at the default range.
 //!
 //! # Format version 5
 //!
-//! Version 5 states where its cells sit and carries the paint channels in
-//! the regions.
+//! The header drops `channel_resolution` and runs magic, version, flags,
+//! `channel_count`, followed by a channel directory: per channel, a name
+//! length, the name, an element tag and three padding bytes, and no values.
+//! The values are per region, written after that region's colour: one plane per
+//! declared channel, in directory order, `side^2` values at that channel's own
+//! width. Every region carries every declared channel, and a cell no region
+//! holds reads as zero.
 //!
-//! The header has no `channel_resolution`, so it runs magic, version,
-//! flags, `channel_count`. What follows is a channel directory: per
-//! channel, a name length, the name, an element tag and three padding
-//! bytes, and no values. The values are per region, written after that
-//! region's colour: one plane per declared channel, in directory order,
-//! `side^2` values at that channel's own width.
+//! Channels live in the regions because a terrain's extent is emergent: a dense
+//! grid sized independently of the regions cannot cover a region a stroke has
+//! just allocated without being resized and re-anchored first.
 //!
-//! Channels live in the regions because a terrain's extent is emergent. A
-//! dense grid sized independently of the regions cannot cover a region a
-//! stroke has just allocated without being resized and re-anchored first,
-//! and a read in between lands on the wrong cell. Every region carries
-//! every declared channel, and a cell no region holds reads as zero.
-//!
-//! Between the autoterrain block and the region table sits one fixed-size
-//! block: where this terrain's cell grid sits and how big its cells are.
+//! Between the autoterrain block and the region table sits one fixed-size block
+//! stating where this terrain's cell grid sits and how big its cells are.
 //!
 //! ```text
 //! offset  size          field
@@ -132,37 +114,15 @@
 //!         4             anchor z, f32
 //! ```
 //!
-//! A version-4 or older file carries its channels as one dense grid
-//! anchored at cell `(0, 0)`, the same anchor the heights use, so the load
-//! slices that grid into the regions owning its cells.
-//!
-//! Grid geometry lives here, beside the cells it describes, rather than
-//! only on the `Terrain` component.
-//!
-//! A terrain's extent is emergent: the allocated regions are the terrain,
-//! and how much ground they cover is their count times
-//! [`GridGeometry::cell_size`]. Nothing declares a rectangle, so no edit
-//! can put stored cells outside what the terrain claims.
-//!
-//! A save writes the sidecar before the scene text and cannot roll one
-//! back if the other fails, so the two can disagree on disk. When they do,
-//! the sidecar wins for interpreting stored cells: it travels with the
-//! data, so a version-5 sidecar beside stale scene text still draws its
-//! ground at the same place and scale. The component's `cell_size` is the
-//! authoring surface, and a save copies it here.
-//!
-//! A version-4 or older file states no geometry. Its cells are addressed
-//! by a declared `size`/`resolution` rectangle centred on the entity, so
-//! it loads with no geometry of its own and the caller derives it from
-//! that vintage's contract: `cell_size = size.x / (resolution - 1)`,
-//! anchored at `-size/2`. Every stored cell keeps the world position it
-//! had, and the first save records the result as version 5.
+//! When sidecar and scene text disagree, the sidecar wins for interpreting
+//! stored cells: it travels with the data. A version-4 or older file states no
+//! geometry, and the caller derives it from that vintage's contract:
+//! `cell_size = size.x / (resolution - 1)`, anchored at `-size/2`.
 //!
 //! # Format version 7
 //!
-//! Version 7 carries a terrain's scatter as data. One block follows the
-//! surface block, ahead of the region table: two count-prefixed side
-//! tables the placements index into.
+//! One block follows the surface block, ahead of the region table: two
+//! count-prefixed side tables the placements index into.
 //!
 //! ```text
 //! offset  size          field
@@ -199,27 +159,17 @@
 //!         4             uniform scale, f32
 //! ```
 //!
-//! Both indices must name an entry the file's own tables declare;
-//! anything else is [`SidecarError::UnknownScatterIndex`]. A row is
-//! emptied rather than removed while a document is open, because an index
-//! is what every placement in memory refers to; the writer drops those
-//! tombstoned rows and renumbers the placements with them, so a file holds
-//! only rows something names.
+//! Both indices must name an entry the file's own tables declare; anything else
+//! is [`SidecarError::UnknownScatterIndex`]. A row is emptied rather than
+//! removed while a document is open, because an index is what every placement in
+//! memory refers to; the writer drops tombstoned rows and renumbers the
+//! placements with them. A placement is positioned against its region's minimum
+//! corner, so it moves with the ground it stands on. A version-6 or older file
+//! loads with an empty palette and no placements.
 //!
-//! A placement belongs to the region covering its cell and is positioned
-//! against that region's minimum corner, so it moves with the ground it
-//! stands on. A version-6 or older file carries no such block and loads
-//! with an empty palette and no placements: its scatter, if it had any,
-//! is scene entities.
-//!
-//! [`load`] and [`save`] are the entry points: `load` upgrades a version-1
-//! file into regions sized to its resolution, reads a version-2 file as
-//! detiling-off, a version-3 file as autoterrain-off, and a version-4 file
-//! as stating no grid geometry; `save` always writes the current version.
-//! A newer-than-this-build version is refused by both.
-//! `save`/[`encode_regions`] refuse to write a malformed material name;
-//! [`decode_regions`] rejects one too and clamps a slot's tiling and
-//! detiling floats to their bounds. The bare `encode`/`decode` and
+//! [`load`] and [`save`] are the entry points: `load` upgrades older files
+//! forward and `save` always writes the current version, refusing anything
+//! newer than this build. The bare `encode`/`decode` and
 //! `encode_regions`/`decode_regions` pairs address one format directly.
 
 use std::collections::HashSet;
@@ -313,11 +263,8 @@ impl core::fmt::Display for SidecarPathError {
 impl core::error::Error for SidecarPathError {}
 
 /// Traversal guard shared by every project-relative path string this crate
-/// accepts from a file: sidecar `data_path` and texture-set references both
-/// go through this before any format-specific check.
-///
-/// Stricter than the host platform: backslashes and Windows drive prefixes
-/// are rejected on every platform, as are empty, `.` and `..` components.
+/// accepts from a file. Stricter than the host platform: backslashes, Windows
+/// drive prefixes, and empty, `.` and `..` components are rejected everywhere.
 fn reject_path_traversal(data_path: &str) -> Result<(), SidecarPathError> {
     if data_path.is_empty() {
         return Err(SidecarPathError::Empty);
@@ -398,14 +345,12 @@ impl core::error::Error for MaterialNameError {}
 
 /// Validate a terrain slot's material reference.
 ///
-/// A material's name, its `@Name` identity and its file stem are one
-/// string, so a name that could not be a file stem could never resolve.
-/// Checked at the format boundary, because an unchecked name stored on a
-/// terrain fails every subsequent save of the scene.
+/// A material's name, its `@Name` identity and its file stem are one string, so
+/// a name that could not be a file stem could never resolve. Checked at the
+/// format boundary, because an unchecked name fails every subsequent save.
 ///
-/// The empty name is valid and means a tombstone: see
-/// [`TerrainMaterialSlot::tombstone`]. No material can answer to it, since
-/// a name is a file stem and there is no empty one.
+/// The empty name is valid and means a tombstone; see
+/// [`TerrainMaterialSlot::tombstone`].
 pub fn validate_material_name(name: &str) -> Result<(), MaterialNameError> {
     if name.is_empty() {
         return Ok(());
@@ -422,17 +367,16 @@ pub fn validate_material_name(name: &str) -> Result<(), MaterialNameError> {
     Ok(())
 }
 
-/// One texture id on a terrain: the saved material it draws, and how many
-/// times that material's textures repeat per world unit here.
+/// One texture id on a terrain: the saved material it draws, and how many times
+/// that material's textures repeat per world unit here.
 ///
-/// The scale lives on the slot rather than on the material because one
-/// material is shared across surfaces: the same rock tiles differently on
-/// a terrain than on a brush face.
+/// The scale lives on the slot rather than on the material because one material
+/// is shared across surfaces.
 ///
-/// A slot with an empty name is a tombstone: an id whose material was
-/// removed. It still occupies its position, because the position is the
-/// id, and the control map holds ids that must not change meaning
-/// underneath what was painted with them. See [`Self::tombstone`].
+/// A slot with an empty name is a tombstone: an id whose material was removed.
+/// It still occupies its position, because the position is the id and the
+/// control map holds ids that must not change meaning underneath what was
+/// painted with them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TerrainMaterialSlot {
     /// Name of a saved material: the `@Name` identity, which is also the
@@ -458,10 +402,8 @@ impl TerrainMaterialSlot {
 
     /// A vacated id: no material, but the id itself is held open.
     ///
-    /// Removing a material leaves this behind. Every id above it keeps its
-    /// number, so cells painted with those ids keep drawing what they
-    /// drew; cells painted with this id draw the fallback until a material
-    /// is added back into it.
+    /// Every id above it keeps its number, so cells painted with those ids keep
+    /// drawing what they drew.
     pub fn tombstone() -> Self {
         Self {
             material: String::new(),
@@ -475,15 +417,12 @@ impl TerrainMaterialSlot {
         self.material.is_empty()
     }
 
-    /// Clamp the floats into the bounds downstream code assumes:
-    /// non-finite becomes the field's default, out of range clamps.
+    /// Clamp the floats into the bounds downstream code assumes: non-finite
+    /// becomes the field's default, out of range clamps.
     ///
-    /// A corrupt or hand-edited sidecar can carry a NaN here, and a NaN
-    /// fails every comparison guarding it, including the shader's
-    /// `strength <= 0.0`, so it would reach the sampler as a NaN UV.
-    ///
-    /// A tombstone is left alone: it draws nothing, and its zeroed floats
-    /// are what it is written back out as.
+    /// A NaN fails every comparison guarding it, including the shader's
+    /// `strength <= 0.0`, so it would reach the sampler as a NaN UV. A tombstone
+    /// is left alone: its zeroed floats are what it is written back out as.
     fn sanitize(&mut self) {
         if self.is_tombstone() {
             return;
@@ -537,14 +476,11 @@ const SCATTER_FLAG_OBSTACLE: u8 = 0b0000_0001;
 /// cells from their slope.
 const AUTOTERRAIN_FLAG_ENABLED: u8 = 0b0000_0001;
 
-/// How a terrain's whole surface is shaded, over and above what any one
-/// slot says.
+/// How a terrain's whole surface is shaded, over and above what any one slot
+/// says.
 ///
-/// Both fields are authored dials rather than measurements, so both are
-/// `0..1` and both default to what every pre-version-6 sidecar was
-/// rendered at: the middle of the sharpness dial, and a colour layer
-/// applied at full strength (white being no tint, an unpainted terrain
-/// draws the same either way).
+/// Both fields are authored dials in `0..1`, defaulting to what every
+/// pre-version-6 sidecar was rendered at.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceSettings {
     /// How hard the height blend cuts between two texture ids, `0..1`.
@@ -574,12 +510,11 @@ impl SurfaceSettings {
         self
     }
 
-    /// Clamp the block into the bounds the shader assumes: non-finite
-    /// becomes the field's default, out of range clamps to `0..=1`.
+    /// Clamp the block into the bounds the shader assumes: non-finite becomes
+    /// the field's default, out of range clamps to `0..=1`.
     ///
-    /// A NaN here fails every comparison guarding it and would reach the
-    /// shader as a NaN exponent or a NaN mix factor, which paints the
-    /// terrain black.
+    /// A NaN here would reach the shader as a NaN exponent or mix factor, which
+    /// paints the terrain black.
     pub fn sanitize(&mut self) {
         self.blend_sharpness = sane_unit(self.blend_sharpness, DEFAULT_BLEND_SHARPNESS);
         self.tint_strength = sane_unit(self.tint_strength, DEFAULT_TINT_STRENGTH);
@@ -604,14 +539,12 @@ fn sane_unit(value: f32, default: f32) -> f32 {
     }
 }
 
-/// How a terrain textures the cells no hand has claimed.
-///
-/// Off until a terrain says otherwise, in which case the terrain draws
-/// what its control map says and nothing else.
+/// How a terrain textures the cells no hand has claimed. Off until a terrain
+/// says otherwise.
 ///
 /// The two slots are texture ids into the same list the control map is
 /// addressed by, so a slot naming a vacated or missing material draws the
-/// fallback layer, the same as a cell painted with that id.
+/// fallback layer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AutoTerrainSettings {
     /// Whether cells without [`Control::manual`] take their texture from
@@ -648,17 +581,13 @@ impl AutoTerrainSettings {
         self
     }
 
-    /// Clamp the block into the bounds the shader assumes.
+    /// Clamp the block into the bounds the shader assumes: non-finite becomes
+    /// the field's default, out of range clamps to `0..=90`, and a range whose
+    /// ends arrive the wrong way round is swapped, keeping the width.
     ///
-    /// As in [`TerrainMaterialSlot::sanitize`], a NaN fails every
-    /// comparison guarding it and would reach the shader's `smoothstep`.
-    /// Non-finite becomes the field's default, out of range clamps to
-    /// `0..=90`, and a range whose ends arrive the wrong way round is
-    /// swapped, which keeps the width the author chose.
-    ///
-    /// The result is always at least [`MIN_SLOPE_BAND_DEG`] wide: the end
-    /// is pushed up to make the width, or the start pulled down where the
-    /// end is already against the 90-degree ceiling.
+    /// The result is always at least [`MIN_SLOPE_BAND_DEG`] wide: the end is
+    /// pushed up to make the width, or the start pulled down where the end is
+    /// already against the 90-degree ceiling.
     fn sanitize(&mut self) {
         self.base_slot = self.base_slot.min(crate::control::MAX_TEXTURE_ID);
         self.slope_slot = self.slope_slot.min(crate::control::MAX_TEXTURE_ID);
@@ -1008,20 +937,18 @@ pub fn decode(bytes: &[u8]) -> Result<TerrainData, SidecarError> {
 
 /// Where a terrain's cell grid sits, and how big its cells are.
 ///
-/// The whole of a terrain's geometry. There is no declared rectangle:
-/// which cells exist is the allocated regions' business, and this states
-/// only where cell `(0, 0)` is and how far apart cells are.
+/// The whole of a terrain's geometry: which cells exist is the allocated
+/// regions' business, and this states only where cell `(0, 0)` is and how far
+/// apart cells are.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridGeometry {
     /// World metres per cell edge.
     pub cell_size: f32,
-    /// World-space offset of cell `(0, 0)` from the terrain entity's
-    /// origin.
+    /// World-space offset of cell `(0, 0)` from the terrain entity's origin.
     ///
-    /// Zero for a terrain authored against this format: cell `(0, 0)` sits
-    /// at the entity. Nonzero only on a terrain migrated from a version-4
-    /// or older sidecar, whose cells are addressed by a rectangle centred
-    /// on the entity, giving that vintage's `-size/2`.
+    /// Zero for a terrain authored against this format. Nonzero only on a
+    /// terrain migrated from a version-4 or older sidecar, giving that
+    /// vintage's `-size/2`.
     pub anchor: bevy_math::Vec2,
 }
 
@@ -1035,14 +962,11 @@ impl GridGeometry {
     /// The geometry a terrain declaring a square `size` metres across a
     /// `resolution`-vertex grid is drawn with.
     ///
-    /// Vertex spacing is `size / (resolution - 1)`, since `resolution`
-    /// counts vertices and a 256-vertex edge has 255 cells, and the
-    /// rectangle is centred on the entity, putting its first vertex at
-    /// `-size/2`.
+    /// Vertex spacing is `size / (resolution - 1)`, since `resolution` counts
+    /// vertices, and the rectangle is centred on the entity.
     ///
-    /// A cell is square, so only a square rectangle re-describes exactly.
-    /// A rectangle asking for two different spacings is respaced to the
-    /// one its X axis asked for, which moves its cells along Z;
+    /// A cell is square, so a rectangle asking for two different spacings is
+    /// respaced to the one its X axis asked for, which moves its cells along Z;
     /// [`declared_rect_respacing`] reports that in advance.
     pub fn for_declared_rect(size: bevy_math::Vec2, resolution: u32) -> Self {
         Self {
@@ -1058,29 +982,21 @@ impl Default for GridGeometry {
     }
 }
 
-/// The two spacings a declared rectangle asked for, when it asked for
-/// two different ones: `(x, z)`, in metres per cell.
-///
-/// `None` for a square rectangle, which
-/// [`GridGeometry::for_declared_rect`] re-describes exactly. A caller
-/// migrating an old file gets `Some` when the migration respaces that
-/// terrain's cells along Z.
+/// The two spacings a declared rectangle asked for, when it asked for two
+/// different ones: `(x, z)`, in metres per cell. `None` for a square rectangle,
+/// which [`GridGeometry::for_declared_rect`] re-describes exactly.
 pub fn declared_rect_respacing(size: bevy_math::Vec2, resolution: u32) -> Option<(f32, f32)> {
     let cells = (resolution.max(2) - 1) as f32;
     let (x, z) = (size.x / cells, size.y / cells);
     (x != z).then_some((x, z))
 }
 
-/// The geometry to draw a terrain's stored cells at, given what its
-/// sidecar says and the rectangle its component declares.
+/// The geometry to draw a terrain's stored cells at, given what its sidecar says
+/// and the rectangle its component declares.
 ///
-/// The sidecar wins whenever it states geometry: it travels with the
-/// cells it describes, so a version-5 file beside scene text left stale
-/// by a half-finished save still places its ground the same way. Only a
-/// file too old to state geometry falls back to the declared rectangle.
-///
-/// The editor and the runtime both resolve through here, so a scene draws
-/// the same ground in a game as in the editor that made it.
+/// The sidecar wins whenever it states geometry: it travels with the cells it
+/// describes. Only a file too old to state geometry falls back to the declared
+/// rectangle. The editor and the runtime both resolve through here.
 pub fn resolve_grid(
     stored: Option<GridGeometry>,
     declared_size: bevy_math::Vec2,
@@ -1089,12 +1005,10 @@ pub fn resolve_grid(
     stored.unwrap_or_else(|| GridGeometry::for_declared_rect(declared_size, declared_resolution))
 }
 
-/// The dense grid a terrain presents: how many vertices it has, how much
-/// ground they cover, and where the first one sits.
+/// The dense grid a terrain presents: how many vertices it has, how much ground
+/// they cover, and where the first one sits.
 ///
-/// Derived, never declared. The resolution is how far the stored regions
-/// reach, and the placement is the document's own geometry, so this
-/// changes when an edit allocates a region.
+/// Derived, never declared, so this changes when an edit allocates a region.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridShape {
     /// Vertices per edge.
@@ -1124,13 +1038,11 @@ pub struct RegionTerrainData {
     /// How the whole surface is shaded: blend sharpness and how much of
     /// the colour layer reaches the albedo.
     pub surface: SurfaceSettings,
-    /// Where this document's cells sit in the world, or `None` when the
-    /// file it came from is too old to state it.
+    /// Where this document's cells sit in the world, or `None` when the file it
+    /// came from is too old to state it.
     ///
-    /// `None` is a version-4-or-older file, whose cells are placed by the
-    /// `Terrain` component's declared rectangle. A caller holding that
-    /// component resolves it with [`GridGeometry::for_declared_rect`]; the
-    /// next save writes the result, and it reads as `Some` thereafter.
+    /// `None` is placed by the `Terrain` component's declared rectangle through
+    /// [`GridGeometry::for_declared_rect`]; the next save writes the result.
     pub grid: Option<GridGeometry>,
     /// The assets and stamp identities this document's stored scatter
     /// placements name. Empty on a document with no stored scatter, and
@@ -1138,11 +1050,8 @@ pub struct RegionTerrainData {
     pub scatter: ScatterPalette,
 }
 
-/// An empty document: no channels, no regions, no materials, regions
-/// sized [`RegionSize::DEFAULT`], at this format's own grid geometry.
-///
-/// The geometry is stated rather than `None`; `None` arises only from
-/// decoding a file too old to state it.
+/// An empty document: no channels, no regions, no materials, regions sized
+/// [`RegionSize::DEFAULT`], at this format's own grid geometry.
 impl Default for RegionTerrainData {
     fn default() -> Self {
         Self {
@@ -1165,15 +1074,12 @@ impl RegionTerrainData {
         self.regions.stored_extent().map_or(0, |(x, z)| x.max(z))
     }
 
-    /// The dense grid this document presents, placed and scaled by the
-    /// geometry its cells are drawn at.
+    /// The dense grid this document presents, placed and scaled by the geometry
+    /// its cells are drawn at: the extent comes from the regions and the
+    /// placement from the file.
     ///
-    /// The extent comes from the regions and the placement from the file.
-    /// The editor and the runtime both go through here, so a scene draws
-    /// the same ground in a game as in the editor that made it.
-    ///
-    /// The declared rectangle is consulted only for a document from a file
-    /// too old to state its geometry; see [`resolve_grid`].
+    /// The declared rectangle is consulted only for a document from a file too
+    /// old to state its geometry; see [`resolve_grid`].
     pub fn grid_shape(
         &self,
         declared_size: bevy_math::Vec2,
@@ -1188,15 +1094,11 @@ impl RegionTerrainData {
         }
     }
 
-    /// The document's dense vertex grid as one borrowable region: the
-    /// region at [`RegionCoord::ORIGIN`] when the whole grid fits inside
-    /// it exactly.
+    /// The document's dense vertex grid as one borrowable region: the region at
+    /// [`RegionCoord::ORIGIN`] when the whole grid fits inside it exactly.
     ///
-    /// Callers addressing a terrain as one dense `resolution^2` array can
-    /// borrow it in place when the grid is exactly one region, which is
-    /// every power-of-two resolution. A grid spanning regions goes through
-    /// [`Self::grid_heights`] and [`Self::set_grid_heights`], which read
-    /// and write across as many regions as it covers.
+    /// A grid spanning regions goes through [`Self::grid_heights`] and
+    /// [`Self::set_grid_heights`] instead.
     pub fn contiguous_grid(&self) -> Option<&Region> {
         self.regions
             .region(RegionCoord::ORIGIN)
@@ -1235,26 +1137,17 @@ impl RegionTerrainData {
             .write_grid_control(self.grid_resolution(), control);
     }
 
-    /// Migrate a [`TerrainData`] into a region document: the legacy dense
-    /// grid laid over regions sized by [`RegionSize::for_resolution`],
-    /// with no control or color paint. Present even if every height is
-    /// default. Channels move across unchanged.
+    /// Migrate a [`TerrainData`] into a region document: the legacy dense grid
+    /// laid over regions sized by [`RegionSize::for_resolution`], with no
+    /// control or color paint. Channels move across unchanged.
     ///
-    /// A resolution that is not a power of two is stored, not resampled:
-    /// it spans two regions per axis and the vertices past the first
-    /// region are held by the next one, so the migration keeps every
-    /// height the file carried. A resolution of 0 migrates to zero
-    /// regions under [`RegionSize::DEFAULT`].
+    /// The grid is embedded, not resampled, and regions are allocated whole, so
+    /// the terrain it becomes is wider than the grid: a 129-vertex grid becomes
+    /// a 256-cell terrain whose extra cells read as height zero. Every authored
+    /// value keeps its place; the terrain's edge is not kept.
     ///
-    /// Such a grid is embedded, and the terrain it becomes is wider than
-    /// the grid: regions are allocated whole, so a 129-vertex grid becomes
-    /// a 256-cell terrain. The cells past the authored grid read as height
-    /// zero and are flat ground to the mesher, the export manifest and the
-    /// navmesh bake alike. The migration keeps every authored value in
-    /// place; it does not keep the terrain's edge.
-    ///
-    /// Channels are embedded the same way and against the same anchor, so
-    /// a channel value stays on the height it described.
+    /// Channels are embedded against the same anchor, so a channel value stays
+    /// on the height it described.
     pub fn from_legacy_v1(data: &TerrainData) -> Result<Self, SidecarError> {
         let mut normalized = data.clone();
         normalized.normalize();
@@ -1292,13 +1185,11 @@ impl RegionTerrainData {
         })
     }
 
-    /// A [`TerrainData`] view of this document: the regions its dense
-    /// vertex grid covers, with no control or color paint. Returns `None`
-    /// once any of that stops holding, rather than flattening data it
-    /// cannot represent.
-    ///
-    /// A region outside the grid holds ground the legacy format has no
-    /// coordinate for, so it refuses rather than dropping it.
+    /// A [`TerrainData`] view of this document: the regions its dense vertex
+    /// grid covers, with no control or color paint. Returns `None` once any of
+    /// that stops holding -- a region outside the grid holds ground the legacy
+    /// format has no coordinate for -- rather than flattening data it cannot
+    /// represent.
     pub fn as_legacy(&self) -> Option<TerrainData> {
         if self.autoterrain != AutoTerrainSettings::default() {
             return None;
@@ -1342,20 +1233,15 @@ impl RegionTerrainData {
     }
 
     /// Bring the stored channel planes into agreement with the directory,
-    /// zero-filling a plane the regions do not carry yet.
-    ///
-    /// Idempotent: the planes are per-region, so only their count is
-    /// settled here, never their size or placement.
+    /// zero-filling a plane the regions do not carry yet. Idempotent: only their
+    /// count is settled here, never their size or placement.
     pub fn normalize(&mut self) {
         self.regions.set_channel_count(self.channels.len());
     }
 
-    /// Where the stored placements' offsets are measured from, and how
-    /// wide a region is in world units.
-    ///
-    /// A document too old to state its geometry has none stored, so it
-    /// carries no placements either and the default is never consulted for
-    /// one.
+    /// Where the stored placements' offsets are measured from, and how wide a
+    /// region is in world units. A document too old to state its geometry
+    /// carries no placements, so the default is never consulted for one.
     fn placement_frame(&self) -> (GridGeometry, f32) {
         let grid = self.grid.unwrap_or(GridGeometry::DEFAULT);
         let span = self.regions.region_size().get() as f32 * grid.cell_size;
@@ -1393,12 +1279,11 @@ impl RegionTerrainData {
         )
     }
 
-    /// Store one instance at terrain-local `local`, allocating the region
-    /// under it if the terrain does not reach there yet.
+    /// Store one instance at terrain-local `local`, allocating the region under
+    /// it if the terrain does not reach there yet.
     ///
     /// Returns where it landed. `None` when the terrain is already at
-    /// [`crate::region::MAX_REGIONS`] and the position needs a new one:
-    /// scatter must not be the edit that grows a terrain past its cap.
+    /// [`crate::region::MAX_REGIONS`] and the position needs a new one.
     pub fn add_placement(
         &mut self,
         local: bevy_math::Vec3,
@@ -1408,11 +1293,10 @@ impl RegionTerrainData {
         scale: f32,
     ) -> Option<(RegionCoord, usize)> {
         let (mut coord, mut x, mut z) = self.placement_slot(local);
-        // A position exactly on a region's minimum edge belongs to that
-        // region by the floor above, but the last vertex of a terrain sits
-        // exactly on the edge of the region past its last one. Storing it
-        // there would allocate ground the terrain does not have, so an
-        // edge position falls back into the region already holding it.
+        // The last vertex of a terrain sits exactly on the edge of the region
+        // past its last one. Storing it there would allocate ground the terrain
+        // does not have, so an edge position falls back into the region already
+        // holding it.
         let (_, span) = self.placement_frame();
         if self.regions.region(coord).is_none() {
             let back_x = x == 0.0;
@@ -1518,12 +1402,9 @@ impl RegionTerrainData {
         (index < region.placements().len()).then(|| region.placements_mut().remove(index))
     }
 
-    /// Drop every placement of one stamp identity, keeping its key,
-    /// returning how many were removed.
-    ///
-    /// What a re-run of a stamp does: the key stays where it is, so the
-    /// replacement placements name the row the last run wrote rather than
-    /// a new one.
+    /// Drop every placement of one stamp identity, keeping its key, returning
+    /// how many were removed. What a re-run of a stamp does: the key stays where
+    /// it is, so the replacement placements name the same row.
     pub fn clear_group(&mut self, group: u16) -> usize {
         let mut removed = 0;
         for (_, region) in self.regions.iter_sorted_mut() {
@@ -1538,10 +1419,9 @@ impl RegionTerrainData {
     /// Drop every placement of one stamp identity and tombstone its key,
     /// returning how many were removed.
     ///
-    /// The key is tombstoned rather than removed because the index is what
-    /// the remaining placements name, and renumbering the table here would
-    /// re-point every one of them. The placements go first, which is what
-    /// leaves the row free for the next key to take.
+    /// The key is tombstoned rather than removed because the index is what the
+    /// remaining placements name. The placements go first, which is what leaves
+    /// the row free for the next key to take.
     pub fn remove_group(&mut self, group: u16) -> usize {
         let removed = self.clear_group(group);
         if let Some(key) = self.scatter.groups.get_mut(group as usize) {
@@ -1637,10 +1517,8 @@ pub fn encode_regions(data: &RegionTerrainData) -> Result<Vec<u8>, SidecarError>
         }
     }
     // Tombstoned rows are dropped on the way out and the surviving ones
-    // renumbered, so a document that has been stamped and cleared many
-    // times does not carry a row per run in every future file. A
-    // placement's index is remapped with them; one naming a row that is
-    // not written has nothing to be remapped to.
+    // renumbered, so a document stamped and cleared many times does not carry a
+    // row per run. A placement's index is remapped with them.
     let assets = compact_table(
         data.scatter
             .assets
@@ -2053,13 +1931,11 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
     }
     regions.set_channel_count(channels.len());
 
-    // A pre-version-5 file's channels are a dense grid anchored at cell
-    // (0, 0), the same anchor the heights use, so every value lands in the
-    // region owning the cell it describes. The spacing is the resolution
-    // ahead of the channel table, the one the heights are read at, not the
-    // regions' extent: regions are allocated whole and reach past the grid
-    // a file declares, so spreading a channel over that wider ground would
-    // take every value off the height it describes.
+    // A pre-version-5 file's channels are a dense grid anchored at cell (0, 0),
+    // the same anchor the heights use. The spacing is the resolution ahead of
+    // the channel table, not the regions' extent: regions reach past the grid a
+    // file declares, so spreading a channel over that ground would take every
+    // value off the height it describes.
     for (index, dense) in legacy_channels.iter().enumerate() {
         regions.write_grid_channel(index, legacy_channel_resolution, &dense.values);
     }

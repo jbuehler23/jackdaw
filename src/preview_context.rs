@@ -1,58 +1,21 @@
 //! Design-time binding preview: the Preview Context panel.
 //!
-//! An authored binding reads game state that does not exist in the editor.
-//! Preview supplies it: one scratch entity stands in for the game's subject,
-//! the open UI scene's root points at it with [`BindContext`], and
-//! `jackdaw_bind`'s evaluator runs in the editor for as long as the toggle is
-//! on. Scrubbing a field on the scratch entity moves the real widgets in the
-//! 2D viewport, with no build and no Play session.
+//! One scratch entity stands in for the game's subject, the open UI scene's
+//! root points at it with [`BindContext`], and `jackdaw_bind`'s evaluator runs
+//! in the editor while the toggle is on, so scrubbing a field moves the real
+//! widgets with no build and no Play session.
 //!
-//! # Nothing here is authored content
+//! Nothing here is authored content: the scratch entity and the `BindContext`
+//! are [`EditorEntity`] state that never reaches the document, and every
+//! component the evaluator writes is snapshotted at start and restored at stop.
+//! While the evaluator owns a property the user cannot author it: the session
+//! publishes [`PreviewWriteTargets`] and the document-writing edit paths refuse
+//! an edit that lands on one, with [`PREVIEW_EDIT_REFUSED`] in the log.
 //!
-//! The scratch entity carries [`EditorEntity`] and is never registered in the
-//! scene document, so it cannot save, undo, or appear in the outliner. The
-//! same holds for the `BindContext` this inserts on the scene root: the
-//! document is maintained by explicit patches, and preview writes none, so a
-//! save taken mid-session is byte-identical to one taken with preview off.
-//!
-//! Evaluating also writes to the authored widgets themselves (a `Node`'s
-//! width, a `Text`, a `Visibility`). Those writes are live ECS state, not
-//! document state, but leaving them behind would show the user a scene they
-//! did not author, so every write target is snapshotted when the session
-//! starts and restored when it ends.
-//!
-//! # Bound properties are read-only during a session
-//!
-//! While the evaluator owns a property, the user cannot author it: a drag or
-//! an inspector commit would race a value that is rewritten every frame, and
-//! whichever landed last would be baked into the document. So the session
-//! publishes its write targets ([`PreviewWriteTargets`]) and the two
-//! document-writing edit paths, [`crate::commands::push_layout_edit`] for
-//! stage gestures and `crate::commands::field_edit_commit` for inspector
-//! fields, refuse an edit that lands on one, with [`PREVIEW_EDIT_REFUSED`] in
-//! the log. The set is empty whenever preview is off, so the check costs a
-//! hash lookup.
-//!
-//! Play-in-editor projection writes the same components from the running
-//! game. Nothing here arbitrates between the two: run a projection and a
-//! preview at once and both write the same components, with the last writer
-//! winning.
-//!
-//! # What can be previewed
-//!
-//! `jackdaw_bind` resolves a component read against the context entity's real
-//! ECS components, through the editor's type registry. So a binding can be
-//! previewed exactly when the editor links the Rust type it reads. A project
-//! component the editor knows only as extracted schema ([`ProjectTypes`]) has
-//! no Rust type here and cannot be constructed as a real component at all;
-//! those rows render disabled, and say that previewing them needs the game
-//! running.
-//!
-//! A `Res(Type).field` read is previewed too, which no context entity can
-//! carry: the session stands the resource up in the editor world for as long
-//! as it runs, and takes it back out at the end. A resource the editor was
-//! already holding is left alone, being real editor state, and its rows say so
-//! rather than offering a scrub that would move it.
+//! A binding is previewable exactly when the editor links the Rust type it
+//! reads. A type known only as extracted schema ([`ProjectTypes`]) renders
+//! disabled. A `Res(Type).field` read is stood up as a real resource for the
+//! session's lifetime, unless the editor already holds that resource.
 
 use std::any::TypeId;
 
@@ -106,11 +69,9 @@ const NO_FIELDS_NOTE: &str = "this type has no fields to scrub";
 /// running preview is driving.
 pub const PREVIEW_EDIT_REFUSED: &str = "stop preview to edit a bound property";
 
-/// The components a live session's evaluator writes, as (entity, type).
-///
-/// Empty whenever preview is off, which is what makes
-/// [`preview_writes_type_path`] cheap enough to sit on the editor's edit
-/// paths.
+/// The components a live session's evaluator writes, as (entity, type). Empty
+/// whenever preview is off, which is what makes the lookup cheap enough to sit
+/// on the editor's edit paths.
 #[derive(Resource, Default)]
 pub struct PreviewWriteTargets(bevy::platform::collections::HashSet<(Entity, TypeId)>);
 
@@ -152,12 +113,9 @@ pub fn preview_writes_type_path(world: &World, entity: Entity, type_path: &str) 
         .is_some_and(|registration| targets.contains(entity, registration.type_id()))
 }
 
-/// The live preview session.
-///
-/// `subject` is the scratch entity, `root` the UI scene root carrying the
-/// editor's `BindContext`. Both are `None` while preview is off, and
-/// `subject` is also `None` when preview is on but the document holds no UI
-/// scene to point anywhere.
+/// The live preview session. `subject` is the scratch entity, `root` the UI
+/// scene root carrying the editor's `BindContext`; both are `None` while preview
+/// is off, and `subject` is also `None` with no UI scene to point anywhere.
 #[derive(Resource, Default)]
 pub struct PreviewSession {
     on: bool,
@@ -167,11 +125,10 @@ pub struct PreviewSession {
     subjects: Vec<PreviewSubject>,
     /// Authored component state the evaluator overwrites, restored on stop.
     restore: Vec<WriteTarget>,
-    /// The resources this session stood up in the editor world, as (type, the
-    /// entity it was put on), to take back out when it ends. Only ever types
-    /// the editor did not already hold. The entity is recorded rather than
-    /// looked up again at teardown: the world's resource entity moving means
-    /// something else claimed the resource, which the session must not drop.
+    /// The resources this session stood up, as (type, the entity it was put
+    /// on), to take back out when it ends. The entity is recorded rather than
+    /// looked up at teardown: a moved resource entity means something else
+    /// claimed the resource, which the session must not drop.
     resources: Vec<(TypeId, Entity)>,
 }
 
@@ -365,14 +322,8 @@ pub fn preview_is_running(world: &World) -> bool {
         .is_some_and(PreviewSession::is_on)
 }
 
-// ---------------------------------------------------------------------------
-// Session lifecycle
-// ---------------------------------------------------------------------------
-
-/// Start or stop preview.
-///
-/// Never panics on user state: a document with no UI scene leaves the toggle
-/// on with nothing attached, and the panel says so.
+/// Start or stop preview. A document with no UI scene leaves the toggle on with
+/// nothing attached, and the panel says so.
 pub fn set_preview(world: &mut World, on: bool) {
     if !on {
         stop_preview(world);
@@ -405,13 +356,8 @@ fn stop_preview(world: &mut World) {
     clear_resolved_bindings(world);
 }
 
-/// Drop the lookups the evaluator built while the session ran.
-///
-/// `ResolvedBindings` holds entity ids, among them the scratch subject this
-/// session is about to despawn, and the editor stops running the evaluator
-/// with the session, so nothing would revisit them. Clearing them here leaves
-/// an authored widget with no derived state on it between sessions, and the
-/// next session resolves from scratch.
+/// Drop the lookups the evaluator built while the session ran, which hold entity
+/// ids including the scratch subject about to be despawned.
 fn clear_resolved_bindings(world: &mut World) {
     let bound: Vec<Entity> = world
         .query_filtered::<Entity, With<ResolvedBindings>>()
@@ -435,14 +381,9 @@ fn detach_context(world: &mut World, root: Option<Entity>) {
     }
 }
 
-/// Give up the subject when there is no scene to point at (the document was
-/// closed, or its scene despawned mid-session).
-///
-/// The widgets can outlive the root that stranded them (a scene parented under
-/// something else is still in the world) and they are still holding what the
-/// evaluator put there. So this restores before it disarms: dropping
-/// [`PreviewWriteTargets`] is what stops refusing authored edits to those
-/// properties, and an edit must never land on a value the session wrote.
+/// Give up the subject when there is no scene to point at. Widgets can outlive
+/// the root that stranded them still holding what the evaluator put there, so
+/// this restores before it drops [`PreviewWriteTargets`].
 fn drop_subject(world: &mut World) {
     {
         let session = world.resource::<PreviewSession>();
@@ -476,22 +417,11 @@ fn drop_subject(world: &mut World) {
     clear_resolved_bindings(world);
 }
 
-/// Bring the session in line with the open scene: the scene's current root,
-/// and the referenced types on the scratch entity.
-///
-/// All three halves can go stale on their own. The scene's root changes on a
-/// tab switch, a structural undo, or a prefab reload, leaving the recorded
-/// root despawned or not the one being edited while the current root carries
-/// no context; the referenced types change whenever a binding is authored. The
-/// scratch entity itself survives both: types are attached and detached in
-/// place, so a value the user scrubbed is still there after they add a binding.
-///
-/// The third is the set of properties the evaluator owns, and it moves without
-/// either of the others: a binding added to a widget whose reads the panel
-/// already lists, or a write repointed at another component, leaves the
-/// read-derived list identical. That set has to be compared in its own right,
-/// or a write target goes unsnapshotted and unguarded and the evaluator
-/// overwrites an authored value with nothing recorded to put back.
+/// Bring the session in line with the open scene: its current root, the
+/// referenced types on the scratch entity, and the set of properties the
+/// evaluator owns. All three go stale independently, so all three are compared;
+/// an uncompared write target goes unsnapshotted and unguarded, and the
+/// evaluator overwrites an authored value with nothing recorded to put back.
 fn sync_subject(world: &mut World) {
     let Some(root) = crate::ui_palette::ui_scene_root(world) else {
         drop_subject(world);
@@ -535,10 +465,8 @@ fn sync_subject(world: &mut World) {
     attach_referenced_resources(world, &subjects);
 
     // A property the bindings stopped naming is handed back here, not at the
-    // end of the session. The guard swap below stops refusing authored edits
-    // to it, so from this moment it is the user's again; a snapshot held until
-    // the session ended would be written over whatever they did with it,
-    // leaving the document holding one value and the component another.
+    // end of the session: the guard swap below makes it the user's again, and a
+    // snapshot held to the end would be written over whatever they did with it.
     let departed: Vec<WriteTarget> = {
         let mut session = world.resource_mut::<PreviewSession>();
         let (kept, departed): (Vec<WriteTarget>, Vec<WriteTarget>) =
@@ -551,9 +479,7 @@ fn sync_subject(world: &mut World) {
     restore_write_targets(world, departed);
 
     // Snapshot before the first evaluation, so the restore holds what the user
-    // authored rather than what a previous frame's binding wrote. A widget
-    // bound later in the session adds its own entry; one already recorded
-    // keeps the value it had when the session began.
+    // authored rather than what a previous frame's binding wrote.
     let unseen: Vec<(Entity, TypeId)> = {
         let session = world.resource::<PreviewSession>();
         written
@@ -653,10 +579,8 @@ fn attach_referenced_types(world: &mut World, subject: Entity, subjects: &[Previ
 }
 
 /// Stand up a resource for every natively-known resource read the scene makes,
-/// and take back down the ones nothing reads any more.
-///
-/// Only ever a type the editor was not already holding: `mark_editor_owned`
-/// has demoted the rest, so nothing here can overwrite editor state.
+/// and take back down the ones nothing reads any more. Only ever a type the
+/// editor was not already holding, so nothing here can overwrite editor state.
 fn attach_referenced_resources(world: &mut World, subjects: &[PreviewSubject]) {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let wanted: Vec<(TypeId, String)> = {
@@ -707,10 +631,8 @@ fn attach_referenced_resources(world: &mut World, subjects: &[PreviewSubject]) {
             warn!("preview cannot default-construct resource `{type_path}`");
             continue;
         };
-        // Resources are entity-backed here, and `IsResource` is a required
-        // component of every one of them, so putting the component on a fresh
-        // entity is what makes the world hold the resource. The marker keeps
-        // that entity out of the outliner and out of the document.
+        // Resources are entity-backed, so putting the component on a fresh
+        // entity is what makes the world hold the resource.
         let entity = world.spawn(EditorEntity).id();
         {
             let registry = registry.read();
@@ -733,20 +655,12 @@ fn resource_entity(world: &World, type_id: TypeId) -> Option<Entity> {
     world.resource_entities().get(component_id)
 }
 
-/// Take one stand-in resource back out of the editor world.
+/// Take one stand-in resource back out of the editor world, touching only the
+/// entity the session put it on.
 ///
-/// `entity` is the one the session put the resource on, and the only entity
-/// this touches. If the world's resource entity is a different one, something
-/// else stood the resource up after the session did and that value is not the
-/// session's to drop; the stand-in entity still goes.
-///
-/// When `entity` is the resource entity, `IsResource` comes off first: its
-/// discard hook clears the world's resource cache and queues the value
-/// component's own removal, and a cache still naming this entity would make the
-/// next session's insert land on top of a resource bevy thinks is already
-/// there. Only once that has flushed is the entity an ordinary one that can be
-/// despawned; a despawn while it is still the resource entity queues a removal
-/// against an entity that is gone by the time the command runs.
+/// `IsResource` comes off and flushes first: its discard hook clears the world's
+/// resource cache, and despawning while this is still the resource entity would
+/// queue a removal against an entity that is already gone.
 fn remove_stand_in_resource(world: &mut World, type_id: TypeId, entity: Entity) {
     if resource_entity(world, type_id) == Some(entity) {
         if let Ok(mut held) = world.get_entity_mut(entity) {
@@ -768,16 +682,9 @@ fn release_stand_in_resources(world: &mut World) {
     }
 }
 
-/// Re-point the session at the scene as it currently stands.
-///
-/// This has to happen before the evaluator runs, not merely earlier in the
-/// frame: the evaluator reads the subject and the write targets this
-/// establishes, so a frame that evaluated first would drive the scene from a
-/// stale subject and would write properties the session has no baseline for,
-/// which is what puts a previewed value somewhere it can be saved from. It
-/// runs in `PostUpdate` ahead of [`jackdaw_bind::BindEvaluationSystems`] so
-/// that ordering is a constraint the schedule enforces rather than a
-/// consequence of which schedule each half happens to sit in.
+/// Re-point the session at the scene as it currently stands. Ordered ahead of
+/// [`jackdaw_bind::BindEvaluationSystems`]: evaluating first would drive the
+/// scene from a stale subject and write properties with no baseline recorded.
 fn resync_preview_subject(world: &mut World) {
     if !world.resource::<PreviewSession>().on {
         return;
@@ -785,11 +692,8 @@ fn resync_preview_subject(world: &mut World) {
     sync_subject(world);
 }
 
-/// Whether [`resync_preview_subject`] has anything to do this frame.
-///
-/// The walk itself is the expensive part, so nothing gets walked on a quiet
-/// frame: only a session whose subject died, whose scene root moved, or whose
-/// scene had a `Bindings` added, changed, or removed is worth re-reading.
+/// Whether `resync_preview_subject` has anything to do this frame. The walk is
+/// the expensive part, so a quiet frame walks nothing.
 fn preview_needs_resync(
     session: Res<PreviewSession>,
     subjects: Query<(), With<EditorEntity>>,
@@ -810,10 +714,6 @@ fn preview_needs_resync(
     }
     !changed.is_empty() || !removed.is_empty()
 }
-
-// ---------------------------------------------------------------------------
-// Reading the scene's bindings
-// ---------------------------------------------------------------------------
 
 /// Every entity of the UI scene, root included.
 fn scene_subtree(world: &mut World, root: Entity) -> Vec<Entity> {
@@ -840,12 +740,8 @@ fn read_paths(binding: &Binding) -> Vec<&BindPath> {
     }
 }
 
-/// The types the scene's bindings read, resolved and described.
-///
-/// A resource read is listed beside a component one: the context entity cannot
-/// carry a resource, so the session stands one up in the world instead, and a
-/// scene that reads only resources still has to list something or the panel
-/// says the scene reads nothing at all.
+/// The types the scene's bindings read, resolved and described. Resource reads
+/// are listed beside component ones.
 fn referenced_subjects(world: &mut World, root: Entity) -> Vec<PreviewSubject> {
     let mut wanted: Vec<(String, PreviewSource)> = Vec::new();
     let entities = scene_subtree(world, root);
@@ -980,10 +876,8 @@ fn describe(
     }
 }
 
-/// A schema'd field, which names a tuple element by its bare index.
-///
-/// Only an all-digit name is an index: a field called `x2` is a named field
-/// and reaches its value without a leading dot.
+/// A schema'd field, which names a tuple element by its bare index. Only an
+/// all-digit name is an index; a field called `x2` is a named field.
 fn schema_field_row(name: &str, type_path: &str) -> PreviewFieldRow {
     let indexed = !name.is_empty() && name.chars().all(|c| c.is_ascii_digit());
     let path = if indexed {
@@ -999,11 +893,8 @@ fn schema_field_row(name: &str, type_path: &str) -> PreviewFieldRow {
 }
 
 /// A project schema for a path a binding wrote, matched on the full path or on
-/// the short name the binding may have used instead.
-///
-/// Keyed on how the binding named the type: a project's resources live in
-/// their own map, so a `Res(T)` read looked up among the components resolves
-/// to a type nothing knows.
+/// the short name the binding may have used instead. Keyed on how the binding
+/// named the type, since a project's resources live in their own map.
 fn project_schema<'a>(
     project: &'a ProjectTypes,
     path: &str,
@@ -1060,20 +951,13 @@ fn kind_of(value: &dyn PartialReflect) -> PreviewFieldKind {
     kind_of_type_path(path)
 }
 
-/// Every numeric width the preview panel offers a control for.
+/// Every numeric width the preview panel offers a control for: the one list
+/// behind the names `kind_of_type_path` advertises, the widths `apply_scalar`
+/// writes, and the widths `read_scalar` reads back.
 ///
-/// The one list behind three things that must not drift: the names
-/// `kind_of_type_path` advertises, the widths `apply_scalar` writes, and the
-/// widths `read_scalar` reads back. The suite generates its fixture from it
-/// too, so a width added here is advertised, written, read, and tested by that
-/// edit alone.
-///
-/// Float-to-integer `as` casts saturate, so a scrub past a narrow type's range
-/// stops at its bound rather than wrapping into a value nobody asked for.
-///
-/// Braces, not parentheses: the list is handed to macros that expand to items
-/// as well as to ones that expand to expressions, and only a braced call works
-/// in both positions.
+/// Braces, not parentheses: the list is handed to macros expanding to items as
+/// well as to ones expanding to expressions, and only a braced call works in
+/// both positions.
 #[macro_export]
 macro_rules! numeric_widths {
     ($macro:ident) => {
@@ -1081,7 +965,7 @@ macro_rules! numeric_widths {
     };
 }
 
-/// The type names [`numeric_widths`] lists, which is what the panel offers a
+/// The type names `numeric_widths` lists, which is what the panel offers a
 /// number control for.
 macro_rules! width_names {
     ($($width:ty),*) => {
@@ -1089,13 +973,8 @@ macro_rules! width_names {
     };
 }
 
-/// What the panel offers for a type, by name.
-///
-/// The numeric names are generated from the one list `apply_scalar` and
-/// `read_scalar` are generated from, so a width cannot be advertised without
-/// also being writable and readable. `Vec3A` is absent: the inspector calls it
-/// uneditable, and preview matches it rather than advertising a control over a
-/// value the rest of the editor will not author.
+/// What the panel offers for a type, by name. `Vec3A` is absent because the
+/// inspector calls it uneditable, and preview matches it.
 fn kind_of_type_path(path: &str) -> PreviewFieldKind {
     const NUMBERS: &[&str] = numeric_widths!(width_names);
     let name = path.rsplit("::").next().unwrap_or(path);
@@ -1118,14 +997,9 @@ pub fn preview_layout(world: &mut World) -> Vec<PreviewSubject> {
     world.resource::<PreviewSession>().subjects.clone()
 }
 
-// ---------------------------------------------------------------------------
-// Restoring what the evaluator overwrote
-// ---------------------------------------------------------------------------
-
 /// The components each binding kind writes on its own widget entity, named by
 /// `TypeId` rather than by path so a rename in bevy is a compile error rather
-/// than a silently missed restore. A `Field` binding's target comes from its
-/// own write path instead, and an `Action` writes nothing on the widget.
+/// than a silently missed restore.
 fn implicit_write_targets(binding: &Binding) -> Vec<TypeId> {
     match binding {
         Binding::Text { .. } => vec![TypeId::of::<Text>()],
@@ -1140,8 +1014,7 @@ fn implicit_write_targets(binding: &Binding) -> Vec<TypeId> {
 
 /// Every component the scene's bindings would have the evaluator write, as
 /// (entity, type). Split from the snapshot so the session can ask what it owns
-/// without cloning what it holds: the answer is compared every resync, and it
-/// moving is itself a reason to resync.
+/// without cloning what it holds.
 fn write_target_ids(world: &mut World, root: Entity) -> Vec<(Entity, TypeId)> {
     let mut by_path: Vec<(Entity, String)> = Vec::new();
     let mut by_id: Vec<(Entity, TypeId)> = Vec::new();
@@ -1239,22 +1112,10 @@ fn restore_write_targets(world: &mut World, targets: Vec<WriteTarget>) {
 pub struct SuspendedPreview(Vec<WriteTarget>);
 
 /// Put the authored values back over whatever the running preview wrote, and
-/// hand back what the preview had there.
+/// hand back what the preview had there, so an emission's live-ECS reads see
+/// what the author wrote rather than a previewed value.
 ///
-/// A previewed value must never reach the user's file. An authored edit to a
-/// previewed property is refused outright, but any part of the emitter that
-/// re-reads live ECS (asset discovery and the handle-bearing patch
-/// re-derivation both do) would otherwise read the preview's value rather than
-/// the author's.
-///
-/// The guarantee is enforced at the one place every emission passes through
-/// rather than at each live-ECS read inside it: the world is put back to what
-/// the author wrote for the length of the emission, and the preview is
-/// reinstated afterwards. A live-ECS read added to the emitter later inherits
-/// the guarantee instead of escaping it.
-///
-/// `None` means there was nothing to suspend (no session, or a session that
-/// has not written anything yet); pass it straight back to
+/// `None` means there was nothing to suspend; pass it straight back to
 /// [`resume_preview_writes`].
 pub fn suspend_preview_writes(world: &mut World) -> Option<SuspendedPreview> {
     let session = world.get_resource::<PreviewSession>()?;
@@ -1292,16 +1153,9 @@ pub fn resume_preview_writes(world: &mut World, held: Option<SuspendedPreview>) 
     }
 }
 
-// ---------------------------------------------------------------------------
-// Writing the scratch entity
-// ---------------------------------------------------------------------------
-
-/// Write one field of one previewed type: a component of the scratch entity,
-/// or the resource the session stood up for it.
-///
-/// Plain reflect writes with no undo entry and no document patch: the scratch
-/// entity is editor-only state, so an edit here is not something the user can
-/// lose or wants to undo.
+/// Write one field of one previewed type: a component of the scratch entity, or
+/// the resource the session stood up for it. Plain reflect writes with no undo
+/// entry and no document patch, the scratch entity being editor-only state.
 pub fn write_scratch_field(
     world: &mut World,
     field: &PreviewField,
@@ -1395,12 +1249,8 @@ fn write_resource_field(
         .ok_or_else(|| PreviewError::NoSuchField(field.field.clone()))
 }
 
-/// Set a scalar of whatever numeric width the field actually has. Returns
-/// false for a shape no control writes.
-///
-/// Every width answered here is one [`kind_of_type_path`] advertises, and
-/// [`read_scalar`] reads back the same set: a control the panel offers has to
-/// be able to land its value and show it again.
+/// Set a scalar of whatever numeric width the field actually has. Returns false
+/// for a shape no control writes.
 fn apply_scalar(target: &mut dyn PartialReflect, value: &PreviewValue) -> bool {
     match value {
         PreviewValue::Number(number) => {
@@ -1435,11 +1285,9 @@ fn apply_scalar(target: &mut dyn PartialReflect, value: &PreviewValue) -> bool {
     }
 }
 
-/// The other half of [`apply_scalar`]: what a control seeds itself from.
-///
-/// A wide integer is handed back through `f64`, which is what the scrub
-/// control holds, so a value past 2^53 comes back rounded. That is the
-/// control's precision, not a lost write.
+/// The other half of `apply_scalar`: what a control seeds itself from. A wide
+/// integer comes back through `f64`, so a value past 2^53 is rounded to the
+/// scrub control's precision.
 fn read_scalar(value: &dyn PartialReflect) -> Option<PreviewValue> {
     macro_rules! read_width {
         ($($width:ty),*) => {
@@ -1477,10 +1325,6 @@ pub fn read_scratch_value(world: &World, field: &PreviewField) -> Option<Preview
         .reflect(world.get_entity(holder).ok()?)?;
     read_scalar(held.reflect_path(field.field.as_str()).ok()?)
 }
-
-// ---------------------------------------------------------------------------
-// The panel
-// ---------------------------------------------------------------------------
 
 /// Root of one preview window's content.
 #[derive(Component, Default)]
@@ -1673,11 +1517,8 @@ fn display_value(value: &PreviewValue) -> String {
 }
 
 /// One field of a type the panel cannot drive: the same row shape, with no
-/// control to touch.
-///
-/// An editor-owned resource is real state, so the row shows what it holds. A
-/// schema-only type has no value to show, the editor having never constructed
-/// one, and keeps the placeholder.
+/// control to touch. An editor-owned resource shows what it holds; a
+/// schema-only type keeps the placeholder.
 fn spawn_disabled_row(
     world: &mut World,
     panel: Entity,
@@ -1863,10 +1704,6 @@ fn spawn_scrub_row(
     }
     world.flush();
 }
-
-// ---------------------------------------------------------------------------
-// Commits
-// ---------------------------------------------------------------------------
 
 fn on_preview_toggle(
     event: On<ValueChange<bool>>,

@@ -67,16 +67,10 @@ fn queue_operator_dispatch(commands: &mut Commands, call: &ButtonOperatorCall) {
     });
 }
 
-/// Dispatches when a button carrying a [`ButtonOperatorCall`] emits
-/// `Activate` on click or keyboard activation. Entities without a
-/// `ButtonOperatorCall` are ignored, so other `Activate` sources such as
-/// a button with its own `on(Activate)` observer don't double-fire.
-///
-/// This covers menu and context-menu `op:`-prefixed entries too, which
-/// attach `ButtonOperatorCall` via feathers. The feathers-level click
-/// handlers skip firing their own `MenuAction`/`ContextMenuAction`
-/// events when they see `ButtonOperatorCall`, so this observer is the
-/// sole dispatch path for those items and won't double-fire.
+/// Dispatches when a button carrying a [`ButtonOperatorCall`] emits `Activate`.
+/// Entities without one are ignored. Menu and context-menu `op:` entries come
+/// through here too: their feathers click handlers skip their own events when
+/// they see `ButtonOperatorCall`, so this is the sole dispatch path.
 fn dispatch_activate_operator(
     activate: On<Activate>,
     button_op: Query<&ButtonOperatorCall>,

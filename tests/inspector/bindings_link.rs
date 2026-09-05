@@ -1,18 +1,6 @@
-//! `jackdaw_bind`'s authoring types have to be visible to the editor,
-//! not just to the games that run them.
-//!
-//! Three contracts:
-//!
-//! 1. `Bindings` reaches the Add Component picker off the live editor
-//!    registry. Registration is what makes a binding authorable at all,
-//!    and without it the inspector surface has nothing to attach to.
-//! 2. `BindContext` does not. It names the subject entity a binding
-//!    resolves against and is inserted by game code, so hand-adding an
-//!    empty one from the picker would only produce a dangling entity
-//!    reference.
-//! 3. An entity carrying `Bindings` gets an inspector card. The
-//!    namespace cull hides jackdaw's own bookkeeping components; the
-//!    bindings the user authored are not bookkeeping.
+//! `jackdaw_bind`'s authoring types have to be visible to the editor, not just to
+//! the games that run them: `Bindings` reaches the Add Component picker and gets
+//! an inspector card, while `BindContext`, which game code inserts, does not.
 
 use crate::util;
 

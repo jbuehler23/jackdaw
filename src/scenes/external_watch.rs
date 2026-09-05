@@ -1,14 +1,8 @@
-//! Filesystem watcher over the files the open tabs point at. A scene
-//! changed outside the editor raises a prompt offering to reload that tab.
+//! Filesystem watcher over the files the open tabs point at. A scene changed
+//! outside the editor raises a prompt offering to reload that tab.
 //!
-//! Separate from the prefab watcher (`crate::prefab::watcher`), which shares
-//! the same notify machinery but handles a change silently by re-resolving the
-//! live scene. An open scene is a document the user is editing, so a change
-//! underneath it raises a prompt instead.
-//!
-//! Distinguishing the editor's own writes from outside ones rests on one rule:
-//! the editor records the bytes it read or wrote at the boundary where it read
-//! or wrote them, and a file still hashing to that record is unchanged.
+//! The editor's own writes are told apart by hash: it records the bytes it
+//! read or wrote at the boundary that read or wrote them.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -35,9 +29,8 @@ impl Plugin for ExternalSceneWatchPlugin {
                     refresh_watch_list,
                     drain_changes,
                     sync_prompts_with_tabs,
-                    // Ordered ahead of the presenters, so the frame that opens
-                    // a dialog is never also the frame that reads its absence
-                    // as a dismissal.
+                    // Ahead of the presenters, so the frame that opens a
+                    // dialog never also reads its absence as a dismissal.
                     resolve_dismissed_prompt,
                     dismiss_refusal_notice,
                     present_front_prompt,
@@ -59,7 +52,7 @@ pub const KEEP_LABEL: &str = "Keep Mine";
 pub enum ExternalReloadChoice {
     /// Take what is on disk, discarding the editor's copy.
     Reload,
-    /// Leave the editor's copy standing. The next save overwrites disk.
+    /// Leave the editor's copy standing; the next save overwrites disk.
     Keep,
 }
 
@@ -73,12 +66,10 @@ pub struct ExternalSceneChange {
     pub tab_display_name: String,
     /// Whether that tab has edits a reload would throw away.
     pub tab_dirty: bool,
-    /// Whether the tab holding it is a prefab tab. Affects only the wording of
-    /// the prompt.
+    /// Whether the tab holding it is a prefab tab, which changes the wording.
     pub tab_is_prefab: bool,
     /// Hash of the bytes this prompt was raised for. Answering records these
-    /// rather than whatever is on disk by then, so a write that lands while
-    /// the prompt is up is still a change the next drain asks about.
+    /// rather than whatever is on disk by then.
     hash: u64,
 }
 
@@ -97,8 +88,7 @@ impl ExternalSceneChange {
         }
     }
 
-    /// Label on the button that takes what is on disk. Spells out the cost when
-    /// the tab is dirty.
+    /// Label on the button that takes what is on disk.
     pub fn action_label(&self) -> &'static str {
         if self.tab_dirty {
             "Reload (discards your unsaved changes)"
@@ -153,10 +143,9 @@ pub struct ExternalSceneChanges {
     pub refused: Option<RefusedReload>,
 }
 
-/// Set while a reload prompt is on screen, naming the file it was opened for.
-/// Answering goes to that path rather than to whatever is at the front of the
-/// queue when the click lands. Absent headless, where the prompt is the
-/// resource and there is no dialog to dismiss.
+/// Set while a reload prompt is on screen, naming the file it was opened for,
+/// so an answer goes to that path and not to whatever is now at the front of
+/// the queue. Absent headless, where there is no dialog.
 #[derive(Resource)]
 struct ReloadPromptOpen(PathBuf);
 
@@ -170,16 +159,12 @@ struct ExternalWatchState {
     watched: Vec<PathBuf>,
     pending: Arc<Mutex<Vec<PathBuf>>>,
     debounced: Vec<(PathBuf, Instant)>,
-    /// Hash of the bytes the editor believes are at each watched path: what
-    /// it read when it opened the file, what it last wrote there, or what it
-    /// has already asked about.
+    /// Hash of the bytes the editor believes are at each watched path.
     known: HashMap<PathBuf, u64>,
 }
 
-/// Record `contents` as what the editor believes is at `path`.
-///
-/// Called at the boundary that read or wrote those bytes rather than afterwards
-/// from disk, so an edit landing in between still registers as a change.
+/// Record `contents` as what the editor believes is at `path`. Called at the
+/// boundary that read or wrote those bytes, not afterwards from disk.
 pub fn note_known_content(world: &mut World, path: &Path, contents: &[u8]) {
     note_known_hash(world, path, hash_bytes(contents));
 }
@@ -192,12 +177,8 @@ pub fn note_known_hash(world: &mut World, path: &Path, hash: u64) {
     }
 }
 
-/// Answer the prompt raised for `path`.
-///
-/// An answer for a path with no open prompt is dropped rather than treated as
-/// an error. The queue can move under a dialog that is already
-/// up (a tab closes, a file is briefly unlinked), and a click on a dialog
-/// naming one file must not act on another.
+/// Answer the prompt raised for `path`. An answer for a path with no open
+/// prompt is dropped: the queue can move under a dialog that is already up.
 pub fn answer_external_change(world: &mut World, path: &Path, choice: ExternalReloadChoice) {
     let path = canonical(path);
     let Some(change) = world
@@ -230,10 +211,8 @@ pub fn answer_external_change(world: &mut World, path: &Path, choice: ExternalRe
         }
     }
 
-    // A reload records the bytes it read, which is the file as of the load.
-    // Every other answer records the bytes the prompt was raised for, the ones
-    // the user was shown, so a write that landed while the dialog was up is
-    // still a change and the re-check below finds it.
+    // Every answer but a reload records the bytes the user was shown, so a
+    // write that landed while the dialog was up is still a change.
     if !installed {
         note_known_hash(world, &change.path, change.hash);
     }
@@ -250,10 +229,8 @@ fn queue_recheck(world: &mut World, path: &Path) {
     }
 }
 
-/// Re-run the open path for the tab holding `path`.
-///
-/// A refusal leaves the open scene standing, since the load resolves and gates
-/// before it clears anything, so this reports rather than repairs.
+/// Re-run the open path for the tab holding `path`. A refusal leaves the open
+/// scene standing, so this reports rather than repairs.
 fn reload_tab_from_disk(world: &mut World, path: &Path) -> Result<(), RefusedReload> {
     let Some(index) = tab_index_for_path(world, path) else {
         return Err(RefusedReload {
@@ -263,9 +240,8 @@ fn reload_tab_from_disk(world: &mut World, path: &Path) -> Result<(), RefusedRel
         });
     };
 
-    // The load installs into the live world, which belongs to the active tab,
-    // so the swap has to come first. A refusal therefore has to swap back,
-    // rather than leaving the user on a tab they never asked to visit.
+    // The load installs into the active tab's world, so the swap comes first
+    // and a refusal has to swap back.
     let was_active = world.resource::<Scenes>().active;
     if was_active != index {
         crate::scenes::swap::swap_active_tab(world, index);
@@ -294,9 +270,8 @@ fn adopt_reloaded_document(world: &mut World, index: usize) {
     let doc = world
         .get_resource::<jackdaw_bsn::SceneBsnAst>()
         .map(jackdaw_bsn::SceneBsnAst::deep_clone);
-    // The document that arrived decides the tab's kind. An outside edit can
-    // turn a scene file into a prefab, and a prefab document left in a Scene
-    // tab would be captured and saved back as a plain scene, losing the marker.
+    // The document that arrived decides the tab's kind: an outside edit can
+    // turn a scene file into a prefab.
     let becomes_prefab = doc
         .as_ref()
         .is_some_and(crate::scenes::operators::document_is_prefab);
@@ -354,13 +329,9 @@ struct OpenSceneTab {
     is_prefab: bool,
 }
 
-/// Every open tab this watcher covers.
-///
-/// Prefab tabs are included: an open prefab file is an edited document like any
-/// scene, and the prefab watcher's silent re-resolve would either overwrite the
-/// editor's copy or hide the outside edit. To keep the change from being
-/// handled twice, `crate::prefab::watcher` skips any path an open prefab tab
-/// holds, leaving it to this prompt.
+/// Every open tab this watcher covers, prefab tabs included;
+/// `crate::prefab::watcher` skips any path an open prefab tab holds so the
+/// change is not handled twice.
 fn open_scene_tabs(scenes: &Scenes) -> Vec<OpenSceneTab> {
     scenes
         .tabs
@@ -382,8 +353,7 @@ fn open_scene_tabs(scenes: &Scenes) -> Vec<OpenSceneTab> {
 }
 
 fn refresh_watch_list(mut state: ResMut<ExternalWatchState>, scenes: Res<Scenes>) {
-    // Reading the tab list costs a canonicalize and a stat per tab, and the
-    // list can only differ when the tabs changed.
+    // Reading the tab list costs a canonicalize and a stat per tab.
     if !scenes.is_changed() {
         return;
     }
@@ -424,15 +394,13 @@ fn refresh_watch_list(mut state: ResMut<ExternalWatchState>, scenes: Res<Scenes>
         }
     }
     for path in newly_watched {
-        // notify reports nothing that happened before `watch()` returned, so a
-        // file edited between the open reading it and the watch starting would
-        // never be asked about. This synthetic check closes that gap against
-        // the baseline the open recorded.
+        // notify reports nothing from before `watch()` returned, so check
+        // once by hand for an edit that landed in that gap.
         if let Ok(mut lock) = state.pending.lock() {
             lock.push(path.clone());
         }
-        // Only a path with no recorded hash falls back to disk. A recorded one
-        // came from the editor's own read or write, which takes precedence.
+        // A recorded hash came from the editor's own read or write and takes
+        // precedence over disk.
         if !state.known.contains_key(&path)
             && let Ok(bytes) = std::fs::read(&path)
         {
@@ -484,8 +452,6 @@ fn drain_changes(world: &mut World) {
             continue;
         }
         let Ok(bytes) = std::fs::read(&path) else {
-            // An unreadable file yields no hash to compare; the next event on
-            // it checks again.
             continue;
         };
         let hash = hash_bytes(&bytes);
@@ -576,8 +542,7 @@ fn present_front_prompt(world: &mut World) {
     world.flush();
 }
 
-/// Show a refused reload in its own notice, since the prompt that triggered it
-/// has already closed.
+/// Show a refused reload in its own notice.
 fn present_refusal_notice(world: &mut World) {
     if world.contains_resource::<RefusalNoticeOpen>() {
         return;
@@ -599,11 +564,8 @@ fn present_refusal_notice(world: &mut World) {
     world.flush();
 }
 
-/// Whether a dialog surface exists and no dialog is currently up.
-///
-/// A missing dialog font means headless, where the prompt and the refusal live
-/// only in the resource and callers read them directly. A dialog already up
-/// blocks presentation; the queued entry waits.
+/// Whether a dialog surface exists and no dialog is currently up. A missing
+/// dialog font means headless, where callers read the resource directly.
 fn screen_is_free(world: &mut World) -> bool {
     if world.get_resource::<EditorFont>().is_none() {
         return false;
@@ -627,8 +589,7 @@ fn on_dialog_reload(
     });
 }
 
-/// A prompt whose dialog closed without its action firing counts as Keep,
-/// covering the cancel button and Esc.
+/// A prompt whose dialog closed without its action firing counts as Keep.
 fn resolve_dismissed_prompt(
     open: Option<Res<ReloadPromptOpen>>,
     dialogs: Query<(), With<EditorDialog>>,

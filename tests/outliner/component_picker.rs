@@ -1,6 +1,5 @@
-//! Picker enumeration coverage. Drives [`enumerate_pickable_components`]
-//! directly with a hand-built `TypeRegistry` so filter behaviour
-//! can be pinned without spinning up the full editor app.
+//! Picker enumeration: `enumerate_pickable_components` driven with a hand-built
+//! `TypeRegistry`, so filter behaviour is pinned without the full editor app.
 
 use std::any::TypeId;
 use std::collections::HashSet;
@@ -198,9 +197,8 @@ fn denylisted_prefix_filters_component() {
     );
 }
 
-/// Avian components don't carry `@EditorCategory` (upstream types),
-/// so the picker's fallback maps `avian3d::` and
-/// `jackdaw_avian_integration::` paths into the "Avian3d" category.
+/// Avian components carry no `@EditorCategory`, so the picker's fallback maps
+/// `avian3d::` and `jackdaw_avian_integration::` paths into "Avian3d".
 #[test]
 fn avian_paths_fall_back_to_physics_category() {
     assert_eq!(
@@ -217,9 +215,8 @@ fn avian_paths_fall_back_to_physics_category() {
     );
 }
 
-/// Non-avian paths get no fallback; their category comes from
-/// `@EditorCategory` or remains empty (so the picker uses the
-/// Bevy / Game module-path grouping).
+/// Non-avian paths get no fallback; their category comes from `@EditorCategory`
+/// or stays empty.
 #[test]
 fn non_avian_paths_have_no_category_fallback() {
     assert_eq!(fallback_category_for("bevy_pbr::StandardMaterial"), None);
@@ -230,10 +227,9 @@ fn non_avian_paths_have_no_category_fallback() {
     );
 }
 
-/// `populate_avian_picker_denylist` should hide solver / cache types,
-/// regardless of registry contents. Asserting against the populated
-/// denylist directly keeps the test independent of avian being a test
-/// dep.
+/// `populate_avian_picker_denylist` hides solver / cache types whatever the
+/// registry holds. Asserting against the populated denylist keeps the test
+/// independent of avian being a test dep.
 #[test]
 fn avian_denylist_includes_known_internals() {
     let mut denylist = PickerDenylist::default();
@@ -245,8 +241,8 @@ fn avian_denylist_includes_known_internals() {
         "avian3d::dynamics::rigid_body::mass_properties::components::computed::ComputedAngularInertia",
         "avian3d::dynamics::rigid_body::sleeping::SleepTimer",
         "avian3d::dynamics::integrator::VelocityIntegrationData",
-        // Standalone `ColliderConstructor` panics avian's auto-init
-        // when added without a mesh; users should pick `AvianCollider`.
+        // Standalone `ColliderConstructor` panics avian's auto-init when added
+        // without a mesh; users should pick `AvianCollider`.
         "avian3d::collision::collider::constructor::ColliderConstructor",
     ] {
         assert!(
@@ -255,9 +251,8 @@ fn avian_denylist_includes_known_internals() {
         );
     }
 
-    // Sanity: user-facing avian components stay visible, including
-    // `ColliderConstructorHierarchy` (descends into Mesh3d children
-    // and is the right tool for prop-placement workflows).
+    // User-facing avian components stay visible, `ColliderConstructorHierarchy`
+    // included.
     for path in [
         "avian3d::dynamics::rigid_body::RigidBody",
         "avian3d::collision::collider::Collider",
@@ -280,11 +275,8 @@ fn editor_hidden_marker_filters_component() {
         find(&pickables, "HiddenByMarker").is_none(),
         "`@EditorHidden` reflect attribute must keep a Component out of the picker",
     );
-    // Sanity-check that unmarked components in the same registry
-    // remain visible. This guards the regression where
-    // `starts_with("jackdaw")` filtered any user crate whose name
-    // started with `jackdaw_`. The current marker-based filter
-    // must not regress to a path-based heuristic.
+    // The filter is marker-based, not a path heuristic on `starts_with`, so a
+    // user crate named `jackdaw_*` still reaches the picker.
     assert!(find(&pickables, "WithDefault").is_some());
     assert!(find(&pickables, "NoDefault").is_some());
 }

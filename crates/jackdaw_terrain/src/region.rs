@@ -182,10 +182,9 @@ pub struct Region {
     channels: Vec<Vec<u16>>,
     /// Scatter instances this region carries, in insertion order.
     ///
-    /// A placement belongs to the region covering its cell, so the list
-    /// moves with the ground it stands on and a renderer that culls whole
-    /// regions culls their placements with them. Positions are stored
-    /// against the region's minimum corner; see [`ScatterPlacement`].
+    /// A placement belongs to the region covering its cell, so the list moves
+    /// with the ground it stands on. Positions are stored against the region's
+    /// minimum corner; see [`ScatterPlacement`].
     placements: Vec<ScatterPlacement>,
 }
 

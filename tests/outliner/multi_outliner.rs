@@ -1,19 +1,10 @@
-//! Multi-instance Outliner: two `HierarchyTreeContainer`s should both
-//! reflect every scene-graph change in lockstep.
+//! Multi-instance Outliner: two `HierarchyTreeContainer`s reflect every
+//! scene-graph change in lockstep, one row per container for an added root, rows
+//! reseated on a reparent, and removed on a despawn.
 //!
-//! Pins three contracts the per-`(container, source)` `TreeIndex`
-//! refactor introduced:
-//!  - adding a new root scene entity spawns one row in every container,
-//!    not zero (single-instance fallthrough) and not two in any one
-//!    panel (the duplicate-row regression);
-//!  - reparenting a scene entity moves its row under the new parent's
-//!    `TreeRowChildren` in every container;
-//!  - despawning the source removes the row in every container.
-//!
-//! Also pins that a `UiSceneRoot` is a root for outliner purposes. UI
-//! roots carry `UiTransform` (via `Node`), never `Transform`, so the
-//! `Transform`-keyed root predicate and root-spawn observer would leave
-//! an authored UI scene invisible in every panel.
+//! Also pins that a `UiSceneRoot` is a root for outliner purposes: UI roots carry
+//! `UiTransform` via `Node` and never `Transform`, so a `Transform`-keyed root
+//! predicate would leave an authored UI scene invisible.
 
 use crate::util;
 
@@ -22,8 +13,7 @@ use jackdaw::hierarchy::{HierarchyShowAll, HierarchyTreeContainer};
 use jackdaw_scene_types::UiSceneRoot;
 use jackdaw_widgets::tree_view::{TreeIndex, TreeNode, TreeRowContent, TreeRowLabel};
 
-/// Spawn a host entity carrying `HierarchyTreeContainer` (which
-/// requires `TreeRoot` + `EditorEntity`). Matches the runtime
+/// Spawn a host entity carrying `HierarchyTreeContainer`, matching the runtime
 /// layout's "Outliner panel content" entity.
 fn spawn_outliner_container(world: &mut World) -> Entity {
     world
@@ -110,7 +100,6 @@ fn reparent_scene_entity_moves_row_in_every_outliner() {
     let child = world.spawn((Name::new("Child"), Transform::default())).id();
     app.update();
 
-    // Sanity: both containers initially see both as roots.
     let world = app.world_mut();
     {
         let index = world.resource::<TreeIndex>();
@@ -120,10 +109,8 @@ fn reparent_scene_entity_moves_row_in_every_outliner() {
         }
     }
 
-    // Mark the parent as having children populated so the reparent
-    // observer reseats existing rows instead of treating it as a
-    // not-yet-expanded subtree. (`spawn_single_tree_row` defaults
-    // `TreeChildrenPopulated(false)`.)
+    // Mark the parent as having children populated, or the reparent observer
+    // treats it as a not-yet-expanded subtree instead of reseating rows.
     {
         let mut q = world.query::<(
             &TreeNode,
@@ -136,22 +123,20 @@ fn reparent_scene_entity_moves_row_in_every_outliner() {
         }
     }
 
-    // Reparent child under parent.
     world.entity_mut(child).insert(ChildOf(parent));
     app.update();
 
     let world = app.world_mut();
     let index = world.resource::<TreeIndex>();
 
-    // Parent's row in each container has a `TreeRowChildren` descendant
-    // that should be the new ancestor of the child's row.
+    // The parent's `TreeRowChildren` descendant should be the child row's new
+    // ancestor.
     for container in [outliner_a, outliner_b] {
         let parent_row = index
             .get(container, parent)
             .expect("parent row in container");
         let child_row = index.get(container, child).expect("child row in container");
 
-        // Walk up from child_row's ChildOf chain; we must hit parent_row.
         let mut current = child_row;
         let mut found_parent = false;
         for _ in 0..6 {
@@ -218,8 +203,8 @@ fn ui_scene_root_gets_a_row_in_every_outliner() {
         ))
         .id();
 
-    // Containers mount after the root exists, so the row has to come out
-    // of the full rebuild rather than the spawn observers.
+    // Containers mount after the root exists, so the row has to come out of the
+    // full rebuild rather than the spawn observers.
     let outliner_a = spawn_outliner_container(world);
     let outliner_b = spawn_outliner_container(world);
     app.update();
@@ -271,7 +256,6 @@ fn unnamed_ui_scene_root_spawns_a_row_that_picks_up_its_name() {
             .collect()
     };
 
-    // Naming the root relabels the row it already owns.
     world.entity_mut(root).insert(Name::new("HUD"));
     app.update();
 

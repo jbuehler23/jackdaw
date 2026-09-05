@@ -227,14 +227,6 @@ fn read_int_param(params: &OperatorParameters, name: &str) -> Option<i64> {
 /// Resolve which viewport's camera a framing op should act on: the hovered
 /// viewport if one exists, otherwise the sole `MainViewportCamera` if there
 /// is exactly one. More than one is ambiguous, so nothing resolves.
-///
-/// `ActiveViewport` only reflects a literal cursor-over-the-panel hover
-/// (`update_active_viewport`), which never happens from `JACKDAW_RUN_OP` (no
-/// synthetic pointer) and can also miss a keypress fired while the cursor
-/// sits over other UI in a single-viewport layout. Only `view.frame_selected`
-/// and `view.frame_all` use this fallback; `view.set_axis` and
-/// `view.toggle_persp_ortho` keep the hover-only gate
-/// (`active_viewport_ready`).
 fn resolve_frame_camera(
     active: &ActiveViewport,
     cameras: &Query<Entity, With<MainViewportCamera>>,
@@ -256,11 +248,8 @@ fn frame_selected_available(
 }
 
 /// Framing the world needs a camera to frame it in, and needs the 3D viewport
-/// to be the panel Home belongs to.
-///
-/// Home frames the canvas in the 2D viewport and the world in the 3D one. Both
-/// stay bound, so without this gate one press over the canvas would do both
-/// and the framing would come with a camera move nobody asked for.
+/// to be the panel Home belongs to. Home is bound in the 2D viewport too, so
+/// without this gate one press over the canvas would do both.
 fn frame_all_available(
     active: Res<ActiveViewport>,
     cameras: Query<Entity, With<MainViewportCamera>>,
@@ -472,33 +461,17 @@ pub(crate) fn view_frame_selected(
     OperatorResult::Finished
 }
 
-/// Where an orbit turns.
-///
-/// An orbit needs a point to go round, and a camera transform does not
-/// carry one: a position and a rotation say where the sightline starts
-/// and which way it points, not how far along it the subject is. So the
-/// point persists on the camera, or every `view.orbit` would pick its own
-/// centre and the camera would wander instead of circling.
-///
-/// Everything that moves the camera keeps it current: the framing ops put
-/// it on what they framed, `view.look_at` on what it was aimed at, and
-/// `track_pointer_focus` carries it along the sightline through a fly
-/// gesture. Without that a pointer move across the map would leave the
-/// next `view.orbit` circling a point the user left behind.
+/// The point an orbit turns around. A camera transform does not carry one, so
+/// it persists on the camera and everything that moves the camera keeps it
+/// current.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ViewportFocus(pub Vec3);
 
-/// Carry [`ViewportFocus`] along with a camera the pointer is flying.
+/// Carry [`ViewportFocus`] along with a camera the pointer is flying, keeping
+/// its distance ahead of the camera.
 ///
-/// A look, a dolly and a WASD move all change where the camera is or
-/// which way it points without naming a new subject, so the focus keeps
-/// its distance ahead of the camera rather than staying where it was. A
-/// camera that has never been given a focus takes
-/// [`orbit_focus`]'s ground fallback, which is what the next orbit would
-/// have picked anyway.
-///
-/// Runs in `Last` so it reads the transform the camera controller left,
-/// not the one it is about to replace.
+/// Runs in `Last` so it reads the transform the camera controller left, not the
+/// one it is about to replace.
 pub(crate) fn track_pointer_focus(
     nav: Res<jackdaw_camera::CameraNavInput>,
     cameras: Query<(Entity, &Transform, Option<&ViewportFocus>), With<MainViewportCamera>>,
@@ -520,13 +493,9 @@ pub(crate) fn track_pointer_focus(
     }
 }
 
-/// The point `camera` turns around: what it was last told, else where
-/// its sightline meets the ground.
-///
-/// The ground is the fallback because that is what a scene is built on.
-/// A sightline parallel to it (a camera looking at the horizon) meets it
-/// nowhere, so that case falls back again to a point `distance` ahead,
-/// which is the best a caller who named no target can mean.
+/// The point `camera` turns around: what it was last told, else where its
+/// sightline meets the ground, else a point `distance` ahead when the sightline
+/// is parallel to the ground.
 fn orbit_focus(transform: &Transform, focus: Option<&ViewportFocus>, distance: f32) -> Vec3 {
     if let Some(ViewportFocus(point)) = focus {
         return *point;
@@ -544,14 +513,9 @@ fn orbit_focus(transform: &Transform, focus: Option<&ViewportFocus>, distance: f
     }
 }
 
-/// Put the active viewport's camera at a place, looking at another.
-///
-/// `view.frame_all` and `view.frame_selected` keep the orientation they
-/// find, so a camera left level with the ground frames a terrain edge-on
-/// and shows nothing. Aiming one from a script otherwise meant a pointer
-/// drag, which a caller does not have. Switches to perspective, because
-/// the orthographic views this shares a viewport with are axis snaps and
-/// an arbitrary eye point is not one.
+/// Put the active viewport's camera at a place, looking at another. Switches to
+/// perspective, since the orthographic views are axis snaps and an arbitrary eye
+/// point is not one.
 #[operator(
     id = "view.look_at",
     label = "Look At",
@@ -585,8 +549,8 @@ pub(crate) fn view_look_at(
 
     let (mut transform, mut projection) = cameras.get_mut(camera_entity)?;
     transform.translation = eye;
-    // Straight down needs a hint that is not world up, or `looking_at`
-    // has no way to spell the roll.
+    // Straight down needs a hint that is not world up, or `looking_at` has no
+    // way to spell the roll.
     let up = if (target - eye).normalize().y.abs() > 0.999 {
         Vec3::Z
     } else {
@@ -598,12 +562,8 @@ pub(crate) fn view_look_at(
     OperatorResult::Finished
 }
 
-/// Turn the active viewport's camera around its focus point.
-///
-/// The parametric form of the pointer's orbit, pan and dolly gestures
-/// together: an angle pair and a radius say where to stand, where a drag
-/// says how far to move from wherever it started. Angles are degrees,
-/// because that is what the caller means and what the inspector shows.
+/// Turn the active viewport's camera around its focus point. Angles are in
+/// degrees.
 #[operator(
     id = "view.orbit",
     label = "Orbit Camera",
@@ -644,8 +604,8 @@ pub(crate) fn view_orbit(
         .max(0.01);
 
     let yaw = (params.as_float("yaw").unwrap_or(0.0) as f32).to_radians();
-    // Clamped short of the poles: at exactly straight down the sightline
-    // is parallel to world up and the orientation has no roll to pick.
+    // Clamped short of the poles: straight down leaves the orientation with no
+    // roll to pick.
     let pitch = (params.as_float("pitch").unwrap_or(30.0) as f32)
         .to_radians()
         .clamp(-1.5533, 1.5533);
@@ -920,8 +880,6 @@ mod resolve_frame_camera_tests {
         assert_eq!(resolve_frame_camera(&active, &cameras), Some(hovered));
     }
 
-    /// The scripted / no-hover case `JACKDAW_RUN_OP` always hits: falls
-    /// back to the sole viewport camera.
     #[test]
     fn nothing_hovered_falls_back_to_the_sole_camera() {
         let mut world = World::new();
@@ -932,7 +890,6 @@ mod resolve_frame_camera_tests {
         assert_eq!(resolve_frame_camera(&active, &cameras), Some(camera));
     }
 
-    /// Two viewports and nothing hovered is ambiguous, so nothing resolves.
     #[test]
     fn nothing_hovered_with_two_cameras_resolves_to_nothing() {
         let mut world = World::new();

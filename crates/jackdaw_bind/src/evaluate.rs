@@ -50,18 +50,15 @@ fn lookup_function<'a>(
     }
 }
 
-/// A `via` function with its lookup already done. Resolving a short name walks
-/// every registered function, and the answer does not change between frames.
+/// A `via` function with its lookup already done.
 pub(crate) struct ResolvedVia {
     /// The name the binding gave, for the messages a failed call raises.
     name: String,
-    /// The function itself, cloned out of the registry once. A
-    /// `DynamicFunction` is a handle, so keeping one is cheap.
+    /// The function itself, cloned out of the registry once.
     function: DynamicFunction<'static>,
 }
 
 /// Looks a `via` function up once, when the binding it belongs to is resolved.
-/// A name that answers to nothing fails here rather than on every frame.
 fn resolve_via(world: &World, name: &str) -> Result<ResolvedVia, BindError> {
     let registry_arc = world
         .get_resource::<AppFunctionRegistry>()
@@ -74,9 +71,8 @@ fn resolve_via(world: &World, name: &str) -> Result<ResolvedVia, BindError> {
     })
 }
 
-/// Runs a binding's reads through a registered function and takes the result.
-/// The function has to hand back a value the binding can keep: a borrow does
-/// not outlive the call.
+/// Runs a binding's reads through a registered function and takes the result,
+/// which has to be owned.
 pub fn apply_via(world: &World, name: &str, args: Vec<BindValue>) -> Result<BindValue, BindError> {
     call_via(&resolve_via(world, name)?, args)
 }
@@ -110,20 +106,17 @@ pub(crate) fn report(failures: &mut BindFailures, entity: Entity, index: usize, 
     }
 }
 
-/// Takes a binding out of the warn-once ledger. The entry records that this
-/// binding's failure has already been logged, so dropping it once the binding
-/// succeeds lets a later failure be logged again.
+/// Takes a binding out of the warn-once ledger, so a later failure is logged
+/// again.
 fn clear_failure(world: &mut World, entity: Entity, index: usize) {
     if let Some(mut failures) = world.get_resource_mut::<BindFailures>() {
         failures.0.remove(&(entity, index));
     }
 }
 
-/// How many evaluator runs pass before a widget whose bindings failed is
-/// looked up again. Re-resolving clones the authored list and takes the type
-/// registry lock, and what a failed lookup waits for (a type registered, a
-/// resource inserted, a target named) does not arrive any sooner for being
-/// asked about more often. Roughly twice a second at 60fps.
+/// How many evaluator runs pass before a widget whose bindings failed is looked
+/// up again: roughly twice a second at 60fps, since re-resolving takes the type
+/// registry lock.
 const RESOLVE_RETRY_RUNS: u32 = 30;
 
 /// What a binding does with the values it read, and where the result lands,
@@ -153,17 +146,15 @@ pub(crate) enum ResolvedTarget {
     /// Keeps the widget's slider, checkbox or text in step with its source.
     Value {
         /// The widget's text field, looked up once from
-        /// [`crate::ValueTextTarget`]. `None` when nothing
-        /// named one, or when what it named is not a write this world can
-        /// make.
+        /// [`crate::ValueTextTarget`], or `None` when nothing named a usable
+        /// one.
         text: Option<ResolvedWrite>,
     },
     /// Nothing to do each frame: an action sends its event from an observer
     /// when the widget is activated.
     Action,
-    /// The binding's paths could not be looked up. The reason is reported
-    /// every frame and the lookup is tried again, so a binding that names a
-    /// type registered later starts working on its own.
+    /// The binding's paths could not be looked up; the lookup is tried again,
+    /// so a binding naming a type registered later starts working on its own.
     Unresolved(BindError),
 }
 
@@ -176,25 +167,19 @@ pub(crate) struct ResolvedBinding {
     pub(crate) sources: Vec<ResolvedSource>,
     /// What the binding does with them.
     pub(crate) target: ResolvedTarget,
-    /// When the lookup was done. A binding resolved since the evaluator last
-    /// ran is evaluated whether or not its sources have moved. A binding that
-    /// keeps failing is looked up again on the retry cadence, so its whole
-    /// widget carries a fresh stamp each time that comes round.
+    /// When the lookup was done; a binding resolved since the evaluator last
+    /// ran is evaluated whether or not its sources have moved.
     pub(crate) resolved_at: Tick,
-    /// Whether the last attempt to evaluate this binding failed. A failing
-    /// binding is due every frame: nothing about its sources will move to
-    /// bring it back, and what it is waiting for, such as a widget component
-    /// hydrated a frame late, costs a read to notice.
+    /// Whether the last attempt to evaluate this binding failed, which makes it
+    /// due every frame: nothing about its sources will move to bring it back.
     pub(crate) failing: bool,
 }
 
 /// The lookups behind a widget's [`Bindings`], kept beside them.
 ///
-/// This is derived state, not authored state: the resolver maintains it as the
-/// scene changes and nothing else writes it. It holds entity ids, component ids
-/// and reflect handles, none of which mean anything outside the world that
-/// produced them, so it is not a reflected type and a scene writer, which works
-/// from the type registry, cannot see it.
+/// Derived state the resolver maintains; it holds ids and reflect handles that
+/// mean nothing outside the world that produced them, so it is not reflected
+/// and never reaches a document.
 #[derive(Component)]
 pub struct ResolvedBindings(Vec<ResolvedBinding>);
 
@@ -210,33 +195,22 @@ impl ResolvedBindings {
     }
 }
 
-/// How many bindings the evaluator has read sources for since the app started.
-///
-/// A frame in which no source moved leaves this standing still, which is what
-/// makes the change-tick gate observable from outside the crate.
+/// How many bindings the evaluator has read sources for since the app started,
+/// which is what makes the change-tick gate observable from outside the crate.
 #[derive(Resource, Default)]
 pub struct BindReads(
     /// The running count.
     pub u64,
 );
 
-/// Reads every binding's sources and writes its target only when the value it
-/// computed differs from the value already there, so a widget nothing moved
-/// stays clean for the rest of the frame. A binding that fails warns once and
-/// the others carry on.
+/// Reads every binding's sources and writes its target only when the computed
+/// value differs from the one already there. A binding that fails warns once
+/// and the others carry on.
 ///
-/// Before any of that it brings the lookups up to date: this is the only place
-/// [`ResolvedBindings`] is built, so an app that registers the evaluator alone,
-/// as the editor does behind its preview toggle, needs nothing else.
-///
-/// A binding whose sources have not moved since the last run is skipped: it
-/// would have computed the value already stored and written nothing either way,
-/// so an idle frame touches no game state. `Value` bindings are the exception
-/// and run every frame, because a click that moves the widget without moving
-/// the value has to be put back.
-///
-/// What is due is decided before anything is written, so two bindings in a
-/// chain, one reading what the other writes, advance a link per frame.
+/// It brings the lookups up to date first: this is the only place
+/// [`ResolvedBindings`] is built. A binding whose sources have not moved is
+/// skipped, and what is due is decided before anything is written, so two
+/// chained bindings advance a link per frame.
 pub fn evaluate_bindings(
     world: &mut World,
     mut dirty: Local<SystemState<DirtyBindings<'static, 'static>>>,
@@ -254,10 +228,8 @@ pub fn evaluate_bindings(
     };
     refresh_lookups(world, &mut dirty, retrying);
     let this_run = world.change_tick();
-    // Tick zero is what a `Local` holds before the system has ever run, so the
-    // first pass evaluates everything rather than comparing against a tick
-    // nothing in the world has reached. The same branch covers a tick that has
-    // saturated: everything is due, which is the safe answer.
+    // Tick zero is what a `Local` holds before the first run, and a saturated
+    // tick takes the same branch: everything is due.
     let first_run = *last_run == Tick::new(0);
     let mut work: Vec<(Entity, Vec<usize>)> = Vec::new();
     {
@@ -285,8 +257,6 @@ pub fn evaluate_bindings(
         let Some(mut held) = world.get_mut::<ResolvedBindings>(entity) else {
             continue;
         };
-        // Evaluation needs the whole world, so the list moves out for the
-        // duration and back afterwards.
         let mut list = std::mem::take(&mut held.bypass_change_detection().0);
         for index in due {
             let Some(binding) = list.get(index) else {
@@ -302,8 +272,6 @@ pub fn evaluate_bindings(
             let was_failing = binding.failing;
             let failed = outcome.is_err();
             match outcome {
-                // A binding that succeeds leaves the ledger, so a later failure
-                // is warned about again.
                 Ok(()) => {
                     if was_failing {
                         clear_failure(world, entity, binding_index);
@@ -311,8 +279,7 @@ pub fn evaluate_bindings(
                 }
                 Err(err) => {
                     // The failure may be about the world rather than the
-                    // binding, such as a widget whose target component has not
-                    // arrived yet. Nothing about its sources will move to bring
+                    // binding, and nothing about its sources will move to bring
                     // it back, so the lookup is what has to happen again.
                     retry.insert(entity);
                     if let Some(mut failures) = world.get_resource_mut::<BindFailures>() {
@@ -335,17 +302,10 @@ pub fn evaluate_bindings(
 /// Whether a binding has anything to do this frame: it was looked up since the
 /// evaluator last ran, or one of the values it reads has moved.
 ///
-/// Three kinds answer without asking. An action does nothing here, since it
-/// sends its event from an observer. A `Value` binding keeps the widget
-/// following the value, so skipping it would leave a click that moved the
-/// widget and not the value standing; a checkbox's state is a component being
-/// there or not, which no tick reports either way. `Text` is exempt for the
-/// same reason: a keystroke moves the box without moving the source, so a gated
-/// binding would leave the two disagreeing until something else touched the
-/// source. The write is equality-guarded either way, so a widget already
-/// showing its value is left alone. A binding that failed is due for the same
-/// reason its widget is looked up again: nothing about its sources will move to
-/// bring it back.
+/// An action never is, since it sends from an observer. `Value` and `Text`
+/// always are: a click or a keystroke moves the widget without moving any
+/// source, so a gated binding would leave the two disagreeing. A binding that
+/// failed is always due, since nothing about its sources will bring it back.
 fn is_due(
     world: &World,
     binding: &ResolvedBinding,
@@ -391,10 +351,8 @@ type DirtyBindings<'w, 's> = (
 
 /// Whether removals went by that this reader never saw.
 ///
-/// A host may park the evaluator; the editor runs it only while preview is on.
-/// Bevy clears these queues every frame, so a removal that happened while it
-/// was parked is gone before it runs again, and the cursor is the only thing
-/// that still knows: it is left behind the oldest message still held.
+/// A host may park the evaluator, and bevy clears these queues every frame, so
+/// a cursor left behind the oldest message still held is the only trace.
 fn missed_removals<T: Component>(removals: &RemovedComponents<'_, '_, T>) -> bool {
     removals
         .messages()
@@ -429,10 +387,8 @@ fn refresh_lookups(
             entity_mut.remove::<ResolvedBindings>();
         }
     }
-    // A removal nobody read may have been the one that moved a widget out of
-    // its context, and the widget itself is no longer anywhere a walk from the
-    // roots that changed would reach it. Which one it was cannot be recovered,
-    // so every lookup is made again, once, on the frame the gap is noticed.
+    // Which removal was missed cannot be recovered, so every lookup is made
+    // again, once, on the frame the gap is noticed.
     if missed {
         let mut bound = world.query_filtered::<Entity, With<ResolvedBindings>>();
         entities.extend(bound.iter(world).collect::<Vec<_>>());
@@ -450,8 +406,6 @@ fn refresh_lookups(
             if let Some(children) = world.get::<Children>(entity) {
                 stack.extend(children.iter());
             }
-            // A reparented subtree is mostly entities with no bindings at all.
-            // Walking through them is the point; looking them up is not.
             if is_bound(world, entity) {
                 resolve_entity(world, entity);
             }
@@ -501,8 +455,6 @@ fn resolve_entity(world: &mut World, entity: Entity) {
             }
         })
         .collect();
-    // A lookup that succeeds clears the failure the log carries for it, and a
-    // binding no longer on the list takes its entry with it.
     if let Some(mut failures) = world.get_resource_mut::<BindFailures>() {
         failures.0.retain(|(failed, index)| {
             *failed != entity
@@ -564,9 +516,8 @@ fn resolve_one(
         Binding::Visible { via, .. } => ResolvedTarget::Visible {
             via: resolve_maybe_via(world, via.as_deref())?,
         },
-        // A failed lookup is not the binding's failure: most `Value` bindings
-        // drive a slider or a checkbox and never look at this. A string one
-        // finds it missing and says so.
+        // Most `Value` bindings drive a slider or a checkbox and never look at
+        // this; a string one finds it missing and says so.
         Binding::Value { .. } => ResolvedTarget::Value {
             text: resolve_text_target(world),
         },
@@ -583,9 +534,7 @@ fn resolve_maybe_via(world: &World, name: Option<&str>) -> Result<Option<Resolve
 }
 
 /// Where a widget's text lives, if anything has said. Answered once per
-/// resolve, so a target installed after a binding was looked up is picked up
-/// the next time that binding is, which the write failing in the meantime asks
-/// for on its own.
+/// resolve.
 fn resolve_text_target(world: &mut World) -> Option<ResolvedWrite> {
     let path = world.get_resource::<ValueTextTarget>()?.0.clone();
     resolve_write(world, &path).ok()
@@ -634,8 +583,6 @@ fn evaluate_resolved(
             let mut values = read_all(world, &resolved.sources)?;
             let value = match via {
                 Some(via) => call_via(via, values)?,
-                // Silently keeping the last read would make the others look
-                // wired up when nothing consumes them.
                 None if values.len() > 1 => {
                     return Err(BindError::MultipleReadsNoVia {
                         count: values.len(),
@@ -695,10 +642,8 @@ fn evaluate_resolved(
         ResolvedTarget::Value { text } => {
             let mut values = read_all(world, &resolved.sources)?;
             let value = values.pop().ok_or(BindError::NoReads)?;
-            // Which widget component takes the value is decided by the value's
-            // own shape, so a text widget has to be recognised before that
-            // guess is made: otherwise a number aimed at a name field reports
-            // a missing slider.
+            // The value's shape decides which component takes it, so a text
+            // widget has to be recognised before that guess is made.
             let text = text.as_ref().filter(|write| {
                 world
                     .get_entity(entity)
@@ -711,9 +656,8 @@ fn evaluate_resolved(
                 (BindValue::Str(_), None) => Err(BindError::StringValueNoTarget),
                 (BindValue::F32(_), Some(_)) => Err(BindError::ValueNotAString { kind: "number" }),
                 (BindValue::Bool(_), Some(_)) => Err(BindError::ValueNotAString { kind: "bool" }),
-                // SliderValue is immutable, so a sync means re-inserting it.
-                // The equality guard keeps an unchanged binding from doing that
-                // every frame.
+                // SliderValue is immutable, so a sync means re-inserting it;
+                // the equality guard keeps that off an idle frame.
                 (BindValue::F32(v), None) => {
                     let current = world
                         .get::<SliderValue>(entity)

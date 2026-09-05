@@ -1,13 +1,5 @@
-//! Shift-click in the outliner selects the run of rows between the anchor
-//! and the row that was clicked.
-//!
-//! What is pinned here:
-//!  * the range runs both ways, and the clicked row ends up primary;
-//!  * only rows on screen are swept, so a collapsed subtree contributes
-//!    nothing;
-//!  * a plain click moves the anchor and a Shift-click leaves it, so a run of
-//!    Shift-clicks sweeps from one end;
-//!  * Ctrl still toggles one row.
+//! Shift-click in the outliner selects the run of rows between the anchor and the
+//! row that was clicked.
 
 use crate::util;
 

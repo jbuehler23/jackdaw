@@ -1,9 +1,6 @@
-//! F2 renames what is selected.
-//!
-//! The chord is pressed through the window's own key stream, because the
-//! question is whether the outliner answers a keypress at all: an operator
-//! called by hand always finds its target, and the friction was that a
-//! bare F2 found nothing unless a row had been clicked first.
+//! F2 renames what is selected. The chord is pressed through the window's own
+//! key stream: an operator called by hand always finds its target, and the
+//! friction was that a bare F2 found nothing unless a row had been clicked.
 
 use crate::util;
 use crate::util::OperatorResultExt as _;
@@ -88,9 +85,8 @@ fn entry_open(app: &mut App) -> bool {
         .is_some()
 }
 
-/// F2 renames the primary selection, with nothing clicked in the outliner
-/// first. Selecting a node is how a user says which one they mean; making
-/// them click its row again to say it a second time is the friction.
+/// F2 renames the primary selection with nothing clicked in the outliner first:
+/// selecting a node is already how a user says which one they mean.
 #[test]
 fn f2_opens_the_entry_on_the_selected_row() {
     let (mut app, panel, node) = outliner_app();
@@ -112,13 +108,9 @@ fn f2_opens_the_entry_on_the_selected_row() {
     );
 }
 
-/// The same chord on a selection whose row is not on screen yet.
-///
-/// A node selected on the canvas, or one just added under a closed
-/// parent, has no row until the outliner is opened down to it. The rename
-/// looked the row up and gave up when it found none, so F2 did nothing at
-/// all -- and the only way out was to hunt the row down and click it,
-/// which is the click the chord exists to avoid.
+/// The same chord on a selection whose row is not on screen yet. A node selected
+/// on the canvas, or added under a closed parent, has no row until the outliner
+/// is opened down to it.
 #[test]
 fn f2_reaches_a_selection_whose_row_is_not_open_yet() {
     let (mut app, panel, parent) = outliner_app();
@@ -146,17 +138,10 @@ fn f2_reaches_a_selection_whose_row_is_not_open_yet() {
     );
 }
 
-/// The entry stands where the name stood: the label's own place in the
-/// row, and the label's own width.
-///
-/// Appended to the row instead, it landed past the lock and the eye in
-/// whatever room the two of them left over -- a box a couple of letters
-/// wide, at the far end of the row from the name it was replacing.
-///
-/// Typing replaces the name rather than adding to it, because the entry
-/// opens with the old name selected: a rename is nearly always a
-/// replacement, and the old name is still there for an Escape or an arrow
-/// key.
+/// The entry stands where the name stood: the label's own place in the row and
+/// its width. Appended to the row instead, it landed past the lock and the eye in
+/// whatever room they left. Typing replaces the name rather than adding to it,
+/// because the entry opens with the old name selected.
 #[test]
 fn the_entry_takes_the_labels_place_with_the_name_selected() {
     use jackdaw_widgets::tree_view::{
@@ -218,9 +203,8 @@ fn the_entry_takes_the_labels_place_with_the_name_selected() {
         "the entry is given the label's width, not what the glyphs left over: {width}",
     );
 
-    // What a keystroke amounts to once the entry has the keyboard. On the
-    // old name with the caret at its end this appends; on the old name
-    // selected it replaces, which is the whole of the claim.
+    // What a keystroke amounts to once the entry has the keyboard: on the old
+    // name with the caret at its end this appends, on it selected it replaces.
     let field = descendants(app.world(), slots[entry])
         .into_iter()
         .find(|&e| {
@@ -229,9 +213,8 @@ fn the_entry_takes_the_labels_place_with_the_name_selected() {
                 .is_some()
         })
         .expect("the entry holds an editable field");
-    // The editor's own auto-focus pass runs behind `AppState::Editor`,
-    // which a headless app does not enter; the keyboard is put on the
-    // entry here so the commit on losing it is the real one.
+    // The editor's own auto-focus pass runs behind `AppState::Editor`, which a
+    // headless app does not enter, so the keyboard is put on the entry here.
     app.world_mut()
         .resource_mut::<bevy::input_focus::InputFocus>()
         .set(field, bevy::input_focus::FocusCause::Pressed);
@@ -300,12 +283,9 @@ fn label_of(app: &mut App, panel: Entity, source: Entity) -> (String, Option<Str
     )
 }
 
-/// A name too long for the panel is cut down to what the row can show,
-/// and the whole of it is a hover away.
-///
-/// Uncut, the label was the row's own minimum width: it pushed the lock
-/// and the eye out of the panel and left the rename entry a few pixels
-/// wide, so a renamed node could not be read back at all.
+/// A name too long for the panel is cut down to what the row can show, and the
+/// whole of it is a hover away. Uncut, the label was the row's own minimum width:
+/// it pushed the lock and the eye out and left the rename entry a few pixels.
 #[test]
 fn a_long_row_name_is_cut_down_with_the_whole_of_it_in_a_tooltip() {
     let (mut app, panel, _node) = outliner_app();
@@ -343,11 +323,8 @@ fn a_long_row_name_is_cut_down_with_the_whole_of_it_in_a_tooltip() {
     assert_eq!(tooltip, None, "and carries no tooltip repeating itself");
 }
 
-/// Resting the pointer on a cut label brings the whole name up.
-///
-/// The tooltip is a dwell, not a move: it only appears once the pointer
-/// has been still on the row for long enough, which is what
-/// `input.pointer action=rest` is for.
+/// Resting the pointer on a cut label brings the whole name up. The tooltip is a
+/// dwell, not a move, which is what `input.pointer action=rest` is for.
 #[test]
 fn resting_on_a_cut_label_shows_the_whole_name() {
     use bevy::ui::UiGlobalTransform;

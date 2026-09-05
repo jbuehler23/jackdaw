@@ -1,10 +1,6 @@
-//! The editor's remote-control surface, driven in process.
-//!
-//! The BRP handlers are ordinary Bevy systems, so a test can run them
-//! against a headless editor without a socket: what the HTTP layer adds
-//! is transport, and the answers are what a client acts on. The
-//! `jd mcp` end of the wire is covered by `tests/mcp_smoke.rs`, which
-//! needs a real editor process.
+//! The editor's remote-control surface, driven in process. The BRP handlers are
+//! ordinary Bevy systems, so a test can run them without a socket; the `jd mcp`
+//! end of the wire is covered by `tests/mcp_smoke.rs`.
 
 use bevy::prelude::*;
 use jackdaw::project::{ProjectConfig, ProjectRoot};
@@ -77,13 +73,9 @@ fn open_scene_path(app: &App) -> Option<std::path::PathBuf> {
     scenes.tabs.get(scenes.active)?.path.clone()
 }
 
-/// An editor with a project rooted in a temp directory, which is what
-/// every path the surface accepts is measured against.
-///
-/// The directory is handed back with the app rather than kept: the tests
-/// write into the project and read the refusals back, so it has to outlive
-/// the calls, and a test that leaked one would leave a project tree behind
-/// on every run.
+/// An editor with a project rooted in a temp directory, which is what every path
+/// the surface accepts is measured against. The directory is handed back with
+/// the app so it outlives the calls instead of leaking a project tree.
 fn editor_with_a_project() -> (App, tempfile::TempDir) {
     let dir = tempfile::Builder::new()
         .prefix("jackdaw-remote-")
@@ -211,10 +203,8 @@ fn a_call_adds_an_entity_that_the_tree_and_undo_both_see() {
     );
 }
 
-/// A batch is one action, so it is one undo entry. Without the shared
-/// history span a caller that placed twelve props would need twelve
-/// Ctrl-Zs to take the placement back, and would be the only party that
-/// knew the number.
+/// A batch is one action, so it is one undo entry: without the shared history
+/// span a caller that placed twelve props would need twelve Ctrl-Zs.
 #[test]
 fn a_batch_of_calls_is_one_undo_entry() {
     let mut app = editor_with_a_scene();
@@ -369,19 +359,16 @@ fn applied_bsn_lands_under_the_named_parent() {
     );
 }
 
-/// The screenshot method answers only once the PNG is on disk. The
-/// capture itself needs a GPU, so this drives the completion half: a
-/// path the capture log already knows resolves on the next poll, with
-/// the size the readback reported.
+/// The screenshot method answers only once the PNG is on disk. The capture
+/// itself needs a GPU, so this drives the completion half.
 #[test]
 fn a_screenshot_resolves_once_the_capture_log_has_the_file() {
     let (mut app, _project) = editor_with_a_project();
     let project = app.world().resource::<ProjectRoot>().root.clone();
     let path = project.join("shot.png");
-    // A window capture is the one kind that cannot fail up front: it
-    // targets the primary window by reference, so nothing has to exist
-    // yet. The readback needs a GPU, so the log entry below stands in for
-    // the frame that would have landed.
+    // A window capture is the one kind that cannot fail up front: it targets the
+    // primary window by reference. The log entry below stands in for the frame a
+    // GPU readback would have landed.
     let params = Some(json!({ "kind": "window", "path": "shot.png", "request": "one" }));
 
     let queued = app
@@ -416,10 +403,8 @@ fn a_screenshot_resolves_once_the_capture_log_has_the_file() {
     );
 }
 
-/// A frame wait answers after the frames it was asked for and not
-/// before, so a caller that waits for a scene load does actually wait.
-/// Frames, not polls: a client that asks twice in one frame has not
-/// waited twice.
+/// A frame wait answers after the frames it was asked for and not before, so a
+/// caller waiting for a scene load does wait. Frames, not polls.
 #[test]
 fn a_frame_wait_answers_only_after_its_frames() {
     let mut app = util::editor_test_app();
@@ -444,9 +429,8 @@ fn a_frame_wait_answers_only_after_its_frames() {
     assert_eq!(answer["frames"], json!(2));
 }
 
-/// Two waits are two waits. A client that asks for 60 frames and drops
-/// at 40 must not leave the next caller's identical request answering
-/// after 20: the second caller waited for a load that had not happened.
+/// Two waits are two waits: a client that asks for 60 frames and drops at 40
+/// must not leave the next identical request answering after 20.
 #[test]
 fn a_dropped_wait_does_not_shorten_the_next_one() {
     let mut app = util::editor_test_app();
@@ -479,9 +463,8 @@ fn a_dropped_wait_does_not_shorten_the_next_one() {
     assert!(answer.is_some(), "the fresh wait never answered");
 }
 
-/// `until_idle` answers even while a modal operator holds the editor.
-/// Nothing is going to end that modal on its own -- there is no pointer
-/// -- so waiting on it would block the call for its whole timeout.
+/// `until_idle` answers even while a modal operator holds the editor: nothing is
+/// going to end that modal on its own, since there is no pointer.
 #[test]
 fn waiting_for_idle_does_not_block_on_a_modal() {
     let mut app = util::editor_test_app();
@@ -520,9 +503,8 @@ fn a_screenshot_refuses_a_path_outside_the_project() {
     }
 }
 
-/// `scene.open` is reachable from the remote, so its path is confined
-/// the same way. An unconfined one would read any file on the machine
-/// into the editor and let a later save write it back somewhere else.
+/// `scene.open` is reachable from the remote, so its path is confined the same
+/// way: an unconfined one would read any file on the machine into the editor.
 #[test]
 fn scene_open_refuses_a_file_outside_the_project() {
     let (mut app, _project) = editor_with_a_project();
@@ -552,9 +534,8 @@ bevy_transform::components::transform::Transform
     );
 }
 
-/// Applying BSN is a write, and the surface promises every write is
-/// undoable. Without a command on the stack the nodes would stay and the
-/// user's next Ctrl-Z would revert whatever they did before the call.
+/// Applying BSN is a write, and every write is undoable: without a command on
+/// the stack the user's next Ctrl-Z would revert whatever they did before.
 #[test]
 fn applied_bsn_is_taken_back_by_one_undo() {
     let mut app = editor_with_a_scene();
@@ -593,10 +574,9 @@ bevy_transform::components::transform::Transform
     );
 }
 
-/// A batch whose entries push the history past its budget must group its
-/// own work and nothing else. The span is keyed on a push counter for
-/// this reason: a recorded stack length slides under the user's earlier
-/// edits as the budget drops entries from the front.
+/// A batch whose entries push the history past its budget must group its own
+/// work and nothing else. The span is keyed on a push counter for that reason: a
+/// recorded stack length slides under earlier edits as the budget drops them.
 #[test]
 fn a_batch_never_swallows_an_earlier_edit_when_history_trims() {
     let mut app = editor_with_a_scene();
@@ -646,9 +626,8 @@ fn a_batch_never_swallows_an_earlier_edit_when_history_trims() {
     );
 }
 
-/// A modal call inside a batch stops it and is cancelled on the way out.
-/// Left running it would hold the editor: every later modal call is
-/// refused while one is active, and no pointer is coming to end it.
+/// A modal call inside a batch stops it and is cancelled on the way out: left
+/// running it refuses every later modal call, with no pointer coming to end it.
 #[test]
 fn a_batch_cancels_a_modal_it_started() {
     let mut app = editor_with_a_scene();
@@ -696,9 +675,8 @@ fn cancel_ends_the_modal_holding_the_editor() {
     assert_eq!(status["modal"], Value::Null, "{status}");
 }
 
-/// An operator declared `remote_hidden` stays out of the vocabulary. The
-/// draw-brush sub-operators only continue a gesture the pointer starts,
-/// so offering them to a caller with no pointer is offering a dead end.
+/// An operator declared `remote_hidden` stays out of the vocabulary: the
+/// draw-brush sub-operators only continue a gesture the pointer starts.
 #[test]
 fn remote_hidden_operators_are_not_offered() {
     let mut app = util::editor_test_app();
@@ -728,10 +706,9 @@ fn remote_hidden_operators_are_not_offered() {
     }
 }
 
-/// `until_idle` holds while a model is still coming in and answers once
-/// nothing is. Which load states count is pinned by `any_still_loading`'s
-/// own tests; this is the wiring, and it has to hold in both directions --
-/// a gate that always answered `idle` would pass a one-sided test.
+/// `until_idle` holds while a model is still coming in and answers once nothing
+/// is. It has to hold in both directions: a gate that always answered `idle`
+/// would pass a one-sided test.
 #[test]
 fn waiting_for_idle_holds_while_a_model_is_still_coming_in() {
     let (mut app, _project) = editor_with_a_project();
@@ -775,10 +752,8 @@ fn waiting_for_idle_holds_while_a_model_is_still_coming_in() {
     );
 }
 
-/// An operator that could not use a parameter says so to whoever called
-/// it, not only to the log. A remote caller has no terminal, so a
-/// `space=viewport` the pointer ignored would otherwise come back as a
-/// clean `finished` over a scene that had not moved.
+/// An operator that could not use a parameter says so to whoever called it, not
+/// only to the log: a remote caller has no terminal to read it in.
 #[test]
 fn a_call_reports_what_the_operator_refused() {
     let mut app = editor_with_a_scene();
@@ -802,9 +777,8 @@ fn a_call_reports_what_the_operator_refused() {
     );
 }
 
-/// A warning belongs to the call that produced it. Left uncleared, the
-/// next call would inherit it and a caller would chase a refusal that
-/// had already been reported.
+/// A warning belongs to the call that produced it; left uncleared, the next call
+/// would inherit it.
 #[test]
 fn warnings_do_not_carry_over_to_the_next_call() {
     let mut app = editor_with_a_scene();
@@ -830,10 +804,8 @@ fn warnings_do_not_carry_over_to_the_next_call() {
     );
 }
 
-/// A project that turns the surface off is answered by nothing, so a
-/// second editor on a locked-down project cannot be driven through a
-/// port it happens to hold. The methods refuse, not merely the setting:
-/// a gate nothing consults reads the same as one that is on.
+/// A project that turns the surface off is answered by nothing. The methods
+/// refuse, not merely the setting: a gate nothing consults reads as on.
 #[test]
 fn a_project_can_turn_the_surface_off() {
     let (mut app, _project) = editor_with_a_project();
@@ -877,10 +849,9 @@ fn a_project_can_turn_the_surface_off() {
     assert!(refusal.message.contains("remote.enabled"));
 }
 
-/// The editor takes its endpoint file back as it exits, so the next client
-/// reads no live-looking editor at an address nothing answers. A test that
-/// only killed the process would pass on the dead pid alone, whether or
-/// not anything retracted the file.
+/// The editor takes its endpoint file back as it exits, so the next client reads
+/// no live-looking editor at an address nothing answers. A test that only killed
+/// the process would pass on the dead pid alone.
 #[test]
 fn the_editor_takes_its_endpoint_back_as_it_exits() {
     let (mut app, project) = editor_with_a_project();
@@ -965,9 +936,8 @@ fn every_call_in_a_batch_reports_its_own_spawn() {
     );
 }
 
-/// Instancing a prefab writes a node into the document and rebuilds the
-/// scene from it, which mints new ids for every node in it. The call still
-/// has to name the instance, or a caller cannot place what it just made.
+/// Instancing a prefab rebuilds the scene from the document and mints new ids
+/// for every node, and the call still has to name the instance.
 #[test]
 fn a_prefab_instance_call_reports_the_instance_it_added() {
     let (mut app, project) = editor_with_a_project();
@@ -1003,9 +973,8 @@ bevy_transform::components::transform::Transform
     );
 }
 
-/// Packing a group takes a root out of the document and puts one back, so
-/// the count is where it was. The instance is still the one thing the
-/// caller has to be able to name.
+/// Packing a group takes a root out of the document and puts one back, so the
+/// count is where it was; the instance still has to be nameable.
 #[test]
 fn a_call_that_replaces_a_root_reports_only_the_one_it_added() {
     let (mut app, _project) = editor_with_a_project();
@@ -1076,9 +1045,8 @@ fn the_tree_starts_from_a_root_named_by_name_or_by_id() {
     }
 }
 
-/// A caller places what the project already has, and nothing else in the
-/// surface says what that is: the tree reports what is placed, not what is
-/// on disk.
+/// A caller places what the project already has: the tree reports what is
+/// placed, not what is on disk.
 #[test]
 fn the_asset_listing_reports_project_files_matching_the_glob() {
     let (mut app, project) = editor_with_a_project();
@@ -1127,12 +1095,10 @@ fn set_play_state(app: &mut App, state: jackdaw_api::pie::PlayState) {
         .insert_resource(bevy::state::state::State::new(state));
 }
 
-/// A caller that pressed play has nothing to poll but the state, and a
-/// launch is a cargo build and then a process: minutes, not frames.
-///
-/// `pie.play` returns while the editor still reads as stopped, so a
-/// `pie_stopped` answered on the current state would answer at once with
-/// the state the caller was trying to leave.
+/// A caller that pressed play has nothing to poll but the state, and a launch is
+/// a cargo build and then a process. `pie.play` returns while the editor still
+/// reads as stopped, so a `pie_stopped` answered on the current state would
+/// answer at once with the state the caller was trying to leave.
 #[test]
 fn a_pie_wait_answers_on_the_transition_rather_than_the_state_it_started_in() {
     let mut app = util::editor_test_app();
@@ -1187,9 +1153,8 @@ fn a_pie_wait_gives_up_when_its_frames_run_out() {
     );
 }
 
-/// A call reports what it spawned and nothing else. The list is opened for
-/// the call and taken back after it, so a spawn from the menus in between
-/// is not handed to the next caller as its own.
+/// A call reports what it spawned and nothing else: the list is opened for the
+/// call and taken back after it.
 #[test]
 fn a_call_reports_only_the_entities_it_spawned_itself() {
     let mut app = editor_with_a_scene();

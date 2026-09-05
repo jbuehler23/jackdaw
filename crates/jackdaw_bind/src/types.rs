@@ -44,13 +44,8 @@ impl BindPath {
 
     /// The component this path names when it names no field inside one.
     ///
-    /// A marker component holds nothing: for `InteractionDisabled` presence or
-    /// absence is the whole state, so there is no field to set and the path is
-    /// the type on its own. A write path spelled that way puts the component
-    /// on or takes it off, driven by a bool.
-    ///
-    /// Only a write path can be spelled this way. A read has to name a value,
-    /// and a component with no fields holds none.
+    /// A write path spelled that way puts a marker component on or takes it
+    /// off, driven by a bool. Only a write path can be spelled this way.
     pub fn marker_type(&self) -> Option<&str> {
         let raw = self.raw.trim();
         if raw.is_empty() || raw.contains('.') || raw.starts_with("Res(") {
@@ -105,8 +100,7 @@ pub enum Binding {
     /// a health bar's width from the player's health.
     ///
     /// A write path that names a component and no field drives the whole
-    /// component instead: a bool puts a marker like `InteractionDisabled` on
-    /// the widget or takes it off. See the crate doc.
+    /// component instead, putting a marker on or taking it off.
     Field {
         /// Where the value comes from. More than one read needs a `via`
         /// function to combine them.
@@ -156,15 +150,9 @@ pub enum Binding {
 }
 
 /// Declarative connections from this widget to game state and events.
-// The sentence above is picker copy: with no `EditorDescription` on the type
-// the editor shows this doc comment verbatim, so it stays one plain line.
-//
-// Every binding on the list is evaluated each frame, in the order it was
-// authored.
-//
-// `Default` is reflected as well as derived: without `ReflectDefault`
-// the editor's picker cannot synthesise an instance, because its
-// field-walking fallback has no default for a bare `Vec`.
+// The sentence above is picker copy shown verbatim, so it stays one plain line.
+// `Default` is reflected as well as derived, or the picker cannot synthesise an
+// instance.
 #[derive(Component, Clone, Debug, PartialEq, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct Bindings(pub Vec<Binding>);
@@ -180,17 +168,11 @@ pub struct BindContext(
     pub Entity,
 );
 
-/// Where a string [`Binding::Value`] puts the text it reads: a widget
-/// component and the field inside it, as a write path.
+/// Where a string [`Binding::Value`] puts the text it reads: a widget component
+/// and the field inside it, as a write path.
 ///
-/// A slider's value and a checkbox's state are bevy's own components, so this
-/// crate writes them by name. Text is not: bevy has no reflectable text-input
-/// value, and the crate that supplies one (`jackdaw_widgets_runtime`, whose
-/// `TextValue` is the target a game and the editor both install) is not one
-/// this crate depends on. Whoever composes the two names the target here, and
-/// the widget side of a string `Value` binding is then the same resolved
-/// write every other binding uses.
-///
+/// Bevy has no reflectable text-input value, and this crate does not depend on
+/// the one that supplies it, so whoever composes the two names the target here.
 /// Without it a string `Value` binding has nowhere to land and says so.
 #[derive(Resource, Clone, Debug)]
 pub struct ValueTextTarget(
@@ -198,9 +180,8 @@ pub struct ValueTextTarget(
     pub BindPath,
 );
 
-/// Warn-once ledger: (entity, binding index) pairs already reported. A
-/// binding that fails does so every frame, and one line per failure is what
-/// makes the log worth reading.
+/// Warn-once ledger: (entity, binding index) pairs already reported, since a
+/// binding that fails does so every frame.
 #[derive(Resource, Default)]
 pub struct BindFailures(
     /// The (entity, binding index) pairs already warned about.

@@ -7,11 +7,9 @@ use super::{BsnPatch, BsnPatches, SceneBsnAst};
 
 /// How deep a document walk follows `Children` before it gives up.
 ///
-/// A document is written by a person or by this editor and is nowhere near
-/// this deep; a clipboard payload is neither, and one whose `Children` lists
-/// form a cycle would otherwise recurse until the stack ran out. Hitting the
-/// cap is a refusal, logged and then abandoned, never a partial walk that
-/// carries on.
+/// A clipboard payload whose `Children` lists form a cycle would otherwise
+/// recurse until the stack ran out. Hitting the cap is a refusal, logged and
+/// abandoned, never a partial walk that carries on.
 pub const MAX_AST_DEPTH: usize = 256;
 
 impl SceneBsnAst {
@@ -118,11 +116,8 @@ impl SceneBsnAst {
         }
     }
 
-    /// Remove a child from every `Children` patch its parent carries.
-    ///
-    /// Every list, not the first one: a parent with two `Children` patches
-    /// holding the same child once each would otherwise keep the copy the
-    /// first list did not hold, and a move would then duplicate it.
+    /// Removes a child from every `Children` patch its parent carries, not just
+    /// the first, or a move out of a parent with two lists duplicates it.
     pub fn remove_child_from_ast(&mut self, parent_ast: Entity, child_ast: Entity) {
         let Some(patches) = self.get_patches(parent_ast) else {
             return;
@@ -212,12 +207,10 @@ impl SceneBsnAst {
         self.insert_child_in_ast(parent_ast, child_ast, usize::MAX);
     }
 
-    /// Insert a child into a parent's ordered child list.
+    /// Inserts a child into a parent's ordered child list.
     ///
     /// `index` counts over every `Children` patch the parent carries, in the
-    /// order [`Self::get_children_ast`] reports them, so the slot a caller
-    /// read from that list is the slot the child lands in whichever patch
-    /// holds it.
+    /// order [`Self::get_children_ast`] reports them.
     pub fn insert_child_in_ast(&mut self, parent_ast: Entity, child_ast: Entity, index: usize) {
         let Some(patches) = self.get_patches(parent_ast) else {
             return;
@@ -243,8 +236,6 @@ impl SceneBsnAst {
             last_list = Some(patch_entity);
         }
 
-        // Past the end of every list: append to the last one there is, or
-        // start the parent's first.
         if let Some(patch_entity) = last_list
             && let Some(patch) = self.world.get_mut::<BsnPatch>(patch_entity)
             && let BsnPatch::Children(children) = patch.into_inner()
@@ -372,9 +363,8 @@ fn link_cloned_subtree(
 mod tests {
     use super::*;
 
-    /// A parent whose children are split across two `Children` patches, the
-    /// shape a parsed document with two `Children [ ... ]` relations has and
-    /// the shape an edit can leave behind.
+    /// A parent whose children are split across two `Children` patches, which
+    /// is what two `Children [ ... ]` relations parse to.
     fn parent_with_two_child_lists() -> (SceneBsnAst, Entity, Vec<Entity>) {
         let mut ast = SceneBsnAst::default();
         let kids: Vec<Entity> = (0..4)
@@ -414,8 +404,6 @@ mod tests {
         );
     }
 
-    /// Removing from only the first list left the child in the second, and
-    /// the insert that followed a move then made a duplicate.
     #[test]
     fn a_move_within_a_split_list_does_not_duplicate_the_child() {
         let (mut ast, parent, kids) = parent_with_two_child_lists();
@@ -439,8 +427,7 @@ mod tests {
         );
     }
 
-    /// A document whose `Children` point back at an ancestor cannot come out
-    /// of the parser, but it can come off a clipboard. The walk has to end.
+    /// A cycle cannot come out of the parser, but it can come off a clipboard.
     #[test]
     fn cloning_a_cyclic_document_ends_at_the_depth_cap() {
         let mut src = SceneBsnAst::default();

@@ -161,19 +161,8 @@ fn hidden_by_namespace(full_path: &str) -> bool {
         && !authored_widget_components().contains(&full_path)
 }
 
-/// The reflected components a widget's author edits: the text an input holds,
-/// the value a progress bar shows, a dropdown's options, a tab strip's labels.
-///
-/// `jackdaw_widgets_runtime` is culled with the rest of the jackdaw namespace
-/// because most of what it holds is chrome bookkeeping -- which generated part
-/// stands for which row, which list the chrome was built from -- and none of
-/// that is the user's. These are: they are the whole of what the widget
-/// carries, and hiding them left the widgets placeable and not authorable.
-///
-/// Spelled through [`TypePath`] so a moved or renamed component takes its hole
-/// with it rather than silently losing its card.
-///
-/// [`TypePath`]: bevy::reflect::TypePath
+/// The reflected components a widget's author edits, exempted from the
+/// `jackdaw_widgets_runtime` cull that hides the crate's chrome bookkeeping.
 fn authored_widget_components() -> [&'static str; 10] {
     use bevy::reflect::TypePath;
     use jackdaw_widgets_runtime as widgets;
@@ -334,8 +323,7 @@ pub(crate) fn build_inspector_displays(
                 return Some((short, module_group, component_id, full_path.to_string()));
             }
 
-            // Unreflected components fall back to the `Components` name, and
-            // run through the same namespace rule as the reflected arm.
+            // Unreflected components fall back to the `Components` name.
             let name = components.get_name(component_id)?;
             if hidden_by_namespace(&name) {
                 return None;
@@ -959,8 +947,7 @@ pub(crate) fn spawn_component_display(
                 column_gap: Val::Px(tokens::SPACING_SM),
                 flex_grow: 1.0,
                 // A generic type path is one unbreakable word wider than the
-                // sidebar, so the row clips it. The full path is on the
-                // hover tooltip.
+                // sidebar; the full path is on the hover tooltip.
                 min_width: Val::Px(0.0),
                 overflow: Overflow::clip_x(),
                 ..Default::default()
@@ -1010,8 +997,8 @@ pub(crate) fn spawn_component_display(
             weight: FontWeight::MEDIUM,
             ..Default::default()
         },
-        // A title that ran out of room is cut, never wrapped: a second line
-        // would move the card's controls down the panel.
+        // Cut, never wrapped: a second line would move the card's controls
+        // down the panel.
         TextLayout {
             linebreak: bevy::text::LineBreak::NoWrap,
             ..Default::default()
@@ -1259,8 +1246,7 @@ mod tests {
     use jackdaw_api_internal::operator::Operator;
     use jackdaw_feathers::button::ButtonOperatorCall;
 
-    /// The card's remove control is the native tool button, not a bare glyph,
-    /// and it still carries the operator call that dispatches the removal.
+    /// The card's remove control is a tool button carrying the remove operator.
     #[test]
     fn the_remove_control_is_a_feathers_tool_button() {
         let mut app = App::new();
@@ -1384,22 +1370,17 @@ mod tests {
         ));
     }
 
-    /// Bindings are authored data, not editor bookkeeping: the user put
-    /// them on the entity and the inspector is where they edit them.
+    /// Bindings are authored data, not editor bookkeeping.
     #[test]
     fn binding_types_survive_the_namespace_cull() {
         assert!(!hidden_by_namespace("jackdaw_bind::types::Bindings"));
         assert!(!hidden_by_namespace("jackdaw_bind::types::BindContext"));
-        // The exemption is that crate, not every crate whose name starts
-        // with its name.
+        // The exemption is that crate, not every crate sharing its prefix.
         assert!(hidden_by_namespace("jackdaw_bindings::Foo"));
     }
 
-    /// `AuthoredWidget` is not `Reflect`, so it reaches the inspector
-    /// through the `Components`-name fallback rather than the registry.
-    /// It stays out of the list because its crate is under the jackdaw
-    /// namespace; renaming or moving that crate would surface it to the
-    /// user as an `Other` row.
+    /// `AuthoredWidget` is not `Reflect`, so it reaches the inspector through
+    /// the `Components`-name fallback and is culled by its namespace.
     #[test]
     fn the_runtime_widget_marker_stays_out_of_the_generic_list() {
         assert!(hidden_by_namespace(std::any::type_name::<
@@ -1407,9 +1388,7 @@ mod tests {
         >()));
     }
 
-    /// The other side of the same cull: what a widget's author edits is not
-    /// bookkeeping, and a widget whose components are all hidden can be
-    /// placed and never authored.
+    /// What a widget's author edits is not bookkeeping, so it survives the cull.
     #[test]
     fn the_authored_widget_components_survive_the_namespace_cull() {
         for path in super::authored_widget_components() {

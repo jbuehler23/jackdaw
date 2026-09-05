@@ -86,14 +86,9 @@ fn classic_preset_contains_builtin_entries_and_applies_them() {
         .get_resource_or_init::<DefaultKeymap>()
         .to_classic_preset();
 
-    // Verify the 6 builtin names that have DefaultKeymap entries are present.
-    // nav.fly is bound code-level with a Down condition and has no DefaultKeymap
-    // entry (not preset-bindable this pass).
-    // nav.brush_resize_up / nav.brush_resize_down are registered in BuiltinActions
-    // and DefaultKeymap with PresetContext::Navigation.
-    // modal.confirm / modal.step_up / modal.step_down are registered in
-    // BuiltinActions but have no DefaultKeymap entries yet; they are recorded
-    // into the keymap once a modal consumer exists.
+    // The 6 builtin names with DefaultKeymap entries. nav.fly is bound code-level
+    // with a Down condition; modal.confirm / step_up / step_down are in
+    // BuiltinActions but get keymap entries once a modal consumer exists.
     let builtin_names = [
         ("modal.cancel", PresetContext::Modal),
         ("modal.axis_x", PresetContext::Modal),
@@ -150,10 +145,9 @@ fn classic(app: &mut App) -> KeymapPreset {
         .to_classic_preset()
 }
 
-/// Ctrl+C and Ctrl+V are the clipboard chord, and two operators claim each:
-/// the timeline's keyframes and the entity clipboard. Their availability
-/// checks are disjoint on the timeline being the focused window, so one
-/// press answers once. The whole-component clipboard sits on Ctrl+Shift.
+/// Ctrl+C and Ctrl+V are claimed by both the timeline's keyframes and the entity
+/// clipboard, and their availability checks are disjoint on the timeline being
+/// the focused window. The whole-component clipboard sits on Ctrl+Shift.
 #[test]
 fn the_clipboard_chord_is_shared_by_the_entity_and_keyframe_operators() {
     let mut app = crate::headless_app();
@@ -211,9 +205,8 @@ fn home_and_escape_are_preset_entries() {
     );
 }
 
-/// Two actions on one chord co-fire and let `is_available` arbitrate, so
-/// a shared chord is reported rather than resolved. A synthetic duplicate
-/// is the shape the report has to name.
+/// Two actions on one chord co-fire and let `is_available` arbitrate, so a shared
+/// chord is reported rather than resolved.
 #[test]
 fn a_chord_claimed_twice_is_reported() {
     let preset = KeymapPreset {
@@ -262,10 +255,9 @@ fn a_chord_claimed_twice_is_reported() {
     );
 }
 
-/// The chords the authoring operators added claim what they were meant to.
-///
-/// Every one but the shared clipboard pair belongs to a single operator, and
-/// the applier's conflict report says so: none of them turns up in it.
+/// The chords the authoring operators added claim what they were meant to: all
+/// but the shared clipboard pair belong to a single operator, and none turns up
+/// in the applier's conflict report.
 #[test]
 fn the_authoring_chords_claim_what_they_were_meant_to() {
     let mut app = crate::headless_app();

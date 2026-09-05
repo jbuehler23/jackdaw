@@ -2,12 +2,10 @@
 //! with, a parametric stamp of it, the whole-layer noise wash, and the two
 //! surface dials the splat material shades by.
 //!
-//! The layer itself lives in [`TerrainDataStore`] beside the heights and
-//! the control words, so none of this touches the scene document. What
-//! does reach a history entry is anything that changes what the terrain
-//! draws: `TerrainTintStampOp` and `TerrainTintVariationOp` push one
-//! for the cells they wrote, and the two surface dials push one for the
-//! setting they moved. `TerrainPaintTintOp` does not, being brush state.
+//! The layer lives in [`TerrainDataStore`] beside the heights, so none of
+//! this touches the scene document. Anything that changes what the terrain
+//! draws pushes a history entry; `TerrainPaintTintOp` does not, being brush
+//! state.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -40,9 +38,8 @@ fn channel(value: Option<f64>) -> u8 {
 /// Load the tint brush with a colour.
 ///
 /// Brush state, so it leaves no history entry of its own; the stroke it
-/// produces records one. Channels are `0..1` rather than `0..255` because
-/// that is what the colour picker and every other colour parameter in the
-/// editor speak.
+/// produces records one. Channels are `0..1`, as every other colour parameter
+/// in the editor is.
 #[operator(
     id = "terrain.paint.tint",
     label = "Tint Colour",
@@ -68,10 +65,9 @@ pub(crate) fn terrain_paint_tint(
 
 /// Tint once at a named place, as a released stroke would.
 ///
-/// The parametric twin of the `terrain.paint` modal in its colour domain:
-/// the same [`jackdaw_terrain::apply_color_brush`] kernel, applied once,
-/// pushing the same history entry. Coordinates are terrain-local metres,
-/// as they are for `terrain.sculpt.stamp` and `terrain.paint.stamp`.
+/// The parametric twin of the `terrain.paint` modal in its colour domain: the
+/// same kernel applied once, pushing the same history entry. Coordinates are
+/// terrain-local metres.
 #[operator(
     id = "terrain.tint.stamp",
     label = "Tint Stamp",
@@ -134,9 +130,9 @@ fn run_tint_stamp(world: &mut World, params: &OperatorParameters) {
 
     let outcome = world.resource_scope(|world, mut store: Mut<TerrainDataStore>| {
         // Read before the write and scoped to `rect`: the dense buffer
-        // `tint_rect_mut` hands back holds only `rect`, so an entry over
-        // the whole layer would undo a stamp by whitening every cell
-        // tinted anywhere else.
+        // `tint_rect_mut` hands back holds only `rect`, so an entry over the
+        // whole layer would undo a stamp by whitening every cell tinted
+        // anywhere else.
         let old_color = rect.read(&store.tint(&terrain.data_path), placement.resolution);
         let Some(mut color) = store.tint_rect_mut(&terrain, rect) else {
             warn_caller(
@@ -181,10 +177,9 @@ fn run_tint_stamp(world: &mut World, params: &OperatorParameters) {
 
 /// Lay low-frequency noise over the whole colour layer.
 ///
-/// What a large field of one texture needs to stop reading flat. The
-/// layer is replaced rather than blended into, so the history entry holds
-/// the whole of what was there: this is the one tint operation that is
-/// not a brush.
+/// What a large field of one texture needs to stop reading flat. The layer is
+/// replaced rather than blended into, so the history entry holds the whole of
+/// what was there.
 #[operator(
     id = "terrain.tint.variation",
     label = "Tint Variation",
@@ -229,10 +224,9 @@ fn run_tint_variation(world: &mut World, params: &OperatorParameters) {
     let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(target).cloned() else {
         return;
     };
-    // The options bar's Apply button carries no parameters: the three dials
-    // beside it live on the brush state, so an omitted parameter reads
-    // whatever the bar is showing rather than a constant the bar disagrees
-    // with.
+    // The options bar's Apply button carries no parameters: the dials beside
+    // it live on the brush state, so an omitted parameter reads whatever the
+    // bar is showing.
     let dials = {
         let state = world.resource::<super::paint::TerrainPaintState>();
         (
@@ -283,8 +277,7 @@ fn run_tint_variation(world: &mut World, params: &OperatorParameters) {
 /// Set how much of a terrain's colour layer reaches its albedo.
 ///
 /// A surface dial rather than a slot one: it scales the whole layer, so
-/// turning it to 0 puts the ground back to what its textures alone say
-/// without touching a painted cell.
+/// turning it to 0 puts the ground back to what its textures alone say.
 #[operator(
     id = "terrain.tint.strength",
     label = "Tint Strength",
@@ -314,8 +307,8 @@ pub(crate) fn terrain_tint_strength(
 
 /// Set how hard a terrain's height blend cuts between two texture ids.
 ///
-/// Was a constant in the splat material; it is authored per terrain now,
-/// and lives in the sidecar's surface block beside the tint strength.
+/// Authored per terrain, in the sidecar's surface block beside the tint
+/// strength.
 #[operator(
     id = "terrain.material.blend_sharpness",
     label = "Terrain Blend Sharpness",
@@ -346,9 +339,8 @@ pub(crate) fn terrain_material_blend_sharpness(
 /// Resolve a terrain, apply `edit` to its surface settings, and record the
 /// change so a dial can be taken back like any other edit.
 ///
-/// The store sanitizes what it is handed and refuses a quarantined
-/// terrain rather than fabricating a document for it; either refusal
-/// reaches the caller rather than only a terminal.
+/// The store sanitizes what it is handed and refuses a quarantined terrain;
+/// either refusal reaches the caller rather than only a terminal.
 fn set_surface(
     world: &mut World,
     params: &OperatorParameters,

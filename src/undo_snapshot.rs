@@ -5,14 +5,9 @@
 //! overlay). That way Ctrl+Z also reverts "I toggled wireframe" or "I
 //! switched to Face mode", matching user expectations.
 //!
-//! The selection rides along too, but by scene node id rather than by
-//! entity: the respawn re-mints every entity id, so a recorded `Entity`
-//! would dangle. It is recorded at capture and restored at apply, which is
-//! what makes Ctrl+Z put back what was selected when the undone step was
-//! asked for -- including a node the step deleted, which nothing else can
-//! name once it is gone. It is deliberately absent from `equals`: a
-//! selection change is not an edit, and counting it as one would push a
-//! history entry every time the user clicked something.
+//! The selection rides along by scene node id rather than by entity, since the
+//! respawn re-mints every entity id. It is deliberately absent from `equals`: a
+//! selection change is not an edit.
 
 use std::any::Any;
 
@@ -97,15 +92,13 @@ impl SceneSnapshotter for BsnDocumentSnapshotter {
 pub struct BsnDocumentSnapshot {
     text: String,
     editor_state: EditorStateSnapshot,
-    /// What was selected when this snapshot was taken, by document node
-    /// rather than by entity. Order is the selection's own, so the primary
-    /// is still last when it comes back.
+    /// What was selected when this snapshot was taken, by document node.
+    /// Order is the selection's own, so the primary comes back last.
     selection: Vec<jackdaw_scene_types::SceneNodeId>,
 }
 
-/// The selection as node ids, dropping anything the document does not
-/// name: a brush face, an editor entity, a preview entity a running game
-/// spawned. None of those survives a respawn to be re-selected.
+/// The selection as node ids, dropping anything the document does not name
+/// (brush faces, editor entities, preview entities): none survives a respawn.
 fn selected_node_ids(world: &World) -> Vec<jackdaw_scene_types::SceneNodeId> {
     world
         .get_resource::<crate::selection::Selection>()
@@ -139,11 +132,8 @@ impl SceneSnapshot for BsnDocumentSnapshot {
         // diverged fields); the resolver materializes the inherited subtrees
         // back so the respawn produces complete entities. Resolve the cache
         // borrow before the spawn borrow.
-        //
-        // Borrowed unless the resolver actually rewrote the document: the
-        // captured text is the whole scene (a megabyte on a large one) and
-        // the loader below only reads it, so copying it to hand it over is
-        // a megabyte of memcpy per undo for nothing.
+        // The captured text is borrowed unless the resolver rewrote it: it is
+        // the whole scene, and the loader below only reads it.
         let resolved_text: std::borrow::Cow<'_, str> =
             match world.get_resource::<crate::prefab::PrefabAstCache>() {
                 Some(_) => match jackdaw_bsn::parse_bsn_text(&self.text) {
@@ -193,9 +183,8 @@ impl SceneSnapshot for BsnDocumentSnapshot {
         })
     }
 
-    /// The document text plus the recorded selection. The editor-state
-    /// half is a handful of small `Copy` fields and settings structs, on
-    /// the far side of the rounding from a scene measured in megabytes.
+    /// The document text plus the recorded selection; the editor-state half is
+    /// small enough to round away.
     fn heap_bytes(&self) -> usize {
         self.text.capacity()
             + self.selection.capacity() * std::mem::size_of::<jackdaw_scene_types::SceneNodeId>()
@@ -206,16 +195,9 @@ impl SceneSnapshot for BsnDocumentSnapshot {
     }
 }
 
-/// Put `wanted` back as the selection, in the order it was recorded.
-///
-/// The [`Selected`](crate::selection::Selected) marker goes on with it:
-/// the outliner paints its rows off that marker, and a selection that is
-/// only a list of entities leaves every row unpainted and every observer
-/// that keys off the marker unfired.
-///
-/// A node the snapshot's own text does not spawn is skipped rather than
-/// leaving a gap: applying the other half of the pair is what brings it
-/// back, and its own snapshot names it.
+/// Put `wanted` back as the selection, in the order it was recorded, including
+/// the `Selected` marker the outliner and its observers key off. A node this
+/// snapshot's text does not spawn is skipped.
 fn restore_selection(world: &mut World, wanted: &[jackdaw_scene_types::SceneNodeId]) {
     if wanted.is_empty() {
         return;
@@ -290,10 +272,8 @@ mod tests {
         app
     }
 
-    // A material in the catalog emits as `@Name` only when something on disk
-    // defines that name. An unsaved material has no file, so the scene must
-    // carry it inline instead: a bare `@Name` would resolve to nothing outside
-    // this editor run and the brush would load white.
+    // An unsaved material has no file, so the scene must carry it inline; a
+    // bare `@Name` would resolve to nothing outside this editor run.
     #[test]
     fn an_unsaved_catalog_material_embeds_inline_instead_of_emitting_a_name() {
         use bevy::pbr::StandardMaterial;
@@ -362,10 +342,9 @@ mod tests {
         }
     }
 
-    // A runtime material handle assigned to a brush face must survive a capture:
-    // the incremental document records the `Brush` patch without an asset
-    // context, so a bare emit would drop the handle. The capture-time inline
-    // asset pass embeds the material and rewrites the reference.
+    // The incremental document records the `Brush` patch without an asset
+    // context, so a bare emit would drop a runtime material handle; the
+    // capture-time inline asset pass embeds it and rewrites the reference.
     #[test]
     fn bsn_snapshot_embeds_runtime_face_material() {
         use bevy::pbr::StandardMaterial;

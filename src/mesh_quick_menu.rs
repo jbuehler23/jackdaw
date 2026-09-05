@@ -128,7 +128,7 @@ fn mesh_quick_menu_input(
 
 /// Dispatch the operator named by a confirmed radial selection. An operator
 /// that is unavailable in the current state is skipped by the dispatch gate, so
-/// such a selection simply does nothing.
+/// such a selection does nothing.
 fn dispatch_quick_menu_selection(select: On<RadialMenuSelect>, mut commands: Commands) {
     commands.operator(select.event().action.clone()).call();
 }

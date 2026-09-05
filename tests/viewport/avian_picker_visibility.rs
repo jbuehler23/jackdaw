@@ -1,14 +1,6 @@
-//! Smoke coverage for the avian-physics picker UX. Boots a real
-//! `editor_test_app`, walks the live `AppTypeRegistry`, and asserts
-//! that the user-facing physics components surface from
-//! [`enumerate_pickable_components`] in the "Avian3d" category while
-//! the internals stay hidden.
-//!
-//! Catches regressions where:
-//!   - `register_avian_types` stops being called on plugin build,
-//!   - the picker denylist over-matches and hides public types,
-//!   - the category fallback stops mapping `avian3d::*` to "Avian3d",
-//!   - a future avian rename breaks the denylist's literal paths.
+//! The avian-physics picker: the user-facing physics components surface from
+//! `enumerate_pickable_components` in the "Avian3d" category while the
+//! internals stay hidden.
 
 use crate::util;
 
@@ -32,9 +24,7 @@ fn find<'a>(pickables: &'a [PickableComponent], path: &str) -> Option<&'a Pickab
     pickables.iter().find(|p| p.type_path_full == path)
 }
 
-/// `AvianCollider` is the editor wrapper users pick to attach a
-/// collider. If this drops out of the picker, the inspector workflow
-/// for adding physics breaks completely.
+/// `AvianCollider` is the editor wrapper users pick to attach a collider.
 #[test]
 fn avian_collider_wrapper_is_pickable() {
     let mut app = util::editor_test_app();
@@ -58,10 +48,8 @@ fn avian_collider_wrapper_is_pickable() {
     );
 }
 
-/// `RigidBody` is the canonical body type. Picking `AvianCollider`
-/// auto-adds it via `#[require(RigidBody)]`, but the user must also
-/// be able to pick it directly to switch a static body to dynamic
-/// (or vice versa) without going through the wrapper.
+/// Picking `AvianCollider` auto-adds `RigidBody` through `#[require(RigidBody)]`,
+/// but it must be pickable directly too, to switch a static body to dynamic.
 #[test]
 fn rigid_body_is_pickable() {
     let mut app = util::editor_test_app();

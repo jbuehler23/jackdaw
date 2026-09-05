@@ -533,11 +533,8 @@ fn spawn_paint_target_picker(commands: &mut Commands, parent: Entity, domain: Pa
 /// The Color-mode bar: the brush's shape and strength, the colour it lays
 /// down, and the whole-layer variation wash.
 ///
-/// The colour picker is the feathers one rather than three number chips:
-/// a macro tint is chosen by eye, and the picker's own swatch is what
-/// says which colour is loaded. It keeps its own state, so the bar's
-/// rebuild signature ignores the colour and a rebuild cannot close the
-/// popover mid-pick.
+/// The colour picker keeps its own state, so the bar's rebuild signature
+/// ignores the colour and a rebuild cannot close the popover mid-pick.
 fn spawn_color_paint_bar(
     commands: &mut Commands,
     parent: Entity,
@@ -623,9 +620,8 @@ fn spawn_color_paint_bar(
             },
         );
 
-    // The variation wash: three dials and the button that applies them.
-    // Beside the brush rather than in the Terrain panel because it is what
-    // a tint pass usually starts with, before any stroke.
+    // The variation wash: three dials and the button that applies them, beside
+    // the brush because it is what a tint pass usually starts with.
     spawn_scrub_chip(
         commands,
         parent,

@@ -2,18 +2,9 @@
 //! reflected types, produced by the project itself and consumed by the
 //! editor as plain data.
 //!
-//! # Compatibility
-//!
-//! A schema is a snapshot, and the editor may be holding an older one than the
-//! project it describes. Every field here defaults on deserialization, so a
-//! dump written without a field still loads with that field empty, and the
-//! editor's offer is out of date rather than wrong: a dump carrying no
-//! [`TypeSchema::entity_fields`] leads the binding picker to offer an event's
-//! entity fields as though a binding could map them, and the binding is refused
-//! at run time. Rebuilding the project rewrites the dump.
-//!
-//! Nothing here is the authority on what a game accepts. The dispatcher is, and
-//! it works from the live type registry.
+//! Every field defaults on deserialization, so an older dump still loads and
+//! the editor's offer is out of date rather than wrong. Nothing here is the
+//! authority on what a game accepts; the live type registry is.
 
 use std::path::{Path, PathBuf};
 
@@ -116,12 +107,9 @@ pub struct TypeSchema {
     /// One entry per variant for enums; empty for every other kind.
     #[serde(default)]
     pub variants: Vec<VariantSchema>,
-    /// Every field the type declares as an `Entity`, by name.
-    ///
-    /// A bind value carries numbers, bools and strings, so none of these is a
-    /// field a binding can map. The dispatcher fills one named `entity` with
-    /// the widget's subject entity and refuses the rest; the picker offers
-    /// none of them.
+    /// Every field the type declares as an `Entity`, by name. None can be
+    /// mapped by a binding; the dispatcher fills one named `entity` with the
+    /// widget's subject and refuses the rest.
     #[serde(default)]
     pub entity_fields: Vec<String>,
     /// Whether reflection can build a value with fields left unset
@@ -164,12 +152,9 @@ pub struct FunctionSchema {
 }
 
 impl FunctionSchema {
-    /// Whether a binding can call this function.
-    ///
-    /// The evaluator builds its argument list with `with_owned` and accepts
-    /// only an owned return, so a function that borrows an argument or hands
-    /// back a reference is unusable. A schema carrying no ownership answers
-    /// `true`, leaving a bad pick to fail at call time.
+    /// Whether a binding can call this function: the evaluator passes owned
+    /// arguments and accepts only an owned return. A schema carrying no
+    /// ownership answers `true`, leaving a bad pick to fail at call time.
     pub fn callable_by_value(&self) -> bool {
         self.return_ownership == ArgOwnership::Owned
             && self
@@ -236,15 +221,12 @@ mod extract {
         extract_from_registry(&registry)
     }
 
-    /// Build the schema for every reflected `Component`, `Resource` and
-    /// `Event` in `registry`. Everything is dumped; the editor filters
-    /// to types it does not already know.
+    /// Builds the schema for every reflected `Component`, `Resource` and
+    /// `Event` in `registry`.
     ///
-    /// A type can land in more than one bucket, so no picker loses it. Every
-    /// resource lands in two: `Resource` has `Component` as a supertrait and
-    /// `ReflectResource` registers `ReflectComponent` beside itself, so
-    /// resources and components cannot be told apart by asking which one a
-    /// type is.
+    /// A type can land in more than one bucket, so no picker loses it: every
+    /// resource lands in two, since `ReflectResource` registers
+    /// `ReflectComponent` beside itself.
     pub fn extract_from_registry(registry: &TypeRegistry) -> ProjectSchema {
         let mut schema = ProjectSchema::default();
         for registration in registry.iter() {
@@ -268,10 +250,8 @@ mod extract {
         schema
     }
 
-    /// Describe every function registered for bindings to call.
-    ///
-    /// Only the first signature of an overloaded function is reported; the
-    /// binding picker offers one argument list.
+    /// Describes every function registered for bindings to call. Only the first
+    /// signature of an overloaded function is reported.
     pub fn extract_functions(registry: &FunctionRegistry) -> Vec<FunctionSchema> {
         registry
             .iter()
@@ -463,8 +443,7 @@ mod tests {
         assert!(parse_from_stdout(b"no schema here\n").is_err());
     }
 
-    /// The editor reads whatever `schema.json` the last build left behind, so a
-    /// dump carrying none of the optional keys still loads.
+    /// A dump carrying none of the optional keys still loads.
     #[test]
     fn a_schema_without_the_new_keys_still_parses() {
         let old = br#"{
@@ -588,7 +567,6 @@ mod extract_tests {
         label: String,
     }
 
-    /// `Resource` has `Component` as a supertrait and registering
     /// `ReflectResource` registers `ReflectComponent` with it, so this lands in
     /// both buckets.
     #[derive(Resource, Reflect, Default)]
@@ -670,9 +648,8 @@ mod extract_tests {
         assert_eq!(resource.fields[0].name, "points");
     }
 
-    /// The binding picker offers `Res(Type).field` from the resources bucket and
-    /// the inspector offers components from the components bucket, so a
-    /// resource belongs in both.
+    /// The picker reads the resources bucket and the inspector the components
+    /// one, so a resource belongs in both.
     #[test]
     fn a_resource_is_reported_as_a_component_too() {
         let schema = schema_of::<Score>();

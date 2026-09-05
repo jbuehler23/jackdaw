@@ -36,11 +36,10 @@ pub struct EditorDialog;
 
 /// What a dialog is asking and what it will take for an answer.
 ///
-/// The footer's buttons carry their labels in `Text` children several
-/// levels down, which is enough to draw them and not enough to answer
-/// one from anywhere but a pointer. Recorded here at open time so a
-/// caller with no pointer can read the question and name a button --
-/// see the editor's `dialog.answer` operator.
+/// The footer's buttons carry their labels in `Text` children several levels
+/// down, which is enough to draw them and not enough to answer one from anywhere
+/// but a pointer. Recorded here at open time so a caller with no pointer can read
+/// the question and name a button.
 #[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
 pub struct DialogChoices {
     pub title: Option<String>,
@@ -100,16 +99,13 @@ impl core::fmt::Display for DialogChoiceError {
 /// The button `choice` names: a label, or an index into
 /// [`DialogChoices::labels`].
 ///
-/// A label matches exactly first, so a button literally spelled `1` is
-/// reachable by name. Failing that, a value that parses as an integer is
-/// an index. Failing that, one case-insensitive prefix match answers, so
-/// `Reload` presses a button spelled `Reload (discards your unsaved
-/// changes)` -- a caller should not have to reproduce the parenthetical
-/// the editor appends when a tab is dirty.
+/// A label matches exactly first, so a button literally spelled `1` is reachable
+/// by name. Failing that, a value that parses as an integer is an index. Failing
+/// that, one case-insensitive prefix match answers, so `Reload` presses a button
+/// spelled `Reload (discards your unsaved changes)`.
 ///
-/// A prefix that fits two buttons presses neither: `D` on a dialog
-/// offering `Don't Save` and `Delete` is a coin toss over data, so it
-/// comes back as [`DialogChoiceError::Ambiguous`] naming both.
+/// A prefix that fits two buttons presses neither and comes back as
+/// [`DialogChoiceError::Ambiguous`] naming both.
 pub fn resolve_dialog_choice(
     choices: &DialogChoices,
     choice: &str,
@@ -149,11 +145,9 @@ pub fn resolve_dialog_choice(
     }
 }
 
-/// Press one of `dialog`'s buttons, as a click on it would.
-///
-/// The same two steps every footer button takes: fire the event the
-/// button fires, then take the dialog down. Cancel fires nothing, which
-/// is what makes a dismissal and a cancel the same answer.
+/// Press one of `dialog`'s buttons, as a click on it would: fire the event the
+/// button fires, then take the dialog down. Cancel fires nothing, which is what
+/// makes a dismissal and a cancel the same answer.
 pub fn answer_dialog(commands: &mut Commands, dialog: Entity, choice: DialogChoice) {
     match choice {
         DialogChoice::Action => commands.trigger(DialogActionEvent { entity: dialog }),
@@ -447,9 +441,8 @@ fn spawn_dialog(
 
         let footer_id = footer.id();
 
-        // Secondary action on the far left (margin-right: auto pushes it left).
-        // The button is wrapped in a layout node to avoid a duplicate `Node` component
-        // (since `button()` already provides one via `button_base()`).
+        // Secondary action on the far left (margin-right: auto pushes it left),
+        // wrapped in a layout node to avoid a duplicate `Node` component.
         if let Some(secondary) = &event.secondary_action {
             let btn = commands
                 .spawn((
@@ -602,10 +595,9 @@ fn handle_backdrop_click(
     }
 }
 
-/// Escape closes a dialog -- except while the keybind settings are
-/// recording, when the press belongs to the recorder. Without this the
-/// one dialog the user can record in is the one Escape closes, so Escape
-/// could never be bound to anything.
+/// Escape closes a dialog -- except while the keybind settings are recording, when
+/// the press belongs to the recorder. Without this Escape could never be bound to
+/// anything.
 fn handle_esc_key(
     keyboard: Res<ButtonInput<KeyCode>>,
     capture: Option<Res<KeymapCapture>>,

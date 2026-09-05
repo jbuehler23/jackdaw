@@ -26,10 +26,8 @@ struct SpinningCube {
 #[reflect(Component, @EditorCategory::new("Actor"))]
 struct PlayerSpawn;
 
-/// Mirrors a plugin author marking a helper Component as
-/// editor-hidden. Used by the integration test to verify the
-/// dogfood-able public API works end-to-end through the real
-/// editor `App` lifecycle.
+/// Mirrors a plugin author marking a helper Component as editor-hidden, through
+/// the same public API a user's crate would use.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default, @EditorHidden)]
 struct PluginInternalSupport;
@@ -76,10 +74,8 @@ fn scaffolded_user_components_reach_picker() {
 
 #[test]
 fn editor_hidden_marker_hides_component_in_real_app() {
-    // Mirrors a plugin author tagging a helper Component with
-    // `@EditorHidden`. Registered through the same path a user's
-    // crate would use; we then walk the full editor type registry
-    // and assert the picker enumeration filters it out.
+    // Registered through the path a user's crate would use, then the full editor
+    // type registry is walked to check the picker filters it out.
     let mut app = util::editor_test_app();
     app.register_type::<PluginInternalSupport>();
     app.register_type::<SpinningCube>();
@@ -178,9 +174,8 @@ fn add_marker_component_round_trips_through_ast() {
 
 #[test]
 fn inspector_field_edit_updates_ecs_and_ast() {
-    // Inspector field commits dispatch `SetBsnField`, which must
-    // mutate both the document (so save persists) and the ECS
-    // component (so play picks it up immediately).
+    // Inspector field commits dispatch `SetBsnField`, which must mutate both the
+    // document (so a save persists) and the ECS component (so play sees it).
     let mut app = app_with_user_components();
     let entity = spawn_authored_entity(&mut app);
 
@@ -243,8 +238,7 @@ fn inspector_field_edit_updates_ecs_and_ast() {
 
 #[test]
 fn inspector_field_edit_undoes_back_to_original() {
-    // Inspector edits go through the undo stack; execute + undo
-    // must restore the original value (Ctrl-Z in the UI).
+    // Inspector edits go through the undo stack, so undo must restore the value.
     let mut app = app_with_user_components();
     let entity = spawn_authored_entity(&mut app);
 
@@ -348,10 +342,9 @@ fn write_scene(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
     path
 }
 
-/// Project open restores every persisted tab in the same exclusive run
-/// that enters the editor, so the first scene of a session loads before
-/// the schema watcher has ever ticked. The types have to be on hand by
-/// then, or the one load the user watches is the one that misses them.
+/// Project open restores every persisted tab in the same exclusive run that
+/// enters the editor, so the first scene of a session loads before the schema
+/// watcher has ever ticked and the types have to be on hand by then.
 #[test]
 fn the_first_scene_of_a_session_loads_before_any_watcher_tick() {
     let mut app = util::editor_test_app();
@@ -396,9 +389,8 @@ fn the_first_scene_of_a_session_loads_before_any_watcher_tick() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A scene that names the project's own components opens with them
-/// authored rather than unknown: the editor must not read it as a scene
-/// full of faults.
+/// A scene that names the project's own components opens with them authored
+/// rather than unknown.
 #[test]
 fn a_scene_naming_project_components_loads_without_unresolved_types() {
     let mut app = app_with_project_schema();
@@ -445,9 +437,8 @@ fn project_components_survive_an_open_and_resave() {
     jackdaw::scene_io::load_scene_from_file(app.world_mut(), &path);
     app.update();
 
-    // The live entity carries the authored marker through its document
-    // node: the editor has no Rust type to insert, so the node is what
-    // every editor surface reads the component off.
+    // The editor has no Rust type to insert, so the document node is what every
+    // editor surface reads the component off.
     let entity = app
         .world_mut()
         .query_filtered::<Entity, With<jackdaw_bsn::AstNodeRef>>()
@@ -509,8 +500,7 @@ fn an_authored_variant_of_a_project_enum_is_not_unresolved() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A type the schema does not know either is a real gap, and stays
-/// reported, which is what tells the user their build is behind the scene.
+/// A type the schema does not know either is a real gap, and stays reported.
 #[test]
 fn a_type_absent_from_the_schema_is_still_reported() {
     let mut app = app_with_project_schema();

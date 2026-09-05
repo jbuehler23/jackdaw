@@ -1,47 +1,22 @@
 //! Synthetic pointer and keyboard input, as operators.
 //!
-//! [`crate::boot_ops`] runs operators with no mouse, which reaches every
-//! operator and nothing that only a gesture can do: a drag on the canvas,
-//! a click on a menu row, a double click that opens the in-place text
-//! editor, a rename typed into a field. Those are the parts of the editor
-//! a scripted run could not touch, and they are the parts a usability pass
-//! is about.
-//!
 //! ```text
 //! JACKDAW_RUN_OP="input.pointer x=640 y=400 action=click"
 //! JACKDAW_RUN_OP="input.pointer space=canvas x=200 y=120 action=drag_to steps=12"
 //! JACKDAW_RUN_OP="input.key key=KeyD mods=ctrl; input.text text=Play"
 //! ```
 //!
-//! # The path taken
+//! Nothing here triggers a `Pointer<Click>` or a `FocusedInput`. Each operator
+//! queues the window events winit would have delivered -- on their own message
+//! streams and on the combined [`WindowEvent`] one, as `bevy_winit` forwards
+//! them -- and moves the window's cursor with them, so everything downstream
+//! behaves as it does for a user.
 //!
-//! Nothing here triggers a `Pointer<Click>` or a `FocusedInput`. Each
-//! operator queues the *window events* winit would have delivered --
-//! [`CursorMoved`], [`MouseButtonInput`], [`KeyboardInput`], each written
-//! both on its own message stream and on the combined [`WindowEvent`] one,
-//! exactly as `bevy_winit` forwards them -- and moves the window's own
-//! cursor position with them. Everything downstream then behaves as it
-//! does for a user: `bevy_picking`'s `mouse_pick_events` turns them into
-//! `PointerInput` for `PointerId::Mouse`, the hover map is rebuilt,
-//! `Pointer<Press>` / `Drag` / `Click` come out with their real click
-//! counts and drag thresholds, `ButtonInput` picks the buttons and keys
-//! up, and [`crate::viewport_2d`]'s forwarding carries the stream onto the
-//! canvas's own pointer.
-//!
-//! # Frames
-//!
-//! A gesture is not one instant. The queue is a list of *beats*, and one
-//! beat is emitted per pass with `frames` frames left to run before the
-//! next, so a press lands on a hover the editor has already seen and a
-//! drag's steps are separate frames rather than one collapsed jump. That
-//! is also why the modifiers a clause names are pressed in a beat of their
-//! own ahead of the event they modify: `ButtonInput<KeyCode>` is written
-//! in `PreUpdate`, after the picking input pass that would read it.
-//!
-//! [`crate::boot_ops`] holds its next clause while the queue has anything
-//! left, so a script reads as one gesture per clause however many frames
-//! the gesture takes.
-
+//! A gesture is a list of beats, one emitted per pass with `frames` frames
+//! before the next, so a press lands on a hover the editor has already seen.
+//! Modifiers are pressed a beat ahead of what they modify: `ButtonInput` is
+//! written in `PreUpdate`, after the picking pass that would read it.
+//! [`crate::boot_ops`] holds its next clause while the queue has anything left.
 use std::collections::VecDeque;
 
 use bevy::{
@@ -58,12 +33,8 @@ use bevy::{
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::key_code_from_name;
 
-/// The extension the input operators are registered from.
-///
-/// A built-in, so it is enabled in every editor launch and in the test
-/// harness without a config file saying so. It registers no window, no
-/// menu entry and no keybind: an operator here is reached from a script,
-/// and a chord that moved the mouse would be a chord no user wants.
+/// The extension the input operators are registered from. It registers no
+/// window, menu entry or keybind: these operators are reached from a script.
 pub const EXTENSION_ID: &str = "jackdaw.test_input";
 
 #[derive(Default)]
@@ -92,9 +63,8 @@ impl JackdawExtension for TestInputExtension {
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<SyntheticInput>().add_systems(
         First,
-        // Ahead of the pass that turns window events into `PointerInput`,
-        // so a beat queued here is this frame's input rather than the next
-        // frame's.
+        // Ahead of the pass that turns window events into `PointerInput`, so a
+        // beat queued here is this frame's input.
         drive_synthetic_input.before(PickingSystems::Input),
     );
 }
@@ -105,9 +75,8 @@ const DEFAULT_DRAG_STEPS: i64 = 8;
 /// Default frames between one beat and the next.
 const DEFAULT_FRAMES: i64 = 1;
 
-/// Most steps one drag may be cut into, and most frames one beat may
-/// wait. A typo in an environment variable should cost a refused clause,
-/// not a session that never advances again.
+/// Most steps one drag may be cut into, and most frames one beat may wait, so
+/// a typo cannot stall a session.
 const MAX_STEPS: i64 = 512;
 const MAX_FRAMES: i64 = 600;
 
@@ -135,10 +104,8 @@ struct Beat {
     frames: u32,
 }
 
-/// The gesture still being played out.
-///
-/// Public so [`crate::boot_ops`] can hold its next clause until the
-/// current one's gesture has finished; nothing else reads it.
+/// The gesture still being played out. Public so [`crate::boot_ops`] can hold
+/// its next clause until the current one's gesture has finished.
 #[derive(Resource, Default)]
 pub struct SyntheticInput {
     beats: VecDeque<Beat>,
@@ -146,8 +113,7 @@ pub struct SyntheticInput {
 }
 
 impl SyntheticInput {
-    /// Whether every queued beat has been delivered and its frames have
-    /// passed.
+    /// Whether every queued beat has been delivered and its frames have passed.
     pub fn is_idle(&self) -> bool {
         self.beats.is_empty() && self.wait == 0
     }
@@ -191,9 +157,8 @@ fn drive_synthetic_input(world: &mut World) {
     }
 }
 
-/// Deliver one event the way `bevy_winit` delivers it: on its own message
-/// stream and on the combined [`WindowEvent`] stream that `bevy_picking`
-/// reads, with the window's cursor moved to match.
+/// Deliver one event the way `bevy_winit` does: on its own message stream and
+/// on the combined [`WindowEvent`] one, with the window's cursor moved to match.
 fn emit(world: &mut World, window: Entity, event: Emit) {
     match event {
         Emit::Cursor(logical) => {
@@ -243,11 +208,8 @@ fn emit(world: &mut World, window: Entity, event: Emit) {
     }
 }
 
-/// The modifiers a `mods=` list names, in press order.
-///
-/// Unknown names are dropped with a warning rather than failing the
-/// clause, matching how [`crate::boot_ops`] treats a token it cannot
-/// parse.
+/// The modifiers a `mods=` list names, in press order. An unknown name is
+/// dropped with a warning rather than failing the clause.
 fn parse_mods(spec: Option<&str>) -> Vec<KeyCode> {
     let mut out = Vec::new();
     for name in spec.unwrap_or_default().split(',') {
@@ -266,15 +228,11 @@ fn parse_mods(spec: Option<&str>) -> Vec<KeyCode> {
     out
 }
 
-/// The logical key and produced text a physical key stands for on a
-/// plain US layout.
+/// The logical key and produced text a physical key stands for on a plain US
+/// layout.
 ///
-/// A synthetic press has no layout behind it, and the widgets downstream
-/// read the *logical* key: `bevy_ui_widgets`' text input inserts
-/// `KeyboardInput::text` only for `Key::Character`, and matches
-/// `Key::Escape`, `Key::Delete` and the arrows by name. Anything not
-/// spelled out here still presses its `KeyCode`, which is what the
-/// editor's own keybinds read.
+/// A synthetic press has no layout behind it, and the widgets downstream read
+/// the logical key. Anything not spelled out here still presses its `KeyCode`.
 fn logical_key(key: KeyCode, shift: bool) -> (Key, Option<String>) {
     if let Some(character) = character_for(key) {
         let text = if shift {
@@ -384,12 +342,8 @@ fn character_for(key: KeyCode) -> Option<char> {
         })
 }
 
-/// The `KeyCode` a character is typed on, for a plain US layout.
-///
-/// The logical key and the text carry the character itself, so a
-/// character with no key of its own still types; this is only what
-/// `ButtonInput<KeyCode>` sees, which is what the editor's own chords
-/// read.
+/// The `KeyCode` a character is typed on, for a plain US layout. Only what
+/// `ButtonInput<KeyCode>` sees: the logical key carries the character itself.
 fn key_code_for(character: char) -> KeyCode {
     let lower = character.to_ascii_lowercase();
     if lower == ' ' {
@@ -403,8 +357,8 @@ fn key_code_for(character: char) -> KeyCode {
     KeyCode::Unidentified(bevy::input::keyboard::NativeKeyCode::Unidentified)
 }
 
-/// Every key [`character_for`] answers for, so [`key_code_for`] can run
-/// the map backwards without a second copy of it.
+/// Every key `character_for` answers for, so `key_code_for` can run the map
+/// backwards without a second copy of it.
 const ALL_TYPING_KEYS: &[KeyCode] = &[
     KeyCode::KeyA,
     KeyCode::KeyB,
@@ -455,8 +409,7 @@ const ALL_TYPING_KEYS: &[KeyCode] = &[
     KeyCode::Backquote,
 ];
 
-/// Beats pressing every modifier in `mods`, or `None` when there are
-/// none.
+/// Beats pressing every modifier in `mods`, or `None` when there are none.
 fn mod_beats(mods: &[KeyCode], state: ButtonState, frames: u32) -> Option<Beat> {
     if mods.is_empty() {
         return None;
@@ -495,14 +448,9 @@ fn bounded(params: &OperatorParameters, key: &str, default: i64, max: i64) -> u3
     u32::try_from(raw.clamp(0, max)).unwrap_or(0)
 }
 
-/// Where a clause's `x`/`y` land in window logical pixels.
-///
-/// `space=window` is the default and passes them through.
-/// `space=canvas` reads them as authored canvas pixels and maps them
-/// through the fronted 2D panel's stage -- the same mapping a guide
-/// dragged out of the ruler is landed by, run backwards -- so a script
-/// can aim at a node's own coordinates instead of at wherever the panel
-/// happens to be on screen.
+/// Where a clause's `x`/`y` land in window logical pixels. `space=window` is
+/// the default and passes them through; `space=canvas` reads them as authored
+/// canvas pixels and maps them through the fronted 2D panel's stage.
 fn resolve_position(world: &mut World, params: &OperatorParameters) -> Option<Vec2> {
     let x = params.as_float("x")?;
     let y = params.as_float("y")?;
@@ -532,16 +480,15 @@ fn resolve_position(world: &mut World, params: &OperatorParameters) -> Option<Ve
     }
 }
 
-/// The pointer's current position in window logical pixels, for a
-/// gesture that starts where the cursor already is.
+/// The pointer's current position in window logical pixels, for a gesture that
+/// starts where the cursor already is.
 fn current_position(world: &mut World) -> Option<Vec2> {
     let window = primary_window(world)?;
     world.get::<Window>(window)?.cursor_position()
 }
 
-/// The button a `button=` names. `left` and `right` are accepted as
-/// aliases for the primary and secondary buttons, which is what the
-/// platform actually reports and what a caller used to a browser writes.
+/// The button a `button=` names, with `left` and `right` accepted as aliases
+/// for primary and secondary.
 fn pointer_button(world: &mut World, name: &str) -> Option<MouseButton> {
     match name {
         "primary" | "left" => Some(MouseButton::Left),
@@ -571,19 +518,20 @@ fn pointer_button(world: &mut World, name: &str) -> Option<MouseButton> {
         y(f64, doc = "Vertical position, in the space `space` names."),
         space(
             String,
-            doc = "`window` (default) for window logical pixels, or `canvas` for authored \
-                   pixels on the 2D panel's canvas. Those two only; anything else is \
-                   refused with a warning."
+            doc = "`window` (default) for window logical pixels, or `canvas` for \
+                   authored pixels on the 2D panel's canvas. Those two only; \
+                   anything else is refused with a warning."
         ),
         action(
             String,
             doc = "move, press, release, click, dblclick, drag_to or rest. \
-                   Defaults to move."
+                   Defaults to move; anything else is refused with a warning."
         ),
         button(
             String,
-            doc = "primary (default), secondary or middle. `left` and `right` are aliases \
-                   for the first two; anything else is refused with a warning."
+            doc = "primary (default), secondary or middle; `left` and `right` are \
+                   aliases for the first two. Anything else is refused with a \
+                   warning."
         ),
         mods(
             String,
@@ -627,10 +575,8 @@ pub(crate) fn input_pointer(
         };
 
         let gesture = if action == "rest" {
-            // Beats with nothing in them: the cursor stays where it is and
-            // the frames pass. A move to the same position would not do --
-            // a `CursorMoved` of zero delta is still a move, and a menu
-            // reads one as the pointer stirring on the row it rests on.
+            // Beats with nothing in them: a `CursorMoved` of zero delta is
+            // still a move, which a menu reads as the pointer stirring.
             vec![
                 Beat {
                     events: Vec::new(),
@@ -804,12 +750,8 @@ pub(crate) fn input_text(params: In<OperatorParameters>, mut commands: Commands)
     OperatorResult::Finished
 }
 
-/// The spaces a clause cannot carry, put back.
-///
-/// A `JACKDAW_RUN_OP` clause splits on whitespace and has no quoting, so
-/// a value cannot contain a space (see [`crate::boot_ops`]). Both the
-/// underscore and the percent escape spell one here; an underscore that
-/// is meant literally is written `%5f`.
+/// The spaces a clause cannot carry, put back: a `JACKDAW_RUN_OP` value cannot
+/// contain one, so both `_` and `%20` spell it. A literal underscore is `%5f`.
 pub fn unescape_spaces(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars();
@@ -842,14 +784,11 @@ mod tests {
         assert_eq!(unescape_spaces("Play"), "Play");
     }
 
-    /// A literal underscore is still reachable, so a node named with one
-    /// can be typed.
     #[test]
     fn a_percent_escape_reaches_the_underscore_itself() {
         assert_eq!(unescape_spaces("snake%5fcase"), "snake_case");
     }
 
-    /// A stray percent is text, not a failed clause.
     #[test]
     fn an_incomplete_escape_stays_a_percent() {
         assert_eq!(unescape_spaces("100%"), "100%");
@@ -867,9 +806,6 @@ mod tests {
         assert!(parse_mods(None).is_empty());
     }
 
-    /// The logical key is what a text field reads, so a letter has to
-    /// carry its character and its text, and Shift has to reach the
-    /// capital.
     #[test]
     fn a_letter_carries_the_character_a_text_field_inserts() {
         assert_eq!(
@@ -886,9 +822,6 @@ mod tests {
         assert_eq!(logical_key(KeyCode::Space, false).1, Some(" ".to_string()));
     }
 
-    /// Every key that types a character is reachable from that
-    /// character, so `input.text` presses the `KeyCode` the editor's own
-    /// chords read rather than an unidentified one.
     #[test]
     fn every_typing_key_round_trips_through_its_character() {
         for key in ALL_TYPING_KEYS {
@@ -899,9 +832,6 @@ mod tests {
         assert_eq!(key_code_for('P'), KeyCode::KeyP);
     }
 
-    /// Modifiers are pressed a beat ahead of what they modify, because
-    /// `ButtonInput<KeyCode>` is written after the picking input pass
-    /// that a same-frame pointer event goes through.
     #[test]
     fn modifiers_bracket_the_gesture_in_beats_of_their_own() {
         let gesture = vec![Beat {

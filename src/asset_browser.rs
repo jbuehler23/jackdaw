@@ -553,11 +553,9 @@ fn refresh_browser_on_change(
                     return None;
                 }
                 let path = entry.path();
-                // `DirEntry::file_type` reports the link itself, so a
-                // symlinked directory used to classify as a file and render
-                // as an unopenable row. Ask the path, which follows the
-                // link: symlinking a shared art kit into a project is a
-                // normal way to avoid copying gigabytes of models.
+                // `DirEntry::file_type` reports the link itself, which
+                // classifies a symlinked directory as a file. Ask the path,
+                // which follows the link.
                 let is_directory = path.is_dir();
 
                 let texture_info = if !is_directory && is_image_file_path(&path) {
@@ -1616,12 +1614,8 @@ fn poll_asset_browser_folder(world: &mut World) {
 pub fn asset_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
     let folder_icon_font = icon_font.clone();
     let chip_icon_font = icon_font.clone();
-    // NOTE: the 30px window-selector sidebar that used to live here
-    // is now owned by `layout::bottom_panels` (the dock container),
-    // because it's about picking WHICH tool window is shown in the
-    // bottom panel, not about the asset browser itself. Adding more
-    // windows (e.g. Timeline) means adding an icon there, not
-    // touching this function.
+    // The window-selector sidebar belongs to `layout::bottom_panels`:
+    // adding a tool window means adding an icon there, not here.
     let _ = icon_font;
     (
         AssetBrowserPanel,
@@ -1957,8 +1951,7 @@ mod tests {
     }
 
     /// `.bsn` is the format the editor actually writes prefabs in, so it is
-    /// the case that matters most; detection used to parse every candidate
-    /// as JSON and missed all of them.
+    /// the case that matters most.
     #[test]
     fn read_is_prefab_detects_a_bsn_prefab() {
         let tmp = tempfile::tempdir().unwrap();

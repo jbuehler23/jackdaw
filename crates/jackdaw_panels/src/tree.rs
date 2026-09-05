@@ -11,10 +11,9 @@
 //!
 //! There is exactly one tree per workspace: a single `root` node that
 //! is either a `Leaf` (the whole layout is one tabbed area) or a
-//! `Split` containing the rest of the layout. Earlier versions kept a
-//! separate sub-tree per named anchor (`left`, `right_sidebar`, etc.);
-//! that's gone now in favour of a flat single-tree, which lets panels
-//! be dragged anywhere without an anchor wall between them.
+//! `Split` containing the rest of the layout. There is no per-anchor
+//! sub-tree, so panels can be dragged anywhere without an anchor wall
+//! between them.
 
 use std::collections::HashMap;
 

@@ -1,11 +1,9 @@
-//! Headless coverage for modeling essentials: live `MeshMirror`
-//! evaluation feeding `BrushMeshCache`, and the x-ray view-mode
-//! material swap.
+//! Modeling essentials: live `MeshMirror` evaluation feeding `BrushMeshCache`,
+//! the modifier-stack ops, the x-ray material swap, and reference images.
 //!
-//! The brush mesh systems are gated to `AppState::Editor` in the
-//! editor's plugin schedule, so these tests drive them directly with
-//! `run_system_cached` (same pattern as the toolbar-highlight tests),
-//! preserving the production order: removal marker, then regenerate.
+//! The brush mesh systems are gated to `AppState::Editor` in the editor's
+//! plugin schedule, so these tests drive them directly in the production
+//! order: removal marker, then regenerate.
 
 use crate::util;
 
@@ -19,9 +17,7 @@ use jackdaw::view_modes::ViewModeSettings;
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::{Modifier, ModifierEntry, ModifierStack};
 
-/// Wrap a `MeshMirror` as a single-entry editor modifier stack, the
-/// component the brush mesh systems now read in place of the standalone
-/// mirror.
+/// Wrap a `MeshMirror` as a single-entry editor modifier stack.
 fn mirror_stack(mirror: MeshMirror) -> ModifierStack {
     ModifierStack {
         modifiers: vec![ModifierEntry::new(Modifier::Mirror(mirror))],
@@ -97,7 +93,6 @@ fn mirrored_brush_cache_holds_both_halves_with_source_maps() {
     assert_eq!(cache.vertices.len(), 12);
     assert!(!cache.face_source.is_empty());
     assert!(!cache.vert_source.is_empty());
-    // Mirrored faces map back to an authored face.
     let last = cache.face_polygons.len() - 1;
     assert!(
         cache.face_to_authored(last) < 6,
@@ -120,14 +115,12 @@ fn picking_remaps_to_authored_space() {
     tick_brush_meshes(&mut app);
 
     let cache = cache_of(&app, entity);
-    // Every evaluated face maps into the authored range.
     for f in 0..cache.face_polygons.len() {
         assert!(
             cache.face_to_authored(f) < 6,
             "evaluated face {f} must resolve to an authored face"
         );
     }
-    // Every evaluated vertex maps into the authored range.
     for v in 0..cache.vertices.len() {
         assert!(
             cache.vert_to_authored(v) < 8,
@@ -155,8 +148,7 @@ fn removing_mirror_restores_authored_only_cache() {
     tick_brush_meshes(&mut app);
     assert_eq!(cache_of(&app, entity).face_polygons.len(), 11);
 
-    // Removal alone must trigger the rebuild, within a single
-    // marker + regenerate pass; no manual Brush touch.
+    // Removal alone must trigger the rebuild within one marker + regenerate pass.
     app.world_mut().entity_mut(entity).remove::<ModifierStack>();
     tick_brush_meshes(&mut app);
 
@@ -186,14 +178,12 @@ fn bisect_cut_geometry_is_not_editable() {
 
     let cache = cache_of(&app, entity);
 
-    // The cap/split verts exist as NO_SOURCE entries.
     assert!(
         cache.vert_source.contains(&jackdaw_geometry::NO_SOURCE),
         "bisect must introduce NO_SOURCE cut verts"
     );
 
-    // authored_vert returns None for at least one cut vertex and Some for
-    // an authored vertex (index 0 lies in the authored identity prefix).
+    // Index 0 lies in the authored identity prefix.
     assert_eq!(cache.authored_vert(0), Some(0));
     let cut_index = cache
         .vert_source
@@ -206,8 +196,7 @@ fn bisect_cut_geometry_is_not_editable() {
         "cut geometry must not map to an authored vertex"
     );
 
-    // Editable verts (authored origin) are strictly fewer than the total,
-    // so cut geometry is excluded from editing.
+    // Cut geometry is excluded from editing.
     let editable = (0..cache.vertices.len())
         .filter(|&v| cache.authored_vert(v).is_some())
         .count();
@@ -217,8 +206,7 @@ fn bisect_cut_geometry_is_not_editable() {
         cache.vertices.len() - editable
     );
 
-    // The cut cap face is likewise non-editable: a NO_SOURCE face index maps
-    // to no authored face, so the face picker skips it.
+    // A NO_SOURCE face index maps to no authored face, so the face picker skips it.
     let cap_face = cache
         .face_source
         .iter()
@@ -237,9 +225,8 @@ fn non_bisecting_mirror_leaves_every_vert_editable() {
     app.finish();
     app.update();
 
-    // The same straddling cube with bisect disabled: a plain reflect adds
-    // mirrored copies but no NO_SOURCE cut geometry, so every vert stays
-    // editable. This pins the cut-only behavior to the bisect flag.
+    // Bisect disabled: a plain reflect adds mirrored copies but no NO_SOURCE
+    // cut geometry, which pins the cut-only behaviour to the bisect flag.
     let entity = spawn_straddle_cube(&mut app);
     app.world_mut()
         .entity_mut(entity)
@@ -264,9 +251,8 @@ fn non_bisecting_mirror_leaves_every_vert_editable() {
     );
 }
 
-/// Select `entity` and clear the headless placeholder `InputFocus`,
-/// which the mirror ops' availability checks read as "a text field
-/// owns the keyboard" (same setup as the `brush_ops` tests).
+/// Select `entity` and clear the headless placeholder `InputFocus`, which the
+/// mirror ops' availability checks read as a text field owning the keyboard.
 fn select_for_operators(app: &mut App, entity: Entity) {
     use bevy::input_focus::InputFocus;
     app.world_mut().resource_mut::<InputFocus>().clear();
@@ -292,13 +278,11 @@ fn mirror_ops_gate_on_selection_and_component() {
         .clear();
     app.update();
 
-    // Empty selection: nothing is available.
     assert_available(&mut app, "mesh.mirror.add", false);
     assert_available(&mut app, "mesh.mirror.apply", false);
     assert_available(&mut app, "mesh.mirror.bisect", false);
     assert_available(&mut app, "mesh.symmetrize", false);
 
-    // A selected brush without a mirror: add / bisect / symmetrize only.
     let entity = spawn_half_cube(&mut app);
     select_for_operators(&mut app, entity);
     assert_available(&mut app, "mesh.mirror.add", true);
@@ -306,7 +290,6 @@ fn mirror_ops_gate_on_selection_and_component() {
     assert_available(&mut app, "mesh.mirror.bisect", true);
     assert_available(&mut app, "mesh.symmetrize", true);
 
-    // With a mirror present: apply replaces add / bisect.
     app.world_mut()
         .entity_mut(entity)
         .insert(mirror_stack(MeshMirror::default()));
@@ -349,8 +332,7 @@ fn apply_bakes_mirror_into_authored_topology() {
     assert_eq!(brush.topology.vertices.len(), 12);
     assert_eq!(brush.faces.len(), 11);
 
-    // The next rebuild renders the baked geometry with no source maps;
-    // nothing is left to re-mirror.
+    // Nothing is left to re-mirror.
     tick_brush_meshes(&mut app);
     let cache = cache_of(&app, entity);
     assert_eq!(cache.face_polygons.len(), 11);
@@ -374,10 +356,8 @@ fn symmetrize_x_bakes_authored_topology() {
         .expect("mesh.symmetrize dispatched");
     assert_eq!(result, OperatorResult::Finished);
 
-    // No live mirror remains; the authored topology holds both halves.
-    // Half cube occupies x in [0, 1]; the default bisect keeps all of it
-    // (positive side). X-mirror welds the 4 on-plane verts (x=0) so the
-    // -X face produces no mirrored copy: 6 + 5 = 11 faces, 8 + 4 = 12 verts.
+    // Half cube occupies x in [0, 1], the default bisect keeps all of it, and
+    // the X mirror welds the 4 on-plane verts: 6 + 5 faces, 8 + 4 verts.
     assert!(app.world().entity(entity).get::<ModifierStack>().is_none());
     let brush = app
         .world()
@@ -422,9 +402,8 @@ fn xray_overrides_every_chunk_and_restores_on_toggle_off() {
     app.finish();
     app.update();
 
-    // The palette is normally built on entering `AppState::Editor`;
-    // these tests never leave `ProjectSelect`, so run the setup
-    // system directly like the mesh systems below.
+    // The palette is normally built on entering `AppState::Editor`, so run the
+    // setup system directly.
     app.world_mut()
         .run_system_cached(setup_default_materials)
         .expect("setup_default_materials ran");
@@ -458,9 +437,8 @@ fn xray_overrides_every_chunk_and_restores_on_toggle_off() {
     let chunks = chunk_materials(&mut app, entity);
     assert_eq!(chunks.len(), 2, "default + explicit material chunks");
 
-    // X-ray on: every chunk gets the x-ray material, explicit or not.
-    // The brush is unselected and not previewed, so never the
-    // selected variant.
+    // Every chunk gets the x-ray material; the brush is unselected and not
+    // previewed, so never the selected variant.
     app.world_mut().resource_mut::<ViewModeSettings>().x_ray = true;
     app.world_mut()
         .run_system_cached(ensure_brush_chunk_materials)
@@ -469,7 +447,6 @@ fn xray_overrides_every_chunk_and_restores_on_toggle_off() {
         assert_eq!(mat, palette_x_ray, "x-ray overrides every chunk");
     }
 
-    // Selecting the brush switches every chunk to the selected variant.
     let palette_x_ray_selected = app
         .world()
         .resource::<BrushMaterialPalette>()
@@ -508,10 +485,8 @@ fn xray_overrides_every_chunk_and_restores_on_toggle_off() {
 
 #[test]
 fn symmetrize_x_bakes_prior_live_y_mirror() {
-    // Regression for the bug where symmetrize on a brush carrying a
-    // live mirror on a different axis silently discarded the mirrored
-    // geometry. The fix bakes the existing live mirror first, so the
-    // authored topology reflects both the Y-baked half and the X mirror.
+    // Symmetrize on a brush carrying a live mirror on a different axis bakes
+    // that mirror first, keeping its geometry.
     let mut app = util::headless_app();
     app.finish();
     app.update();
@@ -541,11 +516,8 @@ fn symmetrize_x_bakes_prior_live_y_mirror() {
         .get::<Brush>()
         .expect("brush survives symmetrize");
 
-    // The Y-baked geometry doubles the face count before the X bisect,
-    // so the result holds strictly more faces than the no-live-mirror
-    // case (11). The exact count is 21: 10 faces survive the bisect +
-    // cap = 11, then X-mirror skips the all-on-plane cap and doubles the
-    // remaining 10 faces (11 + 10 = 21).
+    // 10 faces survive the bisect + cap = 11, then the X mirror skips the
+    // all-on-plane cap and doubles the remaining 10: 21.
     assert!(
         brush.topology.polygons.len() > 11,
         "Y-baked geometry must survive the X symmetrize"
@@ -648,7 +620,6 @@ fn modifier_move_reorders() {
         .expect("modifier.move_down dispatched");
     assert_eq!(result, OperatorResult::Finished);
 
-    // The X-axis mirror that started at index 0 is now at index 1.
     let stack = stack_of(&app, entity);
     let Modifier::Mirror(first) = &stack.modifiers[0].modifier;
     let Modifier::Mirror(second) = &stack.modifiers[1].modifier;
@@ -679,7 +650,6 @@ fn modifier_apply_bakes_and_removes_entry() {
         .expect("modifier.apply dispatched");
     assert_eq!(result, OperatorResult::Finished);
 
-    // The baked topology holds both halves and the drained stack is gone.
     let brush = app
         .world()
         .entity(entity)
@@ -714,7 +684,6 @@ fn modifier_remove_restores_base_cache() {
     assert_eq!(result, OperatorResult::Finished);
     tick_brush_meshes(&mut app);
 
-    // Removing the last entry drops the stack and restores the base cache.
     assert!(app.world().entity(entity).get::<ModifierStack>().is_none());
     let cache = cache_of(&app, entity);
     assert_eq!(cache.face_polygons.len(), 6);
@@ -819,11 +788,9 @@ fn reference_image_maintenance_installs_placeholder_for_empty_path() {
     assert_eq!(material.base_color.alpha(), 0.7, "default opacity applied");
 }
 
-/// Mutating opacity must update the material alpha but must NOT clobber
-/// a manually set non-uniform scale. The maintenance system should
-/// refresh the material in-place when the path is already current,
-/// leaving `ReferenceImageRuntime` (and therefore `aspect_applied`)
-/// untouched.
+/// The maintenance system refreshes the material in-place when the path is
+/// already current, leaving `ReferenceImageRuntime` untouched, so a manually
+/// set non-uniform scale survives an opacity change.
 #[test]
 fn reference_image_opacity_change_updates_alpha_without_clobbering_scale() {
     use jackdaw::reference_image::{ReferenceImage, maintain_reference_images};
@@ -842,12 +809,11 @@ fn reference_image_opacity_change_updates_alpha_without_clobbering_scale() {
         ))
         .id();
 
-    // First maintenance pass: installs the placeholder material and the runtime.
     app.world_mut()
         .run_system_cached(maintain_reference_images)
         .expect("first maintain_reference_images ran");
 
-    // Manually stretch the board along X (simulates an artist dragging the scale gizmo).
+    // Manually stretch the board along X.
     app.world_mut()
         .entity_mut(entity)
         .get_mut::<Transform>()
@@ -871,7 +837,6 @@ fn reference_image_opacity_change_updates_alpha_without_clobbering_scale() {
         .run_system_cached(maintain_reference_images)
         .expect("third maintain_reference_images ran");
 
-    // Scale must survive the opacity tweak.
     let scale = app
         .world()
         .entity(entity)
@@ -883,7 +848,6 @@ fn reference_image_opacity_change_updates_alpha_without_clobbering_scale() {
         "manual X scale must not be clobbered by opacity change"
     );
 
-    // Material alpha must reflect the new opacity.
     let material_handle = app
         .world()
         .entity(entity)

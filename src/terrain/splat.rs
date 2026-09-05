@@ -4,11 +4,10 @@
 //! least one material slot and everything those materials name has loaded.
 //! Otherwise it draws with the plain editor material.
 //!
-//! The editor contributes the name store: it hands
-//! [`resolve_with`] a closure that looks a slot's name up in
-//! [`MaterialRegistry`]. Which material slot is albedo, that slot order is
-//! the id space, and how the arrays stack all live in the shared crate, so
-//! the editor and a built game turn the same names into the same pixels.
+//! The editor contributes the name store: it hands [`resolve_with`] a closure
+//! that looks a slot's name up in [`MaterialRegistry`]. The id space and the
+//! array stacking live in the shared crate, so the editor and a built game
+//! turn the same names into the same pixels.
 
 use std::sync::Arc;
 
@@ -84,15 +83,11 @@ struct SplatEntry {
     /// The slope map autoterrain reads, kept so sculpting can re-upload it
     /// without rebuilding the material.
     slope: Option<Handle<Image>>,
-    /// The heights [`Self::slope`] was built from, compared by pointer to
-    /// spot an edit. Holding this `Arc` is what makes that comparison
-    /// sound: the store patches an edited map in place only when it holds
-    /// the sole reference, so this second reference forces every edit to
-    /// come back as a fresh allocation with a new pointer.
-    ///
-    /// The cost is one full heightmap per splat terrain beside the store's
-    /// own copy (4 MB at a 1024 grid) and a fresh allocation on every
-    /// sculpt commit.
+    /// The heights [`Self::slope`] was built from, compared by pointer to spot
+    /// an edit. Holding this `Arc` is what makes that comparison sound: the
+    /// store patches an edited map in place only when it holds the sole
+    /// reference, so this second reference forces every edit to come back as a
+    /// fresh allocation. The cost is one full heightmap per splat terrain.
     slope_heights: Option<Arc<jackdaw_terrain::Heightmap>>,
     /// Terrain geometry the material was built against. The control map's
     /// size and the shader's UV scaling both depend on these, so a change
@@ -109,13 +104,11 @@ struct SplatEntry {
     built_surface: SurfaceSettings,
     /// Whether the chunks are carrying a material this entry has dropped.
     /// Chunks pick their material up at mesh-build time, so dropping the
-    /// handle here is not enough: a terrain whose last material was removed
-    /// would keep drawing the arrays it was built with.
+    /// handle here is not enough.
     needs_chunk_rebuild: bool,
-    /// The last problem reported for this entry: an invalid set, a failed
-    /// texture load, a size mismatch. Shown verbatim in the Textures tab.
-    /// `Some` also means "already logged", so a broken set complains once
-    /// rather than every frame.
+    /// The last problem reported for this entry, shown verbatim in the
+    /// Textures tab. `Some` also means "already logged", so a broken set
+    /// complains once rather than every frame.
     error: Option<String>,
 }
 
@@ -201,11 +194,10 @@ impl TerrainSplatMaterials {
 
 /// Resolve every terrain's material list into the array builder's input.
 ///
-/// Runs every frame rather than on a change signal: resolution is a
-/// registry lookup per slot and the result is compared before it is stored,
-/// so an unchanged terrain writes nothing. A material that finished loading
-/// late, or that was saved after the terrain referenced it, is picked up on
-/// the next frame without invalidation bookkeeping.
+/// Runs every frame rather than on a change signal: resolution is a registry
+/// lookup per slot and the result is compared before it is stored, so an
+/// unchanged terrain writes nothing and a material that loaded late is picked
+/// up without invalidation bookkeeping.
 fn resolve_terrain_materials(
     mut materials: ResMut<TerrainSplatMaterials>,
     mut paint_state: ResMut<super::TerrainPaintState>,
@@ -242,8 +234,7 @@ fn resolve_terrain_materials(
             continue;
         }
         // The id space moved under the brush, so a pick past the end of the
-        // list is clamped back into range rather than reset, which would
-        // throw away the pick on an unrelated slot edit.
+        // list is clamped back into range rather than reset.
         let ceiling = slots.len().saturating_sub(1) as u8;
         paint_state.active_texture_id = paint_state.active_texture_id.min(ceiling);
 
@@ -543,19 +534,16 @@ fn write_tint_block(bytes: &mut [u8], resolution: u32, rect: GridRect, block: &[
     }
 }
 
-/// Re-upload a terrain's control map after it has been painted, or after
-/// the region view mode changed which regions show their paint.
+/// Re-upload a terrain's control map after it has been painted, or after the
+/// region view mode changed which regions show their paint.
 ///
-/// Only the rectangle the paint stroke wrote is rebuilt, into the texel
-/// buffer this entry keeps between frames; the rect saves the CPU-side
-/// rebuild, not the upload. The control texture is `RENDER_WORLD`-only, so
-/// the image is replaced rather than edited in place and the renderer sends
-/// all of it either way. A mode change has no rect and rebuilds the whole
-/// buffer.
+/// Only the rectangle the paint stroke wrote is rebuilt into the texel buffer
+/// this entry keeps between frames; the rect saves the CPU-side rebuild, not
+/// the upload, the texture being `RENDER_WORLD`-only. A mode change has no
+/// rect and rebuilds the whole buffer.
 ///
-/// The mask is applied on the way to the texture and nowhere else: the
-/// document keeps every control word, so a save or an export writes the
-/// same bytes under every mode.
+/// The mask is applied on the way to the texture and nowhere else, so a save
+/// or an export writes the same bytes under every mode.
 fn refresh_control_maps(
     mut materials: ResMut<TerrainSplatMaterials>,
     store: Res<TerrainDataStore>,
@@ -614,17 +602,14 @@ fn refresh_control_maps(
 
 /// Re-upload a terrain's slope map after its heights have moved.
 ///
-/// Autoterrain reads the slope of the stored ground rather than of the
-/// surface being drawn, so a sculpt stroke has to reach the texture before
-/// the ground it raised can be textured as slope. An edited map comes back
-/// from the store under a new pointer, because the entry's own held
-/// reference blocks the store's patch-in-place path (see
-/// [`SplatEntry::slope_heights`]), so pointer identity is the staleness
-/// test.
+/// Autoterrain reads the slope of the stored ground rather than of the surface
+/// being drawn, so a sculpt stroke has to reach the texture before the ground
+/// it raised can be textured as slope. An edited map comes back from the store
+/// under a new pointer (see [`SplatEntry::slope_heights`]), so pointer
+/// identity is the staleness test.
 ///
-/// The map is regathered whole: sculpt strokes are rarer than a paint
-/// stroke's per-frame writes, and the mesher rebuilds surfaces from the
-/// same map on the same frames.
+/// The map is regathered whole: sculpt strokes are rarer than a paint stroke's
+/// per-frame writes.
 fn refresh_slope_maps(
     mut materials: ResMut<TerrainSplatMaterials>,
     store: Res<TerrainDataStore>,
@@ -680,14 +665,12 @@ fn write_control_block(bytes: &mut [u8], resolution: u32, rect: GridRect, block:
     }
 }
 
-/// Drop what a terrain's materials produced when one of their textures
-/// changes on disk.
+/// Drop what a terrain's materials produced when one of their textures changes
+/// on disk.
 ///
-/// The editor build runs the asset file watcher, so editing one of a
-/// material's PNGs raises `Modified` here and the following frames rebuild
-/// from the new bytes. A change to the material file itself needs nothing
-/// here: `resolve_terrain_materials` re-reads the live `StandardMaterial`
-/// every frame.
+/// The editor build runs the asset file watcher, so editing a material's PNG
+/// raises `Modified` here. A change to the material file itself needs nothing:
+/// `resolve_terrain_materials` re-reads the live `StandardMaterial`.
 fn invalidate_on_asset_change(
     mut materials: ResMut<TerrainSplatMaterials>,
     mut image_events: MessageReader<AssetEvent<Image>>,

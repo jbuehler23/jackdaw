@@ -1,51 +1,22 @@
 //! Selection, the selection outline, and direct manipulation for the 2D
 //! viewport stage.
 //!
-//! A click on the stage hit-tests the authored UI rects the panel is
-//! showing and selects the topmost one; the outline and its eight resize
-//! handles then track that node's live rect, and dragging either moves
-//! or resizes the authored `Node` behind it.
-//!
-//! The overlay is editor chrome: editor entities parented into the
-//! panel's stage node, never into the authored tree. Nothing that
-//! happens to the authored scene can interrupt a gesture halfway
-//! through, and nothing the overlay does can reach a saved document.
-//!
-//! All of it is [`Viewport2dMode::Edit`] behaviour: the press observer,
-//! the gesture observers, and the overlay sync each read the mode off
-//! the panel the stage belongs to. In `Interact` the outline comes down
-//! and a press on the stage belongs to the scene (see
-//! `crate::viewport_2d::forward_pointer_into_stage` for what carries it
-//! there).
-//!
-//! A gesture writes `Node` on every drag event, and hands the history
-//! exactly one entry on release: none at all if the pointer is released
-//! where it started, or Escape was pressed.
-//!
-//! What it writes is the scheme the node was authored in: a node pinned
-//! to its parent's bottom-right corner comes back pinned there, a
-//! stretched one comes back stretched, and a percentage stays a
-//! percentage. See [`NodeAnchors`].
-//!
-//! # Units
+//! A click hit-tests the authored UI rects the panel is showing and selects
+//! the topmost one; the outline and its eight resize handles track that
+//! node's live rect, and dragging either moves or resizes the authored
+//! `Node` behind it, writing back through the scheme its author wrote (see
+//! [`NodeAnchors`]). The overlay is editor chrome parented into the panel's
+//! stage node, never into the authored tree. All of it is
+//! [`Viewport2dMode::Edit`] behaviour. One gesture is at most one history
+//! entry, handed over on release.
 //!
 //! Everything here is stated in the render-target pixels of
-//! [`crate::viewport_2d::Ui2dView`], which are authored pixels: the
-//! panel's image is held at the scene's reference size, so Bevy lays the
-//! authored tree out directly in them and `ComputedNode` and
-//! `UiGlobalTransform` read as authored measurements with no conversion.
-//! The only two conversions are the ones `viewport_2d` owns, ui-logical
-//! to stage physical and stage physical to render-target, composed once
-//! in [`cursor_stage_offset`] on the way in and inverted by
-//! [`stage_pixels_per_target_pixel`] on the way back out.
-//!
-//! There is no camera term. Bevy renders UI through a view of its own
-//! (`bevy_ui_render::extract_ui_camera_view` builds an orthographic
-//! projection from the target's viewport rect and parks the view
-//! transform at the origin), so a routed UI scene is pinned to its
-//! render target whatever the 2D camera's pan and zoom are doing.
-//! Putting the view into this mapping would walk the hit test off the
-//! visible pixels by exactly the pan.
+//! [`crate::viewport_2d::Ui2dView`], which are authored pixels. The only
+//! conversions are the ones `viewport_2d` owns, composed in
+//! [`cursor_stage_offset`] on the way in and inverted by
+//! [`stage_pixels_per_target_pixel`] on the way out. There is no camera
+//! term: Bevy renders UI through a view of its own, so a routed scene is
+//! pinned to its render target whatever the 2D camera is doing.
 
 use bevy::{
     ecs::system::SystemParam,
@@ -78,22 +49,14 @@ pub const HANDLE_SIZE: f32 = 8.0;
 /// Thickness of the selection outline, in the stage's logical pixels.
 const OUTLINE_WIDTH: f32 = 1.0;
 
-/// Thinnest a resize may leave a node, in authored pixels.
-///
-/// The handle's own side. A node thinner than the thing that resizes it
-/// cannot be picked up again by any of its handles, so a drag that would
-/// take it there stops at the handle instead: a resize that collapses the
-/// node is refused rather than written and left for the author to undo.
+/// Thinnest a resize may leave a node, in authored pixels: the handle's own
+/// side, below which the node could not be picked up by a handle again.
 const MIN_NODE_SIZE: f32 = HANDLE_SIZE;
 
 /// How small a node has to be on an axis before that axis's handles are
 /// drawn outside it rather than straddling its edges, in authored pixels.
-///
-/// Three handles across is the point at which the eight of them cover the
-/// whole of a node: on a 40x20 label every press landed on a handle, so
-/// the node had a resize and no move at all, and the first drag wrote a
-/// one-pixel width. Moved outward, the handles ring the node and its
-/// inside is its own again.
+/// Three handles across is where the eight of them would cover the node
+/// entirely and leave no press that is a move.
 const HANDLES_OUTSIDE_BELOW: f32 = 3.0 * HANDLE_SIZE;
 
 /// Draw order of the overlay inside the stage. Above the stage's own
@@ -105,25 +68,15 @@ const OVERLAY_Z: i32 = 50;
 const HOVER_OUTLINE_Z: i32 = OVERLAY_Z - 1;
 
 /// How wide a guide is to the pointer, in the stage's logical pixels. A
-/// one-pixel line is drawn down the middle of it: the line has to be
-/// thin to place a node against, and wide enough to pick up again.
-///
-/// Narrow, because the slab lies over the canvas: two pixels either side
-/// of the line is enough to catch and little enough to keep the guide
-/// off the nodes it was drawn to place. What a press over a node does
-/// is [`guide_takes_the_press`].
+/// one-pixel line is drawn down the middle of the slab, which lies over the
+/// canvas; what a press over a node does is [`guide_takes_the_press`].
 const GUIDE_HIT_WIDTH: f32 = 5.0;
 
 /// How close, in **pointer** pixels, a dragged edge has to come to a
-/// neighbouring one before it lands on it.
-///
-/// Pointer pixels rather than authored ones, so the radius stays
-/// constant on screen at any zoom. The gesture converts it with the
-/// scale the panel is drawing at as each drag event arrives (see
-/// [`live_scale`]), so a zoom mid-gesture moves the radius with it.
-///
-/// A module constant rather than a [`CanvasSnap`] field: the radius is
-/// what "near" means on this canvas, not a preference the user states.
+/// neighbouring one before it lands on it. Pointer pixels rather than
+/// authored ones, so the radius stays constant on screen at any zoom; the
+/// gesture converts it with the scale the panel is drawing at (see
+/// [`live_scale`]).
 const EDGE_SNAP_PIXELS: f32 = 6.0;
 
 /// The eight handle positions, clockwise from the top-left corner.
@@ -165,11 +118,8 @@ impl CanvasAxis {
     }
 }
 
-/// A line drawn across one panel's stage where a drag came to rest.
-///
-/// One per axis at most, and only while a gesture is landing on
-/// something: the point of it is to say *why* the node stopped where it
-/// did, so it appears with the landing and goes with it.
+/// A line drawn across one panel's stage where a drag came to rest. One per
+/// axis at most, and only while a gesture is landing on something.
 #[derive(Component, Clone, Copy)]
 pub struct SnapHighlight {
     /// The panel content entity carrying this stage's
@@ -179,12 +129,8 @@ pub struct SnapHighlight {
     pub axis: CanvasAxis,
 }
 
-/// One of the scene's guides, drawn over one panel's stage.
-///
-/// The guides belong to the scene rather than to a panel, so every panel
-/// showing that scene draws the same set. `index` is the guide's place
-/// in its axis's list, which is kept sorted, so it names the same line
-/// for as long as the list holds still.
+/// One of the scene's guides, drawn over one panel's stage. The guides
+/// belong to the scene, so every panel showing it draws the same set.
 #[derive(Component, Clone, Copy)]
 pub struct GuideLine {
     /// The panel content entity carrying this stage's
@@ -215,16 +161,9 @@ pub struct UiSelectionOverlay {
     pub handles_outside: BVec2,
 }
 
-/// The outline drawn around the authored UI node under the cursor, before
-/// anything has been clicked.
-///
-/// A canvas of nested boxes says nothing about where one ends and the next
-/// begins until something is selected, so a press is a guess. This draws
-/// what the press would pick.
-///
-/// Told apart from [`UiSelectionOverlay`] by everything: a lighter line,
-/// no handles, no dark edge, and no pointer of its own. It never covers
-/// the selected node, whose own outline is the answer there.
+/// The outline drawn around the authored UI node under the cursor, showing
+/// what a press would pick. A lighter line than [`UiSelectionOverlay`],
+/// with no handles, and never drawn over a selected node.
 #[derive(Component, Clone, Copy)]
 pub struct UiHoverOutline {
     /// The panel content entity carrying this stage's
@@ -232,10 +171,8 @@ pub struct UiHoverOutline {
     pub host: Entity,
 }
 
-/// The node the cursor is over, and the panel it is over it on.
-///
-/// One pointer authors at a time, so one entry covers every panel: moving
-/// onto another canvas replaces it, and moving off the canvases clears it.
+/// The node the cursor is over, and the panel it is over it on. One entry
+/// covers every panel, since one pointer authors at a time.
 #[derive(Resource, Default)]
 pub struct UiHoverPreselect {
     /// The panel content entity carrying the stage the cursor is over.
@@ -257,33 +194,23 @@ pub struct StageHit {
 /// One node a gesture is editing.
 struct GestureNode {
     entity: Entity,
-    /// The `Node` as the gesture found it, for the undo entry and for
-    /// Escape.
+    /// The `Node` as the gesture found it, for the undo entry and Escape.
     before: Node,
     /// Authored-pixel rect at gesture start: left, top, width, height.
     start: Vec4,
-    /// How the node was positioned when the gesture began. The drag
-    /// writes back through this, editing the scheme the author wrote
-    /// rather than replacing it. See [`NodeAnchors`].
+    /// How the node was positioned when the gesture began; the drag writes
+    /// back through this. See [`NodeAnchors`].
     anchors: NodeAnchors,
     /// What this node's units are measured against, in authored pixels.
-    /// Read once at the press: the parents hold still for the length of
-    /// a gesture.
+    /// Read once at the press.
     basis: UnitBasis,
 }
 
 /// The gesture in progress, if any. One gesture is one history entry.
 ///
-/// # What a gesture carries
-///
-/// A move carries the whole selection, and every node in it keeps its
-/// own start rect and its own scheme: the selected nodes can sit under
-/// different parents, in different units, pinned to different edges, and
-/// each one has to be written back through what its author wrote.
-///
-/// A resize carries the primary alone. The handles are drawn around the
-/// primary's rect and only its rect, so a resize is a gesture on that
-/// one node.
+/// A move carries the whole selection, each node keeping its own start rect
+/// and scheme. A resize carries the primary alone, since the handles are
+/// drawn around the primary's rect.
 #[derive(Resource, Default)]
 pub struct UiManipulation {
     /// Every node the gesture is editing, primary first. Empty when no
@@ -301,19 +228,12 @@ pub struct UiManipulation {
     /// [`crate::viewport_2d::Ui2dView::grid`] taken at the press.
     grid: f32,
     /// Edges the gesture can land on, in the same authored pixels the
-    /// primary's start rect is stated in. Gathered once, around the
-    /// primary alone: the parent and the siblings hold still for the
-    /// length of a gesture.
-    ///
-    /// The primary is what snaps, and the snapped delta is what the rest
-    /// of the selection moves by. Letting every selected node answer its
-    /// own neighbours would pull a selection apart: two nodes eight
-    /// pixels apart land on two different edges and stop being eight
-    /// pixels apart.
+    /// primary's start rect is stated in. Gathered once, around the primary
+    /// alone: the primary snaps and the rest of the selection moves by the
+    /// delta it snapped to, so the selection cannot be pulled apart.
     candidates: SnapCandidates,
     /// Which kinds of line this gesture may land on, copied off
-    /// [`CanvasSnap`] at the press so a preference changed mid-drag
-    /// cannot move a node that is already following the cursor.
+    /// [`CanvasSnap`] at the press.
     kinds: CanvasSnap,
     /// What the last drag event came to rest against, for the highlight
     /// drawn over the stage.
@@ -327,8 +247,7 @@ impl UiManipulation {
         self.last_snap
     }
 
-    /// Whether a canvas gesture is in flight. A drag holds nodes from the
-    /// press until the release, whatever the pointer is doing meanwhile.
+    /// Whether a canvas gesture is in flight.
     pub fn is_running(&self) -> bool {
         !self.nodes.is_empty()
     }
@@ -342,10 +261,9 @@ pub struct Candidate {
     pub at: f32,
     /// What kind of line it is, so a landing can be drawn and filtered.
     pub kind: CandidateKind,
-    /// Where the line sits in the parent box as a percentage, when it
-    /// is a line the parent box can state that way. A node whose author
-    /// wrote the matching offset in percent takes this figure verbatim
-    /// rather than one derived from pixels.
+    /// Where the line sits in the parent box as a percentage, when it has
+    /// one. A percent-authored offset takes this figure verbatim rather
+    /// than one derived from pixels.
     pub percent: Option<f32>,
 }
 
@@ -372,18 +290,16 @@ pub enum CandidateKind {
 struct SnapCandidates {
     x: Vec<Candidate>,
     y: Vec<Candidate>,
-    /// The parent's padding-box corner in global authored pixels: what a
-    /// candidate's coordinate is measured from, and so what turns one
-    /// back into a position on the canvas.
+    /// The parent's padding-box corner in global authored pixels, which a
+    /// candidate's coordinate is measured from.
     origin: Vec2,
 }
 
 /// The line one axis of a drag came to rest against.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct SnapWinner {
-    /// The line's coordinate, in the authored offsets the drag is
-    /// stated in: measured from the parent's padding-box corner, not
-    /// from the canvas.
+    /// The line's coordinate, measured from the parent's padding-box
+    /// corner rather than from the canvas.
     pub at: f32,
     pub kind: CandidateKind,
     /// The line's percentage of the parent box, when it has one.
@@ -433,8 +349,7 @@ pub struct PercentLanding {
 }
 
 /// What a gesture landed on, per axis, for the offsets it is about to
-/// write. Default is "nothing exact", which is every drag that came to
-/// rest somewhere the parent box has no percentage for.
+/// write. Default is "nothing exact".
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
 pub struct ExactPercent {
     pub x: Option<PercentLanding>,
@@ -447,27 +362,17 @@ pub enum PixelRounding {
     /// Whole authored pixels, the canvas's own lattice.
     #[default]
     Whole,
-    /// Two decimal places, so a drag zoomed past one pixel per pointer
-    /// pixel keeps the fraction it produced.
+    /// Two decimal places, keeping the fraction a zoomed-in drag produced.
     Fractional,
 }
 
-/// The lines of the parent box a percentage names, as percentages.
-///
-/// The quarters and the thirds. A third is a figure a `Val::Percent`
-/// layout reaches for as readily as a quarter -- three columns across a
-/// row, a panel a third of the way down -- and it is the one an author
-/// cannot get by eye, because the pixels it lands on round to something
-/// that is not a third of anything.
+/// The lines of the parent box a percentage names, as percentages: the
+/// quarters and the thirds.
 const PERCENT_LINES: [f32; 7] = [0.0, 25.0, 100.0 / 3.0, 50.0, 200.0 / 3.0, 75.0, 100.0];
 
-/// How finely a gesture states the pixels it writes.
-///
-/// Keyed on the pixel kind alone. The master magnet and Ctrl decide
-/// whether a drag lands on a neighbour at all; how many decimals the
-/// result is written with is a separate question, answered once, and
-/// tying the two would make Ctrl silently change the units a drag
-/// commits.
+/// How finely a gesture states the pixels it writes. Keyed on the pixel
+/// kind alone, so Ctrl and the master magnet cannot change the units a
+/// drag commits.
 fn pixel_rounding(kinds: &CanvasSnap) -> PixelRounding {
     if kinds.pixel {
         PixelRounding::Whole
@@ -514,12 +419,10 @@ impl AnchorUnit {
         }
     }
 
-    /// How many authored pixels one of this unit is worth, or `None`
-    /// when nothing it is measured against has a usable size yet.
-    ///
-    /// A degenerate basis is a refusal rather than a fallback to pixels,
-    /// so that a parent measuring zero for one frame cannot rewrite
-    /// `50%` as `Val::Px`.
+    /// How many authored pixels one of this unit is worth, or `None` when
+    /// nothing it is measured against has a usable size yet. A refusal
+    /// rather than a fallback to pixels, so a parent measuring zero for one
+    /// frame cannot rewrite `50%` as `Val::Px`.
     fn authored_px(self, parent: f32, viewport: Vec2) -> Option<f32> {
         let per = match self {
             Self::Px => 1.0,
@@ -532,16 +435,10 @@ impl AnchorUnit {
         (per > 0.0 && per.is_finite()).then_some(per)
     }
 
-    /// Decimals a magnitude in this unit is rounded to on the way back
-    /// out. Whole pixels while the canvas is on its pixel lattice; two
-    /// places otherwise and for every other unit, matching what the
-    /// inspector's `Val` field shows and commits.
-    ///
-    /// A landing on one of the [`PERCENT_LINES`] is exempt: the figure
-    /// is written whole, so a third of the parent box is
-    /// `Val::Percent(100.0 / 3.0)` rather than a `33.33` that is a third
-    /// of nothing. Those landings do not come through here at all; see
-    /// [`exact_percent_for`].
+    /// Decimals a magnitude in this unit is rounded to on the way back out:
+    /// whole pixels while the canvas is on its pixel lattice, two places
+    /// otherwise. A landing on one of the [`PERCENT_LINES`] is written whole
+    /// instead and does not come through here; see [`exact_percent_for`].
     fn round(self, magnitude: f32, rounding: PixelRounding) -> f32 {
         match (self, rounding) {
             (Self::Px, PixelRounding::Whole) => magnitude.round(),
@@ -573,11 +470,8 @@ impl AxisAnchor {
     }
 
     /// Whether the axis is a stretch: both offsets pinned and no size of
-    /// its own, so the size is whatever the two edges leave between them.
-    ///
-    /// An author who set all three said something over-constrained, and
-    /// Bevy resolves that by the near offset and the size. Writing the
-    /// size there is what makes a resize resize.
+    /// its own. All three set is over-constrained, which Bevy resolves by
+    /// the near offset and the size, so the size is what a resize writes.
     fn stretched(self) -> bool {
         self.near.is_some() && self.far.is_some() && self.size.is_none()
     }
@@ -585,17 +479,10 @@ impl AxisAnchor {
 
 /// How a node is positioned on both axes.
 ///
-/// # What manipulation preserves
-///
 /// A gesture computes a rect in authored pixels and projects it back
-/// through the scheme it found, so a dialog pinned to the bottom-right
-/// corner stays pinned there, a bar stretched across its parent stays
-/// stretched, and a panel laid out in percentages keeps following the
-/// canvas. Writing `left`/`top` and clearing `right`/`bottom` instead
-/// would look identical in the frame the gesture ends and wrong at the
-/// next resolution.
-///
-/// The projection:
+/// through the scheme it found, so a node pinned to its parent's
+/// bottom-right corner stays pinned there and a percentage stays a
+/// percentage. The projection:
 ///
 /// - an offset the author set is written, in the unit they wrote it in;
 /// - an offset they left `Auto` stays `Auto`;
@@ -637,19 +524,13 @@ pub struct UnitBasis {
 
 /// Write one axis of a manipulated rect back through `anchor`.
 ///
-/// `min` and `extent` are the axis of the new rect, in authored pixels
-/// from the parent's offset box, and `parent` is that box's extent on
-/// the same axis. `resized` says the gesture moved an edge rather than
-/// the whole node.
-///
-/// A value whose unit has nothing usable to be measured against is left
-/// alone rather than rewritten in pixels: see [`AnchorUnit::authored_px`].
-///
-/// `exact` is the axis's landing, if it came to rest on a line the
-/// parent box states as a percentage. An offset its author wrote in
-/// percent then takes that figure verbatim: a parent whose width is not
-/// a multiple of four has no exact percentage for a quarter line once
-/// the figure has been through pixels and back.
+/// `min` and `extent` are the axis of the new rect, in authored pixels from
+/// the parent's offset box, and `parent` is that box's extent on the same
+/// axis. `resized` says the gesture moved an edge rather than the whole
+/// node. `exact` is the axis's landing when it came to rest on a line the
+/// parent box states as a percentage, which a percent-authored offset takes
+/// verbatim. A value whose unit has nothing usable to be measured against
+/// is left alone; see [`AnchorUnit::authored_px`].
 #[expect(
     clippy::too_many_arguments,
     reason = "one axis of a rect, its scheme, and what it is measured against"
@@ -685,17 +566,13 @@ fn write_axis(
             None => write(near, unit, min),
         }
     }
-    // The far offset is the gap between the node's far edge and the
-    // parent's, so it needs a parent that has been measured.
+    // The far offset is measured against the parent, so it needs one.
     if let Some(unit) = anchor.far
         && placed
         && parent > 0.0
         && parent.is_finite()
     {
         match exact_percent_for(unit, exact, SnapLine::Max) {
-            // The far offset is measured back from the parent's far
-            // edge, so a landing a quarter of the way in is three
-            // quarters of the way back.
             Some(percent) => *far = Val::Percent(100.0 - percent),
             None => write(far, unit, parent - (min + extent)),
         }
@@ -718,29 +595,18 @@ fn exact_percent_for(
     (unit == AnchorUnit::Percent && landing.line == wanted).then_some(landing.percent)
 }
 
-/// Write a manipulated rect back into `node` through the scheme its
-/// author wrote it in. See [`NodeAnchors`].
+/// Write a manipulated rect back into `node` through the scheme its author
+/// wrote it in. See [`NodeAnchors`].
 ///
 /// `rect` is `(left, top, width, height)` in authored pixels from the
 /// parent's offset box; `edges` is the gesture's, `(0, 0)` for a move.
 /// `rounding` says how finely pixels are stated, and `exact` carries any
 /// percentage the gesture landed on.
 ///
-/// # What a resize does to a flowed child
-///
-/// A move is a statement about where the node goes, and a node whose
-/// parent lays it out has nowhere to go until it leaves that layout, so a
-/// move promotes it to `PositionType::Absolute` and writes offsets.
-///
-/// A resize says nothing about placement. Promoting there would take a
-/// row's child out of the row the moment the user widened it, moving the
-/// node and every sibling after it while the user was dragging one edge.
-/// So a resize on a flowed child writes `width`/`height` alone and leaves
-/// both the placement and `position_type` to the parent.
-///
-/// A node already absolute keeps both halves on either gesture: its
-/// offsets are what place it, so a handle that drags its left edge has to
-/// move `left`.
+/// A move on a flowed child promotes it to `PositionType::Absolute` and
+/// writes offsets. A resize says nothing about placement, so on a flowed
+/// child it writes `width`/`height` alone and leaves the position to the
+/// parent. A node already absolute keeps both halves on either gesture.
 pub fn apply_authored_rect(
     node: &mut Node,
     anchors: NodeAnchors,
@@ -829,20 +695,13 @@ impl Plugin for UiStagePlugin {
 }
 
 /// Authored point (render-target pixels, origin at the canvas's top-left
-/// corner) under a cursor sitting `stage_offset` render-target pixels
-/// from the centre of the stage, as [`cursor_stage_offset`] reports it.
-///
-/// The whole mapping is this recentring: the panel's image *is* the
-/// authored canvas, at one image pixel per authored pixel.
+/// corner) under a cursor sitting `stage_offset` render-target pixels from
+/// the centre of the stage, as [`cursor_stage_offset`] reports it.
 pub fn stage_to_authored(stage_offset: Vec2, target_size: UVec2) -> Vec2 {
     stage_offset + target_size.as_vec2() / 2.0
 }
 
 /// Inverse of [`stage_to_authored`].
-///
-/// The overlay is placed from layout, so no editor code calls this; the
-/// mapping tests state the contract as a round trip through both
-/// directions, which catches an asymmetric recentring.
 pub fn authored_to_stage(authored: Vec2, target_size: UVec2) -> Vec2 {
     authored - target_size.as_vec2() / 2.0
 }
@@ -852,10 +711,8 @@ pub fn authored_to_stage(authored: Vec2, target_size: UVec2) -> Vec2 {
 ///
 /// `target_scale` is [`target_pixels_per_stage_pixel`] for the panel and
 /// `inverse_scale_factor` is the stage's own
-/// `ComputedNode::inverse_scale_factor()`, so this is the two factors of
-/// the cursor path run backwards. A degenerate stage yields the identity
-/// rather than an infinity: this runs every frame something is selected,
-/// including the frame a panel is first laid out.
+/// `ComputedNode::inverse_scale_factor()`. A degenerate stage yields the
+/// identity rather than an infinity.
 pub fn stage_pixels_per_target_pixel(target_scale: f32, inverse_scale_factor: f32) -> f32 {
     if target_scale <= 0.0 {
         return 1.0;
@@ -864,14 +721,11 @@ pub fn stage_pixels_per_target_pixel(target_scale: f32, inverse_scale_factor: f3
 }
 
 /// Authored (render-target) pixels per pointer pixel: what a
-/// [`Pointer<Drag>`] distance is multiplied by to become an authored
-/// delta.
+/// [`Pointer<Drag>`] distance is multiplied by to become an authored delta.
 ///
-/// `stage_scale` is [`stage_pixels_per_target_pixel`], so this is that
-/// factor inverted with the [`UiScale`] taken back out: pointer
-/// locations are reported before the UI scale is applied, and `Node`
-/// values are stated after it. A degenerate factor yields the identity
-/// rather than an infinity.
+/// `stage_scale` is [`stage_pixels_per_target_pixel`] inverted with the
+/// [`UiScale`] taken back out, since pointer locations are reported before
+/// the UI scale is applied. A degenerate factor yields the identity.
 pub fn target_pixels_per_pointer_pixel(stage_scale: f32, ui_scale: f32) -> f32 {
     let factor = stage_scale * ui_scale;
     if factor <= 0.0 {
@@ -880,20 +734,12 @@ pub fn target_pixels_per_pointer_pixel(stage_scale: f32, ui_scale: f32) -> f32 {
     1.0 / factor
 }
 
-/// The authored node a click at `point` lands on, or `None` when it
-/// misses every one.
+/// The authored node a click at `point` lands on, or `None` when it misses
+/// every one: the one Bevy paints last, the highest [`ComputedStackIndex`].
 ///
-/// The pick is the one Bevy paints last, the highest
-/// [`ComputedStackIndex`]. `ui_stack_system` assigns it from the tree
-/// walk and `ZIndex` together and it is unique per node, so it decides
-/// on its own wherever layout has run.
-///
-/// The tree-order tiebreak covers the frame before it has.
-/// `ComputedStackIndex` is missing on a node that has never been through
-/// a stack pass and reads `0` for all of them, and `hits` is built
-/// depth-first (parents before children, siblings in `Children` order),
-/// so taking the last entry matches what Bevy would paint last: the
-/// later sibling over the earlier, the child over its parent.
+/// The tree-order tiebreak covers the frame before a stack pass has run,
+/// where every index reads `0`. `hits` is built depth-first, so taking the
+/// last entry matches what Bevy would paint last.
 pub fn topmost_hit(point: Vec2, hits: &[StageHit]) -> Option<Entity> {
     hits.iter()
         .enumerate()
@@ -935,30 +781,18 @@ pub(crate) enum StagePick {
     Hit(Entity),
     /// The stage is showing a scene and the cursor is over none of it.
     Miss,
-    /// Nothing is routed to this panel, or the cursor is not over its
-    /// stage at all. The cursor says nothing about this panel's
-    /// selection: an empty stage must not erase a selection made in
-    /// another viewport.
+    /// Nothing is routed to this panel, or the cursor is not over its stage
+    /// at all, so it says nothing about this panel's selection.
     Empty,
 }
 
 /// The authored node `cursor` (ui-logical pixels) is over on `host`'s
-/// stage.
-///
-/// The one place the stage's pixels become an authored node: resolving
-/// what a press on the overlay is over, and hit-testing a drag, both go
-/// through here rather than through a second copy of the mapping.
+/// stage. The one place the stage's pixels become an authored node.
 /// Every authored node routed to one camera, in paint order, gathered once
-/// a frame.
-///
-/// A single press asks three separate observers what is under the cursor
-/// and every pointer move asks a fourth, and each of them walked the whole
-/// scene to answer. Layout is written once a frame and nothing an observer
-/// does moves a rect, so the walk's answer is the same every time it is
-/// asked within one frame. It is thrown away at the start of the next.
-///
-/// One camera's worth, because a frame that asks about two panels asks
-/// about one of them at a time; the second question refills it.
+/// a frame and thrown away at the start of the next. Layout is written once
+/// a frame and nothing an observer does moves a rect, so several observers
+/// asking within one frame get the same answer. One camera's worth; a
+/// question about another panel refills it.
 #[derive(Resource, Default)]
 pub struct StageHitCache {
     camera: Option<Entity>,
@@ -1025,25 +859,17 @@ pub(crate) fn hit_at(
     }
 }
 
-/// The rubber band a drag from bare canvas is pulling out.
-///
-/// A drag that started on a node is that node's move; this is the other
-/// drag, the one that starts where there is nothing and gathers up
-/// whatever it is pulled across. The two never both run: the band only
-/// starts when the press under it hit nothing.
+/// The rubber band a drag from bare canvas is pulling out. A drag that
+/// started on a node is that node's move instead; the two never both run.
 #[derive(Resource, Default)]
 pub struct MarqueeSelect {
     band: Option<Marquee>,
     seed: Option<MarqueeSeed>,
 }
 
-/// What the press left behind for a band that may follow it.
-///
-/// The press runs before the drag starts and has already had its say on
-/// the selection -- a press on the backdrop selects the scene's root, the
-/// way it always has. A band built from the selection as the drag finds it
-/// would therefore carry that root, so the press records what was selected
-/// *before* it, and the band builds from that instead.
+/// What the press left behind for a band that may follow it: the selection
+/// as it was *before* the press, since a press on the backdrop selects the
+/// scene's root and a band is not a selection of the root.
 struct MarqueeSeed {
     /// The panel content entity the press landed on.
     host: Entity,
@@ -1072,13 +898,12 @@ struct Marquee {
     start: Vec2,
     /// Where the cursor is now, in the same pixels.
     current: Vec2,
-    /// Shift and Ctrl as of the press, the same reading
-    /// [`on_stage_press`] takes: what the band gathers is added to, or
-    /// toggled against, the selection that press left.
+    /// Shift and Ctrl as of the press: whether what the band gathers is
+    /// added to, or toggled against, the seed selection.
     extend: bool,
     toggle: bool,
-    /// That selection, so a band swept back and forth answers the state
-    /// the gesture started from rather than the one it last wrote.
+    /// That selection, so a band swept back and forth answers the state the
+    /// gesture started from.
     base: Vec<Entity>,
 }
 
@@ -1090,16 +915,12 @@ pub struct MarqueeOverlay {
     pub host: Entity,
 }
 
-/// Draw order of the band: over the canvas and over the selection
-/// outlines, because it is what the pointer is doing right now.
+/// Draw order of the band: over the canvas and over the selection outlines.
 const MARQUEE_Z: i32 = OVERLAY_Z + 2;
 
 /// Where `cursor` (ui-logical pixels) is on the canvas `stage` is drawing,
-/// in authored pixels, whether or not it is still over the stage.
-///
-/// Unbounded, because a band is pulled past the canvas edge as readily as
-/// across it, and a drag that stopped reporting at the edge would leave the
-/// band frozen there while the pointer went on.
+/// in authored pixels. Unbounded, since a band is pulled past the canvas
+/// edge as readily as across it.
 fn authored_at(
     cursor: Vec2,
     host: &Viewport2dPanelHost,
@@ -1119,13 +940,9 @@ fn authored_at(
 /// Start a band when a drag begins on the canvas rather than on a node.
 ///
 /// The canvas is the backdrop: bare stage, or the scene's own root, which
-/// fills it. A press on either selects the root and has done so since the
-/// canvas was built, so the band is what a drag from there means; a press
-/// on any other node is that node's move.
-///
-/// The drag can be delivered to the stage or to the selection outline
-/// lying over it, depending on what the press selected, so the band
-/// remembers which and answers only that one.
+/// fills it. The drag can be delivered to the stage or to the selection
+/// outline lying over it, so the band remembers which and answers only that
+/// one.
 fn on_marquee_start(
     mut event: On<Pointer<DragStart>>,
     ui_scale: Res<UiScale>,
@@ -1148,10 +965,8 @@ fn on_marquee_start(
     if handles.contains(target) {
         return;
     }
-    // An outline belongs to the node it is drawn around, and a drag on it
-    // is that node's move -- unless the node is the scene's own root,
-    // whose outline covers the whole canvas and would otherwise swallow
-    // every band pulled out after the backdrop was clicked once.
+    // A drag on an outline is that node's move, unless the node is the
+    // scene's own root, whose outline covers the whole canvas.
     let panel = match overlays.get(target) {
         Ok(overlay) => selection
             .primary()
@@ -1232,15 +1047,9 @@ fn on_marquee_drag(
     band.current = authored_at(event.pointer_location.position / ui_scale.0, host, stage);
 }
 
-/// Take everything the band was pulled across.
-///
-/// Intersection rather than containment: what the band touches is what it
-/// picks up, so a container wider than the panel does not have to be swept
-/// end to end.
-///
-/// The scene's own root is never picked up. It covers the whole canvas, so
-/// every band would take it, and a band that always selects the root is a
-/// band that selects nothing in particular.
+/// Take everything the band was pulled across. Intersection rather than
+/// containment, so a container wider than the panel does not have to be
+/// swept end to end. The scene's own root is never picked up.
 fn on_marquee_end(
     mut event: On<Pointer<DragEnd>>,
     hosts: Query<&Viewport2dPanelHost>,
@@ -1305,12 +1114,8 @@ fn overlaps(left: Rect, right: Rect) -> bool {
         && left.max.y >= right.min.y
 }
 
-/// Escape drops the band and leaves the selection as the press left it.
-///
-/// The seed goes with it. It is what the *next* band would build on, and a
-/// seed left behind by an abandoned gesture is a selection the user has
-/// already said they did not want, put back under a band pulled out
-/// somewhere else entirely.
+/// Escape drops the band and leaves the selection as the press left it. The
+/// seed goes with it, so the next band does not build on an abandoned one.
 fn cancel_marquee(
     keys: Res<ButtonInput<KeyCode>>,
     focus: crate::keybind_focus::KeybindFocus,
@@ -1377,8 +1182,6 @@ fn sync_marquee_overlay(
             BackgroundColor(crate::default_style::SELECTION_MARQUEE_BG),
             BorderColor::all(crate::default_style::SELECTION_MARQUEE_BORDER),
             ZIndex(MARQUEE_Z),
-            // The band lies over the canvas it is being pulled across, and
-            // the drag it belongs to is delivered to the stage underneath.
             Pickable::IGNORE,
             ChildOf(stage),
         ));
@@ -1404,12 +1207,10 @@ pub struct DragReadoutMeasure;
 pub struct DragReadoutSpacing;
 
 /// How far from the node's bottom-right corner the readout sits, in the
-/// stage's logical pixels. Clear of the corner handle, which is
-/// [`HANDLE_SIZE`] across and centred on it.
+/// stage's logical pixels: clear of the corner handle.
 const READOUT_OFFSET: f32 = HANDLE_SIZE;
 
-/// Draw order of the readout: above everything else the gesture draws,
-/// because it is the figure the user is watching.
+/// Draw order of the readout: above everything else the gesture draws.
 const READOUT_Z: i32 = OVERLAY_Z + 3;
 
 /// What a gesture's readout says this frame.
@@ -1425,30 +1226,19 @@ struct Readout {
     spacing: String,
 }
 
-/// A figure the readout states: whole authored pixels, because that is
-/// what the gesture writes when the canvas is on its pixel lattice and
-/// what an author reads back off the inspector.
+/// A figure the readout states, in whole authored pixels.
 fn readout_figure(value: f32) -> String {
     format!("{}", value.round())
 }
 
 /// The distance from the dragged rect's edges on one axis to the nearest
-/// sibling edge, or `None` when no sibling offers one.
+/// sibling edge, or `None` when no sibling offers one. Read off the
+/// gesture's own candidates, so the figure matches the geometry the magnet
+/// lands on.
 ///
-/// The gesture's own candidates, so the figure the readout shows is the
-/// same geometry the magnet lands on: the readout says how far there is
-/// to go, and the highlight says when the drag got there.
-///
-/// Signed, because a gap and an overlap are not the same news. A sibling
-/// edge outside the dragged rect is a gap and reads positive; one that has
-/// crossed inside it is an overlap and reads negative, by how far in it
-/// has come. Taken as an absolute the two were the same figure, and a
-/// readout saying `x 12` while the nodes sat on top of each other said the
-/// opposite of what was on screen.
-///
-/// Edges come in pairs, so an overlap of n and a gap of n are both on
-/// offer as often as not; the overlap wins the tie, because it is the half
-/// of the news the author cannot see for themselves.
+/// Signed: a sibling edge outside the dragged rect is a gap and reads
+/// positive, one that has crossed inside reads negative. An overlap wins a
+/// tie against a gap of the same size.
 fn nearest_sibling_gap(candidates: &[Candidate], near: f32, far: f32) -> Option<f32> {
     candidates
         .iter()
@@ -1520,18 +1310,13 @@ fn gesture_readout(world: &World) -> Option<Readout> {
     })
 }
 
-/// Keep one readout drawn beside the node a gesture is dragging.
-///
-/// Exclusive, so it reads the gesture's own geometry through the same
-/// helpers the gesture writes through rather than a second copy of them.
-/// It does nothing at all when no gesture is running, which is nearly
-/// always.
+/// Keep one readout drawn beside the node a gesture is dragging. Exclusive,
+/// so it reads the gesture's own geometry through the helpers the gesture
+/// writes through.
 fn sync_drag_readouts(
     world: &mut World,
-    // Kept across frames rather than built on each one: a fresh
-    // `QueryState` walks every archetype in the world to work out which
-    // ones it matches, and this system runs whether or not a gesture is
-    // going on.
+    // Kept across frames: a fresh `QueryState` walks every archetype in the
+    // world, and this system runs whether or not a gesture is going on.
     mut drawn: Local<Option<QueryState<(Entity, &'static DragReadout)>>>,
 ) {
     let wanted = gesture_readout(world);
@@ -1627,8 +1412,6 @@ fn spawn_readout(world: &mut World, host: Entity, stage: Entity, at: Vec2) -> En
             },
             BackgroundColor(tokens::SHADOW_COLOR),
             ZIndex(READOUT_Z),
-            // The label lies over the canvas the gesture is running on, and
-            // the drag it belongs to is delivered underneath it.
             Pickable::IGNORE,
             ChildOf(stage),
         ))
@@ -1640,44 +1423,21 @@ fn spawn_readout(world: &mut World, host: Entity, stage: Entity, at: Vec2) -> En
 }
 
 /// Select the authored node under a press on the stage, in
-/// [`Viewport2dMode::Edit`].
-///
-/// In `Interact` the press belongs to the scene: it is claimed off the
-/// dock all the same, but it selects nothing.
+/// [`Viewport2dMode::Edit`]. In `Interact` the press is still claimed off
+/// the dock but selects nothing.
 ///
 /// Propagation is stopped synchronously, before the observer defers
-/// anything: a press that climbed out of the stage would reach the dock
-/// leaf and start a panel drag under the gesture the user meant for the
-/// canvas. Only the primary button is claimed, so a middle-drag still
-/// reaches the pan handler and a right-click still reaches whatever
-/// context menu the panel carries.
+/// anything, so a press cannot climb out of the stage and start a panel
+/// drag. Only the primary button is claimed.
 ///
-/// # Presses on the outline
+/// The outline covers the whole selected node, so the press is re-resolved
+/// through [`hit_at`] wherever it lands: the selected node under the cursor
+/// is the move gesture, anything else is selected instead. The handles keep
+/// their resize gesture unconditionally.
 ///
-/// The outline covers the whole selected node, so every press on the
-/// selected node's own area lands on the overlay rather than on the
-/// stage. Claiming those as the move gesture without asking what is
-/// under them makes a selected container swallow every click on its
-/// children.
-///
-/// So the press is re-resolved through [`hit_at`] wherever it lands. The
-/// selected node under the cursor is the move gesture; anything else, a
-/// child or an overlapping sibling, is selected instead. The handles
-/// keep their resize gesture unconditionally.
-///
-/// # Modifiers
-///
-/// Shift adds the node under the cursor to the selection, Ctrl toggles it
-/// in or out. Both are read at the press, before any drag has started.
-///
-/// Ctrl is also the snap magnet's inverter, which [`on_gesture_drag`]
-/// reads on every drag event. One key, two jobs, and a Ctrl-press that
-/// then drags does both: the modifiers held at the press decide the
-/// selection, and the modifiers held during the drag decide the
-/// snapping. Neither reads the other's moment, so holding Ctrl only after
-/// the button went down inverts the magnet without touching the
-/// selection, and releasing it after the press leaves the toggle done and
-/// the magnet alone.
+/// Shift adds the node under the cursor to the selection and Ctrl toggles
+/// it, both read at the press. Ctrl is also the snap magnet's inverter,
+/// which [`on_gesture_drag`] reads separately on every drag event.
 fn on_stage_press(
     mut event: On<Pointer<Press>>,
     ui_scale: Res<UiScale>,
@@ -1699,8 +1459,6 @@ fn on_stage_press(
     }
     let target = event.event_target();
 
-    // A press on a handle is the start of a resize, and must not fall
-    // through to the dock.
     if handles.contains(target) {
         event.propagate(false);
         return;
@@ -1734,9 +1492,8 @@ fn on_stage_press(
     let extend = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     let toggle = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
 
-    // What a band that follows this press would build from. Taken here,
-    // before the press has had its say, because a press on the backdrop
-    // selects the scene's root and a band is not a selection of the root.
+    // What a band that follows this press would build from, taken before
+    // the press has had its say on the selection.
     marquee.seed = match pick {
         StagePick::Hit(entity) if !roots.contains(entity) => None,
         _ => Some(MarqueeSeed {
@@ -1748,9 +1505,8 @@ fn on_stage_press(
     };
 
     if on_overlay.is_some() {
-        // Only a hit on something else re-selects. A miss must not clear
-        // a selection about to be dragged: the outline can extend past
-        // whatever laid the scene out.
+        // A miss must not clear a selection about to be dragged: the
+        // outline can extend past whatever laid the scene out.
         let StagePick::Hit(entity) = pick else {
             return;
         };
@@ -1768,19 +1524,15 @@ fn on_stage_press(
         StagePick::Hit(entity) if extend => selection.extend(&mut commands, entity),
         StagePick::Hit(entity) if toggle => selection.toggle(&mut commands, entity),
         StagePick::Hit(entity) => selection.select_single(&mut commands, entity),
-        // A modified press is building a selection, so a miss beside the
-        // nodes it is building from must not empty it.
         StagePick::Miss if !extend && !toggle => selection.clear(&mut commands),
         StagePick::Miss | StagePick::Empty => {}
     }
 }
 
-/// Land an asset dragged out of the asset browser on the canvas.
-///
-/// The drop is claimed off the dock the way a press is, and only in
-/// [`Viewport2dMode::Edit`]: in `Interact` the canvas belongs to the
-/// running scene. What the drop means is decided by what is under the
-/// cursor; see [`crate::ui_asset_drop::classify_drop`].
+/// Land an asset dragged out of the asset browser on the canvas, claimed
+/// off the dock the way a press is and only in [`Viewport2dMode::Edit`].
+/// What the drop means is decided by what is under the cursor; see
+/// [`crate::ui_asset_drop::classify_drop`].
 fn on_stage_asset_drop(
     mut event: On<Pointer<DragDrop>>,
     ui_scale: Res<UiScale>,
@@ -1841,24 +1593,11 @@ fn on_stage_asset_drop(
 
 /// A second press on a node carrying text opens an entry over it.
 ///
-/// The pair is counted against the *authored node* the press landed on,
-/// not against the entity the picking backend handed over. The first
-/// press on an unselected node selects it, and selecting it spawns the
-/// outline over it, so the second press of the same double click lands on
-/// a different entity and arrives carrying a count of one. Counting the
-/// node instead is what makes a double click on something not yet
-/// selected open the entry, which is the gesture a user actually makes.
-///
-/// The press that opened the pair has already selected the node, so the
-/// entry opens over what the user is looking at either way.
-///
-/// A press on a resize handle counts too. The eight handles hang around
-/// a rect that can be smaller than they are, so on a label the size the
-/// palette spawns one there is nowhere left to press that is not chrome,
-/// and a gesture the handles swallowed could never be made on a small
-/// node at all. The pair is still counted against the node under the
-/// cursor, so a press on the half of a handle that hangs off the node is
-/// no more a double click than a press beside it is.
+/// The pair is counted against the *authored node* under the cursor, not
+/// against the entity the picking backend handed over: the first press
+/// spawns an outline, so the second lands on a different entity and arrives
+/// carrying a count of one. A press on a resize handle counts too, since on
+/// a small node the handles leave nowhere else to press.
 fn on_stage_double_press(
     event: On<Pointer<Press>>,
     ui_scale: Res<UiScale>,
@@ -1908,8 +1647,6 @@ fn on_stage_double_press(
         *last_press = None;
         return;
     };
-    // A consumed pair resets, so a third press starts a new one rather
-    // than opening the entry again.
     let now = time.elapsed_secs_f64();
     let doubled = matches!(*last_press, Some((node, at))
         if node == entity && now - at < crate::hierarchy::DOUBLE_CLICK_SECS);
@@ -1924,15 +1661,9 @@ fn on_stage_double_press(
     });
 }
 
-/// Track the authored node under the cursor, for the pre-select outline.
-///
-/// The same resolution the press does, on every pointer move: the panel
-/// the cursor is over, then [`hit_at`] on its stage. In `Interact` the
-/// pointer belongs to the scene, so nothing is tracked there.
-///
-/// A running gesture clears it. The node being dragged is already
-/// outlined, and a second outline chasing whatever the cursor passes over
-/// mid-drag says nothing about what the release will do.
+/// Track the authored node under the cursor, for the pre-select outline:
+/// the same resolution the press does, on every pointer move. Nothing is
+/// tracked in `Interact`, and a running gesture clears it.
 fn on_stage_hover(
     event: On<Pointer<Move>>,
     ui_scale: Res<UiScale>,
@@ -1948,8 +1679,6 @@ fn on_stage_hover(
     mut hit_cache: ResMut<StageHitCache>,
 ) {
     let target = event.event_target();
-    // A handle is part of the overlay it hangs off, so the cursor on one
-    // is still the cursor on that panel's stage.
     let on_chrome = handles.get(target).map(ChildOf::parent).unwrap_or(target);
     let panel = overlays.get(on_chrome).ok().map(|overlay| overlay.host);
     let found = match panel {
@@ -1986,12 +1715,8 @@ fn on_stage_hover(
 }
 
 /// Forget the pre-select as the pointer leaves the stage.
-///
 /// [`on_stage_hover`] only runs while the pointer is over a stage, so
-/// without this the last node it passed over stays named, and its outline
-/// stays drawn, for as long as the pointer is somewhere else: over a
-/// panel, over another window, or off the screen entirely, which fires no
-/// move at all.
+/// without this the last node it passed over stays outlined.
 fn on_stage_leave(
     event: On<Pointer<Out>>,
     hosts: Query<&Viewport2dPanelHost>,
@@ -2005,14 +1730,9 @@ fn on_stage_leave(
     hover.entity = None;
 }
 
-/// Keep at most one pre-select outline, over the node
-/// [`UiHoverPreselect`] names.
-///
-/// Built on the same placement the selection outline uses, so the two
-/// agree on where a node is. Every selected node is skipped, not only the
-/// primary one: each already carries a selection outline, and drawing a
-/// second line over one of them says the hover would change the selection
-/// when it would not.
+/// Keep at most one pre-select outline, over the node [`UiHoverPreselect`]
+/// names. Built on the same placement the selection outline uses. Every
+/// selected node is skipped, since each already carries an outline.
 fn sync_hover_outlines(
     mut commands: Commands,
     hover: Res<UiHoverPreselect>,
@@ -2061,11 +1781,9 @@ fn sync_hover_outlines(
     }
 }
 
-/// Spawn one panel's pre-select outline: one thin border and nothing
-/// else.
-///
-/// [`Pickable::IGNORE`] because it lies over the node it is drawn around:
-/// the press that follows the hover has to reach the stage underneath.
+/// Spawn one panel's pre-select outline: one thin border and nothing else.
+/// [`Pickable::IGNORE`], so the press that follows the hover reaches the
+/// stage underneath.
 fn spawn_hover_outline(commands: &mut Commands, host: Entity, stage: Entity, rect: Rect) {
     let mut node = Node {
         position_type: PositionType::Absolute,
@@ -2086,14 +1804,9 @@ fn spawn_hover_outline(commands: &mut Commands, host: Entity, stage: Entity, rec
 }
 
 /// Collect `entity` and its descendants in tree order, the order
-/// [`topmost_hit`] resolves ties in.
-///
-/// A [`Locked`] node contributes no hit of its own, so a press over it
-/// reaches whatever else is there: the node under it, or the canvas. Its
-/// children still do -- the lock is on the node the author locked, not on
-/// everything inside it -- and nothing is said about the press either way,
-/// because a lock is asking for the clicks to go elsewhere and a notice
-/// per click would be the noise it was set to stop.
+/// [`topmost_hit`] resolves ties in. A [`Locked`] node contributes no hit
+/// of its own, so a press over it reaches whatever else is there; its
+/// children still do.
 fn collect_stage_hits(
     entity: Entity,
     nodes: &AuthoredNodes,
@@ -2120,21 +1833,14 @@ fn collect_stage_hits(
 /// Keep one overlay per selected authored node per panel, covering that
 /// node's live rect.
 ///
-/// Every selected node is outlined, not only the primary one: a
-/// selection of three that drew one line says the other two are not
-/// selected, and the next chord acts on all three. The primary's outline
-/// is the one that carries the resize handles and the one the gestures
-/// are delivered to; the rest are `Pickable::IGNORE` drawing, so a press
-/// on one falls through to the node under it and reselects, exactly as a
-/// press anywhere else on the canvas does.
+/// Every selected node is outlined. The primary's outline carries the
+/// resize handles and takes the gestures; the rest are `Pickable::IGNORE`,
+/// so a press on one falls through and reselects. The rect is read off each
+/// entity every frame, so an outline follows layout on its own.
 ///
-/// The rect is read off each selected entity every frame rather than
-/// cached, so an outline follows layout without anything having to tell
-/// it that layout moved.
-///
-/// A panel in [`Viewport2dMode::Interact`] has no overlay at all.
-/// Despawning them rather than hiding them leaves the gesture observers
-/// nothing to fire on, whatever the selection does meanwhile.
+/// A panel in [`Viewport2dMode::Interact`] has no overlay: they are
+/// despawned rather than hidden, so the gesture observers have nothing to
+/// fire on.
 fn sync_selection_overlays(
     mut commands: Commands,
     selection: Res<Selection>,
@@ -2146,10 +1852,8 @@ fn sync_selection_overlays(
     mut nodes: Query<&mut Node>,
 ) {
     let primary = selection.primary();
-    // One pass over the outlines rather than one per selected node per
-    // panel: with three panels open on a selection of ten this was thirty
-    // scans of the whole outline list every frame, and the answer each of
-    // them wanted was a lookup.
+    // One pass over the outlines rather than one scan per selected node
+    // per panel.
     let index: std::collections::HashMap<(Entity, Entity, bool), Entity> = overlays
         .iter()
         .map(|(entity, overlay)| ((overlay.host, overlay.node, overlay.primary), entity))
@@ -2161,9 +1865,8 @@ fn sync_selection_overlays(
         } else {
             &[]
         };
-        // An outline for a node that has left the selection goes, and so
-        // does one drawn for the wrong role: the handles hang off the
-        // primary's overlay, so a change of primary is a respawn.
+        // The handles hang off the primary's overlay, so a change of
+        // primary is a respawn rather than a re-place.
         for (entity, overlay) in &overlays {
             if overlay.host != host_entity {
                 continue;
@@ -2196,7 +1899,6 @@ fn sync_selection_overlays(
                         is_primary,
                     ),
                 },
-                // Nothing to move it to this frame; leave what is on screen.
                 Placement::Hold => {}
                 Placement::Drop => {
                     if let Some(overlay) = overlay
@@ -2215,10 +1917,9 @@ enum Placement {
     /// The selected node is this panel's, and here is its rect in the
     /// stage's logical pixels.
     At(Rect),
-    /// The selected node is this panel's but has no layout to draw
-    /// against yet. Hold the rect the overlay already has: an overlay
-    /// that vanishes for a frame takes any gesture running on it with
-    /// it.
+    /// The selected node is this panel's but has no layout to draw against
+    /// yet, so the overlay holds the rect it has rather than vanishing and
+    /// taking a running gesture with it.
     Hold,
     /// Not this panel's node at all: nothing selected, a 3D entity, or a
     /// scene another panel is showing. There should be no overlay.
@@ -2254,20 +1955,11 @@ fn overlay_placement(
 
 /// Spawn a panel's outline and its eight handles.
 ///
-/// # Reading against the content
-///
-/// The chrome is drawn over authored content of any colour, so a single
-/// accent colour would disappear against content of the same luminance.
-/// The handles are a light neutral fill with an accent border, reading
-/// on dark content by their fill and on light content by their border,
-/// and the outline carries a dark edge just outside its accent line for
-/// the same reason in the other direction.
-///
-/// The dark edge is one node, not one per side: a box pinned a pixel
-/// outside the outline on all four edges draws its border and nothing
-/// else. It is [`Pickable::IGNORE`] because it covers the outline body,
-/// and a press on the body is a gesture or a reselection (see
-/// [`on_stage_press`]) that must still reach the overlay underneath.
+/// The chrome is drawn over authored content of any colour, so the handles
+/// are a light neutral fill with an accent border and the outline carries a
+/// dark edge outside its accent line. That edge is one [`Pickable::IGNORE`]
+/// box pinned a pixel outside on all four sides, so a press on the outline
+/// body still reaches the overlay underneath.
 fn spawn_overlay(
     commands: &mut Commands,
     host: Entity,
@@ -2295,9 +1987,8 @@ fn spawn_overlay(
             node,
             BorderColor::all(tokens::ACCENT_BLUE),
             ZIndex(OVERLAY_Z),
-            // Only the primary's outline is a thing to press: a press on
-            // any other has to reach the node under it, which is how a
-            // second node in a selection is made the primary.
+            // A press on a non-primary outline reaches the node under it,
+            // which is how a second selected node is made the primary.
             if primary {
                 Pickable::default()
             } else {
@@ -2341,12 +2032,9 @@ fn spawn_overlay(
     }
 }
 
-/// Move an outline's handles inside or outside the node, when a resize
-/// has taken it across [`HANDLES_OUTSIDE_BELOW`] on either axis.
-///
-/// Only on the crossing: the handles hang off the outline and follow it
-/// wherever it goes, so the only thing a change of rect can ask of them is
-/// which side of the edge they sit on.
+/// Move an outline's handles inside or outside the node, when a resize has
+/// taken it across [`HANDLES_OUTSIDE_BELOW`] on either axis. Only on the
+/// crossing: the handles otherwise follow the outline on their own.
 fn reseat_handles(
     overlay: Entity,
     rect: Rect,
@@ -2389,13 +2077,11 @@ struct GestureTargets<'w, 's> {
     hosts: Query<'w, 's, &'static Viewport2dPanelHost>,
 }
 
-/// Which edges a gesture on `target` drags, and the overlay it belongs
-/// to, if `target` is part of one on a panel that is being authored.
-///
-/// Resolved synchronously so the observer can stop propagation before
-/// the event climbs out of the panel and into the dock. Only the primary
-/// button is claimed, so a middle-drag that starts on the outline still
-/// pans the view, and only [`Viewport2dMode::Edit`] is claimed at all.
+/// Which edges a gesture on `target` drags, and the overlay it belongs to,
+/// if `target` is part of one on a panel that is being authored. Resolved
+/// synchronously so the observer can stop propagation before the event
+/// reaches the dock. Only the primary button and only
+/// [`Viewport2dMode::Edit`].
 fn gesture_edges(
     target: Entity,
     button: PointerButton,
@@ -2430,34 +2116,28 @@ fn on_gesture_start(
     event.propagate(false);
     commands.queue(move |world: &mut World| {
         let started = begin_manipulation(world, overlay, edges);
-        // A gesture that could not be measured leaves no half-built
-        // state behind for the next drag event to act on.
         *world.resource_mut::<UiManipulation>() = started.unwrap_or_default();
     });
 }
 
-/// Everything a gesture needs to know at the moment the pointer went
-/// down, or `None` when there is nothing measurable to drag.
-///
-/// A move takes the whole selection; a resize takes the primary alone
-/// (see [`UiManipulation`]). Either way the primary leads the list, so
-/// the snap and the scale are read off the node under the cursor.
+/// Everything a gesture needs to know at the moment the pointer went down,
+/// or `None` when there is nothing measurable to drag. A move takes the
+/// whole selection, a resize the primary alone; either way the primary
+/// leads the list.
 fn begin_manipulation(world: &World, overlay: Entity, edges: (i8, i8)) -> Option<UiManipulation> {
     let host_entity = world.get::<UiSelectionOverlay>(overlay)?.host;
     let host = world.get::<Viewport2dPanelHost>(host_entity)?;
     let selection = world.get_resource::<Selection>()?;
     let primary = selection.primary()?;
-    // The scene's own root is the canvas, not something on it: a drag
-    // from the backdrop pulls a band out (see [`on_marquee_start`]), so
-    // there is no move here to pick up.
+    // The scene's own root is the canvas, not something on it: a drag from
+    // the backdrop pulls a band out instead.
     if edges == (0, 0) && is_scene_root(world, primary) {
         return None;
     }
     let primary_node = gesture_node(world, primary, host)?;
     let nodes = if edges == (0, 0) {
         let movable = without_selected_ancestors(world, &selection.entities);
-        // Primary first, so the node under the cursor anchors the
-        // gesture, unless a selected container above it is what moves.
+        // Primary first, so the node under the cursor anchors the gesture.
         let mut nodes = Vec::new();
         if movable.contains(&primary) {
             nodes.push(primary_node);
@@ -2470,8 +2150,6 @@ fn begin_manipulation(world: &World, overlay: Entity, edges: (i8, i8)) -> Option
         );
         nodes
     } else {
-        // A resize is the primary's alone: dragging one handle must not
-        // stretch every other node in the selection.
         vec![primary_node]
     };
     if nodes.is_empty() {
@@ -2503,12 +2181,9 @@ fn is_scene_root(world: &World, entity: Entity) -> bool {
             .is_some()
 }
 
-/// The selected entities that no other selected entity contains.
-///
-/// A container and a node inside it can both be in the selection. Layout
-/// already carries the child when its container moves, so applying the
-/// gesture's delta to both would move the child twice. Only the
-/// outermost selected node of each chain is written.
+/// The selected entities that no other selected entity contains. Layout
+/// already carries a child when its container moves, so applying a delta to
+/// both would move the child twice.
 pub(crate) fn without_selected_ancestors(world: &World, selected: &[Entity]) -> Vec<Entity> {
     let set: std::collections::HashSet<Entity> = selected.iter().copied().collect();
     selected
@@ -2516,8 +2191,6 @@ pub(crate) fn without_selected_ancestors(world: &World, selected: &[Entity]) -> 
         .copied()
         .filter(|entity| {
             let mut cursor = *entity;
-            // The whole chain, not just the immediate parent: a
-            // grandchild of a selected container is carried too.
             while let Some(parent) = world.get::<ChildOf>(cursor).map(|c| c.0) {
                 if set.contains(&parent) {
                     return false;
@@ -2530,12 +2203,8 @@ pub(crate) fn without_selected_ancestors(world: &World, selected: &[Entity]) -> 
 }
 
 /// One selected entity as a gesture sees it, or `None` when it is not an
-/// authored node of this panel's canvas with a rect to drag.
-///
-/// The camera check keeps out a selection made in another viewport: the
-/// editor's selection is one list for the whole editor, so a 3D entity
-/// or a node another panel is showing can be sitting in it while this
-/// canvas is dragged.
+/// authored node of this panel's canvas with a rect to drag. The camera
+/// check keeps out a selection made in another viewport.
 fn gesture_node(world: &World, entity: Entity, host: &Viewport2dPanelHost) -> Option<GestureNode> {
     if world.get::<EditorEntity>(entity).is_some() {
         return None;
@@ -2548,11 +2217,9 @@ fn gesture_node(world: &World, entity: Entity, host: &Viewport2dPanelHost) -> Op
     let offset = authored_offset(world, entity, rect);
     let viewport = host.target_size.as_vec2();
     // A routed scene's root has no parent node, so its offset box measures
-    // zero. Bevy lays such a root out directly against the render target, and
-    // that is what its percentages and its right/bottom offsets are stated
-    // against; left at zero those units resolve to nothing and the root is
-    // undraggable. Per axis, so a parent degenerate on one side is covered
-    // too.
+    // zero. Bevy lays it out against the render target, which is what its
+    // percentages and far offsets are stated against. Per axis, so a parent
+    // degenerate on one side is covered too.
     let measured = parent_offset_box(world, entity).size();
     let parent = Vec2::new(
         if measured.x > 0.0 {
@@ -2575,15 +2242,10 @@ fn gesture_node(world: &World, entity: Entity, host: &Viewport2dPanelHost) -> Op
     })
 }
 
-/// The gesture's scale as of right now, or `None` when the panel it
-/// started on has gone.
-///
-/// Read again on every drag event rather than taken once at the press.
-/// The wheel still belongs to the panel while the button is down, so the
-/// canvas can zoom mid-gesture; a scale captured at the press would then
-/// convert pointer pixels at a rate the panel has stopped drawing at,
-/// and the node would trail or outrun the cursor for the rest of the
-/// drag.
+/// The gesture's scale as of right now, or `None` when the panel it started
+/// on has gone. Read again on every drag event, since the canvas can zoom
+/// mid-gesture and a scale captured at the press would then convert pointer
+/// pixels at a rate the panel has stopped drawing at.
 fn live_scale(world: &World, host: Option<Entity>) -> Option<f32> {
     let host = world.get::<Viewport2dPanelHost>(host?)?;
     Some(gesture_scale(world, host))
@@ -2611,10 +2273,8 @@ fn authored_rect(world: &World, entity: Entity) -> Option<Rect> {
 }
 
 /// The node's laid-out rect in the global authored pixels layout reports,
-/// or `None` for a node layout has not measured.
-///
-/// This is the space two nodes under different parents can be compared in,
-/// which is what a bounding box over a selection needs.
+/// or `None` for a node layout has not measured. The space two nodes under
+/// different parents can be compared in.
 pub(crate) fn global_node_rect(world: &World, entity: Entity) -> Option<Rect> {
     let size = world.get::<ComputedNode>(entity)?.size();
     if size.x <= 0.0 || size.y <= 0.0 {
@@ -2624,18 +2284,14 @@ pub(crate) fn global_node_rect(world: &World, entity: Entity) -> Option<Rect> {
     Some(Rect::from_corners(centre - size / 2.0, centre + size / 2.0))
 }
 
-/// The box a child's `left`/`top` are measured from, the parent's
-/// padding box, in the global authored pixels layout reports.
+/// The box a child's `left`/`top` are measured from, the parent's padding
+/// box, in the global authored pixels layout reports.
 ///
 /// Inside the border, not at the parent's outer corner: an absolutely
-/// placed child's offsets start where the border ends, so reading them
-/// against the border box would shift the offset a gesture starts from
-/// and every edge it can snap to. The two shifts do not cancel, because
-/// the offset comes from the node's own `Val::Px` and the candidates
-/// from layout, so a bordered parent would land a snap one border-width
-/// past the edge it aimed at and make a promoted flex child jump.
-///
-/// A node with no parent is measured from the canvas itself.
+/// placed child's offsets start where the border ends, and the shifts do
+/// not cancel because the offset comes from the node's own `Val::Px` while
+/// the candidates come from layout. A node with no parent is measured from
+/// the canvas itself.
 pub(crate) fn parent_offset_box(world: &World, entity: Entity) -> Rect {
     let Some(parent) = world.get::<ChildOf>(entity).map(ChildOf::parent) else {
         return Rect::from_corners(Vec2::ZERO, Vec2::ZERO);
@@ -2654,11 +2310,9 @@ pub(crate) fn parent_offset_box(world: &World, entity: Entity) -> Rect {
     )
 }
 
-/// Authored left/top the gesture starts from.
-///
-/// A node with no explicit offset starts from where layout put it, so
-/// promoting a flex child to absolute placement does not make it jump on
-/// the first drag event.
+/// Authored left/top the gesture starts from. A node with no explicit
+/// offset starts from where layout put it, so promoting a flex child does
+/// not make it jump on the first drag event.
 fn authored_offset(world: &World, entity: Entity, rect: Rect) -> Vec2 {
     if let Some(node) = world.get::<Node>(entity)
         && node.position_type == PositionType::Absolute
@@ -2669,25 +2323,18 @@ fn authored_offset(world: &World, entity: Entity, rect: Rect) -> Vec2 {
     rect.min
 }
 
-/// The `left`/`top` a move on `entity` starts from, in the authored
-/// offsets its own `Node` states them in.
-///
-/// The pointer's own starting figure, for a caller that moves a node
-/// without a pointer: an operator computes where the node should end up in
-/// the global pixels layout reports, and this is what that answer is added
-/// to on the way back into the node's own space.
+/// The `left`/`top` a move on `entity` starts from, in the authored offsets
+/// its own `Node` states them in. The pointer's own starting figure, for a
+/// caller that moves a node without a pointer.
 pub(crate) fn authored_offset_of(world: &World, entity: Entity) -> Option<Vec2> {
     let rect = authored_rect(world, entity)?;
     Some(authored_offset(world, entity, rect))
 }
 
-/// What `entity`'s units are measured against, read off layout.
-///
-/// [`gesture_node`] takes the viewport from the panel the drag is running
-/// on; a caller with no panel takes it from the scene's own root, which is
-/// laid out directly against the render target and so measures the canvas.
-/// A parent that measures zero on an axis falls back to that same canvas,
-/// exactly as a gesture's does.
+/// What `entity`'s units are measured against, read off layout. A caller
+/// with no panel takes the viewport from the scene's own root, which is
+/// laid out directly against the render target. A parent that measures zero
+/// on an axis falls back to that same canvas.
 pub(crate) fn unit_basis_of(world: &World, entity: Entity) -> UnitBasis {
     let viewport = world
         .get::<ComputedNode>(scene_root(world, entity))
@@ -2710,10 +2357,8 @@ pub(crate) fn unit_basis_of(world: &World, entity: Entity) -> UnitBasis {
 }
 
 /// Where `entity`'s box sits on `host`'s stage, in that stage's logical
-/// pixels: the rect a piece of chrome drawn over the node is placed at.
-///
-/// The same mapping the selection outline is placed by, for chrome placed
-/// from an exclusive path rather than from the outline's own pass.
+/// pixels: the rect a piece of chrome drawn over the node is placed at, by
+/// the same mapping the selection outline uses.
 pub(crate) fn node_overlay_rect(world: &World, entity: Entity, host: Entity) -> Option<Rect> {
     let host = world.get::<Viewport2dPanelHost>(host)?;
     let stage = world.get::<ComputedNode>(host.stage)?;
@@ -2724,24 +2369,17 @@ pub(crate) fn node_overlay_rect(world: &World, entity: Entity, host: Entity) -> 
 }
 
 /// The lines a gesture on `entity` can land on, in the same offset space
-/// [`authored_rect`] reports, so they can be compared with the value the
-/// gesture is about to write.
+/// [`authored_rect`] reports.
 ///
 /// The order is the precedence a landing is decided by, nearest distance
-/// first and this order to break a tie: the parent's own edges and
-/// centre, sibling sides, sibling centres, the scene's guides, nodes
-/// elsewhere in the tree, and last the lines a percentage of the parent
-/// box names. An edge something in the scene actually has beats a line
-/// that is only a figure: the thirds put a percent line within reach of
-/// a sibling often enough that a tie is a real case, and the author can
-/// see the edge. A percent line still wins when it is strictly nearer.
+/// first and this order to break a tie: the parent's own edges and centre,
+/// sibling sides, sibling centres, the scene's guides, nodes elsewhere in
+/// the tree, and last the lines a percentage of the parent box names. An
+/// edge something in the scene actually has beats a line that is only a
+/// figure; a percent line still wins when it is strictly nearer.
 ///
-/// `kinds` decides which of those are offered at all; an off kind
-/// contributes nothing rather than being filtered later, so nothing it
-/// governs can win a tie against a kind that is on.
-///
-/// Editor chrome is skipped, so an overlay drawn over the same tree
-/// cannot become something the authored scene snaps to.
+/// `kinds` decides which are offered at all; an off kind contributes
+/// nothing rather than being filtered later. Editor chrome is skipped.
 fn gather_candidates(world: &World, entity: Entity, kinds: &CanvasSnap) -> SnapCandidates {
     let mut candidates = SnapCandidates::default();
     let Some(parent) = world.get::<ChildOf>(entity).map(ChildOf::parent) else {
@@ -2754,8 +2392,7 @@ fn gather_candidates(world: &World, entity: Entity, kinds: &CanvasSnap) -> SnapC
 
     if kinds.parent {
         // The parent's own lines carry their percentage too, so a
-        // percent-authored node landing on an edge or the centre writes
-        // the exact figure whether or not the quarter lines are on.
+        // percent-authored node landing on one writes the exact figure.
         for (at, percent) in [(0.0, 0.0), (size.x / 2.0, 50.0), (size.x, 100.0)] {
             candidates.x.push(Candidate {
                 at,
@@ -2877,12 +2514,8 @@ fn push_rect_sides(candidates: &mut SnapCandidates, rect: Rect, kind: CandidateK
     }
 }
 
-/// The topmost ancestor of `entity`: the root of the scene it is part
-/// of, and where the scene's guides are kept.
-///
-/// A walk up rather than a query for the routed root, which is the same
-/// entity: the gesture has already established that the dragged node
-/// draws into this panel's camera.
+/// The topmost ancestor of `entity`: the root of the scene it is part of,
+/// and where the scene's guides are kept.
 fn scene_root(world: &World, entity: Entity) -> Entity {
     let mut root = entity;
     while let Some(next) = world.get::<ChildOf>(root).map(ChildOf::parent) {
@@ -2891,13 +2524,10 @@ fn scene_root(world: &World, entity: Entity) -> Entity {
     root
 }
 
-/// Every authored node under the same routed root that is not part of
-/// the dragged node's family, measured from `origin`.
-///
-/// The family is the parent, the parent's own children (those are the
-/// siblings, which have their own kinds), and the whole selection with
-/// everything under it: a node the gesture is carrying cannot be
-/// something the gesture lands on.
+/// Every authored node under the same routed root that is not part of the
+/// dragged node's family, measured from `origin`. The family is the parent,
+/// its own children (the siblings, which have their own kinds), and the
+/// whole selection with everything under it.
 ///
 fn other_node_rects(world: &World, entity: Entity, parent: Entity, origin: Vec2) -> Vec<Rect> {
     let root = scene_root(world, entity);
@@ -2923,7 +2553,7 @@ fn collect_other_nodes(
     rects: &mut Vec<Rect>,
 ) {
     // A carried node takes its whole subtree out: layout moves the
-    // descendants with it, so none of them holds still to land on.
+    // descendants with it.
     if carried.contains(&entity) {
         return;
     }
@@ -2937,12 +2567,9 @@ fn collect_other_nodes(
     }
 }
 
-/// Move or resize what the gesture picked up, every drag event.
-///
-/// A move carries every selected node on this canvas; a resize carries
-/// the primary alone, because the handles are drawn around the primary's
-/// rect. The primary is also what snaps, and the rest of the selection
-/// moves by the delta it snapped to. See [`UiManipulation`].
+/// Move or resize what the gesture picked up, every drag event. The primary
+/// is what snaps, and the rest of the selection moves by the delta it
+/// snapped to. See [`UiManipulation`].
 fn on_gesture_drag(mut event: On<Pointer<Drag>>, parts: GestureTargets, mut commands: Commands) {
     let target = event.event_target();
     if gesture_edges(target, event.button, &parts).is_none() {
@@ -2971,16 +2598,10 @@ fn on_gesture_drag(mut event: On<Pointer<Drag>>, parts: GestureTargets, mut comm
                 manipulation.grid,
                 scale,
             );
-            // The primary's whole delta, snap included; the rest of the
-            // selection moves by it.
             let delta = distance * scale + outcome.nudge;
             let rounding = pixel_rounding(&manipulation.kinds);
-            // Only the primary landed on anything, so only the primary
-            // may write a landing's exact percentage.
             let exact = outcome.exact_percent();
             for (ordinal, node) in manipulation.nodes.iter().enumerate() {
-                // Only the primary is resized; the rest of a selection
-                // is carried along by the move.
                 let edges = if ordinal == 0 { edges } else { (0, 0) };
                 let exact = if ordinal == 0 {
                     exact
@@ -3005,12 +2626,10 @@ fn on_gesture_drag(mut event: On<Pointer<Drag>>, parts: GestureTargets, mut comm
     });
 }
 
-/// Move the edges `edges` names by `delta`, in authored pixels.
-///
-/// The rect is `(left, top, width, height)`. A move slides both offsets
-/// and leaves the size alone; a resize moves one or two edges and lets
-/// the opposite ones stay where they are, which is why the near edges
-/// take the delta out of the size again.
+/// Move the edges `edges` names by `delta`, in authored pixels, over a rect
+/// of `(left, top, width, height)`. A move slides both offsets; a resize
+/// holds the opposite edges still, which is why a near edge takes the delta
+/// back out of the size.
 fn drag_edges(rect: Vec4, edges: (i8, i8), delta: Vec2) -> Vec4 {
     let (mut left, mut top, mut width, mut height) = (rect.x, rect.y, rect.z, rect.w);
     match edges {
@@ -3037,14 +2656,10 @@ fn drag_edges(rect: Vec4, edges: (i8, i8), delta: Vec2) -> Vec4 {
 }
 
 /// The rect a gesture may actually write: no thinner than
-/// [`MIN_NODE_SIZE`] on either axis, with the origin held back by
-/// however much the size had to be floored.
-///
-/// The floor alone is not enough. Dragging a left or top handle past the
-/// opposite edge keeps moving `left`/`top` with the cursor while the
-/// width bottoms out, so the node walks off across the canvas a single
-/// pixel wide. The edge not being dragged has to hold still, so the
-/// origin stops exactly [`MIN_NODE_SIZE`] short of it.
+/// [`MIN_NODE_SIZE`] on either axis, with the origin held back by however
+/// much the size had to be floored. Without holding the origin, dragging a
+/// left or top handle past the opposite edge would walk the node off across
+/// the canvas a single pixel wide.
 fn floor_size(rect: Vec4, edges: (i8, i8)) -> Vec4 {
     let (mut left, mut top, mut width, mut height) = (rect.x, rect.y, rect.z, rect.w);
     if width < MIN_NODE_SIZE {
@@ -3062,25 +2677,15 @@ fn floor_size(rect: Vec4, edges: (i8, i8)) -> Vec4 {
     Vec4::new(left, top, width, height)
 }
 
-/// How far the gesture's dragged edges have to move to land on a
-/// neighbour, or on the canvas's pixel grid when no neighbour is near.
+/// How far the gesture's dragged edges have to move to land on a neighbour,
+/// or on the canvas's pixel grid when no neighbour is near.
 ///
-/// The moving geometry is the whole rect for a move and the dragged
-/// edge or corner for a resize, so a resize snaps the edge under the
-/// cursor and leaves the opposite one alone, and both answer the same
-/// lattice.
+/// The moving geometry is the whole rect for a move and the dragged edge or
+/// corner for a resize. Both kinds of snapping are decided by `magnet`
+/// once, at the top, so Ctrl and the master's off state mean one thing.
 ///
-/// # One switch
-///
-/// Both kinds of snapping are decided by `magnet` once, at the top:
-/// [`CanvasSnap::enabled`] inverted by Ctrl for the length of the
-/// gesture. Consulting the individual kinds a second time further down
-/// would make Ctrl mean "edges only" and give the master's off state two
-/// meanings depending on which kind of snap was near.
-///
-/// `grid` is the lattice in authored pixels; `scale` is authored pixels
-/// per pointer pixel, which is what turns [`EDGE_SNAP_PIXELS`] into a
-/// radius the candidates can be measured against.
+/// `grid` is the lattice in authored pixels; `scale` is authored pixels per
+/// pointer pixel, which turns [`EDGE_SNAP_PIXELS`] into a radius.
 fn snap_gesture(
     rect: Vec4,
     edges: (i8, i8),
@@ -3120,8 +2725,8 @@ fn snap_gesture(
     let at_x: Vec<f32> = x.iter().map(|candidate| candidate.at).collect();
     let at_y: Vec<f32> = y.iter().map(|candidate| candidate.at).collect();
     let (won_x, won_y) = snap_edges_2d_with_winners(moving, &at_x, &at_y, EDGE_SNAP_PIXELS * scale);
-    // The grid only has a say on an axis no neighbour claimed; rounding
-    // an edge landing afterwards would take it straight back off.
+    // The grid only has a say on an axis no neighbour claimed; rounding an
+    // edge landing afterwards would take it back off.
     let lattice = snap_to_pixel_grid(moving.min, grid) - moving.min;
     SnapOutcome {
         nudge: Vec2::new(
@@ -3133,13 +2738,9 @@ fn snap_gesture(
     }
 }
 
-/// Name the line an axis landed on.
-///
-/// A resize collapses the moving rect to the dragged corner, so all
-/// three of its lines are the same coordinate and the reported one says
-/// nothing about which edge of the node moved. `edge` is that axis of
-/// the gesture's handle, and it is what decides: a positive edge moved
-/// the far side, a negative one the near side.
+/// Name the line an axis landed on. A resize collapses the moving rect to
+/// the dragged corner, so `edge` is what decides which of the node's lines
+/// it was: positive for the far side, negative for the near one.
 fn winner(snap: jackdaw_snap::AxisSnap, candidates: &[Candidate], edge: i8) -> SnapWinner {
     let candidate = candidates[snap.candidate];
     let line = match edge {
@@ -3155,10 +2756,8 @@ fn winner(snap: jackdaw_snap::AxisSnap, candidates: &[Candidate], edge: i8) -> S
     }
 }
 
-/// `point` rounded onto a lattice of `grid` authored pixels.
-///
-/// A non-positive or non-finite grid is no grid at all rather than a
-/// division by zero: the value comes off a per-panel view.
+/// `point` rounded onto a lattice of `grid` authored pixels. A non-positive
+/// or non-finite grid is no grid at all rather than a division by zero.
 pub fn snap_to_pixel_grid(point: Vec2, grid: f32) -> Vec2 {
     if grid <= 0.0 || !grid.is_finite() {
         return point;
@@ -3206,32 +2805,12 @@ fn finish_manipulation(world: &mut World, commit: bool) {
 /// Move every selected UI node on an authored canvas one step in
 /// `direction`, and say whether there was anything there to move.
 ///
-/// The keyboard half of direct manipulation. It writes through the same
-/// two pieces the pointer does, the rect arithmetic of [`drag_edges`]
-/// and the scheme projection of [`apply_authored_rect`], so a nudged
-/// node keeps the offsets its author wrote and a whole selection moves
-/// together.
-///
-/// # The step
-///
-/// One authored pixel, or the panel's own canvas grid with Shift held,
-/// which is the lattice the header's stepper sets. Not the 3D grid: that
-/// is a lattice of world units, and at the editor's default power it
-/// rounds an authored pixel to a quarter of one.
-///
-/// # Separate from the 3D nudge
-///
-/// The arrow keys are also the editor's 3D nudge, and
-/// [`crate::entity_ops::nudge_selected`] translates a `Transform`. A UI
-/// node has none: a canvas moves its nodes through `Node`, so the same
-/// keys reach a different writer. The selection decides which; see
-/// `crate::transform_ops`.
-///
-/// # One entry per press
-///
-/// A burst of presses is a burst of history entries, matching the 3D
-/// nudge. Nothing coalesces them: a key has no release that marks the
-/// end of an edit the way the scrub fields' pointer release does.
+/// The keyboard half of direct manipulation, written through the same
+/// [`drag_edges`] and [`apply_authored_rect`] the pointer uses. The step is
+/// one authored pixel, or the panel's own canvas grid with Shift held; not
+/// the 3D grid, which is a lattice of world units. One history entry per
+/// press, matching [`crate::entity_ops::nudge_selected`], which the same
+/// keys reach for a 3D selection.
 pub(crate) fn nudge_ui_selection(world: &mut World, direction: Vec2) -> bool {
     let Some(primary) = world
         .get_resource::<Selection>()
@@ -3245,8 +2824,8 @@ pub(crate) fn nudge_ui_selection(world: &mut World, direction: Vec2) -> bool {
     else {
         return false;
     };
-    // The panel showing the canvas the selection is on, and only while
-    // it is being authored: in `Interact` the keys belong to the scene.
+    // Only while the panel is being authored: in `Interact` the keys
+    // belong to the scene.
     let host_entity = {
         let mut panels = world.query::<(Entity, &Viewport2dPanelHost)>();
         panels
@@ -3271,8 +2850,7 @@ pub(crate) fn nudge_ui_selection(world: &mut World, direction: Vec2) -> bool {
         };
         let step = if coarse { host.view.grid } else { 1.0 };
         // A locked node is out of the canvas's reach, and the keys are the
-        // canvas: the pointer path already refuses to pick one up, so a nudge
-        // moving it would be the one gesture the lock did not stop.
+        // canvas.
         let nodes: Vec<GestureNode> = without_selected_ancestors(world, &selected)
             .into_iter()
             .filter(|&entity| world.get::<Locked>(entity).is_none())
@@ -3283,12 +2861,9 @@ pub(crate) fn nudge_ui_selection(world: &mut World, direction: Vec2) -> bool {
     if nodes.is_empty() {
         return false;
     }
-    // A node its parent lays out has no offsets to step: a nudge would
-    // promote it out of the flow, which is a change to the layout and not
-    // the one-pixel move the key asked for. The drag has a rect and a
-    // cursor to promote against; a keystroke has neither, so it refuses
-    // and says so. The canvas still answers, so the 3D nudge does not
-    // take the key instead.
+    // A node its parent lays out has no offsets to step, and promoting it
+    // is a change to the layout rather than the move the key asked for. The
+    // canvas still answers, so the 3D nudge does not take the key instead.
     if let Some(flowed) = nodes
         .iter()
         .find(|node| node.before.position_type != PositionType::Absolute)
@@ -3313,8 +2888,6 @@ pub(crate) fn nudge_ui_selection(world: &mut World, direction: Vec2) -> bool {
         let Some(mut value) = world.get_mut::<Node>(node.entity) else {
             continue;
         };
-        // Kind-blind: a nudge is a keystroke of exactly one step, so
-        // nothing it writes is up to what the canvas offers a drag.
         apply_authored_rect(
             &mut value,
             node.anchors,
@@ -3347,12 +2920,8 @@ fn cancel_manipulation(
 }
 
 /// Keep a line drawn across the stage wherever the running gesture is
-/// landing on something, and nowhere else.
-///
-/// Driven off the gesture rather than off the selection: a landing is a
-/// property of the drag in progress, so the line comes up with the first
-/// drag event that lands and goes on the release, which clears the
-/// outcome.
+/// landing on something, and nowhere else. Driven off the gesture, so the
+/// line comes up with the first drag event that lands and goes on release.
 fn sync_snap_highlights(
     mut commands: Commands,
     manipulation: Res<UiManipulation>,
@@ -3401,10 +2970,7 @@ fn sync_snap_highlights(
             EditorEntity,
             node,
             BackgroundColor(tokens::SNAP_HIGHLIGHT),
-            // Above the outline: the line says where the edge came to
-            // rest, so the edge must not be drawn over it.
             ZIndex(OVERLAY_Z + 1),
-            // A press over the line belongs to the gesture that drew it.
             Pickable::IGNORE,
             ChildOf(line.stage),
         ));
@@ -3412,9 +2978,7 @@ fn sync_snap_highlights(
 }
 
 /// One line the running gesture wants drawn. Every landing is painted
-/// [`tokens::SNAP_HIGHLIGHT`], whatever kind of line it was: the
-/// highlight says the drag came to rest, and the line it came to rest
-/// against is already drawn in its own right.
+/// [`tokens::SNAP_HIGHLIGHT`], whatever kind of line it was.
 struct HighlightLine {
     host: Entity,
     stage: Entity,
@@ -3424,12 +2988,8 @@ struct HighlightLine {
 }
 
 /// The lines the gesture in progress is landing on, in the stage's own
-/// logical pixels.
-///
-/// A candidate is stated from the dragged node's parent, so the
-/// canvas position is the landing plus the parent's own corner. Leaving
-/// that term out draws the line on the canvas origin's copy of it, which
-/// is the same place only while the parent is the root.
+/// logical pixels. A candidate is stated from the dragged node's parent, so
+/// the canvas position is the landing plus the parent's own corner.
 fn highlight_lines(
     manipulation: &UiManipulation,
     hosts: &Query<&Viewport2dPanelHost>,
@@ -3490,12 +3050,10 @@ fn place_highlight(node: &mut Node, axis: CanvasAxis, at: f32) {
     }
 }
 
-/// Draw the open scene's guides over every panel showing it.
-///
-/// Guides are scene data, not a property of a gesture or a selection, so
-/// they stand whatever the canvas is doing; what takes them down is the
-/// panel leaving [`Viewport2dMode::Edit`], where the stage belongs to the
-/// running scene, or the canvas settings saying they are hidden.
+/// Draw the open scene's guides over every panel showing it. Guides are
+/// scene data, so they stand whatever the canvas is doing; what takes them
+/// down is the panel leaving [`Viewport2dMode::Edit`] or the canvas
+/// settings hiding them.
 fn sync_guide_lines(
     mut commands: Commands,
     snap: Res<CanvasSnap>,
@@ -3548,9 +3106,7 @@ fn sync_guide_lines(
             },
             EditorEntity,
             node,
-            // Under the selection chrome: a guide says where to put a
-            // node, and the node being placed is what the user is
-            // looking at.
+            // Under the selection chrome.
             ZIndex(OVERLAY_Z - 1),
             // Pickable, because a guide is dragged by its line.
             Pickable::default(),
@@ -3575,11 +3131,9 @@ struct WantedGuide {
     at: f32,
 }
 
-/// Every guide every panel wants drawn.
-///
-/// A guide's position is canvas-global authored pixels, and the stage
-/// node *is* the canvas, so the whole mapping is the stage's own scale:
-/// there is no parent corner to add, unlike a snap landing.
+/// Every guide every panel wants drawn. A guide's position is canvas-global
+/// authored pixels and the stage node *is* the canvas, so there is no
+/// parent corner to add, unlike a snap landing.
 fn guide_lines(
     snap: &CanvasSnap,
     roots: &Query<(Entity, &CanvasGuides), AuthoredUiSceneRoot>,
@@ -3589,8 +3143,8 @@ fn guide_lines(
     if !snap.show_guides {
         return Vec::new();
     }
-    // A malformed document holding several roots picks the lowest
-    // entity, the same one the guide operators write.
+    // A malformed document holding several roots picks the lowest entity,
+    // the same one the guide operators write.
     let Some((_, guides)) = roots.iter().min_by_key(|(entity, _)| *entity) else {
         return Vec::new();
     };
@@ -3676,12 +3230,9 @@ struct GuideDrag {
     dropping: bool,
 }
 
-/// The guides the scene carries while `drag` is running, with the
-/// dragged line in or out.
-///
-/// A guide dragged onto another is the other one: two lines on the same
-/// pixel are one line the user cannot pull apart again, and the operator
-/// that adds a guide refuses the same way.
+/// The guides the scene carries while `drag` is running, with the dragged
+/// line in or out. A guide dragged onto another becomes the other one, the
+/// way the operator that adds a guide refuses a duplicate.
 fn drag_guides(drag: &GuideDrag, keep: bool) -> CanvasGuides {
     let mut guides = drag.before.clone().unwrap_or_default();
     let mut lines = drag.others.clone();
@@ -3708,14 +3259,10 @@ struct GuideTargets<'w, 's> {
     hosts: Query<'w, 's, &'static Viewport2dPanelHost>,
 }
 
-/// The panel a pointer event on a ruler or a guide belongs to, the axis
-/// of the line it is about, and which guide of that axis it is, `None`
-/// for a ruler, where a drag draws a new one.
-///
-/// Resolved synchronously so the observer can stop propagation before
-/// the event climbs out of the panel and into the dock. Only the primary
-/// button and only [`Viewport2dMode::Edit`], like every other gesture on
-/// the canvas.
+/// The panel a pointer event on a ruler or a guide belongs to, the axis of
+/// the line it is about, and which guide of that axis it is, `None` for a
+/// ruler, where a drag draws a new one. Resolved synchronously so the
+/// observer can stop propagation before the event reaches the dock.
 fn guide_gesture(
     target: Entity,
     button: PointerButton,
@@ -3746,24 +3293,16 @@ struct GuidePointer<'w, 's> {
 }
 
 /// How far from the drawn line a press still belongs to the guide, in
-/// logical screen pixels: the canvas zoom sizes the stage node rather
-/// than scaling the pointer, so the target is the same width at any zoom.
+/// logical screen pixels, which is the same width at any zoom.
 const GUIDE_GRAB_RADIUS: f32 = 1.0;
 
-/// Whether a guide takes a pointer event at `cursor`, or lets it through
-/// to the canvas underneath.
+/// Whether a guide takes a pointer event at `cursor`, or lets it through to
+/// the canvas underneath.
 ///
-/// The slab a guide is picked up by is [`GUIDE_HIT_WIDTH`] across, so
-/// the line is not a one-pixel target, but only the middle of the slab
-/// is the guide's: a press within [`GUIDE_GRAB_RADIUS`] of the drawn
-/// line grabs the line, and the pixels either side of that fall through
-/// to whatever the canvas has there. A guide drawn along a node's edge
-/// -- which is what guides are for -- can therefore still be dragged off
-/// the line itself, while the node it marks stays selectable a pixel
-/// away, whichever of the two is on top.
-///
-/// A press on a ruler is never over the canvas at all, so a ruler always
-/// takes its own.
+/// The slab is [`GUIDE_HIT_WIDTH`] across, but only the middle of it is the
+/// guide's: a press within [`GUIDE_GRAB_RADIUS`] of the drawn line grabs
+/// the line, and the pixels either side fall through, so a node a guide is
+/// drawn along stays selectable. A ruler always takes its own.
 fn guide_takes_the_press(
     pointer: &GuidePointer,
     guide: Option<Entity>,
@@ -3803,25 +3342,19 @@ fn on_guide_drag_start(
         return;
     };
     let cursor = event.pointer_location.position / pointer.ui_scale.0;
-    // The press off the line went to the canvas, so the drag that
-    // follows it belongs to the canvas too.
     if !guide_takes_the_press(&pointer, index.map(|_| target), axis, cursor) {
         return;
     }
     event.propagate(false);
     commands.queue(move |world: &mut World| {
         let started = begin_guide_drag(world, host, axis, index, cursor);
-        // A drag that could not be measured leaves nothing half-built
-        // behind for the next event to act on.
         world.resource_mut::<GuideManipulation>().active = started;
     });
 }
 
-/// Pick a guide up, drawing a new one under the cursor when the drag
-/// came off a ruler rather than off a line.
-///
-/// The new guide goes straight onto the scene: it is what the drag is
-/// showing, and the history hears about it once, on release.
+/// Pick a guide up, drawing a new one under the cursor when the drag came
+/// off a ruler rather than off a line. The new guide goes straight onto the
+/// scene; the history hears about it once, on release.
 fn begin_guide_drag(
     world: &mut World,
     host: Entity,
@@ -3902,13 +3435,10 @@ fn on_guide_drag_end(mut event: On<Pointer<DragEnd>>, parts: GuideTargets, mut c
     commands.queue(|world: &mut World| finish_guide_drag(world, true));
 }
 
-/// End the guide drag, either keeping the line where the cursor left it
-/// or putting the guides back the way the drag found them.
-///
-/// A release over the guide's own ruler takes it off the canvas: the
-/// ruler is where a guide comes from, so it is where one goes back to.
-/// Either way the history hears exactly one entry, and none at all when
-/// the guides ended up where they started.
+/// End the guide drag, either keeping the line where the cursor left it or
+/// putting the guides back the way the drag found them. A release over the
+/// guide's own ruler takes it off the canvas. Exactly one history entry,
+/// and none when the guides ended up where they started.
 fn finish_guide_drag(world: &mut World, commit: bool) {
     let Some(drag) = world.resource_mut::<GuideManipulation>().active.take() else {
         return;
@@ -3926,13 +3456,9 @@ fn finish_guide_drag(world: &mut World, commit: bool) {
 }
 
 /// Put back whatever a canvas gesture is in the middle of, recording
-/// nothing.
-///
-/// Undo and redo restore the very components a running gesture is
-/// editing, and the gesture is still holding the state it started from:
-/// its release would write that back over what the history just put
-/// there, and record the difference as an edit the user never made. So
-/// an undo cancels the gesture first, exactly as Escape does.
+/// nothing. Undo restores the very components a running gesture is editing,
+/// so the gesture is cancelled first, exactly as Escape does; otherwise its
+/// release would write its start state back over what the history put there.
 pub fn cancel_canvas_gestures(world: &mut World) {
     finish_manipulation(world, false);
     finish_guide_drag(world, false);
@@ -3954,13 +3480,9 @@ fn cancel_guide_drag(
 }
 
 /// Where a guide dragged to `cursor` comes to rest, in canvas-global
-/// authored pixels.
-///
-/// Whole pixels at the least: a guide is read back as a figure and typed
-/// into the inspector, and a line at 320.37 is one nothing else can be
-/// aimed at. With the canvas's magnet on it lands on the panel's own
-/// lattice instead, the one a dragged node lands on, and Ctrl inverts
-/// that exactly as it inverts a node's drag.
+/// authored pixels. Whole pixels at the least, so the figure can be typed
+/// back into the inspector; with the canvas's magnet on it lands on the
+/// panel's own lattice instead, and Ctrl inverts that.
 fn guide_landing(world: &World, host: Entity, axis: CanvasAxis, cursor: Vec2) -> Option<f32> {
     let raw = axis_of(cursor_on_canvas(world, host, cursor)?, axis);
     let ctrl = world
@@ -4003,14 +3525,10 @@ fn cursor_on_canvas(world: &World, host: Entity, cursor: Vec2) -> Option<Vec2> {
     Some(stage_to_authored(offset, host.target_size))
 }
 
-/// Where `authored` (canvas-global authored pixels) is showing on a
-/// panel, in ui-logical pixels: [`cursor_on_canvas`] run backwards.
-///
-/// What lets a caller aim at the canvas's own coordinates -- a node's
-/// position as the inspector states it -- rather than at wherever the
-/// panel has been docked and however far it has been panned. A degenerate
-/// stage answers `None` rather than an infinity, the same refusal
-/// [`crate::viewport_2d::target_pixels_per_stage_pixel`] guards against.
+/// Where `authored` (canvas-global authored pixels) is showing on a panel,
+/// in ui-logical pixels: [`cursor_on_canvas`] run backwards, so a caller
+/// can aim at the canvas's own coordinates rather than at wherever the
+/// panel has been docked and panned. A degenerate stage answers `None`.
 pub(crate) fn canvas_to_cursor(world: &World, host: Entity, authored: Vec2) -> Option<Vec2> {
     let host = world.get::<Viewport2dPanelHost>(host)?;
     let computed = world.get::<ComputedNode>(host.stage)?;
@@ -4024,12 +3542,8 @@ pub(crate) fn canvas_to_cursor(world: &World, host: Entity, authored: Vec2) -> O
 }
 
 /// Whether the cursor has gone past the stage area on the side the ruler
-/// for `axis` sits on: the top for a vertical guide, the left for a
-/// horizontal one.
-///
-/// Measured against the area rather than against the ruler, so the
-/// answer is the same wherever along the gutter the cursor is, and going
-/// past the gutter altogether still counts.
+/// for `axis` sits on. Measured against the area rather than the ruler, so
+/// going past the gutter altogether still counts.
 fn past_the_rulers_edge(world: &World, host: Entity, axis: CanvasAxis, cursor: Vec2) -> bool {
     let Some(host) = world.get::<Viewport2dPanelHost>(host) else {
         return false;
@@ -4049,16 +3563,10 @@ fn past_the_rulers_edge(world: &World, host: Entity, axis: CanvasAxis, cursor: V
     }
 }
 
-/// A handle straddling the edge or corner it drags: offset by half its
-/// own size so it sits centred on the outline rather than inside it.
-///
-/// The border is inside the square, because Bevy measures a `Node` as
-/// its border box: the handle stays [`HANDLE_SIZE`] on a side, so its
-/// hit area matches what is drawn.
-///
-/// On an axis where `outside` is set the offset is the whole handle
-/// rather than half of it, so the handle sits clear of the node instead
-/// of over it. See [`HANDLES_OUTSIDE_BELOW`].
+/// A handle straddling the edge or corner it drags: offset by half its own
+/// size so it sits centred on the outline rather than inside it. On an axis
+/// where `outside` is set the offset is the whole handle, so it sits clear
+/// of the node. See [`HANDLES_OUTSIDE_BELOW`].
 fn handle_node(x: i8, y: i8, outside: BVec2) -> Node {
     let mut node = Node {
         position_type: PositionType::Absolute,

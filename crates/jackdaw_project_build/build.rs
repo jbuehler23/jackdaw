@@ -1,19 +1,14 @@
 //! Assemble the embedded SDK-builder recipe.
 //!
-//! When built in the jackdaw workspace with the `embed-recipe` feature,
-//! this copies every workspace library crate and a self-contained pure
-//! `[workspace]` root manifest into an `include_bytes!` table plus a
-//! content hash. A shipped jackdaw extracts this at first use and builds
-//! the SDK (`cargo build -p jackdaw_sdk -p
-//! jackdaw_rustc_wrapper`) against the user's toolchain; cargo compiles
-//! only those targets and their closure, so shipping every crate's
-//! source (but not the editor's) keeps the manifest correct without
-//! per-crate dependency surgery.
+//! Under the `embed-recipe` feature this copies every workspace library crate
+//! and a pure `[workspace]` root manifest into an `include_bytes!` table plus a
+//! content hash. A shipped jackdaw extracts this at first use and builds the SDK
+//! against the user's toolchain; cargo compiles only the SDK targets' closure,
+//! so shipping every crate's source keeps the manifest correct without per-crate
+//! dependency surgery.
 //!
-//! No-op unless `embed-recipe` is set, so ordinary dev builds pay nothing.
-//! Also a no-op when compiled OUTSIDE the workspace, which is what happens
-//! when the extracted recipe rebuilds this crate: no workspace to read, so
-//! it embeds nothing and does not recurse.
+//! A no-op without the feature, and a no-op when compiled outside the workspace,
+//! which is what stops the extracted recipe recursing.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -44,11 +39,9 @@ fn main() {
     println!("cargo:rustc-env=RECIPE_HASH={hash}");
 
     if assembled && let Some(ws) = workspace.as_deref() {
-        // Deep-watch every recipe source. `rerun-if-changed` on a
-        // directory tracks only that directory entry, not nested file
-        // contents, so an edit inside a crate would leave the embedded
-        // recipe (and its hash) stale until a clean build. Emit one line
-        // per file so any source change re-runs assembly and re-hashes.
+        // Deep-watch every recipe source. `rerun-if-changed` on a directory
+        // tracks only that directory entry, so an edit inside a crate would
+        // leave the embedded recipe and its hash stale until a clean build.
         emit_rerun_for_tree(&ws.join("crates"));
         println!("cargo:rerun-if-changed={}", ws.join("Cargo.toml").display());
         println!("cargo:rerun-if-changed={}", ws.join("Cargo.lock").display());
@@ -61,16 +54,12 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_EMBED_RECIPE");
 }
 
-/// Record where the jackdaw crates this build is made of can be fetched
-/// from, so a project it scaffolds can ask for the same ones.
+/// Record where the jackdaw crates this build is made of can be fetched from, so
+/// a project it scaffolds can ask for the same ones.
 ///
-/// A published build says so through `JACKDAW_RELEASE_BUILD`, which the
-/// release workflow sets: nothing readable from the source tree
-/// distinguishes the commit a release is cut from, and guessing wrong
-/// writes a version requirement no registry can answer. Otherwise the
-/// revision, which both a `cargo install --git` checkout and a
-/// developer's own tree have. Failing both -- an unpacked tarball with no
-/// git and no release -- the workspace on this machine.
+/// A published build says so through `JACKDAW_RELEASE_BUILD`: nothing readable
+/// from the source tree distinguishes the commit a release is cut from.
+/// Otherwise the revision, and failing that the workspace on this machine.
 fn emit_build_source(manifest_dir: &Path, workspace: Option<&Path>) {
     println!("cargo:rerun-if-env-changed=JACKDAW_RELEASE_BUILD");
     let source = if env::var_os("JACKDAW_RELEASE_BUILD").is_some_and(|flag| flag == "1") {
@@ -104,9 +93,8 @@ fn git_head(dir: &Path) -> Option<String> {
     full.then_some(rev)
 }
 
-/// True only for the jackdaw editor workspace with the crates present. In
-/// an extracted recipe (a pure virtual workspace) this is false, so
-/// assembly is skipped and there is no recursion.
+/// True only for the jackdaw editor workspace with the crates present. False in
+/// an extracted recipe, so assembly is skipped and there is no recursion.
 fn is_main_workspace(ws: &Path) -> bool {
     let Ok(text) = fs::read_to_string(ws.join("Cargo.toml")) else {
         return false;
@@ -117,18 +105,13 @@ fn is_main_workspace(ws: &Path) -> bool {
 }
 
 fn assemble_recipe(ws: &Path, recipe: &Path) -> bool {
-    // Every workspace library crate. `cargo build -p <sdk targets>` only
-    // compiles the three targets' closure; the rest ride along so all
-    // `.workspace = true` path deps (including optional ones) resolve.
+    // Every workspace library crate. `cargo build -p <sdk targets>` compiles only
+    // those targets' closure; the rest ride along so all `.workspace = true` path
+    // deps resolve.
     //
-    // Except any crate that depends on the editor package itself. The
-    // recipe's root is a pure virtual workspace with no `jackdaw`
-    // package in it, so such a crate's path dependency cannot resolve
-    // and cargo rejects the whole workspace before compiling anything:
-    //   found a virtual manifest at .../build/Cargo.toml
-    //   instead of a package manifest
-    // That aborts SDK setup entirely, which leaves the editor unable to
-    // build any project.
+    // Except any crate depending on the editor package itself: the recipe's root
+    // is a pure virtual workspace with no `jackdaw` package, so such a path
+    // dependency cannot resolve and cargo rejects the whole workspace.
     copy_dir_filtered(&ws.join("crates"), &recipe.join("crates"), &|crate_dir| {
         !depends_on_editor(crate_dir)
     });
@@ -140,9 +123,8 @@ fn assemble_recipe(ws: &Path, recipe: &Path) -> bool {
         fs::write(recipe.join("Cargo.lock"), lock).unwrap();
     }
     // The extracted first-run SDK has no checkout-level `.cargo/config.toml`.
-    // Preserve the Mach-O/PE dylib codegen rule there too, or a prepared macOS
-    // or Windows SDK can contain unresolved shared-generic instantiations even
-    // though release bundles built from the checkout are sound.
+    // Preserve the Mach-O/PE dylib codegen rule there too, or a prepared macOS or
+    // Windows SDK can contain unresolved shared-generic instantiations.
     fs::create_dir_all(recipe.join(".cargo")).unwrap();
     fs::write(
         recipe.join(".cargo/config.toml"),
@@ -153,15 +135,12 @@ fn assemble_recipe(ws: &Path, recipe: &Path) -> bool {
     true
 }
 
-/// Emit `cargo:rerun-if-changed` for every file the recipe ships,
-/// recursively, skipping build output, VCS metadata and the target
-/// directories the recipe leaves out, so a change to any recipe source
-/// re-runs the build script and refreshes the embedded hash -- and a
-/// change to anything else does not.
+/// Emit `cargo:rerun-if-changed` for every file the recipe ships, recursively,
+/// skipping build output, VCS metadata and the target directories the recipe
+/// leaves out.
 ///
-/// The watch has to match [`copy_dir_filtered`]'s filter exactly. Watch
-/// less and the hash goes stale, which is silent; watch more and the
-/// script re-runs to produce the same hash, which is merely wasteful.
+/// The watch has to match [`copy_dir_filtered`]'s filter exactly: watch less and
+/// the hash goes stale silently, watch more and the script re-runs for nothing.
 fn emit_rerun_for_tree(dir: &Path) {
     emit_rerun_at_depth(dir, 0);
 }
@@ -209,19 +188,15 @@ fn depends_on_editor(crate_dir: &Path) -> bool {
 
 /// Cargo target directories the SDK build never compiles.
 ///
-/// `cargo build -p jackdaw_sdk` builds libraries. A crate's tests,
-/// examples and benches are separate targets that build only when asked
-/// for, so shipping them in the recipe adds nothing the SDK can use --
-/// and, because the recipe's content hash is the SDK cache's stamp,
-/// editing one of them invalidated the cache and cost a full release
-/// rebuild of the SDK on the next launch. Which is a common edit: they
-/// are where a crate's tests live.
+/// A crate's tests, examples and benches are separate targets that build only
+/// when asked for, so shipping them adds nothing the SDK can use -- and, because
+/// the recipe's content hash is the SDK cache's stamp, editing one of them cost a
+/// full SDK rebuild on the next launch.
 ///
-/// Excluded by directory name rather than by reading each manifest,
-/// which is sound only while no crate declares an explicit `[[test]]`,
-/// `[[example]]` or `[[bench]]` target pointing outside them.
-/// `no_shipped_crate_declares_an_explicit_test_or_example_target`
-/// guards that.
+/// Excluded by directory name rather than by reading each manifest, which is
+/// sound only while no crate declares an explicit `[[test]]`, `[[example]]` or
+/// `[[bench]]` target pointing outside them;
+/// `no_shipped_crate_declares_an_explicit_test_or_example_target` guards that.
 const UNSHIPPED_TARGET_DIRS: &[&str] = &["tests", "examples", "benches"];
 
 /// Whether `dir` is one of [`UNSHIPPED_TARGET_DIRS`], directly inside a
@@ -270,11 +245,9 @@ fn copy_dir_at_depth(src: &Path, dst: &Path, keep: &dyn Fn(&Path) -> bool, depth
     }
 }
 
-/// The recipe's root manifest: the workspace's own `[workspace]` table
-/// (its `[workspace.dependencies]`, `[workspace.lints]`,
-/// `[workspace.package]`, resolver) with `members` narrowed to the
-/// embedded crates and the editor package dropped, so it is a pure
-/// virtual workspace of exactly the library crates.
+/// The recipe's root manifest: the workspace's own `[workspace]` table with
+/// `members` narrowed to the embedded crates and the editor package dropped, so
+/// it is a pure virtual workspace of exactly the library crates.
 fn generate_root_manifest(ws: &Path) -> Option<String> {
     let text = fs::read_to_string(ws.join("Cargo.toml")).ok()?;
     let doc: toml::Value = toml::from_str(&text).ok()?;
@@ -283,11 +256,9 @@ fn generate_root_manifest(ws: &Path) -> Option<String> {
         "members".to_string(),
         toml::Value::Array(vec![toml::Value::String("crates/*".to_string())]),
     );
-    // A virtual workspace has no root package edition to imply a resolver,
-    // so it would default to resolver 1 and unify features differently than
-    // the editor (edition 2024 => resolver 3). Pin it to match, or the SDK
-    // dylib is built with a different feature set and every build that
-    // touches a different package subset re-resolves and re-links.
+    // A virtual workspace has no root package edition to imply a resolver, so it
+    // would default to resolver 1 and unify features differently than the editor
+    // (edition 2024 => resolver 3).
     workspace.insert("resolver".to_string(), toml::Value::String("3".to_string()));
     // These reference paths outside the embedded crates.
     workspace.remove("exclude");

@@ -105,9 +105,8 @@ pub struct DocumentTabButton(pub TabKind);
 #[derive(Component)]
 pub struct DocumentRoot(pub TabKind);
 
-/// Marker on the center column container. Retained as a hook for
-/// systems that want to find the main viewport-plus-bottom-panels
-/// area. Formerly driven by `SceneViewPreset`; now unconditional.
+/// Marker on the center column container: the hook for systems that want
+/// to find the main viewport-plus-bottom-panels area.
 #[derive(Component)]
 pub struct SceneCenter;
 

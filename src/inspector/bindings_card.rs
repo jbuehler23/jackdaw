@@ -1,26 +1,10 @@
-//! The `Bindings` inspector card.
+//! The `Bindings` inspector card: a row per binding, with pickers for the
+//! places it reads and writes.
 //!
-//! A binding names two places in the game: read the player's health, write
-//! the bar's width. The generic reflect renderer shows one as a list of enum
-//! variants over raw strings, so authoring it means typing reflect paths from
-//! memory. This card draws the same data as a row per binding: what kind of
-//! connection it is, where it reads, what it runs the value through, where it
-//! writes, and a badge on anything that names nothing.
-//!
-//! Two rules hold the card together.
-//!
-//! **One write primitive.** Every control here (a picker, a checkbox, a
-//! reorder arrow, the footer menu) builds the whole new [`Bindings`] value
-//! in memory and commits it through `crate::commands::field_edit_commit`
-//! with an EMPTY field path. That is the registered-type whole-component
-//! replacement path, so one gesture is one document patch and one undo
-//! entry. With more than one entity selected that list lands on all of them,
-//! the way every other field on the panel behaves.
-//!
-//! **Pickers write full type paths.** A [`BindPath`] takes either a short or
-//! a full type path and the runtime resolves both; the editor knows the full
-//! one, so it writes the full one and ambiguity never arises. Only the
-//! display shortens.
+//! Every control builds the whole new `Bindings` value and commits it through
+//! `crate::commands::field_edit_commit` with an empty field path, so one
+//! gesture is one document patch and one undo entry. Pickers always write
+//! full type paths; only the display shortens.
 
 use bevy::ecs::component::ComponentInfo;
 use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent, ReflectResource};
@@ -49,10 +33,8 @@ use jackdaw_scene_types::PropertyValue;
 
 use super::material_card_routing::RefreshInspectorCardBody;
 
-/// The reflect path of the component this card stands in for. Also the
-/// card's `ComponentDisplayTypePath`, so a targeted body refresh finds it.
-/// Asked of the type rather than spelled out, so moving `Bindings` inside its
-/// crate moves the card with it.
+/// The reflect path of the component this card stands in for, and the card's
+/// `ComponentDisplayTypePath`.
 pub fn bindings_type_path() -> &'static str {
     <Bindings as bevy::reflect::TypePath>::type_path()
 }
@@ -62,19 +44,12 @@ const GROUP_LABEL: &str = "Edit bindings on multiple entities";
 
 /// Room a type or field picker asks for on a path row.
 const PICKER_WIDTH: f32 = 96.0;
-/// How far a picker gives way before the row wraps it onto its own line
-/// instead. Below this a short type name is already losing characters.
+/// How far a picker gives way before the row wraps it onto its own line.
 const PICKER_MIN_WIDTH: f32 = 72.0;
 
-/// A path row's type and field pickers share their line, and give way
-/// together, down to the width a name still reads at.
-///
-/// The floor is carried by the basis and the row's wrap, not by a
-/// `min_width`: a picker that cannot keep [`PICKER_MIN_WIDTH`] beside a
-/// neighbour is dropped onto a line of its own, where it gets the whole
-/// row. A `min_width` would add only the case the row cannot honour, a panel
-/// narrower than the floor itself, and there it hangs the picker past the
-/// panel's edge, which clips it away entirely.
+/// Node for a path row's type and field pickers, which share a line and give
+/// way together. The floor comes from the basis and the row's wrap rather than
+/// a `min_width`, which would clip the picker on a very narrow panel.
 fn picker_node() -> Node {
     Node {
         flex_grow: 1.0,
@@ -85,19 +60,11 @@ fn picker_node() -> Node {
     }
 }
 
-// ---------------------------------------------------------------------------
-// What the card is made of
-// ---------------------------------------------------------------------------
-
-/// Marker on the card body, so a test (and a targeted refresh) can tell this
-/// card from the generic one. It carries the entity it was filled for, which
-/// is what lets [`refresh_bindings_card_on_change`] watch exactly the
-/// entities a card is currently showing and nothing else.
+/// Marker on the card body, carrying the entity it was filled for.
 #[derive(Component)]
 pub struct BindingsCardBody(pub Entity);
 
-/// Marker on a binding row's summary line, the text that turns red when
-/// something in the row resolves against nothing.
+/// Marker on a binding row's summary line.
 #[derive(Component)]
 pub struct BindingRowLabel;
 
@@ -107,14 +74,11 @@ pub struct AddBindingMenu {
     source: Entity,
 }
 
-/// What a picker on this card would write, in option order. The combobox
-/// keeps its own options private, so this is both the card's index of what
-/// it offered and the only way to see the feed from outside.
+/// What a picker on this card would write, in option order.
 #[derive(Component)]
 pub struct BindingOptions(Vec<String>);
 
-/// The five shapes a binding can take. [`Binding`] has no `Default`, so the
-/// card owns constructing one of each.
+/// The five shapes a binding can take.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BindKind {
     Field,
@@ -163,9 +127,7 @@ impl BindKind {
         }
     }
 
-    /// A binding of this kind with nothing chosen yet. Every path starts
-    /// empty rather than guessed: an empty path reads as "not picked" on the
-    /// card, where a plausible-looking wrong one would read as done.
+    /// A binding of this kind with nothing chosen yet.
     fn new_binding(self, carried: Option<BindPath>) -> Binding {
         let carried = carried.unwrap_or_default();
         match self {
@@ -195,17 +157,14 @@ impl BindKind {
     }
 }
 
-/// Where in a binding one [`BindPath`] lives. `Read(0)` is the single path
-/// of a `Visible` or `Value` binding as well as the first of a `Field`'s
-/// reads or a `Text`'s args, because all four are the same control.
+/// Where in a binding one `BindPath` lives. `Read(0)` covers the single path
+/// of a `Visible` or `Value` as well as the first read of a `Field` or `Text`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PathSlot {
     Read(usize),
     Write,
-    /// An `Action`'s mapping for one of its event's fields. Which field is
-    /// carried by the control, not the slot, because the mapping is by name:
-    /// the card renders a row per field the event declares, whether or not
-    /// the binding maps it yet.
+    /// An `Action`'s mapping for one of its event's fields. The field name is
+    /// carried by the control rather than the slot, since mapping is by name.
     EventField,
 }
 
@@ -216,7 +175,7 @@ pub enum BindControl {
     Kind,
     /// Component or resource, for a path that could be either.
     PathSource(PathSlot),
-    /// The type half of a path. Writes the FULL type path.
+    /// The type half of a path, written as a full type path.
     PathType(PathSlot),
     /// The field half of a path.
     PathField(PathSlot),
@@ -242,8 +201,7 @@ pub struct BindingControl {
     source: Entity,
     binding: usize,
     control: BindControl,
-    /// The event field name for a [`PathSlot::EventField`] control; empty
-    /// otherwise.
+    /// The event field name for a `PathSlot::EventField` control; empty otherwise.
     event_field: String,
 }
 
@@ -286,10 +244,6 @@ pub fn combo_option_values(world: &World, combo: Entity) -> Vec<String> {
         .map(|options| options.0.clone())
         .unwrap_or_default()
 }
-
-// ---------------------------------------------------------------------------
-// Reading and writing a path inside a binding
-// ---------------------------------------------------------------------------
 
 /// The path at `slot`, or `None` when the binding has no such slot.
 fn path_at<'a>(binding: &'a Binding, slot: PathSlot, event_field: &str) -> Option<&'a BindPath> {
@@ -384,8 +338,7 @@ fn via_arity(binding: &Binding) -> usize {
 }
 
 /// Split a raw path into its resource flag, its type path and its field. A
-/// marker path names a type and no field, which is a whole path and not half
-/// of one.
+/// marker path names a type and no field.
 fn decompose(raw: &str) -> (bool, String, String) {
     if let Some(marker) = BindPath::new(raw).marker_type() {
         return (false, marker.to_string(), String::new());
@@ -397,9 +350,8 @@ fn decompose(raw: &str) -> (bool, String, String) {
     }
 }
 
-/// Put a path back together from its three halves. Half a path is no path:
-/// a picker with nothing chosen writes an empty raw rather than a `Type.`
-/// that only parses to an error.
+/// Put a path back together from its three halves. Half a path composes to an
+/// empty raw rather than a `Type.` that only parses to an error.
 fn compose(is_resource: bool, type_path: &str, field: &str) -> String {
     if type_path.is_empty() || field.is_empty() {
         return String::new();
@@ -411,8 +363,8 @@ fn compose(is_resource: bool, type_path: &str, field: &str) -> String {
     }
 }
 
-/// The same, for a type the picker has an entry for. A marker has no field to
-/// pick, so the type on its own is the finished path.
+/// The same, for a type the picker has an entry for. A marker's type path is
+/// already the finished path.
 fn compose_option(
     option: Option<&TypeOption>,
     is_resource: bool,
@@ -425,34 +377,25 @@ fn compose_option(
     compose(is_resource, type_path, field)
 }
 
-// ---------------------------------------------------------------------------
-// What the pickers can offer
-// ---------------------------------------------------------------------------
-
-/// One type a path may name: what to write, what to show, and what fields it
-/// has. `pickable` separates the two jobs this list does: everything in it
-/// can be validated against, but only some of it belongs in a dropdown.
+/// One type a path may name. Everything in the list can be validated against;
+/// only the `pickable` entries belong in a dropdown.
 struct TypeOption {
     type_path: String,
     short_name: String,
     fields: Vec<String>,
     pickable: bool,
-    /// A component with nothing in it, which a `Field` binding writes by
-    /// putting it on and taking it off. It names no field, so the row shows
-    /// one picker instead of two.
+    /// A component with no fields, which a `Field` binding writes by putting it
+    /// on and taking it off.
     marker: bool,
     /// This entity already carries the component, or its document node does.
-    /// Write targets are ordered by it: what the widget has comes before what
-    /// it could be given. Meaningless on the read lists, which are never
-    /// ordered this way.
+    /// Write targets are ordered by it; the read lists ignore it.
     on_widget: bool,
 }
 
 struct EventOption {
     type_path: String,
     short_name: String,
-    /// The fields a binding has to fill; the dispatcher's own `entity` field
-    /// is not one of them.
+    /// The fields a binding has to fill, excluding the dispatcher's own `entity`.
     fields: Vec<String>,
     fills_gaps: bool,
 }
@@ -463,16 +406,15 @@ struct FunctionOption {
     arity: usize,
 }
 
-/// Everything the card needs to know about the project and the world to
-/// build its pickers and judge what is already authored.
+/// What the card knows about the project and the world when building pickers.
 struct SchemaCtx {
     components: Vec<TypeOption>,
     resources: Vec<TypeOption>,
     write_targets: Vec<TypeOption>,
     events: Vec<EventOption>,
     functions: Vec<FunctionOption>,
-    /// True once the editor has a project schema. Before that it has no
-    /// grounds to call a game type unknown, so it does not.
+    /// True once the editor has a project schema; before that no game type can
+    /// be called unknown.
     schema_known: bool,
 }
 
@@ -484,9 +426,7 @@ fn short_of(type_path: &str) -> String {
         .to_string()
 }
 
-/// The field names of a reflected type, as a reflect path would address
-/// them. Tuple fields answer by index, matching how the schema reports a
-/// tuple struct.
+/// The field names of a reflected type, as a reflect path addresses them.
 fn fields_of(info: &TypeInfo) -> Vec<String> {
     match info {
         TypeInfo::Struct(s) => s.iter().map(|f| f.name().to_string()).collect(),
@@ -522,9 +462,8 @@ impl SchemaCtx {
         };
         ctx.components.sort_by(by_name);
         ctx.resources.sort_by(by_name);
-        // What the widget carries comes first, then the markers offered off
-        // the registry that it does not carry, since a marker binding exists
-        // to put one on.
+        // What the widget carries comes first; a marker binding exists to put
+        // one on, so markers it does not carry still follow.
         ctx.write_targets.sort_by(|a, b| {
             b.on_widget
                 .cmp(&a.on_widget)
@@ -568,19 +507,16 @@ impl SchemaCtx {
         }
         for schema in project.events() {
             self.schema_known = true;
-            // An enum event is in the schema, but the dispatcher builds its
-            // value field by field and cannot choose a variant, so offering
-            // one would be offering a binding that never fires.
+            // The dispatcher builds its value field by field and cannot choose
+            // a variant, so an enum event would never fire.
             if schema.kind != jackdaw_schema::TypeKind::Struct {
                 continue;
             }
             self.events.push(EventOption {
                 type_path: schema.type_path.clone(),
                 short_name: schema.short_name.clone(),
-                // Every entity field is left out, not just one named
-                // `entity`: the dispatcher fills that one from the widget's
-                // context and refuses the rest outright, and a bind value
-                // could not carry an entity to fill them with anyway.
+                // The dispatcher fills entity fields from the widget's context,
+                // and a bind value cannot carry an entity anyway.
                 fields: schema
                     .fields
                     .iter()
@@ -592,9 +528,8 @@ impl SchemaCtx {
         }
         for schema in project.functions() {
             self.schema_known = true;
-            // `callable_by_value` is the whole filter: the evaluator builds
-            // its arguments owned and takes only an owned return, so
-            // anything else is unusable however it is spelled.
+            // The evaluator builds its arguments owned and takes only an owned
+            // return, so anything else is unusable.
             if !schema.callable_by_value() {
                 continue;
             }
@@ -606,11 +541,8 @@ impl SchemaCtx {
         }
     }
 
-    /// The editor's own registrations. Every registered component and
-    /// resource can be validated against; only the components the bound
-    /// entity (or its bind context) actually carries reach a dropdown,
-    /// because a dropdown of the whole registry has no search box and no
-    /// floor.
+    /// The editor's own registrations. Everything registered can be validated
+    /// against, but only what the bound entity carries reaches a dropdown.
     fn gather_native(
         &mut self,
         world: &World,
@@ -649,8 +581,7 @@ impl SchemaCtx {
                 }
                 on_hand.insert(type_path.to_string());
                 // A `Field` binding writes to the widget it sits on, so the
-                // write picker is that entity's own archetype and nothing
-                // else.
+                // write picker is that entity's own archetype.
                 if index == 0 {
                     self.write_targets.push(TypeOption {
                         type_path: type_path.to_string(),
@@ -701,18 +632,9 @@ impl SchemaCtx {
         }
     }
 
-    /// A marker component: a struct with nothing in it, which a `Field`
-    /// binding writes by putting it on the widget or taking it off.
-    /// `InteractionDisabled` is the case this exists for: disabling a button
-    /// until a form is valid has no field to drive.
-    ///
-    /// Unlike the other write targets these are offered whether or not the
-    /// widget carries one, since the binding exists to put one on. Three
-    /// things have to hold or authoring it would produce a binding that
-    /// looks right and is not: reflection has to be able to build the
-    /// component (that is what `true` writes), the type has to be a
-    /// component at all, and the save policy has to keep it, or the marker
-    /// would go missing the first time the document is reloaded.
+    /// Offer a fieldless component as a marker write target, whether or not the
+    /// widget carries one. Reflection has to be able to build it and the save
+    /// policy has to keep it, or the binding would author cleanly and fail later.
     fn gather_marker(&mut self, registration: &bevy::reflect::TypeRegistration, type_path: &str) {
         let empty_struct = matches!(
             registration.type_info(),
@@ -741,13 +663,9 @@ impl SchemaCtx {
         });
     }
 
-    /// The project components the document authored on this entity.
-    ///
-    /// These are write targets too, and the archetype walk above cannot see
-    /// them: a project component is never a real ECS component in the editor
-    /// (its type lives in the game binary), so it exists only as a patch on
-    /// the node. Without this a `Field` writing to a game component on its
-    /// own entity would be unpickable AND badged as an unknown type.
+    /// The project components the document authored on this entity. A project
+    /// component is never a real ECS component in the editor, so the archetype
+    /// walk cannot see it and it has to be collected off the node.
     fn gather_authored_project(&mut self, world: &World, source: Entity) {
         let (Some(ast), Some(project)) = (
             world.get_resource::<jackdaw_bsn::SceneBsnAst>(),
@@ -775,12 +693,9 @@ impl SchemaCtx {
                 fields: schema.fields.iter().map(|f| f.name.clone()).collect(),
                 pickable: true,
                 on_widget: true,
-                // A game's own marker is authored the same way a native one
-                // is: the whole component is the value. `fills_gaps` is the
-                // schema's word for what the native side asks `ReflectDefault`;
-                // without it the game cannot build the component either, so
-                // the binding would author cleanly and fail at run time with
-                // nothing but a log line to say why.
+                // `fills_gaps` is the schema's word for what the native side
+                // asks of `ReflectDefault`: without it the game cannot build
+                // the component either.
                 marker: schema.fields.is_empty()
                     && schema.kind == jackdaw_schema::TypeKind::Struct
                     && schema.fills_gaps,
@@ -796,21 +711,17 @@ impl SchemaCtx {
         }
     }
 
-    /// The type a path names, matched on the full path first and the short
-    /// name second: the two spellings a [`BindPath`] accepts.
+    /// The type a path names, matched on the full path first and the short name
+    /// second, the two spellings a `BindPath` accepts.
     fn lookup<'a>(list: &'a [TypeOption], type_path: &str) -> Option<&'a TypeOption> {
         list.iter()
             .find(|option| option.type_path == type_path)
             .or_else(|| list.iter().find(|option| option.short_name == type_path))
     }
 
-    /// Every list a path in `slot` may legitimately name.
-    ///
-    /// Offering and judging are not the same question. A write picker offers
-    /// only what this entity carries, but a write path that names any known
-    /// component is a path the editor has no grounds to call unknown: the
-    /// component may be added by game code, or by a template this node
-    /// inherits, long before the binding runs.
+    /// Every list a path in `slot` may legitimately name. Wider than what the
+    /// picker offers: a component may be added by game code or an inherited
+    /// template long before the binding runs.
     fn judging_lists(&self, slot: PathSlot, is_resource: bool) -> Vec<&[TypeOption]> {
         if is_resource {
             return vec![&self.resources];
@@ -852,13 +763,8 @@ impl SchemaCtx {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------
-
 impl SchemaCtx {
-    /// Why a path would not resolve, or `None` when it would, or when it is
-    /// empty, which is unfinished rather than wrong.
+    /// Why a path would not resolve. An empty path is unfinished, not wrong.
     fn path_error(&self, raw: &str, slot: PathSlot) -> Option<BindError> {
         if raw.is_empty() {
             return None;
@@ -878,11 +784,9 @@ impl SchemaCtx {
             Err(error) => return Some(error),
         };
 
-        // A short name shared by several types is not an unknown type; it is
-        // a spelling the resolver refuses, and saying so names the fix. The
-        // same type can sit in two of these lists, so candidates are counted
-        // by distinct path: a component that is also a write target is one
-        // answer, not an ambiguity.
+        // A short name shared by several types is a spelling the resolver
+        // refuses, not an unknown type. The same type can sit in two lists, so
+        // candidates are counted by distinct path.
         if !type_path.contains("::") {
             let mut candidates: Vec<String> = lists
                 .iter()
@@ -901,8 +805,7 @@ impl SchemaCtx {
         }
 
         let Some(option) = Self::lookup_across(&lists, &type_path) else {
-            // With no project schema the editor has not been told what the
-            // game has, so it cannot call any of it missing.
+            // With no project schema, nothing can be called missing.
             if !self.schema_known {
                 return None;
             }
@@ -911,9 +814,8 @@ impl SchemaCtx {
                 type_path,
             });
         };
-        // Only the leading segment is checked. A nested path (`margin.left`)
-        // resolves the rest at runtime, and half a check beats a red badge on
-        // a path that works.
+        // Only the leading segment is checked; a nested path resolves the rest
+        // at runtime.
         let head = field.split('.').next().unwrap_or(&field);
         if !option.fields.is_empty() && !option.fields.iter().any(|name| name == head) {
             return Some(BindError::ReflectPath {
@@ -925,9 +827,8 @@ impl SchemaCtx {
         None
     }
 
-    /// Why a path naming a whole component would not work. Only a write can
-    /// be spelled that way: a read has to name a value, and a component with
-    /// no fields holds none.
+    /// Why a path naming a whole component would not work. Only a write can be
+    /// spelled that way.
     fn marker_error(&self, type_path: &str, slot: PathSlot) -> Option<BindError> {
         if slot != PathSlot::Write {
             return Some(BindError::MalformedPath {
@@ -937,14 +838,12 @@ impl SchemaCtx {
         }
         match SchemaCtx::lookup(&self.write_targets, type_path) {
             Some(option) if option.marker => None,
-            // A type that is here but is not a marker was named without the
-            // field it needs.
+            // A known type that is not a marker was named without its field.
             Some(_) => Some(BindError::MalformedPath {
                 raw: type_path.to_string(),
                 reason: "expected 'Type.field'",
             }),
-            // With no project schema the editor has not been told what the
-            // game has, so it cannot call any of it missing.
+            // With no project schema, nothing can be called missing.
             None if !self.schema_known => None,
             None => Some(BindError::UnknownType {
                 noun: "type",
@@ -990,9 +889,8 @@ impl SchemaCtx {
         shape_error(binding)
     }
 
-    /// The complaint for one unmapped field of an event that cannot fill its
-    /// own gaps: the one case where an unfinished binding is known to fail at
-    /// dispatch rather than merely be incomplete.
+    /// The complaint for one unmapped field of an event that cannot fill its own
+    /// gaps, the one unfinished binding known to fail at dispatch.
     fn gap_warning(&self, binding: &Binding, field: &str) -> Option<BindError> {
         let Binding::Action { event, fields } = binding else {
             return None;
@@ -1008,12 +906,8 @@ impl SchemaCtx {
     }
 }
 
-/// What is wrong with a binding's own shape, whatever the schema says.
-///
-/// These are the mistakes the card's own controls make easy: "add read"
-/// gives a `Field` two sources with nothing to combine them, and the default
-/// format string outlives the args it was written for. No registry is needed
-/// to see either, so they are caught even before a project is built.
+/// What is wrong with a binding's own shape, whatever the schema says. Needs no
+/// registry, so it catches mistakes before a project is built.
 fn shape_error(binding: &Binding) -> Option<BindError> {
     match binding {
         Binding::Field { read, via, .. } => {
@@ -1032,10 +926,6 @@ fn shape_error(binding: &Binding) -> Option<BindError> {
         _ => None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Display
-// ---------------------------------------------------------------------------
 
 /// A path as the card shows it: short type name, full field path.
 fn display_path(raw: &str) -> String {
@@ -1070,8 +960,7 @@ fn summary(binding: &Binding) -> String {
                 Some(via) if !via.is_empty() => format!("{}({})", short_of(via), reads.join(", ")),
                 _ => reads.join(", "),
             };
-            // A marker is put on and taken off rather than set, and there is
-            // no field on the other end of the arrow to point at.
+            // A marker is put on and taken off, so there is no field to point at.
             if write.marker_type().is_some() {
                 return format!("{source} sets {}", display_path(&write.raw));
             }
@@ -1110,14 +999,8 @@ fn summary(binding: &Binding) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Building the card
-// ---------------------------------------------------------------------------
-
-/// Fill the `Bindings` card body for `source`. World-exclusive and deferred
-/// by the caller, like the material and `Node` cards: the rows are built off
-/// the live component and the project schema rather than reflected field by
-/// field.
+/// Fill the `Bindings` card body for `source`, off the live component and the
+/// project schema. World-exclusive and deferred by the caller.
 pub(crate) fn fill_bindings_card_body(world: &mut World, source: Entity, body: Entity) {
     if world.get_entity(body).is_err() {
         return;
@@ -1205,9 +1088,7 @@ fn spawn_binding_row(
                 binding,
                 ctx,
             );
-            // A marker write puts a component on or takes it off, so there
-            // is no number to scale and the checkbox would mean nothing.
-            // `summary` already leaves the "as %" suffix off such a row.
+            // A marker write has no number to scale.
             if write.marker_type().is_none() {
                 spawn_checkbox(
                     commands,
@@ -1293,11 +1174,8 @@ fn spawn_binding_row(
         }
         Binding::Action { event, fields } => {
             spawn_event_picker(commands, row, source, index, event, ctx);
-            // With a schema the rows are the fields the event declares,
-            // mapped or not. Without one (an unbuilt project, or an event
-            // the schema no longer names) the rows are whatever is already
-            // mapped, because a mapping the card does not draw is a value
-            // the author can neither see nor take back.
+            // Without a schema the rows fall back to whatever is already
+            // mapped: a mapping the card does not draw cannot be taken back.
             let names: Vec<String> = match ctx.event(event) {
                 Some(schema) => schema.fields.clone(),
                 None => fields.iter().map(|(name, _)| name.clone()).collect(),
@@ -1399,9 +1277,8 @@ fn spawn_row_header(
             Tooltip::title(tip),
             ChildOf(header),
         ));
-        // An arrow at the end of the list has nowhere to go. It keeps its
-        // place so the header does not reflow between rows, but it carries
-        // no control and reads as unavailable rather than as broken.
+        // An arrow at the end of the list keeps its place so the header does not
+        // reflow, but carries no control.
         if enabled {
             entity.insert(BindingControl::new(source, index, control));
         } else {
@@ -1429,9 +1306,8 @@ fn spawn_row_label(commands: &mut Commands, parent: Entity, binding: &Binding, c
         ChildOf(parent),
     ));
     if let Some(error) = error {
-        // A badge, never a gate: the row says what the runtime would say, and
-        // the edit still commits. `Hovered` is opt-in and the tooltip renderer
-        // reads the pair, so a `Tooltip` on its own never surfaces.
+        // A badge, never a gate: the edit still commits. `Hovered` is opt-in and
+        // the tooltip renderer reads the pair.
         entity.insert((Hovered::default(), Tooltip::title(error.to_string())));
     }
 }
@@ -1471,11 +1347,8 @@ fn spawn_path_row(
     let (is_resource, type_path, field) = decompose(&raw);
     let (types, fields) = ctx.resolve(&raw, slot);
 
-    // Two or three pickers do not fit beside a label at the width the
-    // inspector ships at. The row asks for a picker's width, so a panel that
-    // cannot give it that drops the whole control onto its own line, and the
-    // pickers wrap within it rather than shrinking past what a type name
-    // reads at.
+    // The row asks for a picker's width, so a panel that cannot give it that
+    // drops the whole control onto its own line and the pickers wrap within it.
     let row = spawn_field_row(
         commands,
         parent,
@@ -1489,8 +1362,7 @@ fn spawn_path_row(
             node.row_gap = Val::Px(tokens::SPACING_XS);
         });
 
-    // A write always targets a component; only a read can come from a
-    // resource, so only a read gets the choice.
+    // A write always targets a component; only a read can come from a resource.
     if slot != PathSlot::Write {
         let selected = usize::from(is_resource);
         commands
@@ -1504,9 +1376,8 @@ fn spawn_path_row(
                 ),
                 ChildOf(row.control),
             ))
-            // The widget carries its own `Node`, so the narrower width this
-            // half of the row wants goes on afterwards rather than into the
-            // bundle beside it.
+            // The widget carries its own `Node`, so the narrower width goes on
+            // afterwards rather than into the bundle beside it.
             .insert((
                 ComboBoxSelectedIndex(selected),
                 BindingOptions(vec!["Component".to_string(), "Resource".to_string()]),
@@ -1518,9 +1389,7 @@ fn spawn_path_row(
                 ),
                 Node {
                     width: Val::Px(PICKER_MIN_WIDTH),
-                    // It asks for the floor and no more, its only two
-                    // captions being Component and Resource, but it gives
-                    // way with the pickers beside it rather than pushing
+                    // Gives way with the pickers beside it rather than pushing
                     // them off a narrow row.
                     flex_shrink: 1.0,
                     min_width: Val::Px(0.0),
@@ -1562,8 +1431,7 @@ fn spawn_path_row(
         ))
         .insert(picker_node());
 
-    // A marker names no field, so the row stops at the type picker rather
-    // than offering an empty dropdown beside it.
+    // A marker names no field, so the row stops at the type picker.
     if !SchemaCtx::lookup(types, &type_path).is_some_and(|option| option.marker) {
         let fields = offered_with_current(fields, &field);
         let selected = fields.iter().position(|name| *name == field).unwrap_or(0);
@@ -1619,7 +1487,7 @@ fn spawn_path_row(
 }
 
 /// The options a picker shows, with whatever is already authored kept in the
-/// list, so opening a dropdown can never lose the current value.
+/// list so opening a dropdown cannot lose the current value.
 fn offered_with_current(mut offered: Vec<String>, current: &str) -> Vec<String> {
     if !current.is_empty() && !offered.iter().any(|option| option == current) {
         offered.insert(0, current.to_string());
@@ -1627,10 +1495,8 @@ fn offered_with_current(mut offered: Vec<String>, current: &str) -> Vec<String> 
     offered
 }
 
-/// The transform picker. With functions in the schema it is a dropdown
-/// filtered to what a binding could actually call; with none it is a text
-/// field, because a schema the editor has not seen yet is no reason to
-/// refuse a name the game knows.
+/// The transform picker: a dropdown of callable functions when the schema names
+/// any, otherwise a free text field.
 fn spawn_via(
     commands: &mut Commands,
     parent: Entity,
@@ -1703,8 +1569,8 @@ fn spawn_event_picker(
     );
 }
 
-/// A dropdown whose first option is "none", for the two places a binding
-/// names something optional: its transform function and its event.
+/// A dropdown whose first option is "none", for a binding's optional transform
+/// function or event.
 #[expect(
     clippy::too_many_arguments,
     reason = "one row: where it goes, what it edits, what it offers, and what it holds"
@@ -1719,8 +1585,8 @@ fn spawn_optional_picker(
     offered: Vec<String>,
     current: &str,
 ) {
-    // Index 0 is "none", so every index into the offered list is shifted by
-    // one and the recorded values carry the empty string at the front.
+    // Index 0 is "none", so offered indices shift by one and the recorded values
+    // carry an empty string at the front.
     let selected = offered
         .iter()
         .position(|name| name == current)
@@ -1843,24 +1709,13 @@ fn spawn_footer(commands: &mut Commands, parent: Entity, source: Entity) {
     ));
 }
 
-// ---------------------------------------------------------------------------
-// Writing
-// ---------------------------------------------------------------------------
-
-/// Build the new `Bindings` value and commit it whole.
-///
-/// Every mutation on this card comes through here, which is what makes one
-/// gesture one document patch and one undo entry. PIE Live goes first, like
-/// every other editor write path: with the game running the edit is sent to
-/// it and the document is left alone.
+/// Build the new `Bindings` value and commit it whole. Every mutation on this
+/// card comes through here, so one gesture is one patch and one undo entry.
 fn apply(world: &mut World, source: Entity, mutate: impl FnOnce(&mut Vec<Binding>) -> bool) {
     let Some(mut list) = world
         .get::<Bindings>(source)
         .map(|bindings| bindings.0.clone())
     else {
-        // The whole gesture goes nowhere, so it says so: a card whose entity
-        // lost its `Bindings` between the click and the commit looks to the
-        // user exactly like one that ignored them.
         warn!("a binding edit was dropped: {source} carries no Bindings to edit");
         return;
     };
@@ -1893,8 +1748,8 @@ fn apply(world: &mut World, source: Entity, mutate: impl FnOnce(&mut Vec<Binding
     ) {
         crate::commands::field_edit_commit(world, bindings_type_path(), "", &json, GROUP_LABEL);
     }
-    // Remember the tick this write landed on, so the change-detection pass
-    // does not rebuild the card a second time for the edit it just made.
+    // Remember the tick this write landed on, so the change-detection pass does
+    // not rebuild the card for the edit it just made.
     let echo = world.get_entity(source).ok().and_then(|entity| {
         entity
             .get_ref::<Bindings>()
@@ -1910,13 +1765,8 @@ fn apply(world: &mut World, source: Entity, mutate: impl FnOnce(&mut Vec<Binding
     world.flush();
 }
 
-/// The optional halves of a binding a clause may spell.
-///
-/// Enough to author each of the five shapes the footer menu offers, and
-/// nothing that needs a schema to make sense of. Choosing a type from the
-/// picker's judged list, reordering, and adding a second read stay pointer
-/// gestures: they are choices about what the schema offers, which a clause
-/// cannot see.
+/// The optional halves of a binding a clause may spell: enough to author each of
+/// the five shapes, and nothing that needs a schema to make sense of.
 struct BindingEdit {
     read: Option<Vec<BindPath>>,
     write: Option<BindPath>,
@@ -1929,10 +1779,8 @@ struct BindingEdit {
 }
 
 impl BindingEdit {
-    /// Read one clause's optional keys. `read` and `with` are the same
-    /// key under the two names the card's own rows use for it: a `Value`
-    /// binding's path reads as "with", every other one as "read", and a
-    /// clause should not have to know which shape it is talking to.
+    /// Read one clause's optional keys. `read` and `with` are the same key under
+    /// the two names the card's rows use for it.
     fn from_params(params: &OperatorParameters) -> Self {
         let paths = |raw: &str| {
             raw.split(',')
@@ -1947,8 +1795,7 @@ impl BindingEdit {
         Self {
             read: read.or_else(|| params.as_str("with")).map(paths),
             write: params.as_str("write").map(BindPath::new),
-            // An empty `via=` clears it, the way picking the blank row on
-            // the card's Via combo does.
+            // An empty `via=` clears it.
             via: params
                 .as_str("via")
                 .map(|name| (!name.is_empty()).then(|| name.to_string())),
@@ -1966,9 +1813,8 @@ impl BindingEdit {
         }
     }
 
-    /// Apply what applies to `binding`, and say what did not. A key that
-    /// no shape of this kind has is a typo worth hearing about, not a
-    /// silent no-op.
+    /// Apply what applies to `binding` and return the keys this shape has no
+    /// place for.
     fn apply_to(self, binding: &mut Binding) -> Vec<&'static str> {
         let mut ignored = Vec::new();
         let Self {
@@ -2068,9 +1914,8 @@ impl BindingEdit {
                 event: event_slot,
                 fields,
             } => {
-                // A mapping belongs to the event it was made against, so a
-                // new event clears it before the clause's own map lands,
-                // the rule the card's Event combo already applies.
+                // A mapping belongs to the event it was made against, so a new
+                // event clears it before the clause's own map lands.
                 if let Some(event) = event
                     && *event_slot != event
                 {
@@ -2094,9 +1939,7 @@ impl BindingEdit {
     }
 }
 
-/// The one path a single-path shape keeps. `Visible` and `Value` read one
-/// place, so a longer list is a misunderstanding worth saying out loud
-/// rather than a head silently taken off it.
+/// The one path a `Visible` or `Value` binding keeps, warning if given more.
 fn single_path(read: Vec<BindPath>, shape: &str) -> BindPath {
     if read.len() > 1 {
         warn!(
@@ -2116,12 +1959,8 @@ fn named_keys(present: &[(&'static str, bool)]) -> Vec<&'static str> {
         .collect()
 }
 
-/// Add a binding to an entity's list, the way the card's footer menu does.
-///
-/// `kind` names one of the five shapes; the optional keys fill in what the
-/// row's controls would. The entity has to carry `Bindings` already; putting
-/// it there is `component.add`'s job, the same trip through the Add Component
-/// picker a user makes before the card appears at all.
+/// Add a binding to an entity's list. The entity has to carry `Bindings`
+/// already; putting it there is `component.add`'s job.
 #[operator(
     id = "binding.add",
     label = "Add Binding",
@@ -2179,8 +2018,7 @@ pub(crate) fn binding_add(
     OperatorResult::Finished
 }
 
-/// Edit one binding already on the list, addressed the way the card
-/// addresses it: by index, top row first.
+/// Edit one binding already on the list, addressed by index, top row first.
 #[operator(
     id = "binding.set",
     label = "Set Binding",
@@ -2215,13 +2053,9 @@ pub(crate) fn binding_set(
 ) -> OperatorResult {
     let entity = params.as_entity("entity")?;
     let index = match params.get("index") {
-        // The card's top row, for the common case of a list with one
-        // binding on it.
         None => 0,
         Some(PropertyValue::Int(index)) if *index >= 0 => *index as usize,
-        // Spelled, and no position: a typo that edited binding zero would
-        // be worse than one that edited nothing, and the author would not
-        // find out from the value they wrote.
+        // Spelled but no position: better to edit nothing than binding zero.
         Some(other) => {
             warn!("binding.set: `index` is {other}, which is no binding position");
             return OperatorResult::Cancelled;
@@ -2271,20 +2105,14 @@ fn report_ignored(op: &str, kind: BindKind, ignored: Vec<&'static str>) {
     }
 }
 
-/// The `Bindings` write this card made itself, as the tick it landed on.
-///
-/// [`refresh_bindings_card_on_change`] rebuilds the card whenever the
-/// component moves behind its back. Its own commits move it too, and they
-/// have already rebuilt, so this is how the pass tells one from the other.
+/// The `Bindings` write this card made itself, as the tick it landed on, so the
+/// refresh pass can tell its own commits from outside changes.
 #[derive(Resource, Default)]
 pub struct BindingsCardEcho(Option<(Entity, bevy::ecs::change_detection::Tick)>);
 
-/// Rebuild the card when `Bindings` changes underneath it.
-///
-/// The card addresses every widget by index, so a value that moved without
-/// a rebuild leaves rows pointing at bindings that are not theirs: after an
-/// undone reorder, the row drawn first would edit whatever sits at index zero.
-/// Undo, a second inspector, and the running game all move it that way.
+/// Rebuild the card when `Bindings` changes underneath it. The card addresses
+/// every widget by index, so a value that moved without a rebuild leaves rows
+/// pointing at bindings that are not theirs.
 pub fn refresh_bindings_card_on_change(
     cards: Query<&BindingsCardBody>,
     bindings: Query<Ref<Bindings>>,
@@ -2311,8 +2139,8 @@ pub fn refresh_bindings_card_on_change(
     }
 }
 
-/// Mutate one binding in place. The card addresses everything by index, and
-/// an index that no longer names a binding is a stale widget, not an error.
+/// Mutate one binding in place. An index that no longer names a binding is a
+/// stale widget, not an error.
 fn apply_to(
     commands: &mut Commands,
     source: Entity,
@@ -2361,9 +2189,8 @@ pub(crate) fn on_binding_combobox_change(
         return;
     }
 
-    // The kind picker's dropdown lives inside the variant-edit popover, so
-    // its event arrives on the popover's combobox rather than on the card's
-    // own control.
+    // The kind picker's dropdown lives inside the variant-edit popover, so its
+    // event arrives on the popover's combobox, not the card's own control.
     let owner = variants
         .get(event.entity)
         .map_or(event.entity, |variant| variant.0);
@@ -2375,8 +2202,8 @@ pub(crate) fn on_binding_combobox_change(
     }
     let (source, index, event_field) =
         (control.source, control.binding, control.event_field.clone());
-    // The widget's own value is the authority when it carries one; the
-    // recorded option list is the fallback for an index-only change.
+    // The widget's own value wins; the recorded option list is the fallback for
+    // an index-only change.
     let picked = event.value.clone().or_else(|| {
         options
             .get(event.entity)
@@ -2393,17 +2220,15 @@ pub(crate) fn on_binding_combobox_change(
                 if BindKind::of(binding) == kind {
                     return;
                 }
-                // The first path is the one thing every kind but `Action`
-                // has, so a misclick on the kind menu does not throw away
-                // the source that was already picked.
+                // Carry the first path across, so a misclick on the kind menu
+                // does not throw away the source already picked.
                 let carried = path_at(binding, PathSlot::Read(0), "").cloned();
                 *binding = kind.new_binding(carried);
             });
         }
         BindControl::PathSource(slot) => {
             // The type list changes with the source, so the row lands on the
-            // first entry of the new list rather than keeping a path of the
-            // wrong kind.
+            // first entry of the new list.
             let to_resource = event.selected == 1;
             commands.queue(move |world: &mut World| {
                 let ctx = SchemaCtx::gather(world, source);
@@ -2458,13 +2283,10 @@ pub(crate) fn on_binding_combobox_change(
                 let fields = option
                     .map(|option| option.fields.clone())
                     .unwrap_or_default();
-                // Keep the field name when the new type has one by that name;
-                // otherwise land on its first, so one pick leaves a whole path
-                // rather than half of one. A type the editor has no schema
-                // for reports no fields at all, and that is not the same
-                // answer as "it has none": dropping the authored field there
-                // would erase a path the game knows because the editor has
-                // not seen the project yet.
+                // Keep the field name when the new type has one by that name,
+                // otherwise land on its first. A type with no schema reports no
+                // fields, which is not the same as having none, so its authored
+                // field is kept.
                 let field = if fields.contains(&field) || option.is_none() {
                     field
                 } else {
@@ -2512,9 +2334,7 @@ pub(crate) fn on_binding_combobox_change(
                 if let Binding::Action { event, fields } = binding
                     && *event != picked
                 {
-                    // A mapping belongs to the event it was made against;
-                    // carrying one onto a different event would author a
-                    // field the new event does not have.
+                    // A mapping belongs to the event it was made against.
                     *event = picked;
                     fields.clear();
                 }
@@ -2575,12 +2395,8 @@ pub(crate) fn on_binding_button_click(
         }
         BindControl::RemoveRead(slot) => {
             apply_to(&mut commands, source, index, move |binding| match binding {
-                // A `Field` with no reads has nothing to write, so the last
-                // one stays and the row keeps its picker. The slot is the
-                // position the row was built at, and the binding may have
-                // lost reads since: a slot that is not there names no read
-                // to drop, so the click does nothing, the way a control
-                // pointing at a gone binding does.
+                // The last read stays, and a slot the binding has since lost
+                // names no read to drop.
                 Binding::Field { read, .. } if read.len() > 1 && slot < read.len() => {
                     read.remove(slot);
                 }
@@ -2608,8 +2424,7 @@ pub(crate) fn on_binding_checkbox_change(
         return;
     }
     let value = event.value;
-    // The checkbox does not self-manage `Checked`; reflect the new value so
-    // the box renders it before the card rebuilds.
+    // The checkbox does not self-manage `Checked`.
     jackdaw_feathers::utils::set_marker_if_alive::<Checked>(&mut commands, target, value);
     let control_kind = control.control;
     apply_to(
@@ -2631,8 +2446,8 @@ pub(crate) fn on_binding_text_commit(
     remote_proxies: RemoteProxies,
     mut commands: Commands,
 ) {
-    // The commit fires on the inner text entry, so the control is found by
-    // walking up to the row the card spawned.
+    // The commit fires on the inner text entry, so walk up to the row the card
+    // spawned to find the control.
     let mut current = event.entity;
     let mut found = controls.get(current).ok().cloned();
     for _ in 0..4 {
@@ -2672,8 +2487,7 @@ pub(crate) fn on_binding_text_commit(
 mod tests {
     use super::*;
 
-    /// Every kind constructs, and constructs as itself. `Binding` has no
-    /// `Default`, so this table is the card's whole answer to "add one".
+    /// Every kind constructs, and constructs as itself.
     #[test]
     fn every_kind_builds_a_binding_of_that_kind() {
         for kind in BindKind::ALL {
@@ -2685,8 +2499,7 @@ mod tests {
         }
     }
 
-    /// The one path every kind but `Action` has survives a kind change, so a
-    /// misclick on the menu does not throw away the source already picked.
+    /// The one path every kind but `Action` has survives a kind change.
     #[test]
     fn a_kind_change_carries_the_first_path() {
         let carried = Some(BindPath::new("demo::Health.current"));
@@ -2705,9 +2518,7 @@ mod tests {
         }
     }
 
-    /// Composing and decomposing are the two halves of every picker, and a
-    /// path that does not survive the round trip is a path the picker would
-    /// silently rewrite.
+    /// A path survives the compose/decompose round trip every picker does.
     #[test]
     fn a_path_survives_being_taken_apart_and_put_back() {
         for raw in [
@@ -2733,9 +2544,7 @@ mod tests {
         }
     }
 
-    /// A marker names no field, so a type with no field is a whole path
-    /// rather than half of one, and it has to survive the same round trip
-    /// every other path does.
+    /// A marker path names a type and no field, and survives the round trip.
     #[test]
     fn a_marker_path_survives_being_taken_apart_and_put_back() {
         let raw = "bevy_ui::interaction_states::InteractionDisabled";
@@ -2754,8 +2563,7 @@ mod tests {
         );
     }
 
-    /// The row's own label. A marker is put on and taken off, so the summary
-    /// says so rather than pointing an arrow at a field that is not there.
+    /// A marker write reads as "sets" rather than an arrow at a missing field.
     #[test]
     fn a_marker_write_reads_as_setting_the_component() {
         let binding = Binding::Field {
@@ -2770,8 +2578,7 @@ mod tests {
         );
     }
 
-    /// A marker is a legitimate write path and a nonsense read path, and the
-    /// badge has to tell the two apart.
+    /// A marker is a legitimate write path and a nonsense read path.
     #[test]
     fn a_marker_is_judged_only_as_a_write() {
         let ctx = SchemaCtx {
@@ -2806,8 +2613,7 @@ mod tests {
         assert_eq!(display_path(""), "...");
     }
 
-    /// The summary is the row's own label, and it has to name both ends of
-    /// the binding or a list of five rows says nothing to tell them apart.
+    /// The summary names both ends of the binding.
     #[test]
     fn a_summary_names_both_ends() {
         let binding = Binding::Field {
@@ -2825,10 +2631,7 @@ mod tests {
         );
     }
 
-    /// The two mistakes the card's own buttons make easy. "Add read" is one
-    /// click from a `Field` the evaluator refuses, and the default format
-    /// string outlives the arg it was written for, so both are caught on the
-    /// row rather than at Play time.
+    /// The two shape mistakes the card's own buttons make easy.
     #[test]
     fn a_binding_that_cannot_evaluate_says_so_without_a_schema() {
         let field = |reads: usize, via: Option<&str>| Binding::Field {
@@ -2865,8 +2668,7 @@ mod tests {
         );
     }
 
-    /// Setting an event mapping is by name, and clearing one takes the entry
-    /// out rather than leaving an empty path the dispatcher would choke on.
+    /// Setting an event mapping is by name; clearing one removes the entry.
     #[test]
     fn an_event_mapping_is_set_and_cleared_by_name() {
         let mut binding = Binding::Action {

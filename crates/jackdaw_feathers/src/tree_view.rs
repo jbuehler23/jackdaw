@@ -23,23 +23,14 @@ pub const ROW_BG: Color = Color::NONE;
 const INDENT_WIDTH: f32 = 16.0;
 const TOGGLE_WIDTH: f32 = 18.0;
 const DOT_COLUMN_WIDTH: f32 = 14.0;
-/// How tall a tree row is: the text plus the padding and border around
-/// it. Not measured, because the gap zones are laid out before anything
-/// has been; it is what the row's own values add up to.
+/// How tall a tree row is: the text plus the padding and border around it.
 const ROW_HEIGHT: f32 = tokens::TEXT_SIZE_PX + 2.0 * tokens::SPACING_XS + 2.0;
 
-/// How tall the strip standing for the gap between two rows is.
-///
-/// A third of a row each side of the boundary, so the band that means
-/// "between these two" is two thirds of a row wide. Four pixels a side
-/// with a two-pixel overhang, which is what this was, left a dead band
-/// in the middle of the row and a gap that had to be hit rather than
-/// aimed at.
+/// How tall the strip standing for the gap between two rows is: a third of a
+/// row each side of the boundary.
 const INSERT_ZONE_HEIGHT: f32 = ROW_HEIGHT / 3.0;
 
-/// How long the pointer rests on a collapsed row before the drag opens
-/// it. Long enough that crossing a parent on the way somewhere else
-/// opens nothing, short enough that resting on one answers promptly.
+/// How long the pointer rests on a collapsed row before the drag opens it.
 const SPRING_LOAD_DELAY: f32 = 0.4;
 
 /// How close to the top or bottom edge of the list the pointer has to be
@@ -53,9 +44,8 @@ pub struct TreeRowStyle {
     pub icon_font: Handle<Font>,
 }
 
-/// The glyph a category is drawn with when no registered rule names a
-/// more particular one. Paired with [`category_color`]: a row that catches
-/// up with its kind after being built re-reads both from here.
+/// The glyph a category is drawn with when no registered rule names a more
+/// particular one.
 pub fn category_icon(category: EntityCategory) -> Icon {
     match category {
         EntityCategory::Camera => Icon::Video,
@@ -69,10 +59,8 @@ pub fn category_icon(category: EntityCategory) -> Icon {
     }
 }
 
-/// Returns the display color for an entity category. When `inherited`
-/// is true, the muted `CATEGORY_INHERITED` color wins; this is how
-/// resolver-materialised descendants of a prefab instance get drawn
-/// faintly regardless of their underlying category (Mesh, Light, etc.).
+/// Returns the display color for an entity category. When `inherited` is true
+/// the muted `CATEGORY_INHERITED` color wins, whatever the category.
 pub fn category_color(category: EntityCategory, inherited: bool) -> Color {
     if inherited {
         return tokens::CATEGORY_INHERITED;
@@ -90,14 +78,10 @@ pub fn category_color(category: EntityCategory, inherited: bool) -> Color {
 }
 
 /// Creates a tree row bundle for displaying an entity in the hierarchy.
-/// `inherited` flips the dot color to the muted "inherited from prefab"
-/// tone while leaving the icon character to reflect the underlying
-/// category (Lightbulb for an inherited light, Video for an inherited
-/// camera, etc.).
+/// `inherited` mutes the dot color while the icon still reflects the category.
 ///
 /// The row spawns with an empty expand toggle; call
-/// [`set_row_expand_toggle`] to give it a disclosure control once the
-/// source entity's children are known.
+/// [`set_row_expand_toggle`] to give it a disclosure control.
 pub fn tree_row(
     label: &str,
     selected: bool,
@@ -119,7 +103,6 @@ pub fn tree_row(
             ..default()
         },
         children![
-            // The clickable row content
             tree_row_content(
                 label,
                 selected,
@@ -129,16 +112,13 @@ pub fn tree_row(
                 icon_override,
                 style
             ),
-            // Container for child rows (initially empty, populated lazily)
             (
                 TreeRowChildren,
                 Node {
                     flex_direction: FlexDirection::Column,
-                    // Indent via padding only. A left margin on a full-width box
-                    // is clamped to `parent_width - margin`, so each nesting
-                    // level would pull the row's right edge (and the eye toggle
-                    // anchored there) inward. Padding and a left border shift the
-                    // content rightward without moving the right edge.
+                    // Indent via padding, not margin: a left margin on a
+                    // full-width box is clamped to `parent_width - margin`, so
+                    // each level would pull the row's right edge inward.
                     padding: UiRect::left(px(INDENT_WIDTH + tokens::SPACING_SM)),
                     border: UiRect::left(px(1.0)),
                     width: percent(100),
@@ -147,12 +127,11 @@ pub fn tree_row(
                 },
                 BorderColor::all(tokens::CONNECTION_LINE),
             ),
-            // The gaps above and below the row. Last, so they sit over the
-            // row's own drop target where the two meet.
+            // Last, so the gaps sit over the row's own drop target where the
+            // two meet.
             insertion_zone(false),
             insertion_zone(true)
         ],
-        // React to TreeNodeExpanded changes: children visibility + Checked
         observe(
             |mutation: On<Mutation<TreeNodeExpanded>>,
              expanded_query: Query<(&TreeNodeExpanded, &Children)>,
@@ -177,10 +156,8 @@ pub fn tree_row(
                         };
                     }
 
-                    // TreeRowContent -> TreeNodeExpandToggle -> disclosure.
                     // A childless leaf carries no disclosure at all, so it
-                    // keeps its blank toggle even when the reveal machinery
-                    // marks it expanded.
+                    // keeps its blank toggle even when marked expanded.
                     let Ok(content_children) = content_query.get(child) else {
                         continue;
                     };
@@ -203,14 +180,8 @@ pub fn tree_row(
 }
 
 /// The strip standing for the gap above (`after == false`) or below
-/// (`after == true`) a row. Dropping there reorders the dragged entity
-/// among the row's siblings instead of making it the row's child.
-///
-/// Placed absolutely over the top or bottom third of the row, so the two
-/// strips either side of a boundary meet with nothing between them: the
-/// gap is a band to aim at rather than a line to hit. The lower strip
-/// sits under the row's whole subtree, which is where "after this row"
-/// is once the row is expanded.
+/// (`after == true`) a row. Dropping there reorders the dragged entity among
+/// the row's siblings instead of making it the row's child.
 fn insertion_zone(after: bool) -> impl Bundle {
     (
         TreeRowInsertZone { after },
@@ -224,12 +195,9 @@ fn insertion_zone(after: bool) -> impl Bundle {
             ..default()
         },
         BackgroundColor(Color::NONE),
-        // A strip covers the top and the bottom third of the row, so two
-        // thirds of every row is a gap. A click there is a click on the
-        // row: without this it would bubble past the row (which has no
-        // click observer of its own) to the container and select nothing,
-        // and only the middle third of the outliner would answer a
-        // pointer.
+        // Two thirds of every row is gap, so a click there has to be handled
+        // as a click on the row; otherwise it bubbles past the row to the
+        // container and selects nothing.
         observe(
             |mut click: On<Pointer<Click>>,
              mut commands: Commands,
@@ -260,9 +228,9 @@ fn insertion_zone(after: bool) -> impl Bundle {
                 });
             },
         ),
-        // Every move, not only the first: the line has to follow the
-        // pointer along the gap, and the level a release would land at
-        // changes with the pointer's x without it leaving the zone.
+        // Every move, not only the first: the level a release would
+        // land at changes with the pointer's x without it leaving the
+        // zone.
         observe(
             |mut over: On<Pointer<DragOver>>,
              zones: Query<&TreeRowInsertZone>,
@@ -352,14 +320,10 @@ fn insertion_zone(after: bool) -> impl Bundle {
 /// Which row's gap the pointer is in, and at what depth.
 ///
 /// An expanded row's after-gap is drawn on the same pixels as its last
-/// descendant's, because the descendant is the last thing under it. So one
-/// strip stands for several places a drop could land, and which zone
-/// entity the picking backend hands over says nothing about which of them
-/// the user meant: the zones are spawned after the rows, so the shallowest
-/// one wins the pick every time. The candidates are therefore collected
-/// from the row tree ([`coincident_after_gaps`]), and the pointer's x
-/// picks between them against the indent each level is actually drawn at,
-/// the way it does in a file tree.
+/// descendant's, so the zone the picking backend hands over does not say which
+/// drop was meant. The candidates come from the row tree
+/// ([`coincident_after_gaps`]) and the pointer's x picks between them against
+/// the indent each level is drawn at.
 ///
 /// Returns `(row, depth)`. `None` for a zone that is not under a row.
 fn resolve_drop_depth(
@@ -378,8 +342,7 @@ fn resolve_drop_depth(
     };
     tree_nodes.get(row).ok()?;
     let depth = row_depth(row, parents, row_children);
-    // Only the gap below a row can coincide with anything: the gap above
-    // one is its own, whatever is nested above it.
+    // Only the gap below a row can coincide with anything.
     if !zones.get(zone).is_ok_and(|side| side.after) {
         return Some((row, depth));
     }
@@ -398,10 +361,6 @@ fn resolve_drop_depth(
 
 /// Every row whose after-gap is drawn on the same pixels as `row`'s,
 /// shallowest first, `row` included.
-///
-/// Downwards: an expanded row's gap sits below its last descendant, so
-/// that descendant's own gap is the same strip. Upwards: when `row` is the
-/// last thing under its parent, the parent's gap is that strip too.
 fn coincident_after_gaps(
     row: Entity,
     depth: usize,
@@ -414,8 +373,7 @@ fn coincident_after_gaps(
     let mut above = Vec::new();
     let mut current = row;
     let mut current_depth = depth;
-    // A tree is not deep; the bounds here guard against a cycle rather
-    // than limiting anything anyone builds.
+    // The bound guards against a cycle rather than limiting tree depth.
     for _ in 0..64 {
         let Some(parent_row) = enclosing_row_if_last(current, parents, children, row_children)
         else {
@@ -472,13 +430,11 @@ fn last_visible_child_row(
         .find(|&child| tree_nodes.get(child).is_ok())
 }
 
-/// The candidate the pointer is pointing at: the deepest one whose own
-/// indent it has reached, and the shallowest when it has reached none.
+/// The candidate the pointer is pointing at: the deepest one whose own indent
+/// it has reached, and the shallowest when it has reached none.
 ///
-/// Both sides of the comparison are logical pixels. `UiGlobalTransform`
-/// and `ComputedNode` are physical, and `Pointer::pointer_location` is
-/// logical, so at any scale factor but 1 an unconverted comparison pins
-/// every gap to the shallowest level.
+/// Both sides of the comparison are logical pixels: `UiGlobalTransform` and
+/// `ComputedNode` are physical, `Pointer::pointer_location` is logical.
 fn level_at_cursor(
     candidates: &[(Entity, usize)],
     cursor_x: f32,
@@ -507,8 +463,7 @@ fn row_depth(
 ) -> usize {
     let mut depth = 0;
     let mut current = row;
-    // A tree is not deep; the bound is a guard against a cycle, not a
-    // limit anyone reaches.
+    // The bound guards against a cycle rather than limiting tree depth.
     for _ in 0..64 {
         let Ok(&ChildOf(parent)) = parents.get(current) else {
             return depth;
@@ -553,9 +508,7 @@ fn expand_toggle_of(world: &World, row: Entity) -> Option<Entity> {
 }
 
 /// Give `row` a [`FeathersDisclosureToggle`] when `has_children`, and take it
-/// away when not, so a row that gains its first child becomes expandable and
-/// one that loses its last stops advertising children. [`Checked`] mirrors the
-/// row's [`TreeNodeExpanded`], which is what points the chevron down.
+/// away when not. [`Checked`] mirrors the row's `TreeNodeExpanded`.
 pub fn set_row_expand_toggle(world: &mut World, row: Entity, has_children: bool) {
     let Some(toggle) = expand_toggle_of(world, row) else {
         return;
@@ -654,11 +607,8 @@ fn tree_row_content(
         BackgroundColor(bg),
         BorderColor::all(border),
         children![
-            // Expand toggle (the disclosure lands via `set_row_expand_toggle`)
             expand_toggle(),
-            // Category icon
             category_dot(category, inherited, icon_override, &style.icon_font),
-            // Label
             (
                 TreeRowLabel,
                 TreeRowLabelEllipsis,
@@ -668,10 +618,8 @@ fn tree_row_content(
                     ..default()
                 },
                 // One line, and no wider than the room the row has left:
-                // without the zero minimum a long name is the row's
-                // min-content width, which pushes the lock and the eye out
-                // of the panel and squeezes the rename entry to nothing.
-                // `ellipsize_tree_row_labels` cuts what is left over.
+                // without the zero minimum a long name is the row's min-content
+                // width, which pushes the trailing controls out of the panel.
                 TextLayout {
                     linebreak: LineBreak::NoWrap,
                     ..default()
@@ -679,27 +627,20 @@ fn tree_row_content(
                 Node {
                     flex_grow: 1.0,
                     // A floor rather than nothing: with a zero minimum the
-                    // label is the first thing a narrow panel takes the room
-                    // from, and a row that shows three letters of a name is
-                    // no better than one that shows none. This is the width
-                    // the name, and the rename entry that replaces it, are
-                    // always given.
+                    // label is the first thing a narrow panel takes room from.
                     min_width: px(LABEL_MIN_WIDTH),
                     overflow: Overflow::clip(),
                     margin: UiRect::left(px(tokens::SPACING_SM)),
                     ..default()
                 },
-                // The tooltip the cut name is read in full from needs the
-                // hover state, and picking only updates a `Hovered` that is
-                // already on the entity.
+                // The tooltip needs the hover state, and picking only updates
+                // a `Hovered` that is already on the entity.
                 bevy::picking::hover::Hovered::default(),
                 ThemedText,
             ),
-            // Lock toggle, then the visibility toggle (eye icon)
             lock_toggle(source, &style.icon_font),
             visibility_toggle(source, &style.icon_font)
         ],
-        // Click handler for selection (left-click only)
         observe(
             move |mut click: On<Pointer<Click>>, mut commands: Commands| {
                 if click.event.button != PointerButton::Primary {
@@ -712,7 +653,6 @@ fn tree_row_content(
                 });
             },
         ),
-        // Hover effects (skip selected rows)
         observe(
             |hover: On<Pointer<Over>>,
              mut bg_query: Query<
@@ -735,8 +675,8 @@ fn tree_row_content(
                 }
             },
         ),
-        // Drag-and-drop: highlight drop target with border accent, and
-        // start the clock that opens a closed row rested on.
+        // Drag-and-drop: highlight the drop target, and start the clock that
+        // opens a closed row rested on.
         observe(
             |mut drag_enter: On<Pointer<DragEnter>>,
              mut query: Query<(&mut BackgroundColor, &mut Node), With<TreeRowContent>>,
@@ -782,7 +722,6 @@ fn tree_row_content(
                 }
             },
         ),
-        // Drag-and-drop: resolve source entities and fire TreeRowDropped
         observe(
             |mut drag_drop: On<Pointer<DragDrop>>,
              mut commands: Commands,
@@ -794,7 +733,6 @@ fn tree_row_content(
                 drag_drop.propagate(false);
                 let target_content = drag_drop.event_target();
 
-                // Revert drop target styling
                 if let Ok((mut bg, mut node)) = query.get_mut(target_content) {
                     bg.0 = if selected_query.contains(target_content) {
                         tokens::SELECTED_BG
@@ -810,7 +748,6 @@ fn tree_row_content(
                     return;
                 }
 
-                // Resolve both target and dragged to their scene source entities
                 let Ok(&ChildOf(target_tree_row)) = parent_query.get(target_content) else {
                     return;
                 };
@@ -851,7 +788,6 @@ fn expand_toggle() -> impl Bundle {
                     return;
                 }
                 click.propagate(false);
-                // Walk up ChildOf chain to find the nearest TreeNode ancestor
                 let mut current = click.event_target();
                 for _ in 0..4 {
                     if let Ok((entity, expanded)) = tree_node_query.get(current) {
@@ -870,14 +806,11 @@ fn expand_toggle() -> impl Bundle {
     )
 }
 
-/// The row's lock control: a tool button whose glyph says whether the
-/// canvas will pick this node up.
+/// The row's lock control: a tool button whose glyph says whether the canvas
+/// will pick this node up.
 ///
-/// A feathers tool button rather than a bare glyph, because it is a
-/// control: it takes the focus ring, the hover and pressed treatments and
-/// the disabled state from the same place every other button in the editor
-/// does. The consumer refreshes the glyph by writing the button's own
-/// caption text; see the editor's `refresh_row_lock_glyph`.
+/// The consumer refreshes the glyph by writing the button's own caption text;
+/// see the editor's `refresh_row_lock_glyph`.
 fn lock_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle + use<> {
     (
         TreeRowLockToggle,
@@ -885,11 +818,8 @@ fn lock_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle + use<> 
             crate::button::IconButtonProps::new(Icon::LockOpen).with_alpha(LOCK_IDLE_ALPHA),
             icon_font,
         ),
-        // What the lock does is not obvious from the padlock: it does not
-        // grey the node out, it takes it out of the canvas's reach. The
-        // workflow that opens up is worth saying, because a background
-        // filling the canvas is the one thing that makes a marquee
-        // impossible.
+        // What the lock does is not obvious from the padlock: it does not grey
+        // the node out, it takes it out of the canvas's reach.
         crate::tooltip::Tooltip::title("Lock").with_description(
             "Locked nodes let the pointer through - lock a background to marquee over it.",
         ),
@@ -905,9 +835,8 @@ fn lock_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle + use<> 
     )
 }
 
-/// How faint an unlocked row's padlock is. The control is on every row and
-/// means nothing on most of them, so it stays out of the way until it is
-/// either hovered or set.
+/// How faint an unlocked row's padlock is, so it stays out of the way until it
+/// is hovered or set.
 pub const LOCK_IDLE_ALPHA: f32 = 0.4;
 
 /// Eye icon for toggling entity visibility.
@@ -973,11 +902,10 @@ fn visibility_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle {
     )
 }
 
-/// Icon indicating entity category. When `inherited` is true the row is
-/// drawn in the muted prefab-inherited color, but the icon still reflects
-/// the underlying category so an inherited light still looks like a light,
-/// an inherited camera still looks like a camera. `icon_override`, when
-/// present, replaces the category glyph while keeping the category color.
+/// Icon indicating entity category. When `inherited` is true the row is drawn
+/// in the muted prefab-inherited color while the icon still reflects the
+/// underlying category. `icon_override`, when present, replaces the category
+/// glyph while keeping the category color.
 fn category_dot(
     category: EntityCategory,
     inherited: bool,
@@ -1030,79 +958,57 @@ fn find_source_entity(
 /// The line drawn where a release would put what is being dragged.
 ///
 /// One per tree, reconciled from [`TreeDropLine`] rather than spawned by
-/// whichever zone was entered, so it follows the pointer along a gap and
-/// between gaps instead of appearing once and staying put.
+/// whichever zone was entered, so it follows the pointer between gaps.
 #[derive(Component)]
 pub struct TreeDropIndicator;
 
 /// What a row's label really says, beside what it has room to show.
 ///
-/// A name too long for the panel is cut down to fit, so the full one has
-/// to be kept somewhere: this is where, and it is also what the tooltip
-/// reads. `shown` is the last text this crate wrote, which is how a name
-/// changed from outside is told apart from the cut this made.
+/// A name too long for the panel is cut down to fit, so the full one is kept
+/// here. `shown` is the last text this crate wrote, which is how a name changed
+/// from outside is told apart from the cut this made.
 #[derive(Component, Debug, Clone, Default)]
 pub struct TreeRowLabelFit {
     /// The name in full.
     pub full: String,
     /// The text last written into the label.
     pub shown: String,
-    /// How wide the whole name was drawn, in logical pixels, from the
-    /// last frame it was the text on screen. Zero until it has been.
+    /// How wide the whole name was drawn, in logical pixels, from the last
+    /// frame it was the text on screen. Zero until it has been.
     ///
-    /// Kept because a cut label measures the cut text: without the width
-    /// of the whole name a row wide enough to hold it again could only be
-    /// found by writing it back, and a name that does not fit would be
-    /// cut on the next frame and written back on the one after.
+    /// A cut label only measures the cut text, so the full width has to be
+    /// remembered rather than re-measured.
     pub full_width: f32,
 }
 
-/// Marks a row label laid out to fill the row, and so one that may be
-/// cut down to what the row has room for.
+/// Marks a row label laid out to fill the row, and so one that may be cut down
+/// to what the row has room for.
 ///
-/// [`TreeRowLabel`] is shared with trees whose labels are laid out to
-/// their own text. Cutting one of those narrows it, which lowers the
-/// budget, which cuts it again, until a name is one letter -- so only a
-/// label given the row's leftover room is one whose width says anything
-/// about how much of the name fits.
+/// A label laid out to its own text narrows with every cut, so only a
+/// row-filling label's width says anything about how much of the name fits.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct TreeRowLabelEllipsis;
 
-/// The narrowest a row's label is ever laid out, in logical pixels.
-///
-/// Nine or so characters of the editor's body face: enough that a cut name
-/// still says which node it is, and enough for the rename entry that
-/// stands in its place to be typed into and read back.
+/// The narrowest a row's label is ever laid out, in logical pixels: enough that
+/// a cut name still says which node it is.
 pub const LABEL_MIN_WIDTH: f32 = 64.0;
 
 /// What the ellipsis is written with. Three ASCII dots rather than the
 /// single character, which the icon font has no glyph for.
 const ELLIPSIS: &str = "...";
 
-/// How wide one character is taken to be, as a fraction of the font
-/// size, for a label that has not been laid out yet.
-///
-/// Only the frames before the text has a measurement use this. It is
-/// deliberately under the average of the editor's body face: an estimate
-/// that is a little narrow shows a character too many for one frame,
-/// while one that is wide cuts a name that fits.
+/// How wide one character is taken to be, as a fraction of the font size, for a
+/// label that has not been laid out yet. Deliberately under the average of the
+/// editor's body face: an estimate that is wide cuts a name that fits.
 const CHAR_WIDTH_RATIO: f32 = 0.5;
 
-/// Cut a row's label down to the room the row gave it, and hang the full
-/// name off it as a tooltip.
+/// Cut a row's label down to the room the row gave it, and hang the full name
+/// off it as a tooltip.
 ///
-/// Bevy has no ellipsis mode, so the cut is made here. A name that fits is
-/// left exactly as it was written and carries no tooltip: a tooltip
-/// repeating what is already on screen is noise.
-///
-/// Whether a name fits is a measurement, not an estimate: the width the
-/// whole name was drawn at is kept on [`TreeRowLabelFit`] the frame it is
-/// on screen, and every cut afterwards is worked out from it.
-///
-/// A label being renamed is left alone. The entry stands in its place and
-/// the label itself is laid out to nothing, so the room it measures says
-/// nothing about the name; cutting it would only mean the name that came
-/// back on a cancel was the cut one.
+/// Bevy has no ellipsis mode, so the cut is made here. A name that fits is left
+/// exactly as it was written and carries no tooltip. A label being renamed is
+/// left alone: it is laid out to nothing while the entry stands in its place,
+/// so the room it measures says nothing about the name.
 pub fn ellipsize_tree_row_labels(
     mut labels: Query<
         (
@@ -1124,8 +1030,8 @@ pub fn ellipsize_tree_row_labels(
             continue;
         }
         let full = match fit.as_deref() {
-            // The text is the one this wrote, so the name is whatever it
-            // was cut from; anything else is a fresh write from outside.
+            // The text is the one this wrote, so the name is whatever it was
+            // cut from; anything else is a fresh write from outside.
             Some(fit) if fit.shown == text.0 => fit.full.clone(),
             _ => text.0.clone(),
         };
@@ -1171,9 +1077,8 @@ pub fn ellipsize_tree_row_labels(
                 });
             }
         }
-        // Only on a change. Written every frame, the insert and the remove
-        // were two commands per row per frame for a tooltip that had said
-        // the same thing since the row was spawned.
+        // Only on a change: written every frame, the insert and the remove were
+        // two commands per row per frame.
         let shown = tooltip.map(|tooltip| tooltip.title.as_str());
         if wanted == full {
             if shown.is_some() {
@@ -1187,11 +1092,9 @@ pub fn ellipsize_tree_row_labels(
     }
 }
 
-/// `name` shortened to `budget` characters, ending in [`ELLIPSIS`] when
-/// anything was taken off.
-///
-/// A budget with no room for the ellipsis itself yields as many characters
-/// of the name as there is room for: a row too narrow to say anything
+/// `name` shortened to `budget` characters, ending in `ELLIPSIS` when anything
+/// was taken off. A budget with no room for the ellipsis yields as many
+/// characters of the name as fit.
 /// should still say something.
 fn cut_to_fit(name: &str, budget: usize) -> String {
     if name.chars().count() <= budget {
@@ -1206,21 +1109,17 @@ fn cut_to_fit(name: &str, budget: usize) -> String {
 
 /// Marks a row or a list currently painted for a drag hanging over it.
 ///
-/// `DragEnter` paints; `DragLeave` and a drop paint back. A drag called
-/// off part way through raises neither, so without a record of what is
-/// painted the tint has nothing to take it off again. This is that
-/// record, and it is also what says a drag is still live enough to cancel.
+/// A drag called off part way through raises neither `DragLeave` nor a drop, so
+/// this is the record of what has to be painted back.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct TreeDropPainted;
 
-/// Call off a drag on Escape: paint every tinted row and list back, drop
-/// the line and the rest, and mark the lists so the release that follows
-/// moves nothing.
+/// Call off a drag on Escape: paint every tinted row and list back, drop the
+/// line and the rest, and mark the lists so the release that follows moves
+/// nothing.
 ///
-/// Escape is read here rather than through the keymap for the reason the
-/// arrow keys are: it is how a gesture in a list is abandoned, not a
-/// command of its own, and the operator that owns Escape elsewhere would
-/// have to know what a tree row is to answer it.
+/// Escape is read here rather than through the keymap: it abandons a gesture in
+/// a list rather than being a command of its own.
 pub fn cancel_tree_drag_on_escape(
     keys: Res<ButtonInput<KeyCode>>,
     painted: Query<Entity, With<TreeDropPainted>>,
@@ -1288,13 +1187,9 @@ pub fn sync_tree_drop_line(
         return;
     };
     let side = zones.get(zone).is_ok_and(|side| side.after);
-    // The gap the zone stands for is its own outer edge: the top of the
-    // strip above a row, the bottom of the strip below one.
-    //
-    // Converted to logical pixels before it is written, because that is
-    // what a `Node` offset is measured in while `UiGlobalTransform` and
-    // `ComputedNode` are physical: at a scale factor of 2 the raw figure
-    // would put the line twice as far down the tree as the gap it marks.
+    // The gap the zone stands for is its own outer edge. Converted to logical
+    // pixels, because that is what a `Node` offset is measured in while
+    // `UiGlobalTransform` and `ComputedNode` are physical.
     let scale = root_computed.inverse_scale_factor();
     let centre =
         zone_transform.translation.y + if side { 1.0 } else { -1.0 } * zone_computed.size().y / 2.0;
@@ -1328,11 +1223,8 @@ pub fn sync_tree_drop_line(
     }
 }
 
-/// Open a collapsed row the pointer has rested on during a drag.
-///
-/// A drag holds what it is carrying, so a subtree that is closed cannot
-/// be opened by clicking it. Resting on it opens it instead, which is how
-/// a nested drop is reached without letting go.
+/// Open a collapsed row the pointer has rested on during a drag, which is how a
+/// nested drop is reached without letting go.
 pub fn spring_load_tree_rows(
     time: Res<Time>,
     mut spring: ResMut<TreeSpringLoad>,
@@ -1420,19 +1312,13 @@ fn ancestor_tree_root(
     None
 }
 
-/// Returns observers for the root tree container to handle deparenting (drop-to-root).
+/// Returns observers for the root tree container to handle deparenting
+/// (drop-to-root).
 ///
-/// The wash the container paints means "release here and the entity
-/// leaves its parent", so it belongs to the container's own empty space
-/// and nothing else. Pointer events bubble, and the gap strips over every
-/// row stop their `DragLeave` and `DragDrop` but let `DragEnter` through:
-/// painting on a bubbled enter would wash the whole list from a drag that
-/// only crossed a row, and nothing would ever paint it back.
-///
-/// It also belongs to a row going somewhere. A press on the list's empty
-/// space and a drag from there is a gesture with nothing in it, and the
-/// whole panel turning green until the button came back up said the
-/// release would move something.
+/// The wash means "release here and the entity leaves its parent", so it
+/// belongs to the container's own empty space: the gap strips over every row
+/// stop their `DragLeave` and `DragDrop` but let `DragEnter` bubble, and a drag
+/// starting from empty space carries nothing.
 pub fn tree_container_drop_observers() -> impl Bundle {
     (
         observe(
@@ -1469,8 +1355,6 @@ pub fn tree_container_drop_observers() -> impl Bundle {
                         .entity(drag_leave.event_target())
                         .remove::<TreeDropPainted>();
                 }
-                // The drag has left the tree, so there is nowhere it would
-                // land and nothing it is resting on.
                 line.zone = None;
                 spring.row = None;
             },
@@ -1485,7 +1369,6 @@ pub fn tree_container_drop_observers() -> impl Bundle {
                 drag_drop.propagate(false);
                 let container = drag_drop.event_target();
 
-                // Revert background
                 if let Ok(mut bg) = bg_query.get_mut(container) {
                     bg.0 = Color::NONE;
                     commands.entity(container).remove::<TreeDropPainted>();
@@ -1494,7 +1377,6 @@ pub fn tree_container_drop_observers() -> impl Bundle {
                     return;
                 }
 
-                // Resolve the dragged entity to its scene source
                 let Some(dragged_source) =
                     find_source_entity(drag_drop.dropped, &parent_query, &tree_nodes)
                 else {
@@ -1510,13 +1392,10 @@ pub fn tree_container_drop_observers() -> impl Bundle {
     )
 }
 
-/// Keyboard navigation for tree views: arrow keys, Enter, F2, Delete
+/// Keyboard navigation for tree views: arrow keys, Enter, F2, Delete.
 ///
-/// These keys are read here rather than through the keymap, because they
-/// are how a list is walked rather than commands of their own. That also
-/// means nothing else stands them down, so the keybind dialog's recorder
-/// has to be checked here: without it, naming a chord in the dialog walks
-/// the outliner, or renames a row.
+/// These keys are read here rather than through the keymap, so nothing else
+/// stands them down and the keybind dialog's recorder has to be checked here.
 pub fn tree_keyboard_navigation(
     keyboard: Res<ButtonInput<KeyCode>>,
     capture: Option<Res<jackdaw_commands::KeymapCapture>>,
@@ -1536,17 +1415,14 @@ pub fn tree_keyboard_navigation(
     if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
         return;
     }
-    // A field being typed into takes the keys; anything else holding
-    // focus does not. Standing down for any focus at all is what left the
-    // arrow keys dead in the editor, where a button or a toolbar control
-    // has focus most of the time.
+    // A field being typed into takes the keys; anything else holding focus does
+    // not. Standing down for any focus at all left the arrow keys dead.
     if input_focus
         .get()
         .is_some_and(|entity| text_inputs.contains(entity))
     {
         return;
     }
-    // Collect all visible tree rows in order
     let visible_rows =
         collect_visible_rows(&tree_roots, &tree_nodes, &tree_row_children, &node_query);
 
@@ -1577,8 +1453,7 @@ pub fn tree_keyboard_navigation(
     }
 
     // Left closes the branch the walk is standing on, and on a row that is
-    // already closed steps out to the row holding it. Without the second
-    // half Left is dead on every leaf, which is most of a tree.
+    // already closed steps out to the row holding it.
     if keyboard.just_pressed(KeyCode::ArrowLeft)
         && let Some(focused_entity) = focused.0
         && let Ok((entity, expanded, _)) = tree_nodes.get(focused_entity)
@@ -1595,36 +1470,30 @@ pub fn tree_keyboard_navigation(
         && let Ok((entity, expanded, children)) = tree_nodes.get(focused_entity)
     {
         // The marker, not its children: a branch that has not been opened
-        // yet holds an empty container, and a `&Children` query does not
-        // match an entity with none. Asked that way, Right opened nothing
-        // that had not already been opened.
+        // yet holds an empty container, which a `&Children` query does not
+        // match.
         let has_children = children.iter().any(|c| row_children.contains(c));
         if has_children && !expanded.0 {
-            // Expand the node
             commands.entity(entity).insert(TreeNodeExpanded(true));
         }
     }
 
-    // Enter/Space: select focused node
     if (keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::Space))
         && let Some(focused_entity) = focused.0
         && let Ok(tree_node) = tree_node_query.get(focused_entity)
+        && let Ok((_, _, children)) = tree_nodes.get(focused_entity)
     {
-        // Find the TreeRowContent child to use as event target
-        if let Ok((_, _, children)) = tree_nodes.get(focused_entity) {
-            for child in children.iter() {
-                if tree_row_contents.contains(child) {
-                    commands.trigger(TreeRowClicked {
-                        entity: child,
-                        source_entity: tree_node.0,
-                    });
-                    break;
-                }
+        for child in children.iter() {
+            if tree_row_contents.contains(child) {
+                commands.trigger(TreeRowClicked {
+                    entity: child,
+                    source_entity: tree_node.0,
+                });
+                break;
             }
         }
     }
 
-    // F2: start inline rename
     if keyboard.just_pressed(KeyCode::F2)
         && let Some(focused_entity) = focused.0
         && let Ok(tree_node) = tree_node_query.get(focused_entity)
@@ -1683,7 +1552,6 @@ fn collect_visible_rows_recursive(
         return;
     };
 
-    // Check if this node is visible (Display::Flex or default)
     if let Ok(node) = node_query.get(entity)
         && node.display == Display::None
     {
@@ -1693,7 +1561,6 @@ fn collect_visible_rows_recursive(
     result.push(entity);
 
     if expanded.0 {
-        // Find TreeRowChildren container and recurse into its children
         for child in children.iter() {
             if let Ok(row_children) = tree_row_children.get(child) {
                 for grandchild in row_children.iter() {

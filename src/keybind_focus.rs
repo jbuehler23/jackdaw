@@ -12,22 +12,9 @@
 //! refuses spuriously.
 //!
 //! [`KeybindFocus`] returns `is_typing()` only when the focused entity
-//! holds an editable text buffer.
-//!
-//! The buffer rather than the editor's own field wrapper: a field built
-//! straight out of Bevy's text input -- the canvas text entry, the Add
-//! Entity search, an inspector row -- holds the keyboard exactly as the
-//! wrapper does, and asking after the wrapper let every one of those type
-//! a name into the field and a chord into the scene at the same time.
-//!
-//! Recording a chord in the keybind settings is the same class of thing:
-//! the press names a key rather than commanding the editor with it, and
-//! everything that reads the keyboard for a gesture has to stand down for
-//! it exactly as it does for typing. So the two share one answer,
-//! [`KeybindFocus::keyboard_is_spoken_for`], rather than each reader
-//! remembering to ask twice. Readers in the crates below this one, which
-//! cannot see this type, ask [`KeymapCapture::is_recording`] instead --
-//! the same flag, one layer down.
+//! holds an editable text buffer. Recording a keybind chord suppresses the
+//! keyboard the same way; [`KeybindFocus::keyboard_is_spoken_for`] answers
+//! for both.
 
 use bevy::ecs::system::SystemParam;
 use bevy::input_focus::InputFocus;
@@ -60,23 +47,15 @@ impl KeybindFocus<'_, '_> {
         KeymapCapture::is_recording(self.capture.as_deref())
     }
 
-    /// True when this press is not the editor's to act on: the user is
-    /// typing it into a field, or naming it as a binding.
-    ///
-    /// What every gate predicate and every direct keyboard reader outside
-    /// the operator path asks.
+    /// True when this press is not the editor's to act on: the user is typing
+    /// it into a field, or naming it as a binding.
     pub fn keyboard_is_spoken_for(&self) -> bool {
         self.is_typing() || self.is_recording()
     }
 
-    /// Whether any of `keys` is held *for this gesture*.
-    ///
-    /// What a modal drag asks instead of reading `ButtonInput` itself. A
-    /// modal reads Ctrl, Shift and Alt as modifiers rather than as chords, so
-    /// the keymap's own suppression does not reach it: with a text field
-    /// focused or a rebind recording, a Shift typed into the field also
-    /// changed what the drag under way was doing, and there was nothing on
-    /// screen saying it had. The keyboard belongs to one thing at a time.
+    /// Whether any of `keys` is held for this gesture. Modal drags read
+    /// modifiers through this rather than `ButtonInput` directly, so a key
+    /// typed into a focused field does not also steer the drag.
     pub fn any_pressed(
         &self,
         keyboard: &ButtonInput<KeyCode>,

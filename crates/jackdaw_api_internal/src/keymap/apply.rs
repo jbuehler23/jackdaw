@@ -214,13 +214,11 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
     report
 }
 
-/// Whether `conflicts` differs from the set the last warning named, and
-/// record it as the new set.
+/// Whether `conflicts` differs from the set the last warning named, recording
+/// it as the new set.
 ///
 /// The shipped preset carries deliberate shared chords, so re-applying it
-/// unchanged - which every editor boot in the process does - would repeat
-/// the same warning. A rebind that introduces or clears a conflict changes
-/// the set and is still reported.
+/// unchanged would otherwise repeat the same warning.
 fn conflicts_are_new(conflicts: &[String]) -> bool {
     static LAST: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
     let mut last = LAST
@@ -233,18 +231,12 @@ fn conflicts_are_new(conflicts: &[String]) -> bool {
     true
 }
 
-/// Layer the user's own bindings over the shipped defaults.
+/// Layers the user's own bindings over the shipped defaults.
 ///
-/// The unit of replacement is the operator, not the chord: naming an
-/// operator in [`UserKeymap`] drops every default row that operator had
-/// and uses the user's rows instead. That is what makes a rebind
-/// complete (the old chord goes away with the new one arriving) and a
-/// reset a deletion (removing the operator's user rows restores exactly
-/// what it shipped with).
-///
-/// Default rows keep their order and their positions; the user's rows
-/// follow them, so a chord's meaning does not depend on when it was
-/// rebound.
+/// The unit of replacement is the operator, not the chord: naming one in
+/// [`UserKeymap`] drops every default row it had. That is what makes a rebind
+/// complete and a reset a deletion. Default rows keep their order and the
+/// user's follow them.
 pub fn resolve_keymap(defaults: &KeymapPreset, user: &UserKeymap) -> KeymapPreset {
     let overridden: std::collections::HashSet<&str> = user
         .bindings
@@ -265,18 +257,12 @@ pub fn resolve_keymap(defaults: &KeymapPreset, user: &UserKeymap) -> KeymapPrese
 }
 
 /// Every chord in `preset` that more than one action claims, as
-/// `"chord (phase, context): op-a, op-b"` in the order the entries are
-/// written.
+/// `"chord (phase, context): op-a, op-b"` in written order.
 ///
-/// A chord is one input, one phase and one context. Two actions on the
-/// same one both fire, and their `is_available` checks decide which of
-/// them does anything, which is how a key means one thing in the timeline
-/// and another on the canvas. So a shared chord is reported and never
-/// resolved here: what the report is for is the pair nobody intended,
-/// where both sides are available at once and the press does two things.
-///
-/// An action claiming the same chord twice is not a conflict with
-/// itself; only distinct operator names count.
+/// Two actions on one chord both fire, and their `is_available` checks decide
+/// which does anything, which is how a key means one thing in the timeline and
+/// another on the canvas. So a shared chord is reported and never resolved
+/// here. Only distinct operator names count.
 pub fn find_conflicts(preset: &KeymapPreset) -> Vec<String> {
     let mut claims: Vec<(&PresetBinding, Vec<&str>)> = Vec::new();
     for entry in &preset.bindings {

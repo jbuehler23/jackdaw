@@ -22,8 +22,8 @@ fn ratio(current: f32, max: f32) -> f32 {
 }
 
 /// A registered function that hands back a borrow instead of an owned value.
-/// Rust's `IntoFunction` impls cannot express this from a plain fn item, so the
-/// dynamic function is built by hand.
+/// `IntoFunction` cannot express this from a plain fn item, so it is built by
+/// hand.
 fn borrowed_function() -> DynamicFunction<'static> {
     static VALUE: f32 = 1.0;
     DynamicFunction::new(
@@ -119,8 +119,8 @@ fn broken_path_warns_once_and_does_not_panic() {
     assert_eq!(failures.0.len(), 1);
 }
 
-/// Several reads with no `via` to fold them is an error. Writing only the last
-/// one would leave a binding that forgot its combiner looking wired up.
+/// Several reads with no `via` to fold them is an error, rather than a binding
+/// that quietly writes the last one.
 #[test]
 fn several_reads_without_via_is_an_error_not_a_silent_last_read() {
     let mut app = app();
@@ -230,12 +230,9 @@ fn immutable_component_write_is_an_error_not_a_panic() {
     assert_eq!(app.world().get::<Locked>(entity).unwrap().0, 1.0);
 }
 
-/// A NaN is refused by the float targets, not only the integer ones.
-///
-/// NaN compares unequal to itself, so a stored NaN makes the equality guard
-/// report a change on every evaluation: the component is flagged every frame
-/// forever, and a NaN `Val` goes on to reach layout. Refusing the write keeps
-/// an unchanged source from costing anything.
+/// A NaN is refused by the float targets, not only the integer ones: it
+/// compares unequal to itself, so a stored one would flag its component every
+/// frame forever.
 #[test]
 fn a_non_finite_number_is_refused_by_every_float_target() {
     let mut app = app();
@@ -291,9 +288,8 @@ fn a_non_finite_number_is_refused_by_every_float_target() {
     );
 }
 
-/// A NaN that got in would never stop flagging its component, because it
-/// compares unequal to itself. Pins that the write never reports a change it
-/// cannot stop reporting.
+/// A NaN that got in would never stop flagging its component, since it compares
+/// unequal to itself.
 #[test]
 fn a_refused_nan_cannot_churn_change_ticks() {
     let mut app = app();
@@ -305,8 +301,6 @@ fn a_refused_nan_cannot_churn_change_ticks() {
         })
         .id();
 
-    // The write is refused, so it reports no change, twice over, which is what
-    // a stored NaN could never do.
     for _ in 0..2 {
         assert!(
             write_path(
@@ -320,7 +314,6 @@ fn a_refused_nan_cannot_churn_change_ticks() {
         );
     }
 
-    // Not vacuous: a real number still reports a change once, then settles.
     assert!(
         write_path(
             app.world_mut(),
@@ -343,7 +336,7 @@ fn a_refused_nan_cannot_churn_change_ticks() {
     );
 }
 
-/// The type is never spawned, inserted or queried in this world, so it holds no
+/// The type is never spawned, inserted or queried here, so it holds no
 /// `ComponentId` until the write forces one.
 #[test]
 fn unspawned_immutable_component_write_is_an_error_not_a_panic() {
@@ -440,8 +433,7 @@ fn visible_binding_toggles_visibility() {
 }
 
 /// A widget that is its own subject can be authored to read the very field it
-/// writes. The binding would then feed itself, so it is refused when it is
-/// resolved rather than run.
+/// writes, which is refused at resolve time rather than run.
 #[test]
 fn a_binding_that_reads_what_it_writes_is_refused() {
     let mut app = app();
@@ -471,8 +463,7 @@ fn a_binding_that_reads_what_it_writes_is_refused() {
     assert_eq!(app.world().get::<Health>(widget).unwrap().current, 40.0);
 }
 
-/// The same shape with the read and the write on different fields is an
-/// ordinary binding, so the refusal above is about the cycle and nothing else.
+/// The same shape on different fields is an ordinary binding.
 #[test]
 fn reading_a_neighbouring_field_of_the_written_component_is_fine() {
     let mut app = app();
@@ -496,9 +487,8 @@ fn reading_a_neighbouring_field_of_the_written_component_is_fine() {
     assert_eq!(app.world().get::<Health>(widget).unwrap().current, 100.0);
 }
 
-/// A binding that failed once and then started working has nothing left to
-/// report, so its entry leaves the ledger and a second failure is worth a
-/// second line.
+/// A binding that starts working leaves the ledger, so a second failure is
+/// worth a second line.
 #[test]
 fn a_binding_that_starts_working_leaves_the_failure_ledger() {
     let mut app = app();

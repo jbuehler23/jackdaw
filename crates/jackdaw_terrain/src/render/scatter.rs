@@ -1,28 +1,21 @@
 //! Drawing a terrain's stored scatter.
 //!
-//! A placement is data, not an entity: nothing here carries a name, a
-//! scene node id or a document reference, and a host's outliner, undo
-//! stack and scene writer never see one. What is spawned is the least a
-//! draw needs -- a mesh, a material and a transform -- so bevy's automatic
-//! instancing batches every placement of the same asset into one draw.
+//! A placement is data, not an entity: what is spawned is the least a draw needs
+//! -- a mesh, a material and a transform -- so bevy's automatic instancing
+//! batches every placement of the same asset into one draw.
 //!
-//! A glTF is resolved once per palette entry rather than once per
-//! placement: the file's node graph is flattened into a list of
-//! [`ScatterPrimitive`]s, each a mesh, a material and the transform that
-//! node sat at inside the file. A kit tree with a bark primitive and a
-//! leaf primitive is two entries in that list, and two batches.
+//! A glTF is resolved once per palette entry rather than once per placement: the
+//! file's node graph is flattened into a list of [`ScatterPrimitive`]s, each a
+//! mesh, a material and the transform that node sat at inside the file.
 //!
-//! Placements are spawned under one chunk entity per region. Bevy frustum
-//! culls per entity, and a hidden parent takes its children out of that
-//! test, so hiding a chunk whose bounds are off screen is what keeps the
-//! per-frame visibility cost proportional to the regions in view rather
-//! than to the placements in the document.
+//! Placements are spawned under one chunk entity per region. Bevy frustum culls
+//! per entity and skips a hidden parent's children, so hiding an off-screen
+//! chunk keeps the per-frame visibility cost proportional to the regions in view
+//! rather than to the placements in the document.
 //!
-//! Two hosts drive this: an editor holding its documents in a store and a
-//! game holding one per terrain. Both write [`TerrainScatter`] onto the
-//! terrain entity and mark what changed in [`ScatterDirty`]; everything
-//! below is the same in each, so a scene draws the same scatter in a game
-//! as in the editor that placed it.
+//! Both hosts -- an editor holding its documents in a store, a game holding one
+//! per terrain -- write [`TerrainScatter`] onto the terrain entity and mark what
+//! changed in [`ScatterDirty`].
 
 use bevy::asset::LoadState;
 use bevy::camera::primitives::{Aabb, Frustum, MeshAabb};
@@ -37,11 +30,9 @@ use crate::placement::{ScatterPalette, ScatterPlacement};
 use crate::region::RegionCoord;
 use crate::sidecar::RegionTerrainData;
 
-/// Tallest an asset can be and still count as ground cover.
-///
-/// Ground cover is what the two defaults below are for: it is not an
-/// obstacle a path has to go round, and it is not worth drawing from far
-/// enough away that its pixels are smaller than the batch is wide.
+/// Tallest an asset can be and still count as ground cover: not an obstacle a
+/// path has to go round, and not worth drawing once its pixels are smaller than
+/// the batch is wide.
 pub const GROUND_COVER_HEIGHT: f32 = 1.5;
 
 /// Distance past which ground cover stops drawing when a palette entry
@@ -53,9 +44,8 @@ const CULL_FADE: f32 = 0.1;
 
 /// The stored scatter one terrain draws.
 ///
-/// A projection of the terrain's document rather than the document
-/// itself, so the renderer is the same whether the host keeps documents in
-/// a resource keyed by path or one per entity.
+/// A projection of the terrain's document rather than the document itself, so
+/// the renderer is the same however the host keeps its documents.
 #[derive(Component, Clone, Debug, Default, PartialEq)]
 pub struct TerrainScatter {
     /// The assets and stamp identities the placements index into.
@@ -145,11 +135,9 @@ impl ScatterDirty {
         self.regions.insert(coord);
     }
 
-    /// Fold another mark into this one.
-    ///
-    /// What a host writing this component every frame needs: a mark the
-    /// renderer has not caught up with yet must not be overwritten by the
-    /// next edit's, or the regions between them never rebuild.
+    /// Fold another mark into this one: a mark the renderer has not caught up
+    /// with must not be overwritten by the next edit's, or the regions between
+    /// them never rebuild.
     pub fn merge(&mut self, other: &Self) {
         self.all |= other.all;
         self.regions.extend(other.regions.iter().copied());
@@ -164,9 +152,8 @@ impl ScatterDirty {
 /// toggles.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ScatterChunk {
-    /// The terrain this belongs to. The chunk is a child of it, so this is
-    /// the parent; kept so a cull can look up the terrain without walking
-    /// the hierarchy.
+    /// The terrain this belongs to, kept so a cull can look it up without
+    /// walking the hierarchy.
     pub terrain: Entity,
     pub coord: RegionCoord,
     /// Bounds of everything drawn under this chunk, in the terrain's local
@@ -176,9 +163,8 @@ pub struct ScatterChunk {
 
 /// One drawn placement, by where in the document it came from.
 ///
-/// The only link back to the data: nothing else about the entity says it
-/// is scatter, so a host that has an entity in hand reads which stored
-/// placement drew it here.
+/// The only link back to the data: nothing else about the entity says it is
+/// scatter.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ScatterRendered {
     pub region: RegionCoord,
@@ -258,8 +244,8 @@ impl ScatterAssets {
 
 /// Resolves palette assets, draws stored scatter, and culls it by chunk.
 ///
-/// Independent of [`super::TerrainRenderPlugin`]: a host that draws the
-/// ground without scatter adds one and not the other.
+/// Independent of [`super::TerrainRenderPlugin`]: a host that draws the ground
+/// without scatter adds one and not the other.
 pub struct ScatterRenderPlugin;
 
 /// The stages a host orders its own scatter work against.
@@ -274,10 +260,9 @@ pub enum ScatterSystems {
 
 impl Plugin for ScatterRenderPlugin {
     fn build(&self, app: &mut App) {
-        // The asset types this reads, declared rather than assumed: a host
-        // that draws stored scatter has a glTF loader, but the systems
-        // below are also scheduled in a headless editor build that does
-        // not, and a missing collection would fail their validation.
+        // The asset types this reads, declared rather than assumed: these
+        // systems are also scheduled in a headless build with no glTF loader,
+        // where a missing collection would fail their validation.
         app.init_asset::<Gltf>()
             .init_asset::<GltfNode>()
             .init_asset::<GltfMesh>()
@@ -293,9 +278,8 @@ impl Plugin for ScatterRenderPlugin {
                 .chain()
                 .in_set(ScatterSystems::Rebuild),
         );
-        // After the frusta are written and before they are read: culling
-        // against last frame's frustum pops chunks in at the screen edge
-        // whenever the camera moves faster than a frame.
+        // After the frusta are written and before they are read: culling against
+        // last frame's frustum pops chunks in at the screen edge.
         app.configure_sets(
             PostUpdate,
             ScatterSystems::Cull
@@ -359,12 +343,11 @@ fn resolve_palette_assets(
     assets.settled = settled;
 }
 
-/// Every drawable part of a glTF, with the transform of the node it hung
-/// under folded in.
+/// Every drawable part of a glTF, with the transform of the node it hung under
+/// folded in.
 ///
-/// `None` while any part is still loading: a half-resolved asset drawn now
-/// would have to be rebuilt when the rest arrived, and the placements
-/// would move under the camera as it did.
+/// `None` while any part is still loading: a half-resolved asset would have to
+/// be rebuilt when the rest arrived, moving the placements under the camera.
 fn flatten(
     gltf: &Gltf,
     nodes: &Assets<GltfNode>,
@@ -372,8 +355,8 @@ fn flatten(
     mesh_assets: &Assets<Mesh>,
     server: &AssetServer,
 ) -> Option<ReadyAsset> {
-    // The roots are the nodes nothing lists as a child. glTF holds the
-    // node table flat, so this is what says where a walk starts.
+    // The roots are the nodes nothing lists as a child; glTF holds the node
+    // table flat.
     let mut child_ids = HashSet::new();
     for handle in &gltf.nodes {
         let node = nodes.get(handle)?;
@@ -408,10 +391,9 @@ fn flatten(
                 .as_ref()
                 .and_then(|handle| standard_material(server, handle))
                 .unwrap_or_default();
-            // A mesh with no positions has no size to stand a placement
-            // in, so it is left out rather than waited for: the asset
-            // resolves without it, where waiting would re-walk the graph
-            // every frame for a bound that never arrives.
+            // A mesh with no positions has no size to stand a placement in, so
+            // it is left out rather than waited for: waiting would re-walk the
+            // graph every frame for a bound that never arrives.
             let Some(bounds) = mesh_assets.get(&primitive.mesh)?.compute_aabb() else {
                 warn!(
                     "terrain scatter: a primitive of {:?} has no positions and draws nothing",
@@ -448,9 +430,8 @@ fn flatten(
 /// The `StandardMaterial` the glTF loader wrote beside a primitive's
 /// `GltfMaterial`, under the same asset path with a `/std` label.
 ///
-/// `None` for a primitive whose material has no path to hang that label
-/// on, which the caller draws with the default material rather than
-/// waiting for one that will never arrive.
+/// `None` for a primitive whose material has no path to hang that label on,
+/// which the caller draws with the default material.
 fn standard_material(
     server: &AssetServer,
     material: &Handle<bevy::gltf::GltfMaterial>,
@@ -588,19 +569,16 @@ fn spawn_chunk(
         });
 }
 
-/// How far a placement of this asset draws, or `None` for one that draws
-/// at every distance.
+/// How far a placement of this asset draws, or `None` for one that draws at
+/// every distance.
 ///
-/// A palette entry that states a cutoff is taken at its word. One that
-/// does not gets the ground-cover default when the asset is short enough
-/// to be ground cover, and no cutoff otherwise: a tree that vanished at
-/// eighty metres would be a hole in the landscape, while a tuft of grass
-/// is already sub-pixel there. Nothing is attached in the no-cutoff case,
-/// which keeps an instance that has no cutoff out of the render world's
-/// visibility-range bookkeeping altogether.
+/// A palette entry that states a cutoff is taken at its word. One that does not
+/// gets the ground-cover default when the asset is short enough to be ground
+/// cover, and no cutoff otherwise; nothing is attached in that case, which keeps
+/// the instance out of the render world's visibility-range bookkeeping.
 ///
-/// The cutoff fades rather than snaps: an abrupt one pops a whole batch of
-/// ground cover in and out as the camera creeps over the distance.
+/// The cutoff fades rather than snaps, so a batch of ground cover does not pop
+/// in as the camera creeps over the distance.
 fn cull_range(cull_distance: f32, height: f32) -> Option<VisibilityRange> {
     let distance = if cull_distance > 0.0 {
         cull_distance
@@ -622,9 +600,8 @@ fn cull_range(cull_distance: f32, height: f32) -> Option<VisibilityRange> {
 
 /// Hide the chunks no camera can see.
 ///
-/// Bevy's own frustum test is per entity and skips the children of a
-/// hidden parent, so this is what keeps the cost of a document with tens
-/// of thousands of placements proportional to the regions in view.
+/// Bevy's own frustum test is per entity and skips the children of a hidden
+/// parent, so this keeps the cost proportional to the regions in view.
 fn cull_chunks(
     mut chunks: Query<(&ScatterChunk, &mut Visibility)>,
     terrains: Query<&GlobalTransform>,

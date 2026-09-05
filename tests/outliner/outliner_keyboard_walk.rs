@@ -1,14 +1,8 @@
 //! The arrow keys walk the outliner.
 //!
-//! The walk reads the keyboard itself rather than going through the
-//! keymap, and it used to look for its rows under a marker nothing
-//! carried: the outliner's list is a `TreeRoot`, and the walk asked for a
-//! `TreeView`. It found no rows, so every arrow key did nothing in the
-//! real panel while the unit tests, which spawned the marker the walk
-//! asked for, passed.
-//!
-//! So the keys are pressed through the window's own stream, and the rows
-//! are the outliner's own.
+//! The walk reads the keyboard itself rather than going through the keymap, and
+//! the outliner's list is a `TreeRoot` rather than a `TreeView`. So the keys are
+//! pressed through the window's own stream and the rows are the outliner's own.
 
 use crate::util;
 use crate::util::OperatorResultExt as _;
@@ -44,13 +38,9 @@ fn run(app: &mut App, clause: &str) {
     settle(app);
 }
 
-/// An editor showing an outliner over two roots, the first with a child.
-///
-/// The walk is added to `Update` here because the editor registers it
-/// behind `AppState::Editor`, and entering that state stands the whole
-/// editor up around the panel under test. The container, its rows and the
-/// key stream are the real ones either way, which is what the walk was
-/// getting wrong.
+/// An editor showing an outliner over two roots, the first with a child. The walk
+/// is added to `Update` here because entering `AppState::Editor` would stand the
+/// whole editor up around the panel under test.
 fn outliner_app() -> (App, Entity, Vec<Entity>, Entity) {
     let mut app = util::editor_test_app();
     {
@@ -66,9 +56,8 @@ fn outliner_app() -> (App, Entity, Vec<Entity>, Entity) {
         Update,
         jackdaw_feathers::tree_view::tree_keyboard_navigation,
     );
-    // The walk stands down while a text field has focus, and the project
-    // screen this app starts on leaves one focused. Nothing is being typed
-    // into here.
+    // The walk stands down while a text field has focus, and the project screen
+    // this app starts on leaves one focused.
     app.world_mut()
         .resource_mut::<bevy::input_focus::InputFocus>()
         .clear();
@@ -173,10 +162,9 @@ fn right_opens_a_branch_and_left_closes_it() {
     assert!(!open(&app, panel, roots[0]), "Left on the parent closes it");
 }
 
-/// Focus is not the same as being typed into. A button, a toolbar
-/// control, whatever the pointer last landed on: the editor almost always
-/// has focus somewhere, and the walk standing down for any of it is the
-/// other half of why the arrow keys did nothing.
+/// Focus is not the same as being typed into: the editor almost always has focus
+/// somewhere, and the walk standing down for any of it is the other half of why
+/// the arrow keys did nothing.
 #[test]
 fn focus_on_something_that_is_not_a_field_leaves_the_walk_alone() {
     use bevy::input_focus::{FocusCause, InputFocus};
@@ -192,8 +180,7 @@ fn focus_on_something_that_is_not_a_field_leaves_the_walk_alone() {
     assert_eq!(walking_on(&app), Some(roots[0]));
 }
 
-/// A field being typed into does take them, which is what the guard was
-/// for: an arrow moves the caret, not the tree.
+/// A field being typed into does take them: an arrow moves the caret.
 #[test]
 fn a_field_being_typed_into_keeps_the_arrow_keys() {
     use bevy::input_focus::{FocusCause, InputFocus};

@@ -1,16 +1,4 @@
-//! Aligning a selection to its bounding box, and distributing it along an
-//! axis.
-//!
-//! What is pinned here:
-//!  * each of the six alignments moves only its own axis, and lands every
-//!    member on the line the box states;
-//!  * the alignment writes through each node's own offset box, so a member
-//!    under a bordered parent lands on the canvas line rather than ten
-//!    pixels off it;
-//!  * one press is one history entry that undoes to the exact `Node`;
-//!  * a member its parent lays out refuses the whole press and says so;
-//!  * distributing evens the gaps and leaves the two outermost members
-//!    where they are, and refuses fewer than three.
+//! Aligning a selection to its bounding box, and distributing it along an axis.
 
 use crate::util;
 
@@ -44,8 +32,8 @@ fn settle(app: &mut App) {
     }
 }
 
-/// A 2D panel framed so the whole authored canvas fits it, which is what
-/// gives the authored scene a target to be laid out against.
+/// A 2D panel framed so the whole authored canvas fits it, which gives the
+/// authored scene a target to be laid out against.
 fn panel(app: &mut App) {
     let parent = app
         .world_mut()
@@ -289,22 +277,17 @@ fn distributing_evens_the_gaps_and_leaves_the_ends_alone() {
     assert_eq!(offsets(&app, boxes[2]).0, px(500.0), "the last end holds");
 }
 
-/// The two outermost members hold still even when one of them starts
-/// inside another.
-///
-/// The pass lays the members out from the box's near edge and the last one
-/// it places lands on the far edge, so the order has to end with whichever
-/// member reaches furthest. Ordered by leading edge it did not: a wide box
-/// starting early sorted before a narrow one starting later, so the box
-/// the span was measured to was the box that moved, and the span the doc
-/// promises to hold was not held.
+/// The pass lays the members out from the box's near edge and the last one it
+/// places lands on the far edge, so the order has to end with whichever member
+/// reaches furthest. Ordered by leading edge, a wide box starting early sorted
+/// before a narrow one starting later.
 #[test]
 fn distributing_holds_the_member_that_reaches_furthest() {
     let mut app = util::editor_test_app();
     panel(&mut app);
     let root = root_with_border(&mut app);
-    // "Wide" starts before "Narrow" and ends after it, so it is both an
-    // end of the span and not the last box by leading edge.
+    // "Wide" starts before "Narrow" and ends after it, so it is an end of the
+    // span but not the last box by leading edge.
     let boxes = vec![
         child(&mut app, root, "First", 0.0, 0.0, 100.0, 50.0),
         child(&mut app, root, "Wide", 200.0, 0.0, 400.0, 50.0),
@@ -389,9 +372,8 @@ fn one_selected_node_is_not_an_alignment() {
     assert_eq!(offsets(&app, boxes[0]), before);
 }
 
-/// A locked node is out of the canvas's reach. The pointer path already
-/// refuses to pick one up; an alignment that moved it anyway would be the one
-/// gesture the lock did not stop.
+/// The pointer path already refuses to pick a locked node up; an alignment
+/// that moved it anyway would be the one gesture the lock did not stop.
 #[test]
 fn an_alignment_leaves_a_locked_member_where_it_is() {
     let mut app = util::editor_test_app();
@@ -415,8 +397,7 @@ fn an_alignment_leaves_a_locked_member_where_it_is() {
     assert_eq!(offsets(&app, boxes[2]).0, px(100.0));
 }
 
-/// Distributing reads the same members, so the lock has to hold there too:
-/// three selected with one locked is two to spread, which is fewer than a
+/// Three selected with one locked is two to spread, which is fewer than a
 /// distribution needs.
 #[test]
 fn distributing_does_not_count_a_locked_member() {

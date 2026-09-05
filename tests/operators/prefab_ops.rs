@@ -358,9 +358,8 @@ fn spawn_instance_reads_a_path_relative_to_the_assets_directory() {
     );
 }
 
-/// Matching one level deep calls two groups copies when they agree on
-/// their direct children and differ below, and `pack_matching` deletes
-/// what it matches: the chimney under the second roof would go with it.
+/// Matching one level deep calls two groups copies when they agree on their
+/// direct children and differ below, and `pack_matching` deletes what it matches.
 #[test]
 fn pack_matching_leaves_a_group_that_differs_below_its_direct_children() {
     let (mut app, _dir) = app_in_project();
@@ -414,9 +413,8 @@ fn pack_matching_replaces_a_group_that_matches_all_the_way_down() {
     );
 }
 
-/// `path` reaches these operators from a remote caller and `prefab.pack`
-/// writes where it points, so a path that leaves the assets directory is
-/// refused rather than followed.
+/// `path` reaches these operators from a remote caller and `prefab.pack` writes
+/// where it points, so a path leaving the assets directory is refused.
 #[test]
 fn pack_refuses_a_path_that_leaves_the_assets_directory() {
     let (mut app, dir) = app_in_project();
@@ -442,9 +440,8 @@ fn pack_refuses_a_path_that_leaves_the_assets_directory() {
     }
 }
 
-/// The group comes out of the scene only once the file it would inherit
-/// from is on disk and reads back. A write that cannot land otherwise
-/// leaves the scene with the group gone and nothing standing where it was.
+/// The group comes out of the scene only once the file it inherits from is on
+/// disk and reads back, or the group is gone with nothing standing where it was.
 #[cfg(unix)]
 #[test]
 fn pack_matching_keeps_the_group_when_the_file_cannot_be_written() {

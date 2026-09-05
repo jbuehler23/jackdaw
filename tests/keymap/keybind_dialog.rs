@@ -1,12 +1,5 @@
-//! What a keybind row draws: its chords, and the badge saying another
-//! command claims one of them.
-//!
-//! What is pinned here:
-//!  * a row is drawn with its chords on the frame it appears, rather than
-//!    waiting for the working copy to change again;
-//!  * a chord the shipped keymap gives to several commands is marked as
-//!    shared, not as a warning;
-//!  * a chord this session made shared is the warning.
+//! What a keybind row draws: its chords, and the badge saying another command
+//! claims one of them.
 
 use bevy::prelude::*;
 use jackdaw::keybind_settings::{KeybindChordList, KeymapConflictBadge, PendingKeymapChanges};
@@ -74,9 +67,8 @@ fn badge_of(app: &mut App, operator: &str) -> (bool, String) {
     (shown, text_under(app, badge).join(""))
 }
 
-/// The dialog puts its working copy in the world and spawns its rows in
-/// the same breath, so a row that only redrew on the next change to that
-/// copy was drawn empty and stayed empty.
+/// The dialog puts its working copy in the world and spawns its rows in the same
+/// breath, so a row that only redrew on the next change was drawn empty.
 #[test]
 fn a_row_shows_its_chords_on_the_frame_it_appears() {
     let mut app = dialog_app();
@@ -87,9 +79,8 @@ fn a_row_shows_its_chords_on_the_frame_it_appears() {
     );
 }
 
-/// The shipped keymap gives Escape to several commands on purpose and
-/// arbitrates between them. Marking that with a warning marks most of the
-/// list with a warning, and a warning on everything is read as nothing.
+/// The shipped keymap gives Escape to several commands on purpose and arbitrates
+/// between them; a warning on everything is read as nothing.
 #[test]
 fn a_shipped_shared_chord_is_marked_as_shared_not_as_a_warning() {
     let mut app = dialog_app();
@@ -137,11 +128,9 @@ fn a_chord_this_session_shared_is_the_warning() {
     );
 }
 
-/// A command moved onto a chord the shipped keymap already shares joins
-/// that sharing set, and a set this session changed is the user's own to
-/// sort out. Keying the neutral badge on the chord alone gave the joiner --
-/// and everyone already on the chord -- the shipped Info marker, which is
-/// exactly the case the warning exists for.
+/// A command moved onto a chord the shipped keymap already shares joins that set,
+/// and a set this session changed is the user's own to sort out. Keying the
+/// neutral badge on the chord alone gave everyone on it the shipped Info marker.
 #[test]
 fn joining_a_shipped_shared_chord_is_the_warning_for_everyone_on_it() {
     use jackdaw_api_internal::keymap::PresetInput;
@@ -209,11 +198,9 @@ fn leaving_a_shipped_shared_chord_leaves_the_rest_neutral() {
     );
 }
 
-/// Save writes the whole keymap file, and refuses while a file nobody could
-/// read is still sitting where it would write. The dialog dismisses itself
-/// on the click either way, so a refusal it did not report was a rebind
-/// that worked all session and was gone the next morning with nothing
-/// having said so.
+/// Save writes the whole keymap file, and refuses while a file nobody could read
+/// is sitting where it would write. The dialog dismisses itself on the click
+/// either way, so a refusal it did not report lost the session's rebinds.
 #[test]
 fn a_refused_save_says_so_and_keeps_the_rebind_for_the_session() {
     use jackdaw_api_internal::keymap::PresetInput;
@@ -225,8 +212,8 @@ fn a_refused_save_says_so_and_keeps_the_rebind_for_the_session() {
     let dir = crate::empty_config_dir();
     let mut app = dialog_app();
 
-    // The state a failed rescue leaves, put in place after the load that
-    // would otherwise have moved it aside.
+    // The state a failed rescue leaves, put in place after the load that would
+    // otherwise have moved it aside.
     let path = dir.join("keymap.json");
     std::fs::write(&path, "{ this is not json").expect("write a corrupt keymap");
 
@@ -260,8 +247,8 @@ fn a_refused_save_says_so_and_keeps_the_rebind_for_the_session() {
         "the unread file was left exactly as it was",
     );
 
-    // The rebind is this session's keymap all the same, so reopening the
-    // dialog reads it back rather than starting from the shipped chords.
+    // The rebind is this session's keymap, so reopening reads it back rather
+    // than starting from the shipped chords.
     let result = app
         .world_mut()
         .operator("app.open_keybinds")

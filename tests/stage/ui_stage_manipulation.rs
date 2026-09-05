@@ -1,22 +1,5 @@
-//! Stage selection and manipulation: clicking the 2D viewport picks the
-//! authored UI node under the cursor and outlines it, and dragging the
-//! outline edits it.
-//!
-//! Five contracts are pinned here:
-//!
-//! 1. The stage-to-authored mapping is the reference-resolution scale and
-//!    nothing else: a round trip between the render-target pixels
-//!    `Ui2dView` is stated in and the authored pixels the scene lays out
-//!    in.
-//! 2. Overlapping authored rects resolve the way Bevy paints them:
-//!    `ComputedStackIndex` first, tree order second.
-//! 3. A click on the stage selects that node, spawns exactly one outline
-//!    with eight handles over its live rect, and never reaches the dock.
-//! 4. A gesture is one history entry, undoing to the exact `Node` it
-//!    started from; a gesture that moved nothing, or that Escape
-//!    abandoned, is no entry at all.
-//! 5. Snapping pulls a dragged edge onto a neighbouring one, and Ctrl
-//!    inverts that for the length of the gesture.
+//! Stage selection and manipulation: picking authored UI nodes in the 2D
+//! viewport, dragging the outline to edit them, snapping, and guides.
 
 use crate::util;
 
@@ -56,20 +39,17 @@ use jackdaw::{
 use crate::util::OperatorResultExt as _;
 use jackdaw_api::op::OperatorWorldExt as _;
 
-/// The reference resolution used by the world tests: twice the stage the
-/// panel below lays out, so every conversion factor is an exact 2.
+/// Twice the stage the panel below lays out, so every conversion factor is 2.
 const REFERENCE: UVec2 = UVec2::new(2400, 1200);
 
 #[test]
 fn the_stage_and_the_authored_canvas_round_trip() {
     let target = UVec2::new(1280, 720);
 
-    // The centre of the stage is the centre of the authored canvas.
     assert_eq!(
         stage_to_authored(Vec2::ZERO, target),
         Vec2::new(640.0, 360.0),
     );
-    // ... and the authored origin is the stage's top-left corner.
     assert_eq!(
         authored_to_stage(Vec2::ZERO, target),
         Vec2::new(-640.0, -360.0),
@@ -88,30 +68,18 @@ fn the_stage_and_the_authored_canvas_round_trip() {
     }
 }
 
-/// The overlay is drawn in the stage's own logical pixels, so an authored
-/// measurement takes both factors back out: the reference-resolution scale
-/// and the UI scale factor.
 #[test]
 fn authored_pixels_scale_into_the_stage_node_through_both_factors() {
-    // A 2400-wide reference shown in a 1200-wide stage: two authored
-    // pixels per stage physical pixel. At a UI scale factor of 2 that
-    // stage is 600 logical px wide, so an authored pixel is a quarter of
-    // a logical one.
+    // A 2400-wide reference shown in a 1200-wide stage, at UI scale 2.
     let scale = target_pixels_per_stage_pixel(Vec2::new(1200.0, 600.0), REFERENCE);
     assert_eq!(scale, 2.0);
     assert_eq!(stage_pixels_per_target_pixel(scale, 0.5), 0.25);
-    // With no UI scale in play the reference scale is the only factor.
     assert_eq!(stage_pixels_per_target_pixel(scale, 1.0), 0.5);
 
-    // A degenerate stage must not divide by zero: this runs every frame a
-    // panel is selected, including the one it is first laid out on.
+    // Runs every frame a panel is selected, including its first layout frame.
     assert_eq!(stage_pixels_per_target_pixel(0.0, 1.0), 1.0);
 }
 
-/// Paint order is `ComputedStackIndex`: assigned by `ui_stack_system`
-/// from the tree walk and `ZIndex` together, unique per node, so it
-/// decides on its own wherever layout has run. The click has to agree
-/// with what is drawn.
 #[test]
 fn the_topmost_hit_is_the_last_painted_rect() {
     let a = Entity::from_raw_u32(1).unwrap();
@@ -124,8 +92,6 @@ fn the_topmost_hit_is_the_last_painted_rect() {
         stack,
     };
 
-    // Overlapping siblings as a stack pass leaves them: the later one is
-    // painted over the earlier, and carries the higher index to say so.
     let siblings = [
         hit(a, Vec2::new(0.0, 0.0), Vec2::new(100.0, 100.0), 3),
         hit(b, Vec2::new(50.0, 50.0), Vec2::new(150.0, 150.0), 4),
@@ -134,16 +100,12 @@ fn the_topmost_hit_is_the_last_painted_rect() {
     assert_eq!(topmost_hit(Vec2::new(25.0, 25.0), &siblings), Some(a));
     assert_eq!(topmost_hit(Vec2::new(400.0, 25.0), &siblings), None);
 
-    // A `ZIndex` that lifts the earlier sibling shows up as the higher
-    // index, and outranks tree order.
     let raised = [
         hit(a, Vec2::new(0.0, 0.0), Vec2::new(100.0, 100.0), 9),
         hit(b, Vec2::new(50.0, 50.0), Vec2::new(150.0, 150.0), 3),
     ];
     assert_eq!(topmost_hit(Vec2::new(75.0, 75.0), &raised), Some(a));
 
-    // A child inside its parent, likewise: later in the walk, higher
-    // index. The ordinary case of clicking a button inside a panel.
     let nested = [
         hit(a, Vec2::new(0.0, 0.0), Vec2::new(200.0, 200.0), 1),
         hit(c, Vec2::new(20.0, 20.0), Vec2::new(60.0, 60.0), 2),
@@ -151,9 +113,6 @@ fn the_topmost_hit_is_the_last_painted_rect() {
     assert_eq!(topmost_hit(Vec2::new(40.0, 40.0), &nested), Some(c));
     assert_eq!(topmost_hit(Vec2::new(150.0, 150.0), &nested), Some(a));
 
-    // Before the first stack pass every node reads 0, and the tiebreak
-    // falls back to the depth-first order the hits were collected in,
-    // which matches what Bevy paints last once the pass runs.
     let unstacked = [
         hit(a, Vec2::new(0.0, 0.0), Vec2::new(100.0, 100.0), 0),
         hit(b, Vec2::new(50.0, 50.0), Vec2::new(150.0, 150.0), 0),
@@ -161,8 +120,6 @@ fn the_topmost_hit_is_the_last_painted_rect() {
     assert_eq!(topmost_hit(Vec2::new(75.0, 75.0), &unstacked), Some(b));
 }
 
-/// The whole path, against real layout: a click lands on the authored node
-/// under it, and the outline follows that node's live rect.
 #[test]
 fn clicking_the_stage_selects_and_outlines_the_authored_node() {
     let mut app = stage_app();
@@ -170,8 +127,6 @@ fn clicking_the_stage_selects_and_outlines_the_authored_node() {
     let (root, back, front) = authored_scene(&mut app);
     settle(&mut app);
 
-    // The overlap of the two children: `front` is the later sibling, so
-    // it is what is drawn there.
     click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
     settle(&mut app);
 
@@ -192,8 +147,7 @@ fn clicking_the_stage_selects_and_outlines_the_authored_node() {
         "the overlay must be marked as editor chrome",
     );
 
-    // `front` is authored at (400, 200) 400x200 in a 2400-wide reference
-    // shown in a 1200-wide stage, so the outline sits at half of that.
+    // Authored (400, 200) 400x200 in a 2400-wide reference shown at half scale.
     assert_eq!(
         (node.left, node.top, node.width, node.height),
         (px(200), px(100), px(200), px(100)),
@@ -219,8 +173,6 @@ fn clicking_the_stage_selects_and_outlines_the_authored_node() {
     }
     assert_eq!(HANDLE_SIZE, 8.0);
 
-    // Clicking the part of `back` that `front` does not cover moves the
-    // selection, and the single overlay follows rather than doubling up.
     click_authored(&mut app, panel, Vec2::new(250.0, 150.0));
     settle(&mut app);
     assert_eq!(app.world().resource::<Selection>().entities, vec![back]);
@@ -231,9 +183,7 @@ fn clicking_the_stage_selects_and_outlines_the_authored_node() {
         "the outline moved to the newly selected node",
     );
 
-    // Five authored pixels either side of `front`'s left edge, over ground
-    // both children cover: the click resolves to the exact edge, not to
-    // the neighbourhood of it.
+    // Five authored pixels either side of `front`'s left edge.
     click_authored(&mut app, panel, Vec2::new(405.0, 250.0));
     settle(&mut app);
     assert_eq!(app.world().resource::<Selection>().entities, vec![front]);
@@ -241,7 +191,6 @@ fn clicking_the_stage_selects_and_outlines_the_authored_node() {
     settle(&mut app);
     assert_eq!(app.world().resource::<Selection>().entities, vec![back]);
 
-    // The same on the other axis, across `front`'s bottom edge.
     click_authored(&mut app, panel, Vec2::new(700.0, 395.0));
     settle(&mut app);
     assert_eq!(app.world().resource::<Selection>().entities, vec![front]);
@@ -249,22 +198,13 @@ fn clicking_the_stage_selects_and_outlines_the_authored_node() {
     settle(&mut app);
     assert_eq!(app.world().resource::<Selection>().entities, vec![root]);
 
-    // The root fills the canvas, so a click that misses both children
-    // still lands on something authored rather than clearing.
     click_authored(&mut app, panel, Vec2::new(1800.0, 900.0));
     settle(&mut app);
     assert_eq!(app.world().resource::<Selection>().entities, vec![root]);
 }
 
-/// The outline covers the whole selected node, so a press anywhere on a
-/// selected container lands on the overlay rather than on the stage.
-/// Claiming those as the move gesture without asking what is under them
-/// makes a selected container swallow every click on its children.
-///
-/// So an overlay press re-resolves. Anything that is not the selection,
-/// a child or an overlapping sibling, is selected instead. That is a
-/// selection and not an edit: no gesture runs and no history entry is
-/// pushed.
+/// The overlay covers the whole node, so a press on it re-resolves to what
+/// is under it rather than always starting a move.
 #[test]
 fn a_press_on_a_selected_containers_child_selects_the_child() {
     let mut app = stage_app();
@@ -272,7 +212,6 @@ fn a_press_on_a_selected_containers_child_selects_the_child() {
     let (root, _, front) = authored_scene(&mut app);
     settle(&mut app);
 
-    // The root fills the canvas, so its outline is over every child.
     select(&mut app, root);
     settle(&mut app);
     let (overlay, _) = overlay_node(&mut app);
@@ -299,15 +238,12 @@ fn a_press_on_a_selected_containers_child_selects_the_child() {
     );
 }
 
-/// The other half of the rule: a press on the selected node's *own* body
-/// is the move gesture.
 #[test]
 fn a_press_on_the_selected_nodes_own_body_still_moves_it() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
-    // A gesture read for what it writes, not for what it lands on:
-    // the magnet off is the only way to see the cursor's own figures.
+    // Magnet off: the assertions read the cursor's own figures.
     magnet(&mut app, false);
     settle(&mut app);
 
@@ -342,14 +278,8 @@ fn a_press_on_the_selected_nodes_own_body_still_moves_it() {
     assert_eq!(history_len(&app), entries + 1, "and is one history entry");
 }
 
-/// A node smaller than three handles across wears its handles outside
-/// itself, so the middle of it is still a place to press.
-///
-/// The eight handles are eight pixels each and straddle the outline, so on
-/// a 40x20 label they covered every pixel of it: a press anywhere on the
-/// node started a resize, the first drag wrote a one-pixel width, and there
-/// was no gesture that moved the label at all. Moved outward they ring the
-/// node instead, and its inside is its own again.
+/// Handles moved outward ring a small node rather than covering it, so its
+/// inside is still a place to press.
 #[test]
 fn a_small_nodes_handles_ring_it_rather_than_cover_it() {
     use bevy::ui::UiGlobalTransform;
@@ -405,8 +335,6 @@ fn a_small_nodes_handles_ring_it_rather_than_cover_it() {
             "the {edges:?} handle still covers the middle of the node: {handle:?}",
         );
     }
-    // The resize is not given up for the move: the corner handle is still
-    // over the corner it drags.
     let corner = handles
         .iter()
         .find(|(edges, _)| *edges == (-1, -1))
@@ -418,14 +346,8 @@ fn a_small_nodes_handles_ring_it_rather_than_cover_it() {
     );
 }
 
-/// Selection chrome is drawn over content the editor does not control,
-/// so a single accent colour would disappear against content of the same
-/// luminance.
-///
-/// The handles are a light neutral fill with an accent border, and the
-/// outline carries a dark edge just outside its accent line. Between them
-/// the chrome has a light part and a dark part on every side, and no
-/// single content colour can swallow both.
+/// Chrome is drawn over content the editor does not control, so it carries
+/// a light part and a dark part on every side.
 #[test]
 fn the_selection_chrome_reads_against_content_of_any_colour() {
     use bevy::picking::prelude::Pickable;
@@ -481,8 +403,7 @@ fn the_selection_chrome_reads_against_content_of_any_colour() {
         );
     }
 
-    // One node for the dark edge, not one per side, and it must not take
-    // the press that belongs to the outline body underneath it.
+    // One node for the dark edge, and it must not take the outline's press.
     let edges: Vec<Entity> = children
         .iter()
         .copied()
@@ -505,8 +426,6 @@ fn the_selection_chrome_reads_against_content_of_any_colour() {
     );
 }
 
-/// A press that starts a selection must not climb into the dock, or a
-/// gesture started on the stage becomes a panel drag.
 #[test]
 fn a_stage_press_never_reaches_the_dock() {
     #[derive(Resource, Default)]
@@ -534,10 +453,7 @@ fn a_stage_press_never_reaches_the_dock() {
     );
 }
 
-/// A selected node with no layout this frame, hidden or rebuilt and not
-/// yet measured, holds the outline where it is instead of dropping it.
-/// An overlay that vanishes for a frame takes any gesture running on it
-/// with it.
+/// An overlay that vanishes for a frame takes any gesture running on it with it.
 #[test]
 fn an_unmeasured_node_holds_the_outline_rather_than_dropping_it() {
     let mut app = stage_app();
@@ -549,7 +465,6 @@ fn an_unmeasured_node_holds_the_outline_rather_than_dropping_it() {
     settle(&mut app);
     let (overlay, placed) = overlay_node(&mut app);
 
-    // Collapse the selected node's layout without deselecting it.
     if let Some(mut node) = app.world_mut().get_mut::<Node>(front) {
         node.display = Display::None;
     }
@@ -563,7 +478,6 @@ fn an_unmeasured_node_holds_the_outline_rather_than_dropping_it() {
         "the outline holds the last rect it had",
     );
 
-    // Deselecting is what drops it.
     app.world_mut().resource_mut::<Selection>().entities.clear();
     settle(&mut app);
     assert_eq!(
@@ -576,11 +490,8 @@ fn an_unmeasured_node_holds_the_outline_rather_than_dropping_it() {
     );
 }
 
-/// The path a real click takes. The stage's frame child covers it
-/// completely, so picking never targets the stage itself: the press lands
-/// on the frame and reaches the observer by propagating up. A selection
-/// that only resolved an event aimed at the stage directly would pass
-/// every other test here and do nothing in the editor.
+/// The stage's frame child covers it completely, so a real press lands on
+/// the frame and reaches the observer by propagating up.
 #[test]
 fn a_press_on_the_frame_child_selects_through_propagation() {
     let mut app = stage_app();
@@ -606,13 +517,8 @@ fn a_press_on_the_frame_child_selects_through_propagation() {
     );
 }
 
-/// Pan and zoom live in the stage's placement, so a click still lands on
-/// the authored pixel under the cursor after the view moves.
-///
-/// The click position here is derived from the area and the view, not
-/// from the stage node, so it agrees with the production path only if
-/// `place_stage` put the canvas where the view says. Dropping the zoom
-/// from the placement puts every one of these clicks on the wrong node.
+/// The click position is derived from the area and the view, so this also
+/// checks that `place_stage` put the canvas where the view says.
 #[test]
 fn a_zoomed_and_panned_view_still_selects_what_the_cursor_is_over() {
     let mut app = stage_app();
@@ -625,8 +531,7 @@ fn a_zoomed_and_panned_view_still_selects_what_the_cursor_is_over() {
         .pan = Vec2::new(500.0, -250.0);
     settle(&mut app);
 
-    // At zoom 2 a stage pixel is half an authored pixel, and the pan has
-    // put authored (1700, 850) at the centre of the area.
+    // At zoom 2 a stage pixel is half an authored pixel.
     let stage = stage_entity(&mut app, panel);
     assert_eq!(
         target_pixels_per_stage_pixel(
@@ -644,8 +549,6 @@ fn a_zoomed_and_panned_view_still_selects_what_the_cursor_is_over() {
     settle(&mut app);
     assert_eq!(app.world().resource::<Selection>().entities, vec![front]);
 
-    // The same +-5 authored pixel probes as at the default view: a zoom
-    // the mapping had not accounted for would miss by far more.
     click_authored(&mut app, panel, Vec2::new(395.0, 250.0));
     settle(&mut app);
     assert_eq!(app.world().resource::<Selection>().entities, vec![back]);
@@ -654,9 +557,7 @@ fn a_zoomed_and_panned_view_still_selects_what_the_cursor_is_over() {
     settle(&mut app);
     assert_eq!(app.world().resource::<Selection>().entities, vec![root]);
 
-    // The overlay follows the zoom because it is a child of the stage
-    // that carries it: `front` is 400x200 authored, so 800x400 of stage
-    // at zoom 2.
+    // `front` is 400x200 authored, so 800x400 of stage at zoom 2.
     click_authored(&mut app, panel, Vec2::new(500.0, 250.0));
     settle(&mut app);
     let (_, node) = overlay_node(&mut app);
@@ -667,15 +568,8 @@ fn a_zoomed_and_panned_view_still_selects_what_the_cursor_is_over() {
     );
 }
 
-/// Panning the view does not move the authored scene, so the stage-to-
-/// authored mapping has no camera term in it.
-///
-/// Bevy renders UI through its own view (`extract_ui_camera_view` builds an
-/// orthographic projection straight from the target's viewport rect and
-/// parks the view transform at the origin), so a routed UI scene is pinned
-/// to its render target whatever the 2D camera is doing. A hit test that
-/// went through `world_at` would drift off the visible pixels by exactly
-/// the pan.
+/// Bevy pins a routed UI scene to its render target whatever the 2D camera
+/// is doing, so the hit test has no camera term in it.
 #[test]
 fn the_view_does_not_move_the_authored_scene_under_the_cursor() {
     let mut app = stage_app();
@@ -719,17 +613,13 @@ fn the_view_does_not_move_the_authored_scene_under_the_cursor() {
     );
 }
 
-/// One drag of the outline is one history entry, and undoing it hands
-/// back the exact `Node` the gesture started from: not a rounded
-/// approximation, and not an intermediate value from the middle of the
-/// drag.
+/// Undo hands back the exact `Node` the gesture started from.
 #[test]
 fn a_move_gesture_is_one_undoable_entry() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
-    // A gesture read for what it writes, not for what it lands on:
-    // the magnet off is the only way to see the cursor's own figures.
+    // Magnet off: the assertions read the cursor's own figures.
     magnet(&mut app, false);
     settle(&mut app);
 
@@ -769,16 +659,12 @@ fn a_move_gesture_is_one_undoable_entry() {
     );
 }
 
-/// The top-left handle drags two edges at once: the offset follows the
-/// cursor and the size shrinks by the same amount, leaving the opposite
-/// corner where it was.
 #[test]
 fn the_top_left_handle_moves_the_offset_and_the_size_together() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
-    // A gesture read for what it writes, not for what it lands on:
-    // the magnet off is the only way to see the cursor's own figures.
+    // Magnet off: the assertions read the cursor's own figures.
     magnet(&mut app, false);
     settle(&mut app);
 
@@ -811,21 +697,15 @@ fn the_top_left_handle_moves_the_offset_and_the_size_together() {
     );
 }
 
-/// The wheel still belongs to the panel while a gesture is running, so a
-/// drag keeps tracking the cursor across a zoom mid-drag.
-///
-/// The conversion from pointer pixels to authored ones is the view's, and
-/// a copy of it taken at the press is stale the moment the view moves:
-/// the node then trails the cursor at half speed, or outruns it at
-/// double, for the rest of the gesture.
+/// The pointer-to-authored conversion is the view's, and a copy taken at the
+/// press goes stale the moment the view moves.
 #[test]
 fn a_zoom_mid_drag_moves_the_drag_onto_the_new_scale() {
     let mut app = stage_app();
     // Half zoom: two authored pixels per pointer pixel.
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
-    // A gesture read for what it writes, not for what it lands on:
-    // the magnet off is the only way to see the cursor's own figures.
+    // Magnet off: the assertions read the cursor's own figures.
     magnet(&mut app, false);
     settle(&mut app);
 
@@ -834,7 +714,6 @@ fn a_zoom_mid_drag_moves_the_drag_onto_the_new_scale() {
     let (overlay, _) = overlay_node(&mut app);
     let start = begin_drag(&mut app, panel, overlay, Vec2::new(500.0, 250.0));
 
-    // The canvas is zoomed to 1:1 with the gesture still down.
     app.world_mut()
         .get_mut::<Viewport2dPanelHost>(panel)
         .expect("host on panel parent")
@@ -853,14 +732,8 @@ fn a_zoom_mid_drag_moves_the_drag_onto_the_new_scale() {
     );
 }
 
-/// A handle dragged past the edge opposite it stops there. The size
-/// bottoms out at the handle's own width, and the origin bottoms out with
-/// it: an origin that kept following the cursor would walk the node off
-/// across the canvas a sliver wide.
-///
-/// The handle rather than a pixel, because a node thinner than the thing
-/// that resizes it cannot be picked up by any of its handles again: the
-/// collapse is refused rather than written and left to be undone.
+/// The size bottoms out at the handle's own width: a node thinner than the
+/// thing that resizes it could never be picked up again.
 #[test]
 fn a_resize_dragged_past_the_far_edge_stops_at_it() {
     let mut app = stage_app();
@@ -873,8 +746,7 @@ fn a_resize_dragged_past_the_far_edge_stops_at_it() {
     let (overlay, _) = overlay_node(&mut app);
     let handle = handle_entity(&mut app, overlay, (-1, -1));
 
-    // `front` spans authored 400..800 by 200..400, so this drags the
-    // top-left corner a long way past the bottom-right one.
+    // `front` spans authored 400..800 by 200..400.
     drag_authored(
         &mut app,
         panel,
@@ -897,8 +769,6 @@ fn a_resize_dragged_past_the_far_edge_stops_at_it() {
     );
 }
 
-/// A press and release that never moved is a click, not an edit, and
-/// leaves no history entry.
 #[test]
 fn a_click_that_never_moved_records_nothing() {
     let mut app = stage_app();
@@ -928,15 +798,12 @@ fn a_click_that_never_moved_records_nothing() {
     );
 }
 
-/// Escape abandons the gesture: the node goes back to exactly what it
-/// was, and the history never hears about it.
 #[test]
 fn escape_abandons_a_gesture_in_progress() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
-    // A gesture read for what it writes, not for what it lands on:
-    // the magnet off is the only way to see the cursor's own figures.
+    // Magnet off: the assertions read the cursor's own figures.
     magnet(&mut app, false);
     settle(&mut app);
 
@@ -971,13 +838,9 @@ fn escape_abandons_a_gesture_in_progress() {
     );
 }
 
-/// With snapping on, a move lands on a sibling's edge rather than where
-/// the cursor stopped; Ctrl inverts that for the gesture, as in the 3D
-/// tools.
 #[test]
 fn a_snapped_move_lands_on_a_sibling_edge_unless_ctrl_says_otherwise() {
-    // `back` spans authored x 200..600, so its right edge is a candidate
-    // four pixels from where this drag would otherwise leave `front`.
+    // `back`'s right edge at authored 600 is four pixels from where this drag ends.
     let dragged = |ctrl: bool| {
         let mut app = stage_app();
         let panel = panel_entity(&mut app);
@@ -1015,14 +878,8 @@ fn a_snapped_move_lands_on_a_sibling_edge_unless_ctrl_says_otherwise() {
     );
 }
 
-/// The canvas has a grid of its own, in authored pixels, and a snapped
-/// gesture that no neighbour claimed lands on it.
-///
-/// The 3D grid is a lattice of world units: at the editor's default
-/// power it rounds an authored pixel to a quarter of one, and at a large
-/// power it pins a button to a lattice measured in metres. The stage
-/// carries its own pixel grid instead, and both the offset a move writes
-/// and the size a resize writes land on it.
+/// The canvas carries its own pixel grid in authored pixels rather than the
+/// 3D world lattice.
 #[test]
 fn a_snapped_gesture_lands_on_the_canvas_pixel_grid() {
     assert_eq!(
@@ -1031,9 +888,7 @@ fn a_snapped_gesture_lands_on_the_canvas_pixel_grid() {
         "the default lattice is eight authored pixels",
     );
 
-    // 61 by 37 authored pixels: clear of every sibling and parent edge
-    // the gesture could otherwise land on, so the grid is the only thing
-    // that can move it.
+    // 61 by 37: clear of every sibling and parent edge, so only the grid can move it.
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
@@ -1058,8 +913,6 @@ fn a_snapped_gesture_lands_on_the_canvas_pixel_grid() {
         "461 by 237 rounds onto the eight-pixel lattice",
     );
 
-    // The same lattice under a resize: the dragged corner lands on it,
-    // and the opposite one stays where it was, so the size follows.
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
@@ -1086,14 +939,8 @@ fn a_snapped_gesture_lands_on_the_canvas_pixel_grid() {
     );
 }
 
-/// Snapping is one switch. Ctrl inverts the snap toggle for the length
-/// of a gesture, and what it inverts is the grid and the neighbouring
-/// edges together.
-///
-/// Consulting the raw `translate_snap` field a second time, as
-/// `snap_translate_vec2` does, would make Ctrl mean "edges only", so the
-/// toggle's off state would mean one thing next to a sibling and another
-/// out in the open.
+/// Ctrl inverts the master magnet for the length of a gesture, and what it
+/// inverts is the grid and the neighbouring edges together.
 #[test]
 fn ctrl_turns_the_grid_and_the_edges_on_together() {
     // The master is off throughout: Ctrl is the whole switch here.
@@ -1128,12 +975,7 @@ fn ctrl_turns_the_grid_and_the_edges_on_together() {
     );
 }
 
-/// A canvas that has had nothing switched on snaps.
-///
-/// The master is the canvas's own, and it ships on, so the first drag a
-/// new user makes lands on its neighbour. Shipping it off would leave
-/// the rulers, the guides and every kind in the menu doing nothing until
-/// a switch nothing points at had been found and turned.
+/// The master magnet ships on, so the first drag a new user makes snaps.
 #[test]
 fn a_drag_on_a_default_canvas_already_snaps() {
     let mut app = stage_app();
@@ -1164,17 +1006,12 @@ fn a_drag_on_a_default_canvas_already_snaps() {
     );
 }
 
-/// The snap radius is a distance on screen, not in the canvas: a cursor
-/// stopping a given number of *screen* pixels past a neighbour snaps, or
-/// does not, identically at any zoom.
-///
-/// A radius stated in authored pixels passes the single-zoom tests above
-/// and then shrinks and grows with the zoom.
+/// The snap radius is a distance on screen, not in the canvas, so it behaves
+/// the same at any zoom.
 #[test]
 fn the_snap_radius_is_the_same_on_screen_at_any_zoom() {
-    // `back`'s right edge is authored 600 and `front` starts at 400, so
-    // a drag of 200 authored pixels puts the two edges together; `over`
-    // is how far past that the cursor stops, in screen pixels.
+    // `back`'s right edge is authored 600 and `front` starts at 400, so a drag
+    // of 200 puts them together; `over` is the overshoot in screen pixels.
     let landed = |zoom: f32, over: f32| {
         let mut app = stage_app();
         let panel = framed_panel(&mut app, zoom);
@@ -1198,9 +1035,7 @@ fn the_snap_radius_is_the_same_on_screen_at_any_zoom() {
         node_of(&app, front).left
     };
 
-    // Four screen pixels past the edge: inside the radius at both zooms,
-    // even though that is eight authored pixels at one and two at the
-    // other.
+    // Four screen pixels past the edge: inside the radius at both zooms.
     assert_eq!(
         landed(0.5, 4.0),
         px(600),
@@ -1208,8 +1043,7 @@ fn the_snap_radius_is_the_same_on_screen_at_any_zoom() {
     );
     assert_eq!(landed(2.0, 4.0), px(600), "zoomed in, four screen px snaps");
 
-    // Eight screen pixels: outside it at both, so each lands where the
-    // cursor left it.
+    // Eight screen pixels: outside it at both.
     assert_eq!(
         landed(0.5, 8.0),
         px(616),
@@ -1222,21 +1056,14 @@ fn the_snap_radius_is_the_same_on_screen_at_any_zoom() {
     );
 }
 
-/// A child's `left`/`top` are measured from inside its parent's border,
-/// so everything the gesture compares them against has to be too.
-///
-/// The two shifts a border introduces do not cancel: the offset a
-/// promoted flex child starts from is read out of layout, and the value
-/// written back to `Node::left` is read by Bevy as padding-relative.
+/// `left`/`top` are measured from inside the parent's border, and the two
+/// shifts a border introduces do not cancel.
 #[test]
 fn offsets_inside_a_bordered_parent_are_measured_from_the_padding_box() {
-    // A drag that does not snap: the promoted child lands where the
-    // cursor took it, measured from inside the border.
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let flexed = bordered_scene(&mut app);
-    // A gesture read for what it writes, not for what it lands on:
-    // the magnet off is the only way to see the cursor's own figures.
+    // Magnet off: the assertions read the cursor's own figures.
     magnet(&mut app, false);
     settle(&mut app);
 
@@ -1259,8 +1086,6 @@ fn offsets_inside_a_bordered_parent_are_measured_from_the_padding_box() {
         "promoting a flex child moves it by the drag and not by the border",
     );
 
-    // A snapped drag lands on the sibling's edge itself, not a
-    // border-width past it.
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let flexed = bordered_scene(&mut app);
@@ -1272,8 +1097,7 @@ fn offsets_inside_a_bordered_parent_are_measured_from_the_padding_box() {
     select(&mut app, flexed);
     settle(&mut app);
     let (overlay, _) = overlay_node(&mut app);
-    // The sibling's left edge is 400 from the padding box; stop two
-    // authored pixels short of it.
+    // Stop two authored pixels short of the sibling's left edge at 400.
     drag_authored(
         &mut app,
         panel,
@@ -1294,8 +1118,6 @@ fn offsets_inside_a_bordered_parent_are_measured_from_the_padding_box() {
 // The arrow keys nudge the canvas
 // ---------------------------------------------------------------------------
 
-/// The arrows move the whole selection a pixel at a time, and Shift
-/// moves it by the canvas grid the header's stepper sets.
 #[test]
 fn the_arrow_keys_nudge_the_selected_nodes() {
     let (mut app, panel, nodes) = selection_app();
@@ -1318,8 +1140,7 @@ fn the_arrow_keys_nudge_the_selected_nodes() {
         "and one press is one entry, whatever it moved",
     );
 
-    // Shift takes the canvas grid instead: the panel's own grid, the one
-    // the header's stepper sets.
+    // Shift takes the canvas grid the header's stepper sets.
     set_grid(&mut app, panel, 8.0);
     hold_shift(&mut app);
     nudge(&mut app, "transform.nudge_z_neg");
@@ -1343,12 +1164,8 @@ fn the_arrow_keys_nudge_the_selected_nodes() {
     );
 }
 
-/// A container and a node inside it, both selected, move together once.
-///
-/// Layout already carries the child when its container moves. Writing
-/// the gesture's delta to both would move the child twice, once by the
-/// container's offset and once by its own, and the child would drift out
-/// of the container by the nudge distance.
+/// Layout already carries the child when its container moves, so writing the
+/// delta to both would move the child twice.
 #[test]
 fn a_container_and_its_child_selected_together_move_the_child_once() {
     let (mut app, _, container) = anchored_app(Node {
@@ -1393,9 +1210,7 @@ fn a_container_and_its_child_selected_together_move_the_child_once() {
     );
 }
 
-/// A nudge writes through the same projection a drag does: the node
-/// keeps the offsets its author wrote, and never grows a `Transform`,
-/// which belongs to the 3D writer.
+/// A nudge writes the authored offsets and never grows a `Transform`.
 #[test]
 fn a_nudged_node_keeps_its_authored_offsets() {
     let (mut app, _, node) = anchored_app(Node {
@@ -1423,8 +1238,6 @@ fn a_nudged_node_keeps_its_authored_offsets() {
     );
 }
 
-/// In `Interact` the keys belong to the scene, so an arrow nudges
-/// nothing and pushes no history entry.
 #[test]
 fn a_canvas_in_interact_mode_does_not_nudge() {
     let (mut app, panel, node) = anchored_app(Node {
@@ -1454,10 +1267,8 @@ fn a_canvas_in_interact_mode_does_not_nudge() {
     );
 }
 
-/// Arrow keys reach a focused text field, not the canvas. The guard is
-/// `keybind_focus::KeybindFocus`, applied through the nudge operator's
-/// availability, so the canvas nudge sits behind it rather than beside
-/// it.
+/// The guard is `keybind_focus::KeybindFocus`, applied through the nudge
+/// operator's availability.
 #[test]
 fn a_focused_text_field_keeps_the_arrow_keys() {
     let (mut app, _, node) = anchored_app(Node {
@@ -1472,9 +1283,8 @@ fn a_focused_text_field_keeps_the_arrow_keys() {
     settle(&mut app);
     let before = node_of(&app, node);
 
-    // A whole field, which is what the focus lands on for a user: the
-    // guard asks after the editable buffer the keyboard writes into, and
-    // a marker with no buffer is not a field anyone can type in.
+    // The guard asks after the editable buffer, so a marker with no buffer
+    // is not a field anyone can type in.
     app.world_mut()
         .spawn(jackdaw_feathers::text_edit::text_edit(
             jackdaw_feathers::text_edit::TextEditProps::default().auto_focus(),
@@ -1501,9 +1311,8 @@ fn a_focused_text_field_keeps_the_arrow_keys() {
     );
 }
 
-/// The other half of the routing: a selection with a `Transform` reaches
-/// the 3D writer, on the world grid. The canvas nudge answers first, so
-/// it has to decline a selection that is not on a canvas.
+/// The canvas nudge answers first, so it has to decline a selection that is
+/// not on a canvas.
 #[test]
 fn a_transform_selection_still_nudges_in_world_units() {
     let mut app = stage_app();
@@ -1552,8 +1361,7 @@ fn set_grid(app: &mut App, panel: Entity, grid: f32) {
         .grid = grid;
 }
 
-/// Hold Shift the way the input pass reports it, so the next nudge reads
-/// the coarse step.
+/// Hold Shift the way the input pass reports it.
 fn hold_shift(app: &mut App) {
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
@@ -1564,14 +1372,11 @@ fn hold_shift(app: &mut App) {
 // A move carries the whole selection
 // ---------------------------------------------------------------------------
 
-/// Every selected node moves, and the whole gesture is one entry, so one
-/// undo puts all of them back.
 #[test]
 fn a_drag_moves_every_selected_node_and_undoes_as_one() {
     let (mut app, panel, nodes) = selection_app();
     let [first, second, third] = nodes;
-    // A gesture read for what it writes, not for what it lands on:
-    // the magnet off is the only way to see the cursor's own figures.
+    // Magnet off: the assertions read the cursor's own figures.
     magnet(&mut app, false);
     select_all(&mut app, &nodes);
     settle(&mut app);
@@ -1615,18 +1420,13 @@ fn a_drag_moves_every_selected_node_and_undoes_as_one() {
     );
 }
 
-/// The primary is what lands on a neighbouring edge, and the rest of the
-/// selection moves by the delta it landed with. Snapping each node to
-/// its own neighbours would pull the arrangement apart: two nodes eight
-/// pixels apart would come to rest on two different edges and stop being
-/// eight pixels apart.
+/// Snapping each node to its own neighbours would pull the arrangement apart.
 #[test]
 fn a_snapped_multi_move_keeps_the_selection_arranged() {
     let mut app = stage_app();
     let panel = framed_panel(&mut app, 0.5);
     without_the_pixel_grid(&mut app, panel);
     let root = ui_root(&mut app);
-    // What the mover lands on.
     spawn_child(&mut app, root, 1000.0, 0.0, 100.0, 100.0);
     let companion = spawn_child(&mut app, root, 900.0, 700.0, 200.0, 100.0);
     let mover = spawn_child(&mut app, root, 400.0, 400.0, 400.0, 200.0);
@@ -1666,9 +1466,6 @@ fn a_snapped_multi_move_keeps_the_selection_arranged() {
 // What a drag is offered, and what it writes
 // ---------------------------------------------------------------------------
 
-/// A sibling's centre line is a kind of its own, so a node can be
-/// centred on its neighbour without the neighbour's edges getting in the
-/// way -- and turning the kind off takes that line away again.
 #[test]
 fn a_move_lands_on_a_sibling_centre_when_that_kind_is_on() {
     let landed = |centres: bool| {
@@ -1677,8 +1474,7 @@ fn a_move_lands_on_a_sibling_centre_when_that_kind_is_on() {
         without_the_pixel_grid(&mut app, panel);
         with_kinds(&mut app, |kinds| kinds.sibling_centers = centres);
         let root = ui_root(&mut app);
-        // Centre at authored x 400, clear of every parent and quarter
-        // line of the 2400-wide canvas.
+        // Centre at authored x 400, clear of every parent and quarter line.
         spawn_child(&mut app, root, 200.0, 100.0, 400.0, 200.0);
         let mover = spawn_child(&mut app, root, 1000.0, 700.0, 100.0, 100.0);
         settle(&mut app);
@@ -1709,11 +1505,8 @@ fn a_move_lands_on_a_sibling_centre_when_that_kind_is_on() {
     );
 }
 
-/// On a tie, an edge the scene actually has beats a percentage.
-///
-/// The percent lines are close enough to a sibling often enough that the
-/// tie is a real case, and of the two the author can only see the
-/// sibling. A percent line still wins when it is strictly nearer.
+/// Of the two the author can only see the sibling; a percent line still wins
+/// when it is strictly nearer.
 #[test]
 fn a_sibling_edge_beats_a_percent_line_the_same_distance_away() {
     let landed = |sides: bool| {
@@ -1722,9 +1515,8 @@ fn a_sibling_edge_beats_a_percent_line_the_same_distance_away() {
         without_the_pixel_grid(&mut app, panel);
         with_kinds(&mut app, |kinds| kinds.sibling_sides = sides);
         let root = ui_root(&mut app);
-        // A quarter of the 2400-wide canvas is 600, and the sibling's
-        // near edge is at 612: the drag below stops at 606, six from
-        // each.
+        // A quarter of the 2400-wide canvas is 600 and the sibling's near edge
+        // is 612, so the drag below stops at 606, six from each.
         spawn_child(&mut app, root, 612.0, 100.0, 200.0, 200.0);
         let mover = spawn_child(&mut app, root, 200.0, 640.0, 60.0, 100.0);
         settle(&mut app);
@@ -1755,10 +1547,8 @@ fn a_sibling_edge_beats_a_percent_line_the_same_distance_away() {
     );
 }
 
-/// A kind is what puts its lines in front of a drag at all, rather than
-/// a filter applied to a landing already chosen. An edge a switched-off
-/// kind governs cannot claim a drag, and cannot win a tie against a kind
-/// that is on either.
+/// A kind is what puts its lines in front of a drag at all, not a filter
+/// applied to a landing already chosen.
 #[test]
 fn a_kind_switched_off_frees_the_edge_it_governs() {
     let landed = |sides: bool| {
@@ -1767,8 +1557,7 @@ fn a_kind_switched_off_frees_the_edge_it_governs() {
         without_the_pixel_grid(&mut app, panel);
         with_kinds(&mut app, |kinds| kinds.sibling_sides = sides);
         let root = ui_root(&mut app);
-        // Sides at 900 and 1100: neither is a quarter line of the
-        // 2400-wide canvas, so only the sibling kind offers them.
+        // Sides at 900 and 1100: not quarter lines, so only the sibling kind offers them.
         spawn_child(&mut app, root, 900.0, 100.0, 200.0, 200.0);
         let mover = spawn_child(&mut app, root, 200.0, 640.0, 60.0, 100.0);
         settle(&mut app);
@@ -1795,9 +1584,6 @@ fn a_kind_switched_off_frees_the_edge_it_governs() {
     );
 }
 
-/// Ctrl is still one switch, and the kinds did not become a second one.
-/// Ctrl inverts the master magnet for the length of a gesture, and what
-/// that turns on is every kind of line and the pixel grid together.
 #[test]
 fn ctrl_still_inverts_the_kinds_together_with_the_grid() {
     // The magnet is off throughout: Ctrl is the whole switch here.
@@ -1843,16 +1629,10 @@ fn ctrl_still_inverts_the_kinds_together_with_the_grid() {
     assert_eq!(landed(false, 1470.0), px(1470), "on either kind of line");
 }
 
-/// A node whose author wrote its offset as a percentage and landed on a
-/// quarter line writes that quarter outright.
-///
-/// The parent here is 1003 authored pixels wide, so a quarter of it is
-/// 250.75: a figure that goes through the pixel path and comes back as
-/// something that is not 25%, and would leave the node a hair off the
-/// line at every other canvas size.
+/// The parent is 1003 authored pixels wide, so a quarter of it is 250.75: a
+/// figure the pixel path cannot hand back as 25%.
 #[test]
 fn a_percent_anchored_node_landing_on_a_quarter_line_writes_the_exact_percent() {
-    // Near edge: the left offset takes the quarter it landed on.
     let (mut app, panel, child) = quarter_line_app(Node {
         position_type: PositionType::Absolute,
         left: percent(10),
@@ -1880,9 +1660,7 @@ fn a_percent_anchored_node_landing_on_a_quarter_line_writes_the_exact_percent() 
         "the landing is written as the quarter it is, not as a figure from pixels",
     );
 
-    // Far edge: `right` is measured back from the parent's far edge, so
-    // a landing a quarter of the way in is three quarters of the way
-    // back.
+    // `right` is measured back from the parent's far edge.
     let (mut app, panel, child) = quarter_line_app(Node {
         position_type: PositionType::Absolute,
         right: percent(60),
@@ -1910,9 +1688,8 @@ fn a_percent_anchored_node_landing_on_a_quarter_line_writes_the_exact_percent() 
         "a far offset landing on the quarter line writes the rest of the box",
     );
 
-    // A centre landing names no edge, so nothing is written outright.
-    // A node centred on a quarter line sits half its own width back
-    // from it, which is not a figure that line can supply.
+    // A centre landing names no edge: a node centred on a quarter line sits
+    // half its own width back from it.
     let (mut app, panel, child) = quarter_line_app(Node {
         position_type: PositionType::Absolute,
         left: percent(10),
@@ -1958,20 +1735,14 @@ fn quarter_line_app(node: Node) -> (App, Entity, Entity) {
     (app, panel, child)
 }
 
-/// A third is a line a percent-authored node lands on, and the figure
-/// it writes is the third itself.
-///
-/// A third of the parent is a figure nothing else can produce: the
-/// pixels it lands on divide back into 33.33, which is a hair off the
-/// line at this parent size and further off at every other one. The
-/// author who wrote the offset in percent gets the percent.
+/// A third of the parent divides back into 33.33, so what is read is the
+/// figure the author wrote rather than the place landed on.
 #[test]
 fn a_percent_anchored_node_landing_on_a_third_writes_the_third() {
     let mut app = stage_app();
     let panel = framed_panel(&mut app, 0.5);
     let root = ui_root(&mut app);
-    // 900 across: a third of it is exactly 300 authored pixels, so what
-    // is being read is the figure written, not the place landed on.
+    // 900 across: a third of it is exactly 300 authored pixels.
     let container = spawn_child(&mut app, root, 0.0, 0.0, 900.0, 400.0);
     let child = app
         .world_mut()
@@ -2008,10 +1779,7 @@ fn a_percent_anchored_node_landing_on_a_third_writes_the_third() {
     );
 }
 
-/// Pixel Snap is what decides how finely a drag states the pixels it
-/// writes, and it is the only thing that decides: with it off, a canvas
-/// zoomed past one authored pixel per pointer pixel keeps the fraction
-/// the drag actually produced.
+/// Pixel Snap alone decides how finely a drag states the pixels it writes.
 #[test]
 fn pixel_snap_off_keeps_the_fraction_a_zoomed_drag_produced() {
     // At zoom 4 one pointer pixel is a quarter of an authored one.
@@ -2021,9 +1789,7 @@ fn pixel_snap_off_keeps_the_fraction_a_zoomed_drag_produced() {
         let root = ui_root(&mut app);
         let mover = spawn_child(&mut app, root, 400.0, 200.0, 100.0, 100.0);
         settle(&mut app);
-        // The master off leaves the pixel kind as the only thing
-        // deciding the figure: that it is a separate switch is the
-        // point of this test.
+        // The master off leaves the pixel kind as the only thing deciding the figure.
         with_kinds(&mut app, |kinds| {
             kinds.enabled = false;
             kinds.pixel = pixel;
@@ -2052,10 +1818,8 @@ fn pixel_snap_off_keeps_the_fraction_a_zoomed_drag_produced() {
     );
 }
 
-/// Other Nodes reaches outside the dragged node's family, and ships off
-/// because it pulls a node towards something the user cannot see beside
-/// it. What it never reaches is the selection's own descendants: layout
-/// carries those with the drag, so none of them holds still to land on.
+/// Other Nodes never reaches the selection's own descendants: layout carries
+/// those with the drag, so none of them holds still to land on.
 #[test]
 fn other_nodes_reach_across_the_tree_only_when_asked() {
     let landed = |other_nodes: bool, to: f32| {
@@ -2103,17 +1867,14 @@ fn other_nodes_reach_across_the_tree_only_when_asked() {
     );
 }
 
-/// The keyboard nudge is kind-blind. It is one authored pixel a press
-/// however close the node is to a line the canvas would offer a drag, so
-/// the arrows stay a way of saying an exact number rather than a second
-/// way of landing on something.
+/// The arrows stay a way of saying an exact number rather than a second way
+/// of landing on something.
 #[test]
 fn a_nudge_ignores_the_snap_kinds() {
     let mut app = stage_app();
     let panel = framed_panel(&mut app, 0.5);
     let root = ui_root(&mut app);
-    // Four authored pixels to the right of the mover's near edge: well
-    // inside the radius a drag would land from.
+    // Four authored pixels from the mover's near edge: well inside a drag's radius.
     spawn_child(&mut app, root, 404.0, 100.0, 100.0, 100.0);
     let mover = spawn_child(&mut app, root, 400.0, 700.0, 100.0, 100.0);
     settle(&mut app);
@@ -2129,7 +1890,6 @@ fn a_nudge_ignores_the_snap_kinds() {
         "one press is one authored pixel, not a landing on the near edge",
     );
 
-    // ... and with every kind switched off it is still that one pixel.
     with_kinds(&mut app, |kinds| {
         for kind in CanvasSnapKind::ALL {
             kinds.set(kind, false);
@@ -2144,8 +1904,6 @@ fn a_nudge_ignores_the_snap_kinds() {
     );
 }
 
-/// The gesture keeps the line it came to rest against, so the canvas can
-/// draw it, and lets go of it on release.
 #[test]
 fn the_gesture_records_the_winning_line() {
     let mut app = stage_app();
@@ -2195,17 +1953,11 @@ fn with_kinds(app: &mut App, edit: impl FnOnce(&mut CanvasSnap)) {
 // The line a drag came to rest against
 // ---------------------------------------------------------------------------
 
-/// A drag that landed on something says so: a line across the stage
-/// where the landing is, for as long as the gesture holds it.
-///
-/// The line is drawn on the canvas, and a candidate is stated from the
-/// dragged node's own parent, so the parent's corner is part of the
-/// position. Leaving it out puts the line in the right place only while
-/// the parent happens to be the canvas root.
+/// A candidate is stated from the dragged node's own parent, so the parent's
+/// corner is part of the line's position.
 #[test]
 fn a_snapped_drag_draws_the_line_it_landed_on_and_lets_go_of_it() {
-    // The dragged node's parent is the root, so the landing is already
-    // a canvas position: authored 900, half of that in stage pixels.
+    // The parent is the root, so the landing is already a canvas position.
     let mut app = stage_app();
     let panel = framed_panel(&mut app, 0.5);
     without_the_pixel_grid(&mut app, panel);
@@ -2245,9 +1997,8 @@ fn a_snapped_drag_draws_the_line_it_landed_on_and_lets_go_of_it() {
         "the release lets go of the line",
     );
 
-    // The same canvas position reached from a parent that is not the
-    // root: the container sits at authored 300, and the landing is 600
-    // measured from inside it.
+    // The same canvas position from a container at authored 300, with the
+    // landing 600 measured from inside it.
     let mut app = stage_app();
     let panel = framed_panel(&mut app, 0.5);
     without_the_pixel_grid(&mut app, panel);
@@ -2277,9 +2028,8 @@ fn a_snapped_drag_draws_the_line_it_landed_on_and_lets_go_of_it() {
     );
 }
 
-/// A drag that came to rest on nothing draws nothing. The grid is not a
-/// line the canvas can point at: it is everywhere, so a line on it says
-/// nothing about why the node stopped there.
+/// The grid is everywhere, so a line on it says nothing about why the node
+/// stopped there.
 #[test]
 fn a_drag_that_snapped_nothing_draws_nothing() {
     let mut app = stage_app();
@@ -2333,12 +2083,8 @@ fn snap_highlights(app: &mut App) -> Vec<(CanvasAxis, Val)> {
         .collect()
 }
 
-/// The landing line is its own colour, whatever it landed on.
-///
-/// The selection outline is drawn over the node in `ACCENT_BLUE` and a
-/// guide is drawn under it in `GUIDE_LINE`; a landing painted in either
-/// would be a line that reads as the thing beside it rather than as the
-/// answer to "why did the drag stop here".
+/// The outline is drawn in `ACCENT_BLUE` and guides in `GUIDE_LINE`, so a
+/// landing painted in either would read as the thing beside it.
 #[test]
 fn the_landing_line_is_told_apart_from_the_outline_and_the_guides() {
     let painted = |guide: bool| {
@@ -2388,8 +2134,7 @@ fn the_landing_line_is_told_apart_from_the_outline_and_the_guides() {
     }
 }
 
-/// A guide is a line the author drew, and a drag lands on it like any
-/// other: its own kind, so it can be switched off without taking the
+/// A guide is its own snap kind, so it can be switched off without taking the
 /// parent and the siblings with it.
 #[test]
 fn a_drag_lands_on_a_guide_when_that_kind_is_on() {
@@ -2486,8 +2231,7 @@ fn spawn_child(
         .id()
 }
 
-/// Select all of `entities`, the last one primary: the outline is drawn
-/// around the primary, and the primary is what the gesture snaps.
+/// Select all of `entities`, the last one primary.
 fn select_all(app: &mut App, entities: &[Entity]) {
     app.world_mut().resource_mut::<Selection>().entities = entities.to_vec();
 }
@@ -2496,9 +2240,7 @@ fn select_all(app: &mut App, entities: &[Entity]) {
 // Manipulation preserves the scheme the node was authored in
 // ---------------------------------------------------------------------------
 
-/// The projection on its own, one axis at a time. A drag computes a rect
-/// in authored pixels and then writes it back through the scheme it
-/// found, and this is that second half with no pointer in the way.
+/// The projection on its own, with no pointer in the way.
 #[test]
 fn a_rect_is_written_back_through_the_scheme_it_was_read_from() {
     let basis = UnitBasis {
@@ -2509,7 +2251,6 @@ fn a_rect_is_written_back_through_the_scheme_it_was_read_from() {
     // at (100, 50) sized 200x100.
     let moved = Vec4::new(130.0, 70.0, 200.0, 100.0);
 
-    // Left and top: the near offsets take the delta directly.
     let mut node = Node {
         position_type: PositionType::Absolute,
         left: px(100),
@@ -2534,8 +2275,7 @@ fn a_rect_is_written_back_through_the_scheme_it_was_read_from() {
         "a node placed from the near edges keeps being placed from them",
     );
 
-    // Right and bottom: the offsets move by the negated delta, and the
-    // near edges are never given a number they did not have.
+    // Right and bottom: the offsets move by the negated delta.
     let mut node = Node {
         position_type: PositionType::Absolute,
         right: px(700),
@@ -2560,8 +2300,7 @@ fn a_rect_is_written_back_through_the_scheme_it_was_read_from() {
         "a node pinned to the far edges stays pinned to them",
     );
 
-    // Percentages stay percentages: the delta goes through the parent's
-    // size into percentage points rather than rewriting the unit.
+    // Percentages go through the parent's size rather than rewriting the unit.
     let mut node = Node {
         position_type: PositionType::Absolute,
         left: percent(10),
@@ -2586,8 +2325,7 @@ fn a_rect_is_written_back_through_the_scheme_it_was_read_from() {
         "30 of 1000 is three points, 20 of 500 is four",
     );
 
-    // A stretch keeps both edges and gains no size: the size is what the
-    // two offsets leave between them, and writing one would pin it.
+    // A stretch keeps both edges: the size is what they leave between them.
     let mut node = Node {
         position_type: PositionType::Absolute,
         left: px(100),
@@ -2614,9 +2352,7 @@ fn a_rect_is_written_back_through_the_scheme_it_was_read_from() {
     );
 }
 
-/// A unit with nothing measurable behind it is left alone rather than
-/// rewritten in pixels, so that a parent measuring zero for one frame
-/// cannot turn `50%` into `Val::Px`.
+/// A parent measuring zero for one frame must not turn `50%` into `Val::Px`.
 #[test]
 fn a_unit_with_no_basis_is_left_as_it_was() {
     let basis = UnitBasis {
@@ -2645,8 +2381,7 @@ fn a_unit_with_no_basis_is_left_as_it_was() {
         "no parent size is no conversion, and no conversion is no rewrite",
     );
 
-    // Viewport units have the canvas to measure against, so they convert
-    // whatever the parent is doing.
+    // Viewport units measure against the canvas whatever the parent is doing.
     let mut node = Node {
         position_type: PositionType::Absolute,
         left: Val::Vw(5.0),
@@ -2672,8 +2407,7 @@ fn a_unit_with_no_basis_is_left_as_it_was() {
 /// The same three schemes through a real drag, against real layout.
 #[test]
 fn a_drag_edits_the_offsets_the_node_was_authored_with() {
-    // Pinned to the bottom-right corner: writing `left`/`top` here would
-    // move the node to the opposite corner of the parent.
+    // Pinned to the bottom-right corner: writing `left`/`top` would move it.
     let (mut app, panel, node) = anchored_app(Node {
         position_type: PositionType::Absolute,
         right: px(400),
@@ -2682,8 +2416,7 @@ fn a_drag_edits_the_offsets_the_node_was_authored_with() {
         height: px(200),
         ..default()
     });
-    // A gesture read for what it writes, not for what it lands on:
-    // the magnet off is the only way to see the cursor's own figures.
+    // Magnet off: the assertions read the cursor's own figures.
     magnet(&mut app, false);
     let overlay = outline_over(&mut app, node);
     drag_authored(
@@ -2708,7 +2441,6 @@ fn a_drag_edits_the_offsets_the_node_was_authored_with() {
         "the drag moved the offsets the author wrote, by the negated delta",
     );
 
-    // Percentages: the same drag in percentage points.
     let (mut app, panel, node) = anchored_app(Node {
         position_type: PositionType::Absolute,
         left: percent(10),
@@ -2734,8 +2466,7 @@ fn a_drag_edits_the_offsets_the_node_was_authored_with() {
         "48 of 2400 and 24 of 1200 are two points each, and the size is untouched",
     );
 
-    // Stretched across one axis and pinned from the top on the other:
-    // each axis is projected through its own scheme.
+    // Stretched across one axis and pinned from the top on the other.
     let (mut app, panel, node) = anchored_app(Node {
         position_type: PositionType::Absolute,
         left: px(100),
@@ -2768,9 +2499,8 @@ fn a_drag_edits_the_offsets_the_node_was_authored_with() {
     );
 }
 
-/// Resizing a node pinned to its far edge moves the near edge through
-/// its size: the far offset is where the author put it, and a resize
-/// from the other side must not walk it.
+/// The far offset is where the author put it, so a resize from the other side
+/// must not walk it.
 #[test]
 fn a_resize_of_a_far_pinned_node_leaves_the_far_offset_alone() {
     let (mut app, panel, node) = anchored_app(Node {
@@ -2781,8 +2511,7 @@ fn a_resize_of_a_far_pinned_node_leaves_the_far_offset_alone() {
         height: px(200),
         ..default()
     });
-    // A gesture read for what it writes, not for what it lands on:
-    // the magnet off is the only way to see the cursor's own figures.
+    // Magnet off: the assertions read the cursor's own figures.
     magnet(&mut app, false);
     let overlay = outline_over(&mut app, node);
     // The node's left edge is at 2400 - 400 - 400 = 1600.
@@ -2827,10 +2556,8 @@ fn rulers_sit_outside_the_area_the_stage_is_measured_against() {
         );
     }
 
-    // The area is what a fit is computed against, and the gutter comes
-    // off it, so showing the rulers is a smaller canvas to fit into.
-    // Two different areas, two different framings, each the one
-    // `fit_view` gives for the area the panel actually had.
+    // The gutter comes off the area a fit is computed against, so showing the
+    // rulers is a smaller canvas to fit into.
     let with_rulers = refit(&mut app, panel);
     app.world_mut().resource_mut::<CanvasSnap>().show_rulers = false;
     settle(&mut app);
@@ -2896,12 +2623,11 @@ fn show_rulers_off_gives_the_area_the_gutter_back() {
     );
 }
 
-/// The ruler is a reading of the canvas as the panel is showing it: the
-/// figures follow the pan, not just the zoom.
+/// The ruler figures follow the pan, not just the zoom.
 #[test]
 fn ruler_labels_count_every_hundred_authored_pixels_at_the_zoom() {
-    // A canvas origin a hundred pixels off the left of the ruler, at
-    // half zoom: the ruler's 1200 pixels read 200 to 2600 authored.
+    // A canvas origin a hundred pixels off the ruler's left at half zoom: its
+    // 1200 pixels read 200 to 2600 authored.
     let marks = ruler_marks(-100.0, 0.5, 1200.0);
     let labels: Vec<f32> = marks
         .iter()
@@ -2925,7 +2651,6 @@ fn ruler_labels_count_every_hundred_authored_pixels_at_the_zoom() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     authored_scene(&mut app);
-    // Pan a hundred stage pixels left, which is the origin above.
     let mut host = app
         .world_mut()
         .get_mut::<Viewport2dPanelHost>(panel)
@@ -2946,14 +2671,10 @@ fn ruler_labels_count_every_hundred_authored_pixels_at_the_zoom() {
     );
 }
 
-/// A ruler reads to its far end however wide the panel is.
-///
-/// A fixed ceiling on the number of marks stops them partway across, and
-/// the panel past that point reads as canvas with no ruler over it.
+/// A fixed ceiling on the number of marks would stop them partway across.
 #[test]
 fn a_wide_ruler_is_marked_all_the_way_to_its_far_end() {
-    // The densest reading the ruler offers: ten marks per label with the
-    // marks exactly RULER_TICK_GAP apart.
+    // The densest reading the ruler offers: ten marks per label, RULER_TICK_GAP apart.
     let marks = ruler_marks(0.0, 0.4, 4000.0);
     let last = marks.last().expect("a 4000 pixel ruler carries marks");
     assert!(
@@ -2968,19 +2689,15 @@ fn a_wide_ruler_is_marked_all_the_way_to_its_far_end() {
     );
 }
 
-/// Panning moves the marks, it does not make new ones.
-///
-/// Comparing what a ruler was drawn for as a float means every frame of
-/// a pan is a different reading and every mark on both rulers is
-/// despawned and respawned, all the way through the drag.
+/// Comparing the drawn reading as a float would despawn and respawn every
+/// mark on both rulers through a pan.
 #[test]
 fn panning_moves_a_rulers_marks_rather_than_making_them_again() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     authored_scene(&mut app);
-    // Both framings put the canvas origin between two marks, so the pan
-    // between them moves every mark and brings no new figure in: what is
-    // being read here is whether an unchanged reading is redrawn.
+    // Both framings put the canvas origin between two marks, so the pan brings
+    // no new figure in.
     pan_to(&mut app, panel, -5.0);
     settle(&mut app);
 
@@ -2997,10 +2714,8 @@ fn panning_moves_a_rulers_marks_rather_than_making_them_again() {
     );
 }
 
-/// Every guide is marked on the ruler it came off, on every panel.
-///
-/// A guide is put away by dragging it back onto its ruler, so the ruler
-/// has to show where each one is.
+/// A guide is put away by dragging it back onto its ruler, so the ruler has
+/// to show where each one is.
 #[test]
 fn each_guide_is_marked_on_its_ruler() {
     let mut app = stage_app();
@@ -3023,8 +2738,7 @@ fn each_guide_is_marked_on_its_ruler() {
         "and the one down the left marks both guides across it",
     );
 
-    // The labels are written in the rest of the gutter, so a mark that
-    // ran the whole depth of it would be painted over one of them.
+    // The labels use the rest of the gutter, so a full-depth mark would paint over one.
     let mark = guide_mark_node(&mut app, panel, CanvasAxis::Vertical);
     assert_eq!(
         (mark.height, mark.bottom, mark.top),
@@ -3218,8 +2932,7 @@ fn ruler_labels(app: &mut App, panel: Entity, axis: CanvasAxis) -> Vec<(String, 
     let mut labels: Vec<(String, f32)> = children
         .into_iter()
         .filter_map(|child| {
-            // The figure sits in a box of its own, which is what the
-            // left ruler turns on its side.
+            // The figure sits in a box of its own, which the left ruler turns on its side.
             let text = app
                 .world()
                 .get::<Children>(child)
@@ -3259,8 +2972,6 @@ fn guide_lines_of(app: &mut App, panel: Entity) -> Vec<(CanvasAxis, Val)> {
     lines.into_iter().map(|(axis, _, at)| (axis, at)).collect()
 }
 
-/// A guide comes off a ruler: the press draws one under the cursor and
-/// the release leaves it where the pointer stopped.
 #[test]
 fn dragging_off_a_ruler_creates_a_guide_where_the_pointer_stops() {
     let mut app = stage_app();
@@ -3307,8 +3018,7 @@ fn dragging_a_guide_moves_it_and_dragging_it_back_onto_the_ruler_removes_it() {
 
     let line = guide_line_entity(&mut app, panel, CanvasAxis::Vertical, 0);
     let entries = history_len(&app);
-    // Both ends of the drag sit on the panel's own lattice, which is
-    // what the magnet lands a guide on.
+    // Both ends sit on the panel's own lattice, which is what the magnet lands a guide on.
     drag_authored(
         &mut app,
         panel,
@@ -3419,8 +3129,7 @@ fn a_guide_drag_that_did_not_move_records_nothing() {
     let line = guide_line_entity(&mut app, panel, CanvasAxis::Vertical, 0);
     let entries = history_len(&app);
 
-    // Out and back inside one gesture: the guide is written on every
-    // event, and the history hears about the gesture, not the events.
+    // The guide is written on every event; history hears the gesture, not the events.
     let start = begin_drag(&mut app, panel, line, Vec2::new(320.0, 300.0));
     let away = screen_position_of(&mut app, panel, Vec2::new(500.0, 300.0)) - start;
     continue_drag(&mut app, line, start, away);
@@ -3441,13 +3150,8 @@ fn a_guide_drag_that_did_not_move_records_nothing() {
     );
 }
 
-/// A guide drag reads the canvas the panel is actually showing.
-///
-/// Zoomed past 1:1 and panned off the origin, so both halves of the
-/// gesture have something to get wrong: the cursor mapping, which has to
-/// carry the pan as well as the zoom, and the rule that drops a guide
-/// back onto its ruler, which measures against the panel's area rather
-/// than against the canvas.
+/// Zoomed and panned so both halves of the gesture have something to get
+/// wrong: the cursor mapping, and the rule that drops a guide back onto its ruler.
 #[test]
 fn a_guide_drag_reads_the_panned_and_zoomed_canvas() {
     let mut app = stage_app();
@@ -3460,8 +3164,8 @@ fn a_guide_drag_reads_the_panned_and_zoomed_canvas() {
         .pan = Vec2::new(120.0, -80.0);
     settle(&mut app);
 
-    // Authored (1200, 640) is well inside the area at this framing, and
-    // authored y 600 is above it, in the ruler's own gutter.
+    // Authored (1200, 640) is inside the area at this framing; authored y 600
+    // is above it, in the ruler's gutter.
     let ruler = ruler_entity(&mut app, panel, CanvasAxis::Vertical);
     drag_authored(
         &mut app,
@@ -3492,11 +3196,8 @@ fn a_guide_drag_reads_the_panned_and_zoomed_canvas() {
     );
 }
 
-/// A guide lands on a figure the inspector can state.
-///
-/// Whole authored pixels with the magnet off, and the panel's own
-/// lattice with it on: a guide is the line other things are aimed at, so
-/// it has to sit somewhere they can reach.
+/// A guide is the line other things are aimed at, so it has to land on a
+/// figure the inspector can state.
 #[test]
 fn a_dragged_guide_lands_on_a_whole_pixel_or_on_the_grid() {
     let dropped = |magnet_on: bool, to: f32| {
@@ -3530,12 +3231,8 @@ fn a_dragged_guide_lands_on_a_whole_pixel_or_on_the_grid() {
     );
 }
 
-/// An undo while a guide is being dragged cancels the drag.
-///
-/// Undo restores the very component the drag is editing, and the drag is
-/// still holding the guides it picked up: the release would write those
-/// back over what the undo put there and record the difference as an
-/// edit nobody made.
+/// Undo restores the very component the drag is editing, so the release would
+/// otherwise write the picked-up guides back over it.
 #[test]
 fn an_undo_during_a_guide_drag_puts_the_guides_back() {
     let mut app = stage_app();
@@ -3581,18 +3278,14 @@ fn an_undo_during_a_guide_drag_puts_the_guides_back() {
     assert_eq!(history_len(&app), entries, "nor records anything");
 }
 
-/// A guide drawn along a node's edge is still dragged by its line.
-///
-/// Guides are drawn to place nodes against, so a guide and an edge on
-/// the same pixel is the case they exist for. The node underneath must
-/// not cost the author the guide: the line itself stays the guide's.
+/// A guide and an edge on the same pixel is the case guides exist for: the
+/// line itself stays the guide's.
 #[test]
 fn a_guide_over_a_node_is_dragged_from_the_line() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (root, _, front) = authored_scene(&mut app);
-    // `front` spans authored x 400..800, so the guide runs down its
-    // left edge and the press below is over both.
+    // `front` spans authored x 400..800, so the guide runs down its left edge.
     app.world_mut().entity_mut(root).insert(CanvasGuides {
         horizontal: Vec::new(),
         vertical: vec![400.0],
@@ -3621,26 +3314,21 @@ fn a_guide_over_a_node_is_dragged_from_the_line() {
     );
 }
 
-/// A press off the line reaches the node the guide is drawn over.
-///
-/// The slab is wider than the line so the line is easy to hit; the
-/// pixels either side of it belong to the canvas, or a node under a
-/// guide would be unselectable and unmovable.
+/// The slab is wider than the line so the line is easy to hit; the pixels
+/// either side of it belong to the canvas.
 #[test]
 fn a_node_under_a_guide_can_still_be_picked_up() {
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (root, _, front) = authored_scene(&mut app);
-    // `front` spans authored x 400..800: the guide runs down its left
-    // edge, so the press below lands on the guide's slab.
+    // The guide runs down `front`'s left edge at authored 400.
     app.world_mut().entity_mut(root).insert(CanvasGuides {
         horizontal: Vec::new(),
         vertical: vec![400.0],
     });
     settle(&mut app);
 
-    // Two stage pixels off the line, which is four authored pixels at
-    // this panel's framing, and still inside `front`.
+    // Two stage pixels off the line, four authored, and still inside `front`.
     let line = guide_line_entity(&mut app, panel, CanvasAxis::Vertical, 0);
     press_at(&mut app, panel, Vec2::new(404.0, 250.0), line);
     settle(&mut app);
@@ -3751,10 +3439,8 @@ fn framed_panel(app: &mut App, zoom: f32) -> Entity {
         .spawn((
             jackdaw::EditorEntity,
             Node {
-                // The header and the ruler gutter come off the panel
-                // before the area is measured, so the panel is grown by
-                // both to leave the 1200x600 area every position below
-                // is stated against.
+                // The header and the ruler gutter come off the panel before
+                // the area is measured, so grow the panel by both.
                 width: px(1200.0 + RULER_SIZE),
                 height: px(600.0 + RULER_SIZE + jackdaw_feathers::tokens::TOOLBAR_HEIGHT),
                 ..default()
@@ -3767,9 +3453,7 @@ fn framed_panel(app: &mut App, zoom: f32) -> Entity {
         .get_mut::<Viewport2dPanelHost>(parent)
         .expect("host on panel parent");
     host.view.zoom = zoom;
-    // An explicit framing: every position below is stated in authored
-    // pixels at this zoom, so the fit a new panel starts with has to
-    // stand down the way a restored framing does.
+    // An explicit framing, so the fit a new panel starts with has to stand down.
     host.fit_pending = false;
     parent
 }
@@ -3821,13 +3505,10 @@ fn authored_scene(app: &mut App) -> (Entity, Entity, Entity) {
     (root, back, front)
 }
 
-/// A ten-pixel-bordered container at authored (200, 100), holding a flex
-/// child with no offset of its own and an absolutely placed sibling 400
-/// pixels into the container's padding box.
-///
-/// Returns the flex child. Its laid-out corner is the padding box's
-/// origin, so any border term leaking into the offset space shows up as
-/// a jump of exactly the border width.
+/// A ten-pixel-bordered container at authored (200, 100) holding a flex child
+/// with no offset of its own and an absolutely placed sibling 400 pixels into
+/// the container's padding box. Returns the flex child, whose laid-out corner
+/// is the padding box's origin.
 fn bordered_scene(app: &mut App) -> Entity {
     let root = app
         .world_mut()
@@ -3882,15 +3563,13 @@ fn bordered_scene(app: &mut App) -> Entity {
     flexed
 }
 
-/// Put the canvas's master magnet where the Snap menu's first row puts
-/// it. On is the default, so this is only ever called to turn it off.
+/// Put the canvas's master magnet where the Snap menu's first row puts it.
 fn magnet(app: &mut App, on: bool) {
     with_kinds(app, |kinds| kinds.enabled = on);
 }
 
-/// Put the panel's canvas grid on a one-pixel lattice, which is no
-/// lattice at all once the gesture rounds to whole pixels, so that the
-/// edge snap is the only thing that can move the drag.
+/// A one-pixel lattice is no lattice once the gesture rounds to whole pixels,
+/// so the edge snap is the only thing that can move the drag.
 fn without_the_pixel_grid(app: &mut App, panel: Entity) {
     app.world_mut()
         .get_mut::<Viewport2dPanelHost>(panel)
@@ -3924,14 +3603,9 @@ fn click_authored(app: &mut App, panel: Entity, authored: Vec2) {
     press_at(app, panel, authored, stage);
 }
 
-/// Where on screen the panel is currently showing authored point
-/// `authored`, in window pixels.
-///
-/// Derived from the *area* and the view rather than from the stage node
-/// the production path measures. The two agree only if `place_stage` put
-/// the canvas where the view says it is, so every click test doubles as
-/// a check on the placement: drop the zoom from the placement and these
-/// positions stop landing on the nodes they name.
+/// Where on screen the panel is currently showing authored point `authored`,
+/// in window pixels. Derived from the area and the view rather than from the
+/// stage node, so every click test doubles as a check on `place_stage`.
 fn screen_position_of(app: &mut App, panel: Entity, authored: Vec2) -> Vec2 {
     let (area, view, target_size) = app
         .world()
@@ -3948,8 +3622,7 @@ fn screen_position_of(app: &mut App, panel: Entity, authored: Vec2) -> Vec2 {
         .expect("the stage area is laid out")
         .translation;
 
-    // The authored point the view has parked at the centre of the area,
-    // in authored pixels from the canvas's top-left corner.
+    // The authored point the view has parked at the centre of the area.
     let focus = target_size.as_vec2() / 2.0 + Vec2::new(view.pan.x, -view.pan.y);
     let area_centre_logical = centre * computed.inverse_scale_factor();
     let logical = area_centre_logical + (authored - focus) * view.zoom;
@@ -4006,9 +3679,8 @@ fn pointer_at<E: std::fmt::Debug + Clone + Reflect>(
     ));
 }
 
-/// The primary selection's overlay: the one carrying the handles, and the
-/// one every gesture is delivered to. Each selected node is outlined, so a
-/// multi-selection has this one and a plain outline per other node.
+/// The primary selection's overlay: the one carrying the handles, and the one
+/// every gesture is delivered to.
 fn overlay_node(app: &mut App) -> (Entity, Node) {
     let overlays: Vec<Entity> = app
         .world_mut()
@@ -4049,13 +3721,8 @@ fn undo(app: &mut App) {
     );
 }
 
-/// The whole gesture on `target`: press at the screen position showing
-/// `from`, drag to the one showing `to`, release.
-///
-/// The pointer distance comes from `screen_position_of`, so what the
-/// gesture believes the cursor moved is derived from the area and the
-/// view rather than from the numbers the production path uses. A drag
-/// test is therefore also a placement test.
+/// The whole gesture on `target`: press at the screen position showing `from`,
+/// drag to the one showing `to`, release.
 fn drag_authored(app: &mut App, panel: Entity, target: Entity, from: Vec2, to: Vec2) {
     let start = begin_drag(app, panel, target, from);
     let distance = screen_position_of(app, panel, to) - start;
@@ -4103,8 +3770,7 @@ fn end_drag(app: &mut App, target: Entity, start: Vec2, distance: Vec2) {
     );
 }
 
-/// Escape as the editor sees it: a keyboard message the input pass turns
-/// into `just_pressed` on the frame it is read.
+/// Escape as the input pass reports it.
 fn press_escape(app: &mut App) {
     let window = app
         .world_mut()
@@ -4171,9 +3837,8 @@ fn release(app: &mut App, key: KeyCode) {
         .release(key);
 }
 
-/// Shift adds to the selection, Ctrl toggles in and out, and a plain
-/// press replaces it. Without them a canvas can only ever hold one node,
-/// so nothing on it can be moved or aligned together.
+/// Shift adds to the selection, Ctrl toggles in and out, and a plain press
+/// replaces it.
 #[test]
 fn shift_adds_and_ctrl_toggles_on_the_canvas() {
     let mut app = stage_app();
@@ -4181,7 +3846,6 @@ fn shift_adds_and_ctrl_toggles_on_the_canvas() {
     let (root, back, front) = authored_scene(&mut app);
     settle(&mut app);
 
-    // The part of `back` that `front` does not cover.
     click_authored(&mut app, panel, Vec2::new(250.0, 150.0));
     settle(&mut app);
     assert_eq!(app.world().resource::<Selection>().entities, vec![back]);
@@ -4214,8 +3878,7 @@ fn shift_adds_and_ctrl_toggles_on_the_canvas() {
     );
     release(&mut app, KeyCode::ControlLeft);
 
-    // A miss with a modifier held keeps the selection being built; a
-    // plain one clears it.
+    // A miss with a modifier keeps the selection being built; a plain one clears it.
     hold(&mut app, KeyCode::ShiftLeft);
     click_authored(&mut app, panel, Vec2::new(1800.0, 900.0));
     settle(&mut app);
@@ -4235,12 +3898,8 @@ fn shift_adds_and_ctrl_toggles_on_the_canvas() {
     );
 }
 
-/// Ctrl means two things on the canvas, and each reads its own moment:
-/// the modifiers held at the press decide the selection, and the
-/// modifiers held during the drag decide the snapping.
-///
-/// So a Ctrl-press that then drags does both, and neither the toggle nor
-/// the magnet inversion is lost to the other.
+/// The modifiers held at the press decide the selection, and the modifiers
+/// held during the drag decide the snapping.
 #[test]
 fn ctrl_selects_at_the_press_and_inverts_the_magnet_during_the_drag() {
     let mut app = stage_app();
@@ -4252,8 +3911,7 @@ fn ctrl_selects_at_the_press_and_inverts_the_magnet_during_the_drag() {
     settle(&mut app);
     assert_eq!(app.world().resource::<Selection>().entities, vec![back]);
 
-    // Ctrl down for the whole gesture: the press toggles `front` in, and
-    // the drag that follows is unsnapped.
+    // Ctrl down for the whole gesture: the press toggles `front` in, the drag is unsnapped.
     hold(&mut app, KeyCode::ControlLeft);
     let (overlay, _) = overlay_node(&mut app);
     press_at(&mut app, panel, Vec2::new(700.0, 350.0), overlay);
@@ -4264,8 +3922,7 @@ fn ctrl_selects_at_the_press_and_inverts_the_magnet_during_the_drag() {
         "the press with Ctrl held added the node under it",
     );
 
-    // The node the press added is the primary now, so the handles moved
-    // to its outline and the gesture belongs there.
+    // The press made `front` primary, so the handles moved to its outline.
     let (overlay, _) = overlay_node(&mut app);
     drag_authored(
         &mut app,
@@ -4281,8 +3938,7 @@ fn ctrl_selects_at_the_press_and_inverts_the_magnet_during_the_drag() {
         "and the drag under the same Ctrl landed where the cursor did",
     );
 
-    // The other half: Ctrl held only from the press onwards inverts the
-    // magnet without ever having toggled anything.
+    // Ctrl held from the press onwards inverts the magnet without toggling anything.
     let mut app = stage_app();
     let panel = panel_entity(&mut app);
     let (_, _, front) = authored_scene(&mut app);
@@ -4315,10 +3971,8 @@ fn ctrl_selects_at_the_press_and_inverts_the_magnet_during_the_drag() {
 // What a gesture may do to a node its parent lays out
 // ---------------------------------------------------------------------------
 
-/// A move is a statement about where the node goes, so it takes a flowed
-/// child out of the flow. A resize is not, so it writes the size and
-/// leaves the placement alone: promoting there would pull a row's child
-/// out of the row the moment the user widened it.
+/// A move promotes a flowed child out of the flow; a resize writes the size
+/// and leaves the placement alone.
 #[test]
 fn a_resize_sizes_a_flowed_child_and_a_move_promotes_it() {
     let mut app = stage_app();
@@ -4338,7 +3992,6 @@ fn a_resize_sizes_a_flowed_child_and_a_move_promotes_it() {
     settle(&mut app);
     let (overlay, _) = overlay_node(&mut app);
     let handle = handle_entity(&mut app, overlay, (1, 1));
-    // The child's laid-out rect is the padding box's corner, 100x50.
     drag_authored(
         &mut app,
         panel,
@@ -4367,7 +4020,6 @@ fn a_resize_sizes_a_flowed_child_and_a_move_promotes_it() {
         "a resize writes the size and nothing about placement",
     );
 
-    // The same node moved is a different statement.
     drag_authored(
         &mut app,
         panel,
@@ -4385,10 +4037,7 @@ fn a_resize_sizes_a_flowed_child_and_a_move_promotes_it() {
     );
 }
 
-/// A nudge of a flowed child is refused, and the refusal is said out
-/// loud. The drag has a rect and a cursor to promote against; a
-/// keystroke has neither, and promoting on an arrow press would change
-/// the layout of every sibling for a one-pixel move.
+/// A drag has a rect and a cursor to promote against; a keystroke has neither.
 #[test]
 fn a_nudge_of_a_flowed_child_is_refused_with_a_notice() {
     let mut app = stage_app();
@@ -4465,9 +4114,8 @@ fn move_over(app: &mut App, panel: Entity, authored: Vec2) {
     app.update();
 }
 
-/// A canvas of nested boxes says nothing about where one ends and the
-/// next begins until something is selected, so a press is a guess. The
-/// pre-select outline draws what the press would pick.
+/// Nested boxes say nothing about where one ends and the next begins, so the
+/// pre-select outline draws what a press would pick.
 #[test]
 fn the_cursor_outlines_what_a_press_would_select() {
     let mut app = stage_app();
@@ -4493,8 +4141,7 @@ fn the_cursor_outlines_what_a_press_would_select() {
         "and follows the cursor onto `back`",
     );
 
-    // The selected node's own outline is the answer there, so the
-    // pre-select one stands down over it.
+    // The selected node's own outline is the answer there.
     select(&mut app, back);
     settle(&mut app);
     move_over(&mut app, panel, Vec2::new(250.0, 150.0));
@@ -4530,9 +4177,7 @@ fn the_cursor_outlines_what_a_press_would_select() {
 // Undo, redo, and the two panels that share a selection
 // ---------------------------------------------------------------------------
 
-/// A gesture is one history entry, and redo puts back exactly the rect
-/// the drag wrote. Undo alone was already covered; the redo half is what
-/// says the entry carries both states rather than only the old one.
+/// Redo puts back exactly the rect the drag wrote, so the entry carries both states.
 #[test]
 fn redo_restores_the_rect_a_canvas_drag_wrote() {
     let mut app = stage_app();
@@ -4578,10 +4223,7 @@ fn redo(app: &mut App) {
     );
 }
 
-/// The canvas and the outliner are two views of one selection, so a
-/// press on either shows up on the other. Without that, the panel a user
-/// is not looking at goes stale and the next action lands on the wrong
-/// node.
+/// The canvas and the outliner are two views of one selection.
 #[test]
 fn the_canvas_and_the_outliner_share_one_selection() {
     let mut app = stage_app();
@@ -4686,9 +4328,7 @@ fn row_reads_selected(app: &mut App, source: Entity) -> bool {
         })
 }
 
-/// Every selected node carries its own outline, so the pre-select one
-/// stands down over all of them. It used to stand down over the primary
-/// alone, which drew a second line on the rest of a multi-selection.
+/// The pre-select outline stands down over every selected node, not just the primary.
 #[test]
 fn the_outline_stands_down_over_every_selected_node() {
     let mut app = stage_app();
@@ -4708,9 +4348,8 @@ fn the_outline_stands_down_over_every_selected_node() {
     );
 }
 
-/// The tracker only runs while the pointer is over a stage, so leaving one
-/// has to say so. Without it the last node the cursor passed over kept its
-/// outline while the pointer was somewhere else entirely.
+/// The tracker only runs while the pointer is over a stage, so leaving one has
+/// to say so.
 #[test]
 fn the_outline_goes_away_when_the_pointer_leaves_the_stage() {
     let mut app = stage_app();

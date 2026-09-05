@@ -1,19 +1,11 @@
 //! One-shot brush stamps: the sculpt and paint brushes, without a drag.
 //!
 //! `terrain.sculpt` and `terrain.paint` are modal operators driven by the
-//! pointer: they read the brush position the cursor raycast put there and
-//! run their kernel once a frame until the button comes up. A caller with
-//! no pointer cannot enter them at all, so the two most consequential
-//! terrain tools would otherwise be out of reach of a script.
+//! pointer, so a caller with no pointer cannot enter them at all. These are
+//! the same kernels applied once at a named place, pushing the same history
+//! entry a released stroke pushes.
 //!
-//! These are the same kernels -- [`jackdaw_terrain::apply_brush_at`] and
-//! [`jackdaw_terrain::apply_control_brush`] -- applied once at a named
-//! place, pushing the same history entry a released stroke pushes. A stamp
-//! and a very short drag over the same spot produce the same cells.
-//!
-//! Coordinates are terrain-local metres, not grid cells: a caller places
-//! things in the scene's units and should not have to know the sidecar's
-//! resolution.
+//! Coordinates are terrain-local metres, not grid cells.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -38,13 +30,12 @@ pub(crate) struct StampPlacement {
     pub resolution: u32,
 }
 
-/// Convert a terrain-local XZ position and a metre radius into the grid
-/// space the brush kernels work in.
+/// Convert a terrain-local XZ position and a metre radius into the grid space
+/// the brush kernels work in.
 ///
-/// The grid is derived from the regions the terrain has allocated, so
-/// this asks the store rather than the component: a stamp has to reach
-/// wherever ground exists, which is the same rule the pointer strokes
-/// follow.
+/// The grid is derived from the regions the terrain has allocated, so this
+/// asks the store rather than the component: a stamp reaches wherever ground
+/// exists, the same rule the pointer strokes follow.
 pub(crate) fn place(
     store: &TerrainDataStore,
     terrain: &jackdaw_scene_types::Terrain,
@@ -81,10 +72,9 @@ pub(crate) struct StampTarget {
 
 /// Resolve the terrain and footprint every stamp operator starts from.
 ///
-/// One preamble rather than three: the three stamps differ in the kernel
-/// they run and the layer they write, and in nothing before that. Whatever
-/// step could not be taken is reported to the caller under `id`, since a
-/// remote or scripted caller has no terminal to read.
+/// One preamble rather than three: the stamps differ only in the kernel they
+/// run and the layer they write. Whatever step could not be taken is reported
+/// to the caller under `id`, a scripted caller having no terminal to read.
 pub(crate) fn stamp_target(
     world: &mut World,
     params: &OperatorParameters,
@@ -139,11 +129,9 @@ fn sculpt_tool(mode: &str) -> Option<SculptTool> {
 
 /// Sculpt once at a named place, as a released stroke would.
 ///
-/// `strength` is metres at the centre for `raise` and `lower`, and a
-/// 0..1 blend for `flatten` and `smooth`, because that is what the
-/// kernel's `strength * falloff * dt` means with the one-frame `dt` a
-/// stamp uses. `flatten` levels toward the height under the stamp
-/// centre, the same as holding the flatten brush still.
+/// `strength` is metres at the centre for `raise` and `lower`, and a 0..1
+/// blend for `flatten` and `smooth`, which is what the kernel's
+/// `strength * falloff * dt` means with a stamp's one-frame `dt`.
 #[operator(
     id = "terrain.sculpt.stamp",
     label = "Sculpt Stamp",

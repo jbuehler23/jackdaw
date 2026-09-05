@@ -1,39 +1,7 @@
-//! The keybind settings dialog.
-//!
-//! Every editor command is an operator, and an operator's chord lives in
-//! the keymap, so the dialog is a view of the keymap: one row per
-//! operator, showing the chords the working copy gives it, with a rebind
-//! and a reset. Saving diffs the working copy against what the editor
-//! ships with, writes the difference to the user keymap file, and
-//! re-applies the result, so a rebind takes effect in the session that
-//! made it rather than at the next launch.
-//!
-//! A command can hold more than one chord, and several ship that way, so
-//! an editable row draws each chord with a remove of its own and offers
-//! Add Chord beside Rebind. Rebind replaces every chord; both keep the
-//! phase and context the command's rows already had, because when a
-//! command fires is not something changing its chord should decide.
-//!
-//! Three kinds of row are not editable here. A *fixed* row is an
-//! operator whose chord is attached at a raw binding site rather than
-//! through the keymap (hold-repeat nudges, the draw-brush modal's own
-//! keys); the dialog shows those so the chord is not invisible, and
-//! cannot change them. A *menu only* row is an operator with no input
-//! action behind it at all: it was registered to be reached from a menu,
-//! a button or the command palette, and there is nothing for a chord to
-//! attach to, so the dialog says so rather than offering a rebind that
-//! would go nowhere. Both carry the reason in a tooltip, because the
-//! heading alone says what the row is and not why. The camera rows are
-//! the last users of the legacy [`KeybindRegistry`], which drives camera
-//! fly directly; they keep their old behaviour, including their own file.
-//!
-//! A chord more than one command claims is marked on the rows it is
-//! about, naming the other commands the way those rows name them. The
-//! line above the list is for what the reader has to decide something
-//! about: a conflict a rebind in this session made, a keymap file that
-//! would not parse, a saved binding that could not be attached. Chords
-//! shared since the editor shipped are arbitrated by availability, so
-//! they are one line saying how many, not six saying which.
+//! The keybind settings dialog: one row per operator, showing the chords a
+//! working copy of the keymap gives it. Save writes the difference from the
+//! shipped keymap to the user keymap file and re-applies it, so a rebind
+//! takes effect in this session.
 
 use std::collections::HashMap;
 
@@ -97,21 +65,11 @@ impl Plugin for KeybindSettingsPlugin {
 #[derive(Event)]
 pub struct OpenKeybindSettingsEvent;
 
-/// Operators that have an input action, hold no chord in the keymap, and
-/// are meant to.
+/// Operators that have an input action but deliberately hold no chord in
+/// the keymap.
 ///
-/// The other half of "unbound" is derived rather than listed: an operator
-/// with no action entity has nothing for a binding to point at, so the
-/// applier could not give it a chord however the keymap were written, and
-/// it needs no entry here. What is left is the operators that could hold a
-/// chord: their chord lives at a raw binding site the preset format cannot
-/// yet express (hold-repeat nudges, modifier-only gestures, a modal's own
-/// keys), or they are reached only from a surface of their own.
-///
-/// Listed rather than inferred, because the difference between "give it a
-/// chord" and "it never had one" is a decision. `keymap_user_overrides`
-/// fails on an operator that needs the decision and has not had it, and on
-/// an entry that has gone stale in either direction.
+/// Listed rather than inferred: `keymap_user_overrides` fails on an
+/// operator missing from this list, and on an entry gone stale.
 pub const UNBOUND_OPERATORS: &[&str] = &[
     "clip.timeline.step_left",
     "clip.timeline.step_right",
@@ -185,12 +143,7 @@ impl KeybindRow {
         self.bindable && self.fixed.is_empty()
     }
 
-    /// Why this row offers no rebind, for the reader who wants to know
-    /// what "Fixed" or "Menu only" is standing in for.
-    ///
-    /// Empty for an editable row. The words are in the dialog rather than
-    /// only in this module's own documentation, because the person asking
-    /// is looking at the row.
+    /// Why this row offers no rebind; empty for an editable row.
     pub fn reason(&self) -> String {
         if self.is_editable() {
             return String::new();
@@ -235,12 +188,8 @@ impl PendingKeymapChanges {
             .collect()
     }
 
-    /// The phase and context `operator`'s rows are written in.
-    ///
-    /// Taken from the rows it already holds, so a command that fires on
-    /// release keeps firing on release when its chord is changed. Writing
-    /// `Press` for everything turned a release binding into a press one
-    /// the first time it was rebound, with nothing saying so.
+    /// The phase and context `operator`'s rows are written in, taken from
+    /// the rows it already holds so a rebind does not change when it fires.
     fn shape_of(&self, operator: &str) -> (PresetPhase, PresetContext) {
         self.bindings
             .iter()
@@ -251,10 +200,8 @@ impl PendingKeymapChanges {
             })
     }
 
-    /// Bind `operator` to `input`, replacing every chord it had. The
-    /// command whose chord this was keeps it: a shared chord is a thing
-    /// the keymap allows, and taking one away from a command the user
-    /// did not name is not this dialog's decision to make.
+    /// Bind `operator` to `input`, replacing every chord it had. Any other
+    /// command already holding `input` keeps it.
     pub fn rebind(&mut self, operator: &str, input: PresetInput) {
         let (phase, context) = self.shape_of(operator);
         self.bindings.retain(|binding| binding.operator != operator);
@@ -267,11 +214,6 @@ impl PendingKeymapChanges {
     }
 
     /// Give `operator` another chord alongside the ones it holds.
-    ///
-    /// A command can answer to more than one chord, and several ship that
-    /// way - Delete and Backspace, the two zoom keys. A dialog that could
-    /// only replace turned every one of those into a single chord the
-    /// first time it was touched.
     pub fn add_chord(&mut self, operator: &str, input: PresetInput) {
         if self
             .bindings
@@ -410,12 +352,9 @@ impl PendingKeymapChanges {
         self.shipped_conflicts().len()
     }
 
-    /// Whether any chord `operator` holds is shared with another command
-    /// because of a rebind made in this session, rather than because the
-    /// shipped keymap ships it that way.
-    ///
-    /// What the badge is for: a shipped co-fire is arbitrated and normal,
-    /// and marking it as a warning taught the user to ignore the mark.
+    /// Whether a rebind made in this session, rather than the shipped
+    /// keymap, is what shares one of `operator`'s chords with another
+    /// command.
     pub fn has_user_conflict(&self, operator: &str) -> bool {
         self.bindings
             .iter()
@@ -425,12 +364,8 @@ impl PendingKeymapChanges {
             })
     }
 
-    /// The chords this session's rebinds made shared, said the way the
-    /// rows say them: the chord as a row shows it, and each command by the
-    /// name beside it rather than by its operator id.
-    ///
-    /// `find_conflicts` keeps its own wording for the log, where an
-    /// operator id is the name worth having; this is the dialog's.
+    /// The chords this session's rebinds made shared, worded as the rows
+    /// word them: each command by its label rather than its operator id.
     pub fn user_conflict_lines(&self) -> Vec<String> {
         let mut seen: Vec<&PresetBinding> = Vec::new();
         let mut lines = Vec::new();
@@ -467,15 +402,8 @@ impl PendingKeymapChanges {
     }
 
     /// Whether the commands sharing `binding`'s chord are the ones the
-    /// editor shipped it to, and no others.
-    ///
-    /// The set, not the chord. Keying on the chord alone made a rebind onto
-    /// an already-shared chord read as shipped: Escape is shared, so a
-    /// command moved onto Escape in this session got the neutral badge and
-    /// the one thing the badge exists to say went unsaid. A command dropping
-    /// out of a shipped set is still shipped, though -- fewer claimants is
-    /// nothing new to sort out -- so it is a joiner that makes the warning,
-    /// which is what a subset rather than an equality tests for.
+    /// editor shipped it to, and no others. Tested as a subset, so a
+    /// command joining a shipped set warns and one leaving it does not.
     fn is_shipped_share(&self, binding: &PresetBinding) -> bool {
         let shipped = Self::sharers(&self.defaults, binding);
         shipped.len() > 1 && Self::sharers(&self.bindings, binding).is_subset(&shipped)
@@ -499,11 +427,7 @@ impl PendingKeymapChanges {
     }
 
     /// One line per chord of `operator` that another command also claims,
-    /// naming that command the way the row next to it is named.
-    ///
-    /// The advisory used to be the only sign of a conflict, so finding
-    /// which row it was about meant reading a list of operator ids at the
-    /// top of a dialog listing labels. This is what the row itself says.
+    /// naming that command by its label.
     pub fn conflicts_of(&self, operator: &str) -> Vec<String> {
         self.bindings
             .iter()
@@ -522,12 +446,8 @@ impl PendingKeymapChanges {
     }
 }
 
-/// What a row says while it is waiting for the chord to record.
-///
-/// It names the cancel, because a recording has no keyboard way out: every
-/// key the user could press is a key they might be trying to bind, Escape
-/// included. Right-clicking the row is the way back, and the dialog's own
-/// close button is the other.
+/// What a row says while it is waiting for the chord to record. It names
+/// the cancel gesture, since every key press is a candidate binding.
 const RECORDING_PROMPT: &str = "Press a key... right-click to cancel";
 
 /// Tracks which operator or camera action is being re-recorded.
@@ -608,15 +528,13 @@ struct KeybindRowTarget {
 #[derive(Component)]
 struct KeybindCategoryHeader(String);
 
-/// The text element showing an operator's chords. The camera rows still
-/// draw one; an operator row draws a [`KeybindChordList`] instead, so each
-/// chord can be removed on its own.
+/// The text element showing an operator's chords. Only the camera rows
+/// still draw one; an operator row draws a `KeybindChordList` instead.
 #[derive(Component)]
 struct KeybindDisplayText(String);
 
 /// The container holding one operator row's chords, rebuilt whenever the
-/// working copy or the recording changes. Holds the operator, so a test
-/// can read back what a row is showing.
+/// working copy or the recording changes.
 #[derive(Component)]
 pub struct KeybindChordList(pub String);
 
@@ -629,8 +547,7 @@ struct KeybindRemoveChordButton(String, usize);
 #[derive(Component)]
 struct KeybindAddChordButton(String);
 
-/// The marker on a row whose chords another command also claims. Holds the
-/// operator, so a test can read back what a row is showing.
+/// The marker on a row whose chords another command also claims.
 #[derive(Component)]
 pub struct KeymapConflictBadge(pub String);
 
@@ -638,8 +555,7 @@ pub struct KeymapConflictBadge(pub String);
 #[derive(Component)]
 struct CameraDisplayText(EditorAction);
 
-/// Rebind button for an operator row. The operator it rebinds, so a test
-/// can press the same button the user does.
+/// Rebind button for an operator row, holding the operator it rebinds.
 #[derive(Component)]
 pub struct KeybindRebindButton(pub String);
 
@@ -687,10 +603,8 @@ fn collect_rows(world: &mut World) -> Vec<KeybindRow> {
         .iter(world)
         .map(|(action, bindings)| (action.0.to_string(), bindings.iter().collect()))
         .collect();
-    // Chords that reach an operator from an action that is not its own.
-    // They are as pressable as the ones on its own action, so a dialog
-    // that left them out would show a chord the user cannot find and
-    // hide one they can press.
+    // Chords reaching an operator from an action that is not its own are
+    // just as pressable, so they belong in the list too.
     entries.extend(
         world
             .query::<(&OperatorChordSite, &Bindings)>()
@@ -712,8 +626,7 @@ fn collect_rows(world: &mut World) -> Vec<KeybindRow> {
     }
 
     // An operator with no action entity has nothing for a binding to
-    // point at, so the applier cannot give it a chord however the keymap
-    // is written.
+    // point at, so no keymap can give it a chord.
     let with_action: std::collections::HashSet<String> = world
         .query::<&OperatorAction>()
         .iter(world)
@@ -734,10 +647,6 @@ fn collect_rows(world: &mut World) -> Vec<KeybindRow> {
                 operator: op.id().to_string(),
                 label: op.label().to_string(),
                 description: op.description().to_string(),
-                // Grouping by where the row is listed rather than by what
-                // the operator is called keeps the rows the dialog cannot
-                // edit together; grouping by the id's head scatters them
-                // through the list and repeats their header at every one.
                 category: if !bindable {
                     MENU_ONLY.to_string()
                 } else if raw.is_empty() {
@@ -837,12 +746,7 @@ fn format_bindings(bindings: &[Keybind]) -> String {
 }
 
 /// What the advisory line says about a working copy and the last apply.
-///
-/// Only what the reader has to decide something about. A chord two
-/// commands have shared since the editor shipped is arbitrated by their
-/// availability and needs no decision, so it is one line saying how many
-/// there are; the rows themselves carry which. A chord a rebind in this
-/// session made shared is new, and is named in full.
+/// Shipped chord sharing is counted; a share this session made is named.
 pub fn advisory_text(
     pending: &PendingKeymapChanges,
     skipped: &[String],
@@ -1091,9 +995,6 @@ fn populate_keybind_dialog(
             let name_label = commands.spawn(row_label(&row.label, 240.0)).id();
             let right = commands.spawn(row_right_node()).id();
 
-            // The badge sits with the row rather than in a paragraph at
-            // the top, so which command shares a chord is answered where
-            // the question is asked.
             let badge = commands
                 .spawn((
                     KeymapConflictBadge(row.operator.clone()),
@@ -1164,8 +1065,6 @@ fn populate_keybind_dialog(
                         },
                     ))
                     .id();
-                // The heading says the row cannot be changed; the tooltip
-                // says why, which is the part a reader is missing.
                 let note = commands
                     .spawn((
                         Text::new(row.category.clone()),
@@ -1266,11 +1165,8 @@ fn refresh_advisory(
     }
 }
 
-/// Draw each editable row's chords, one removable chip per chord.
-///
-/// Driven by the working copy rather than told by whatever changed it, so
-/// a rebind, an added chord, a removed one, a reset and a reset-all all
-/// reach the row through the same path.
+/// Draw each editable row's chords, one removable chip per chord, from the
+/// working copy.
 fn refresh_chord_lists(
     mut commands: Commands,
     pending: Option<Res<PendingKeymapChanges>>,
@@ -1279,9 +1175,8 @@ fn refresh_chord_lists(
     lists: Query<(Entity, &KeybindChordList, Option<&Children>)>,
 ) {
     let Some(pending) = pending else { return };
-    // A list is spawned some frames after the working copy was put in the
-    // world, so "the copy changed" on its own would leave every row it
-    // drew for empty: a list with nothing in it has not been drawn yet.
+    // A list is spawned some frames after the working copy lands, so an
+    // empty list also counts as stale.
     let stale = pending.is_changed() || recording.is_changed();
     let icon_font = icon_font.map(|font| font.0.clone()).unwrap_or_default();
     let waiting = recording
@@ -1374,13 +1269,9 @@ fn refresh_conflict_badges(
     >,
 ) {
     let Some(pending) = pending else { return };
-    // The answer costs a pass over every binding per badge, so it is not
-    // worth having every frame the dialog is open. It cannot be the working
-    // copy changing alone, though: a badge's glyph lives in a child the
-    // button builds a frame or two after the badge itself, so the frame the
-    // copy changed on is a frame with nothing to write to. The child
-    // arriving changes the badge's `Children`, which is the second half of
-    // the gate. Every write below is still guarded on the value differing.
+    // A badge's glyph lives in a child the button builds a frame or two
+    // later, so the child arriving is the second half of the gate: the
+    // frame the working copy changed on has nothing to write to yet.
     if !pending.is_changed() && stirred.is_empty() {
         return;
     }
@@ -1394,10 +1285,6 @@ fn refresh_conflict_badges(
         if node.display != display {
             node.display = display;
         }
-        // A chord the shipped keymap shares is arbitrated and works; a
-        // chord this session made shared is the user's to sort out. Only
-        // the second is a warning, because a warning on every shipped
-        // co-fire is a warning nobody reads.
         let (icon, title) = if pending.has_user_conflict(&badge.0) {
             (Icon::TriangleAlert, "Conflicting chord")
         } else {
@@ -1493,9 +1380,9 @@ fn on_key_filter_click(
     }
 }
 
-/// Write a caption into a button. The caption hangs in a clipping slot under
-/// the button rather than off it directly, so it is found by its own marker;
-/// walking the button's direct children finds nothing.
+/// Write a caption into a button. The caption hangs in a clipping slot
+/// under the button, so it is found by its own marker rather than by
+/// walking the button's direct children.
 fn set_button_text(
     button_entity: Entity,
     label: &str,
@@ -1696,12 +1583,8 @@ fn on_rebind_click(
     }
 }
 
-/// The chord the user is pressing, as a keymap row's input.
-///
-/// Returns `None` while only modifiers are down, and for a key or button
-/// with no name in the preset format: an unnamed key would serialize to
-/// something that cannot be parsed back, so it is refused at the point
-/// of capture rather than written into the file.
+/// The chord the user is pressing, as a keymap row's input. `None` while
+/// only modifiers are down, and for a key the preset format cannot name.
 pub fn capture_input(
     keyboard: &ButtonInput<KeyCode>,
     mouse: &ButtonInput<MouseButton>,
@@ -1969,16 +1852,12 @@ fn on_keybind_settings_save(
     if let Some(pending) = pending {
         registry.bindings = pending.camera.clone();
         let user = pending.to_user_keymap();
-        // A refused write is not a refused rebind: the working copy still
-        // becomes this session's keymap, and reopening the dialog reads it
-        // back out of the world. What is lost is the next launch, so that
-        // is what the notice says -- the dialog is already dismissing
-        // itself by the time this runs, and a warning in the log is a place
-        // nobody looks.
+        // A refused write still leaves the working copy as this session's
+        // keymap; only the next launch loses it, which is what the notice
+        // says.
         let refusal = save_user_keymap(&user).err();
         // Re-applied from an exclusive command so it runs once the dialog
-        // is gone and the working copy has been dropped, rather than in
-        // the middle of the click that saved it.
+        // is gone and the working copy has been dropped.
         commands.queue(move |world: &mut World| {
             world.insert_resource(user);
             crate::extension_lifecycle::apply_active_keymap(world);
@@ -2049,8 +1928,7 @@ mod tests {
     use super::*;
     use jackdaw_feathers::icons::{EditorFont, IconFont};
 
-    /// The filter button, ticked far enough for its caption to exist, with
-    /// the capture pass as the only system running.
+    /// The filter button, ticked far enough for its caption to exist.
     fn app_with_filter_button() -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins((
@@ -2097,9 +1975,7 @@ mod tests {
         panic!("the filter button draws a caption");
     }
 
-    /// Armed capture has no other sign of itself: the button's caption is
-    /// the whole feedback, and it hangs in a clipping slot below the
-    /// button's direct children.
+    /// The button's caption is the whole feedback for an armed capture.
     #[test]
     fn a_captured_key_reaches_the_buttons_caption() {
         let (mut app, button_entity) = app_with_filter_button();
@@ -2217,9 +2093,7 @@ mod tests {
         assert_eq!(pending.to_user_keymap(), UserKeymap::default());
     }
 
-    /// Only what the user changed reaches the file: a saved keymap that
-    /// copied the defaults would freeze them, and a later change to a
-    /// shipped chord would never reach anyone who had opened this dialog.
+    /// A saved keymap that copied the defaults would freeze them.
     #[test]
     fn saving_writes_only_the_operators_that_changed() {
         let mut pending = pending_with(vec![

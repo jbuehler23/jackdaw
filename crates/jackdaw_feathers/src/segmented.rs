@@ -1,19 +1,13 @@
-//! A segmented control: two or more mutually exclusive choices joined
-//! inside one bordered box, the compact form the editor uses for
-//! Play/Select, 3D/2D, Edit/Interact, Scene/Live and the Node card's
-//! enum fields.
+//! A segmented control: two or more mutually exclusive choices joined inside one
+//! bordered box, the compact form the editor uses for Play/Select, 3D/2D,
+//! Edit/Interact, Scene/Live and the Node card's enum fields.
 //!
-//! The behaviour is [`RadioGroup`] and [`RadioButton`]: the bar is the
-//! group, each segment is a radio whose caption is its label, a click or
-//! an arrow key on the focused group emits a
-//! [`ValueChange`](bevy::ui_widgets::ValueChange) naming the chosen
-//! segment, and [`Checked`] marks the one that is current.
+//! The behaviour is [`RadioGroup`] and [`RadioButton`]: the bar is the group,
+//! each segment is a radio whose caption is its label, and [`Checked`] marks the
+//! one that is current.
 //!
-//! Not `bevy_feathers`' `FeathersRadio`: its scene builds a dial (a
-//! bordered circle around a mark) beside the caption, and neither a theme
-//! token nor a border radius turns that into a segment. The look here is
-//! the box: a segment paints its own background when it is
-//! [`Checked`] and nothing when it is not.
+//! Not `bevy_feathers`' `FeathersRadio`, whose scene builds a dial beside the
+//! caption. A segment here paints its own background when it is [`Checked`].
 
 use bevy::prelude::*;
 use bevy::ui::Checked;
@@ -21,10 +15,8 @@ use bevy::ui_widgets::{RadioButton, RadioGroup};
 
 use crate::tokens;
 
-/// The bar's `Node`: segments side by side inside one rounded, clipped
-/// box. Spread it (`Node { ..segmented_bar_node() }`) to add a layout
-/// property, like the wrap a bar of four variants in a narrow panel
-/// needs.
+/// The bar's `Node`: segments side by side inside one rounded, clipped box.
+/// Spread it (`Node { ..segmented_bar_node() }`) to add a layout property.
 pub fn segmented_bar_node() -> Node {
     Node {
         flex_direction: FlexDirection::Row,
@@ -105,13 +97,11 @@ pub fn segment_background(checked: bool) -> Color {
 
 /// Mark `segment` as the current choice, or clear it.
 ///
-/// [`RadioGroup`] deliberately does not write [`Checked`] itself: which
-/// segment is current is the app's state, not the widget's, so every
-/// segmented control syncs it from whatever it drives.
+/// [`RadioGroup`] deliberately does not write [`Checked`] itself: which segment
+/// is current is the app's state, not the widget's.
 pub fn set_segment_checked(commands: &mut Commands, segment: Entity, checked: bool) {
-    // `Commands::get_entity` only proves the segment was alive when the
-    // write was queued; a panel rebuild between here and the flush
-    // still takes it, so the check belongs at flush time.
+    // `Commands::get_entity` only proves the segment was alive when the write was
+    // queued; a panel rebuild before the flush still takes it.
     crate::utils::set_marker_if_alive::<Checked>(commands, segment, checked);
 }
 

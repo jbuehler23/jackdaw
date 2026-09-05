@@ -1,28 +1,20 @@
-// Terrain splat shading: two texture ids per control texel, blended by
-// comparing their height maps.
+// Terrain splat shading: two texture ids per control texel, blended by comparing
+// their height maps.
 //
-// The control map is `texture_2d<u32>` read with `textureLoad` only: a
-// packed control word must never be filtered into a different packed word.
-// Four texels are read per fragment and their decoded contributions are
-// mixed with bilinear weights, so a painted boundary follows the height
-// fields rather than the cell grid.
+// The control map is `texture_2d<u32>` read with `textureLoad` only: a packed
+// control word must never be filtered into a different packed word. Four texels
+// are read per fragment and their decoded contributions are mixed with bilinear
+// weights.
 //
-// A terrain with autoterrain on replaces the word of every cell no hand
-// has claimed with one its own slope stands for, before any of the
-// sampling below. Painted cells keep the word they were painted with.
-//
-// That slope comes from `slope_map`, which holds the ground's own slope
-// per grid point, and never from the surface being drawn. The surface is
-// a clipmap: the same ground is meshed at several step sizes, each
-// smoothing the relief by a different amount, so a slope taken from the
-// mesh normal reads gentler with distance and the ground re-textures
-// itself as a level hands over under a moving camera.
+// A terrain with autoterrain on replaces the word of every cell no hand has
+// claimed with one its own slope stands for. That slope comes from `slope_map`,
+// which holds the ground's own slope per grid point, and never from the surface
+// being drawn: the surface is a clipmap, so a slope taken from the mesh normal
+// reads gentler with distance.
 //
 // Every texture read is `textureSampleGrad` with derivatives taken once in
-// uniform control flow at the top of `fragment`. The per-layer branches
-// below make implicit-derivative sampling illegal, and the derivative of a
-// UV-scaled position is the scaled derivative, so one pair covers every
-// layer.
+// uniform control flow at the top of `fragment`: the per-layer branches below
+// make implicit-derivative sampling illegal.
 
 #import bevy_pbr::{
     forward_io::{VertexOutput, FragmentOutput},
@@ -113,11 +105,9 @@ fn tile_hash(tile: vec2<f32>) -> vec2<f32> {
     return fract((h.xx + h.yz) * h.zy);
 }
 
-// One tile's own rigid sample frame.
-//
-// Rigid, not interpolated: the tile's rotation and shift are applied
-// whole, so what is read is the texture turned, and the four tiles around
-// a fragment are blended after each has been sampled in its own frame.
+// One tile's own rigid sample frame: the tile's rotation and shift are applied
+// whole, and the four tiles around a fragment are blended after each has been
+// sampled in its own frame.
 struct TileTap {
     uv: vec2<f32>,
     ddx: vec2<f32>,
@@ -142,33 +132,23 @@ fn turned_by(v: vec2<f32>, turn: vec2<f32>) -> vec2<f32> {
 
 // Break a tiled texture out of its grid.
 //
-// Every tile of the repeat is turned and shifted by its own amount, drawn
-// from a hash of its coordinate, breaking up the repeat. Applying one
-// tile's transform on its own would seam at every tile border, so the four
-// nearest tiles are each sampled in their own frame and the sampled
-// values blended with the bilinear weights of the position between their
-// centres: a tile's weight reaches zero where it is left, so the blend is
-// continuous across the plane.
+// Every tile of the repeat is turned and shifted by its own amount, drawn from a
+// hash of its coordinate. The four nearest tiles are each sampled in their own
+// frame and the sampled values blended with the bilinear weights of the position
+// between their centres, so a tile's weight reaches zero where it is left and the
+// blend is continuous across the plane.
 //
 // Sampling per tile, rather than blending the four tiles' coordinates and
-// sampling once, is the whole point. Interpolating between rigid
-// transforms is not a rigid transform: the blended coordinate field
-// stretches and shears between tile centres, which reads as marbled
-// smears through the ground. This is the standard technique (Inigo
-// Quilez's texture repetition, and what Unity HDRP and Unreal call
-// procedural or stochastic tiling).
+// sampling once, is the whole point: interpolating between rigid transforms is
+// not a rigid transform, and the blended coordinate field stretches and shears
+// between tile centres. This is the standard technique (Inigo Quilez's texture
+// repetition; Unity HDRP and Unreal call it procedural or stochastic tiling).
 //
-// Each tap carries its own derivatives, and a rigid frame makes them
-// exact: the derivative of a rotation is the rotated derivative, so no
-// Jacobian is approximated and the mip level a tap picks is the one its
-// own footprint calls for.
+// Each tap carries its own derivatives, and a rigid frame makes them exact. The
+// rotation pivots on the tile centres rather than the texture origin, so the
+// displacement does not grow with how far the terrain runs.
 //
-// The rotation pivots on the tile centres rather than the texture origin,
-// so how far a fragment is displaced does not grow with how far the
-// terrain runs.
-//
-// `strength` 0 returns a single tap holding exactly what came in: a slot
-// with detiling off costs one sample, at the UV its scale alone put it at.
+// `strength` 0 returns a single tap holding exactly what came in.
 fn detile(uv: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>, strength: f32) -> Sampling {
     var out: Sampling;
     out.count = 1u;
@@ -228,14 +208,13 @@ fn load_slope(coord: vec2<i32>) -> f32 {
     return textureLoad(slope_map, clamped, 0).r;
 }
 
-// The stored slope under a fragment, bilinear across the four grid points
-// around it.
+// The stored slope under a fragment, bilinear across the four grid points around
+// it.
 //
 // Filtered rather than nearest so the band between the two textures moves
-// smoothly across a cell instead of stepping at every grid line, and taken
-// on the slope rather than on the two control words it produces so the
-// four corners agree wherever the ground is uniformly flat or uniformly
-// steep, which keeps the single-word fast path below covering most of a
+// smoothly across a cell, and taken on the slope rather than on the two control
+// words it produces so the four corners agree wherever the ground is uniformly
+// flat or steep, which keeps the single-word fast path below covering most of a
 // terrain.
 fn slope_at(corner: vec2<i32>, f: vec2<f32>) -> f32 {
     let s00 = load_slope(corner);
@@ -253,22 +232,19 @@ struct Accum {
 
 // One texture id's contribution, summed over the corners that named it.
 //
-// `corner_weights` holds the four bilinear corner shares, with zero in the
-// slots that did not name this id at this layer weight. The weight is
+// `corner_weights` holds the four bilinear corner shares, with zero in the slots
+// that did not name this id at this layer weight. The weight is
 //
 //     sum over corners of pow(corner_w + layer_w + height, sharpness) * corner_w
 //
-// which is the height-blend curve: a taller layer wins the contested
-// band, and a heavier painted share biases it. `corner_w` rides inside the
-// power so a near corner gets a height advantage, and multiplies outside
-// it so a far corner cannot win on height alone.
+// which is the height-blend curve. `corner_w` rides inside the power so a near
+// corner gets a height advantage, and multiplies outside it so a far corner
+// cannot win on height alone.
 //
-// Taking the four corners as a vector rather than one call per corner is
-// what makes the uniform-word fast path in `fragment` exact: a zeroed slot
-// contributes `pow(k, s) * 0`, so summing the slots here is identical to
-// summing four separate calls, and a single call with all four slots
-// filled is identical again whenever the four corners name the same id
-// with the same layer weight.
+// Taking the four corners as a vector rather than one call per corner is what
+// makes the uniform-word fast path in `fragment` exact: a zeroed slot contributes
+// `pow(k, s) * 0`, so summing the slots here is identical to summing four
+// separate calls.
 fn accumulate(
     accum: Accum,
     id: u32,
@@ -367,15 +343,13 @@ fn accumulate_control(
 
 // The control word a cell's own slope stands for.
 //
-// A word, not a colour: the two slots and the blend between them are what
-// a hand would have painted for this slope, so the fragment carries on
-// into `accumulate_control` and picks up the height blend, the detiling
-// and the mip derivatives that painted ground gets. There is no second
-// sampling path to drift from the first.
+// A word, not a colour: the two slots and the blend between them are what a hand
+// would have painted for this slope, so the fragment carries on into
+// `accumulate_control` and picks up the height blend, the detiling and the mip
+// derivatives that painted ground gets.
 //
-// `smoothstep` across the authored range means flat ground is purely the
-// base slot, anything past the far end is purely the slope slot, and the
-// band between them interlocks by height like any other transition.
+// `smoothstep` across the authored range means flat ground is purely the base
+// slot and anything past the far end purely the slope slot.
 fn autoterrain_control(slope: f32) -> u32 {
     let t = smoothstep(splat.autoterrain_slope_start, splat.autoterrain_slope_end, slope);
     let blend = u32(clamp(t, 0.0, 1.0) * 255.0 + 0.5);
@@ -393,16 +367,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let ddx_local = dpdx(local_xz);
     let ddy_local = dpdy(local_xz);
 
-    // The tint is sampled, not loaded: it is a colour, so two of them
-    // interpolate into a colour, and a coarse hand-painted wash reads
-    // smooth across the cells between strokes. Taken here, with the
-    // derivatives, because the per-layer branches below are not uniform
-    // control flow.
+    // The tint is sampled, not loaded: it is a colour, so two of them interpolate
+    // into a colour. Taken here, with the derivatives, because the per-layer
+    // branches below are not uniform control flow.
     //
-    // Grid point i sits at i/(res-1) in UV0, while texel i is sampled at
-    // its centre, (i+0.5)/res. Without the remap the layer would be half a
-    // cell out of register with the control map it was painted against at
-    // one edge of the terrain, and half a cell the other way at the other.
+    // Grid point i sits at i/(res-1) in UV0, while texel i is sampled at its
+    // centre, (i+0.5)/res. Without the remap the layer would be half a cell out of
+    // register with the control map, in opposite directions at the two edges.
     // `render::tint_uv` spells the same mapping in Rust.
     let tint_res = f32(max(splat.control_resolution, 2u));
     let tint_uv = (in.uv * (tint_res - 1.0) + 0.5) / tint_res;
@@ -438,12 +409,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     accum.total = 0.0;
 
     if c00 == c10 && c00 == c01 && c00 == c11 {
-        // Every unpainted fragment, and the interior of every uniformly
-        // painted area: one control word, so four taps would sample the
-        // same textures four times over. Passing all four corner weights
-        // to one call sums the same four terms the branch below sums
-        // separately, so this saves the samples without shading
-        // differently, and draws no seam one cell outside a plateau.
+        // Every unpainted fragment, and the interior of every uniformly painted
+        // area: one control word, so four taps would sample the same textures
+        // four times. Passing all four corner weights to one call sums the same
+        // four terms the branch below sums separately.
         accum = accumulate_control(accum, c00, w, local_xz, ddx_local, ddy_local);
     } else {
         accum = accumulate_control(
@@ -460,14 +429,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let albedo = accum.albedo * inv_total * mix(vec3<f32>(1.0), tint, splat.tint_strength);
     let tangent_normal = accum.normal * inv_total;
 
-    // The mesher emits no tangents: UV0 runs along world X and Z, so the
-    // tangent is world +X projected onto the surface normal. That
-    // projection collapses where the surface stands vertical and faces X,
-    // which is where a planar XZ UV is itself degenerate, so +Z stands in
-    // there rather than normalizing a zero vector. Picking the axis the
-    // normal leans on least, the usual choice for arbitrary geometry,
-    // would swap the frame by 90 degrees wherever |n.x| and |n.z| cross,
-    // seaming flat ground.
+    // The mesher emits no tangents: UV0 runs along world X and Z, so the tangent
+    // is world +X projected onto the surface normal. That projection collapses
+    // where the surface stands vertical and faces X, so +Z stands in there.
+    // Picking the axis the normal leans on least would swap the frame by 90
+    // degrees wherever |n.x| and |n.z| cross, seaming flat ground.
     let world_normal = pbr_functions::prepare_world_normal(in.world_normal, false, is_front);
     let n = normalize(world_normal);
     var reference = vec3<f32>(1.0, 0.0, 0.0);

@@ -15,11 +15,9 @@ type ActionFields = Vec<(String, BindPath)>;
 
 /// The only field name an `EntityEvent`'s target can be recognised by.
 ///
-/// bevy's derive also accepts a field carrying `#[event_target]` under any
-/// name, but that is a derive helper attribute: it produces the trait impl and
-/// leaves nothing in the type registry, and there is no `ReflectEntityEvent`
-/// to ask at runtime (bevy 0.19). An action binding therefore only fills the
-/// field literally named `entity`; see the crate doc.
+/// bevy's `#[event_target]` is a derive helper attribute that leaves nothing in
+/// the type registry, and bevy 0.19 has no `ReflectEntityEvent` to ask at
+/// runtime, so only the field literally named `entity` can be filled.
 const ENTITY_TARGET_FIELD: &str = "entity";
 
 pub fn on_activate(activate: On<Activate>, bindings: Query<&Bindings>, mut commands: Commands) {
@@ -28,9 +26,7 @@ pub fn on_activate(activate: On<Activate>, bindings: Query<&Bindings>, mut comma
         return;
     };
     // The index travels with each action so a failure reaches the same
-    // warn-once ledger the evaluator reports through: a button whose binding
-    // is wrong is wrong on every click, and one line per binding is what makes
-    // the log readable.
+    // warn-once ledger the evaluator reports through.
     let actions: Vec<(usize, String, ActionFields)> = found
         .0
         .iter()
@@ -123,11 +119,11 @@ pub fn on_value_change_string(
 }
 
 /// Inserts a bind value under the exact type the event declares for that field.
+///
 /// `read_path` widens every integer to f32, so a numeric value is narrowed back
 /// to the declared width; every other pairing must match outright. A value that
-/// does not fit the declared type is refused here rather than handed to
-/// reflection, which would either panic building the event or quietly swap in
-/// the type's `Default` for the field.
+/// does not fit is refused here rather than handed to reflection, which would
+/// panic or quietly default the field.
 fn insert_coerced(
     dynamic: &mut DynamicStruct,
     field: &str,
@@ -141,10 +137,9 @@ fn insert_coerced(
     };
     match value {
         BindValue::F32(v) => {
-            // Every integer a binding reads arrives widened to f32, so putting
-            // one back is a narrowing. `as` would saturate a number too large
-            // for the field and turn a NaN into zero, sending an event carrying
-            // a number nobody computed. Refuse it instead.
+            // `as` would saturate a number too large for the field and turn a
+            // NaN into zero, sending an event carrying a number nobody
+            // computed.
             macro_rules! narrowed {
                 ($ty:ty) => {{
                     if !fits(v, <$ty>::MIN as f64, <$ty>::MAX as f64) {
@@ -193,17 +188,16 @@ fn mismatch(field: &str, type_path: &str, kind: &'static str) -> BindError {
 /// `read_path` runs, which takes the same lock again.
 struct EventShape {
     reflect_event: ReflectEvent,
-    /// A registry of one, holding the event's registration and nothing else.
-    /// See [`dispatch`] for why the trigger is not handed the app's.
+    /// A registry of one, holding the event's registration and nothing else;
+    /// see `dispatch` for why the trigger is not handed the app's.
     registry: TypeRegistry,
     field_types: Vec<Option<String>>,
     declared_fields: Vec<String>,
     /// Every field the event declares as an `Entity`.
     ///
-    /// The one named `entity` takes the widget's context; see
-    /// [`ENTITY_TARGET_FIELD`] for why no other name can be recognised. The
-    /// rest are here so an unfilled one can be refused rather than defaulted
-    /// to `Entity::PLACEHOLDER`.
+    /// The one named `entity` takes the widget's context; the rest are here so
+    /// an unfilled one is refused rather than defaulted to
+    /// `Entity::PLACEHOLDER`.
     entity_fields: Vec<String>,
     /// Whether reflection can build the event when the binding leaves a field
     /// unmapped. Without it bevy's fallback panics rather than erroring.
@@ -227,10 +221,8 @@ fn event_shape(
             event_path: event_path.to_string(),
         })?
         .clone();
-    // A tuple struct or an enum has no named fields, so every guard below
-    // would pass on an empty list and reflection would be handed a
-    // `DynamicStruct` it cannot build the event from, which panics rather than
-    // erroring. Refuse the shape itself.
+    // A tuple struct or an enum has no named fields, so every guard below would
+    // pass on an empty list and reflection would panic building the event.
     let info = reg
         .type_info()
         .as_struct()
@@ -262,13 +254,9 @@ fn event_shape(
     })
 }
 
-/// Everything about an action binding the type registry alone can answer: that
-/// the event is registered, that it is an event, that its fields have names to
-/// fill, and that the names the binding maps are among them.
-///
-/// Asked when the binding is resolved rather than only when the widget is
-/// clicked, so a binding nothing can send is reported the way every other
-/// broken binding is instead of waiting for the first click.
+/// Everything about an action binding the type registry alone can answer, asked
+/// when the binding is resolved so a binding nothing can send is reported
+/// without waiting for a click.
 pub(crate) fn check_event(
     world: &World,
     event_path: &str,
@@ -287,13 +275,10 @@ pub(crate) fn check_event(
 
 /// Builds the event an action binding names and sends it.
 ///
-/// `ReflectEvent::trigger` takes a type registry by reference and holds it for
-/// the whole dispatch, observers included, so the one it is handed is not the
-/// app's: it is the registry of one that `event_shape` built, holding the
-/// event's registration. Reflection reads it only to build the event from the
-/// fields the binding filled in, and an observer is then free to ask the app
-/// for its registry, mutably to register a type, without deadlocking against a
-/// lock this dispatch is still holding.
+/// `ReflectEvent::trigger` holds the registry it is given for the whole
+/// dispatch, observers included, so it is handed the registry of one that
+/// `event_shape` built rather than the app's, leaving an observer free to ask
+/// for the app's without deadlocking.
 fn dispatch(
     world: &mut World,
     widget: Entity,
@@ -307,10 +292,9 @@ fn dispatch(
         let value = read_path(world, context, path)?;
         insert_coerced(&mut dynamic, field, value, field_type.as_deref())?;
     }
-    // The widget's context fills the event's entity target. A widget with no
-    // context resolved has no entity to send, and the event's own `Default`
-    // would put `Entity::PLACEHOLDER` there: an id that names nothing, which an
-    // observer would still look up. Refuse instead.
+    // A widget with no context resolved has no entity to send, and the event's
+    // own `Default` would put `Entity::PLACEHOLDER` there, which an observer
+    // would still look up.
     if shape.entity_fields.iter().any(|f| f == ENTITY_TARGET_FIELD)
         && dynamic.field(ENTITY_TARGET_FIELD).is_none()
     {
@@ -322,9 +306,8 @@ fn dispatch(
         };
         dynamic.insert(ENTITY_TARGET_FIELD, subject);
     }
-    // Any other entity field is one nothing can fill: bind values carry
-    // numbers, bools and strings, and only `entity` takes the context. Left
-    // alone it would reach the observer as the `Default` placeholder.
+    // Any other entity field is one nothing can fill, and left alone it would
+    // reach the observer as the `Default` placeholder.
     if let Some(field) = shape
         .entity_fields
         .iter()

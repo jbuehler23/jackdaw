@@ -1,10 +1,6 @@
-//! A synthetic click reaches an editor control the way a real one does.
-//!
-//! Every menu row, toolbar button and panel button in the editor is a
-//! `FeathersButton` that raises `Activate` when it is clicked, so a
-//! scripted pass that could not click one could not open a menu. This
-//! pins the whole chain from `input.pointer` to the operator the button
-//! names, with nothing triggered by hand along the way.
+//! A synthetic click reaches an editor control the way a real one does: the whole
+//! chain from `input.pointer` to the operator the `FeathersButton` names, with
+//! nothing triggered by hand along the way.
 
 use crate::util;
 use crate::util::OperatorResultExt as _;

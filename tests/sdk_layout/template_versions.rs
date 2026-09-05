@@ -1,14 +1,10 @@
-//! Scaffolded projects must request the anchored jackdaw and Bevy versions.
-//! CI builds the templates with a `[patch.crates-io]` redirect to this
-//! checkout, so nothing else checks the versions they actually resolve from
-//! crates.io.
+//! Scaffolded projects must request the anchored jackdaw and Bevy versions. CI
+//! builds the templates with a `[patch.crates-io]` redirect to this checkout, so
+//! nothing else checks what they resolve from crates.io.
 //!
-//! The templates state versions as placeholders substituted at scaffold
-//! time, so this covers both halves: the templates must not hard-code a
-//! version that could drift, and the value substituted in must be the
-//! workspace's anchored minor. (Rendering a project here would not prove
-//! the second half: inside a source checkout the jackdaw dependencies are
-//! rewritten to path deps.)
+//! The templates state versions as placeholders substituted at scaffold time, so
+//! both halves are covered: no hard-coded version that could drift, and the
+//! substituted value is the workspace's anchored minor.
 
 use jackdaw::scaffold::TemplateKind;
 

@@ -1,14 +1,9 @@
 //! Widget creation: one registered definition becomes one authored entity.
 //!
 //! [`instantiate_widget`] is the single path from a registered
-//! [`WidgetDefinition`] to an authored entity: it decides which node adopts
-//! the new widget, runs the definition, puts the result in the scene
-//! document, selects it, and records one undo entry. The Add menu's UI
-//! Widgets section calls that path.
-//!
-//! Registration in the document, rather than a bare `world.spawn`, is what
-//! makes the widget visible to save, to undo, and to the outliner, which reads
-//! document membership through [`crate::hierarchy`].
+//! [`WidgetDefinition`] to an authored entity: it picks the parent, runs the
+//! definition, registers the result in the scene document, selects it, and
+//! records one undo entry.
 
 use std::sync::Arc;
 
@@ -30,9 +25,8 @@ const TAB_GROUP_TYPE_PATH: &str = "bevy_input_focus::tab_navigation::TabGroup";
 /// selection is a container and beside it when it is a leaf, and a selection
 /// outside the UI scene falls back to the scene root.
 ///
-/// Both failure modes are decided before anything is queued, so a request that
-/// did not happen reports `Cancelled`. An unknown id is reported alongside the
-/// ids that do exist.
+/// Both failure modes are decided before anything is queued, so a request
+/// that did not happen reports `Cancelled`.
 #[operator(
     id = "widget.add",
     label = "Add Widget",
@@ -81,17 +75,14 @@ pub(crate) fn widget_add(
     OperatorResult::Finished
 }
 
-/// Every registered widget id, for the line that reports what an author can
-/// write instead. Sorted, since the registry is a hash map and its iteration
-/// order varies between runs.
+/// Every registered widget id, sorted, for the line that reports what an
+/// author can write instead.
 fn registered_widget_ids(registry: Option<&WidgetRegistry>) -> String {
     let mut ids: Vec<&str> = registry
         .map(|registry| registry.iter().map(|definition| &*definition.id).collect())
         .unwrap_or_default();
     ids.sort_unstable();
     if ids.is_empty() {
-        // The widget vocabulary ships as an extension, so an editor with it
-        // switched off has no widgets at all.
         return "empty: no extension has registered a widget".to_string();
     }
     ids.join(", ")
@@ -100,8 +91,7 @@ fn registered_widget_ids(registry: Option<&WidgetRegistry>) -> String {
 /// Why a widget request produced no widget.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaletteError {
-    /// No definition is registered under this id (a stale menu row, or an
-    /// extension that unloaded between the click and the dispatch).
+    /// No definition is registered under this id.
     UnknownDefinition(String),
     /// Nothing in the open document can hold a UI node.
     NoUiScene,
@@ -140,11 +130,8 @@ pub fn instantiate_widget(world: &mut World, definition_id: &str) -> Result<Enti
 /// Create the widget `definition_id` names inside `parent`, as its last child.
 ///
 /// A caller naming a parent means that node, so the widget goes in it rather
-/// than beside it: `widget.add parent=Panel` fills the panel. `None` is the
-/// case with no parent named, which is [`instantiate_widget`]'s rule instead.
-///
-/// `parent` is a preference, not a requirement: a node outside the open UI
-/// scene cannot hold a UI node, so the scene root adopts the widget instead.
+/// than beside it; `None` falls back to [`instantiate_widget`]'s rule. A
+/// named node outside the open UI scene is replaced by the scene root.
 pub fn instantiate_widget_under(
     world: &mut World,
     definition_id: &str,
@@ -183,13 +170,9 @@ fn instantiate_at(
 }
 
 /// Create the widget `definition_id` names inside `parent`, handing the
-/// caller the entry that undoes it rather than recording one.
-///
-/// For a caller whose own command owns the creation: a drop makes the node,
-/// places it, and gives it a texture as one thing the user did, and its
-/// `execute` runs while the history is out of the world for a redo, where
-/// recording anything is impossible. Undoing the returned command takes the
-/// node back the same way an Add does.
+/// caller the entry that undoes it rather than recording one. For a caller
+/// whose own command owns the creation, since its `execute` may run while
+/// the history is out of the world for a redo.
 pub fn instantiate_widget_command_under(
     world: &mut World,
     definition_id: &str,
@@ -254,19 +237,9 @@ pub fn resolve_widget_parent(world: &mut World) -> Option<Entity> {
 }
 
 /// Where a new widget goes: inside `candidate` when `candidate` is a
-/// container, and beside it when it is not.
-///
-/// A container is selected in order to fill it -- that is what a Panel, a
-/// Row, a Column or a Grid is for -- so a widget added with one selected
-/// becomes its last child, the way dropping a control into a frame does in
-/// every layout tool. A leaf has nothing to be filled with, so the widget
-/// becomes its next sibling instead: three presses of the Button row make
-/// three buttons side by side rather than a Button holding a Button holding
-/// a Button.
-///
-/// A candidate that is the scene root is the container case, since the root
-/// has no siblings to be one of. A candidate outside the open UI scene, or
-/// none at all, is the same case.
+/// container, and beside it when it is not. The scene root, a candidate
+/// outside the open UI scene, and no candidate at all are all the container
+/// case.
 fn widget_slot(world: &mut World, candidate: Option<Entity>) -> Option<WidgetSlot> {
     let root = ui_scene_root(world)?;
     let inside = candidate.filter(|entity| is_in_ui_scene(world, *entity, root));
@@ -291,16 +264,10 @@ fn widget_slot(world: &mut World, candidate: Option<Entity>) -> Option<WidgetSlo
 
 /// Whether `entity` is a node a widget is added *into* rather than beside.
 ///
-/// A container is a laid-out node with nothing more particular on it: the
-/// Panel, Row, Column and Grid presets are each a `Node` and a background
-/// and no more, and the scroll area is a column with a viewport around it.
-///
-/// Everything else is a leaf. A label, a picture and a control are not
-/// frames to put things in, and neither are the widgets whose chrome is
-/// rebuilt from their own data -- a tab strip, a radio group, a dropdown --
-/// where a child added by hand is thrown away by the next rebuild. Each is
-/// asked for by the marker it carries in the document, the same markers the
-/// outliner reads a row's kind from.
+/// A container is a laid-out node with nothing more particular on it.
+/// Everything else is a leaf, including widgets whose chrome is rebuilt from
+/// their own data, where a child added by hand would be thrown away by the
+/// next rebuild.
 fn is_layout_container(world: &World, entity: Entity) -> bool {
     use bevy::ui_widgets::{Button, Checkbox, RadioButton, ScrollArea, Slider};
     use jackdaw_widgets_runtime as runtime;
@@ -342,12 +309,10 @@ struct WidgetSlot {
 
 /// The open UI scene's root.
 ///
-/// Only a root the open document holds: a second tab's scene keeps its
-/// entities alive in the same world, so a bare query over the marker can
-/// answer with another scene's root and put a new widget, or a paste, in a
-/// document nobody has open. A document holds one root, but a malformed one
-/// may hold several; the lowest entity is picked so the choice is stable
-/// across a session rather than following archetype order.
+/// Only a root the open document holds: another tab's scene keeps its
+/// entities alive in the same world, and a bare query over the marker could
+/// answer with that one. A malformed document holding several picks the
+/// lowest entity, so the choice is stable across a session.
 pub fn ui_scene_root(world: &mut World) -> Option<Entity> {
     let candidates: Vec<Entity> = world
         .query_filtered::<Entity, crate::prefab::AuthoredUiSceneRoot>()
@@ -360,17 +325,10 @@ pub fn ui_scene_root(world: &mut World) -> Option<Entity> {
         .min()
 }
 
-/// Give the open UI scene's root the focus group tab navigation gathers
-/// from, unless it already declares one.
-///
-/// Tab navigation collects focusable nodes from a `TabGroup` ancestor, so a
-/// screen whose root has none is unreachable by keyboard however many buttons
-/// it holds. New scenes get theirs from [`seed_ui_scene_root`]; this covers
-/// scenes authored without one, on their first added widget.
-///
-/// Idempotent: a root that declares its own order or modality keeps them. It
-/// writes the document without an undo entry, as the seeding does, so undoing
-/// the widget that triggered it does not remove keyboard reachability.
+/// Give the open UI scene's root the `TabGroup` tab navigation gathers from,
+/// unless it already declares one. Covers scenes authored before
+/// [`seed_ui_scene_root`] added it, on their first added widget, and writes
+/// the document without an undo entry.
 fn backfill_focus_group(world: &mut World) {
     let Some(root) = ui_scene_root(world) else {
         return;
@@ -387,17 +345,10 @@ fn backfill_focus_group(world: &mut World) {
 /// against, unless it states a size of its own.
 ///
 /// A root authored before [`ui_scene_root_node`] stated `100%` carries
-/// `Node`'s `Auto` on both axes. The implicit viewport node Bevy puts around
-/// a root is a grid that start-aligns its item without stretching it, so such
-/// a root shrinks to fit whatever is in it and parks in the top-left corner --
-/// and every placement downstream resolves against that shrunken box. Middle
-/// Center lands in the middle of one widget and Full Rect stretches over
-/// nothing. The document is not wrong, it is old, so opening it brings it
-/// forward rather than making the user notice and fix it.
-///
-/// Only a root that states neither width nor height: a scene that asks for a
-/// size means it. Written without an undo entry, as the focus group is, so
-/// undoing the first edit after an open does not put the shrunken box back.
+/// `Auto` on both axes, which shrinks it to fit its contents and leaves every
+/// placement downstream resolving against that shrunken box. Written without
+/// an undo entry, so undoing the first edit after an open does not put the
+/// shrunken box back.
 pub fn backfill_ui_root_size(world: &mut World) {
     let Some(root) = ui_scene_root(world) else {
         return;
@@ -412,10 +363,9 @@ pub fn backfill_ui_root_size(world: &mut World) {
     let sized = ui_scene_root_node();
     node.width = sized.width;
     node.height = sized.height;
-    // Once the root is the canvas's own height, its default cross-axis
-    // alignment stretches every child down the whole canvas, which is the
-    // shape the seeder states `Start` to avoid. Only when the document states
-    // nothing: an alignment somebody wrote is theirs.
+    // Once the root is the canvas's own height its default cross-axis
+    // alignment would stretch every child down it. Only when the document
+    // states nothing of its own.
     if node.align_items == AlignItems::Default {
         node.align_items = sized.align_items;
     }
@@ -448,13 +398,10 @@ fn is_in_ui_scene(world: &World, entity: Entity, root: Entity) -> bool {
     }
 }
 
-/// Put `root` and everything under it into the scene document, parent
-/// before children.
-///
-/// [`crate::scene_io::register_entity_in_ast`] links a new node to its parent
-/// only if the parent already has a node, so registering a child first strands
-/// it as a second document root. `register_entities_in_ast` guarantees no such
-/// order, hence this walk.
+/// Put `root` and everything under it into the scene document, parent before
+/// children. [`crate::scene_io::register_entity_in_ast`] links a node to its
+/// parent only if the parent already has one, and
+/// `register_entities_in_ast` guarantees no such order.
 pub fn register_authored_subtree(world: &mut World, root: Entity) {
     let mut stack = vec![root];
     while let Some(entity) = stack.pop() {
@@ -467,20 +414,13 @@ pub fn register_authored_subtree(world: &mut World, root: Entity) {
     }
 }
 
-/// Give `root` and everything under it names no other scene entity holds,
-/// the way a duplicated subtree gets them.
-///
-/// A widget definition names its root after the kind it makes, so a second
-/// Button arrives called `Button` again. Two rows reading `Button` in the
-/// outliner name nothing, and an operator clause addressing one by name
-/// reaches whichever the query answers with first.
-///
-/// The whole subtree, not only the root, for the same reason a paste
-/// renames a whole subtree: a widget is a subtree, and a second Button
-/// carries a second `Caption` with it.
+/// Give `root` and everything under it names no other scene entity holds.
+/// A definition names its root after the kind it makes, so a second Button
+/// would otherwise arrive called `Button` again, and an operator clause
+/// addressing it by name would be ambiguous.
 ///
 /// Run before the subtree is registered, so the document records the names
-/// the entities end up with rather than the ones the definition wrote.
+/// the entities end up with.
 fn rename_off_collisions(
     world: &mut World,
     root: Entity,
@@ -520,23 +460,17 @@ impl EditorCommand for InstantiateWidgetCommand {
     fn execute(&mut self, world: &mut World) {
         self.spawned = None;
         self.error = None;
-        // Read before the definition runs, so the new widget's own name is
-        // not in the set it is checked against.
         let mut taken = crate::entity_ops::scene_entity_names(world);
         let context = WidgetInstantiateContext {
             parent: Some(self.slot.parent),
         };
         match (self.definition.instantiate)(world, context) {
             Ok(entity) if world.get_entity(entity).is_ok() => {
-                // A third-party definition may ignore `ctx.parent`, so
-                // re-parenting here keeps every widget inside the open scene.
                 if world.get::<ChildOf>(entity).map(ChildOf::parent) != Some(self.slot.parent) {
                     world.entity_mut(entity).insert(ChildOf(self.slot.parent));
                 }
                 rename_off_collisions(world, entity, &mut taken);
                 register_authored_subtree(world, entity);
-                // The document node has to exist before the slot is written,
-                // since that is where the sibling order lives.
                 crate::commands::place_entity(
                     world,
                     entity,
@@ -565,8 +499,6 @@ impl EditorCommand for InstantiateWidgetCommand {
             return;
         };
         crate::commands::deselect_entities(world, &[entity]);
-        // Recursive on the document side: it detaches the node and despawns
-        // every AST descendant, unlinking each one's ECS mapping.
         world
             .resource_mut::<jackdaw_bsn::SceneBsnAst>()
             .remove_entity_node(entity);
@@ -584,26 +516,12 @@ impl EditorCommand for InstantiateWidgetCommand {
 /// operator clause can address it as `name=UiRoot`.
 pub const UI_SCENE_ROOT_NAME: &str = "UiRoot";
 
-/// Seed the root a new UI scene starts from: one node a widget can be parented
-/// to, registered in the document and selected so the next Add lands inside it.
+/// Seed the root a new UI scene starts from: one node a widget can be
+/// parented to, registered in the document and selected so the next Add
+/// lands inside it. The one place a new UI scene's starting shape is defined.
 ///
-/// The one place a new UI scene's starting shape is defined, so every path that
-/// makes one makes the same one.
-///
-/// Spawns directly rather than through `SpawnEntity`, since there is no earlier
-/// state to undo to: `scene.new` is `allows_undo = false` and hands over a tab
-/// whose history is empty.
-///
-/// The three components: `UiSceneRoot` is what the 2D stage keys on, and its
-/// default `reference_size` is the design resolution that stage frames the
-/// scene at; `TabGroup` is the ancestor tab navigation gathers focusable nodes
-/// from; [`ui_scene_root_node`] makes it a layout parent the size of that
-/// resolution.
-///
-/// The name has no space in it on purpose: an operator clause has no quoting,
-/// so a `name=` value cannot carry one and a root called `UI Root` would be
-/// unaddressable from `JACKDAW_RUN_OP` or the command palette. See
-/// [`crate::boot_ops`].
+/// Spawns directly rather than through `SpawnEntity`, since `scene.new` is
+/// `allows_undo = false` and hands over a tab whose history is empty.
 pub fn seed_ui_scene_root(world: &mut World) -> Entity {
     let root = world
         .spawn((
@@ -620,21 +538,12 @@ pub fn seed_ui_scene_root(world: &mut World) -> Entity {
 
 /// The `Node` a UI scene root carries: the canvas box itself.
 ///
-/// It states `100%` on both axes rather than taking `Node`'s `Auto`. A root
-/// `Node` is laid out inside the implicit viewport node Bevy puts around it,
-/// which is a grid that start-aligns its item and does not stretch it, so an
-/// `Auto` root shrinks to fit whatever is in it and parks in the top-left
-/// corner. Everything downstream then resolves against that shrunken box: an
-/// absolutely placed child reads its containing block from the root's padding
-/// box, so a preset asking for the middle of the canvas would land in the
-/// middle of one widget, and Full Rect would stretch over nothing. Stating
-/// `100%` makes the root the target's own size, which
-/// [`crate::viewport_2d::size_targets_to_reference`] holds at the scene's
-/// `reference_size`.
-///
-/// `align_items` is `Start` so a child in the root's flow keeps the height it
-/// states or measures instead of being stretched down the whole canvas, which
-/// is what `Stretch` would do to a widget dropped straight onto a fresh scene.
+/// `100%` on both axes rather than `Auto`, since the implicit viewport node
+/// Bevy puts around a root start-aligns without stretching, and an `Auto`
+/// root would shrink to fit its contents. That makes the root the target's
+/// own size, which [`crate::viewport_2d::size_targets_to_reference`] holds at
+/// the scene's `reference_size`. `align_items` is `Start` so a child in the
+/// root's flow is not stretched down the whole canvas.
 pub fn ui_scene_root_node() -> Node {
     Node {
         width: percent(100.0),

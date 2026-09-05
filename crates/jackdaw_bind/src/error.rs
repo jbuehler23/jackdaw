@@ -4,10 +4,7 @@ use bevy::prelude::Entity;
 /// is what the warn-once log and the editor's validation badge both show, so it
 /// stays phrased for an author reading their own scene.
 ///
-/// # Matching
-///
-/// The list grows as bindings learn to do more, so it is `#[non_exhaustive]`:
-/// a match needs a `_` arm even when it names every variant that exists today.
+/// It is `#[non_exhaustive]`, so a match over it needs a `_` arm.
 ///
 /// ```
 /// # use jackdaw_bind::BindError;
@@ -19,19 +16,6 @@ use bevy::prelude::Entity;
 ///     }
 /// }
 /// # assert_eq!(hint(&BindError::NoTypeRegistry), "check the binding against the scene");
-/// ```
-///
-/// Naming variants instead does not compile, however many of them are named:
-/// there is always one more the match has not seen.
-///
-/// ```compile_fail
-/// # use jackdaw_bind::BindError;
-/// # fn describe(error: BindError) -> &'static str {
-/// match error {
-///     BindError::NoReads => "nothing to read",
-///     BindError::VisibleNotBool => "not a bool",
-/// }
-/// # }
 /// ```
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 #[non_exhaustive]
@@ -194,9 +178,8 @@ pub enum BindError {
         raw: String,
     },
 
-    /// The write path names a marker component, one with nothing in it, and the
-    /// binding worked out something other than a bool. A marker is there or it
-    /// is not, and only a bool answers which.
+    /// The write path names a marker component and the binding worked out
+    /// something other than a bool.
     #[error("marker '{type_path}' is set by a bool: true puts it on, false takes it off")]
     MarkerNeedsBool {
         /// The marker the write path named.
@@ -306,10 +289,8 @@ pub enum BindError {
         event_path: String,
     },
 
-    /// An `Action` binding names an event whose fields have no names to fill:
-    /// a tuple struct, an enum, anything reflection does not describe as a
-    /// named struct. A binding maps paths to field names, and there are none
-    /// here to map onto.
+    /// An `Action` binding names an event that is not a named struct, so it has
+    /// no field names to map paths onto.
     #[error("'{event_path}' is a {kind}, and an action binding fills fields by name")]
     EventNotNamedStruct {
         /// The type the binding named as its event.
@@ -359,8 +340,7 @@ pub enum BindError {
     },
 
     /// An `Action` binding names an event that targets an entity, and nothing
-    /// above the widget says which one. The event's own default would supply
-    /// `Entity::PLACEHOLDER`, which is not an entity, so nothing is sent.
+    /// above the widget says which one.
     #[error("'{event_path}' targets an entity through '{field}', and no BindContext says which")]
     MissingContext {
         /// The event the binding names.
@@ -369,9 +349,8 @@ pub enum BindError {
         field: String,
     },
 
-    /// An `Action` binding leaves an entity-typed field unmapped, and it is
-    /// not the one the widget's context fills. Bind values carry numbers,
-    /// bools and strings, so nothing else can fill it either.
+    /// An `Action` binding leaves an entity-typed field unmapped, and it is not
+    /// the one the widget's context fills.
     #[error(
         "'{event_path}' declares entity field '{field}', which a binding cannot fill -- only a \
          field named 'entity' takes the widget's context"
@@ -392,7 +371,6 @@ mod tests {
         s.to_string()
     }
 
-    /// Every message an author can be shown, pinned to its exact text.
     #[test]
     fn display_text_is_pinned() {
         let e = Entity::PLACEHOLDER;

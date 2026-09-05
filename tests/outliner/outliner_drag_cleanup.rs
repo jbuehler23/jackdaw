@@ -1,17 +1,11 @@
-//! What a finished outliner drag leaves behind.
+//! What a finished outliner drag leaves behind: the row tint, the drop line and
+//! the container wash all have to be gone the moment the gesture ends.
 //!
-//! A drag paints as it travels: the row under the pointer takes a drop
-//! tint, the gap it would land in takes a line, and the list itself takes
-//! a wash meaning "release here and the entity leaves its parent". All
-//! three are meant to be gone the moment the gesture ends.
-//!
-//! They were not. `DragEnter` bubbles and the gap strips over every row
-//! stop their `DragLeave` and `DragDrop` but not their `DragEnter`, so a
-//! drag that merely crossed a row washed the whole panel green and
-//! nothing ever painted it back. The pointer is driven through the
-//! window's own event streams here, because that asymmetry only exists
-//! along the real propagation path: a test that triggers `DragDrop` on
-//! the zone by hand never reaches the container's observers at all.
+//! `DragEnter` bubbles and the gap strips stop their `DragLeave` and `DragDrop`
+//! but not their `DragEnter`, so a drag that merely crossed a row washed the
+//! whole panel and nothing painted it back. The pointer is driven through the
+//! window's own event streams, because that asymmetry only exists along the real
+//! propagation path.
 
 use crate::util;
 use crate::util::OperatorResultExt as _;
@@ -180,9 +174,8 @@ fn a_finished_drag_leaves_the_outliner_clean_and_answering() {
     let first = row_content(&mut app, panel, children[0]);
     let third = row_content(&mut app, panel, children[2]);
     let from = centre_of(&app, first);
-    // Released on the gap above the last row, which is where the strips
-    // stop the container's own `DragLeave` and `DragDrop`: with the
-    // enter unguarded, that is a wash nothing ever paints back.
+    // Released on the gap above the last row, where the strips stop the
+    // container's own `DragLeave` and `DragDrop`.
     let to = centre_of(&app, third) - Vec2::new(0.0, row_height(&app, third) * 0.4);
 
     run(
@@ -208,7 +201,6 @@ fn a_finished_drag_leaves_the_outliner_clean_and_answering() {
         "and no drop line is left drawn",
     );
 
-    // And the panel still answers a pointer.
     let second = row_content(&mut app, panel, children[1]);
     let at = centre_of(&app, second);
     run(
@@ -222,9 +214,8 @@ fn a_finished_drag_leaves_the_outliner_clean_and_answering() {
     );
 }
 
-/// A gap strip covers the top and the bottom third of every row, so most
-/// of a row is gap. A click there is a click on the row: without that,
-/// only the middle third of the outliner answered a pointer at all.
+/// A gap strip covers the top and bottom third of every row, so a click there
+/// has to be a click on the row: otherwise only the middle third answers.
 #[test]
 fn a_click_on_the_gap_over_a_row_selects_that_row() {
     let (mut app, panel) = outliner_app();
@@ -332,12 +323,9 @@ fn child_names(app: &App, entity: Entity) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// A drag begun on the list's own empty space paints nothing.
-///
-/// The wash means "release here and the entity leaves its parent". A
-/// press on the empty space below the rows is holding no entity at all,
-/// and the whole panel turning green until the button came back up said
-/// otherwise.
+/// A drag begun on the list's own empty space paints nothing: the wash means
+/// "release here and the entity leaves its parent", and a press below the rows is
+/// holding no entity at all.
 #[test]
 fn a_drag_from_empty_space_paints_nothing() {
     let (mut app, panel) = outliner_app();
@@ -385,9 +373,8 @@ fn a_drag_from_empty_space_paints_nothing() {
     );
 }
 
-/// A row dragged into a second list does paint that list, and the
-/// release paints it back: the gate is what is being dragged, not the
-/// wash itself.
+/// A row dragged into a second list does paint that list, and the release paints
+/// it back: the gate is what is being dragged, not the wash itself.
 #[test]
 fn a_row_dragged_into_another_list_paints_it_and_clears() {
     let (mut app, panel) = outliner_app();

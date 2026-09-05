@@ -10,8 +10,7 @@ use jackdaw::brush::{Brush, MeshMirror};
 use jackdaw_api::prelude::*;
 use jackdaw_geometry::{Modifier, ModifierEntry, ModifierStack};
 
-/// Wrap a `MeshMirror` as a single-entry editor modifier stack, the
-/// component the brush mesh systems read.
+/// Wrap a `MeshMirror` as a single-entry editor modifier stack.
 fn mirror_stack(mirror: MeshMirror) -> ModifierStack {
     ModifierStack {
         modifiers: vec![ModifierEntry::new(Modifier::Mirror(mirror))],
@@ -35,9 +34,8 @@ fn spawn_half_cube(app: &mut App) -> Entity {
         .id()
 }
 
-/// Select `entity` and clear the headless placeholder `InputFocus`,
-/// which the mirror ops' availability checks read as "a text field
-/// owns the keyboard".
+/// Select `entity` and clear the headless placeholder `InputFocus`, which the
+/// mirror ops' availability checks read as a text field owning the keyboard.
 fn select_for_operators(app: &mut App, entity: Entity) {
     use bevy::input_focus::InputFocus;
     app.world_mut().resource_mut::<InputFocus>().clear();

@@ -248,11 +248,8 @@ pub(crate) fn collect_jsn_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// A legacy scene converted in memory, waiting to be written.
-///
-/// The caller decides whether the converted document is one the editor can
-/// open before any of it reaches disk. Dropping this instead of committing it
-/// leaves the `.jsn` untouched.
+/// A legacy scene converted in memory, waiting to be written. Dropping this
+/// instead of committing it leaves the `.jsn` untouched.
 pub struct PendingConversion {
     /// Where the `.bsn` goes once the document is accepted.
     pub bsn_path: std::path::PathBuf,
@@ -306,14 +303,9 @@ pub fn commit_conversion(world: &mut World, pending: PendingConversion) -> Resul
     Ok(())
 }
 
-/// Convert legacy prefabs the scene inherits from.
-///
-/// The prefab cache reads `.bsn` only, so an unconverted `.jsn` dependency
-/// leaves the scene's instances unresolved: the scene opens missing every
-/// inherited entity. Nested chains convert recursively, and an already
-/// converted path is skipped, so calling this twice on one conversion is
-/// cheap. The load path calls it before resolving; committing calls it again
-/// for every other caller.
+/// Convert legacy prefabs the scene inherits from; the prefab cache reads
+/// `.bsn` only. Nested chains convert recursively and an already converted path
+/// is skipped, so calling this twice is cheap.
 pub fn convert_prefab_dependencies(world: &mut World, pending: &PendingConversion) {
     let parent = pending.source.parent().unwrap_or(Path::new(""));
     for entity in &pending.scene.scene {
@@ -347,12 +339,8 @@ pub fn convert_prefab_dependencies(world: &mut World, pending: &PendingConversio
 }
 
 /// Convert one legacy `.jsn` scene or prefab file to its `.bsn` sibling on
-/// disk, renaming the original to `.jsn.bak`. Returns the `.bsn` path and the
-/// conversion report.
-///
-/// Converts and commits in one step, for callers that do not inspect the
-/// document first, such as the bulk project migration and the CLI. A load path
-/// splits the two around its own acceptance check.
+/// disk, renaming the original to `.jsn.bak`. Converts and commits in one step,
+/// for callers that do not inspect the document first.
 pub fn convert_scene_file(
     world: &mut World,
     path: &Path,

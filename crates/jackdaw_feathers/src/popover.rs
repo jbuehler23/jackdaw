@@ -105,8 +105,7 @@ impl PopoverPlacement {
     }
 
     /// The placement asked for, then its mirror. The widget takes the
-    /// first that fits in the window and the least occluded otherwise,
-    /// which is the flip the editor used to do by hand.
+    /// first that fits in the window and the least occluded otherwise.
     fn positions(&self) -> Vec<PopoverPosition> {
         let align = self.align();
         [self.side(), self.side().mirror()]

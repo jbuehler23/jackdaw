@@ -1,16 +1,10 @@
-//! `jd mcp` against a real editor, over the wire it will actually use.
+//! `jd mcp` against a real editor, over the wire it will actually use: an editor
+//! process listening on a socket, a `jd mcp` child speaking MCP over its stdin
+//! and stdout, and the handshake plus one tool call travelling between them.
+//! `tests/guards/editor_remote.rs` pins the handlers' behaviour in process.
 //!
-//! `tests/guards/editor_remote.rs` drives the BRP handlers in process,
-//! which is where their behaviour is pinned. This is the other half: an
-//! editor process listening on a socket, a `jd mcp` child speaking MCP
-//! over its stdin and stdout, and the handshake plus one tool call
-//! travelling the whole path between them.
-//!
-//! It needs a window server, because the editor is a windowed app and
-//! its viewport is what a client would capture. Without one it skips,
-//! the way the other end-to-end suites do -- unless
-//! `JACKDAW_MCP_E2E_REQUIRED` is set, which is how a machine that does
-//! have a display refuses to let the coverage quietly lapse.
+//! It needs a window server, and skips without one unless
+//! `JACKDAW_MCP_E2E_REQUIRED` is set.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -31,13 +25,9 @@ fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Whether the MCP server binary sits beside `jd`, which is where
-/// `jd mcp` looks for it.
-///
-/// `jd-mcp` belongs to another package, so no `CARGO_BIN_EXE_` variable
-/// names it here; what both binaries share is the workspace target
-/// directory, which is the directory holding `jd`. `cargo xtask heavy`
-/// builds it before running this suite.
+/// Whether the MCP server binary sits beside `jd`, which is where `jd mcp` looks
+/// for it. `jd-mcp` belongs to another package, so no `CARGO_BIN_EXE_` names it;
+/// what both share is the workspace target directory.
 fn mcp_binary_built() -> bool {
     Path::new(env!("CARGO_BIN_EXE_jd"))
         .parent()

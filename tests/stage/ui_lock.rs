@@ -1,13 +1,4 @@
 //! Locking a node so the canvas stops picking it up.
-//!
-//! What is pinned here:
-//!  * a press over a locked node reaches whatever is under it, down to the
-//!    scene root, rather than being swallowed;
-//!  * the lock is on the node the author locked, not on its children;
-//!  * the outliner still selects a locked node, which is how it is reached
-//!    to be unlocked again;
-//!  * the lock is document data, so it survives a save and a reload;
-//!  * the row's padlock says which way the lock is set.
 
 use crate::util;
 
@@ -298,12 +289,9 @@ fn the_row_shows_a_closed_padlock_once_the_node_is_locked() {
     );
 }
 
-/// The lock control says what locking a node buys, because the padlock on
-/// its own does not.
-///
-/// A locked node is not greyed out, it is out of the canvas's reach -- and
-/// the workflow that opens up, pulling a band out over a background that
-/// otherwise swallows every press, is the one nobody finds by pressing the
+/// A locked node is not greyed out, it is out of the canvas's reach, and the
+/// workflow that opens up -- pulling a band out over a background that
+/// otherwise swallows every press -- is the one nobody finds by pressing the
 /// button.
 #[test]
 fn the_lock_control_says_what_a_lock_lets_through() {
@@ -446,8 +434,8 @@ fn toggle_lock(app: &mut App, entity: Entity) {
     settle(app);
 }
 
-/// The lock is document data, so it belongs on the undo stack: without an
-/// entry of its own, Ctrl+Z after locking undid whatever came before instead.
+/// The lock is document data, so it belongs on the undo stack: without an entry
+/// of its own, Ctrl+Z after locking undid whatever came before instead.
 #[test]
 fn undo_after_locking_unlocks() {
     let mut app = util::editor_test_app();
@@ -464,8 +452,7 @@ fn undo_after_locking_unlocks() {
 }
 
 /// Recording nothing also left the lock under the snapshot history, where the
-/// next unrelated undo restored a state taken before the lock and flipped it
-/// back.
+/// next unrelated undo restored a state taken before the lock.
 #[test]
 fn an_unrelated_undo_leaves_the_lock_alone() {
     let mut app = util::editor_test_app();
@@ -494,8 +481,7 @@ fn an_unrelated_undo_leaves_the_lock_alone() {
     );
 }
 
-/// The keyboard is the canvas too: a locked node the pointer refuses to pick
-/// up must not be moved by the arrow keys either.
+/// The keyboard is the canvas too: the arrow keys must not move a locked node.
 #[test]
 fn a_nudge_leaves_a_locked_node_where_it_is() {
     let mut app = util::editor_test_app();

@@ -344,7 +344,6 @@ impl<T: Pickable> PickerProps<T> {
             .add_one_related::<PickerListOf>(list)
             .add_child(picker_entity);
 
-        // we no longer need it here, it's done its job
         commands.entity(ctx.entity).remove::<Self>();
     }
 }

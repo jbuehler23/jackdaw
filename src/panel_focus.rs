@@ -1,31 +1,17 @@
-//! Which dock panel a keypress belongs to.
-//!
-//! Several chords are claimed by more than one panel: `Ctrl+C` copies an
-//! entity in the outliner and a keyframe in the timeline, `Delete` removes
-//! either, and `Home` frames the canvas or jumps the playhead. Asking whether
-//! a panel's tab is active *somewhere* in the dock tree cannot separate them:
-//! in a workspace holding both, both answers are yes and the narrower claim
-//! wins everywhere, which leaves the wider one dead in every other panel.
-//!
-//! Focus is the separator, and the dock tree does not track it. What it does
-//! have is the pointer and the last press, so that is what this reads: the
-//! panel under the cursor, or, when the cursor is over no panel at all, the
-//! panel last pressed in. Both are gestures the user made towards one panel.
+//! Which dock panel a keypress belongs to, for chords more than one panel
+//! claims. The dock tree tracks no focus, so this reads the panel under the
+//! cursor, falling back to the panel last pressed in.
 
 use bevy::picking::hover::HoverMap;
 use bevy::prelude::*;
 use jackdaw_panels::area::DockTabContent;
 
-/// The dock panel the user last pressed in, by window id.
-///
-/// The answer for a cursor that is over no panel: a chord typed with the
-/// pointer parked over the menu bar, or off the window entirely, still belongs
-/// to the panel the user was last working in.
+/// The dock panel the user last pressed in, by window id. Used when the cursor
+/// is over no panel at all.
 #[derive(Resource, Default)]
 pub struct LastPressedPanel(pub Option<String>);
 
-/// What an availability check asks "is this panel the one the press belongs
-/// to?".
+/// What an availability check asks whether a panel owns the current press.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct PanelFocus<'w, 's> {
     hover_map: Res<'w, HoverMap>,
@@ -36,11 +22,8 @@ pub struct PanelFocus<'w, 's> {
 
 impl PanelFocus<'_, '_> {
     /// Whether the panel `window_id` names is the one a keypress belongs to.
-    ///
-    /// The panel under the cursor wins: a workspace can show the timeline and
-    /// the outliner at once, and the cursor is what says which of the two the
-    /// user is working in. With the cursor over no panel, the last press
-    /// answers.
+    /// The panel under the cursor wins; with the cursor over no panel, the
+    /// last press answers.
     pub fn is_focused(&self, window_id: &str) -> bool {
         match hovered_panel(&self.hover_map, &self.parents, &self.contents) {
             Some(hovered) => hovered == window_id,

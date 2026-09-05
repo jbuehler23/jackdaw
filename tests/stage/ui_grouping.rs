@@ -1,15 +1,4 @@
 //! Grouping a selection into a container, and taking one apart again.
-//!
-//! What is pinned here:
-//!  * the container lands on the selection's bounding rect, flowing along
-//!    whichever side of it is longer;
-//!  * an absolutely placed member keeps the place it had on the canvas, its
-//!    authored rect re-expressed against the container's offset box, while a
-//!    flowed member moves in untouched and the container lays it out again;
-//!  * ungroup puts the children back in the container's own slot, again
-//!    without moving them, and takes the empty container away;
-//!  * each is one history entry that undoes cleanly;
-//!  * both refuse outside a UI scene.
 
 use crate::util;
 
@@ -26,12 +15,9 @@ use jackdaw_scene_types::UiSceneRoot;
 /// stage the panel lays out, so every conversion factor is an exact 2.
 const REFERENCE: UVec2 = UVec2::new(2400, 1200);
 
-/// Run one clause the way a chord runs it.
-///
-/// `creates_history_entry`, which a scripted call leaves off, is what makes
-/// the dispatcher open a snapshot span: an operator that records its own entry
-/// and one that leaves the entry to the snapshot are only told apart under a
-/// press, and this suite counts entries.
+/// Run one clause the way a chord runs it. `creates_history_entry`, which a
+/// scripted call leaves off, is what makes the dispatcher open a snapshot
+/// span, and this suite counts entries.
 #[track_caller]
 fn run_finished(app: &mut App, clause: &str) {
     let result = run_op_clause_as_user(app.world_mut(), clause)
@@ -50,8 +36,8 @@ fn settle(app: &mut App) {
     }
 }
 
-/// A 2D panel framed so the whole authored canvas fits it, which is what
-/// gives the authored scene a target to be laid out against.
+/// A 2D panel framed so the whole authored canvas fits it, which gives the
+/// authored scene a target to be laid out against.
 fn panel(app: &mut App) {
     let parent = app
         .world_mut()
@@ -74,12 +60,8 @@ fn panel(app: &mut App) {
 }
 
 /// A canvas-filling root with two absolutely placed children, registered in
-/// the document the way a load leaves them.
-///
-/// The root carries a border, so the box the children measure their offsets
-/// from does not start at the canvas corner: a container placed at their
-/// bounding box has to take that shift back out, and a group that reads the
-/// wrong box lands ten pixels off.
+/// the document the way a load leaves them. The root carries a border, so a
+/// group that reads the wrong offset box lands ten pixels off.
 fn authored_scene(app: &mut App) -> (Entity, Entity, Entity) {
     let root = app
         .world_mut()
@@ -325,9 +307,8 @@ fn grouping_refuses_outside_a_ui_scene() {
 }
 
 /// A container holds whatever a widget definition put inside it, not only
-/// laid-out nodes. Ungroup used to move the nodes and leave the rest to be
-/// despawned with the container, which lost them, and with a childless
-/// snapshot undo had nothing to put back.
+/// laid-out nodes, so ungroup carries all of it out and the snapshot behind
+/// undo holds all of it.
 #[test]
 fn ungroup_carries_out_a_child_that_is_not_a_node() {
     let mut app = util::editor_test_app();
@@ -385,9 +366,6 @@ fn ungroup_carries_out_a_child_that_is_not_a_node() {
     );
 }
 
-/// The scene's own root is what the canvas draws, what a paste falls back to
-/// and what the outliner hangs the scene off. Ctrl+Shift+G on it used to
-/// delete it and leave the editor with a scene it could not draw.
 #[test]
 fn neither_operator_touches_the_scene_root() {
     let mut app = util::editor_test_app();
@@ -406,7 +384,7 @@ fn neither_operator_touches_the_scene_root() {
         );
     }
 
-    // And the world functions refuse too, so a caller reaching past the
+    // The world functions refuse too, so a caller reaching past the
     // availability gate gets a refusal rather than a broken document.
     let depth = undo_depth(&app);
     jackdaw::ui_grouping::ungroup_selection(app.world_mut());
@@ -478,11 +456,8 @@ fn child_names(app: &App, parent: Entity) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// A member's slot is an index into the sibling list as it was, and that
-/// list only reads that way once the container has left it. Undo used to
-/// replay the slots against a list that still held the container, which put
-/// a member that had a never-selected sibling between it and the other
-/// member back on the wrong side of it.
+/// A member's slot is an index into the sibling list as it was, and that list
+/// only reads that way once the container has left it.
 #[test]
 fn group_undo_puts_the_members_back_around_a_sibling_that_was_never_selected() {
     let mut app = util::editor_test_app();
@@ -504,7 +479,7 @@ fn group_undo_puts_the_members_back_around_a_sibling_that_was_never_selected() {
 
 /// A rect re-expressed against a different offset box is only the same rect
 /// when it started from the box the container replaces, so a selection under
-/// two parents has no one box to group at. It used to fail into the log.
+/// two parents has no one box to group at.
 #[test]
 fn grouping_across_two_parents_is_refused_out_loud() {
     let mut app = util::editor_test_app();
@@ -527,8 +502,7 @@ fn grouping_across_two_parents_is_refused_out_loud() {
 }
 
 /// The bounding box is axis-aligned and measured before the turn, so a
-/// container drawn on it and given a turned node as a child would draw the
-/// turn again from a different origin and move the node.
+/// container drawn on it would draw the turn again from a different origin.
 #[test]
 fn grouping_a_rotated_node_is_refused_out_loud() {
     let mut app = util::editor_test_app();
@@ -553,8 +527,7 @@ fn grouping_a_rotated_node_is_refused_out_loud() {
     );
 }
 
-/// Ungrouping a node with nothing inside it has nothing to do. The refusal
-/// used to go only to the log, so the chord looked broken.
+/// Ungrouping a node with nothing inside it has nothing to do.
 #[test]
 fn ungrouping_an_empty_node_is_refused_out_loud() {
     let mut app = util::editor_test_app();
@@ -604,9 +577,8 @@ fn add_button(app: &mut App, parent: Entity) -> Entity {
 }
 
 /// Every palette widget spawns flowed, so a selection of them is the common
-/// case grouping has to answer -- and the answer is not a refusal. The
-/// members move into the container and the container lays them out again,
-/// which is what putting nodes in a container is for.
+/// case, and the answer is not a refusal: the members move in and the
+/// container lays them out again.
 #[test]
 fn grouping_two_palette_buttons_moves_them_in_to_be_laid_out_again() {
     let mut app = util::editor_test_app();
@@ -683,9 +655,8 @@ fn grouping_two_palette_buttons_moves_them_in_to_be_laid_out_again() {
     assert_eq!(selected, wanted, "and selected them again");
 }
 
-/// A selection holding both kinds does both: the placed member keeps its
-/// spot through the offset arithmetic, the flowed one is left for the
-/// container to lay out.
+/// A selection holding both kinds does both: the placed member keeps its spot
+/// through the offset arithmetic, the flowed one is left to be laid out.
 #[test]
 fn a_mixed_selection_places_one_member_and_flows_the_other() {
     let mut app = util::editor_test_app();
@@ -726,10 +697,9 @@ fn a_mixed_selection_places_one_member_and_flows_the_other() {
     );
 }
 
-/// A `UiTransform` that only moves the node is the same double application
-/// as one that turns it: the container is placed on the box the node was
-/// measured at, and the translation is then drawn again from the
-/// container's own corner.
+/// A `UiTransform` that only moves the node is the same double application as
+/// one that turns it: the translation is drawn again from the container's own
+/// corner.
 #[test]
 fn grouping_a_translated_member_is_refused_out_loud() {
     let mut app = util::editor_test_app();
@@ -754,9 +724,8 @@ fn grouping_a_translated_member_is_refused_out_loud() {
     );
 }
 
-/// Undo is a way back to the state the command was asked for, and the
-/// selection is part of that state: grouping leaves the container selected,
-/// so undoing it has to leave the members selected again.
+/// Grouping leaves the container selected, so undoing it has to leave the
+/// members selected again.
 #[test]
 fn undoing_a_group_selects_the_members_again() {
     let mut app = util::editor_test_app();
@@ -776,8 +745,8 @@ fn undoing_a_group_selects_the_members_again() {
     assert_eq!(selected, wanted, "the members are selected again");
 }
 
-/// The other direction: ungrouping selects the members it lifted out, so
-/// undoing it selects the container it put back.
+/// Ungrouping selects the members it lifted out, so undoing it selects the
+/// container it put back.
 #[test]
 fn undoing_an_ungroup_selects_the_container_again() {
     let mut app = util::editor_test_app();

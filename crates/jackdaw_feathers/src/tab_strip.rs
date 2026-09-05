@@ -1,14 +1,12 @@
-//! A horizontal row of labeled tabs sharing one active highlight and one
-//! dispatch operator.
+//! A horizontal row of labeled tabs sharing one active highlight and one dispatch
+//! operator.
 //!
-//! Tabs dispatch a named operator with a per-tab parameter, so a
-//! consumer needs no tab-specific glue. That is the limit of what this
-//! covers: a control whose click has to reach a particular entity, or
-//! carry anything an operator parameter cannot name, is not served here.
+//! Tabs dispatch a named operator with a per-tab parameter, so a consumer needs
+//! no tab-specific glue. A control whose click has to reach a particular entity is
+//! not served here.
 //!
-//! `jackdaw_panels`' `DockTabBar` is not built on this. Its
-//! drag-to-reorder and close-button affordances need `jackdaw_panels`
-//! types this crate cannot depend on.
+//! `jackdaw_panels`' `DockTabBar` is not built on this: its drag-to-reorder and
+//! close-button affordances need types this crate cannot depend on.
 
 use std::borrow::Cow;
 
@@ -29,10 +27,8 @@ pub struct TabStripTab;
 /// Layout direction for a [`spawn_tab_strip`] row.
 ///
 /// A parameter rather than two functions: every consumer shares one
-/// dispatch/highlight mechanism and differs only in which axis the tabs
-/// stack along. The Terrain panel's and the inspector/dock header's strips
-/// run horizontally, the bottom window dock's runs vertically along its
-/// edge.
+/// dispatch/highlight mechanism and differs only in which axis the tabs stack
+/// along.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum TabStripOrientation {
     #[default]
@@ -68,25 +64,16 @@ impl TabStripItem {
     }
 }
 
-/// Spawn a row of tabs under `parent`. Clicking a tab dispatches `op_id`
-/// with `param_key` set to that tab's [`TabStripItem::param`], carried on
-/// the [`ButtonOperatorCall`] every other clickable widget in this crate
-/// uses, so the app's generic dispatch (`jackdaw::core_extension`'s
-/// `dispatch_button_operator_call`, wired off `EditorButton`'s
-/// `ButtonClickEvent`) fires it with no tab-specific glue and this widget
-/// stays independent of the operator API.
+/// Spawn a row of tabs under `parent`. Clicking a tab dispatches `op_id` with
+/// `param_key` set to that tab's [`TabStripItem::param`], carried on the
+/// [`ButtonOperatorCall`] every other clickable widget in this crate uses, so this
+/// widget stays independent of the operator API.
 ///
-/// Active-tab highlight reuses [`ButtonVariant::Active`], the treatment
-/// the toolbar's active-tool indicator uses; an inactive tab is
-/// [`ButtonVariant::Ghost`].
+/// The active tab reuses [`ButtonVariant::Active`]; an inactive one is
+/// [`ButtonVariant::Ghost`]. `orientation` picks the axis tabs stack along, and
+/// both the row's layout and its gap follow it.
 ///
-/// `orientation` picks the axis tabs stack along; see
-/// [`TabStripOrientation`]. Both the row's own layout and the gap between
-/// tabs follow it, so a vertical strip keeps no horizontal gap from a
-/// row-flow default.
-///
-/// Returns the row entity, for a caller that wants to tag or style it
-/// further.
+/// Returns the row entity.
 pub fn spawn_tab_strip(
     commands: &mut Commands,
     parent: Entity,

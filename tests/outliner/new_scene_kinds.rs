@@ -1,21 +1,5 @@
-//! Making a scene of each kind: what `scene.new kind=...` puts in the
-//! document, what it names it, and where it leaves the workspace.
-//!
-//! The contracts, all of them things a human authoring through the GUI
-//! trips over on the first try:
-//!
-//! 1. A UI scene seeds UI defaults and nothing else. A directional light
-//!    is 3D furniture; seeded into a UI document it is saved to disk as
-//!    part of a screen that has nothing to light.
-//! 2. The seeded root is named without a space, so an operator clause --
-//!    which has no quoting -- can address it as `name=UiRoot`.
-//! 3. Creating a UI scene brings the viewport forward on its canvas, the
-//!    way opening one already does. The canvas is the whole point of the
-//!    scene.
-//! 4. The kind a scene was made as survives a save and a reopen, because
-//!    it is a component in the document rather than editor state.
-//! 5. A menu row makes the kind it names. The row hands its clause to the
-//!    operator through the same dispatch a click does.
+//! Making a scene of each kind: what `scene.new kind=...` puts in the document,
+//! what it names it, and where it leaves the workspace.
 
 use crate::util;
 
@@ -59,8 +43,8 @@ fn intent(app: &App) -> ViewportModeIntent {
     *app.world().resource::<ViewportModeIntent>()
 }
 
-/// Put the viewport in a mode the scene's kind did not ask for, so what a
-/// later activation writes reads as a change.
+/// Put the viewport in a mode the scene's kind did not ask for, so a later
+/// activation's write reads as a change.
 fn set_intent(app: &mut App, mode: ViewportMode) {
     *app.world_mut().resource_mut::<ViewportModeIntent>() = ViewportModeIntent {
         mode,
@@ -77,9 +61,8 @@ fn active_window(app: &App, leaf: NodeId) -> Option<String> {
         .find_map(|(window, tab)| (tab == active).then(|| window.to_string()))
 }
 
-/// Gap 2. The light is what an empty 3D scene needs to be visible at all;
-/// a UI document has nothing to light, and whatever is in the document at
-/// the end of this is what a save writes.
+/// A UI document has nothing to light, and whatever is in the document at the
+/// end of this is what a save writes.
 #[test]
 fn a_new_ui_scene_seeds_the_ui_root_and_nothing_else() {
     let mut app = util::editor_test_app();
@@ -102,8 +85,7 @@ fn a_new_ui_scene_seeds_the_ui_root_and_nothing_else() {
     );
 }
 
-/// The other half of the same branch: an ordinary scene still gets the
-/// light it has always got, and no UI root.
+/// The other half of the same branch: an ordinary scene still gets its light.
 #[test]
 fn a_new_3d_scene_still_seeds_its_light_and_no_ui_root() {
     let mut app = util::editor_test_app();
@@ -125,9 +107,8 @@ fn a_new_3d_scene_still_seeds_its_light_and_no_ui_root() {
     );
 }
 
-/// Gap 3. An operator clause is text with no quoting, so a value cannot
-/// carry a space; a root called `UI Root` is unreachable from every
-/// scripted path the editor has.
+/// An operator clause is text with no quoting, so a root called `UI Root` is
+/// unreachable from every scripted path the editor has.
 #[test]
 fn the_seeded_root_is_named_so_a_clause_can_address_it() {
     let mut app = util::editor_test_app();
@@ -155,8 +136,7 @@ fn the_seeded_root_is_named_so_a_clause_can_address_it() {
     );
 }
 
-/// Gap 11. Making a UI scene is exactly the moment the canvas is wanted.
-/// The load and tab-swap paths already front the panel; creation did not.
+/// The load and tab-swap paths already front the canvas panel; creation did not.
 /// One panel shows both, so what comes forward is that panel, in 2D.
 #[test]
 fn creating_a_ui_scene_brings_the_viewport_forward_on_its_canvas() {
@@ -188,8 +168,7 @@ fn creating_a_ui_scene_brings_the_viewport_forward_on_its_canvas() {
     );
 }
 
-/// And only for a UI scene: a new 3D scene leaves the workspace as the
-/// user arranged it. The mode still follows the kind, so a 3D scene made
+/// And only for a UI scene. The mode still follows the kind, so a 3D scene made
 /// from a UI tab does not open on the canvas the UI scene left behind.
 #[test]
 fn creating_a_3d_scene_leaves_the_fronted_tab_alone() {
@@ -217,9 +196,8 @@ fn creating_a_3d_scene_leaves_the_fronted_tab_alone() {
     );
 }
 
-/// A 2D scene is a world scene with nothing in it yet. The light a 3D
-/// scene needs lights nothing a sprite draws, and every other 3D default
-/// is furniture a save would write into a document that never wanted it.
+/// A 2D scene is a world scene with nothing in it yet: the light a 3D scene needs
+/// lights nothing a sprite draws, and the rest is furniture a save would write.
 #[test]
 fn a_new_2d_scene_seeds_its_root_and_no_3d_furniture() {
     let mut app = util::editor_test_app();
@@ -278,9 +256,8 @@ fn creating_a_2d_scene_brings_the_viewport_forward_on_its_canvas() {
     );
 }
 
-/// Gap 4. The kind is a component in the document, so reopening the file
-/// finds it. Editor state would not survive the round trip; this is the
-/// whole reason the kind is persisted the way `UiSceneRoot` is.
+/// The kind is a component in the document, so reopening the file finds it;
+/// editor state would not survive the round trip.
 #[test]
 fn a_saved_scenes_kind_survives_a_reopen() {
     for kind in [SceneKind::TwoD, SceneKind::Ui] {
@@ -307,8 +284,8 @@ fn a_saved_scenes_kind_survives_a_reopen() {
             "the kind is written into the document, not held in the editor:\n{written}",
         );
 
-        // A fresh editor, because the tab that wrote the file is still open in
-        // this one and reopening its own path just switches to it.
+        // A fresh editor: the tab that wrote the file is still open in this one,
+        // and reopening its own path just switches to it.
         let mut app = util::editor_test_app();
         // The mode a reopen lands in has to come from the document too: the
         // operator parameter that made this scene is long gone.
@@ -347,11 +324,10 @@ fn a_saved_scenes_kind_survives_a_reopen() {
     }
 }
 
-/// Gap 5. The row a user clicks, dispatched the way a click dispatches it:
-/// the action string parsed into the operator call feathers attaches, then
-/// through the editor's button observer. A row whose clause never reaches
-/// the operator makes a 3D scene whatever it says, which is exactly what
-/// asserting on the rows alone cannot catch.
+/// The row a user clicks, dispatched the way a click dispatches it: the action
+/// string parsed into the operator call feathers attaches, then through the
+/// editor's button observer. Asserting on the rows alone would not catch a
+/// clause that never reaches the operator.
 fn click_new_scene_row(app: &mut App, label: &str) {
     use bevy::ui_widgets::Activate;
     use jackdaw_feathers::button::ButtonOperatorCall;
@@ -424,9 +400,8 @@ fn clicking_the_3d_row_makes_a_3d_scene() {
     assert_eq!(roots.iter(app.world()).count(), 0);
 }
 
-/// `ui=true` is what scripted runs and older keymaps spell. It keeps
-/// meaning `kind=ui` for one release, so nothing that spells it breaks on
-/// the day the kinds arrive.
+/// `ui=true` is what scripted runs and older keymaps spell, and it keeps meaning
+/// `kind=ui` for one release.
 #[test]
 fn the_ui_true_alias_still_makes_a_ui_scene() {
     let mut app = util::editor_test_app();
@@ -448,8 +423,7 @@ fn the_ui_true_alias_still_makes_a_ui_scene() {
     );
 }
 
-/// And the alias's string form, which is how it arrives from any untyped
-/// source: an action string carries `ui=true` as text, not as a bool.
+/// And the alias's string form: an action string carries `ui=true` as text.
 #[test]
 fn the_alias_reads_the_same_from_a_text_clause() {
     let mut app = util::editor_test_app();

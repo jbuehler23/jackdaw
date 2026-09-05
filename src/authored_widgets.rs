@@ -1,12 +1,9 @@
 //! Value behaviour for the authored UI widgets.
 //!
-//! The defaults and the observers live in [`jackdaw_widgets_runtime`], shared
-//! with the game runtime so an authored widget behaves the same in both. The
-//! editor supplies which entities count as authored: the observers fire only
-//! for [`AuthoredWidget`], and here that marker mirrors [`AstNodeRef`]. An
-//! entity the scene document has a node for is authored content; editor chrome
-//! has none, so the Extensions dialog, the material panel, and the inspector
-//! keep their own checkbox state machines.
+//! The defaults and observers live in `jackdaw_widgets_runtime`, shared with
+//! the game runtime. The editor supplies which entities count as authored: the
+//! observers fire only for `AuthoredWidget`, which here mirrors `AstNodeRef`,
+//! so editor chrome keeps its own state machines.
 
 use bevy::prelude::*;
 use jackdaw_bsn::AstNodeRef;

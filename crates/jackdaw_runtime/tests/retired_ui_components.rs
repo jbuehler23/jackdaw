@@ -1,10 +1,9 @@
-//! A game refuses a scene carrying the retired facade UI vocabulary, for the
-//! same reason the editor does: those types are not registered, so loading
-//! would hand the player a scene missing its UI.
+//! A game refuses a scene carrying the retired facade UI vocabulary, which is
+//! not registered and would load as a scene missing its UI.
 //!
 //! Two gates, because a scene reaches the world two ways: the asset loader
-//! reading a `.bsn` off disk, and the spawn pass, which also serves scenes
-//! handed over as in-memory text through `JackdawScene::new`.
+//! reading a `.bsn` off disk, and the spawn pass, which also serves in-memory
+//! text through `JackdawScene::new`.
 
 use bevy::asset::{AssetPlugin, LoadState};
 use bevy::prelude::*;
@@ -73,10 +72,8 @@ bevy_transform::components::transform::Transform
     );
 }
 
-/// A game names a scene file rather than building a `JackdawScene` by hand, so
-/// the asset loader is the gate it meets. The loader fails the load rather
-/// than handing back a scene, and the asset server reports the refusal by the
-/// component's name.
+/// A game naming a scene file meets the asset loader, which fails the load and
+/// reports the refusal by the component's name.
 #[test]
 fn the_asset_loader_fails_a_scene_file_holding_retired_ui_components() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -120,9 +117,7 @@ fn the_asset_loader_fails_a_scene_file_holding_retired_ui_components() {
 }
 
 /// Refusing is not the same as loading a scene that happens to hold nothing,
-/// and a game that shows a screen when its scene arrives has to tell the two
-/// apart. The marker is how: it says the loader would not spawn this, so the
-/// game can fall back rather than wait for entities that are never coming.
+/// and the marker is how a game tells the two apart.
 #[test]
 fn a_refused_scene_is_marked_so_a_game_can_tell() {
     let mut app = runtime_app();
@@ -141,10 +136,8 @@ fn a_refused_scene_is_marked_so_a_game_can_tell() {
     );
 }
 
-/// A refusal describes one load attempt, not the root forever. When a
-/// corrected document arrives through hot reload the scene spawns and the
-/// marker goes; a marker left on a healthy scene would have the game showing
-/// its fallback over content that is there.
+/// A refusal describes one load attempt: a corrected document arriving through
+/// hot reload spawns and takes the marker off.
 #[test]
 fn a_refusal_does_not_outlive_the_document_that_earned_it() {
     let mut app = runtime_app();
@@ -161,7 +154,6 @@ fn a_refusal_does_not_outlive_the_document_that_earned_it() {
         "the first attempt is refused, or this proves nothing"
     );
 
-    // What hot reload does: the same asset, now holding a corrected document.
     if let Some(mut scene) = app
         .world_mut()
         .resource_mut::<Assets<JackdawScene>>()
@@ -187,8 +179,7 @@ fn a_refusal_does_not_outlive_the_document_that_earned_it() {
 }
 
 /// A scene named as a file fails in the asset loader, so no document reaches
-/// the spawn pass. Without the marker the root would sit with no children and
-/// nothing to say why.
+/// the spawn pass and only the marker says why.
 #[test]
 fn a_scene_file_the_asset_loader_refuses_marks_its_root() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -220,14 +211,10 @@ fn a_scene_file_the_asset_loader_refuses_marks_its_root() {
     );
 }
 
-/// A scene the spawn pass cannot find is usually one still on its way, and
-/// marking those would have every game showing its fallback for the frames
-/// before its screen arrives. Only a load the asset server has given up on is
-/// a refusal.
-///
-/// The fixture holds a handle whose asset is not in the store, the branch a
-/// still-loading file takes on every pass, so a mark made on the miss rather
-/// than on the failure shows up at once.
+/// A scene the spawn pass cannot find is usually one still on its way, so only
+/// a load the asset server has given up on counts as a refusal. The fixture
+/// holds a handle whose asset is not in the store, the branch a still-loading
+/// file takes.
 #[test]
 fn a_scene_whose_asset_has_not_arrived_is_not_marked_refused() {
     let mut app = runtime_app();
@@ -268,8 +255,7 @@ fn a_scene_whose_asset_has_not_arrived_is_not_marked_refused() {
     );
 }
 
-/// A scene that carried nothing to spawn was still loaded, and must not read
-/// as refused.
+/// A scene that carried nothing to spawn was still loaded.
 #[test]
 fn a_scene_that_spawns_nothing_is_not_marked_refused() {
     let mut app = runtime_app();
@@ -291,9 +277,9 @@ fn a_scene_that_spawns_nothing_is_not_marked_refused() {
     );
 }
 
-/// A prefab base carrying the retired vocabulary hands it to an instance whose
-/// own document never names it, so a gate reading the document as authored
-/// sees a clean one and the component arrives on the way to the spawn.
+/// A prefab base hands the retired vocabulary to an instance whose own document
+/// never names it, so a gate reading the document as authored sees a clean
+/// one.
 #[test]
 fn a_scene_inheriting_retired_ui_components_is_refused() {
     let dir = tempfile::tempdir().expect("tempdir");

@@ -14,17 +14,10 @@ mod keymap_user_overrides;
 
 use bevy::prelude::App;
 
-/// A config directory of this test binary's own.
-///
-/// `headless_app` builds the editor, and the editor reads the user keymap
-/// from the config directory at startup. Without this the suite would read
-/// whoever is running it: a developer with a rebound chord would see these
-/// tests fail on their machine and nowhere else.
-///
-/// The redirect is process-wide, so it belongs at the binary's root rather
-/// than in either module: it is installed once, and every app either
-/// module builds goes through [`headless_app`] below and so is built after
-/// it.
+/// A config directory of this test binary's own. The editor reads the user keymap
+/// from the config directory at startup, so without this the suite would read
+/// whoever is running it. The redirect is process-wide, so it belongs at the
+/// binary's root: every app either module builds goes through `headless_app`.
 pub(crate) static CONFIG_DIR: std::sync::LazyLock<std::path::PathBuf> =
     std::sync::LazyLock::new(|| {
         let dir = std::env::temp_dir().join(format!("jackdaw_keymap_tests_{}", std::process::id()));
@@ -47,11 +40,8 @@ pub(crate) fn empty_config_dir() -> &'static std::path::Path {
     dir
 }
 
-/// Take `app` into the editor proper.
-///
-/// A headless app is parked in `AppState::ProjectSelect`, and most of the
-/// editor's systems -- the keybind dialog's, the status bar's -- are gated
-/// on the state it is not in. The panels that read the open project fail
+/// Take `app` into the editor proper. A headless app is parked in
+/// `AppState::ProjectSelect`, and the panels that read the open project fail
 /// their parameter validation without one, so a project goes in first.
 pub(crate) fn enter_editor(app: &mut App) {
     use bevy::prelude::*;

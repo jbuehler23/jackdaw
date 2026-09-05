@@ -66,9 +66,6 @@ fn cycle_detector_rejects_revisit() {
     assert!(err.to_string().contains("a.bsn"));
 }
 
-/// Prefab and scene documents for these tests are built directly as BSN
-/// documents (the prefab cache stores `SceneBsnAst`), and resolved through
-/// `resolver_bsn`, mirroring the live editor path.
 const PREFAB_TYPE: &str = "jackdaw::prefab::components::Prefab";
 const PEID_TYPE: &str = "jackdaw::prefab::components::PrefabEntityId";
 const ISA_TYPE: &str = "jackdaw::prefab::components::IsA";
@@ -97,25 +94,21 @@ fn isa_patch(source: &str) -> jackdaw_bsn::BsnPatch {
     })
 }
 
-/// Parse `.bsn` text into a document. `PrefabAstCache` and `read_prefab_ast`
-/// store BSN documents, so prefab fixtures are authored as BSN text.
+/// Parse `.bsn` text into a document.
 fn bsn_ast(text: &str) -> jackdaw_bsn::SceneBsnAst {
     jackdaw_bsn::parse_bsn_text(text).expect("prefab BSN parses")
 }
 
 /// Convert an inline JSON prefab fixture to BSN text and write it to `path`.
-/// The prefab cache loader reads only `.bsn` files, and the conversion needs
-/// the app's type registry, so the app must exist before the fixture is
-/// written.
+/// The conversion needs the app's type registry, so the app must exist first.
 fn write_bsn_prefab(app: &mut bevy::prelude::App, path: &std::path::Path, jsn: &str) {
     let converted = jackdaw::jsn_to_bsn::convert_jsn_text(app.world_mut(), jsn)
         .expect("convert prefab fixture to bsn");
     std::fs::write(path, converted.scene_bsn).expect("write .bsn fixture");
 }
 
-/// Register an ECS entity as a root node of the live BSN document, carrying
-/// the given patches. Prefab operators package selection data off the
-/// document node, so test entities must be registered to participate.
+/// Register an ECS entity as a root node of the live BSN document. Prefab
+/// operators package selection data off the document node.
 fn register_live_root(
     app: &mut bevy::prelude::App,
     entity: bevy::prelude::Entity,
@@ -148,8 +141,7 @@ fn vec3_value(x: f64, y: f64, z: f64) -> jackdaw_bsn::BsnValue {
     })
 }
 
-/// A full `Transform` struct patch with the given translation, identity
-/// rotation, and unit scale.
+/// A full `Transform` patch: given translation, identity rotation, unit scale.
 fn transform_patch(x: f64, y: f64, z: f64) -> jackdaw_bsn::BsnPatch {
     jackdaw_bsn::BsnPatch::Struct(jackdaw_bsn::BsnStructData {
         type_path: TRANSFORM_TYPE.to_string(),
@@ -190,10 +182,8 @@ fn transform_patch(x: f64, y: f64, z: f64) -> jackdaw_bsn::BsnPatch {
     })
 }
 
-/// The document node entity for the sole `IsA` instance in the live BSN
-/// document. Prefab operators take the document node; `spawn_instance` and the
-/// resolver author it into `SceneBsnAst`. Re-fetch after any operator, which
-/// rebuilds the document with fresh node ids on reload.
+/// The document node for the sole `IsA` instance. Re-fetch after any operator:
+/// a reload rebuilds the document with fresh node ids.
 fn sole_isa_node(app: &bevy::prelude::App) -> bevy::prelude::Entity {
     app.world()
         .resource::<jackdaw_bsn::SceneBsnAst>()
@@ -451,10 +441,8 @@ fn load_resolves_isa_spawns_inherited_entities() {
     );
 }
 
-/// A legacy scene whose prefab is legacy too. The cache reads `.bsn` only, so
-/// opening has to convert the dependency before it resolves; converting late
-/// leaves the instance spawning as a bare entity, with the inherited tree
-/// missing from a scene that looks like it opened fine.
+/// The cache reads `.bsn` only, so opening a legacy scene has to convert its
+/// legacy prefab dependency before resolving, or the instance spawns bare.
 #[test]
 fn a_legacy_scene_resolves_a_legacy_prefab_it_inherits_from() {
     let tmp = tempfile::tempdir().unwrap();
@@ -525,7 +513,6 @@ fn save_writes_sparse_deltas_only() {
     let prefab_path = tmp.path().join("p.jsn");
     let scene_path = tmp.path().join("s.jsn");
 
-    // Prefab with a default Transform.
     let prefab_jsn = r#"{
         "jsn": { "format_version": [3,0,0], "editor_version": "0", "bevy_version": "0.18" },
         "metadata": { "name": "p", "created": "", "modified": "" },
@@ -544,7 +531,6 @@ fn save_writes_sparse_deltas_only() {
     }"#;
     std::fs::write(&prefab_path, prefab_jsn).unwrap();
 
-    // Scene with one instance, sparse Transform override (translation only).
     let scene_jsn = format!(
         r#"{{
             "jsn": {{ "format_version": [3,0,0], "editor_version": "0", "bevy_version": "0.18" }},
@@ -563,8 +549,6 @@ fn save_writes_sparse_deltas_only() {
     std::fs::write(&scene_path, scene_jsn).unwrap();
 
     let mut app = make_app_for_prefab_tests();
-    // Opening a legacy scene converts it (and its prefab dependency) to .bsn
-    // on disk; the originals stay as .jsn.bak.
     jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
     let bsn_scene_path = scene_path.with_extension("bsn");
     assert!(bsn_scene_path.exists(), "scene converted to .bsn on open");
@@ -589,8 +573,6 @@ fn save_writes_sparse_deltas_only() {
     let written = std::fs::read_to_string(&bsn_scene_path).expect("file exists");
     let doc = bsn_ast(&written);
 
-    // The instance node persists sparsely: the diverged Transform keeps only
-    // the translation delta, the baseline-matching fields drop.
     let instance = doc
         .entities_with_component(ISA_TYPE)
         .first()
@@ -620,8 +602,6 @@ fn save_as_prefab_writes_file_and_converts_in_place() {
 
     let mut app = make_app_for_prefab_tests();
 
-    // Spawn a simple entity with a Name and register it in the live BSN
-    // document so the bundle path has something concrete to package.
     let entity = app.world_mut().spawn(Name::new("test_entity")).id();
     register_live_root(
         &mut app,
@@ -647,12 +627,10 @@ fn save_as_prefab_writes_file_and_converts_in_place() {
         "synthetic root has PrefabEntityId(0)"
     );
 
-    // After conversion, a new instance node carrying IsA was inserted.
     let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
     let has_isa = !ast.entities_with_component(ISA_TYPE).is_empty();
     assert!(has_isa, "new instance node carrying IsA inserted");
 
-    // The prefab is now in the cache (so re-resolving the scene works).
     let cache = app.world().resource::<jackdaw::prefab::PrefabAstCache>();
     assert!(
         cache.get(&prefab_target).is_some(),
@@ -720,12 +698,9 @@ fn prefab_file_change_triggers_reload() {
         "initial load sees v1; got {initial:?}"
     );
 
-    // Modify the prefab on disk.
     write_bsn_prefab(&mut app, &prefab_path, &prefab_with_name("v2"));
 
-    // Poll the app for up to 3 seconds waiting for the watcher to fire,
-    // debounce, and re-resolve. Filesystem event latency varies by OS;
-    // generous deadline so this isn't flaky in CI.
+    // Filesystem event latency varies by OS; generous deadline to avoid flakes.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     while std::time::Instant::now() < deadline {
         app.update();
@@ -821,9 +796,6 @@ fn spawn_instance_reuses_cached_prefab() {
         bevy::math::Vec3::ZERO,
     );
 
-    // Mutate the on-disk file. The second spawn should not pick up the
-    // change, because the cache already has the original. Pins the
-    // "caches if missing, otherwise reuses" semantics.
     std::fs::write(&prefab_path, "{}").unwrap();
 
     jackdaw::prefab::operators::spawn_instance(
@@ -854,7 +826,6 @@ fn field_is_overridden_detects_changed_field() {
     );
     let get = |p: &std::path::Path| cache.get(p);
 
-    // Instance node overriding translation.x only.
     let scene = bsn_ast(
         "jackdaw::prefab::components::IsA { source: \"p.bsn\" }\n\
          jackdaw::prefab::components::PrefabEntityId(0)\n\
@@ -965,12 +936,8 @@ fn revert_field_snaps_value_back_to_prefab() {
 
 #[test]
 fn revert_component_preserves_instance_only_addition() {
-    // `revert_component` only reverts to a prefab-provided value. When
-    // the prefab doesn't have the component (instance-only addition),
-    // the operator must refuse to drop it; removing in that case
-    // erases authored data with no recovery path. Re-enable the "drop
-    // instance-only addition" behaviour later behind explicit gating
-    // (an IsA-ancestor check).
+    // `revert_component` only reverts to a prefab-provided value: dropping an
+    // instance-only addition would erase authored data with no recovery path.
     let tmp = tempfile::tempdir().unwrap();
     let prefab_path = tmp.path().join("p.bsn");
     std::fs::write(
@@ -990,7 +957,6 @@ fn revert_component_preserves_instance_only_addition() {
 
     let instance_key = sole_isa_node(&app);
 
-    // Author an instance-only Name directly on the document node.
     {
         let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
         let patch = ast
@@ -1011,8 +977,6 @@ fn revert_component_preserves_instance_only_addition() {
         "bevy_ecs::name::Name",
     );
 
-    // revert_component refuses to remove a component the prefab does not
-    // provide, so it is a no-op that leaves the document node untouched.
     let name = live_component(&app, instance_key, "bevy_ecs::name::Name");
     let preserved = matches!(
         name,
@@ -1083,7 +1047,6 @@ fn save_as_variant_writes_prefab_with_isa_and_overrides() {
         "variant root has IsA pointing at base"
     );
 
-    // Source scene's instance now points at the variant's written path.
     let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
     let instance_node = ast
         .entities_with_component(ISA_TYPE)
@@ -1113,7 +1076,6 @@ fn bulk_apply_in_scene_copies_delta_to_all_matching_instances() {
 
     let mut app = make_app_for_prefab_tests();
 
-    // Spawn three instances of the same prefab.
     for x in [0.0, 2.0, 4.0] {
         jackdaw::prefab::operators::spawn_instance(
             app.world_mut(),
@@ -1401,9 +1363,6 @@ fn unpack_child_adds_to_deleted_and_creates_standalone_node() {
     );
     assert!(has_seven, "instance's IsA.deleted contains the unpacked id");
 
-    // The unpacked entity is re-parented under the drop target and keeps its
-    // inherited components (its Transform); its PrefabEntityId marker is
-    // stripped so it reads as standalone.
     let kids = ast.get_children_ast(scene_root);
     assert_eq!(kids.len(), 1, "one unpacked child under the drop target");
     let unpacked_x = jackdaw_bsn::get_bsn_field(ast, kids[0], TRANSFORM_TYPE, "translation.x");
@@ -1445,7 +1404,6 @@ fn save_as_prefab_from_selection_packages_siblings_under_synthetic_root() {
         written.find_patch_by_type_path(root, PREFAB_TYPE).is_some(),
         "the root is the synthetic prefab root"
     );
-    // Both authored entities are children of the synthetic root.
     assert_eq!(
         written.get_children_ast(root).len(),
         2,
@@ -1471,11 +1429,8 @@ fn save_as_prefab_from_selection_filters_descendants_of_selected_ancestors() {
         ))
         .id();
 
-    // Register both in the live BSN document so they survive the
-    // "document-tracked only" filter. In the real editor every user-drawn
-    // entity is registered as part of scene_io's spawn path; ECS-only
-    // children of brushes (face overlays etc.) are deliberately not
-    // registered and therefore get filtered out.
+    // Only document-tracked entities survive the bundle filter; ECS-only
+    // children of brushes are deliberately left unregistered.
     {
         let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
         let parent_node =
@@ -1488,8 +1443,6 @@ fn save_as_prefab_from_selection_filters_descendants_of_selected_ancestors() {
         ast.link(child, child_node);
     }
 
-    // Select both - normalization should drop the child (its parent
-    // already covers it), leaving a single top root.
     jackdaw::prefab::operators::save_as_prefab_from_selection(
         app.world_mut(),
         &[parent, child],
@@ -1498,7 +1451,6 @@ fn save_as_prefab_from_selection_filters_descendants_of_selected_ancestors() {
 
     let written = bsn_ast(&std::fs::read_to_string(&target).unwrap());
     let root = written.roots[0];
-    // Always-wrap shape: synthetic PrefabRoot + parent + child.
     assert_eq!(
         1 + written.descendants_of(root).len(),
         3,
@@ -1512,8 +1464,6 @@ fn save_as_prefab_from_selection_filters_descendants_of_selected_ancestors() {
 
 #[test]
 fn save_as_prefab_from_selection_one_root_inserts_instance() {
-    // Selection of size 1 still mutates the live document to add a new
-    // instance node carrying IsA + PrefabEntityId(0).
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("solo.bsn");
 
@@ -1557,16 +1507,13 @@ fn save_round_trip_preserves_prefab_markers() {
         }"#,
     );
 
-    // Drop an instance into the scene.
     jackdaw::prefab::operators::spawn_instance(
         app.world_mut(),
         &prefab_path,
         bevy::math::Vec3::ZERO,
     );
 
-    // Capture the live document the same way save_scene does. This is
-    // the boundary where `should_skip_component` runs, so it's the
-    // exact path that previously dropped the prefab marker components.
+    // Capture as save_scene does: this is where `should_skip_component` runs.
     let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
         app.world_mut(),
         std::path::Path::new(""),
@@ -1660,9 +1607,6 @@ fn external_edit_changes_fingerprint() {
     assert_ne!(fp_a, fp_b, "fingerprint changes when content changes");
 }
 
-/// Smoke test: dispatch `prefab.revert_component` through the operator
-/// framework end-to-end. Verifies the wrapper decodes parameters and
-/// calls the underlying `revert_component` helper.
 #[test]
 fn revert_component_operator_runs_through_dispatch() {
     use jackdaw_api::prelude::*;
@@ -1684,8 +1628,6 @@ fn revert_component_operator_runs_through_dispatch() {
 
     let mut app = util::editor_test_app();
 
-    // Spawn a prefab instance; the placement Transform is a sparse override
-    // against the prefab's identity Transform baseline.
     jackdaw::prefab::operators::spawn_instance(
         app.world_mut(),
         &prefab_path,
@@ -1703,7 +1645,6 @@ fn revert_component_operator_runs_through_dispatch() {
         .ecs_for_ast(instance_key)
         .expect("instance ECS entity");
 
-    // Dispatch through the operator framework.
     let _ = app
         .world_mut()
         .operator("prefab.revert_component")
@@ -1714,7 +1655,6 @@ fn revert_component_operator_runs_through_dispatch() {
     // The dispatcher queues commands through the world; flush them.
     app.update();
 
-    // The revert triggers a reload that rebuilds the document; re-fetch.
     let instance_key = sole_isa_node(&app);
     assert_eq!(
         live_field_f64(&app, instance_key, TRANSFORM_TYPE, "translation.x"),
@@ -1725,11 +1665,6 @@ fn revert_component_operator_runs_through_dispatch() {
 
 #[test]
 fn save_as_prefab_strips_inherited_prefab_markers() {
-    // An entity whose AST node already carries an `IsA` (because the
-    // user previously converted it to an instance) must not bake that
-    // marker into the freshly-authored prefab file. After saving,
-    // neither the synthetic root nor any packaged child carries the
-    // inherited IsA.
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("fresh.bsn");
 
@@ -1769,10 +1704,6 @@ fn save_as_prefab_strips_inherited_prefab_markers() {
 
 #[test]
 fn save_as_prefab_does_not_bake_self_isa_into_file() {
-    // The source entity already has an `IsA` pointing at `target`.
-    // The always-wrap save path writes a synthetic PrefabRoot wrapping
-    // the source entity; the source's pre-existing IsA must be stripped
-    // from the written file so the prefab does not reference itself.
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("box.bsn");
 
@@ -1863,10 +1794,6 @@ fn repair_self_cycles_strips_self_isa_from_cached_prefab() {
 
 #[test]
 fn prefab_edit_propagates_to_instance_in_other_tab_on_swap() {
-    // Simulates: user has tab A with an instance of box.bsn + tab B
-    // editing box.bsn directly. Edit the prefab via the cache (as
-    // `scene.save`'s prefab branch does), then swap back to tab A and
-    // assert the instance's spawned entity reflects the updated prefab.
     use bevy::prelude::*;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -1875,7 +1802,6 @@ fn prefab_edit_propagates_to_instance_in_other_tab_on_swap() {
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
 
-    // 1. Seed a prefab with a Name component and a Transform.
     app.world_mut()
         .resource_mut::<jackdaw::prefab::PrefabAstCache>()
         .insert(
@@ -1892,8 +1818,6 @@ fn prefab_edit_propagates_to_instance_in_other_tab_on_swap() {
             ),
         );
 
-    // 2. Build tab A: a scene with one instance of the prefab. Push a
-    //    second tab (tab B) pointing at the prefab via its cache entry.
     {
         let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
         let mut tab_a = jackdaw::scenes::SceneTab::new_untitled(1);
@@ -1915,8 +1839,6 @@ fn prefab_edit_propagates_to_instance_in_other_tab_on_swap() {
         scenes.tabs.push(tab_b);
     }
 
-    // 3. Activate tab A: resolver should spawn the instance with the
-    //    initial name + transform inherited from the prefab.
     jackdaw::scenes::swap::activate_tab(app.world_mut(), 0);
 
     let initial_names: Vec<String> = {
@@ -1929,17 +1851,8 @@ fn prefab_edit_propagates_to_instance_in_other_tab_on_swap() {
         "instance should spawn with the inherited prefab Name; got {initial_names:?}"
     );
 
-    // 4. Swap to tab B (the prefab tab). This is what happens when the
-    //    user clicks the prefab tab in the strip. capture_active_tab
-    //    flushes tab A's instance AST into tab.content; activate_tab
-    //    reads the cache, resolves, and spawns the prefab into the
-    //    live world. Now the live SceneJsnAst is the prefab AST.
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
 
-    // 5. Mutate the cache entry: rename the prefab. This is what
-    //    `scene.save`'s prefab branch does after the user hits Ctrl+S
-    //    on a prefab tab: clone the live AST and insert it into the
-    //    cache under the prefab path.
     {
         let mut cache = app
             .world_mut()
@@ -1964,10 +1877,8 @@ fn prefab_edit_propagates_to_instance_in_other_tab_on_swap() {
                 }
             }
         });
-        // Also update the live BSN document so the upcoming capture-on-swap
-        // (which flushes the live document into the cache for prefab tabs)
-        // doesn't clobber our mutation. In the real editor, scene.save
-        // mutates the cache from the live document, so they stay in sync.
+        // Capture-on-swap flushes the live document into the cache, so mutate
+        // both or the swap clobbers this rename.
         let mut live = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
         let root_key = live.entities_with_component(PREFAB_TYPE).first().copied();
         if let Some(root_key) = root_key {
@@ -1986,8 +1897,6 @@ fn prefab_edit_propagates_to_instance_in_other_tab_on_swap() {
         }
     }
 
-    // 6. Swap back to tab A. The resolver should re-read the cache and
-    //    respawn the instance with the new Name.
     jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
 
     let final_names: Vec<String> = {
@@ -2007,8 +1916,6 @@ fn prefab_edit_propagates_to_instance_in_other_tab_on_swap() {
 
 #[test]
 fn scene_save_on_prefab_tab_clears_dirty_state() {
-    // After a Ctrl+S on a prefab tab, neither the per-tab dirty flag
-    // nor the global `SceneDirtyState` should report unsaved work.
     use bevy::prelude::*;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -2017,7 +1924,6 @@ fn scene_save_on_prefab_tab_clears_dirty_state() {
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
 
-    // Seed the cache with a prefab.
     app.world_mut()
         .resource_mut::<jackdaw::prefab::PrefabAstCache>()
         .insert(
@@ -2029,7 +1935,6 @@ fn scene_save_on_prefab_tab_clears_dirty_state() {
             ),
         );
 
-    // Set up one prefab tab as the active tab.
     {
         let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
         let canonical = jackdaw::prefab::canonical_prefab_path(&prefab_path);
@@ -2049,9 +1954,7 @@ fn scene_save_on_prefab_tab_clears_dirty_state() {
     }
     jackdaw::scenes::swap::activate_tab(app.world_mut(), 0);
 
-    // Simulate a user edit: push something onto the command history and
-    // flip the tab dirty flag. Also drift `undo_len_at_save` so the
-    // global status bar would otherwise still show `*Unsaved`.
+    // Drift `undo_len_at_save` so the status bar would otherwise show unsaved.
     struct NoOpCommand;
     impl jackdaw_commands::EditorCommand for NoOpCommand {
         fn execute(&mut self, _world: &mut bevy::prelude::World) {}
@@ -2070,8 +1973,6 @@ fn scene_save_on_prefab_tab_clears_dirty_state() {
     }
     assert!(jackdaw::scene_io::is_scene_dirty(app.world()));
 
-    // Save: this routes through the prefab branch in save_scene_inner
-    // because the active tab is a prefab.
     jackdaw::scene_io::save_scene(app.world_mut());
 
     assert!(
@@ -2083,7 +1984,6 @@ fn scene_save_on_prefab_tab_clears_dirty_state() {
         "global SceneDirtyState must report clean after save"
     );
 
-    // Pump the dirty-tracker system once; it must not flip dirty back on.
     let _ = app
         .world_mut()
         .run_system_cached(jackdaw::scenes::mark_active_dirty_on_history_growth);
@@ -2092,12 +1992,8 @@ fn scene_save_on_prefab_tab_clears_dirty_state() {
         "mark_active_dirty_on_history_growth must not re-dirty the tab post-save"
     );
 
-    // Pump the cache-epoch-change driver: this is what fires on the next
-    // frame after the save inserts into the cache. It calls
-    // `reload_all_instances`, which calls `clear_scene_entities`, which
-    // *clears the command history*. If `SceneDirtyState.undo_len_at_save`
-    // is not also reset to 0, the status bar will keep showing `*Unsaved`
-    // because `undo_stack.len() (0) != undo_len_at_save (>0)`.
+    // The cache-epoch driver clears the command history; `undo_len_at_save`
+    // must be reset with it or the status bar stays stuck on unsaved.
     jackdaw::prefab::sync::drive_respawn_on_prefab_cache_change(app.world_mut());
     assert!(
         !jackdaw::scene_io::is_scene_dirty(app.world()),
@@ -2237,8 +2133,6 @@ fn save_scene_as_prefab_with_multiple_roots_uses_synthetic_root() {
 
 #[test]
 fn save_as_prefab_from_selection_always_wraps_in_prefab_root() {
-    // Single-entity selection produces the same shape as multi-entity:
-    // synthetic PrefabRoot + child(ren) with PrefabEntityId(1..).
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("solo.bsn");
 
@@ -2274,10 +2168,8 @@ fn save_as_prefab_from_selection_always_wraps_in_prefab_root() {
 
 #[test]
 fn save_as_prefab_from_selection_replaces_source_with_instance() {
-    // After save, the live document has exactly one new authored node:
-    // the instance. The originally-selected entity is removed; the
-    // resolver materialises it back as an inherited descendant when the
-    // next respawn fires.
+    // The selected entity is removed; the resolver materialises it back as an
+    // inherited descendant on the next respawn.
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("box.bsn");
 
@@ -2312,10 +2204,6 @@ fn save_as_prefab_from_selection_replaces_source_with_instance() {
 
 #[test]
 fn unbundle_instance_promotes_inherited_children_to_authored() {
-    // Bundle a single entity, then unbundle. The new model puts only
-    // the instance node in the source AST after bundling; the inherited
-    // child is materialised by the resolver. Unbundle promotes the
-    // inherited child to an authored AST node and strips PrefabEntityId.
     let tmp = tempfile::tempdir().unwrap();
     // A `.bsn` target so the bundle write and the follow-up spawn_instance both
     // round-trip through the BSN prefab reader.
@@ -2326,8 +2214,6 @@ fn unbundle_instance_promotes_inherited_children_to_authored() {
         .world_mut()
         .spawn(bevy::prelude::Name::new("source"))
         .id();
-    // Register the source in the live BSN document with its Name patch; the
-    // bundle path copies component patches off the document node.
     {
         let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
         let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("source".to_string())]);
@@ -2340,15 +2226,12 @@ fn unbundle_instance_promotes_inherited_children_to_authored() {
 
     jackdaw::prefab::operators::unbundle_instance(app.world_mut(), instance_key);
 
-    // The instance node is gone; unbundle strips IsA across the promoted subtree.
     let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
     assert!(
         ast.entities_with_component(ISA_TYPE).is_empty(),
         "IsA stripped from former instance node"
     );
 
-    // One authored node remains: the promoted child. It has a Name, no IsA,
-    // no PrefabEntityId, and is a top-level (root) node.
     let promoted = ast
         .roots
         .iter()
@@ -2375,10 +2258,8 @@ fn unbundle_instance_promotes_inherited_children_to_authored() {
 
 #[test]
 fn save_as_prefab_preserves_world_positions_of_selection() {
-    // After Save Selection as Prefab, the visual positions of the
-    // selected entities in the source scene must NOT change. The
-    // instance entity sits at the selection centroid and each child's
-    // local Transform is shifted by `-centroid` to compensate.
+    // Saving a selection as a prefab must not move it: the instance sits at the
+    // centroid and each child's local Transform is shifted by `-centroid`.
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("p.bsn");
 
@@ -2398,10 +2279,8 @@ fn save_as_prefab_preserves_world_positions_of_selection() {
         ))
         .id();
 
-    // Force GlobalTransform population so the centroid read uses the
-    // production GlobalTransform path. The Transform fallback would
-    // give the same answer for these top-level entities, but exercising
-    // the GlobalTransform branch is the goal here.
+    // Force GlobalTransform population so the centroid read takes the
+    // GlobalTransform path rather than the Transform fallback.
     app.update();
 
     register_live_root(&mut app, e1, vec![transform_patch(2.0, 0.0, 0.0)]);
@@ -2409,11 +2288,7 @@ fn save_as_prefab_preserves_world_positions_of_selection() {
 
     jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[e1, e2], &target);
 
-    // Centroid is (3, 0, 0). Instance Transform.x in the live document
-    // should equal the centroid. The packaged children live in the
-    // prefab file with centroid-relative translations so a fresh
-    // instance spawn at world (3, 0, 0) reproduces the originals at
-    // (2, 0, 0) and (4, 0, 0).
+    // Centroid of (2, 0, 0) and (4, 0, 0).
     let instance_key = sole_isa_node(&app);
     let instance_x = live_field_f64(&app, instance_key, TRANSFORM_TYPE, "translation.x")
         .expect("instance has a Transform translation");
@@ -2422,8 +2297,7 @@ fn save_as_prefab_preserves_world_positions_of_selection() {
         "instance Transform.x is the centroid (3.0); got {instance_x}"
     );
 
-    // Verify the prefab file: children's translations should be
-    // (-1, 0, 0) and (1, 0, 0) (centroid-relative).
+    // Children are stored centroid-relative.
     let written = bsn_ast(&std::fs::read_to_string(&target).unwrap());
     let root = written.roots[0];
     let mut child_xs: Vec<f64> = written
@@ -2450,10 +2324,8 @@ fn save_as_prefab_preserves_world_positions_of_selection() {
 
 #[test]
 fn save_as_prefab_synthetic_root_has_visibility() {
-    // Bevy's hierarchy propagation requires Visibility on every entity
-    // in a render parent chain. Without it, children log B0004 warnings
-    // and render at the wrong world position because the parent's
-    // GlobalTransform stays at identity.
+    // Bevy's hierarchy propagation needs Visibility on every entity in a render
+    // parent chain, or the parent's GlobalTransform stays at identity.
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("v.bsn");
 
@@ -2476,11 +2348,8 @@ fn save_as_prefab_synthetic_root_has_visibility() {
         "synthetic PrefabRoot carries Visibility for hierarchy propagation"
     );
 
-    // The instance entity in the live document inherits Visibility from
-    // the prefab's synthetic root via the resolver merge; the local
-    // node only needs to carry the sparse delta (IsA + placement
-    // Transform). Verify the instance exists and the prefab's synthetic
-    // root has Visibility (the latter is what the resolver will pull in).
+    // The instance inherits Visibility from the prefab's synthetic root, so the
+    // local node only carries the sparse delta (IsA + placement Transform).
     let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
     assert!(
         !ast.entities_with_component(ISA_TYPE).is_empty(),
@@ -2574,12 +2443,8 @@ fn load_scene_from_jsn_backfills_visibility_require_chain() {
 
 #[test]
 fn save_as_prefab_skips_ecs_only_descendants() {
-    // Brushes have ECS-only children (face overlays, clip previews) that
-    // aren't registered in the AST. Bundling them into the prefab would
-    // orphan them after respawn because the in-place restructure has no
-    // way to re-attach unknown ECS entities to the brush they belong to.
-    // The brush spawn pipeline re-derives them from the brush data, so
-    // they don't belong in the prefab file at all.
+    // Brushes have ECS-only children (face overlays, clip previews) the brush
+    // spawn pipeline re-derives; bundling them would orphan them after respawn.
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("derived.bsn");
 
@@ -2588,8 +2453,7 @@ fn save_as_prefab_skips_ecs_only_descendants() {
         .world_mut()
         .spawn(bevy::prelude::Name::new("brush"))
         .id();
-    // Child entity exists in ECS as a child of `brush` but never gets
-    // registered in the document - emulating a brush face overlay.
+    // Unregistered ECS child, emulating a brush face overlay.
     let _derived = app
         .world_mut()
         .spawn((
@@ -2616,10 +2480,6 @@ fn save_as_prefab_skips_ecs_only_descendants() {
 
 #[test]
 fn save_then_respawn_keeps_isa_on_instance_entity() {
-    // Reproduces the editor flow: draw a brush, save selection as prefab,
-    // let the cache-driven respawn fire, then assert that the new
-    // instance entity has IsA on its ECS - which classify_entity needs
-    // to assign EntityCategory::Prefab and draw the Package icon.
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("p_test.bsn");
 
@@ -2636,10 +2496,8 @@ fn save_then_respawn_keeps_isa_on_instance_entity() {
     app.update();
 
     jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &[brush], &target);
-    // Force the cache-driven driver to run reload_all_instances.
     jackdaw::prefab::watcher::reload_all_instances(app.world_mut());
 
-    // After respawn, find the instance entity (the one carrying IsA).
     let mut q = app
         .world_mut()
         .query::<(bevy::prelude::Entity, &jackdaw::prefab::IsA)>();
@@ -2680,15 +2538,11 @@ fn save_then_respawn_keeps_isa_on_instance_entity() {
 
 #[test]
 fn three_instances_keep_independent_positions() {
-    // Spawn the same prefab three times at three different positions.
-    // Each instance must keep its own Transform; adding a new instance
-    // must NOT reset existing instances' positions.
     use bevy::math::Vec3;
 
     let tmp = tempfile::tempdir().unwrap();
     let prefab_path = tmp.path().join("p.bsn");
 
-    // Hand-write a minimal prefab: synthetic root + 1 brush child.
     let prefab_json = serde_json::json!({
         "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
         "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
@@ -2747,7 +2601,6 @@ fn three_instances_keep_independent_positions() {
         Vec3::new(30.0, 0.0, 0.0),
     );
 
-    // Three instance entities. Each must have a distinct Transform.translation.
     let world = app.world_mut();
     let mut q = world.query::<(
         bevy::prelude::Entity,
@@ -2774,10 +2627,6 @@ fn three_instances_keep_independent_positions() {
 
 #[test]
 fn three_instances_each_carry_isa_on_ecs() {
-    // Every instance entity must carry IsA on its ECS state so the
-    // outliner classifies it as `Prefab` (Package icon). After
-    // multiple spawn_instance calls + reload_all_instances passes, no
-    // instance can be missing IsA.
     use bevy::math::Vec3;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -2830,15 +2679,6 @@ fn three_instances_each_carry_isa_on_ecs() {
 
 #[test]
 fn save_then_drag_spawn_twice_keeps_distinct_positions() {
-    // Mirrors the editor flow that's been showing position clustering:
-    // 1. Draw a brush at position A, save selection as prefab.
-    //    -> instance #1 ends up at A.
-    // 2. spawn_instance at position B (drag from asset browser).
-    //    -> instance #2 at B.
-    // 3. spawn_instance at position C.
-    //    -> instance #3 at C.
-    // After all three, each instance's Transform must reflect its
-    // original placement. Adding instance #3 must NOT reset #1 or #2.
     use bevy::math::Vec3;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -2869,8 +2709,6 @@ fn save_then_drag_spawn_twice_keeps_distinct_positions() {
 
     jackdaw::prefab::operators::spawn_instance(app.world_mut(), &target, Vec3::new(20.0, 0.0, 0.0));
 
-    // The third drag-spawn is the one reported as resetting the earlier two
-    // instances' positions.
     jackdaw::prefab::operators::spawn_instance(app.world_mut(), &target, Vec3::new(30.0, 0.0, 0.0));
 
     let world = app.world_mut();
@@ -2899,14 +2737,8 @@ fn save_then_drag_spawn_twice_keeps_distinct_positions() {
 
 #[test]
 fn set_transform_sync_after_external_execute_writes_to_ast() {
-    // Reproduces the gizmo-drag-then-reload regression: a "live drag"
-    // path mutates the ECS Transform directly and pushes a
-    // `SetTransform` via `push_executed` (no execute). Previously this
-    // left the AST holding the pre-drag value, and a subsequent reload
-    // (triggered e.g. by a prefab spawn) snapped the entity back.
-    //
-    // `SetTransform::sync_after_external_execute` is the hook that
-    // brings the AST up to date.
+    // A live gizmo drag mutates the ECS Transform and pushes `SetTransform` via
+    // `push_executed`; `sync_after_external_execute` brings the AST up to date.
     use bevy::math::Vec3;
     use jackdaw_commands::EditorCommand;
 
@@ -2965,18 +2797,13 @@ fn set_transform_sync_after_external_execute_writes_to_ast() {
 
 #[test]
 fn snapshot_captures_inherited_descendant_edit_as_override() {
-    // After editing a component on an inherited brush child (ECS-only,
-    // materialised by the resolver), the snapshot AST must encode the
-    // change as an override entry under the instance, not as a top-level
-    // authored entity. Without this, the snapshot loses the prefab
-    // relationship and a subsequent reload spawns a duplicate inherited
-    // child alongside the edited one.
+    // An edit to a resolver-materialised child must snapshot as an override
+    // under the instance, or a reload spawns a duplicate alongside it.
     use bevy::math::Vec3;
 
     let tmp = tempfile::tempdir().unwrap();
     let prefab_path = tmp.path().join("p.bsn");
 
-    // Prefab with one synthetic root + one child carrying Transform.
     let prefab_json = serde_json::json!({
         "jsn": { "format_version": [3, 0, 0], "editor_version": "0", "bevy_version": "0.18" },
         "metadata": { "name": "", "description": "", "author": "", "created": "", "modified": "" },
@@ -3023,9 +2850,6 @@ fn snapshot_captures_inherited_descendant_edit_as_override() {
         Vec3::new(5.0, 0.0, 0.0),
     );
 
-    // The resolver materialises a child entity (PrefabEntityId=1).
-    // Find it and mutate its Transform to simulate an inherited-child
-    // edit.
     let child_entity = {
         let world = app.world_mut();
         let mut q = world.query::<(bevy::prelude::Entity, &jackdaw::prefab::PrefabEntityId)>();
@@ -3040,24 +2864,20 @@ fn snapshot_captures_inherited_descendant_edit_as_override() {
     {
         t.translation = Vec3::new(99.0, 0.0, 0.0);
     }
-    // Mirror the edit into the live document, as command dispatch does.
     jackdaw_bsn::sync_to_ast(
         app.world_mut(),
         child_entity,
         std::any::TypeId::of::<bevy::prelude::Transform>(),
     );
 
-    // Capture a snapshot. The result must encode the edit as an override.
     let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
         app.world_mut(),
         std::path::Path::new(""),
     );
     let snapshot = bsn_ast(&text);
 
-    // The instance node (with IsA) should still have a child node carrying
-    // PrefabEntityId(1). The child node should NOT have a Transform equal
-    // to the prefab baseline stripped away entirely: the Transform differs
-    // from the prefab, so it stays, while the matching Name is omitted.
+    // The Transform differs from the prefab baseline so it stays; the matching
+    // Name is omitted.
     let isa_type = "jackdaw::prefab::components::IsA";
     let instance = snapshot
         .entities_with_component(isa_type)
@@ -3093,13 +2913,8 @@ fn snapshot_captures_inherited_descendant_edit_as_override() {
 
 #[test]
 fn snapshot_install_plus_reload_keeps_inherited_child_visible() {
-    // Reproduces the regression: capturing a snapshot then dragging in
-    // another instance (which triggers `reload_all_instances`) must NOT
-    // erase the existing instance's children. Earlier the resolver was
-    // skipping materialisation of inherited descendants whose id matched
-    // an override entry, but the override entry only carried
-    // `PrefabEntityId`. After reload, spawned entities had no Name /
-    // Transform / Brush data.
+    // A snapshot reduces inherited descendants to sparse override entries; the
+    // resolver must still materialise them fully on the next reload.
     use bevy::math::Vec3;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -3151,21 +2966,17 @@ fn snapshot_install_plus_reload_keeps_inherited_child_visible() {
         Vec3::new(10.0, 0.0, 0.0),
     );
 
-    // Capture a snapshot (exercises the sparse capture side effects).
     let _ = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
         app.world_mut(),
         std::path::Path::new(""),
     );
 
-    // Drag in a second instance, which triggers reload_all_instances.
     jackdaw::prefab::operators::spawn_instance(
         app.world_mut(),
         &prefab_path,
         Vec3::new(20.0, 0.0, 0.0),
     );
 
-    // Both instances should have a visible child entity carrying the
-    // inherited Name and Transform.
     let world = app.world_mut();
     let mut q = world.query::<(
         &jackdaw::prefab::PrefabEntityId,
@@ -3185,10 +2996,8 @@ fn snapshot_install_plus_reload_keeps_inherited_child_visible() {
 
 #[test]
 fn snapshot_round_trip_undoes_spawn_instance() {
-    // What `Ctrl+Z` does on a prefab-spawn operator boils down to:
-    // capture a snapshot, run the spawn, then apply the captured
-    // snapshot back. This test exercises that round-trip directly,
-    // bypassing the operator framework so the harness stays minimal.
+    // The snapshot round-trip `Ctrl+Z` performs, driven directly rather than
+    // through the operator framework.
     use bevy::math::Vec3;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -3220,7 +3029,6 @@ fn snapshot_round_trip_undoes_spawn_instance() {
         &serde_json::to_string(&prefab_json).unwrap(),
     );
 
-    // Capture the "before" snapshot text.
     let before_text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
         app.world_mut(),
         std::path::Path::new(""),
@@ -3231,7 +3039,6 @@ fn snapshot_round_trip_undoes_spawn_instance() {
         assert_eq!(q.iter(world).count(), 0, "no instances before spawn");
     }
 
-    // Run the spawn.
     jackdaw::prefab::operators::spawn_instance(
         app.world_mut(),
         &prefab_path,
@@ -3243,7 +3050,6 @@ fn snapshot_round_trip_undoes_spawn_instance() {
         assert_eq!(q.iter(world).count(), 1, "instance spawned");
     }
 
-    // Apply the before-snapshot (what snapshot undo does).
     jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &before_text);
     {
         let world = app.world_mut();
@@ -3258,9 +3064,8 @@ fn snapshot_round_trip_undoes_spawn_instance() {
 
 #[test]
 fn save_3_brushes_as_prefab_produces_3_inherited_children() {
-    // Reproduces user-reported bug: selecting 3 brushes and saving as a
-    // prefab should produce ONE instance entity with THREE inherited
-    // children, not one inherited child + three top-level brushes.
+    // Three selected brushes must become one instance with three inherited
+    // children, not one child plus three leftover top-level brushes.
 
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("p_boxes.bsn");
@@ -3290,8 +3095,6 @@ fn save_3_brushes_as_prefab_produces_3_inherited_children() {
 
     jackdaw::prefab::operators::save_as_prefab_from_selection(app.world_mut(), &entities, &target);
 
-    // The prefab file on disk should contain the synthetic root +
-    // three child entries.
     let written = bsn_ast(&std::fs::read_to_string(&target).unwrap());
     let root = written.roots[0];
     assert_eq!(
@@ -3300,10 +3103,6 @@ fn save_3_brushes_as_prefab_produces_3_inherited_children() {
         "prefab file has synthetic root + 3 children"
     );
 
-    // After the save, the live world should have:
-    //  - one IsA-bearing instance entity
-    //  - three inherited Brush children (PrefabEntityId set, ChildOf the instance)
-    //  - zero authored top-level Brushes left over
     let world = app.world_mut();
     let mut isa_q = world.query::<&jackdaw::prefab::IsA>();
     let isa_count = isa_q.iter(world).count();
@@ -3338,12 +3137,8 @@ fn save_3_brushes_as_prefab_produces_3_inherited_children() {
 
 #[test]
 fn save_3_brushes_survives_snapshot_capture_and_install() {
-    // The operator framework calls `build_snapshot_ast` twice (before
-    // and after) and installs each as the live AST. The prefabify pass
-    // reduces inherited descendants to override entries. After all of
-    // this, the world must still have the same 3 inherited children
-    // under the instance, not lose any to the prefabify+install
-    // round-trip.
+    // The framework installs a before- and after-snapshot as the live AST; the
+    // prefabify+install round-trip must not lose inherited children.
 
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("p_boxes.bsn");
@@ -3371,9 +3166,6 @@ fn save_3_brushes_survives_snapshot_capture_and_install() {
     }
     app.update();
 
-    // Simulate the operator framework: before-snapshot capture, then the
-    // actual save, then after-snapshot, then a reload triggered by cache
-    // change.
     let _before = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
         app.world_mut(),
         std::path::Path::new(""),
@@ -3386,11 +3178,8 @@ fn save_3_brushes_survives_snapshot_capture_and_install() {
         std::path::Path::new(""),
     );
 
-    // The cache-driven driver respawn (next-frame side effect of cache
-    // mutation in save_as_prefab_from_selection):
     jackdaw::prefab::watcher::reload_all_instances(app.world_mut());
 
-    // Assertions: one instance, three inherited children, zero top-level brushes.
     let world = app.world_mut();
     let mut isa_q = world.query::<&jackdaw::prefab::IsA>();
     assert_eq!(isa_q.iter(world).count(), 1, "exactly one instance");
@@ -3424,13 +3213,6 @@ fn save_3_brushes_survives_snapshot_capture_and_install() {
 
 #[test]
 fn spawn_instance_undo_via_framework_snapshot_round_trip_removes_instance() {
-    // Reproduce the "drag prefab in, undo, instance still there" bug by
-    // simulating the operator framework's snapshot path:
-    //   1) capture before-snapshot via the snapshotter
-    //   2) run spawn_instance
-    //   3) capture after-snapshot
-    //   4) apply before-snapshot (what SnapshotDiff::undo does)
-    //   5) assert no instance entities remain
     use bevy::math::Vec3;
     use bevy::prelude::Mut;
     use jackdaw_api_internal::snapshot::ActiveSnapshotter;
@@ -3477,8 +3259,7 @@ fn spawn_instance_undo_via_framework_snapshot_round_trip_removes_instance() {
         &prefab_path,
         &serde_json::to_string(&prefab_json).unwrap(),
     );
-    // The snapshotter captures editor state alongside the document;
-    // initialize the resources it reads so its capture/apply don't panic.
+    // The snapshotter reads editor-state resources; initialize them.
     app.init_resource::<jackdaw::brush::EditMode>();
     app.init_resource::<jackdaw::active_tool::ActiveTool>();
     app.init_resource::<jackdaw::gizmos::GizmoSpace>();
@@ -3527,11 +3308,8 @@ fn spawn_instance_undo_via_framework_snapshot_round_trip_removes_instance() {
 
 #[test]
 fn reload_all_instances_preserves_command_history() {
-    // Regression for the "drag prefab in, undo doesn't remove it"
-    // bug. `reload_all_instances` used to call `clear_scene_entities`,
-    // which truncates the undo stack. That ran on the next frame
-    // after spawn_instance (cache-driven driver), wiping the
-    // SnapshotDiff the operator framework had just pushed.
+    // `reload_all_instances` must not truncate the undo stack: it runs the frame
+    // after spawn_instance and would wipe the just-pushed SnapshotDiff.
     use bevy::math::Vec3;
     use jackdaw_commands::{CommandHistory, EditorCommand};
 
@@ -3573,7 +3351,6 @@ fn reload_all_instances_preserves_command_history() {
 
     let mut app = make_app_for_prefab_tests();
 
-    // Push a canary command before any prefab work.
     app.world_mut()
         .resource_mut::<CommandHistory>()
         .push_executed(Box::new(NoopCommand));
@@ -3596,13 +3373,8 @@ fn reload_all_instances_preserves_command_history() {
 
 #[test]
 fn unbundle_resolves_key_from_entity_after_snapshot_install() {
-    // The framework's before-snapshot capture during operator dispatch
-    // rewrites the live AST (build_snapshot_ast installs the captured
-    // snapshot, with prefabify_inherited_descendants reshuffling node
-    // indices). A key fetched before the operator runs would therefore
-    // be stale by the time the operator's body reads the live AST.
-    // The fix is to pass the ECS Entity and look the key up inside
-    // the operator. This test exercises that flow.
+    // The before-snapshot capture reshuffles node indices, so a key fetched
+    // before dispatch is stale; the operator resolves it from the ECS Entity.
     use bevy::math::Vec3;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -3628,9 +3400,7 @@ fn unbundle_resolves_key_from_entity_after_snapshot_install() {
         Vec3::new(0.0, 0.0, 0.0),
     );
 
-    // The instance root's ECS entity, taken from the live BSN document. The
-    // document is the source of truth; the instance node links back to its
-    // spawned entity.
+    // The instance root's ECS entity, via the live document's node link.
     let instance_entity = {
         let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
         let isa_node = ast
@@ -3642,14 +3412,12 @@ fn unbundle_resolves_key_from_entity_after_snapshot_install() {
             .expect("instance node links to a spawned entity")
     };
 
-    // Simulate the framework's before-snapshot capture during dispatch.
     let _ = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
         app.world_mut(),
         std::path::Path::new(""),
     );
 
-    // Resolve the document node fresh from the Entity, as the dispatch site
-    // does; the operator takes the document node, not a captured key.
+    // Resolve the document node fresh from the Entity, as dispatch does.
     let key = app
         .world()
         .resource::<jackdaw_bsn::SceneBsnAst>()
@@ -3666,7 +3434,6 @@ fn unbundle_resolves_key_from_entity_after_snapshot_install() {
     .is_some();
     assert!(has_isa, "node resolved from entity points at an IsA node");
 
-    // And the underlying unbundle works: the instance node leaves the document.
     jackdaw::prefab::operators::unbundle_instance(app.world_mut(), key);
     let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
     assert!(
@@ -3677,12 +3444,8 @@ fn unbundle_resolves_key_from_entity_after_snapshot_install() {
 
 #[test]
 fn apply_ast_with_override_entries_resolves_inherited_components() {
-    // Snapshots captured via `build_snapshot_ast` reduce inherited
-    // descendants to sparse override entries (just PrefabEntityId).
-    // When such a snapshot is applied (e.g. on undo of unbundle), the
-    // resolver must fill in the prefab baseline so the spawned ECS
-    // entities have their Name / Transform / Brush data, not just an
-    // empty `PrefabEntityId`.
+    // Applying a snapshot whose inherited descendants are sparse override
+    // entries must refill the prefab baseline, not spawn bare `PrefabEntityId`.
     use bevy::math::Vec3;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -3733,15 +3496,12 @@ fn apply_ast_with_override_entries_resolves_inherited_components() {
         Vec3::new(0.0, 0.0, 0.0),
     );
 
-    // Capture a snapshot. This reduces the inherited child to a sparse
-    // override entry with just PrefabEntityId.
     let snapshot_text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
         app.world_mut(),
         std::path::Path::new(""),
     );
 
-    // Confirm the snapshot does carry a sparse override (the test
-    // is meaningful only if the sparsify ran).
+    // The test is meaningful only if the sparsify ran.
     let snapshot_ast = bsn_ast(&snapshot_text);
     let override_node = snapshot_ast
         .find_node_by_component_int(PEID_TYPE, 1)
@@ -3757,12 +3517,8 @@ fn apply_ast_with_override_entries_resolves_inherited_components() {
         "sparse override omits the Name (matches prefab baseline)"
     );
 
-    // Despawn everything, then re-apply the snapshot. This is the
-    // path snapshot undo takes.
     jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &snapshot_text);
 
-    // Verify the inherited child is back in the world WITH its
-    // inherited Name + Transform (resolved from the prefab cache).
     let world = app.world_mut();
     let mut q = world.query::<(
         &jackdaw::prefab::PrefabEntityId,
@@ -3790,9 +3546,6 @@ fn apply_ast_with_override_entries_resolves_inherited_components() {
 
 #[test]
 fn snapshot_round_trip_redo_brings_back_instance() {
-    // Verify the redo path: capture before, spawn, capture after,
-    // apply before (undo), apply after (redo). Redo must restore the
-    // instance + inherited descendants with full components.
     use bevy::math::Vec3;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -3854,7 +3607,6 @@ fn snapshot_round_trip_redo_brings_back_instance() {
         std::path::Path::new(""),
     );
 
-    // Undo
     jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &before);
     {
         let world = app.world_mut();
@@ -3862,7 +3614,6 @@ fn snapshot_round_trip_redo_brings_back_instance() {
         assert_eq!(q.iter(world).count(), 0, "instance removed after undo");
     }
 
-    // Redo
     jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &after);
     {
         let world = app.world_mut();
@@ -3885,9 +3636,6 @@ fn snapshot_round_trip_redo_brings_back_instance() {
 
 #[test]
 fn typed_command_and_snapshot_diff_interleave_cleanly_on_undo() {
-    // Verify that a typed EditorCommand (manual push_executed) and a
-    // SnapshotDiff (framework-pushed) coexist on the same undo stack
-    // and each Ctrl+Z peels off the right one.
     use bevy::math::Vec3;
     use jackdaw_commands::{CommandHistory, EditorCommand};
 
@@ -3934,23 +3682,11 @@ fn typed_command_and_snapshot_diff_interleave_cleanly_on_undo() {
     );
     let counter = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
 
-    // Sequence:
-    //   1) Counter to 1 (typed push_executed-only)
-    //   2) Capture before-snapshot
-    //   3) Spawn instance
-    //   4) Capture after-snapshot, push SnapshotDiff
-    // Stack: [Counter, SnapshotDiff]
-    //
-    // Then:
-    //   Ctrl+Z -> pop SnapshotDiff -> instance removed, counter still 1
-    //   Ctrl+Z -> pop Counter -> counter back to 0
-
     counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     app.world_mut()
         .resource_mut::<CommandHistory>()
         .push_executed(Box::new(Counter(counter.clone())));
 
-    // Initialize editor-state resources the snapshotter expects.
     app.init_resource::<jackdaw::brush::EditMode>();
     app.init_resource::<jackdaw::active_tool::ActiveTool>();
     app.init_resource::<jackdaw::gizmos::GizmoSpace>();
@@ -4004,7 +3740,6 @@ fn typed_command_and_snapshot_diff_interleave_cleanly_on_undo() {
         assert_eq!(q.iter(world).count(), 1, "instance present pre-undo");
     }
 
-    // First undo: pops SnapshotDiff -> instance removed, counter unchanged
     app.world_mut()
         .resource_scope(|world, mut history: bevy::prelude::Mut<CommandHistory>| {
             history.undo(world);
@@ -4020,7 +3755,6 @@ fn typed_command_and_snapshot_diff_interleave_cleanly_on_undo() {
         assert_eq!(q.iter(world).count(), 0, "instance removed by first undo");
     }
 
-    // Second undo: pops Counter -> counter back to 0
     app.world_mut()
         .resource_scope(|world, mut history: bevy::prelude::Mut<CommandHistory>| {
             history.undo(world);
@@ -4034,10 +3768,6 @@ fn typed_command_and_snapshot_diff_interleave_cleanly_on_undo() {
 
 #[test]
 fn scene_save_reopen_round_trip_preserves_instance_and_override() {
-    // Full user flow: spawn instance, edit a child Transform, serialize
-    // the scene, simulate a reload, verify the instance is back with
-    // the inherited child carrying the OVERRIDE value (not the prefab
-    // baseline). This is what `Ctrl+S` then close+reopen would do.
     use bevy::math::Vec3;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -4087,20 +3817,17 @@ fn scene_save_reopen_round_trip_preserves_instance_and_override() {
     {
         t.translation.x = 99.0;
     }
-    // Mirror the edit into the live document, as command dispatch does.
     jackdaw_bsn::sync_to_ast(
         app.world_mut(),
         child_entity,
         std::any::TypeId::of::<bevy::prelude::Transform>(),
     );
 
-    // "Save": capture the live document as sparse scene text.
     let snapshot_text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
         app.world_mut(),
         std::path::Path::new(""),
     );
 
-    // Verify the on-disk shape: an override entry with the edit only.
     let snapshot_ast = bsn_ast(&snapshot_text);
     let override_entry = snapshot_ast
         .find_node_by_component_int(PEID_TYPE, 1)
@@ -4123,10 +3850,7 @@ fn scene_save_reopen_round_trip_preserves_instance_and_override() {
         "on-disk override stores the edited translation X (99.0)"
     );
 
-    // "Reopen": fresh app, respawn from the sparse text (mimics
-    // finish_load_scene).
     let mut app2 = make_app_for_prefab_tests();
-    // Re-prime the prefab cache (loading from disk would do this).
     {
         let scene_text = std::fs::read_to_string(&prefab_path).unwrap();
         app2.world_mut()
@@ -4156,10 +3880,8 @@ fn scene_save_reopen_round_trip_preserves_instance_and_override() {
     );
 }
 
-/// A prefab that itself inherits (`mid` `IsA` `base`) hands the instance ids
-/// that exist nowhere in `mid`'s own file. Baselines must therefore be read
-/// from the resolved source, not the raw one, or every transitively inherited
-/// entity is skipped while the pass still reports success.
+/// A prefab that itself inherits hands the instance ids absent from its own
+/// file, so baselines must be read from the resolved source, not the raw one.
 #[test]
 fn revert_all_reverts_field_inherited_through_a_nested_prefab() {
     let tmp = tempfile::tempdir().unwrap();
@@ -4208,7 +3930,6 @@ fn revert_all_reverts_field_inherited_through_a_nested_prefab() {
             .expect("id inherited through the middle prefab materializes")
     };
 
-    // Override the transitively inherited entity, then revert it.
     {
         let registry = app
             .world()
@@ -4246,9 +3967,8 @@ fn revert_all_reverts_field_inherited_through_a_nested_prefab() {
     );
 }
 
-/// An instance entity whose `PrefabEntityId` matches nothing in the resolved
-/// source cannot be reverted. It must be counted and reported, never dropped
-/// from a pass that then claims to have reverted everything.
+/// An unmatched `PrefabEntityId` must be reported, never silently dropped from
+/// a pass that then claims to have reverted everything.
 #[test]
 fn revert_all_reports_targets_with_no_baseline() {
     let tmp = tempfile::tempdir().unwrap();
@@ -4289,9 +4009,8 @@ fn revert_all_reports_targets_with_no_baseline() {
     assert_eq!(report.reverted, 1, "the instance root itself still reverts");
 }
 
-/// A prefab that stops parsing must not be forgotten. The scene still names
-/// it, so it stays watched, its last good copy stays cached, and the edit that
-/// repairs the file is picked up like any other.
+/// A prefab that stops parsing stays watched and keeps its last good cached
+/// copy, so the repairing edit is picked up like any other.
 #[test]
 fn a_prefab_that_fails_to_parse_stays_watched_and_recovers() {
     let tmp = tempfile::tempdir().unwrap();
@@ -4308,7 +4027,6 @@ fn a_prefab_that_fails_to_parse_stays_watched_and_recovers() {
         "initial load sees v1"
     );
 
-    // Break the file and let the watcher see that it fails to parse.
     std::fs::write(&prefab_path, "not a bsn document {{{").unwrap();
     let settle = std::time::Instant::now() + std::time::Duration::from_millis(1200);
     while std::time::Instant::now() < settle {
@@ -4320,7 +4038,6 @@ fn a_prefab_that_fails_to_parse_stays_watched_and_recovers() {
         "a file that stopped parsing leaves the scene on its last good copy"
     );
 
-    // Repair it. The watcher has to still be listening.
     write_bsn_prefab(&mut app, &prefab_path, &prefab_with_name("v2"));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while std::time::Instant::now() < deadline {

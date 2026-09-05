@@ -1,20 +1,10 @@
 //! The entity clipboard: `entity.copy`, `entity.cut` and `entity.paste`.
 //!
-//! What is pinned here:
-//!  * a paste lands as the sibling straight after the primary selection, with
-//!    a name no other entity holds, and becomes the selection;
-//!  * nothing selected pastes under the open UI scene's root;
-//!  * the clipboard is scene text, so a copy survives a reload and pastes
-//!    into a different scene in a different tab;
-//!  * a cut is one history entry and undo puts the subtree back in place;
-//!  * a paste is one history entry that undoes and redoes to the same place;
-//!  * the timeline keeps `Ctrl+C` / `Ctrl+V` while it is the focused window.
-//!
 //! The tests take the OS clipboard out of the app: it is one object shared by
-//! every process on the machine (and by every test thread), so leaving it in
-//! would make what one test copies visible to another. What is left is the
-//! editor's own [`jackdaw::entity_ops::EntityClipboard`], the same fallback a
-//! run with no clipboard at all uses.
+//! every process and test thread, so leaving it in would make what one test
+//! copies visible to another. What is left is the editor's own
+//! `jackdaw::entity_ops::EntityClipboard`, the fallback a run with no clipboard
+//! uses.
 
 use crate::util;
 
@@ -44,9 +34,9 @@ fn run_finished(app: &mut App, clause: &str) {
     );
 }
 
-/// The clause run the way a chord runs it, which is the only shape that
-/// says how many history entries a press leaves behind: a press opens a
-/// snapshot span and a chained call does not.
+/// The clause run the way a chord runs it, the only shape that says how many
+/// history entries a press leaves: a press opens a snapshot span, a chained call
+/// does not.
 #[track_caller]
 fn press(app: &mut App, clause: &str) {
     let result = run_op_clause_as_user(app.world_mut(), clause)
@@ -318,8 +308,7 @@ fn the_timeline_keeps_the_chord_only_in_its_own_panel() {
         );
     }
 
-    // The Animation workspace shows the timeline beside the outliner. With
-    // the outliner the panel last pressed in, the entity chords are the
+    // With the outliner the panel last pressed in, the entity chords are the
     // user's, however many timelines are on screen.
     let mut tree = jackdaw_panels::tree::DockTree::new();
     let leaf = tree.insert(jackdaw_panels::tree::DockNode::Leaf(
@@ -388,8 +377,8 @@ fn the_paste_gets_a_row_in_the_outliner() {
     app.update();
     app.update();
 
-    // A widget is a subtree, not one entity: the button's caption is
-    // authored too, and a paste has to give the root a row and not the part.
+    // A widget is a subtree, not one entity: a paste has to give the root a row
+    // and not the part.
     let caption = app
         .world_mut()
         .spawn((Name::new("Caption"), Node::default(), ChildOf(children[0])))
@@ -413,8 +402,7 @@ fn the_paste_gets_a_row_in_the_outliner() {
     );
 }
 
-/// A paste with nothing to paste says so. It used to do nothing at all,
-/// which reads as a dead key.
+/// A paste with nothing to paste says so, rather than reading as a dead key.
 #[test]
 fn a_paste_with_an_empty_clipboard_refuses_out_loud() {
     let mut app = clipboard_app();
@@ -434,10 +422,8 @@ fn a_paste_with_an_empty_clipboard_refuses_out_loud() {
     );
 }
 
-/// A UI node has no `Transform` of its own: it is placed by its parent's
-/// layout. The paste path used to read the freshly spawned entity's
-/// `GlobalTransform`, get identity back, and write that into the document as
-/// an authored `Transform` nobody asked for.
+/// A UI node has no `Transform` of its own, so the paste path has none to carry
+/// over to the copy.
 #[test]
 fn a_pasted_ui_node_gains_no_transform_patch() {
     let mut app = clipboard_app();
@@ -518,11 +504,9 @@ fn a_paste_with_nothing_selected_uses_the_open_scenes_root() {
     );
 }
 
-/// A clipboard holding a UI node and a world entity at once has no scene to
-/// land in: pasting it would put a `Node` in a world or a mesh in a screen,
-/// whichever the open scene is. The mixed payload is reachable by copying a
-/// selection that spans both, and by pasting BSN written by hand, which is
-/// what this does -- one document, two roots, one of each kind.
+/// A clipboard holding a UI node and a world entity at once has no scene to land
+/// in. The mixed payload is reachable by copying a selection that spans both, and
+/// by pasting hand-written BSN, which is what this does.
 #[test]
 fn a_paste_refuses_a_payload_that_is_both_kinds() {
     const MIXED: &str = "bevy_ecs::hierarchy::Children [\n\

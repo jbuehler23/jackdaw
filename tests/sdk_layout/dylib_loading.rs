@@ -1,20 +1,12 @@
-//! Integration coverage for the dynamic-extension load path.
+//! Integration coverage for the dynamic-extension load path: builds
+//! `tests/fixtures/test_fixture_extension` as a cdylib and drives
+//! `jackdaw_loader::load_from_path` against it.
 //!
-//! Builds `tests/fixtures/test_fixture_extension` as a cdylib and
-//! drives `jackdaw_loader::load_from_path` against it, mirroring the
-//! editor's runtime install flow from a headless test.
-//!
-//! ## Scope
-//!
-//! These tests cover the **loader's job**: dlopen, ctor symbol
-//! lookup, catalog registration, library-handle retention, error
-//! paths. They do **not** cover invoking operators or querying
-//! components from the loaded extension: without the `dylib` feature
-//! and the `jackdaw_sdk` proxy dylib, host and cdylib get separate
-//! static copies of bevy and `jackdaw_api_internal`, so `TypeId` and
-//! `ComponentId` don't unify across the boundary. Operator-dispatch
-//! coverage belongs in a follow-up test harness built with
-//! `--features dylib` that wires the proxy SDK.
+//! These cover the loader's job (dlopen, ctor lookup, catalog registration,
+//! handle retention, error paths), not invoking operators from the loaded
+//! extension: without the `dylib` feature and the `jackdaw_sdk` proxy dylib,
+//! host and cdylib get separate static copies of bevy, so `TypeId` and
+//! `ComponentId` do not unify across the boundary.
 
 use crate::util;
 
@@ -27,17 +19,11 @@ use bevy::prelude::*;
 use jackdaw_api_internal::lifecycle::ExtensionCatalog;
 use jackdaw_loader::{LoadError, LoadedDylibs, load_from_path};
 
-/// Resolve the path to the fixture cdylib produced by cargo as part
-/// of the workspace test-target build.
-///
-/// `test_fixture_extension` is a `dev-dependency` of the root
-/// `jackdaw` crate (see `Cargo.toml`), so cargo compiles its cdylib
-/// before any test binary runs. This test binary and the fixture
-/// land in the same `deps/` directory (including under an explicit
-/// `--target <triple>`), so resolving relative to `current_exe`
-/// always picks the fixture from this compilation session rather
-/// than a stale copy under another target dir. `target/<profile>/`
-/// is a fallback for harnesses that copied the artifact top-level.
+/// Resolve the path to the fixture cdylib cargo produced. The fixture is a
+/// dev-dependency of the root crate, so its cdylib lands in the same `deps/`
+/// directory as this test binary (including under an explicit `--target`);
+/// resolving relative to `current_exe` therefore picks this session's copy.
+/// `target/<profile>/` is a fallback for harnesses that copied it top-level.
 fn fixture_path() -> PathBuf {
     let filename = format!(
         "{}test_fixture_extension{}",
@@ -70,21 +56,18 @@ fn fixture_path() -> PathBuf {
     );
 }
 
-/// Headless `App` with an empty [`DylibLoaderPlugin`] wired in so
-/// [`LoadedDylibs`] exists but no on-disk directory is scanned.
-/// Tests drive loading explicitly via [`load_from_path`].
+/// Headless `App` with an empty `DylibLoaderPlugin` wired in so
+/// `LoadedDylibs` exists but no on-disk directory is scanned.
+/// Tests drive loading explicitly via `load_from_path`.
 fn headless_app_with_empty_dylib_loader() -> LeakyApp {
     let app = util::headless_app();
     LeakyApp(ManuallyDrop::new(app))
 }
 
-/// Skip the `App`'s destructor. Dropping an `App` that holds a
-/// cdylib-loaded extension runs [`LoadedDylibs`]' `Drop` (`dlclose`)
-/// at an indeterminate moment relative to the `Extension` entity
-/// that stores a trait object whose vtable lives inside that
-/// library. If the library unloads first, the vtable drop-glue
-/// segfaults. Leaking is harmless in a test binary - the OS reclaims
-/// everything at process exit.
+/// Skip the `App`'s destructor. Dropping an `App` holding a cdylib-loaded
+/// extension runs `LoadedDylibs`' `dlclose` at an indeterminate moment relative
+/// to the `Extension` entity whose vtable lives inside that library, and if the
+/// library unloads first the drop glue segfaults.
 #[derive(Deref, DerefMut)]
 struct LeakyApp(ManuallyDrop<App>);
 

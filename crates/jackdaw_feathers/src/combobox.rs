@@ -106,13 +106,11 @@ pub struct ComboBoxChangeEvent {
     pub value: Option<String>,
 }
 
-/// Which option a combobox is showing, outside the widget. The config the
-/// widget reads is crate-private, so this is the only handle a caller has
-/// on the selection: write it and the trigger button repaints; read it
-/// back and it is what the user last picked.
+/// Which option a combobox is showing, outside the widget. The config the widget
+/// reads is crate-private, so this is the only handle a caller has on the
+/// selection.
 ///
-/// Out-of-range values are ignored rather than clamped, so an index that
-/// names no option leaves the shown selection alone.
+/// Out-of-range values are ignored rather than clamped.
 #[derive(Component)]
 pub struct ComboBoxSelectedIndex(pub usize);
 

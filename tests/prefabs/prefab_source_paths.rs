@@ -1,15 +1,9 @@
 //! How a saved scene spells the prefab it instances.
 //!
-//! The editor holds an instance's source as the file it opened: an absolute
-//! path, straight from the file dialog. Written out that way, the scene
-//! resolves on exactly one machine, not on a teammate's checkout and not in
-//! the shipped game, where the editor's directories do not exist at all. The
-//! disk boundary therefore rewrites the source relative to the scene file,
-//! and opening rewrites it back.
-//!
-//! `prefab_ui_import` covers the everyday same-directory case. What is here
-//! is the shape that case cannot show: a scene and its prefab in different
-//! directories, where the saved reference has to climb.
+//! The editor holds an instance's source as the absolute file it opened, which
+//! resolves on exactly one machine, so the disk boundary rewrites the source
+//! relative to the scene file and opening rewrites it back. `prefab_ui_import`
+//! covers the same-directory case; here the saved reference has to climb.
 
 use bevy::prelude::*;
 
@@ -184,10 +178,8 @@ fn saving_twice_writes_the_same_reference() {
     );
 }
 
-/// A variant is a prefab whose own root carries `IsA`, pointing at the base it
-/// was cut from. It is written by a different function than a scene save, and
-/// that function owes the same relative rewrite: the base's in-memory absolute
-/// path would resolve on the machine that made the variant and nowhere else.
+/// A variant is a prefab whose own root carries `IsA`, written by a different
+/// function than a scene save, and that function owes the same relative rewrite.
 #[test]
 fn a_saved_variant_names_its_base_relative_to_itself() {
     let tmp = tempfile::tempdir().unwrap();
@@ -204,7 +196,7 @@ fn a_saved_variant_names_its_base_relative_to_itself() {
         .expect("the instance spawned");
 
     // Cut the variant into the scene's directory, so the way back to the base
-    // has to climb, the shape a bare file name would hide.
+    // has to climb.
     let variant = tmp.path().join("zones/hud_variant.bsn");
     jackdaw::prefab::operators::save_as_variant(app.world_mut(), instance, &variant);
 
@@ -215,9 +207,8 @@ fn a_saved_variant_names_its_base_relative_to_itself() {
     );
 }
 
-/// The editor half of the containment asymmetry. A hand-authored scene can
-/// name a prefab anywhere on the machine, and the person opening it is the
-/// person who authored it. The game refuses the same reference; see
+/// A hand-authored scene can name a prefab anywhere on the machine, and the
+/// person opening it authored it. The game refuses the same reference; see
 /// `jackdaw_runtime`'s resolution tests.
 #[test]
 fn the_editor_still_follows_a_source_outside_the_project() {

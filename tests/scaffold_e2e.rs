@@ -1,12 +1,8 @@
-//! End-to-end scaffolding regression: scaffold a game project, build it
-//! as a cargo binary, and assert the template's component reaches the
-//! extracted schema. This is the user's first-run loop (New Game -> build
-//! -> component shows up in the editor) exercised headlessly.
-//!
-//! The nested build is the whole cost of this suite, and almost all of it
-//! is the dependency graph the template pins. That graph only changes when
-//! the template or the workspace lockfile does, so the target dir it
-//! compiles into is keyed on both and kept between runs.
+//! End-to-end scaffolding regression: scaffold a game project, build it as a
+//! cargo binary, and assert the template's component reaches the extracted
+//! schema. The nested build is almost all dependency graph, which only changes
+//! with the template or the workspace lockfile, so the target dir it compiles
+//! into is keyed on both and kept between runs.
 
 use std::path::{Path, PathBuf};
 
@@ -48,13 +44,9 @@ fn scaffold_game_builds_and_exposes_component() {
     );
 }
 
-/// Where this checkout scaffolds its project.
-///
-/// Under the system temp dir, and keyed on the checkout: two worktrees
-/// scaffold the same template revision and would otherwise write the same
-/// path, so one run's `remove_dir_all` lands in the middle of the other's
-/// build. The dependency cache stays shared per key inside a checkout,
-/// which is where the reuse is worth having.
+/// Where this checkout scaffolds its project: under the system temp dir and keyed
+/// on the checkout, so two worktrees do not write the same path and one run's
+/// `remove_dir_all` land in the middle of the other's build.
 fn scratch_root() -> PathBuf {
     use std::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -114,12 +106,9 @@ fn dependency_cache(key: &str) -> PathBuf {
 }
 
 /// Point the scaffolded project's build at the shared target dir.
-///
-/// `build_project_binary` strips `CARGO_TARGET_DIR` from the environment it
-/// hands cargo, because a build of someone else's project must not inherit
-/// this one's. The project's own cargo config is what remains, and it is
-/// read from the project dir upwards - which is under the system temp dir,
-/// so nothing of the workspace's config reaches the nested build either.
+/// `build_project_binary` strips `CARGO_TARGET_DIR` from the environment it hands
+/// cargo, so the project's own config is what remains, read from the project dir
+/// upwards - under the system temp dir, out of reach of the workspace's config.
 fn reuse_dependency_build(project: &Path, target_dir: &Path) {
     let dir = project.join(".cargo");
     std::fs::create_dir_all(&dir).expect("a cargo config dir in the scaffolded project");

@@ -1,28 +1,17 @@
-//! The splat material: terrain shaded from its control map against a
-//! texture set, with height-blended transitions between the two ids a
-//! control word names.
+//! The splat material: terrain shaded from its control map against a texture
+//! set, with height-blended transitions between the two ids a control word
+//! names. Behind the `render` feature, so the data model below it stays
+//! buildable with no GPU crate in the graph.
 //!
-//! Behind the `render` feature. The data model, sidecar and mesher below
-//! it stay buildable with no GPU crate in the graph.
+//! A terrain's material names become the three texture arrays the shader binds
+//! in two steps: [`resolve_with`] maps each slot onto a [`TextureSetEntry`], and
+//! [`splat_images`] stacks the entries' images into arrays. Finding the material
+//! behind a name is the host's job, done through a closure passed to
+//! [`resolve_with`].
 //!
-//! A terrain's material names become the three texture arrays the shader
-//! binds in two steps: [`resolve_with`] maps each slot onto a
-//! [`TextureSetEntry`], and [`splat_images`] stacks the entries' images
-//! into arrays.
-//!
-//! Nothing here loads assets or knows of a name store. Finding the
-//! material behind a name is the host's job: the editor looks in its
-//! material registry, a game in its project catalog, and each hands
-//! [`resolve_with`] a closure that does the looking. What may not differ
-//! between them lives here: which material slot is albedo, that a vacated
-//! id keeps its place, and that a missing name is reported rather than
-//! compacted away.
-//!
-//! The blend is height-weighted rather than a cross-fade: a layer's
-//! weight is `pow(corner_weight + layer_weight + height, sharpness)`,
-//! normalized across every contributing layer, so the taller of two
-//! textures wins the contested band and the transition interlocks
-//! instead of fading. See `shaders/terrain_splat.wgsl`.
+//! The blend is height-weighted rather than a cross-fade: a layer's weight is
+//! `pow(corner_weight + layer_weight + height, sharpness)`, normalized across
+//! every contributing layer. See `shaders/terrain_splat.wgsl`.
 
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
@@ -57,15 +46,9 @@ const FLAT_NORMAL_TEXEL: [u8; 4] = [128, 128, 255, 255];
 /// Height of a layer with no height map: the middle of the range.
 ///
 /// The height blend compares `layer_weight + height` between the two ids a
-/// control word names, so what a heightless layer is filled with decides
-/// every band it is in. The top of the range wins them all: a material
-/// with no depth map would beat every material that has one, at any paint
-/// weight, and a terrain whose grass happens to ship without a height map
-/// draws grass over the roads and squares painted on top of it. The bottom
-/// loses them all the same way. The middle is the only fill that leaves
-/// the paint deciding: a real height map averages about here, so a
-/// heightless layer neither takes nor yields the contested band and the
-/// blend falls back to the layer weights.
+/// control word names. The top of the range would let a material with no depth
+/// map beat every material that has one at any paint weight, and the bottom
+/// would lose them all; the middle leaves the paint deciding.
 const FLAT_HEIGHT_TEXEL: [u8; 4] = [128, 128, 128, 255];
 /// Albedo of a slot whose material has no base colour texture, or none
 /// this project can resolve. Neutral grey rather than a missing layer, so
@@ -75,9 +58,8 @@ const FALLBACK_ALBEDO_TEXEL: [u8; 4] = [128, 128, 128, 255];
 
 /// The loaded image handles for a [`TextureSet`], parallel to its entries.
 ///
-/// Held per entry rather than pre-stacked because stacking needs the
-/// decoded images, which do not exist until the asset server finishes.
-/// Every slot is `Option`: a material may be missing, or may not bind
+/// Held per entry rather than pre-stacked because stacking needs the decoded
+/// images. Every slot is `Option`: a material may be missing, or may not bind
 /// that texture.
 #[derive(Clone, Debug, Default)]
 pub struct TextureSetImages {
@@ -115,24 +97,20 @@ pub struct ResolvedSlots {
     pub missing: Vec<String>,
 }
 
-/// Turn a terrain's material names into texture entries.
+/// Turn a terrain's material names into texture entries, with `lookup`
+/// answering what material a name addresses.
 ///
-/// `lookup` answers what material a name addresses: the editor asks its
-/// material registry, a game its project catalog.
-///
-/// Index-preserving: entry `i` is slot `i` is texture id `i`, whether the
-/// slot resolved, went missing, or was vacated. The control map is
-/// addressed by these indices, so compacting the list would renumber
-/// every id painted above the dropped one.
+/// Index-preserving: entry `i` is slot `i` is texture id `i`, whether the slot
+/// resolved, went missing, or was vacated. The control map is addressed by these
+/// indices, so compacting the list would renumber every id painted above the
+/// dropped one.
 ///
 /// The slot mapping is fixed: albedo is `base_color_texture`, normal is
-/// `normal_map_texture`, height is `depth_map`. A material with no depth
-/// map gets [`splat_images`]'s flat-height fallback, and one flagged
-/// `flip_normal_map_y` carries that flag through so the array builder can
-/// flip the green channel before the shader samples it.
+/// `normal_map_texture`, height is `depth_map`. A material flagged
+/// `flip_normal_map_y` carries that flag through to the array builder.
 ///
-/// Tiling and detiling come from the slot, never from the material: one
-/// material is shared across surfaces and tiles differently on each.
+/// Tiling and detiling come from the slot, never from the material: one material
+/// is shared across surfaces and tiles differently on each.
 pub fn resolve_with<'m>(
     slots: &[TerrainMaterialSlot],
     lookup: impl Fn(&str) -> Option<&'m StandardMaterial>,
@@ -243,21 +221,17 @@ impl core::error::Error for SplatBuildError {}
 
 /// Stack a resolved texture set into albedo, normal and height arrays.
 ///
-/// Returns [`SplatBuildError::NotReady`] until every image the set names
-/// has decoded, and [`SplatBuildError::Invalid`], naming the material and
-/// path, when the layers disagree on size, which a texture array cannot
-/// accept.
+/// Returns [`SplatBuildError::NotReady`] until every image the set names has
+/// decoded, and [`SplatBuildError::Invalid`], naming the material and path, when
+/// the layers disagree on size.
 ///
-/// Entries with no albedo, normal or height map get a filled layer rather
-/// than a missing one, so optionality is per entry and a slot never loses
-/// its texture id. When no entry has a given map, that array is built
-/// 1x1: sampling a one-texel layer returns the constant anywhere, so the
-/// shader needs no flag to tell the two cases apart.
+/// Entries with no albedo, normal or height map get a filled layer rather than a
+/// missing one, so a slot never loses its texture id. When no entry has a given
+/// map, that array is built 1x1: sampling a one-texel layer returns the constant
+/// anywhere, so the shader needs no flag to tell the two cases apart.
 ///
-/// A normal map flagged [`TextureSetEntry::flip_normal_y`] has its green
-/// channel inverted here, once, on the way into the array: the shader
-/// samples one convention, and a map that reached it unflipped would
-/// light every slope backwards.
+/// A normal map flagged [`TextureSetEntry::flip_normal_y`] has its green channel
+/// inverted here, once, on the way into the array.
 pub fn splat_images(
     set: &TextureSet,
     handles: &TextureSetImages,
@@ -267,9 +241,8 @@ pub fn splat_images(
         return Err(SplatBuildError::Invalid(reason));
     }
     // The handle lists are parallel to the entries, and every array below
-    // declares `entry_count.max(1)` layers. A caller that passes no
-    // handles at all would declare one layer over an empty buffer, which
-    // is a texture wgpu cannot make.
+    // declares `entry_count.max(1)` layers. No handles at all would declare one
+    // layer over an empty buffer, which is a texture wgpu cannot make.
     if handles.albedo.is_empty() {
         return Err(SplatBuildError::Invalid(TextureSetError::Empty));
     }
@@ -359,11 +332,9 @@ fn decode_layers<'a>(
     Ok(DecodedLayers { decoded, sizes })
 }
 
-/// Build one array from a per-entry list of optional handles.
-///
-/// A layer with no handle is filled with `fill`. If no entry has one at
-/// all, the whole array collapses to 1x1; the shader reads the same
-/// constant either way.
+/// Build one array from a per-entry list of optional handles. A layer with no
+/// handle is filled with `fill`; if no entry has one at all, the whole array
+/// collapses to 1x1.
 fn stack_optional(
     handles: &[Option<Handle<Image>>],
     set: &TextureSet,
@@ -464,11 +435,9 @@ fn converted(image: &Image, format: TextureFormat) -> Result<Vec<u8>, SplatBuild
 /// Narrow 16-bit-per-channel texels to RGBA8, keeping the high byte of each
 /// channel.
 ///
-/// `Image::convert` routes through `DynamicImage`, which has no path out of
-/// the formats bevy decodes deep files into: 16-bit grayscale lands on
-/// `R16Uint`, grayscale+alpha on `Rg16Uint`, colour on `Rgba16Unorm`. A
-/// single channel replicates across RGB, so a 16-bit height or roughness
-/// map stacks as grey rather than red.
+/// `Image::convert` routes through `DynamicImage`, which has no path out of the
+/// formats bevy decodes deep files into. A single channel replicates across RGB,
+/// so a 16-bit height map stacks as grey rather than red.
 fn narrowed_to_rgba8(data: &[u8], from: TextureFormat, to: TextureFormat) -> Option<Vec<u8>> {
     if !matches!(
         to,
@@ -496,11 +465,9 @@ fn narrowed_to_rgba8(data: &[u8], from: TextureFormat, to: TextureFormat) -> Opt
     }
 }
 
-/// How a mip level averages the four texels it stands for.
-///
-/// A texture array is filtered as stored bytes, so what averaging is
-/// correct depends on what the bytes mean: colour is stored non-linearly,
-/// a normal is a direction rather than a quantity, and height is neither.
+/// How a mip level averages the four texels it stands for. A texture array is
+/// filtered as stored bytes, so what averaging is correct depends on what the
+/// bytes mean.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum MipFilter {
     /// Plain average of the stored bytes.
@@ -511,11 +478,9 @@ enum MipFilter {
     Normal,
 }
 
-/// Mip levels a `width` by `height` texture carries, down to 1x1.
-///
-/// `floor(log2(max(width, height))) + 1`, so a non-power-of-two size gets
-/// the chain its longest side allows and the odd levels halve by flooring,
-/// which is what wgpu's `mip_level_size` computes.
+/// Mip levels a `width` by `height` texture carries, down to 1x1:
+/// `floor(log2(max(width, height))) + 1`, which is what wgpu's
+/// `mip_level_size` computes.
 fn mip_level_count(width: u32, height: u32) -> u32 {
     u32::BITS - width.max(height).max(1).leading_zeros()
 }
@@ -714,12 +679,9 @@ pub fn control_image(texels: &ControlTexels) -> Image {
     control_image_from_bytes(&texels.to_bytes(), texels.resolution)
 }
 
-/// [`control_image`] from a texel buffer the caller already holds.
-///
-/// An editor keeping the CPU-side mirror of the uploaded texture patches
-/// the rows a brush touched and hands the whole buffer here, instead of
-/// walking the terrain's control words back into bytes for every frame of
-/// a stroke.
+/// [`control_image`] from a texel buffer the caller already holds, so an editor
+/// keeping the CPU-side mirror of the uploaded texture can patch the rows a
+/// brush touched instead of rebuilding the buffer every frame of a stroke.
 pub fn control_image_from_bytes(bytes: &[u8], resolution: u32) -> Image {
     let side = resolution.max(1);
     let mut data = bytes.to_vec();
@@ -746,27 +708,18 @@ pub fn control_image_from_bytes(bytes: &[u8], resolution: u32) -> Image {
     image
 }
 
-/// The colour layer as an uploadable image: `Rgba8Unorm`, one texel per
-/// grid point, laid out exactly like the control map.
+/// The colour layer as an uploadable image: `Rgba8Unorm`, one texel per grid
+/// point, laid out exactly like the control map.
 ///
-/// Not an sRGB texture, because the layer is a multiplier rather than a
-/// colour to be lit: the shader scales the albedo by what it reads, so a
-/// byte the picker draws at half brightness has to arrive as a half
-/// multiply. Decoding it would make the dial read far darker than the
-/// swatch beside it.
+/// Not an sRGB texture, because the layer is a multiplier rather than a colour
+/// to be lit: a byte the picker draws at half brightness has to arrive as a half
+/// multiply.
 ///
-/// Filtered rather than loaded, unlike the control map: a tint is a
-/// colour, and interpolating two colours gives a colour. That is what
-/// lets a coarse hand-painted wash read as a smooth one across the cells
-/// between the strokes.
+/// Filtered rather than loaded, unlike the control map, so a coarse
+/// hand-painted wash reads as a smooth one between the strokes. No mip chain:
+/// the tint is already the low-frequency half of the ground's look.
 ///
-/// No mip chain. The tint is already the low-frequency half of the
-/// ground's look, so minification has nothing to alias, and a chain here
-/// would cost a quarter again of the memory to blur what is smooth.
-///
-/// A short buffer pads with white, which is the identity: a terrain whose
-/// layer has never been allocated uploads a white texture and draws
-/// exactly what its textures say.
+/// A short buffer pads with white, which is the identity.
 pub fn tint_image_from_bytes(bytes: &[u8], resolution: u32) -> Image {
     let side = resolution.max(1);
     let mut data = bytes.to_vec();
@@ -795,12 +748,10 @@ pub fn tint_image_from_bytes(bytes: &[u8], resolution: u32) -> Image {
 
 /// UV0 remapped onto the tint layer's texel centres.
 ///
-/// The splat shader computes this inline; both spell the same mapping, so
-/// a change to one belongs in the other. UV0 places control grid point `i`
-/// at `i/(res-1)`, while a sampled texel `i` is centred at `(i+0.5)/res`,
-/// so a raw UV0 sample reads the colour layer half a cell out of register
-/// with the control map it was painted against -- and by the opposite half
-/// at the far edge, so no constant bias corrects it.
+/// The splat shader computes this inline; both spell the same mapping. UV0
+/// places control grid point `i` at `i/(res-1)` while a sampled texel `i` is
+/// centred at `(i+0.5)/res`, and the error reverses sign across the terrain, so
+/// no constant bias corrects it.
 #[must_use]
 pub fn tint_uv(uv: f32, resolution: u32) -> f32 {
     let res = resolution.max(2) as f32;
@@ -821,16 +772,13 @@ pub fn tint_image(colors: &[[u8; 4]], resolution: u32) -> Image {
     tint_image_from_bytes(&bytes, side)
 }
 
-/// A heightmap's slope field as an uploadable image: `R32Float`, one
-/// texel per grid point, laid out exactly like the control map so a
-/// fragment reads both with one grid coordinate.
+/// A heightmap's slope field as an uploadable image: `R32Float`, one texel per
+/// grid point, laid out exactly like the control map so a fragment reads both
+/// with one grid coordinate.
 ///
-/// The shader shades autoterrain from this rather than from the surface
-/// it is drawing. The surface is a clipmap: the same ground is meshed at
-/// several step sizes, each smoothing the relief by a different amount,
-/// so a slope read off the geometry changes as a level hands over and the
-/// ground re-textures itself under a moving camera. These values are per
-/// grid point and the same from every distance.
+/// The shader shades autoterrain from this rather than from the surface it is
+/// drawing: the surface is a clipmap, so a slope read off the geometry changes
+/// as a level hands over. These values are the same from every distance.
 pub fn slope_image(map: &Heightmap) -> Image {
     let side = map.resolution.max(1);
     let slopes = map.slope_field();
@@ -863,9 +811,8 @@ pub fn slope_image(map: &Heightmap) -> Image {
 
 /// Terrain shaded from a control map against a texture set.
 ///
-/// One material per terrain: the control map and terrain size are the two
-/// things that differ between them, and both live here rather than
-/// per chunk, so every chunk of a terrain shares one material and one
+/// One material per terrain: the control map and terrain size live here rather
+/// than per chunk, so every chunk of a terrain shares one material and one
 /// upload.
 #[derive(Asset, AsBindGroup, TypePath, Clone, Debug)]
 pub struct TerrainSplatMaterial {
@@ -909,10 +856,8 @@ pub struct TerrainSplatMaterial {
     /// Slope at which the slope texture has fully taken over, in radians.
     #[uniform(0)]
     pub autoterrain_slope_end: f32,
-    /// How much of the tint texture reaches the finished albedo, `0..1`.
-    /// 0 draws the textures untinted; the colour layer's own white is the
-    /// identity at every strength, so an unpainted terrain draws the same
-    /// either way.
+    /// How much of the tint texture reaches the finished albedo, `0..1`. 0 draws
+    /// the textures untinted.
     #[uniform(0)]
     pub tint_strength: f32,
     #[texture(1, dimension = "2d_array")]
@@ -992,15 +937,11 @@ impl TerrainSplatMaterial {
 
     /// Point the autoterrain half of the uniform at `settings`.
     ///
-    /// Separate from [`Self::new`] because changing these is a uniform
-    /// write: the control map, the arrays and the mesh all stand, so an
-    /// editor moving a slider re-uploads one buffer rather than
-    /// rebuilding a terrain.
+    /// Separate from [`Self::new`] because changing these is a uniform write:
+    /// the control map, the arrays and the mesh all stand.
     ///
-    /// The settings are sanitized on the way in. They reach a
-    /// `smoothstep` the fragment cannot guard, and a caller that read
-    /// them from anywhere but a decoded sidecar has not been through that
-    /// check.
+    /// The settings are sanitized on the way in: they reach a `smoothstep` the
+    /// fragment cannot guard.
     pub fn set_autoterrain(&mut self, settings: AutoTerrainSettings) {
         let settings = settings.sanitized();
         self.autoterrain_enabled = u32::from(settings.enabled);
@@ -1012,13 +953,9 @@ impl TerrainSplatMaterial {
 
     /// Point the surface half of the uniform at `settings`.
     ///
-    /// A uniform write, like [`Self::set_autoterrain`]: the control map,
-    /// the tint texture, the arrays and the mesh all stand, so moving
-    /// either dial re-uploads one buffer.
-    ///
-    /// Sanitized on the way in for the same reason: a NaN sharpness
-    /// reaches the fragment's `pow` and a NaN strength its `mix`, and
-    /// neither is guarded there.
+    /// A uniform write, like [`Self::set_autoterrain`], and sanitized on the way
+    /// in for the same reason: a NaN reaches the fragment's `pow` and its `mix`
+    /// unguarded.
     pub fn set_surface(&mut self, settings: SurfaceSettings) {
         let settings = settings.sanitized();
         self.blend_sharpness = settings.blend_sharpness;
@@ -1428,14 +1365,9 @@ mod tests {
         assert_eq!(built.albedo.data.as_ref().unwrap().len(), expected);
     }
 
-    /// Layer-major, exactly: the second layer's base level starts where
-    /// the first layer's whole chain ends.
-    ///
-    /// This is the arithmetic `TextureDataOrder::LayerMajor` reads back.
-    /// Getting it wrong by one level's worth of bytes shifts every layer
-    /// past the first, and a terrain then draws layer 0 wherever it was
-    /// painted with anything else - flat ground, everywhere, with no GPU
-    /// needed to catch it.
+    /// Layer-major, exactly: the second layer's base level starts where the
+    /// first layer's whole chain ends. Getting it wrong by one level's worth of
+    /// bytes shifts every layer past the first.
     #[test]
     fn the_second_layer_starts_where_the_first_layers_chain_ends() {
         let red = [255u8, 0, 0, 255];
@@ -1619,16 +1551,11 @@ mod tests {
         );
     }
 
-    /// The fill for a layer with no height map has to sit in the middle of
-    /// the range, not at either end.
+    /// The fill for a layer with no height map has to sit in the middle of the
+    /// range, not at either end.
     ///
-    /// The shader blends two ids by `layer_weight + height`, so a fill at
-    /// the top hands every contested band to whichever layer happens to
-    /// ship without a depth map, whatever the paint says, and a fill at the
-    /// bottom takes every band away from it. Either way one material's
-    /// missing file decides the whole terrain's look. This is the guard on
-    /// the number itself: a project whose grass has no height map and whose
-    /// roads do must still draw its roads.
+    /// The shader blends two ids by `layer_weight + height`, so a fill at either
+    /// end lets one material's missing file decide the whole terrain's look.
     #[test]
     fn a_layer_with_no_height_map_is_filled_mid_range() {
         assert_eq!(
@@ -2147,13 +2074,9 @@ mod tests {
 
     /// The shader source, for the binding checks below.
     ///
-    /// The source cannot be compiled here: it is naga-oil input, not
-    /// WGSL. It opens with `#import bevy_pbr::{...}` and declares
-    /// `@group(#{MATERIAL_BIND_GROUP})`, neither of which naga parses, and
-    /// composing it would mean pulling in every `bevy_pbr` shader it
-    /// imports. The checks below are textual: they catch binding numbers
-    /// drifting between the `AsBindGroup` derive and the shader that
-    /// reads them.
+    /// It cannot be compiled here: it is naga-oil input, not WGSL. The checks
+    /// are textual, and catch binding numbers drifting between the
+    /// `AsBindGroup` derive and the shader that reads them.
     const SHADER_SOURCE: &str = include_str!("shaders/terrain_splat.wgsl");
 
     #[test]
@@ -2212,12 +2135,9 @@ mod tests {
         }
     }
 
-    /// Detiling turns the UV, so the texture reads rotated across the
-    /// surface and the tangent-space normal stored in it has to turn back
-    /// with it. Sampling the rotated UV while accumulating the unrotated
-    /// normal lights every detiled slope from the wrong side, and with one
-    /// rotation per tile the turn has to be applied per tap, before the
-    /// taps are blended.
+    /// Detiling turns the UV, so the tangent-space normal stored in the texture
+    /// has to turn back with it. With one rotation per tile, the turn has to be
+    /// applied per tap, before the taps are blended.
     #[test]
     fn the_shader_turns_each_sampled_normal_with_its_own_tile_rotation() {
         assert!(
@@ -2243,13 +2163,9 @@ mod tests {
     /// Detiling samples once per tile and blends the samples, rather than
     /// blending the tiles' coordinates and sampling once.
     ///
-    /// Interpolating between four rigid transforms is not a rigid
-    /// transform: the blended coordinate field stretches and shears
-    /// between tile centres, and a texture read through it comes back
-    /// marbled and smeared. Sampling each tile in its own frame is what
-    /// the standard technique does, and the difference is visible on any
-    /// ground at a detile strength worth using, so the structure is
-    /// pinned here.
+    /// Interpolating between four rigid transforms is not a rigid transform: the
+    /// blended coordinate field stretches and shears between tile centres, and a
+    /// texture read through it comes back marbled.
     #[test]
     fn detiling_samples_once_per_tile_and_blends_the_samples() {
         assert!(
@@ -2302,11 +2218,10 @@ mod tests {
         );
     }
 
-    /// Tint strength 0 has to leave the albedo exactly as the layers
-    /// accumulated it, which is what lets the dial be turned off rather
-    /// than merely turned down. Two halves: the uniform carries the 0,
-    /// and the fragment mixes from white, so `mix(white, tint, 0)` is
-    /// white and multiplying by white is the identity.
+    /// Tint strength 0 has to leave the albedo exactly as the layers accumulated
+    /// it. Two halves: the uniform carries the 0, and the fragment mixes from
+    /// white, so `mix(white, tint, 0)` is white and multiplying by white is the
+    /// identity.
     #[test]
     fn a_tint_strength_of_zero_leaves_the_albedo_alone() {
         let mut material = TerrainSplatMaterial::new(
@@ -2339,11 +2254,9 @@ mod tests {
         );
     }
 
-    /// A cell painted at control grid point `i` has to shade from tint
-    /// texel `i`, at both ends of the terrain and in the middle. Sampling
-    /// raw UV0 misses by half a cell one way at uv 0 and half a cell the
-    /// other way at uv 1, so a tint painted along a road edge draws beside
-    /// the road rather than on it.
+    /// A cell painted at control grid point `i` has to shade from tint texel `i`
+    /// at both ends of the terrain and in the middle. Sampling raw UV0 misses by
+    /// half a cell, in opposite directions at the two ends.
     #[test]
     fn a_tint_texel_is_sampled_at_the_grid_point_it_was_painted_at() {
         const RESOLUTION: u32 = 64;

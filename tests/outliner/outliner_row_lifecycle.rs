@@ -1,18 +1,6 @@
-//! What an Outliner row costs while nobody is looking at it.
-//!
-//! Rows are built when a branch is opened. They used to stay built, so a
-//! panel's cost was everything the session had ever opened rather than
-//! what it draws, and a scene of a few thousand nodes put tens of
-//! thousands of UI nodes into every frame's layout.
-//!
-//! What is pinned here:
-//!  * closing a branch frees its rows, and the whole branch, not just its
-//!    top level;
-//!  * the `TreeIndex` forgets them, so opening the branch again builds
-//!    them rather than believing they are still there;
-//!  * what the rows carried comes back with them: the order, and the mark
-//!    on a row whose entity is selected;
-//!  * the keyboard walk lands somewhere real afterwards.
+//! What an Outliner row costs while nobody is looking at it. Rows are built when
+//! a branch is opened and torn down when it closes, so a panel costs what it
+//! draws rather than everything the session has ever opened.
 
 use crate::util;
 
@@ -23,10 +11,8 @@ use jackdaw_widgets::tree_view::{
     TreeRowSelected,
 };
 
-/// An Outliner panel over a scene with one branch two levels deep.
-///
-/// Returns the panel, the branch root, its children, and the one
-/// grandchild, all registered in the document the way a load leaves them.
+/// An Outliner panel over a scene with one branch two levels deep. Returns the
+/// panel, the branch root, its children and the one grandchild.
 fn panel_over_a_branch(app: &mut App) -> (Entity, Entity, Vec<Entity>, Entity) {
     app.world_mut().insert_resource(HierarchyShowAll(true));
     let panel = app
@@ -148,9 +134,8 @@ fn closing_a_branch_frees_the_rows_under_it() {
     }
 }
 
-/// The freed subtree is the whole branch: a grandchild's row is drawn
-/// under a closed ancestor just as a child's is, and an index entry left
-/// behind is a row that can never be built again.
+/// The freed subtree is the whole branch: an index entry left behind is a row
+/// that can never be built again.
 #[test]
 fn closing_a_branch_frees_the_rows_nested_below_it_too() {
     let mut app = util::editor_test_app();
@@ -191,10 +176,9 @@ fn reopening_a_branch_builds_its_rows_again() {
     );
 }
 
-/// A row is built when its branch is opened, which can be long after its
-/// entity was selected -- from the canvas, or before the branch was closed
-/// and opened again. A row that comes back unmarked is a selection the
-/// panel disagrees with the rest of the editor about.
+/// A row is built when its branch is opened, which can be long after its entity
+/// was selected, and a row that comes back unmarked is a selection the panel
+/// disagrees with the rest of the editor about.
 #[test]
 fn a_selected_entity_gets_a_marked_row_when_its_branch_is_reopened() {
     let mut app = util::editor_test_app();
@@ -221,9 +205,8 @@ fn a_selected_entity_gets_a_marked_row_when_its_branch_is_reopened() {
     );
 }
 
-/// The keyboard walks the rows that are drawn. Left on the row it was
-/// under closes the branch, and what it was standing on is gone; the row
-/// that was closed is where the walk has to resume.
+/// The keyboard walks the rows that are drawn, so closing a branch it was inside
+/// has to resume the walk on the row that was closed.
 #[test]
 fn the_keyboard_walk_resumes_on_the_row_that_was_closed() {
     let mut app = util::editor_test_app();

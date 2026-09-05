@@ -1,23 +1,6 @@
-//! Undo round-trip coverage. For a curated set of operators with
-//! `allows_undo = true` (default), we verify the snapshot-based undo
-//! pipeline:
-//!
-//! ```text
-//! before = snapshot()
-//! op.call() -> Finished
-//! after = snapshot()        # mutated, before != after
-//! CommandHistory::undo()
-//! undo = snapshot()         # restored, before == undo
-//! CommandHistory::redo()
-//! redo = snapshot()         # re-applied, after == redo
-//! ```
-//!
-//! The snapshot capture covers `ViewModeSettings`, `OverlaySettings`,
-//! `EditMode`, `ActiveTool`, `GizmoSpace`, `SnapSettings`,
-//! `PhysicsOverlayConfig`, and the
-//! scene AST (see `src/undo_snapshot.rs`).
-//!
-//!
+//! Undo round-trip coverage: for operators with `allows_undo = true`, a snapshot
+//! before the call and after it, then undo and redo, each restoring the other.
+//! What the snapshot captures is listed in `src/undo_snapshot.rs`.
 
 use crate::util;
 
@@ -32,9 +15,8 @@ fn assert_undo_redo_round_trip(app: &mut App, id: &'static str) {
     let stack_before = app.world().resource::<CommandHistory>().undo_stack.len();
 
     // Real user-facing dispatch (toolbar / menu / keybind) opts into
-    // history-entry creation. The `.call()` default does not, since
-    // operator-from-operator chaining doesn't want to spam the undo
-    // stack. Tests covering undo must mirror the user-facing call.
+    // history-entry creation; the `.call()` default does not, so
+    // operator-from-operator chaining cannot spam the undo stack.
     app.world_mut()
         .operator(id)
         .settings(CallOperatorSettings {
@@ -128,9 +110,8 @@ fn entity_place_gltf_survives_later_history_and_scene_tabs() {
         "placed GLB must be part of the authoritative scene document"
     );
 
-    // Reproduce the reported sequence: a later rotate action creates another
-    // snapshot, then undo/redo reloads the scene document. The authored GLB
-    // and its derived render root must both survive those reloads.
+    // A later rotate action creates another snapshot, then undo/redo reloads the
+    // scene document: the authored GLB and its render root must survive both.
     app.world_mut()
         .operator("tool.rotate")
         .settings(CallOperatorSettings {
@@ -154,8 +135,7 @@ fn entity_place_gltf_survives_later_history_and_scene_tabs() {
         .resource_scope(|world, mut history: Mut<CommandHistory>| history.redo(world));
     assert_single_renderable_gltf(&mut app, path, position);
 
-    // Undo both actions, then redo just the placement to verify the placement
-    // snapshot itself also restores a renderable GLB.
+    // Redo just the placement, to check that snapshot restores a renderable GLB.
     app.world_mut()
         .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
     app.world_mut()
@@ -172,7 +152,7 @@ fn entity_place_gltf_survives_later_history_and_scene_tabs() {
         .resource_scope(|world, mut history: Mut<CommandHistory>| history.redo(world));
     assert_single_renderable_gltf(&mut app, path, position);
 
-    // Scene tabs capture and restore the same authoritative document. A trip
+    // Scene tabs capture and restore the same authoritative document, so a trip
     // to an empty tab and back must rehydrate the GLB's derived render root.
     {
         let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
@@ -208,9 +188,8 @@ fn assert_single_renderable_gltf(app: &mut App, path: &str, position: Vec3) -> E
         .expect("expected one GLB root with its derived render asset");
     assert_eq!(source.path, path);
     assert_eq!(transform.translation, position);
-    // Assert the derived handle actually resolves. Checking only that the
-    // component exists would pass with a defaulted handle, which is exactly
-    // the state that renders nothing.
+    // Checking only that the component exists would pass with a defaulted
+    // handle, which is exactly the state that renders nothing.
     let resolved = app
         .world()
         .resource::<AssetServer>()
@@ -262,16 +241,15 @@ fn grid_decrease_round_trip() {
 
 #[test]
 fn tool_rotate_round_trip() {
-    // Default `ActiveTool` is `Select`; rotate diverges, so the
-    // snapshot diff is non-empty.
+    // Default `ActiveTool` is `Select`; rotate diverges, so the diff is non-empty.
     let mut app = util::editor_test_app();
     assert_undo_redo_round_trip(&mut app, "tool.rotate");
 }
 
 #[test]
 fn tool_select_round_trip_from_translate() {
-    // `tool.select` flips both `ActiveTool` and `EditMode`; starting
-    // from a non-default state proves the snapshot captures both.
+    // `tool.select` flips both `ActiveTool` and `EditMode`; a non-default start
+    // proves the snapshot captures both.
     let mut app = util::editor_test_app();
     *app.world_mut()
         .resource_mut::<jackdaw::active_tool::ActiveTool>() =
@@ -305,8 +283,8 @@ fn view_cycle_bounding_box_mode_round_trip() {
 fn entity_toggle_visibility_round_trip() {
     let mut app = util::editor_test_app();
     let entity = app.world_mut().spawn(Name::new("Hidden")).id();
-    // The snapshot is the emitted document, so the toggle has to reach it:
-    // an entity outside the document would diff to nothing.
+    // The snapshot is the emitted document, so an entity outside it would diff
+    // to nothing.
     jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
     app.world_mut()
         .resource_mut::<jackdaw::selection::Selection>()
@@ -316,11 +294,9 @@ fn entity_toggle_visibility_round_trip() {
     assert_undo_redo_round_trip(&mut app, "entity.toggle_visibility");
 }
 
-/// The history's 256 MiB budget can only trim entries that say what they
-/// weigh. A `SnapshotDiff` holds the whole scene as text twice, and while
-/// it answered zero the budget read a history of any size as free: it
-/// never trimmed, and a long editing session grew until the editor ran
-/// out of memory.
+/// The history's 256 MiB budget can only trim entries that say what they weigh.
+/// A `SnapshotDiff` holds the whole scene as text twice, and while it answered
+/// zero the budget never trimmed and a long session grew until the editor died.
 #[test]
 fn a_snapshot_entry_reports_the_document_it_holds() {
     let mut app = util::editor_test_app();

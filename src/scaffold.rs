@@ -474,11 +474,8 @@ pub fn run_import_cli(args: &[String]) -> AppExit {
 /// `[jackdaw]` pins, and bump any `jackdaw_*` requirement to the
 /// anchored minor.
 ///
-/// Pins were previously written once at setup and never revisited, so
-/// an editor upgrade left every project claiming the version that
-/// created it and its dependency requirements pointing at the old line
-/// of releases. Side-effect free, like the import plan: the same
-/// changes are previewed, then applied on a second explicit action.
+/// Side-effect free, like the import plan: the changes are previewed,
+/// then applied on a second explicit action.
 pub fn plan_upgrade_project(root: &Path) -> Result<ImportPlan, ScaffoldError> {
     let manifest_path = root.join("Cargo.toml");
     if !manifest_path.is_file() {
@@ -1491,14 +1488,10 @@ fn substitute_placeholders(
 /// releases that targets the same engine.
 const JACKDAW_DEP_REQ: &str = jackdaw_project_build::BEVY_VERSION;
 
-/// How a scaffolded project asks for one of the public jackdaw crates:
-/// the registry line when this editor was released, the exact revision
-/// when it was built from git, the crate in the workspace when it was
-/// built from a checkout.
-///
-/// A version requirement for every build asked the registry for a line
-/// only a release has, so a project set up by an editor installed from
-/// git named a crate no registry could answer for and did not resolve.
+/// How a scaffolded project asks for one of the public jackdaw crates: the
+/// registry line for a released editor, the exact revision for one built from
+/// git, the workspace crate for one built from a checkout. A version
+/// requirement alone would not resolve for a git-installed editor.
 fn jackdaw_dep_requirement(crate_name: &str) -> String {
     jackdaw_project_build::build_source::build_source().dep_requirement(crate_name)
 }
@@ -1806,8 +1799,8 @@ mod tests {
              [dependencies]\nbevy = \"0.19\"\n",
         )
         .unwrap();
-        // A type merely named `*Plugin` above the real one: the old
-        // first-name-wins scan recorded `AudioPlugin` here.
+        // A type merely named `*Plugin` above the real one, which a
+        // first-name-wins scan would record instead of `MyGamePlugin`.
         std::fs::write(
             root.join("src/lib.rs"),
             "pub struct AudioPlugin;\nimpl Plugin for MyGamePlugin {}\n",
@@ -1902,9 +1895,8 @@ mod tests {
         assert!(lib.contains("impl Plugin for GamePlugin"), "got:\n{lib}");
     }
 
-    /// A project set up by an older jackdaw claims that version forever
-    /// and keeps requesting the old crate line, so upgrading has to
-    /// move both.
+    /// A project set up by an older jackdaw pins that version and its
+    /// crate line, so upgrading has to move both.
     #[test]
     fn upgrade_refreshes_the_pins_and_the_crate_requirements() {
         let root = temp_dir("upgrade");
@@ -1976,9 +1968,9 @@ mod tests {
         );
     }
 
-    /// Upgrading a project that was never set up used to write a
-    /// pins-only jackdaw.toml, which made it look integrated and
-    /// permanently skipped the import flow that would have completed it.
+    /// Upgrading a project that was never set up must refuse: writing a
+    /// pins-only jackdaw.toml would make it look integrated and skip the
+    /// import flow that completes it.
     #[test]
     fn upgrade_refuses_a_project_that_was_never_set_up() {
         let root = temp_dir("upgrade-unset");

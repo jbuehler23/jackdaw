@@ -1,17 +1,8 @@
 //! What Ctrl+Z does to the selection.
 //!
-//! An undo that respawns the scene re-mints every entity, so a selection
-//! held as entity ids would come back empty and leave the inspector, the
-//! canvas outline and every gesture pointing at nothing. The snapshot
-//! records the selection by document node instead.
-//!
-//! What is pinned here:
-//!  * undoing a delete puts the deleted node back and selects it again,
-//!    with the marker the outliner paints off;
-//!  * undoing an edit that changed no entity leaves the selection alone;
-//!  * a selection change on its own is not an edit, so it records nothing;
-//!  * group and ungroup still undo back to what was selected when they
-//!    were asked for.
+//! An undo that respawns the scene re-mints every entity, so a selection held
+//! as entity ids would come back empty. The snapshot records the selection by
+//! document node instead.
 
 use crate::util;
 
@@ -193,12 +184,9 @@ fn undoing_a_group_selects_what_was_grouped() {
     );
 }
 
-/// Ctrl+Shift+Z is Redo's chord, so Undo stands down when Shift is held.
-///
-/// The modifier matcher is "must include these", so the Ctrl-only binding
-/// answers Ctrl+Shift+Z too and both operators fire on one press. Undo
-/// reads what the chord did not name and refuses; the check used to be a
-/// hand-rolled Shift test that said nothing about Alt or Super.
+/// Ctrl+Shift+Z is Redo's chord. The modifier matcher is "must include these",
+/// so the Ctrl-only binding answers Ctrl+Shift+Z too and both operators fire on
+/// one press; Undo reads what the chord did not name and refuses.
 #[test]
 fn undo_stands_down_while_shift_is_held() {
     let mut app = util::editor_test_app();

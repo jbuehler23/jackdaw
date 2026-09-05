@@ -1,12 +1,4 @@
 //! Dropping an image out of the asset browser onto the 2D canvas.
-//!
-//! What is pinned here:
-//!  * dropped on a node that already draws an image, the texture is what
-//!    changes, and the node stays where it was;
-//!  * dropped on a container, a new image goes in it;
-//!  * dropped on bare canvas, a new image is placed where the drop landed;
-//!  * each of the three is one history entry that undoes cleanly, so a drop
-//!    never leaves half of itself behind.
 
 use crate::util;
 
@@ -138,7 +130,7 @@ fn drop_image_at(app: &mut App, panel: Entity, authored: Vec2) {
     drop_path_at(app, panel, authored, DROPPED.into());
 }
 
-/// [`drop_image_at`] for a drag carrying a particular path, which is how the
+/// `drop_image_at` for a drag carrying a particular path, which is how the
 /// asset browser hands one over: the file's own, and absolute.
 fn drop_path_at(app: &mut App, panel: Entity, authored: Vec2, path: std::path::PathBuf) {
     app.world_mut().resource_mut::<ActiveAssetDrag>().image = Some(path);
@@ -319,10 +311,9 @@ fn a_drop_on_bare_canvas_places_an_image_where_it_landed() {
     );
 }
 
-/// The browser carries the file's own path, which is absolute. What the
-/// document has to end up with is the project-relative one: an absolute path
-/// is not an approved asset path, so the texture never loads and the save
-/// records an empty image.
+/// The browser carries the file's own absolute path, and an absolute path is
+/// not an approved asset path, so the document has to end up with the
+/// project-relative one.
 #[test]
 fn a_drop_records_the_project_relative_path_of_the_file_it_carried() {
     let mut app = util::editor_test_app();
@@ -352,8 +343,8 @@ fn a_drop_records_the_project_relative_path_of_the_file_it_carried() {
     );
 }
 
-/// The placement is the other half of what a drop is. It reached the node but
-/// not the document, so a save wrote the palette's default position.
+/// The placement reached the node but not the document, so a save wrote the
+/// palette's default position.
 #[test]
 fn a_canvas_drop_saves_where_it_landed() {
     let mut app = util::editor_test_app();
@@ -370,9 +361,8 @@ fn a_canvas_drop_saves_where_it_landed() {
     );
 }
 
-/// Undo and redo both have to move the placement. Written outside the entry,
-/// a redo replayed the palette's spawn and left the image at the palette's
-/// default position.
+/// Written outside the entry, a redo replayed the palette's spawn and left the
+/// image at the palette's default position.
 #[test]
 fn redo_puts_a_dropped_image_back_where_it_landed() {
     let mut app = util::editor_test_app();

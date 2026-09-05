@@ -48,12 +48,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ]);
 }
 
-/// Which kind of scene a `scene.new` makes.
-///
-/// The kind is the scene's own concept rather than a flag on the operator:
-/// it decides what the document is seeded with, which panel comes forward,
-/// and which marker component a save writes so a reopened document is
-/// recognised as the same kind.
+/// Which kind of scene a `scene.new` makes. The kind decides what the document
+/// is seeded with, which panel comes forward, and which marker a save writes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SceneKind {
     /// A 3D world scene. The editor's default.
@@ -66,8 +62,7 @@ pub enum SceneKind {
 }
 
 impl SceneKind {
-    /// Read the operator's `kind` clause: `3d`, `2d` or `ui`. Unknown
-    /// values fall back to 3D, the kind a bare `scene.new` has always made.
+    /// Read the operator's `kind` clause: `3d`, `2d` or `ui`, defaulting to 3D.
     pub fn from_clause(value: &str) -> Self {
         match value {
             "2d" => Self::TwoD,
@@ -96,9 +91,7 @@ impl SceneKind {
     )
 )]
 pub fn scene_new(In(params): In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    // `ui=true` is the spelling scripted runs and older keymaps use. It is
-    // kept as an alias for one release, and only speaks when `kind` is
-    // absent, so an explicit kind always wins.
+    // `ui=true` is a deprecated alias, and only speaks when `kind` is absent.
     let kind = match params.as_str("kind") {
         Some(kind) => SceneKind::from_clause(kind),
         None if params.as_bool("ui").unwrap_or(false) => SceneKind::Ui,
@@ -119,15 +112,8 @@ pub fn scene_new_system(world: &mut World) {
 /// New tab of `kind`, optionally pointed at a file.
 ///
 /// Seeding runs after the tab is active: activating replaces the live entities,
-/// so a root spawned first would be despawned with the previous scene.
-///
-/// The three kinds seed different things and share nothing. A 3D scene gets a
-/// directional light, without which it opens black; a UI scene gets a
-/// [`crate::ui_palette::seed_ui_scene_root`] and nothing else, because a light
-/// in a UI document is furniture the author never asked for that a save then
-/// writes to disk; a 2D scene gets its root marker alone, since its contents
-/// are sprites the author places. So the seeding is a branch, not a common
-/// step with addenda.
+/// so a root spawned first would be despawned with the previous scene. Each
+/// kind seeds its own root and nothing else.
 pub fn scene_new_configured(world: &mut World, kind: SceneKind, path: Option<&std::path::Path>) {
     let n = {
         let mut c = world.resource_mut::<UntitledCounter>();
@@ -150,10 +136,8 @@ pub fn scene_new_configured(world: &mut World, kind: SceneKind, path: Option<&st
         SceneKind::TwoD | SceneKind::Ui => crate::entity_ops::ensure_scene_document(world),
     }
 
-    // Point the save path at the new tab, or clear it when the tab is
-    // untitled. Clearing matters: a leftover path from the previous tab would
-    // send the next `scene.save` at that file, overwriting it with the new
-    // empty scene.
+    // Point the save path at the new tab, or clear it when untitled: a
+    // leftover path would send the next `scene.save` at the previous file.
     if let Some(mut file_path) = world.get_resource_mut::<SceneFilePath>() {
         file_path.path = path.map(|path| path.to_string_lossy().into_owned());
     }
@@ -168,10 +152,7 @@ pub fn scene_new_configured(world: &mut World, kind: SceneKind, path: Option<&st
         SceneKind::ThreeD => {}
     }
 
-    // The kind picks the mode; the user can switch afterwards. A flat scene
-    // is also the moment its canvas is wanted, and the dock leaves whatever
-    // was in front there otherwise, so those two kinds front the panel as
-    // well. The load and tab-swap paths front it the same way.
+    // The kind picks the mode; a flat scene also brings its canvas forward.
     let mode = crate::viewport_host::ViewportMode::for_scene_kind(kind);
     match kind {
         SceneKind::TwoD | SceneKind::Ui => crate::viewport_host::focus_viewport(world, mode),
@@ -222,23 +203,12 @@ pub fn scene_open(In(params): In<OperatorParameters>, mut commands: Commands) ->
     OperatorResult::Finished
 }
 
-/// Where a `scene.open path=` lands, or `None` when it names a file the
-/// caller has no business opening.
+/// Where a `scene.open path=` lands. A relative path is tried under the
+/// project's `assets/`, then the project root, then the working directory.
 ///
-/// A caller that has not clicked through a file dialog spells the scene
-/// the way the project does -- `level.bsn`, or `scenes/level.bsn` -- and
-/// has no business knowing the editor's working directory. A relative
-/// path is tried under the project's `assets/`, then under the project
-/// root, and only then against the working directory, which is what a
-/// shell-typed path means.
-///
-/// With a project open, the file has to be inside it. `path=` is reachable
-/// from the remote surface, where an unconfined path would let a caller
-/// read any file on the machine into the editor and then save it back
-/// somewhere else. The user's own File > Open dialog is not this path: it
-/// hands its pick to [`crate::migrate_dialog::request_open_with_conversion`]
-/// directly, so opening a scene from outside the project by hand still
-/// works.
+/// With a project open the file has to be inside it, since `path=` is reachable
+/// from the remote surface. The File > Open dialog does not come through here,
+/// so opening a scene from outside the project by hand still works.
 fn resolve_scene_path(
     world: &World,
     path: std::path::PathBuf,
@@ -269,9 +239,6 @@ fn resolve_scene_path(
 }
 
 /// Does this document describe a prefab rather than a scene?
-///
-/// Shared with the reload path, which asks the same question of a file edited
-/// into a prefab underneath an open scene tab.
 pub fn document_is_prefab(doc: &jackdaw_bsn::SceneBsnAst) -> bool {
     doc.roots.first().is_some_and(|&root| {
         doc.component_type_paths(root)
@@ -302,9 +269,7 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
             .unwrap_or(false)
     });
     if let Some(idx) = existing {
-        // Opening a scene that is already open is a request to see it, and
-        // `swap_active_tab` refreshes any sidecar the file has moved on
-        // from, so a terrain rewritten on disk is the one that comes up.
+        // The swap also refreshes any sidecar the file has moved on from.
         swap_active_tab(world, idx);
         return;
     }
@@ -318,14 +283,11 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
         }
     };
 
-    // Build the tab's scene document. `.bsn` parses directly. Legacy `.jsn`
-    // is not imported: it converts to a `.bsn` document that the tab opens,
-    // and the conversion is held in memory until that document is accepted
-    // below. The interactive open path confirms before reaching here.
+    // `.bsn` parses directly. Legacy `.jsn` converts to a `.bsn` document held
+    // in memory until it is accepted below.
     let mut saved_camera: Option<Transform> = None;
-    // The path the user picked, for messages about a document not yet written:
-    // `canonical` becomes the `.bsn` the conversion targets, which does not
-    // exist until the commit below.
+    // The path the user picked; `canonical` becomes the conversion's target,
+    // which does not exist until the commit below.
     let opened = canonical.clone();
     let (canonical, file_text, pending_conversion) =
         if canonical.extension().is_some_and(|e| e == "bsn") {
@@ -358,16 +320,13 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
         }
     };
 
-    // The same refusal every other load path applies: a document naming the
-    // removed facade UI vocabulary would open as a scene silently missing its
-    // UI, so no tab is created.
+    // A document naming the removed facade UI vocabulary gets no tab at all,
+    // rather than opening with its UI silently missing.
     if let Err(err) = jackdaw_bsn::reject_retired_ui_components(&doc) {
         warn!("scene.open: cannot open {opened:?}: {err}");
         return;
     }
 
-    // The document parsed and passed the gate, so the conversion can be
-    // written to disk.
     if let Some(pending) = pending_conversion {
         let bsn_path = pending.bsn_path.clone();
         if let Err(err) = crate::jsn_to_bsn::commit_conversion(world, pending) {
@@ -382,9 +341,8 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
             bsn_path.display()
         );
     }
-    // Record the bytes read as what is at this path, before the tab exists: the
-    // open-tab watcher starts only once the tab does, and an edit landing in
-    // that gap still has to be reported.
+    // Record the bytes before the tab exists: the watcher starts with the tab,
+    // and an edit landing in that gap still has to be reported.
     crate::scenes::external_watch::note_known_content(world, &canonical, file_text.as_bytes());
 
     let is_prefab = document_is_prefab(&doc);

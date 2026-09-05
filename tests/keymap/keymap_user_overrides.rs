@@ -207,9 +207,8 @@ fn applying_a_rebind_leaves_exactly_one_binding_on_the_new_chord() {
     }
 }
 
-/// The file the editor writes and reads back. Pinned so a change to the
-/// serde shape is a decision rather than a silently unreadable file in
-/// everyone's config directory.
+/// The file the editor writes and reads back. Pinned so a change to the serde
+/// shape is a decision rather than an unreadable file in everyone's config.
 #[test]
 fn user_keymap_json_is_the_documented_shape() {
     let keymap = UserKeymap {
@@ -235,10 +234,8 @@ fn an_absent_bindings_field_parses_as_an_empty_keymap() {
     assert_eq!(keymap, UserKeymap::default());
 }
 
-/// Every operator either has a chord in the resolved keymap or is on the
-/// list of operators that deliberately have none. A new operator with no
-/// binding and no entry here fails, which is the moment to decide which
-/// of the two it is.
+/// Every operator either has a chord in the resolved keymap or is on the list of
+/// operators that deliberately have none, so a new one has to be classified.
 #[test]
 fn every_operator_is_bound_or_listed_as_unbound() {
     let mut app = headless_app();
@@ -253,11 +250,9 @@ fn every_operator_is_bound_or_listed_as_unbound() {
         .map(|b| b.operator.as_str())
         .collect();
 
-    // An operator with no action entity has nothing for a binding to
-    // point at, so it is exempt by construction and needs no entry: it
-    // was registered to be reached from a menu, a button or the command
-    // palette. Deriving that half rather than listing it keeps the list
-    // to the operators that could hold a chord and deliberately do not.
+    // An operator with no action entity has nothing for a binding to point at,
+    // so it is exempt by construction: deriving that half keeps the list to
+    // operators that could hold a chord and deliberately do not.
     let world = app.world_mut();
     let with_action: std::collections::HashSet<String> = world
         .query::<&OperatorAction>()
@@ -274,10 +269,9 @@ fn every_operator_is_bound_or_listed_as_unbound() {
     unbound.sort_unstable();
     unbound.dedup();
 
-    // What is left: operators that do have an action, and whose chord
-    // lives at a raw binding site the preset format cannot yet express
-    // (hold-repeat, modifier-only gestures), or that are deliberately
-    // reached only from a surface of their own.
+    // What is left: operators with an action whose chord lives at a raw binding
+    // site the preset format cannot express (hold-repeat, modifier-only), or
+    // that are reached only from a surface of their own.
     let known_unbound: std::collections::HashSet<&str> =
         jackdaw::keybind_settings::UNBOUND_OPERATORS
             .iter()
@@ -298,9 +292,8 @@ fn every_operator_is_bound_or_listed_as_unbound() {
     );
 }
 
-/// An entry that has since been given a chord is a lie the list keeps
-/// telling: it says the operator is deliberately unbound while the keymap
-/// says otherwise, and the next reader believes the list.
+/// An entry that has since been given a chord says the operator is deliberately
+/// unbound while the keymap says otherwise.
 #[test]
 fn no_listed_unbound_operator_actually_holds_a_chord() {
     let mut app = headless_app();
@@ -327,7 +320,7 @@ fn no_listed_unbound_operator_actually_holds_a_chord() {
 }
 
 /// The other half of the same rot: an entry for an operator that has no
-/// input action at all is now derived, so the entry says nothing.
+/// input action at all is derived, so the entry says nothing.
 #[test]
 fn no_listed_unbound_operator_is_already_exempt_without_an_action() {
     let mut app = headless_app();
@@ -375,9 +368,8 @@ fn the_dialog_seeds_one_row_per_operator() {
     );
 }
 
-/// Operators whose chord is attached at a raw binding site rather than
-/// through the keymap are listed and marked as not editable, so the
-/// chord is visible even though the dialog cannot change it.
+/// Operators whose chord is attached at a raw binding site are listed and marked
+/// not editable, so the chord is visible even though the dialog cannot change it.
 #[test]
 fn a_raw_bound_operator_is_listed_as_fixed() {
     let mut app = headless_app();
@@ -465,9 +457,8 @@ fn resetting_a_rebound_row_leaves_nothing_in_the_file() {
     assert_eq!(pending.to_user_keymap(), UserKeymap::default());
 }
 
-/// An operator with no input action behind it has nothing for a chord
-/// to attach to, so the dialog says so instead of offering a rebind the
-/// applier would then refuse.
+/// An operator with no input action has nothing for a chord to attach to, so the
+/// dialog says so instead of offering a rebind the applier would refuse.
 #[test]
 fn a_menu_only_operator_is_listed_but_not_offered_a_chord() {
     let mut app = headless_app();
@@ -493,9 +484,7 @@ fn a_menu_only_operator_is_listed_but_not_offered_a_chord() {
         .expect("undo is an operator");
     assert!(editable.bindable && editable.is_editable());
 
-    // Every row the dialog offers a rebind on must be one the applier can
-    // actually bind, or the dialog would be writing a file that does
-    // nothing.
+    // Every row the dialog offers a rebind on must be one the applier can bind.
     let world = app.world_mut();
     let with_action: std::collections::HashSet<String> = world
         .query::<&jackdaw_api_internal::lifecycle::OperatorAction>()
@@ -511,9 +500,8 @@ fn a_menu_only_operator_is_listed_but_not_offered_a_chord() {
     }
 }
 
-/// The rows the dialog cannot edit are listed together under one
-/// heading each. Grouping them by the operator's own name instead would
-/// scatter them through the list and repeat their heading at each one.
+/// The rows the dialog cannot edit are listed under one heading each; grouping
+/// by the operator's own name would scatter them and repeat the heading.
 #[test]
 fn the_fixed_rows_are_one_run_of_the_list() {
     let mut app = headless_app();
@@ -546,12 +534,9 @@ fn the_fixed_rows_are_one_run_of_the_list() {
     }
 }
 
-/// The whole path a rebind takes: the dialog's Save writes a file, a later
-/// session reads it back, and the operator answers on the new chord.
-///
-/// The pieces were covered one at a time; the disk in the middle was not, so
-/// a keymap that serialized and resolved could still have been written where
-/// nothing read it.
+/// The whole path a rebind takes: Save writes a file, a later session reads it
+/// back, and the operator answers on the new chord. The disk in the middle was
+/// the piece no test covered.
 #[test]
 fn a_saved_rebind_comes_back_off_disk_and_applies() {
     use jackdaw_api_internal::keymap::{load_user_keymap, save_user_keymap};
@@ -611,9 +596,8 @@ fn load_user_keymap_now() -> UserKeymap {
     jackdaw_api_internal::keymap::load_user_keymap()
 }
 
-/// A chord two commands have shared since the editor shipped needs no
-/// decision from the reader: their availability arbitrates. What the
-/// dialog owes is which rows those are, which the row says itself.
+/// A chord two commands have always shared needs no decision from the reader:
+/// their availability arbitrates, and the row says which rows those are.
 #[test]
 fn a_shipped_co_fire_marks_its_rows_and_stays_out_of_the_paragraph() {
     let mut app = headless_app();
@@ -652,9 +636,8 @@ fn a_shipped_co_fire_marks_its_rows_and_stays_out_of_the_paragraph() {
     );
 }
 
-/// A conflict a rebind in this session made is new, and is the reader's
-/// to decide about, so it is named in full -- in the words the rows next
-/// to it use, not in the words the log uses.
+/// A conflict a rebind in this session made is the reader's to decide about, so
+/// it is named in full, in the words the rows next to it use.
 #[test]
 fn a_conflict_this_session_made_is_named_in_the_paragraph() {
     let mut app = headless_app();
@@ -679,9 +662,8 @@ fn a_conflict_this_session_made_is_named_in_the_paragraph() {
     );
 }
 
-/// Several commands ship with more than one chord. A dialog that could
-/// only replace turned each of those into one chord the first time it was
-/// touched, and Save wrote that loss to disk.
+/// Several commands ship with more than one chord, and a dialog that could only
+/// replace turned each into one chord the first time it was touched.
 #[test]
 fn an_added_chord_survives_a_save_and_a_reload() {
     let mut app = headless_app();
@@ -726,9 +708,8 @@ fn an_added_chord_survives_a_save_and_a_reload() {
     assert_eq!(reopened.chords_of(REBOUND), after[1..].to_vec());
 }
 
-/// A command that fires on release keeps firing on release when its chord
-/// is changed. The dialog used to write `Press` for everything, turning a
-/// release binding into a press one with nothing saying so.
+/// A command that fires on release keeps firing on release when its chord is
+/// changed.
 #[test]
 fn a_rebind_keeps_the_phase_the_command_fires_on() {
     let mut app = headless_app();
@@ -765,9 +746,8 @@ fn a_rebind_keeps_the_phase_the_command_fires_on() {
     );
 }
 
-/// The draw-brush modal is reached by four chords, two of them hanging
-/// off marker actions of their own. The dialog used to show the two on
-/// its own action, so the two the user actually presses were invisible.
+/// The draw-brush modal is reached by four chords, two hanging off marker
+/// actions of their own, and the dialog lists all four on the draw-brush row.
 #[test]
 fn the_draw_brush_row_lists_the_chords_that_reach_it() {
     let mut app = headless_app();
@@ -795,12 +775,9 @@ fn the_draw_brush_row_lists_the_chords_that_reach_it() {
     );
 }
 
-/// A keymap that will not parse loads as empty, and the next Save writes
-/// the whole file: leaving the unparseable one in place would destroy
-/// whatever was in it without ever showing it to anyone.
-///
-/// A second corruption is kept too, beside the first rather than over it:
-/// a rescue that clobbers the last rescue is no rescue at all.
+/// A keymap that will not parse loads as empty and the next Save writes the whole
+/// file, so the unparseable one is moved aside. A second corruption is kept
+/// beside the first: a rescue that clobbers the last rescue is no rescue.
 #[test]
 fn a_corrupt_keymap_is_kept_beside_itself_and_reported() {
     use jackdaw_api_internal::keymap::load_user_keymap_reporting;
@@ -862,8 +839,8 @@ fn a_corrupt_keymap_is_kept_beside_itself_and_reported() {
     drop(guard);
 }
 
-/// A file that cannot be read at all is no safer than one that will not
-/// parse: the next Save writes the whole thing, so it is moved aside too.
+/// A file that cannot be read at all is no safer than one that will not parse,
+/// so it is moved aside too.
 #[test]
 fn a_keymap_that_cannot_be_read_is_kept_as_well() {
     use jackdaw_api_internal::keymap::load_user_keymap_reporting;
@@ -875,8 +852,8 @@ fn a_keymap_that_cannot_be_read_is_kept_as_well() {
     let path = dir.join("keymap.json");
     let kept = dir.join("keymap.json.invalid");
     let _ = std::fs::remove_file(&kept);
-    // Bytes no `read_to_string` can turn into text, which is the shape a
-    // truncated or half-written file arrives in.
+    // Bytes no `read_to_string` can turn into text: the shape a truncated or
+    // half-written file arrives in.
     std::fs::write(&path, [0x80u8, 0x81, 0x82]).expect("write an unreadable keymap");
 
     let (keymap, problem) = load_user_keymap_reporting();
@@ -907,7 +884,6 @@ fn a_keymap_that_cannot_be_read_is_kept_as_well() {
 
 /// When the rescue itself fails there is still an unread file on disk, and
 /// writing the keymap over it is the loss the rescue exists to prevent.
-/// Save refuses instead, and says so.
 #[test]
 fn a_save_refuses_while_an_unrescued_keymap_is_still_there() {
     use jackdaw_api_internal::keymap::save_user_keymap;
@@ -917,8 +893,8 @@ fn a_save_refuses_while_an_unrescued_keymap_is_still_there() {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = empty_config_dir();
     let path = dir.join("keymap.json");
-    // The state a failed rescue leaves: a file nobody could read, still
-    // where the next Save would write.
+    // The state a failed rescue leaves: a file nobody could read, still where
+    // the next Save would write.
     std::fs::write(&path, "{ this is not json").expect("write a corrupt keymap");
 
     let refusal = save_user_keymap(&UserKeymap::default())
@@ -942,9 +918,8 @@ fn a_save_refuses_while_an_unrescued_keymap_is_still_there() {
     drop(guard);
 }
 
-/// A keymap the editor could not read costs the user every override they
-/// had. The dialog says so, but nobody opens Preferences to find out why:
-/// the status bar says it too, on the first frame there is one.
+/// A keymap the editor could not read costs the user every override, so the
+/// status bar says so on the first frame there is one.
 #[test]
 fn a_keymap_that_would_not_load_is_said_out_loud() {
     let guard = CONFIG_LOCK
@@ -972,11 +947,10 @@ fn a_keymap_that_would_not_load_is_said_out_loud() {
     drop(guard);
 }
 
-/// A rescue that could only empty the original leaves a file with nothing
-/// in it. Read as a parse failure, that file is rescued again on the next
-/// launch, and the one after: `.invalid.2`, `.3`, on to the end of the
-/// counter, which then writes over the rescue of the first corruption. An
-/// empty file is a keymap with no overrides, so nothing happens to it.
+/// A rescue that could only empty the original leaves a file that would be
+/// rescued again every launch, on to the end of the counter, which then writes
+/// over the first corruption's rescue. An empty file is a keymap with no
+/// overrides, so nothing happens to it.
 #[test]
 fn an_empty_keymap_file_loads_as_no_overrides_and_is_not_rescued() {
     use jackdaw_api_internal::keymap::load_user_keymap_reporting;

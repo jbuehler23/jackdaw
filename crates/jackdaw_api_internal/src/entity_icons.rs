@@ -15,11 +15,9 @@ pub type IconPredicate = fn(EntityRef) -> Option<Icon>;
 
 /// When a rule is asked, relative to every other rule.
 ///
-/// Registration order decides priority inside a tier, and the tier decides
-/// it between them. Without the second tier a rule that matches everything
-/// of a shape - every `Node` is a container of some kind - would answer for
-/// each entity of that shape before any rule registered after it, so an
-/// extension loaded later could never name one of its own.
+/// Registration order decides priority inside a tier, and the tier decides it
+/// between them, so a rule matching a whole shape cannot answer ahead of an
+/// extension's own kinds.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IconTier {
     /// Says what an entity is. Asked first.
@@ -28,13 +26,12 @@ pub enum IconTier {
     LastResort,
 }
 
-/// A component rule, with the type id it resolves to once it has been
-/// looked up.
+/// A component rule, with the type id it resolves to once looked up.
 struct ComponentRule {
     type_path: String,
     icon: Icon,
-    /// Resolved on the first lookup that finds it. Filled only on a hit,
-    /// so a type registered after the rule is still found later.
+    /// Filled on the first lookup that finds it, so a type registered after
+    /// the rule is still found later.
     type_id: OnceLock<TypeId>,
 }
 
@@ -58,11 +55,10 @@ enum IconRule {
 }
 
 /// The ordered rules deciding the icon a tree row shows, in two tiers.
-/// Inside a tier the first rule that matches wins, so the specific kinds
-/// are registered before the general ones. A rule that answers for a whole
-/// shape rather than a kind goes in [`IconTier::LastResort`], which is
-/// asked only once every `Kind` rule has declined. Seeded by jackdaw for
-/// its own types; extensions add more via
+///
+/// Inside a tier the first rule that matches wins, so specific kinds are
+/// registered before general ones, and a rule answering for a whole shape goes
+/// in [`IconTier::LastResort`]. Extensions add rules through
 /// `ExtensionContext::register_entity_icon`.
 #[derive(Resource, Default)]
 pub struct EntityIconRegistry {
@@ -81,20 +77,19 @@ impl EntityIconRegistry {
         }));
     }
 
-    /// Register a rule that reads an entity's component values. Later
-    /// registrations have lower priority than earlier ones.
+    /// Registers a rule that reads an entity's component values, at lower
+    /// priority than the rules already registered.
     pub fn register_predicate(&mut self, predicate: IconPredicate) {
         self.entries.push(IconRule::Predicate(predicate));
     }
 
-    /// Register a rule asked only when no [`IconTier::Kind`] rule matched.
+    /// Registers a rule asked only when no [`IconTier::Kind`] rule matched.
     pub fn register_last_resort_predicate(&mut self, predicate: IconPredicate) {
         self.last_resort.push(IconRule::Predicate(predicate));
     }
 
-    /// Iterate the registered `(type_path, icon)` pairs in the order they
-    /// are asked in, skipping the value predicates, which have no type
-    /// path.
+    /// Iterates the registered `(type_path, icon)` pairs in the order they are
+    /// asked in, skipping the value predicates, which have no type path.
     pub fn iter(&self) -> impl Iterator<Item = (&String, Icon)> {
         self.entries
             .iter()
@@ -194,9 +189,8 @@ mod tests {
         );
     }
 
-    /// A rule that answers for a whole shape has to stand behind every
-    /// rule that names a kind, including the ones registered after it, or
-    /// no extension loaded later could name one of its own types.
+    /// A rule answering for a whole shape stands behind every rule naming a
+    /// kind, including ones registered after it.
     #[test]
     fn a_last_resort_rule_stands_behind_a_kind_registered_after_it() {
         let mut world = world_with_types();

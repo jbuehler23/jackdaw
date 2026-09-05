@@ -62,12 +62,9 @@ fn main() -> AppExit {
     // - `JACKDAW_AUTO_OPEN=1` env var: opt in to "re-open last
     //   project on launch" for power users who prefer that flow.
     //
-    // We previously defaulted to auto-open; reverted because static
-    // game projects need a 5-10 minute build on first run, and
-    // auto-opening one means the user stares at a launcher window
-    // doing apparently nothing for several minutes. Showing the
-    // picker first lets the user explicitly choose to start that
-    // build.
+    // The picker comes first otherwise: a static game project needs a
+    // 5-10 minute build on first run, so auto-opening one leaves the
+    // user staring at an idle-looking launcher.
     let respawn_skip_build = std::env::var_os(jackdaw::restart::ENV_SKIP_INITIAL_BUILD).is_some();
     let auto_open_opt_in = std::env::var_os("JACKDAW_AUTO_OPEN").is_some();
     let auto_open = if respawn_skip_build {

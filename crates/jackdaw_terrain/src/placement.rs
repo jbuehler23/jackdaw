@@ -1,17 +1,13 @@
 //! Scatter placements stored on the terrain rather than as entities.
 //!
 //! A [`crate::scatter::Placement`] is what the kernel produces; a
-//! [`ScatterPlacement`] is what a terrain keeps. The difference is
-//! ownership: the kernel's placement is a value in a caller's list, while
-//! a stored one belongs to a region and is addressed by that region's
-//! coordinate and its index within it.
+//! [`ScatterPlacement`] is what a terrain keeps, belonging to a region and
+//! addressed by that region's coordinate and its index within it.
 //!
-//! Two side tables make a placement small. The [`ScatterPalette`] holds
-//! each asset once, and the group table holds each stamp identity once, so
-//! a placement is four u16-or-f32 fields and two indices rather than two
-//! strings. Both tables are append-only within a document: an index is
-//! what every placement refers to, so an entry is emptied rather than
-//! removed.
+//! Two side tables make a placement small: the [`ScatterPalette`] holds each
+//! asset once and the group table holds each stamp identity once. Both are
+//! append-only within a document, because an index is what every placement
+//! refers to, so an entry is emptied rather than removed.
 
 use bevy_math::Vec3;
 
@@ -22,9 +18,8 @@ const MODEL_EXTENSIONS: [&str; 2] = [".gltf", ".glb"];
 /// so an index past this one could not be stored.
 pub const MAX_SCATTER_TABLE: usize = u16::MAX as usize + 1;
 
-/// Longest a stamp identity may be. A key is an editor-facing name, not a
-/// payload, and an unbounded one would be written into every sidecar that
-/// carried a placement of it.
+/// Longest a stamp identity may be. A key is an editor-facing name, and an
+/// unbounded one would be written into every sidecar carrying a placement of it.
 pub const MAX_SCATTER_GROUP_LEN: usize = 128;
 
 /// Why a palette entry could not name an asset.
@@ -98,14 +93,11 @@ impl core::error::Error for ScatterGroupError {}
 
 /// Validate a palette entry's asset reference.
 ///
-/// Stricter than the host platform, and for the same reason the sidecar's
-/// other path fields are: a document is read on machines other than the
-/// one that wrote it, so a backslash, a drive prefix and a `..` component
-/// are rejected everywhere rather than wherever they happen to escape.
+/// Stricter than the host platform, as the sidecar's other path fields are: a
+/// backslash, a drive prefix and a `..` component are rejected everywhere.
 ///
-/// The extension is required because the renderer resolves an entry
-/// through the glTF loader and has nothing to fall back on for a path
-/// that loader will not accept.
+/// The extension is required because the renderer resolves an entry through the
+/// glTF loader and has nothing to fall back on.
 pub fn validate_scatter_asset(path: &str) -> Result<(), ScatterAssetError> {
     if path.is_empty() {
         return Err(ScatterAssetError::Empty);
@@ -181,9 +173,8 @@ impl ScatterPaletteEntry {
         self.asset.is_empty()
     }
 
-    /// Clamp `cull_distance` into the range the renderer compares against:
-    /// a non-finite or negative value reads as "no cutoff", which is what
-    /// a caller that never set one meant.
+    /// Clamp `cull_distance` into the range the renderer compares against: a
+    /// non-finite or negative value reads as "no cutoff".
     pub(crate) fn sanitize(&mut self) {
         if !self.cull_distance.is_finite() || self.cull_distance < 0.0 {
             self.cull_distance = 0.0;
@@ -211,9 +202,8 @@ impl ScatterPalette {
 
     /// Index of `asset`, appending an entry when it is not there yet.
     ///
-    /// An existing entry is returned as it stands, so re-running a stamp
-    /// over the same assets reuses the rows it wrote last time rather than
-    /// growing the table.
+    /// An existing entry is returned as it stands, so re-running a stamp over
+    /// the same assets reuses the rows it wrote last time.
     pub fn intern_asset(&mut self, asset: &str) -> Result<u16, ScatterAssetError> {
         if let Some(at) = self.assets.iter().position(|e| e.asset == asset) {
             return Ok(at as u16);
@@ -228,9 +218,8 @@ impl ScatterPalette {
     /// Index of `key`, reviving a tombstoned row or appending one when the
     /// key is not there yet.
     ///
-    /// A tombstoned row is free to take because the only thing that
-    /// tombstones one takes that group's placements with it, so no
-    /// placement names the index by the time it is handed out again.
+    /// A tombstoned row is free to take because tombstoning one takes that
+    /// group's placements with it, so no placement names the index.
     pub fn intern_group(&mut self, key: &str) -> Result<u16, ScatterGroupError> {
         if let Some(at) = self.groups.iter().position(|g| g == key) {
             return Ok(at as u16);
@@ -275,12 +264,10 @@ impl ScatterPalette {
 /// One instance a terrain carries, in the space of the region holding it.
 ///
 /// Position is stored against the region's minimum corner rather than the
-/// terrain's origin: that is the only anchor that stays put when the
-/// terrain grows, and it keeps the floats small on a document that reaches
-/// far from its origin.
+/// terrain's origin: that anchor stays put when the terrain grows, and it keeps
+/// the floats small far from the origin.
 ///
-/// Rotation is a yaw alone. A placement stands upright; anything tilted,
-/// bent or hand-adjusted is an entity, not a stored placement.
+/// Rotation is a yaw alone; anything tilted or hand-adjusted is an entity.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScatterPlacement {
     /// Index into [`ScatterPalette::groups`].
@@ -305,11 +292,9 @@ impl ScatterPlacement {
         Vec3::new(self.x, self.y, self.z)
     }
 
-    /// Clamp the floats into a range the renderer and the bake can use.
-    ///
-    /// A non-finite coordinate reaching the render world becomes a NaN
-    /// bounding volume, which no frustum test rejects and every batch then
-    /// draws.
+    /// Clamp the floats into a range the renderer and the bake can use. A
+    /// non-finite coordinate becomes a NaN bounding volume, which no frustum
+    /// test rejects and every batch then draws.
     pub(crate) fn sanitize(&mut self) {
         for value in [&mut self.x, &mut self.y, &mut self.z, &mut self.yaw] {
             if !value.is_finite() {

@@ -1,19 +1,9 @@
 //! Dropping an image from the asset browser onto the 2D canvas.
 //!
-//! Three landings, decided by what is under the cursor when the drag is
-//! released:
-//!
-//! - an `ImageNode` takes the texture, keeping the node that was already
-//!   laid out where the author put it;
-//! - a container takes a new image as its last child, laid out by whatever
-//!   the container does;
-//! - bare canvas -- the scene's own root -- takes a new image placed
-//!   absolutely at the point the drop landed on.
-//!
-//! The new image is made through the widget palette, so a dropped image is
-//! the same node the Add menu builds and carries the same name, and its
-//! placement and texture go in the same history entry rather than following
-//! it as a second.
+//! What is under the cursor decides the landing: an `ImageNode` takes the
+//! texture, a container takes a new image as its last child, and bare canvas
+//! takes a new image placed absolutely at the drop point. New images are made
+//! through the widget palette, so they match what the Add menu builds.
 
 use bevy::{asset::AssetServer, prelude::*};
 
@@ -70,11 +60,8 @@ pub enum ImageDrop {
     Canvas(Vec2),
 }
 
-/// What a drop at `target` means, given the node under the cursor.
-///
-/// `under` is the authored node the cursor is over, or `None` for a miss;
-/// a hit on the scene's own root is the canvas rather than a container,
-/// because the root is what the canvas is.
+/// What a drop at `at` means. `under` is the authored node the cursor is over,
+/// or `None` for a miss; the scene's own root counts as canvas, not container.
 pub fn classify_drop(world: &World, under: Option<Entity>, at: Vec2) -> ImageDrop {
     match under {
         Some(entity) if world.get::<ImageNode>(entity).is_some() => ImageDrop::Texture(entity),
@@ -94,15 +81,9 @@ fn is_scene_root(world: &World, entity: Entity) -> bool {
             .is_some()
 }
 
-/// Land a dropped image, and say which node it ended up on.
-///
-/// The browser hands over the file's own path, which is absolute. A document
-/// records a texture as the asset path the handle carries, so loading the
-/// absolute path would write a path that resolves on this machine and nowhere
-/// else -- and under Bevy's approved-path rule does not resolve at all, leaving
-/// the saved document with an empty image. [`crate::entity_ops::to_asset_path`]
-/// is what reduces it to the project-relative path both the load and the save
-/// need.
+/// Land a dropped image, and say which node it ended up on. The browser hands
+/// over an absolute path, so it is reduced to a project-relative asset path
+/// before loading; an absolute one would neither resolve nor save.
 pub fn drop_image(world: &mut World, path: &str, landing: ImageDrop) -> Option<Entity> {
     let asset_path = crate::entity_ops::to_asset_path(path);
     let texture: Handle<Image> = world.resource::<AssetServer>().load(asset_path);
@@ -116,17 +97,9 @@ pub fn drop_image(world: &mut World, path: &str, landing: ImageDrop) -> Option<E
     }
 }
 
-/// One drop that made a node: the node, where it landed, and what it draws.
-///
-/// Making the node is the palette's own command, kept here so undo takes it
-/// back. The placement and the texture are not commands beside it: the palette
-/// respawns the node on redo, so anything addressing the old entity would write
-/// to a node that no longer exists and put the image back at the palette's
-/// default position with no texture on it. Doing all three inside one
-/// `execute` is what makes a redo land where the drop did.
-///
-/// Nothing here touches [`CommandHistory`]: a redo runs `execute` with the
-/// history taken out of the world.
+/// One drop that made a node. Spawn, placement and texture all happen inside
+/// one `execute`, because the palette respawns the node on redo and a separate
+/// command would address the old entity.
 struct DropImage {
     parent: Option<Entity>,
     at: Option<Vec2>,
@@ -204,9 +177,6 @@ fn set_texture(world: &mut World, entity: Entity, texture: Handle<Image>) {
 }
 
 /// Make a new image node, place it, and give it its texture, as one entry.
-///
-/// A drop that made no node records nothing: there is nothing to undo, and no
-/// half-made node is left outside history for an undo to miss.
 fn spawn_image(
     world: &mut World,
     parent: Option<Entity>,

@@ -1,10 +1,10 @@
 //! Rendered thumbnails for `.glb` / `.gltf` entries in the asset browser.
 //!
-//! A folder of models used to browse as a wall of identical font glyphs,
-//! which makes a 300-model kit unusable. This module photographs each model
-//! off-screen once and caches the result as a PNG under the project's
-//! `.jackdaw/thumbnails/`, so the second visit to a folder costs a file read
-//! rather than a scene load and a GPU pass.
+//! Without them a folder of models browses as a wall of identical font
+//! glyphs, which makes a 300-model kit unusable. This module photographs
+//! each model off-screen once and caches the result as a PNG under the
+//! project's `.jackdaw/thumbnails/`, so the second visit to a folder costs
+//! a file read rather than a scene load and a GPU pass.
 //!
 //! The off-screen setup copies [`crate::material_preview`]: a camera with
 //! `RenderTarget::Image`, its own [`RenderLayers`] so nothing leaks into a
@@ -278,7 +278,7 @@ fn source_mtime(path: &Path) -> Option<SystemTime> {
 ///
 /// The mtime is part of the *name*, not just of the in-memory key, so a
 /// stale PNG can never be mistaken for a fresh one across editor restarts;
-/// the superseded file is simply orphaned. The path is folded with FNV-1a
+/// the superseded file is orphaned. The path is folded with FNV-1a
 /// rather than [`std::hash::DefaultHasher`] because a disk cache outlives
 /// the process that wrote it and `DefaultHasher` is explicitly not stable
 /// across releases.

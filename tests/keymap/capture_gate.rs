@@ -1,11 +1,7 @@
-//! While the keybind dialog is recording, a key press names a chord and
-//! does nothing else.
-//!
-//! The dispatcher's own gate covers every operator reached through the
-//! keymap. What is pinned here is the rest: the panels that read the
-//! keyboard directly, because their keys are how a surface is used rather
-//! than commands with chords of their own. Each has to stand down on its
-//! own, and each used to act on the press that was naming it.
+//! While the keybind dialog is recording, a key press names a chord and does
+//! nothing else. The dispatcher's gate covers operators reached through the
+//! keymap; pinned here are the panels that read the keyboard directly, each of
+//! which has to stand down on its own.
 
 use crate::util;
 
@@ -133,10 +129,8 @@ fn recording_takes_the_draw_brush_chord() {
     );
 }
 
-/// Escape is a chord like any other, so a user must be able to bind it.
-/// It only works if the dialog it is being recorded in stops treating it
-/// as the way out: the press names the chord, and the dialog is still
-/// standing afterwards to show what it named.
+/// Escape is a chord like any other, so the dialog recording it has to stop
+/// treating it as the way out and still be standing afterwards.
 #[test]
 fn escape_pressed_while_recording_binds_escape_and_leaves_the_dialog_up() {
     let mut app = util::editor_test_app();
@@ -151,9 +145,9 @@ fn escape_pressed_while_recording_binds_escape_and_leaves_the_dialog_up() {
         "pressing Rebind starts a recording",
     );
 
-    // Escape is already claimed by other commands, so the first press
-    // raises the confirmation the dialog asks for and the second commits
-    // it. Neither may reach the dialog's own Escape handler.
+    // Escape is already claimed by other commands, so the first press raises the
+    // confirmation and the second commits it, neither reaching the dialog's own
+    // Escape handler.
     press_escape(&mut app);
     assert!(
         dialog_is_open(&mut app),
@@ -189,9 +183,8 @@ fn escape_pressed_while_recording_binds_escape_and_leaves_the_dialog_up() {
     );
 }
 
-/// The numeric transform entry arms on a bare X / Y / Z, which it reads
-/// itself. A chord being recorded must not arm it, or the press that names
-/// `X` also starts a transform behind the dialog.
+/// The numeric transform entry arms on a bare X / Y / Z, which it reads itself,
+/// so a press naming `X` must not start a transform behind the dialog.
 #[test]
 fn recording_takes_the_numeric_transform_axis_keys() {
     use jackdaw::numeric_transform::NumericTransformState;
@@ -278,10 +271,9 @@ fn recording_takes_the_add_node_popovers_escape() {
     );
 }
 
-/// Escape as the editor sees it: a keyboard message the input pass turns
-/// into `just_pressed` on the frame it is read. A press written straight
-/// into `ButtonInput` would be cleared by that pass before any system saw
-/// it, which is why an app with the input plugin goes through a message.
+/// Escape as the editor sees it: a keyboard message the input pass turns into
+/// `just_pressed` on the frame it is read. A press written straight into
+/// `ButtonInput` would be cleared by that pass before any system saw it.
 fn press_escape(app: &mut App) {
     use bevy::input::{
         ButtonState,
@@ -307,15 +299,11 @@ fn press_escape(app: &mut App) {
     }
 }
 
-/// Open the keybind settings dialog the way the menu row does.
-///
-/// The dialog's systems are gated on `AppState::Editor`, which a headless
-/// app starts outside of, so the state is entered first: a dialog nothing
-/// populates has no row to record on.
+/// Open the keybind settings dialog the way the menu row does. The dialog's
+/// systems are gated on `AppState::Editor`, so the state is entered first.
 fn open_keybind_dialog(app: &mut App) {
-    // The editor's own systems expect an open project; without one the
-    // panels that read it fail their parameter validation on the first
-    // frame in the state.
+    // The editor's own systems expect an open project; without one the panels
+    // that read it fail parameter validation on the first frame in the state.
     app.world_mut()
         .insert_resource(jackdaw::project::ProjectRoot {
             root: std::env::temp_dir().join("jackdaw_capture_gate_project"),

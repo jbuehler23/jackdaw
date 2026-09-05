@@ -1,16 +1,6 @@
-//! Operators a caller with no pointer needs.
-//!
-//! Everything the editor does is an operator, so a remote or scripted
-//! caller already reaches the menus, the panels and the tools. What it
-//! could not reach was the handful of things a person does with the
-//! mouse and never through a command: name a group and drop nodes into
-//! it, drag a gizmo to a position, type a value into one entity's
-//! inspector field while a different entity is selected.
-//!
-//! These fill those gaps. Each is the parametric form of a gesture that
-//! already exists, pushes the same command the gesture pushes, and
-//! therefore undoes the same way. See [`crate::remote::server`] for the
-//! surface that calls them and `src/boot_ops.rs` for the text one.
+//! Operators a caller with no pointer needs: the parametric form of gestures
+//! that otherwise only a mouse can perform. Each pushes the same command the
+//! gesture pushes, so it undoes the same way.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -27,12 +17,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<DialogAnswerOp>();
 }
 
-/// Press a button on the dialog that is up.
-///
-/// A modal dialog stops everything until someone answers it, and the
-/// buttons are otherwise reachable only by a click at a position a
-/// caller with no pointer cannot know. `jackdaw/status` reports the
-/// pending dialog and its choices; this presses one of them.
+/// Press a button on the dialog that is up. `jackdaw/status` reports the
+/// pending dialog and its choices.
 #[operator(
     id = "dialog.answer",
     label = "Answer Dialog",
@@ -41,11 +27,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     is_available = a_dialog_is_up,
     params(choice(
         String,
-        doc = "Button label, or its index counting from the primary action. A label \
-               matches exactly first, then as an index, then as a case-insensitive \
-               prefix, so `Reload` answers `Reload (discards your unsaved changes)`. \
-               A prefix that fits two buttons presses neither. Defaults to the \
-               primary action."
+        doc = "Button label, or its index counting from the primary action. \
+               Matched exactly, then as an index, then as an unambiguous \
+               case-insensitive prefix. Defaults to the primary action."
     ))
 )]
 pub(crate) fn dialog_answer(
@@ -53,10 +37,7 @@ pub(crate) fn dialog_answer(
     dialogs: Query<(Entity, &DialogChoices), With<EditorDialog>>,
     mut commands: Commands,
 ) -> OperatorResult {
-    // One dialog is up at a time, but `iter()` order is arbitrary and
-    // a second one would make that a coin toss. Entity ids rise with each
-    // spawn, so the greatest is the newest -- the one on top, and the one
-    // blocking.
+    // Entity ids rise with each spawn, so the greatest is the dialog on top.
     let Some((dialog, choices)) = dialogs.iter().max_by_key(|(entity, _)| *entity) else {
         commands.queue(|world: &mut World| warn_caller(world, "dialog.answer: no dialog is up"));
         return OperatorResult::Cancelled;
@@ -81,13 +62,7 @@ fn a_dialog_is_up(dialogs: Query<(), With<EditorDialog>>) -> bool {
     !dialogs.is_empty()
 }
 
-/// Add an empty node, named, optionally under another node.
-///
-/// `entity.add.empty` already spawns the node; naming it and dropping it
-/// under a parent are two more gestures in the outliner. A caller
-/// building a scene needs all three as one step, and as one undo entry:
-/// a call that named a group and then failed to parent it would leave
-/// the scene half-built with two entries to take back.
+/// Add an empty node, named, optionally under another node, as one undo entry.
 #[operator(
     id = "entity.add.group",
     label = "Add Group",
@@ -109,9 +84,8 @@ pub(crate) fn entity_add_group(
         .to_string();
     let parent = params.as_entity("parent");
     commands.queue(move |world: &mut World| {
-        // Spawn through the same command `entity.add.empty` pushes, so
-        // undo despawns the node rather than leaving an unnamed, unparented
-        // one behind with only its rename taken back.
+        // Spawn through the same command `entity.add.empty` pushes, so undo
+        // despawns the node rather than only taking back its rename.
         let mut spawn = SpawnEntity {
             spawned: None,
             spawn_fn: Box::new(|world: &mut World| {
@@ -152,8 +126,8 @@ pub(crate) fn entity_add_group(
             }));
         }
 
-        // The spawn already ran; everything after it runs here, and the
-        // whole group goes on the history as one already-executed entry.
+        // The spawn already ran; the rest runs here and the group goes on the
+        // history as one already-executed entry.
         for command in group.iter_mut().skip(1) {
             command.execute(world);
         }
@@ -167,12 +141,8 @@ pub(crate) fn entity_add_group(
     OperatorResult::Finished
 }
 
-/// Place an entity: position, rotation in degrees, scale.
-///
-/// Every field is optional and an omitted one is left alone, so a caller
-/// can move a node without restating its rotation. Angles are degrees
-/// because that is what the inspector shows and what a caller writing
-/// `yaw=90` means.
+/// Place an entity: position, rotation in degrees, scale. Every field is
+/// optional and an omitted one is left alone.
 #[operator(
     id = "entity.set_transform",
     label = "Set Transform",
@@ -212,9 +182,8 @@ pub(crate) fn entity_set_transform(
         };
         let in_world = params.as_bool("world").unwrap_or(false);
 
-        // In world space the values describe the entity's global placement,
-        // so they are read from (and written back through) the parent's
-        // frame; with no parent the two frames are the same.
+        // In world space the values are read from and written back through the
+        // parent's frame.
         let parent = world
             .get::<ChildOf>(entity)
             .map(ChildOf::parent)
@@ -242,10 +211,8 @@ pub(crate) fn entity_set_transform(
             axis("sy", wanted.scale.y),
             axis("sz", wanted.scale.z),
         );
-        // Only recomposed when a rotation was asked for: the decomposition
-        // is one of several euler triples that name the same quaternion, so
-        // a caller setting `x` alone would otherwise get its rotation
-        // rewritten into whichever triple `to_euler` happened to pick.
+        // Only recomposed when a rotation was asked for: several euler triples
+        // name the same quaternion, so a needless round-trip rewrites it.
         let angles = ["yaw", "pitch", "roll"].map(|key| params.as_float(key));
         if angles.iter().any(Option::is_some) {
             let (current_yaw, current_pitch, current_roll) =
@@ -279,12 +246,8 @@ pub(crate) fn entity_set_transform(
     OperatorResult::Finished
 }
 
-/// Set one field on one entity's component, by reflection path.
-///
-/// `field.set` is the inspector's own commit and writes to every selected
-/// entity, which is what a person typing into a multi-selection means. A
-/// caller that names an entity means that one, so this writes there and
-/// leaves the selection alone.
+/// Set one field on one entity's component, by reflection path. Unlike
+/// `field.set`, this writes to the named entity and leaves the selection alone.
 #[operator(
     id = "component.set",
     label = "Set Component Field",
@@ -326,9 +289,8 @@ pub(crate) fn component_set(
     OperatorResult::Finished
 }
 
-/// A parameter as JSON. A string parses as JSON when it can and stands
-/// for itself when it cannot, so `value=12` and `value=red` both mean
-/// what they look like.
+/// A parameter as JSON. A string parses as JSON when it can and stands for
+/// itself when it cannot.
 fn param_json(params: &OperatorParameters, key: &str) -> Option<serde_json::Value> {
     use jackdaw_scene_types::PropertyValue;
     match params.get(key)? {

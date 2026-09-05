@@ -1,14 +1,4 @@
 //! Editing a node's text where it is drawn.
-//!
-//! What is pinned here:
-//!  * a double click on a node carrying text opens an entry over its rect,
-//!    seeded with what the node says;
-//!  * a double click on a node with no text opens nothing;
-//!  * Enter commits through the field path, as one history entry that
-//!    undoes back to the text that was there;
-//!  * Escape puts the entry away and writes nothing;
-//!  * an entry dismissed without a change writes nothing either;
-//!  * the entry follows the canvas, so a zoom moves it with the node.
 
 use crate::util;
 
@@ -388,13 +378,9 @@ fn the_entry_follows_the_canvas_it_is_drawn_on() {
     );
 }
 
-/// A commit writes the edited node and nothing else, and hands the
-/// selection back the way it found it.
-///
 /// A field commit writes to every selected node, so a commit made with two
-/// labels selected typed the same words onto both; naming only the edited
-/// one instead collapsed the selection to it, and the pair the user had
-/// lined up to align was gone by the time they looked up.
+/// labels selected typed the same words onto both; naming only the edited one
+/// instead collapsed the selection to it.
 #[test]
 fn a_commit_writes_one_node_and_leaves_the_selection_as_it_was() {
     let mut app = util::editor_test_app();
@@ -425,8 +411,7 @@ fn a_commit_writes_one_node_and_leaves_the_selection_as_it_was() {
     settle(&mut app);
 
     open_entry(&mut app, panel, Vec2::new(400.0, 200.0));
-    // The pair the user lined up while the entry was open, which the
-    // commit is not asked to touch.
+    // The pair the user lined up while the entry was open.
     jackdaw::selection::select_many(app.world_mut(), &[other, label]);
     settle(&mut app);
     let selected = app

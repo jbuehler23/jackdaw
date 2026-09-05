@@ -232,9 +232,8 @@ fn the_editors_own_save_raises_no_prompt() {
     );
 }
 
-/// The watch survives the save it suppresses. A save lands by rename, so it
-/// replaces the file the watch went on, and nothing in the editor re-arms the
-/// watch afterwards.
+/// The watch survives the save it suppresses: a save lands by rename, replacing
+/// the file the watch went on, and nothing re-arms it afterwards.
 #[test]
 fn an_outside_edit_after_the_editors_own_save_still_raises_a_prompt() {
     let tmp = tempfile::tempdir().unwrap();
@@ -473,9 +472,9 @@ fn an_answer_for_an_evicted_prompt_does_not_touch_the_new_front() {
     );
 }
 
-/// A refusal must not park the user on a tab they never asked to visit. The
-/// load installs into the live world, so the swap has to happen before the
-/// load knows whether it will accept the document.
+/// A refusal must not park the user on a tab they never asked to visit: the load
+/// installs into the live world, so the swap happens before it knows whether it
+/// will accept the document.
 #[test]
 fn a_refused_reload_puts_the_user_back_where_they_were() {
     let tmp = tempfile::tempdir().unwrap();
@@ -506,9 +505,8 @@ fn a_refused_reload_puts_the_user_back_where_they_were() {
     );
 }
 
-/// The watch goes on after the open has already read the file. An edit that
-/// lands in that gap is one notify will never report, so the baseline has to
-/// be what the open read, not a later look at disk.
+/// The watch goes on after the open has read the file, so an edit landing in that
+/// gap is one notify never reports: the baseline has to be what the open read.
 #[test]
 fn an_edit_between_the_open_and_the_watch_is_still_reported() {
     let tmp = tempfile::tempdir().unwrap();
@@ -577,9 +575,8 @@ fn a_write_during_the_prompt_is_asked_about_after_keep() {
     );
 }
 
-/// An outside edit can turn a scene file into a prefab. A prefab document
-/// left in a Scene tab would be saved back as a plain scene, losing the
-/// marker that makes it a prefab at all.
+/// An outside edit can turn a scene file into a prefab, and a prefab document
+/// left in a Scene tab would be saved back as a plain scene.
 #[test]
 fn a_reload_that_brings_a_prefab_retypes_the_tab() {
     const PREFAB: &str = "#Rock\njackdaw::prefab::components::Prefab\n";
@@ -618,9 +615,8 @@ fn a_reload_that_brings_a_prefab_retypes_the_tab() {
     );
 }
 
-/// A prefab file open in a tab is a document the user is editing, not just a
-/// source the scene reads. An outside edit to it has to be a question, the
-/// same way it is for a scene, or it is silently applied or silently lost.
+/// A prefab file open in a tab is a document the user is editing, so an outside
+/// edit to it has to be a question, the same way it is for a scene.
 #[test]
 fn an_outside_edit_to_an_open_prefab_raises_a_prompt() {
     const ROCK: &str = "#Rock\njackdaw::prefab::components::Prefab\n";
