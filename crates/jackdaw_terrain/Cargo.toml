@@ -27,7 +27,15 @@ procgen = ["dep:noise", "dep:rand"]
 # mesher, scatter, navmesh and texture-set validation: enough to read and query
 # a baked artifact, and the only configuration that builds for
 # wasm32-unknown-unknown.
-render = ["dep:bevy", "bevy/bevy_pbr", "bevy/bevy_render", "bevy/bevy_image"]
+render = [
+    "dep:bevy",
+    "bevy/bevy_pbr",
+    "bevy/bevy_render",
+    "bevy/bevy_image",
+    "bevy/bevy_gltf",
+    "bevy/bevy_scene",
+    "bevy/bevy_log",
+]
 
 [lints]
 workspace = true

@@ -27,6 +27,7 @@ fn main() -> ExitCode {
         Some("upgrade") => exit(jackdaw::scaffold::run_upgrade_cli(&args[1..])),
         Some("export-terrain") => jackdaw::terrain::export::run_export_terrain_cli(&args[1..]),
         Some("extension") => extension_command(&args[1..]),
+        Some("mcp") => mcp_command(&args[1..]),
         Some("--help" | "-h" | "help") | None => {
             print_usage();
             ExitCode::SUCCESS
@@ -107,6 +108,12 @@ const SPECS: &[CommandSpec] = &[
         usage: "jd doctor [--project <path>]",
     },
     CommandSpec {
+        name: "mcp",
+        flags: &[],
+        values: &["--project", "-p"],
+        usage: "jd mcp [--project <path>]",
+    },
+    CommandSpec {
         name: "export-terrain",
         flags: &["--raw-heights"],
         values: &["--out", "--cell-size", "--elevation-step"],
@@ -172,6 +179,43 @@ fn exit(value: bevy::app::AppExit) -> ExitCode {
     }
 }
 
+/// Run `jd-mcp`, which serves the Model Context Protocol over stdio and
+/// drives the editor that has this project open.
+///
+/// A separate process, not a module: the MCP stack (rmcp, tokio, reqwest)
+/// belongs to `jackdaw_mcp` alone, and linking it here would put all of
+/// it in the editor's dependency graph, which needs none of it. The
+/// binary is looked for beside this one first, so a checkout runs the
+/// `jd-mcp` it just built rather than one on `PATH`.
+///
+/// stdin and stdout are inherited: stdout is the protocol channel.
+#[expect(clippy::print_stderr, reason = "MCP owns stdout; errors go to stderr")]
+fn mcp_command(args: &[String]) -> ExitCode {
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(MCP_BIN)))
+        .filter(|path| path.is_file());
+    let program = beside.unwrap_or_else(|| std::path::PathBuf::from(MCP_BIN));
+
+    match std::process::Command::new(&program).args(args).status() {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => {
+            eprintln!("jd mcp: {} exited with {status}", program.display());
+            ExitCode::FAILURE
+        }
+        Err(err) => {
+            eprintln!(
+                "jd mcp: cannot run {}: {err}. Build it with `cargo build --bin {MCP_BIN}`.",
+                program.display()
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The MCP server binary [`mcp_command`] runs.
+const MCP_BIN: &str = "jd-mcp";
+
 #[expect(clippy::print_stdout, reason = "CLI help is written to stdout")]
 fn print_usage() {
     println!(
@@ -197,7 +241,10 @@ fn print_usage() {
            --cell-size <m>            declare the XZ quantization cell size\n    \
            --elevation-step <m>       declare the elevation quantization step\n    \
            --raw-heights              also write heights.f32 (raw float heights)\n  \
-         extension <command>        Package or manage signed extensions\n\n\
+         extension <command>        Package or manage signed extensions\n  \
+         mcp [--project <path>]     Serve MCP over stdio, driving a running editor\n\n\
+         Register it with an MCP client as a stdio server:\n  \
+           command: jd, args: mcp --project <path>\n\n\
          Start here: `jd new my-game` then `jd open my-game`, or `jd import .` in an \
          existing Bevy project."
     );

@@ -93,6 +93,7 @@ pub struct OperatorEntity {
     pub(crate) cancel: Option<SystemId<()>>,
     pub(crate) modal: bool,
     pub(crate) allows_undo: bool,
+    pub(crate) remote_hidden: Option<&'static str>,
 }
 
 impl OperatorEntity {
@@ -133,6 +134,12 @@ impl OperatorEntity {
     /// auto-capture for them.
     pub fn allows_undo(&self) -> bool {
         self.allows_undo
+    }
+
+    /// Why a scripted caller is not offered this operator, or `None`
+    /// when it is. Mirrors [`crate::Operator::REMOTE_HIDDEN`].
+    pub fn remote_hidden(&self) -> Option<&'static str> {
+        self.remote_hidden
     }
 }
 

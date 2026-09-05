@@ -3,7 +3,7 @@
 //! Everything the editor does goes through an operator, and until now
 //! every operator needed a click. That makes half the editor untestable
 //! by anything but a human: a CI job cannot scatter a terrain, a bug
-//! report cannot be replayed, and an agent capturing evidence has to
+//! report cannot be replayed, and a caller capturing evidence has to
 //! aim a synthetic pointer at a button.
 //!
 //! ```text
@@ -177,7 +177,7 @@ pub fn parse_run_ops(spec: &str) -> Vec<BootOp> {
 /// there would read `7` as an int and miss it, which is why every
 /// numeric operator parameter in the editor declares one type or the
 /// other and callers write `1.0` when they mean a float.
-fn parse_value(raw: &str) -> PropertyValue {
+pub fn parse_value(raw: &str) -> PropertyValue {
     match raw {
         "true" => return PropertyValue::Bool(true),
         "false" => return PropertyValue::Bool(false),
@@ -245,6 +245,11 @@ fn declared_params(world: &mut World, id: &str) -> Vec<&'static ParamSpec> {
 /// what a bare F2 does), so filling it in here puts that resolution in the
 /// log.
 ///
+/// `entity.add.group` is deliberately absent for the same reason as
+/// `widget.add`: a group with no `parent` is a top-level group, which is
+/// the common case, not a call short of a target. It is in
+/// [`OPTIONAL_ENTITY_PARAMS`] instead.
+///
 /// `widget.add` is deliberately absent. Its `parent` names the node that
 /// *adopts* the widget, while a bare `widget.add` puts the widget beside the
 /// selection instead (`ui_palette::instantiate_widget`). Filling `parent` in
@@ -259,10 +264,15 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "component.add",
     "component.remove",
     "component.revert_baseline",
+    "component.set",
+    "entity.set_transform",
     "field.set",
     "hierarchy.rename_begin",
     "physics.disable",
     "physics.enable",
+    "prefab.pack",
+    "prefab.pack_matching",
+    "terrain.scatter.adopt",
 ];
 
 /// `Entity` parameters that mean something by being left out, so a clause
@@ -271,7 +281,8 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
 /// The list is `(operator, parameter)`. Everything else declaring an
 /// `Entity` needs one, from the clause or from the selection, and says so
 /// when it gets neither.
-pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] = &[("widget.add", "parent")];
+pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] =
+    &[("entity.add.group", "parent"), ("widget.add", "parent")];
 
 /// How one declared `Entity` parameter was filled in.
 ///

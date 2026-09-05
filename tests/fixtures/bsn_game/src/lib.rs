@@ -9,7 +9,7 @@
 
 use bevy::prelude::*;
 use jackdaw_runtime::prelude::*;
-use jackdaw_scene_types::SceneNodeId;
+use jackdaw_scene_types::{SceneNodeId, types::ScatterGroup};
 
 /// A minimal editor extension type kept in this fixture for
 /// `jackdaw_extension` API surface coverage beside the game plugin.
@@ -59,6 +59,7 @@ fn report_scene_loaded(
     node_ids: Query<&SceneNodeId>,
     names: Query<&Name>,
     transforms: Query<Entity, With<Transform>>,
+    scatter_groups: Query<&ScatterGroup>,
 ) {
     if *done {
         return;
@@ -70,14 +71,24 @@ fn report_scene_loaded(
         return;
     }
     let names: Vec<String> = names.iter().map(|n| n.as_str().to_owned()).collect();
+    // Scatter provenance is scene data, so a runtime that cannot apply it
+    // loads the scene with the groups stripped back to bare models. The
+    // keys are reported so the test reads what arrived rather than what
+    // failed to be complained about.
+    let scatter: Vec<String> = scatter_groups
+        .iter()
+        .map(|group| group.key.clone())
+        .collect();
     eprintln!(
-        "BSN_SCENE_LOADED entities={} node_ids={} target={} has_target={} ids={:?} names={:?}",
+        "BSN_SCENE_LOADED entities={} node_ids={} target={} has_target={} ids={:?} names={:?} \
+         scatter_keys={:?}",
         transforms.iter().count(),
         ids.len(),
         target,
         ids.contains(&target),
         ids,
         names,
+        scatter,
     );
     *done = true;
 }

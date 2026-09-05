@@ -71,6 +71,10 @@ struct SplatUniform {
     // the way in so this side carries no conversion of its own.
     autoterrain_slope_start: f32,
     autoterrain_slope_end: f32,
+    // How much of the tint texture reaches the finished albedo, 0..1.
+    // The layer's own white is the identity, so a terrain that has never
+    // been tinted draws the same at every strength.
+    tint_strength: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> splat: SplatUniform;
@@ -80,6 +84,8 @@ struct SplatUniform {
 @group(#{MATERIAL_BIND_GROUP}) @binding(4) var height_array: texture_2d_array<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(5) var control_map: texture_2d<u32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(6) var slope_map: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(7) var tint_map: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(8) var tint_sampler: sampler;
 
 // The last id this material can address: one short of the bound set's
 // layer count, and never past the UV-scale array. Every id is clamped
@@ -107,11 +113,31 @@ fn tile_hash(tile: vec2<f32>) -> vec2<f32> {
     return fract((h.xx + h.yz) * h.zy);
 }
 
-// A UV and the derivatives that go with it.
-struct Sampling {
+// One tile's own rigid sample frame.
+//
+// Rigid, not interpolated: the tile's rotation and shift are applied
+// whole, so what is read is the texture turned, and the four tiles around
+// a fragment are blended after each has been sampled in its own frame.
+struct TileTap {
     uv: vec2<f32>,
     ddx: vec2<f32>,
     ddy: vec2<f32>,
+    // The rotation that produced `uv`, as a unit `(cos, sin)`. Anything
+    // sampled through it that is itself a direction - a tangent-space
+    // normal - has to turn back by the same angle.
+    turn: vec2<f32>,
+    weight: f32,
+}
+
+// The tiles one fragment reads, with the share each of them takes.
+struct Sampling {
+    taps: array<TileTap, 4>,
+    count: u32,
+}
+
+// `v` turned by the unit `(cos, sin)` in `turn`.
+fn turned_by(v: vec2<f32>, turn: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(turn.x * v.x - turn.y * v.y, turn.y * v.x + turn.x * v.y);
 }
 
 // Break a tiled texture out of its grid.
@@ -119,21 +145,38 @@ struct Sampling {
 // Every tile of the repeat is turned and shifted by its own amount, drawn
 // from a hash of its coordinate, breaking up the repeat. Applying one
 // tile's transform on its own would seam at every tile border, so the four
-// nearest tiles are blended with the bilinear weights of the position
-// between their centres: the weights of a tile being left reach zero where
-// it is left, so the blended transform is continuous across the plane.
+// nearest tiles are each sampled in their own frame and the sampled
+// values blended with the bilinear weights of the position between their
+// centres: a tile's weight reaches zero where it is left, so the blend is
+// continuous across the plane.
+//
+// Sampling per tile, rather than blending the four tiles' coordinates and
+// sampling once, is the whole point. Interpolating between rigid
+// transforms is not a rigid transform: the blended coordinate field
+// stretches and shears between tile centres, which reads as marbled
+// smears through the ground. This is the standard technique (Inigo
+// Quilez's texture repetition, and what Unity HDRP and Unreal call
+// procedural or stochastic tiling).
+//
+// Each tap carries its own derivatives, and a rigid frame makes them
+// exact: the derivative of a rotation is the rotated derivative, so no
+// Jacobian is approximated and the mip level a tap picks is the one its
+// own footprint calls for.
 //
 // The rotation pivots on the tile centres rather than the texture origin,
 // so how far a fragment is displaced does not grow with how far the
 // terrain runs.
 //
-// `strength` 0 returns exactly what came in: a slot with detiling off
-// samples the UV its scale alone put it at.
+// `strength` 0 returns a single tap holding exactly what came in: a slot
+// with detiling off costs one sample, at the UV its scale alone put it at.
 fn detile(uv: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>, strength: f32) -> Sampling {
     var out: Sampling;
-    out.uv = uv;
-    out.ddx = ddx;
-    out.ddy = ddy;
+    out.count = 1u;
+    out.taps[0].uv = uv;
+    out.taps[0].ddx = ddx;
+    out.taps[0].ddy = ddy;
+    out.taps[0].turn = vec2<f32>(1.0, 0.0);
+    out.taps[0].weight = 1.0;
     if strength <= 0.0 {
         return out;
     }
@@ -144,8 +187,7 @@ fn detile(uv: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>, strength: f32) -> Sampl
     let base = floor(p);
     let f = smoothstep(vec2<f32>(0.0), vec2<f32>(1.0), fract(p));
 
-    var blended = vec2<f32>(0.0);
-    var turn = vec2<f32>(0.0);
+    out.count = 4u;
     for (var j = 0u; j < 2u; j++) {
         for (var i = 0u; i < 2u; i++) {
             let corner = base + vec2<f32>(f32(i), f32(j));
@@ -154,29 +196,15 @@ fn detile(uv: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>, strength: f32) -> Sampl
             let angle = (hash.x * 2.0 - 1.0) * strength * 3.14159265;
             let shift = (hash - vec2<f32>(0.5)) * strength;
             let pivot = corner + vec2<f32>(0.5);
-            let local = uv - pivot;
-            let c = cos(angle);
-            let s = sin(angle);
-            let rotated = vec2<f32>(c * local.x - s * local.y, s * local.x + c * local.y);
-            blended += (pivot + rotated + shift) * weight;
-            turn += vec2<f32>(c, s) * weight;
+            let turn = vec2<f32>(cos(angle), sin(angle));
+            let index = j * 2u + i;
+            out.taps[index].uv = pivot + turned_by(uv - pivot, turn) + shift;
+            out.taps[index].ddx = turned_by(ddx, turn);
+            out.taps[index].ddy = turned_by(ddy, turn);
+            out.taps[index].turn = turn;
+            out.taps[index].weight = weight;
         }
     }
-
-    // The blended rotation stands in for the whole Jacobian. The term the
-    // varying weights contribute is dropped for cost, though it is the
-    // same order as the rotation: tile-scale displacements times O(1)
-    // smoothstep gradients. These derivatives pick a mip level, so the
-    // error is a fraction of a level.
-    //
-    // Where the four rotations cancel, at strength near 1 with tiles
-    // turned against each other, `turn` collapses toward zero, the
-    // derivatives go with it and the sharpest mip is chosen at those fold
-    // points. The dropped weight-gradient term is what would keep the true
-    // Jacobian non-degenerate there.
-    out.uv = blended;
-    out.ddx = vec2<f32>(turn.x * ddx.x - turn.y * ddx.y, turn.y * ddx.x + turn.x * ddx.y);
-    out.ddy = vec2<f32>(turn.x * ddy.x - turn.y * ddy.y, turn.y * ddy.x + turn.x * ddy.y);
     return out;
 }
 
@@ -255,14 +283,43 @@ fn accumulate(
     let scale = uv_scale_for(layer_id);
     let tiled = detile(
         local_xz * scale, ddx_local * scale, ddy_local * scale, detile_for(layer_id));
-    let uv = tiled.uv;
-    let ddx = tiled.ddx;
-    let ddy = tiled.ddy;
 
-    let albedo = textureSampleGrad(albedo_array, layer_sampler, uv, layer, ddx, ddy).rgb;
-    let height = textureSampleGrad(height_array, layer_sampler, uv, layer, ddx, ddy).r;
-    let packed = textureSampleGrad(normal_array, layer_sampler, uv, layer, ddx, ddy).rgb;
-    let normal = packed * 2.0 - 1.0;
+    // One sample per tile, blended after sampling: a rigid UV and its own
+    // derivatives per tap, so no tap is stretched by its neighbours.
+    // Four taps of three arrays across four control corners is 96 reads
+    // per fragment where a single cell with detiling off takes 24.
+    var albedo_sum = vec3<f32>(0.0);
+    var height_sum = 0.0;
+    var normal_sum = vec3<f32>(0.0);
+    var taken = 0.0;
+    for (var t = 0u; t < tiled.count; t++) {
+        let tap = tiled.taps[t];
+        // A tile whose share has fallen to nothing is three samples that
+        // change no pixel. The gradients are explicit, so this branch does
+        // not have to be uniform.
+        if tap.weight <= 1e-4 {
+            continue;
+        }
+        albedo_sum += tap.weight
+            * textureSampleGrad(albedo_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).rgb;
+        height_sum += tap.weight
+            * textureSampleGrad(height_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).r;
+        let packed =
+            textureSampleGrad(normal_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).rgb;
+        let unpacked = packed * 2.0 - 1.0;
+        // This tap's UV was turned by `tap.turn`, so its texture reads
+        // rotated by the inverse across the surface and the tangent-space
+        // normal stored in it has to turn back before the tiles are
+        // blended. Green is already in the shader's convention:
+        // `flip_normal_y` is applied on the way into the array.
+        let back = turned_by(unpacked.xy, vec2<f32>(tap.turn.x, -tap.turn.y));
+        normal_sum += tap.weight * vec3<f32>(back, unpacked.z);
+        taken += tap.weight;
+    }
+    let inv_taps = 1.0 / max(taken, 1e-8);
+    let albedo = albedo_sum * inv_taps;
+    let height = height_sum * inv_taps;
+    let normal = normal_sum * inv_taps;
 
     let sharpness = SHARPNESS_MIN + SHARPNESS_RANGE * splat.blend_sharpness;
     let contested = vec4<f32>(layer_weight + height);
@@ -336,6 +393,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let ddx_local = dpdx(local_xz);
     let ddy_local = dpdy(local_xz);
 
+    // The tint is sampled, not loaded: it is a colour, so two of them
+    // interpolate into a colour, and a coarse hand-painted wash reads
+    // smooth across the cells between strokes. Taken here, with the
+    // derivatives, because the per-layer branches below are not uniform
+    // control flow.
+    //
+    // Grid point i sits at i/(res-1) in UV0, while texel i is sampled at
+    // its centre, (i+0.5)/res. Without the remap the layer would be half a
+    // cell out of register with the control map it was painted against at
+    // one edge of the terrain, and half a cell the other way at the other.
+    // `render::tint_uv` spells the same mapping in Rust.
+    let tint_res = f32(max(splat.control_resolution, 2u));
+    let tint_uv = (in.uv * (tint_res - 1.0) + 0.5) / tint_res;
+    let tint = textureSample(tint_map, tint_sampler, tint_uv).rgb;
+
     let g = in.uv * f32(max(splat.control_resolution, 2u) - 1u);
     let corner = control_corner(g);
     let f = clamp(g - vec2<f32>(corner), vec2<f32>(0.0), vec2<f32>(1.0));
@@ -385,7 +457,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
 
     let inv_total = 1.0 / max(accum.total, 1e-8);
-    let albedo = accum.albedo * inv_total;
+    let albedo = accum.albedo * inv_total * mix(vec3<f32>(1.0), tint, splat.tint_strength);
     let tangent_normal = accum.normal * inv_total;
 
     // The mesher emits no tangents: UV0 runs along world X and Z, so the

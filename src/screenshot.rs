@@ -60,10 +60,61 @@ pub(crate) fn plugin(app: &mut App) {
             queued: false,
         });
     }
+    app.init_resource::<CaptureLog>();
     app.add_systems(
         Update,
         drive_shot_probe.run_if(in_state(crate::AppState::Editor)),
     );
+}
+
+/// Captures that have reached the disk, by the path they were written to.
+///
+/// A capture is queued in one frame and the GPU readback lands several
+/// frames later, so an operator returns `Finished` long before the PNG
+/// exists. A caller that has to hand the file to someone -- the remote
+/// surface, a test -- needs to know when it is really there, and the
+/// observer that writes the bytes is the only place that knows.
+///
+/// Only a caller that asked drains its entry, and captures started from
+/// the menus are never collected, so the log is capped: past
+/// [`CaptureLog::CAPACITY`] the oldest entry goes. A caller polls for its
+/// own capture within a few frames of asking, so nothing it is waiting on
+/// is ever the oldest of that many.
+#[derive(Resource, Default)]
+pub struct CaptureLog {
+    landed: bevy::platform::collections::HashMap<PathBuf, (u32, u32)>,
+    /// Insertion order, for eviction. Holds the same paths as `landed`.
+    order: std::collections::VecDeque<PathBuf>,
+}
+
+impl CaptureLog {
+    /// Captures remembered before the oldest is dropped.
+    pub const CAPACITY: usize = 64;
+
+    /// Record a capture that has reached the disk.
+    pub fn record(&mut self, path: PathBuf, size: (u32, u32)) {
+        if self.landed.insert(path.clone(), size).is_none() {
+            self.order.push_back(path);
+        }
+        while self.order.len() > Self::CAPACITY {
+            if let Some(oldest) = self.order.pop_front() {
+                self.landed.remove(&oldest);
+            }
+        }
+    }
+
+    /// The size of the capture written to `path`, if one has landed.
+    pub fn size_of(&self, path: &Path) -> Option<(u32, u32)> {
+        self.landed.get(path).copied()
+    }
+
+    /// Forget `path`, so the next capture written there is not answered
+    /// with this one's image.
+    pub fn forget(&mut self, path: &Path) {
+        if self.landed.remove(path).is_some() {
+            self.order.retain(|held| held != path);
+        }
+    }
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -238,7 +289,9 @@ fn spawn_capture(world: &mut World, screenshot: Screenshot, path: PathBuf, exit_
     }
 
     world.spawn(screenshot).observe(
-        move |capture: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
+        move |capture: On<ScreenshotCaptured>,
+              mut exit: MessageWriter<AppExit>,
+              log: Option<ResMut<CaptureLog>>| {
             // Writing the PNG here rather than through bevy's
             // `save_to_disk` observer keeps write-then-exit in one
             // observer. Two observers on the same entity have no
@@ -246,6 +299,12 @@ fn spawn_capture(world: &mut World, screenshot: Screenshot, path: PathBuf, exit_
             // alongside `save_to_disk` could run before the bytes
             // reached the disk.
             let wrote = write_png(&capture.image, &path);
+            if wrote && let Some(mut log) = log {
+                log.record(
+                    path.clone(),
+                    (capture.image.width(), capture.image.height()),
+                );
+            }
             if exit_when_done {
                 exit.write(if wrote {
                     AppExit::Success

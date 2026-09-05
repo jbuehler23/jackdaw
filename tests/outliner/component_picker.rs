@@ -59,6 +59,7 @@ fn registry_with_test_types() -> TypeRegistry {
     registry.register::<DocCommentDescribed>();
     registry.register::<NotAComponent>();
     registry.register::<HiddenByMarker>();
+    registry.register::<jackdaw_runtime::NavmeshExclude>();
     registry
 }
 
@@ -286,4 +287,19 @@ fn editor_hidden_marker_filters_component() {
     // must not regress to a path-based heuristic.
     assert!(find(&pickables, "WithDefault").is_some());
     assert!(find(&pickables, "NoDefault").is_some());
+}
+
+/// The navmesh opt-out is a component an author reaches for by hand, so it
+/// has to be in Add Component, filed where the rest of navigation will be.
+#[test]
+fn navmesh_exclude_is_offered_under_navigation() {
+    let registry = registry_with_test_types();
+    let pickables =
+        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let entry = find(&pickables, "NavmeshExclude").expect("the tag is pickable");
+    assert_eq!(entry.category, "Navigation");
+    assert_eq!(
+        entry.type_path_full,
+        jackdaw_runtime::NAVMESH_EXCLUDE_TYPE_PATH
+    );
 }

@@ -105,6 +105,7 @@ pub mod project_types;
 pub mod reference_image;
 pub mod reflect_default;
 pub mod remote;
+pub mod remote_ops;
 pub mod render_diagnostics;
 pub mod restart;
 pub mod run_config;
@@ -157,6 +158,9 @@ use jackdaw_api_internal::{
     ToAnchorId as _,
     lifecycle::{RegisteredMenuEntry, RegisteredWindow},
 };
+/// The camera controller the viewport drives, so a test can feed it the
+/// pointer input the editor would.
+pub use jackdaw_camera;
 use jackdaw_feathers::dialog::EditorDialog;
 use jackdaw_feathers::{EditorFeathersPlugin, button::ButtonOperatorCall};
 pub use jackdaw_loader::DylibLoaderPlugin;
@@ -438,6 +442,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(render_diagnostics::plugin)
         .add_plugins(perf_probe::plugin)
         .add_systems(Update, view_ops::drive_dolly)
+        .add_systems(Last, view_ops::track_pointer_focus)
         .add_plugins(jackdaw_avian_integration::PhysicsOverlaysPlugin::<
             selection::Selected,
         >::new())

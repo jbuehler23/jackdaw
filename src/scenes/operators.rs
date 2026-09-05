@@ -196,11 +196,23 @@ fn activate_pushed_tab(world: &mut World, target: usize) {
     id = "scene.open",
     label = "Open Scene...",
     allows_undo = false,
-    params(path(String, doc = "Scene file to open. Asks for one when omitted."))
+    params(path(
+        String,
+        doc = "Scene file to open, absolute or relative to the project's assets \
+               directory. Asks for one when omitted."
+    ))
 )]
 pub fn scene_open(In(params): In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     let path = params.as_str("path").map(std::path::PathBuf::from);
     commands.queue(move |world: &mut World| {
+        let path = match path.map(|path| resolve_scene_path(world, path)) {
+            Some(Ok(path)) => Some(path),
+            Some(Err(refusal)) => {
+                warn!("scene.open: {refusal}");
+                return;
+            }
+            None => None,
+        };
         let Some(path) = path.or_else(pick_scene_file) else {
             return;
         };
@@ -208,6 +220,52 @@ pub fn scene_open(In(params): In<OperatorParameters>, mut commands: Commands) ->
         crate::migrate_dialog::request_open_with_conversion(world, &path);
     });
     OperatorResult::Finished
+}
+
+/// Where a `scene.open path=` lands, or `None` when it names a file the
+/// caller has no business opening.
+///
+/// A caller that has not clicked through a file dialog spells the scene
+/// the way the project does -- `level.bsn`, or `scenes/level.bsn` -- and
+/// has no business knowing the editor's working directory. A relative
+/// path is tried under the project's `assets/`, then under the project
+/// root, and only then against the working directory, which is what a
+/// shell-typed path means.
+///
+/// With a project open, the file has to be inside it. `path=` is reachable
+/// from the remote surface, where an unconfined path would let a caller
+/// read any file on the machine into the editor and then save it back
+/// somewhere else. The user's own File > Open dialog is not this path: it
+/// hands its pick to [`crate::migrate_dialog::request_open_with_conversion`]
+/// directly, so opening a scene from outside the project by hand still
+/// works.
+fn resolve_scene_path(
+    world: &World,
+    path: std::path::PathBuf,
+) -> Result<std::path::PathBuf, String> {
+    let Some(project) = world.get_resource::<crate::project::ProjectRoot>() else {
+        return Ok(path);
+    };
+    let root = dunce::canonicalize(&project.root).unwrap_or_else(|_| project.root.clone());
+    let candidate = if path.is_absolute() {
+        path
+    } else {
+        [project.assets_dir(), project.root.clone()]
+            .into_iter()
+            .map(|base| base.join(&path))
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| project.root.join(&path))
+    };
+    let resolved = dunce::canonicalize(&candidate).unwrap_or(candidate);
+    if resolved.starts_with(&root) {
+        Ok(resolved)
+    } else {
+        Err(format!(
+            "{} is outside the open project at {}",
+            resolved.display(),
+            root.display()
+        ))
+    }
 }
 
 /// Does this document describe a prefab rather than a scene?
@@ -244,6 +302,9 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
             .unwrap_or(false)
     });
     if let Some(idx) = existing {
+        // Opening a scene that is already open is a request to see it, and
+        // `swap_active_tab` refreshes any sidecar the file has moved on
+        // from, so a terrain rewritten on disk is the one that comes up.
         swap_active_tab(world, idx);
         return;
     }
@@ -466,7 +527,12 @@ pub fn scene_close_system_unprompted(world: &mut World, target: usize) {
     }
 }
 
-#[operator(id = "scene.switch", label = "Switch Scene", allows_undo = false)]
+#[operator(
+    id = "scene.switch",
+    label = "Switch Scene",
+    allows_undo = false,
+    params(tab(i64, doc = "Index of the tab to activate, counting from zero."))
+)]
 pub fn scene_switch(In(params): In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     let Some(target) = params.as_int("tab") else {
         warn!("scene.switch: missing 'tab' parameter");

@@ -479,6 +479,15 @@ pub(crate) enum SidecarImport {
     /// activation, where the store may be holding unsaved sculpting that
     /// the file on disk does not have yet.
     FillMissing,
+    /// Fill paths the store has never heard of, and re-read the ones
+    /// whose file has been written since the store last read it.
+    ///
+    /// Between [`Self::Reload`] and [`Self::FillMissing`]: the store's
+    /// copy is the truth while it holds edits nobody has written, and the
+    /// file is the truth once someone has written it. Used when returning
+    /// to a tab with nothing unsaved in it, where a sidecar rewritten in
+    /// the meantime is the newer of the two.
+    RefreshChanged,
 }
 
 /// Read each terrain's binary sidecar into the store.
@@ -527,9 +536,20 @@ pub(crate) fn import_terrain_sidecars(
         }
         wanted.push((terrain.data_path.clone(), terrain.heights.is_empty()));
     }
-    if mode == SidecarImport::FillMissing {
-        let store = world.resource::<crate::terrain::TerrainDataStore>();
-        wanted.retain(|(path, _)| !store.contains(path));
+    match mode {
+        SidecarImport::Reload => {}
+        SidecarImport::FillMissing => {
+            let store = world.resource::<crate::terrain::TerrainDataStore>();
+            wanted.retain(|(path, _)| !store.contains(path));
+        }
+        SidecarImport::RefreshChanged => {
+            let store = world.resource::<crate::terrain::TerrainDataStore>();
+            wanted.retain(|(path, _)| {
+                !store.contains(path)
+                    || sidecar::resolve_path(&scene_dir, path)
+                        .is_ok_and(|full| store.sidecar_is_stale(path, &full))
+            });
+        }
     }
     let mut imported: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (data_path, no_inline_heights) in wanted {
@@ -546,9 +566,12 @@ pub(crate) fn import_terrain_sidecars(
             // writes it back as the current version.
             Ok(bytes) => match sidecar::load(&bytes) {
                 Ok(data) => {
-                    world
-                        .resource_mut::<crate::terrain::TerrainDataStore>()
-                        .insert(data_path.clone(), data);
+                    let mtime = std::fs::metadata(&full)
+                        .and_then(|meta| meta.modified())
+                        .ok();
+                    let mut store = world.resource_mut::<crate::terrain::TerrainDataStore>();
+                    store.insert(data_path.clone(), data);
+                    store.note_read(&data_path, mtime);
                     imported.insert(data_path);
                 }
                 Err(err) => {
@@ -576,6 +599,9 @@ pub(crate) fn import_terrain_sidecars(
     }
 
     settle_terrain_grids(world);
+    // Terrains are placed by now, which is what a group saved beside one
+    // has to be moved into the space of.
+    crate::terrain::scatter::migrate_legacy_scatter_groups(world);
     imported.into_iter().collect()
 }
 

@@ -520,7 +520,13 @@ fn resolve_position(world: &mut World, params: &OperatorParameters) -> Option<Ve
             Some(cursor * world.resource::<UiScale>().0)
         }
         other => {
-            warn!("input.pointer: unknown space {other:?}; expected window or canvas");
+            jackdaw_api_internal::operator::warn_caller(
+                world,
+                format!(
+                    "input.pointer: {other:?} is not a space; expected window or canvas. The \
+                     gesture was left where the cursor already was."
+                ),
+            );
             None
         }
     }
@@ -533,13 +539,22 @@ fn current_position(world: &mut World) -> Option<Vec2> {
     world.get::<Window>(window)?.cursor_position()
 }
 
-fn pointer_button(name: &str) -> Option<MouseButton> {
+/// The button a `button=` names. `left` and `right` are accepted as
+/// aliases for the primary and secondary buttons, which is what the
+/// platform actually reports and what a caller used to a browser writes.
+fn pointer_button(world: &mut World, name: &str) -> Option<MouseButton> {
     match name {
         "primary" | "left" => Some(MouseButton::Left),
         "secondary" | "right" => Some(MouseButton::Right),
         "middle" => Some(MouseButton::Middle),
         other => {
-            warn!("input.pointer: unknown button {other:?}");
+            jackdaw_api_internal::operator::warn_caller(
+                world,
+                format!(
+                    "input.pointer: {other:?} is not a button; expected primary, secondary or \
+                     middle"
+                ),
+            );
             None
         }
     }
@@ -556,15 +571,20 @@ fn pointer_button(name: &str) -> Option<MouseButton> {
         y(f64, doc = "Vertical position, in the space `space` names."),
         space(
             String,
-            doc = "`window` (default) for window logical pixels, `canvas` for authored \
-                   pixels on the 2D panel's canvas."
+            doc = "`window` (default) for window logical pixels, or `canvas` for authored \
+                   pixels on the 2D panel's canvas. Those two only; anything else is \
+                   refused with a warning."
         ),
         action(
             String,
             doc = "move, press, release, click, dblclick, drag_to or rest. \
                    Defaults to move."
         ),
-        button(String, doc = "primary (default), secondary or middle."),
+        button(
+            String,
+            doc = "primary (default), secondary or middle. `left` and `right` are aliases \
+                   for the first two; anything else is refused with a warning."
+        ),
         mods(
             String,
             doc = "Comma list of shift, ctrl, alt, super held for the gesture."
@@ -585,7 +605,8 @@ pub(crate) fn input_pointer(
         let frames = bounded(&params, "frames", DEFAULT_FRAMES, MAX_FRAMES);
         let steps = bounded(&params, "steps", DEFAULT_DRAG_STEPS, MAX_STEPS).max(1);
         let mods = parse_mods(params.as_str("mods"));
-        let Some(button) = pointer_button(params.as_str("button").unwrap_or("primary")) else {
+        let Some(button) = pointer_button(world, params.as_str("button").unwrap_or("primary"))
+        else {
             return;
         };
         let action = params.as_str("action").unwrap_or("move").to_string();

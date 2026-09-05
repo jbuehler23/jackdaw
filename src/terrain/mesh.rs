@@ -1,3 +1,4 @@
+use bevy::ecs::system::EntityCommands;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use jackdaw_terrain::ClipmapLevel;
@@ -298,21 +299,48 @@ fn sync_terrain_surface(
             if let Some(handle) = fresh {
                 entity.insert(Mesh3d(handle));
             }
-            // The two material types are different components, so the
-            // unused one is removed: a terrain whose last texture slot was
-            // removed would otherwise keep drawing the arrays.
-            match &splat_handle {
-                Some(handle) => {
-                    entity
-                        .remove::<MeshMaterial3d<StandardMaterial>>()
-                        .insert(MeshMaterial3d(handle.clone()));
-                }
-                None => {
-                    entity
-                        .remove::<MeshMaterial3d<jackdaw_terrain::render::TerrainSplatMaterial>>()
-                        .insert(MeshMaterial3d(fallback.clone()));
-                }
-            }
+            point_at_material(&mut entity, &splat_handle, &fallback);
+        }
+
+        // Every level this terrain still has, not only the ones this frame
+        // rebuilt. A material arrives once and the levels standing under it
+        // outlive any one rebuild: a level the budget skipped, or one that
+        // only ever moves its hole, would otherwise keep drawing with the
+        // handle it was given when it was last built whole - the plain
+        // fallback, for a terrain whose textures had not loaded yet.
+        for (entity, _, _, _) in &existing {
+            point_at_material(&mut commands.entity(*entity), &splat_handle, &fallback);
+        }
+    }
+}
+
+/// Point one surface at the material its terrain draws with now.
+///
+/// Every path that leaves a surface standing has to run this, not only the
+/// one that rebuilds its mesh: a level whose ground did not change still
+/// has to follow its terrain onto a rebuilt material, and a level that
+/// only moves its hole would otherwise keep the handle it was given when
+/// it was last built whole - which is the fallback material for a terrain
+/// whose textures had not finished loading yet.
+///
+/// The two material types are different components, so the unused one is
+/// removed: a terrain whose last texture slot was removed would otherwise
+/// keep drawing the arrays.
+fn point_at_material(
+    entity: &mut EntityCommands,
+    splat: &Option<Handle<jackdaw_terrain::render::TerrainSplatMaterial>>,
+    fallback: &Handle<StandardMaterial>,
+) {
+    match splat {
+        Some(handle) => {
+            entity
+                .remove::<MeshMaterial3d<StandardMaterial>>()
+                .insert(MeshMaterial3d(handle.clone()));
+        }
+        None => {
+            entity
+                .remove::<MeshMaterial3d<jackdaw_terrain::render::TerrainSplatMaterial>>()
+                .insert(MeshMaterial3d(fallback.clone()));
         }
     }
 }
@@ -467,6 +495,70 @@ mod tests {
     /// unchanged either way.
     fn rebuilt_levels(world: &mut World) -> Vec<u32> {
         let mut query = world.query_filtered::<&TerrainSurface, Changed<BuiltLevel>>();
+        let mut levels: Vec<u32> = query.iter(world).map(|surface| surface.level).collect();
+        levels.sort_unstable();
+        levels
+    }
+
+    /// A level that only moves its hole still has to be handed the
+    /// terrain's current material.
+    ///
+    /// The hole-only path rewrites an index buffer and leaves everything
+    /// else standing, so it has to pick the material up as well: a level
+    /// built while the textures were still loading would otherwise keep the
+    /// plain fallback for as long as it kept taking that path, and the
+    /// ground would draw untextured wherever that level reached. Nothing
+    /// about the mesh says so - the handle does not change either way - so
+    /// this is asserted on the component.
+    #[test]
+    fn a_hole_only_rebuild_still_follows_the_terrain_onto_its_material() {
+        let (mut world, _) = world_with_terrain(65, vec![0.0; 65 * 65]);
+        run(&mut world);
+        assert!(
+            surfaces_on_splat(&mut world).is_empty(),
+            "the textures have not arrived, so every level is on the fallback"
+        );
+
+        // The material arrives after the levels were built whole. Moving
+        // the camera a little keeps every level's lattice and moves only
+        // the hole, which is the path that has to pick the material up.
+        world.insert_resource(Assets::<jackdaw_terrain::render::TerrainSplatMaterial>::default());
+        let material = world
+            .resource_mut::<Assets<jackdaw_terrain::render::TerrainSplatMaterial>>()
+            .reserve_handle();
+        world
+            .resource_mut::<super::super::splat::TerrainSplatMaterials>()
+            .set_test_material("a.jdterrain", material);
+        // Nudge the viewer so the hole moves and the lattice does not: the
+        // hole-only path, the one that rebuilds no lattice.
+        let mut cameras = world.query_filtered::<&mut GlobalTransform, With<Camera3d>>();
+        for mut transform in cameras.iter_mut(&mut world) {
+            *transform = GlobalTransform::from_translation(Vec3::new(1.0, 0.0, 1.0));
+        }
+        run(&mut world);
+
+        let levels = levels_of_all(&mut world);
+        assert!(!levels.is_empty(), "the terrain draws some levels");
+        assert_eq!(
+            surfaces_on_splat(&mut world),
+            levels,
+            "every standing level draws with the material the terrain has now"
+        );
+    }
+
+    /// Levels holding the splat material, in level order.
+    fn surfaces_on_splat(world: &mut World) -> Vec<u32> {
+        let mut query = world.query_filtered::<&TerrainSurface, With<
+            MeshMaterial3d<jackdaw_terrain::render::TerrainSplatMaterial>,
+        >>();
+        let mut levels: Vec<u32> = query.iter(world).map(|surface| surface.level).collect();
+        levels.sort_unstable();
+        levels
+    }
+
+    /// Every standing level, in level order.
+    fn levels_of_all(world: &mut World) -> Vec<u32> {
+        let mut query = world.query::<&TerrainSurface>();
         let mut levels: Vec<u32> = query.iter(world).map(|surface| surface.level).collect();
         levels.sort_unstable();
         levels

@@ -1229,7 +1229,11 @@ fn try_find_registry_material(
 #[operator(
     id = "material.apply_texture",
     label = "Apply Texture",
-    description = "Apply a texture material to the selected faces or brushes"
+    description = "Apply a texture material to the selected faces or brushes",
+    params(path(
+        String,
+        doc = "Texture file to apply, as an asset path under the project's assets directory."
+    ))
 )]
 pub fn apply_texture(
     In(params): In<OperatorParameters>,

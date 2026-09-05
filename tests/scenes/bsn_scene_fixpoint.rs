@@ -189,3 +189,104 @@ fn scene_with_assets_and_prefab_instance_round_trips_to_a_fixpoint() {
         "the instance resolved its inherited descendant"
     );
 }
+
+/// `NavmeshExclude` is editor-facing in effect but lives in
+/// `jackdaw_scene_types` so the save filter, which drops every `jackdaw::`
+/// path, keeps it. Without the round trip, reopening a scene and baking
+/// again would bake over different geometry than the first bake saw.
+#[test]
+fn navmesh_exclude_survives_a_save_and_load() {
+    let mut app = make_app();
+
+    let tagged = app
+        .world_mut()
+        .spawn((
+            Name::new("Grass"),
+            Transform::default(),
+            Visibility::Inherited,
+            jackdaw_scene_types::NavmeshExclude,
+        ))
+        .id();
+    let plain = app
+        .world_mut()
+        .spawn((
+            Name::new("Wall"),
+            Transform::default(),
+            Visibility::Inherited,
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), tagged);
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), plain);
+
+    let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
+    assert!(
+        text.contains(jackdaw_scene_types::NAVMESH_EXCLUDE_TYPE_PATH),
+        "the tag has to reach the document:\n{text}"
+    );
+
+    jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &text);
+
+    let world = app.world_mut();
+    let mut query = world.query_filtered::<&Name, With<jackdaw_scene_types::NavmeshExclude>>();
+    let names: Vec<String> = query.iter(world).map(ToString::to_string).collect();
+    assert_eq!(
+        names,
+        vec!["Grass".to_string()],
+        "the tag comes back on the node it was authored on, and only that one"
+    );
+}
+
+/// A value equal to its default is elided from the document, so the
+/// default is what every scene that never touched the bake settings reads
+/// back as. `min_obstacle_size` has to come back filtering nothing and
+/// `climb` at the height the baker used before either was authorable, or
+/// reopening a scene bakes a different surface than the one that was
+/// saved.
+#[test]
+fn a_terrain_that_authored_no_bake_settings_reads_them_back_at_their_defaults() {
+    let mut app = make_app();
+
+    let terrain = app
+        .world_mut()
+        .spawn((
+            Name::new("Ground"),
+            Transform::default(),
+            Visibility::Inherited,
+            jackdaw_scene_types::Terrain {
+                data_path: "level.terrain-0.jdterrain".to_string(),
+                ..default()
+            },
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), terrain);
+
+    let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
+    assert!(
+        !text.contains("navmesh"),
+        "the default bake settings reached the document, so this pins nothing:\n{text}"
+    );
+
+    jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &text);
+
+    let world = app.world_mut();
+    let mut query = world.query::<&jackdaw_scene_types::Terrain>();
+    let navmesh = &query
+        .iter(world)
+        .next()
+        .expect("the terrain came back")
+        .navmesh;
+    assert_eq!(
+        navmesh.min_obstacle_size, 0.0,
+        "an elided obstacle floor has to filter nothing"
+    );
+    assert_eq!(
+        navmesh.climb, 0.9,
+        "an elided climb has to be the height the baker used before the field"
+    );
+}

@@ -95,6 +95,18 @@ pub trait Operator: InputAction + 'static {
     /// so this should usually be `true`.
     const ALLOWS_UNDO: bool = true;
 
+    /// Why this operator is out of reach of a scripted or remote
+    /// caller, or `None` when it is not.
+    ///
+    /// Everything the editor does is an operator, so a caller driving
+    /// the editor over the remote surface can reach all of it. A few
+    /// operators mean nothing without a person at the pointer -- they
+    /// continue a gesture already under way -- and declaring that here
+    /// keeps them out of the remote vocabulary rather than failing
+    /// halfway through a call. The reason is required so hiding one is
+    /// an argument on the record rather than a silencer.
+    const REMOTE_HIDDEN: Option<&'static str> = None;
+
     /// Modal operators stay active across frames.
     ///
     /// When `MODAL = true` and the invoke system returns
@@ -471,6 +483,18 @@ impl<'a, T> OperatorCallBuilder<'a, T> {
         self
     }
 
+    /// Pass a whole parameter set at once.
+    ///
+    /// [`Self::param`] is the call site that knows its parameters at
+    /// compile time. A dispatcher handed a set it did not build --- a
+    /// keymap, a text clause, a remote call --- has a whole
+    /// [`OperatorParameters`] already and nothing to spell out.
+    #[must_use = "Operators must be called with `.call()` to execute them"]
+    pub fn params(mut self, params: OperatorParameters) -> Self {
+        self.params = params;
+        self
+    }
+
     #[must_use = "Operators must be called with `.call()` to execute them"]
     pub fn settings(mut self, settings: CallOperatorSettings) -> Self {
         self.settings = settings;
@@ -677,7 +701,12 @@ fn dispatch_operator(
     // `resource_scope` lifts `ActiveSnapshotter` out of the world
     // temporarily so `capture` can take `&mut World` (needed for
     // snapshotters that walk entities via `World::query`).
-    let before_snapshot = settings.creates_history_entry.then(|| {
+    //
+    // Gated on `allows_undo` as well as on the caller's request: an
+    // operator that pushes its own commands (or none) never consumes the
+    // snapshot, and capturing one is a full copy of the scene, so a batch
+    // of such calls would copy it once per call and throw every copy away.
+    let before_snapshot = (settings.creates_history_entry && op.allows_undo).then(|| {
         world.resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| {
             snapshotter.0.capture(world)
         })
@@ -743,6 +772,84 @@ fn save_history(
             after,
             label: label.to_string(),
         }));
+}
+
+/// What the operator that just ran wants its caller told.
+///
+/// An operator reports a refusal by logging it, which reaches a person
+/// reading the terminal and nobody else. A caller that dispatched the
+/// operator from somewhere without a terminal -- a remote client, a
+/// script -- gets `Finished` and no idea that its `space=viewport` was
+/// not a space. This is the channel back: whoever dispatches clears it
+/// before the call and reads it after.
+///
+/// Not part of [`OperatorResult`], because a warning is orthogonal to
+/// whether the operator finished: a gesture can do most of what was
+/// asked and still have ignored one parameter.
+#[derive(Resource, Default, Debug)]
+pub struct OperatorWarnings(pub Vec<String>);
+
+/// Tell whoever dispatched the running operator something, as well as
+/// logging it.
+pub fn warn_caller(world: &mut World, message: impl Into<String>) {
+    let message = message.into();
+    warn!("{message}");
+    world
+        .get_resource_or_init::<OperatorWarnings>()
+        .0
+        .push(message);
+}
+
+/// What the operator that just ran did, for a caller that cannot see it.
+///
+/// [`OperatorWarnings`] carries what an operator refused; this carries
+/// what it did when the amount is the answer and the scene does not say
+/// it -- how many groups were replaced, to a caller with no viewport to
+/// count them in. Separate, so a receipt is still distinguishable from a
+/// complaint.
+#[derive(Resource, Default, Debug)]
+pub struct OperatorReports(pub Vec<String>);
+
+/// Tell whoever dispatched the running operator what it did.
+pub fn report_to_caller(world: &mut World, message: impl Into<String>) {
+    let message = message.into();
+    info!("{message}");
+    world
+        .get_resource_or_init::<OperatorReports>()
+        .0
+        .push(message);
+}
+
+/// Run `body` as one undo entry labelled `label`.
+///
+/// A single operator call already gets its own history entry, and nested
+/// calls collapse into the outermost one. A caller that runs
+/// several *top-level* calls that the user asked for as one action -- a
+/// remote batch, a scripted sequence -- has no outermost call to nest
+/// inside, so without this each call would land on the undo stack
+/// separately and one Ctrl-Z would take back a fraction of what was
+/// asked for.
+///
+/// Everything pushed while `body` runs is collapsed, whether it came
+/// from the framework's own snapshot or from an operator that pushes its
+/// own [`EditorCommand`]s (`entity.add.cube` does). A snapshot span
+/// alone would miss the second kind, which is most of the authoring
+/// operators. Calls inside `body` should therefore keep asking for
+/// history as they normally would.
+///
+/// Spans nest exactly: an inner span contributes the one entry it leaves
+/// behind to the enclosing span, not the several it collapsed.
+pub fn with_history_span<R>(
+    world: &mut World,
+    label: impl Into<String>,
+    body: impl FnOnce(&mut World) -> R,
+) -> R {
+    let span = world.resource_mut::<CommandHistory>().begin_span();
+    let out = body(world);
+    world
+        .resource_mut::<CommandHistory>()
+        .end_span(span, label.into());
+    out
 }
 
 /// One undo entry. Swaps the active scene snapshot on execute / undo.

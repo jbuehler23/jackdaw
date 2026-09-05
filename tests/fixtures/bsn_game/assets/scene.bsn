@@ -28,4 +28,12 @@ bevy_ecs::hierarchy::Children [
         translation: glam::Vec3 { x: 1.0, y: 2.0, z: 3.0 },
     }
     bevy_camera::visibility::Visibility::Visible
+
+    #"Scatter Group"
+    jackdaw_scene_types::types::ScatterGroup {
+        generator: "terrain.scatter",
+        key: "Props",
+    }
+    bevy_transform::components::transform::Transform
+    bevy_camera::visibility::Visibility::Visible
 ]

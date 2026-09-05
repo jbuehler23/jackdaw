@@ -12,11 +12,14 @@ pub mod panel;
 pub mod quantize_ops;
 pub mod regions;
 pub mod scatter;
+pub mod scatter_data;
 pub mod sculpt;
 pub mod shape_ops;
 pub mod splat;
+pub mod stamp_ops;
 pub mod store;
 pub mod texture_ops;
+pub mod tint_ops;
 pub(crate) mod ui_fields;
 
 use std::collections::HashSet;
@@ -46,11 +49,18 @@ impl Plugin for TerrainPlugin {
                     ensure_terrain_data_path,
                     sync_terrain_bounds,
                     prune_terrain_heightmaps,
+                    scatter_data::sync_terrain_scatter,
                 )
                     .chain()
+                    // The projection this writes is what the renderer
+                    // rebuilds from, so it is written before the rebuild
+                    // reads it rather than a frame behind it.
+                    .before(jackdaw_terrain::render::ScatterSystems::Rebuild)
                     .run_if(in_state(crate::AppState::Editor)),
             )
+            .add_observer(scatter_data::hide_drawn_scatter)
             .add_plugins((
+                jackdaw_terrain::render::ScatterRenderPlugin,
                 mesh::plugin,
                 sculpt::plugin,
                 paint::plugin,

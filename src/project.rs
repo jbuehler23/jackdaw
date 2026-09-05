@@ -139,6 +139,56 @@ impl ProjectRoot {
     }
 }
 
+/// Resolve `candidate` under `root`, refusing anything that would land
+/// outside it.
+///
+/// The editor runs as the user, so a path taken verbatim from a remote
+/// caller or an operator parameter is an arbitrary write:
+/// `../.ssh/config` names the user's key config as readily as it names a
+/// scene. A path the project owns is relative, carries no `..`, and lands
+/// under `root` once resolved.
+///
+/// The file itself need not exist yet -- a write is usually about to
+/// create it -- so the deepest existing path on the way to it is what
+/// gets canonicalized, which is where a symlink would otherwise smuggle
+/// the write back out. The target is included when it exists: a write
+/// follows a symlink in the last component as readily as one in a
+/// directory above it.
+pub fn path_within(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
+    if candidate.is_absolute() {
+        return Err(format!(
+            "`{}` is absolute; name a path relative to {}",
+            candidate.display(),
+            root.display()
+        ));
+    }
+    if candidate
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "`{}` climbs out of {}",
+            candidate.display(),
+            root.display()
+        ));
+    }
+    let root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let resolved = root.join(candidate);
+    let anchor = resolved
+        .ancestors()
+        .find(|ancestor| ancestor.exists())
+        .unwrap_or(&root);
+    let anchor = dunce::canonicalize(anchor).unwrap_or_else(|_| anchor.to_path_buf());
+    if !anchor.starts_with(&root) {
+        return Err(format!(
+            "`{}` resolves outside {}",
+            candidate.display(),
+            root.display()
+        ));
+    }
+    Ok(resolved)
+}
+
 #[derive(Serialize, Deserialize, Default)]
 pub struct RecentProjects {
     pub projects: Vec<RecentEntry>,

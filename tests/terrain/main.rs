@@ -8,3 +8,4 @@ mod util;
 
 mod terrain_export;
 mod terrain_reload;
+mod terrain_stamp;

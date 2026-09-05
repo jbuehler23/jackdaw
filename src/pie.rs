@@ -118,8 +118,11 @@ enum BuildState {
     /// The binary is built and cached at this path; later instances of
     /// the same spec spawn from it without rebuilding.
     Done(PathBuf),
-    /// The build failed; its pending instances were dropped.
-    Failed,
+    /// The build failed; its pending instances were dropped. `launch`
+    /// says whether any were waiting: a background rebuild that fails
+    /// leaves the editor where it was, while a failed launch is a play
+    /// the caller is still waiting on and has to be told about.
+    Failed { launch: bool },
 }
 
 /// One instance waiting for its build to finish before spawning.
@@ -173,6 +176,47 @@ impl PieSession {
                 if pending.iter().any(|p| p.key == *key))
         })
     }
+
+    /// Whether an instance is waiting on a build to finish before it
+    /// spawns.
+    fn is_launching(&self) -> bool {
+        self.builds.values().any(
+            |build| matches!(build, BuildState::Running { pending, .. } if !pending.is_empty()),
+        )
+    }
+
+    /// Whether the last thing a launch did was fail its build.
+    fn launch_failed(&self) -> bool {
+        self.builds
+            .values()
+            .any(|build| matches!(build, BuildState::Failed { launch: true }))
+    }
+}
+
+/// What play-in-editor is doing: `building` while a launch waits on its
+/// cargo build, `running` once a game process is up, `failed` when the
+/// build a launch was waiting on did not compile, `stopped` otherwise.
+///
+/// A paused game is running: its process is alive and its window is still
+/// there to capture. Reported by `jackdaw/status`, and the state
+/// `jackdaw/wait` holds on, so a caller that pressed play has something
+/// to wait for other than a frame count it guessed -- including an end
+/// that is not the one it asked for.
+pub(crate) fn play_status(world: &World) -> &'static str {
+    let session = world.get_non_send::<PieSession>();
+    let playing = world
+        .get_resource::<State<PlayState>>()
+        .is_some_and(|state| *state.get() != PlayState::Stopped);
+    if playing || session.is_some_and(|session| !session.children.is_empty()) {
+        return "running";
+    }
+    if session.is_some_and(PieSession::is_launching) {
+        return "building";
+    }
+    if session.is_some_and(PieSession::launch_failed) {
+        return "failed";
+    }
+    "stopped"
 }
 
 pub struct PiePlugin;
@@ -582,7 +626,7 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
             pending.push(PendingSpawn { key, run });
         }
         Some(BuildState::Done(_)) => unreachable!("handled above"),
-        Some(BuildState::Failed) | None => {
+        Some(BuildState::Failed { .. }) | None => {
             info!("PIE: building the game for {key}");
             let (task, progress) = spawn_game_build(&root, spec, BuildLoad::Foreground);
             session.builds.insert(
@@ -1530,7 +1574,9 @@ fn poll_builds(world: &mut World) {
             Some(Err(err)) => {
                 let keys: Vec<String> = pending.iter().map(|p| p.key.to_string()).collect();
                 error!("PIE: game build failed for {}: {err}", keys.join(", "));
-                *state = BuildState::Failed;
+                *state = BuildState::Failed {
+                    launch: !pending.is_empty(),
+                };
                 world
                     .resource_mut::<crate::build_status::BuildStatus>()
                     .state = crate::build_status::BuildState::Failed { at: Instant::now() };
@@ -2025,6 +2071,42 @@ fn drain_game_events(world: &mut World) {
             ),
             None => warn!("PIE: dropping malformed pixel frame"),
         }
+    }
+}
+
+#[cfg(test)]
+mod play_status_tests {
+    use super::*;
+
+    /// A wait held on `pie_running` would otherwise run to its frame cap
+    /// over a build that is never going to produce a game. The failure is
+    /// a state of its own so the wait can end with it.
+    #[test]
+    fn a_launch_whose_build_failed_reads_as_failed() {
+        let mut world = World::new();
+        world.init_resource::<State<PlayState>>();
+        let mut session = PieSession::default();
+        session.builds.insert(
+            PathBuf::from("project"),
+            BuildState::Failed { launch: true },
+        );
+        world.insert_non_send(session);
+        assert_eq!(play_status(&world), "failed");
+    }
+
+    /// A background rebuild is not a launch: it fails without anyone
+    /// waiting on a game, and the editor is where it was.
+    #[test]
+    fn a_background_build_that_failed_leaves_the_editor_stopped() {
+        let mut world = World::new();
+        world.init_resource::<State<PlayState>>();
+        let mut session = PieSession::default();
+        session.builds.insert(
+            PathBuf::from("project"),
+            BuildState::Failed { launch: false },
+        );
+        world.insert_non_send(session);
+        assert_eq!(play_status(&world), "stopped");
     }
 }
 

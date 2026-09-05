@@ -315,8 +315,10 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::terrain::quantize_ops::add_to_extension(ctx);
         crate::terrain::shape_ops::add_to_extension(ctx);
         crate::terrain::scatter::add_to_extension(ctx);
+        crate::terrain::stamp_ops::add_to_extension(ctx);
         crate::terrain::panel::add_to_extension(ctx);
         crate::terrain::texture_ops::add_to_extension(ctx);
+        crate::terrain::tint_ops::add_to_extension(ctx);
         crate::terrain::autoterrain_ops::add_to_extension(ctx);
         crate::asset_browser::add_to_extension(ctx);
         crate::material_browser::add_to_extension(ctx);
@@ -326,6 +328,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::command_palette::add_to_extension(ctx);
         crate::document_ops::add_to_extension(ctx);
         crate::dock_ops::add_to_extension(ctx);
+        crate::remote_ops::add_to_extension(ctx);
     }
 }
 

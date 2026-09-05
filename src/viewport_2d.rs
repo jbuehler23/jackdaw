@@ -2344,6 +2344,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<Viewport2dGridOp>()
         .register_operator::<Viewport2dZoomOp>();
     ctx.register_operator::<SelectionSelectOp>();
+    ctx.register_operator::<SelectionExtendOp>();
     crate::canvas_snap::add_to_extension(ctx);
     // These three hang off this extension's own input context, not the
     // core one. An action belongs to the context instance on the entity
@@ -2734,6 +2735,37 @@ pub(crate) fn selection_select(
         return OperatorResult::Cancelled;
     };
     selection.select_single(&mut commands, entity);
+    OperatorResult::Finished
+}
+
+/// Add the authored entity with this name to the selection.
+///
+/// `selection.select` replaces the selection, which is what one click
+/// means. Building a multi-entity selection is otherwise Ctrl-click, and
+/// a scripted or remote caller has no pointer to hold Ctrl with, so the
+/// operators that act on several entities at once were out of reach.
+#[operator(
+    id = "selection.extend",
+    label = "Add To Selection By Name",
+    description = "Add the entity with this name to the current selection.",
+    allows_undo = false,
+    params(name(String, doc = "`Name` of the entity to add. Must match exactly one."))
+)]
+pub(crate) fn selection_extend(
+    params: In<OperatorParameters>,
+    named: Query<(Entity, &Name), Without<crate::EditorEntity>>,
+    mut selection: ResMut<Selection>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(wanted) = params.as_str("name").filter(|name| !name.is_empty()) else {
+        warn!("selection.extend: missing 'name' parameter");
+        return OperatorResult::Cancelled;
+    };
+    let Some(entity) = crate::boot_ops::unique_named_entity(named.iter(), wanted) else {
+        warn!("selection.extend: '{wanted}' names no entity in this scene, or more than one");
+        return OperatorResult::Cancelled;
+    };
+    selection.extend(&mut commands, entity);
     OperatorResult::Finished
 }
 

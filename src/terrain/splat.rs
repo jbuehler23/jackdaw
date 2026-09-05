@@ -18,8 +18,9 @@ use bevy::prelude::*;
 use jackdaw_terrain::render::{
     SplatArrayHandles, SplatBuildError, TerrainRenderPlugin, TerrainSplatMaterial,
     TextureSetImages, control_image_from_bytes, resolve_with, slope_image, splat_images,
+    tint_image_from_bytes,
 };
-use jackdaw_terrain::sidecar::{AutoTerrainSettings, TerrainMaterialSlot};
+use jackdaw_terrain::sidecar::{AutoTerrainSettings, SurfaceSettings, TerrainMaterialSlot};
 use jackdaw_terrain::splat::ControlTexels;
 use jackdaw_terrain::texture_set::TextureSet;
 use jackdaw_terrain::{Control, GridRect};
@@ -40,7 +41,9 @@ pub(super) fn plugin(app: &mut App) {
                 resolve_terrain_materials,
                 build_ready_materials,
                 refresh_autoterrain,
+                refresh_surface,
                 refresh_control_maps,
+                refresh_tint_maps,
                 refresh_slope_maps,
             )
                 .chain()
@@ -72,6 +75,12 @@ struct SplatEntry {
     /// The region view [`Self::control_texels`] was masked for. A change
     /// here re-uploads the whole map; nothing else does.
     control_mask: ControlMask,
+    /// The tint map the shader multiplies its albedo by, kept so a colour
+    /// stroke can re-upload it without rebuilding the material.
+    tint: Option<Handle<Image>>,
+    /// The uploaded tint texture's texels, as bytes, kept between frames so
+    /// a colour stroke rewrites only the rows its brush touched.
+    tint_texels: Vec<u8>,
     /// The slope map autoterrain reads, kept so sculpting can re-upload it
     /// without rebuilding the material.
     slope: Option<Handle<Image>>,
@@ -94,6 +103,10 @@ struct SplatEntry {
     /// nothing: `refresh_autoterrain` writes the new numbers into the bound
     /// material.
     built_autoterrain: AutoTerrainSettings,
+    /// The surface settings the uniform carries, on the same terms as
+    /// [`Self::built_autoterrain`]: `refresh_surface` writes the new
+    /// numbers into the bound material rather than rebuilding.
+    built_surface: SurfaceSettings,
     /// Whether the chunks are carrying a material this entry has dropped.
     /// Chunks pick their material up at mesh-build time, so dropping the
     /// handle here is not enough: a terrain whose last material was removed
@@ -172,6 +185,17 @@ impl TerrainSplatMaterials {
                 ..default()
             },
         );
+    }
+
+    /// Give a path a material without building one, so a test can watch
+    /// what the chunks do when a terrain's material arrives.
+    #[cfg(test)]
+    pub(crate) fn set_test_material(
+        &mut self,
+        data_path: impl Into<String>,
+        material: Handle<TerrainSplatMaterial>,
+    ) {
+        self.entries.entry(data_path.into()).or_default().material = Some(material);
     }
 }
 
@@ -275,6 +299,7 @@ fn build_ready_materials(
             entry.material = None;
             entry.control = None;
             entry.slope = None;
+            entry.tint = None;
         }
         if entry.set.is_empty() {
             // Nothing to draw with, so the chunks go back to the plain
@@ -319,6 +344,8 @@ fn build_ready_materials(
         )
         .to_bytes();
         let control = images.add(control_image_from_bytes(&texels, shape.resolution));
+        let tint_texels = tint_bytes(&store.tint(&terrain.data_path), shape.resolution);
+        let tint = images.add(tint_image_from_bytes(&tint_texels, shape.resolution));
         let heights = store.heightmap(terrain).map;
         let slope = images.add(slope_image(&heights));
         let arrays = SplatArrayHandles {
@@ -327,24 +354,30 @@ fn build_ready_materials(
             height: images.add(built.height),
         };
         let autoterrain = store.autoterrain(&terrain.data_path);
+        let surface = store.surface(&terrain.data_path);
         let material = splat_materials.add(TerrainSplatMaterial::new(
             &entry.set,
             arrays,
             control.clone(),
             slope.clone(),
+            tint.clone(),
             shape.size,
             shape.resolution,
             autoterrain,
+            surface,
         ));
         entry.slope = Some(slope);
         entry.slope_heights = Some(heights);
         entry.control = Some(control);
         entry.control_texels = texels;
+        entry.tint = Some(tint);
+        entry.tint_texels = tint_texels;
         entry.control_mask = mask;
         entry.material = Some(material);
         entry.built_size = shape.size;
         entry.built_resolution = shape.resolution;
         entry.built_autoterrain = autoterrain;
+        entry.built_surface = surface;
         entry.error = None;
         entry.needs_chunk_rebuild = false;
         // The chunks are spawned with the fallback material; a rebuild is
@@ -396,6 +429,117 @@ fn refresh_autoterrain(
         };
         material.set_autoterrain(wanted);
         entry.built_autoterrain = wanted;
+    }
+}
+
+/// Follow a terrain's surface settings into the material it draws with.
+///
+/// A uniform write only, on `refresh_autoterrain`'s terms: the blend
+/// sharpness and the tint strength are two numbers the fragment reads, so
+/// moving either re-uploads one buffer and rebuilds nothing.
+fn refresh_surface(
+    mut materials: ResMut<TerrainSplatMaterials>,
+    mut splat_materials: ResMut<Assets<TerrainSplatMaterial>>,
+    store: Res<TerrainDataStore>,
+    terrains: Query<&jackdaw_scene_types::Terrain>,
+) {
+    for terrain in &terrains {
+        let Some(entry) = materials.entries.get_mut(&terrain.data_path) else {
+            continue;
+        };
+        let wanted = store.surface(&terrain.data_path);
+        if entry.built_surface == wanted {
+            continue;
+        }
+        let Some(handle) = entry.material.clone() else {
+            continue;
+        };
+        let Some(mut material) = splat_materials.get_mut(&handle) else {
+            continue;
+        };
+        material.set_surface(wanted);
+        entry.built_surface = wanted;
+    }
+}
+
+/// Re-upload a terrain's colour layer after it has been tinted.
+///
+/// `refresh_control_maps` without the region mask: the tint is a colour
+/// the shader filters, not a packed word, and no view mode hides it. Only
+/// the rectangle the stroke wrote is rebuilt into the entry's texel
+/// buffer; the texture is `RENDER_WORLD`-only, so the image is replaced
+/// rather than edited in place.
+fn refresh_tint_maps(
+    mut materials: ResMut<TerrainSplatMaterials>,
+    store: Res<TerrainDataStore>,
+    mut images: ResMut<Assets<Image>>,
+    terrains: Query<&jackdaw_scene_types::Terrain>,
+) {
+    for terrain in &terrains {
+        let shape = store.grid_shape(terrain);
+        let Some(entry) = materials.entries.get_mut(&terrain.data_path) else {
+            continue;
+        };
+        // Nowhere to upload to yet; the mark stays set so a write that
+        // lands before the material exists is not lost.
+        let Some(tint) = entry.tint.clone() else {
+            continue;
+        };
+        let expected = (shape.resolution as usize) * (shape.resolution as usize) * 4;
+        let whole = entry.tint_texels.len() != expected;
+        let dirty = store.take_tint_dirty(&terrain.data_path);
+        if !whole && dirty.is_none() {
+            continue;
+        }
+        match dirty.filter(|_| !whole) {
+            Some(rect) => {
+                let block = store.tint_rect(&terrain.data_path, shape.resolution, rect);
+                write_tint_block(&mut entry.tint_texels, shape.resolution, rect, &block);
+            }
+            None => {
+                entry.tint_texels = tint_bytes(&store.tint(&terrain.data_path), shape.resolution);
+            }
+        }
+        // Fails only if the handle has been dropped, which cannot happen
+        // while this entry still holds it.
+        if let Err(err) = images.insert(
+            tint.id(),
+            tint_image_from_bytes(&entry.tint_texels, shape.resolution),
+        ) {
+            warn!("terrain tint map could not be re-uploaded: {err}");
+        }
+    }
+}
+
+/// A dense colour layer as upload bytes, padded to `resolution^2` with
+/// white: an untinted terrain uploads no tint rather than a black one.
+fn tint_bytes(colors: &[[u8; 4]], resolution: u32) -> Vec<u8> {
+    let side = resolution.max(1) as usize;
+    let cells = side * side;
+    let mut bytes = Vec::with_capacity(cells * 4);
+    for texel in colors.iter().take(cells) {
+        bytes.extend_from_slice(texel);
+    }
+    bytes.resize(cells * 4, u8::MAX);
+    bytes
+}
+
+/// Patch `rect` of an uploaded tint texture from that rect's own texels,
+/// row-major over the rect. [`write_control_block`] for colour.
+fn write_tint_block(bytes: &mut [u8], resolution: u32, rect: GridRect, block: &[[u8; 4]]) {
+    let width = rect.width.max(1) as usize;
+    for (line, row) in rect.rows(resolution).enumerate() {
+        for (column, index) in row.enumerate() {
+            let at = index * 4;
+            if at + 4 > bytes.len() {
+                break;
+            }
+            let texel = block
+                .get(line * width + column)
+                .copied()
+                .unwrap_or(jackdaw_terrain::region::DEFAULT_COLOR);
+            bytes[at..at + 4].copy_from_slice(&texel);
+        }
     }
 }
 
@@ -714,6 +858,116 @@ mod tests {
             texels(&app),
             flat,
             "the raised cell must reach the uploaded slopes"
+        );
+    }
+
+    /// A tint stroke lands in the store and the next refresh pass patches
+    /// the uploaded texture, from the stroke's own rect rather than the
+    /// whole layer.
+    #[test]
+    fn a_tint_stroke_reaches_the_uploaded_tint_map() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = splat_app();
+        app.init_resource::<TerrainSplatMaterials>();
+        app.init_resource::<TerrainDataStore>();
+        let terrain = jackdaw_scene_types::Terrain {
+            data_path: "a.jdterrain".to_string(),
+            ..default()
+        };
+        let mut data = jackdaw_terrain::RegionTerrainData::default();
+        data.regions
+            .ensure_grid(65)
+            .expect("a small grid fits the cap");
+        app.world_mut()
+            .resource_mut::<TerrainDataStore>()
+            .insert("a.jdterrain", data);
+        app.world_mut().spawn(terrain.clone());
+
+        let resolution = app
+            .world()
+            .resource::<TerrainDataStore>()
+            .grid_resolution("a.jdterrain");
+        let bytes = tint_bytes(
+            &app.world()
+                .resource::<TerrainDataStore>()
+                .tint("a.jdterrain"),
+            resolution,
+        );
+        assert!(
+            bytes.iter().all(|byte| *byte == u8::MAX),
+            "an unpainted terrain uploads white, the shader's identity"
+        );
+        let tint = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(tint_image_from_bytes(&bytes, resolution));
+        app.world_mut()
+            .resource_mut::<TerrainSplatMaterials>()
+            .entries
+            .insert(
+                "a.jdterrain".to_string(),
+                SplatEntry {
+                    tint: Some(tint.clone()),
+                    tint_texels: bytes.clone(),
+                    ..default()
+                },
+            );
+        // `insert` marked the whole layer for upload; clear that so the
+        // assertions below are about the stroke and nothing else.
+        app.world_mut()
+            .resource::<TerrainDataStore>()
+            .take_tint_dirty("a.jdterrain");
+
+        let texels = |app: &App| {
+            app.world()
+                .resource::<Assets<Image>>()
+                .get(tint.id())
+                .expect("the tint image lives")
+                .data
+                .clone()
+        };
+        let white = texels(&app);
+
+        app.world_mut()
+            .run_system_once(refresh_tint_maps)
+            .expect("system runs");
+        assert_eq!(
+            texels(&app),
+            white,
+            "an untinted terrain re-uploads nothing"
+        );
+
+        let rect = GridRect::brush(resolution, Vec2::splat(32.0), 6.0).expect("in range");
+        {
+            let mut store = app.world_mut().resource_mut::<TerrainDataStore>();
+            let mut color = store
+                .tint_rect_mut(&terrain, rect)
+                .expect("the terrain has a document");
+            jackdaw_terrain::apply_color_brush(
+                &mut color,
+                resolution,
+                Vec2::splat(32.0),
+                6.0,
+                2.0,
+                1.0,
+                1.0,
+                1.0,
+                [0, 0, 0],
+            );
+        }
+        app.world_mut()
+            .run_system_once(refresh_tint_maps)
+            .expect("system runs");
+
+        let painted = texels(&app);
+        let painted = painted.expect("the tint image keeps its data");
+        let at = |bytes: &[u8], x: usize, z: usize| bytes[(z * resolution as usize + x) * 4];
+        assert_eq!(at(&painted, 32, 32), 0, "the stroke must reach the texture");
+        assert_eq!(
+            at(&painted, 0, 0),
+            u8::MAX,
+            "a cell outside the brush keeps its white"
         );
     }
 

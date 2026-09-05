@@ -17,10 +17,12 @@ use jackdaw_feathers::{
     tokens,
     tooltip::Tooltip,
 };
+use jackdaw_terrain::navmesh::BakeParams;
 
 use super::navmesh_bake::TerrainNavmeshState;
 use super::regions::{RegionVisibility, TerrainRegionView};
 use super::texture_ops::TerrainPaintTargetOp;
+use super::tint_ops::{TerrainPaintTintOp, TerrainTintVariationOp};
 use super::ui_fields::{
     FieldKind, TerrainDefaultFontRoot, spawn_add_tile, spawn_bar_swatch, spawn_checkbox,
     spawn_hint, spawn_scrub_chip, spawn_tile, spawn_tile_grid, spawn_tile_remove,
@@ -140,6 +142,17 @@ enum QuantField {
 #[derive(Component, Clone, Copy)]
 enum TextureField {
     Opacity,
+    /// How far a tint stroke crosses toward its colour per second.
+    TintOpacity,
+    /// Fraction of the tint brush held at full strength before the
+    /// falloff starts.
+    TintHardness,
+    /// The three variation dials the Apply button reads. Held on the
+    /// brush state rather than passed as parameters so the button needs
+    /// no fields of its own.
+    VariationSeed,
+    VariationFrequency,
+    VariationAmount,
 }
 
 /// Tags the Navmesh bar's agent chips. They describe the character a bake is
@@ -150,6 +163,8 @@ enum NavmeshField {
     AgentRadius,
     AgentHeight,
     MaxSlope,
+    Climb,
+    MinObstacle,
 }
 
 /// What the bar last rendered, so it rebuilds only on a structural change
@@ -346,6 +361,9 @@ fn update_options_bar_content(
                             terrain.as_ref(),
                         );
                     }
+                    PaintDomain::Color => {
+                        spawn_color_paint_bar(&mut commands, bar, &brush_settings, &paint_state);
+                    }
                 }
             }
             TerrainEditMode::Quantize => {
@@ -481,20 +499,25 @@ fn spawn_paint_target_picker(commands: &mut Commands, parent: Entity, domain: Pa
     let selected = match domain {
         PaintDomain::Channels => 0,
         PaintDomain::Textures => 1,
+        PaintDomain::Color => 2,
     };
     commands
         .spawn((
             combobox::combobox_with_selected(
-                vec!["Scatter Masks".to_string(), "Textures".to_string()],
+                vec![
+                    "Scatter Masks".to_string(),
+                    "Textures".to_string(),
+                    "Color".to_string(),
+                ],
                 selected,
             ),
             ChildOf(parent),
         ))
         .observe(|event: On<ComboBoxChangeEvent>, mut commands: Commands| {
-            let target = if event.selected == 1 {
-                "textures"
-            } else {
-                "channels"
+            let target = match event.selected {
+                1 => "textures",
+                2 => "color",
+                _ => "channels",
             };
             commands
                 .operator(TerrainPaintTargetOp::ID)
@@ -505,6 +528,140 @@ fn spawn_paint_target_picker(commands: &mut Commands, parent: Entity, domain: Pa
                 })
                 .call();
         });
+}
+
+/// The Color-mode bar: the brush's shape and strength, the colour it lays
+/// down, and the whole-layer variation wash.
+///
+/// The colour picker is the feathers one rather than three number chips:
+/// a macro tint is chosen by eye, and the picker's own swatch is what
+/// says which colour is loaded. It keeps its own state, so the bar's
+/// rebuild signature ignores the colour and a rebuild cannot close the
+/// popover mid-pick.
+fn spawn_color_paint_bar(
+    commands: &mut Commands,
+    parent: Entity,
+    brush: &TerrainBrushSettings,
+    paint: &TerrainPaintState,
+) {
+    spawn_scrub_chip(
+        commands,
+        parent,
+        "Radius",
+        "Area of effect for the brush",
+        brush.radius,
+        0.1..50.0,
+        FieldKind::Continuous,
+        BrushField::Radius,
+    );
+    spawn_scrub_chip(
+        commands,
+        parent,
+        "Falloff",
+        "Brush edge softness (1=linear, 2=smooth)",
+        brush.falloff,
+        0.1..8.0,
+        FieldKind::Continuous,
+        BrushField::Falloff,
+    );
+    spawn_scrub_chip(
+        commands,
+        parent,
+        "Opacity",
+        "How far a cell crosses toward the colour per second at full brush strength",
+        paint.tint_opacity,
+        0.01..1.0,
+        FieldKind::Continuous,
+        TextureField::TintOpacity,
+    );
+    spawn_scrub_chip(
+        commands,
+        parent,
+        "Hardness",
+        "Fraction of the radius held at full strength before the falloff starts",
+        paint.tint_hardness,
+        0.0..1.0,
+        FieldKind::Continuous,
+        TextureField::TintHardness,
+    );
+
+    let swatch = spawn_bar_group(commands, parent);
+    commands.entity(swatch).insert((
+        Tooltip::title("Tint colour").with_description(
+            "The colour the brush eases cells toward. Ctrl paints white, which is \
+             the layer's identity and so its eraser.",
+        ),
+        Hovered::default(),
+    ));
+    let [r, g, b] = paint.tint_color;
+    commands
+        .spawn((
+            jackdaw_feathers::color_picker::color_picker(
+                jackdaw_feathers::color_picker::ColorPickerProps::new().with_color([
+                    f32::from(r) / 255.0,
+                    f32::from(g) / 255.0,
+                    f32::from(b) / 255.0,
+                    1.0,
+                ]),
+            ),
+            ChildOf(swatch),
+        ))
+        .observe(
+            |event: On<jackdaw_feathers::color_picker::ColorPickerChangeEvent>,
+             mut commands: Commands| {
+                let [r, g, b, _] = event.color;
+                commands
+                    .operator(TerrainPaintTintOp::ID)
+                    .param("r", f64::from(r))
+                    .param("g", f64::from(g))
+                    .param("b", f64::from(b))
+                    .settings(CallOperatorSettings {
+                        creates_history_entry: false,
+                        execution_context: ExecutionContext::Invoke,
+                    })
+                    .call();
+            },
+        );
+
+    // The variation wash: three dials and the button that applies them.
+    // Beside the brush rather than in the Terrain panel because it is what
+    // a tint pass usually starts with, before any stroke.
+    spawn_scrub_chip(
+        commands,
+        parent,
+        "Seed",
+        "Noise seed. The same seed writes the same variation",
+        paint.variation_seed as f32,
+        0.0..9999.0,
+        FieldKind::Count,
+        TextureField::VariationSeed,
+    );
+    spawn_scrub_chip(
+        commands,
+        parent,
+        "Frequency",
+        "Noise cycles per cell: small is a broad wash, large is speckle",
+        paint.variation_frequency,
+        0.001..0.2,
+        FieldKind::Continuous,
+        TextureField::VariationFrequency,
+    );
+    spawn_scrub_chip(
+        commands,
+        parent,
+        "Amount",
+        "How far a channel travels from white",
+        paint.variation_amount,
+        0.0..1.0,
+        FieldKind::Continuous,
+        TextureField::VariationAmount,
+    );
+    commands.spawn((
+        button::button(
+            ButtonProps::new("Apply Variation").call_operator(TerrainTintVariationOp::ID),
+        ),
+        ChildOf(parent),
+    ));
 }
 
 /// The Texture-mode bar: brush radius and falloff, opacity, which texture is
@@ -752,6 +909,28 @@ fn spawn_navmesh_fields(
         FieldKind::Continuous,
         NavmeshField::MaxSlope,
     );
+    spawn_scrub_chip(
+        commands,
+        parent,
+        "Step Height",
+        "Tallest step the character walks up without leaving the ground. Kerbs and stair \
+         treads under this stay one connected surface",
+        agent.climb,
+        0.0..2.0,
+        FieldKind::Continuous,
+        NavmeshField::Climb,
+    );
+    spawn_scrub_chip(
+        commands,
+        parent,
+        "Min Obstacle",
+        "Smallest scene mesh the bake rasterizes. Below this a piece is decoration the bake \
+         walks over. 0 filters nothing",
+        agent.min_obstacle_size,
+        0.0..2.0,
+        FieldKind::Continuous,
+        NavmeshField::MinObstacle,
+    );
     commands.spawn((
         button::button(
             ButtonProps::new("Bake Navmesh")
@@ -890,6 +1069,21 @@ fn on_scrub_value_change(
     if let Ok(&field) = texture_bindings.get(source) {
         match field {
             TextureField::Opacity => paint_state.texture_opacity = event.value.clamp(0.01, 1.0),
+            TextureField::TintOpacity => {
+                paint_state.tint_opacity = event.value.clamp(0.01, 1.0);
+            }
+            TextureField::TintHardness => {
+                paint_state.tint_hardness = event.value.clamp(0.0, 1.0);
+            }
+            TextureField::VariationSeed => {
+                paint_state.variation_seed = event.value.max(0.0).round() as u32;
+            }
+            TextureField::VariationFrequency => {
+                paint_state.variation_frequency = event.value.clamp(0.0001, 1.0);
+            }
+            TextureField::VariationAmount => {
+                paint_state.variation_amount = event.value.clamp(0.0, 1.0);
+            }
         }
         return;
     }
@@ -906,6 +1100,8 @@ fn on_scrub_value_change(
                 NavmeshField::AgentRadius => agent.agent_radius = value.clamp(0.05, 3.0),
                 NavmeshField::AgentHeight => agent.agent_height = value.clamp(0.5, 6.0),
                 NavmeshField::MaxSlope => agent.max_slope_degrees = value.clamp(0.0, 85.0),
+                NavmeshField::Climb => agent.climb = value.clamp(0.0, BakeParams::MAX_CLIMB),
+                NavmeshField::MinObstacle => agent.min_obstacle_size = value.clamp(0.0, 2.0),
             });
         });
         return;
@@ -1023,6 +1219,11 @@ fn sync_texture_opacity_field(
         .map(|(entity, field)| {
             let value = match field {
                 TextureField::Opacity => paint_state.texture_opacity,
+                TextureField::TintOpacity => paint_state.tint_opacity,
+                TextureField::TintHardness => paint_state.tint_hardness,
+                TextureField::VariationSeed => paint_state.variation_seed as f32,
+                TextureField::VariationFrequency => paint_state.variation_frequency,
+                TextureField::VariationAmount => paint_state.variation_amount,
             };
             (entity, value)
         })

@@ -65,3 +65,54 @@ fn no_duplicate_operator_ids() {
          the last registration is reachable by id: {unexpected:#?}"
     );
 }
+
+/// The scatter ops a caller with no pointer needs are registered under the
+/// ids the panel's buttons, the book and the MCP tools all spell.
+#[test]
+fn the_scatter_group_operators_are_registered_under_their_ids() {
+    let mut app = util::editor_test_app();
+
+    for (id, expected) in [
+        ("terrain.scatter.adopt", "Adopt Scatter Group"),
+        ("terrain.scatter.group.select", "Select Scatter Group"),
+    ] {
+        let labels = util::operator_labels(&mut app, id);
+        assert_eq!(labels, [expected], "{id} is not registered exactly once");
+    }
+}
+
+/// The tint ops a caller with no pointer needs, under the ids the options
+/// bar, the Textures tab and the MCP tools all spell.
+#[test]
+fn the_tint_operators_are_registered_under_their_ids() {
+    let mut app = util::editor_test_app();
+
+    for (id, expected) in [
+        ("terrain.paint.tint", "Tint Colour"),
+        ("terrain.tint.stamp", "Tint Stamp"),
+        ("terrain.tint.variation", "Tint Variation"),
+        ("terrain.tint.strength", "Tint Strength"),
+        (
+            "terrain.material.blend_sharpness",
+            "Terrain Blend Sharpness",
+        ),
+    ] {
+        let labels = util::operator_labels(&mut app, id);
+        assert_eq!(labels, [expected], "{id} is not registered exactly once");
+    }
+}
+
+/// The prefab ops a caller with no pointer needs, under the ids the outliner,
+/// the book and the MCP tools all spell.
+#[test]
+fn the_prefab_pack_operators_are_registered_under_their_ids() {
+    let mut app = util::editor_test_app();
+
+    for (id, expected) in [
+        ("prefab.pack", "Pack Group as Prefab"),
+        ("prefab.pack_matching", "Pack Matching Groups as Prefab"),
+    ] {
+        let labels = util::operator_labels(&mut app, id);
+        assert_eq!(labels, [expected], "{id} is not registered exactly once");
+    }
+}

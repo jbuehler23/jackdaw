@@ -174,6 +174,7 @@ fn drain_changes(world: &mut World) {
     world.resource_mut::<PrefabWatchState>().debounced = debounced;
 
     let open_prefab_tabs = open_prefab_tab_paths(world);
+    let mut reloaded = false;
     for path in to_reload {
         // An open prefab is an edited document, not only a source this scene
         // reads. The external-scene watcher prompts about it, so applying the
@@ -245,8 +246,199 @@ fn drain_changes(world: &mut World) {
             }
         }
         if let Some(sparse_text) = &sparse_text {
-            respawn_from_sparse_text(world, sparse_text);
+            match reload_instances_of(world, sparse_text, &cache_key) {
+                PrefabReload::Instances => reloaded = true,
+                PrefabReload::Unhandled => {
+                    respawn_scene(world, sparse_text);
+                    reloaded = true;
+                }
+                PrefabReload::Nothing => {}
+            }
         }
+    }
+
+    // Once for the batch: a rebuild per changed file would walk the whole
+    // scene again for each one, and only the last walk's rows survive.
+    if reloaded {
+        rebuild_outliner(world);
+    }
+}
+
+/// What a per-file reload did, which is what decides whether the caller
+/// has anything left to do.
+pub enum PrefabReload {
+    /// The file's instances were respawned in place; every other entity
+    /// kept its id.
+    Instances,
+    /// Not something this path can do: nothing in the live document
+    /// inherits from the file directly (a prefab another prefab
+    /// references has no instance node of its own), or an instance is not
+    /// a document root and does not line up with a resolved root. The
+    /// caller respawns the whole scene.
+    Unhandled,
+    /// The new text did not parse or resolve. The scene is untouched and
+    /// respawning it would only rebuild what is already there.
+    Nothing,
+}
+
+/// Respawn the instances that inherit from `changed`, leaving every other
+/// entity in place so its id, and whatever holds it, survives the reload.
+pub fn reload_instances_of(world: &mut World, sparse_text: &str, changed: &Path) -> PrefabReload {
+    let wanted = crate::prefab::canonical_prefab_path(changed);
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let live_roots: Vec<Entity> = {
+        let reg = registry.read();
+        let Some(live) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
+            return PrefabReload::Unhandled;
+        };
+        jackdaw_bsn::entity_roots(live, &reg)
+    };
+    let instances: Vec<Entity> = {
+        let live = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        live.entities_with_component(ISA_TYPE)
+            .into_iter()
+            .filter(|&node| {
+                crate::prefab::resolver_bsn::read_isa_source(live, node)
+                    .is_some_and(|source| crate::prefab::canonical_prefab_path(source) == wanted)
+            })
+            .collect()
+    };
+    // A prefab only another prefab file references has no instance node
+    // here to respawn; the whole-scene path picks it up through the cache.
+    if instances.is_empty() {
+        return PrefabReload::Unhandled;
+    }
+    let at_root: Option<Vec<usize>> = instances
+        .iter()
+        .map(|node| live_roots.iter().position(|root| root == node))
+        .collect();
+    let Some(at_root) = at_root else {
+        return PrefabReload::Unhandled;
+    };
+
+    let resolved = {
+        let authored = match jackdaw_bsn::parse_bsn_text(sparse_text) {
+            Ok(authored) => authored,
+            Err(e) => {
+                warn!("prefab reload: parse failed: {e}");
+                return PrefabReload::Nothing;
+            }
+        };
+        let cache = world.resource::<PrefabAstCache>();
+        let get_prefab = |p: &Path| cache.get(p);
+        match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                warn!("prefab reload: resolver failed: {e}");
+                return PrefabReload::Nothing;
+            }
+        }
+    };
+    let resolved_roots = {
+        let reg = registry.read();
+        jackdaw_bsn::entity_roots(&resolved, &reg)
+    };
+    // The sparse emit keeps document order, so a root's index carries over.
+    // Anything else means the two documents disagree about the scene's shape,
+    // and a whole-scene respawn is the honest answer.
+    let mut pairs = Vec::with_capacity(instances.len());
+    for (&node, &index) in instances.iter().zip(&at_root) {
+        let Some(&counterpart) = resolved_roots.get(index) else {
+            return PrefabReload::Unhandled;
+        };
+        if crate::prefab::resolver_bsn::read_isa_source(&resolved, counterpart)
+            .is_none_or(|source| crate::prefab::canonical_prefab_path(source) != wanted)
+        {
+            return PrefabReload::Unhandled;
+        }
+        pairs.push((node, counterpart));
+    }
+
+    for (node, counterpart) in pairs {
+        let position = world
+            .resource::<jackdaw_bsn::SceneBsnAst>()
+            .roots
+            .iter()
+            .position(|&root| root == node);
+        despawn_document_subtree(world, node);
+        let fresh = {
+            let mut live = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+            let fresh = graft_subtree(&resolved, counterpart, &mut live);
+            match position {
+                Some(position) if position <= live.roots.len() => {
+                    live.roots.insert(position, fresh);
+                }
+                _ => live.add_to_roots(fresh),
+            }
+            fresh
+        };
+        let mut spawned = Vec::new();
+        jackdaw_bsn::spawn_ast_node(world, fresh, None, &mut spawned);
+    }
+    jackdaw_bsn::apply_dirty_ast_patches(world);
+
+    // An entity the reload despawned is out of the selection, and its
+    // `Selected` marker went with it; re-selecting the survivors puts the
+    // resource and the markers back in step.
+    let alive: Vec<Entity> = world
+        .resource::<crate::selection::Selection>()
+        .entities
+        .iter()
+        .copied()
+        .filter(|&entity| world.get_entity(entity).is_ok())
+        .collect();
+    crate::selection::select_many(world, &alive);
+    PrefabReload::Instances
+}
+
+/// Despawn the entities a document subtree spawned and drop its nodes.
+fn despawn_document_subtree(world: &mut World, root: Entity) {
+    let entities: Vec<Entity> = {
+        let live = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        std::iter::once(root)
+            .chain(live.descendants_of(root))
+            .filter_map(|node| live.ecs_for_ast(node))
+            .collect()
+    };
+    // Every mapped entity, not only the first: a subtree whose root has no
+    // ECS mapping would otherwise leave its descendants in the world with
+    // nothing in the document naming them. Despawning a root takes its
+    // children with it, so a later id in the list may already be gone.
+    for &entity in &entities {
+        if let Ok(entity) = world.get_entity_mut(entity) {
+            entity.despawn();
+        }
+    }
+    let mut live = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+    for entity in entities {
+        live.remove_entity_node(entity);
+    }
+}
+
+/// Copy `node` and its subtree from `from` into `into`, returning the new node.
+fn graft_subtree(
+    from: &jackdaw_bsn::SceneBsnAst,
+    node: Entity,
+    into: &mut jackdaw_bsn::SceneBsnAst,
+) -> Entity {
+    let grafted = into.create_entity_node(from.cloned_component_patches(node));
+    for child in from.get_children_ast(node) {
+        let child = graft_subtree(from, child, into);
+        into.add_child_to_ast(grafted, child);
+    }
+    grafted
+}
+
+/// Rebuild the outliner from scratch. Observer-driven row creation can fire
+/// mid-apply (`Add<Transform>` before `IsA` / `Name` land) and pin the wrong
+/// category icon; a clean rebuild classifies every row against the final
+/// archetype.
+fn rebuild_outliner(world: &mut World) {
+    if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
+        bevy::log::warn!("prefab reload: clear_all_tree_rows failed: {err}");
+    }
+    if let Err(err) = crate::hierarchy::rebuild_hierarchy(world) {
+        bevy::log::warn!("prefab reload: rebuild_hierarchy failed: {err}");
     }
 }
 
@@ -290,6 +482,13 @@ pub fn reload_all_instances(world: &mut World) {
 /// the resolved document, preserving undo history and selection-independent
 /// editor state.
 pub fn respawn_from_sparse_text(world: &mut World, sparse_text: &str) {
+    respawn_scene(world, sparse_text);
+    rebuild_outliner(world);
+}
+
+/// [`respawn_from_sparse_text`] without the outliner rebuild, for a caller
+/// respawning more than once before the tree is read.
+fn respawn_scene(world: &mut World, sparse_text: &str) {
     // Parse the sparse form back and resolve every `IsA` instance against
     // the prefab cache.
     let resolved_text = {
@@ -331,21 +530,9 @@ pub fn respawn_from_sparse_text(world: &mut World, sparse_text: &str) {
     // applies patches, producing a full linked document once more.
     if let Err(err) = jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
         bevy::log::error!("reload_all_instances: load_bsn_scene failed: {err}");
-        return;
     }
 
     // History is preserved across the inline despawn above, so the
     // dirty-state baselines stay valid and the status bar / per-tab
     // dirty dot keep tracking the correct undo depth.
-
-    // Rebuild the outliner from scratch. Observer-driven row creation
-    // can fire mid-apply (Add<Transform> before IsA / Name land) and pin
-    // the wrong category icon; a clean rebuild classifies every row
-    // against the final archetype.
-    if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
-        bevy::log::warn!("reload_all_instances: clear_all_tree_rows failed: {err}");
-    }
-    if let Err(err) = crate::hierarchy::rebuild_hierarchy(world) {
-        bevy::log::warn!("reload_all_instances: rebuild_hierarchy failed: {err}");
-    }
 }

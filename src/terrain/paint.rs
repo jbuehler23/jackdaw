@@ -19,6 +19,11 @@
 //! (`jackdaw_terrain::apply_control_brush`). Primary paints the base
 //! texture id and lowers blend toward it; Ctrl paints the overlay id and
 //! raises blend toward it rather than erasing.
+//!
+//! [`PaintDomain::Color`] is the tint layer the splat material multiplies
+//! its finished albedo by (`jackdaw_terrain::apply_color_brush`). It
+//! accumulates like the texture brush rather than stamping, and Ctrl
+//! paints white, which is the layer's identity and so its eraser.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -57,6 +62,7 @@ pub enum PaintDomain {
     #[default]
     Channels,
     Textures,
+    Color,
 }
 
 /// Which channel/value or texture/opacity the paint brush writes, and
@@ -91,6 +97,24 @@ pub struct TerrainPaintState {
     pub texture_opacity: f32,
     /// Control words at stroke start, for undo, in [`PaintDomain::Textures`].
     pub stroke_control_snapshot: Vec<Control>,
+    /// Colour the brush eases cells toward in [`PaintDomain::Color`],
+    /// chosen with the options bar's colour picker.
+    pub tint_color: [u8; 3],
+    /// How far a cell crosses toward [`Self::tint_color`] per second at
+    /// full brush strength. `0.0..=1.0`, scaled by falloff and frame `dt`
+    /// at the call site.
+    pub tint_opacity: f32,
+    /// Fraction of the brush radius that gets full strength before the
+    /// falloff starts, `0.0..=1.0`.
+    pub tint_hardness: f32,
+    /// Colour layer at stroke start, for undo, in [`PaintDomain::Color`].
+    pub stroke_color_snapshot: Vec<[u8; 4]>,
+    /// Seed the whole-layer variation wash is applied at.
+    pub variation_seed: u32,
+    /// Noise cycles per cell for that wash.
+    pub variation_frequency: f32,
+    /// How far a channel travels from white in that wash, `0.0..=1.0`.
+    pub variation_amount: f32,
     /// Whether the brush hands cells back to autoterrain instead of
     /// painting a texture into them. The paint bar's Restore Auto
     /// checkbox switches this.
@@ -116,6 +140,16 @@ impl Default for TerrainPaintState {
             active_texture_id: 0,
             texture_opacity: 0.5,
             stroke_control_snapshot: Vec::new(),
+            // Not white: white is the layer's identity, so a brush loaded
+            // with it would read as broken on the first stroke. A warm
+            // mid tone is what a macro tint is usually reached for.
+            tint_color: [153, 140, 115],
+            tint_opacity: 0.5,
+            tint_hardness: 0.5,
+            stroke_color_snapshot: Vec::new(),
+            variation_seed: 0,
+            variation_frequency: 0.01,
+            variation_amount: 0.15,
             restore_auto: false,
             stroke_restores: false,
         }
@@ -187,47 +221,163 @@ impl EditorCommand for SetTerrainChannel {
     }
 }
 
-/// Undo command for a texture-paint stroke: writes the whole control-word
-/// layer back to a snapshot.
+/// One layer edit's before and after: the whole grid, or the block of it
+/// that changed.
 ///
-/// Whole-layer rather than rect-scoped, unlike
-/// [`super::sculpt::SetTerrainHeights`]: a resolution-256 terrain's control
-/// layer is 256 KiB (`256 * 256 * 4` bytes), so an entry holds 512 KiB.
-/// [`CommandHistory`]'s byte budget is what bounds that.
+/// A stroke writes a disc a few dozen cells across into an array that is
+/// `resolution^2`, so a whole-layer entry holds two dense copies of the
+/// terrain however little it touched -- 134 MiB a stroke on a 4096-cell
+/// edge. The rect form is what [`super::sculpt::SetTerrainHeights`]
+/// already records; this is the same bargain for the two byte layers.
+enum LayerPatch<T> {
+    Whole {
+        old: Vec<T>,
+        new: Vec<T>,
+    },
+    /// One rectangle of the grid, row-major, as [`GridRect::read`]
+    /// produces.
+    Rect {
+        rect: GridRect,
+        old: Vec<T>,
+        new: Vec<T>,
+    },
+}
+
+impl<T> LayerPatch<T> {
+    fn sides(&self) -> (&Vec<T>, &Vec<T>) {
+        match self {
+            Self::Whole { old, new } | Self::Rect { old, new, .. } => (old, new),
+        }
+    }
+
+    fn heap_bytes(&self) -> usize {
+        let (old, new) = self.sides();
+        (old.capacity() + new.capacity()) * size_of::<T>()
+    }
+}
+
+/// The smallest rect covering every cell where `old` and `new` differ, or
+/// nothing when they are the same.
+///
+/// A pointer stroke accumulates its footprint over many frames, so the
+/// brush rect of any one frame does not describe it. Comparing the two
+/// snapshots once at release names the block exactly, and tighter than the
+/// union of the brush rects would.
+fn changed_rect<T: PartialEq>(old: &[T], new: &[T], resolution: u32) -> Option<GridRect> {
+    if resolution == 0 {
+        return None;
+    }
+    let stride = resolution as usize;
+    let (mut min_x, mut min_z, mut max_x, mut max_z) = (u32::MAX, u32::MAX, 0, 0);
+    let len = old.len().min(new.len());
+    for index in 0..len {
+        if old[index] == new[index] {
+            continue;
+        }
+        let x = (index % stride) as u32;
+        let z = (index / stride) as u32;
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_z = min_z.min(z);
+        max_z = max_z.max(z);
+    }
+    (min_x != u32::MAX).then(|| GridRect {
+        x: min_x,
+        z: min_z,
+        width: max_x - min_x + 1,
+        height: max_z - min_z + 1,
+    })
+}
+
+/// Undo command for a texture-paint stroke.
 ///
 /// Does not touch the scene document, for the same reason
 /// [`SetTerrainChannel`] does not: control words are bulk per-cell data
 /// living in the sidecar store.
 pub struct SetTerrainControl {
     pub entity: Entity,
-    pub old_control: Vec<Control>,
-    pub new_control: Vec<Control>,
+    patch: LayerPatch<Control>,
     pub label: String,
 }
 
 impl SetTerrainControl {
-    fn apply(&self, world: &mut World, values: &[Control]) {
+    /// An entry covering every cell, for an edit that rewrote the layer.
+    pub fn whole(entity: Entity, old: Vec<Control>, new: Vec<Control>, label: String) -> Self {
+        Self {
+            entity,
+            patch: LayerPatch::Whole { old, new },
+            label,
+        }
+    }
+
+    /// An entry covering only `rect`, read out of the layer before and
+    /// after the edit ([`GridRect::read`]).
+    pub fn stroke(
+        entity: Entity,
+        rect: GridRect,
+        old: Vec<Control>,
+        new: Vec<Control>,
+        label: String,
+    ) -> Self {
+        Self {
+            entity,
+            patch: LayerPatch::Rect { rect, old, new },
+            label,
+        }
+    }
+
+    /// The entry a whole-layer before/after pair calls for: `rect` when
+    /// only a block changed, nothing at all when nothing did.
+    pub fn from_snapshots(
+        entity: Entity,
+        resolution: u32,
+        old: &[Control],
+        new: &[Control],
+        label: String,
+    ) -> Option<Self> {
+        let rect = changed_rect(old, new, resolution)?;
+        Some(Self::stroke(
+            entity,
+            rect,
+            rect.read(old, resolution),
+            rect.read(new, resolution),
+            label,
+        ))
+    }
+
+    fn apply(&self, world: &mut World, old: bool) {
         let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(self.entity) else {
             return;
         };
         let terrain = terrain.clone();
-        if let Some(mut control) = world
-            .resource_mut::<TerrainDataStore>()
-            .control_mut(&terrain)
-        {
-            let len = control.len().min(values.len());
-            control[..len].copy_from_slice(&values[..len]);
+        let mut store = world.resource_mut::<TerrainDataStore>();
+        let resolution = store.grid_shape(&terrain).resolution;
+        let rect = match &self.patch {
+            LayerPatch::Whole { .. } => GridRect::whole(resolution),
+            LayerPatch::Rect { rect, .. } => *rect,
+        };
+        let (old_values, new_values) = self.patch.sides();
+        let values = if old { old_values } else { new_values };
+        let Some(mut control) = store.control_rect_mut(&terrain, rect) else {
+            return;
+        };
+        match &self.patch {
+            LayerPatch::Whole { .. } => {
+                let len = control.len().min(values.len());
+                control[..len].copy_from_slice(&values[..len]);
+            }
+            LayerPatch::Rect { rect, .. } => rect.write(&mut control, resolution, values),
         }
     }
 }
 
 impl EditorCommand for SetTerrainControl {
     fn execute(&mut self, world: &mut World) {
-        self.apply(world, &self.new_control.clone());
+        self.apply(world, false);
     }
 
     fn undo(&mut self, world: &mut World) {
-        self.apply(world, &self.old_control.clone());
+        self.apply(world, true);
     }
 
     fn description(&self) -> &str {
@@ -235,7 +385,107 @@ impl EditorCommand for SetTerrainControl {
     }
 
     fn heap_bytes(&self) -> usize {
-        (self.old_control.capacity() + self.new_control.capacity()) * size_of::<Control>()
+        self.patch.heap_bytes()
+    }
+}
+
+/// Undo command for a tint stroke.
+///
+/// Does not touch the scene document. The colour layer is bulk per-cell
+/// data living in the sidecar store, like the heights and the control
+/// words beside it.
+pub struct SetTerrainColor {
+    pub entity: Entity,
+    patch: LayerPatch<[u8; 4]>,
+    pub label: String,
+}
+
+impl SetTerrainColor {
+    /// An entry covering every cell, for an edit that rewrote the layer.
+    pub fn whole(entity: Entity, old: Vec<[u8; 4]>, new: Vec<[u8; 4]>, label: String) -> Self {
+        Self {
+            entity,
+            patch: LayerPatch::Whole { old, new },
+            label,
+        }
+    }
+
+    /// An entry covering only `rect`, read out of the layer before and
+    /// after the edit ([`GridRect::read`]).
+    pub fn stroke(
+        entity: Entity,
+        rect: GridRect,
+        old: Vec<[u8; 4]>,
+        new: Vec<[u8; 4]>,
+        label: String,
+    ) -> Self {
+        Self {
+            entity,
+            patch: LayerPatch::Rect { rect, old, new },
+            label,
+        }
+    }
+
+    /// The entry a whole-layer before/after pair calls for: `rect` when
+    /// only a block changed, nothing at all when nothing did.
+    pub fn from_snapshots(
+        entity: Entity,
+        resolution: u32,
+        old: &[[u8; 4]],
+        new: &[[u8; 4]],
+        label: String,
+    ) -> Option<Self> {
+        let rect = changed_rect(old, new, resolution)?;
+        Some(Self::stroke(
+            entity,
+            rect,
+            rect.read(old, resolution),
+            rect.read(new, resolution),
+            label,
+        ))
+    }
+
+    fn apply(&self, world: &mut World, old: bool) {
+        let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(self.entity) else {
+            return;
+        };
+        let terrain = terrain.clone();
+        let mut store = world.resource_mut::<TerrainDataStore>();
+        let resolution = store.grid_shape(&terrain).resolution;
+        let rect = match &self.patch {
+            LayerPatch::Whole { .. } => GridRect::whole(resolution),
+            LayerPatch::Rect { rect, .. } => *rect,
+        };
+        let (old_values, new_values) = self.patch.sides();
+        let values = if old { old_values } else { new_values };
+        let Some(mut color) = store.tint_rect_mut(&terrain, rect) else {
+            return;
+        };
+        match &self.patch {
+            LayerPatch::Whole { .. } => {
+                let len = color.len().min(values.len());
+                color[..len].copy_from_slice(&values[..len]);
+            }
+            LayerPatch::Rect { rect, .. } => rect.write(&mut color, resolution, values),
+        }
+    }
+}
+
+impl EditorCommand for SetTerrainColor {
+    fn execute(&mut self, world: &mut World) {
+        self.apply(world, false);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        self.apply(world, true);
+    }
+
+    fn description(&self) -> &str {
+        &self.label
+    }
+
+    fn heap_bytes(&self) -> usize {
+        self.patch.heap_bytes()
     }
 }
 
@@ -436,17 +686,19 @@ pub fn terrain_paint(
                 paint_state.active = false;
                 let old_control = std::mem::take(&mut paint_state.stroke_control_snapshot);
                 let new_control = store.control(&terrain.data_path);
-                if old_control.as_slice() != new_control.as_ref() {
-                    history.push_executed(Box::new(SetTerrainControl {
-                        entity: target,
-                        old_control,
-                        new_control: new_control.to_vec(),
-                        label: if restoring {
-                            "Restore Auto".to_string()
-                        } else {
-                            "Paint Texture".to_string()
-                        },
-                    }));
+                let label = if restoring {
+                    "Restore Auto".to_string()
+                } else {
+                    "Paint Texture".to_string()
+                };
+                if let Some(entry) = SetTerrainControl::from_snapshots(
+                    target,
+                    resolution,
+                    &old_control,
+                    new_control.as_ref(),
+                    label,
+                ) {
+                    history.push_executed(Box::new(entry));
                 }
                 return OperatorResult::Finished;
             }
@@ -498,6 +750,62 @@ pub fn terrain_paint(
             }
             OperatorResult::Running
         }
+        PaintDomain::Color => {
+            let (terrain, _dirty) = terrain_query.get_mut(target)?;
+            let terrain = terrain.clone();
+            let resolution = store.grid_shape(&terrain).resolution;
+            // Ctrl paints white, the layer's identity, so the eraser is
+            // the same brush rather than a mode of its own.
+            let erase = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+            let tint = if erase {
+                [255, 255, 255]
+            } else {
+                paint_state.tint_color
+            };
+
+            if !active.is_modal_running() {
+                // `tint_mut` marks the whole layer for upload, which puts
+                // a tint that arrived by a load or an undo on screen, and
+                // is where a terrain the store refuses turns the stroke
+                // away before it starts.
+                paint_state.stroke_color_snapshot = store.tint_mut(&terrain)?.to_vec();
+                paint_state.active = true;
+            }
+
+            if super::stroke_should_end(&mouse) {
+                paint_state.active = false;
+                let old_color = std::mem::take(&mut paint_state.stroke_color_snapshot);
+                let new_color = store.tint(&terrain.data_path);
+                if let Some(entry) = SetTerrainColor::from_snapshots(
+                    target,
+                    resolution,
+                    &old_color,
+                    new_color.as_ref(),
+                    "Paint Tint".to_string(),
+                ) {
+                    history.push_executed(Box::new(entry));
+                }
+                return OperatorResult::Finished;
+            }
+
+            if let Some(grid_pos) = paint_state.brush_position
+                && let Some(rect) = GridRect::brush(resolution, grid_pos, brush_settings.radius)
+                && let Some(mut color) = store.tint_rect_mut(&terrain, rect)
+            {
+                jackdaw_terrain::apply_color_brush(
+                    &mut color,
+                    resolution,
+                    grid_pos,
+                    brush_settings.radius,
+                    brush_settings.falloff,
+                    paint_state.tint_hardness,
+                    paint_state.tint_opacity,
+                    time.delta_secs(),
+                    tint,
+                );
+            }
+            OperatorResult::Running
+        }
     }
 }
 
@@ -515,6 +823,23 @@ fn cancel_terrain_paint(
         return;
     }
     paint_state.active = false;
+
+    if paint_state.domain == PaintDomain::Color {
+        let snapshot = std::mem::take(&mut paint_state.stroke_color_snapshot);
+        let Some(target) = paint_state.target else {
+            return;
+        };
+        let Ok((terrain, _dirty)) = terrain_query.get_mut(target) else {
+            return;
+        };
+        let terrain = terrain.clone();
+        if let Some(mut color) = store.tint_mut(&terrain)
+            && color.len() == snapshot.len()
+        {
+            color.copy_from_slice(&snapshot);
+        }
+        return;
+    }
 
     if paint_state.domain == PaintDomain::Textures {
         let snapshot = std::mem::take(&mut paint_state.stroke_control_snapshot);
@@ -722,12 +1047,12 @@ mod tests {
         let mut new_control = old_control.clone();
         new_control[5] = Control::default().with_base_id(3).with_blend(120);
 
-        let mut command = SetTerrainControl {
+        let mut command = SetTerrainControl::whole(
             entity,
-            old_control: old_control.clone(),
-            new_control: new_control.clone(),
-            label: "Paint Texture".to_string(),
-        };
+            old_control.clone(),
+            new_control.clone(),
+            "Paint Texture".to_string(),
+        );
 
         command.execute(&mut world);
         assert_eq!(
@@ -752,12 +1077,12 @@ mod tests {
     #[test]
     fn a_mismatched_snapshot_length_does_not_panic() {
         let (mut world, entity) = control_test_world();
-        let mut command = SetTerrainControl {
+        let mut command = SetTerrainControl::whole(
             entity,
-            old_control: vec![Control::default(); 4],
-            new_control: vec![Control::default(); 4],
-            label: "Paint Texture".to_string(),
-        };
+            vec![Control::default(); 4],
+            vec![Control::default(); 4],
+            "Paint Texture".to_string(),
+        );
         command.execute(&mut world);
     }
 

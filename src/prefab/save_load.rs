@@ -115,7 +115,12 @@ pub(crate) fn resolve_source_path(source: &Path, scene_dir: &Path) -> PathBuf {
     resolved
 }
 
-pub(crate) fn read_prefab_ast(path: &Path) -> Result<SceneBsnAst, std::io::Error> {
+/// Read a prefab file into a document.
+///
+/// Public rather than crate-private for the integration tests, which put
+/// a new version of a prefab into the cache the way the watcher does
+/// before asking for a reload.
+pub fn read_prefab_ast(path: &Path) -> Result<SceneBsnAst, std::io::Error> {
     if path.extension().is_some_and(|e| e == "bsn") {
         return jackdaw_prefab::source::read_prefab_document(path);
     }

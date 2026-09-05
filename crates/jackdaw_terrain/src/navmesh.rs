@@ -30,7 +30,8 @@
 //! 44      4             polygon count, u32
 //! 48      4             surface vertex count, u32
 //! 52      4             surface triangle count, u32
-//! 56      len           terrain path, UTF-8
+//! 56      4             climb, f32 (version 2 and up)
+//! 60      len           terrain path, UTF-8
 //! then    12*vertices   polygon vertices, 3 x f32
 //! then, per polygon:
 //!         1             area, u8
@@ -84,13 +85,17 @@ use std::collections::HashMap;
 
 use bevy_math::{Affine3A, UVec2, Vec2, Vec3};
 
+use crate::placement::ScatterPalette;
 use crate::region::TerrainRegions;
 
 /// Magic bytes at the head of every baked navmesh.
 pub const MAGIC: [u8; 8] = *b"JDNAVMS\0";
 
 /// Format version [`encode`] writes and [`decode`] reads.
-pub const VERSION: u16 = 1;
+///
+/// Version 2 appended the agent's climb to the header. A version 1 file is
+/// still read, with the climb every bake before the field used.
+pub const VERSION: u16 = 2;
 
 /// Conventional file extension for a baked navmesh, beside the scene.
 pub const EXTENSION: &str = "jdnav";
@@ -98,8 +103,12 @@ pub const EXTENSION: &str = "jdnav";
 /// Edge neighbor value meaning "this edge is a border, not a crossing".
 pub const NO_NEIGHBOR: u32 = u32::MAX;
 
-/// Fixed-size part of the header, before the terrain path.
+/// Fixed-size part of a version 1 header, before the terrain path. Still
+/// the shortest header any readable file has.
 const HEADER_LEN: usize = 56;
+
+/// Fixed-size part of a version 2 header, before the terrain path.
+const HEADER_LEN_V2: usize = 60;
 
 /// A triangle mesh in terrain-local space, indexed.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -127,6 +136,9 @@ pub struct BakeParams {
     /// Voxel size on the horizontal plane, in world units. Derived from
     /// the terrain's own cell size by [`Self::with_terrain_cell`].
     pub cell_size: f32,
+    /// Tallest step the agent climbs, in world units. Ground either side of
+    /// a rise no taller than this stays one connected surface.
+    pub climb: f32,
 }
 
 impl Default for BakeParams {
@@ -136,11 +148,16 @@ impl Default for BakeParams {
             agent_height: 1.8,
             max_slope_degrees: 45.0,
             cell_size: 0.25,
+            climb: Self::DEFAULT_CLIMB,
         }
     }
 }
 
 impl BakeParams {
+    /// Climb a bake uses when nothing authored one, and what every bake
+    /// before the field was authorable ran at.
+    pub const DEFAULT_CLIMB: f32 = 0.9;
+
     /// Smallest voxel a bake may use. Below this a terrain-sized bake
     /// runs out of the u16 grid the baker addresses cells with.
     pub const MIN_CELL_SIZE: f32 = 0.05;
@@ -170,6 +187,14 @@ impl BakeParams {
     /// and the rasterization is wrong with it. A bake that would land past
     /// this refuses instead.
     pub const ADDRESSABLE_GRID: f32 = u16::MAX as f32;
+
+    /// Tallest step a bake will take a walking character over, in world
+    /// units.
+    ///
+    /// The same ceiling the options bar's dial clamps to: without it the
+    /// upper end is open, and a climb taller than the terrain's own relief
+    /// walks the whole surface flat while reading as plausible.
+    pub const MAX_CLIMB: f32 = 2.0;
 
     /// Fraction of a terrain cell one voxel spans.
     ///
@@ -227,6 +252,8 @@ impl BakeParams {
             && self.cell_size > 0.0
             && self.max_slope_degrees.is_finite()
             && (0.0..=90.0).contains(&self.max_slope_degrees)
+            && self.climb.is_finite()
+            && (0.0..=Self::MAX_CLIMB).contains(&self.climb)
     }
 
     /// Voxel columns a bake over `extent` would span, or `None` when
@@ -599,6 +626,36 @@ impl SourceHasher {
         }
     }
 
+    /// Every stored placement, and what the palette says each one is.
+    ///
+    /// Placements are obstacles a bake routes round, so a stamp, a clear
+    /// or an adoption moves the navmesh as surely as a sculpt does. The
+    /// palette goes in as the asset each index names and whether it blocks
+    /// an agent: an entry flipped to ground cover takes its placements out
+    /// of the bake without any of them changing.
+    pub fn eat_placements(&mut self, palette: &ScatterPalette, regions: &TerrainRegions) {
+        self.eat_u32(palette.assets.len() as u32);
+        for entry in &palette.assets {
+            self.eat(entry.asset.as_bytes());
+            self.eat(&[u8::from(entry.obstacle)]);
+        }
+        for (coord, region) in regions.iter_sorted() {
+            if region.placements().is_empty() {
+                continue;
+            }
+            self.eat(&coord.x.to_le_bytes());
+            self.eat(&coord.z.to_le_bytes());
+            self.eat_u32(region.placements().len() as u32);
+            for placement in region.placements() {
+                self.eat(&placement.group.to_le_bytes());
+                self.eat(&placement.asset.to_le_bytes());
+                self.eat_vec3(placement.offset());
+                self.eat_f32(placement.yaw);
+                self.eat_f32(placement.scale);
+            }
+        }
+    }
+
     /// The terrain's world footprint and sample grid.
     ///
     /// `cell` is how far apart the terrain's cells are, and `extent` how
@@ -677,6 +734,7 @@ pub fn encode(artifact: &NavmeshArtifact) -> Vec<u8> {
     out.extend_from_slice(&(artifact.polygons.len() as u32).to_le_bytes());
     out.extend_from_slice(&(artifact.surface_vertices.len() as u32).to_le_bytes());
     out.extend_from_slice(&(artifact.surface_triangles.len() as u32).to_le_bytes());
+    out.extend_from_slice(&artifact.params.climb.to_le_bytes());
     out.extend_from_slice(artifact.terrain.as_bytes());
 
     for vertex in &artifact.vertices {
@@ -720,15 +778,19 @@ pub fn decode(bytes: &[u8]) -> Result<NavmeshArtifact, NavmeshError> {
     if version == 0 || version > VERSION {
         return Err(NavmeshError::UnsupportedVersion(version));
     }
+    if version >= 2 && bytes.len() < HEADER_LEN_V2 {
+        return Err(NavmeshError::Truncated);
+    }
     if r.u16()? != 0 {
         return Err(NavmeshError::ReservedFieldSet);
     }
 
-    let params = BakeParams {
+    let mut params = BakeParams {
         agent_radius: r.f32()?,
         agent_height: r.f32()?,
         max_slope_degrees: r.f32()?,
         cell_size: r.f32()?,
+        climb: BakeParams::DEFAULT_CLIMB,
     };
     // A reader compares these against the params it would ask for, and a
     // NaN compares equal to nothing. A file claiming a bake at an
@@ -743,6 +805,12 @@ pub fn decode(bytes: &[u8]) -> Result<NavmeshArtifact, NavmeshError> {
     let polygon_count = r.u32()? as usize;
     let surface_vertex_count = r.u32()? as usize;
     let surface_triangle_count = r.u32()? as usize;
+    if version >= 2 {
+        params.climb = r.f32()?;
+        if !params.is_plausible() {
+            return Err(NavmeshError::BadParams);
+        }
+    }
     let terrain = core::str::from_utf8(r.take(terrain_len)?)
         .map_err(|_| NavmeshError::BadText)?
         .to_string();
@@ -897,6 +965,7 @@ mod tests {
                 agent_height: 1.8,
                 max_slope_degrees: 45.0,
                 cell_size: 0.25,
+                climb: 0.9,
             },
             source_hash: 0x0123_4567_89ab_cdef,
             terrain: "zone.terrain-0.jdterrain".to_string(),
@@ -946,7 +1015,7 @@ mod tests {
             surface_triangles: Vec::new(),
         };
         let bytes = encode(&artifact);
-        assert_eq!(bytes.len(), HEADER_LEN);
+        assert_eq!(bytes.len(), HEADER_LEN_V2);
         let decoded = decode(&bytes).expect("an empty artifact is still an artifact");
         assert!(decoded.is_empty());
     }
@@ -986,6 +1055,19 @@ mod tests {
         );
         bytes[8..10].copy_from_slice(&0u16.to_le_bytes());
         assert_eq!(decode(&bytes), Err(NavmeshError::UnsupportedVersion(0)));
+    }
+
+    /// A navmesh baked before the climb was authorable carries no climb
+    /// byte, and must still read back as the bake it was: the number that
+    /// bake ran at.
+    #[test]
+    fn a_version_1_artifact_reads_back_at_the_old_climb() {
+        let mut bytes = encode(&sample_artifact());
+        bytes[8..10].copy_from_slice(&1u16.to_le_bytes());
+        bytes.drain(HEADER_LEN..HEADER_LEN_V2);
+        let decoded = decode(&bytes).expect("a version 1 artifact is still readable");
+        assert_eq!(decoded.params.climb, BakeParams::DEFAULT_CLIMB);
+        assert_eq!(decoded.polygons, sample_artifact().polygons);
     }
 
     #[test]

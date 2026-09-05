@@ -29,6 +29,7 @@
 use std::collections::HashMap;
 
 use crate::control::Control;
+use crate::placement::ScatterPlacement;
 
 /// Most regions one terrain may hold: 32 by 32 of them.
 ///
@@ -179,6 +180,13 @@ pub struct Region {
     /// re-anchored before it covered a region a stroke had allocated, and
     /// every read in between would land on the wrong cell.
     channels: Vec<Vec<u16>>,
+    /// Scatter instances this region carries, in insertion order.
+    ///
+    /// A placement belongs to the region covering its cell, so the list
+    /// moves with the ground it stands on and a renderer that culls whole
+    /// regions culls their placements with them. Positions are stored
+    /// against the region's minimum corner; see [`ScatterPlacement`].
+    placements: Vec<ScatterPlacement>,
 }
 
 impl Region {
@@ -190,6 +198,7 @@ impl Region {
             control: vec![Control::default(); n],
             color: None,
             channels: vec![vec![0; n]; channels],
+            placements: Vec::new(),
         }
     }
 
@@ -200,6 +209,7 @@ impl Region {
         control: Vec<Control>,
         color: Option<Vec<[u8; 4]>>,
         channels: Vec<Vec<u16>>,
+        placements: Vec<ScatterPlacement>,
     ) -> Self {
         let n = (side as usize) * (side as usize);
         debug_assert_eq!(heights.len(), n);
@@ -214,7 +224,18 @@ impl Region {
             control,
             color,
             channels,
+            placements,
         }
+    }
+
+    /// Scatter instances standing on this region.
+    pub fn placements(&self) -> &[ScatterPlacement] {
+        &self.placements
+    }
+
+    /// Scatter instances standing on this region, writable in place.
+    pub fn placements_mut(&mut self) -> &mut Vec<ScatterPlacement> {
+        &mut self.placements
     }
 
     /// Row-major values of one channel, or `None` when this region carries
@@ -293,6 +314,15 @@ impl Region {
         &mut self.control
     }
 
+    /// Row-major color, writable in place, or `None` where this region has
+    /// never been painted.
+    ///
+    /// Deliberately not allocating: a caller that only reads the tint, or
+    /// that erases back to white, must not grow the sidecar by asking.
+    pub fn color_mut(&mut self) -> Option<&mut [[u8; 4]]> {
+        self.color.as_deref_mut()
+    }
+
     /// Overwrite heights from `source`, zero-filling a short source and
     /// ignoring the tail of a long one, so the layer keeps its size.
     pub fn copy_heights_from(&mut self, source: &[f32]) {
@@ -348,7 +378,13 @@ impl Region {
         }
     }
 
+    /// Writing the default onto a region with no layer allocates nothing:
+    /// the absent layer already reads as white everywhere, so erasing a
+    /// stroke off an untinted region must not grow the file by a plane.
     fn set_color(&mut self, lx: u32, lz: u32, value: [u8; 4]) {
+        if self.color.is_none() && value == DEFAULT_COLOR {
+            return;
+        }
         let n = self.heights.len();
         let i = self.idx(lx, lz);
         let layer = self.color.get_or_insert_with(|| vec![DEFAULT_COLOR; n]);
@@ -483,6 +519,13 @@ impl TerrainRegions {
     /// `HashMap` iteration order.
     pub fn iter_sorted(&self) -> impl Iterator<Item = (RegionCoord, &Region)> {
         let mut entries: Vec<_> = self.regions.iter().map(|(c, r)| (*c, r)).collect();
+        entries.sort_by_key(|(coord, _)| *coord);
+        entries.into_iter()
+    }
+
+    /// Every region, writable, in region-coordinate order.
+    pub fn iter_sorted_mut(&mut self) -> impl Iterator<Item = (RegionCoord, &mut Region)> {
+        let mut entries: Vec<_> = self.regions.iter_mut().map(|(c, r)| (*c, r)).collect();
         entries.sort_by_key(|(coord, _)| *coord);
         entries.into_iter()
     }
@@ -828,6 +871,63 @@ impl TerrainRegions {
         self.regions.contains_key(&coord)
     }
 
+    /// One rect of the color layer, row-major over the rect.
+    ///
+    /// The tint brush's counterpart to the paint brush's control rect:
+    /// a stroke gathers its own footprint rather than the whole layer,
+    /// which on the default terrain is a hundred cells against a
+    /// million. A cell no region holds reads as [`DEFAULT_COLOR`].
+    pub fn color_rect(&self, rect: crate::rect::GridRect) -> Vec<[u8; 4]> {
+        let mut out = Vec::with_capacity(rect.cells());
+        for gz in rect.z..rect.z + rect.height {
+            for gx in rect.x..rect.x + rect.width {
+                out.push(self.color_at(gx as i32, gz as i32));
+            }
+        }
+        out
+    }
+
+    /// Scatter a rect of color back across the regions that own it,
+    /// allocating a region's color layer on the first non-default write.
+    ///
+    /// `source` is row-major over `rect`, as [`Self::color_rect`] hands
+    /// it back; a short source has its missing cells left alone.
+    pub fn set_color_rect(&mut self, rect: crate::rect::GridRect, source: &[[u8; 4]]) {
+        let mut at = 0usize;
+        for gz in rect.z..rect.z + rect.height {
+            for gx in rect.x..rect.x + rect.width {
+                let Some(value) = source.get(at).copied() else {
+                    return;
+                };
+                at += 1;
+                self.set_color(gx as i32, gz as i32, value);
+            }
+        }
+    }
+
+    /// The whole color layer as a dense `resolution`-per-edge grid.
+    ///
+    /// Exact, like [`Self::read_grid_control`]: a cell no region holds
+    /// reads as [`DEFAULT_COLOR`] rather than as its neighbour.
+    pub fn read_grid_color(&self, resolution: u32) -> Vec<[u8; 4]> {
+        self.read_grid(resolution, |regions, x, z| {
+            regions.color_at(x as i32, z as i32)
+        })
+    }
+
+    /// Scatter a dense color grid back across the regions that own it.
+    pub fn write_grid_color(&mut self, resolution: u32, source: &[[u8; 4]]) {
+        for z in 0..resolution {
+            for x in 0..resolution {
+                let at = (z as usize) * (resolution as usize) + x as usize;
+                let Some(value) = source.get(at).copied() else {
+                    continue;
+                };
+                self.set_color(x as i32, z as i32, value);
+            }
+        }
+    }
+
     /// Paint a color, allocating the region's color layer on first use.
     pub fn set_color(&mut self, x: i32, z: i32, value: [u8; 4]) {
         let (coord, lx, lz) = self.locate(x, z);
@@ -1119,6 +1219,7 @@ mod tests {
             vec![Control::default(); 4],
             None,
             Vec::new(),
+            Vec::new(),
         );
         t.insert_region(RegionCoord::ORIGIN, region);
         assert_eq!(
@@ -1137,6 +1238,7 @@ mod tests {
             vec![1.0, 0.0, 0.0, 0.0],
             vec![Control::default(); 4],
             None,
+            Vec::new(),
             Vec::new(),
         );
         t.insert_region(RegionCoord::ORIGIN, region);

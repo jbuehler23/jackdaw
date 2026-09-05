@@ -227,6 +227,49 @@ pub(crate) fn field_edit_commit(
     world.resource_mut::<CommandHistory>().push_executed(cmd);
 }
 
+/// Set one field on one entity's component, as one undo entry.
+///
+/// [`field_edit_commit`] writes through the field-edit *session*, which is
+/// the whole selection: an inspector edit means "every entity I have
+/// selected". A caller that names its target -- a remote or scripted call --
+/// means that entity and no other, and must not widen to whatever the user
+/// last clicked.
+///
+/// Returns whether a value was written; `false` when the JSON does not
+/// convert to the field's type.
+pub(crate) fn field_edit_commit_on(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+    new_json: &serde_json::Value,
+) -> bool {
+    if crate::preview_context::preview_writes_type_path(world, entity, type_path) {
+        warn!(
+            "{}: `{type_path}` on {entity}",
+            crate::preview_context::PREVIEW_EDIT_REFUSED
+        );
+        return false;
+    }
+    let old_value = resolve_field_edit_old_value(world, entity, type_path, field_path);
+    let Some(new_value) =
+        json_field_edit_to_bsn_value(world, entity, type_path, field_path, new_json)
+    else {
+        return false;
+    };
+    let mut cmd: Box<dyn EditorCommand> = Box::new(SetBsnField {
+        entity,
+        type_path: type_path.to_string(),
+        field_path: field_path.to_string(),
+        old_value,
+        new_value,
+        was_derived: false,
+    });
+    cmd.execute(world);
+    world.resource_mut::<CommandHistory>().push_executed(cmd);
+    true
+}
+
 pub struct SetTransform {
     pub entity: Entity,
     pub old_transform: Transform,
@@ -805,6 +848,55 @@ impl EditorCommand for RemoveComponent {
     }
 }
 
+/// Scene entities spawned during the call being watched.
+///
+/// The remote surface answers a call with the entities it added, so it
+/// opens this before dispatching and takes the list back after. Nothing
+/// else reads it, so nothing else records into it: outside a watched call
+/// [`SpawnedEntities::record`] drops what it is handed, and a session
+/// driven from the menus never accumulates ids nobody is going to ask
+/// for.
+#[derive(Resource, Default)]
+pub struct SpawnedEntities {
+    /// Whether a caller is waiting for this list.
+    watching: bool,
+    entities: Vec<Entity>,
+}
+
+impl SpawnedEntities {
+    /// Start recording, discarding whatever the last call left.
+    pub fn watch(world: &mut World) {
+        let mut spawned = world.get_resource_or_init::<Self>();
+        spawned.watching = true;
+        spawned.entities.clear();
+    }
+
+    /// Stop recording and take what was spawned.
+    pub fn take(world: &mut World) -> Vec<Entity> {
+        let mut spawned = world.get_resource_or_init::<Self>();
+        spawned.watching = false;
+        std::mem::take(&mut spawned.entities)
+    }
+
+    /// Record `entity` as spawned, if anyone is watching.
+    pub(crate) fn record(world: &mut World, entity: Entity) {
+        if let Some(mut spawned) = world.get_resource_mut::<Self>()
+            && spawned.watching
+        {
+            spawned.entities.push(entity);
+        }
+    }
+
+    /// Forget `entity`, for a command that has just taken its spawn back.
+    /// An undo inside a watched call leaves nothing for the caller to be
+    /// told about, and a redo records the id it mints afresh.
+    fn forget(world: &mut World, entity: Entity) {
+        if let Some(mut spawned) = world.get_resource_mut::<Self>() {
+            spawned.entities.retain(|&recorded| recorded != entity);
+        }
+    }
+}
+
 pub struct SpawnEntity {
     /// The entity that was spawned (set after first execute).
     pub spawned: Option<Entity>,
@@ -817,10 +909,12 @@ impl EditorCommand for SpawnEntity {
     fn execute(&mut self, world: &mut World) {
         let entity = (self.spawn_fn)(world);
         self.spawned = Some(entity);
+        SpawnedEntities::record(world, entity);
     }
 
     fn undo(&mut self, world: &mut World) {
         if let Some(entity) = self.spawned.take() {
+            SpawnedEntities::forget(world, entity);
             deselect_entities(world, &[entity]);
             despawn_scene_entity(world, entity);
         }
@@ -2398,6 +2492,51 @@ mod set_bsn_field_tests {
             doc_and_ecs_name(&app, entity),
             (Some("Old".to_string()), Some("Old".to_string()))
         );
+    }
+}
+
+#[cfg(test)]
+mod spawned_entities_tests {
+    use super::*;
+
+    /// The list belongs to the call that opened it: outside one nothing is
+    /// recorded, so a session driven from the menus never grows a list
+    /// nobody is going to read.
+    #[test]
+    fn nothing_is_recorded_while_no_call_is_watching() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        SpawnedEntities::record(&mut world, entity);
+        assert!(SpawnedEntities::take(&mut world).is_empty());
+    }
+
+    /// Taking the list ends the watch, so what the next spawn does is not
+    /// reported against the call that has already answered.
+    #[test]
+    fn a_spawn_after_the_call_took_its_list_is_not_recorded() {
+        let mut world = World::new();
+        SpawnedEntities::watch(&mut world);
+        let first = world.spawn_empty().id();
+        SpawnedEntities::record(&mut world, first);
+        assert_eq!(SpawnedEntities::take(&mut world), vec![first]);
+
+        let second = world.spawn_empty().id();
+        SpawnedEntities::record(&mut world, second);
+        assert!(SpawnedEntities::take(&mut world).is_empty());
+    }
+
+    /// An undo inside a watched call takes its spawn back, and a caller
+    /// told about an entity that is no longer there cannot act on it.
+    #[test]
+    fn a_spawn_taken_back_is_not_reported() {
+        let mut world = World::new();
+        SpawnedEntities::watch(&mut world);
+        let kept = world.spawn_empty().id();
+        let undone = world.spawn_empty().id();
+        SpawnedEntities::record(&mut world, kept);
+        SpawnedEntities::record(&mut world, undone);
+        SpawnedEntities::forget(&mut world, undone);
+        assert_eq!(SpawnedEntities::take(&mut world), vec![kept]);
     }
 }
 

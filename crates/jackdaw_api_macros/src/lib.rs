@@ -90,6 +90,7 @@ fn expand_operator(
     let mut description: Option<Expr> = None;
     let mut modal: bool = false;
     let mut allows_undo: bool = true;
+    let mut remote_hidden: Option<String> = None;
     let mut name_override: Option<String> = None;
     let mut is_available: Option<Path> = None;
     let mut cancel: Option<Path> = None;
@@ -126,6 +127,18 @@ fn expand_operator(
                         if let Some(b) = as_lit_bool(&nv.value) {
                             allows_undo = b.value;
                         }
+                    }
+                    "remote_hidden" => {
+                        let Some(reason) = as_lit_str(&nv.value) else {
+                            return syn::Error::new(
+                                nv.value.span(),
+                                "remote_hidden takes the reason as a string, e.g. \
+                                 remote_hidden = \"continues a pointer gesture\"",
+                            )
+                            .to_compile_error()
+                            .into();
+                        };
+                        remote_hidden = Some(reason.value());
                     }
                     "name" => {
                         if let Some(s) = as_lit_str(&nv.value) {
@@ -236,6 +249,11 @@ fn expand_operator(
         }
     });
 
+    let remote_hidden_tokens = match &remote_hidden {
+        Some(reason) => quote! { Some(#reason) },
+        None => quote! { None },
+    };
+
     let expanded = quote! {
         #[derive(::core::default::Default)]
         #vis struct #struct_name;
@@ -250,6 +268,7 @@ fn expand_operator(
             const DESCRIPTION: &'static str = #description;
             const MODAL: bool = #modal;
             const ALLOWS_UNDO: bool = #allows_undo;
+            const REMOTE_HIDDEN: Option<&'static str> = #remote_hidden_tokens;
 
             #parameters_const
 
@@ -348,7 +367,10 @@ fn build_param_spec(meta: &Meta, api_crate: &TokenStream2) -> syn::Result<TokenS
             "parameter name must be a simple identifier",
         )
     })?;
-    let name_lit = LitStr::new(&name_ident.to_string(), name_ident.span());
+    // A parameter whose name is a Rust keyword is written raw (`r#match`);
+    // callers spell it without the escape.
+    let name = name_ident.to_string();
+    let name_lit = LitStr::new(name.strip_prefix("r#").unwrap_or(&name), name_ident.span());
 
     let inner: Punctuated<Meta, Token![,]> = list.parse_args_with(Punctuated::parse_terminated)?;
     let mut iter = inner.iter();

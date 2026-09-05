@@ -81,7 +81,8 @@ use jackdaw_bsn::{
 
 pub use jackdaw_scene_types::{
     Brush, BrushFaceData, CustomProperties, EditorCategory, EditorDescription, EditorHidden,
-    GltfSource, PropertyValue, SkipSerialization,
+    GltfSource, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude, PropertyValue, ScatterGroup,
+    ScatterInstance, SkipSerialization,
 };
 
 #[cfg(feature = "pie")]

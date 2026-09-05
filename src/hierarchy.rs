@@ -3007,6 +3007,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<PrefabSaveAsVariantOp>()
         .register_operator::<crate::prefab::operators::PrefabSaveOp>()
         .register_operator::<crate::prefab::operators::PrefabSpawnInstanceOp>()
+        .register_operator::<crate::prefab::operators::PrefabPackOp>()
+        .register_operator::<crate::prefab::operators::PrefabPackMatchingOp>()
         .register_operator::<crate::prefab::operators::PrefabOpenSourceOp>()
         .register_operator::<crate::prefab::operators::PrefabRevertFieldOp>()
         .register_operator::<crate::prefab::operators::PrefabRevertComponentOp>()

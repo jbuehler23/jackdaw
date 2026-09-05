@@ -334,6 +334,7 @@ impl<'a> ExtensionContext<'a> {
                 cancel,
                 modal: O::MODAL,
                 allows_undo: O::ALLOWS_UNDO,
+                remote_hidden: O::REMOTE_HIDDEN,
             },
             ChildOf(ext),
             children![

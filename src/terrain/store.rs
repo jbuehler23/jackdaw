@@ -16,9 +16,13 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use jackdaw_terrain::region::RegionCoord;
 #[cfg(test)]
 use jackdaw_terrain::region::RegionSize;
-use jackdaw_terrain::sidecar::{self, AutoTerrainSettings, RegionTerrainData, TerrainMaterialSlot};
+use jackdaw_terrain::render::ScatterDirty;
+use jackdaw_terrain::sidecar::{
+    self, AutoTerrainSettings, RegionTerrainData, SurfaceSettings, TerrainMaterialSlot,
+};
 use jackdaw_terrain::texture_set::MAX_TEXTURES;
 use jackdaw_terrain::{Control, GridRect, GridShape};
 
@@ -117,6 +121,17 @@ pub struct TerrainDataStore {
     /// gets persisted. Behind a lock for the reason [`Self::heightmaps`] is:
     /// the renderer asks every frame, and asking must not read as writing.
     control_dirty: Mutex<HashMap<String, GridRect>>,
+    /// Which block of each terrain's colour layer has been written since the
+    /// renderer last uploaded it. Kept beside [`Self::control_dirty`], and
+    /// behind a lock for the same reason.
+    tint_dirty: Mutex<HashMap<String, GridRect>>,
+    /// Which of each terrain's regions have had their stored scatter
+    /// written since the renderer last drew them.
+    ///
+    /// Beside the other dirty marks, and behind a lock for the same
+    /// reason: the renderer asks every frame, and asking must not read as
+    /// writing the store.
+    scatter_dirty: Mutex<HashMap<String, ScatterDirty>>,
     /// Sampling views handed out by [`Self::heightmap`], keyed the same way
     /// [`Self::entries`] is.
     ///
@@ -125,6 +140,15 @@ pub struct TerrainDataStore {
     /// and everything gated on `is_changed`, such as the material tiling
     /// fields, would run against a store nobody had written.
     heightmaps: Mutex<HashMap<String, CachedHeightmap>>,
+    /// When each sidecar path was last read off disk.
+    ///
+    /// The store is the live document and outlives the file it came from:
+    /// a tab holds its terrain data while another program rewrites the
+    /// sidecar underneath, and re-reading unconditionally would throw away
+    /// sculpting the user has not saved. This is how a reload tells the
+    /// two apart -- a file whose mtime has not moved holds nothing the
+    /// store does not already have.
+    read_mtimes: HashMap<String, std::time::SystemTime>,
 }
 
 /// A terrain's heights ready to sample, with the height range a raycast needs
@@ -544,6 +568,8 @@ impl TerrainDataStore {
         self.retire_heightmap(&data_path);
         self.load_failed.remove(&data_path);
         self.mark_control_dirty(&data_path, GridRect::whole(data.grid_resolution()));
+        self.mark_tint_dirty(&data_path, GridRect::whole(data.grid_resolution()));
+        self.mark_scatter_dirty(&data_path, None);
         self.entries.insert(data_path, data);
     }
 
@@ -568,7 +594,37 @@ impl TerrainDataStore {
     /// Drops a sidecar path's data.
     pub fn remove(&mut self, data_path: &str) -> Option<RegionTerrainData> {
         self.cached().remove(data_path);
+        self.read_mtimes.remove(data_path);
         self.entries.remove(data_path)
+    }
+
+    /// Record that `data_path` was just read from a file last modified at
+    /// `mtime`.
+    pub fn note_read(&mut self, data_path: &str, mtime: Option<std::time::SystemTime>) {
+        match mtime {
+            Some(mtime) => {
+                self.read_mtimes.insert(data_path.to_string(), mtime);
+            }
+            None => {
+                self.read_mtimes.remove(data_path);
+            }
+        }
+    }
+
+    /// Whether the file at `full` has been written since this store last
+    /// read `data_path` from it.
+    ///
+    /// A path the store has never read is stale by definition: there is
+    /// nothing to keep. A file that cannot be stat'd is not, because
+    /// re-reading it would fail anyway and dropping the entry would lose
+    /// the only copy.
+    pub fn sidecar_is_stale(&self, data_path: &str, full: &std::path::Path) -> bool {
+        let Some(read_at) = self.read_mtimes.get(data_path) else {
+            return true;
+        };
+        std::fs::metadata(full)
+            .and_then(|meta| meta.modified())
+            .is_ok_and(|mtime| mtime != *read_at)
     }
 
     /// Whether a sidecar path has data.
@@ -630,6 +686,15 @@ impl TerrainDataStore {
         // cached heightmap is stale from here whether the caller writes or not.
         self.retire_heightmap(&terrain.data_path);
         Self::document_in(&mut self.entries, &self.load_failed, terrain).map(TerrainEntry::new)
+    }
+
+    /// A terrain's document by sidecar path, writable.
+    ///
+    /// Unlike [`Self::entry_for`] this reshapes nothing and retires no
+    /// heightmap: it is for the parts of a document that are not per-cell,
+    /// where a write cannot change the ground the mesher samples.
+    pub fn document_mut(&mut self, data_path: &str) -> Option<&mut RegionTerrainData> {
+        self.entries.get_mut(data_path)
     }
 
     /// Every (sidecar path, document) pair currently held.
@@ -863,6 +928,29 @@ impl TerrainDataStore {
         }
     }
 
+    /// Mark one region's stored scatter as written, or the whole terrain's
+    /// when `region` is `None`.
+    pub fn mark_scatter_dirty(&self, data_path: &str, region: Option<RegionCoord>) {
+        let mut dirty = self
+            .scatter_dirty
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let entry = dirty.entry(data_path.to_string()).or_default();
+        match region {
+            Some(coord) => entry.touch(coord),
+            None => entry.all = true,
+        }
+    }
+
+    /// What of a terrain's stored scatter has been written since this was
+    /// last called, clearing the mark.
+    pub fn take_scatter_dirty(&self, data_path: &str) -> Option<ScatterDirty> {
+        self.scatter_dirty
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(data_path)
+    }
+
     /// Which block of a terrain's control map has been written since this
     /// was last called, clearing the mark.
     ///
@@ -873,6 +961,247 @@ impl TerrainDataStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(data_path)
+    }
+
+    /// How a terrain's whole surface is shaded. A terrain with no document
+    /// reads as the default, which is what every pre-version-6 sidecar was
+    /// rendered at.
+    pub fn surface(&self, data_path: &str) -> SurfaceSettings {
+        self.entries
+            .get(data_path)
+            .map(|data| data.surface)
+            .unwrap_or_default()
+    }
+
+    /// Replaces a terrain's surface settings, under
+    /// [`Self::set_autoterrain`]'s rules: refused for a quarantined path,
+    /// and a path with no document mints one only for non-default settings.
+    pub fn set_surface(
+        &mut self,
+        data_path: impl Into<String>,
+        settings: SurfaceSettings,
+    ) -> Result<(), TerrainMaterialError> {
+        let data_path = data_path.into();
+        if self.load_failed.contains_key(&data_path) {
+            return Err(TerrainMaterialError::LoadFailed);
+        }
+        let settings = settings.sanitized();
+        match self.entries.get_mut(&data_path) {
+            Some(data) => data.surface = settings,
+            None if settings != SurfaceSettings::default() => {
+                self.entries.insert(
+                    data_path,
+                    RegionTerrainData {
+                        surface: settings,
+                        ..default()
+                    },
+                );
+            }
+            None => {}
+        }
+        Ok(())
+    }
+
+    /// A terrain's colour layer as a dense grid, or an empty slice when the
+    /// path has no document.
+    ///
+    /// Empty is not an error, for [`Self::control`]'s reason: an untinted
+    /// terrain has no layer, and every cell of it reads as white.
+    pub fn tint(&self, data_path: &str) -> Cow<'_, [[u8; 4]]> {
+        match self.entries.get(data_path) {
+            Some(data) => Cow::Owned(data.regions.read_grid_color(data.grid_resolution())),
+            None => Cow::Borrowed(&[]),
+        }
+    }
+
+    /// One rect of a terrain's colour layer, row-major over the rect.
+    ///
+    /// What the renderer patches an uploaded tint map from after a stroke,
+    /// the same bargain [`Self::control_rect`] makes. Cells outside the
+    /// terrain's own grid read as white.
+    pub fn tint_rect(&self, data_path: &str, resolution: u32, rect: GridRect) -> Vec<[u8; 4]> {
+        let Some(data) = self.entries.get(data_path) else {
+            return vec![jackdaw_terrain::region::DEFAULT_COLOR; rect.cells()];
+        };
+        let mut out = Vec::with_capacity(rect.cells());
+        for gz in rect.z..rect.z + rect.height {
+            for gx in rect.x..rect.x + rect.width {
+                out.push(if gx < resolution && gz < resolution {
+                    data.regions.color_at(gx as i32, gz as i32)
+                } else {
+                    jackdaw_terrain::region::DEFAULT_COLOR
+                });
+            }
+        }
+        out
+    }
+
+    /// A terrain's colour layer as a dense grid, writable, under
+    /// [`Self::control_mut`]'s rules.
+    pub fn tint_mut(&mut self, terrain: &jackdaw_scene_types::Terrain) -> Option<ColorGrid<'_>> {
+        let resolution = self.grid_shape(terrain).resolution;
+        self.tint_rect_mut(terrain, GridRect::whole(resolution))
+    }
+
+    /// [`Self::tint_mut`] for a caller that knows which block it is about to
+    /// write. Only `rect` is marked for upload, and only `rect` is gathered
+    /// and scattered back, so a stroke costs its brush footprint.
+    pub fn tint_rect_mut(
+        &mut self,
+        terrain: &jackdaw_scene_types::Terrain,
+        rect: GridRect,
+    ) -> Option<ColorGrid<'_>> {
+        let Self {
+            entries,
+            load_failed,
+            tint_dirty,
+            ..
+        } = self;
+        let document = Self::document_in(entries, load_failed, terrain)?;
+        let dirty = tint_dirty.get_mut().unwrap_or_else(PoisonError::into_inner);
+        dirty
+            .entry(terrain.data_path.clone())
+            .and_modify(|pending| *pending = pending.union(rect))
+            .or_insert(rect);
+        Some(ColorGrid::new(document, rect))
+    }
+
+    /// Records that `rect` of a terrain's colour layer needs uploading.
+    fn mark_tint_dirty(&self, data_path: &str, rect: GridRect) {
+        let mut dirty = self
+            .tint_dirty
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match dirty.get_mut(data_path) {
+            Some(pending) => *pending = pending.union(rect),
+            None => {
+                dirty.insert(data_path.to_string(), rect);
+            }
+        }
+    }
+
+    /// Which block of a terrain's colour layer has been written since this
+    /// was last called, clearing the mark.
+    pub fn take_tint_dirty(&self, data_path: &str) -> Option<GridRect> {
+        self.tint_dirty
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(data_path)
+    }
+}
+
+/// One terrain's colour layer as a dense grid, writable.
+///
+/// [`ControlGrid`]'s two shapes over the tint. A terrain stored as one
+/// region that has already been painted is written where it lives; anything
+/// else is gathered over `rect` and scattered back on drop.
+///
+/// A region with no colour layer is never borrowed: the layer allocates on
+/// first paint, and a stroke that reads the tint or erases back to white
+/// must not grow the sidecar. The scatter writes only the cells that
+/// actually changed, so such a stroke allocates nothing.
+///
+/// Outside `rect` the dense view reads as white rather than as what is
+/// stored, so `rect` has to cover every cell the caller reads as well as
+/// every cell it writes.
+pub struct ColorGrid<'a> {
+    texels: ColorTexels<'a>,
+}
+
+enum ColorTexels<'a> {
+    Borrowed(&'a mut [[u8; 4]]),
+    Gathered {
+        document: &'a mut RegionTerrainData,
+        /// Dense `resolution^2`, with only `rect` populated and only `rect`
+        /// written back.
+        colors: Vec<[u8; 4]>,
+        rect: GridRect,
+        resolution: u32,
+    },
+}
+
+impl<'a> ColorGrid<'a> {
+    fn new(document: &'a mut RegionTerrainData, rect: GridRect) -> Self {
+        let resolution = document.grid_resolution();
+        // Split in two steps for the same reason `ControlGrid` does: the
+        // borrowed case reborrows the document for the whole guard.
+        if document
+            .contiguous_grid()
+            .is_some_and(|region| region.color().is_some())
+        {
+            let texels = document
+                .contiguous_grid_mut()
+                .expect("just checked")
+                .color_mut()
+                .expect("just checked");
+            return Self {
+                texels: ColorTexels::Borrowed(texels),
+            };
+        }
+        let mut colors = vec![
+            jackdaw_terrain::region::DEFAULT_COLOR;
+            (resolution as usize) * (resolution as usize)
+        ];
+        for row in rect.rows(resolution) {
+            for index in row {
+                let x = (index % resolution as usize) as i32;
+                let z = (index / resolution as usize) as i32;
+                colors[index] = document.regions.color_at(x, z);
+            }
+        }
+        Self {
+            texels: ColorTexels::Gathered {
+                document,
+                colors,
+                rect,
+                resolution,
+            },
+        }
+    }
+}
+
+impl core::ops::Deref for ColorGrid<'_> {
+    type Target = [[u8; 4]];
+
+    fn deref(&self) -> &[[u8; 4]] {
+        match &self.texels {
+            ColorTexels::Borrowed(texels) => texels,
+            ColorTexels::Gathered { colors, .. } => colors,
+        }
+    }
+}
+
+impl core::ops::DerefMut for ColorGrid<'_> {
+    fn deref_mut(&mut self) -> &mut [[u8; 4]] {
+        match &mut self.texels {
+            ColorTexels::Borrowed(texels) => texels,
+            ColorTexels::Gathered { colors, .. } => colors,
+        }
+    }
+}
+
+impl Drop for ColorGrid<'_> {
+    fn drop(&mut self) {
+        if let ColorTexels::Gathered {
+            document,
+            colors,
+            rect,
+            resolution,
+        } = &mut self.texels
+        {
+            for row in rect.rows(*resolution) {
+                for index in row {
+                    let x = (index % *resolution as usize) as i32;
+                    let z = (index / *resolution as usize) as i32;
+                    // Only what moved: `set_color` allocates a region's
+                    // colour layer on any write, so scattering an untouched
+                    // white cell would grow the sidecar for nothing.
+                    if document.regions.color_at(x, z) != colors[index] {
+                        document.regions.set_color(x, z, colors[index]);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1575,6 +1904,106 @@ mod tests {
             .ensure_region(jackdaw_terrain::RegionCoord::new(1, 0));
 
         assert_eq!(store.heightmap(&subject).map.resolution, 8);
+    }
+
+    /// A stroke on one region must not grow the sidecar everywhere it
+    /// looked. The colour layer allocates per region on first paint, so
+    /// scattering an untouched cell back would put 256 KB of white in every
+    /// region the brush rect overlapped.
+    #[test]
+    fn a_tint_stroke_allocates_only_the_regions_it_changed() {
+        let subject = terrain(512, "a.jdterrain");
+        let mut store = store_for(&subject);
+        assert!(
+            store
+                .entries
+                .get("a.jdterrain")
+                .expect("keyed")
+                .contiguous_grid()
+                .is_none(),
+            "a 512 terrain is a grid of regions, which is the case this guards"
+        );
+
+        {
+            let mut grid = store
+                .tint_rect_mut(
+                    &subject,
+                    GridRect {
+                        x: 0,
+                        z: 0,
+                        width: 4,
+                        height: 4,
+                    },
+                )
+                .expect("keyed");
+            grid[0] = [10, 20, 30, 255];
+        }
+
+        let regions = &store.entries.get("a.jdterrain").expect("keyed").regions;
+        assert!(
+            regions
+                .region(jackdaw_terrain::RegionCoord::ORIGIN)
+                .expect("allocated")
+                .color()
+                .is_some(),
+            "the region the stroke changed gets its colour layer"
+        );
+        for coord in [
+            jackdaw_terrain::RegionCoord::new(1, 0),
+            jackdaw_terrain::RegionCoord::new(0, 1),
+            jackdaw_terrain::RegionCoord::new(1, 1),
+        ] {
+            assert!(
+                regions.region(coord).expect("allocated").color().is_none(),
+                "{coord:?} was never painted and must not carry a colour layer"
+            );
+        }
+    }
+
+    /// An eraser stroke over ground that was never tinted writes white on
+    /// white, which is no change: it must leave the sidecar the size it
+    /// found it.
+    #[test]
+    fn erasing_untinted_ground_allocates_no_colour_layer() {
+        let subject = terrain(4, "a.jdterrain");
+        let mut store = store_for(&subject);
+        {
+            let mut grid = store.tint_mut(&subject).expect("keyed");
+            for texel in grid.iter_mut() {
+                *texel = jackdaw_terrain::region::DEFAULT_COLOR;
+            }
+        }
+        assert!(
+            store
+                .entries
+                .get("a.jdterrain")
+                .expect("keyed")
+                .regions
+                .region(jackdaw_terrain::RegionCoord::ORIGIN)
+                .expect("allocated")
+                .color()
+                .is_none()
+        );
+    }
+
+    /// Once a contiguous terrain has a colour layer, a stroke writes it
+    /// where it lives rather than gathering and scattering a copy.
+    #[test]
+    fn a_painted_contiguous_terrain_is_tinted_in_place() {
+        let subject = terrain(4, "a.jdterrain");
+        let mut store = store_for(&subject);
+        {
+            let mut grid = store.tint_mut(&subject).expect("keyed");
+            grid[5] = [1, 2, 3, 255];
+        }
+        {
+            let mut grid = store.tint_mut(&subject).expect("keyed");
+            assert_eq!(grid[5], [1, 2, 3, 255], "the layer reads back as stored");
+            grid[6] = [4, 5, 6, 255];
+        }
+        let regions = &store.entries.get("a.jdterrain").expect("keyed").regions;
+        assert_eq!(regions.color_at(1, 1), [1, 2, 3, 255]);
+        assert_eq!(regions.color_at(2, 1), [4, 5, 6, 255]);
     }
 
     /// A terrain with no document has no cells, and therefore no ground: there

@@ -29,8 +29,9 @@ pub use mesh_rebuild::evaluate_brush_geometry;
 pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
 pub use types::{
     Brush, BrushFaceData, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh, GltfSource,
-    PrefabBaseline, PropertyValue, SceneRootTag, Terrain, TerrainChannel, TerrainChannelElement,
-    TerrainNavmesh, TerrainPaletteEntry, TerrainQuantization,
+    NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude, PrefabBaseline, PropertyValue, ScatterGroup,
+    ScatterInstance, SceneRootTag, Terrain, TerrainChannel, TerrainChannelElement, TerrainNavmesh,
+    TerrainPaletteEntry, TerrainQuantization,
 };
 
 use bevy::prelude::*;
@@ -79,6 +80,9 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<TerrainChannel>()
             .register_type::<TerrainChannelElement>()
             .register_type::<TerrainNavmesh>()
+            .register_type::<NavmeshExclude>()
+            .register_type::<ScatterGroup>()
+            .register_type::<ScatterInstance>()
             .register_type::<TerrainPaletteEntry>()
             .register_type::<TerrainQuantization>()
             .register_type::<MeshMirror>()

@@ -78,7 +78,8 @@ fn integration() -> bool {
             "not (binary(bsn_game_run) | binary(editor_journey) | binary(bundle_smoke) \
                | binary(stress_reload) | binary(scaffold_e2e) \
                | binary(schema_extract) | binary(reflect_auto_register) \
-               | binary(component_shape_refresh) | binary(dylib_linkage_identity) | binary(extern_redirect_ecosystem))",
+               | binary(component_shape_refresh) | binary(dylib_linkage_identity) \
+               | binary(extern_redirect_ecosystem) | binary(mcp_smoke))",
         ],
     )
 }
@@ -100,6 +101,21 @@ fn heavy() -> bool {
             triple,
         ],
     ) && sh("cargo", &["build", "-p", "jackdaw_rustc_wrapper"])
+        // `jd mcp` executes `jd-mcp` from beside `jd`, and it lives in
+        // another package, so nothing else in this tier builds it. Without
+        // it `mcp_smoke` has no binary to drive and skips.
+        && sh(
+            "cargo",
+            &[
+                "build",
+                "-p",
+                "jackdaw_mcp",
+                "--bin",
+                "jd-mcp",
+                "--target",
+                triple,
+            ],
+        )
         && sh(
             "cargo",
             &[
@@ -126,10 +142,17 @@ fn heavy() -> bool {
                 // bundle_smoke is deliberately absent: it needs a release SDK,
                 // which this tier does not build, so it would only self-skip
                 // here. It runs on the real release artifacts in release.yaml.
+                //
+                // mcp_smoke belongs here rather than in `integration`: it
+                // launches a windowed editor process and waits minutes on it,
+                // which is what this tier's deadlines and thread budget are
+                // sized for.
                 "--test",
                 "bsn_game_run",
                 "--test",
                 "editor_journey",
+                "--test",
+                "mcp_smoke",
             ],
         )
 }

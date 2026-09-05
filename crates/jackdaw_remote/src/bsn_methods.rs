@@ -53,8 +53,24 @@ pub fn jackdaw_entity_bsn_handler(In(params): In<Option<Value>>, world: &mut Wor
         .ok_or_else(|| invalid_params("expected {\"entity\": <entity bits>}".into()))?;
     let root = Entity::try_from_bits(bits)
         .ok_or_else(|| invalid_params(format!("invalid entity bits {bits}")))?;
+
+    let text = entity_bsn(world, root).map_err(invalid_params)?;
+    Ok(json!({ "bsn": text }))
+}
+
+/// The BSN text for `root` and its descendants.
+///
+/// The pure half of [`jackdaw_entity_bsn_handler`], so the editor's own
+/// remote surface emits one node exactly the way the game side does
+/// rather than growing a second conversion.
+///
+/// The world's live [`SceneBsnAst`], if it has one, is lifted out for the
+/// duration and put back afterwards: the conversion builds its own AST and
+/// stamps `AstNodeRef` back references that would otherwise point into a
+/// document the editor still owns.
+pub fn entity_bsn(world: &mut World, root: Entity) -> Result<String, String> {
     if world.get_entity(root).is_err() {
-        return Err(invalid_params(format!("entity {root} does not exist")));
+        return Err(format!("entity {root} does not exist"));
     }
 
     let prior_ast = world.remove_resource::<SceneBsnAst>();
@@ -98,9 +114,7 @@ pub fn jackdaw_entity_bsn_handler(In(params): In<Option<Value>>, world: &mut Wor
         world.insert_resource(prior_ast);
     }
 
-    let text = emitted.ok_or_else(|| invalid_params(format!("no AST node for entity {root}")))?;
-
-    Ok(json!({ "bsn": text }))
+    emitted.ok_or_else(|| format!("no AST node for entity {root}"))
 }
 
 /// Type ids of the entity's reflected components, minus the ones BSN

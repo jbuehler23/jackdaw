@@ -104,6 +104,33 @@ fn transform_translation_patch(pos: Vec3) -> BsnPatch {
     })
 }
 
+fn quat_value(x: f32, y: f32, z: f32, w: f32) -> BsnValue {
+    BsnValue::Struct(BsnStructData {
+        type_path: "glam::Quat".to_string(),
+        fields: BsnStructFields(vec![
+            field("x", BsnValue::Float(f64::from(x))),
+            field("y", BsnValue::Float(f64::from(y))),
+            field("z", BsnValue::Float(f64::from(z))),
+            field("w", BsnValue::Float(f64::from(w))),
+        ]),
+    })
+}
+
+/// A whole `Transform` struct patch. An instance that stands in for a group
+/// takes over its rotation and scale as well as its position, so the delta it
+/// carries names all three.
+fn transform_patch(transform: Transform) -> BsnPatch {
+    let (t, r, s) = (transform.translation, transform.rotation, transform.scale);
+    BsnPatch::Struct(BsnStructData {
+        type_path: TRANSFORM_TYPE.to_string(),
+        fields: BsnStructFields(vec![
+            field("translation", vec3_value(t.x, t.y, t.z)),
+            field("rotation", quat_value(r.x, r.y, r.z, r.w)),
+            field("scale", vec3_value(s.x, s.y, s.z)),
+        ]),
+    })
+}
+
 /// Deep-clone a live-document node's component patches into a fresh vector.
 /// `Children` patches are dropped (the caller rebuilds the hierarchy); when
 /// `drop_markers` is set, the `Prefab`, `IsA`, and `PrefabEntityId` markers are
@@ -201,7 +228,16 @@ fn back_up_legacy_prefab(original: &Path) {
 /// to the file being written, as at any disk boundary. Done on a clone, so the
 /// caller's document, and the cache entry it usually becomes, keeps absolute
 /// paths.
-fn write_prefab_doc(target_path: &Path, prefab: &SceneBsnAst, op_id: &str) -> Option<PathBuf> {
+/// `replace` says whether a file already at the path may be written over.
+/// A refusal is the open itself rather than a prior `exists()`: a prefab
+/// other scenes instance is not something to lose to whoever wrote it
+/// between the check and the write.
+fn write_prefab_doc(
+    target_path: &Path,
+    prefab: &SceneBsnAst,
+    op_id: &str,
+    replace: bool,
+) -> Option<PathBuf> {
     let path = prefab_bsn_path(target_path);
     if path != target_path {
         back_up_legacy_prefab(target_path);
@@ -211,7 +247,17 @@ fn write_prefab_doc(target_path: &Path, prefab: &SceneBsnAst, op_id: &str) -> Op
     }
     let mut out = crate::prefab::resolver_bsn::clone_scene(prefab);
     jackdaw_prefab::relativize_isa_sources(&mut out, path.parent().unwrap_or(Path::new("")));
-    if let Err(err) = std::fs::write(&path, emit_scene(&out)) {
+    let text = emit_scene(&out);
+    let written = if replace {
+        std::fs::write(&path, text)
+    } else {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .and_then(|mut file| std::io::Write::write_all(&mut file, text.as_bytes()))
+    };
+    if let Err(err) = written {
         warn!("{op_id}: failed to write {}: {err}", path.display());
         return None;
     }
@@ -344,12 +390,56 @@ pub fn save_as_prefab_from_selection(world: &mut World, roots: &[Entity], target
         return;
     }
 
-    save_selection_as_new_prefab(world, &normalized, target_path);
+    save_selection_as_new_prefab(world, &normalized, target_path, true);
 }
 
 /// Bundle path: write a fresh prefab file from the selection and replace it
 /// in the source scene with an instance of the new prefab.
-fn save_selection_as_new_prefab(world: &mut World, normalized: &[Entity], target_path: &Path) {
+fn save_selection_as_new_prefab(
+    world: &mut World,
+    normalized: &[Entity],
+    target_path: &Path,
+    replace: bool,
+) {
+    let Some(packed) = write_prefab_from_roots(world, normalized, target_path, replace) else {
+        return;
+    };
+    remove_packed_from_document(world, &packed.entities);
+    // spawn_instance adds the instance node and triggers a reload that
+    // materializes the inherited children from the prefab we just wrote.
+    spawn_instance(world, &packed.path, packed.centroid);
+}
+
+/// A prefab file that was just written, and what went into it.
+struct PackedPrefab {
+    /// The file written, which is where an instance inherits from.
+    path: PathBuf,
+    /// The centroid the packaged roots were shifted around, which is where
+    /// an instance of the file stands for the scene to look as it did.
+    centroid: Vec3,
+    /// The live-document entities that went into the file. Still in the
+    /// document: dropping them is [`remove_packed_from_document`], which a
+    /// caller runs once it is satisfied the file it just wrote reads back.
+    entities: Vec<Entity>,
+}
+
+/// Drop the packaged entities from the live document so the upcoming
+/// reload does not respawn them alongside the new instance.
+fn remove_packed_from_document(world: &mut World, entities: &[Entity]) {
+    let mut live = world.resource_mut::<SceneBsnAst>();
+    for &entity in entities {
+        live.remove_entity_node(entity);
+    }
+}
+
+/// Write `normalized` and their descendants out as a prefab file, leaving
+/// them in the live document for [`remove_packed_from_document`].
+fn write_prefab_from_roots(
+    world: &mut World,
+    normalized: &[Entity],
+    target_path: &Path,
+    replace: bool,
+) -> Option<PackedPrefab> {
     // BFS each top root in input order so `PrefabEntityId` assignment 1..N is
     // stable across runs.
     let mut entities: Vec<Entity> = Vec::new();
@@ -410,23 +500,372 @@ fn save_selection_as_new_prefab(world: &mut World, normalized: &[Entity], target
         prefab.add_child_to_ast(prefab_parent, prefab_node);
     }
 
-    let Some(target_path) = write_prefab_doc(target_path, &prefab, "save_as_prefab_from_selection")
-    else {
-        return;
-    };
+    let path = write_prefab_doc(
+        target_path,
+        &prefab,
+        "save_as_prefab_from_selection",
+        replace,
+    )?;
 
-    // Remove the packaged entities from the live document so the upcoming
-    // reload doesn't respawn them alongside the new instance.
-    {
-        let mut live = world.resource_mut::<SceneBsnAst>();
-        for &entity in &entities {
-            live.remove_entity_node(entity);
+    Some(PackedPrefab {
+        path,
+        centroid,
+        entities,
+    })
+}
+
+/// How [`pack_matching_groups`] decides another top-level group is a copy of
+/// the one being packed.
+pub(crate) enum GroupMatch {
+    /// The same subtree: every descendant's identity and local placement,
+    /// to the bottom.
+    Structural,
+    /// Name starting with the given prefix.
+    Prefix(String),
+}
+
+/// How far two placements may differ and still count as the same.
+///
+/// Relative to the distance involved, so it means the same thing for a
+/// child sitting 0.2m from its parent as for a group standing 5km out:
+/// an absolute millimetre is below float precision at that range, and
+/// every copy of a distant group would read as different.
+const MATCH_TOLERANCE: f32 = 1e-3;
+
+/// Whether two placements are the same within [`MATCH_TOLERANCE`].
+fn placements_match(a: &Transform, b: &Transform) -> bool {
+    let scaled = |a: Vec3, b: Vec3| {
+        let span = a.abs().max(b.abs()).max_element().max(1.0);
+        a.abs_diff_eq(b, MATCH_TOLERANCE * span)
+    };
+    scaled(a.translation, b.translation)
+        && a.rotation.abs_diff_eq(b.rotation, MATCH_TOLERANCE)
+        && scaled(a.scale, b.scale)
+}
+
+/// One node of a group's shape: what the entity is, where it sits in its
+/// parent, and the same for its own children in order.
+struct SubtreeSignature {
+    /// The glTF file the entity draws, or the sorted type paths of the
+    /// components it carries when it draws none. A group of two lights
+    /// and a group of two empties both have no source; without the
+    /// component set standing in for one they would read as the same
+    /// shape.
+    identity: Vec<String>,
+    at: Transform,
+    children: Vec<SubtreeSignature>,
+}
+
+/// A group's shape, to the bottom of its subtree. Editor-internal
+/// children are left out, as they are when the group is packaged.
+///
+/// The whole subtree, because [`pack_matching_groups`] deletes what it
+/// matches: two groups that agree on their direct children and differ
+/// below are not copies, and calling them copies drops the chimney off
+/// one of the roofs.
+fn group_signature(world: &World, root: Entity) -> Vec<SubtreeSignature> {
+    let Some(children) = world.get::<Children>(root) else {
+        return Vec::new();
+    };
+    let mut signature = Vec::new();
+    for child in children.iter() {
+        if world.get::<crate::EditorHidden>(child).is_some()
+            || world.get::<crate::NonSerializable>(child).is_some()
+        {
+            continue;
+        }
+        signature.push(SubtreeSignature {
+            identity: node_identity(world, child),
+            at: world.get::<Transform>(child).copied().unwrap_or_default(),
+            children: group_signature(world, child),
+        });
+    }
+    signature
+}
+
+/// What an entity is, for matching: its glTF source, or the component
+/// types it carries when it has none.
+fn node_identity(world: &World, entity: Entity) -> Vec<String> {
+    if let Some(source) = world.get::<crate::entity_ops::GltfSource>(entity) {
+        return vec![source.path.clone()];
+    }
+    let Ok(components) = world.inspect_entity(entity) else {
+        return Vec::new();
+    };
+    let mut types: Vec<String> = components
+        .filter(|info| info.type_id().is_some())
+        .map(|info| info.name().to_string())
+        .collect();
+    types.sort();
+    types
+}
+
+fn signatures_match(a: &[SubtreeSignature], b: &[SubtreeSignature]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(a, b)| {
+            a.identity == b.identity
+                && placements_match(&a.at, &b.at)
+                && signatures_match(&a.children, &b.children)
+        })
+}
+
+/// The scene's top-level entities, in document order.
+fn top_level_entities(world: &World) -> Vec<Entity> {
+    let live = world.resource::<SceneBsnAst>();
+    live.roots
+        .iter()
+        .filter_map(|&node| live.ecs_for_ast(node))
+        .collect()
+}
+
+/// The group an operator acts on: its `entity` parameter, or the primary
+/// selection when that was left out.
+fn target_group(world: &World, entity: Option<Entity>, op_id: &str) -> Option<Entity> {
+    let target = entity.or_else(|| world.resource::<crate::selection::Selection>().primary());
+    if target.is_none() {
+        warn!("{op_id}: no `entity` param and nothing is selected");
+    }
+    target
+}
+
+/// Resolve a caller-supplied prefab path against the open project's assets
+/// directory, refusing one that would land outside it.
+///
+/// `path` reaches these operators from a remote caller, and `prefab.pack`
+/// writes where it points, so the confinement
+/// [`crate::project::path_within`] applies is what makes "relative to the
+/// project's assets directory" true rather than only documented. A path
+/// that already names `assets/` is taken from the project root, so both
+/// spellings reach the same file.
+fn resolve_asset_path(world: &mut World, path: &str, op_id: &str) -> Option<PathBuf> {
+    let Some(root) = world
+        .get_resource::<crate::project::ProjectRoot>()
+        .map(|project| project.root.clone())
+    else {
+        warn_caller(world, format!("{op_id}: no project is open"));
+        return None;
+    };
+    let path = Path::new(path);
+    let candidate = if path.starts_with("assets") {
+        path.to_path_buf()
+    } else {
+        Path::new("assets").join(path)
+    };
+    match crate::project::path_within(&root, &candidate) {
+        Ok(resolved) => Some(resolved),
+        Err(refusal) => {
+            warn_caller(world, format!("{op_id}: {refusal}"));
+            None
         }
     }
+}
 
-    // spawn_instance adds the instance node and triggers a reload that
-    // materializes the inherited children from the prefab we just wrote.
-    spawn_instance(world, &target_path, centroid);
+/// Whether `target_path` is free to write. A prefab file is a document other
+/// scenes may already instance, so replacing one is asked for rather than
+/// assumed.
+fn target_is_writable(world: &mut World, target_path: &Path, overwrite: bool, op_id: &str) -> bool {
+    let path = prefab_bsn_path(target_path);
+    if overwrite || !path.exists() {
+        return true;
+    }
+    warn_caller(
+        world,
+        format!(
+            "{op_id}: {} already exists; pass overwrite=true to replace it",
+            path.display()
+        ),
+    );
+    false
+}
+
+/// Drop any cached copy of `target_path`, so what gets instanced is the file
+/// just written rather than the document an earlier pack left behind.
+fn forget_cached_prefab(world: &mut World, target_path: &Path) {
+    let path = prefab_bsn_path(target_path);
+    world.resource_mut::<PrefabAstCache>().invalidate(&path);
+}
+
+/// Drop `root` and its descendants from the live document. The ECS entities go
+/// with the respawn that follows.
+fn remove_subtree_from_document(world: &mut World, root: Entity) {
+    let mut entities = vec![root];
+    collect_descendants(world, root, &mut entities);
+    let mut live = world.resource_mut::<SceneBsnAst>();
+    for entity in entities {
+        live.remove_entity_node(entity);
+    }
+}
+
+/// Record the last `count` document roots as entities this call added.
+///
+/// An instance goes into the document as a node and the scene is rebuilt
+/// from it, which mints a fresh id for every entity in the document. So
+/// the id worth reporting is the one the rebuild left standing, read back
+/// after it from the position the node went in at, rather than the one
+/// that existed while the node was being written.
+fn record_spawned_roots(world: &mut World, count: usize) {
+    let added: Vec<Entity> = {
+        let live = world.resource::<SceneBsnAst>();
+        live.roots
+            .iter()
+            .rev()
+            .take(count)
+            .filter_map(|&node| live.ecs_for_ast(node))
+            .collect()
+    };
+    for entity in added.into_iter().rev() {
+        crate::commands::SpawnedEntities::record(world, entity);
+    }
+}
+
+/// Add an instance root for `source` carrying `transform`, without the respawn
+/// [`spawn_instance`] does; a caller adding several reloads once for all of
+/// them.
+fn add_instance_node(world: &mut World, source: &Path, transform: Transform) {
+    let patches = vec![
+        isa_patch(&source.to_string_lossy(), &[]),
+        peid_patch(0),
+        transform_patch(transform),
+    ];
+    let mut live = world.resource_mut::<SceneBsnAst>();
+    let node = live.create_entity_node(patches);
+    live.add_to_roots(node);
+}
+
+/// The scale an instance carries to stand at `target`'s size, given that
+/// the prefab already holds `packed`'s own scale.
+///
+/// `None` when the ratio is not the same on every axis. The instance
+/// applies its scale under its rotation, so an uneven ratio composed with
+/// a rotation is a shear, not the placement the group had, and
+/// [`pack_matching_groups`] leaves such a group alone rather than move it
+/// somewhere it never stood.
+fn instance_scale(packed: Vec3, target: Vec3) -> Option<Vec3> {
+    let ratio = |target: f32, packed: f32| {
+        if packed.abs() > f32::EPSILON {
+            target / packed
+        } else {
+            target
+        }
+    };
+    let scale = Vec3::new(
+        ratio(target.x, packed.x),
+        ratio(target.y, packed.y),
+        ratio(target.z, packed.z),
+    );
+    let even = (scale.max_element() - scale.min_element()).abs()
+        <= MATCH_TOLERANCE * scale.abs().max_element().max(1.0);
+    even.then_some(scale)
+}
+
+/// The transform an instance carries to stand where `target` stood, given that
+/// the prefab already holds `packed`'s own rotation and scale.
+fn instance_delta(packed: Transform, target: Transform) -> Option<Transform> {
+    Some(Transform {
+        translation: target.translation,
+        rotation: target.rotation * packed.rotation.inverse(),
+        scale: instance_scale(packed.scale, target.scale)?,
+    })
+}
+
+/// Pack `root` and its subtree into a prefab file, replacing it in the scene
+/// with an instance standing where the group stood.
+pub(crate) fn pack_group(
+    world: &mut World,
+    root: Entity,
+    target_path: &Path,
+    overwrite: bool,
+) -> bool {
+    if !target_is_writable(world, target_path, overwrite, "prefab.pack") {
+        return false;
+    }
+    forget_cached_prefab(world, target_path);
+    save_selection_as_new_prefab(world, &[root], target_path, overwrite);
+    true
+}
+
+/// Pack `root` as [`pack_group`] does, then replace every other top-level
+/// group `matcher` accepts with an instance of the same file, each keeping the
+/// transform its group had. Returns how many groups became instances, `root`
+/// included.
+pub(crate) fn pack_matching_groups(
+    world: &mut World,
+    root: Entity,
+    target_path: &Path,
+    matcher: &GroupMatch,
+    overwrite: bool,
+) -> Option<usize> {
+    let op = "prefab.pack_matching";
+    if !target_is_writable(world, target_path, overwrite, op) {
+        return None;
+    }
+    let packed = world.get::<Transform>(root).copied().unwrap_or_default();
+    let signature = group_signature(world, root);
+    let mut matched: Vec<(Entity, Transform)> = Vec::new();
+    for entity in top_level_entities(world) {
+        if entity == root {
+            continue;
+        }
+        let accepted = match matcher {
+            GroupMatch::Structural => signatures_match(&signature, &group_signature(world, entity)),
+            GroupMatch::Prefix(prefix) => world
+                .get::<Name>(entity)
+                .is_some_and(|name| name.as_str().starts_with(prefix.as_str())),
+        };
+        if !accepted {
+            continue;
+        }
+        let at = world.get::<Transform>(entity).copied().unwrap_or_default();
+        let Some(delta) = instance_delta(packed, at) else {
+            let name = world
+                .get::<Name>(entity)
+                .map_or_else(|| format!("{entity}"), |name| name.as_str().to_string());
+            warn_caller(
+                world,
+                format!("{op}: {name} is scaled unevenly against the packed group; left alone"),
+            );
+            continue;
+        };
+        matched.push((entity, delta));
+    }
+
+    forget_cached_prefab(world, target_path);
+    let written = write_prefab_from_roots(world, &[root], target_path, overwrite)?;
+    // The instances go in as document nodes rather than through
+    // `spawn_instance`, so the file has to be in the cache before the one
+    // respawn at the end resolves them.
+    crate::prefab::save_load::cache_prefab_tree(
+        &written.path,
+        &mut world.resource_mut::<PrefabAstCache>(),
+    );
+    // Nothing comes out of the document until the file it would inherit
+    // from is known to read back: the alternative is a scene with the
+    // group gone and no instance standing where it was.
+    if world
+        .resource::<PrefabAstCache>()
+        .get(&written.path)
+        .is_none()
+    {
+        warn_caller(
+            world,
+            format!("{op}: failed to read back {}", written.path.display()),
+        );
+        return None;
+    }
+
+    remove_packed_from_document(world, &written.entities);
+    add_instance_node(
+        world,
+        &written.path,
+        Transform::from_translation(written.centroid),
+    );
+    for (entity, delta) in &matched {
+        remove_subtree_from_document(world, *entity);
+        add_instance_node(world, &written.path, *delta);
+    }
+    crate::prefab::watcher::reload_all_instances(world);
+    record_spawned_roots(world, matched.len() + 1);
+    Some(matched.len() + 1)
 }
 
 /// Propagate path: snapshot the instance's current subtree from the live
@@ -470,7 +909,8 @@ fn propagate_instance_to_prefab(world: &mut World, instance_node: Entity, target
         }
     }
 
-    let Some(target_path) = write_prefab_doc(target_path, &prefab, "propagate_instance_to_prefab")
+    let Some(target_path) =
+        write_prefab_doc(target_path, &prefab, "propagate_instance_to_prefab", true)
     else {
         return;
     };
@@ -813,6 +1253,7 @@ pub fn spawn_instance(world: &mut World, prefab_path: &Path, world_pos: Vec3) {
     }
 
     crate::prefab::watcher::reload_all_instances(world);
+    record_spawned_roots(world, 1);
 }
 
 /// Whether instancing this source produces a UI scene root.
@@ -1174,7 +1615,7 @@ pub fn save_as_variant(world: &mut World, instance_root: Entity, target_path: &P
         variant.add_child_to_ast(variant_root, child);
     }
 
-    let Some(target_path) = write_prefab_doc(target_path, &variant, "save_as_variant") else {
+    let Some(target_path) = write_prefab_doc(target_path, &variant, "save_as_variant", true) else {
         return;
     };
 
@@ -1511,7 +1952,11 @@ pub fn prefab_open_source(
     description = "Drop a new instance of the given prefab into the active scene at a world position.",
     allows_undo = true,
     params(
-        path(String, doc = "Path to the prefab to instantiate."),
+        path(
+            String,
+            doc = "Prefab to instantiate. A relative path resolves under the \
+                   project's assets directory."
+        ),
         pos_x(f64, doc = "World-space X position."),
         pos_y(f64, doc = "World-space Y position."),
         pos_z(f64, doc = "World-space Z position."),
@@ -1536,7 +1981,114 @@ pub fn prefab_spawn_instance(
     };
     let pos = Vec3::new(x as f32, y as f32, z as f32);
     commands.queue(move |world: &mut World| {
-        spawn_instance(world, &PathBuf::from(path), pos);
+        let Some(path) = resolve_asset_path(world, &path, op) else {
+            return;
+        };
+        spawn_instance(world, &path, pos);
+    });
+    OperatorResult::Finished
+}
+
+/// Turn a group into a prefab file and an instance of it.
+#[operator(
+    id = "prefab.pack",
+    label = "Pack Group as Prefab",
+    description = "Write a group out as a prefab file and replace it with an instance of that file.",
+    allows_undo = true,
+    params(
+        entity(Entity, doc = "Group to pack. Defaults to the selection."),
+        path(
+            String,
+            doc = "Where to write the prefab, relative to the project's assets directory."
+        ),
+        overwrite(
+            bool,
+            doc = "Replace an existing file at that path. Refused without it."
+        ),
+    )
+)]
+pub fn prefab_pack(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    let op = "prefab.pack";
+    let Some(path) = require_str(&params, "path", op) else {
+        return OperatorResult::Cancelled;
+    };
+    let entity = params.as_entity("entity");
+    let overwrite = params.as_bool("overwrite").unwrap_or(false);
+    commands.queue(move |world: &mut World| {
+        let Some(root) = target_group(world, entity, op) else {
+            return;
+        };
+        let Some(target) = resolve_asset_path(world, &path, op) else {
+            return;
+        };
+        pack_group(world, root, &target, overwrite);
+    });
+    OperatorResult::Finished
+}
+
+/// Pack one group and replace its copies elsewhere in the scene with
+/// instances of the same file.
+#[operator(
+    id = "prefab.pack_matching",
+    label = "Pack Matching Groups as Prefab",
+    description = "Pack a group as a prefab file, then replace every other top-level group that \
+                   matches it with an instance of that file.",
+    allows_undo = true,
+    params(
+        entity(Entity, doc = "Group to pack. Defaults to the selection."),
+        path(
+            String,
+            doc = "Where to write the prefab, relative to the project's assets directory."
+        ),
+        r#match(
+            String,
+            doc = "`structural` (the default) compares each group's child glTF sources and local \
+                   transforms; `prefix` compares names against `prefix`."
+        ),
+        prefix(String, doc = "Name prefix, for `match=prefix`."),
+        overwrite(
+            bool,
+            doc = "Replace an existing file at that path. Refused without it."
+        ),
+    )
+)]
+pub fn prefab_pack_matching(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let op = "prefab.pack_matching";
+    let Some(path) = require_str(&params, "path", op) else {
+        return OperatorResult::Cancelled;
+    };
+    let entity = params.as_entity("entity");
+    let overwrite = params.as_bool("overwrite").unwrap_or(false);
+    let matcher = match params.as_str("match").unwrap_or("structural") {
+        "prefix" => match params.as_str("prefix").filter(|prefix| !prefix.is_empty()) {
+            Some(prefix) => GroupMatch::Prefix(prefix.to_string()),
+            None => {
+                warn!("{op}: match=prefix needs a `prefix` param");
+                return OperatorResult::Cancelled;
+            }
+        },
+        "structural" => GroupMatch::Structural,
+        other => {
+            warn!("{op}: unknown match `{other}`; expected `structural` or `prefix`");
+            return OperatorResult::Cancelled;
+        }
+    };
+    commands.queue(move |world: &mut World| {
+        let Some(root) = target_group(world, entity, op) else {
+            return;
+        };
+        let Some(target) = resolve_asset_path(world, &path, op) else {
+            return;
+        };
+        if let Some(count) = pack_matching_groups(world, root, &target, &matcher, overwrite) {
+            report_to_caller(
+                world,
+                format!("{op}: replaced {count} groups with instances"),
+            );
+        }
     });
     OperatorResult::Finished
 }

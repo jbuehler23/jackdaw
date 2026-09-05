@@ -183,6 +183,7 @@ fn confirm_measure_available(
     description = "First click sets the start point, second click finishes",
     is_available = confirm_measure_available,
     allows_undo = false,
+    remote_hidden = "confirms a measurement the pointer is taking",
 )]
 fn confirm_measure_distance(
     _: In<OperatorParameters>,

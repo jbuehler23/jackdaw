@@ -71,7 +71,23 @@ pub struct CommandHistory {
     pub redo_stack: Vec<Box<dyn EditorCommand>>,
     /// Ceiling on what both stacks hold, in bytes. Zero disables the cap.
     pub budget_bytes: usize,
+    /// How many entries an open span has to account for.
+    ///
+    /// A caller that groups a run of edits has to know how many entries
+    /// the run produced. The stack's length cannot say: `trim_to_budget`
+    /// removes from the *front* while the run is going, so a length
+    /// recorded before it would name a position that has since slid
+    /// under someone else's older edit. Closing a span rewinds this to
+    /// what the span actually left on the stack -- one entry, or none --
+    /// so an enclosing span counts an inner span once rather than once
+    /// per entry the inner span collapsed.
+    pushes: u64,
 }
+
+/// Where the undo stack stood when a span was opened. Hand it back to
+/// [`CommandHistory::end_span`] to collapse everything pushed since.
+#[derive(Debug, Clone, Copy)]
+pub struct HistorySpan(u64);
 
 impl Default for CommandHistory {
     fn default() -> Self {
@@ -79,6 +95,7 @@ impl Default for CommandHistory {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             budget_bytes: HISTORY_BUDGET_BYTES,
+            pushes: 0,
         }
     }
 }
@@ -87,8 +104,40 @@ impl CommandHistory {
     pub fn execute(&mut self, mut command: Box<dyn EditorCommand>, world: &mut World) {
         command.execute(world);
         self.undo_stack.push(command);
+        self.pushes += 1;
         self.redo_stack.clear();
         self.trim_to_budget();
+    }
+
+    /// Start collecting entries for one undo entry. Spans nest: an inner
+    /// span counts against its enclosing one as the single entry it
+    /// leaves behind.
+    pub fn begin_span(&mut self) -> HistorySpan {
+        HistorySpan(self.pushes)
+    }
+
+    /// Collapse everything pushed since `span` into one entry labelled
+    /// `label`, and count the span as that one entry for any enclosing
+    /// span.
+    pub fn end_span(&mut self, span: HistorySpan, label: impl Into<String>) {
+        let produced = self.pushes.saturating_sub(span.0) as usize;
+        let take = produced.min(self.undo_stack.len());
+        let at = self.undo_stack.len() - take;
+        let mut pushed = self.undo_stack.split_off(at);
+        match pushed.len() {
+            0 => {
+                self.pushes = span.0;
+                return;
+            }
+            // One entry is already one entry; wrapping it would only bury
+            // the description the user reads in the undo menu.
+            1 => self.undo_stack.push(pushed.remove(0)),
+            _ => self.push_executed(Box::new(CommandGroup {
+                label: label.into(),
+                commands: pushed,
+            })),
+        }
+        self.pushes = span.0 + 1;
     }
 
     /// Bytes both stacks currently hold.
@@ -132,6 +181,7 @@ impl CommandHistory {
 
     pub fn push_executed(&mut self, command: Box<dyn EditorCommand>) {
         self.undo_stack.push(command);
+        self.pushes += 1;
         self.redo_stack.clear();
         self.trim_to_budget();
     }
@@ -280,5 +330,54 @@ mod tests {
             history.push_executed(Box::new(Weighty(1_000)));
         }
         assert_eq!(history.undo_stack.len(), 20);
+    }
+
+    /// An inner span costs its enclosing span one entry, not the several
+    /// it collapsed, so a batch of calls groups the batch and leaves the
+    /// edits made before it alone.
+    #[test]
+    fn a_span_around_inner_spans_groups_only_their_entries() {
+        let mut world = World::new();
+        let mut history = CommandHistory {
+            budget_bytes: 0,
+            ..default()
+        };
+        for _ in 0..20 {
+            history.push_executed(Box::new(Weighty(0)));
+        }
+
+        let batch = history.begin_span();
+        for _ in 0..5 {
+            let call = history.begin_span();
+            history.push_executed(Box::new(Weighty(0)));
+            history.push_executed(Box::new(Weighty(0)));
+            history.end_span(call, "call");
+        }
+        history.end_span(batch, "batch");
+
+        assert_eq!(history.undo_stack.len(), 21);
+        assert_eq!(history.undo_stack[20].description(), "batch");
+        history.undo(&mut world);
+        assert_eq!(history.undo_stack.len(), 20);
+    }
+
+    /// A span that pushed nothing leaves the stack and the enclosing
+    /// span's count untouched.
+    #[test]
+    fn an_empty_span_costs_its_enclosing_span_nothing() {
+        let mut history = CommandHistory {
+            budget_bytes: 0,
+            ..default()
+        };
+        history.push_executed(Box::new(Weighty(0)));
+
+        let outer = history.begin_span();
+        let inner = history.begin_span();
+        history.end_span(inner, "inner");
+        history.push_executed(Box::new(Weighty(0)));
+        history.end_span(outer, "outer");
+
+        assert_eq!(history.undo_stack.len(), 2);
+        assert_eq!(history.undo_stack[0].description(), "weighty");
     }
 }

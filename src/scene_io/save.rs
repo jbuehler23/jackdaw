@@ -438,7 +438,7 @@ pub(crate) fn export_terrain_sidecars(
     }
 
     let store = world.resource::<crate::terrain::TerrainDataStore>();
-    let mut writes: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    let mut writes: Vec<(String, PathBuf, Vec<u8>)> = Vec::new();
     for data_path in paths {
         let path = match sidecar::resolve_path(&scene_dir, &data_path) {
             Ok(path) => path,
@@ -467,10 +467,10 @@ pub(crate) fn export_terrain_sidecars(
                 "terrain sidecar {data_path:?} cannot be written: {err}"
             ))
         })?;
-        writes.push((path, bytes));
+        writes.push((data_path, path, bytes));
     }
 
-    for (path, bytes) in writes {
+    for (data_path, path, bytes) in writes {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|err| {
                 BevyError::from(format!(
@@ -487,6 +487,17 @@ pub(crate) fn export_terrain_sidecars(
             ))
         })?;
         info!("Terrain data written to {}", path.display());
+        // The store has now seen this file's newest bytes: they are the ones
+        // it just wrote. Without noting the write the mtime the store
+        // remembers is the one it loaded from, and every later activation of
+        // this clean tab judges the sidecar changed underneath it and
+        // re-imports the whole terrain.
+        let mtime = std::fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .ok();
+        world
+            .resource_mut::<crate::terrain::TerrainDataStore>()
+            .note_read(&data_path, mtime);
     }
     Ok(())
 }
@@ -1353,6 +1364,47 @@ mod tests {
         );
     }
 
+    /// A tab that was just saved is not stale: the newest bytes on disk are
+    /// the ones the save wrote. Without noting the write, every later
+    /// activation of the clean tab re-imports the whole terrain and re-uploads
+    /// its textures.
+    #[test]
+    fn saving_a_sidecar_leaves_the_store_current_with_the_file() {
+        let mut world = build_live_save_world();
+        let tmp = tempfile::tempdir().expect("temp directory");
+        let scene_path = tmp.path().join("zone.bsn");
+
+        let data_path = "zone.terrain-0.jdterrain";
+        let mut store = crate::terrain::TerrainDataStore::default();
+        store.insert(
+            data_path.to_string(),
+            jackdaw_terrain::RegionTerrainData::from_legacy_v1(&jackdaw_terrain::TerrainData {
+                resolution: 2,
+                heights: vec![0.0; 4],
+                channels: vec![],
+            })
+            .expect("a power-of-two resolution migrates"),
+        );
+        world.insert_resource(store);
+        world.spawn(jackdaw_scene_types::Terrain {
+            resolution: 2,
+            data_path: data_path.to_string(),
+            ..default()
+        });
+
+        let scene_path_str = scene_path.to_string_lossy().into_owned();
+        export_terrain_sidecars(&mut world, &scene_path_str).expect("the sidecar writes");
+
+        let written = tmp.path().join(data_path);
+        assert!(written.exists(), "the sidecar landed");
+        assert!(
+            !world
+                .resource::<crate::terrain::TerrainDataStore>()
+                .sidecar_is_stale(data_path, &written),
+            "the file the save just wrote must not read as an outside edit"
+        );
+    }
+
     /// `save_scene_with_outcome` distinguishes a failure from an opened dialog, so a caller
     /// with work to defer (see `scene_io::load::on_new_scene_save`) does not give up on a
     /// save still in flight.
@@ -1707,7 +1759,7 @@ mod terrain_sidecar_tests {
         let sidecar_path = tmp.join("zone.terrain-0.jdterrain");
 
         let mut original = sidecar::save(&document(&sculpted())).expect("encodes");
-        original[8..10].copy_from_slice(&(sidecar::VERSION_5 + 1).to_le_bytes());
+        original[8..10].copy_from_slice(&(sidecar::VERSION_7 + 1).to_le_bytes());
         std::fs::write(&sidecar_path, &original).expect("write sidecar");
 
         let mut world = World::new();
@@ -1940,7 +1992,7 @@ mod terrain_sidecar_tests {
         let rewritten = std::fs::read(&sidecar_path).expect("read back");
         assert_eq!(
             u16::from_le_bytes([rewritten[8], rewritten[9]]),
-            sidecar::VERSION_5,
+            sidecar::VERSION_7,
         );
         // The load settled this terrain onto the geometry its declared rectangle drew with
         // (four vertices across the default 100 metres, cornered at -size/2) and the rewrite

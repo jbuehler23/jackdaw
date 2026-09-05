@@ -226,6 +226,7 @@ fn is_drawing_cut(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushState>) 
     description = "Flip between adding and cutting while drawing.",
     is_available = is_drawing,
     allows_undo = false,
+    remote_hidden = "continues the draw-brush gesture, which only the pointer starts",
 )]
 pub(crate) fn draw_brush_toggle_mode(
     _: In<OperatorParameters>,
@@ -246,6 +247,7 @@ pub(crate) fn draw_brush_toggle_mode(
     description = "Close the polygon and start extruding it.",
     is_available = is_drawing_polygon,
     allows_undo = false,
+    remote_hidden = "continues the draw-brush gesture, which only the pointer starts",
 )]
 pub(crate) fn draw_brush_commit_polygon(
     _: In<OperatorParameters>,
@@ -280,6 +282,7 @@ pub(crate) fn draw_brush_commit_polygon(
     description = "Take back the last polygon point you placed.",
     is_available = is_drawing_polygon,
     allows_undo = false,
+    remote_hidden = "continues the draw-brush gesture, which only the pointer starts",
 )]
 pub(crate) fn draw_brush_remove_last_vertex(
     _: In<OperatorParameters>,
@@ -301,6 +304,7 @@ pub(crate) fn draw_brush_remove_last_vertex(
     description = "Bail out of the current cut.",
     is_available = is_drawing_cut,
     allows_undo = false,
+    remote_hidden = "continues the draw-brush gesture, which only the pointer starts",
 )]
 pub(crate) fn draw_brush_cancel_cut(
     _: In<OperatorParameters>,

@@ -302,15 +302,26 @@ pub fn activate_tab(world: &mut World, target: usize) {
     // Hydrate any terrain sidecar the store has not seen yet. A tab opened
     // by `scene_open_system` pushes a parsed document straight onto the
     // tab strip and never goes through `finish_load_scene`, so this is the
-    // only place its bulk data gets read. `FillMissing` is deliberate: a
-    // swap back to a tab the user has been sculpting must keep the unsaved
-    // edits the store holds rather than re-reading the older file.
+    // only place its bulk data gets read.
+    //
+    // Which mode depends on what the tab is holding. A tab with unsaved
+    // edits keeps them: re-reading would throw away sculpting the file
+    // does not have. A clean tab has nothing to lose and takes whatever
+    // the file says, so a sidecar rewritten while the tab was in the
+    // background shows on the way back to it rather than only after a
+    // restart.
     if let Some(path) = tab_path.as_ref() {
-        crate::scene_io::import_terrain_sidecars(
-            world,
-            &path.to_string_lossy(),
-            crate::scene_io::SidecarImport::FillMissing,
-        );
+        let mode = if world
+            .resource::<Scenes>()
+            .tabs
+            .get(target)
+            .is_some_and(|tab| tab.dirty)
+        {
+            crate::scene_io::SidecarImport::FillMissing
+        } else {
+            crate::scene_io::SidecarImport::RefreshChanged
+        };
+        crate::scene_io::import_terrain_sidecars(world, &path.to_string_lossy(), mode);
         crate::terrain::navmesh_bake::import_beside_scene(world, &path.to_string_lossy());
     }
 
