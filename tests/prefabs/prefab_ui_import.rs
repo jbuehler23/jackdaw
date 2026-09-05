@@ -1,16 +1,9 @@
-//! Importing a UI scene into a world scene as a prefab instance.
+//! Importing a UI scene into a world scene as a prefab instance: the existing
+//! `IsA` machinery pointed at a `.bsn` whose root carries `UiSceneRoot`.
 //!
-//! A UI scene is an ordinary `.bsn` whose root carries `UiSceneRoot`, and
-//! importing one is the existing `IsA` machinery pointed at that file: the
-//! instance root is a member of the world
-//! document, the widget tree under it is inherited rather than authored,
-//! and the file on disk keeps a reference instead of a copy.
-//!
-//! The routing assertions are the reason this suite exists apart from
-//! `prefab_lifecycle`. An imported root carries `UiSceneRoot` with no
-//! `ChildOf`, which is exactly the shape every 2D-viewport query matches,
-//! so nothing but a test keeps the world scene's overlay out of the panel
-//! that edits UI scenes.
+//! An imported root carries `UiSceneRoot` with no `ChildOf`, the shape every
+//! 2D-viewport query matches, so the routing assertions are what keep the world
+//! scene's overlay out of the panel that edits UI scenes.
 
 use crate::util;
 
@@ -161,12 +154,10 @@ fn an_imported_ui_root_is_not_given_a_placement_transform() {
 
 #[test]
 fn the_imported_widget_tree_is_inherited_not_authored() {
-    // "Read-only" is the existing prefab affordance rather than a separate
-    // refusal: an inherited node is one carrying `PrefabEntityId` without
-    // `IsA`, which is what mutes its outliner row and puts revert dots on
-    // its fields. The live document does hold expanded nodes for them, which
-    // is what `resolve_scene` is for, so the invariant to pin is inheritance;
-    // the save test pins that they never reach disk.
+    // "Read-only" is the existing prefab affordance: an inherited node carries
+    // `PrefabEntityId` without `IsA`, which mutes its outliner row. The live
+    // document does hold expanded nodes for them, so the invariant to pin here
+    // is inheritance; the save test pins that they never reach disk.
     let tmp = tempfile::tempdir().unwrap();
     let mut app = make_app();
     import_ui_scene(&mut app, tmp.path());
@@ -211,9 +202,7 @@ fn saving_the_world_scene_emits_a_reference_not_the_widget_tree() {
         .first()
         .copied()
         .expect("the instance is on disk as an IsA reference");
-    // Named relative to the scene that references it: the two files sit in one
-    // directory, so the reference is a bare file name. An absolute authoring
-    // path is a path only the authoring machine has, and a scene saved with one
+    // Named relative to the scene that references it. An absolute authoring path
     // resolves nowhere in a teammate's checkout or in the shipped game.
     let expected = ui_path.file_name().expect("the source has a file name");
     assert_eq!(
@@ -227,10 +216,8 @@ fn saving_the_world_scene_emits_a_reference_not_the_widget_tree() {
         !written.contains("Greeting"),
         "the inherited widget tree is not flattened into the world scene; wrote:\n{written}"
     );
-    // A leaked UiSceneRoot here would be read back by `declares_ui_scene_root`
-    // on the next open, which classifies the whole level as a UI scene and
-    // brings the 2D panel forward over it. The component is inherited from the
-    // source at resolve time and has no business in the world scene's own text.
+    // A leaked UiSceneRoot would be read back by `declares_ui_scene_root` on the
+    // next open, classifying the whole level as a UI scene.
     assert!(
         !doc.component_type_paths(instance)
             .iter()
@@ -401,10 +388,8 @@ fn an_imported_instance_parks_when_there_is_no_world_view() {
 #[test]
 fn a_ui_scene_variant_is_edited_on_the_stage_not_routed_to_the_world_view() {
     // `save_as_variant` stamps the variant root `Prefab + PrefabEntityId(0) +
-    // IsA(original)` and copies the resolved component patches, so a variant
-    // saved off an imported UI overlay is a UI scene file whose root carries
-    // both `UiSceneRoot` and `IsA`. Opening it is editing it, so `IsA` alone
-    // cannot be the discriminator: `Prefab` says the document owns this root.
+    // IsA(original)`, so a variant off an imported UI overlay carries both
+    // `UiSceneRoot` and `IsA`: `Prefab` is what says the document owns the root.
     let mut app = make_app();
     app.add_systems(Update, jackdaw::viewport_2d::route_ui_roots_to_cameras);
 
@@ -488,16 +473,15 @@ fn click_row(app: &mut App, source: Entity) {
     app.update();
 }
 
-/// Double-clicking an instance row is the only gesture that opens an
-/// imported UI scene for editing, and the order inside the observer is what
-/// makes it usable: the pair is resolved BEFORE the ordinary click handling
-/// below it, so the second click opens the source instead of re-selecting
-/// the row. A consumed pair resets, so a third click is an ordinary click
-/// again, which keeps the row selected and opens nothing.
+/// Double-clicking an instance row is the only gesture that opens an imported UI
+/// scene for editing. The pair is resolved before the ordinary click handling, so
+/// the second click opens the source rather than re-selecting the row, and a
+/// consumed pair resets.
 #[test]
 fn a_double_click_on_an_instance_row_opens_its_source_and_keeps_the_row_selected() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = util::editor_test_app();
+    util::fixed_frame_clock(&mut app);
     let ui_path = import_ui_scene(&mut app, tmp.path());
     push_tab(&mut app, &ui_path);
     app.update();
