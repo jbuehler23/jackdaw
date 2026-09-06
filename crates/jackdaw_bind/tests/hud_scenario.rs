@@ -111,6 +111,7 @@ fn hud_binds_fill_text_veil_and_button() {
             Bindings(vec![Binding::Action {
                 event: "OpenSettingsMenu".into(),
                 fields: vec![],
+                literals: Vec::new(),
             }]),
         ))
         .id();

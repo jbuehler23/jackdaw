@@ -146,6 +146,14 @@ pub enum Binding {
         /// Which path fills which field of the event. Fields left out take
         /// the event's own default.
         fields: Vec<(String, BindPath)>,
+        /// Constants the binding carries, as (field name, the value written
+        /// out). Each is read as the type the event declares for the field it
+        /// fills; a field `fields` also names takes the value read from game
+        /// state instead.
+        // Documents written before literals existed leave this out, so it
+        // takes its default rather than costing them the whole binding.
+        #[reflect(default)]
+        literals: Vec<(String, String)>,
     },
 }
 

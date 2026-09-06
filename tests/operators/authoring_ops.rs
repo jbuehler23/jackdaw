@@ -1052,7 +1052,7 @@ fn every_binding_shape_the_card_offers_is_reachable_from_a_clause() {
     run_finished(
         &mut app,
         "binding.add entity=Button kind=action event=operators::authoring_ops::Hit \
-         map=amount:operators::authoring_ops::AuthoringHealth.current",
+         map=amount:operators::authoring_ops::AuthoringHealth.current literals=slot=2",
     );
 
     assert_eq!(
@@ -1090,6 +1090,7 @@ fn every_binding_shape_the_card_offers_is_reachable_from_a_clause() {
                     "amount".to_string(),
                     BindPath::new("operators::authoring_ops::AuthoringHealth.current"),
                 )],
+                literals: vec![("slot".to_string(), "2".to_string())],
             },
         ],
         "a clause authored a shape the card would not have"

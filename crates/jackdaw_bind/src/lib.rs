@@ -58,8 +58,11 @@
 //!
 //! # What an action binding can send
 //!
-//! An `Action` binding fills the event's fields from the paths it names. An
-//! `EntityEvent`'s target is the exception: it takes the widget's
+//! An `Action` binding fills the event's fields from the paths it names, and
+//! from the constants it carries: each `literals` entry
+//! names a field and the value it takes, read as the type that field is
+//! declared with. A field named on both sides takes the value read from game
+//! state. An `EntityEvent`'s target is the exception: it takes the widget's
 //! [`BindContext`], and only when the field is named `entity`. A
 //! `#[event_target]` field of another name leaves nothing in the type registry
 //! for reflection to find and is refused with

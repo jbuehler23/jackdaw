@@ -39,6 +39,7 @@ fn authored_value() -> Bindings {
         Binding::Action {
             event: "game::hud::RetryPressed".to_string(),
             fields: vec![("slot".to_string(), BindPath::new("game::hud::Save.slot"))],
+            literals: Vec::new(),
         },
     ])
 }
@@ -95,5 +96,28 @@ fn saving_what_loaded_reproduces_the_document() {
         serialize_to_bsn(&reloaded),
         saved,
         "and saving it again is a fixpoint",
+    );
+}
+
+/// The document as it was written before an action could carry constants. The
+/// field it leaves out is one the value takes a default for, so the whole
+/// binding still arrives.
+const BEFORE_LITERALS: &str = r#"#Bar
+jackdaw_bind::types::Bindings([
+    jackdaw_bind::types::Binding::Action { event: "game::hud::RetryPressed", fields: [["slot", jackdaw_bind::types::BindPath { raw: "game::hud::Save.slot" }]] },
+])
+"#;
+
+#[test]
+fn an_action_saved_without_literals_still_loads() {
+    let mut world = load(BEFORE_LITERALS);
+    assert_eq!(
+        bindings_of(&mut world, "Bar"),
+        Bindings(vec![Binding::Action {
+            event: "game::hud::RetryPressed".to_string(),
+            fields: vec![("slot".to_string(), BindPath::new("game::hud::Save.slot"))],
+            literals: Vec::new(),
+        }]),
+        "an older document keeps its mapping and takes no constants",
     );
 }

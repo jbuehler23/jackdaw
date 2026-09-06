@@ -521,8 +521,12 @@ fn resolve_one(
         Binding::Value { .. } => ResolvedTarget::Value {
             text: resolve_text_target(world),
         },
-        Binding::Action { event, fields } => {
-            crate::actions::check_event(world, event, fields)?;
+        Binding::Action {
+            event,
+            fields,
+            literals,
+        } => {
+            crate::actions::check_event(world, event, fields, literals)?;
             ResolvedTarget::Action
         }
     };
