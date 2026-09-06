@@ -169,7 +169,12 @@ impl Plugin for AnimationRuntimePlugin {
                 report_finished_states,
             )
                 .chain()
-                .in_set(AnimationSetSystems),
+                .in_set(AnimationSetSystems)
+                .run_if(
+                    resource_exists::<AssetServer>
+                        .and_then(resource_exists::<Assets<Gltf>>)
+                        .and_then(resource_exists::<Assets<AnimationGraph>>),
+                ),
         );
     }
 }
