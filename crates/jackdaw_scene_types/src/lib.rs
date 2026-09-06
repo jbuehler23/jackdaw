@@ -29,8 +29,9 @@ pub use mesh_rebuild::evaluate_brush_geometry;
 pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
 pub use types::{
     Brush, BrushFaceData, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh, GltfSource,
-    PrefabBaseline, PropertyValue, SceneRootTag, Terrain, TerrainChannel, TerrainChannelElement,
-    TerrainNavmesh, TerrainPaletteEntry, TerrainQuantization,
+    NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude, PrefabBaseline, PropertyValue, ScatterGroup,
+    ScatterInstance, SceneRootTag, Terrain, TerrainChannel, TerrainChannelElement, TerrainNavmesh,
+    TerrainPaletteEntry, TerrainQuantization,
 };
 
 use bevy::prelude::*;
@@ -79,12 +80,19 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<TerrainChannel>()
             .register_type::<TerrainChannelElement>()
             .register_type::<TerrainNavmesh>()
+            .register_type::<NavmeshExclude>()
+            .register_type::<ScatterGroup>()
+            .register_type::<ScatterInstance>()
             .register_type::<TerrainPaletteEntry>()
             .register_type::<TerrainQuantization>()
             .register_type::<MeshMirror>()
             .register_type::<ModifierStack>()
             .register_type::<ModifierEntry>()
-            .register_type::<Modifier>();
+            .register_type::<Modifier>()
+            .register_type::<UiSceneRoot>()
+            .register_type::<Scene2dRoot>()
+            .register_type::<CanvasGuides>()
+            .register_type::<Locked>();
 
         #[cfg(feature = "render")]
         {
@@ -112,6 +120,77 @@ impl Plugin for SceneTypesPlugin {
         }
     }
 }
+
+/// Root of an authored UI scene. The 2D UI viewport keys on this
+/// component; `reference_size` is the design resolution the authored
+/// layout is measured against.
+#[derive(Component, Clone, Copy, Debug, Reflect)]
+#[reflect(Component, Default)]
+pub struct UiSceneRoot {
+    pub reference_size: UVec2,
+}
+
+impl Default for UiSceneRoot {
+    fn default() -> Self {
+        Self {
+            reference_size: UVec2::new(1280, 720),
+        }
+    }
+}
+
+/// Root of an authored 2D world scene.
+///
+/// A 2D scene has no seeded contents of its own -- sprites are the author's
+/// to add -- so this marker is what a saved document carries to say which
+/// kind it is, the way [`UiSceneRoot`] does for a UI scene. Reopening a
+/// document that declares it recognises the scene as 2D again.
+#[derive(Component, Clone, Copy, Debug, Default, Reflect)]
+#[reflect(Component, Default)]
+pub struct Scene2dRoot;
+
+/// Guide lines an author pulled off the 2D canvas's rulers, on the root
+/// of an authored UI scene.
+///
+/// Positions are authored pixels from the canvas's top-left corner: the
+/// same measure the scene's own layout is written in, so a guide stays
+/// where the author put it whatever the panel is doing.
+///
+/// Editor-only in effect -- a running game never reads it -- but it
+/// lives here rather than in the editor because the save filter drops
+/// every type path under `jackdaw::`, and a guide has to survive the
+/// document it was drawn on.
+///
+/// The component is absent rather than empty when a scene has no guides.
+/// A saved component equal to its default emits as a bare type path, so
+/// an empty one would sit in every document that ever had a guide.
+#[derive(Component, Clone, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component, Default, @EditorHidden)]
+pub struct CanvasGuides {
+    /// Lines across the canvas, each fixing a y coordinate.
+    pub horizontal: Vec<f32>,
+    /// Lines down the canvas, each fixing an x coordinate.
+    pub vertical: Vec<f32>,
+}
+
+/// A node the canvas will not pick up.
+///
+/// A locked node is still there, still drawn, still in the outliner and
+/// still selectable from it; what it stops doing is answering a press on
+/// the canvas. A background image or a frame that everything else is
+/// placed against is the case for it: without a lock, every click aimed at
+/// what sits on top of it lands on the thing underneath.
+///
+/// Editor-only in effect -- a running game never reads it -- but it lives
+/// here rather than in the editor because the save filter drops every type
+/// path under `jackdaw::`, and a lock has to survive the document it was
+/// set on.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+#[reflect(Component, Default, @EditorHidden)]
+pub struct Locked;
+
+/// Reflect type path for [`Locked`], for the paths that name a component
+/// by its path rather than by its type.
+pub const LOCKED_TYPE_PATH: &str = "jackdaw_scene_types::Locked";
 
 /// Picker grouping for a component. Attach via
 /// `#[reflect(@EditorCategory("Your Group"))]`.

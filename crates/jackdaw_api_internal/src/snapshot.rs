@@ -21,6 +21,17 @@ pub trait SceneSnapshot: Any + Send + Sync + 'static {
 
     fn clone_box(&self) -> Box<dyn SceneSnapshot>;
 
+    /// Heap bytes this snapshot holds, for the history's budget.
+    ///
+    /// A document snapshot is the whole scene as text, so two of them
+    /// ride on every undoable operator. On a large scene that is
+    /// megabytes per entry, and an entry that answers zero is an entry
+    /// the budget cannot trim: the history grows until the editor runs
+    /// out of memory. Implementors that hold a document must answer.
+    fn heap_bytes(&self) -> usize {
+        0
+    }
+
     /// Implementors should forward to `self`. Needed for downcasting
     /// inside [`Self::equals`].
     fn as_any(&self) -> &dyn Any;

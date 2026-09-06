@@ -5,6 +5,7 @@ pub mod entity_browser;
 pub mod panel;
 mod registry_fetch;
 pub mod remote_inspector;
+pub mod server;
 
 use bevy::prelude::*;
 

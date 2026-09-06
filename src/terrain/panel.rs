@@ -63,7 +63,8 @@ pub(super) fn plugin(app: &mut App) {
         .add_observer(on_material_uv_change)
         .add_observer(on_material_detile_change)
         .add_observer(on_autoterrain_slider_change)
-        .add_observer(on_autoterrain_checkbox_change);
+        .add_observer(on_autoterrain_checkbox_change)
+        .add_observer(on_ground_slider_change);
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -302,15 +303,19 @@ fn update_terrain_panel_content(
     mut local_state: Local<PanelState>,
     tab: Res<TerrainPanelTab>,
     gen_state: Res<TerrainGenerateState>,
-    scatter_state: Res<super::scatter::TerrainScatterState>,
-    scatter_report: Res<super::scatter::TerrainScatterReport>,
+    scatter: super::scatter::ScatterTabRefs,
     textures: TexturesTabRefs,
     store: Res<TerrainDataStore>,
 ) {
     let terrain_entity = selection.primary().filter(|&e| terrains.contains(e));
 
-    let scatter_signature = (*tab == TerrainPanelTab::Scatter && terrain_entity.is_some())
-        .then(|| super::scatter::signature(&scatter_state, &scatter_report));
+    let scatter_view = (*tab == TerrainPanelTab::Scatter)
+        .then_some(terrain_entity)
+        .flatten()
+        .map(|entity| super::scatter::groups_view(&scatter, &selection, entity));
+    let scatter_signature = scatter_view
+        .as_ref()
+        .map(|view| super::scatter::signature(&scatter, view));
 
     let textures_signature = (*tab == TerrainPanelTab::Textures)
         .then(|| terrain_entity.and_then(|e| terrain_data.get(e).ok()))
@@ -388,13 +393,15 @@ fn update_terrain_panel_content(
             }
             TerrainPanelTab::Scatter => {
                 let terrain = terrain_data.get(terrain_entity_id).ok().cloned();
-                super::scatter::spawn_scatter_ui(
-                    &mut commands,
-                    body,
-                    terrain.as_ref(),
-                    &scatter_state,
-                    &scatter_report,
-                );
+                if let Some(view) = &scatter_view {
+                    super::scatter::spawn_scatter_ui(
+                        &mut commands,
+                        body,
+                        terrain.as_ref(),
+                        &scatter,
+                        view,
+                    );
+                }
             }
             TerrainPanelTab::Generation => {
                 spawn_generation_section(&mut commands, body, &gen_state);
@@ -549,6 +556,7 @@ fn spawn_textures_section(
     }
 
     spawn_autoterrain_section(commands, parent, data_path, refs);
+    spawn_ground_section(commands, parent, data_path, refs);
 
     let selected = refs.paint.active_texture_id as usize;
     if let Some(slot) = slots.get(selected).filter(|slot| !slot.is_tombstone()) {
@@ -649,6 +657,46 @@ fn spawn_autoterrain_section(
         SLOPE_RANGE,
         FieldKind::Continuous,
         AutoterrainField::SlopeEnd,
+    );
+}
+
+/// The Ground Shading section: the two dials that shade the whole terrain
+/// rather than any one slot.
+///
+/// Both live in the sidecar's surface block, so they are the terrain's own
+/// look and travel with it into a built game.
+fn spawn_ground_section(
+    commands: &mut Commands,
+    parent: Entity,
+    data_path: &str,
+    refs: &TexturesTabRefs,
+) {
+    let icon_font = refs.icon_font.0.clone();
+    let surface = refs.store.surface(data_path);
+
+    let section = spawn_section(commands, parent, GROUND_SECTION, &icon_font, &refs.collapse);
+    spawn_slider_row(
+        commands,
+        section.body,
+        "Blend sharpness",
+        "How hard two textures cut into one another where they meet. Low is a soft \
+         cross-fade, high a near-binary cutout following their height maps",
+        surface.blend_sharpness,
+        UNIT_RANGE,
+        FieldKind::Continuous,
+        GroundField::BlendSharpness,
+    );
+    spawn_slider_row(
+        commands,
+        section.body,
+        "Tint strength",
+        "How much of the painted colour layer reaches the ground. 0 draws the \
+         textures untinted; the layer is white until it is painted, so an \
+         untinted terrain looks the same either way",
+        surface.tint_strength,
+        UNIT_RANGE,
+        FieldKind::Continuous,
+        GroundField::TintStrength,
     );
 }
 
@@ -831,8 +879,51 @@ const AUTOTERRAIN_SECTION: MaterialSection = MaterialSection::new(
     false,
 );
 
+/// Open by default beside Autoterrain, for the same reason: these two
+/// dials decide what the whole terrain looks like.
+const GROUND_SECTION: MaterialSection = MaterialSection::new(
+    "Ground Shading",
+    Icon::Palette,
+    "terrain.textures.ground",
+    false,
+);
+
 /// The whole slope range: 0 is level ground and 90 is a wall.
 const SLOPE_RANGE: std::ops::Range<f32> = 0.0..90.0;
+
+/// Both surface dials are authored 0..1.
+const UNIT_RANGE: std::ops::Range<f32> = 0.0..1.0;
+
+/// Which of the two whole-terrain shading dials a slider row drives.
+#[derive(Component, Clone, Copy)]
+enum GroundField {
+    BlendSharpness,
+    TintStrength,
+}
+
+fn on_ground_slider_change(
+    event: On<ValueChange<f32>>,
+    fields: Query<&GroundField>,
+    mut commands: Commands,
+) {
+    let Ok(field) = fields.get(event.event_target()) else {
+        return;
+    };
+    let op_id = match field {
+        GroundField::BlendSharpness => {
+            crate::terrain::tint_ops::TerrainMaterialBlendSharpnessOp::ID
+        }
+        GroundField::TintStrength => crate::terrain::tint_ops::TerrainTintStrengthOp::ID,
+    };
+    commands
+        .operator(op_id)
+        .param("value", event.value as f64)
+        .settings(CallOperatorSettings {
+            creates_history_entry: true,
+            execution_context: ExecutionContext::Invoke,
+        })
+        .call();
+}
 
 /// Which end of the autoterrain slope band a slider row drives.
 #[derive(Component, Clone, Copy)]
@@ -881,11 +972,7 @@ fn on_autoterrain_checkbox_change(
     if !boxes.contains(target) {
         return;
     }
-    if event.value {
-        commands.entity(target).insert(Checked);
-    } else {
-        commands.entity(target).remove::<Checked>();
-    }
+    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(&mut commands, target, event.value);
     commands
         .operator(TerrainAutoterrainEnableOp::ID)
         .param("enabled", event.value)

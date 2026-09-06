@@ -93,6 +93,7 @@ pub struct OperatorEntity {
     pub(crate) cancel: Option<SystemId<()>>,
     pub(crate) modal: bool,
     pub(crate) allows_undo: bool,
+    pub(crate) remote_hidden: Option<&'static str>,
 }
 
 impl OperatorEntity {
@@ -134,6 +135,12 @@ impl OperatorEntity {
     pub fn allows_undo(&self) -> bool {
         self.allows_undo
     }
+
+    /// Why a scripted caller is not offered this operator, or `None`
+    /// when it is. Mirrors [`crate::Operator::REMOTE_HIDDEN`].
+    pub fn remote_hidden(&self) -> Option<&'static str> {
+        self.remote_hidden
+    }
 }
 
 /// Marker on a BEI action entity associating it with an operator id.
@@ -147,6 +154,20 @@ impl OperatorEntity {
 /// operator type.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct OperatorAction(pub &'static str);
+
+/// The chords on this action entity belong to `operator`, for anything
+/// that shows a chord next to a command's name.
+///
+/// For an action that is not the operator's own: a marker action whose
+/// press dispatches an operator with particular parameters. The dialog
+/// and the tooltips would otherwise say the operator has only the chords
+/// on its own action, which is not what the user can press.
+///
+/// Display only. Unlike [`OperatorAction`] it is not what the keymap
+/// applier resolves a preset row against, so tagging a site does not put
+/// it under the keymap's control.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct OperatorChordSite(pub &'static str);
 
 /// Tracks the currently-active modal operator. Exactly zero or one is
 /// active at any time; starting a second modal while one is running is

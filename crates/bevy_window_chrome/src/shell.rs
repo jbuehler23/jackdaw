@@ -37,6 +37,11 @@ pub fn spawn_window_shell<S: Component + Copy>(
 ) -> WindowShellSlots {
     commands.spawn((
         Camera2d,
+        // Without this mark, UI roots resolve their target camera by
+        // scanning window cameras, and can latch onto an inactive one
+        // (a scene camera's preview mirror) when a project opens
+        // straight from boot -- leaving every UI node invisible.
+        bevy::ui::IsDefaultUiCamera,
         Camera {
             // Transparent clear only matters where the surface is transparent
             // (Linux/FreeBSD). On the opaque Windows window it's ignored; the
@@ -96,5 +101,60 @@ pub fn spawn_window_shell<S: Component + Copy>(
     WindowShellSlots {
         title_bar: title_bar_slot.expect("window shell title bar slot spawned"),
         body: body_slot.expect("window shell body slot spawned"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[derive(Component, Clone, Copy)]
+    struct TestScreen;
+
+    fn spawn_shell(
+        mut commands: Commands,
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+        caption_font: Res<CaptionFont>,
+    ) {
+        spawn_window_shell(
+            &mut commands,
+            &WindowChromeTheme::default(),
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+            caption_font,
+            TestScreen,
+        );
+    }
+
+    /// A UI root with no explicit target camera resolves one by scanning the
+    /// window's cameras, and a scene camera's preview mirror can win that
+    /// scan and leave the whole editor invisible. The mark is what settles
+    /// it, so it is part of the shell's contract rather than a detail.
+    #[test]
+    fn shell_camera_is_marked_the_default_ui_camera() {
+        let mut app = App::new();
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+        app.insert_resource(CaptionFont {
+            handle: Handle::default(),
+            #[cfg(target_os = "windows")]
+            use_segoe_glyphs: false,
+        });
+        app.world_mut()
+            .run_system_once(spawn_shell)
+            .expect("shell spawns");
+
+        let mut cameras = app
+            .world_mut()
+            .query_filtered::<Entity, With<Camera2d>>()
+            .iter(app.world())
+            .collect::<Vec<_>>();
+        assert_eq!(cameras.len(), 1, "the shell spawns exactly one UI camera");
+        let camera = cameras.pop().expect("one camera");
+        assert!(
+            app.world()
+                .get::<bevy::ui::IsDefaultUiCamera>(camera)
+                .is_some(),
+            "the shell camera carries IsDefaultUiCamera",
+        );
     }
 }

@@ -8,11 +8,24 @@ repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
 bevy = { version = "0.19", default-features = false, features = ["std", "bevy_asset"] }
+# Named directly to turn on `smol_str`, which is what gives `SmolStr` its
+# reflect impl. In the workspace build a sibling crate happens to enable it;
+# relying on that would make theme tokens silently revert to their Debug form
+# the day the sibling stops.
+bevy_reflect = { version = "0.19", features = ["smol_str"] }
 lalrpop-util = "0.23"
 nom = "8"
 pathdiff.workspace = true
 thiserror = "2"
 log = "0.4"
+# `bevy_feathers::theme::ThemeToken` wraps a `SmolStr`, which reflects as an
+# opaque value: without a direct conversion it round-trips as its `Debug` form.
+smol_str = "0.2"
+
+[dev-dependencies]
+# The round-trip test needs a real vocabulary of its own, not a synthetic
+# stand-in: `Bindings` is the list-of-enums shape the read path is weakest on.
+jackdaw_bind.workspace = true
 
 [build-dependencies]
 lalrpop = "0.23"

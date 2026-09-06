@@ -72,7 +72,7 @@ fn the_embedded_recipe_is_a_loadable_workspace() {
 
 /// Unpacking is otherwise additive, so a crate dropped between
 /// versions would linger as a workspace member and keep breaking the
-/// cache after the fix that removed it had already shipped.
+/// cache.
 #[test]
 fn unpacking_removes_a_crate_the_recipe_no_longer_ships() {
     let Some(dir) = unpack("prune") else {
@@ -119,4 +119,94 @@ fn the_recipe_contains_every_package_the_sdk_build_names() {
         "crates depending on the editor package cannot resolve in the recipe"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The recipe's content hash is the SDK cache's stamp, so it must move for the
+/// sources the SDK build compiles and for nothing else. Tests, examples and
+/// benches are separate cargo targets `cargo build -p jackdaw_sdk` never touches,
+/// and shipping them made routine work invalidate the SDK.
+#[test]
+fn the_recipe_ships_no_test_or_example_targets() {
+    let Some(dir) = unpack("targets") else {
+        eprintln!("SKIP: no embedded recipe in this build");
+        return;
+    };
+
+    let mut shipped = Vec::new();
+    for crate_dir in std::fs::read_dir(dir.join("crates"))
+        .expect("the recipe ships crates")
+        .flatten()
+    {
+        for unshipped in ["tests", "examples", "benches"] {
+            let path = crate_dir.path().join(unshipped);
+            if path.is_dir() {
+                shipped.push(path);
+            }
+        }
+    }
+
+    assert!(
+        shipped.is_empty(),
+        "the recipe ships target directories the SDK build never compiles: {shipped:?}"
+    );
+}
+
+/// The exclusion above is by directory name. A crate that declared an
+/// explicit `[[test]]`, `[[example]]` or `[[bench]]` target could point
+/// at a path outside those directories, or at one inside them that the
+/// recipe no longer ships -- and cargo rejects a manifest naming a
+/// target file that is not there, which aborts SDK setup entirely.
+#[test]
+fn no_shipped_crate_declares_an_explicit_test_or_example_target() {
+    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates");
+    let mut declared = Vec::new();
+    for entry in std::fs::read_dir(&crates).expect("read crates/").flatten() {
+        let manifest = entry.path().join("Cargo.toml");
+        let Ok(text) = std::fs::read_to_string(&manifest) else {
+            continue;
+        };
+        for table in ["[[test]]", "[[example]]", "[[bench]]"] {
+            if text.contains(table) {
+                declared.push(format!("{} declares {table}", manifest.display()));
+            }
+        }
+    }
+
+    assert!(
+        declared.is_empty(),
+        "the recipe excludes tests/, examples/ and benches/ by directory name, \
+         which an explicit target declaration can defeat: {declared:?}"
+    );
+}
+
+/// The hash is taken over exactly the files the recipe ships, so what
+/// the recipe leaves out cannot invalidate the SDK. The editor package's
+/// own sources are the case that matters day to day: they live outside
+/// `crates/`, the SDK build never compiles them, and editing one must
+/// leave a prepared SDK alone.
+#[test]
+fn the_recipe_ships_nothing_from_the_editor_package() {
+    let Some(dir) = unpack("editor") else {
+        eprintln!("SKIP: no embedded recipe in this build");
+        return;
+    };
+
+    let allowed = ["crates", "Cargo.toml", "Cargo.lock", ".cargo"];
+    let unexpected: Vec<String> = std::fs::read_dir(&dir)
+        .expect("read the unpacked recipe")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| !allowed.contains(&name.as_str()))
+        .collect();
+
+    assert!(
+        unexpected.is_empty(),
+        "the recipe root should hold only the workspace crates and their \
+         manifests; the editor package's own tree must stay out of the hash: \
+         {unexpected:?}"
+    );
+    assert!(
+        !dir.join("src").exists(),
+        "the editor crate's src/ must not reach the recipe"
+    );
 }

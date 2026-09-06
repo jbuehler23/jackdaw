@@ -13,6 +13,7 @@ pub mod app_ops;
 pub mod asset_browser;
 pub mod asset_catalog;
 pub mod asset_ingest;
+pub mod authored_widgets;
 pub mod boot_ops;
 pub mod brush;
 pub mod brush_drag_ops;
@@ -24,6 +25,7 @@ pub mod clip_ops;
 pub mod command_palette;
 pub mod commands;
 pub mod component_json;
+pub mod creation_taxonomy;
 pub mod custom_properties;
 pub mod default_style;
 pub mod draw_brush;
@@ -38,17 +40,21 @@ pub mod hierarchy;
 pub mod history_ops;
 pub mod input_contexts;
 pub mod inspector;
+pub mod io_pool;
 pub mod jsn_to_bsn;
 pub mod keybind_focus;
 pub mod keybind_settings;
 pub mod keybinds;
 pub mod migrate_dialog;
+pub mod panel_focus;
 
 use std::{collections::BTreeMap, marker::PhantomData};
 
 pub use inspector::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
 
 pub mod camera_preview;
+pub mod camera_settings;
+pub mod canvas_snap;
 pub mod core_extension;
 pub mod dock_ops;
 pub mod document_ops;
@@ -81,6 +87,7 @@ pub mod modifier_ops;
 pub mod new_project;
 pub mod numeric_transform;
 pub mod operator_tooltip;
+pub mod perf_probe;
 pub mod physics_brush_bridge;
 pub mod physics_tool;
 pub mod pie;
@@ -89,14 +96,18 @@ pub mod pie_mirror;
 pub mod pie_projection;
 pub mod prefab;
 pub mod preflight;
+pub mod preview_context;
 pub mod project;
 pub mod project_build;
 pub mod project_files;
 pub mod project_select;
+pub mod project_settings;
 pub mod project_types;
 pub mod reference_image;
 pub mod reflect_default;
 pub mod remote;
+pub mod remote_ops;
+pub mod render_diagnostics;
 pub mod restart;
 pub mod run_config;
 pub mod scaffold;
@@ -111,21 +122,25 @@ pub mod selection;
 pub mod snapping;
 pub mod status_bar;
 pub mod terrain;
+pub mod test_input;
 pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod transform_ops;
-pub mod ui_authoring;
-pub mod ui_canvas;
-pub mod ui_projection;
+pub mod ui_align;
+pub mod ui_asset_drop;
+pub mod ui_grouping;
+pub mod ui_layout_presets;
+pub mod ui_palette;
 pub mod ui_stage;
-pub mod ui_widgets_panel;
+pub mod ui_text_edit;
 pub mod undo_snapshot;
 pub mod view_modes;
 pub mod view_ops;
 pub mod viewport;
+pub mod viewport_2d;
+pub mod viewport_host;
 pub mod viewport_overlays;
 pub mod viewport_select;
-pub mod viewport_ui;
 pub mod viewport_util;
 pub mod windowing;
 pub mod workspace_dropdown;
@@ -133,8 +148,9 @@ pub mod workspace_dropdown;
 use bevy::{
     app::PluginGroupBuilder,
     ecs::system::SystemState,
-    feathers::{FeathersPlugins, dark_theme::create_dark_theme, theme::UiTheme},
+    feathers::{FeathersCorePlugin, dark_theme::create_dark_theme, theme::UiTheme},
     input::mouse::{MouseScrollUnit, MouseWheel},
+    input_focus::tab_navigation::TabNavigationPlugin,
     picking::hover::HoverMap,
     platform::collections::HashMap,
     prelude::*,
@@ -144,6 +160,9 @@ use jackdaw_api_internal::{
     ToAnchorId as _,
     lifecycle::{RegisteredMenuEntry, RegisteredWindow},
 };
+/// The camera controller the viewport drives, so a test can feed it the
+/// pointer input the editor would.
+pub use jackdaw_camera;
 use jackdaw_feathers::dialog::EditorDialog;
 use jackdaw_feathers::{EditorFeathersPlugin, button::ButtonOperatorCall};
 pub use jackdaw_loader::DylibLoaderPlugin;
@@ -313,13 +332,56 @@ impl Plugin for EditorCorePlugin {
             app.add_plugins(FeathersPlugins);
         }
         app.add_plugins(EditorFeathersPlugin);
+        // A game whose own UI is built on feathers adds the group itself,
+        // and the editor loads that game's plugin into this app. Adding a
+        // plugin twice is a panic, so the editor takes each of these only
+        // where nothing else already has. `FeathersPlugins` is these two
+        // together, and a game may have brought either on its own.
+        if !app.is_plugin_added::<TabNavigationPlugin>() {
+            app.add_plugins(TabNavigationPlugin);
+        }
+        if !app.is_plugin_added::<FeathersCorePlugin>() {
+            app.add_plugins(FeathersCorePlugin);
+        }
+        if !app.is_plugin_added::<EditorFeathersPlugin>() {
+            app.add_plugins(EditorFeathersPlugin);
+        }
+        // `JackdawBindPlugin` itself stays out: its observers would run
+        // authored actions and value writes against the editor's own world.
+        // Only the evaluator preview needs is registered here.
+        app.register_type::<jackdaw_bind::Bindings>()
+            .register_type::<jackdaw_bind::Binding>()
+            .register_type::<jackdaw_bind::BindPath>()
+            .register_type::<jackdaw_bind::BindContext>()
+            .init_resource::<jackdaw_bind::BindFailures>()
+            // Neither crate can name the other's half of a string Value
+            // binding, so the editor declares both, as a game does.
+            .insert_resource(jackdaw_bind::ValueTextTarget(jackdaw_bind::BindPath::new(
+                jackdaw_widgets_runtime::text_value_write_path(),
+            )))
+            .configure_sets(
+                PostUpdate,
+                jackdaw_widgets_runtime::AuthoredTextSystems
+                    .after(jackdaw_bind::BindEvaluationSystems),
+            )
+            .configure_sets(
+                PostUpdate,
+                jackdaw_widgets_runtime::AuthoredNodeSystems
+                    .after(jackdaw_bind::BindEvaluationSystems),
+            )
+            .configure_sets(
+                PostUpdate,
+                jackdaw_widgets_runtime::AuthoredChromeSystems
+                    .after(jackdaw_bind::BindEvaluationSystems),
+            )
+            .add_systems(
+                PostUpdate,
+                jackdaw_bind::evaluate_bindings
+                    .in_set(jackdaw_bind::BindEvaluationSystems)
+                    .before(bevy::ui::UiSystems::Layout)
+                    .run_if(preview_context::preview_is_evaluating),
+            );
         app.add_plugins((
-            jackdaw_ui::JackdawUiPlugin::marked_only(),
-            ui_projection::UiProjectionPlugin,
-            ui_canvas::UiCanvasPlugin,
-            ui_stage::UiStagePlugin,
-            ui_widgets_panel::UiWidgetsPanelPlugin,
-            viewport_ui::ViewportUiPlugin,
             jackdaw_scene_types::SceneTypesPlugin {
                 runtime_mesh_rebuild: false,
             },
@@ -331,6 +393,12 @@ impl Plugin for EditorCorePlugin {
                 inspector::InspectorPlugin,
                 hierarchy::HierarchyPlugin,
                 viewport::ViewportPlugin,
+                viewport_2d::Viewport2dPlugin,
+                viewport_host::ViewportHostPlugin,
+                ui_stage::UiStagePlugin,
+                ui_text_edit::UiTextEditPlugin,
+                preview_context::PreviewContextPlugin,
+                authored_widgets::AuthoredWidgetPlugin,
                 gizmos::TransformGizmosPlugin,
                 commands::CommandHistoryPlugin,
             ),
@@ -351,6 +419,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(file_ops::FileOpsPlugin)
         .add_plugins(keybinds::KeybindsPlugin)
         .add_plugins(keybind_settings::KeybindSettingsPlugin)
+        .add_plugins(panel_focus::PanelFocusPlugin)
         .add_plugins((
             viewport_overlays::ViewportOverlaysPlugin,
             view_modes::ViewModesPlugin,
@@ -364,6 +433,7 @@ impl Plugin for EditorCorePlugin {
             camera_preview::CameraPreviewPlugin,
             material_preview::MaterialPreviewPlugin,
             material_ui::plugin,
+            canvas_snap::plugin,
             undo_snapshot::plugin,
             migrate_dialog::plugin,
         ))
@@ -382,11 +452,15 @@ impl Plugin for EditorCorePlugin {
             mesh_quick_menu::MeshQuickMenuPlugin,
             remote::RemoteConnectionPlugin,
             remote::debug::RemoteDebugPlugin,
+            camera_settings::plugin,
         ))
         .add_plugins(model_thumbnail::plugin)
         .add_plugins(boot_ops::plugin)
         .add_plugins(fps_overlay::plugin)
+        .add_plugins(render_diagnostics::plugin)
+        .add_plugins(perf_probe::plugin)
         .add_systems(Update, view_ops::drive_dolly)
+        .add_systems(Last, view_ops::track_pointer_focus)
         .add_plugins(jackdaw_avian_integration::PhysicsOverlaysPlugin::<
             selection::Selected,
         >::new())
@@ -438,6 +512,7 @@ impl Plugin for EditorCorePlugin {
             JackdawDrawSystems
                 .after(bevy::transform::TransformSystems::Propagate)
                 .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+                .run_if(|| std::env::var_os("JD_PERF_NO_DRAW").is_none())
                 .run_if(in_state(crate::AppState::Editor)),
         )
         .insert_resource(UiTheme(create_dark_theme()))
@@ -465,6 +540,9 @@ impl Plugin for EditorCorePlugin {
                 .chain(),
         )
         .add_systems(OnEnter(AppState::Editor), run_config::read_run_configs)
+        // Outside the editor state, since the launcher opens and closes
+        // projects too.
+        .add_systems(First, project::mirror_open_project)
         .add_systems(
             Update,
             rebuild_menu_if_dirty.run_if(in_state(AppState::Editor)),
@@ -558,13 +636,15 @@ impl Plugin for ExtensionPlugin {
             app.add_plugins(core_extension::plugin)
                 .register_extension::<builtin_extensions::CoreWindowsExtension>()
                 .register_extension::<builtin_extensions::ViewportExtension>()
-                .register_extension::<builtin_extensions::UiEditorExtension>()
+                .register_extension::<builtin_extensions::UiPaletteExtension>()
                 .register_extension::<builtin_extensions::AssetBrowserExtension>()
                 .register_extension::<builtin_extensions::GamePanelExtension>()
                 .register_extension::<builtin_extensions::TimelineExtension>()
                 .register_extension::<builtin_extensions::TerminalExtension>()
                 .register_extension::<build_panel::BuildPanelExtension>()
-                .register_extension::<builtin_extensions::InspectorExtension>();
+                .register_extension::<builtin_extensions::InspectorExtension>()
+                .add_plugins(test_input::plugin)
+                .register_extension::<test_input::TestInputExtension>();
         }
 
         // Bundled behind the default-on `multiplayer` feature. Registers the
@@ -1278,9 +1358,13 @@ pub(crate) fn clip_delete_keyframes(
     OperatorResult::Finished
 }
 
+/// Keyframes are selected and the timeline is the focused window. The
+/// entity clipboard refuses under the same condition, so one `Ctrl+C`
+/// copies keyframes or a subtree and never both.
 fn has_selected_keyframes(
     input_focus: Res<bevy::input_focus::InputFocus>,
     selection: Res<selection::Selection>,
+    panel_focus: crate::panel_focus::PanelFocus,
     keyframes: Query<
         (),
         bevy::ecs::query::Or<(
@@ -1293,19 +1377,22 @@ fn has_selected_keyframes(
     if input_focus.get().is_some() {
         return false;
     }
+    if !panel_focus.is_focused(crate::entity_ops::TIMELINE_WINDOW_ID) {
+        return false;
+    }
     selection.entities.iter().any(|&e| keyframes.contains(e))
 }
 
 fn timeline_with_clip(
     input_focus: Res<bevy::input_focus::InputFocus>,
     active: ActiveModalQuery,
-    tree: Res<jackdaw_panels::tree::DockTree>,
+    panel_focus: crate::panel_focus::PanelFocus,
     selected_clip: Res<jackdaw_animation::SelectedClip>,
 ) -> bool {
     if input_focus.get().is_some() || active.is_modal_running() {
         return false;
     }
-    if !crate::transform_ops::active_tab_kind_present(&tree, "jackdaw.timeline") {
+    if !panel_focus.is_focused(crate::entity_ops::TIMELINE_WINDOW_ID) {
         return false;
     }
     selected_clip.0.is_some()
@@ -1314,14 +1401,14 @@ fn timeline_with_clip(
 fn timeline_paste_available(
     input_focus: Res<bevy::input_focus::InputFocus>,
     active: ActiveModalQuery,
-    tree: Res<jackdaw_panels::tree::DockTree>,
+    panel_focus: crate::panel_focus::PanelFocus,
     selected_clip: Res<jackdaw_animation::SelectedClip>,
     clipboard: Res<jackdaw_animation::KeyframeClipboard>,
 ) -> bool {
     if input_focus.get().is_some() || active.is_modal_running() {
         return false;
     }
-    if !crate::transform_ops::active_tab_kind_present(&tree, "jackdaw.timeline") {
+    if !panel_focus.is_focused(crate::entity_ops::TIMELINE_WINDOW_ID) {
         return false;
     }
     selected_clip.0.is_some() && !clipboard.entries.is_empty()
@@ -2030,17 +2117,31 @@ fn register_animation_entities_in_ast(
     }
 }
 
-/// For every [`GltfSource`] entity whose underlying glTF asset is
-/// loaded but has not yet had its clips imported, spawn one
-/// [`jackdaw_animation::Clip`] + [`jackdaw_animation::GltfClipRef`]
+/// Clip discovery has run for this entity, whichever way it came out.
+/// Editor-side state: it carries no `Reflect`, so it never reaches a
+/// saved scene.
+#[derive(Component)]
+struct GltfClipsDiscovered {
+    /// The `GltfSource` path this answer was reached for; a different path
+    /// has to be asked again.
+    path: String,
+}
+
+/// The glTF whose clips are still being waited for. The handle is held
+/// here rather than in a local because dropping it cancels the load, and
+/// the restarted load respawns every instance of the model.
+#[derive(Component)]
+struct PendingGltfClips(Handle<bevy::gltf::Gltf>);
+
+/// For every [`GltfSource`] entity that has not been asked yet, spawn
+/// one [`jackdaw_animation::Clip`] + [`jackdaw_animation::GltfClipRef`]
 /// child per entry in `Gltf::named_animations`. Those child entities
-/// persist through JSN save/load (just two strings each), so this
-/// discovery step only needs to run once per glTF in a given session.
+/// persist through save/load (just two strings each), so discovery only
+/// needs to run once per `GltfSource`.
 ///
-/// The guard ("skip if any child already has a `GltfClipRef`") keeps
-/// us from resurrecting clips the user deleted within the session.
-/// Adding new clips to the glTF file externally requires a scene
-/// reload to rediscover them.
+/// Asked once per source path, not once per frame: the entity is marked
+/// `GltfClipsDiscovered` on both outcomes, so clips the user deleted stay
+/// deleted.
 ///
 /// Lives in the main crate rather than `jackdaw_animation` because it
 /// needs to read `jackdaw_scene_types::GltfSource`, and we'd rather not wire a
@@ -2048,26 +2149,75 @@ fn register_animation_entities_in_ast(
 ///
 /// [`GltfSource`]: jackdaw_scene_types::GltfSource
 fn discover_gltf_clips(
-    sources: Query<(Entity, &jackdaw_scene_types::GltfSource, Option<&Children>)>,
+    pending: Query<
+        (
+            Entity,
+            &jackdaw_scene_types::GltfSource,
+            Option<&Children>,
+            Option<&PendingGltfClips>,
+        ),
+        Without<GltfClipsDiscovered>,
+    >,
+    answered: Query<
+        (
+            Entity,
+            &jackdaw_scene_types::GltfSource,
+            &GltfClipsDiscovered,
+        ),
+        Changed<jackdaw_scene_types::GltfSource>,
+    >,
     existing_refs: Query<(), With<jackdaw_animation::GltfClipRef>>,
     asset_server: Res<AssetServer>,
     gltfs: Res<Assets<bevy::gltf::Gltf>>,
     mut commands: Commands,
 ) {
-    for (entity, source, children) in &sources {
-        // Skip if this GltfSource already has any imported clip
-        // children: discovery has run at least once.
+    // A source repointed at another file has to be asked again.
+    for (entity, source, discovered) in &answered {
+        if discovered.path != source.path {
+            commands.entity(entity).remove::<GltfClipsDiscovered>();
+        }
+    }
+
+    for (entity, source, children, waiting) in &pending {
+        // Clips imported in an earlier session come back as children of
+        // the document, which is already the answer.
         let any_existing = children
             .into_iter()
             .flatten()
             .any(|&c| existing_refs.contains(c));
         if any_existing {
+            commands.entity(entity).insert(GltfClipsDiscovered {
+                path: source.path.clone(),
+            });
             continue;
         }
 
-        let asset_path = crate::entity_ops::to_asset_path(&source.path);
-        let handle: Handle<bevy::gltf::Gltf> = asset_server.load(asset_path);
+        let handle = match waiting {
+            Some(PendingGltfClips(handle)) => handle.clone(),
+            None => {
+                let asset_path = crate::entity_ops::to_asset_path(&source.path);
+                let handle: Handle<bevy::gltf::Gltf> = asset_server.load(asset_path);
+                commands
+                    .entity(entity)
+                    .insert(PendingGltfClips(handle.clone()));
+                handle
+            }
+        };
+
         let Some(gltf) = gltfs.get(&handle) else {
+            // A load the server has given up on is answered too, rather
+            // than retrying a missing file forever.
+            if matches!(
+                asset_server.get_load_state(&handle),
+                Some(bevy::asset::LoadState::Failed(_))
+            ) {
+                commands
+                    .entity(entity)
+                    .remove::<PendingGltfClips>()
+                    .insert(GltfClipsDiscovered {
+                        path: source.path.clone(),
+                    });
+            }
             continue;
         };
 
@@ -2083,7 +2233,22 @@ fn discover_gltf_clips(
                 ChildOf(entity),
             ));
         }
+        commands
+            .entity(entity)
+            .remove::<PendingGltfClips>()
+            .insert(GltfClipsDiscovered {
+                path: source.path.clone(),
+            });
     }
+}
+
+/// One View-menu row for a canvas view toggle.
+fn canvas_view_row<O: jackdaw_api::op::Operator>(on: bool, label: &str) -> (String, String) {
+    jackdaw_feathers::menu_bar::checked_row(
+        on,
+        format!("{OP_PREFIX}{}?on={}", O::ID, !on),
+        label.to_string(),
+    )
 }
 
 fn populate_menu(
@@ -2091,43 +2256,50 @@ fn populate_menu(
     menu_bar_entity: &mut SystemState<
         Single<Entity, With<jackdaw_feathers::menu_bar::MenuBarRoot>>,
     >,
-    items: &mut QueryState<Entity, With<jackdaw_widgets::menu_bar::MenuBarItem>>,
 ) {
     let Ok(menu_bar_entity) = menu_bar_entity.get(world).map(Single::into_inner) else {
         return;
     };
 
-    // Despawn existing menu-bar items before re-populating. Idempotent on
-    // first call (nothing to remove), necessary for rebuilds when the
-    // window registry changes (extensions toggled on/off).
-    let existing: Vec<Entity> = items.iter(world).collect();
-    for entity in existing {
-        if let Ok(ec) = world.get_entity_mut(entity) {
-            ec.despawn();
-        }
-    }
-
     // Collect extension-contributed menu entries for menus OTHER than
     // "Add". The "Add" menu goes through the shared
     // `collect_add_menu_items` helper below so the toolbar and the
     // scene-tree picker present identical content.
-    let mut ext_menu_entries = HashMap::<_, Vec<(String, String)>>::new();
+    let mut ext_menu_entries = HashMap::<_, Vec<ExtensionMenuEntry>>::new();
     {
-        let mut q = world.query::<&RegisteredMenuEntry>();
-        for entry in q.iter(world) {
-            if entry.menu == TopLevelMenu::Add {
-                continue;
-            }
-            ext_menu_entries
-                .entry(entry.menu.clone())
-                .or_default()
-                .push((
+        // The heading is the extension's own label, not its id: an id like
+        // `jackdaw.core` names the package, not a menu group.
+        let extension_labels = world
+            .resource::<jackdaw_api_internal::lifecycle::ExtensionCatalog>()
+            .iter_with_content()
+            .map(|(id, label, ..)| (id, label))
+            .collect::<HashMap<_, _>>();
+        let mut q = world.query::<(&RegisteredMenuEntry, Option<&ChildOf>)>();
+        let registered: Vec<_> = q
+            .iter(world)
+            .filter(|(entry, _)| entry.menu != TopLevelMenu::Add)
+            .map(|(entry, parent)| {
+                (
+                    entry.menu.clone(),
                     format!("{OP_PREFIX}{}", entry.operator_id),
                     entry.label.clone(),
-                ));
-        }
-        for entries in ext_menu_entries.values_mut() {
-            entries.sort_by(|a, b| a.1.cmp(&b.1));
+                    parent.map(ChildOf::parent),
+                )
+            })
+            .collect();
+        for (menu, action, label, owner) in registered {
+            let heading = owner
+                .and_then(|owner| world.get::<jackdaw_api_internal::lifecycle::Extension>(owner))
+                .and_then(|extension| extension_labels.get(&extension.id).cloned())
+                .unwrap_or_else(|| add_entity_picker::EXTENSIONS_SECTION.to_string());
+            ext_menu_entries
+                .entry(menu)
+                .or_default()
+                .push(ExtensionMenuEntry {
+                    heading,
+                    action,
+                    label,
+                });
         }
     }
 
@@ -2166,7 +2338,7 @@ fn populate_menu(
             continue;
         };
         if !first {
-            window_entries.push(("---".to_string(), String::new()));
+            window_entries.push(separator());
         }
         first = false;
         for (id, name) in entries {
@@ -2174,29 +2346,22 @@ fn populate_menu(
         }
     }
     if !window_entries.is_empty() {
-        window_entries.push(("---".to_string(), String::new()));
+        window_entries.push(separator());
     }
     window_entries.push((
         format!("{OP_PREFIX}window.reset_layout"),
         "Reset Layout".to_string(),
     ));
 
-    // Build the Add menu from the shared helper so the toolbar and the
-    // scene-tree Add Entity picker stay in lockstep. Separators are
-    // inserted between categories.
-    let add_items = add_entity_picker::collect_add_menu_items(world);
-    let mut add_menu: Vec<(String, String)> = Vec::with_capacity(add_items.len() + 8);
-    let mut last_category: Option<String> = None;
-    for item in add_items {
-        let name = item.category.name.unwrap_or_else(|| String::from("None"));
-        if last_category.as_deref() != Some(name.as_str()) {
-            if last_category.is_some() {
-                add_menu.push(("---".into(), String::new()));
-            }
-            last_category = Some(name.clone());
-        }
-        add_menu.push((item.action, item.label));
-    }
+    // Shared with the scene-tree Add Entity picker, so the two stay in
+    // lockstep.
+    let add_menu = add_entity_picker::add_menu_rows(world);
+
+    // The same two switches the canvas's own Snap menu carries.
+    let canvas = world
+        .get_resource::<canvas_snap::CanvasSnap>()
+        .copied()
+        .unwrap_or_default();
 
     // Current hot-reload state ->reflect in the menu label.
     let hot_reload_on = world
@@ -2212,25 +2377,7 @@ fn populate_menu(
     let mut menu_items = [
         (
             TopLevelMenu::File,
-            vec![
-                op_entry::<crate::scenes::operators::SceneNewOp>("New"),
-                op_entry::<crate::scenes::operators::SceneOpenOp>("Open"),
-                separator(),
-                op_entry::<scene_ops::SceneSaveOp>("Save"),
-                op_entry::<scene_ops::SceneSaveAsOp>("Save As..."),
-                op_entry::<crate::scenes::operators::SceneSaveAllOp>("Save All"),
-                separator(),
-                op_entry::<crate::scenes::operators::SceneCloseOp>("Close Tab"),
-                separator(),
-                op_entry::<scene_ops::SceneSaveSelectionAsPrefabOp>("Save Selection as Prefab"),
-                separator(),
-                op_entry::<app_ops::AppOpenKeybindsOp>("Keybinds..."),
-                op_entry::<app_ops::AppOpenExtensionsOp>("Extensions..."),
-                separator(),
-                op_entry::<app_ops::AppToggleHotReloadOp>(hot_reload_label),
-                op_entry::<scene_ops::SceneOpenRecentOp>("Open Recent..."),
-                op_entry::<app_ops::AppGoHomeOp>("Home"),
-            ],
+            file_menu_rows(hot_reload_label, recent_projects_rows()),
         ),
         (
             TopLevelMenu::Edit,
@@ -2240,6 +2387,18 @@ fn populate_menu(
                 separator(),
                 op_entry::<entity_ops::EntityDeleteOp>("Delete"),
                 op_entry::<entity_ops::EntityDuplicateOp>("Duplicate"),
+                separator(),
+                op_entry::<ui_grouping::UiGroupIntoOp>("Group Into Container"),
+                op_entry::<ui_grouping::UiUngroupOp>("Ungroup"),
+                separator(),
+                op_entry::<ui_align::UiAlignLeftOp>("Align Left"),
+                op_entry::<ui_align::UiAlignCenterXOp>("Align Center Horizontally"),
+                op_entry::<ui_align::UiAlignRightOp>("Align Right"),
+                op_entry::<ui_align::UiAlignTopOp>("Align Top"),
+                op_entry::<ui_align::UiAlignCenterYOp>("Align Center Vertically"),
+                op_entry::<ui_align::UiAlignBottomOp>("Align Bottom"),
+                op_entry::<ui_align::UiDistributeHorizontalOp>("Distribute Horizontally"),
+                op_entry::<ui_align::UiDistributeVerticalOp>("Distribute Vertically"),
                 separator(),
                 op_entry::<draw_brush::BrushJoinOp>("Join (Convex Merge)"),
                 op_entry::<draw_brush::BrushCsgSubtractOp>("CSG Subtract"),
@@ -2269,6 +2428,9 @@ fn populate_menu(
                 op_entry::<view_ops::ViewUiZoomInOp>("Zoom UI In"),
                 op_entry::<view_ops::ViewUiZoomOutOp>("Zoom UI Out"),
                 op_entry::<view_ops::ViewUiZoomResetOp>("Reset UI Zoom"),
+                separator(),
+                canvas_view_row::<canvas_snap::CanvasRulersOp>(canvas.show_rulers, "Canvas Rulers"),
+                canvas_view_row::<canvas_snap::CanvasGuidesOp>(canvas.show_guides, "Canvas Guides"),
             ],
         ),
         (TopLevelMenu::Add, add_menu),
@@ -2278,13 +2440,13 @@ fn populate_menu(
     .into_iter()
     .collect::<BTreeMap<u8, HashMap<String, Vec<(String, String)>>>>();
 
-    for (menu, actions) in ext_menu_entries {
-        menu_items
+    for (menu, entries) in ext_menu_entries {
+        let rows = menu_items
             .entry(menu.order())
             .or_default()
             .entry(menu.id())
-            .or_default()
-            .extend(actions);
+            .or_default();
+        append_extension_entries(rows, entries);
     }
     let menu_items = menu_items.into_values().flatten();
 
@@ -2304,7 +2466,10 @@ pub(crate) fn window_open(
     registry: Res<jackdaw_panels::WindowRegistry>,
     mut commands: bevy::prelude::Commands,
 ) -> OperatorResult {
-    let window_id = params.as_str("window_id").map(str::to_string)?;
+    let window_id = params
+        .as_str("window_id")
+        .map(viewport::canonical_window_id)
+        .map(str::to_string)?;
     // Reject unknown ids up front so callers get `Cancelled` rather
     // than a silent no-op + `Finished`. Lets the menu/tooltip pipeline
     // distinguish "user opened a window" from "user clicked a stale
@@ -2312,9 +2477,163 @@ pub(crate) fn window_open(
     if registry.get(&window_id).is_none() {
         return OperatorResult::Cancelled;
     }
-    // Focus the tab if this window already has one rather than docking a second copy.
+    // Focus the tab if this window already has one, rather than docking a
+    // second tab for it.
     commands.queue(move |world: &mut World| {
         open_window_in_default_area_if_absent(world, &window_id);
+    });
+    OperatorResult::Finished
+}
+
+/// Turn the Preview Context session on or off, and optionally scrub one
+/// numeric field of the scratch entity, which is editor-only state.
+#[operator(
+    id = "preview.set",
+    label = "Set Preview Context",
+    description = "Toggle the preview session, optionally scrubbing one field.",
+    allows_undo = false,
+    params(
+        on(bool, default = true, doc = "`true` starts the session."),
+        type_path(String, default = "", doc = "Component to scrub, e.g. \"Transform\"."),
+        field(String, default = "", doc = "Field path within that component."),
+        value(f64, default = 0.0, doc = "Number to write into that field.")
+    )
+)]
+pub(crate) fn preview_set(
+    params: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    let on = params.as_bool("on").unwrap_or(true);
+    let scrub = match (params.as_str("type_path"), params.as_str("field")) {
+        (Some(type_path), Some(field)) if !type_path.is_empty() && !field.is_empty() => Some((
+            preview_context::PreviewField::new(type_path, field),
+            params.as_float("value").unwrap_or_default(),
+        )),
+        _ => None,
+    };
+    commands.queue(move |world: &mut World| {
+        preview_context::set_preview(world, on);
+        if let Some((field, value)) = scrub
+            && let Err(err) = preview_context::write_scratch_field(
+                world,
+                &field,
+                preview_context::PreviewValue::Number(value),
+            )
+        {
+            warn!("preview.set: {err}");
+        }
+    });
+    OperatorResult::Finished
+}
+
+/// Open a top-level menu by its label, as a click on it would. Writes the
+/// menu bar's own open state and nothing else.
+#[operator(
+    id = "menu.open",
+    label = "Open Menu",
+    description = "Open the top-level menu with this label.",
+    allows_undo = false,
+    params(name(String, doc = "Menu label as the bar shows it, e.g. \"File\"."))
+)]
+pub(crate) fn menu_open(
+    params: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+    mut state: ResMut<jackdaw_widgets::menu_bar::MenuBarState>,
+    items: Query<(
+        Entity,
+        &jackdaw_widgets::menu_bar::MenuBarItem,
+        &bevy::ui::ComputedNode,
+        &bevy::ui::ui_transform::UiGlobalTransform,
+    )>,
+    windows: Query<&Window>,
+    mut backgrounds: Query<
+        (Entity, &mut BackgroundColor),
+        With<jackdaw_widgets::menu_bar::MenuBarItem>,
+    >,
+) -> OperatorResult {
+    let name = params.as_str("name").map(str::to_string)?;
+    if jackdaw_feathers::menu_bar::open_menu_named(
+        &name,
+        &mut commands,
+        &mut state,
+        &items,
+        &windows,
+        &mut backgrounds,
+    ) {
+        OperatorResult::Finished
+    } else {
+        warn!("menu.open: no menu labelled '{name}'");
+        OperatorResult::Cancelled
+    }
+}
+
+/// Expand a group of an open menu by its label, as resting the pointer on
+/// its row does. Writes the menu's own open state and nothing else.
+#[operator(
+    id = "menu.hover",
+    label = "Expand Menu Group",
+    description = "Expand the open menu's group with this label.",
+    allows_undo = false,
+    params(name(String, doc = "Group label as the menu shows it, e.g. \"3D Objects\"."))
+)]
+pub(crate) fn menu_hover(
+    params: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+    mut state: ResMut<jackdaw_feathers::menu_bar::SubmenuState>,
+    rows: Query<(
+        &jackdaw_feathers::menu_bar::SubmenuRow,
+        &bevy::ui::ComputedNode,
+        &bevy::ui::ui_transform::UiGlobalTransform,
+        &ChildOf,
+    )>,
+    row_ids: Query<(Entity, &jackdaw_feathers::menu_bar::SubmenuRow)>,
+    dropdowns: Query<
+        (
+            &bevy::ui::ComputedNode,
+            &bevy::ui::ui_transform::UiGlobalTransform,
+        ),
+        With<jackdaw_widgets::menu_bar::MenuBarDropdown>,
+    >,
+    windows: Query<&Window>,
+) -> OperatorResult {
+    let name = params.as_str("name").map(str::to_string)?;
+    if jackdaw_feathers::menu_bar::open_submenu_named(
+        &name,
+        &mut commands,
+        &mut state,
+        &rows,
+        &row_ids,
+        &dropdowns,
+        &windows,
+    ) {
+        OperatorResult::Finished
+    } else {
+        warn!("menu.hover: no open menu has a group labelled '{name}'");
+        OperatorResult::Cancelled
+    }
+}
+
+/// Open one of the recent projects, the way the Open Recent list does.
+#[operator(
+    id = "project.open_recent",
+    label = "Open Recent Project",
+    description = "Open a project from the recent list.",
+    allows_undo = false,
+    params(path(String, doc = "Directory the project lives in."))
+)]
+pub(crate) fn project_open_recent(
+    params: In<OperatorParameters>,
+    mut commands: bevy::prelude::Commands,
+) -> OperatorResult {
+    let path = std::path::PathBuf::from(unescape_action_value(params.as_str("path")?));
+    commands.insert_resource(project_select::PendingAutoOpen {
+        path,
+        skip_build: false,
+    });
+    commands.queue(|world: &mut World| {
+        world
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::ProjectSelect);
     });
     OperatorResult::Finished
 }
@@ -2341,10 +2660,185 @@ fn op_entry<O: Operator>(label: impl Into<String>) -> (String, String) {
     (format!("op:{}", O::ID), label.into())
 }
 
+/// One extension-contributed menu row, and the section it belongs under.
+struct ExtensionMenuEntry {
+    heading: String,
+    action: String,
+    label: String,
+}
+
+/// Append extension-contributed rows to a menu, each extension opening its
+/// own labelled section.
+///
+/// An entry naming an operator the built-in list already carries is
+/// dropped. The comparison is on the operator alone, so a parametrised
+/// built-in row still counts as carrying it.
+fn append_extension_entries(
+    rows: &mut Vec<(String, String)>,
+    mut entries: Vec<ExtensionMenuEntry>,
+) {
+    entries.sort_by(|a, b| (&a.heading, &a.label).cmp(&(&b.heading, &b.label)));
+    // Deduplicated against the rows already there and within the batch:
+    // two extensions can register the same operator.
+    let mut seen: std::collections::HashSet<String> = rows
+        .iter()
+        .map(|(action, _)| action_operator_id(action).to_string())
+        .collect();
+    entries.retain(|entry| seen.insert(action_operator_id(&entry.action).to_string()));
+
+    let mut current: Option<String> = None;
+    for entry in entries {
+        if current.as_deref() != Some(entry.heading.as_str()) {
+            if !rows.is_empty() {
+                rows.push(separator());
+            }
+            rows.push(section_label(&entry.heading));
+            current = Some(entry.heading);
+        }
+        rows.push((entry.action, entry.label));
+    }
+}
+
+/// The operator an `op:` action names, without its parameters. A row that
+/// is not an operator action answers with itself.
+fn action_operator_id(action: &str) -> &str {
+    let Some(rest) = action.strip_prefix(OP_PREFIX) else {
+        return action;
+    };
+    rest.split_once('?').map_or(rest, |(id, _)| id)
+}
+
 /// Menu separator row. Feathers renders any `(---, _)` entry as a
 /// horizontal divider.
 fn separator() -> (String, String) {
-    ("---".to_string(), String::new())
+    (
+        jackdaw_feathers::menu_bar::SEPARATOR_ACTION.to_string(),
+        String::new(),
+    )
+}
+
+/// Non-interactive section heading row.
+fn section_label(name: &str) -> (String, String) {
+    (
+        format!(
+            "{}{name}",
+            jackdaw_feathers::menu_bar::SECTION_ACTION_PREFIX
+        ),
+        String::new(),
+    )
+}
+
+/// The File menu: entries and dividers, no headings.
+fn file_menu_rows(hot_reload_label: &str, recent: Vec<(String, String)>) -> Vec<(String, String)> {
+    [
+        new_scene_rows(),
+        vec![op_entry::<crate::scenes::operators::SceneOpenOp>("Open")],
+        recent,
+        vec![
+            op_entry::<crate::scenes::operators::SceneCloseOp>("Close Tab"),
+            separator(),
+            op_entry::<scene_ops::SceneSaveOp>("Save"),
+            op_entry::<scene_ops::SceneSaveAsOp>("Save As..."),
+            op_entry::<crate::scenes::operators::SceneSaveAllOp>("Save All"),
+            op_entry::<scene_ops::SceneSaveSelectionAsPrefabOp>("Save Selection as Prefab"),
+            separator(),
+            op_entry::<app_ops::AppOpenKeybindsOp>("Keybinds..."),
+            op_entry::<app_ops::AppOpenExtensionsOp>("Extensions..."),
+            op_entry::<app_ops::AppToggleHotReloadOp>(hot_reload_label),
+            op_entry::<app_ops::AppGoHomeOp>("Home"),
+        ],
+    ]
+    .concat()
+}
+
+/// The File menu's `New` group: one row per scene kind, expanding on
+/// hover. Each row is `scene.new` with an `op:<id>?key=value` clause naming
+/// the kind.
+pub fn new_scene_rows() -> Vec<(String, String)> {
+    let kinds = ["3d", "2d", "ui"]
+        .into_iter()
+        .zip(["3D", "2D", "UI"])
+        .map(|(kind, label)| {
+            (
+                format!(
+                    "{OP_PREFIX}{}?kind={kind}",
+                    crate::scenes::operators::SceneNewOp::ID
+                ),
+                label.to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    jackdaw_feathers::menu_bar::submenu_row("New", kinds)
+}
+
+/// How many recent projects the File menu lists before the rest stay in
+/// the dialog.
+const RECENT_MENU_LIMIT: usize = 10;
+
+/// The File menu's Open Recent group: a row per recent project, expanding
+/// on hover. With nothing to list it is a plain row that opens the dialog.
+fn recent_projects_rows() -> Vec<(String, String)> {
+    let recent = project::read_recent_projects();
+    if recent.projects.is_empty() {
+        return vec![op_entry::<scene_ops::SceneOpenRecentOp>("Open Recent...")];
+    }
+    let projects = recent
+        .projects
+        .iter()
+        .take(RECENT_MENU_LIMIT)
+        .map(|entry| {
+            (
+                format!(
+                    "{OP_PREFIX}{}?path={}",
+                    ProjectOpenRecentOp::ID,
+                    escape_action_value(&entry.path.to_string_lossy())
+                ),
+                entry.name.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    jackdaw_feathers::menu_bar::submenu_row("Open Recent", projects)
+}
+
+/// Percent-escape the characters an `op:` action string gives meaning to
+/// (`?`, `&`, `=`, `%`), so a parameter carrying one arrives whole.
+fn escape_action_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '%' => escaped.push_str("%25"),
+            '?' => escaped.push_str("%3F"),
+            '&' => escaped.push_str("%26"),
+            '=' => escaped.push_str("%3D"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
+/// Undo `escape_action_value`. Text that was never escaped comes back
+/// unchanged, including a bare `%`.
+fn unescape_action_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(index) = rest.find('%') {
+        out.push_str(&rest[..index]);
+        let escape = rest
+            .get(index + 1..index + 3)
+            .and_then(|digits| u8::from_str_radix(digits, 16).ok());
+        match escape {
+            Some(byte) => {
+                out.push(byte as char);
+                rest = &rest[index + 3..];
+            }
+            None => {
+                out.push('%');
+                rest = &rest[index + 1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Dispatch `op:`-prefixed [`MenuAction`] events emitted by callers that
@@ -2355,11 +2849,16 @@ fn separator() -> (String, String) {
 /// free-standing `op:` events. Always plain `op:OP_ID` form ;
 /// parametrised dispatch goes through `ButtonOperatorCall.params`.
 fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
-    if let Some(widget_id) = event.action.strip_prefix("widget:") {
+    // The UI Widgets rows go through `instantiate_widget` so the new node
+    // is authored, undoable, and in the document.
+    if let Some(widget_id) = event
+        .action
+        .strip_prefix(add_entity_picker::WIDGET_ACTION_PREFIX)
+    {
         let widget_id = widget_id.to_string();
         commands.queue(move |world: &mut World| {
-            if let Err(error) = crate::ui_widgets_panel::instantiate_widget(world, &widget_id) {
-                error!("widget creation failed for `{widget_id}`: {error}");
+            if let Err(error) = ui_palette::instantiate_widget(world, &widget_id) {
+                warn!("could not add `{widget_id}`: {error}");
             }
         });
         return;
@@ -2432,9 +2931,8 @@ fn cleanup_editor(world: &mut World) {
         }
     }
 
-    // 5. Reset resources. The catalog, the durable-name set and the material registry all
-    // describe the project being closed; carrying them into the next one would write its
-    // materials into that project's assets.
+    // 5. Reset resources. The catalog, the durable-name set and the
+    // material registry all describe the project being closed.
     world.insert_resource(scene_io::SceneFilePath::default());
     world.insert_resource(scene_io::SceneDirtyState::default());
     world.insert_resource(Selection::default());
@@ -2461,9 +2959,6 @@ fn cleanup_editor(world: &mut World) {
 
 pub(crate) fn open_recent_dialog(world: &mut World) {
     let recent = project::read_recent_projects();
-    if recent.projects.is_empty() {
-        return;
-    }
 
     let mut dialog_event = jackdaw_feathers::dialog::OpenDialogEvent::new("Open Recent", "")
         .without_cancel()
@@ -2487,6 +2982,30 @@ pub(crate) fn open_recent_dialog(world: &mut World) {
         .resource::<jackdaw_feathers::icons::EditorFont>()
         .0
         .clone();
+
+    // A first run has nothing to list, and the dialog still opens to say so.
+    if recent.projects.is_empty() {
+        world.commands().spawn((
+            Node {
+                width: Val::Percent(100.0),
+                padding: UiRect::all(Val::Px(16.0)),
+                ..Default::default()
+            },
+            children![(
+                Text::new("No projects opened yet."),
+                TextFont {
+                    font: editor_font.clone().into(),
+                    font_size: jackdaw_feathers::tokens::TEXT_SIZE,
+                    ..Default::default()
+                },
+                TextColor(jackdaw_feathers::tokens::TEXT_SECONDARY),
+                Pickable::IGNORE,
+            )],
+            ChildOf(slot_entity),
+        ));
+        world.flush();
+        return;
+    }
 
     for entry in &recent.projects {
         let path = entry.path.clone();
@@ -2605,8 +3124,13 @@ fn send_scroll_events(
 
 fn on_scroll(
     mut scroll: On<Scroll>,
-    mut query: Query<(&mut ScrollPosition, &Node, &ComputedNode)>,
+    mut query: Query<
+        (&mut ScrollPosition, &Node, &ComputedNode),
+        Without<bevy::ui_widgets::ScrollArea>,
+    >,
 ) {
+    // A `ScrollArea` is the widget's to scroll; moving it here as well
+    // would move it twice for one turn of the wheel.
     let Ok((mut scroll_position, node, computed)) = query.get_mut(scroll.entity) else {
         return;
     };
@@ -2975,7 +3499,10 @@ fn auto_save_layout_on_change(
 /// 1. `WorkspacesPersist`: full per-workspace registry (current).
 /// 2. Bare `DockTree`: single-workspace layout (older format).
 /// 3. None / unparseable: fall through to defaults.
-fn init_layout(world: &mut World) {
+///
+/// Public so a test can load a layout without driving the whole
+/// `OnEnter(AppState::Editor)` transition.
+pub fn init_layout(world: &mut World) {
     let layout_json = world
         .get_resource::<crate::project::ProjectRoot>()
         .and_then(|p| p.config.layout.clone());
@@ -2983,10 +3510,13 @@ fn init_layout(world: &mut World) {
     let mut loaded_tree = false;
     if let Some(json) = layout_json {
         // Try the per-workspace format first.
-        if let Ok(persist) =
+        if let Ok(mut persist) =
             serde_json::from_value::<jackdaw_panels::WorkspacesPersist>(json.clone())
             && !persist.workspaces.is_empty()
         {
+            for workspace in &mut persist.workspaces {
+                canonicalise_persisted_windows(&mut workspace.tree);
+            }
             let active_tree = {
                 let mut registry = world.resource_mut::<jackdaw_panels::WorkspaceRegistry>();
                 persist.apply_to_registry(&mut registry);
@@ -2999,8 +3529,9 @@ fn init_layout(world: &mut World) {
         }
         // Fall back to the older bare-DockTree format.
         if !loaded_tree
-            && let Ok(tree) = serde_json::from_value::<jackdaw_panels::tree::DockTree>(json)
+            && let Ok(mut tree) = serde_json::from_value::<jackdaw_panels::tree::DockTree>(json)
         {
+            canonicalise_persisted_windows(&mut tree);
             world.insert_resource(tree);
             loaded_tree = true;
         }
@@ -3028,6 +3559,16 @@ fn init_layout(world: &mut World) {
     // Covers both the "fresh defaults" path and the older bare-DockTree
     // load path, so subsequent workspace switches save/restore correctly.
     sync_active_workspace_from_live_tree(world);
+}
+
+/// Point a saved layout's tabs at the windows that answer for them today:
+/// a tab naming the retired canvas panel becomes a viewport tab, without
+/// giving a leaf two tabs on the same panel.
+fn canonicalise_persisted_windows(tree: &mut jackdaw_panels::tree::DockTree) {
+    tree.alias_window_kind(
+        viewport::VIEWPORT_2D_WINDOW_ID,
+        viewport::VIEWPORT_WINDOW_ID,
+    );
 }
 
 /// Open `window_id` in its registered `default_area` leaf. If the
@@ -3074,18 +3615,14 @@ fn largest_visible_leaf(
 }
 
 /// Open a registered dock window, or bring its tab to the front when one
-/// already exists in the live tree. Unlike [`open_window_in_default_area`]
-/// (used by the Window menu, which always adds a fresh tab), this serves
-/// programmatic auto-open triggers such as the Terrain panel opening itself
-/// when a Terrain entity is added.
+/// already exists in the live tree.
 ///
-/// A present tab is focused rather than left alone: every fresh workspace's
-/// `right_sidebar` leaf is seeded at boot with one tab per registered window
-/// (`build_default_tree`), Terrain included but not focused
-/// (`DockLeaf::with_windows` activates the first one, and priority order puts
-/// Components first). A presence check alone would leave the Terrain tab
-/// unfocused behind Components when `entity.add.terrain` runs.
+/// For programmatic auto-open triggers, unlike `open_window_in_default_area`
+/// behind the Window menu, which always adds a fresh tab. A fresh workspace
+/// is seeded with a tab per registered window, so the tab usually exists
+/// already and only needs focusing.
 pub(crate) fn open_window_in_default_area_if_absent(world: &mut World, window_id: &str) {
+    let window_id = viewport::canonical_window_id(window_id);
     let existing = {
         let tree = world.resource::<jackdaw_panels::tree::DockTree>();
         tree.find_leaf_with_window(window_id).map(|leaf_id| {
@@ -3222,9 +3759,9 @@ fn sync_active_workspace_from_live_tree(world: &mut World) {
 ///
 /// Each canonical leaf is populated from `WindowRegistry::by_area`
 /// based on the windows registered with that `default_area`. The
-/// `center` leaf is empty today (the hardcoded `SceneViewport` is
-/// parented into it by `setup_viewport`). The multi-viewport work
-/// will register a real viewport panel into it.
+/// `center` leaf gets the one window registered for it, the viewport
+/// panel, whose mode decides whether it opens on the world or on the
+/// canvas.
 ///
 /// Project Files is split off the bottom of the `left` leaf via the
 /// runtime split API so the resulting bottom-left leaf gets a
@@ -3334,8 +3871,8 @@ mod dock_open_tests {
 
     use super::*;
 
-    /// Mirrors `build_default_tree`'s `right_sidebar` leaf: seeded at boot with every
-    /// registered window as a tab, Components first and therefore active.
+    /// Mirrors `build_default_tree`'s `right_sidebar` leaf: every registered
+    /// window as a tab, Components active.
     fn world_with_right_sidebar_seeded() -> World {
         let mut world = World::new();
         let mut tree = DockTree::new();
@@ -3350,9 +3887,7 @@ mod dock_open_tests {
         world
     }
 
-    /// A present but unfocused tab is not treated as already open: called on a freshly
-    /// booted workspace (Terrain tab present, Components active), this brings Terrain to
-    /// the front.
+    /// A tab that is present but not focused is brought to the front.
     #[test]
     fn a_present_but_unfocused_tab_is_brought_to_front() {
         let mut world = world_with_right_sidebar_seeded();
@@ -3374,7 +3909,8 @@ mod dock_open_tests {
         assert_eq!(leaf.windows.len(), 3);
     }
 
-    /// Calling it again once Terrain is the active tab leaves it active with no duplicate.
+    /// Calling it again once Terrain is the active tab leaves it active,
+    /// with no duplicate.
     #[test]
     fn calling_it_again_when_already_active_stays_stable() {
         let mut world = world_with_right_sidebar_seeded();
@@ -3393,5 +3929,384 @@ mod dock_open_tests {
             .find(|t| Some(t.id) == leaf.active)
             .map(|t| t.window_id.as_str());
         assert_eq!(active_window, Some("jackdaw.inspector.terrain"));
+    }
+}
+
+#[cfg(test)]
+mod preset_tree_tests {
+    use jackdaw_panels::tree::{DockLeaf, DockTree};
+    use jackdaw_panels::{DockWindowDescriptor, WindowRegistry};
+
+    use super::*;
+    use crate::viewport::{VIEWPORT_2D_WINDOW_ID, VIEWPORT_WINDOW_ID};
+
+    /// The window ids the leaf with this area id holds, in tab order.
+    fn windows_in(tree: &DockTree, area_id: &str) -> Vec<String> {
+        tree.leaves()
+            .find(|(_, leaf): &(_, &DockLeaf)| leaf.area_id == area_id)
+            .map(|(_, leaf)| leaf.tabs().map(|(window, _)| window.to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Every window id anywhere in the tree.
+    fn all_windows(tree: &DockTree) -> Vec<String> {
+        tree.leaves()
+            .flat_map(|(_, leaf)| leaf.tabs().map(|(window, _)| window.to_string()))
+            .collect()
+    }
+
+    /// The canvas is a mode of the viewport panel, so a preset asks for the
+    /// panel once and never for a second window beside it.
+    fn assert_one_viewport_panel(tree: &DockTree, preset: &str) {
+        let center = windows_in(tree, "center");
+        assert_eq!(
+            center.iter().filter(|id| *id == VIEWPORT_WINDOW_ID).count(),
+            1,
+            "{preset}'s center leaf holds one viewport tab, got {center:?}",
+        );
+        assert!(
+            !all_windows(tree)
+                .iter()
+                .any(|id| id == VIEWPORT_2D_WINDOW_ID),
+            "{preset} must not dock a window the editor no longer registers",
+        );
+    }
+
+    #[test]
+    fn the_level_design_preset_docks_one_viewport_panel_in_the_center() {
+        assert_one_viewport_panel(&build_level_design_tree(), "level design");
+    }
+
+    #[test]
+    fn the_animation_preset_docks_one_viewport_panel_in_the_center() {
+        assert_one_viewport_panel(&build_animation_tree(), "animation");
+    }
+
+    /// The default tree takes its center tabs from the registry, driven here
+    /// against a registry holding one center window.
+    #[test]
+    fn the_default_tree_docks_one_viewport_panel_in_the_center() {
+        let mut world = World::new();
+        world.init_resource::<DockTree>();
+        let mut registry = WindowRegistry::default();
+        for (id, area) in [
+            (VIEWPORT_WINDOW_ID, "center"),
+            ("jackdaw.inspector", "right_sidebar"),
+        ] {
+            registry.register(DockWindowDescriptor {
+                id: id.to_string(),
+                name: id.to_string(),
+                icon: None,
+                default_area: area.to_string(),
+                priority: 0,
+                build: std::sync::Arc::new(|_| {}),
+            });
+        }
+        world.insert_resource(registry);
+
+        build_default_tree(&mut world);
+
+        assert_one_viewport_panel(world.resource::<DockTree>(), "the default tree");
+    }
+}
+
+#[cfg(test)]
+mod file_menu_tests {
+    use super::*;
+    use jackdaw_feathers::menu_bar::{
+        SECTION_ACTION_PREFIX, SEPARATOR_ACTION, SUBMENU_ACTION_PREFIX, SUBMENU_END_ACTION,
+        submenu_row,
+    };
+
+    fn recent() -> Vec<(String, String)> {
+        submenu_row(
+            "Open Recent",
+            [(
+                String::from("op:project.open_recent?path=/tmp/game"),
+                String::from("game"),
+            )],
+        )
+    }
+
+    #[test]
+    fn the_file_menu_names_no_sections() {
+        let rows = file_menu_rows("Hot Reload: On", recent());
+        assert!(
+            !rows
+                .iter()
+                .any(|(action, _)| action.starts_with(SECTION_ACTION_PREFIX)),
+            "the dividers do the grouping: {rows:?}",
+        );
+        assert!(
+            rows.iter().any(|(action, _)| action == SEPARATOR_ACTION),
+            "the groups are still divided: {rows:?}",
+        );
+    }
+
+    #[test]
+    fn the_recent_projects_are_a_group_of_the_menus_two() {
+        let rows = file_menu_rows("Hot Reload: On", recent());
+        let openers = rows
+            .iter()
+            .filter(|(action, _)| action.starts_with(SUBMENU_ACTION_PREFIX))
+            .map(|(action, _)| action.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            openers,
+            vec![
+                format!("{SUBMENU_ACTION_PREFIX}New"),
+                format!("{SUBMENU_ACTION_PREFIX}Open Recent"),
+            ],
+            "the scene kinds and the recent list: {rows:?}",
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|(action, _)| action == SUBMENU_END_ACTION)
+                .count(),
+            openers.len(),
+            "every group is closed: {rows:?}",
+        );
+
+        let opened = rows
+            .iter()
+            .position(|(action, _)| action == &format!("{SUBMENU_ACTION_PREFIX}Open Recent"))
+            .expect("the group is in the menu");
+        let open = rows
+            .iter()
+            .position(|(_, label)| label == "Open")
+            .expect("Open is in the menu");
+        assert!(opened > open, "the recent list follows Open: {rows:?}");
+    }
+
+    /// A project directory is arbitrary text travelling through an action
+    /// string that splits on `?`, `&` and `=`.
+    #[test]
+    fn a_path_with_the_encodings_own_characters_survives_it() {
+        for path in [
+            "/home/joe/games/a&b",
+            "/home/joe/games/rate=1?x",
+            "/home/joe/100% real",
+            "/home/joe/plain",
+        ] {
+            let escaped = escape_action_value(path);
+            assert!(
+                !escaped.contains('&') && !escaped.contains('=') && !escaped.contains('?'),
+                "`{escaped}` still splits the action string",
+            );
+            assert_eq!(unescape_action_value(&escaped), path, "round trip");
+        }
+    }
+
+    /// An operator called by hand carries whatever the caller typed.
+    #[test]
+    fn text_that_was_never_escaped_comes_back_unchanged() {
+        assert_eq!(unescape_action_value("/home/50%"), "/home/50%");
+        assert_eq!(unescape_action_value("/home/%zz/x"), "/home/%zz/x");
+    }
+
+    /// With no recent projects there is no list to expand, so the row goes
+    /// back to being the one that opens the dialog.
+    #[test]
+    fn an_empty_recent_list_is_no_group_at_all() {
+        let rows = file_menu_rows(
+            "Hot Reload: Off",
+            vec![op_entry::<scene_ops::SceneOpenRecentOp>("Open Recent...")],
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|(action, _)| action == &format!("{SUBMENU_ACTION_PREFIX}Open Recent")),
+            "nothing expands there: {rows:?}",
+        );
+        assert!(
+            rows.iter().any(|(_, label)| label == "Open Recent..."),
+            "the dialog is still reachable: {rows:?}",
+        );
+    }
+
+    /// Each row is `scene.new` with the clause that names its scene kind.
+    #[test]
+    fn the_new_group_offers_the_three_scene_kinds() {
+        use jackdaw_feathers::button::ButtonOperatorCall;
+
+        let rows = file_menu_rows("Hot Reload: On", recent());
+        let open = rows
+            .iter()
+            .position(|(action, _)| action == &format!("{SUBMENU_ACTION_PREFIX}New"))
+            .expect("the File menu makes scenes");
+        let close = rows
+            .iter()
+            .skip(open)
+            .position(|(action, _)| action == SUBMENU_END_ACTION)
+            .expect("the group is closed")
+            + open;
+        let kinds = &rows[open + 1..close];
+
+        assert_eq!(
+            kinds.iter().map(|(_, label)| label).collect::<Vec<_>>(),
+            vec!["3D", "2D", "UI"],
+            "exactly the three kinds, in that order: {kinds:?}",
+        );
+        for (expected, (action, label)) in ["3d", "2d", "ui"].into_iter().zip(kinds) {
+            let call = ButtonOperatorCall::try_from(action.as_str())
+                .expect("the row is an operator action");
+            assert_eq!(call.id, crate::scenes::operators::SceneNewOp::ID);
+            let kind = call
+                .params
+                .iter()
+                .find(|(key, _)| key == "kind")
+                .map(|(_, value)| value.clone());
+            assert!(
+                matches!(kind, Some(jackdaw_scene_types::PropertyValue::String(ref v)) if v == expected),
+                "`{label}` carries the clause that decides its kind: {action}",
+            );
+        }
+
+        assert!(
+            !rows.iter().any(|(_, label)| label == "New UI Scene"),
+            "the flat UI row is gone, its kind now a row of the group: {rows:?}",
+        );
+    }
+}
+
+#[cfg(test)]
+mod extension_menu_tests {
+    use super::*;
+
+    fn entry(heading: &str, action: &str, label: &str) -> ExtensionMenuEntry {
+        ExtensionMenuEntry {
+            heading: heading.to_string(),
+            action: action.to_string(),
+            label: label.to_string(),
+        }
+    }
+
+    fn actions(rows: &[(String, String)]) -> Vec<&str> {
+        rows.iter().map(|(action, _)| action.as_str()).collect()
+    }
+
+    /// An operator the built-in File menu already lists gets one row, in the
+    /// built-in placement.
+    #[test]
+    fn an_entry_for_an_operator_the_menu_already_lists_is_dropped() {
+        let mut rows = vec![
+            section_label("Scene"),
+            ("op:scene.new".to_string(), "New".to_string()),
+        ];
+
+        append_extension_entries(
+            &mut rows,
+            vec![
+                entry("Jackdaw Core", "op:scene.new", "New Scene"),
+                entry("Jackdaw Core", "op:tools.bake", "Bake"),
+            ],
+        );
+
+        assert_eq!(
+            actions(&rows),
+            vec![
+                "##Scene",
+                "op:scene.new",
+                "---",
+                "##Jackdaw Core",
+                "op:tools.bake",
+            ],
+        );
+    }
+
+    /// The `New` group's parametrised rows carry `scene.new`, so an
+    /// extension's bare row for it is dropped.
+    #[test]
+    fn a_parametrised_built_in_row_carries_its_operator() {
+        let mut rows = new_scene_rows();
+        rows.push(("op:scene.open".to_string(), "Open".to_string()));
+        let before = actions(&rows).len();
+
+        append_extension_entries(
+            &mut rows,
+            vec![
+                entry("Jackdaw Core Functionality", "op:scene.new", "New Scene"),
+                entry("Jackdaw Core Functionality", "op:scene.open", "Open Scene"),
+            ],
+        );
+
+        assert_eq!(
+            actions(&rows).len(),
+            before,
+            "nothing appended, and no section for it: {rows:?}",
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|(_, label)| label == "Jackdaw Core Functionality" || label == "New Scene"),
+            "{rows:?}",
+        );
+    }
+
+    /// What is left opens a section of its own, named for the extension that
+    /// contributed it.
+    #[test]
+    fn what_an_extension_adds_opens_its_own_labelled_section() {
+        let mut rows = vec![("op:scene.new".to_string(), "New".to_string())];
+
+        append_extension_entries(
+            &mut rows,
+            vec![
+                entry("Terrain", "op:terrain.paint", "Paint"),
+                entry("Jackdaw Core", "op:tools.bake", "Bake"),
+                entry("Terrain", "op:terrain.flatten", "Flatten"),
+            ],
+        );
+
+        assert_eq!(
+            actions(&rows),
+            vec![
+                "op:scene.new",
+                "---",
+                "##Jackdaw Core",
+                "op:tools.bake",
+                "---",
+                "##Terrain",
+                "op:terrain.flatten",
+                "op:terrain.paint",
+            ],
+            "one section per extension, and no divider before the first row \
+             of a menu with nothing built in ahead of it",
+        );
+    }
+
+    /// Two extensions naming the same operator produce one row, as an
+    /// extension naming a built-in does.
+    #[test]
+    fn two_extensions_registering_one_operator_get_one_row() {
+        let mut rows = Vec::new();
+
+        append_extension_entries(
+            &mut rows,
+            vec![
+                entry("Terrain", "op:tools.bake", "Bake"),
+                entry("Zebra", "op:tools.bake", "Bake Lighting"),
+            ],
+        );
+
+        assert_eq!(
+            actions(&rows),
+            vec!["##Terrain", "op:tools.bake"],
+            "the first section to name it keeps it",
+        );
+    }
+
+    /// A menu an extension owns outright opens with its heading rather than
+    /// with a leading divider.
+    #[test]
+    fn a_menu_with_no_built_in_rows_starts_with_the_heading() {
+        let mut rows = Vec::new();
+
+        append_extension_entries(
+            &mut rows,
+            vec![entry("Terrain", "op:terrain.paint", "Paint")],
+        );
+
+        assert_eq!(actions(&rows), vec!["##Terrain", "op:terrain.paint"]);
     }
 }

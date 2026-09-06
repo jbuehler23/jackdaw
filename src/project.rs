@@ -14,6 +14,40 @@ pub struct ProjectRoot {
     pub config: ProjectConfig,
 }
 
+/// The open project's `assets/` directory, mirrored out of [`ProjectRoot`] so
+/// the plain path helpers -- called from observers, asset loaders and scene
+/// readers that hold no `World` -- need not go to disk for it.
+static OPEN_PROJECT_ASSETS: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+/// The open project's assets directory, or `None` when no project is
+/// open or its `assets/` does not exist.
+pub fn open_project_assets_dir() -> Option<PathBuf> {
+    OPEN_PROJECT_ASSETS.read().ok()?.clone()
+}
+
+/// Point the mirror at `dir`, or clear it. Only `mirror_open_project` should
+/// call this; it is public for tests.
+pub fn set_open_project_assets_dir(dir: Option<PathBuf>) {
+    if let Ok(mut slot) = OPEN_PROJECT_ASSETS.write() {
+        *slot = dir;
+    }
+}
+
+/// Keep [`open_project_assets_dir`] in step with the resource.
+pub(crate) fn mirror_open_project(
+    project: Option<Res<ProjectRoot>>,
+    mut mirrored: Local<Option<PathBuf>>,
+) {
+    let current = project
+        .map(|project| project.assets_dir())
+        .filter(|assets| assets.is_dir());
+    if *mirrored == current {
+        return;
+    }
+    set_open_project_assets_dir(current.clone());
+    *mirrored = current;
+}
+
 /// Native editor project configuration persisted to `.jackdaw/project.json`.
 /// Carries the same fields the legacy JSN project config held, without the
 /// vestigial format-header wrapper.
@@ -88,6 +122,48 @@ impl ProjectRoot {
         let root = dunce::simplified(&self.root);
         path.strip_prefix(root).unwrap_or(path).to_path_buf()
     }
+}
+
+/// Resolve `candidate` under `root`, refusing anything that would land outside
+/// it. A path the project owns is relative, carries no `..`, and lands under
+/// `root` once resolved.
+///
+/// The file need not exist yet, so the deepest existing path on the way to it
+/// is canonicalized -- including the target itself when it exists -- to catch a
+/// symlink that would otherwise smuggle the write out.
+pub fn path_within(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
+    if candidate.is_absolute() {
+        return Err(format!(
+            "`{}` is absolute; name a path relative to {}",
+            candidate.display(),
+            root.display()
+        ));
+    }
+    if candidate
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "`{}` climbs out of {}",
+            candidate.display(),
+            root.display()
+        ));
+    }
+    let root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let resolved = root.join(candidate);
+    let anchor = resolved
+        .ancestors()
+        .find(|ancestor| ancestor.exists())
+        .unwrap_or(&root);
+    let anchor = dunce::canonicalize(anchor).unwrap_or_else(|_| anchor.to_path_buf());
+    if !anchor.starts_with(&root) {
+        return Err(format!(
+            "`{}` resolves outside {}",
+            candidate.display(),
+            root.display()
+        ));
+    }
+    Ok(resolved)
 }
 
 #[derive(Serialize, Deserialize, Default)]

@@ -955,6 +955,23 @@ pub struct TerrainNavmesh {
     pub agent_height: f32,
     /// Steepest ground the agent may stand on, in degrees.
     pub max_slope_degrees: f32,
+    /// Tallest step the agent climbs without leaving the ground, in world
+    /// units.
+    ///
+    /// Ground either side of a rise no taller than this stays one connected
+    /// surface, so kerbs and stair treads are walked over rather than read as
+    /// ledges with a gap between them. The bake raises it to one height voxel
+    /// where it is smaller, since below that a slope rasterizes as terraces.
+    pub climb: f32,
+    /// Smallest scene mesh a bake rasterizes, as the longest edge of its
+    /// placed bounding box in world units.
+    ///
+    /// A piece under this on all three axes is left out. 0, the default,
+    /// filters nothing. Raise it to drop decoration a character walks
+    /// through -- grass, pebbles, litter -- without tagging each piece with
+    /// [`NavmeshExclude`]; a value under one voxel is raised to the voxel,
+    /// which is the smallest a bake can resolve anyway.
+    pub min_obstacle_size: f32,
 }
 
 impl Default for TerrainNavmesh {
@@ -963,8 +980,68 @@ impl Default for TerrainNavmesh {
             agent_radius: 0.4,
             agent_height: 1.8,
             max_slope_degrees: 45.0,
+            climb: 0.9,
+            min_obstacle_size: 0.0,
         }
     }
+}
+
+/// A node the navmesh bake leaves out, along with everything under it.
+///
+/// Descendants inherit it, so tagging a scatter group excludes every
+/// instance in it: a field of grass is one component rather than a thousand.
+/// What it is for is geometry a character walks through -- grass, pebbles,
+/// vines, decoration -- which a bake would otherwise rasterize into
+/// sub-voxel holes the baker cannot contour.
+///
+/// Scene data rather than an editor preference: the navmesh beside a scene
+/// was baked over particular geometry, and reopening the scene has to bake
+/// the same geometry again.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Navigation"))]
+pub struct NavmeshExclude;
+
+/// Reflect type path for [`NavmeshExclude`], for the paths that name a
+/// component by its path rather than by its type.
+pub const NAVMESH_EXCLUDE_TYPE_PATH: &str = "jackdaw_scene_types::types::NavmeshExclude";
+
+/// Marks the group entity a scatter run stamps its instances under.
+///
+/// `key` is what a re-run matches on, so two scatter runs over the same
+/// terrain, such as undergrowth and trees, stay independent stamps rather
+/// than overwriting each other. A group is a child of the terrain it was
+/// scattered over, and the match is scoped to that terrain, so two
+/// terrains may carry a group of the same name.
+///
+/// Scene data rather than an editor marker: without it in the file, a
+/// reopened scene has no record of which entities a run produced, and the
+/// next run over the same terrain places a second copy of everything.
+#[derive(Component, Reflect, Clone, Debug, Default)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Terrain"), @crate::EditorHidden)]
+pub struct ScatterGroup {
+    /// Operator id that produced this group, or `external` for a
+    /// hand-authored group adopted by `terrain.scatter.adopt`.
+    pub generator: String,
+    /// Stamp identity. Matched on re-run, within the parent terrain.
+    pub key: String,
+}
+
+/// Provenance carried by every generated instance.
+///
+/// `generated` is the transform this instance was spawned with, in the
+/// terrain's local space, which is also the space the instance is stored
+/// in. An instance whose live `Transform` equals it has not been edited by
+/// hand and a re-run may replace it; anything else is preserved. Exact
+/// equality holds as a test because nothing in the editor perturbs a
+/// transform on its own: no physics settle, no re-import, no snapping pass
+/// over placed entities.
+#[derive(Component, Reflect, Clone, Debug, Default)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Terrain"), @crate::EditorHidden)]
+pub struct ScatterInstance {
+    pub generator: String,
+    pub key: String,
+    pub seed: u64,
+    pub generated: Transform,
 }
 
 /// Optional snapping of a terrain onto a game's own metric grid.
@@ -1115,6 +1192,33 @@ impl TerrainChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The const is how the editor's save filter, the component picker and
+    /// any script naming the tag reach it; drift here breaks all three
+    /// silently.
+    #[test]
+    fn navmesh_exclude_type_path_const_matches_the_reflected_path() {
+        assert_eq!(NavmeshExclude::type_path(), NAVMESH_EXCLUDE_TYPE_PATH);
+    }
+
+    /// The defaults are a persisted contract: BSN elides a field equal to
+    /// its default, so these numbers are what every scene saved before the
+    /// field existed reads back as. The round trip through a document is
+    /// pinned by `tests/scenes/bsn_scene_fixpoint.rs`; this is the
+    /// contract those numbers are, so a change to one is a change to what
+    /// existing scenes mean.
+    #[test]
+    fn a_navmesh_that_authored_nothing_bakes_what_it_always_baked() {
+        let defaults = TerrainNavmesh::default();
+        assert_eq!(
+            defaults.min_obstacle_size, 0.0,
+            "an obstacle floor nobody authored has to filter nothing"
+        );
+        assert_eq!(
+            defaults.climb, 0.9,
+            "the climb the baker used before the field was authorable"
+        );
+    }
 
     #[test]
     fn plane_is_a_thin_six_faced_slab() {

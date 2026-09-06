@@ -7,8 +7,8 @@
 # It does not change what fits: the 65,535 export ceiling is the PE
 # format's 16-bit ordinal field, so every linker hits it alike.
 # Bevy, Jackdaw's extension-facing surface, and the SDK facade have separate
-# DLL export tables. The release workflow measures all three. Linux and macOS
-# use their default linker (or the user's override in a different config).
+# DLL export tables. The release workflow measures all three. macOS uses its
+# default linker (or the user's override in a different config).
 
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld"
@@ -25,6 +25,29 @@ rustflags = [
 # needs the same rule for its DLLs.
 [target.'cfg(target_os = "macos")']
 rustflags = ["-Zshare-generics=no"]
+
+# Linux links through wild, the linker CI measures against
+# (`.cargo/config_ci.toml`). clang drives the link because `--ld-path` is a
+# clang flag that `cc` rejects. The rest of the CI file stays out on purpose:
+# `-Dwarnings` turns every local warning into a build failure, the cranelift
+# backend changes codegen, and `-Cdebuginfo=line-tables-only` drops the debug
+# info a local debugger reads.
+#
+# Opting out takes two variables, because the linker and the flag pointing it
+# at wild are set separately and each is overridden on its own:
+#
+#   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc  replaces `clang` below
+#   CARGO_BUILD_RUSTFLAGS=                           replaces this `rustflags`
+#                                                    list whole
+#
+# A machine with no clang needs the first: clearing `CARGO_BUILD_RUSTFLAGS`
+# alone drops `--ld-path=wild` but still runs clang, so the link still fails
+# with `linker 'clang' not found`. A machine with clang but no wild needs the
+# second, for `unable to find library -lwild`. Either way the variables are
+# the opt-out, rather than editing this file.
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-Clink-arg=--ld-path=wild"]
 
 [build]
 # The default `dylib` feature links the editor against the SDK dylib.

@@ -14,6 +14,18 @@ pub fn is_enum_variant_of(stored_path: &str, base_path: &str) -> bool {
         && !stored_path[base_path.len() + 2..].contains("::")
 }
 
+/// The component type path a patch names, for the patch forms that name one.
+/// `Children`, base inheritance and name references are not components and
+/// answer `None`.
+pub fn patch_type_path(patch: &BsnPatch) -> Option<&str> {
+    match patch {
+        BsnPatch::Type(path) | BsnPatch::Template(path, _) => Some(path.as_str()),
+        BsnPatch::Struct(data) => Some(data.type_path.as_str()),
+        BsnPatch::TupleStruct(data) => Some(data.type_path.as_str()),
+        _ => None,
+    }
+}
+
 /// Whether `paths` includes `type_path`, treating a stored `Enum::Variant`
 /// patch as covering the base enum type.
 pub fn type_paths_include<'a>(paths: impl IntoIterator<Item = &'a str>, type_path: &str) -> bool {
@@ -54,14 +66,25 @@ impl SceneBsnAst {
             .0
             .iter()
             .filter_map(|&patch_entity| {
-                self.get_patch(patch_entity).and_then(|patch| match patch {
-                    BsnPatch::Type(tp) | BsnPatch::Template(tp, _) => Some(tp.clone()),
-                    BsnPatch::Struct(data) => Some(data.type_path.clone()),
-                    BsnPatch::TupleStruct(data) => Some(data.type_path.clone()),
-                    _ => None,
-                })
+                self.get_patch(patch_entity)
+                    .and_then(patch_type_path)
+                    .map(str::to_string)
             })
             .collect()
+    }
+
+    /// Every component type path the document names, in no particular order
+    /// and with repeats.
+    ///
+    /// Reached through the patch component rather than by walking `Children`
+    /// from the roots, so a type in a subtree that walk would miss still
+    /// appears.
+    pub fn all_patch_type_paths(&self) -> impl Iterator<Item = &str> {
+        self.world
+            .iter_entities()
+            .filter_map(|entity| entity.get::<BsnPatches>())
+            .flat_map(|patches| patches.0.iter().copied())
+            .filter_map(|patch| self.get_patch(patch).and_then(patch_type_path))
     }
 
     /// Get the [`BsnPatch::Name`] value for an AST entity, if present.
@@ -130,16 +153,23 @@ impl SceneBsnAst {
     }
 
     /// Get child AST entities from [`BsnPatch::Children`], if present.
+    ///
+    /// A node may carry more than one `Children` patch: a parsed document
+    /// writes one per `Children [ ... ]` relation, and an edit that adds a
+    /// child to a node whose first patch list is not the one it belongs to
+    /// leaves a second. Every list contributes, in patch order, so the child
+    /// order this reports is the order the document holds.
     pub fn get_children_ast(&self, patches_entity: Entity) -> Vec<Entity> {
         let Some(patches) = self.get_patches(patches_entity) else {
             return Vec::new();
         };
+        let mut children = Vec::new();
         for &pe in &patches.0 {
-            if let Some(BsnPatch::Children(children)) = self.get_patch(pe) {
-                return children.clone();
+            if let Some(BsnPatch::Children(list)) = self.get_patch(pe) {
+                children.extend(list.iter().copied());
             }
         }
-        Vec::new()
+        children
     }
 
     /// Find the patch of a given type within an entity's patches list.

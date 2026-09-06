@@ -1,31 +1,19 @@
-//! Baking a navigation mesh from the selected terrain, and drawing the result
-//! over the ground.
+//! Baking a navigation mesh from the selected terrain, and drawing the
+//! result over the ground.
 //!
-//! The bake is an explicit action, never live: a terrain is sculpted in long
-//! strokes and a bake costs seconds. The artifact records a hash of the world
-//! it was baked from, and the options bar reports when the two disagree.
+//! The bake is an explicit action, never live. Its input is the terrain's
+//! stored heights at full resolution rather than the clipmap meshes in the
+//! viewport, which are built around the camera. Scene meshes join it as more
+//! of the same geometry rather than as obstacles: a flat roof at a walkable
+//! slope comes back walkable, and a wall comes back as the gap around it.
 //!
-//! The input is the terrain's own full-resolution geometry, taken from stored
-//! heights rather than from the clipmap meshes in the viewport, which are built
-//! around the camera at whatever level of detail the view called for and would
-//! bake the camera's position into the navmesh. Scene meshes join it as more of
-//! the same geometry rather than as obstacles: a flat roof at a walkable slope
-//! comes back walkable, and a wall comes back as the gap around it.
-//!
-//! Meshing the ground is the expensive half of assembling a bake's input, a
-//! million cells at editor scale, and happens inside the async bake task rather
-//! than in the operator. The scene's own meshes are converted on the main
-//! thread, since they live behind an asset collection a task cannot hold; that
-//! half is proportional to the props in the scene rather than to the terrain.
-//! The clock starts at the click, where the status changes, so the time
-//! reported is the time waited.
-//!
-//! The overlay is view state and leaves no history entry. The agent a bake is
-//! for is scene data on the terrain and does.
+//! The artifact records a hash of the world it was baked from, and the
+//! options bar reports when the two disagree.
 
 use std::path::PathBuf;
 use std::time::Instant;
 
+use bevy::camera::primitives::{Aabb, MeshAabb as _};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::math::Affine3A;
 use bevy::prelude::*;
@@ -68,27 +56,31 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// The last bake's result and whether the overlay draws.
 ///
 /// One scene's, not the editor's: a bake belongs to the ground it was taken
-/// from, so this rides the tab the way [`TerrainDataStore`] does.
-///
-/// What a bake is *for* is not here. The agent it carries is authored per
-/// terrain and saved with the scene as
-/// [`jackdaw_scene_types::TerrainNavmesh`], so the next person to open the
-/// scene can see which character the navmesh beside it was baked for.
+/// from, so this rides the tab. What a bake is *for* is authored per terrain
+/// and saved with the scene instead.
 #[derive(Resource)]
 pub struct TerrainNavmeshState {
+    /// Whether the walkable surface is drawn over the ground.
+    ///
+    /// Off until somebody asks for it: the overlay is an opaque unlit sheet
+    /// over every walkable cell, so a scene that opens with it on shows one
+    /// flat colour where its terrain is.
     pub show_overlay: bool,
     pub status: BakeStatus,
     pub baked: Option<BakedNavmesh>,
     /// Whether the world moved out from under [`Self::baked`], and in which
     /// way.
     pub staleness: Staleness,
+    /// Stored placements the last bake stood in a default footprint
+    /// because their models had not loaded. Zero when every asset was
+    /// measured.
+    pub unresolved_scatter: usize,
 }
 
 /// Why a bake does not describe the world, if it does not.
 ///
-/// The two ways a bake goes out of date are repaired in different places: an
-/// agent scrubbed to a new size is a number on the terrain, and moved ground is
-/// out in the scene. They are reported separately so the reader knows which.
+/// The two ways a bake goes out of date are repaired in different places, so
+/// they are reported separately.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Staleness {
     /// The bake still describes the world.
@@ -111,24 +103,25 @@ impl Staleness {
 impl Default for TerrainNavmeshState {
     fn default() -> Self {
         Self {
-            show_overlay: true,
+            show_overlay: false,
             status: BakeStatus::Idle,
             baked: None,
             staleness: Staleness::Fresh,
+            unresolved_scatter: 0,
         }
     }
 }
 
 /// What the baker is asked for, from what the terrain authored.
 ///
-/// The voxel is not authored: it is derived from the terrain's own cell so a
-/// coarse terrain is not voxelized as if it were fine, and it is coarsened
-/// again inside the bake to fit the grid budget.
+/// The voxel is derived from the terrain's own cell, then coarsened inside
+/// the bake to fit the grid budget.
 pub(crate) fn bake_params(terrain: &jackdaw_scene_types::Terrain) -> BakeParams {
     BakeParams {
         agent_radius: terrain.navmesh.agent_radius,
         agent_height: terrain.navmesh.agent_height,
         max_slope_degrees: terrain.navmesh.max_slope_degrees,
+        climb: terrain.navmesh.climb,
         ..BakeParams::default()
     }
     .with_terrain_cell(terrain_cell(terrain))
@@ -168,11 +161,18 @@ pub struct TabNavmesh {
     running: Option<RunningBake>,
 }
 
+/// Whether a navmesh bake is running for the active tab.
+///
+/// The bake is a background task, so an operator that starts one returns
+/// before there is a navmesh.
+pub(crate) fn bake_in_flight(world: &World) -> bool {
+    world.contains_resource::<RunningBake>()
+}
+
 /// Moves the active tab's navmesh out of the world and onto its tab.
 pub(crate) fn take_from_world(world: &mut World) -> Option<TabNavmesh> {
-    // The drawn overlay belongs to the bake going onto the tab, not to the tab
-    // coming in. `sync_navmesh_overlay` builds the incoming one's on the next
-    // frame from the state installed with it.
+    // The drawn overlay belongs to the bake going onto the tab, not to the
+    // one coming in; `sync_navmesh_overlay` rebuilds it next frame.
     despawn_overlay(world);
     let state = std::mem::take(&mut *world.get_resource_mut::<TerrainNavmeshState>()?);
     let running = world.remove_resource::<RunningBake>();
@@ -196,14 +196,11 @@ pub(crate) fn install_in_world(world: &mut World, tab: TabNavmesh) {
 
 /// Forgets the active scene's navmesh, in the world and in flight.
 ///
-/// A tab holds one scene at a time but not always the same one: File > Open,
-/// File > New, and Save & New Scene all replace what is in a tab without
-/// switching away from it. Without this the replaced scene's bake stays
-/// resident, drawn over the new ground, counted in the bar, and blocking the
-/// new scene's own artifact from being read, while reporting itself fresh
-/// because the terrain it was measured against is absent to disagree.
-///
-/// [`take_from_world`] instead moves a bake somewhere it will be wanted again.
+/// A tab holds one scene at a time but not always the same one: Open, New,
+/// and Save & New Scene all replace what is in a tab without switching away
+/// from it. Without this the replaced scene's bake stays resident, drawn
+/// over the new ground and reporting itself fresh. `take_from_world` instead
+/// moves a bake somewhere it will be wanted again.
 pub(crate) fn forget_scene_navmesh(world: &mut World) {
     despawn_overlay(world);
     if let Some(mut state) = world.get_resource_mut::<TerrainNavmeshState>() {
@@ -238,8 +235,8 @@ impl BakedNavmesh {
     /// `Terrain::data_path` of the ground this was baked from.
     ///
     /// Staleness is measured against *this* terrain, not against whatever is
-    /// selected: a scene with two terrains would otherwise report a bake of one
-    /// as stale the moment the other was clicked on.
+    /// selected: a scene with two terrains would otherwise report a bake of
+    /// one as stale the moment the other was clicked on.
     pub fn data_path(&self) -> &str {
         &self.artifact.terrain
     }
@@ -260,19 +257,18 @@ pub enum BakeStatus {
 struct RunningBake {
     handle: Task<Result<NavmeshArtifact, String>>,
     started: Instant,
-    /// The scene this bake was started under, and where the finished artifact
-    /// should be written. Both are resolved before the bake starts, so the poll
-    /// does not reach back into the scene and a bake that outlives a tab switch
-    /// lands on its own tab rather than on whichever one is in front.
+    /// The scene this bake was started under, and where the finished
+    /// artifact should be written. Both are resolved before the bake starts,
+    /// so a bake that outlives a tab switch lands on its own tab.
     scene: Option<PathBuf>,
     destination: Option<PathBuf>,
 }
 
 /// Leaving the editor drops any bake in flight.
 ///
-/// The poll only runs in `Editor`, so a bake left running across the exit would
-/// keep the resource alive with nothing to retire it, and every later Bake
-/// click would be cancelled as a duplicate.
+/// The poll only runs in `Editor`, so a bake left running across the exit
+/// would keep the resource alive and every later Bake click would be
+/// cancelled as a duplicate.
 fn drop_running_bake(mut commands: Commands, mut state: ResMut<TerrainNavmeshState>) {
     commands.remove_resource::<RunningBake>();
     if state.status == BakeStatus::Baking {
@@ -301,6 +297,7 @@ pub(crate) fn terrain_navmesh_bake(
     terrains: Query<(&jackdaw_scene_types::Terrain, &GlobalTransform)>,
     geometry: SceneGeometry,
     store: Res<TerrainDataStore>,
+    scatter_assets: Option<Res<jackdaw_terrain::render::ScatterAssets>>,
     scene_path: Res<SceneFilePath>,
     running: Option<Res<RunningBake>>,
     mut state: ResMut<TerrainNavmeshState>,
@@ -329,9 +326,8 @@ pub(crate) fn terrain_navmesh_bake(
     }
     // The options bar cannot author a negative agent, but a scene file can:
     // the agent is reflected component data and BSN text goes in unclamped.
-    // Caught here because a bake at these numbers succeeds, the voxel
-    // arithmetic saturating rather than failing, and produces an artifact no
-    // build will read back.
+    // A bake at these numbers succeeds, the voxel arithmetic saturating, and
+    // produces an artifact no build will read back.
     let params = bake_params(terrain);
     if !params.is_plausible() {
         state.status = BakeStatus::Failed(
@@ -345,15 +341,44 @@ pub(crate) fn terrain_navmesh_bake(
     // Extent and placement come from the cells the terrain holds, so the bake
     // covers whatever ground has been allocated.
     let shape = store.grid_shape(terrain);
+    let (mut placed, mut tally) = geometry.placed(min_obstacle(terrain, params));
+    // Built whether or not the renderer is there to measure the assets: a
+    // bake that quietly left the trees out because a resource was missing
+    // would report success over a navmesh with no forest in it.
+    let bounds_of = |asset: &str| scatter_assets.as_deref().and_then(|a| a.bounds(asset));
+    let (obstacles, skipped, unresolved) = scatter_obstacles(
+        document,
+        bounds_of,
+        transform.affine(),
+        min_obstacle(terrain, params),
+    );
+    tally.included += obstacles.len();
+    tally.skipped_small += skipped;
+    tally.unresolved_scatter += unresolved;
+    placed.extend(obstacles);
+    if unresolved > 0 {
+        warn!(
+            "{unresolved} scatter placements stand in a default footprint: their models had              not loaded when this bake started"
+        );
+    }
+    state.unresolved_scatter = unresolved;
+    if tally.excluded > 0 {
+        info!(
+            "{} scene meshes are tagged NavmeshExclude and are not in this bake",
+            tally.excluded
+        );
+    }
     let input = BakeInput {
         regions: document.regions.clone(),
         cell: terrain_cell(terrain),
         origin: shape.origin,
         placement: transform.affine(),
         data_path: terrain.data_path.clone(),
-        geometry: geometry.placed(),
+        scatter: document.scatter.clone(),
+        geometry: placed,
         geometry_hashes: geometry_hashes(geometry.placements()),
         params,
+        tally,
     };
 
     let scene = scene_path.path.as_ref().map(PathBuf::from);
@@ -393,13 +418,10 @@ pub(crate) fn terrain_navmesh_toggle_overlay(
 /// The scene meshes a bake rasterizes alongside the terrain.
 ///
 /// One definition, used by the bake and by the staleness check, so the two
-/// cannot disagree about what the bake was over.
-///
-/// These are *geometry*, not obstacles: they are rasterized into the same
-/// heightfield the ground is, so a flat roof at a walkable slope comes back
-/// walkable and a wall comes back as the gap around it. Left out are a body the
-/// simulation moves, a mesh hidden in the viewport, and a trigger volume
-/// nothing collides with.
+/// cannot disagree about what the bake was over. These are geometry, not
+/// obstacles: they are rasterized into the same heightfield the ground is.
+/// Left out are a body the simulation moves, a mesh hidden in the viewport,
+/// and a trigger volume nothing collides with.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SceneGeometry<'w, 's> {
     meshes: Query<
@@ -416,10 +438,8 @@ pub(crate) struct SceneGeometry<'w, 's> {
     >,
     /// Colliders standing on their own, with no mesh to rasterize.
     ///
-    /// A shape authored straight onto an entity (a capsule, a box, a collider
-    /// built from bounds rather than from geometry) is an obstacle in the
-    /// running game and nothing to a bake that reads meshes. Kept as its own
-    /// query so the bake can warn about it.
+    /// A shape authored straight onto an entity is an obstacle in the running
+    /// game and nothing to a bake that reads meshes, so the bake warns.
     mesh_less_colliders: Query<
         'w,
         's,
@@ -438,23 +458,37 @@ pub(crate) struct SceneGeometry<'w, 's> {
         ),
     >,
     visibility: Query<'w, 's, (Option<&'static Visibility>, Option<&'static ChildOf>)>,
+    exclusions: Query<
+        'w,
+        's,
+        (
+            Has<jackdaw_scene_types::NavmeshExclude>,
+            Option<&'static ChildOf>,
+        ),
+    >,
     names: Query<'w, 's, &'static Name>,
     assets: Res<'w, Assets<Mesh>>,
 }
 
 impl SceneGeometry<'_, '_> {
-    /// Every mesh that belongs in the bake, with where it stands.
-    fn baked(&self) -> impl Iterator<Item = (Entity, Affine3A, &Mesh3d)> + '_ {
+    /// Every mesh a bake could rasterize, before anything the author has
+    /// excluded is dropped.
+    fn candidates(&self) -> impl Iterator<Item = (Entity, Affine3A, &Mesh3d)> + '_ {
         self.meshes
             .iter()
             .filter(|(entity, _, _, body, sensor)| {
-                // A body that moves is not ground: baking it would freeze one
-                // frame of a simulation into the navmesh. Nothing stands on a
-                // trigger volume either. A collider with no body is static,
-                // like an unsimulated scene mesh.
+                // A body that moves is not ground, and nothing stands on a
+                // trigger volume. A collider with no body is static, like an
+                // unsimulated scene mesh.
                 !moves(*body) && sensor.is_none() && !self.hidden(*entity)
             })
             .map(|(entity, transform, handle, _, _)| (entity, transform.affine(), handle))
+    }
+
+    /// Every mesh that belongs in the bake, with where it stands.
+    fn baked(&self) -> impl Iterator<Item = (Entity, Affine3A, &Mesh3d)> + '_ {
+        self.candidates()
+            .filter(|(entity, _, _)| !self.excluded(*entity))
     }
 
     /// Whether any mesh in the bake is still waiting on its asset.
@@ -468,9 +502,8 @@ impl SceneGeometry<'_, '_> {
 
     /// Where each piece stands and how much of it there is.
     ///
-    /// Reads the mesh's counts rather than its vertices, so the staleness check
-    /// can run it several times a second against a scene the bake itself takes
-    /// seconds over.
+    /// Reads the mesh's counts rather than its vertices, so the staleness
+    /// check can run several times a second.
     fn placements(&self) -> impl Iterator<Item = (Affine3A, u32, u32)> + '_ {
         self.baked().filter_map(|(_, placement, handle)| {
             let mesh = self.assets.get(handle)?;
@@ -484,18 +517,35 @@ impl SceneGeometry<'_, '_> {
 
     /// Every piece as the baker reads it, in world space.
     ///
-    /// Lifted out of the asset collection here because a bake runs off the main
-    /// thread and cannot hold one. A mesh the baker cannot read (a strip, a
-    /// fan, anything without an index buffer) is named in a warning rather than
-    /// dropped silently, since it will be missing from the navmesh.
-    fn placed(&self) -> Vec<TriMesh> {
+    /// Lifted out of the asset collection here because a bake runs off the
+    /// main thread and cannot hold one. A mesh the baker cannot read is named
+    /// in a warning rather than dropped silently.
+    fn placed(&self, min_size: f32) -> (Vec<TriMesh>, GeometryTally) {
         let mut out = Vec::new();
-        for (entity, placement, handle) in self.baked() {
+        let mut tally = GeometryTally {
+            threshold: min_size,
+            ..default()
+        };
+        for (entity, placement, handle) in self.candidates() {
+            if self.excluded(entity) {
+                tally.excluded += 1;
+                continue;
+            }
             let Some(mesh) = self.assets.get(handle) else {
                 continue;
             };
+            // Decoration below the voxel does not become ground, it becomes
+            // holes in it, which is what the baker refuses a contour over.
+            if placed_extent(mesh, placement).is_some_and(|extent| extent.max_element() < min_size)
+            {
+                tally.skipped_small += 1;
+                continue;
+            }
             match placed_trimesh(mesh, placement) {
-                Some(tri) => out.push(tri),
+                Some(tri) => {
+                    tally.included += 1;
+                    out.push(tri);
+                }
                 None => warn!(
                     "{} is not a triangle list with an index buffer, so it is not in the navmesh",
                     self.describe(entity)
@@ -503,7 +553,7 @@ impl SceneGeometry<'_, '_> {
             }
         }
         for (entity, body, sensor) in self.mesh_less_colliders.iter() {
-            if moves(body) || sensor.is_some() || self.hidden(entity) {
+            if moves(body) || sensor.is_some() || self.hidden(entity) || self.excluded(entity) {
                 continue;
             }
             warn!(
@@ -512,13 +562,31 @@ impl SceneGeometry<'_, '_> {
                 self.describe(entity)
             );
         }
-        out
+        (out, tally)
     }
 
-    /// Bevy's visibility rule, walked on demand: hidden wins, visible stops the
-    /// walk, inherited asks the parent. Read here rather than off
-    /// `InheritedVisibility` so the answer does not depend on where in the
-    /// frame the bake was asked for.
+    /// Whether the author has taken this node out of the bake, walked up the
+    /// hierarchy so a tag on a group covers everything under it.
+    fn excluded(&self, entity: Entity) -> bool {
+        let mut at = entity;
+        loop {
+            let Ok((tagged, parent)) = self.exclusions.get(at) else {
+                return false;
+            };
+            if tagged {
+                return true;
+            }
+            match parent {
+                Some(parent) => at = parent.parent(),
+                None => return false,
+            }
+        }
+    }
+
+    /// Bevy's visibility rule, walked on demand: hidden wins, visible stops
+    /// the walk, inherited asks the parent. Read here rather than off
+    /// `InheritedVisibility`, whose answer depends on where in the frame the
+    /// bake was asked for.
     fn hidden(&self, entity: Entity) -> bool {
         let mut at = entity;
         loop {
@@ -545,6 +613,63 @@ impl SceneGeometry<'_, '_> {
     }
 }
 
+/// What the scene contributed to a bake, and what it did not.
+///
+/// Travels with the input so a bake that fails can say what it was over.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct GeometryTally {
+    included: usize,
+    skipped_small: usize,
+    excluded: usize,
+    /// Stored placements whose asset had no measurable extent, and so
+    /// stand in a default footprint rather than their own.
+    unresolved_scatter: usize,
+    /// Size a piece had to reach to be rasterized, in world units.
+    threshold: f32,
+}
+
+impl GeometryTally {
+    /// A refusal from the baker, named against the geometry behind it.
+    fn explain(&self, reason: String) -> String {
+        let unresolved = if self.unresolved_scatter > 0 {
+            format!(
+                " and {} scatter placements stood in a default footprint because their models \
+                 had not loaded",
+                self.unresolved_scatter
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            "{reason} -- {} scene meshes were in this bake ({} skipped as smaller than the \
+             {:.2} m voxel){unresolved}; tag decoration such as grass or pebbles with \
+             NavmeshExclude, or raise Min Obstacle Size, and bake again",
+            self.included, self.skipped_small, self.threshold
+        )
+    }
+}
+
+/// World-space size of a mesh's bounding box under `placement`, or `None` for
+/// a mesh with no readable positions.
+///
+/// The box is transformed by its corners rather than by its extents: a rotated
+/// placement turns a thin plank into a box no axis-aligned scaling of the
+/// original describes.
+fn placed_extent(mesh: &Mesh, placement: Affine3A) -> Option<Vec3> {
+    let aabb = mesh.compute_aabb()?;
+    let (center, half) = (Vec3::from(aabb.center), Vec3::from(aabb.half_extents));
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    for corner in 0..8u32 {
+        let sign = |bit: u32| if corner & (1 << bit) == 0 { -1.0 } else { 1.0 };
+        let point =
+            placement.transform_point3(center + half * Vec3::new(sign(0), sign(1), sign(2)));
+        min = min.min(point);
+        max = max.max(point);
+    }
+    Some(max - min)
+}
+
 /// One mesh in world space, or `None` if the baker cannot read it.
 ///
 /// The affine is applied to the vertices directly rather than through a
@@ -567,9 +692,8 @@ fn placed_trimesh(mesh: &Mesh, placement: Affine3A) -> Option<TriMesh> {
 
 /// One hash per piece of scene geometry.
 ///
-/// Split from [`world_source_hash`] because the two halves are paid for in
-/// different places: this one needs the world, the other walks megabytes of
-/// heights and runs inside the bake.
+/// Split from `world_source_hash` because this half needs the world and the
+/// other walks megabytes of heights inside the bake.
 fn geometry_hashes(placements: impl Iterator<Item = (Affine3A, u32, u32)>) -> Vec<u64> {
     placements
         .map(|(placement, vertices, triangles)| {
@@ -582,23 +706,22 @@ fn geometry_hashes(placements: impl Iterator<Item = (Affine3A, u32, u32)>) -> Ve
 
 /// Hash of everything this terrain's bake depends on.
 ///
-/// `placement` is the terrain's own transform. A bake is taken in world space,
-/// so ground that is moved, turned, or scaled after one leaves every polygon
-/// hanging where the ground stood, a change the heights and the shape say
-/// nothing about.
-///
-/// The shape it eats is the cell size and the cells the terrain stores, not a
-/// declared rectangle. Both move the ground: a wider cell size rescales it, and
-/// allocating a region adds to it.
+/// A bake is taken in world space, so `placement` counts: ground that is
+/// moved, turned or scaled afterwards leaves every polygon where the ground
+/// stood. The shape it eats is the cell size and the cells the terrain
+/// stores, not a declared rectangle. The stored scatter goes in too, a
+/// placement being an obstacle the bake routes round.
 fn world_source_hash(
     cell: Vec2,
     extent: (u32, u32),
     placement: Affine3A,
     regions: &jackdaw_terrain::TerrainRegions,
+    scatter: &jackdaw_terrain::ScatterPalette,
     geometry: Vec<u64>,
 ) -> u64 {
     let mut hasher = navmesh::SourceHasher::default();
     hasher.eat_regions(regions);
+    hasher.eat_placements(scatter, regions);
     hasher.eat_shape(cell, extent.0.max(extent.1));
     hasher.eat_affine(placement);
     hasher.eat_unordered(geometry);
@@ -613,6 +736,7 @@ fn params_match(baked: BakeParams, now: BakeParams) -> bool {
     baked.agent_radius == now.agent_radius
         && baked.agent_height == now.agent_height
         && baked.max_slope_degrees == now.max_slope_degrees
+        && baked.climb == now.climb
 }
 
 /// A body that moves is not ground: baking it would freeze one frame of a
@@ -623,6 +747,121 @@ fn moves(body: Option<&avian3d::prelude::RigidBody>) -> bool {
         body,
         Some(avian3d::prelude::RigidBody::Dynamic | avian3d::prelude::RigidBody::Kinematic)
     )
+}
+
+/// Smallest placed piece this bake rasterizes: what the terrain authored,
+/// raised to the voxel where that is smaller, since nothing below the voxel
+/// resolves.
+///
+/// Zero means filter nothing, which is what a scene saved before the field
+/// existed elides to; a number that is not a size reads as zero too.
+/// as zero too.
+fn min_obstacle(terrain: &jackdaw_scene_types::Terrain, params: BakeParams) -> f32 {
+    let authored = terrain.navmesh.min_obstacle_size;
+    if authored.is_finite() && authored > 0.0 {
+        authored.max(params.cell_size)
+    } else {
+        0.0
+    }
+}
+
+/// Footprint a placement stands in when its asset's own extent cannot be
+/// measured: half a metre either way and two metres tall.
+///
+/// Deliberately a blocking guess. The alternative is a navmesh that walks
+/// straight through a forest and says nothing about it.
+const UNRESOLVED_OBSTACLE: Vec3 = Vec3::new(0.5, 2.0, 0.5);
+
+/// Box colliders for the stored placements a bake has to route round.
+///
+/// A placement stands in for its asset as the asset's bounding box at the
+/// placement's scale, which is what an agent has to go round. An asset the
+/// renderer cannot answer for gets [`UNRESOLVED_OBSTACLE`], counted so the
+/// bake can say how many placements it guessed at.
+///
+/// Two things keep a placement out: a palette entry that says it does not
+/// block agents, and an asset too small to rasterize. Returns the boxes, how
+/// many were skipped as too small, and how many were guessed at.
+fn scatter_obstacles(
+    document: &jackdaw_terrain::RegionTerrainData,
+    bounds_of: impl Fn(&str) -> Option<Aabb>,
+    placement: Affine3A,
+    min_size: f32,
+) -> (Vec<TriMesh>, usize, usize) {
+    let mut out = Vec::new();
+    let mut skipped = 0;
+    let mut unresolved = 0;
+    for (coord, _, stored) in document.placements() {
+        let Some(entry) = document.scatter.asset(stored.asset) else {
+            continue;
+        };
+        if !entry.obstacle {
+            continue;
+        }
+        let bounds = match bounds_of(&entry.asset) {
+            Some(bounds) => bounds,
+            None => {
+                unresolved += 1;
+                Aabb {
+                    center: Vec3::new(0.0, UNRESOLVED_OBSTACLE.y, 0.0).into(),
+                    half_extents: UNRESOLVED_OBSTACLE.into(),
+                }
+            }
+        };
+        let half = Vec3::from(bounds.half_extents) * stored.scale;
+        if half.max_element() * 2.0 < min_size {
+            skipped += 1;
+            continue;
+        }
+        let stand = Affine3A::from_scale_rotation_translation(
+            Vec3::splat(stored.scale),
+            Quat::from_rotation_y(stored.yaw),
+            document.placement_position(coord, stored),
+        );
+        let centre = Vec3::from(bounds.center);
+        out.push(box_trimesh(
+            placement * stand,
+            centre,
+            Vec3::from(bounds.half_extents),
+        ));
+    }
+    (out, skipped, unresolved)
+}
+
+/// An axis-aligned box as a triangle list, placed by `world_from_local`.
+fn box_trimesh(world_from_local: Affine3A, centre: Vec3, half: Vec3) -> TriMesh {
+    let vertices = (0..8u32)
+        .map(|corner| {
+            let sign = |bit: u32| if corner & (1 << bit) == 0 { -1.0 } else { 1.0 };
+            let local = centre + half * Vec3::new(sign(0), sign(1), sign(2));
+            world_from_local.transform_point3a(local.into())
+        })
+        .collect();
+    // Corner bit 0 is X, bit 1 is Y, bit 2 is Z, so a face is the four
+    // corners sharing one bit. Winding is counter-clockwise seen from
+    // outside, which is what makes the top face ground and the rest walls.
+    const FACES: [[u32; 4]; 6] = [
+        [0, 2, 3, 1], // -Z
+        [4, 5, 7, 6], // +Z
+        [0, 1, 5, 4], // -Y
+        [2, 6, 7, 3], // +Y
+        [0, 4, 6, 2], // -X
+        [1, 3, 7, 5], // +X
+    ];
+    let mut indices = Vec::with_capacity(12);
+    for [a, b, c, d] in FACES {
+        indices.push(UVec3::new(a, b, c));
+        indices.push(UVec3::new(a, c, d));
+    }
+    // Every face is walkable, as scene meshes are: what makes the walls
+    // walls is the slope and ledge filtering the baker runs over the
+    // heightfield.
+    let area_types = vec![AreaType::DEFAULT_WALKABLE; indices.len()];
+    TriMesh {
+        vertices,
+        indices,
+        area_types,
+    }
 }
 
 /// World size of one of this terrain's cells: the authored cell size, not one
@@ -649,10 +888,9 @@ fn to_trimesh(surface: &jackdaw_terrain::SurfaceMesh, placement: Affine3A) -> Tr
 
 /// Everything a bake needs, lifted out of the world.
 ///
-/// Assembling the triangles is most of what a bake costs at editor scale, a
-/// kilometre of ground being a million cells to walk, so the assembly happens
-/// inside the bake task. What is gathered on the main thread is only what
-/// cannot leave it: the stored ground, the terrain's shape, and the scene's
+/// Assembling the triangles is most of what a bake costs at editor scale, so
+/// it happens inside the bake task. Gathered here is only what cannot leave
+/// the main thread: the stored ground, the terrain's shape, and the scene's
 /// meshes as the baker reads them.
 struct BakeInput {
     /// Local-space position of the grid's first vertex.
@@ -661,19 +899,25 @@ struct BakeInput {
     cell: Vec2,
     placement: Affine3A,
     data_path: String,
+    /// The palette the stored placements name, as the staleness check
+    /// hashes it.
+    scatter: jackdaw_terrain::ScatterPalette,
     /// Scene geometry, already in world space.
     geometry: Vec<TriMesh>,
     /// The same geometry as the staleness check counts it.
+    ///
+    /// Counted before the size filter: the check asks whether the scene has
+    /// moved, which a piece too small to rasterize answers as well as any.
     geometry_hashes: Vec<u64>,
     params: BakeParams,
+    tally: GeometryTally,
 }
 
 /// Assembles the input and rasterizes it, off the main thread.
 ///
-/// The voxel is sized against the assembled bounds, not the terrain's. The
-/// terrain's footprint is the smaller box in any scene with a prop past its
-/// edge, a region outside its span, or a scale on its transform, and the baker
-/// rasterizes the box it is handed.
+/// The voxel is sized against the assembled bounds, not the terrain's: with
+/// a prop past its edge or a scale on its transform the terrain's footprint
+/// is the smaller box, and the baker rasterizes the box it is handed.
 fn bake(input: BakeInput) -> Result<NavmeshArtifact, String> {
     let BakeInput {
         regions,
@@ -681,9 +925,11 @@ fn bake(input: BakeInput) -> Result<NavmeshArtifact, String> {
         origin,
         placement,
         data_path: terrain,
+        scatter,
         geometry,
         geometry_hashes,
         params,
+        tally,
     } = input;
 
     let source_hash = world_source_hash(
@@ -691,6 +937,7 @@ fn bake(input: BakeInput) -> Result<NavmeshArtifact, String> {
         regions.stored_extent().unwrap_or((0, 0)),
         placement,
         &regions,
+        &scatter,
         geometry_hashes,
     );
     let surface = navmesh::surface_mesh(&regions, cell, origin);
@@ -698,7 +945,7 @@ fn bake(input: BakeInput) -> Result<NavmeshArtifact, String> {
     for piece in geometry {
         assembled.extend(piece);
     }
-    rasterize(assembled, params, source_hash, &terrain)
+    rasterize(assembled, params, source_hash, &terrain).map_err(|reason| tally.explain(reason))
 }
 
 /// The whole rasterize-to-polygons pipeline over an assembled input.
@@ -718,10 +965,10 @@ fn rasterize(
         Ok(artifact) => return Ok(artifact),
         Err(reason) => reason,
     };
-    // The baker refuses a contour it cannot triangulate, which is what a voxel
-    // too coarse for the ground under it produces. Halving the voxel fixes that
-    // at four times the work, so it is a single retry and is not attempted once
-    // the grid budget is spent.
+    // The baker refuses a contour it cannot triangulate, which is what a
+    // voxel too coarse for the ground under it produces. Halving the voxel
+    // fixes that at four times the work, so it is a single retry and is not
+    // attempted once the grid budget is spent.
     let Some(finer) = params.halved_within_budget(extent) else {
         return Err(first);
     };
@@ -754,6 +1001,11 @@ fn bake_once(
         // baker's recommendation.
         cell_size_fraction: params.agent_radius / params.cell_size,
         cell_height_fraction: 2.0 * params.agent_radius / params.cell_size,
+        // The step the agent climbs, authored on the terrain and defaulting
+        // to the 0.9 m every bake ran at before it was a field. One height
+        // voxel is the floor: below it the rasterized ground is its own ledge
+        // and a slope comes back as terraces with gaps between them.
+        walkable_climb: params.climb.max(params.cell_size),
         aabb: Aabb3d {
             min: aabb.min,
             max: aabb.max,
@@ -784,13 +1036,10 @@ fn bake_once(
         .map_err(|err| err.to_string())?;
     compact.erode_walkable_area(config.walkable_radius);
     compact.build_distance_field();
-    // No border ring. `Config` sizes one because its defaults are written for a
-    // tiled bake, where the heightfield is padded past the tile and the padding
-    // is discarded. This bake is one field over the whole terrain, so a border
-    // ring would be carved out of the ground and would make the terrain's
-    // perimeter a portal into another region rather than a solid wall.
-    // Contouring does not subdivide a portal edge, which collapses the whole
-    // walkable surface into one polygon.
+    // No border ring. `Config` sizes one for a tiled bake, where the padding
+    // past the tile is discarded. This bake is one field over the whole
+    // terrain, so a border would make the perimeter a portal rather than a
+    // solid wall, and contouring does not subdivide a portal edge.
     compact
         .build_regions(0, config.min_region_area, config.merge_region_area)
         .map_err(|err| err.to_string())?;
@@ -822,11 +1071,10 @@ fn bake_once(
 
 /// Refuses a config whose derived voxel counts the baker would not survive.
 ///
-/// The baker takes these as plain `u16` arithmetic with no checks of its own:
-/// an edge limit past 255 overflows when squared for the length test, a panic
-/// in a debug build and silence in a release one. An agent wider than the
-/// ground is caught here too, where it can be named, rather than as an empty
-/// bake further down.
+/// The baker takes these as plain `u16` arithmetic with no checks of its
+/// own: an edge limit past 255 overflows when squared for the length test.
+/// An agent wider than the ground is caught here too, where it can be
+/// named.
 fn refuse_unbakeable_config(
     config: &bevy_rerecast::rerecast::Config,
     params: BakeParams,
@@ -1007,16 +1255,13 @@ fn poll_running_bake(
     });
 }
 
-/// Whether `artifact` still describes the world, and if not, which half of it
-/// stopped matching: the agent asked for, or the world itself.
+/// Whether `artifact` still describes the world, and if not, which half of
+/// it stopped matching: the agent asked for, or the world itself.
 ///
 /// A terrain absent from the scene counts as fresh, there being nothing to
-/// compare against.
-///
-/// A scene whose meshes have not all arrived counts as fresh too. Geometry that
-/// is still loading hashes as geometry that is not there, so answering mid-load
-/// would report every props-heavy scene as stale until the last asset landed.
-/// The question is asked again [`STALENESS_INTERVAL`] later.
+/// compare against. So does a scene whose meshes have not all arrived:
+/// geometry still loading hashes as geometry that is not there. The question
+/// is asked again `STALENESS_INTERVAL` later.
 fn staleness_against_world(
     artifact: &NavmeshArtifact,
     terrains: &Query<(&jackdaw_scene_types::Terrain, &GlobalTransform)>,
@@ -1044,6 +1289,7 @@ fn staleness_against_world(
         document.regions.stored_extent().unwrap_or((0, 0)),
         transform.affine(),
         &document.regions,
+        &document.scatter,
         geometry_hashes(geometry.placements()),
     ) == artifact.source_hash
     {
@@ -1084,9 +1330,8 @@ fn refresh_staleness(
 // --- Overlay ---
 
 /// How far above the baked surface the overlay sits, as a fraction of the
-/// terrain's extent. The region grid scales its lift the same way: a line
-/// running the length of a large terrain is seen at a grazing angle for most of
-/// it, and a constant lift loses the depth test out there.
+/// terrain's extent. A constant lift loses the depth test at the grazing
+/// angles a large terrain is seen at, so this scales like the region grid's.
 const LIFT_FRACTION: f32 = 0.002;
 /// Floor for that lift, matching the region grid's own.
 const MIN_LIFT: f32 = 0.1;
@@ -1106,16 +1351,14 @@ struct OverlayBuild {
 
 /// Draws the walkable surface over the ground.
 ///
-/// The surface, not the polygons. A baked navmesh has two levels: the coarse
-/// convex polygons a pathfinder walks, and the detail mesh those were
-/// simplified from. A hull edge is a straight line in world space between two
-/// corners that may be a hundred metres and eight metres of height apart, so on
-/// rolling ground it cuts under the hills it spans. The detail triangles follow
-/// the ground they were rasterized from.
+/// The detail surface, not the coarse hulls a pathfinder walks: a hull edge
+/// is a straight line between corners that can be a hundred metres and eight
+/// metres of height apart, so on rolling ground it cuts under the hills it
+/// spans.
 ///
-/// A mesh rather than gizmo lines: the detail surface runs to tens of thousands
-/// of triangles on a real zone, and their edges would be hundreds of thousands
-/// of lines to submit every frame.
+/// A mesh rather than gizmo lines: the detail surface runs to tens of
+/// thousands of triangles, whose edges would be hundreds of thousands of
+/// lines to submit every frame.
 fn sync_navmesh_overlay(
     mut commands: Commands,
     state: Res<TerrainNavmeshState>,
@@ -1135,10 +1378,9 @@ fn sync_navmesh_overlay(
         return;
     };
 
-    // Lifted off the ground it describes, by the size of that ground, found by
-    // the name in the bake rather than by what is selected. A surface mesh
-    // sitting where the terrain sits z-fights it across the whole zone, so the
-    // lift must not collapse to the floor when someone clicks away.
+    // Lifted off the ground it describes, by the size of that ground, found
+    // by the name in the bake rather than by what is selected: a surface mesh
+    // sitting where the terrain sits z-fights it across the whole zone.
     let lift = terrains
         .iter()
         .find(|terrain| terrain.data_path == baked.artifact.terrain)
@@ -1163,10 +1405,9 @@ fn sync_navmesh_overlay(
     if *built == Some(want)
         && let Some((_, material)) = existing.iter().next()
     {
-        // Same surface, so only the tint can have moved, and it moves only when
-        // staleness flips. Read first because `get_mut` raises
-        // `AssetEvent::Modified` whether or not the value changes, which would
-        // re-prepare the material every frame the overlay is drawn.
+        // Read first because `get_mut` raises `AssetEvent::Modified` whether
+        // or not the value changes, which would re-prepare the material every
+        // frame the overlay is drawn.
         let tinted = materials
             .get(&material.0)
             .is_some_and(|material| material.base_color == color);
@@ -1243,8 +1484,7 @@ fn surface_mesh(artifact: &NavmeshArtifact, lift: f32) -> Option<Mesh> {
 /// Drops the drawn overlay along with the bake behind it.
 ///
 /// The mesh is a live entity, not something a resource reset reaches, so a
-/// scene leaving the tab has to take it down explicitly or its navmesh keeps
-/// drawing over the incoming scene's ground.
+/// scene leaving the tab has to take it down explicitly.
 pub(crate) fn despawn_overlay(world: &mut World) {
     let drawn: Vec<Entity> = world
         .query_filtered::<Entity, With<NavmeshOverlay>>()
@@ -1257,17 +1497,13 @@ pub(crate) fn despawn_overlay(world: &mut World) {
 
 /// Re-writes the baked artifact beside the scene at `scene_path`.
 ///
-/// A bake writes its own file when it finishes, so this covers a scene that has
-/// since moved: a first save after a bake, where the ground was baked before it
-/// had a file to sit beside. An artifact already in place and a scene never
-/// baked are both no-ops, and a write failure warns rather than failing the
-/// scene save, the artifact being derived data a re-bake reproduces.
+/// A bake writes its own file when it finishes, so this covers a scene that
+/// has since moved: a first save after a bake of ground that had no file to
+/// sit beside. An artifact already in place and a scene never baked are both
+/// no-ops, and a write failure warns rather than failing the scene save.
 ///
-/// Saving under a *different* name is refused. The bake names the scene it was
-/// taken from, and a navmesh copied onto a file it was not baked from is the
-/// one failure this format cannot detect on the way back in: the bytes decode
-/// and the polygons are real, but they describe other ground. A re-bake under
-/// the new name writes one that belongs there.
+/// Saving under a *different* name is refused: the bytes would decode and
+/// the polygons would be real, but they describe other ground.
 pub(crate) fn export_beside_scene(world: &mut World, scene_path: &str) {
     let scene = PathBuf::from(scene_path);
     let destination = scene.with_extension(navmesh::EXTENSION);
@@ -1325,9 +1561,8 @@ fn encoded(artifact: &NavmeshArtifact) -> Vec<u8> {
 
 /// One-line summary of the navmesh this terrain has, for the options bar.
 ///
-/// "Not baked yet" means there is no navmesh, on disk or in memory: an artifact
-/// beside the scene is read at open, so an absent line is an absent navmesh
-/// rather than one nobody has looked for.
+/// "Not baked yet" means there is no navmesh, on disk or in memory: an
+/// artifact beside the scene is read at open.
 pub(super) fn summary(state: &TerrainNavmeshState) -> String {
     match &state.status {
         BakeStatus::Idle => "Not baked yet".to_string(),
@@ -1363,18 +1598,25 @@ pub(super) fn summary(state: &TerrainNavmeshState) -> String {
                 Staleness::AgentChanged => " -- out of date, the agent changed since the bake",
                 Staleness::SceneMoved => " -- out of date, the scene moved since",
             };
-            format!("{polygons}{where_to}{stale}")
+            // A guessed footprint is not a stale bake, but it is not the
+            // scatter either, and only the bake knows it happened.
+            let guessed = match state.unresolved_scatter {
+                0 => String::new(),
+                count => format!(
+                    " -- {count} placements stood in a default footprint, their models had \
+                     not loaded; bake again"
+                ),
+            };
+            format!("{polygons}{where_to}{stale}{guessed}")
         }
     }
 }
 
-/// Reads the navmesh beside `scene_path` into the tab, if there is one and the
-/// tab has none of its own.
+/// Reads the navmesh beside `scene_path` into the tab, if there is one and
+/// the tab has none of its own.
 ///
-/// A scene that was baked and saved comes back with its navmesh drawn and
-/// measured against the ground it opens onto, rather than reading as unbaked.
-/// An artifact this build cannot read is left on disk and reported; overwriting
-/// it with a fresh bake is the author's decision, not the loader's.
+/// An artifact this build cannot read is left on disk and reported;
+/// overwriting it with a fresh bake is the author's decision.
 pub(crate) fn import_beside_scene(world: &mut World, scene_path: &str) {
     let Some(state) = world.get_resource::<TerrainNavmeshState>() else {
         return;
@@ -1442,6 +1684,73 @@ mod tests {
         to_trimesh(&surface, Affine3A::IDENTITY)
     }
 
+    fn terrain_authoring(
+        navmesh: jackdaw_scene_types::TerrainNavmesh,
+    ) -> jackdaw_scene_types::Terrain {
+        jackdaw_scene_types::Terrain {
+            cell_size: 1.0,
+            navmesh,
+            ..default()
+        }
+    }
+
+    /// The default filters nothing: a scene saved before the field existed
+    /// elides it, and the bake it gets back has to be the bake it had.
+    #[test]
+    fn an_unauthored_obstacle_floor_filters_nothing() {
+        let terrain = terrain_authoring(jackdaw_scene_types::TerrainNavmesh::default());
+        let params = bake_params(&terrain);
+        assert!(params.cell_size > 0.0, "the voxel is a size");
+        assert_eq!(
+            min_obstacle(&terrain, params),
+            0.0,
+            "a 0.2 m bollard on a fine terrain has to stay in the bake"
+        );
+    }
+
+    /// An authored floor under one voxel is raised to it, since nothing
+    /// below the voxel resolves either way.
+    #[test]
+    fn an_authored_obstacle_floor_is_raised_to_the_voxel() {
+        let params = bake_params(&terrain_authoring(
+            jackdaw_scene_types::TerrainNavmesh::default(),
+        ));
+        let tiny = terrain_authoring(jackdaw_scene_types::TerrainNavmesh {
+            min_obstacle_size: params.cell_size / 10.0,
+            ..default()
+        });
+        assert_eq!(min_obstacle(&tiny, params), params.cell_size);
+
+        let large = terrain_authoring(jackdaw_scene_types::TerrainNavmesh {
+            min_obstacle_size: 1.5,
+            ..default()
+        });
+        assert_eq!(min_obstacle(&large, params), 1.5);
+    }
+
+    /// The climb is authored, and a scene that authored none bakes at the
+    /// number every bake used before it was a field.
+    #[test]
+    fn the_climb_comes_from_the_terrain_not_the_agent_height() {
+        let terrain = terrain_authoring(jackdaw_scene_types::TerrainNavmesh::default());
+        assert_eq!(bake_params(&terrain).climb, BakeParams::DEFAULT_CLIMB);
+
+        let stepped = terrain_authoring(jackdaw_scene_types::TerrainNavmesh {
+            climb: 0.35,
+            agent_height: 3.0,
+            ..default()
+        });
+        assert_eq!(
+            bake_params(&stepped).climb,
+            0.35,
+            "a taller agent must not move the step it climbs"
+        );
+        assert!(
+            !params_match(bake_params(&terrain), bake_params(&stepped)),
+            "changing the climb has to make a bake stale"
+        );
+    }
+
     #[test]
     fn a_flat_terrain_bakes_to_walkable_polygons() {
         let params = BakeParams::default().with_terrain_cell(Vec2::splat(1.0));
@@ -1487,12 +1796,9 @@ mod tests {
     }
 
     /// The bake has to come back describing the ground, and the polygon and
-    /// vertex counts are what say whether it did.
-    ///
-    /// A bake whose walkable contour borders the baker's border region rather
-    /// than open space comes back as one four-cornered polygon spanning the
-    /// whole kilometre, since contouring does not subdivide an edge onto
-    /// another region. That artifact is not empty, so only the counts catch it.
+    /// vertex counts are what say whether it did: a contour bordering the
+    /// baker's border region rather than open space comes back as one
+    /// four-cornered polygon spanning the whole kilometre.
     #[test]
     fn a_kilometre_of_rolling_ground_bakes_to_a_navmesh_that_describes_it() {
         let (regions, extent, cell) = rolling_kilometre(256);
@@ -1687,6 +1993,100 @@ mod tests {
         OperatorParameters(std::collections::BTreeMap::new())
     }
 
+    /// Stored scatter is not scene meshes, so a bake builds an obstacle
+    /// for each placement itself. A palette entry that says it does not
+    /// block agents, and an asset too small to rasterize, contribute
+    /// nothing -- which is what leaves ground cover out without tagging.
+    #[test]
+    fn stored_placements_of_obstacle_assets_become_boxes_in_the_bake() {
+        use jackdaw_terrain::region::{RegionSize, TerrainRegions};
+        use jackdaw_terrain::{RegionTerrainData, ScatterPalette, ScatterPaletteEntry};
+
+        let mut document = RegionTerrainData {
+            regions: TerrainRegions::new(RegionSize::new(8).unwrap()),
+            scatter: ScatterPalette {
+                assets: vec![
+                    ScatterPaletteEntry::new("models/tree.gltf"),
+                    ScatterPaletteEntry {
+                        asset: "models/grass.glb".to_string(),
+                        obstacle: false,
+                        cull_distance: 0.0,
+                    },
+                    ScatterPaletteEntry::new("models/pebble.gltf"),
+                ],
+                groups: vec!["woods".to_string()],
+            },
+            ..RegionTerrainData::default()
+        };
+        for asset in 0..3 {
+            document
+                .add_placement(Vec3::new(1.0 + asset as f32, 0.0, 2.0), 0, asset, 0.0, 1.0)
+                .expect("the region allocates");
+        }
+
+        let bounds_of = |asset: &str| match asset {
+            "models/tree.gltf" => Some(Aabb::from_min_max(
+                Vec3::new(-0.5, 0.0, -0.5),
+                Vec3::new(0.5, 6.0, 0.5),
+            )),
+            "models/grass.glb" => Some(Aabb::from_min_max(
+                Vec3::new(-0.2, 0.0, -0.2),
+                Vec3::new(0.2, 0.4, 0.2),
+            )),
+            _ => Some(Aabb::from_min_max(
+                Vec3::new(-0.05, 0.0, -0.05),
+                Vec3::new(0.05, 0.1, 0.05),
+            )),
+        };
+
+        let (obstacles, skipped, unresolved) = scatter_obstacles(
+            &document,
+            bounds_of,
+            Affine3A::from_translation(Vec3::new(100.0, 0.0, 0.0)),
+            0.5,
+        );
+        assert_eq!(obstacles.len(), 1, "only the tree blocks an agent");
+        assert_eq!(skipped, 1, "the pebble is below the voxel");
+        assert_eq!(unresolved, 0, "every asset was measured");
+
+        let tree = &obstacles[0];
+        assert_eq!(tree.vertices.len(), 8);
+        assert_eq!(tree.indices.len(), 12);
+        let centre: Vec3A =
+            tree.vertices.iter().copied().sum::<Vec3A>() / tree.vertices.len() as f32;
+        assert!(
+            Vec3::from(centre).abs_diff_eq(Vec3::new(101.0, 3.0, 2.0), 1e-3),
+            "the box stands where the placement does, in world space: {centre:?}"
+        );
+    }
+
+    /// An asset whose extent nothing can answer for still blocks an agent:
+    /// a bake that dropped it would report success over a navmesh that
+    /// walks through a forest.
+    #[test]
+    fn a_placement_whose_model_has_not_loaded_stands_in_a_default_footprint() {
+        use jackdaw_terrain::region::{RegionSize, TerrainRegions};
+        use jackdaw_terrain::{RegionTerrainData, ScatterPalette, ScatterPaletteEntry};
+
+        let mut document = RegionTerrainData {
+            regions: TerrainRegions::new(RegionSize::new(8).unwrap()),
+            scatter: ScatterPalette {
+                assets: vec![ScatterPaletteEntry::new("models/tree.gltf")],
+                groups: vec!["woods".to_string()],
+            },
+            ..RegionTerrainData::default()
+        };
+        document
+            .add_placement(Vec3::new(1.0, 0.0, 2.0), 0, 0, 0.0, 1.0)
+            .expect("the region allocates");
+
+        let (obstacles, skipped, unresolved) =
+            scatter_obstacles(&document, |_| None, Affine3A::IDENTITY, 0.5);
+        assert_eq!(obstacles.len(), 1, "the placement is still an obstacle");
+        assert_eq!(skipped, 0);
+        assert_eq!(unresolved, 1, "and the guess is counted");
+    }
+
     /// Drives the bake through the same operator and polling system the editor
     /// runs, and waits for the background bake to land.
     fn run_bake_to_completion(world: &mut World) {
@@ -1833,6 +2233,64 @@ mod tests {
                     // The same heights spread over twice the ground puts every
                     // polygon the bake laid in the wrong place.
                     terrain.cell_size *= 2.0;
+                }
+            })
+        );
+    }
+
+    /// Stored placements are obstacles this bake builds itself, so a stamp
+    /// puts trees in ground the navmesh says is clear.
+    #[test]
+    fn storing_scatter_after_a_bake_marks_it_out_of_date() {
+        assert_eq!(
+            Staleness::SceneMoved,
+            stale_after("scatter", |world| {
+                let paths: Vec<String> = {
+                    let mut terrains = world.query::<&jackdaw_scene_types::Terrain>();
+                    terrains
+                        .iter(world)
+                        .map(|terrain| terrain.data_path.clone())
+                        .collect()
+                };
+                let mut store = world.resource_mut::<TerrainDataStore>();
+                for path in paths {
+                    let document = store.document_mut(&path).expect("the document is loaded");
+                    let group = document.scatter.intern_group("woods").expect("a free row");
+                    let asset = document
+                        .scatter
+                        .intern_asset("models/tree.gltf")
+                        .expect("a free row");
+                    document
+                        .add_placement(Vec3::new(1.0, 0.0, 1.0), group, asset, 0.0, 1.0)
+                        .expect("the region is allocated");
+                }
+            })
+        );
+    }
+
+    /// A palette entry flipped to ground cover takes its placements out of
+    /// the bake without any of them moving.
+    #[test]
+    fn making_a_scatter_asset_ground_cover_marks_a_bake_out_of_date() {
+        assert_eq!(
+            Staleness::SceneMoved,
+            stale_after("scatter_obstacle", |world| {
+                let paths: Vec<String> = {
+                    let mut terrains = world.query::<&jackdaw_scene_types::Terrain>();
+                    terrains
+                        .iter(world)
+                        .map(|terrain| terrain.data_path.clone())
+                        .collect()
+                };
+                let mut store = world.resource_mut::<TerrainDataStore>();
+                for path in paths {
+                    let document = store.document_mut(&path).expect("the document is loaded");
+                    document
+                        .scatter
+                        .assets
+                        .push(jackdaw_terrain::ScatterPaletteEntry::new(
+                            "models/tree.gltf",
+                        ));
                 }
             })
         );
@@ -2043,6 +2501,9 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("a place to write the artifact");
         let mut world = world_with_terrain(&dir);
         run_bake_to_completion(&mut world);
+        // Drawing the walkable surface is opt in, and this is a test about
+        // how it draws.
+        world.resource_mut::<TerrainNavmeshState>().show_overlay = true;
         world
             .run_system_cached(sync_navmesh_overlay)
             .expect("the overlay sync runs");
@@ -2111,6 +2572,9 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("a place to write the artifact");
         let mut world = world_with_terrain(&dir);
         run_bake_to_completion(&mut world);
+        // Drawing the walkable surface is opt in, and this is a test about
+        // how it draws.
+        world.resource_mut::<TerrainNavmeshState>().show_overlay = true;
         for _ in 0..2 {
             world
                 .run_system_cached(sync_navmesh_overlay)
@@ -2171,6 +2635,9 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("a place to write the artifact");
         let mut world = world_with_terrain(&dir);
         run_bake_to_completion(&mut world);
+        // Drawing the walkable surface is opt in, and this is a test about
+        // how it draws.
+        world.resource_mut::<TerrainNavmeshState>().show_overlay = true;
         let before = world
             .run_system_cached(count_bakeable_meshes)
             .expect("the count runs");
@@ -2204,7 +2671,160 @@ mod tests {
     }
 
     fn count_bakeable_meshes(geometry: SceneGeometry) -> usize {
-        geometry.placed().len()
+        geometry.placed(0.0).0.len()
+    }
+
+    fn bake_tally(In(min_size): In<f32>, geometry: SceneGeometry) -> GeometryTally {
+        geometry.placed(min_size).1
+    }
+
+    /// A cube of `side` metres standing at the origin.
+    fn spawn_cube(world: &mut World, side: f32) -> Entity {
+        let mesh = world
+            .resource_mut::<Assets<Mesh>>()
+            .add(Mesh::from(Cuboid::from_length(side)));
+        world
+            .spawn((
+                Mesh3d(mesh),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id()
+    }
+
+    fn tally(world: &mut World, min_size: f32) -> GeometryTally {
+        world
+            .run_system_cached_with(bake_tally, min_size)
+            .expect("the tally runs")
+    }
+
+    #[test]
+    fn a_mesh_under_navmesh_exclude_is_not_baked() {
+        let dir = std::env::temp_dir().join("jd_exclude_mesh");
+        let mut world = world_with_terrain(&dir);
+        let cube = spawn_cube(&mut world, 2.0);
+        assert_eq!(tally(&mut world, 0.0).included, 1);
+
+        world
+            .entity_mut(cube)
+            .insert(jackdaw_scene_types::NavmeshExclude);
+
+        let after = tally(&mut world, 0.0);
+        assert_eq!(after.included, 0, "a tagged mesh is not rasterized");
+        assert_eq!(after.excluded, 1, "and the bake can say how many it left");
+    }
+
+    /// The tag is what an author puts on a scatter group rather than on a
+    /// thousand tufts of grass, so it has to reach the whole subtree.
+    #[test]
+    fn excluding_a_group_excludes_its_children() {
+        let dir = std::env::temp_dir().join("jd_exclude_group");
+        let mut world = world_with_terrain(&dir);
+        let group = world
+            .spawn((
+                Transform::default(),
+                GlobalTransform::default(),
+                jackdaw_scene_types::NavmeshExclude,
+            ))
+            .id();
+        let child = spawn_cube(&mut world, 2.0);
+        let grandchild = spawn_cube(&mut world, 2.0);
+        world.entity_mut(child).insert(ChildOf(group));
+        world.entity_mut(grandchild).insert(ChildOf(child));
+
+        let counted = tally(&mut world, 0.0);
+        assert_eq!(counted.included, 0, "nothing under the group is baked");
+        assert_eq!(
+            counted.excluded, 2,
+            "both descendants are counted as left out"
+        );
+    }
+
+    /// Decoration below the voxel punches holes in the ground rather than
+    /// becoming any of it, and the holes are what the baker refuses a contour
+    /// over.
+    #[test]
+    fn a_mesh_smaller_than_the_voxel_is_skipped_and_counted() {
+        let dir = std::env::temp_dir().join("jd_small_mesh");
+        let mut world = world_with_terrain(&dir);
+        spawn_cube(&mut world, 0.1);
+        spawn_cube(&mut world, 3.0);
+
+        let counted = tally(&mut world, 0.25);
+        assert_eq!(counted.included, 1, "the building is still ground");
+        assert_eq!(counted.skipped_small, 1, "the pebble is not");
+        assert_eq!(counted.threshold, 0.25);
+        assert_eq!(
+            tally(&mut world, 0.0).included,
+            2,
+            "and nothing is skipped when the floor is zero"
+        );
+    }
+
+    /// A refusal from the baker says nothing about the scene behind it, which
+    /// is the one thing an author can act on.
+    #[test]
+    fn a_failed_bake_names_the_mesh_count_and_navmesh_exclude() {
+        let input = BakeInput {
+            origin: Vec2::ZERO,
+            regions: TerrainRegions::new(RegionSize::new(64).expect("power of two")),
+            cell: Vec2::splat(1.0),
+            placement: Affine3A::IDENTITY,
+            data_path: ground(),
+            scatter: jackdaw_terrain::ScatterPalette::default(),
+            geometry: Vec::new(),
+            geometry_hashes: Vec::new(),
+            params: BakeParams::default(),
+            tally: GeometryTally {
+                included: 7,
+                skipped_small: 3,
+                excluded: 1,
+                unresolved_scatter: 2,
+                threshold: 0.25,
+            },
+        };
+
+        let reason = bake(input).expect_err("there is no ground in an empty terrain");
+
+        assert!(reason.contains("nothing to bake"), "{reason}");
+        assert!(reason.contains("7 scene meshes"), "{reason}");
+        assert!(reason.contains("3 skipped"), "{reason}");
+        assert!(
+            reason.contains("2 scatter placements stood in a default footprint"),
+            "{reason}"
+        );
+        assert!(reason.contains("0.25 m voxel"), "{reason}");
+        assert!(reason.contains("NavmeshExclude"), "{reason}");
+        assert!(reason.contains("Min Obstacle Size"), "{reason}");
+    }
+
+    /// A scene that opens with a bake in it must not have that bake drawn
+    /// over its ground.
+    ///
+    /// The overlay is a near-opaque sheet across every walkable cell, so on
+    /// by default it hides the terrain it describes.
+    #[test]
+    fn a_baked_scene_does_not_open_with_its_navmesh_over_the_ground() {
+        let state = TerrainNavmeshState::default();
+        assert!(
+            !state.show_overlay,
+            "the walkable surface is a view to opt into, not one to be shown"
+        );
+
+        let dir = std::env::temp_dir().join(format!("jd_default_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a place to write the artifact");
+        let mut world = world_with_terrain(&dir);
+        run_bake_to_completion(&mut world);
+        world
+            .run_system_cached(sync_navmesh_overlay)
+            .expect("the overlay syncs");
+        let drawn = world
+            .query_filtered::<Entity, With<NavmeshOverlay>>()
+            .iter(&world)
+            .count();
+        assert_eq!(drawn, 0, "a fresh bake draws nothing over the ground");
+
+        let _ = std::fs::remove_file(dir.join("zone.jdnav"));
     }
 
     /// Whether the overlay is drawn is the author's preference. Opening a scene

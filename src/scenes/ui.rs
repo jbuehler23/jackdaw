@@ -8,6 +8,7 @@ use bevy::picking::hover::Hovered;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use jackdaw_feathers::{
+    button::{ButtonProps, ButtonSize, ButtonVariant, button},
     context_menu::spawn_context_menu,
     icons::{EditorFont, Icon, IconFont},
     tokens,
@@ -179,7 +180,6 @@ fn spawn_scene_tab(
     let tab_entity = commands
         .spawn((
             SceneTabIndex(idx),
-            Interaction::default(),
             Hovered::default(),
             Tooltip::title(display_name.to_string()).with_description(path_display.to_string()),
             Node {
@@ -348,16 +348,11 @@ fn spawn_scene_tab(
     let close_btn = commands
         .spawn((
             SceneTabCloseButton(idx),
-            Interaction::default(),
-            Node {
-                width: Val::Px(14.0),
-                height: Val::Px(14.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                border_radius: BorderRadius::all(Val::Px(2.0)),
-                ..Default::default()
-            },
-            BackgroundColor(Color::NONE),
+            button(
+                ButtonProps::new("")
+                    .with_variant(ButtonVariant::Ghost)
+                    .with_size(ButtonSize::IconSM),
+            ),
             ChildOf(tab_entity),
         ))
         .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
@@ -388,17 +383,11 @@ fn spawn_add_tab_button(commands: &mut Commands, strip: Entity, icon_font: Optio
     let btn = commands
         .spawn((
             SceneTabAddButton,
-            Interaction::default(),
-            Node {
-                width: Val::Px(tokens::HEADER_CONTROL_HEIGHT),
-                height: Val::Px(tokens::HEADER_CONTROL_HEIGHT),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                margin: UiRect::left(Val::Px(4.0)),
-                ..Default::default()
-            },
-            BackgroundColor(Color::NONE),
+            button(
+                ButtonProps::new("")
+                    .with_variant(ButtonVariant::Ghost)
+                    .with_size(ButtonSize::Icon),
+            ),
             ChildOf(strip),
         ))
         .observe(|_: On<Pointer<Click>>, mut commands: Commands| {

@@ -55,5 +55,13 @@ fn built_game_loads_and_spawns_a_bsn_scene() {
         "the built game never loaded the .bsn scene \
          (no `BSN_SCENE_LOADED ... has_target=true`); game stderr:\n{stderr}"
     );
+    // Scatter provenance is scene data, so the runtime has to know the type:
+    // a game that cannot apply it loads a scattered scene with the groups
+    // stripped back to bare models. The game reports the keys it found, so
+    // this reads what arrived rather than what nothing complained about.
+    assert!(
+        stderr.contains("scatter_keys=[\"Props\"]"),
+        "the runtime did not apply the scene's scatter provenance; game stderr:\n{stderr}"
+    );
     println!("ok: {stderr}");
 }

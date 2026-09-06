@@ -3,12 +3,11 @@
 //! current workspace name and a chevron. Clicking it opens a popover
 //! listing every workspace plus a "+ New Workspace" item.
 //!
-//! Each popover row is itself a [`WorkspaceTab`] entity so the
-//! existing `handle_workspace_tab_clicks` (click switches) and
-//! `handle_workspace_tab_double_click` (double-click renames)
-//! systems in `jackdaw_panels` keep working without duplication.
-//! The "+ New Workspace" row reuses the [`AddWorkspaceButton`]
-//! marker so the existing add system applies too.
+//! Each popover row is itself a [`WorkspaceTab`] entity, so
+//! `handle_workspace_tab_double_click` (double-click renames) in
+//! `jackdaw_panels` keeps working without duplication. The rows are
+//! feathers buttons, so switching and adding run off their click event
+//! rather than the dock strip's `Interaction` systems.
 //!
 //! Workspace deletion lives in `jackdaw_panels` but is intentionally
 //! NOT surfaced here; per user request, workspaces are views you
@@ -17,15 +16,15 @@
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
+use jackdaw_feathers::button::{ButtonClickEvent, ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::icons::{EditorFont, Icon, IconFont};
 use jackdaw_feathers::tokens;
 use jackdaw_localization::LocalizedText;
+use jackdaw_panels::tree::DockTree;
 use jackdaw_panels::workspace::{WorkspaceChanged, WorkspaceRegistry, WorkspaceTab};
-use jackdaw_panels::workspace_tabs::{AddWorkspaceButton, WorkspaceTabLabel};
+use jackdaw_panels::workspace_tabs::{AddWorkspaceButton, WorkspaceTabLabel, add_workspace};
 
 const POPOVER_MIN_WIDTH: f32 = 200.0;
-const ROW_HEIGHT: f32 = 26.0;
-const ROW_ACTIVE_BG: Color = tokens::DOC_TAB_ACTIVE_BG;
 
 pub struct WorkspaceDropdownPlugin;
 
@@ -33,6 +32,8 @@ impl Plugin for WorkspaceDropdownPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkspaceDropdownState>()
             .add_observer(on_trigger_click)
+            .add_observer(on_workspace_row_click)
+            .add_observer(on_add_workspace_row_click)
             .add_observer(on_workspace_changed_close_popover)
             .add_systems(
                 Update,
@@ -66,52 +67,47 @@ pub fn workspace_dropdown_trigger(
     editor_font: Handle<Font>,
     icon_font: Handle<Font>,
 ) -> impl Bundle {
+    // The trigger sits in a slot that holds the title bar's minimum
+    // width for it; the button itself fills the slot.
     (
-        WorkspaceDropdownTrigger,
-        Interaction::default(),
         Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(6.0),
-            padding: UiRect::axes(Val::Px(10.0), Val::Px(3.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
-            height: Val::Px(tokens::HEADER_CONTROL_HEIGHT),
             min_width: Val::Px(120.0),
             ..Default::default()
         },
-        BackgroundColor(tokens::HEADER_CONTROL_BG),
-        BorderColor::all(tokens::HEADER_CONTROL_BORDER),
-        children![
-            (
-                WorkspaceDropdownTriggerLabel,
-                Text::default(),
-                TextFont {
-                    font: editor_font.into(),
-                    font_size: tokens::TEXT_SIZE_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_PRIMARY),
-                Pickable::IGNORE,
-            ),
-            (
-                Node {
-                    flex_grow: 1.0,
-                    ..Default::default()
-                },
-                Pickable::IGNORE,
-            ),
-            (
-                Text::new(String::from(Icon::ChevronDown.unicode())),
-                TextFont {
-                    font: icon_font.into(),
-                    font_size: tokens::TEXT_SIZE_XS,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-                Pickable::IGNORE,
-            ),
-        ],
+        children![(
+            WorkspaceDropdownTrigger,
+            button(ButtonProps::new("").align_left()),
+            children![
+                (
+                    WorkspaceDropdownTriggerLabel,
+                    Text::default(),
+                    TextFont {
+                        font: editor_font.into(),
+                        font_size: tokens::TEXT_SIZE_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_PRIMARY),
+                    Pickable::IGNORE,
+                ),
+                (
+                    Node {
+                        flex_grow: 1.0,
+                        ..Default::default()
+                    },
+                    Pickable::IGNORE,
+                ),
+                (
+                    Text::new(String::from(Icon::ChevronDown.unicode())),
+                    TextFont {
+                        font: icon_font.into(),
+                        font_size: tokens::TEXT_SIZE_XS,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                    Pickable::IGNORE,
+                ),
+            ],
+        )],
     )
 }
 
@@ -241,10 +237,10 @@ fn spawn_popover_row(
     editor_font: Option<Handle<Font>>,
     icon_font: Option<Handle<Font>>,
 ) {
-    let row_bg = if is_active {
-        ROW_ACTIVE_BG
+    let row_variant = if is_active {
+        ButtonVariant::Active
     } else {
-        Color::NONE
+        ButtonVariant::Ghost
     };
     let label_color = if is_active {
         tokens::DOC_TAB_ACTIVE_LABEL
@@ -257,17 +253,7 @@ fn spawn_popover_row(
             WorkspaceTab {
                 workspace_id: workspace_id.to_string(),
             },
-            Interaction::default(),
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(6.0),
-                padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
-                height: Val::Px(ROW_HEIGHT),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
-                ..Default::default()
-            },
-            BackgroundColor(row_bg),
+            button(ButtonProps::new("").with_variant(row_variant).align_left()),
             ChildOf(popover),
         ))
         .id();
@@ -341,17 +327,11 @@ fn spawn_popover_add_row(
     let row = world
         .spawn((
             AddWorkspaceButton,
-            Interaction::default(),
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(8.0),
-                padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
-                height: Val::Px(ROW_HEIGHT),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
-                ..Default::default()
-            },
-            BackgroundColor(Color::NONE),
+            button(
+                ButtonProps::new("")
+                    .with_variant(ButtonVariant::Ghost)
+                    .align_left(),
+            ),
             ChildOf(popover),
         ))
         .id();
@@ -405,11 +385,15 @@ fn close_popover_on_outside_click(
     popovers: Query<&ComputedNode, With<WorkspaceDropdownPopover>>,
     popover_transforms: Query<&UiGlobalTransform, With<WorkspaceDropdownPopover>>,
     windows: Query<&Window>,
+    focus: crate::keybind_focus::KeybindFocus,
     mut commands: Commands,
 ) {
     let Some(popover_entity) = state.popover_entity else {
         return;
     };
+    if focus.keyboard_is_spoken_for() {
+        return;
+    }
     if !mouse.just_pressed(MouseButton::Left) && !keyboard.just_pressed(KeyCode::Escape) {
         return;
     }
@@ -463,4 +447,39 @@ where
         }
     }
     None
+}
+
+/// Switch to the workspace a popover row names.
+///
+/// `WorkspaceChanged`'s observer is the sole owner of
+/// `registry.active`; setting it here would race with auto-save.
+fn on_workspace_row_click(
+    click: On<ButtonClickEvent>,
+    rows: Query<&WorkspaceTab>,
+    registry: Res<WorkspaceRegistry>,
+    mut commands: Commands,
+) {
+    let Ok(row) = rows.get(click.entity) else {
+        return;
+    };
+    if registry.active.as_ref() == Some(&row.workspace_id) {
+        return;
+    }
+    commands.trigger(WorkspaceChanged {
+        old: registry.active.clone(),
+        new: row.workspace_id.clone(),
+    });
+}
+
+/// Add a workspace from the popover's last row.
+fn on_add_workspace_row_click(
+    click: On<ButtonClickEvent>,
+    rows: Query<(), With<AddWorkspaceButton>>,
+    mut registry: ResMut<WorkspaceRegistry>,
+    tree: Res<DockTree>,
+    mut commands: Commands,
+) {
+    if rows.contains(click.entity) {
+        add_workspace(&mut registry, &tree, &mut commands);
+    }
 }

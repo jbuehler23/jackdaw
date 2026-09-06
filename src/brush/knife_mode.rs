@@ -296,7 +296,7 @@ pub(super) fn handle_knife_mode(
 
     // While the user is typing, ignore all knife input. The hover
     // indicator still updates so the preview matches the cursor.
-    let typing = keybind_focus.is_typing();
+    let typing = keybind_focus.keyboard_is_spoken_for();
 
     // Resolve the active brush; bail (without clearing the path) if
     // the selection is gone.
@@ -1566,9 +1566,8 @@ fn commit_path(world: &mut World, brush_entity: Entity) {
     }
 
     // Push the brush state through to the scene AST so subsequent prefab
-    // reloads see the cut. Previously the `SetBrush::execute` path did
-    // this via `apply_brush`; the operator-driven path lacks that hook,
-    // so the sync has to happen explicitly before the framework captures
+    // reloads see the cut. The operator-driven path has no `apply_brush`
+    // hook, so the sync happens explicitly before the framework captures
     // the after-snapshot.
     crate::brush::sync_brush_to_ast(world, brush_entity, &new_brush);
 

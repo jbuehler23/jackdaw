@@ -166,6 +166,9 @@ pub(crate) fn field_edit_preview(
 
 /// Commit a field edit: build [`SetBsnField`] commands from session / document
 /// baselines, execute them, push history, and clear the gesture session.
+///
+/// A target whose component the running binding preview drives is dropped
+/// here: the evaluator rewrites that value every frame.
 pub(crate) fn field_edit_commit(
     world: &mut World,
     type_path: &str,
@@ -175,7 +178,17 @@ pub(crate) fn field_edit_commit(
 ) {
     // Immediate commits (no prior preview) still need a derived baseline.
     field_edit_begin(world, type_path, field_path);
-    let targets = field_edit_session_targets(world);
+    let mut targets = field_edit_session_targets(world);
+    targets.retain(|&target| {
+        let previewed = crate::preview_context::preview_writes_type_path(world, target, type_path);
+        if previewed {
+            warn!(
+                "{}: `{type_path}` on {target}",
+                crate::preview_context::PREVIEW_EDIT_REFUSED
+            );
+        }
+        !previewed
+    });
 
     let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
     for &target in &targets {
@@ -210,6 +223,45 @@ pub(crate) fn field_edit_commit(
     };
     cmd.execute(world);
     world.resource_mut::<CommandHistory>().push_executed(cmd);
+}
+
+/// Set one field on one entity's component, as one undo entry. Unlike
+/// [`field_edit_commit`], which writes the whole selection, this writes only
+/// the named entity.
+///
+/// Returns whether a value was written; `false` when the JSON does not
+/// convert to the field's type.
+pub(crate) fn field_edit_commit_on(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+    new_json: &serde_json::Value,
+) -> bool {
+    if crate::preview_context::preview_writes_type_path(world, entity, type_path) {
+        warn!(
+            "{}: `{type_path}` on {entity}",
+            crate::preview_context::PREVIEW_EDIT_REFUSED
+        );
+        return false;
+    }
+    let old_value = resolve_field_edit_old_value(world, entity, type_path, field_path);
+    let Some(new_value) =
+        json_field_edit_to_bsn_value(world, entity, type_path, field_path, new_json)
+    else {
+        return false;
+    };
+    let mut cmd: Box<dyn EditorCommand> = Box::new(SetBsnField {
+        entity,
+        type_path: type_path.to_string(),
+        field_path: field_path.to_string(),
+        old_value,
+        new_value,
+        was_derived: false,
+    });
+    cmd.execute(world);
+    world.resource_mut::<CommandHistory>().push_executed(cmd);
+    true
 }
 
 pub struct SetTransform {
@@ -269,31 +321,23 @@ pub struct ReparentEntity {
 
 impl EditorCommand for ReparentEntity {
     fn execute(&mut self, world: &mut World) {
-        let slot = world
-            .get::<jackdaw_ui::UiSlot>(self.entity)
-            .map(|slot| slot.0.clone());
         set_hierarchy_location(
             world,
             self.entity,
             HierarchyLocation {
                 parent: self.new_parent,
                 index: usize::MAX,
-                slot,
             },
         );
     }
 
     fn undo(&mut self, world: &mut World) {
-        let slot = world
-            .get::<jackdaw_ui::UiSlot>(self.entity)
-            .map(|slot| slot.0.clone());
         set_hierarchy_location(
             world,
             self.entity,
             HierarchyLocation {
                 parent: self.old_parent,
                 index: usize::MAX,
-                slot,
             },
         );
     }
@@ -304,17 +348,14 @@ impl EditorCommand for ReparentEntity {
 }
 
 /// Exact authored position of an entity in Jackdaw's ordered hierarchy.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HierarchyLocation {
     pub parent: Option<Entity>,
     pub index: usize,
-    /// Optional semantic widget slot. Containment and ordering still come
-    /// from the ECS hierarchy.
-    pub slot: Option<String>,
 }
 
 impl HierarchyLocation {
-    /// Read an entity's current parent, sibling index, and UI slot.
+    /// Read an entity's current parent and sibling index.
     pub fn from_world(world: &World, entity: Entity) -> Self {
         let parent = world.get::<ChildOf>(entity).map(ChildOf::parent);
         let index = parent
@@ -332,18 +373,12 @@ impl HierarchyLocation {
                     .position(|candidate| *candidate == node)
                     .unwrap_or(0)
             });
-        let slot = world
-            .get::<jackdaw_ui::UiSlot>(entity)
-            .map(|slot| slot.0.clone());
-        Self {
-            parent,
-            index,
-            slot,
-        }
+        Self { parent, index }
     }
 }
 
-/// Undoable reparent/reorder operation used by the outliner and UI canvas.
+/// Undoable reparent/reorder to an exact ordered location. `ReparentEntity`
+/// is the same move without a sibling index.
 pub struct MoveEntity {
     pub entity: Entity,
     pub old: HierarchyLocation,
@@ -362,11 +397,11 @@ impl MoveEntity {
 
 impl EditorCommand for MoveEntity {
     fn execute(&mut self, world: &mut World) {
-        set_hierarchy_location(world, self.entity, self.new.clone());
+        set_hierarchy_location(world, self.entity, self.new);
     }
 
     fn undo(&mut self, world: &mut World) {
-        set_hierarchy_location(world, self.entity, self.old.clone());
+        set_hierarchy_location(world, self.entity, self.old);
     }
 
     fn description(&self) -> &str {
@@ -387,24 +422,45 @@ impl EditorCommand for MoveEntity {
 /// (prefab save, scene serialization, tab swap) read the document and
 /// silently disagree with the visible hierarchy.
 pub(crate) fn set_parent(world: &mut World, entity: Entity, parent: Option<Entity>) {
-    let slot = world
-        .get::<jackdaw_ui::UiSlot>(entity)
-        .map(|slot| slot.0.clone());
     set_hierarchy_location(
         world,
         entity,
         HierarchyLocation {
             parent,
             index: usize::MAX,
-            slot,
         },
     );
+}
+
+/// Whether a placement re-expresses the entity's world position against its
+/// new parent.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum WorldTransform {
+    /// The entity is already somewhere: keep it there by writing a new local
+    /// `Transform` measured against the new parent.
+    Keep,
+    /// The entity is freshly spawned, so its `GlobalTransform` still reads
+    /// identity and there is no position worth preserving.
+    Unplaced,
 }
 
 /// Apply an exact ordered hierarchy location to both the live ECS and BSN
 /// document while preserving an entity's world-space transform.
 pub fn set_hierarchy_location(world: &mut World, entity: Entity, location: HierarchyLocation) {
-    let current_world = world.get::<GlobalTransform>(entity).copied();
+    place_entity(world, entity, location, WorldTransform::Keep);
+}
+
+/// [`set_hierarchy_location`] saying whether the entity has a world position
+/// worth keeping.
+pub fn place_entity(
+    world: &mut World,
+    entity: Entity,
+    location: HierarchyLocation,
+    transform: WorldTransform,
+) {
+    let current_world = (transform == WorldTransform::Keep)
+        .then(|| world.get::<GlobalTransform>(entity).copied())
+        .flatten();
     let new_parent_world = location
         .parent
         .and_then(|parent| world.get::<GlobalTransform>(parent).copied());
@@ -413,33 +469,19 @@ pub fn set_hierarchy_location(world: &mut World, entity: Entity, location: Hiera
 
     match location.parent {
         Some(parent) => {
+            // `insert_children` removes the entity before re-inserting it,
+            // so a child already under this parent shifts one slot.
             let index = world
                 .get::<Children>(parent)
-                .map(|children| location.index.min(children.len()))
+                .map(|children| {
+                    let already = children.iter().any(|child| child == entity);
+                    location.index.min(children.len() - usize::from(already))
+                })
                 .unwrap_or(0);
             world.entity_mut(parent).insert_children(index, &[entity]);
         }
         None => {
             world.entity_mut(entity).remove::<ChildOf>();
-        }
-    }
-
-    match location.slot {
-        Some(slot) => {
-            let slot = jackdaw_ui::UiSlot(slot);
-            world.entity_mut(entity).insert(slot.clone());
-            sync_component_to_ast(world, entity, "jackdaw_ui::UiSlot", &slot);
-        }
-        None => {
-            world.entity_mut(entity).remove::<jackdaw_ui::UiSlot>();
-            let node = world
-                .get_resource::<jackdaw_bsn::SceneBsnAst>()
-                .and_then(|ast| ast.ast_for(entity));
-            if let Some(node) = node {
-                world
-                    .resource_mut::<jackdaw_bsn::SceneBsnAst>()
-                    .remove_component_patch(node, "jackdaw_ui::UiSlot");
-            }
         }
     }
 
@@ -796,6 +838,47 @@ impl EditorCommand for RemoveComponent {
     }
 }
 
+/// Scene entities spawned during the call being watched. Outside a watched
+/// call nothing is recorded.
+#[derive(Resource, Default)]
+pub struct SpawnedEntities {
+    /// Whether a caller is waiting for this list.
+    watching: bool,
+    entities: Vec<Entity>,
+}
+
+impl SpawnedEntities {
+    /// Start recording, discarding whatever the last call left.
+    pub fn watch(world: &mut World) {
+        let mut spawned = world.get_resource_or_init::<Self>();
+        spawned.watching = true;
+        spawned.entities.clear();
+    }
+
+    /// Stop recording and take what was spawned.
+    pub fn take(world: &mut World) -> Vec<Entity> {
+        let mut spawned = world.get_resource_or_init::<Self>();
+        spawned.watching = false;
+        std::mem::take(&mut spawned.entities)
+    }
+
+    /// Record `entity` as spawned, if anyone is watching.
+    pub(crate) fn record(world: &mut World, entity: Entity) {
+        if let Some(mut spawned) = world.get_resource_mut::<Self>()
+            && spawned.watching
+        {
+            spawned.entities.push(entity);
+        }
+    }
+
+    /// Forget `entity`, for a command that has just taken its spawn back.
+    fn forget(world: &mut World, entity: Entity) {
+        if let Some(mut spawned) = world.get_resource_mut::<Self>() {
+            spawned.entities.retain(|&recorded| recorded != entity);
+        }
+    }
+}
+
 pub struct SpawnEntity {
     /// The entity that was spawned (set after first execute).
     pub spawned: Option<Entity>,
@@ -808,10 +891,12 @@ impl EditorCommand for SpawnEntity {
     fn execute(&mut self, world: &mut World) {
         let entity = (self.spawn_fn)(world);
         self.spawned = Some(entity);
+        SpawnedEntities::record(world, entity);
     }
 
     fn undo(&mut self, world: &mut World) {
         if let Some(entity) = self.spawned.take() {
+            SpawnedEntities::forget(world, entity);
             deselect_entities(world, &[entity]);
             despawn_scene_entity(world, entity);
         }
@@ -823,20 +908,31 @@ impl EditorCommand for SpawnEntity {
 }
 
 pub struct DespawnEntity {
+    /// The entity as it stands in the world now, rewritten by every undo to
+    /// whatever id the restore minted.
     pub entity: Entity,
+    /// The id the snapshot was taken under, and so the only id a restore's
+    /// entity map answers to. Parts company with `entity` after a redo.
+    snapshot_root: Entity,
     pub scene_snapshot: DynamicWorld,
-    pub parent: Option<Entity>,
+    /// Where the entity sat before the despawn, so undo can put it back.
+    pub location: HierarchyLocation,
     pub label: String,
 }
 
 impl DespawnEntity {
-    pub fn from_world(world: &World, entity: Entity) -> Self {
-        let parent = world.get::<ChildOf>(entity).map(|c| c.0);
+    /// Snapshot `entity` as it was authored. Preview writes are suspended
+    /// around the read, so a running preview's values are not captured.
+    pub fn from_world(world: &mut World, entity: Entity) -> Self {
+        let location = HierarchyLocation::from_world(world, entity);
+        let held = crate::preview_context::suspend_preview_writes(world);
         let scene = snapshot_entity(world, entity);
+        crate::preview_context::resume_preview_writes(world, held);
         Self {
             entity,
+            snapshot_root: entity,
             scene_snapshot: scene,
-            parent,
+            location,
             label: format!("Despawn entity {entity}"),
         }
     }
@@ -853,10 +949,20 @@ impl EditorCommand for DespawnEntity {
         let scene = snapshot_rebuild(&self.scene_snapshot);
         let mut entity_map = bevy::ecs::entity::hash_map::EntityHashMap::default();
         let _ = scene.write_to_world(world, &mut entity_map);
-        if let Some(&new_id) = entity_map.get(&self.entity) {
+        if let Some(&new_id) = entity_map.get(&self.snapshot_root) {
             self.entity = new_id;
         }
         crate::scene_io::register_entity_in_ast(world, self.entity);
+        // A parent that has gone since leaves the entity at the top.
+        let location = HierarchyLocation {
+            parent: self
+                .location
+                .parent
+                .filter(|parent| world.get_entity(*parent).is_ok()),
+            index: self.location.index,
+        };
+        set_hierarchy_location(world, self.entity, location);
+        crate::hierarchy::sync_outliner_row_order(world, location.parent);
     }
 
     fn description(&self) -> &str {
@@ -1392,6 +1498,10 @@ pub(crate) fn apply_json_to_reflect(
                 *i = n.as_u64().unwrap_or_default() as u16;
             } else if let Some(i) = field.try_downcast_mut::<u64>() {
                 *i = n.as_u64().unwrap_or_default();
+            } else {
+                // A number can still be the whole of an `Option<f32>` or a
+                // `NonZero`, which reflect takes through serde's own paths.
+                try_typed_deserialize(field, value, registry);
             }
         }
         serde_json::Value::Bool(b) => {
@@ -1412,7 +1522,7 @@ pub(crate) fn apply_json_to_reflect(
             // Structs, tuple structs, enum struct/tuple variants, lists, etc.
             try_typed_deserialize(field, value, registry);
         }
-        serde_json::Value::Null => {}
+        serde_json::Value::Null => try_typed_deserialize(field, value, registry),
     }
 }
 
@@ -1588,6 +1698,152 @@ pub fn sync_component_to_ast<T: bevy::reflect::Reflect>(
     let _ = type_path;
     let registry = world.resource::<AppTypeRegistry>().clone();
     sync_component_to_bsn_doc(world, entity, value.as_partial_reflect(), &registry);
+}
+
+/// Record an authored layout edit a live gesture already applied to the ECS,
+/// as one history entry. A gesture on a `Node` the running binding preview
+/// drives is refused and the live value put back.
+pub fn push_layout_edit(world: &mut World, entity: Entity, before: Node, after: Node) {
+    push_layout_edits(world, vec![(entity, before, after)]);
+}
+
+/// Undo label a layout gesture on more than one node lands under.
+const LAYOUT_GROUP_LABEL: &str = "Edit UI layout";
+
+/// [`push_layout_edit`] for a gesture that moved a whole selection, still as
+/// one history entry. Nodes the gesture left where they were drop out.
+pub fn push_layout_edits(world: &mut World, edits: Vec<(Entity, Node, Node)>) {
+    let mut commands: Vec<Box<dyn EditorCommand>> = Vec::new();
+    for (entity, before, after) in edits {
+        if before == after {
+            continue;
+        }
+        if crate::preview_context::preview_writes(world, entity, std::any::TypeId::of::<Node>()) {
+            warn!(
+                "{}: `Node` on {entity}",
+                crate::preview_context::PREVIEW_EDIT_REFUSED
+            );
+            if let Some(mut node) = world.get_mut::<Node>(entity) {
+                *node = before;
+            }
+            continue;
+        }
+        let command = SetUiNode {
+            entity,
+            before,
+            after,
+        };
+        command.sync_after_external_execute(world);
+        commands.push(Box::new(command));
+    }
+    let entry: Box<dyn EditorCommand> = match commands.len() {
+        0 => return,
+        1 => commands.pop().expect("one command"),
+        _ => Box::new(CommandGroup {
+            commands,
+            label: LAYOUT_GROUP_LABEL.to_string(),
+        }),
+    };
+    world.resource_mut::<CommandHistory>().push_executed(entry);
+}
+
+/// Undoable edit of one authored UI [`Node`].
+pub struct SetUiNode {
+    pub entity: Entity,
+    pub before: Node,
+    pub after: Node,
+}
+
+impl SetUiNode {
+    fn apply(&self, world: &mut World, value: &Node) {
+        if let Some(mut node) = world.get_mut::<Node>(self.entity) {
+            *node = value.clone();
+        }
+        sync_component_to_ast::<Node>(
+            world,
+            self.entity,
+            crate::inspector::node_card::node_type_path(),
+            value,
+        );
+    }
+}
+
+impl EditorCommand for SetUiNode {
+    fn execute(&mut self, world: &mut World) {
+        let after = self.after.clone();
+        self.apply(world, &after);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        let before = self.before.clone();
+        self.apply(world, &before);
+    }
+
+    fn description(&self) -> &str {
+        "Edit UI layout"
+    }
+
+    fn sync_after_external_execute(&self, world: &mut World) {
+        let after = self.after.clone();
+        sync_component_to_ast::<Node>(
+            world,
+            self.entity,
+            crate::inspector::node_card::node_type_path(),
+            &after,
+        );
+    }
+}
+
+/// Undoable edit of one UI scene root's [`jackdaw_scene_types::CanvasGuides`].
+/// `None` on either side means the component is absent, so the first guide
+/// inserts it and the last one takes it off again.
+pub struct SetCanvasGuides {
+    pub root: Entity,
+    pub before: Option<jackdaw_scene_types::CanvasGuides>,
+    pub after: Option<jackdaw_scene_types::CanvasGuides>,
+}
+
+impl SetCanvasGuides {
+    fn apply(&self, world: &mut World, value: &Option<jackdaw_scene_types::CanvasGuides>) {
+        let type_path = <jackdaw_scene_types::CanvasGuides as bevy::reflect::TypePath>::type_path();
+        match value {
+            Some(guides) => {
+                if let Ok(mut entity) = world.get_entity_mut(self.root) {
+                    entity.insert(guides.clone());
+                }
+                sync_component_to_ast(world, self.root, type_path, guides);
+            }
+            None => {
+                if let Ok(mut entity) = world.get_entity_mut(self.root) {
+                    entity.remove::<jackdaw_scene_types::CanvasGuides>();
+                }
+                if let Some(mut ast) = world.get_resource_mut::<jackdaw_bsn::SceneBsnAst>()
+                    && let Some(node) = ast.ast_for(self.root)
+                {
+                    ast.remove_component_patch(node, type_path);
+                }
+            }
+        }
+        if let Ok(mut entity) = world.get_entity_mut(self.root) {
+            entity.insert(crate::inspector::InspectorDirty);
+        }
+    }
+}
+
+impl EditorCommand for SetCanvasGuides {
+    fn execute(&mut self, world: &mut World) {
+        let after = self.after.clone();
+        self.apply(world, &after);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        let before = self.before.clone();
+        self.apply(world, &before);
+    }
+
+    fn description(&self) -> &str {
+        "Edit canvas guides"
+    }
 }
 
 /// Upsert one component's patch on the entity's BSN document node from a
@@ -2191,13 +2447,58 @@ mod set_bsn_field_tests {
 }
 
 #[cfg(test)]
+mod spawned_entities_tests {
+    use super::*;
+
+    /// The list belongs to the call that opened it: outside one nothing is
+    /// recorded, so a session driven from the menus never grows a list
+    /// nobody is going to read.
+    #[test]
+    fn nothing_is_recorded_while_no_call_is_watching() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        SpawnedEntities::record(&mut world, entity);
+        assert!(SpawnedEntities::take(&mut world).is_empty());
+    }
+
+    /// Taking the list ends the watch, so what the next spawn does is not
+    /// reported against the call that has already answered.
+    #[test]
+    fn a_spawn_after_the_call_took_its_list_is_not_recorded() {
+        let mut world = World::new();
+        SpawnedEntities::watch(&mut world);
+        let first = world.spawn_empty().id();
+        SpawnedEntities::record(&mut world, first);
+        assert_eq!(SpawnedEntities::take(&mut world), vec![first]);
+
+        let second = world.spawn_empty().id();
+        SpawnedEntities::record(&mut world, second);
+        assert!(SpawnedEntities::take(&mut world).is_empty());
+    }
+
+    /// An undo inside a watched call takes its spawn back, and a caller
+    /// told about an entity that is no longer there cannot act on it.
+    #[test]
+    fn a_spawn_taken_back_is_not_reported() {
+        let mut world = World::new();
+        SpawnedEntities::watch(&mut world);
+        let kept = world.spawn_empty().id();
+        let undone = world.spawn_empty().id();
+        SpawnedEntities::record(&mut world, kept);
+        SpawnedEntities::record(&mut world, undone);
+        SpawnedEntities::forget(&mut world, undone);
+        assert_eq!(SpawnedEntities::take(&mut world), vec![kept]);
+    }
+}
+
+#[cfg(test)]
 mod bsn_doc_coherence_tests {
     use super::*;
     use jackdaw_api_internal::snapshot::SceneSnapshotter;
     use jackdaw_bsn::{BsnValue, SceneBsnAst, get_bsn_field};
 
-    #[test]
-    fn undo_respawn_rebuilds_the_bsn_document() {
+    /// A world holding what the snapshotter reads.
+    fn coherence_app() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
         app.init_resource::<SceneBsnAst>();
@@ -2211,6 +2512,15 @@ mod bsn_doc_coherence_tests {
         app.init_resource::<crate::view_modes::ViewModeSettings>();
         app.init_resource::<crate::viewport_overlays::OverlaySettings>();
         app.init_resource::<jackdaw_avian_integration::PhysicsOverlayConfig>();
+        app.register_type::<Name>();
+        app.register_type::<Transform>();
+        app.register_type::<jackdaw_scene_types::SceneRootTag>();
+        app
+    }
+
+    #[test]
+    fn undo_respawn_rebuilds_the_bsn_document() {
+        let mut app = coherence_app();
 
         let entity = app
             .world_mut()
@@ -2256,6 +2566,45 @@ mod bsn_doc_coherence_tests {
         assert!(
             ast.ast_for(entity).is_none() || entity == respawned,
             "no stale link to the pre-undo entity"
+        );
+    }
+
+    /// A restore mints a fresh id, so a second undo must still find the
+    /// snapshot under the id it was taken with.
+    #[test]
+    fn a_despawn_undoes_again_after_a_redo() {
+        let mut app = coherence_app();
+        let entity = app
+            .world_mut()
+            .spawn((
+                Name::new("Node"),
+                Transform::from_xyz(1.0, 0.0, 0.0),
+                jackdaw_scene_types::SceneRootTag,
+            ))
+            .id();
+        crate::scene_io::register_entity_in_ast(app.world_mut(), entity);
+
+        let mut command = DespawnEntity::from_world(app.world_mut(), entity);
+        command.execute(app.world_mut());
+        command.undo(app.world_mut());
+        assert!(
+            app.world().get_entity(command.entity).is_ok(),
+            "the first undo puts the entity back"
+        );
+
+        command.execute(app.world_mut());
+        command.undo(app.world_mut());
+
+        assert!(
+            app.world().get_entity(command.entity).is_ok(),
+            "the second undo puts the entity back too"
+        );
+        assert!(
+            app.world()
+                .resource::<SceneBsnAst>()
+                .ast_for(command.entity)
+                .is_some(),
+            "and the document links what it put back"
         );
     }
 }

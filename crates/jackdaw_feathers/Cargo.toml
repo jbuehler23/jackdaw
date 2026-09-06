@@ -13,6 +13,7 @@ bevy_monitors.workspace = true
 jackdaw_fuzzy.workspace = true
 jackdaw_scene_types.workspace = true
 jackdaw_widgets.workspace = true
+jackdaw_commands.workspace = true
 lucide-icons.workspace = true
 jackdaw_localization.workspace = true
 

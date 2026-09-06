@@ -39,6 +39,19 @@ impl BsnAssetContext<'_> {
     }
 }
 
+/// Name a variant of `type_path`, dropping the type's generic arguments.
+///
+/// The document's grammar cannot lex `Option<String>::Some`, and a scene
+/// holding one is unreadable as a whole file, not only in the field that
+/// carried it. The reader resolves a variant by its last segment against the
+/// type the field already has, so the arguments carry nothing it needs.
+fn variant_type_path(type_path: &str, variant: &str) -> String {
+    let base = type_path
+        .split_once('<')
+        .map_or(type_path, |(head, _)| head);
+    format!("{base}::{variant}")
+}
+
 /// Whether a reflect type path denotes a `bevy_asset` `Handle<T>`. Used to
 /// short-circuit handles whose asset type is not registered with
 /// `ReflectHandle`, so the reflect walk never descends into their `AssetId`.
@@ -116,6 +129,28 @@ impl BsnValue {
         }
         if let Some(v) = value.try_downcast_ref::<u16>() {
             return BsnValue::Int(*v as i128);
+        }
+        // `NonZero` reflects as opaque, so without these arms it reaches the
+        // `Debug` fallback and lands in the document as a quoted string no
+        // reader takes back as a number. Bevy's grid lines are `NonZero`.
+        if let Some(v) = value.try_downcast_ref::<std::num::NonZeroI16>() {
+            return BsnValue::Int(i128::from(v.get()));
+        }
+        if let Some(v) = value.try_downcast_ref::<std::num::NonZeroU16>() {
+            return BsnValue::Int(i128::from(v.get()));
+        }
+        if let Some(v) = value.try_downcast_ref::<std::num::NonZeroI32>() {
+            return BsnValue::Int(i128::from(v.get()));
+        }
+        if let Some(v) = value.try_downcast_ref::<std::num::NonZeroU32>() {
+            return BsnValue::Int(i128::from(v.get()));
+        }
+
+        // `SmolStr` reflects as opaque, so without this arm it reaches the
+        // `Debug` fallback and lands in the document double-quoted.
+        // `bevy_feathers` theme tokens are `SmolStr`.
+        if let Some(v) = value.try_downcast_ref::<smol_str::SmolStr>() {
+            return BsnValue::String(v.to_string());
         }
 
         // Handle<T> fields: resolve to an asset-path string when an asset
@@ -249,8 +284,7 @@ impl BsnValue {
                 .get_represented_type_info()
                 .map(|info| info.type_path().to_string())
                 .unwrap_or_default();
-            let variant = e.variant_name();
-            let full_path = format!("{type_path}::{variant}");
+            let full_path = variant_type_path(&type_path, e.variant_name());
             match e.variant_type() {
                 VariantType::Struct => {
                     let mut fields = Vec::new();
@@ -293,6 +327,19 @@ impl BsnValue {
             let mut items = Vec::new();
             for i in 0..l.len() {
                 if let Some(item) = l.get(i) {
+                    items.push(BsnValue::from_reflect_inner(item, type_registry, ctx));
+                }
+            }
+            return BsnValue::List(items);
+        }
+
+        // Tuples emit like lists. BSN has no tuple literal, and a `(String,
+        // T)` pair is how a binding maps an event field, so without this arm
+        // it reaches the `Debug` fallback below and stops being data.
+        if let ReflectRef::Tuple(t) = value.reflect_ref() {
+            let mut items = Vec::new();
+            for i in 0..t.field_len() {
+                if let Some(item) = t.field(i) {
                     items.push(BsnValue::from_reflect_inner(item, type_registry, ctx));
                 }
             }
@@ -427,8 +474,7 @@ fn component_to_bsn_patch_inner(
         }
 
         ReflectRef::Enum(e) => {
-            let variant = e.variant_name();
-            let full_path = format!("{type_path}::{variant}");
+            let full_path = variant_type_path(&type_path, e.variant_name());
             match e.variant_type() {
                 VariantType::Struct => {
                     let mut fields = Vec::new();

@@ -2,7 +2,7 @@
 //! the flags that decide where it is evaluated (editor viewport, exported
 //! mesh) and whether its output carries editable handles.
 
-#[cfg(feature = "render")]
+#[cfg(feature = "reflect")]
 use bevy::prelude::ReflectComponent;
 use glam::Vec3;
 
@@ -12,10 +12,10 @@ use crate::{BrushFaceData, EvaluatedBrush, MeshMirror, NO_SOURCE, evaluate_mirro
 /// authored geometry through each enabled entry in order.
 #[derive(Clone, Default, Debug, PartialEq)]
 #[cfg_attr(
-    feature = "render",
+    feature = "reflect",
     derive(bevy::ecs::component::Component, bevy::reflect::Reflect)
 )]
-#[cfg_attr(feature = "render", reflect(Component))]
+#[cfg_attr(feature = "reflect", reflect(Component))]
 pub struct ModifierStack {
     pub modifiers: Vec<ModifierEntry>,
 }
@@ -47,7 +47,7 @@ impl ModifierStack {
 
 /// One modifier plus the flags controlling where it evaluates.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "render", derive(bevy::reflect::Reflect))]
+#[cfg_attr(feature = "reflect", derive(bevy::reflect::Reflect))]
 pub struct ModifierEntry {
     pub modifier: Modifier,
     /// Evaluate for the editor viewport.
@@ -71,7 +71,7 @@ impl ModifierEntry {
 
 /// A single brush modifier.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "render", derive(bevy::reflect::Reflect))]
+#[cfg_attr(feature = "reflect", derive(bevy::reflect::Reflect))]
 pub enum Modifier {
     Mirror(MeshMirror),
 }
@@ -343,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "render")]
+    #[cfg(feature = "reflect")]
     fn modifier_stack_round_trips_through_reflection() {
         use bevy::reflect::{
             FromReflect, TypeRegistry,

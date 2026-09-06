@@ -378,9 +378,9 @@ fn apply_brush(world: &mut World, entity: Entity, target: &Brush) {
 pub fn sync_brush_to_ast(world: &mut World, entity: Entity, brush: &Brush) {
     // `jackdaw_scene_types::types::Brush` is the canonical reflected type
     // path (Brush lives directly in the crate's `types` module, not a
-    // `types::brush` submodule; historically this string was wrong and the
-    // document ended up with a `types::brush::Brush` key the loader skipped
-    // with an `Unknown type` warning, silently losing the Brush on reload).
+    // `types::brush` submodule; getting this string wrong leaves the
+    // document with a `types::brush::Brush` key the loader skips with an
+    // `Unknown type` warning, silently losing the Brush on reload).
     crate::commands::sync_component_to_ast(
         world,
         entity,

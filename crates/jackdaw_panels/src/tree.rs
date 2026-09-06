@@ -11,10 +11,9 @@
 //!
 //! There is exactly one tree per workspace: a single `root` node that
 //! is either a `Leaf` (the whole layout is one tabbed area) or a
-//! `Split` containing the rest of the layout. Earlier versions kept a
-//! separate sub-tree per named anchor (`left`, `right_sidebar`, etc.);
-//! that's gone now in favour of a flat single-tree, which lets panels
-//! be dragged anywhere without an anchor wall between them.
+//! `Split` containing the rest of the layout. There is no per-anchor
+//! sub-tree, so panels can be dragged anywhere without an anchor wall
+//! between them.
 
 use std::collections::HashMap;
 
@@ -588,6 +587,59 @@ impl DockTree {
         }
     }
 
+    /// Point every tab carrying `from` at `to` instead.
+    ///
+    /// For a window id that used to name its own panel and now names another
+    /// one. A persisted layout keeps the old id, so without this the tree asks
+    /// the registry for a window nobody offers any more.
+    ///
+    /// A leaf that ends up holding `to` twice keeps one tab: the extra is
+    /// dropped, and a leaf whose active tab was the dropped one is retargeted
+    /// at the survivor, so the panel the user was looking at is still the one
+    /// in front. A leaf carrying no `from` is left untouched, active included.
+    pub fn alias_window_kind(&mut self, from: &str, to: &str) {
+        if from == to {
+            return;
+        }
+        for leaf in self.nodes.values_mut() {
+            let DockNode::Leaf(leaf) = leaf else {
+                continue;
+            };
+            if !leaf.windows.iter().any(|t| t.window_id == from) {
+                continue;
+            }
+            // The tab that survives: one already carrying `to`, else the first
+            // `from`, renamed in place so its `TabId` and position hold.
+            let mut survivor = leaf
+                .windows
+                .iter()
+                .find(|t| t.window_id == to)
+                .map(|t| t.id);
+            let mut dropped: Vec<TabId> = Vec::new();
+            leaf.windows.retain_mut(|tab| {
+                if tab.window_id != from {
+                    return true;
+                }
+                match survivor {
+                    Some(_) => {
+                        dropped.push(tab.id);
+                        false
+                    }
+                    None => {
+                        tab.window_id = to.to_string();
+                        survivor = Some(tab.id);
+                        true
+                    }
+                }
+            });
+            if let Some(active) = leaf.active
+                && dropped.contains(&active)
+            {
+                leaf.active = survivor;
+            }
+        }
+    }
+
     /// Collapse the tree:
     /// - Remove empty leaves that aren't the root or marked persistent.
     ///   The surviving sibling of a removed leaf takes its place in the parent.
@@ -909,5 +961,75 @@ mod tests {
 
         assert!(matches!(t.nodes[&t.root.unwrap()], DockNode::Leaf(_)));
         assert_eq!(t.leaves().count(), 1);
+    }
+
+    #[test]
+    fn an_aliased_window_kind_is_renamed_in_place() {
+        let mut t = DockTree::new();
+        let root = t.set_root_leaf(leaf("root", &["a", "old", "b"]));
+        let tab = tab_id_for(&t, root, "old");
+
+        t.alias_window_kind("old", "new");
+
+        assert_eq!(window_ids(&t, root), vec!["a", "new", "b"]);
+        assert_eq!(
+            tab_id_for(&t, root, "new"),
+            tab,
+            "the tab keeps its id, so a layout that names it still resolves",
+        );
+    }
+
+    #[test]
+    fn a_leaf_holding_both_ids_keeps_one_tab() {
+        let mut t = DockTree::new();
+        let root = t.set_root_leaf(leaf("root", &["new", "old"]));
+
+        t.alias_window_kind("old", "new");
+
+        assert_eq!(
+            window_ids(&t, root),
+            vec!["new"],
+            "a leaf that persisted both ids must not reopen with two of the same tab",
+        );
+    }
+
+    #[test]
+    fn a_dropped_active_tab_hands_the_front_to_the_survivor() {
+        let mut t = DockTree::new();
+        let root = t.set_root_leaf(leaf("root", &["new", "old"]));
+        let old = tab_id_for(&t, root, "old");
+        t.set_active(root, old);
+
+        t.alias_window_kind("old", "new");
+
+        assert_eq!(
+            active_window_id(&t, root),
+            Some("new"),
+            "the panel the user was looking at is still the one in front",
+        );
+    }
+
+    #[test]
+    fn aliasing_a_kind_no_leaf_carries_changes_nothing() {
+        let mut t = DockTree::new();
+        let root = t.set_root_leaf(leaf("root", &["a", "b"]));
+        let active = active_window_id(&t, root).map(ToString::to_string);
+
+        t.alias_window_kind("old", "new");
+
+        assert_eq!(window_ids(&t, root), vec!["a", "b"]);
+        assert_eq!(active_window_id(&t, root).map(ToString::to_string), active);
+    }
+
+    #[test]
+    fn aliasing_renames_every_leaf_that_carries_the_old_id() {
+        let mut t = DockTree::new();
+        let root = t.set_root_leaf(leaf("root", &["old"]));
+        let (other, _) = t.split(root, Edge::Right, "old".into()).unwrap();
+
+        t.alias_window_kind("old", "new");
+
+        assert_eq!(window_ids(&t, root), vec!["new"]);
+        assert_eq!(window_ids(&t, other), vec!["new"]);
     }
 }

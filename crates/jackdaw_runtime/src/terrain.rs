@@ -21,8 +21,9 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use jackdaw_scene_types::Terrain;
 use jackdaw_terrain::render::{
-    SplatArrayHandles, SplatBuildError, TerrainRenderPlugin, TerrainSplatMaterial,
-    TextureSetImages, control_image_from_bytes, resolve_with, slope_image, splat_images,
+    ScatterDirty, ScatterRenderPlugin, ScatterSystems, SplatArrayHandles, SplatBuildError,
+    TerrainRenderPlugin, TerrainScatter, TerrainSplatMaterial, TextureSetImages,
+    control_image_from_bytes, resolve_with, slope_image, splat_images, tint_image,
 };
 use jackdaw_terrain::sidecar::{self, TerrainMaterialSlot};
 use jackdaw_terrain::splat::ControlTexels;
@@ -42,18 +43,23 @@ use avian3d::prelude::{Collider, RigidBody};
 const UNTEXTURED: Color = Color::linear_rgb(0.5, 0.5, 0.5);
 
 pub(crate) fn plugin(app: &mut App) {
-    app.add_plugins(TerrainRenderPlugin).add_systems(
-        Update,
-        (
-            load_sidecars,
-            refresh_heightmaps,
-            resolve_material_slots,
-            build_ready_materials,
-            sync_surfaces,
-        )
-            .chain()
-            .after(crate::spawn_loaded_scenes),
-    );
+    app.add_plugins((TerrainRenderPlugin, ScatterRenderPlugin))
+        .add_systems(
+            Update,
+            (
+                load_sidecars,
+                refresh_heightmaps,
+                resolve_material_slots,
+                build_ready_materials,
+                sync_surfaces,
+            )
+                .chain()
+                .after(crate::spawn_loaded_scenes)
+                // The scatter a sidecar carries is written here and drawn
+                // by the rebuild, so it is written before the rebuild
+                // reads it rather than a frame behind it.
+                .before(ScatterSystems::Rebuild),
+        );
     #[cfg(feature = "physics")]
     app.add_systems(Update, build_ground_colliders.after(refresh_heightmaps));
 }
@@ -202,9 +208,12 @@ fn load_sidecars(
             None => RegionTerrainData::default(),
         };
 
-        commands
-            .entity(entity)
-            .insert((document_of(data, terrain), TerrainSplat::default()));
+        commands.entity(entity).insert((
+            TerrainScatter::from_document(&data),
+            ScatterDirty::all(),
+            document_of(data, terrain),
+            TerrainSplat::default(),
+        ));
     }
 }
 
@@ -325,6 +334,12 @@ fn build_ready_materials(
         let texels =
             ControlTexels::from_control(&document.data.grid_control(), shape.resolution).to_bytes();
         let control = images.add(control_image_from_bytes(&texels, shape.resolution));
+        // White where the layer was never painted, which is the shader's
+        // identity, so a terrain with no tint draws what its textures say.
+        let tint = images.add(tint_image(
+            &document.data.regions.read_grid_color(shape.resolution),
+            shape.resolution,
+        ));
         let slope = images.add(slope_image(&document.heightmap));
         let arrays = SplatArrayHandles {
             albedo: images.add(built.albedo),
@@ -336,9 +351,11 @@ fn build_ready_materials(
             arrays,
             control,
             slope,
+            tint,
             shape.size,
             shape.resolution,
             document.data.autoterrain,
+            document.data.surface,
         )));
         splat.built_size = shape.size;
         splat.built_resolution = shape.resolution;
@@ -898,9 +915,11 @@ mod tests {
             },
             Handle::default(),
             Handle::default(),
+            Handle::default(),
             Vec2::splat(100.0),
             4,
             document.data.autoterrain,
+            document.data.surface,
         );
 
         assert_eq!(material.autoterrain_enabled, 1);
@@ -922,9 +941,11 @@ mod tests {
             },
             Handle::default(),
             Handle::default(),
+            Handle::default(),
             Vec2::splat(100.0),
             4,
             RegionTerrainData::default().autoterrain,
+            RegionTerrainData::default().surface,
         );
 
         assert_eq!(material.autoterrain_enabled, 0);

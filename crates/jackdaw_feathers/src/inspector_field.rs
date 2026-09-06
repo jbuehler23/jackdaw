@@ -1,6 +1,7 @@
+use bevy::feathers::controls::FeathersCheckbox;
+use bevy::feathers::theme::ThemedText;
 use bevy::prelude::*;
 
-use crate::checkbox::{CheckboxProps, checkbox};
 use crate::combobox::{ComboBoxOptionData, combobox};
 use crate::icons::EditorFont;
 use crate::text_edit::{TextEditProps, text_edit};
@@ -197,17 +198,14 @@ impl InspectorFieldProps {
     }
 }
 
-pub fn spawn_inspector_field(
-    commands: &mut Commands,
-    props: InspectorFieldProps,
-    editor_font: &Handle<Font>,
-    icon_font: &Handle<Font>,
-) -> Entity {
+pub fn spawn_inspector_field(commands: &mut Commands, props: InspectorFieldProps) -> Entity {
     let label = props.inferred_label();
 
     if props.kind == FieldKind::Bool {
         return commands
-            .spawn(checkbox(CheckboxProps::new(label), editor_font, icon_font))
+            .spawn_scene(bsn! {
+                @FeathersCheckbox { @caption: bsn! { Text(label) ThemedText } }
+            })
             .id();
     }
 

@@ -1,17 +1,17 @@
+use bevy::feathers::controls::{FeathersTextInput, FeathersTextInputContainer};
 use bevy::feathers::cursor::{EntityCursor, OverrideCursor};
 use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::text::{
-    EditableText, EditableTextFilter, FontFeatureTag, FontFeatures, FontSize, LineHeight,
-    TextCursorStyle, TextEdit, TextLayoutInfo,
+    EditableText, EditableTextFilter, FontFeatureTag, FontFeatures, FontSize, LineHeight, TextEdit,
+    TextLayoutInfo,
 };
 use bevy::ui::InteractionDisabled;
 
 use crate::icons::{EditorFont, IconFont};
 use crate::tokens::{
-    self, AXIS_LABEL_BG, BORDER_COLOR, ELEVATED_BG, PRIMARY_COLOR, SHADOW_COLOR_LIGHT,
-    TEXT_BODY_COLOR, TEXT_MUTED_COLOR, TEXT_SIZE, TEXT_SIZE_PX, TEXT_SIZE_SM,
+    self, AXIS_LABEL_BG, TEXT_BODY_COLOR, TEXT_MUTED_COLOR, TEXT_SIZE, TEXT_SIZE_PX, TEXT_SIZE_SM,
 };
 
 pub fn plugin(app: &mut App) {
@@ -19,11 +19,9 @@ pub fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                handle_focus_style,
                 handle_numeric_increment,
                 (handle_unfocus, handle_clamp_on_unfocus).chain(),
                 handle_drag_value,
-                handle_click_to_focus,
                 sync_text_edit_values,
             ),
         )
@@ -119,6 +117,14 @@ struct TextEditPlaceholderNode(Entity);
 #[derive(Component)]
 struct TextEditDefaultValue(String);
 
+/// Select the value the field opens on, the moment that value arrives.
+///
+/// Queued here rather than by whoever spawned the field, because the default
+/// value is written a frame later: a selection made before it arrives selects an
+/// empty buffer.
+#[derive(Component)]
+struct TextEditSelectAllOnOpen;
+
 #[derive(Component, Default)]
 struct DragHitbox {
     dragging: bool,
@@ -156,6 +162,7 @@ pub struct TextEditConfig {
     allow_empty: bool,
     drag_bottom: bool,
     disabled: bool,
+    select_all_on_open: bool,
     pub initialized: bool,
 }
 
@@ -174,6 +181,9 @@ pub struct TextEditProps {
     pub allow_empty: bool,
     pub drag_bottom: bool,
     pub grow: bool,
+    /// Whether the value the field opens on is selected, so the first
+    /// thing typed replaces it rather than being added to it.
+    pub select_all_on_open: bool,
 }
 
 impl Default for TextEditProps {
@@ -193,6 +203,7 @@ impl Default for TextEditProps {
             allow_empty: false,
             drag_bottom: false,
             grow: false,
+            select_all_on_open: false,
         }
     }
 }
@@ -228,6 +239,13 @@ impl TextEditProps {
     }
     pub fn allow_empty(mut self) -> Self {
         self.allow_empty = true;
+        self
+    }
+    /// Open with the default value selected, so typing replaces it. For a field
+    /// that stands in for something already written: a rename is nearly always a
+    /// new name, and the old one is still there for an Escape.
+    pub fn select_all_on_open(mut self) -> Self {
+        self.select_all_on_open = true;
         self
     }
     pub fn drag_bottom(mut self) -> Self {
@@ -311,6 +329,7 @@ pub fn text_edit(props: TextEditProps) -> impl Bundle {
         allow_empty,
         drag_bottom,
         disabled,
+        select_all_on_open,
         grow: _,
     } = props;
 
@@ -337,6 +356,7 @@ pub fn text_edit(props: TextEditProps) -> impl Bundle {
             allow_empty,
             drag_bottom,
             disabled,
+            select_all_on_open,
             initialized: false,
         },
         TextEditValue::default(),
@@ -413,17 +433,7 @@ fn setup_text_edit_input(
                     column_gap: px(tokens::SPACING_MD),
                     ..default()
                 },
-                BackgroundColor(ELEVATED_BG),
-                BoxShadow(vec![ShadowStyle {
-                    x_offset: Val::ZERO,
-                    y_offset: Val::ZERO,
-                    blur_radius: Val::Px(1.0),
-                    spread_radius: Val::Px(1.0),
-                    color: SHADOW_COLOR_LIGHT,
-                }]),
-                Interaction::None,
                 Hovered::default(),
-                EntityCursor::System(bevy::window::SystemCursorIcon::Text),
             ))
             .observe(
                 |mut ev: On<bevy::picking::events::Pointer<bevy::picking::events::DragStart>>| {
@@ -479,7 +489,6 @@ fn setup_text_edit_input(
                         ..default()
                     },
                     ZIndex(10),
-                    Interaction::None,
                     Hovered::default(),
                     EntityCursor::System(bevy::window::SystemCursorIcon::ColResize),
                 ))
@@ -596,7 +605,6 @@ fn setup_text_edit_input(
         let mut text_input = commands.spawn((
             EditorTextEdit,
             config.variant,
-            EditableText::default(),
             TextFont {
                 font: font.clone().into(),
                 font_size: TEXT_SIZE,
@@ -605,11 +613,6 @@ fn setup_text_edit_input(
             },
             LineHeight::Px(line_height_px),
             TextColor(TEXT_BODY_COLOR.into()),
-            TextCursorStyle {
-                color: TEXT_BODY_COLOR.into(),
-                selection_color: PRIMARY_COLOR.with_alpha(0.3).into(),
-                ..default()
-            },
             Node {
                 flex_grow: 1.0,
                 height: px(line_height_px),
@@ -628,7 +631,9 @@ fn setup_text_edit_input(
         }
 
         if config.disabled {
-            text_input.insert(InteractionDisabled);
+            // The feathers input takes focus from its own press observer;
+            // ignoring the pointer is what keeps a disabled field unfocusable.
+            text_input.insert((InteractionDisabled, Pickable::IGNORE));
         }
 
         if let Some(ref suffix) = config.suffix {
@@ -637,6 +642,9 @@ fn setup_text_edit_input(
 
         if let Some(ref default_value) = config.default_value {
             text_input.insert(TextEditDefaultValue(default_value.clone()));
+            if config.select_all_on_open {
+                text_input.insert(TextEditSelectAllOnOpen);
+            }
         }
 
         if is_numeric {
@@ -711,20 +719,56 @@ fn setup_text_edit_input(
             wrapper_entity,
             TextEditWrapper(text_input_entity),
         );
+
+        commands.queue(move |world: &mut World| {
+            apply_feathers_text_input(world, wrapper_entity, text_input_entity);
+        });
     }
 }
 
-fn handle_focus_style(
-    focus: Res<InputFocus>,
-    mut wrappers: Query<(&TextEditWrapper, &mut BorderColor, &Hovered)>,
-) {
-    for (wrapper, mut border_color, hovered) in &mut wrappers {
-        let color = match (focus.get() == Some(wrapper.0), hovered.get()) {
-            (true, _) => PRIMARY_COLOR,
-            (_, true) => BORDER_COLOR.lighter(0.05),
-            _ => BORDER_COLOR,
-        };
-        *border_color = BorderColor::all(color);
+/// Put the field's two entities on the feathers text input. The frame and the
+/// input each carry their own layout and text style, and both scenes write theirs
+/// over the entity, so the editor's are read off first and put back afterwards.
+fn apply_feathers_text_input(world: &mut World, frame: Entity, input: Entity) {
+    let frame_node = world.get::<Node>(frame).cloned();
+    let applied = match world.get_entity_mut(frame) {
+        Ok(mut frame) => frame.apply_scene(bsn! { @FeathersTextInputContainer }),
+        Err(_) => return,
+    };
+    if let Err(error) = applied {
+        error!("a text field frame did not spawn: {error}");
+        return;
+    }
+    if let (Some(node), Ok(mut frame)) = (frame_node, world.get_entity_mut(frame)) {
+        frame.insert(node);
+    }
+
+    let input_node = world.get::<Node>(input).cloned();
+    let font = world.get::<TextFont>(input).cloned();
+    let color = world.get::<TextColor>(input).copied();
+    let line_height = world.get::<LineHeight>(input).copied();
+    let applied = match world.get_entity_mut(input) {
+        Ok(mut input) => input.apply_scene(bsn! { @FeathersTextInput }),
+        Err(_) => return,
+    };
+    if let Err(error) = applied {
+        error!("a text field did not spawn: {error}");
+        return;
+    }
+    let Ok(mut input) = world.get_entity_mut(input) else {
+        return;
+    };
+    if let Some(node) = input_node {
+        input.insert(node);
+    }
+    if let Some(font) = font {
+        input.insert(font);
+    }
+    if let Some(color) = color {
+        input.insert(color);
+    }
+    if let Some(line_height) = line_height {
+        input.insert(line_height);
     }
 }
 
@@ -736,9 +780,10 @@ fn apply_default_value(
         &TextEditVariant,
         &mut EditableText,
         Option<&NumericRange>,
+        Option<&TextEditSelectAllOnOpen>,
     )>,
 ) {
-    for (entity, default_value, variant, mut editable, range) in &mut text_edits {
+    for (entity, default_value, variant, mut editable, range, select_all) in &mut text_edits {
         if editable_text_string(&editable).is_empty() {
             let text = if variant.is_numeric() {
                 let value = clamp_value(default_value.0.parse().unwrap_or(0.0), range);
@@ -747,8 +792,16 @@ fn apply_default_value(
                 default_value.0.clone()
             };
             set_text_input_value(&mut editable, text);
+            // After the value, so the selection is over the value rather
+            // than over the empty buffer it replaced.
+            if select_all.is_some() {
+                editable.queue_edit(TextEdit::SelectAll);
+            }
         }
-        commands.entity(entity).remove::<TextEditDefaultValue>();
+        commands
+            .entity(entity)
+            .remove::<TextEditDefaultValue>()
+            .remove::<TextEditSelectAllOnOpen>();
     }
 }
 
@@ -792,49 +845,28 @@ fn handle_suffix(
     }
 }
 
-fn handle_click_to_focus(
-    mut focus: ResMut<InputFocus>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    wrappers: Query<(&TextEditWrapper, &Interaction, &Children)>,
-    drag_hitboxes: Query<&DragHitbox>,
-    disabled_inputs: Query<(), (With<EditorTextEdit>, With<InteractionDisabled>)>,
-) {
-    if !mouse.just_pressed(MouseButton::Left) {
-        return;
-    }
-
-    for (wrapper, interaction, children) in &wrappers {
-        if disabled_inputs.contains(wrapper.0) {
-            continue;
-        }
-        let is_dragging = children
-            .iter()
-            .any(|c| drag_hitboxes.get(c).is_ok_and(|d| d.dragging));
-        if *interaction == Interaction::Pressed && !is_dragging {
-            focus.set(wrapper.0, FocusCause::Pressed);
-        }
-    }
-}
-
 fn handle_unfocus(
     mut focus: ResMut<InputFocus>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    capture: Option<Res<jackdaw_commands::KeymapCapture>>,
     text_edits: Query<&ChildOf, With<EditorTextEdit>>,
-    wrappers: Query<&Interaction, With<TextEditWrapper>>,
+    wrappers: Query<&Hovered, With<TextEditWrapper>>,
 ) {
+    if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     let Some(focused_entity) = focus.get() else {
         return;
     };
     let Ok(child_of) = text_edits.get(focused_entity) else {
         return;
     };
-    let Ok(interaction) = wrappers.get(child_of.parent()) else {
+    let Ok(hovered) = wrappers.get(child_of.parent()) else {
         return;
     };
 
-    let clicked_outside =
-        mouse.get_just_pressed().next().is_some() && *interaction == Interaction::None;
+    let clicked_outside = mouse.get_just_pressed().next().is_some() && !hovered.get();
     let key_dismiss = keyboard.just_pressed(KeyCode::Escape)
         || keyboard.just_pressed(KeyCode::Enter)
         || keyboard.just_pressed(KeyCode::NumpadEnter);
@@ -894,6 +926,7 @@ fn handle_clamp_on_unfocus(
 fn handle_numeric_increment(
     focus: Res<InputFocus>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    capture: Option<Res<jackdaw_commands::KeymapCapture>>,
     mut text_edits: Query<
         (
             &TextEditVariant,
@@ -904,6 +937,12 @@ fn handle_numeric_increment(
         With<EditorTextEdit>,
     >,
 ) {
+    // A recorded chord is a key being named, not a key being pressed at the
+    // field it happens to be typed over: Up bound to something would also
+    // step the focused number by one, with nothing saying it had.
+    if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     let Some(focused_entity) = focus.get() else {
         return;
     };
@@ -938,7 +977,7 @@ fn handle_drag_value(
     windows: Query<&Window>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut override_cursor: ResMut<OverrideCursor>,
-    mut drag_hitboxes: Query<(&mut DragHitbox, &Interaction, &ChildOf)>,
+    mut drag_hitboxes: Query<(&mut DragHitbox, &Hovered, &ChildOf)>,
     wrappers: Query<&TextEditWrapper>,
     mut text_edits: Query<
         (
@@ -953,14 +992,14 @@ fn handle_drag_value(
     let Ok(window) = windows.single() else { return };
     let cursor_pos = window.cursor_position();
 
-    for (mut hitbox, interaction, child_of) in &mut drag_hitboxes {
+    for (mut hitbox, hovered, child_of) in &mut drag_hitboxes {
         let Ok(wrapper) = wrappers.get(child_of.parent()) else {
             continue;
         };
         let input_entity = wrapper.0;
 
         if mouse.just_pressed(MouseButton::Left)
-            && *interaction == Interaction::Pressed
+            && hovered.get()
             && let Some(pos) = cursor_pos
         {
             let Ok((_, editable, suffix, _)) = text_edits.get(input_entity) else {
@@ -1045,9 +1084,8 @@ pub fn format_numeric_value(value: f64, variant: TextEditVariant) -> String {
         // Round to integer; cast through `i64` so values that exceed
         // the `i32` range (e.g. `u32` bitmasks like
         // `CollisionLayers::filters` near `u32::MAX`) round-trip
-        // without saturation. The variant predates the wider
-        // `numeric_int()` builder; the name `NumericI32` now stands
-        // for "integer formatting", not the literal type.
+        // without saturation. The name `NumericI32` means integer
+        // formatting, not the literal type.
         TextEditVariant::NumericI32 => (value.round() as i64).to_string(),
         TextEditVariant::NumericF32 => {
             let rounded = (value * 100.0).round() / 100.0;
@@ -1122,10 +1160,9 @@ mod tests {
         );
     }
 
-    /// `u32::MAX` (`4294967295`) survives the round-trip through
-    /// `f64`. The previous implementation cast through `i32` and
-    /// saturated to `2147483647`, which corrupted the visible value
-    /// of any full-bitmask `CollisionLayers::filters`.
+    /// `u32::MAX` (`4294967295`) survives the round-trip through `f64`
+    /// instead of saturating at `2147483647`, which would corrupt the
+    /// visible value of a full-bitmask `CollisionLayers::filters`.
     #[test]
     fn integer_variant_preserves_full_u32_range() {
         let u32_max = u32::MAX as f64;
@@ -1134,7 +1171,7 @@ mod tests {
             "4294967295",
         );
 
-        // High-bit-set u32 (above i32::MAX) used to round-trip to a
+        // A high-bit-set u32 (above i32::MAX) must not round-trip to a
         // negative i32; check the most-significant bit alone.
         let high_bit = (1u32 << 31) as f64;
         assert_eq!(

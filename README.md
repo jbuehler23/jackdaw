@@ -51,8 +51,12 @@ Download a signed release bundle, or install all required executables from
 source:
 
 ```sh
-cargo install --git https://github.com/jbuehler23/jackdaw jackdaw --locked
+cargo +nightly-2026-03-05 install --git https://github.com/jbuehler23/jackdaw jackdaw --locked
 ```
+
+The editor uses unstable compiler features, so it builds on nightly. A
+checkout gets that from its `rust-toolchain.toml`; `cargo install` builds
+outside any checkout, so name the channel on the command line.
 
 Take the release bundle if you can. It ships the prebuilt SDK, so you can
 create a project straight away; `cargo install` builds that SDK first,

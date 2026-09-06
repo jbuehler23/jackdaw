@@ -23,11 +23,14 @@ use bevy::{
     ui_widgets::{Activate, Checkbox, SliderValue, ValueChange, observe},
 };
 use jackdaw_feathers::{
+    button::{ButtonProps, ButtonSize, ButtonVariant, button},
+    icons::Icon,
     number_input::{
         NumberInputPrecision, NumberInputStep, ScrubNumberInput, ScrubNumberInputValue,
         is_scrubbing_or_focused,
     },
     tokens,
+    tooltip::Tooltip,
 };
 
 // Axis sigil colors for vector component inputs. The colored left stripe and
@@ -155,6 +158,9 @@ pub(crate) fn spawn_reflected_fields(
                 source_entity,
                 type_path,
                 entity_names,
+                type_registry,
+                editor_font,
+                icon_font,
             );
         }
         ReflectRef::Array(array) => {
@@ -168,6 +174,9 @@ pub(crate) fn spawn_reflected_fields(
                 source_entity,
                 type_path,
                 entity_names,
+                type_registry,
+                editor_font,
+                icon_font,
             );
         }
         ReflectRef::Map(map) => {
@@ -262,7 +271,7 @@ pub(crate) fn spawn_reflected_fields(
                 );
             }
         }
-        ReflectRef::Opaque(_) => {
+        ReflectRef::Opaque(_) | ReflectRef::Function(_) => {
             let label = reflected
                 .get_represented_type_info()
                 .map(|info| {
@@ -369,16 +378,30 @@ pub(crate) fn spawn_field_row(
                     spawn_list_item_value(
                         commands,
                         item_entity,
+                        &format!("{i}"),
                         item,
                         depth + 1,
                         child_path,
                         source_entity,
                         type_path,
                         entity_names,
+                        type_registry,
+                        editor_font,
+                        icon_font,
+                    );
+                    spawn_list_row_controls(
+                        commands,
+                        item_entity,
+                        source_entity,
+                        type_path,
+                        &field_path,
+                        i,
+                        list.len(),
                     );
                 }
             }
         }
+        spawn_list_add_button(commands, parent, source_entity, type_path, &field_path);
         return;
     }
     if let ReflectRef::Array(array) = value.reflect_ref() {
@@ -407,12 +430,16 @@ pub(crate) fn spawn_field_row(
                     spawn_list_item_value(
                         commands,
                         item_entity,
+                        &format!("{i}"),
                         item,
                         depth + 1,
                         child_path,
                         source_entity,
                         type_path,
                         entity_names,
+                        type_registry,
+                        editor_font,
+                        icon_font,
                     );
                 }
             }
@@ -586,6 +613,35 @@ pub(crate) fn spawn_field_row(
             source_entity,
             type_path,
             depth,
+        );
+        return;
+    }
+
+    // Ahead of the enum arm so a `Node`'s lengths stay one row each rather
+    // than a variant menu.
+    if let Some(&val) = value.try_downcast_ref::<Val>() {
+        super::val_field::spawn_val_field(
+            commands,
+            parent,
+            name,
+            val,
+            depth,
+            field_path,
+            source_entity,
+            type_path,
+        );
+        return;
+    }
+    if let Some(&rect) = value.try_downcast_ref::<UiRect>() {
+        super::val_field::spawn_ui_rect_field(
+            commands,
+            parent,
+            name,
+            rect,
+            depth,
+            field_path,
+            source_entity,
+            type_path,
         );
         return;
     }
@@ -1791,7 +1847,40 @@ fn apply_color_with_undo(
     );
 }
 
-fn spawn_numeric_field(
+/// The same number field in the shared label-left row shape, for cards that lay
+/// their properties out as rows rather than label-above-control stacks.
+pub(super) fn spawn_numeric_field_row(
+    commands: &mut Commands,
+    parent: Entity,
+    label: &str,
+    value: f64,
+    field_path: String,
+    source_entity: Entity,
+    type_path: &str,
+    is_integer: bool,
+) {
+    let row = jackdaw_feathers::field_row::spawn_field_row(
+        commands,
+        parent,
+        jackdaw_feathers::field_row::FieldRowProps::new(label),
+    );
+    commands.entity(row.row).insert(InspectorFieldRow {
+        source_entity,
+        type_path: type_path.to_string(),
+        field_path: field_path.clone(),
+    });
+    spawn_numeric_input(
+        commands,
+        row.control,
+        value,
+        field_path,
+        source_entity,
+        type_path,
+        is_integer,
+    );
+}
+
+pub(super) fn spawn_numeric_field(
     commands: &mut Commands,
     parent: Entity,
     label: &str,
@@ -1833,14 +1922,30 @@ fn spawn_numeric_field(
         ChildOf(col),
     ));
 
-    // The `FieldBinding` sits on the widget root, so the `ValueChange`
-    // observers read it from `event.source`. The widget emits
-    // `ValueChange<T>` but never self-updates `ScrubNumberInputValue`, so
-    // the observers re-insert it and the refresh path syncs it from ECS.
-    //
-    // Integer source types (u32, i64, ...) funnel into the `I64` variant and
-    // float types into `F64`. Without this split a `u32` bitmask like
-    // `CollisionLayers::filters` would round through `f32` on commit.
+    spawn_numeric_input(
+        commands,
+        col,
+        value,
+        field_path,
+        source_entity,
+        type_path,
+        is_integer,
+    );
+}
+
+/// The number input itself, under whatever container the caller gives it.
+///
+/// The `FieldBinding` sits on the widget root so the `ValueChange` observers
+/// read it from `event.source`.
+fn spawn_numeric_input(
+    commands: &mut Commands,
+    parent: Entity,
+    value: f64,
+    field_path: String,
+    source_entity: Entity,
+    type_path: &str,
+    is_integer: bool,
+) {
     let mut field = commands.spawn_scene(bsn! { @ScrubNumberInput });
     field.insert((
         FieldBinding {
@@ -1848,11 +1953,10 @@ fn spawn_numeric_field(
             type_path: type_path.to_string(),
             field_path,
         },
-        ChildOf(col),
+        ChildOf(parent),
     ));
-    // The emitted `ValueChange<T>` type follows the value variant: `I64`
-    // emits `ValueChange<i64>` and `F64` emits `ValueChange<f64>`. The
-    // variant is the only format selector needed here.
+    // Without the integer/float split a `u32` bitmask like
+    // `CollisionLayers::filters` would round through `f32` on commit.
     if is_integer {
         field.insert((
             ScrubNumberInputValue::I64(value as i64),
@@ -1921,7 +2025,7 @@ fn spawn_editable_field(
 /// The preview entity IS the normal `Selection` entity in Live mode (the
 /// projection has already applied the live overlay to it). A reverse-lookup
 /// through `PieProjection.by_bits` finds which game-side bits to address.
-fn try_route_pie_live_field_edit(
+pub(crate) fn try_route_pie_live_field_edit(
     world: &mut World,
     source_entity: Entity,
     type_path: &str,
@@ -2084,6 +2188,10 @@ fn spawn_entity_link(commands: &mut Commands, parent: Entity, target: Entity, la
     ));
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the list, where it goes, and the context every item's control needs"
+)]
 fn spawn_list_expansion<'a>(
     commands: &mut Commands,
     parent: Entity,
@@ -2094,6 +2202,9 @@ fn spawn_list_expansion<'a>(
     source_entity: Entity,
     type_path: &str,
     entity_names: &Query<&Name>,
+    type_registry: &AppTypeRegistry,
+    editor_font: &Handle<Font>,
+    icon_font: &Handle<Font>,
 ) {
     spawn_text_row(commands, parent, &format!("[{len} items]"), depth);
     if len == 0 {
@@ -2117,26 +2228,38 @@ fn spawn_list_expansion<'a>(
             spawn_list_item_value(
                 commands,
                 item_entity,
+                &format!("{i}"),
                 item,
                 depth + 1,
                 child_path,
                 source_entity,
                 type_path,
                 entity_names,
+                type_registry,
+                editor_font,
+                icon_font,
             );
         }
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a list item is a field row: where it goes, what it is, and the context every control needs"
+)]
 fn spawn_list_item_value(
     commands: &mut Commands,
     parent: Entity,
+    name: &str,
     value: &dyn PartialReflect,
     depth: usize,
     field_path: String,
     source_entity: Entity,
     type_path: &str,
     entity_names: &Query<&Name>,
+    type_registry: &AppTypeRegistry,
+    editor_font: &Handle<Font>,
+    icon_font: &Handle<Font>,
 ) {
     // Entity -> clickable link
     if let Some(&entity_val) = value.try_downcast_ref::<Entity>() {
@@ -2159,19 +2282,20 @@ fn spawn_list_item_value(
         );
         return;
     }
-    // Compound -> recurse (list items don't have type_registry context, show as text)
-    if let Some(reflected) = value.try_as_reflect() {
-        // For list items we don't have type_registry context, so show text
-        let text = format_reflect_value(reflected);
-        spawn_text_row(commands, parent, &text, depth);
-        return;
-    }
-    // Fallback -> plain text
-    spawn_text_row(
+    // The generic renderer's depth guard stops the walk.
+    spawn_field_row(
         commands,
         parent,
-        &format_partial_reflect_value(value),
+        name,
+        value,
         depth,
+        field_path,
+        source_entity,
+        type_path,
+        entity_names,
+        type_registry,
+        editor_font,
+        icon_font,
     );
 }
 
@@ -2314,10 +2438,6 @@ fn spawn_text_row(commands: &mut Commands, parent: Entity, text: &str, depth: us
         ThemedText,
         ChildOf(parent),
     ));
-}
-
-fn format_reflect_value(value: &dyn Reflect) -> String {
-    format_partial_reflect_value(value.as_partial_reflect())
 }
 
 fn format_partial_reflect_value(value: &dyn PartialReflect) -> String {
@@ -2565,11 +2685,7 @@ pub(crate) fn on_checkbox_commit(
     let checked = event.value;
     // The checkbox does not self-update `Checked`; reflect the new value so
     // the box renders the change. Feathers styles the box off `Checked`.
-    if checked {
-        commands.entity(target).insert(Checked);
-    } else {
-        commands.entity(target).remove::<Checked>();
-    }
+    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(&mut commands, target, checked);
     let val = format!("{checked}");
     commands.queue(move |world: &mut World| {
         apply_field_value_with_undo(world, source, &tp, &path, &val);
@@ -2580,7 +2696,7 @@ pub(crate) fn on_checkbox_commit(
 /// `(last_run, this_run]`. Gates the reflection-based field/enum refresh on real
 /// data changes (undo, gizmos, operators, AST live-edit all mark the component
 /// changed) instead of polling reflection every frame.
-fn entity_components_changed(
+pub(crate) fn entity_components_changed(
     entity_ref: bevy::ecs::world::EntityRef,
     last_run: bevy::ecs::change_detection::Tick,
     this_run: bevy::ecs::change_detection::Tick,
@@ -2744,7 +2860,10 @@ pub(crate) fn refresh_inspector_fields(
     // Apply bool updates by inserting or removing `Checked`; the checkbox
     // renders off `Checked`. Undo/redo and external edits land here.
     for (entity, value) in bool_updates {
-        let mut ent = world.entity_mut(entity);
+        // A panel rebuild can have taken the row; `entity_mut` panics on that.
+        let Ok(mut ent) = world.get_entity_mut(entity) else {
+            continue;
+        };
         if value {
             ent.insert(Checked);
         } else {
@@ -3153,7 +3272,7 @@ pub(super) fn spawn_variant_contents(
 }
 
 /// Apply an enum variant change with undo support.
-fn apply_enum_variant_with_undo(
+pub(super) fn apply_enum_variant_with_undo(
     world: &mut World,
     _entity: Entity,
     type_path: &str,
@@ -3330,4 +3449,234 @@ mod tests {
             "no mutation since `this_run` means no change"
         );
     }
+}
+
+/// What a control beside a reflected list does to it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ListEdit {
+    Add,
+    Remove,
+    MoveUp,
+    MoveDown,
+}
+
+/// The list a control edits, which element it stands for, and what it does.
+#[derive(Component)]
+pub(crate) struct ReflectListControl {
+    source: Entity,
+    type_path: String,
+    field_path: String,
+    index: usize,
+    edit: ListEdit,
+}
+
+/// The move and remove controls beside one element of a list.
+fn spawn_list_row_controls(
+    commands: &mut Commands,
+    row: Entity,
+    source: Entity,
+    type_path: &str,
+    field_path: &str,
+    index: usize,
+    count: usize,
+) {
+    for (edit, icon, tip, enabled) in [
+        (ListEdit::MoveUp, Icon::ArrowUp, "Move up", index > 0),
+        (
+            ListEdit::MoveDown,
+            Icon::ArrowDown,
+            "Move down",
+            index + 1 < count,
+        ),
+        (ListEdit::Remove, Icon::Trash2, "Remove", true),
+    ] {
+        let variant = if edit == ListEdit::Remove {
+            ButtonVariant::Destructive
+        } else {
+            ButtonVariant::Ghost
+        };
+        let mut control = commands.spawn((
+            button(
+                ButtonProps::new("")
+                    .with_variant(variant)
+                    .with_size(ButtonSize::IconSM)
+                    .with_left_icon(icon),
+            ),
+            Tooltip::title(tip),
+            ChildOf(row),
+        ));
+        // An arrow at either end of the list keeps its place, disabled, so the
+        // row does not reflow.
+        if enabled {
+            control.insert(ReflectListControl {
+                source,
+                type_path: type_path.to_string(),
+                field_path: field_path.to_string(),
+                index,
+                edit,
+            });
+        } else {
+            control.insert(bevy::ui::InteractionDisabled);
+        }
+    }
+}
+
+/// The control that puts one more element on the end of a list.
+fn spawn_list_add_button(
+    commands: &mut Commands,
+    parent: Entity,
+    source: Entity,
+    type_path: &str,
+    field_path: &str,
+) {
+    commands.spawn((
+        button(
+            ButtonProps::new("Add")
+                .with_variant(ButtonVariant::Ghost)
+                .with_size(ButtonSize::MD)
+                .with_left_icon(Icon::Plus)
+                .align_left(),
+        ),
+        Tooltip::title("Add an item to the list"),
+        ReflectListControl {
+            source,
+            type_path: type_path.to_string(),
+            field_path: field_path.to_string(),
+            index: usize::MAX,
+            edit: ListEdit::Add,
+        },
+        ChildOf(parent),
+    ));
+}
+
+pub(crate) fn on_reflect_list_button_click(
+    event: On<jackdaw_feathers::button::ButtonClickEvent>,
+    controls: Query<&ReflectListControl>,
+    mut commands: Commands,
+) {
+    let Ok(control) = controls.get(event.entity) else {
+        return;
+    };
+    let source = control.source;
+    let type_path = control.type_path.clone();
+    let field_path = control.field_path.clone();
+    let (index, edit) = (control.index, control.edit);
+    commands.queue(move |world: &mut World| {
+        edit_reflect_list(world, source, &type_path, &field_path, index, edit);
+    });
+}
+
+/// Apply one list edit and commit the whole list back through the same path a
+/// typed field commits with.
+fn edit_reflect_list(
+    world: &mut World,
+    source: Entity,
+    type_path: &str,
+    field_path: &str,
+    index: usize,
+    edit: ListEdit,
+) {
+    let Some(mut items) = list_items_as_json(world, source, type_path, field_path) else {
+        return;
+    };
+    match edit {
+        ListEdit::Add => {
+            let Some(item) = default_list_item(world, source, type_path, field_path) else {
+                warn!("{type_path}.{field_path}: no default is registered for its item type");
+                return;
+            };
+            items.push(item);
+        }
+        ListEdit::Remove => {
+            if index >= items.len() {
+                return;
+            }
+            items.remove(index);
+        }
+        ListEdit::MoveUp => {
+            if index == 0 || index >= items.len() {
+                return;
+            }
+            items.swap(index, index - 1);
+        }
+        ListEdit::MoveDown => {
+            if index + 1 >= items.len() {
+                return;
+            }
+            items.swap(index, index + 1);
+        }
+    }
+    crate::commands::field_edit_commit(
+        world,
+        type_path,
+        field_path,
+        &serde_json::Value::Array(items),
+        "Edit list on multiple entities",
+    );
+    // A list that changed length has no row to write the new value into: the
+    // rows are what changed.
+    if let Some(mut pending) = world.get_resource_mut::<crate::inspector::PendingInspectorRebuild>()
+    {
+        pending.0 = Some(source);
+    }
+}
+
+/// Every element of the list at `field_path`, as the JSON a field edit takes.
+fn list_items_as_json(
+    world: &World,
+    source: Entity,
+    type_path: &str,
+    field_path: &str,
+) -> Option<Vec<serde_json::Value>> {
+    use bevy::reflect::GetPath;
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let registration = registry.get_with_type_path(type_path)?;
+    let reflect_component = registration.data::<ReflectComponent>()?;
+    let component = reflect_component.reflect(world.get_entity(source).ok()?)?;
+    let field = component.reflect_path(field_path).ok()?;
+    let ReflectRef::List(list) = field.reflect_ref() else {
+        return None;
+    };
+    let mut items = Vec::with_capacity(list.len());
+    for index in 0..list.len() {
+        items.push(reflect_to_json(list.get(index)?, &registry)?);
+    }
+    Some(items)
+}
+
+/// A fresh element for the list at `field_path`, from its item type's
+/// registered `ReflectDefault`. `None` when the item type has none.
+fn default_list_item(
+    world: &World,
+    source: Entity,
+    type_path: &str,
+    field_path: &str,
+) -> Option<serde_json::Value> {
+    use bevy::reflect::{GetPath, TypeInfo, prelude::ReflectDefault};
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let registration = registry.get_with_type_path(type_path)?;
+    let reflect_component = registration.data::<ReflectComponent>()?;
+    let component = reflect_component.reflect(world.get_entity(source).ok()?)?;
+    let field = component.reflect_path(field_path).ok()?;
+    let TypeInfo::List(info) = field.get_represented_type_info()? else {
+        return None;
+    };
+    let item = registry
+        .get(info.item_ty().id())?
+        .data::<ReflectDefault>()?;
+    reflect_to_json(item.default().as_partial_reflect(), &registry)
+}
+
+fn reflect_to_json(
+    value: &dyn PartialReflect,
+    registry: &bevy::reflect::TypeRegistry,
+) -> Option<serde_json::Value> {
+    serde_json::to_value(bevy::reflect::serde::TypedReflectSerializer::new(
+        value, registry,
+    ))
+    .ok()
 }

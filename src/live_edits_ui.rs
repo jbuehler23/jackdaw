@@ -14,6 +14,7 @@ use bevy::ui::ui_transform::UiGlobalTransform;
 use bevy::ui_widgets::observe;
 use jackdaw_api::prelude::*;
 use jackdaw_bsn::SceneBsnAst;
+use jackdaw_feathers::button::{ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::tokens;
 
 use crate::{
@@ -93,18 +94,7 @@ fn tray_row_state(resolves: bool) -> RowState {
 pub fn live_edits_badge() -> impl Bundle {
     (
         LiveEditsBadge,
-        Interaction::default(),
-        Node {
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            display: Display::None,
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
+        button(ButtonProps::new("").hidden()),
         observe(|click: On<Pointer<Click>>, mut open: ResMut<TrayOpen>| {
             if click.event().button != PointerButton::Primary {
                 return;
@@ -344,17 +334,11 @@ fn tray_entry_button(
     enabled: bool,
 ) -> impl Bundle {
     (
-        Interaction::default(),
-        Node {
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(1.0)),
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
+        button(ButtonProps::new(label).with_variant(if enabled {
+            ButtonVariant::Default
+        } else {
+            ButtonVariant::Disabled
+        })),
         observe(
             move |click: On<Pointer<Click>>,
                   mut commands: Commands,
@@ -376,18 +360,6 @@ fn tray_entry_button(
                     .call();
             },
         ),
-        children![(
-            Text::new(label),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(if enabled {
-                tokens::TEXT_PRIMARY
-            } else {
-                tokens::TEXT_DISABLED
-            }),
-        )],
     )
 }
 
@@ -395,17 +367,7 @@ fn tray_entry_button(
 /// operators read the log themselves, so no pending key is set.
 fn tray_footer_button(label: &'static str, operator_id: &'static str) -> impl Bundle {
     (
-        Interaction::default(),
-        Node {
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(1.0)),
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
+        button(ButtonProps::new(label)),
         observe(move |click: On<Pointer<Click>>, mut commands: Commands| {
             if click.event().button != PointerButton::Primary {
                 return;
@@ -418,14 +380,6 @@ fn tray_footer_button(label: &'static str, operator_id: &'static str) -> impl Bu
                 })
                 .call();
         }),
-        children![(
-            Text::new(label),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-        )],
     )
 }
 
@@ -500,7 +454,6 @@ fn rebuild_stop_prompt(
         .spawn((
             StopPromptOverlay,
             crate::EditorEntity,
-            Interaction::default(),
             Node {
                 width: percent(100),
                 height: percent(100),
@@ -600,17 +553,7 @@ fn rebuild_stop_prompt(
 /// `operator_id`, the same channel as the tray's footer buttons.
 fn stop_prompt_operator_button(label: &'static str, operator_id: &'static str) -> impl Bundle {
     (
-        Interaction::default(),
-        Node {
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(1.0)),
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
+        button(ButtonProps::new(label)),
         observe(
             move |click: On<Pointer<Click>>,
                   mut commands: Commands,
@@ -628,14 +571,6 @@ fn stop_prompt_operator_button(label: &'static str, operator_id: &'static str) -
                     .call();
             },
         ),
-        children![(
-            Text::new(label),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
-        )],
     )
 }
 
@@ -643,39 +578,28 @@ fn stop_prompt_operator_button(label: &'static str, operator_id: &'static str) -
 /// per-entry triage, leaving the log intact. Plain view-state toggles, the
 /// same as the badge click.
 fn stop_prompt_review_button() -> impl Bundle {
+    // The footer aligns to its end, so Review takes the room left of the
+    // two operator buttons through a slot of its own.
     (
-        Interaction::default(),
         Node {
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(1.0)),
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            flex_shrink: 0.0,
             margin: UiRect {
                 right: Val::Auto,
                 ..Default::default()
             },
             ..Default::default()
         },
-        BackgroundColor(tokens::ELEVATED_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
-        observe(
-            move |click: On<Pointer<Click>>,
-                  mut prompt: ResMut<StopPrompt>,
-                  mut open: ResMut<TrayOpen>| {
-                if click.event().button != PointerButton::Primary {
-                    return;
-                }
-                review_handoff(&mut prompt, &mut open);
-            },
-        ),
         children![(
-            Text::new("Review"),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_PRIMARY),
+            button(ButtonProps::new("Review")),
+            observe(
+                move |click: On<Pointer<Click>>,
+                      mut prompt: ResMut<StopPrompt>,
+                      mut open: ResMut<TrayOpen>| {
+                    if click.event().button != PointerButton::Primary {
+                        return;
+                    }
+                    review_handoff(&mut prompt, &mut open);
+                },
+            ),
         )],
     )
 }

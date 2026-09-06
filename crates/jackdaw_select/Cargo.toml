@@ -8,7 +8,7 @@ repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
 glam.workspace = true
-# Path dep with no default features so the bevy-gated `render` feature of
+# Path dep with no default features so the bevy-gated `reflect` feature of
 # jackdaw_geometry is never pulled in; this keeps jackdaw_select bevy-free.
 jackdaw_geometry = { version = "0.19.0", path = "../jackdaw_geometry", default-features = false }
 

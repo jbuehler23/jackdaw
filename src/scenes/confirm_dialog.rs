@@ -554,7 +554,7 @@ fn apply_confirm_dialog_action(world: &mut World, action: ConfirmDialogButton, t
 
                 // Cleared regardless of outcome: siblings (untitled tab,
                 // Discard, Cancel) all clear it unconditionally, and
-                // leaving it set on a failed save here used to make
+                // leaving it set on a failed save here would make
                 // scene_close_system treat every later close request on
                 // any dirty tab as "a dialog is already up" and silently
                 // ignore it.
@@ -618,9 +618,8 @@ mod apply_confirm_dialog_action_tests {
         world
     }
 
-    /// I10(b) pinning test, the exact scenario from the review finding:
-    /// a failed save from the tab-close confirm dialog used to leave
-    /// `PendingTabClose.tab_index` set, which made `scene_close_system`
+    /// A failed save from the tab-close confirm dialog must still clear
+    /// `PendingTabClose.tab_index`; leaving it set makes `scene_close_system`
     /// treat every later close request on any dirty tab as "a dialog is
     /// already up" and silently ignore it.
     #[test]

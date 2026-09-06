@@ -12,40 +12,6 @@ pub struct WidgetInstantiateContext {
     pub parent: Option<Entity>,
 }
 
-/// Reflected value shape shown by a generic widget-property editor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WidgetPropertyKind {
-    String,
-    Bool,
-    Number,
-    Color,
-    Enum,
-    Asset,
-}
-
-/// Public editable property exposed by a widget definition.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WidgetProperty {
-    pub id: Cow<'static, str>,
-    pub label: Cow<'static, str>,
-    pub kind: WidgetPropertyKind,
-}
-
-/// Stable named child location exposed by a widget definition.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WidgetSlot {
-    pub id: Cow<'static, str>,
-    pub label: Cow<'static, str>,
-    pub accepts_multiple: bool,
-}
-
-/// Runtime interaction state that the editor can force for preview.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WidgetPreviewState {
-    pub id: Cow<'static, str>,
-    pub label: Cow<'static, str>,
-}
-
 pub type WidgetInstantiateFn = Arc<
     dyn Fn(&mut World, WidgetInstantiateContext) -> Result<Entity, String> + Send + Sync + 'static,
 >;
@@ -57,9 +23,6 @@ pub struct WidgetDefinition {
     pub name: Cow<'static, str>,
     pub category: Cow<'static, str>,
     pub icon: Option<Icon>,
-    pub properties: Vec<WidgetProperty>,
-    pub slots: Vec<WidgetSlot>,
-    pub preview_states: Vec<WidgetPreviewState>,
     pub instantiate: WidgetInstantiateFn,
 }
 
@@ -78,9 +41,6 @@ impl WidgetDefinition {
             name: name.into(),
             category: category.into(),
             icon: None,
-            properties: Vec::new(),
-            slots: Vec::new(),
-            preview_states: Vec::new(),
             instantiate: Arc::new(instantiate),
         }
     }
@@ -88,24 +48,6 @@ impl WidgetDefinition {
     #[must_use]
     pub fn with_icon(mut self, icon: Icon) -> Self {
         self.icon = Some(icon);
-        self
-    }
-
-    #[must_use]
-    pub fn with_property(mut self, property: WidgetProperty) -> Self {
-        self.properties.push(property);
-        self
-    }
-
-    #[must_use]
-    pub fn with_slot(mut self, slot: WidgetSlot) -> Self {
-        self.slots.push(slot);
-        self
-    }
-
-    #[must_use]
-    pub fn with_preview_state(mut self, state: WidgetPreviewState) -> Self {
-        self.preview_states.push(state);
         self
     }
 }

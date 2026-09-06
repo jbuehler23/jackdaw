@@ -402,7 +402,7 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
 
     // Join (Convex Merge) wraps all selected brushes' vertices in a single
     // convex hull. This is well-defined for both convex and concave inputs:
-    // we simply gather every vertex from each brush's topology (rather than
+    // gather every vertex from each brush's topology (rather than
     // re-deriving them from face planes, which was the convex-paradigm path
     // and is undefined for non-convex shapes), then call parry's convex_hull
     // on the combined set.
@@ -926,7 +926,7 @@ pub(crate) fn env_allows_brush_op(
     modal: &crate::modal_transform::ModalTransformState,
     draw_state: &DrawBrushState,
 ) -> bool {
-    !keybind_focus.is_typing() && modal.active.is_none() && draw_state.active.is_none()
+    !keybind_focus.keyboard_is_spoken_for() && modal.active.is_none() && draw_state.active.is_none()
 }
 
 /// `brush.join` / `brush.csg_subtract` / `brush.csg_intersect` all
@@ -937,8 +937,9 @@ fn can_run_binary_brush_op(
     draw_state: Res<DrawBrushState>,
     selection: Res<Selection>,
     brushes: Query<(), With<Brush>>,
+    viewport: crate::viewport_2d::FrontedViewport,
 ) -> bool {
-    if !env_allows_brush_op(&keybind_focus, &modal, &draw_state) {
+    if !env_allows_brush_op(&keybind_focus, &modal, &draw_state) || !viewport.is_three_d() {
         return false;
     }
     selection

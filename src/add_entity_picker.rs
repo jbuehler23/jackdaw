@@ -1,7 +1,7 @@
 //! Unified Add Entity picker, shared by the toolbar Add menu and the
-//! scene-tree Add Entity button. Sources items from built-in templates
-//! plus extension-contributed `RegisteredMenuEntry` rows under
-//! `menu == "Add"`.
+//! scene-tree Add Entity button. Both read the single creation vocabulary in
+//! [`crate::creation_taxonomy`], so a menu row and a picker entry cannot drift
+//! apart.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -11,17 +11,10 @@ use jackdaw_feathers::picker::{
 };
 use jackdaw_feathers::tooltip::Tooltip;
 
-#[cfg(feature = "camera_rig")]
-use crate::entity_ops::EntityAddCameraRigOp;
-use crate::entity_ops::{
-    EntityAddAnimationPlayerOp, EntityAddAudioSourceOp, EntityAddCameraOp, EntityAddConeOp,
-    EntityAddCubeOp, EntityAddCylinderOp, EntityAddDirectionalLightOp, EntityAddEmptyOp,
-    EntityAddFogVolumeOp, EntityAddImageOp, EntityAddPlaneOp, EntityAddPointLightOp,
-    EntityAddPrefabOp, EntityAddPyramidOp, EntityAddReflectionProbeOp, EntityAddSphereOp,
-    EntityAddSpotLightOp, EntityAddTerrainOp, EntityAddWedgeOp,
+use crate::creation_taxonomy::CreationTaxonomy;
+pub use crate::creation_taxonomy::{
+    EXTENSIONS_SECTION, GENERAL_SECTION, QUALIFIED_LABEL_SEPARATOR, WIDGET_ACTION_PREFIX,
 };
-#[cfg(feature = "multiplayer")]
-use crate::entity_ops::{EntityAddNetworkRoomOp, EntityAddSpawnPointOp, EntityAddZoneTransitionOp};
 
 /// Marker for the scene-tree Add Entity button.
 #[derive(Component)]
@@ -35,196 +28,14 @@ pub struct AddEntityPicker;
 #[derive(Component)]
 pub struct AddEntityPickerSearch;
 
-#[derive(Component)]
-pub struct AddEntityPickerEntry {
-    pub label: String,
-    pub category: String,
-}
+/// Prefixes a widget category in a picker heading with the UI group's label.
+/// The Add menu shows the same categories as sections inside its `UI` row,
+/// where the prefix is omitted.
+pub const UI_SECTION_PREFIX: &str = "UI: ";
 
-#[derive(Component)]
-pub struct AddEntityPickerSectionHeader {
-    pub category: String,
-}
-
-/// Build an `op:` action string for the given operator type. Keeps
-/// operator ids out of UI code; callers pass the `Op` type, not a
-/// hand-typed string.
-fn op_action<O: Operator>() -> String {
-    format!("op:{}", O::ID)
-}
-
-/// Built-in Add items grouped by category. Order here is the order in
-/// the picker and in the toolbar Add menu.
-fn builtin_groups() -> Vec<AddMenuItem> {
-    let geometry = Category {
-        name: Some(String::from("Geometry")),
-        order: 0,
-    };
-    let lights = Category {
-        name: Some(String::from("Lights")),
-        order: -1,
-    };
-    let audio = Category {
-        name: Some(String::from("Audio")),
-        order: -2,
-    };
-    let animation = Category {
-        name: Some(String::from("Animation")),
-        order: -3,
-    };
-    let cameras_entities = Category {
-        name: Some(String::from("Cameras & Entities")),
-        order: -4,
-    };
-    let regions = Category {
-        name: Some(String::from("Regions")),
-        order: -5,
-    };
-    let environment = Category {
-        name: Some(String::from("Environment")),
-        order: -6,
-    };
-    let prefabs = Category {
-        name: Some(String::from("Prefabs")),
-        order: -7,
-    };
-
-    #[cfg_attr(not(feature = "multiplayer"), expect(unused_mut))]
-    let mut items = vec![
-        AddMenuItem {
-            action: op_action::<EntityAddCubeOp>(),
-            label: "Cube".into(),
-            category: geometry.clone(),
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddSphereOp>(),
-            label: "Sphere".into(),
-            category: geometry.clone(),
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddPlaneOp>(),
-            label: "Plane".into(),
-            category: geometry.clone(),
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddCylinderOp>(),
-            label: "Cylinder".into(),
-            category: geometry.clone(),
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddWedgeOp>(),
-            label: "Wedge".into(),
-            category: geometry.clone(),
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddConeOp>(),
-            label: "Cone".into(),
-            category: geometry.clone(),
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddPyramidOp>(),
-            label: "Pyramid".into(),
-            category: geometry,
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddPointLightOp>(),
-            label: "Point Light".into(),
-            category: lights.clone(),
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddDirectionalLightOp>(),
-            label: "Directional Light".into(),
-            category: lights.clone(),
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddSpotLightOp>(),
-            label: "Spot Light".into(),
-            category: lights,
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddAudioSourceOp>(),
-            label: "Audio Source".into(),
-            category: audio,
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddAnimationPlayerOp>(),
-            label: "Animation Player".into(),
-            category: animation,
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddCameraOp>(),
-            label: "Camera".into(),
-            category: cameras_entities.clone(),
-        },
-        #[cfg(feature = "camera_rig")]
-        AddMenuItem {
-            action: op_action::<EntityAddCameraRigOp>(),
-            label: "Camera Rig".into(),
-            category: cameras_entities.clone(),
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddEmptyOp>(),
-            label: "Empty".into(),
-            category: cameras_entities.clone(),
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddImageOp>(),
-            label: "Image".into(),
-            category: cameras_entities,
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddTerrainOp>(),
-            label: "Terrain".into(),
-            category: regions,
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddFogVolumeOp>(),
-            label: "Fog Volume".into(),
-            category: environment.clone(),
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddReflectionProbeOp>(),
-            label: "Reflection Probe".into(),
-            category: environment,
-        },
-        AddMenuItem {
-            action: op_action::<EntityAddPrefabOp>(),
-            label: "Prefab...".into(),
-            category: prefabs,
-        },
-    ];
-
-    #[cfg(feature = "multiplayer")]
-    {
-        let multiplayer = Category {
-            name: Some(String::from("Multiplayer")),
-            order: -6,
-        };
-        items.extend([
-            AddMenuItem {
-                action: op_action::<EntityAddSpawnPointOp>(),
-                label: "Spawn Point".into(),
-                category: multiplayer.clone(),
-            },
-            AddMenuItem {
-                action: op_action::<EntityAddZoneTransitionOp>(),
-                label: "Zone Transition".into(),
-                category: multiplayer.clone(),
-            },
-            AddMenuItem {
-                action: op_action::<EntityAddNetworkRoomOp>(),
-                label: "Network Room".into(),
-                category: multiplayer,
-            },
-        ]);
-    }
-
-    items
-}
-
-/// One row in the Add menu or Add Entity picker. `action` is handled
-/// by `handle_menu_action` (e.g. `"add.cube"` or
-/// `"op:viewable_camera.place"`).
+/// One row in the Add menu or Add Entity picker, in the shape the picker's
+/// fuzzy matcher takes: a label to match on, a category to group under, and the
+/// action `handle_menu_action` dispatches.
 #[derive(Clone)]
 pub struct AddMenuItem {
     pub action: String,
@@ -232,70 +43,55 @@ pub struct AddMenuItem {
     pub category: Category,
 }
 
-/// Shared source of truth for Add menu contents, consumed by both the
-/// toolbar Add menu and the scene-tree Add Entity picker.
+/// Every creatable thing, in the taxonomy's grouping. Read by both the toolbar
+/// Add menu and the scene-tree Add Entity picker.
 pub fn collect_add_menu_items(world: &mut World) -> Vec<AddMenuItem> {
-    let mut items: Vec<AddMenuItem> = builtin_groups();
-
-    let mut widgets = world
-        .resource::<WidgetRegistry>()
-        .iter()
-        .map(|definition| {
-            (
-                definition.category.to_string(),
-                definition.name.to_string(),
-                definition.id.to_string(),
-            )
-        })
-        .collect::<Vec<_>>();
-    widgets.sort();
-    items.extend(
-        widgets
-            .into_iter()
-            .map(|(category, label, id)| AddMenuItem {
-                action: format!("widget:{id}"),
-                label,
+    let taxonomy = CreationTaxonomy::collect(world);
+    let mut items = Vec::new();
+    for group in taxonomy.groups() {
+        let name = taxonomy
+            .qualified_label(&group.id)
+            .unwrap_or_else(|| group.label.clone());
+        for entry in taxonomy.entries_of(&group.id) {
+            items.push(AddMenuItem {
+                action: entry.action.clone(),
+                label: entry.label.clone(),
                 category: Category {
-                    name: Some(format!("UI / {category}")),
-                    order: -8,
+                    name: Some(name.clone()),
+                    order: group.order,
                 },
-            }),
-    );
-
-    // Extension items grouped by owning extension so entries cluster by
-    // author in the picker.
-    let mut q = world.query::<(
-        &jackdaw_api_internal::lifecycle::RegisteredMenuEntry,
-        Option<&ChildOf>,
-    )>();
-    let mut ext_entries: Vec<(Entity, String, String)> = Vec::new();
-    for (entry, parent) in q.iter(world) {
-        if entry.menu != TopLevelMenu::Add {
-            continue;
+            });
         }
-        let ext_entity = parent.map(ChildOf::parent).unwrap_or(Entity::PLACEHOLDER);
-        ext_entries.push((
-            ext_entity,
-            format!("op:{}", entry.operator_id),
-            entry.label.clone(),
-        ));
     }
-    for (ext_entity, action, label) in ext_entries {
-        let category = world
-            .get::<jackdaw_api_internal::lifecycle::Extension>(ext_entity)
-            .map(|e| e.id.clone())
-            .unwrap_or_else(|| "Extensions".to_string());
-        items.push(AddMenuItem {
-            action,
-            label,
-            category: Category {
-                name: Some(category),
-                order: -8,
-            },
-        });
-    }
-
     items
+}
+
+/// The Add menu's dropdown rows: the general vocabulary in the menu itself,
+/// every other group behind a row that expands on hover.
+pub fn add_menu_rows(world: &mut World) -> Vec<(String, String)> {
+    CreationTaxonomy::collect(world).menu_rows()
+}
+
+/// Open the searchable Add Entity picker, the way the scene tree's Add Entity
+/// button does. Shares [`collect_add_menu_items`] with the Add menu, so the two
+/// offer the same vocabulary. Calling it again closes it.
+#[operator(
+    id = "entity.add_picker",
+    label = "Add Entity",
+    description = "Open the searchable Add Entity picker.",
+    allows_undo = false,
+    is_available = crate::entity_ops::can_act_on_entities
+)]
+pub(crate) fn entity_add_picker(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        if let Err(err) = world.run_system_cached(open_add_entity_picker) {
+            warn!("entity.add_picker: {err}");
+        }
+    });
+    OperatorResult::Finished
 }
 
 /// Open the Add Entity picker as a centered blocking dialog. Styled

@@ -27,6 +27,7 @@ fn main() -> ExitCode {
         Some("upgrade") => exit(jackdaw::scaffold::run_upgrade_cli(&args[1..])),
         Some("export-terrain") => jackdaw::terrain::export::run_export_terrain_cli(&args[1..]),
         Some("extension") => extension_command(&args[1..]),
+        Some("mcp") => mcp_command(&args[1..]),
         Some("--help" | "-h" | "help") | None => {
             print_usage();
             ExitCode::SUCCESS
@@ -43,10 +44,9 @@ fn main() -> ExitCode {
 
 /// One subcommand's accepted options, for rejecting the rest.
 ///
-/// Unrecognised options used to be ignored, so `jd new x --ext` (a typo
-/// for `--extension`) silently produced a game project and `jd new x
-/// --path` with no value created it in the working directory. A user
-/// only discovers either much later.
+/// Unrecognised options are errors, so `jd new x --ext` (a typo for
+/// `--extension`) or `jd new x --path` with no value fails loudly
+/// rather than quietly doing the wrong thing.
 struct CommandSpec {
     name: &'static str,
     /// Options that stand alone.
@@ -107,6 +107,12 @@ const SPECS: &[CommandSpec] = &[
         usage: "jd doctor [--project <path>]",
     },
     CommandSpec {
+        name: "mcp",
+        flags: &[],
+        values: &["--project", "-p"],
+        usage: "jd mcp [--project <path>]",
+    },
+    CommandSpec {
         name: "export-terrain",
         flags: &["--raw-heights"],
         values: &["--out", "--cell-size", "--elevation-step"],
@@ -156,9 +162,8 @@ fn report_option_error(spec: &CommandSpec, message: &str) {
     eprintln!("usage: {}", spec.usage);
 }
 
-/// Name the real command list. The fallthrough used to reach a second,
-/// older usage string that listed neither `new` nor `import`, which is
-/// the worst possible moment to hide them.
+/// Report an unknown command against the real command list, so `new` and
+/// `import` are listed at the moment the user needs them.
 #[expect(clippy::print_stderr, reason = "CLI errors are written to stderr")]
 fn unknown_command(name: &str) {
     eprintln!("jd: unknown command `{name}`\n");
@@ -171,6 +176,38 @@ fn exit(value: bevy::app::AppExit) -> ExitCode {
         bevy::app::AppExit::Error(code) => ExitCode::from(code.get()),
     }
 }
+
+/// Run `jd-mcp`, which serves the Model Context Protocol over stdio and drives
+/// the editor that has this project open. A separate process so the MCP stack
+/// stays out of the editor's dependency graph; the binary is looked for beside
+/// this one before `PATH`. stdin and stdout are inherited, stdout being the
+/// protocol channel.
+#[expect(clippy::print_stderr, reason = "MCP owns stdout; errors go to stderr")]
+fn mcp_command(args: &[String]) -> ExitCode {
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(MCP_BIN)))
+        .filter(|path| path.is_file());
+    let program = beside.unwrap_or_else(|| std::path::PathBuf::from(MCP_BIN));
+
+    match std::process::Command::new(&program).args(args).status() {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => {
+            eprintln!("jd mcp: {} exited with {status}", program.display());
+            ExitCode::FAILURE
+        }
+        Err(err) => {
+            eprintln!(
+                "jd mcp: cannot run {}: {err}. Build it with `cargo build --bin {MCP_BIN}`.",
+                program.display()
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The MCP server binary [`mcp_command`] runs.
+const MCP_BIN: &str = "jd-mcp";
 
 #[expect(clippy::print_stdout, reason = "CLI help is written to stdout")]
 fn print_usage() {
@@ -197,7 +234,10 @@ fn print_usage() {
            --cell-size <m>            declare the XZ quantization cell size\n    \
            --elevation-step <m>       declare the elevation quantization step\n    \
            --raw-heights              also write heights.f32 (raw float heights)\n  \
-         extension <command>        Package or manage signed extensions\n\n\
+         extension <command>        Package or manage signed extensions\n  \
+         mcp [--project <path>]     Serve MCP over stdio, driving a running editor\n\n\
+         Register it with an MCP client as a stdio server:\n  \
+           command: jd, args: mcp --project <path>\n\n\
          Start here: `jd new my-game` then `jd open my-game`, or `jd import .` in an \
          existing Bevy project."
     );

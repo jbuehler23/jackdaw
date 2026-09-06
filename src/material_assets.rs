@@ -538,9 +538,13 @@ pub fn spawn_material_tile(commands: &mut Commands, parent: Entity, tile: Materi
                 Color::NONE
             }),
             BackgroundColor(Color::NONE),
-            ChildOf(parent),
         ))
         .id();
+    // The browser rebuild queues a tile per material against the grid
+    // it saw this frame, and a panel rebuild can despawn that grid
+    // before these spawns flush. Parenting through the guard drops the
+    // tile instead of orphaning it under a dead grid.
+    jackdaw_feathers::utils::attach_or_despawn(commands, parent, cell);
 
     let mut swatch = commands.spawn((
         Node {

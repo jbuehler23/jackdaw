@@ -705,6 +705,28 @@ mod pointer_tests {
         );
     }
 
+    /// The world-space tools reach the terrain through the hovered viewport's
+    /// camera, and a panel showing its 2D canvas reports none. The brush has
+    /// nothing to aim at while the cursor is over one, so no stroke can start
+    /// there and nothing needs a gate of its own.
+    #[test]
+    fn a_press_over_the_2d_canvas_targets_no_terrain() {
+        let mut app = sculpt_app();
+        pointer_harness::hover_2d_viewport(&mut app);
+        app.update();
+        assert!(
+            app.world().resource::<BrushHitProbe>().0.is_none(),
+            "a viewport showing its canvas offers no camera to sculpt through",
+        );
+        assert!(
+            app.world()
+                .resource::<TerrainSculptState>()
+                .brush_position
+                .is_none(),
+            "and so leaves the brush no target either",
+        );
+    }
+
     /// A stroke starts only where the brush has a target, so the same guard
     /// keeps a palette press from sculpting.
     #[test]

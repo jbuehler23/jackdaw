@@ -46,13 +46,13 @@ impl Plugin for DockPlugin {
             (
                 sidebar::handle_sidebar_icon_clicks,
                 workspace_tabs::populate_workspace_tabs,
-                workspace_tabs::handle_workspace_tab_clicks,
-                workspace_tabs::handle_add_workspace_clicks,
                 workspace_tabs::show_workspace_close_on_hover,
                 workspace_tabs::auto_focus_workspace_rename,
                 workspace_tabs::update_workspace_tab_visuals,
             ),
         )
+        .add_observer(workspace_tabs::on_workspace_tab_chosen)
+        .add_observer(workspace_tabs::on_add_workspace_activated)
         .add_observer(sidebar::on_sidebar_icon_right_click)
         .add_observer(workspace_tabs::on_workspace_changed_swap_tree)
         .add_observer(workspace_tabs::on_workspace_close_click)

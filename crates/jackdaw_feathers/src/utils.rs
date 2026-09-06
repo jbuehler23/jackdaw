@@ -66,6 +66,38 @@ pub fn insert_if_alive<B: Bundle>(commands: &mut Commands, entity: Entity, bundl
     });
 }
 
+/// Remove `B` from `entity` at `Commands` flush time if `entity` is
+/// still alive, otherwise silently skip.
+///
+/// The counterpart to [`insert_if_alive`], for the other half of a
+/// toggle. A control that answers a value change by writing
+/// `Checked` on a row keeps a captured `Entity`, and a panel or
+/// inspector rebuild between the event and the flush despawns it;
+/// the raw `commands.entity(entity).remove::<Checked>()` then logs
+/// `Entity despawned: ... is invalid`.
+pub fn remove_if_alive<B: Bundle>(commands: &mut Commands, entity: Entity) {
+    commands.queue(move |world: &mut World| {
+        if let Ok(mut ec) = world.get_entity_mut(entity) {
+            ec.remove::<B>();
+        }
+    });
+}
+
+/// Drive a marker component on `entity` from a bool at flush time,
+/// skipping an entity that has gone away. The shape every
+/// `Checked` toggle wants.
+pub fn set_marker_if_alive<B: Bundle + Default>(
+    commands: &mut Commands,
+    entity: Entity,
+    present: bool,
+) {
+    if present {
+        insert_if_alive(commands, entity, B::default());
+    } else {
+        remove_if_alive::<B>(commands, entity);
+    }
+}
+
 pub fn is_descendant_of(entity: Entity, ancestor: Entity, parents: &Query<&ChildOf>) -> bool {
     let mut current = entity;
     for _ in 0..50 {
@@ -98,4 +130,103 @@ pub fn find_ancestor<'a, C: Component>(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::world::CommandQueue;
+
+    #[derive(Component, Default)]
+    struct Mark;
+
+    /// Queue against `entity`, then despawn it before the flush, the
+    /// way a panel rebuild does mid-frame.
+    fn flush_after_despawn(
+        world: &mut World,
+        entity: Entity,
+        queue: impl FnOnce(&mut Commands, Entity),
+    ) {
+        let mut queued = CommandQueue::default();
+        let mut commands = Commands::new(&mut queued, world);
+        queue(&mut commands, entity);
+        world.despawn(entity);
+        queued.apply(world);
+    }
+
+    #[test]
+    fn marker_writes_skip_a_despawned_entity() {
+        let mut world = World::new();
+
+        for present in [true, false] {
+            let entity = world.spawn_empty().id();
+            flush_after_despawn(&mut world, entity, |commands, entity| {
+                set_marker_if_alive::<Mark>(commands, entity, present);
+            });
+            // The write is dropped rather than erroring on a dead id.
+            assert!(world.get_entity(entity).is_err());
+        }
+    }
+
+    #[test]
+    fn marker_writes_still_land_on_a_live_entity() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+
+        let mut queued = CommandQueue::default();
+        let mut commands = Commands::new(&mut queued, &world);
+        set_marker_if_alive::<Mark>(&mut commands, entity, true);
+        queued.apply(&mut world);
+        assert!(world.get::<Mark>(entity).is_some());
+
+        let mut queued = CommandQueue::default();
+        let mut commands = Commands::new(&mut queued, &world);
+        set_marker_if_alive::<Mark>(&mut commands, entity, false);
+        queued.apply(&mut world);
+        assert!(world.get::<Mark>(entity).is_none());
+    }
+
+    #[test]
+    fn remove_if_alive_skips_a_despawned_entity() {
+        let mut world = World::new();
+        let entity = world.spawn(Mark).id();
+        flush_after_despawn(&mut world, entity, |commands, entity| {
+            remove_if_alive::<Mark>(commands, entity);
+        });
+        assert!(world.get_entity(entity).is_err());
+    }
+
+    /// The `ChildOf(dead parent)` case: the child must not be left
+    /// orphaned with a relationship Bevy then strips with a warning.
+    #[test]
+    fn attach_despawns_the_orphan_when_the_parent_died() {
+        let mut world = World::new();
+        let parent = world.spawn_empty().id();
+        let child = world.spawn_empty().id();
+
+        let mut queued = CommandQueue::default();
+        let mut commands = Commands::new(&mut queued, &world);
+        attach_or_despawn(&mut commands, parent, child);
+        world.despawn(parent);
+        queued.apply(&mut world);
+
+        assert!(world.get_entity(child).is_err());
+    }
+
+    #[test]
+    fn attach_still_parents_when_the_parent_lives() {
+        let mut world = World::new();
+        let parent = world.spawn_empty().id();
+        let child = world.spawn_empty().id();
+
+        let mut queued = CommandQueue::default();
+        let mut commands = Commands::new(&mut queued, &world);
+        attach_or_despawn(&mut commands, parent, child);
+        queued.apply(&mut world);
+
+        assert_eq!(
+            world.get::<ChildOf>(child).map(ChildOf::parent),
+            Some(parent)
+        );
+    }
 }

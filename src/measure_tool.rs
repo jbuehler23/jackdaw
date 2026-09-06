@@ -95,7 +95,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     description = "Click two points in the viewport to measure the distance between them",
     modal = true,
     allows_undo = false,
-    cancel = cancel_measure_distance
+    cancel = cancel_measure_distance,
+    is_available = crate::viewport_2d::three_d_world_is_current
 )]
 pub(crate) fn measure_distance(
     _: In<OperatorParameters>,
@@ -182,6 +183,7 @@ fn confirm_measure_available(
     description = "First click sets the start point, second click finishes",
     is_available = confirm_measure_available,
     allows_undo = false,
+    remote_hidden = "confirms a measurement the pointer is taking",
 )]
 fn confirm_measure_distance(
     _: In<OperatorParameters>,

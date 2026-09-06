@@ -1,0 +1,28 @@
+[package]
+name = "jackdaw_mcp"
+version.workspace = true
+edition = "2024"
+description = "Model Context Protocol server for driving the Jackdaw editor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+# `jd mcp` executes this binary rather than linking the MCP stack into
+# the editor's own dependency graph.
+[[bin]]
+name = "jd-mcp"
+path = "src/main.rs"
+
+[dependencies]
+jackdaw_env.workspace = true
+rmcp = { version = "3.2", features = ["server", "transport-io", "macros", "schemars"] }
+# No TLS: the only endpoint is the editor on loopback, and pulling
+# rustls in for it would cost a whole crypto stack the binary never calls.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+schemars = "1"
+base64.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "time"] }
+
+[lints]
+workspace = true

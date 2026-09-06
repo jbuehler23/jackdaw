@@ -369,14 +369,17 @@ fn attach_material(
         normal: images.add(built.normal),
         height: images.add(built.height),
     };
+    let tint = images.add(jackdaw_terrain::render::tint_image(&[], RESOLUTION));
     let material = materials.add(TerrainSplatMaterial::new(
         &set,
         arrays,
         control,
         slope,
+        tint,
         Vec2::splat(WORLD_SIZE),
         RESOLUTION,
         AutoTerrainSettings::default(),
+        jackdaw_terrain::sidecar::SurfaceSettings::default(),
     ));
     for entity in &verify.surfaces {
         commands

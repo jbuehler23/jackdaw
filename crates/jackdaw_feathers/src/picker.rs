@@ -44,7 +44,7 @@ pub use jackdaw_fuzzy::{Category, Match, Matchable, MatchedStr};
 use lucide_icons::Icon;
 
 use crate::button::{
-    ButtonClickEvent, ButtonSize, ButtonVariant, IconButtonProps, button_base, icon_button,
+    ButtonClickEvent, ButtonProps, ButtonSize, ButtonVariant, IconButtonProps, button, icon_button,
 };
 use crate::icons::{EditorFont, IconFont};
 use crate::scroll::scrollbar;
@@ -201,13 +201,16 @@ impl<T: Pickable> PickerProps<T> {
         let input = commands.spawn(text_edit(text_edit_props)).id();
 
         let list = commands
-            .spawn(Node {
-                flex_direction: FlexDirection::Column,
-                width: percent(100),
-                max_height: px(400),
-                overflow: Overflow::scroll_y(),
-                ..default()
-            })
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    width: percent(100),
+                    max_height: px(400),
+                    overflow: Overflow::scroll_y(),
+                    ..default()
+                },
+                crate::scroll::scroll_area(),
+            ))
             .id();
 
         let scrollbar = commands.spawn(scrollbar(list)).id();
@@ -341,7 +344,6 @@ impl<T: Pickable> PickerProps<T> {
             .add_one_related::<PickerListOf>(list)
             .add_child(picker_entity);
 
-        // we no longer need it here, it's done its job
         commands.entity(ctx.entity).remove::<Self>();
     }
 }
@@ -374,12 +376,13 @@ pub struct PickerItem(pub usize);
 #[must_use]
 pub fn picker_item(index: usize) -> impl Bundle {
     (
-        button_base(
-            ButtonVariant::Ghost,
-            ButtonSize::MD,
-            true,
-            FlexDirection::Column,
-            BorderRadius::ZERO,
+        button(
+            ButtonProps::new("")
+                .with_variant(ButtonVariant::Ghost)
+                .with_size(ButtonSize::MD)
+                .align_left()
+                .with_direction(FlexDirection::Column)
+                .with_border_radius(BorderRadius::ZERO),
         ),
         PickerItem(index),
         // if everything is the same tab index, it's ordered by the child index
@@ -769,6 +772,7 @@ fn picker_host_from_focus(
 fn picker_keyboard_navigation(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    capture: Option<Res<jackdaw_commands::KeymapCapture>>,
     mut focus: ResMut<InputFocus>,
     mut navigation_repeat: ResMut<PickerNavigationRepeat>,
     child_of: Query<&ChildOf>,
@@ -777,6 +781,9 @@ fn picker_keyboard_navigation(
     picker_items: Query<(Entity, &PickerItem)>,
     mut commands: Commands,
 ) {
+    if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     let pressed_enter =
         keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::NumpadEnter);
 

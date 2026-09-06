@@ -234,12 +234,15 @@ pub(crate) fn decorate_prefab_field_rows(
         // child; sharing the wrapper keeps a single entity-level click
         // observer driving the revert.
         let wrapper = commands
-            .spawn(Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(2.0),
-                right: Val::Px(20.0),
-                ..default()
-            })
+            .spawn((
+                jackdaw_feathers::field_row::FieldRowDecoration,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(2.0),
+                    right: Val::Px(20.0),
+                    ..default()
+                },
+            ))
             .id();
 
         let dot = commands

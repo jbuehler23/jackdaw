@@ -206,6 +206,7 @@ fn sync_variant_edit_button(
         With<EditorVariantEdit>,
     >,
     children_query: Query<&Children>,
+    captions: Query<(), With<crate::button::ButtonContentText>>,
     mut texts: Query<&mut Text>,
 ) {
     for (config, mut state, children) in &mut variant_edits {
@@ -220,17 +221,14 @@ fn sync_variant_edit_button(
         let Some(&button_entity) = children.last() else {
             continue;
         };
-        let Ok(button_children) = children_query.get(button_entity) else {
-            continue;
-        };
 
         let mut text_updated = false;
-        for child in button_children.iter() {
-            if let Ok(mut text) = texts.get_mut(child) {
-                **text = path_to_label(&selected_variant.name);
-                text_updated = true;
-                break;
-            }
+        if let Some(caption) =
+            crate::button::button_caption(button_entity, &children_query, &captions)
+            && let Ok(mut text) = texts.get_mut(caption)
+        {
+            **text = path_to_label(&selected_variant.name);
+            text_updated = true;
         }
 
         if text_updated {
@@ -250,7 +248,7 @@ fn handle_variant_edit_click(
     mut trackers: Query<&mut PopoverTracker>,
     existing_popovers: Query<Entity, With<VariantEditPopover>>,
     all_popovers: Query<Entity, With<EditorPopover>>,
-    mut button_styles: Query<(&mut BackgroundColor, &mut BorderColor, &mut ButtonVariant)>,
+    mut button_styles: Query<&mut ButtonVariant>,
     parents: Query<&ChildOf>,
 ) {
     let Ok(child_of) = buttons.get(trigger.entity) else {
@@ -399,6 +397,7 @@ fn handle_variant_combobox_change(
     variant_comboboxes: Query<&VariantComboBox>,
     mut variant_edits: Query<&mut VariantEditConfig, With<EditorVariantEdit>>,
     variant_edit_children: Query<&Children, With<EditorVariantEdit>>,
+    captions: Query<(), With<crate::button::ButtonContentText>>,
     mut texts: Query<&mut Text>,
     children_query: Query<&Children>,
 ) {
@@ -426,13 +425,10 @@ fn handle_variant_combobox_change(
 
     if let Ok(children) = variant_edit_children.get(variant_edit_entity)
         && let Some(&button_entity) = children.last()
-        && let Ok(button_children) = children_query.get(button_entity)
+        && let Some(caption) =
+            crate::button::button_caption(button_entity, &children_query, &captions)
+        && let Ok(mut text) = texts.get_mut(caption)
     {
-        for child in button_children.iter() {
-            if let Ok(mut text) = texts.get_mut(child) {
-                **text = path_to_label(&selected_variant.name);
-                break;
-            }
-        }
+        **text = path_to_label(&selected_variant.name);
     }
 }

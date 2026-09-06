@@ -3,10 +3,11 @@
 //! The snapshot captures both the scene document and a set of editor-state
 //! resources (edit mode, gizmo mode/space, grid, view overlays, physics
 //! overlay). That way Ctrl+Z also reverts "I toggled wireframe" or "I
-//! switched to Face mode", matching user expectations. Entity-ref
-//! resources (`Selection`, `BrushSelection`) are deliberately excluded
-//! because entity ids are re-minted by the snapshot respawn and would
-//! dangle.
+//! switched to Face mode", matching user expectations.
+//!
+//! The selection rides along by scene node id rather than by entity, since the
+//! respawn re-mints every entity id. It is deliberately absent from `equals`: a
+//! selection change is not an edit.
 
 use std::any::Any;
 
@@ -83,6 +84,7 @@ impl SceneSnapshotter for BsnDocumentSnapshotter {
         Box::new(BsnDocumentSnapshot {
             text,
             editor_state: EditorStateSnapshot::capture(world),
+            selection: selected_node_ids(world),
         })
     }
 }
@@ -90,27 +92,37 @@ impl SceneSnapshotter for BsnDocumentSnapshotter {
 pub struct BsnDocumentSnapshot {
     text: String,
     editor_state: EditorStateSnapshot,
+    /// What was selected when this snapshot was taken, by document node.
+    /// Order is the selection's own, so the primary comes back last.
+    selection: Vec<jackdaw_scene_types::SceneNodeId>,
+}
+
+/// The selection as node ids, dropping anything the document does not name
+/// (brush faces, editor entities, preview entities): none survives a respawn.
+fn selected_node_ids(world: &World) -> Vec<jackdaw_scene_types::SceneNodeId> {
+    world
+        .get_resource::<crate::selection::Selection>()
+        .map(|selection| {
+            selection
+                .entities
+                .iter()
+                .filter_map(|&entity| {
+                    world
+                        .get::<jackdaw_scene_types::SceneNodeId>(entity)
+                        .copied()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 impl SceneSnapshot for BsnDocumentSnapshot {
     fn apply(&self, world: &mut World) {
         // Mirror the JSN apply sequence: preserve undo history (despawn
         // directly, never through `clear_scene_entities`), drop stale
-        // selection and tree rows first, and restore selection by node
-        // id after the respawn re-mints entities.
-        let selected_node_ids: Vec<jackdaw_scene_types::SceneNodeId> = world
-            .get_resource::<crate::selection::Selection>()
-            .map(|selection| {
-                selection
-                    .entities
-                    .iter()
-                    .filter_map(|&e| world.get::<jackdaw_scene_types::SceneNodeId>(e).copied())
-                    .collect()
-            })
-            .unwrap_or_default();
-        if let Some(mut selection) = world.get_resource_mut::<crate::selection::Selection>() {
-            selection.entities.clear();
-        }
+        // selection and tree rows first, and restore this snapshot's own
+        // selection after the respawn re-mints entities.
+        crate::selection::clear_selection_in_world(world);
         if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
             error!("Failed to clear tree rows: {err}");
         }
@@ -120,26 +132,29 @@ impl SceneSnapshot for BsnDocumentSnapshot {
         // diverged fields); the resolver materializes the inherited subtrees
         // back so the respawn produces complete entities. Resolve the cache
         // borrow before the spawn borrow.
-        let resolved_text = match world.get_resource::<crate::prefab::PrefabAstCache>() {
-            Some(_) => match jackdaw_bsn::parse_bsn_text(&self.text) {
-                Ok(authored) => {
-                    let cache = world.resource::<crate::prefab::PrefabAstCache>();
-                    let get_prefab = |p: &std::path::Path| cache.get(p);
-                    match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
-                        Ok(resolved) => jackdaw_bsn::emit_scene(&resolved),
-                        Err(e) => {
-                            warn!("undo snapshot: resolver failed: {e}; spawning unresolved");
-                            self.text.clone()
+        // The captured text is borrowed unless the resolver rewrote it: it is
+        // the whole scene, and the loader below only reads it.
+        let resolved_text: std::borrow::Cow<'_, str> =
+            match world.get_resource::<crate::prefab::PrefabAstCache>() {
+                Some(_) => match jackdaw_bsn::parse_bsn_text(&self.text) {
+                    Ok(authored) => {
+                        let cache = world.resource::<crate::prefab::PrefabAstCache>();
+                        let get_prefab = |p: &std::path::Path| cache.get(p);
+                        match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
+                            Ok(resolved) => jackdaw_bsn::emit_scene(&resolved).into(),
+                            Err(e) => {
+                                warn!("undo snapshot: resolver failed: {e}; spawning unresolved");
+                                (&self.text).into()
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    warn!("undo snapshot: parse failed: {e}; spawning raw text");
-                    self.text.clone()
-                }
-            },
-            None => self.text.clone(),
-        };
+                    Err(e) => {
+                        warn!("undo snapshot: parse failed: {e}; spawning raw text");
+                        (&self.text).into()
+                    }
+                },
+                None => (&self.text).into(),
+            };
 
         if let Err(err) = crate::scene_io::despawn_scene_entities(world) {
             error!("undo snapshot: despawn_scene_entities failed: {err}");
@@ -148,22 +163,7 @@ impl SceneSnapshot for BsnDocumentSnapshot {
             error!("undo snapshot failed to reload: {err}");
         }
 
-        if !selected_node_ids.is_empty()
-            && let Some(_) = world.get_resource::<crate::selection::Selection>()
-        {
-            let restored: Vec<Entity> = {
-                let mut query = world.query::<(Entity, &jackdaw_scene_types::SceneNodeId)>();
-                query
-                    .iter(world)
-                    .filter(|(_, id)| selected_node_ids.contains(id))
-                    .map(|(e, _)| e)
-                    .collect()
-            };
-            world
-                .resource_mut::<crate::selection::Selection>()
-                .entities
-                .extend(restored);
-        }
+        restore_selection(world, &self.selection);
 
         self.editor_state.apply(world);
     }
@@ -179,11 +179,45 @@ impl SceneSnapshot for BsnDocumentSnapshot {
         Box::new(Self {
             text: self.text.clone(),
             editor_state: self.editor_state.clone(),
+            selection: self.selection.clone(),
         })
+    }
+
+    /// The document text plus the recorded selection; the editor-state half is
+    /// small enough to round away.
+    fn heap_bytes(&self) -> usize {
+        self.text.capacity()
+            + self.selection.capacity() * std::mem::size_of::<jackdaw_scene_types::SceneNodeId>()
     }
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+/// Put `wanted` back as the selection, in the order it was recorded, including
+/// the `Selected` marker the outliner and its observers key off. A node this
+/// snapshot's text does not spawn is skipped.
+fn restore_selection(world: &mut World, wanted: &[jackdaw_scene_types::SceneNodeId]) {
+    if wanted.is_empty() {
+        return;
+    }
+    let by_id: std::collections::HashMap<jackdaw_scene_types::SceneNodeId, Entity> = world
+        .query::<(Entity, &jackdaw_scene_types::SceneNodeId)>()
+        .iter(world)
+        .map(|(entity, id)| (*id, entity))
+        .collect();
+    let restored: Vec<Entity> = wanted
+        .iter()
+        .filter_map(|id| by_id.get(id).copied())
+        .collect();
+    for &entity in &restored {
+        if let Ok(mut entity) = world.get_entity_mut(entity) {
+            entity.insert(crate::selection::Selected);
+        }
+    }
+    if let Some(mut selection) = world.get_resource_mut::<crate::selection::Selection>() {
+        selection.entities = restored;
     }
 }
 
@@ -238,9 +272,8 @@ mod tests {
         app
     }
 
-    // A material in the catalog emits as `@Name` only when a file on disk defines that
-    // name. An unsaved material has none, so the scene carries it inline; a bare `@Name`
-    // would resolve to nothing outside this editor run and the brush would load white.
+    // An unsaved material has no file, so the scene must carry it inline; a
+    // bare `@Name` would resolve to nothing outside this editor run.
     #[test]
     fn an_unsaved_catalog_material_embeds_inline_instead_of_emitting_a_name() {
         use bevy::pbr::StandardMaterial;
@@ -309,10 +342,9 @@ mod tests {
         }
     }
 
-    // A runtime material handle assigned to a brush face must survive a capture:
-    // the incremental document records the `Brush` patch without an asset
-    // context, so a bare emit would drop the handle. The capture-time inline
-    // asset pass embeds the material and rewrites the reference.
+    // The incremental document records the `Brush` patch without an asset
+    // context, so a bare emit would drop a runtime material handle; the
+    // capture-time inline asset pass embeds it and rewrites the reference.
     #[test]
     fn bsn_snapshot_embeds_runtime_face_material() {
         use bevy::pbr::StandardMaterial;

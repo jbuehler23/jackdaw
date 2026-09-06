@@ -75,6 +75,17 @@ impl LoadedDylibs {
 /// redirect arrange. Without that, trait-object calls across the
 /// dylib boundary are unsound.
 ///
+/// Where a retired extension version is kept while the one replacing it
+/// proves itself.
+///
+/// Through `jackdaw_env` rather than `dirs` directly, and in one place rather
+/// than at each of the two openings: a session pointed at a scratch config
+/// directory has to find the same quarantine both times, and two spellings of
+/// the same path are two quarantines.
+fn quarantine_dir() -> Option<std::path::PathBuf> {
+    jackdaw_env::paths::state_dir().map(|path| path.join("extension-quarantine"))
+}
+
 #[derive(Default)]
 pub struct DylibLoaderPlugin;
 
@@ -83,9 +94,7 @@ impl Plugin for DylibLoaderPlugin {
         app.init_resource::<LoadedDylibs>()
             .init_resource::<PendingActivationGuards>()
             .add_systems(Last, disarm_survived_activations);
-        let quarantine = dirs::state_dir()
-            .map(|path| path.join("jackdaw/extension-quarantine"))
-            .and_then(|path| quarantine::Quarantine::open(path).ok());
+        let quarantine = quarantine_dir().and_then(|path| quarantine::Quarantine::open(path).ok());
 
         // A sentinel left by a dead process identifies the active version that
         // crashed during its first frame. Restore the retired version before
@@ -367,9 +376,7 @@ pub fn load_from_path(world: &mut World, path: &Path) -> Result<String, LoadErro
 /// end of the current frame. A hard process crash leaves the sentinel for
 /// startup rollback; ordinary errors clear it immediately.
 pub fn load_installed_from_path(world: &mut World, path: &Path) -> Result<String, LoadError> {
-    let quarantine = dirs::state_dir()
-        .map(|state| state.join("jackdaw/extension-quarantine"))
-        .and_then(|dir| quarantine::Quarantine::open(dir).ok());
+    let quarantine = quarantine_dir().and_then(|dir| quarantine::Quarantine::open(dir).ok());
     let guard = quarantine
         .as_ref()
         .and_then(|quarantine| quarantine.arm(path).ok());

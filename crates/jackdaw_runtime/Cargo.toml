@@ -16,14 +16,28 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_world_serialization",
     "bevy_log",
     "reflect_documentation",
+    # The schema dump reads the game's function registry, which only
+    # exists with bevy's function reflection on.
+    "reflect_functions",
 ] }
 jackdaw_bsn = { version = "0.19.0", path = "../jackdaw_bsn" }
-jackdaw_schema = { version = "0.19.0", path = "../jackdaw_schema", features = [
+# `IsA` references in a world scene resolve at load, so a shipped game shows
+# the prefab the editor showed.
+jackdaw_prefab = { version = "0.19.0", path = "../jackdaw_prefab" }
+# Bindings are part of what a scene document carries, so the runtime evaluates
+# them in both feature states. It brings `bevy_ui` (and the `bevy_text` and
+# `bevy_sprite` it implies) into the headless build; none of those pull
+# `bevy_render`, so `--no-default-features` stays render-free.
+jackdaw_bind = { version = "0.19.0", path = "../jackdaw_bind" }
+# A widget marker only survives a load if something registers its reflected
+# default, and a widget only answers a click if something attaches the value
+# observers. The editor and the game take both from here.
+jackdaw_widgets_runtime = { version = "0.19.0", path = "../jackdaw_widgets_runtime", default-features = false }
+jackdaw_schema ={ version = "0.19.0", path = "../jackdaw_schema", features = [
     "reflect",
 ] }
 jackdaw_geometry = { version = "0.19.0", path = "../jackdaw_geometry", default-features = false }
 jackdaw_scene_types = { version = "0.19.0", path = "../jackdaw_scene_types", default-features = false }
-jackdaw_ui = { version = "0.19.0", path = "../jackdaw_ui" }
 jackdaw_pie_protocol = { version = "0.19.0", path = "../jackdaw_pie_protocol", optional = true }
 jackdaw_camera_rig = { version = "0.19.0", path = "../jackdaw_camera_rig", optional = true }
 # Runtime collider bridge: the `AvianCollider` -> `Collider` conversion. Default
@@ -52,6 +66,9 @@ render = [
     "bevy/bevy_image",
     "jackdaw_geometry/render",
     "jackdaw_scene_types/render",
+    # `bevy_feathers` depends on `bevy_render` outright, so the theme markers
+    # an authored widget carries can only be registered in a rendering build.
+    "jackdaw_widgets_runtime/feathers",
 ]
 # Play-in-editor: connect to the editor over ipc-channel, stream the
 # scene's ECS state, and apply control commands. Off by default so the
@@ -89,6 +106,8 @@ workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# The cap the resolution tests drive the chain past.
+jackdaw_prefab = { version = "0.19.0", path = "../jackdaw_prefab" }
 # Ground-collider tests query the built collider through avian's spatial
 # queries, so the test targets name it themselves.
 avian3d = { workspace = true }

@@ -60,8 +60,9 @@ pub(crate) fn spawn_material_card_shell(
     icon_font: &Handle<Font>,
     collapsed: bool,
 ) -> Entity {
-    // No key: the inspector remembers its own cards through `InspectorCollapseState`,
-    // which has already resolved `collapsed` here. See `PanelCardCollapseState`.
+    // No key: the inspector remembers its own cards through
+    // `InspectorCollapseState`, which has already resolved `collapsed`
+    // here.
     let card = spawn_panel_card(
         commands,
         inspector_entity,
@@ -161,6 +162,10 @@ pub(crate) fn on_refresh_inspector_card_body(
                 crate::inspector::material_display::fill_material_card_body(
                     world, source, body, kind,
                 );
+            } else if card_tp == crate::inspector::node_card::node_type_path() {
+                crate::inspector::node_card::fill_node_card_body(world, source, body);
+            } else if card_tp == crate::inspector::bindings_card::bindings_type_path() {
+                crate::inspector::bindings_card::fill_bindings_card_body(world, source, body);
             }
         });
     }

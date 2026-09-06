@@ -77,7 +77,11 @@ members = [
 bevy.workspace = true
 jackdaw_jsn.workspace = true
 jackdaw_bsn.workspace = true
-jackdaw_ui.workspace = true
+jackdaw_prefab.workspace = true
+# Types only: the editor registers the binding components so they are
+# authorable and round-trip through BSN. `JackdawBindPlugin` (evaluator
+# + observers) stays out of the editor world; bindings run in the game.
+jackdaw_bind.workspace = true
 jackdaw_geometry.workspace = true
 jackdaw_scene_types.workspace = true
 jackdaw_schema.workspace = true
@@ -88,6 +92,7 @@ bevy_window_chrome.workspace = true
 jackdaw_camera.workspace = true
 jackdaw_feathers.workspace = true
 jackdaw_widgets.workspace = true
+jackdaw_widgets_runtime = { workspace = true, features = ["feathers"] }
 jackdaw_commands.workspace = true
 jackdaw_terrain.workspace = true
 jackdaw_remote.workspace = true
@@ -213,6 +218,7 @@ bevy = { version = "0.19", features = [
     "bevy_remote",
     "file_watcher",
     "reflect_documentation",
+    "reflect_functions",
 ] }
 jackdaw_jsn = { version = "0.19.0", path = "crates/jackdaw_jsn" }
 jackdaw_geometry = { version = "0.19.0", path = "crates/jackdaw_geometry" }
@@ -220,7 +226,7 @@ jackdaw_scene_types = { version = "0.19.0", path = "crates/jackdaw_scene_types" 
 jackdaw_schema = { version = "0.19.0", path = "crates/jackdaw_schema" }
 jackdaw_project_build = { version = "0.19.0", path = "crates/jackdaw_project_build" }
 jackdaw_bsn = { version = "0.19.0", path = "crates/jackdaw_bsn" }
-jackdaw_ui = { version = "0.19.0", path = "crates/jackdaw_ui" }
+jackdaw_bind = { version = "0.19.0", path = "crates/jackdaw_bind" }
 jackdaw_csg = { version = "0.19.0", path = "crates/jackdaw_csg" }
 bevy_monitors = "0.3"
 bevy_window_chrome = { version = "0.19.0", path = "crates/bevy_window_chrome" }
@@ -228,6 +234,7 @@ jackdaw_camera = { version = "0.19.0", path = "crates/jackdaw_camera" }
 jackdaw_camera_rig = { version = "0.19.0", path = "crates/jackdaw_camera_rig" }
 jackdaw_feathers = { version = "0.19.0", path = "crates/jackdaw_feathers" }
 jackdaw_widgets = { version = "0.19.0", path = "crates/jackdaw_widgets" }
+jackdaw_widgets_runtime = { version = "0.19.0", path = "crates/jackdaw_widgets_runtime", default-features = false }
 jackdaw_commands = { version = "0.19.0", path = "crates/jackdaw_commands" }
 jackdaw_terrain = { version = "0.19.0", path = "crates/jackdaw_terrain" }
 jackdaw_remote = { version = "0.19.0", path = "crates/jackdaw_remote" }
@@ -262,6 +269,7 @@ jackdaw_multiplayer = { version = "0.19.0", path = "crates/jackdaw_multiplayer" 
 jackdaw_multiplayer_editor = { version = "0.19.0", path = "crates/jackdaw_multiplayer_editor" }
 jackdaw_runtime = { version = "0.19.0", path = "crates/jackdaw_runtime" }
 jackdaw_panels = { version = "0.19.0", path = "crates/jackdaw_panels" }
+jackdaw_prefab = { version = "0.19.0", path = "crates/jackdaw_prefab" }
 jackdaw_api = { version = "0.19.0", path = "crates/jackdaw_api" }
 jackdaw_extension = { version = "0.19.0", path = "crates/jackdaw_extension" }
 jackdaw_api_internal = { version = "0.19.0", path = "crates/jackdaw_api_internal" }

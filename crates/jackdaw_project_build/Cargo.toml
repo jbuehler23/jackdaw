@@ -29,6 +29,10 @@ tracing = { workspace = true }
 jackdaw_schema.workspace = true
 jackdaw_env.workspace = true
 
+# `setpriority` for background builds; nothing in std reaches it.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [build-dependencies]
 # The build script assembles the embedded SDK-builder recipe: it parses
 # the workspace manifest to generate the recipe's `[workspace.dependencies]`.

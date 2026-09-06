@@ -3,6 +3,7 @@
 //! scene-document snapshot plus the per-tab view state and history.
 
 pub mod confirm_dialog;
+pub mod external_watch;
 pub mod operators;
 pub mod swap;
 pub mod ui;
@@ -36,6 +37,7 @@ impl Plugin for ScenesPlugin {
             ),
         );
         app.add_observer(ui::on_scene_tab_context_action);
+        app.add_plugins(external_watch::ExternalSceneWatchPlugin);
     }
 }
 
@@ -142,9 +144,36 @@ pub struct SceneTab {
     /// made a change since the last check, and the tab is marked
     /// `dirty`.
     pub history_depth_at_last_check: usize,
+    /// Why the tab is in front without its contents in the world, if it is.
+    /// Set, the world is not the file's contents and must not be written back.
+    pub refusal: Option<TabRefusal>,
+}
+
+/// Why an activation refused to put a tab's document in the world. The next
+/// successful activation clears it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TabRefusal {
+    /// The document names vocabulary this build will not spawn.
+    Rejected(String),
+    /// The spawn was attempted and failed.
+    SpawnFailed(String),
+}
+
+impl TabRefusal {
+    /// The message shown for a save this refusal blocks.
+    pub fn reason(&self) -> &str {
+        match self {
+            Self::Rejected(reason) | Self::SpawnFailed(reason) => reason,
+        }
+    }
 }
 
 impl SceneTab {
+    /// Whether writing this tab's file would write a world that never held it.
+    pub fn is_refused(&self) -> bool {
+        self.refusal.is_some()
+    }
+
     pub fn new_untitled(n: u32) -> Self {
         Self {
             path: None,
@@ -157,6 +186,7 @@ impl SceneTab {
             terrain_data_store: TerrainDataStore::default(),
             navmesh: TabNavmesh::default(),
             history_depth_at_last_check: 0,
+            refusal: None,
         }
     }
 }
@@ -240,6 +270,13 @@ pub struct ViewState {
     /// Brush sub-element selection (verts, edges, faces) for whichever
     /// brush is active in `selection`.
     pub brush_sub_selection: crate::brush::BrushSelection,
+    /// How the 2D viewport was framed while this tab was active. `None` means
+    /// no framing was ever chosen, so the tab takes whatever its next
+    /// activation gives it.
+    pub ui_view: Option<crate::viewport_2d::Ui2dView>,
+    /// The viewport mode the user picked for this tab, overriding the one its
+    /// scene kind asks for. `None` falls back to the document's kind.
+    pub viewport_mode: Option<crate::viewport_host::ViewportMode>,
 }
 
 impl ViewState {

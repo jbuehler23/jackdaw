@@ -53,7 +53,6 @@ fn update_terrain_inspector(
     terrains: Query<(), With<jackdaw_scene_types::Terrain>>,
     container_query: Query<(Entity, Option<&Children>), With<TerrainInspectorContainer>>,
     mut local_state: Local<InspectorState>,
-    icon_font: Res<jackdaw_feathers::icons::IconFont>,
     terrain_data: Query<&jackdaw_scene_types::Terrain>,
     terrain_store: Res<TerrainDataStore>,
 ) {
@@ -97,12 +96,8 @@ fn update_terrain_inspector(
         // it renders for a terrain that has never been sculpted or generated.
         // Read-only: resolution and size drive chunk layout, and no operator
         // resizes those.
-        let (_section, body) = jackdaw_feathers::collapsible::collapsible_section(
-            &mut commands,
-            "Terrain",
-            &icon_font.0,
-            container,
-        );
+        let (_section, body) =
+            jackdaw_feathers::collapsible::collapsible_section(&mut commands, "Terrain", container);
         if let Ok(terrain) = terrain_data.get(terrain_entity_id) {
             // Cell size is authored; extent is whatever the terrain has been
             // sculpted into, so it is reported rather than offered.
@@ -182,12 +177,20 @@ mod update_terrain_inspector_tests {
     use super::*;
     use crate::selection::Selection;
 
+    /// The card the inspector builds is a scene, so the world needs the asset
+    /// machinery a scene spawn resolves against.
     fn base_world() -> World {
-        let mut world = World::new();
-        world.init_resource::<Selection>();
-        world.init_resource::<TerrainDataStore>();
-        world.insert_resource(IconFont(Handle::default()));
-        world
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+        ))
+        .init_asset::<Image>()
+        .init_resource::<Selection>()
+        .init_resource::<TerrainDataStore>()
+        .insert_resource(IconFont(Handle::default()));
+        std::mem::take(app.world_mut())
     }
 
     fn select_a_terrain(world: &mut World) {

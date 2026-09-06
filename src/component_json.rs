@@ -633,7 +633,7 @@ mod tests {
         assert_eq!(read, Some(&serde_json::json!(false)));
 
         // Writing through `.0` sets the inner field and reads back the new
-        // value (the bug: this used to be a silent no-op so the edit reverted).
+        // value.
         set_field_in_component_json(
             &mut component,
             type_path,

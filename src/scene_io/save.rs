@@ -97,6 +97,20 @@ pub fn save_scene_with_outcome(world: &mut World) -> SaveOutcome {
     // save to. Re-sync the global `SceneFilePath` from it so a stale
     // path from a previous tab can never cause us to overwrite the
     // wrong file. Untitled tabs (no path) fall through to Save As.
+    // A refused tab keeps its path in front of an empty world, so without
+    // this check the save would write that empty world over the file.
+    if let Some(reason) = active_tab_refusal(world) {
+        error!(
+            "Cannot save this tab: its scene was not loaded ({reason}). \
+             Fix the file and reopen it; nothing has been written."
+        );
+        crate::status_bar::notify_error(
+            world,
+            "Not saved: this tab's scene was not loaded".to_string(),
+        );
+        return SaveOutcome::Failed;
+    }
+
     let active_tab_path: Option<String> = world
         .get_resource::<crate::scenes::Scenes>()
         .and_then(|s| s.tabs.get(s.active).and_then(|t| t.path.clone()))
@@ -152,19 +166,42 @@ pub fn retarget_active_scene(world: &mut World, path: &str) {
 }
 
 pub fn save_scene_as(world: &mut World) {
+    // Save As performs the same write, so a refused tab is refused here too.
+    if let Some(reason) = active_tab_refusal(world) {
+        error!(
+            "Cannot save this tab: its scene was not loaded ({reason}). \
+             Fix the file and reopen it; nothing has been written."
+        );
+        crate::status_bar::notify_error(
+            world,
+            "Not saved: this tab's scene was not loaded".to_string(),
+        );
+        return;
+    }
     if world.contains_resource::<SceneDialogTask>() {
         return; // Dialog already open
     }
     spawn_save_dialog(world);
 }
 
+/// Why the active tab must not be written, if it must not be. A refused
+/// activation is the one state where the live world is not the tab's
+/// contents.
+pub(crate) fn active_tab_refusal(world: &World) -> Option<String> {
+    let scenes = world.get_resource::<crate::scenes::Scenes>()?;
+    let tab = scenes.tabs.get(scenes.active)?;
+    tab.refusal
+        .as_ref()
+        .map(|refusal| refusal.reason().to_string())
+}
+
 /// Save the active tab's scene text and terrain sidecars, synchronously,
 /// on the calling (main) thread.
 ///
-/// This used to spawn the write onto an async task. It does not anymore:
-/// ordering has to hold across the whole boundary -- sidecars before
-/// scene text, dirty state cleared only after every authoritative write
-/// lands (see the ordering comments below) -- and that is far simpler to
+/// The write is not spawned onto an async task, because ordering has to
+/// hold across the whole boundary -- sidecars before scene text, dirty
+/// state cleared only after every authoritative write lands (see the
+/// ordering comments below) -- and that is far simpler to
 /// reason about, and to keep correct under future edits, as a single
 /// synchronous call than as a task whose completion has to be raced
 /// against the next save, the next tab swap, or the app closing mid-write.
@@ -175,10 +212,22 @@ pub fn save_scene_as(world: &mut World) {
 /// Scene text and terrain sidecars are not sized to make that
 /// noticeable in practice, but a project with many large open tabs is
 /// the case to watch. If it ever needs revisiting, the fix is a
-/// different concurrency shape for `scene.save_all` specifically, not
-/// bringing async back to this function -- the ordering argument above
-/// still applies to any single save.
+/// different concurrency shape for `scene.save_all` specifically, not an
+/// async version of this function -- the ordering argument above applies
+/// to any single save.
 pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
+    // Every write of the world to the active tab's file ends here, so the
+    // refusal is enforced here too; callers check only for a better message.
+    if let Some(reason) = active_tab_refusal(world) {
+        crate::status_bar::notify_error(
+            world,
+            "Not saved: this tab's scene was not loaded".to_string(),
+        );
+        return Err(BevyError::from(format!(
+            "cannot save this tab: its scene was not loaded ({reason})"
+        )));
+    }
+
     // If the active tab is a prefab, flush the live AST into the cache
     // and persist via the prefab-aware writer. Reflect-serializing the
     // live world would drop the `Prefab` marker (its deserializer fails,
@@ -266,7 +315,7 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_default();
-        let body = emit_bsn_scene_with_inline_assets(world, &parent_path);
+        let body = emit_bsn_scene_for_file(world, &parent_path);
         // Record the jackdaw + Bevy version at the disk boundary only, so
         // the in-memory undo / tab-swap snapshots from the same emitter stay
         // stamp-free.
@@ -297,6 +346,10 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     write_atomic(Path::new(&path), contents.as_bytes())
         .map_err(|err| BevyError::from(format!("failed to write scene file {path}: {err}")))?;
     info!("Scene saved to {path}");
+
+    // Record the written bytes so the open-tab watcher does not read this
+    // write back as an outside edit.
+    crate::scenes::external_watch::note_known_content(world, Path::new(&path), contents.as_bytes());
 
     // A terrain bake writes its own artifact when it finishes; this covers a scene that has
     // moved since, keeping the two files named after each other.
@@ -378,7 +431,7 @@ pub(crate) fn export_terrain_sidecars(
     }
 
     let store = world.resource::<crate::terrain::TerrainDataStore>();
-    let mut writes: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    let mut writes: Vec<(String, PathBuf, Vec<u8>)> = Vec::new();
     for data_path in paths {
         let path = match sidecar::resolve_path(&scene_dir, &data_path) {
             Ok(path) => path,
@@ -407,10 +460,10 @@ pub(crate) fn export_terrain_sidecars(
                 "terrain sidecar {data_path:?} cannot be written: {err}"
             ))
         })?;
-        writes.push((path, bytes));
+        writes.push((data_path, path, bytes));
     }
 
-    for (path, bytes) in writes {
+    for (data_path, path, bytes) in writes {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|err| {
                 BevyError::from(format!(
@@ -427,6 +480,14 @@ pub(crate) fn export_terrain_sidecars(
             ))
         })?;
         info!("Terrain data written to {}", path.display());
+        // Without noting the write, the store keeps the mtime it loaded from
+        // and every later activation re-imports the whole terrain.
+        let mtime = std::fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .ok();
+        world
+            .resource_mut::<crate::terrain::TerrainDataStore>()
+            .note_read(&data_path, mtime);
     }
     Ok(())
 }
@@ -719,6 +780,115 @@ fn collect_bsn_handles_from_reflect(
     found
 }
 
+/// Reset a button's theme tokens to the resting values for its variant.
+///
+/// feathers writes interaction state into the same components that hold a
+/// button's authored styling, so a save taken with the pointer on a button
+/// would otherwise record its hover token. Runs on the emission clone.
+fn normalize_derived_button_styles(
+    world: &World,
+    ast: &mut jackdaw_bsn::SceneBsnAst,
+    registry: &AppTypeRegistry,
+) {
+    use bevy::feathers::{
+        controls::ButtonVariant,
+        theme::{InheritableThemeTextColor, ThemeBackgroundColor},
+        tokens,
+    };
+    use bevy::ui::InteractionDisabled;
+
+    let reg = registry.read();
+    for entity in doc_entities_in_order(ast) {
+        let Ok(entity_ref) = world.get_entity(entity) else {
+            continue;
+        };
+        let Some(variant) = entity_ref.get::<ButtonVariant>() else {
+            continue;
+        };
+        // A disabled button rests disabled, so that token is authored state.
+        let disabled = entity_ref.contains::<InteractionDisabled>();
+        let background = match (variant, disabled) {
+            (ButtonVariant::Normal, false) => tokens::BUTTON_BG,
+            (ButtonVariant::Normal, true) => tokens::BUTTON_BG_DISABLED,
+            (ButtonVariant::Primary, false) => tokens::BUTTON_PRIMARY_BG,
+            (ButtonVariant::Primary, true) => tokens::BUTTON_PRIMARY_BG_DISABLED,
+            (ButtonVariant::Plain, false) => tokens::BUTTON_PLAIN_BG,
+            (ButtonVariant::Plain, true) => tokens::BUTTON_PLAIN_BG_DISABLED,
+        };
+        let text = match (variant, disabled) {
+            (ButtonVariant::Primary, false) => tokens::BUTTON_PRIMARY_TEXT,
+            (ButtonVariant::Primary, true) => tokens::BUTTON_PRIMARY_TEXT_DISABLED,
+            (_, false) => tokens::BUTTON_TEXT,
+            (_, true) => tokens::BUTTON_TEXT_DISABLED,
+        };
+        replace_patch(ast, entity, &reg, &ThemeBackgroundColor(background));
+        replace_patch(ast, entity, &reg, &InheritableThemeTextColor(text));
+    }
+}
+
+/// Take the values a widget derives for itself -- a progress fill's `width`, a
+/// separator's long axis and `flex_shrink`, a nine-patch's sliced image mode --
+/// back out of the document, so they are not recorded as authored.
+///
+/// Only fields are removed, never whole patches, and only from the emission
+/// clone. Runs last: re-deriving a patch from its live component is what put
+/// the image mode back.
+fn normalize_runtime_derived_values(world: &World, ast: &mut jackdaw_bsn::SceneBsnAst) {
+    use jackdaw_widgets_runtime::{NineSlice, ProgressFill, Separator};
+
+    let node_path = crate::inspector::node_card::node_type_path();
+    let image_path = <ImageNode as bevy::reflect::TypePath>::type_path();
+    for entity in doc_entities_in_order(ast) {
+        let Ok(entity_ref) = world.get_entity(entity) else {
+            continue;
+        };
+        let Some(node) = ast.ast_for(entity) else {
+            continue;
+        };
+        for path in crate::scene_io::computed_ui_component_paths() {
+            ast.remove_component_patch(node, path);
+        }
+        if entity_ref.contains::<ProgressFill>() {
+            jackdaw_bsn::remove_bsn_field(ast, node, node_path, "width");
+        }
+        if entity_ref.contains::<Separator>() {
+            let along_the_flow = entity_ref
+                .get::<ChildOf>()
+                .and_then(|child_of| world.get::<Node>(child_of.parent()))
+                .is_some_and(|parent| {
+                    matches!(
+                        parent.flex_direction,
+                        FlexDirection::Column | FlexDirection::ColumnReverse
+                    )
+                });
+            let filled = if along_the_flow { "width" } else { "height" };
+            jackdaw_bsn::remove_bsn_field(ast, node, node_path, filled);
+            jackdaw_bsn::remove_bsn_field(ast, node, node_path, "flex_shrink");
+        }
+        if entity_ref.contains::<NineSlice>() {
+            jackdaw_bsn::remove_bsn_field(ast, node, image_path, "image_mode");
+        }
+    }
+}
+
+/// Rewrite `entity`'s existing patch for `component`'s type, adding none.
+fn replace_patch(
+    ast: &mut jackdaw_bsn::SceneBsnAst,
+    entity: Entity,
+    registry: &TypeRegistry,
+    component: &dyn Reflect,
+) {
+    let type_path = component.reflect_type_path();
+    let Some(node) = ast.ast_for(entity) else {
+        return;
+    };
+    let Some(patch) = ast.find_patch_by_type_path(node, type_path) else {
+        return;
+    };
+    let new_patch = jackdaw_bsn::component_to_bsn_patch(component.as_partial_reflect(), registry);
+    ast.set_patch(patch, new_patch);
+}
+
 /// Emit the live BSN document to text with runtime inline assets embedded and
 /// their handle references resolved.
 ///
@@ -736,19 +906,50 @@ fn collect_bsn_handles_from_reflect(
 /// All of that happens on a deep clone of the document, so emission never
 /// mutates the live state.
 pub fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: &Path) -> String {
+    emit_bsn_scene(world, parent_path, SourceSpelling::AsHeld)
+}
+
+/// [`emit_bsn_scene_with_inline_assets`] for text that becomes a file at
+/// `parent_path`, with prefab sources written relative to it.
+pub fn emit_bsn_scene_for_file(world: &mut World, parent_path: &Path) -> String {
+    emit_bsn_scene(world, parent_path, SourceSpelling::RelativeToFile)
+}
+
+/// How the emitted document spells the prefabs its instances point at.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SourceSpelling {
+    /// The absolute paths the live document holds.
+    AsHeld,
+    /// Relative to the file being written.
+    RelativeToFile,
+}
+
+/// Every emission of the live document passes through here, with preview
+/// writes suspended so it captures authored values.
+fn emit_bsn_scene(world: &mut World, parent_path: &Path, spelling: SourceSpelling) -> String {
+    let held = crate::preview_context::suspend_preview_writes(world);
+    let text = emit_bsn_scene_authored(world, parent_path, spelling);
+    crate::preview_context::resume_preview_writes(world, held);
+    text
+}
+
+fn emit_bsn_scene_authored(
+    world: &mut World,
+    parent_path: &Path,
+    spelling: SourceSpelling,
+) -> String {
     let Some(live) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
         return String::new();
     };
     let mut ast = live.deep_clone();
 
     let registry = world.resource::<AppTypeRegistry>().clone();
+    normalize_derived_button_styles(world, &mut ast, &registry);
 
     // Seed the reference map with assets that already resolve: catalog entries
     // and scene-inline entries already embedded as document roots.
-    //
-    // An unsaved material is left out: nothing on disk defines it, so seeding it would emit
-    // an `@Name` that resolves nowhere outside this editor run. Unseeded, it embeds inline
-    // and the scene stands alone.
+    // An unsaved material is left unseeded so it embeds inline: an `@Name`
+    // for it would resolve nowhere outside this editor run.
     let mut seed: bevy::platform::collections::HashMap<UntypedAssetId, String> =
         bevy::platform::collections::HashMap::default();
     let ephemeral = crate::material_assets::ephemeral_material_ids(world);
@@ -786,9 +987,15 @@ pub fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: &Path) 
         crate::prefab::resolver_bsn::sparsify_inherited_descendants(&mut ast, &get_prefab);
     }
 
+    // After sparsifying, which reads sources as the cache keys them.
+    if spelling == SourceSpelling::RelativeToFile {
+        jackdaw_prefab::relativize_isa_sources(&mut ast, parent_path);
+    }
+
     // No kept component references an asset handle: the document already emits
     // faithfully once sparsified.
     if pass.touched.is_empty() {
+        normalize_runtime_derived_values(world, &mut ast);
         return jackdaw_bsn::emit_scene(&ast);
     }
 
@@ -799,6 +1006,7 @@ pub fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: &Path) 
     // Re-derive each handle-bearing component patch with the asset context so
     // its handle fields emit reference names or asset paths.
     rederive_handle_patches(world, &mut ast, &registry, parent_path, &pass);
+    normalize_runtime_derived_values(world, &mut ast);
 
     jackdaw_bsn::emit_scene(&ast)
 }
@@ -863,6 +1071,13 @@ pub(crate) fn emit_bsn_entities_with_inline_assets(
     parent_path: &Path,
     nodes: &[Entity],
 ) -> String {
+    let held = crate::preview_context::suspend_preview_writes(world);
+    let text = emit_bsn_entities_authored(world, parent_path, nodes);
+    crate::preview_context::resume_preview_writes(world, held);
+    text
+}
+
+fn emit_bsn_entities_authored(world: &mut World, parent_path: &Path, nodes: &[Entity]) -> String {
     let Some(live) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
         return String::new();
     };
@@ -877,11 +1092,11 @@ pub(crate) fn emit_bsn_entities_with_inline_assets(
         .collect();
 
     let registry = world.resource::<AppTypeRegistry>().clone();
+    normalize_derived_button_styles(world, &mut ast, &registry);
 
-    // Seed catalog and live scene-inline names so same-scene copy keeps the existing `#Name`
-    // refs. Cross-scene paste of unknown inline assets is unsupported; those handles would
-    // need embedding and merge. Unsaved materials are left unseeded so the clip carries
-    // them inline.
+    // Seed catalog and live scene-inline names so same-scene copy keeps the
+    // existing `#Name` refs. Unsaved materials are left unseeded so the clip
+    // carries them inline.
     let mut seed: bevy::platform::collections::HashMap<UntypedAssetId, String> =
         bevy::platform::collections::HashMap::default();
     let ephemeral = crate::material_assets::ephemeral_material_ids(world);
@@ -947,6 +1162,8 @@ pub(crate) fn emit_bsn_entities_with_inline_assets(
         rederive_handle_patches(world, &mut ast, &registry, parent_path, &pass);
     }
     let added_roots: Vec<Entity> = ast.roots[roots_before..].to_vec();
+
+    normalize_runtime_derived_values(world, &mut ast);
 
     let mut emit_list = added_roots;
     emit_list.extend_from_slice(&clone_nodes);
@@ -1101,6 +1318,45 @@ mod tests {
             world.resource::<SceneDirtyState>().undo_len_at_save,
             baseline,
             "failed saves must not advance the clean-history baseline",
+        );
+    }
+
+    /// A tab that was just saved is not stale, so activating it again does
+    /// not re-import the terrain.
+    #[test]
+    fn saving_a_sidecar_leaves_the_store_current_with_the_file() {
+        let mut world = build_live_save_world();
+        let tmp = tempfile::tempdir().expect("temp directory");
+        let scene_path = tmp.path().join("zone.bsn");
+
+        let data_path = "zone.terrain-0.jdterrain";
+        let mut store = crate::terrain::TerrainDataStore::default();
+        store.insert(
+            data_path.to_string(),
+            jackdaw_terrain::RegionTerrainData::from_legacy_v1(&jackdaw_terrain::TerrainData {
+                resolution: 2,
+                heights: vec![0.0; 4],
+                channels: vec![],
+            })
+            .expect("a power-of-two resolution migrates"),
+        );
+        world.insert_resource(store);
+        world.spawn(jackdaw_scene_types::Terrain {
+            resolution: 2,
+            data_path: data_path.to_string(),
+            ..default()
+        });
+
+        let scene_path_str = scene_path.to_string_lossy().into_owned();
+        export_terrain_sidecars(&mut world, &scene_path_str).expect("the sidecar writes");
+
+        let written = tmp.path().join(data_path);
+        assert!(written.exists(), "the sidecar landed");
+        assert!(
+            !world
+                .resource::<crate::terrain::TerrainDataStore>()
+                .sidecar_is_stale(data_path, &written),
+            "the file the save just wrote must not read as an outside edit"
         );
     }
 
@@ -1366,8 +1622,8 @@ mod terrain_sidecar_tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Terrain heights live in the sidecar, so a 512-resolution terrain contributes a
-    /// handful of lines to the scene text rather than 262,144 floats.
+    /// Heights live in the sidecar, not the scene text, so a terrain adds only
+    /// a handful of lines to a `.bsn`.
     #[test]
     fn a_512_terrain_contributes_almost_nothing_to_the_scene_text() {
         use bevy::ecs::reflect::AppTypeRegistry;
@@ -1446,9 +1702,8 @@ mod terrain_sidecar_tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// A sidecar written by a newer build (`SidecarError::UnsupportedVersion`) cannot be
-    /// read here. The user paints a stroke anyway and saves; the save must not write a
-    /// zeroed document over the real file.
+    /// Painting and saving over a sidecar from a newer build must not write a
+    /// zeroed document over it.
     #[test]
     fn an_unreadable_sidecar_is_never_overwritten_by_a_save() {
         let tmp = unique_tmp_dir("unreadable");
@@ -1456,7 +1711,7 @@ mod terrain_sidecar_tests {
         let sidecar_path = tmp.join("zone.terrain-0.jdterrain");
 
         let mut original = sidecar::save(&document(&sculpted())).expect("encodes");
-        original[8..10].copy_from_slice(&(sidecar::VERSION_5 + 1).to_le_bytes());
+        original[8..10].copy_from_slice(&(sidecar::VERSION_7 + 1).to_le_bytes());
         std::fs::write(&sidecar_path, &original).expect("write sidecar");
 
         let mut world = World::new();
@@ -1506,8 +1761,8 @@ mod terrain_sidecar_tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// The texture-set reference and the control word under every cell are authored through
-    /// the store, written by a save, and come back from the file identical.
+    /// The texture-set reference and every cell's control word round-trip
+    /// through a save unchanged.
     #[test]
     fn authored_paint_and_materials_survive_a_save_and_reload() {
         use jackdaw_terrain::Control;
@@ -1652,8 +1907,8 @@ mod terrain_sidecar_tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// A pre-region sidecar opens, migrates, and is rewritten in the current format with no
-    /// user action.
+    /// A pre-region sidecar opens, migrates, and is rewritten in the current
+    /// format with no user action.
     #[test]
     fn a_pre_region_sidecar_migrates_on_load_and_saves_in_the_current_format() {
         let tmp = unique_tmp_dir("migrate");
@@ -1688,7 +1943,7 @@ mod terrain_sidecar_tests {
         let rewritten = std::fs::read(&sidecar_path).expect("read back");
         assert_eq!(
             u16::from_le_bytes([rewritten[8], rewritten[9]]),
-            sidecar::VERSION_5,
+            sidecar::VERSION_7,
         );
         // The load settled this terrain onto the geometry its declared rectangle drew with
         // (four vertices across the default 100 metres, cornered at -size/2) and the rewrite
@@ -1707,8 +1962,8 @@ mod terrain_sidecar_tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// A terrain the editor touched and then flattened is a region on disk, not an empty
-    /// document that would reopen as no terrain at all.
+    /// A terrain that was edited and then flattened persists as a region on
+    /// disk, rather than an empty document that reopens as no terrain.
     #[test]
     fn a_flat_but_authored_terrain_round_trips_as_a_present_region() {
         let tmp = unique_tmp_dir("flat-authored");

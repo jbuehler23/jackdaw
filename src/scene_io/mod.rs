@@ -17,15 +17,19 @@ pub(crate) mod save;
 pub mod stamp;
 
 pub use legacy::{load_inline_assets, load_scene_from_jsn};
-pub use load::load_scene_from_file;
+pub use load::{
+    LoadOutcome, LoadRefusal, RefusalCategory, declared_scene_kind, declares_ui_scene_root,
+    is_ui_scene_root_type_path, load_scene_from_file, load_scene_from_file_with_outcome,
+    spawn_default_lighting,
+};
 pub(crate) use load::{
     SidecarImport, clear_scene_entities, despawn_scene_entities, import_terrain_sidecars,
 };
 pub(crate) use registration::entity_by_scene_node_id;
 pub use registration::{register_entities_in_ast, register_entity_in_ast};
 pub use save::{
-    SaveOutcome, emit_bsn_scene_with_inline_assets, retarget_active_scene, save_layout_to_project,
-    save_scene, save_scene_as, save_scene_with_outcome,
+    SaveOutcome, emit_bsn_scene_for_file, emit_bsn_scene_with_inline_assets, retarget_active_scene,
+    save_layout_to_project, save_scene, save_scene_as, save_scene_with_outcome,
 };
 pub(crate) use save::{emit_bsn_entities_with_inline_assets, save_scene_inner};
 
@@ -48,9 +52,10 @@ const SKIP_COMPONENT_PREFIXES: &[&str] = &[
     // Propagated/inherited values are recomputed from their source every frame
     // (`Inherited<TextColor>`, `Propagate<TextFont>`, ...).
     "bevy_app::propagate::",
-    // Widget implementation detail. Feathers styling, cursors, and focus
-    // treatment are re-derived by `jackdaw_ui`'s materializer from the
-    // authored `Ui*` component, never authored directly.
+    // Widget implementation detail: the marker components and generated parts
+    // a feathers control builds for itself. The styling components a widget
+    // definition authors are listed in `ALWAYS_SAVE_PATHS` below and override
+    // this prefix.
     "bevy_feathers::",
     // Accessibility nodes are built by the widget implementation.
     "bevy_a11y::",
@@ -74,23 +79,37 @@ const SKIP_COMPONENT_PATHS: &[&str] = &[
     // `derive_world_asset_root`. Writing it into the document would put a
     // raw asset handle in a file that other machines and the runtime read.
     "bevy_world_serialization::components::WorldAssetRoot",
-    // UI layout output. Bevy recomputes all of it every frame from `Node`, and
-    // `ComputedUiTargetCamera` additionally holds a view-local camera entity
-    // that means nothing in a saved document.
-    "bevy_ui::ui_node::ComputedNode",
-    "bevy_ui::ui_node::ComputedUiTargetCamera",
-    "bevy_ui::ui_node::ComputedUiRenderTargetInfo",
-    "bevy_ui::stack::ComputedStackIndex",
-    "bevy_ui::ui_transform::UiGlobalTransform",
-    "bevy_ui::measurement::ContentSize",
-    "bevy_text::text::ComputedTextBlock",
-    "bevy_text::text::TextLayoutInfo",
-    "bevy_ui::widget::text::TextNodeFlags",
-    // Marks an implementation-owned widget part; such an entity is never
-    // registered in the document at all, so this is a backstop.
-    "jackdaw_ui::UiGeneratedPart",
-    "jackdaw_ui::UiMaterialize",
+    // Editor-managed routing, inserted by `route_ui_roots_to_cameras` to aim a
+    // UI scene root at its view: the open 2D viewport for an authored root, the
+    // 3D viewport for one a world scene imports. It names a camera entity this
+    // session spawned, so a saved copy would point at nothing on reload.
+    "bevy_ui::ui_node::UiTargetCamera",
 ];
+
+/// The UI state bevy computes every frame from `Node` and the text or image
+/// beside it. None of it is authored, and a document that records it reloads
+/// carrying a measurement of the session that saved it.
+///
+/// Spelled through [`TypePath`] rather than written out: the same list held as
+/// strings went stale when `TextLayoutInfo` moved module, and a path that no
+/// longer names anything skips nothing and says nothing.
+///
+/// [`TypePath`]: bevy::reflect::TypePath
+pub fn computed_ui_component_paths() -> [&'static str; 10] {
+    use bevy::reflect::TypePath;
+    [
+        bevy::ui::ComputedNode::type_path(),
+        bevy::ui::ComputedUiTargetCamera::type_path(),
+        bevy::ui::ComputedUiRenderTargetInfo::type_path(),
+        bevy::ui::ComputedStackIndex::type_path(),
+        bevy::ui::UiGlobalTransform::type_path(),
+        bevy::ui::ContentSize::type_path(),
+        bevy::text::ComputedTextBlock::type_path(),
+        bevy::text::TextLayoutInfo::type_path(),
+        bevy::ui::widget::TextNodeFlags::type_path(),
+        bevy::ui::widget::ImageNodeSize::type_path(),
+    ]
+}
 
 /// Paths that override the skip prefixes  -- these are always saved even if
 /// they match a skip prefix.
@@ -111,6 +130,19 @@ const ALWAYS_SAVE_PATHS: &[&str] = &[
     // Reference image boards persist with the scene; the quad mesh and
     // material are derived from this component at runtime.
     "jackdaw::reference_image::ReferenceImage",
+    // Authored feathers styling, as opposed to the derived styling the
+    // `bevy_feathers::` skip above covers. These are plain `Reflect` components
+    // widget creation puts on an authored node so the widget follows the theme
+    // rather than a colour frozen at spawn time. Dropping them on save reloads
+    // the document as flat boxes.
+    "bevy_feathers::theme::ThemeBackgroundColor",
+    "bevy_feathers::theme::ThemeBorderColor",
+    "bevy_feathers::theme::ThemeTextColor",
+    "bevy_feathers::theme::InheritableThemeTextColor",
+    "bevy_feathers::theme::ThemedText",
+    "bevy_feathers::controls::button::ButtonVariant",
+    "bevy_feathers::focus::FocusIndicator",
+    "bevy_feathers::cursor::EntityCursor",
 ];
 
 pub fn should_skip_component(type_path: &str) -> bool {
@@ -126,7 +158,7 @@ pub fn should_skip_component(type_path: &str) -> bool {
             return true;
         }
     }
-    SKIP_COMPONENT_PATHS.contains(&type_path)
+    SKIP_COMPONENT_PATHS.contains(&type_path) || computed_ui_component_paths().contains(&type_path)
 }
 
 /// The editor's component skip policy as a [`jackdaw_bsn::BsnWriterConfig`]
@@ -144,6 +176,9 @@ pub fn editor_writer_config() -> jackdaw_bsn::BsnWriterConfig {
     }
     for path in SKIP_COMPONENT_PATHS {
         config.skip_paths.push((*path).to_string());
+    }
+    for path in computed_ui_component_paths() {
+        config.skip_paths.push(path.to_string());
     }
     for path in ALWAYS_SAVE_PATHS {
         config.always_save_paths.push((*path).to_string());
