@@ -127,10 +127,14 @@ impl Plugin for InspectorPlugin {
             .add_observer(add_header::on_material_new_click)
             .add_systems(
                 Update,
+                component_display::sync_inspector_to_selection
+                    .before(category_strip::resolve_active_on_rebuild)
+                    .run_if(in_state(crate::AppState::Editor)),
+            )
+            .add_systems(
+                Update,
                 (
                     apply_pending_inspector_rebuild,
-                    component_display::sync_inspector_to_selection
-                        .before(category_strip::resolve_active_on_rebuild),
                     reflect_fields::refresh_inspector_fields,
                     reflect_fields::refresh_enum_variants,
                     val_field::refresh_val_fields,
