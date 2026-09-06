@@ -134,7 +134,8 @@ pub(crate) struct CreateBrushCommand {
 
 impl EditorCommand for CreateBrushCommand {
     fn execute(&mut self, world: &mut World) {
-        spawn_brush_from_data(world, &self.data);
+        let entity = spawn_brush_from_data(world, &self.data);
+        crate::physics_brush_bridge::insert_default_brush_physics(world, entity);
     }
 
     fn undo(&mut self, world: &mut World) {

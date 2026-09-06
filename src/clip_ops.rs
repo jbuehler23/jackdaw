@@ -479,6 +479,7 @@ fn queue_split_spawn(
         }
         let entity = spawner.id();
         crate::scene_io::register_entity_in_ast(world, entity);
+        crate::physics_brush_bridge::insert_default_brush_physics(world, entity);
 
         let create_cmd = CreateBrushCommand {
             data: brush_data_from_entity(world, entity),

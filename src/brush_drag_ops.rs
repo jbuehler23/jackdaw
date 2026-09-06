@@ -729,6 +729,8 @@ fn spawn_extruded_brush(
         let entity = world
             .spawn((Name::new("Brush"), brush, transform, Visibility::default()))
             .id();
+        crate::scene_io::register_entity_in_ast(world, entity);
+        crate::physics_brush_bridge::insert_default_brush_physics(world, entity);
 
         let selection = world.resource::<Selection>();
         let old_selected: Vec<Entity> = selection.entities.clone();

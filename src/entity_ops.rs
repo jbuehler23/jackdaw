@@ -421,6 +421,9 @@ pub fn spawn_template_in_document(world: &mut World, template: EntityTemplate) -
     let entity = create_entity(&mut commands, template, &mut selection);
     system_state.apply(world);
     crate::scene_io::register_entity_in_ast(world, entity);
+    if world.get::<crate::brush::Brush>(entity).is_some() {
+        crate::physics_brush_bridge::insert_default_brush_physics(world, entity);
+    }
     entity
 }
 
