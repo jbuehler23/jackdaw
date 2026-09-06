@@ -3,33 +3,20 @@
 //! `AnimationTargetId`, `AnimatedBy`) based on engagement state.
 //! None of these are persisted.
 
-use bevy::animation::{
-    AnimatedBy, AnimationPlayer, AnimationTargetId, graph::AnimationGraphHandle,
-};
+use bevy::animation::{AnimationPlayer, AnimationTargetId};
 use bevy::prelude::*;
 
 use crate::blend_graph::{AnimationBlendGraph, ClipNodeRef, OutputNode};
-use crate::clip::{Clip, GltfClipRef, SelectedClip};
+use crate::clip::{Clip, SelectedClip};
 use crate::compile::{CompiledClip, clip_display_duration};
+use crate::graph_owner::{PlayerLoan, lend_player, return_player};
 
-/// Whether `auto_bind_player` installed the full runtime stack
-/// (authored) or just `AnimationGraphHandle` (glTF). Controls what
-/// strip removes.
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BindMode {
-    #[default]
-    Authored,
-    Gltf,
-}
-
-/// Which (clip, host entity) pair currently has runtime animation
-/// components installed. `target` is the entity that received the
-/// install; `mode` controls what to strip.
+/// Which (clip, host entity) pair the transport currently drives.
+/// `target` is the entity whose player was borrowed.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct ActiveClipBinding {
     pub clip: Option<Entity>,
     pub target: Option<Entity>,
-    pub mode: BindMode,
 }
 
 /// Whether runtime animation components are installed on the target.
@@ -82,18 +69,19 @@ pub struct AnimationStop;
 #[derive(Message, Debug, Clone, Copy)]
 pub struct AnimationSeek(pub f32);
 
-/// Install or strip runtime animation components based on
-/// `TimelineEngagement`. Active = install; Idle = strip so the
-/// target's Transform is freely editable. For glTF clips, only
-/// the `AnimationGraphHandle` is installed/stripped (Bevy's loader
-/// already placed the player and targets).
+/// Borrow or give back the target's animation player based on
+/// `TimelineEngagement`. Active = borrow; Idle = give it back so the
+/// target's Transform is freely editable again.
+///
+/// The borrow goes through [`crate::graph_owner`], which is also what the
+/// editor's clip preview uses, so neither strips a graph a bound animation
+/// set installed.
 pub fn auto_bind_player(
     selected: Res<SelectedClip>,
     engagement: Res<TimelineEngagement>,
     mut bound: ResMut<ActiveClipBinding>,
     mut cursor: ResMut<TimelineCursor>,
     compiled: Query<&CompiledClip>,
-    gltf_refs: Query<&GltfClipRef>,
     blend_graphs: Query<(), With<AnimationBlendGraph>>,
     clip_refs: Query<&ClipNodeRef>,
     outputs: Query<(), With<OutputNode>>,
@@ -101,7 +89,6 @@ pub fn auto_bind_player(
     parents: Query<&ChildOf>,
     names: Query<&Name>,
     children_q: Query<&Children>,
-    anim_players: Query<(), With<AnimationPlayer>>,
     mut commands: Commands,
 ) {
     let want_bound = *engagement == TimelineEngagement::Active && selected.0.is_some();
@@ -116,27 +103,12 @@ pub fn auto_bind_player(
         return;
     }
 
-    // Strip the previous bind (covers both "deactivating" and
-    // "switching clips while active") so we can't leave stale
-    // components behind. For authored binds we remove the whole
-    // runtime stack; for glTF binds we leave Bevy's preinstalled
-    // player + targets in place and only remove the graph handle.
+    // Give back the previous bind (covers both "deactivating" and
+    // "switching clips while active") so we can't leave a borrowed player
+    // behind.
     if let Some(old_target) = bound.target.take() {
-        let old_mode = bound.mode;
         commands.queue(move |world: &mut World| {
-            if let Ok(mut ent) = world.get_entity_mut(old_target) {
-                match old_mode {
-                    BindMode::Authored => {
-                        ent.remove::<AnimationPlayer>();
-                        ent.remove::<AnimationGraphHandle>();
-                        ent.remove::<AnimationTargetId>();
-                        ent.remove::<AnimatedBy>();
-                    }
-                    BindMode::Gltf => {
-                        ent.remove::<AnimationGraphHandle>();
-                    }
-                }
-            }
+            return_player(world, old_target);
         });
     }
     bound.clip = None;
@@ -188,70 +160,26 @@ pub fn auto_bind_player(
     let seek_time = cursor.seek_time;
     let start_playing = cursor.is_playing;
 
-    if gltf_refs.contains(effective_clip) {
-        // glTF path: find the first descendant of `parent_entity`
-        // (the GltfSource root) that has an `AnimationPlayer`. If the
-        // scene hasn't finished spawning yet, none will exist and we
-        // retry next frame.
-        let Some(host) =
-            find_animation_player_descendant(parent_entity, &children_q, &anim_players)
-        else {
-            return;
-        };
-        commands.queue(move |world: &mut World| {
-            world.entity_mut(host).insert(AnimationGraphHandle(graph));
-            if let Some(mut player) = world.get_mut::<AnimationPlayer>(host) {
-                if player.animation_mut(root_node).is_none() {
-                    player.play(root_node);
-                }
-                if let Some(active) = player.animation_mut(root_node) {
-                    active.seek_to(seek_time);
-                    if start_playing {
-                        active.resume();
-                    } else {
-                        active.pause();
-                    }
-                }
-            }
-        });
-        bound.clip = Some(clip_entity);
-        bound.target = Some(host);
-        bound.mode = BindMode::Gltf;
-        return;
-    }
-
-    // Authored path: install the full runtime stack on the clip's
-    // parent.
     let Ok(target_name) = names.get(parent_entity) else {
         return;
     };
     let target_id = AnimationTargetId::from_name(target_name);
 
     commands.queue(move |world: &mut World| {
-        // Build the player with an active animation seeded at the
-        // current cursor. Bevy evaluates paused animations at their
-        // `seek_time` without advancing time, so the scrub flow can
-        // leave `paused = true` and still preview correctly. Play
-        // inserts an already-running animation.
-        let mut player = AnimationPlayer::default();
-        {
-            let active = player.play(root_node);
-            active.seek_to(seek_time);
-            if !start_playing {
-                active.pause();
-            }
-        }
-        world.entity_mut(parent_entity).insert((
-            player,
-            AnimationGraphHandle(graph),
-            target_id,
-            AnimatedBy(parent_entity),
-        ));
+        // Bevy evaluates paused animations at their `seek_time` without
+        // advancing time, so the scrub flow can leave the clip paused and
+        // still preview the frame it is parked on.
+        lend_player(
+            world,
+            parent_entity,
+            PlayerLoan::new(graph, root_node)
+                .at(seek_time, start_playing)
+                .addressing_itself(target_id),
+        );
     });
 
     bound.clip = Some(clip_entity);
     bound.target = Some(parent_entity);
-    bound.mode = BindMode::Authored;
 }
 
 /// Walk a blend graph's single `ClipRef` -> Output connection to find
@@ -280,31 +208,6 @@ fn resolve_blend_graph_passthrough_source(
         return None;
     }
     Some(clip_ref.clip_entity)
-}
-
-/// Breadth-first search the descendants of `root` for the first
-/// entity carrying an `AnimationPlayer`. Used by the glTF bind path
-/// to locate Bevy's loader-installed player inside a freshly-spawned
-/// glTF scene. Returns `None` if the scene hasn't spawned yet or the
-/// glTF has no animation roots.
-fn find_animation_player_descendant(
-    root: Entity,
-    children_q: &Query<&Children>,
-    anim_players: &Query<(), With<AnimationPlayer>>,
-) -> Option<Entity> {
-    let mut queue: std::collections::VecDeque<Entity> = std::collections::VecDeque::new();
-    queue.push_back(root);
-    while let Some(entity) = queue.pop_front() {
-        if anim_players.contains(entity) {
-            return Some(entity);
-        }
-        if let Ok(children) = children_q.get(entity) {
-            for child in children.iter() {
-                queue.push_back(child);
-            }
-        }
-    }
-    None
 }
 
 pub fn handle_play(

@@ -266,6 +266,10 @@ pub struct AssetsArgs {
     /// e.g. `*Fence*.gltf`.
     #[serde(default)]
     pub glob: Option<String>,
+    /// Report each path as `{path, kind, clips}` instead of a bare string,
+    /// where `clips` names the animations a glTF file holds.
+    #[serde(default)]
+    pub details: Option<bool>,
 }
 
 // --- Tools ---
@@ -544,14 +548,18 @@ impl JackdawMcp {
     /// What is in the project's assets directory.
     #[tool(
         description = "List asset paths under the project's assets directory, so you can see \
-                       which kit pieces, models and scenes exist before placing any."
+                       which kit pieces, models and scenes exist before placing any. Pass \
+                       details=true to get each path's kind and, for a glTF file, its clip names."
     )]
     pub async fn assets(
         &self,
         Parameters(args): Parameters<AssetsArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.brp_text("jackdaw/assets", compact(json!({ "glob": args.glob })))
-            .await
+        self.brp_text(
+            "jackdaw/assets",
+            compact(json!({ "glob": args.glob, "details": args.details })),
+        )
+        .await
     }
 }
 

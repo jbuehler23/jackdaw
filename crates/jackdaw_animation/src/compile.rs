@@ -16,13 +16,10 @@ use bevy::animation::{
     animation_curves::{AnimatableCurve, AnimatableKeyframeCurve},
     graph::{AnimationGraph, AnimationNodeIndex},
 };
-use bevy::gltf::Gltf;
 use bevy::prelude::*;
 
 use crate::blend_graph::{AnimationBlendGraph, ClipNodeRef, OutputNode};
-use crate::clip::{
-    AnimationTrack, Clip, F32Keyframe, GltfClipRef, Interpolation, QuatKeyframe, Vec3Keyframe,
-};
+use crate::clip::{AnimationTrack, Clip, F32Keyframe, Interpolation, QuatKeyframe, Vec3Keyframe};
 
 // Well-known property paths we know how to animate. These constants
 // keep the dispatch table in `build_curve_for_track` readable and give
@@ -73,7 +70,6 @@ pub fn compile_clips(
     parents: Query<&ChildOf>,
     existing_compiled: Query<&CompiledClip>,
     clips: Query<(&Clip, Option<&Children>)>,
-    gltf_refs: Query<&GltfClipRef>,
     blend_graphs: Query<(), With<AnimationBlendGraph>>,
     tracks: Query<(&AnimationTrack, Option<&Children>)>,
     vec3_keyframes: Query<&Vec3Keyframe>,
@@ -92,12 +88,10 @@ pub fn compile_clips(
     }
 
     for clip_entity in dirty {
-        // glTF-sourced and blend-graph-sourced clips are handled by
-        // `compile_gltf_clips` / `compile_blend_graphs`. Skipping here
-        // also means those clips never have their imported
-        // `AnimationClip` handle overwritten by an empty authored
-        // rebuild.
-        if gltf_refs.contains(clip_entity) || blend_graphs.contains(clip_entity) {
+        // Blend-graph clips are handled by `compile_blend_graphs`; skipping
+        // here keeps an empty authored rebuild from overwriting the handle
+        // that step resolved.
+        if blend_graphs.contains(clip_entity) {
             continue;
         }
         let Ok((clip_meta, clip_children)) = clips.get(clip_entity) else {
@@ -267,67 +261,6 @@ pub fn compile_blend_graphs(
         if target {
             commands.entity(clip_entity).insert(compiled.clone());
         }
-    }
-}
-
-/// Resolve glTF-sourced clips by looking up their Bevy
-/// [`AnimationClip`] handle in the loaded [`Gltf`] asset and wrapping
-/// it in a [`CompiledClip`]. Mirrors [`compile_clips`] for imported
-/// data: no keyframes, no tracks, just a direct handle -> graph
-/// conversion.
-///
-/// Runs every frame but only touches un-compiled glTF clips
-/// (`Without<CompiledClip>`) - once a clip is compiled it falls out of
-/// the query. If the Gltf asset isn't loaded yet, or the named
-/// animation can't be found, the clip is left un-compiled and the
-/// system retries next frame.
-pub fn compile_gltf_clips(
-    uncompiled: Query<(Entity, &GltfClipRef), (With<Clip>, Without<CompiledClip>)>,
-    asset_server: Res<AssetServer>,
-    gltfs: Res<Assets<Gltf>>,
-    clip_store: Res<Assets<AnimationClip>>,
-    mut graph_store: ResMut<Assets<AnimationGraph>>,
-    mut clip_meta: Query<&mut Clip>,
-    mut commands: Commands,
-) {
-    for (clip_entity, gltf_ref) in &uncompiled {
-        // Request the Gltf asset (dedup if already loading); we don't
-        // need to hold the handle - the scene's GltfSource entity
-        // keeps it alive.
-        let handle: Handle<Gltf> = asset_server.load(&gltf_ref.gltf_path);
-        let Some(gltf) = gltfs.get(&handle) else {
-            continue;
-        };
-        let Some(clip_handle) = gltf.named_animations.get(gltf_ref.clip_name.as_str()) else {
-            warn!(
-                "glTF clip '{}' not found in {} - available: {:?}",
-                gltf_ref.clip_name,
-                gltf_ref.gltf_path,
-                gltf.named_animations.keys().collect::<Vec<_>>(),
-            );
-            continue;
-        };
-        let Some(clip_data) = clip_store.get(clip_handle) else {
-            continue;
-        };
-
-        // Sync the authored `Clip::duration` from the imported clip so
-        // the timeline widget shows the right range without requiring
-        // the user to type it in manually.
-        if let Ok(mut clip) = clip_meta.get_mut(clip_entity) {
-            let imported = clip_data.duration();
-            if (clip.duration - imported).abs() > f32::EPSILON {
-                clip.duration = imported;
-            }
-        }
-
-        let (graph, root_node) = AnimationGraph::from_clip(clip_handle.clone());
-        let graph_handle = graph_store.add(graph);
-        commands.entity(clip_entity).insert(CompiledClip {
-            clip: clip_handle.clone(),
-            graph: graph_handle,
-            root_node,
-        });
     }
 }
 

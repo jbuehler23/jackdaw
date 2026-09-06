@@ -208,6 +208,7 @@ fn declared_params(world: &mut World, id: &str) -> Vec<&'static ParamSpec> {
 /// entity it means, since a guessed target can write to a file or reparent a
 /// node the author never pointed at.
 pub const SELECTION_FALLBACK_OPS: &[&str] = &[
+    "animation.preview",
     "animation.set_state",
     "animation.toggle_keyframe",
     "binding.add",

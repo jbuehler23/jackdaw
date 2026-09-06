@@ -9,6 +9,7 @@
 pub mod active_tool;
 pub mod add_entity_picker;
 pub mod alignment_guides;
+pub mod animation;
 pub mod app_ops;
 pub mod asset_browser;
 pub mod asset_catalog;
@@ -466,6 +467,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(jackdaw_node_graph::NodeGraphPlugin)
         .add_plugins(jackdaw_animation::AnimationPlugin)
         .add_plugins(jackdaw_animation_runtime::AnimationRuntimePlugin)
+        .add_plugins(animation::plugin)
         .add_plugins(windowing::WindowingPlugin)
         .add_plugins(jackdaw_panels::DockPlugin)
         .add_plugins(input_contexts::InputContextsPlugin)
@@ -559,8 +561,8 @@ impl Plugin for EditorCorePlugin {
                 layout::update_live_badge,
                 auto_hide_internal_entities,
                 decorate_timeline_tooltips,
-                discover_gltf_clips,
                 register_animation_entities_in_ast,
+                drop_imported_clip_entities.after(register_animation_entities_in_ast),
                 follow_scene_selection_to_clip,
                 sync_selected_keyframes_from_selection,
                 auto_save_layout_on_change,
@@ -2100,7 +2102,6 @@ fn register_animation_entities_in_ast(
             Added<jackdaw_animation::Vec3Keyframe>,
             Added<jackdaw_animation::QuatKeyframe>,
             Added<jackdaw_animation::F32Keyframe>,
-            Added<jackdaw_animation::GltfClipRef>,
             Added<jackdaw_animation::AnimationBlendGraph>,
             Added<jackdaw_node_graph::GraphNode>,
             Added<jackdaw_node_graph::Connection>,
@@ -2113,128 +2114,20 @@ fn register_animation_entities_in_ast(
     }
 }
 
-/// Clip discovery has run for this entity, whichever way it came out.
-/// Editor-side state: it carries no `Reflect`, so it never reaches a
-/// saved scene.
-#[derive(Component)]
-struct GltfClipsDiscovered {
-    /// The `GltfSource` path this answer was reached for; a different path
-    /// has to be asked again.
-    path: String,
-}
-
-/// The glTF whose clips are still being waited for. The handle is held
-/// here rather than in a local because dropping it cancels the load, and
-/// the restarted load respawns every instance of the model.
-#[derive(Component)]
-struct PendingGltfClips(Handle<bevy::gltf::Gltf>);
-
-/// For every [`GltfSource`] entity that has not been asked yet, spawn
-/// one [`jackdaw_animation::Clip`] + [`jackdaw_animation::GltfClipRef`]
-/// child per entry in `Gltf::named_animations`. Those child entities
-/// persist through save/load (just two strings each), so discovery only
-/// needs to run once per `GltfSource`.
+/// Drop the glTF clip entities an earlier version of the editor wrote into
+/// documents.
 ///
-/// Asked once per source path, not once per frame: the entity is marked
-/// `GltfClipsDiscovered` on both outcomes, so clips the user deleted stay
-/// deleted.
-///
-/// Lives in the main crate rather than `jackdaw_animation` because it
-/// needs to read `jackdaw_scene_types::GltfSource`, and we'd rather not wire a
-/// `jackdaw_jsn` dep into the animation crate.
-///
-/// [`GltfSource`]: jackdaw_scene_types::GltfSource
-fn discover_gltf_clips(
-    pending: Query<
-        (
-            Entity,
-            &jackdaw_scene_types::GltfSource,
-            Option<&Children>,
-            Option<&PendingGltfClips>,
-        ),
-        Without<GltfClipsDiscovered>,
-    >,
-    answered: Query<
-        (
-            Entity,
-            &jackdaw_scene_types::GltfSource,
-            &GltfClipsDiscovered,
-        ),
-        Changed<jackdaw_scene_types::GltfSource>,
-    >,
-    existing_refs: Query<(), With<jackdaw_animation::GltfClipRef>>,
-    asset_server: Res<AssetServer>,
-    gltfs: Res<Assets<bevy::gltf::Gltf>>,
-    mut commands: Commands,
+/// Those children were the answer to "what can this model play", which is now
+/// the editor's animation library rather than anything the document holds. A
+/// document that still carries them loads, loses them, and resaves without
+/// them.
+fn drop_imported_clip_entities(
+    world: &mut World,
+    stale: &mut QueryState<Entity, With<jackdaw_animation::GltfClipRef>>,
 ) {
-    // A source repointed at another file has to be asked again.
-    for (entity, source, discovered) in &answered {
-        if discovered.path != source.path {
-            commands.entity(entity).remove::<GltfClipsDiscovered>();
-        }
-    }
-
-    for (entity, source, children, waiting) in &pending {
-        // Clips imported in an earlier session come back as children of
-        // the document, which is already the answer.
-        let any_existing = children
-            .into_iter()
-            .flatten()
-            .any(|&c| existing_refs.contains(c));
-        if any_existing {
-            commands.entity(entity).insert(GltfClipsDiscovered {
-                path: source.path.clone(),
-            });
-            continue;
-        }
-
-        let handle = match waiting {
-            Some(PendingGltfClips(handle)) => handle.clone(),
-            None => {
-                let asset_path = crate::entity_ops::to_asset_path(&source.path);
-                let handle: Handle<bevy::gltf::Gltf> = asset_server.load(asset_path);
-                commands
-                    .entity(entity)
-                    .insert(PendingGltfClips(handle.clone()));
-                handle
-            }
-        };
-
-        let Some(gltf) = gltfs.get(&handle) else {
-            // A load the server has given up on is answered too, rather
-            // than retrying a missing file forever.
-            if matches!(
-                asset_server.get_load_state(&handle),
-                Some(bevy::asset::LoadState::Failed(_))
-            ) {
-                commands
-                    .entity(entity)
-                    .remove::<PendingGltfClips>()
-                    .insert(GltfClipsDiscovered {
-                        path: source.path.clone(),
-                    });
-            }
-            continue;
-        };
-
-        for (clip_name, _clip_handle) in &gltf.named_animations {
-            let name_str = clip_name.to_string();
-            commands.spawn((
-                jackdaw_animation::Clip::default(),
-                jackdaw_animation::GltfClipRef {
-                    gltf_path: source.path.clone(),
-                    clip_name: name_str.clone(),
-                },
-                Name::new(name_str),
-                ChildOf(entity),
-            ));
-        }
-        commands
-            .entity(entity)
-            .remove::<PendingGltfClips>()
-            .insert(GltfClipsDiscovered {
-                path: source.path.clone(),
-            });
+    let stale: Vec<Entity> = stale.iter(world).collect();
+    for entity in stale {
+        crate::commands::despawn_scene_entity(world, entity);
     }
 }
 

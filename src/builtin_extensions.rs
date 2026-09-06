@@ -325,7 +325,10 @@ impl JackdawExtension for GamePanelExtension {
     }
 }
 
-/// Animation timeline in the bottom dock.
+/// Clip library and keyframe timeline in the bottom dock.
+///
+/// The window keeps its `jackdaw.timeline` id so a saved layout still finds
+/// it; only what it is called changed.
 #[derive(Default)]
 pub struct TimelineExtension;
 
@@ -335,7 +338,7 @@ impl JackdawExtension for TimelineExtension {
     }
 
     fn label(&self) -> String {
-        "Timeline".to_string()
+        "Animation".to_string()
     }
 
     fn kind(&self) -> ExtensionKind {
@@ -345,12 +348,12 @@ impl JackdawExtension for TimelineExtension {
     fn register(&self, ctx: &mut ExtensionContext) {
         ctx.register_window(
             WindowDescriptor::new("jackdaw.timeline")
-                .with_name("Timeline")
-                .with_icon(Icon::Ruler.unicode())
+                .with_name("Animation")
+                .with_icon(Icon::Film.unicode())
                 .with_default_area(DefaultArea::BottomDock)
                 .with_priority(1)
                 .with_build(|window| {
-                    window.spawn(jackdaw_animation::timeline_panel());
+                    window.spawn(crate::animation::animation_panel_content());
                 }),
         );
     }
