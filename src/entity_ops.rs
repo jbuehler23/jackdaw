@@ -1210,6 +1210,35 @@ impl crate::commands::EditorCommand for PasteEntitiesCommand {
     }
 }
 
+/// Spawn a new brush by cloning `source`'s authored document node and
+/// replacing its geometry. Parent, physics, modifiers, and extra
+/// components follow the original. Children are not copied.
+pub(crate) fn spawn_cloned_brush_with_geometry(
+    world: &mut World,
+    source: Entity,
+    brush: crate::brush::Brush,
+    transform: Transform,
+) -> Option<Entity> {
+    let (parent_ast, patches) = {
+        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        let node = ast.ast_for(source)?;
+        (
+            ast.find_ast_parent_of(node),
+            ast.cloned_component_patches(node),
+        )
+    };
+    let mut temp = jackdaw_bsn::SceneBsnAst::default();
+    let root = temp.create_entity_node(patches);
+    temp.add_to_roots(root);
+    mint_scene_node_ids(world, &mut temp);
+
+    let entity = *graft_and_spawn(world, &temp, parent_ast).first()?;
+    world.entity_mut(entity).insert((brush.clone(), transform));
+    crate::brush::sync_brush_to_ast(world, entity, &brush);
+    crate::commands::sync_component_to_ast(world, entity, Transform::type_path(), &transform);
+    Some(entity)
+}
+
 /// Graft entity roots from `source` into the live document and spawn
 /// them under `parent_ast` (`None` = scene roots).
 fn graft_and_spawn(
@@ -2962,5 +2991,85 @@ mod asset_path_tests {
             .run_system_cached(crate::project::mirror_open_project)
             .expect("the mirror runs");
         assert_eq!(crate::project::open_project_assets_dir(), None);
+    }
+}
+
+#[cfg(test)]
+mod clone_brush_tests {
+    use super::*;
+    use avian3d::prelude::RigidBody;
+    use bevy::reflect::PartialReflect;
+    use jackdaw_avian_integration::AvianCollider;
+    use jackdaw_bsn::SceneBsnAst;
+    use jackdaw_scene_types::Brush;
+
+    #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
+    #[reflect(Component, Default)]
+    struct ExtraBrushMarker;
+
+    #[test]
+    fn cloned_brush_keeps_extra_components() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<SceneBsnAst>();
+        app.register_type::<Brush>();
+        app.register_type::<Transform>();
+        app.register_type::<Visibility>();
+        app.register_type::<Name>();
+        app.register_type::<jackdaw_scene_types::SceneNodeId>();
+        app.register_type::<RigidBody>();
+        app.register_type::<AvianCollider>();
+        app.register_type::<ExtraBrushMarker>();
+
+        let source = app
+            .world_mut()
+            .spawn((
+                Name::new("Brush"),
+                Brush::cuboid(0.5, 0.5, 0.5),
+                Transform::default(),
+                Visibility::default(),
+            ))
+            .id();
+        crate::scene_io::register_entity_in_ast(app.world_mut(), source);
+        crate::physics_brush_bridge::insert_default_brush_physics(app.world_mut(), source);
+
+        app.world_mut().entity_mut(source).insert(ExtraBrushMarker);
+        let registry = app.world().resource::<AppTypeRegistry>().clone();
+        crate::commands::sync_component_to_bsn_doc(
+            app.world_mut(),
+            source,
+            ExtraBrushMarker.as_partial_reflect(),
+            &registry,
+        );
+
+        let new_brush = Brush::cuboid(1.0, 1.0, 1.0);
+        let spawned = spawn_cloned_brush_with_geometry(
+            app.world_mut(),
+            source,
+            new_brush.clone(),
+            Transform::from_xyz(2.0, 0.0, 0.0),
+        )
+        .expect("clone spawn");
+
+        let spawned_ref = app.world().entity(spawned);
+        assert!(
+            spawned_ref.contains::<ExtraBrushMarker>(),
+            "user-added components must copy onto the clone"
+        );
+        assert_eq!(
+            spawned_ref.get::<RigidBody>().copied(),
+            Some(RigidBody::Static),
+            "authored physics must copy onto the clone"
+        );
+        assert!(spawned_ref.contains::<AvianCollider>());
+        assert_eq!(
+            spawned_ref.get::<Brush>().map(|b| b.faces.len()),
+            Some(new_brush.faces.len()),
+            "clone should carry the replacement geometry"
+        );
+        assert_eq!(
+            spawned_ref.get::<Transform>().map(|t| t.translation.x),
+            Some(2.0)
+        );
     }
 }

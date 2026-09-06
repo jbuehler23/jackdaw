@@ -11,12 +11,8 @@ use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
 
-use crate::brush::{
-    BrushEditMode, BrushMeshCache, BrushSelection, ClipMode, ClipState, EditMode, SetBrush,
-};
-use crate::commands::{CommandGroup, CommandHistory};
+use crate::brush::{BrushEditMode, BrushMeshCache, BrushSelection, ClipMode, ClipState, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
-use crate::draw_brush::{CreateBrushCommand, brush_data_from_entity};
 use crate::viewport::{ActiveViewport, MainViewportCamera, SceneViewport};
 use crate::viewport_util::window_to_viewport_cursor_for;
 use jackdaw_geometry::{
@@ -218,7 +214,6 @@ pub(crate) fn clip_clear(
                    (`can_apply_or_cycle`) requires clip mode and a computed \
                    preview plane.",
     is_available = can_apply_or_cycle,
-    allows_undo = false,
 )]
 pub(crate) fn clip_apply(
     _: In<OperatorParameters>,
@@ -226,7 +221,6 @@ pub(crate) fn clip_apply(
     mut brushes: Query<&mut Brush>,
     brush_transforms: Query<&GlobalTransform>,
     mut clip_state: ResMut<ClipState>,
-    mut history: ResMut<CommandHistory>,
     mut commands: Commands,
 ) -> OperatorResult {
     let brush_entity = brush_selection.active_brush?;
@@ -248,26 +242,14 @@ pub(crate) fn clip_apply(
                     warn!("Clip: bisect failed; aborting");
                     return OperatorResult::Cancelled;
                 };
-                push_brush_command(
-                    &mut history,
-                    brush_entity,
-                    &mut brush,
-                    new_brush,
-                    "Clip brush (keep front)",
-                );
+                apply_clip_geometry(&mut commands, brush_entity, &mut brush, new_brush);
             }
             ClipMode::KeepBack => {
                 let Some(new_brush) = bisect_brush(&brush, &plane, BisectKeep::Back) else {
                     warn!("Clip: bisect failed; aborting");
                     return OperatorResult::Cancelled;
                 };
-                push_brush_command(
-                    &mut history,
-                    brush_entity,
-                    &mut brush,
-                    new_brush,
-                    "Clip brush (keep back)",
-                );
+                apply_clip_geometry(&mut commands, brush_entity, &mut brush, new_brush);
             }
             ClipMode::Split => {
                 let Some(front) = bisect_brush(&brush, &plane, BisectKeep::Front) else {
@@ -278,15 +260,8 @@ pub(crate) fn clip_apply(
                     warn!("Clip: split bisect (back) failed; aborting");
                     return OperatorResult::Cancelled;
                 };
-                let old = brush.clone();
                 *brush = front.clone();
-                let set_cmd = SetBrush {
-                    entity: brush_entity,
-                    old,
-                    new: front,
-                    label: "Clip brush (split - front)".to_string(),
-                };
-                queue_split_spawn(&mut commands, brush_entity, brush_global, set_cmd, back);
+                queue_split_spawn(&mut commands, brush_entity, brush_global, front, back);
             }
         }
     } else {
@@ -299,22 +274,10 @@ pub(crate) fn clip_apply(
 
         match clip_state.mode {
             ClipMode::KeepFront => {
-                push_face_command(
-                    &mut history,
-                    brush_entity,
-                    &mut brush,
-                    clip_face,
-                    "Clip brush (keep front)",
-                );
+                apply_clip_face(&mut commands, brush_entity, &mut brush, clip_face);
             }
             ClipMode::KeepBack => {
-                push_face_command(
-                    &mut history,
-                    brush_entity,
-                    &mut brush,
-                    flipped_face,
-                    "Clip brush (keep back)",
-                );
+                apply_clip_face(&mut commands, brush_entity, &mut brush, flipped_face);
             }
             ClipMode::Split => {
                 let old = brush.clone();
@@ -323,14 +286,7 @@ pub(crate) fn clip_apply(
                 let mut back = old.clone();
                 back.faces.push(flipped_face);
                 *brush = front.clone();
-
-                let set_cmd = SetBrush {
-                    entity: brush_entity,
-                    old,
-                    new: front,
-                    label: "Clip brush (split - front)".to_string(),
-                };
-                queue_split_spawn(&mut commands, brush_entity, brush_global, set_cmd, back);
+                queue_split_spawn(&mut commands, brush_entity, brush_global, front, back);
             }
         }
     }
@@ -426,29 +382,23 @@ pub(crate) fn bisect_brush(brush: &Brush, plane: &BrushPlane, keep: BisectKeep) 
     })
 }
 
-fn push_brush_command(
-    history: &mut CommandHistory,
+fn apply_clip_geometry(
+    commands: &mut Commands,
     entity: Entity,
     brush: &mut Brush,
     new_brush: Brush,
-    label: &str,
 ) {
-    let old = brush.clone();
     *brush = new_brush.clone();
-    let cmd = SetBrush {
-        entity,
-        old,
-        new: new_brush,
-        label: label.to_string(),
-    };
-    history.push_executed(Box::new(cmd));
+    commands.queue(move |world: &mut World| {
+        crate::brush::sync_brush_to_ast(world, entity, &new_brush);
+    });
 }
 
 fn queue_split_spawn(
     commands: &mut Commands,
     brush_entity: Entity,
     brush_global: &GlobalTransform,
-    set_cmd: SetBrush,
+    front: Brush,
     back: Brush,
 ) {
     let (_, brush_rot, brush_trans) = brush_global.to_scale_rotation_translation();
@@ -467,30 +417,17 @@ fn queue_split_spawn(
         } else {
             spawn_transform
         };
-
-        let mut spawner = world.spawn((
-            Name::new("Brush"),
+        if crate::entity_ops::spawn_cloned_brush_with_geometry(
+            world,
+            brush_entity,
             back,
             actual_transform,
-            Visibility::default(),
-        ));
-        if let Some(parent) = parent {
-            spawner.insert(ChildOf(parent));
+        )
+        .is_none()
+        {
+            warn!("Clip split spawn failed: source {brush_entity:?} has no document node");
         }
-        let entity = spawner.id();
-        crate::scene_io::register_entity_in_ast(world, entity);
-        crate::physics_brush_bridge::insert_default_brush_physics(world, entity);
-
-        let create_cmd = CreateBrushCommand {
-            data: brush_data_from_entity(world, entity),
-        };
-        let group = CommandGroup {
-            commands: vec![Box::new(set_cmd), Box::new(create_cmd)],
-            label: "Split brush".to_string(),
-        };
-        world
-            .resource_mut::<CommandHistory>()
-            .push_executed(Box::new(group));
+        crate::brush::sync_brush_to_ast(world, brush_entity, &front);
     });
 }
 
@@ -507,20 +444,15 @@ fn clip_face_from_plane(plane: &BrushPlane) -> BrushFaceData {
     }
 }
 
-fn push_face_command(
-    history: &mut CommandHistory,
+fn apply_clip_face(
+    commands: &mut Commands,
     entity: Entity,
     brush: &mut Brush,
     face: BrushFaceData,
-    label: &str,
 ) {
-    let old = brush.clone();
     brush.faces.push(face);
-    let cmd = SetBrush {
-        entity,
-        old,
-        new: brush.clone(),
-        label: label.to_string(),
-    };
-    history.push_executed(Box::new(cmd));
+    let new_brush = brush.clone();
+    commands.queue(move |world: &mut World| {
+        crate::brush::sync_brush_to_ast(world, entity, &new_brush);
+    });
 }

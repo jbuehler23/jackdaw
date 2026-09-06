@@ -1,7 +1,4 @@
-use crate::commands::{EditorCommand, deselect_entities, despawn_scene_entity};
-use crate::scene_io::entity_by_scene_node_id;
 use bevy::prelude::*;
-use jackdaw_scene_types::{Brush, SceneNodeId};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum DrawPhase {
@@ -64,88 +61,4 @@ pub(crate) struct ActiveDraw {
 #[derive(Resource, Debug, Default)]
 pub(crate) struct DrawBrushState {
     pub(crate) active: Option<ActiveDraw>,
-}
-
-/// Minimal data needed to respawn a brush entity.
-#[derive(Clone)]
-pub(crate) struct BrushData {
-    pub(crate) node_id: SceneNodeId,
-    pub(crate) brush: Brush,
-    pub(crate) transform: Transform,
-    pub(crate) name: String,
-    pub(crate) parent_node_id: Option<SceneNodeId>,
-}
-
-fn scene_node_id_of(world: &mut World, entity: Entity) -> SceneNodeId {
-    if let Some(id) = world.get::<SceneNodeId>(entity).copied() {
-        return id;
-    }
-    let id = SceneNodeId::next();
-    world.entity_mut(entity).insert(id);
-    id
-}
-
-/// Read brush data from an existing entity. Mints a `SceneNodeId` if missing.
-pub(crate) fn brush_data_from_entity(world: &mut World, entity: Entity) -> BrushData {
-    let node_id = scene_node_id_of(world, entity);
-    let parent = world.get::<ChildOf>(entity).map(|child_of| child_of.0);
-    let parent_node_id = parent.map(|parent| scene_node_id_of(world, parent));
-
-    BrushData {
-        node_id,
-        brush: world.get::<Brush>(entity).unwrap().clone(),
-        transform: *world.get::<Transform>(entity).unwrap(),
-        name: world
-            .get::<Name>(entity)
-            .map(std::string::ToString::to_string)
-            .unwrap_or_default(),
-        parent_node_id,
-    }
-}
-
-/// Spawn a brush entity from stored data. Returns new entity ID.
-pub(crate) fn spawn_brush_from_data(world: &mut World, data: &BrushData) -> Entity {
-    let parent_entity = data
-        .parent_node_id
-        .and_then(|id| entity_by_scene_node_id(world, id));
-
-    let mut ec = world.spawn((
-        Name::new(data.name.clone()),
-        data.brush.clone(),
-        data.transform,
-        data.node_id,
-        Visibility::default(),
-    ));
-    if let Some(parent) = parent_entity {
-        ec.insert(ChildOf(parent));
-    }
-    let entity = ec.id();
-    crate::scene_io::register_entity_in_ast(world, entity);
-    entity
-}
-
-/// Per-command undo entry for brush spawns from the legacy non-
-/// operator paths (face extrude, brush clip/split). The draw-brush
-/// modal operator doesn't push this; its `SnapshotDiff` covers the
-/// whole transaction.
-pub(crate) struct CreateBrushCommand {
-    pub data: BrushData,
-}
-
-impl EditorCommand for CreateBrushCommand {
-    fn execute(&mut self, world: &mut World) {
-        let entity = spawn_brush_from_data(world, &self.data);
-        crate::physics_brush_bridge::insert_default_brush_physics(world, entity);
-    }
-
-    fn undo(&mut self, world: &mut World) {
-        if let Some(entity) = entity_by_scene_node_id(world, self.data.node_id) {
-            deselect_entities(world, &[entity]);
-            despawn_scene_entity(world, entity);
-        }
-    }
-
-    fn description(&self) -> &str {
-        "Draw brush"
-    }
 }
