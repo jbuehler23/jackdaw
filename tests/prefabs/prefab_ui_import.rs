@@ -483,8 +483,12 @@ fn a_double_click_on_an_instance_row_opens_its_source_and_keeps_the_row_selected
     let mut app = util::editor_test_app();
     util::fixed_frame_clock(&mut app);
     let ui_path = import_ui_scene(&mut app, tmp.path());
-    push_tab(&mut app, &ui_path);
+    let index = push_tab(&mut app, &ui_path);
+    app.world_mut()
+        .resource_mut::<jackdaw::scenes::Scenes>()
+        .active = index;
     app.update();
+    let tabs_before = app.world().resource::<jackdaw::scenes::Scenes>().tabs.len();
 
     let root = entity_named(&mut app, "Overlay").expect("the imported root spawned");
     click_row(&mut app, root);
@@ -505,6 +509,11 @@ fn a_double_click_on_an_instance_row_opens_its_source_and_keeps_the_row_selected
         "the pair opened the scene the instance inherits from"
     );
     assert_eq!(
+        scenes.tabs.len(),
+        tabs_before,
+        "in the tab that already held it, rather than a second one"
+    );
+    assert_eq!(
         app.world()
             .resource::<jackdaw::selection::Selection>()
             .entities,
@@ -512,7 +521,6 @@ fn a_double_click_on_an_instance_row_opens_its_source_and_keeps_the_row_selected
         "and left the row selected, rather than deselecting it on the way"
     );
 
-    let tabs_before = app.world().resource::<jackdaw::scenes::Scenes>().tabs.len();
     click_row(&mut app, root);
     assert_eq!(
         app.world()
