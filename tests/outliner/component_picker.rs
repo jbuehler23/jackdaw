@@ -7,9 +7,11 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 use bevy::reflect::TypeRegistry;
 use jackdaw::inspector::component_picker::{
-    PickableComponent, PickerDenylist, enumerate_pickable_components, fallback_category_for,
+    PickableComponent, PickerDenylist, enumerate_pickable_components,
     populate_avian_picker_denylist,
 };
+use jackdaw::project_types::ProjectTypes;
+use jackdaw::type_metadata::{TypeChrome, TypeMeta, TypeMetadata};
 use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden};
 
 #[derive(Component, Reflect, Default)]
@@ -66,11 +68,24 @@ fn find<'a>(pickables: &'a [PickableComponent], short_name: &str) -> Option<&'a 
     pickables.iter().find(|p| p.short_name == short_name)
 }
 
+fn enumerate(
+    registry: &TypeRegistry,
+    existing: &HashSet<TypeId>,
+    denylist: &PickerDenylist,
+) -> Vec<PickableComponent> {
+    enumerate_pickable_components(
+        registry,
+        existing,
+        denylist,
+        &TypeMetadata::default(),
+        &ProjectTypes::default(),
+    )
+}
+
 #[test]
 fn component_with_default_appears() {
     let registry = registry_with_test_types();
-    let pickables =
-        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables = enumerate(&registry, &HashSet::new(), &PickerDenylist::default());
     assert!(
         find(&pickables, "WithDefault").is_some(),
         "components opting into Default must appear in the picker",
@@ -80,8 +95,7 @@ fn component_with_default_appears() {
 #[test]
 fn component_without_default_appears() {
     let registry = registry_with_test_types();
-    let pickables =
-        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables = enumerate(&registry, &HashSet::new(), &PickerDenylist::default());
     assert!(
         find(&pickables, "NoDefault").is_some(),
         "components without `#[derive(Default)]` must still reach the picker; \
@@ -92,8 +106,7 @@ fn component_without_default_appears() {
 #[test]
 fn non_component_reflect_type_is_filtered() {
     let registry = registry_with_test_types();
-    let pickables =
-        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables = enumerate(&registry, &HashSet::new(), &PickerDenylist::default());
     assert!(
         find(&pickables, "NotAComponent").is_none(),
         "reflected types without `ReflectComponent` must not appear",
@@ -103,8 +116,7 @@ fn non_component_reflect_type_is_filtered() {
 #[test]
 fn editor_category_override_sets_category() {
     let registry = registry_with_test_types();
-    let pickables =
-        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables = enumerate(&registry, &HashSet::new(), &PickerDenylist::default());
     let entry = find(&pickables, "CategoriesAsActor").expect("entry present");
     assert_eq!(entry.category, "Actor");
 }
@@ -112,8 +124,7 @@ fn editor_category_override_sets_category() {
 #[test]
 fn editor_description_override_sets_description() {
     let registry = registry_with_test_types();
-    let pickables =
-        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables = enumerate(&registry, &HashSet::new(), &PickerDenylist::default());
     let entry = find(&pickables, "DescribedExplicitly").expect("entry present");
     assert_eq!(entry.description, "explicit text");
 }
@@ -121,8 +132,7 @@ fn editor_description_override_sets_description() {
 #[test]
 fn doc_comment_falls_through_as_description() {
     let registry = registry_with_test_types();
-    let pickables =
-        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables = enumerate(&registry, &HashSet::new(), &PickerDenylist::default());
     let entry = find(&pickables, "DocCommentDescribed").expect("entry present");
     assert!(
         entry.description.contains("Spawns the player"),
@@ -137,7 +147,7 @@ fn already_on_entity_components_are_filtered() {
     let registry = registry_with_test_types();
     let mut existing = HashSet::new();
     existing.insert(TypeId::of::<WithDefault>());
-    let pickables = enumerate_pickable_components(&registry, &existing, &PickerDenylist::default());
+    let pickables = enumerate(&registry, &existing, &PickerDenylist::default());
     assert!(
         find(&pickables, "WithDefault").is_none(),
         "components already on the target entity must drop out",
@@ -151,13 +161,11 @@ fn already_on_entity_components_are_filtered() {
 #[test]
 fn category_default_is_empty_when_unset() {
     let registry = registry_with_test_types();
-    let pickables =
-        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables = enumerate(&registry, &HashSet::new(), &PickerDenylist::default());
     let entry = find(&pickables, "NoDefault").expect("entry present");
     assert_eq!(
         entry.category, "",
-        "no `EditorCategory` attribute means an empty category; \
-         the picker UI assigns a fallback group from module path",
+        "no `EditorCategory` attribute means an empty group (Game)",
     );
 }
 
@@ -168,7 +176,7 @@ fn denylisted_path_filters_component() {
     let registry = registry_with_test_types();
     let mut denylist = PickerDenylist::default();
     denylist.deny_path("outliner::component_picker::WithDefault");
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new(), &denylist);
+    let pickables = enumerate(&registry, &HashSet::new(), &denylist);
     assert!(
         find(&pickables, "WithDefault").is_none(),
         "explicitly denylisted type path must drop out of the picker",
@@ -186,7 +194,7 @@ fn denylisted_prefix_filters_component() {
     let registry = registry_with_test_types();
     let mut denylist = PickerDenylist::default();
     denylist.deny_prefix("outliner::component_picker::");
-    let pickables = enumerate_pickable_components(&registry, &HashSet::new(), &denylist);
+    let pickables = enumerate(&registry, &HashSet::new(), &denylist);
     assert!(
         find(&pickables, "WithDefault").is_none(),
         "prefix denylist must catch every type rooted under it",
@@ -197,34 +205,31 @@ fn denylisted_prefix_filters_component() {
     );
 }
 
-/// Avian components carry no `@EditorCategory`, so the picker's fallback maps
-/// `avian3d::` and `jackdaw_avian_integration::` paths into "Avian3d".
+/// Avian components carry no `@EditorCategory`, so grouping falls back
+/// to "Avian3d" from the type path.
 #[test]
 fn avian_paths_fall_back_to_physics_category() {
+    let chrome = TypeChrome::default();
     assert_eq!(
-        fallback_category_for("avian3d::dynamics::rigid_body::RigidBody"),
-        Some("Avian3d"),
+        chrome.group("avian3d::dynamics::rigid_body::RigidBody"),
+        "Avian3d",
     );
     assert_eq!(
-        fallback_category_for("avian3d::collision::collider::Collider"),
-        Some("Avian3d"),
+        chrome.group("avian3d::collision::collider::Collider"),
+        "Avian3d",
     );
     assert_eq!(
-        fallback_category_for("jackdaw_avian_integration::AvianCollider"),
-        Some("Avian3d"),
+        chrome.group("jackdaw_avian_integration::AvianCollider"),
+        "Avian3d",
     );
 }
 
-/// Non-avian paths get no fallback; their category comes from `@EditorCategory`
-/// or stays empty.
+/// Game paths with no authored category stay in the empty (Game) group.
 #[test]
 fn non_avian_paths_have_no_category_fallback() {
-    assert_eq!(fallback_category_for("bevy_pbr::StandardMaterial"), None);
-    assert_eq!(fallback_category_for("my_game::PlayerSpawn"), None);
-    assert_eq!(
-        fallback_category_for("outliner::component_picker::WithDefault"),
-        None
-    );
+    let chrome = TypeChrome::default();
+    assert_eq!(chrome.group("my_game::PlayerSpawn"), "");
+    assert_eq!(chrome.group("outliner::component_picker::WithDefault"), "");
 }
 
 /// `populate_avian_picker_denylist` hides solver / cache types whatever the
@@ -269,8 +274,7 @@ fn avian_denylist_includes_known_internals() {
 #[test]
 fn editor_hidden_marker_filters_component() {
     let registry = registry_with_test_types();
-    let pickables =
-        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables = enumerate(&registry, &HashSet::new(), &PickerDenylist::default());
     assert!(
         find(&pickables, "HiddenByMarker").is_none(),
         "`@EditorHidden` reflect attribute must keep a Component out of the picker",
@@ -286,12 +290,44 @@ fn editor_hidden_marker_filters_component() {
 #[test]
 fn navmesh_exclude_is_offered_under_navigation() {
     let registry = registry_with_test_types();
-    let pickables =
-        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables = enumerate(&registry, &HashSet::new(), &PickerDenylist::default());
     let entry = find(&pickables, "NavmeshExclude").expect("the tag is pickable");
     assert_eq!(entry.category, "Navigation");
     assert_eq!(
         entry.type_path_full,
         jackdaw_runtime::NAVMESH_EXCLUDE_TYPE_PATH
     );
+}
+
+#[test]
+fn metadata_overlay_hides_and_recategorizes() {
+    let registry = registry_with_test_types();
+    let mut metadata = TypeMetadata::default();
+    metadata.entries.insert(
+        "outliner::component_picker::WithDefault".into(),
+        TypeMeta {
+            hidden: Some(true),
+            ..Default::default()
+        },
+    );
+    metadata.entries.insert(
+        "outliner::component_picker::NoDefault".into(),
+        TypeMeta {
+            category: Some("Gameplay".into()),
+            ..Default::default()
+        },
+    );
+    let pickables = enumerate_pickable_components(
+        &registry,
+        &HashSet::new(),
+        &PickerDenylist::default(),
+        &metadata,
+        &ProjectTypes::default(),
+    );
+    assert!(
+        find(&pickables, "WithDefault").is_none(),
+        "file overlay hidden must drop the type from the picker",
+    );
+    let entry = find(&pickables, "NoDefault").expect("NoDefault present");
+    assert_eq!(entry.category, "Gameplay");
 }

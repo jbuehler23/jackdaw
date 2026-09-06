@@ -337,7 +337,9 @@ fn a_schema_only_type_previews_as_a_disabled_row() {
             module_path: String::new(),
             category: String::new(),
             description: String::new(),
+            editor_description: String::new(),
             hidden: false,
+            preview: String::new(),
             default_constructible: true,
             fields: vec![FieldSchema {
                 name: "current".to_string(),
@@ -1155,7 +1157,9 @@ fn schema_type(type_path: &str, kind: TypeKind, fields: &[(&str, &str)]) -> Type
         module_path: String::new(),
         category: String::new(),
         description: String::new(),
+        editor_description: String::new(),
         hidden: false,
+        preview: String::new(),
         default_constructible: true,
         fields: fields
             .iter()

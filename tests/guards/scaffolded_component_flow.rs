@@ -10,7 +10,9 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 use jackdaw::commands::{EditorCommand, SetBsnField};
 use jackdaw::inspector::component_picker::{PickerDenylist, enumerate_pickable_components};
+use jackdaw::project_types::ProjectTypes;
 use jackdaw::selection::Selection;
+use jackdaw::type_metadata::TypeMetadata;
 use jackdaw_api::prelude::*;
 use jackdaw_bsn::SceneBsnAst;
 use jackdaw_runtime::{EditorCategory, EditorHidden};
@@ -56,8 +58,13 @@ fn scaffolded_user_components_reach_picker() {
         .world()
         .resource::<bevy::ecs::reflect::AppTypeRegistry>()
         .read();
-    let pickables =
-        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables = enumerate_pickable_components(
+        &registry,
+        &HashSet::new(),
+        &PickerDenylist::default(),
+        &TypeMetadata::default(),
+        &ProjectTypes::default(),
+    );
 
     let spinning = pickables
         .iter()
@@ -85,8 +92,13 @@ fn editor_hidden_marker_hides_component_in_real_app() {
         .world()
         .resource::<bevy::ecs::reflect::AppTypeRegistry>()
         .read();
-    let pickables =
-        enumerate_pickable_components(&registry, &HashSet::new(), &PickerDenylist::default());
+    let pickables = enumerate_pickable_components(
+        &registry,
+        &HashSet::new(),
+        &PickerDenylist::default(),
+        &TypeMetadata::default(),
+        &ProjectTypes::default(),
+    );
     let names: Vec<&str> = pickables.iter().map(|p| p.short_name.as_str()).collect();
 
     assert!(
@@ -292,7 +304,9 @@ fn project_schema() -> jackdaw_schema::ProjectSchema {
             module_path: String::new(),
             category: String::new(),
             description: String::new(),
+            editor_description: String::new(),
             hidden: false,
+            preview: String::new(),
             default_constructible: true,
             fields,
             kind,

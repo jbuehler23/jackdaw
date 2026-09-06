@@ -629,20 +629,36 @@ fn draw_camera_gizmo(
     }
 }
 
-/// Always-on gizmo marker for entities tagged with
+/// Gizmo marker for entities tagged with
 /// [`crate::entity_ops::EmptyEntity`]: small wireframe cube at the
-/// origin so the entity is findable and selectable. Independent of
-/// the `show_bounding_boxes` setting because Empty entities have no
-/// other geometry to anchor the user's eye.
+/// origin so the entity is findable and selectable. Skipped once the
+/// entity has any descendant `Mesh3d`.
 fn draw_empty_entity_marker(
     mut gizmos: Gizmos<EntityGizmoGroup>,
-    query: Query<(&GlobalTransform, &InheritedVisibility, Has<Selected>), With<EmptyEntity>>,
+    query: Query<
+        (
+            Entity,
+            &GlobalTransform,
+            &InheritedVisibility,
+            Has<Selected>,
+        ),
+        With<EmptyEntity>,
+    >,
+    children_query: Query<&Children>,
+    mesh_query: Query<(), With<Mesh3d>>,
 ) {
     // Fixed 0.5-unit cube so the marker is visible at any camera
     // distance. Not the world AABB: nothing to compute one from.
     const SIZE: f32 = 0.5;
-    for (tf, inherited_vis, selected) in &query {
+    for (entity, tf, inherited_vis, selected) in &query {
         if !inherited_vis.get() {
+            continue;
+        }
+        if mesh_query.contains(entity)
+            || children_query
+                .iter_descendants(entity)
+                .any(|child| mesh_query.contains(child))
+        {
             continue;
         }
         let color = marker_color(selected);

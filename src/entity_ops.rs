@@ -536,8 +536,8 @@ pub fn delete_selected(world: &mut World) {
         cmds.push(Box::new(DespawnEntity::from_world(world, entity)));
     }
 
-    // Deselect entities before despawning so that `On<Remove, Selected>`
-    // observers can clean up tree-row UI while the entities still exist.
+    // Drop Selected and Selection before despawn so neither holds ids
+    // of entities that are about to disappear.
     for &entity in &entities {
         if let Ok(mut ec) = world.get_entity_mut(entity) {
             ec.remove::<Selected>();

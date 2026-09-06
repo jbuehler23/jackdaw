@@ -137,6 +137,7 @@ impl Plugin for HierarchyPlugin {
                     jackdaw_feathers::tree_view::ellipsize_tree_row_labels,
                     watch_selection_for_reveal,
                     drive_reveal_target,
+                    sync_outliner_selection_highlights,
                 )
                     .after(jackdaw_widgets::tree_view::maintain_tree_index),
             )
@@ -173,8 +174,6 @@ impl Plugin for HierarchyPlugin {
             .add_observer(refresh_icon_on_add::<crate::entity_ops::SceneAnimationPlayer>)
             .add_observer(refresh_icon_on_add::<crate::entity_ops::SceneAudioSource>)
             .add_observer(refresh_icon_on_add::<crate::reference_image::ReferenceImage>)
-            .add_observer(on_entity_selected)
-            .add_observer(on_entity_deselected)
             .add_observer(on_tree_row_dropped)
             .add_observer(on_tree_row_inserted)
             .add_observer(on_tree_row_dropped_on_root)
@@ -840,8 +839,14 @@ pub(crate) struct RevealTarget {
 
 /// Arm `RevealTarget` on the primary selection so the driver brings its row
 /// into view: a node added under a collapsed parent has no visible row at all.
-fn watch_selection_for_reveal(selection: Res<Selection>, mut reveal: ResMut<RevealTarget>) {
-    if !selection.is_changed() {
+/// Also runs when the tree changes, so spawning rows after selection is
+/// already set still arms the reveal.
+fn watch_selection_for_reveal(
+    selection: Res<Selection>,
+    tree_index: Res<TreeIndex>,
+    mut reveal: ResMut<RevealTarget>,
+) {
+    if !selection.is_changed() && !tree_index.is_changed() {
         return;
     }
     let Some(primary) = selection.primary() else {
@@ -1794,66 +1799,54 @@ fn select_row_range(world: &mut World, clicked: Entity, target: Entity) {
     }
 }
 
-/// When Selected is added, highlight the corresponding row in every
-/// Outliner panel.
-fn on_entity_selected(
-    trigger: On<Add, Selected>,
+/// Paint `TreeRowSelected` and selected colors on every Outliner row whose
+/// source entity is in [`Selection`]. Unselected rows get [`ROW_BG`] and no
+/// border.
+fn sync_outliner_selection_highlights(
     mut commands: Commands,
+    selection: Res<Selection>,
     tree_index: Res<TreeIndex>,
+    containers: Query<Entity, With<HierarchyTreeContainer>>,
     tree_nodes: Query<&Children, With<TreeNode>>,
-    tree_row_contents: Query<Entity, With<TreeRowContent>>,
-    mut bg_query: Query<&mut BackgroundColor>,
-    mut border_query: Query<&mut BorderColor>,
+    mut contents: Query<
+        (
+            Entity,
+            Has<TreeRowSelected>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+        ),
+        With<TreeRowContent>,
+    >,
 ) {
-    let entity = trigger.event_target();
-
-    for (_container, tree_entity) in tree_index.rows_for_source(entity) {
-        let Ok(children) = tree_nodes.get(tree_entity) else {
-            continue;
-        };
-        for child in children.iter() {
-            if tree_row_contents.contains(child) {
-                if let Ok(mut ec) = commands.get_entity(child) {
-                    ec.insert(TreeRowSelected);
-                }
-                if let Ok(mut bg) = bg_query.get_mut(child) {
-                    bg.0 = tokens::SELECTED_BG;
-                }
-                if let Ok(mut border) = border_query.get_mut(child) {
-                    *border = BorderColor::all(tokens::SELECTED_BORDER);
-                }
-                break;
-            }
-        }
+    if !selection.is_changed() && !tree_index.is_changed() {
+        return;
     }
-}
-
-/// When Selected is removed, unhighlight the corresponding row in
-/// every Outliner panel.
-fn on_entity_deselected(
-    trigger: On<Remove, Selected>,
-    mut commands: Commands,
-    tree_index: Res<TreeIndex>,
-    tree_nodes: Query<&Children, With<TreeNode>>,
-    tree_row_contents: Query<Entity, With<TreeRowContent>>,
-    mut bg_query: Query<&mut BackgroundColor>,
-    mut border_query: Query<&mut BorderColor>,
-) {
-    let entity = trigger.event_target();
-
-    for (_container, tree_entity) in tree_index.rows_for_source(entity) {
-        let Ok(children) = tree_nodes.get(tree_entity) else {
-            continue;
-        };
-        for child in children.iter() {
-            if tree_row_contents.contains(child) {
-                if let Ok(mut ec) = commands.get_entity(child) {
-                    ec.remove::<TreeRowSelected>();
+    for container in &containers {
+        let rows: Vec<(Entity, Entity)> = tree_index.rows_in(container).collect();
+        for (source, row) in rows {
+            let want = selection.is_selected(source);
+            let Ok(children) = tree_nodes.get(row) else {
+                continue;
+            };
+            for child in children.iter() {
+                let Ok((content, has_selected, mut bg, mut border)) = contents.get_mut(child)
+                else {
+                    continue;
+                };
+                if has_selected == want {
+                    break;
                 }
-                if let Ok(mut bg) = bg_query.get_mut(child) {
+                if want {
+                    if let Ok(mut ec) = commands.get_entity(content) {
+                        ec.insert(TreeRowSelected);
+                    }
+                    bg.0 = tokens::SELECTED_BG;
+                    *border = BorderColor::all(tokens::SELECTED_BORDER);
+                } else {
+                    if let Ok(mut ec) = commands.get_entity(content) {
+                        ec.remove::<TreeRowSelected>();
+                    }
                     bg.0 = ROW_BG;
-                }
-                if let Ok(mut border) = border_query.get_mut(child) {
                     *border = BorderColor::all(Color::NONE);
                 }
                 break;

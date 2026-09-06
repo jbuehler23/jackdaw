@@ -15,19 +15,17 @@ use super::category_strip::ActiveInspectorCategory;
 use super::component_picker::InspectorAddComponentButton;
 
 /// Marker placed on the add-header host entity in the content column.
-/// `on_add_header_mount_added` fires on `Add` and builds the initial header;
-/// `rebuild_add_header` replaces the children whenever the active category or
-/// the card set changes.
+/// `on_add_header_mount_added` installs layout; [`rebuild_add_header`]
+/// fills children when the category, selection, card set, material
+/// registry, or mount changes.
 #[derive(Component)]
 pub(crate) struct InspectorAddHeaderMount;
 
-/// Populate the add-header when the mount node appears in the world.
+/// Populate the add-header layout when the mount node appears. Children
+/// come from [`rebuild_add_header`], which also catches a mount that
+/// appears after selection is already set.
 pub(crate) fn on_add_header_mount_added(
     trigger: On<Add, InspectorAddHeaderMount>,
-    active: Res<ActiveInspectorCategory>,
-    selection: Res<Selection>,
-    has_rb: Query<Has<RigidBody>>,
-    has_ac: Query<Has<AvianCollider>>,
     mut commands: Commands,
 ) {
     let host = trigger.event_target();
@@ -39,21 +37,17 @@ pub(crate) fn on_add_header_mount_added(
         flex_shrink: 0.0,
         ..Default::default()
     });
-    let (rb, ac) = physics_presence(&selection, &has_rb, &has_ac);
-    build_add_header_children(&mut commands, host, active.0.as_ref(), rb, ac);
 }
 
-/// Each frame: replace the add-header children when the active category
-/// changes, the selection changes, or when the displayed card set changes
-/// (component added or removed). The physics branch additionally tracks
-/// whether the selected entity carries `RigidBody` / `AvianCollider` so the
-/// grid buttons can reflect their active state without waiting for a
-/// re-select.
+/// Replace the add-header children when the active category, selection,
+/// card set, or material registry changes, or when a mount is added so a
+/// late-spawned inspector catches up to the current selection.
 pub(crate) fn rebuild_add_header(
     active: Res<ActiveInspectorCategory>,
     selection: Res<Selection>,
     material_registry: Option<Res<MaterialRegistry>>,
     mounts: Query<(Entity, Option<&Children>), With<InspectorAddHeaderMount>>,
+    added_mounts: Query<(), Added<InspectorAddHeaderMount>>,
     has_rb: Query<Has<RigidBody>>,
     has_ac: Query<Has<AvianCollider>>,
     added_cards: Query<(), Added<super::ComponentDisplay>>,
@@ -61,12 +55,12 @@ pub(crate) fn rebuild_add_header(
     mut commands: Commands,
 ) {
     let cards_changed = !added_cards.is_empty() || removed_cards.read().next().is_some();
-    // The Material tab's combobox reflects the registry contents and the
-    // selection's assigned material; rebuild it when the registry changes
-    // (a material was created, applied, or rescanned) so it stays in sync.
     let registry_changed = material_registry.is_some_and(|r| r.is_changed());
-    let should_rebuild =
-        active.is_changed() || selection.is_changed() || cards_changed || registry_changed;
+    let should_rebuild = active.is_changed()
+        || selection.is_changed()
+        || cards_changed
+        || registry_changed
+        || !added_mounts.is_empty();
     if !should_rebuild {
         return;
     }

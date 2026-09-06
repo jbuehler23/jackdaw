@@ -796,9 +796,7 @@ pub(crate) fn cleanup_remote_proxies(
         }
     }
 
-    // Clear tree rows inside the remote tree container
-    // (they reference proxies that were just despawned, so they'll be cleaned up
-    //  by Bevy's despawn propagation via `TreeNode` relationship)
+    // Clear tree rows inside the remote tree container.
 
     proxy_index.map.clear();
     tree_row_index.map.clear();

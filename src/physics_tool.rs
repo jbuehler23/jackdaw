@@ -249,7 +249,8 @@ fn exit_physics_tool(world: &mut World) {
     state.drag = None;
 }
 
-/// Toggle `RigidBodyDisabled` when selection changes during Physics mode.
+/// Toggle `RigidBodyDisabled` when selection changes during Physics mode,
+/// or when entering Physics mode with an existing selection.
 /// Static bodies are never disabled  -- they must remain as solid surfaces.
 fn sync_selection_disable_state(
     edit_mode: Res<EditMode>,
@@ -258,7 +259,10 @@ fn sync_selection_disable_state(
     mut tool_state: ResMut<PhysicsToolState>,
     bodies: Query<(Entity, &RigidBody)>,
 ) {
-    if *edit_mode != EditMode::Physics || !selection.is_changed() {
+    if *edit_mode != EditMode::Physics {
+        return;
+    }
+    if !selection.is_changed() && !edit_mode.is_changed() {
         return;
     }
 

@@ -84,8 +84,8 @@ use jackdaw_bsn::{
 
 pub use jackdaw_scene_types::{
     Brush, BrushFaceData, CustomProperties, EditorCategory, EditorDescription, EditorHidden,
-    GltfSource, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude, PropertyValue, ScatterGroup,
-    ScatterInstance, SkipSerialization,
+    EditorPreview, GltfSource, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude, PropertyValue,
+    ScatterGroup, ScatterInstance, SkipSerialization,
 };
 
 #[cfg(feature = "pie")]
@@ -119,8 +119,9 @@ pub mod prelude {
     #[cfg(feature = "terrain")]
     pub use crate::TerrainViewer;
     pub use crate::{
-        EditorCategory, EditorDescription, EditorHidden, JackdawCatalog, JackdawCatalogPath,
-        JackdawPlugin, JackdawSceneMember, JackdawSceneRoot, SceneRefused, SkipSerialization,
+        EditorCategory, EditorDescription, EditorHidden, EditorPreview, JackdawCatalog,
+        JackdawCatalogPath, JackdawPlugin, JackdawSceneMember, JackdawSceneRoot, SceneRefused,
+        SkipSerialization,
     };
 }
 

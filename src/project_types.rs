@@ -24,7 +24,7 @@ use jackdaw_schema::{FunctionSchema, ProjectSchema, TypeSchema};
 /// Editor resource: the project's dynamic (schema-reported) component
 /// and resource types, keyed by reflect type path. Refreshed from the
 /// extractor on each project build.
-#[derive(Resource, Default)]
+#[derive(Resource, Clone, Default)]
 pub struct ProjectTypes {
     components: HashMap<String, TypeSchema>,
     resources: HashMap<String, TypeSchema>,
@@ -160,7 +160,9 @@ mod tests {
             module_path: String::new(),
             category: String::new(),
             description: String::new(),
+            editor_description: String::new(),
             hidden: false,
+            preview: String::new(),
             default_constructible: false,
             fields: Vec::new(),
             kind: TypeKind::Struct,

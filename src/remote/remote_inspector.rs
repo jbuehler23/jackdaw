@@ -201,7 +201,7 @@ pub(crate) fn populate_proxy_from_components(
 /// Normal system: read the rebuild flag and build inspector displays
 /// using the shared `build_inspector_displays()` function, which
 /// requires normal system params.
-pub fn build_remote_inspector_displays(
+pub(crate) fn build_remote_inspector_displays(
     mut commands: Commands,
     components: &Components,
     type_registry: Res<AppTypeRegistry>,
@@ -212,6 +212,8 @@ pub fn build_remote_inspector_displays(
     entity_query: Query<(&Archetype, EntityRef)>,
     materials: Res<Assets<StandardMaterial>>,
     collapse_state: Res<crate::inspector::InspectorCollapseState>,
+    type_metadata: Res<crate::type_metadata::TypeMetadata>,
+    project_types: Res<crate::project_types::ProjectTypes>,
 ) {
     let Ok((inspector_entity, rebuild)) = inspector_query.single() else {
         return;
@@ -250,11 +252,13 @@ pub fn build_remote_inspector_displays(
         None,
         None,
         &collapse_state,
-        None,
+        &project_types,
+        &type_metadata,
     );
 
     // Spawn JSON fallback section for unregistered components
     if !fallback_components.is_empty() {
+        let registry = type_registry.read();
         spawn_fallback_section(
             &mut commands,
             inspector_entity,
@@ -263,6 +267,9 @@ pub fn build_remote_inspector_displays(
             &icon_font,
             &editor_font,
             &collapse_state,
+            &registry,
+            &type_metadata,
+            &project_types,
         );
     }
 }
@@ -275,6 +282,9 @@ pub(crate) fn spawn_fallback_section(
     icon_font: &IconFont,
     editor_font: &EditorFont,
     collapse_state: &crate::inspector::InspectorCollapseState,
+    type_registry: &bevy::reflect::TypeRegistry,
+    type_metadata: &crate::type_metadata::TypeMetadata,
+    project_types: &crate::project_types::ProjectTypes,
 ) {
     let section = commands
         .spawn((
@@ -359,8 +369,9 @@ pub(crate) fn spawn_fallback_section(
             .next()
             .unwrap_or(type_path)
             .to_string();
+        let chrome = type_metadata.resolve(type_path, type_registry, project_types);
 
-        let (display_entity, body_entity) = component_display::spawn_component_display(
+        let card = component_display::spawn_component_display(
             commands,
             component_display::ComponentDisplaySpec {
                 name: &short_name,
@@ -376,7 +387,14 @@ pub(crate) fn spawn_fallback_section(
                 collapse_state,
             },
         );
-        commands.entity(display_entity).insert(ChildOf(group_body));
+        crate::inspector::type_metadata_pane::spawn_type_metadata_ui(
+            commands,
+            &card,
+            type_path,
+            &chrome,
+            type_metadata,
+        );
+        commands.entity(card.section).insert(ChildOf(group_body));
 
         let json_text =
             serde_json::to_string_pretty(json_value).unwrap_or_else(|_| format!("{json_value}"));
@@ -392,7 +410,7 @@ pub(crate) fn spawn_fallback_section(
                 max_width: Val::Percent(100.0),
                 ..Default::default()
             },
-            ChildOf(body_entity),
+            ChildOf(card.body),
         ));
     }
 }

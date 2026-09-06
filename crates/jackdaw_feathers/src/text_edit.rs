@@ -4,10 +4,12 @@ use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::text::{
-    EditableText, EditableTextFilter, FontFeatureTag, FontFeatures, FontSize, LineHeight, TextEdit,
-    TextLayoutInfo,
+    EditableText, EditableTextFilter, FontCx, FontFeatureTag, FontFeatures, FontSize, LayoutCx,
+    LineBreak, LineHeight, TextEdit, TextLayoutInfo,
 };
-use bevy::ui::InteractionDisabled;
+use bevy::ui::{
+    AvailableSpace, ContentSize, InteractionDisabled, Measure, MeasureArgs, NodeMeasure, UiSystems,
+};
 
 use crate::icons::{EditorFont, IconFont};
 use crate::tokens::{
@@ -33,6 +35,13 @@ pub fn plugin(app: &mut App) {
                 handle_suffix,
             )
                 .chain(),
+        )
+        .add_systems(
+            PostUpdate,
+            sync_multiline_content_size
+                .in_set(UiSystems::Content)
+                .after(bevy::text::EditableTextSystems)
+                .after(apply_default_value),
         );
 }
 
@@ -63,6 +72,9 @@ const PREFIX_EXTRA: f32 = AFFIX_SIZE as f32 + 6.0;
 
 #[derive(Component)]
 pub struct EditorTextEdit;
+
+#[derive(Component)]
+struct MultilineTextEdit;
 
 #[derive(Component)]
 pub struct TextEditWrapper(pub Entity);
@@ -163,6 +175,7 @@ pub struct TextEditConfig {
     drag_bottom: bool,
     disabled: bool,
     select_all_on_open: bool,
+    multiline: bool,
     pub initialized: bool,
 }
 
@@ -184,6 +197,7 @@ pub struct TextEditProps {
     /// Whether the value the field opens on is selected, so the first
     /// thing typed replaces it rather than being added to it.
     pub select_all_on_open: bool,
+    pub multiline: bool,
 }
 
 impl Default for TextEditProps {
@@ -204,6 +218,7 @@ impl Default for TextEditProps {
             drag_bottom: false,
             grow: false,
             select_all_on_open: false,
+            multiline: false,
         }
     }
 }
@@ -254,6 +269,10 @@ impl TextEditProps {
     }
     pub fn grow(mut self) -> Self {
         self.grow = true;
+        self
+    }
+    pub fn multiline(mut self) -> Self {
+        self.multiline = true;
         self
     }
     pub fn auto_focus(mut self) -> Self {
@@ -331,6 +350,7 @@ pub fn text_edit(props: TextEditProps) -> impl Bundle {
         disabled,
         select_all_on_open,
         grow: _,
+        multiline,
     } = props;
 
     (
@@ -357,6 +377,7 @@ pub fn text_edit(props: TextEditProps) -> impl Bundle {
             drag_bottom,
             disabled,
             select_all_on_open,
+            multiline,
             initialized: false,
         },
         TextEditValue::default(),
@@ -407,11 +428,21 @@ fn setup_text_edit_input(
         });
 
         let has_prefix = config.prefix.is_some();
+        let multiline = config.multiline;
         let wrapper_entity = commands
             .spawn((
                 Node {
                     width: percent(100),
-                    height: px(INPUT_HEIGHT),
+                    height: if multiline {
+                        Val::Auto
+                    } else {
+                        px(INPUT_HEIGHT)
+                    },
+                    min_height: if multiline {
+                        px(INPUT_HEIGHT)
+                    } else {
+                        Val::Auto
+                    },
                     // If prefix, only a small bit of left padding so the label sits close to the edge
                     padding: if has_prefix {
                         UiRect::new(
@@ -427,6 +458,8 @@ fn setup_text_edit_input(
                     // Stretch so prefix fills full height
                     align_items: if has_prefix {
                         AlignItems::Stretch
+                    } else if multiline {
+                        AlignItems::Start
                     } else {
                         AlignItems::Center
                     },
@@ -615,12 +648,31 @@ fn setup_text_edit_input(
             TextColor(TEXT_BODY_COLOR.into()),
             Node {
                 flex_grow: 1.0,
-                height: px(line_height_px),
-                justify_content: JustifyContent::Center,
+                min_width: if multiline { px(0) } else { Val::Auto },
+                height: if multiline {
+                    Val::Auto
+                } else {
+                    px(line_height_px)
+                },
+                justify_content: if multiline {
+                    JustifyContent::Start
+                } else {
+                    JustifyContent::Center
+                },
                 overflow: Overflow::clip(),
                 ..default()
             },
         ));
+
+        if multiline {
+            text_input.insert((
+                MultilineTextEdit,
+                TextLayout {
+                    linebreak: LineBreak::WordBoundary,
+                    ..default()
+                },
+            ));
+        }
 
         if config.auto_focus && !config.disabled {
             focus.set(text_input.id(), FocusCause::Navigated);
@@ -770,6 +822,12 @@ fn apply_feathers_text_input(world: &mut World, frame: Entity, input: Entity) {
     if let Some(line_height) = line_height {
         input.insert(line_height);
     }
+    if input.get::<MultilineTextEdit>().is_some()
+        && let Some(mut editable) = input.get_mut::<EditableText>()
+    {
+        editable.allow_newlines = true;
+        editable.visible_lines = None;
+    }
 }
 
 fn apply_default_value(
@@ -850,7 +908,7 @@ fn handle_unfocus(
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     capture: Option<Res<jackdaw_commands::KeymapCapture>>,
-    text_edits: Query<&ChildOf, With<EditorTextEdit>>,
+    text_edits: Query<(&ChildOf, Has<MultilineTextEdit>), With<EditorTextEdit>>,
     wrappers: Query<&Hovered, With<TextEditWrapper>>,
 ) {
     if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
@@ -859,7 +917,7 @@ fn handle_unfocus(
     let Some(focused_entity) = focus.get() else {
         return;
     };
-    let Ok(child_of) = text_edits.get(focused_entity) else {
+    let Ok((child_of, multiline)) = text_edits.get(focused_entity) else {
         return;
     };
     let Ok(hovered) = wrappers.get(child_of.parent()) else {
@@ -867,9 +925,9 @@ fn handle_unfocus(
     };
 
     let clicked_outside = mouse.get_just_pressed().next().is_some() && !hovered.get();
-    let key_dismiss = keyboard.just_pressed(KeyCode::Escape)
-        || keyboard.just_pressed(KeyCode::Enter)
-        || keyboard.just_pressed(KeyCode::NumpadEnter);
+    let enter_dismiss = !multiline
+        && (keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::NumpadEnter));
+    let key_dismiss = keyboard.just_pressed(KeyCode::Escape) || enter_dismiss;
 
     if clicked_outside || key_dismiss {
         focus.clear();
@@ -1134,6 +1192,64 @@ fn sync_text_edit_values(
             }
             break;
         }
+    }
+}
+
+struct MultilineHeightMeasure {
+    height: f32,
+}
+
+impl Measure for MultilineHeightMeasure {
+    fn measure(&mut self, measure_args: MeasureArgs<'_>) -> Vec2 {
+        let width = measure_args.resolve_width();
+        let x = width
+            .effective
+            .unwrap_or(match measure_args.available_width {
+                AvailableSpace::Definite(x) => x,
+                AvailableSpace::MinContent | AvailableSpace::MaxContent => 0.0,
+            });
+        Vec2::new(x, self.height.max(INPUT_HEIGHT))
+    }
+}
+
+fn wrap_width(
+    entity: Entity,
+    computed: &Query<&ComputedNode>,
+    parents: &Query<&ChildOf>,
+) -> Option<f32> {
+    let mut current = entity;
+    for _ in 0..16 {
+        if let Ok(node) = computed.get(current) {
+            let width = node.content_box().width();
+            if width > 1.0 {
+                return Some(width);
+            }
+        }
+        current = parents.get(current).ok()?.parent();
+    }
+    None
+}
+
+fn sync_multiline_content_size(
+    mut inputs: Query<(Entity, &mut EditableText, &mut ContentSize), With<MultilineTextEdit>>,
+    computed: Query<&ComputedNode>,
+    parents: Query<&ChildOf>,
+    mut font_cx: ResMut<FontCx>,
+    mut layout_cx: ResMut<LayoutCx>,
+) {
+    for (entity, mut editable, mut content_size) in &mut inputs {
+        let Some(width) = wrap_width(entity, &computed, &parents) else {
+            continue;
+        };
+        editable.editor.set_width(Some(width));
+        let height = {
+            let mut driver = editable.editor.driver(&mut font_cx, &mut layout_cx);
+            driver.refresh_layout();
+            driver.layout().height()
+        };
+        content_size.set(NodeMeasure::Custom(Box::new(MultilineHeightMeasure {
+            height,
+        })));
     }
 }
 

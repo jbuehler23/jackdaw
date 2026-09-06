@@ -18,6 +18,7 @@ mod prefab_field_dots;
 pub(crate) mod prefab_menu;
 pub(crate) mod project_component_display;
 pub(crate) mod reflect_fields;
+pub(crate) mod type_metadata_pane;
 pub mod val_field;
 
 use crate::EditorEntity;
@@ -39,52 +40,11 @@ impl InspectorCollapseState {
     }
 }
 
-/// Extract a human-readable module group name from a module path.
-/// e.g., "`bevy_pbr::material`" -> "Render", "`bevy_transform`" -> "Transform"
-fn extract_module_group(module_path: Option<&str>) -> String {
-    let Some(path) = module_path else {
-        return "Other".to_string();
-    };
-    let first = path.split("::").next().unwrap_or(path);
-    // Group jackdaw's avian wrapper alongside avian3d's own types
-    // so AvianCollider sits in the same inspector section as
-    // RigidBody, Sensor, etc. instead of getting its own
-    // `Jackdaw_avian_integration` heading.
-    if first == "avian3d" || first == "jackdaw_avian_integration" {
-        return "Avian3d".to_string();
-    }
-    // Strip "bevy_" prefix and capitalize
-    let name = first.strip_prefix("bevy_").unwrap_or(first);
-    // Map common module names to cleaner labels
-    match name {
-        "pbr" | "core_pipeline" | "render" => "Render".to_string(),
-        "transform" => "Transform".to_string(),
-        "ecs" => "ECS".to_string(),
-        "hierarchy" => "Hierarchy".to_string(),
-        "window" | "winit" => "Window".to_string(),
-        "input" | "picking" => "Input".to_string(),
-        "asset" => "Asset".to_string(),
-        "scene" => "Scene".to_string(),
-        "gltf" => "GLTF".to_string(),
-        "ui" => "UI".to_string(),
-        "text" => "Text".to_string(),
-        "audio" => "Audio".to_string(),
-        "animation" => "Animation".to_string(),
-        "sprite" => "Sprite".to_string(),
-        _ => {
-            // Capitalize first letter
-            let mut chars = name.chars();
-            match chars.next() {
-                None => "Other".to_string(),
-                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
-            }
-        }
-    }
-}
-
 // Editor display metadata as Bevy reflect custom attributes.
 // Newtypes live in `jackdaw_scene_types`, re-exported here via `jackdaw_runtime`.
-pub use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
+pub use jackdaw_runtime::{
+    EditorCategory, EditorDescription, EditorHidden, EditorPreview, SkipSerialization,
+};
 
 #[reflect_trait]
 pub trait Displayable {
@@ -134,8 +94,7 @@ impl Plugin for InspectorPlugin {
         app.register_type_data::<Name, ReflectDisplayable>()
             .add_plugins(component_tooltip::plugin)
             .add_plugins(prefab_menu::plugin)
-            .add_observer(component_display::remove_component_displays)
-            .add_observer(component_display::add_component_displays)
+            .add_plugins(type_metadata_pane::plugin)
             .add_observer(component_display::on_inspector_dirty)
             .add_observer(material_card_routing::on_refresh_inspector_card_body)
             .add_observer(component_picker::on_add_component_button_click)
@@ -166,6 +125,12 @@ impl Plugin for InspectorPlugin {
             .add_observer(add_header::on_add_header_mount_added)
             .add_observer(add_header::on_physics_chip_click)
             .add_observer(add_header::on_material_new_click)
+            .add_systems(
+                Update,
+                component_display::sync_inspector_to_selection
+                    .before(category_strip::resolve_active_on_rebuild)
+                    .run_if(in_state(crate::AppState::Editor)),
+            )
             .add_systems(
                 Update,
                 (
@@ -526,7 +491,7 @@ fn flag_inspector_dirty_on_modifier_stack_change(
 /// `AvianCollider` triggers our `PostUpdate` sync that builds a real
 /// `Collider`, after which avian's own systems insert `Position`,
 /// `Rotation`, `ColliderAabb`, mass aggregates, etc.). Without this
-/// watcher the panel built by `add_component_displays` keeps showing
+/// watcher the panel built by `sync_inspector_to_selection` keeps showing
 /// only the originally-added component until the user reselects.
 ///
 /// Comparing the cached `ArchetypeId` to the live one is O(1) and only

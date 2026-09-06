@@ -496,8 +496,8 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
             *brush = new_brush;
         }
 
-        // Deselect entities before despawning so that `On<Remove, Selected>`
-        // observers can clean up tree-row UI while the entities still exist.
+        // Drop Selected and Selection before despawn so neither holds ids
+        // of entities that are about to disappear.
         for &other in &others {
             if let Ok(mut ec) = world.get_entity_mut(other) {
                 ec.remove::<Selected>();

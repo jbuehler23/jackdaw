@@ -89,12 +89,18 @@ pub struct TypeSchema {
     pub short_name: String,
     /// Module path, for grouping.
     pub module_path: String,
-    /// `@EditorCategory`, or a fallback, or empty.
+    /// `@EditorCategory`, or empty.
     pub category: String,
-    /// `@EditorDescription` or the reflected doc comment.
+    /// Reflected rustdoc, or empty.
     pub description: String,
+    /// `@EditorDescription`, or empty.
+    #[serde(default)]
+    pub editor_description: String,
     /// `@EditorHidden`: skip in the picker.
     pub hidden: bool,
+    /// `@EditorPreview` glTF path under `assets/`, or empty.
+    #[serde(default)]
+    pub preview: String,
     /// Whether a default value could be constructed (picker requires it).
     pub default_constructible: bool,
     /// The type's fields (empty for unit/opaque/enum kinds).
@@ -207,7 +213,7 @@ mod extract {
     use bevy::reflect::func::args::Ownership;
     use bevy::reflect::serde::ReflectSerializer;
     use bevy::reflect::{NamedField, TypeInfo, TypeRegistration, TypeRegistry};
-    use jackdaw_scene_types::{EditorCategory, EditorDescription, EditorHidden};
+    use jackdaw_scene_types::{EditorCategory, EditorDescription, EditorHidden, EditorPreview};
 
     /// Build the schema for this process's reflected types.
     ///
@@ -297,16 +303,20 @@ mod extract {
             .and_then(|a| a.get::<EditorCategory>())
             .map(|c| c.0.to_string())
             .unwrap_or_default();
-        let description = attrs
+        let description = info
+            .docs()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default();
+        let editor_description = attrs
             .and_then(|a| a.get::<EditorDescription>())
             .map(|d| d.0.to_string())
-            .or_else(|| {
-                info.docs()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-            })
             .unwrap_or_default();
         let hidden = attrs.is_some_and(|a| a.get::<EditorHidden>().is_some());
+        let preview = attrs
+            .and_then(|a| a.get::<EditorPreview>())
+            .map(|p| p.0.to_string())
+            .unwrap_or_default();
 
         let (kind, fields, variants) = shape_of(info);
         let entity_fields = info
@@ -340,7 +350,9 @@ mod extract {
             module_path: table.module_path().unwrap_or("").to_string(),
             category,
             description,
+            editor_description,
             hidden,
+            preview,
             default_constructible: default.is_some(),
             fields,
             kind,

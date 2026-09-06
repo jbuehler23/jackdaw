@@ -396,9 +396,9 @@ fn spawn_file_tree_row(
         ))
         .id();
 
-    // Note: We intentionally do NOT add TreeNode(self) here. TreeNode is a
-    // relationship component that would warn about self-referencing. Project file
-    // nodes use ProjectFileNode instead of TreeNode for identification.
+    // Note: We intentionally do NOT add TreeNode(self) here. TreeNode marks
+    // an outliner row for a scene entity. Project file nodes use
+    // ProjectFileNode instead.
 
     if is_dir {
         commands.entity(node_entity).insert(ProjectFileIsDir);

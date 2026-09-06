@@ -66,6 +66,26 @@ designers), use `@EditorDescription`:
 pub struct PlayerSpawn;
 ```
 
+## Viewport previews for markers
+
+Tag a type with `@EditorPreview` and a gltf path under `assets/` 
+to see a viewport preview for your marker in the editor.
+
+```rust
+use jackdaw_runtime::prelude::*;
+
+#[derive(Component, Reflect, Default)]
+#[reflect(
+    Component,
+    Default,
+    @EditorPreview::gltf("models/player.glb"),
+)]
+pub struct PlayerSpawn;
+```
+
+If the entity already has a brush, a glTF, or a mesh,
+the overlay is skipped.
+
 ## Hiding a component from the picker
 
 Sometimes a component is part of your plugin's internal

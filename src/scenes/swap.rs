@@ -408,10 +408,16 @@ fn apply_view_state(world: &mut World, view_state: &ViewState, spawned: bool) {
         .filter_map(|nid| nid_map.get(nid).copied())
         .collect();
 
-    // Clear any current Selected markers (the world was just repopulated).
+    if let Some(mut selection) = world.get_resource_mut::<Selection>() {
+        selection.entities.clone_from(&entities);
+    }
+
     let mut prev_q = world.query_filtered::<Entity, With<Selected>>();
     let prev: Vec<Entity> = prev_q.iter(world).collect();
     for e in prev {
+        if entities.contains(&e) {
+            continue;
+        }
         if let Ok(mut ec) = world.get_entity_mut(e) {
             ec.remove::<Selected>();
         }
@@ -420,9 +426,5 @@ fn apply_view_state(world: &mut World, view_state: &ViewState, spawned: bool) {
         if let Ok(mut ec) = world.get_entity_mut(e) {
             ec.insert(Selected);
         }
-    }
-
-    if let Some(mut selection) = world.get_resource_mut::<Selection>() {
-        selection.entities = entities;
     }
 }

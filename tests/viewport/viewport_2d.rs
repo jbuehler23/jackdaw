@@ -2682,9 +2682,9 @@ fn ui_scene_roots(app: &mut App) -> usize {
         .count()
 }
 
-/// The op's selection is a real selection: the inspector's card list and the
-/// outliner's row highlight are both `On<Add, Selected>` observers, so a
-/// scripted selection lights the editor up as a click does.
+/// The op's selection is a real selection. Inspector cards and outliner
+/// highlights follow the `Selection` resource, so a scripted select lights
+/// the editor up the same way a click does.
 #[test]
 fn selecting_by_name_builds_the_inspector_for_the_selected_node() {
     let mut app = op_app();

@@ -2,7 +2,7 @@ use crate::EditorEntity;
 use crate::custom_properties::CustomProperties;
 use crate::default_style;
 use crate::prelude::*;
-use crate::selection::{Selected, Selection};
+use crate::selection::Selection;
 use std::any::TypeId;
 
 use bevy::ecs::component::ComponentInfo;
@@ -34,18 +34,17 @@ use bevy_monitors::prelude::{Addition, Monitor, NotifyAdded};
 
 use jackdaw_avian_integration::AvianCollider;
 use jackdaw_geometry::is_convex_topology;
-use jackdaw_runtime::EditorCategory;
 
 use super::{
     ComponentDisplay, ComponentDisplayBody, ComponentDisplayTypePath, ComponentName,
     ComponentPicker, Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch,
     InspectorTarget, ReflectDisplayable, bindings_card, brush_display,
     category_strip::ActiveInspectorCategory, component_tooltip::ReflectedTypeTooltip,
-    custom_props_display, extract_module_group, material_display, modifier_display, node_card,
-    reflect_fields,
+    custom_props_display, material_display, modifier_display, node_card, reflect_fields,
 };
 use crate::inspector::prefab_field_dots::{PrefabInstanceCtx, inspector_type_paths_for};
 use crate::prefab::PrefabAstCache;
+use crate::type_metadata::{TypeChrome, TypeMetadata};
 use bevy::picking::hover::Hovered;
 
 /// The live scene-document resource bundled into one param so the systems
@@ -54,16 +53,20 @@ use bevy::picking::hover::Hovered;
 pub(crate) struct SceneAsts<'w> {
     pub(crate) bsn: Res<'w, jackdaw_bsn::SceneBsnAst>,
     pub(crate) project_types: Res<'w, crate::project_types::ProjectTypes>,
+    pub(crate) type_metadata: Res<'w, crate::type_metadata::TypeMetadata>,
 }
 
-pub(crate) fn add_component_displays(
-    _: On<Add, Selected>,
+/// Keep each inspector's cards pointed at [`Selection::primary`]. Runs
+/// when selection changes, or when a panel has no [`InspectorTarget`]
+/// yet and something is already selected (inspector spawned after the
+/// selection was written).
+pub(crate) fn sync_inspector_to_selection(
     mut commands: Commands,
     components: &Components,
     type_registry: Res<AppTypeRegistry>,
     selection: Res<Selection>,
-    entity_query: Query<(&Archetype, EntityRef), (With<Selected>, Without<EditorEntity>)>,
-    inspectors: Query<Entity, With<Inspector>>,
+    entity_query: Query<(&Archetype, EntityRef), Without<EditorEntity>>,
+    inspectors: Query<(Entity, Option<&InspectorTarget>, Option<&Children>), With<Inspector>>,
     names: Query<&Name>,
     icon_font: Res<IconFont>,
     editor_font: Res<EditorFont>,
@@ -73,29 +76,55 @@ pub(crate) fn add_component_displays(
     child_of_query: Query<&bevy::ecs::hierarchy::ChildOf>,
     isa_query: Query<&crate::prefab::IsA>,
     collapse_state: Res<super::InspectorCollapseState>,
+    displays: Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
 ) {
-    let Some(primary) = selection.primary() else {
-        return;
-    };
-    let Ok((archetype, entity_ref)) = entity_query.get(primary) else {
-        return;
-    };
+    let desired = selection.primary();
+    if !selection.is_changed() {
+        if desired.is_none() {
+            return;
+        }
+        if !inspectors.iter().any(|(_, target, _)| target.is_none()) {
+            return;
+        }
+    }
 
-    let source_entity = entity_ref.entity();
     let sel_count = selection.entities.len();
 
-    let authored_type_paths = inspector_type_paths_for(
-        &asts.bsn,
-        &prefab_cache,
-        source_entity,
-        entity_ref,
-        &child_of_query,
-        &isa_query,
-    );
+    for (inspector, target, children) in &inspectors {
+        let current = target.map(|t| t.0);
+        if current == desired && !selection.is_changed() {
+            continue;
+        }
 
-    // Multi-instance dock layouts can host more than one inspector
-    // tab; each gets its own UI subtree but mirrors the same data.
-    for inspector in &inspectors {
+        if let Some(primary) = desired
+            && current.is_none()
+            && entity_query.get(primary).is_err()
+        {
+            continue;
+        }
+
+        commands
+            .entity(inspector)
+            .remove::<(InspectorTarget, Monitor, NotifyAdded<InspectorDirty>)>();
+        despawn_inspector_display_children(&mut commands, children, &displays);
+
+        let Some(primary) = desired else {
+            continue;
+        };
+        let Ok((archetype, entity_ref)) = entity_query.get(primary) else {
+            continue;
+        };
+
+        let source_entity = entity_ref.entity();
+        let authored_type_paths = inspector_type_paths_for(
+            &asts.bsn,
+            &prefab_cache,
+            source_entity,
+            entity_ref,
+            &child_of_query,
+            &isa_query,
+        );
+
         build_inspector_displays(
             &mut commands,
             components,
@@ -114,7 +143,8 @@ pub(crate) fn add_component_displays(
             Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
-            Some(&asts.project_types),
+            &asts.project_types,
+            &asts.type_metadata,
         );
 
         commands.entity(inspector).insert((
@@ -180,6 +210,14 @@ fn authored_widget_components() -> [&'static str; 10] {
     ]
 }
 
+struct ListedComponent {
+    name: String,
+    group: String,
+    component_id: ComponentId,
+    type_path: String,
+    chrome: TypeChrome,
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "inspector rebuild needs the full system param set; bundling into a struct would just push the problem one frame down"
@@ -202,7 +240,8 @@ pub(crate) fn build_inspector_displays(
     scene_ast: Option<&jackdaw_bsn::SceneBsnAst>,
     prefab_cache: Option<&PrefabAstCache>,
     collapse_state: &super::InspectorCollapseState,
-    project_types: Option<&crate::project_types::ProjectTypes>,
+    project_types: &crate::project_types::ProjectTypes,
+    type_metadata: &TypeMetadata,
 ) {
     // Show multi-selection header when multiple entities are selected
     if selection_count > 1 {
@@ -258,9 +297,7 @@ pub(crate) fn build_inspector_displays(
         })
     });
 
-    // (short_name, module_group, component_id, full_type_path)
-    let mut custom_groups = std::collections::HashSet::new();
-    let mut comp_list: Vec<(String, String, ComponentId, String)> = archetype
+    let mut comp_list: Vec<ListedComponent> = archetype
         .iter_components()
         .filter_map(|component_id| {
             let info = components.get_info(component_id)?;
@@ -302,25 +339,15 @@ pub(crate) fn build_inspector_displays(
                 {
                     return None;
                 }
-                let short = table.short_path().to_string();
-                let info = registration.type_info();
-                let attrs = match info {
-                    bevy::reflect::TypeInfo::Struct(s) => Some(s.custom_attributes()),
-                    bevy::reflect::TypeInfo::TupleStruct(s) => Some(s.custom_attributes()),
-                    bevy::reflect::TypeInfo::Enum(e) => Some(e.custom_attributes()),
-                    _ => None,
-                };
-                let module_group = if let Some(cat) = attrs
-                    .and_then(|a| a.get::<EditorCategory>())
-                    .map(|c| c.0.to_string())
-                    .filter(|s| !s.is_empty())
-                {
-                    custom_groups.insert(cat.clone());
-                    cat
-                } else {
-                    extract_module_group(table.module_path())
-                };
-                return Some((short, module_group, component_id, full_path.to_string()));
+                let chrome = type_metadata.resolve(full_path, &registry, project_types);
+                let group = chrome.group(full_path);
+                return Some(ListedComponent {
+                    name: table.short_path().to_string(),
+                    group,
+                    component_id,
+                    type_path: full_path.to_string(),
+                    chrome,
+                });
             }
 
             // Unreflected components fall back to the `Components` name.
@@ -328,18 +355,18 @@ pub(crate) fn build_inspector_displays(
             if hidden_by_namespace(&name) {
                 return None;
             }
-            let full = name.to_string();
-            Some((
-                name.shortname().to_string(),
-                "Other".to_string(),
+            Some(ListedComponent {
+                name: name.shortname().to_string(),
+                group: "Other".to_string(),
                 component_id,
-                full,
-            ))
+                type_path: name.to_string(),
+                chrome: TypeChrome::default(),
+            })
         })
         .collect();
 
-    // Sort: custom-category groups first, then by group name, then
-    // authored before derived within a group, then alphabetical.
+    // Sort: game EditorCategory groups, then Game, then engine groups,
+    // then by group name, authored before derived, then alphabetical.
     let is_derived_path = |type_path: &str| -> bool {
         !authored_type_paths.is_empty()
             && !jackdaw_bsn::type_paths_include(
@@ -348,16 +375,24 @@ pub(crate) fn build_inspector_displays(
             )
     };
     comp_list.sort_by(|a, b| {
-        let a_custom = custom_groups.contains(&a.1);
-        let b_custom = custom_groups.contains(&b.1);
-        b_custom
-            .cmp(&a_custom)
-            .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| is_derived_path(&a.3).cmp(&is_derived_path(&b.3)))
-            .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
+        crate::type_metadata::group_order(&b.type_path, &b.chrome.category)
+            .cmp(&crate::type_metadata::group_order(
+                &a.type_path,
+                &a.chrome.category,
+            ))
+            .then_with(|| a.group.cmp(&b.group))
+            .then_with(|| is_derived_path(&a.type_path).cmp(&is_derived_path(&b.type_path)))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
 
-    for (name, _module_group, component_id, type_path) in &comp_list {
+    for ListedComponent {
+        name,
+        component_id,
+        type_path,
+        chrome,
+        ..
+    } in &comp_list
+    {
         let component_id = *component_id;
 
         // Detect override: compare current component value vs baseline
@@ -461,7 +496,7 @@ pub(crate) fn build_inspector_displays(
             continue;
         }
 
-        let (display_entity, body_entity) = spawn_component_display(
+        let card = spawn_component_display(
             commands,
             ComponentDisplaySpec {
                 name,
@@ -477,7 +512,15 @@ pub(crate) fn build_inspector_displays(
                 collapse_state,
             },
         );
-        jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, display_entity);
+        super::type_metadata_pane::spawn_type_metadata_ui(
+            commands,
+            &card,
+            type_path,
+            chrome,
+            type_metadata,
+        );
+        jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, card.section);
+        let body_entity = card.body;
 
         // Try Displayable first, then reflection, then fallback
         let type_id = components
@@ -610,14 +653,15 @@ pub(crate) fn build_inspector_displays(
     // document authored on this entity from its extracted schema; values come
     // from the document and edits round-trip back through the same field
     // widgets (see `project_component_display`).
-    if let (Some(project_types), Some(ast)) = (project_types, scene_ast)
+    if let Some(ast) = scene_ast
         && let Some(node) = ast.ast_for(source_entity)
     {
         for type_path in ast.component_type_paths(node) {
             let Some(schema) = project_types.component(&type_path) else {
                 continue;
             };
-            let (display_entity, body_entity) = spawn_component_display(
+            let chrome = type_metadata.resolve(&type_path, &registry, project_types);
+            let card = spawn_component_display(
                 commands,
                 ComponentDisplaySpec {
                     name: &schema.short_name,
@@ -633,10 +677,17 @@ pub(crate) fn build_inspector_displays(
                     collapse_state,
                 },
             );
-            jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, display_entity);
+            super::type_metadata_pane::spawn_type_metadata_ui(
+                commands,
+                &card,
+                &type_path,
+                &chrome,
+                type_metadata,
+            );
+            jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, card.section);
             super::project_component_display::spawn_project_component_fields(
                 commands,
-                body_entity,
+                card.body,
                 schema,
                 ast,
                 node,
@@ -674,37 +725,24 @@ pub(crate) fn build_inspector_displays(
 pub(crate) const BRUSH_MATERIAL_TYPE_PATH: &str =
     "bevy_pbr::mesh_material::MeshMaterial3d<bevy_pbr::pbr_material::StandardMaterial>";
 
-pub(crate) fn remove_component_displays(
-    _: On<Remove, Selected>,
-    mut commands: Commands,
-    inspectors: Query<(Entity, Option<&Children>), With<Inspector>>,
-    displays: Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
+/// Despawn inspector card and picker children as one queued world step so
+/// lazy combobox/button setup cannot interleave and orphan UI.
+fn despawn_inspector_display_children(
+    commands: &mut Commands,
+    children: Option<&Children>,
+    displays: &Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
 ) {
-    // Multi-instance: every inspector tab needs its own monitoring
-    // teardown and its own children despawned.
-    for (entity, children) in &inspectors {
-        commands
-            .entity(entity)
-            .remove::<(InspectorTarget, Monitor, NotifyAdded<InspectorDirty>)>();
-
-        let Some(children) = children else {
-            continue;
-        };
-
-        // Collect then despawn inside a queued world closure so the
-        // cascade runs as one atomic step at flush time. See
-        // `on_inspector_dirty` for the rationale; piecemeal deferred
-        // despawns can interleave with lazy combobox/button setup
-        // spawns and orphan UI text at the root.
-        let old_children: Vec<Entity> = displays.iter_many(children.collection()).collect();
-        commands.queue(move |world: &mut World| {
-            for child in old_children {
-                if let Ok(ec) = world.get_entity_mut(child) {
-                    ec.despawn();
-                }
+    let Some(children) = children else {
+        return;
+    };
+    let old_children: Vec<Entity> = displays.iter_many(children.collection()).collect();
+    commands.queue(move |world: &mut World| {
+        for child in old_children {
+            if let Ok(ec) = world.get_entity_mut(child) {
+                ec.despawn();
             }
-        });
-    }
+        }
+    });
 }
 
 /// Handles `Addition<InspectorDirty>` on the Inspector entity: despawn existing
@@ -736,26 +774,7 @@ pub(crate) fn on_inspector_dirty(
     for (inspector_entity, target, children) in &inspectors {
         let mut source_entity = target.0;
 
-        // Collect the old display children, then queue a
-        // world-exclusive closure that despawns them synchronously.
-        // Doing this in a single queued closure (rather than piecemeal
-        // `commands.despawn` calls) guarantees the cascade completes
-        // as one atomic unit inside `Commands` flush; no lazy
-        // `setup_button` / `setup_combobox` spawns from a previous
-        // rebuild can slip in between entity despawns and leave
-        // orphaned UI children (the source of "Inherited" floating
-        // labels + `ChildOf(...) relates to an entity that does not
-        // exist` warnings).
-        let old_children: Vec<Entity> = children
-            .map(|c| displays.iter_many(c.collection()).collect())
-            .unwrap_or_default();
-        commands.queue(move |world: &mut World| {
-            for child in old_children {
-                if let Ok(ec) = world.get_entity_mut(child) {
-                    ec.despawn();
-                }
-            }
-        });
+        despawn_inspector_display_children(&mut commands, children, &displays);
 
         // Rebuild this inspector's contents. If the monitored target is gone
         // (despawned/respawned by CSG, undo, or prefab install), fall back to
@@ -811,7 +830,8 @@ pub(crate) fn on_inspector_dirty(
             Some(&asts.bsn),
             Some(&prefab_cache),
             &collapse_state,
-            Some(&asts.project_types),
+            &asts.project_types,
+            &asts.type_metadata,
         );
     }
 
@@ -859,10 +879,20 @@ pub(crate) struct ComponentDisplaySpec<'a> {
     pub collapse_state: &'a super::InspectorCollapseState,
 }
 
+/// Entities spawned by [`spawn_component_display`]. `section` is the card
+/// root; `body` is where field widgets go; `type_settings` sits between
+/// header and body so type-settings chrome can span the header width.
+pub(crate) struct ComponentDisplayCard {
+    pub section: Entity,
+    pub body: Entity,
+    pub header: Entity,
+    pub type_settings: Entity,
+}
+
 pub(crate) fn spawn_component_display(
     commands: &mut Commands,
     spec: ComponentDisplaySpec<'_>,
-) -> (Entity, Entity) {
+) -> ComponentDisplayCard {
     let ComponentDisplaySpec {
         name,
         type_path,
@@ -913,6 +943,20 @@ pub(crate) fn spawn_component_display(
     let header = commands
         .spawn_scene(pane_header())
         .insert((CollapsibleHeader, ChildOf(section_entity)))
+        .id();
+
+    let type_settings = commands
+        .spawn((
+            CollapsibleBody,
+            Node {
+                flex_direction: FlexDirection::Column,
+                width: Val::Percent(100.0),
+                display: body_display,
+                flex_shrink: 0.0,
+                ..Default::default()
+            },
+            ChildOf(section_entity),
+        ))
         .id();
 
     let body_entity = commands
@@ -1168,7 +1212,12 @@ pub(crate) fn spawn_component_display(
         );
     }
 
-    (section_entity, body_entity)
+    ComponentDisplayCard {
+        section: section_entity,
+        body: body_entity,
+        header,
+        type_settings,
+    }
 }
 
 /// Filter inspector component cards based on both the active category and the

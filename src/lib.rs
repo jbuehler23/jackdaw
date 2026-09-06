@@ -50,7 +50,9 @@ pub mod panel_focus;
 
 use std::{collections::BTreeMap, marker::PhantomData};
 
-pub use inspector::{EditorCategory, EditorDescription, EditorHidden, SkipSerialization};
+pub use inspector::{
+    EditorCategory, EditorDescription, EditorHidden, EditorPreview, SkipSerialization,
+};
 
 pub mod camera_preview;
 pub mod camera_settings;
@@ -97,6 +99,7 @@ pub mod pie_projection;
 pub mod prefab;
 pub mod preflight;
 pub mod preview_context;
+pub(crate) mod preview_model;
 pub mod project;
 pub mod project_build;
 pub mod project_files;
@@ -114,6 +117,7 @@ pub mod scaffold;
 pub mod scene_io;
 pub mod scene_ops;
 pub mod scenes;
+pub mod schema_preview;
 pub mod screenshot;
 pub mod scrolling_log;
 pub mod sdk_paths;
@@ -126,6 +130,7 @@ pub mod test_input;
 pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod transform_ops;
+pub mod type_metadata;
 pub mod ui_align;
 pub mod ui_asset_drop;
 pub mod ui_grouping;
@@ -174,7 +179,7 @@ pub mod prelude {
     pub use crate::windowing::{editor_window_plugin, primary_window_attributes};
     pub use crate::{
         AppState, DylibLoaderPlugin, EditorCategory, EditorCorePlugin, EditorDescription,
-        EditorHidden, ExtensionPlugin, JackdawEditorPlugins, SkipSerialization,
+        EditorHidden, EditorPreview, ExtensionPlugin, JackdawEditorPlugins, SkipSerialization,
     };
     pub use jackdaw_api::prelude::*;
 
@@ -416,21 +421,27 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(keybind_settings::KeybindSettingsPlugin)
         .add_plugins(panel_focus::PanelFocusPlugin)
         .add_plugins((
-            viewport_overlays::ViewportOverlaysPlugin,
-            view_modes::ViewModesPlugin,
-            status_bar::StatusBarPlugin,
-            build_panel::BuildPanelPlugin,
-            project_files::ProjectFilesPlugin,
-            modal_transform::ModalTransformPlugin,
-            numeric_transform::NumericTransformPlugin,
-            custom_properties::CustomPropertiesPlugin,
-            brush::BrushPlugin,
-            camera_preview::CameraPreviewPlugin,
-            material_preview::MaterialPreviewPlugin,
-            material_ui::plugin,
-            canvas_snap::plugin,
-            undo_snapshot::plugin,
-            migrate_dialog::plugin,
+            (
+                viewport_overlays::ViewportOverlaysPlugin,
+                schema_preview::SchemaPreviewPlugin,
+                type_metadata::TypeMetadataPlugin,
+                view_modes::ViewModesPlugin,
+                status_bar::StatusBarPlugin,
+                build_panel::BuildPanelPlugin,
+                project_files::ProjectFilesPlugin,
+                modal_transform::ModalTransformPlugin,
+            ),
+            (
+                numeric_transform::NumericTransformPlugin,
+                custom_properties::CustomPropertiesPlugin,
+                brush::BrushPlugin,
+                camera_preview::CameraPreviewPlugin,
+                material_preview::MaterialPreviewPlugin,
+                material_ui::plugin,
+                canvas_snap::plugin,
+                undo_snapshot::plugin,
+                migrate_dialog::plugin,
+            ),
         ))
         .add_plugins((
             material_browser::MaterialBrowserPlugin,
@@ -1996,7 +2007,7 @@ fn on_timeline_keyframe_click(
     event.propagate(false);
 }
 
-/// Mirror the main [`selection::Selection`] ->the animation crate's
+/// Mirror the main [`selection::Selection`] into the animation crate's
 /// [`jackdaw_animation::SelectedKeyframes`] so the timeline
 /// highlight system can tell which diamonds to light up without
 /// the animation crate needing to import `Selection` itself.
