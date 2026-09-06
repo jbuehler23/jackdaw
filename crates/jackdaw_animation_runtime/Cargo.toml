@@ -1,0 +1,27 @@
+[package]
+name = "jackdaw_animation_runtime"
+version.workspace = true
+edition = "2024"
+description = "Binds authored animation sets to their glTF skeletons and plays the state they ask for"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = [
+    "std",
+    "bevy_animation",
+    "bevy_asset",
+    "bevy_log",
+    # `Gltf`, whose named animations are where an authored state finds its
+    # clip. It carries `bevy_mesh` along, which is where `SkinnedMesh` lives,
+    # and `gltf_animation` is what puts the clips on the loaded file at all.
+    "bevy_gltf",
+    "gltf_animation",
+    # The bodies and the clips arrive as spawned scenes, so binding only ever
+    # sees entities `bevy_scene` produced.
+    "bevy_scene",
+] }
+serde = { workspace = true, features = ["derive"] }
+
+[lints]
+workspace = true

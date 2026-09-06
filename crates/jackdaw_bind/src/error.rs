@@ -329,6 +329,18 @@ pub enum BindError {
         value: f32,
     },
 
+    /// A constant an `Action` binding carries does not read as the type of the
+    /// field it fills: "two" in a `u8`, or "yes" in a `bool`.
+    #[error("field '{field}' is '{type_path}' and does not read from \"{text}\"")]
+    UnreadableLiteral {
+        /// The event field the constant fills.
+        field: String,
+        /// The type that field is declared as.
+        type_path: String,
+        /// The constant as it was written.
+        text: String,
+    },
+
     /// An `Action` binding leaves an event field unmapped, and the event has
     /// no default to fill the gap with.
     #[error("'{event_path}' leaves field '{field}' unmapped and has no #[reflect(Default)]")]
@@ -658,6 +670,14 @@ mod tests {
                     value: 300.0,
                 },
                 owned("field 'slot' is 'u8' and cannot take 300"),
+            ),
+            (
+                BindError::UnreadableLiteral {
+                    field: owned("slot"),
+                    type_path: owned("u8"),
+                    text: owned("two"),
+                },
+                owned("field 'slot' is 'u8' and does not read from \"two\""),
             ),
             (
                 BindError::UnfillableEvent {

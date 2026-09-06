@@ -1823,6 +1823,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<EntityAddConeOp>()
         .register_operator::<EntityAddPyramidOp>()
         .register_operator::<EntityAddAnimationPlayerOp>()
+        .register_operator::<AnimationSetStateOp>()
         .register_operator::<EntityAddAudioSourceOp>()
         .register_operator::<EntityAddFogVolumeOp>()
         .register_operator::<EntityAddReflectionProbeOp>()
@@ -2473,6 +2474,36 @@ pub(crate) fn entity_add_terrain(
 #[operator(id = "entity.add.prefab", label = "Prefab")]
 pub fn entity_add_prefab(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(crate::prefab::operators::open_prefab_picker);
+    OperatorResult::Finished
+}
+
+// -- Animation ---------------------------------------------------
+
+/// Ask an entity's animation set for one of the states it declares, so an
+/// authored set previews in the viewport the way it plays in the game.
+#[operator(
+    id = "animation.set_state",
+    label = "Set Animation State",
+    description = "Play one of the states an entity's animation set declares.",
+    params(
+        entity(
+            Entity,
+            doc = "Entity carrying the animation set. Defaults to the selection."
+        ),
+        state(String, doc = "Name of the state to play."),
+    )
+)]
+pub(crate) fn animation_set_state(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let entity = params.as_entity("entity")?;
+    let state = params.as_str("state").map(str::to_string)?;
+    commands.queue(move |world: &mut World| {
+        if let Ok(mut entity) = world.get_entity_mut(entity) {
+            entity.insert(jackdaw_animation_runtime::AnimationState(state));
+        }
+    });
     OperatorResult::Finished
 }
 

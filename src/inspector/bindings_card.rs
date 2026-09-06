@@ -152,6 +152,7 @@ impl BindKind {
             BindKind::Action => Binding::Action {
                 event: String::new(),
                 fields: Vec::new(),
+                literals: Vec::new(),
             },
         }
     }
@@ -187,6 +188,8 @@ pub enum BindControl {
     AsPercent,
     TwoWay,
     Event,
+    /// The constant one event field takes when no path fills it.
+    Literal,
     AddRead,
     RemoveRead(usize),
     MoveUp,
@@ -289,6 +292,32 @@ fn set_path(binding: &mut Binding, slot: PathSlot, event_field: &str, raw: Strin
             }
         }
         _ => {}
+    }
+}
+
+/// The constant on `field`, or empty when the binding carries none.
+fn literal_at<'a>(binding: &'a Binding, field: &str) -> &'a str {
+    let Binding::Action { literals, .. } = binding else {
+        return "";
+    };
+    literals
+        .iter()
+        .find(|(name, _)| name == field)
+        .map_or("", |(_, text)| text.as_str())
+}
+
+/// Put `text` on `field`. Empty text takes the constant off, the way an empty
+/// path takes a mapping off.
+fn set_literal(binding: &mut Binding, field: &str, text: String) {
+    let Binding::Action { literals, .. } = binding else {
+        return;
+    };
+    if text.is_empty() {
+        literals.retain(|(name, _)| name != field);
+    } else if let Some((_, value)) = literals.iter_mut().find(|(name, _)| name == field) {
+        *value = text;
+    } else {
+        literals.push((field.to_string(), text));
     }
 }
 
@@ -854,7 +883,12 @@ impl SchemaCtx {
 
     /// The first thing wrong with a binding, in reading order.
     fn binding_error(&self, binding: &Binding) -> Option<BindError> {
-        if let Binding::Action { event, fields } = binding {
+        if let Binding::Action {
+            event,
+            fields,
+            literals,
+        } = binding
+        {
             if !event.is_empty() && self.schema_known && self.event(event).is_none() {
                 return Some(BindError::UnknownType {
                     noun: "event type",
@@ -862,9 +896,11 @@ impl SchemaCtx {
                 });
             }
             if let Some(schema) = self.event(event)
-                && let Some((name, _)) = fields
+                && let Some(name) = fields
                     .iter()
-                    .find(|(name, _)| !schema.fields.iter().any(|field| field == name))
+                    .map(|(name, _)| name)
+                    .chain(literals.iter().map(|(name, _)| name))
+                    .find(|name| !schema.fields.iter().any(|field| field == *name))
             {
                 return Some(BindError::UnknownEventField {
                     field: name.clone(),
@@ -892,11 +928,19 @@ impl SchemaCtx {
     /// The complaint for one unmapped field of an event that cannot fill its own
     /// gaps, the one unfinished binding known to fail at dispatch.
     fn gap_warning(&self, binding: &Binding, field: &str) -> Option<BindError> {
-        let Binding::Action { event, fields } = binding else {
+        let Binding::Action {
+            event,
+            fields,
+            literals,
+        } = binding
+        else {
             return None;
         };
         let schema = self.event(event)?;
-        if schema.fills_gaps || fields.iter().any(|(mapped, _)| mapped == field) {
+        if schema.fills_gaps
+            || fields.iter().any(|(mapped, _)| mapped == field)
+            || literals.iter().any(|(mapped, _)| mapped == field)
+        {
             return None;
         }
         Some(BindError::UnfillableEvent {
@@ -984,7 +1028,7 @@ fn summary(binding: &Binding) -> String {
             let arrow = if *two_way { "<->" } else { "<-" };
             format!("value {arrow} {}", display_path(&with.raw))
         }
-        Binding::Action { event, fields } => {
+        Binding::Action { event, fields, .. } => {
             let event = if event.is_empty() {
                 "...".to_string()
             } else {
@@ -1172,13 +1216,27 @@ fn spawn_binding_row(
                 *two_way,
             );
         }
-        Binding::Action { event, fields } => {
+        Binding::Action {
+            event,
+            fields,
+            literals,
+        } => {
             spawn_event_picker(commands, row, source, index, event, ctx);
-            // Without a schema the rows fall back to whatever is already
-            // mapped: a mapping the card does not draw cannot be taken back.
+            // Without a schema the rows fall back to whatever the binding
+            // already names: a field the card does not draw cannot be taken
+            // back.
             let names: Vec<String> = match ctx.event(event) {
                 Some(schema) => schema.fields.clone(),
-                None => fields.iter().map(|(name, _)| name.clone()).collect(),
+                None => {
+                    let mut named: Vec<String> =
+                        fields.iter().map(|(name, _)| name.clone()).collect();
+                    for (name, _) in literals {
+                        if !named.contains(name) {
+                            named.push(name.clone());
+                        }
+                    }
+                    named
+                }
             };
             for name in names {
                 spawn_path_row(
@@ -1189,12 +1247,13 @@ fn spawn_binding_row(
                         index,
                         slot: PathSlot::EventField,
                         label: name.clone(),
-                        event_field: name,
+                        event_field: name.clone(),
                         removable: false,
                     },
                     binding,
                     ctx,
                 );
+                spawn_literal_input(commands, row, source, index, &name, binding);
             }
         }
     }
@@ -1658,6 +1717,29 @@ fn spawn_text_input(
     ));
 }
 
+/// The constant one event field takes when no path fills it. Empty text clears
+/// it, the way an empty path clears a mapping.
+fn spawn_literal_input(
+    commands: &mut Commands,
+    parent: Entity,
+    source: Entity,
+    index: usize,
+    field: &str,
+    binding: &Binding,
+) {
+    let row = spawn_field_row(commands, parent, FieldRowProps::new(format!("{field} =")));
+    commands.spawn((
+        text_edit(
+            TextEditProps::default()
+                .with_placeholder("constant")
+                .with_default_value(literal_at(binding, field))
+                .allow_empty(),
+        ),
+        BindingControl::for_event_field(source, index, BindControl::Literal, field),
+        ChildOf(row.control),
+    ));
+}
+
 fn spawn_add_read(
     commands: &mut Commands,
     parent: Entity,
@@ -1776,6 +1858,7 @@ struct BindingEdit {
     two_way: Option<bool>,
     event: Option<String>,
     map: Option<Vec<(String, BindPath)>>,
+    literals: Option<Vec<(String, String)>>,
 }
 
 impl BindingEdit {
@@ -1810,6 +1893,13 @@ impl BindingEdit {
                     .map(|(field, path)| (field.to_string(), BindPath::new(path)))
                     .collect()
             }),
+            literals: params.as_str("literals").map(|raw| {
+                raw.split(',')
+                    .filter(|part| !part.is_empty())
+                    .filter_map(|pair| pair.split_once('='))
+                    .map(|(field, text)| (field.to_string(), text.to_string()))
+                    .collect()
+            }),
         }
     }
 
@@ -1826,6 +1916,7 @@ impl BindingEdit {
             two_way,
             event,
             map,
+            literals,
         } = self;
         match binding {
             Binding::Field {
@@ -1851,6 +1942,7 @@ impl BindingEdit {
                     ("two_way", two_way.is_some()),
                     ("event", event.is_some()),
                     ("map", map.is_some()),
+                    ("literals", literals.is_some()),
                 ]));
             }
             Binding::Text {
@@ -1870,6 +1962,7 @@ impl BindingEdit {
                     ("two_way", two_way.is_some()),
                     ("event", event.is_some()),
                     ("map", map.is_some()),
+                    ("literals", literals.is_some()),
                 ]));
             }
             Binding::Visible {
@@ -1889,6 +1982,7 @@ impl BindingEdit {
                     ("two_way", two_way.is_some()),
                     ("event", event.is_some()),
                     ("map", map.is_some()),
+                    ("literals", literals.is_some()),
                 ]));
             }
             Binding::Value {
@@ -1908,22 +2002,28 @@ impl BindingEdit {
                     ("format", format.is_some()),
                     ("event", event.is_some()),
                     ("map", map.is_some()),
+                    ("literals", literals.is_some()),
                 ]));
             }
             Binding::Action {
                 event: event_slot,
                 fields,
+                literals: literals_slot,
             } => {
                 // A mapping belongs to the event it was made against, so a new
-                // event clears it before the clause's own map lands.
+                // event clears it before the clause's own values land.
                 if let Some(event) = event
                     && *event_slot != event
                 {
                     *event_slot = event;
                     fields.clear();
+                    literals_slot.clear();
                 }
                 if let Some(map) = map {
                     *fields = map;
+                }
+                if let Some(literals) = literals {
+                    *literals_slot = literals;
                 }
                 ignored.extend(named_keys(&[
                     ("read", read.is_some()),
@@ -1983,6 +2083,10 @@ fn named_keys(present: &[(&'static str, bool)]) -> Vec<&'static str> {
         two_way(bool, doc = "Let a Value binding write the author's edits back."),
         event(String, doc = "An Action binding's event type path."),
         map(String, doc = "Action field mapping, as comma-separated field:path pairs."),
+        literals(
+            String,
+            doc = "Action constants, as comma-separated field=value pairs, e.g. \"slot=2\"."
+        ),
     ),
 )]
 pub(crate) fn binding_add(
@@ -2044,6 +2148,10 @@ pub(crate) fn binding_add(
         two_way(bool, doc = "Let a Value binding write the author's edits back."),
         event(String, doc = "An Action binding's event type path."),
         map(String, doc = "Action field mapping, as comma-separated field:path pairs."),
+        literals(
+            String,
+            doc = "Action constants, as comma-separated field=value pairs, e.g. \"slot=2\"."
+        ),
     ),
 )]
 pub(crate) fn binding_set(
@@ -2331,12 +2439,17 @@ pub(crate) fn on_binding_combobox_change(
         BindControl::Event => {
             let picked = picked.unwrap_or_default();
             apply_to(&mut commands, source, index, move |binding| {
-                if let Binding::Action { event, fields } = binding
+                if let Binding::Action {
+                    event,
+                    fields,
+                    literals,
+                } = binding
                     && *event != picked
                 {
                     // A mapping belongs to the event it was made against.
                     *event = picked;
                     fields.clear();
+                    literals.clear();
                 }
             });
         }
@@ -2468,6 +2581,7 @@ pub(crate) fn on_binding_text_commit(
     }
     let text = event.text.clone();
     let control_kind = control.control;
+    let event_field = control.event_field.clone();
     apply_to(
         &mut commands,
         control.source,
@@ -2478,6 +2592,7 @@ pub(crate) fn on_binding_text_commit(
             | (Binding::Visible { via, .. }, BindControl::ViaText) => {
                 *via = (!text.is_empty()).then_some(text);
             }
+            (binding, BindControl::Literal) => set_literal(binding, &event_field, text),
             _ => {}
         },
     );
@@ -2674,6 +2789,7 @@ mod tests {
         let mut binding = Binding::Action {
             event: "demo::Fired".to_string(),
             fields: Vec::new(),
+            literals: Vec::new(),
         };
         set_path(
             &mut binding,

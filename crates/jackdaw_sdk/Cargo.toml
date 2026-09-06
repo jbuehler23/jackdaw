@@ -40,6 +40,7 @@ jackdaw_runtime = { workspace = true, features = [
     "pie",
     "terrain",
     "navmesh",
+    "animation",
 ] }
 # The version `bevy_math` uses, with the generator features a project's own
 # `rand` dependency enables, so the SDK build already carries them.

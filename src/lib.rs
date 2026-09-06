@@ -465,6 +465,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(operator_tooltip::OperatorTooltipPlugin)
         .add_plugins(jackdaw_node_graph::NodeGraphPlugin)
         .add_plugins(jackdaw_animation::AnimationPlugin)
+        .add_plugins(jackdaw_animation_runtime::AnimationRuntimePlugin)
         .add_plugins(windowing::WindowingPlugin)
         .add_plugins(jackdaw_panels::DockPlugin)
         .add_plugins(input_contexts::InputContextsPlugin)

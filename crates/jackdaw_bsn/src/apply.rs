@@ -1046,6 +1046,8 @@ fn enum_variant_value_to_reflect(
     // `field_len` on the dynamic forms is the trait's, not inherent.
     use bevy::reflect::tuple::Tuple;
 
+    // Why a struct variant came up short, when it did.
+    let mut elided: Option<String> = None;
     let (variant_name, dynamic_variant) = match value {
         BsnValue::Type(type_path) => {
             let name = variant_name_of(type_path);
@@ -1116,24 +1118,33 @@ fn enum_variant_value_to_reflect(
                 };
                 dynamic_struct.insert_boxed(&field.name, reflected);
             }
-            if dynamic_struct.field_len() != struct_var.field_len() {
-                return refused_variant(
-                    enum_info,
-                    name,
-                    &format!(
-                        "it gives {} of the variant's {} fields",
-                        dynamic_struct.field_len(),
-                        struct_var.field_len(),
-                    ),
-                );
-            }
+            elided = (dynamic_struct.field_len() != struct_var.field_len()).then(|| {
+                format!(
+                    "it gives {} of the variant's {} fields",
+                    dynamic_struct.field_len(),
+                    struct_var.field_len(),
+                )
+            });
             (name.to_string(), DynamicVariant::Struct(dynamic_struct))
         }
         _ => return None,
     };
 
-    let mut dynamic_enum = DynamicEnum::new(variant_name, dynamic_variant);
+    let mut dynamic_enum = DynamicEnum::new(variant_name.clone(), dynamic_variant);
     dynamic_enum.set_represented_type(Some(enum_registration.type_info()));
+    // A variant that names fewer fields than the variant declares is a document
+    // written against an older shape. `FromReflect` fills a field the type marks
+    // `#[reflect(default)]` and refuses the rest, so it decides rather than the
+    // count alone.
+    if let Some(short) = elided {
+        let Some(concrete) = enum_registration
+            .data::<ReflectFromReflect>()
+            .and_then(|from_reflect| from_reflect.from_reflect(&dynamic_enum))
+        else {
+            return refused_variant(enum_info, &variant_name, &short);
+        };
+        return Some(concrete.into_partial_reflect());
+    }
     Some(Box::new(dynamic_enum))
 }
 

@@ -4830,6 +4830,7 @@ dependencies = [
  "image",
  "include_dir",
  "jackdaw_animation",
+ "jackdaw_animation_runtime",
  "jackdaw_api",
  "jackdaw_api_internal",
  "jackdaw_avian_integration",
@@ -4902,6 +4903,14 @@ dependencies = [
  "jackdaw_node_graph",
  "jackdaw_scene_types",
  "lucide-icons",
+ "serde",
+]
+
+[[package]]
+name = "jackdaw_animation_runtime"
+version = "0.19.0"
+dependencies = [
+ "bevy",
  "serde",
 ]
 
@@ -5286,6 +5295,7 @@ version = "0.19.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "jackdaw_animation_runtime",
  "jackdaw_avian_integration",
  "jackdaw_bind",
  "jackdaw_bsn",

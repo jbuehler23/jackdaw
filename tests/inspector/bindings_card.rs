@@ -17,6 +17,7 @@ use jackdaw_bsn::{BsnValue, SceneBsnAst};
 use jackdaw_commands::CommandHistory;
 use jackdaw_feathers::button::ButtonClickEvent;
 use jackdaw_feathers::combobox::{ComboBoxChangeEvent, EditorComboBox};
+use jackdaw_feathers::text_edit::TextEditCommitEvent;
 use jackdaw_feathers::tokens;
 use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_feathers::variant_edit::VariantEditConfig;
@@ -257,6 +258,15 @@ fn pick(app: &mut App, combo: Entity, selected: usize, label: &str, value: Optio
     app.update();
 }
 
+fn commit_text(app: &mut App, input: Entity, text: &str) {
+    app.world_mut().trigger(TextEditCommitEvent {
+        entity: input,
+        text: text.to_string(),
+    });
+    app.update();
+    app.update();
+}
+
 fn click(app: &mut App, button: Entity) {
     app.world_mut().trigger(ButtonClickEvent { entity: button });
     app.update();
@@ -451,6 +461,7 @@ fn every_binding_kind_renders_its_own_controls() {
         Binding::Action {
             event: "demo_game::Fired".to_string(),
             fields: Vec::new(),
+            literals: Vec::new(),
         },
     ]));
 
@@ -1034,6 +1045,7 @@ fn the_event_picker_offers_only_struct_events() {
     let (mut app, _) = app_with_bindings(Bindings(vec![Binding::Action {
         event: String::new(),
         fields: Vec::new(),
+        literals: Vec::new(),
     }]));
 
     let event = control(&mut app, 0, BindControl::Event);
@@ -1055,6 +1067,7 @@ fn an_event_that_cannot_fill_gaps_warns_while_fields_are_unmapped() {
     let (mut app, entity) = app_with_bindings(Bindings(vec![Binding::Action {
         event: "demo_game::Strict".to_string(),
         fields: Vec::new(),
+        literals: Vec::new(),
     }]));
 
     let body = card_body(&mut app);
@@ -1072,7 +1085,7 @@ fn an_event_that_cannot_fill_gaps_warns_while_fields_are_unmapped() {
     // Map it, and the warning goes.
     let combo = control(&mut app, 0, BindControl::PathType(PathSlot::EventField));
     pick(&mut app, combo, 0, "Health", Some("demo_game::Health"));
-    let Binding::Action { event, fields } = live(&app, entity).0[0].clone() else {
+    let Binding::Action { event, fields, .. } = live(&app, entity).0[0].clone() else {
         panic!("the binding is still an Action");
     };
     assert_eq!(event, "demo_game::Strict");
@@ -1114,6 +1127,45 @@ fn an_event_that_cannot_fill_gaps_warns_while_fields_are_unmapped() {
         !still_warning,
         "once every field is mapped there is nothing to warn about",
     );
+}
+
+/// A field with nothing worth reading can still be filled by hand: the constant
+/// lands on the row for the field it names, and clearing the text takes it off.
+#[test]
+fn a_constant_typed_on_an_action_row_fills_the_field_it_names() {
+    let (mut app, entity) = app_with_bindings(Bindings(vec![Binding::Action {
+        event: "demo_game::Strict".to_string(),
+        fields: Vec::new(),
+        literals: Vec::new(),
+    }]));
+
+    let input = control(&mut app, 0, BindControl::Literal);
+    commit_text(&mut app, input, "3");
+
+    let Binding::Action { literals, .. } = live(&app, entity).0[0].clone() else {
+        panic!("the binding is still an Action");
+    };
+    assert_eq!(literals, vec![("amount".to_string(), "3".to_string())]);
+
+    let body = card_body(&mut app);
+    let still_warning = descendants(app.world_mut(), body)
+        .into_iter()
+        .any(|entity| {
+            app.world()
+                .get::<Tooltip>(entity)
+                .is_some_and(|tip| tip.title.contains("leaves field 'amount' unmapped"))
+        });
+    assert!(
+        !still_warning,
+        "a field the binding carries a constant for is not an unmapped one",
+    );
+
+    let input = control(&mut app, 0, BindControl::Literal);
+    commit_text(&mut app, input, "");
+    let Binding::Action { literals, .. } = live(&app, entity).0[0].clone() else {
+        panic!("the binding is still an Action");
+    };
+    assert!(literals.is_empty(), "empty text takes the constant off");
 }
 
 /// A `Field` binding writes fields of the widget's own components, so the write
@@ -1287,6 +1339,7 @@ fn an_action_keeps_its_mappings_when_the_event_is_unknown() {
             "amount".to_string(),
             BindPath::new("demo_game::Health.current"),
         )],
+        literals: Vec::new(),
     }]));
 
     let combo = control(&mut app, 0, BindControl::PathField(PathSlot::EventField));
@@ -1396,6 +1449,7 @@ fn a_saved_binding_comes_back_off_disk_unchanged() {
         Binding::Action {
             event: "game::hud::RetryPressed".to_string(),
             fields: vec![("slot".to_string(), BindPath::new("game::hud::Save.slot"))],
+            literals: Vec::new(),
         },
     ]);
     let (mut app, _) = app_with_bindings(authored.clone());

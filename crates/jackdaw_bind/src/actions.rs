@@ -12,6 +12,16 @@ use crate::resolve::{
 use crate::{BindError, BindFailures, BindPath, Binding, Bindings};
 
 type ActionFields = Vec<(String, BindPath)>;
+type ActionLiterals = Vec<(String, String)>;
+
+/// One action binding lifted off the widget, carrying the index it sits at so a
+/// failure reaches the same warn-once ledger the evaluator reports through.
+struct QueuedAction {
+    index: usize,
+    event_path: String,
+    fields: ActionFields,
+    literals: ActionLiterals,
+}
 
 /// The only field name an `EntityEvent`'s target can be recognised by.
 ///
@@ -25,14 +35,21 @@ pub fn on_activate(activate: On<Activate>, bindings: Query<&Bindings>, mut comma
     let Ok(found) = bindings.get(target) else {
         return;
     };
-    // The index travels with each action so a failure reaches the same
-    // warn-once ledger the evaluator reports through.
-    let actions: Vec<(usize, String, ActionFields)> = found
+    let actions: Vec<QueuedAction> = found
         .0
         .iter()
         .enumerate()
         .filter_map(|(index, b)| match b {
-            Binding::Action { event, fields } => Some((index, event.clone(), fields.clone())),
+            Binding::Action {
+                event,
+                fields,
+                literals,
+            } => Some(QueuedAction {
+                index,
+                event_path: event.clone(),
+                fields: fields.clone(),
+                literals: literals.clone(),
+            }),
             _ => None,
         })
         .collect();
@@ -40,8 +57,9 @@ pub fn on_activate(activate: On<Activate>, bindings: Query<&Bindings>, mut comma
         return;
     }
     commands.queue(move |world: &mut World| {
-        for (index, event_path, fields) in actions {
-            if let Err(err) = dispatch(world, target, &event_path, &fields) {
+        for action in actions {
+            let index = action.index;
+            if let Err(err) = dispatch(world, target, &action) {
                 match world.get_resource_mut::<BindFailures>() {
                     Some(mut failures) => report(&mut failures, target, index, err),
                     None => warn!("binding {index} on {target}: {err}"),
@@ -184,6 +202,29 @@ fn mismatch(field: &str, type_path: &str, kind: &'static str) -> BindError {
     }
 }
 
+/// Reads a literal's text as the shape the event declares for the field it
+/// fills, so it lands through the same coercion a value read from game state
+/// goes through. Numbers arrive as `f32` and are narrowed there.
+fn literal_value(field: &str, text: &str, type_path: Option<&str>) -> Result<BindValue, BindError> {
+    let Some(type_path) = type_path else {
+        return Err(BindError::UnknownEventField {
+            field: field.to_string(),
+        });
+    };
+    let unreadable = || BindError::UnreadableLiteral {
+        field: field.to_string(),
+        type_path: type_path.to_string(),
+        text: text.to_string(),
+    };
+    if type_path == bool::type_path() {
+        return text.parse().map(BindValue::Bool).map_err(|_| unreadable());
+    }
+    if type_path == String::type_path() {
+        return Ok(BindValue::Str(text.to_string()));
+    }
+    text.parse().map(BindValue::F32).map_err(|_| unreadable())
+}
+
 /// Field types are collected up front so the registry lock is released before
 /// `read_path` runs, which takes the same lock again.
 struct EventShape {
@@ -192,6 +233,8 @@ struct EventShape {
     /// see `dispatch` for why the trigger is not handed the app's.
     registry: TypeRegistry,
     field_types: Vec<Option<String>>,
+    /// The same, for the fields the binding's literals fill.
+    literal_types: Vec<Option<String>>,
     declared_fields: Vec<String>,
     /// Every field the event declares as an `Entity`.
     ///
@@ -208,6 +251,7 @@ fn event_shape(
     world: &World,
     event_path: &str,
     fields: &[(String, BindPath)],
+    literals: &[(String, String)],
 ) -> Result<EventShape, BindError> {
     let registry_arc = world
         .get_resource::<AppTypeRegistry>()
@@ -230,9 +274,14 @@ fn event_shape(
             event_path: event_path.to_string(),
             kind: reg.type_info().kind().to_string(),
         })?;
+    let declared_type = |field: &String| info.field(field).map(|f| f.type_path().to_string());
     let field_types = fields
         .iter()
-        .map(|(field, _)| info.field(field).map(|f| f.type_path().to_string()))
+        .map(|(field, _)| declared_type(field))
+        .collect();
+    let literal_types = literals
+        .iter()
+        .map(|(field, _)| declared_type(field))
         .collect();
     let declared_fields = info.iter().map(|f| f.name().to_string()).collect();
     let entity_fields = info
@@ -248,6 +297,7 @@ fn event_shape(
         reflect_event,
         registry: alone,
         field_types,
+        literal_types,
         declared_fields,
         entity_fields,
         fills_gaps,
@@ -261,9 +311,20 @@ pub(crate) fn check_event(
     world: &World,
     event_path: &str,
     fields: &[(String, BindPath)],
+    literals: &[(String, String)],
 ) -> Result<(), BindError> {
-    let shape = event_shape(world, event_path, fields)?;
-    for ((field, _), declared) in fields.iter().zip(&shape.field_types) {
+    let shape = event_shape(world, event_path, fields, literals)?;
+    let named = fields
+        .iter()
+        .map(|(field, _)| field)
+        .zip(&shape.field_types)
+        .chain(
+            literals
+                .iter()
+                .map(|(field, _)| field)
+                .zip(&shape.literal_types),
+        );
+    for (field, declared) in named {
         if declared.is_none() {
             return Err(BindError::UnknownEventField {
                 field: field.clone(),
@@ -279,17 +340,27 @@ pub(crate) fn check_event(
 /// dispatch, observers included, so it is handed the registry of one that
 /// `event_shape` built rather than the app's, leaving an observer free to ask
 /// for the app's without deadlocking.
-fn dispatch(
-    world: &mut World,
-    widget: Entity,
-    event_path: &str,
-    fields: &[(String, BindPath)],
-) -> Result<(), BindError> {
-    let shape = event_shape(world, event_path, fields)?;
+fn dispatch(world: &mut World, widget: Entity, action: &QueuedAction) -> Result<(), BindError> {
+    let QueuedAction {
+        event_path,
+        fields,
+        literals,
+        ..
+    } = action;
+    let shape = event_shape(world, event_path, fields, literals)?;
     let context = resolve_context(world, widget);
     let mut dynamic = DynamicStruct::default();
     for ((field, path), field_type) in fields.iter().zip(&shape.field_types) {
         let value = read_path(world, context, path)?;
+        insert_coerced(&mut dynamic, field, value, field_type.as_deref())?;
+    }
+    // The bound value wins: a field named on both sides is one the author moved
+    // off its constant and onto game state.
+    for ((field, text), field_type) in literals.iter().zip(&shape.literal_types) {
+        if dynamic.field(field).is_some() {
+            continue;
+        }
+        let value = literal_value(field, text, field_type.as_deref())?;
         insert_coerced(&mut dynamic, field, value, field_type.as_deref())?;
     }
     // A widget with no context resolved has no entity to send, and the event's
@@ -366,6 +437,7 @@ mod tests {
             &world,
             "Fired",
             &[("0".into(), BindPath::new("Slot.index"))],
+            &[],
         )
         .unwrap_err();
         assert!(
@@ -377,7 +449,7 @@ mod tests {
     #[test]
     fn an_enum_event_is_refused_when_the_binding_is_resolved() {
         let world = world_with::<Mode>();
-        let err = check_event(&world, "Mode", &[]).unwrap_err();
+        let err = check_event(&world, "Mode", &[], &[]).unwrap_err();
         assert!(
             matches!(err, BindError::EventNotNamedStruct { ref kind, .. } if kind == "enum"),
             "wrong branch: {err}"

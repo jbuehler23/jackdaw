@@ -180,6 +180,7 @@ fn button_with(app: &mut App, subject: Entity, event: &str, field: &str, path: &
             Bindings(vec![Binding::Action {
                 event: event.into(),
                 fields: vec![(field.into(), BindPath::new(path))],
+                literals: Vec::new(),
             }]),
         ))
         .id()
@@ -197,6 +198,7 @@ fn activate_triggers_mapped_game_event() {
             Bindings(vec![Binding::Action {
                 event: "CastAbility".into(),
                 fields: vec![("slot".into(), BindPath::new("AbilitySlot.index"))],
+                literals: Vec::new(),
             }]),
         ))
         .id();
@@ -232,6 +234,7 @@ fn unfillable_event_warns_instead_of_panicking() {
             Bindings(vec![Binding::Action {
                 event: "Undefaultable".into(),
                 fields: vec![("slot".into(), BindPath::new("AbilitySlot.index"))],
+                literals: Vec::new(),
             }]),
         ))
         .id();
@@ -261,6 +264,7 @@ fn string_and_bool_fields_dispatch_when_the_types_line_up() {
                     ("name".into(), BindPath::new("Caption.name")),
                     ("ready".into(), BindPath::new("Caption.ready")),
                 ],
+                literals: Vec::new(),
             }]),
         ))
         .id();
@@ -336,6 +340,7 @@ fn an_action_with_no_resolved_context_sends_nothing() {
             Bindings(vec![Binding::Action {
                 event: "CastAbility".into(),
                 fields: vec![],
+                literals: Vec::new(),
             }]),
         ))
         .id();
@@ -361,6 +366,7 @@ fn an_action_with_a_resolved_context_still_sends() {
             Bindings(vec![Binding::Action {
                 event: "CastAbility".into(),
                 fields: vec![],
+                literals: Vec::new(),
             }]),
         ))
         .id();
@@ -399,6 +405,7 @@ fn unknown_event_type_warns_instead_of_panicking() {
             Bindings(vec![Binding::Action {
                 event: "NotAnEvent".into(),
                 fields: vec![],
+                literals: Vec::new(),
             }]),
         ))
         .id();
@@ -422,6 +429,7 @@ fn a_tuple_struct_event_is_refused_instead_of_panicking() {
             Bindings(vec![Binding::Action {
                 event: "Fired".into(),
                 fields: vec![],
+                literals: Vec::new(),
             }]),
         ))
         .id();
@@ -443,6 +451,7 @@ fn an_enum_event_is_refused_instead_of_panicking() {
             Bindings(vec![Binding::Action {
                 event: "Mode".into(),
                 fields: vec![],
+                literals: Vec::new(),
             }]),
         ))
         .id();
@@ -494,4 +503,102 @@ fn a_nan_is_refused_rather_than_sent_as_zero() {
     app.world_mut().trigger(Activate { entity: button });
     app.update();
     assert!(app.world().resource::<Casts>().0.is_empty());
+}
+
+/// A button that fires `event` with `literals` and nothing read from state.
+fn button_with_literals(
+    app: &mut App,
+    subject: Entity,
+    event: &str,
+    literals: &[(&str, &str)],
+) -> Entity {
+    app.world_mut()
+        .spawn((
+            Node::default(),
+            BindContext(subject),
+            Bindings(vec![Binding::Action {
+                event: event.into(),
+                fields: vec![],
+                literals: literals
+                    .iter()
+                    .map(|(field, text)| ((*field).to_string(), (*text).to_string()))
+                    .collect(),
+            }]),
+        ))
+        .id()
+}
+
+/// A slot number the author typed rather than read reaches the event as the
+/// `u8` the field is declared with.
+#[test]
+fn an_action_sends_the_constant_its_binding_carries() {
+    let mut app = app();
+    let subject = app.world_mut().spawn(AbilitySlot { index: 3 }).id();
+    let button = button_with_literals(&mut app, subject, "CastAbility", &[("slot", "2")]);
+    app.update();
+    app.world_mut().trigger(Activate { entity: button });
+    app.update();
+    assert_eq!(app.world().resource::<Casts>().0, vec![(subject, 2)]);
+}
+
+/// A field the author has since bound to game state is no longer the constant
+/// it started as.
+#[test]
+fn a_bound_field_wins_over_a_literal_naming_the_same_field() {
+    let mut app = app();
+    let subject = app.world_mut().spawn(AbilitySlot { index: 3 }).id();
+    let button = app
+        .world_mut()
+        .spawn((
+            Node::default(),
+            BindContext(subject),
+            Bindings(vec![Binding::Action {
+                event: "CastAbility".into(),
+                fields: vec![("slot".into(), BindPath::new("AbilitySlot.index"))],
+                literals: vec![("slot".into(), "9".into())],
+            }]),
+        ))
+        .id();
+    app.update();
+    app.world_mut().trigger(Activate { entity: button });
+    app.update();
+    assert_eq!(
+        app.world().resource::<Casts>().0,
+        vec![(subject, 3)],
+        "the read path filled the field, not the constant beside it",
+    );
+}
+
+/// A constant that does not read as its field's type is an authored mistake,
+/// so it warns through the ledger once and sends nothing.
+#[test]
+fn a_literal_that_cannot_coerce_is_refused_with_one_warning() {
+    let mut app = app();
+    let subject = app.world_mut().spawn(AbilitySlot { index: 3 }).id();
+    let button = button_with_literals(&mut app, subject, "CastAbility", &[("slot", "two")]);
+    app.update();
+    for _ in 0..2 {
+        app.world_mut().trigger(Activate { entity: button });
+        app.update();
+    }
+    assert!(app.world().resource::<Casts>().0.is_empty());
+    let failures = &app.world().resource::<BindFailures>().0;
+    assert!(failures.contains(&(button, 0)));
+    assert_eq!(failures.len(), 1, "the second click warns nothing new");
+}
+
+/// A constant naming a field the event does not declare is caught when the
+/// binding is resolved, the same as a read path that names one.
+#[test]
+fn a_literal_naming_no_field_of_the_event_is_reported_before_the_first_click() {
+    let mut app = app();
+    let subject = app.world_mut().spawn(AbilitySlot { index: 3 }).id();
+    let button = button_with_literals(&mut app, subject, "CastAbility", &[("nope", "2")]);
+    app.update();
+    assert!(
+        app.world()
+            .resource::<BindFailures>()
+            .0
+            .contains(&(button, 0))
+    );
 }
