@@ -100,6 +100,18 @@ fn spawn_body(
     instance
 }
 
+/// Spawns named nodes under `parent`, the way a glTF file's mesh nodes sit
+/// among the bones of the armature they are skinned to.
+fn spawn_mesh_nodes(app: &mut App, parent: Entity, names: &[&str]) {
+    for name in names {
+        app.world_mut().spawn((
+            Name::new((*name).to_string()),
+            Transform::default(),
+            ChildOf(parent),
+        ));
+    }
+}
+
 /// A clip that slides the bone at `path` one unit along X over a second.
 fn sliding_clip(app: &mut App, path: &[&str]) -> Handle<AnimationClip> {
     let names: Vec<Name> = path
@@ -452,6 +464,85 @@ fn two_parts_sharing_a_rig_are_driven_by_one_skeleton_and_their_joints_move_iden
             .x
             > 0.0,
         "one player moves the bones both meshes are skinned to"
+    );
+}
+
+#[test]
+fn a_part_merges_when_its_joints_match_even_if_mesh_node_counts_differ() {
+    let mut app = animation_app();
+    let clip = sliding_clip(&mut app, &["Armature", "Hips"]);
+    let source = source_holding(&mut app, &[("Walk", clip)]);
+    let set = walking_set(
+        vec!["rig.glb".to_string()],
+        vec![AnimationStateDef {
+            name: "walk".to_string(),
+            clip: "Walk".to_string(),
+            ..AnimationStateDef::default()
+        }],
+        "walk",
+    );
+    let root = spawn_rig(&mut app, set, "Torso", &["Hips"]);
+    app.world_mut()
+        .entity_mut(root)
+        .insert(AnimationSources(vec![source]));
+    let torso = named(&mut app, "Torso");
+    let torso_armature = app.world().get::<Children>(torso).unwrap()[0];
+    let torso_hips = app.world().get::<Children>(torso_armature).unwrap()[0];
+    spawn_mesh_nodes(
+        &mut app,
+        torso_armature,
+        &["TorsoSkin", "TorsoTrim", "TorsoBelt"],
+    );
+    app.world_mut().spawn((
+        Name::new("TorsoMesh"),
+        SkinnedMesh {
+            joints: vec![torso_armature, torso_hips],
+            ..SkinnedMesh::default()
+        },
+        ChildOf(torso),
+    ));
+
+    let legs = spawn_body(&mut app, root, "Legs", "Armature", &["Hips"]);
+    let legs_armature = app.world().get::<Children>(legs).unwrap()[0];
+    let legs_hips = app.world().get::<Children>(legs_armature).unwrap()[0];
+    spawn_mesh_nodes(&mut app, legs_armature, &["LegsSkin"]);
+    let legs_mesh = app
+        .world_mut()
+        .spawn((
+            Name::new("LegsMesh"),
+            SkinnedMesh {
+                joints: vec![legs_armature, legs_hips],
+                ..SkinnedMesh::default()
+            },
+            ChildOf(legs),
+        ))
+        .id();
+
+    for _ in 0..5 {
+        step(&mut app, millis(100));
+    }
+
+    assert_eq!(
+        app.world()
+            .get::<SkinnedMesh>(legs_mesh)
+            .unwrap()
+            .joints
+            .clone(),
+        vec![torso_armature, torso_hips],
+        "the bones a part's mesh names are what decides the merge, not how many mesh nodes each \
+         file carries"
+    );
+    assert!(
+        app.world().get_entity(legs_armature).is_err(),
+        "the part's own copy of the skeleton is gone"
+    );
+    assert!(
+        app.world()
+            .get::<AnimationSetBound>(root)
+            .unwrap()
+            .parts
+            .is_empty(),
+        "and no second player was needed"
     );
 }
 

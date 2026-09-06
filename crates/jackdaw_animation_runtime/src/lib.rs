@@ -352,15 +352,7 @@ fn merge_part_skeletons(
                 .into_iter()
                 .filter(|&mesh| skins.contains(mesh))
                 .collect();
-            let part_bones = descendants(part, &children)
-                .into_iter()
-                .filter(|&bone| names.contains(bone))
-                .count();
-
-            let remapped = (part_bones == primary_joints.len())
-                .then(|| remap_joints(&part_meshes, &primary_joints, &skins, &names))
-                .flatten();
-            let Some(remapped) = remapped else {
+            let Some(remapped) = remap_joints(&part_meshes, &primary_joints, &skins, &names) else {
                 warn!(
                     "an animated part does not answer to the same bone names as the skeleton it \
                      was placed under, so it keeps its own"
