@@ -43,19 +43,23 @@ fn fast() -> bool {
                 "warnings",
             ],
         )
-        && sh(
-            "cargo",
-            &[
-                "nextest",
-                "run",
-                "--profile",
-                "ci",
-                "--workspace",
-                "--lib",
-                "--features",
-                "dylib",
-            ],
-        )
+        && unit()
+}
+
+fn unit() -> bool {
+    sh(
+        "cargo",
+        &[
+            "nextest",
+            "run",
+            "--profile",
+            "ci",
+            "--workspace",
+            "--lib",
+            "--features",
+            "dylib",
+        ],
+    )
 }
 
 /// `shard` is an `N/M` slice of the run for CI to spread over `M` runners.
@@ -164,6 +168,7 @@ fn main() -> ExitCode {
     let tier = args.first().map(String::as_str).unwrap_or_default();
     let ok = match tier {
         "fast" => fast(),
+        "unit" => unit(),
         "integration" => integration(args.get(1).map(String::as_str)),
         "heavy" => heavy(),
         "release-gate" => fast() && integration(None) && heavy(),
@@ -175,7 +180,7 @@ fn main() -> ExitCode {
         }
         other => {
             eprintln!(
-                "usage: cargo xtask <fast|integration [N/M]|heavy|release-gate|package-sdk|bundle> \
+                "usage: cargo xtask <fast|unit|integration [N/M]|heavy|release-gate|package-sdk|bundle> \
                  (got {other:?})"
             );
             false

@@ -48,7 +48,6 @@ jobs:
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: tests
 
@@ -67,13 +66,64 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Fast tier (fmt, clippy, lib tests)
-        run: cargo xtask fast
+      - name: Unit tier
+        run: cargo xtask unit
 
       # The create/import flows as a user meets them: the `jd` binary
       # run from outside any checkout, with only its embedded templates.
       # Required here, so a binary that cannot scaffold fails CI instead
       # of skipping quietly.
+  # The scaffold, recipe, SDK-feature and doctest checks, off the unit
+  # tier's clock.
+  sdk:
+    name: SDK checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Remove unused software
+        run: |
+          echo "Available storage before:"
+          sudo df -h
+          echo
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          echo "Available storage after:"
+          sudo df -h
+          echo
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          components: rustc-codegen-cranelift-preview, rustfmt, clippy
+          toolchain: ${{ env.toolchain }}
+      - name: Set LD_LIBRARY_PATH
+        run: |
+          echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
+
+      - name: Populate target directory from cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: ${{ env.LD_LIBRARY_PATH }}
+          shared-key: tests
+
+      - name: Install dependencies
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+
+      - name: Activate CI cargo config
+        run: mv .cargo/config_ci.toml .cargo/config.toml
+
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild
+        run: cargo binstall wild-linker --locked --force
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Standalone scaffold and import
         env:
           JACKDAW_STANDALONE_REQUIRED: "1"
@@ -117,14 +167,15 @@ jobs:
   # on `main`.
   # The editor's integration tests, spread over runners so each finishes
   # inside the job cap.
+
   integration:
-    name: Integration ${{ matrix.shard }}/4
+    name: Integration ${{ matrix.shard }}/6
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -152,7 +203,6 @@ jobs:
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: tests
 
@@ -172,7 +222,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Integration tier
-        run: cargo xtask integration ${{ matrix.shard }}/4
+        run: cargo xtask integration ${{ matrix.shard }}/6
 
   templates:
     name: Template - ${{ matrix.template }}
@@ -215,7 +265,6 @@ jobs:
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: template
 
@@ -311,7 +360,6 @@ jobs:
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: false
           cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: lints
 
@@ -364,8 +412,13 @@ jobs:
       - name: Install Wild
         run: cargo binstall wild-linker --locked --force
 
+      - name: Populate target directory from cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: install
+
       - name: Install the public package
-        run: cargo install --path . --locked --root "$RUNNER_TEMP/jackdaw-install"
+        run: cargo install --path . --locked --target-dir target --root "$RUNNER_TEMP/jackdaw-install"
 
       - name: Verify installed commands
         run: |
@@ -410,7 +463,6 @@ jobs:
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: false
           cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: lints
 
@@ -438,7 +490,6 @@ jobs:
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: lints
 
