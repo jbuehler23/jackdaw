@@ -63,14 +63,14 @@ pub fn setup_default_materials(
     palette.default_material = materials.add(StandardMaterial {
         base_color: default_style::DEFAULT_MATERIAL_COLOR,
         base_color_texture: Some(grid_handle.clone()),
-        alpha_mode: AlphaMode::Blend,
+        alpha_mode: AlphaMode::Opaque,
         uv_transform: uv_tile,
         ..default()
     });
     palette.default_selected_material = materials.add(StandardMaterial {
         base_color: default_style::DEFAULT_MATERIAL_SELECTED_COLOR,
         base_color_texture: Some(grid_handle.clone()),
-        alpha_mode: AlphaMode::Blend,
+        alpha_mode: AlphaMode::Opaque,
         uv_transform: uv_tile,
         ..default()
     });
