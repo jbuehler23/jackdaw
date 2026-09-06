@@ -54,6 +54,9 @@ avian3d = { workspace = true, optional = true }
 # the editor. Default features off, so a `navmesh`-only build takes the data
 # half alone and `terrain` asks for the rendering half by name.
 jackdaw_terrain = { version = "0.19.0", path = "../jackdaw_terrain", optional = true, default-features = false }
+# Authored animation sets: the state machine a rig plays and the binding step
+# that gives a body loaded from one file the clips exported in another.
+jackdaw_animation_runtime = { version = "0.19.0", path = "../jackdaw_animation_runtime", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "2"
@@ -100,6 +103,16 @@ terrain = ["render", "navmesh", "jackdaw_terrain/render"]
 # root. Decoding only: nothing is meshed and nothing is drawn, so a server that
 # validates moves takes this without `terrain`.
 navmesh = ["dep:jackdaw_terrain"]
+# Play the animation sets a scene authored. Bevy's own animation and glTF
+# support come with it, since a set's clips are named animations in a glTF
+# file and `gltf_animation` is what puts them on the loaded file at all. Off by
+# default: a game with no rigs links neither.
+animation = [
+    "dep:jackdaw_animation_runtime",
+    "bevy/bevy_animation",
+    "bevy/bevy_gltf",
+    "bevy/gltf_animation",
+]
 
 [lints]
 workspace = true
@@ -114,3 +127,6 @@ avian3d = { workspace = true }
 # Terrain tests build a sidecar to load back. Optional for the library, so the
 # test targets name it themselves.
 jackdaw_terrain = { version = "0.19.0", path = "../jackdaw_terrain" }
+# The animation test reads the components a loaded set spawned with. Optional
+# for the library, so the test target names it itself.
+jackdaw_animation_runtime = { version = "0.19.0", path = "../jackdaw_animation_runtime" }

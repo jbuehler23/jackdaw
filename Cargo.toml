@@ -104,6 +104,7 @@ jackdaw_hull.workspace = true
 jackdaw_material.workspace = true
 jackdaw_node_graph.workspace = true
 jackdaw_animation.workspace = true
+jackdaw_animation_runtime.workspace = true
 jackdaw_avian_integration.workspace = true
 # Optional, activated by the default-on `multiplayer` feature. Together
 # these bundle the editor-only networking authoring extension (proxy
@@ -246,6 +247,7 @@ jackdaw_hull = { version = "0.19.0", path = "crates/jackdaw_hull" }
 jackdaw_material = { version = "0.19.0", path = "crates/jackdaw_material" }
 jackdaw_node_graph = { version = "0.19.0", path = "crates/jackdaw_node_graph" }
 jackdaw_animation = { version = "0.19.0", path = "crates/jackdaw_animation" }
+jackdaw_animation_runtime = { version = "0.19.0", path = "crates/jackdaw_animation_runtime" }
 jackdaw_fuzzy = { version = "0.19.0", path = "crates/jackdaw_fuzzy" }
 jackdaw_localization = { version = "0.19.0", path = "crates/jackdaw_localization" }
 glam = { version = "0.32", features = ["serde"] }

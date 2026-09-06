@@ -56,6 +56,9 @@
 //!   components. The game adds `PhysicsPlugins` itself to simulate them. With
 //!   `terrain` as well, the authored ground gets a heightfield collider built
 //!   from the heights it is drawn from.
+//! - `animation`: play the animation sets a scene authored, binding each to
+//!   the skeleton spawned under it. Off by default: a game with no rigs links
+//!   neither Bevy's animation support nor its glTF loader.
 //! - `pie`: play-in-editor, streaming this world to a running editor.
 
 use std::any::TypeId;
@@ -197,6 +200,11 @@ impl Plugin for JackdawPlugin {
 
         #[cfg(feature = "terrain")]
         app.add_plugins(terrain::plugin);
+
+        // Registers the authored animation types as well as playing them, so
+        // a set survives a load in the same build that runs it.
+        #[cfg(feature = "animation")]
+        app.add_plugins(jackdaw_animation_runtime::AnimationRuntimePlugin);
 
         // Build avian colliders from authored `AvianCollider` components so
         // brushes collide at runtime. Add `PhysicsPlugins` in your app to run

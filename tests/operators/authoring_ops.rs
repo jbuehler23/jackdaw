@@ -524,6 +524,7 @@ fn a_number_where_an_entity_belongs_is_refused_on_the_boot_path_too() {
 /// fill it from the selection. Each is classified explicitly: left to a default,
 /// the prefab family would inherit one that writes files.
 const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
+    ("animation.set_state", &["entity"], true),
     ("animation.toggle_keyframe", &["entity"], true),
     ("binding.add", &["entity"], true),
     ("binding.set", &["entity"], true),
