@@ -19,6 +19,7 @@
 //! prebuilt SDK so the artifact can be dlopened in-process.
 
 pub mod bootstrap;
+pub mod build_source;
 pub mod cargo_meta;
 pub mod detect;
 pub mod linkage;
@@ -31,7 +32,8 @@ mod binary;
 mod build;
 
 pub use binary::{
-    ProjectBinaryBuild, build_project_binary, detach_from_host_build, prepare_game_command,
+    BuildLoad, ProjectBinaryBuild, background_jobs, build_project_binary,
+    build_project_binary_with_load, detach_from_host_build, prepare_game_command,
 };
 pub use build::{
     BuildEvent, ProjectBuild, ProjectBuildError, build_project_dylib, last_built_dylib, sdk_remedy,

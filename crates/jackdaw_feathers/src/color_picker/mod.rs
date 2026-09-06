@@ -1,50 +1,25 @@
 mod color_math;
-mod controls;
 mod input_fields;
-pub mod materials;
 mod setup;
 mod visuals;
 
-use bevy::asset::embedded_asset;
 use bevy::prelude::*;
-use bevy::shader::load_shader_library;
+use bevy::ui_widgets::ValueChange;
 
 use color_math::{hsv_to_rgb, rgb_to_hsv};
-pub use materials::{
-    AlphaSliderMaterial, CheckerboardMaterial, HsvRectMaterial, HueSliderMaterial,
-};
 
 use crate::popover::PopoverTracker;
 
-const SLIDER_HEIGHT: f32 = 12.0;
-const HSV_RECT_HEIGHT: f32 = 192.0;
+const COLOR_PLANE_HEIGHT: f32 = 192.0;
 const PREVIEW_SWATCH_SIZE: f32 = 36.0;
-const HANDLE_SIZE: f32 = 14.0;
-const HANDLE_BORDER: f32 = 1.0;
 const SWATCH_SIZE: f32 = 16.0;
-const CHECKERBOARD_SIZE: f32 = 8.0;
-const PREVIEW_CHECKERBOARD_SIZE: f32 = 12.0;
-const BORDER_RADIUS: f32 = 4.0;
 const POPOVER_WIDTH: f32 = 256.0;
 
 pub fn plugin(app: &mut App) {
-    // `common.wgsl` is a shader library imported by the four picker shaders
-    // (`editor_feathers::color_picker_common`). It must be loaded (not just
-    // embedded) so its `#define_import_path` registers with the shader
-    // composer; otherwise every picker shader fails to compile and renders
-    // blank. `load_shader_library!` embeds, loads, and leaks the handle.
-    load_shader_library!(app, "shaders/common.wgsl");
-    embedded_asset!(app, "shaders/color_picker_hsv_rect.wgsl");
-    embedded_asset!(app, "shaders/color_picker_hue.wgsl");
-    embedded_asset!(app, "shaders/color_picker_alpha.wgsl");
-    embedded_asset!(app, "shaders/color_picker_checkerboard.wgsl");
-
-    app.add_plugins(UiMaterialPlugin::<HsvRectMaterial>::default())
-        .add_plugins(UiMaterialPlugin::<HueSliderMaterial>::default())
-        .add_plugins(UiMaterialPlugin::<AlphaSliderMaterial>::default())
-        .add_plugins(UiMaterialPlugin::<CheckerboardMaterial>::default())
-        .add_observer(setup::handle_trigger_click)
+    app.add_observer(setup::handle_trigger_click)
         .add_observer(input_fields::handle_input_mode_change)
+        .add_observer(on_color_plane_change)
+        .add_observer(on_color_slider_change)
         .add_systems(
             Update,
             (
@@ -59,6 +34,94 @@ pub fn plugin(app: &mut App) {
                 input_fields::sync_text_inputs_to_state,
             ),
         );
+}
+
+/// Which part of the picker a sub-widget edits.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum ColorPart {
+    /// The plane and the swatches, which carry a whole colour rather than
+    /// one channel.
+    Whole,
+    Red,
+    Green,
+    Blue,
+    Alpha,
+}
+
+impl ColorPart {
+    /// The index this part writes in an rgba quad, or `None` for the
+    /// parts that carry a whole colour.
+    pub(super) fn channel(self) -> Option<usize> {
+        match self {
+            ColorPart::Whole => None,
+            ColorPart::Red => Some(0),
+            ColorPart::Green => Some(1),
+            ColorPart::Blue => Some(2),
+            ColorPart::Alpha => Some(3),
+        }
+    }
+}
+
+/// Ties a feathers colour widget back to the picker whose state it edits.
+#[derive(Component)]
+pub(super) struct ColorSubWidget {
+    pub(super) picker: Entity,
+    pub(super) part: ColorPart,
+}
+
+/// The plane writes red on its x axis and blue on its y.
+fn on_color_plane_change(
+    event: On<ValueChange<Vec2>>,
+    sub_widgets: Query<&ColorSubWidget>,
+    mut states: Query<&mut ColorPickerState>,
+    mut commands: Commands,
+) {
+    let Ok(sub) = sub_widgets.get(event.source) else {
+        return;
+    };
+    let Ok(mut state) = states.get_mut(sub.picker) else {
+        return;
+    };
+    let mut rgba = state.to_rgba();
+    rgba[0] = event.value.x;
+    rgba[2] = event.value.y;
+    state.set_from_rgba(rgba);
+    emit_color(&mut commands, sub.picker, rgba, event.is_final);
+}
+
+/// One slider per channel, read off the part the slider was spawned with.
+fn on_color_slider_change(
+    event: On<ValueChange<f32>>,
+    sub_widgets: Query<&ColorSubWidget>,
+    mut states: Query<&mut ColorPickerState>,
+    mut commands: Commands,
+) {
+    let Ok(sub) = sub_widgets.get(event.source) else {
+        return;
+    };
+    let Some(channel) = sub.part.channel() else {
+        return;
+    };
+    let Ok(mut state) = states.get_mut(sub.picker) else {
+        return;
+    };
+    let mut rgba = state.to_rgba();
+    rgba[channel] = event.value;
+    state.set_from_rgba(rgba);
+    emit_color(&mut commands, sub.picker, rgba, event.is_final);
+}
+
+fn emit_color(commands: &mut Commands, picker: Entity, color: [f32; 4], is_final: bool) {
+    commands.trigger(ColorPickerChangeEvent {
+        entity: picker,
+        color,
+    });
+    if is_final {
+        commands.trigger(ColorPickerCommitEvent {
+            entity: picker,
+            color,
+        });
+    }
 }
 
 #[derive(Component)]
@@ -227,33 +290,6 @@ struct ColorPickerPopover(Entity);
 struct ColorPickerContent(Entity);
 
 #[derive(Component)]
-struct HsvRectangle(Entity);
-
-#[derive(Component)]
-struct HsvRectMaterialNode(Entity);
-
-#[derive(Component)]
-struct HsvRectHandle(Entity);
-
-#[derive(Component)]
-struct HueSlider(Entity);
-
-#[derive(Component)]
-struct HueHandle(Entity);
-
-#[derive(Component)]
-struct AlphaSlider(Entity);
-
-#[derive(Component)]
-struct AlphaMaterialNode(Entity);
-
-#[derive(Component)]
-struct AlphaHandle(Entity);
-
-#[derive(Component)]
-struct AlphaHandleMaterial(Entity);
-
-#[derive(Component)]
 struct ColorInputRow(Entity);
 
 #[derive(Component)]
@@ -266,10 +302,4 @@ struct TriggerSwatchConfig {
 struct TriggerSwatch;
 
 #[derive(Component)]
-pub struct TriggerSwatchMaterial(pub Entity);
-
-#[derive(Component)]
 struct TriggerLabel(Entity);
-
-#[derive(Component)]
-struct PreviewSwatchMaterial(Entity);

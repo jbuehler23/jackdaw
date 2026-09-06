@@ -19,3 +19,4 @@ tests/fixtures/**/Cargo.lock
 .jackdaw/
 # web explorer app
 web/explorer/node_modules
+/.jsn

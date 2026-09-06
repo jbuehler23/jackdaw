@@ -1,0 +1,15 @@
+[package]
+name = "jackdaw_prefab"
+version.workspace = true
+edition = "2024"
+description = "Prefab instancing for jackdaw scenes: the IsA vocabulary and its resolver"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = ["std"] }
+jackdaw_bsn = { version = "0.19.0", path = "../jackdaw_bsn" }
+pathdiff.workspace = true
+
+[lints]
+workspace = true

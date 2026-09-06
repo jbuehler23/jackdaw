@@ -1,6 +1,5 @@
 pub mod alert;
 pub mod button;
-pub mod checkbox;
 pub mod collapsible;
 pub mod color_picker;
 pub mod combobox;
@@ -15,12 +14,12 @@ pub mod list_view;
 pub mod menu_bar;
 pub mod number_input;
 pub mod panel_card;
-pub mod panel_header;
 pub mod panel_section;
 pub mod picker;
 pub mod popover;
 pub mod progress;
 pub mod scroll;
+pub mod segmented;
 pub mod separator;
 pub mod slider_row;
 pub mod split_panel;
@@ -47,7 +46,6 @@ impl Plugin for EditorFeathersPlugin {
             split_panel::SplitPanelPlugin,
             icons::IconFontPlugin,
             button::plugin,
-            checkbox::plugin,
             popover::plugin,
             combobox::plugin,
             dialog::plugin,
@@ -56,6 +54,7 @@ impl Plugin for EditorFeathersPlugin {
             inspector_field::plugin,
             variant_edit::plugin,
             scroll::plugin,
+            list_view::plugin,
             toast::plugin,
             number_input::ScrubNumberInputPlugin,
         ));
@@ -65,7 +64,6 @@ impl Plugin for EditorFeathersPlugin {
             color_picker::plugin,
             menu_bar::plugin,
             context_menu::plugin,
-            panel_header::plugin,
             picker::plugin,
             panel_card::plugin,
         ));

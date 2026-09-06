@@ -1,9 +1,5 @@
 use bevy::prelude::*;
 
-/// Marker for the tree view container
-#[derive(Component)]
-pub struct TreeView;
-
 /// Links a tree row UI entity to the source entity it represents.
 ///
 /// Multiple `TreeNode`s may point at the same source (one per
@@ -89,6 +85,19 @@ pub struct TreeRowVisibilityToggled {
     pub source_entity: Entity,
 }
 
+/// Marker for the lock toggle in a tree row.
+#[derive(Component)]
+pub struct TreeRowLockToggle;
+
+/// Event fired when a lock toggle is clicked.
+#[derive(EntityEvent)]
+pub struct TreeRowLockToggled {
+    #[event_target]
+    pub entity: Entity,
+    /// The source (scene) entity to lock or unlock.
+    pub source_entity: Entity,
+}
+
 /// Marker on the text input during inline rename
 #[derive(Component)]
 pub struct TreeRowInlineRename;
@@ -107,6 +116,13 @@ pub struct TreeIndex {
     /// host entity carrying [`TreeRoot`]; the source is the scene
     /// entity the row represents.
     map: HashMap<(Entity, Entity), Entity>,
+    /// `source` -> the containers holding a row for it.
+    ///
+    /// A second index rather than a scan: the per-frame question is "does
+    /// this changed entity have a row anywhere", asked once per changed
+    /// entity, and answering it by walking every key makes a filter
+    /// keystroke - which dirties every row - cost the square of the tree.
+    by_source: HashMap<Entity, Vec<Entity>>,
 }
 
 impl TreeIndex {
@@ -117,19 +133,39 @@ impl TreeIndex {
 
     /// Insert / overwrite the mapping for the `(container, source)` pair.
     pub fn insert(&mut self, container: Entity, source: Entity, tree_row: Entity) {
-        self.map.insert((container, source), tree_row);
+        if self.map.insert((container, source), tree_row).is_none() {
+            self.by_source.entry(source).or_default().push(container);
+        }
     }
 
     /// Drop the mapping for the `(container, source)` pair.
     pub fn remove(&mut self, container: Entity, source: Entity) {
-        self.map.remove(&(container, source));
+        if self.map.remove(&(container, source)).is_some() {
+            self.drop_source_entry(container, source);
+        }
     }
 
     /// Drop every mapping for `source` across every container. Used
     /// when a scene entity goes away and its rows in every panel
     /// should be forgotten.
     pub fn remove_source(&mut self, source: Entity) {
-        self.map.retain(|(_, s), _| *s != source);
+        for container in self.by_source.remove(&source).unwrap_or_default() {
+            self.map.remove(&(container, source));
+        }
+    }
+
+    /// Forget one container from `source`'s list, and the list itself once
+    /// it is empty, so an entity with no rows left holds no entry.
+    fn drop_source_entry(&mut self, container: Entity, source: Entity) {
+        let Some(containers) = self.by_source.get_mut(&source) else {
+            return;
+        };
+        if let Some(at) = containers.iter().position(|held| *held == container) {
+            containers.swap_remove(at);
+        }
+        if containers.is_empty() {
+            self.by_source.remove(&source);
+        }
     }
 
     /// True if `source` has a row in `container`.
@@ -139,15 +175,21 @@ impl TreeIndex {
 
     /// True if `source` has a row in any container.
     pub fn contains_anywhere(&self, source: Entity) -> bool {
-        self.map.keys().any(|(_, s)| *s == source)
+        self.by_source.contains_key(&source)
     }
 
     /// Iterate every row entity for `source` across all containers.
     pub fn rows_for_source(&self, source: Entity) -> impl Iterator<Item = (Entity, Entity)> + '_ {
-        self.map
+        self.by_source
+            .get(&source)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
             .iter()
-            .filter(move |((_, s), _)| *s == source)
-            .map(|((c, _), row)| (*c, *row))
+            .filter_map(move |&container| {
+                self.map
+                    .get(&(container, source))
+                    .map(|row| (container, *row))
+            })
     }
 
     /// Iterate every row entity for `container`.
@@ -162,11 +204,16 @@ impl TreeIndex {
     /// a tree is torn down.
     pub fn clear_container(&mut self, container: Entity) {
         self.map.retain(|(c, _), _| *c != container);
+        self.by_source.retain(|_, containers| {
+            containers.retain(|held| *held != container);
+            !containers.is_empty()
+        });
     }
 
     /// Drop every mapping. Used when the host app fully resets state.
     pub fn clear(&mut self) {
         self.map.clear();
+        self.by_source.clear();
     }
 }
 
@@ -205,6 +252,72 @@ pub struct TreeRowDropped {
     pub target_source: Entity,
 }
 
+/// Where the drop line is drawn while a drag is over the tree, and what
+/// a release there would mean.
+///
+/// One entry: one pointer drags at a time. Written by the gap zones as
+/// the pointer passes over them and cleared when the drag leaves the
+/// tree, so the line follows the pointer instead of appearing once when
+/// a zone is first entered.
+#[derive(Resource, Default)]
+pub struct TreeDropLine {
+    /// The gap zone the pointer is over, if any.
+    pub zone: Option<Entity>,
+    /// How far in the line starts, in logical pixels from the tree's left
+    /// edge: the indent of the level the drop would land at.
+    pub indent: f32,
+}
+
+/// Whether the drag in progress has been called off.
+///
+/// `bevy_picking` has no notion of a cancelled drag: Escape does not stop
+/// the pointer, and the drop still arrives when the button comes up. This
+/// is what a list checks before acting on one, and the drop that reads it
+/// clears it.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreeDragCancelled(
+    /// Set while a drag has been called off and its release is still to come.
+    pub bool,
+);
+
+/// A row the pointer has been resting on during a drag, and for how long.
+///
+/// Resting over a collapsed parent opens it, so a subtree can be reached
+/// without letting go of what is being dragged.
+#[derive(Resource, Default)]
+pub struct TreeSpringLoad {
+    pub row: Option<Entity>,
+    pub waited: f32,
+}
+
+/// Marker on the strip that stands for the gap above or below a
+/// tree row. A drop there reorders; a drop on the row itself reparents.
+#[derive(Component)]
+pub struct TreeRowInsertZone {
+    /// `true` for the strip below the row (and below everything nested
+    /// under it), `false` for the strip above it.
+    pub after: bool,
+}
+
+/// Event fired when a drag is dropped on the gap between two tree rows,
+/// which reorders rather than reparents.
+///
+/// The widget reports the gap it was dropped in as a row and a side; the
+/// consumer owns the scene, so it is the one that turns that into a parent
+/// and a sibling index.
+#[derive(EntityEvent)]
+pub struct TreeRowInserted {
+    #[event_target]
+    pub entity: Entity,
+    /// The scene entity being moved
+    pub dragged_source: Entity,
+    /// The scene entity whose row the gap sits against
+    pub target: Entity,
+    /// Which side of `target` the gap is: `0` immediately before it among
+    /// its siblings, `1` immediately after.
+    pub index: usize,
+}
+
 /// Event fired when a tree row is dropped onto the root container (deparent)
 #[derive(EntityEvent)]
 pub struct TreeRowDroppedOnRoot {
@@ -240,6 +353,9 @@ impl Plugin for TreeViewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TreeIndex>()
             .init_resource::<TreeFocused>()
+            .init_resource::<TreeDropLine>()
+            .init_resource::<TreeSpringLoad>()
+            .init_resource::<TreeDragCancelled>()
             .add_systems(PostUpdate, (maintain_tree_index,));
     }
 }
@@ -285,5 +401,53 @@ pub fn maintain_tree_index(
         if let Some((container, source)) = key {
             index.remove(container, source);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The source index answers "does this entity have a row anywhere"
+    /// without walking every key, so it has to be taken down by every path
+    /// that takes a row out of the map. A stale entry would keep the icon
+    /// pass working on a row that is gone.
+    #[test]
+    fn the_source_index_follows_every_way_a_row_leaves() {
+        let mut world = World::new();
+        let one = world.spawn_empty().id();
+        let two = world.spawn_empty().id();
+        let source = world.spawn_empty().id();
+        let row_one = world.spawn_empty().id();
+        let row_two = world.spawn_empty().id();
+
+        let mut index = TreeIndex::default();
+        index.insert(one, source, row_one);
+        index.insert(two, source, row_two);
+        assert!(index.contains_anywhere(source));
+        assert_eq!(index.rows_for_source(source).count(), 2);
+
+        index.remove(one, source);
+        assert!(
+            index.contains_anywhere(source),
+            "the other panel still has one"
+        );
+        assert_eq!(
+            index.rows_for_source(source).collect::<Vec<_>>(),
+            vec![(two, row_two)]
+        );
+
+        index.clear_container(two);
+        assert!(!index.contains_anywhere(source), "no panel holds a row now");
+        assert_eq!(index.rows_for_source(source).count(), 0);
+
+        index.insert(one, source, row_one);
+        index.remove_source(source);
+        assert!(!index.contains_anywhere(source));
+        assert!(index.get(one, source).is_none(), "the map went with it");
+
+        index.insert(one, source, row_one);
+        index.clear();
+        assert!(!index.contains_anywhere(source));
     }
 }

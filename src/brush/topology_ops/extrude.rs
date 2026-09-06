@@ -190,6 +190,7 @@ pub(crate) fn brush_extrude(
     mut modal_state: ResMut<ExtrudeModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    keybind_focus: crate::keybind_focus::KeybindFocus,
     modal_inputs: crate::modal_inputs::ModalInputs,
     cursor: crate::viewport::UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
@@ -270,7 +271,7 @@ pub(crate) fn brush_extrude(
 
     // Snap respects the global translate_snap toggle; Ctrl flips the current
     // snap state (anti-modifier).
-    let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let ctrl = keybind_focus.any_pressed(&keyboard, [KeyCode::ControlLeft, KeyCode::ControlRight]);
     modal_state.current_amount =
         if snap_settings.translate_active(ctrl) && snap_settings.translate_increment > 0.0 {
             let inc = snap_settings.translate_increment;
@@ -513,8 +514,13 @@ fn compute_screen_normal_dir(
     if len > 1e-4 { dir / len } else { FALLBACK }
 }
 
-pub(crate) fn can_run_extrude(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {
-    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+pub(crate) fn can_run_extrude(
+    edit_mode: Res<EditMode>,
+    selection: Res<BrushSelection>,
+    viewport: crate::viewport_2d::FrontedViewport,
+) -> bool {
+    viewport.is_three_d()
+        && *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
         && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
 }
 

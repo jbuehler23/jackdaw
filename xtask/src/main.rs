@@ -58,28 +58,32 @@ fn fast() -> bool {
         )
 }
 
-fn integration() -> bool {
+/// `shard` is an `N/M` slice of the run for CI to spread over `M` runners.
+fn integration(shard: Option<&str>) -> bool {
     // Every crate's integration tests that are not SDK/dylib-gated. Matches the
     // pre-harness `--workspace ... --tests` coverage; the excluded binaries need
     // a built SDK and run in `heavy()` or the onboarding workflow instead.
-    sh(
-        "cargo",
-        &[
-            "nextest",
-            "run",
-            "--profile",
-            "ci",
-            "--workspace",
-            "--features",
-            "dylib",
-            "--tests",
-            "-E",
-            "not (binary(bsn_game_run) | binary(editor_journey) | binary(bundle_smoke) \
-               | binary(stress_reload) | binary(scaffold_e2e) \
-               | binary(schema_extract) | binary(reflect_auto_register) \
-               | binary(component_shape_refresh) | binary(dylib_linkage_identity) | binary(extern_redirect_ecosystem))",
-        ],
-    )
+    let mut args = vec![
+        "nextest",
+        "run",
+        "--profile",
+        "ci",
+        "--workspace",
+        "--features",
+        "dylib",
+        "--tests",
+        "-E",
+        "not (binary(bsn_game_run) | binary(editor_journey) | binary(bundle_smoke) \
+           | binary(stress_reload) | binary(scaffold_e2e) \
+           | binary(schema_extract) | binary(reflect_auto_register) \
+           | binary(component_shape_refresh) | binary(dylib_linkage_identity) \
+           | binary(extern_redirect_ecosystem) | binary(mcp_smoke))",
+    ];
+    let partition = shard.map(|shard| format!("hash:{shard}"));
+    if let Some(partition) = &partition {
+        args.extend(["--partition", partition.as_str()]);
+    }
+    sh("cargo", &args)
 }
 
 fn heavy() -> bool {
@@ -99,6 +103,21 @@ fn heavy() -> bool {
             triple,
         ],
     ) && sh("cargo", &["build", "-p", "jackdaw_rustc_wrapper"])
+        // `jd mcp` executes `jd-mcp` from beside `jd`, and it lives in
+        // another package, so nothing else in this tier builds it. Without
+        // it `mcp_smoke` has no binary to drive and skips.
+        && sh(
+            "cargo",
+            &[
+                "build",
+                "-p",
+                "jackdaw_mcp",
+                "--bin",
+                "jd-mcp",
+                "--target",
+                triple,
+            ],
+        )
         && sh(
             "cargo",
             &[
@@ -125,10 +144,17 @@ fn heavy() -> bool {
                 // bundle_smoke is deliberately absent: it needs a release SDK,
                 // which this tier does not build, so it would only self-skip
                 // here. It runs on the real release artifacts in release.yaml.
+                //
+                // mcp_smoke belongs here rather than in `integration`: it
+                // launches a windowed editor process and waits minutes on it,
+                // which is what this tier's deadlines and thread budget are
+                // sized for.
                 "--test",
                 "bsn_game_run",
                 "--test",
                 "editor_journey",
+                "--test",
+                "mcp_smoke",
             ],
         )
 }
@@ -138,9 +164,9 @@ fn main() -> ExitCode {
     let tier = args.first().map(String::as_str).unwrap_or_default();
     let ok = match tier {
         "fast" => fast(),
-        "integration" => integration(),
+        "integration" => integration(args.get(1).map(String::as_str)),
         "heavy" => heavy(),
-        "release-gate" => fast() && integration() && heavy(),
+        "release-gate" => fast() && integration(None) && heavy(),
         "package-sdk" => {
             return jackdaw_cli_internal::package::cmd_package_sdk(&args[1..]);
         }
@@ -149,7 +175,7 @@ fn main() -> ExitCode {
         }
         other => {
             eprintln!(
-                "usage: cargo xtask <fast|integration|heavy|release-gate|package-sdk|bundle> \
+                "usage: cargo xtask <fast|integration [N/M]|heavy|release-gate|package-sdk|bundle> \
                  (got {other:?})"
             );
             false

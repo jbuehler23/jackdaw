@@ -7,7 +7,8 @@
 //! If a modal operator is in flight when undo/redo fires, cancel it
 //! first. The snapshot restore would otherwise rip the scene out from
 //! under the modal, leaving its `ActiveModalOperator` marker + per-op
-//! state stale.
+//! state stale. A running 2D canvas gesture goes the same way, through
+//! [`crate::ui_stage::cancel_canvas_gestures`].
 
 use bevy::input::ButtonInput;
 use bevy::prelude::*;
@@ -28,16 +29,25 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .shift()]);
 }
 
+/// Undo names Ctrl. Shift on top of it is Redo's chord, and Alt on top of
+/// it is neither.
+const UNDO_CHORD: crate::keybinds::ChordModifiers = crate::keybinds::ChordModifiers {
+    ctrl: true,
+    alt: false,
+    shift: false,
+};
+
 #[operator(id = "history.undo", label = "Undo", allows_undo = false)]
 pub(crate) fn history_undo(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         // Ctrl+Shift+Z fires both the Ctrl-only and Ctrl+Shift bindings
-        // because the modifier matcher is "must include these"; bail when
-        // Shift is held so redo can run alone.
-        let shift_held = world
+        // because the modifier matcher is "must include these"; the chord
+        // names Ctrl and nothing else, so Shift held is Redo's chord and
+        // not this one.
+        if world
             .get_resource::<ButtonInput<KeyCode>>()
-            .is_some_and(|kb| kb.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]));
-        if shift_held {
+            .is_some_and(|keyboard| crate::keybinds::unwanted_modifier(keyboard, UNDO_CHORD))
+        {
             return;
         }
         // In-modal undo for knife mode: pop the last placed path point
@@ -51,6 +61,7 @@ pub(crate) fn history_undo(_: In<OperatorParameters>, mut commands: Commands) ->
             return;
         }
         cancel_active_modal_if_any(world);
+        crate::ui_stage::cancel_canvas_gestures(world);
         world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
             history.undo(world);
         });
@@ -73,6 +84,7 @@ pub(crate) fn history_redo(_: In<OperatorParameters>, mut commands: Commands) ->
             return;
         }
         cancel_active_modal_if_any(world);
+        crate::ui_stage::cancel_canvas_gestures(world);
         world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
             history.redo(world);
         });

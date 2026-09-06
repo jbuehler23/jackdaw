@@ -95,6 +95,14 @@ pub trait Operator: InputAction + 'static {
     /// so this should usually be `true`.
     const ALLOWS_UNDO: bool = true;
 
+    /// Why this operator is out of reach of a scripted or remote caller, or
+    /// `None` when it is not.
+    ///
+    /// An operator that continues a gesture already under way means nothing
+    /// without a person at the pointer. The reason is required so hiding one is
+    /// an argument on the record.
+    const REMOTE_HIDDEN: Option<&'static str> = None;
+
     /// Modal operators stay active across frames.
     ///
     /// When `MODAL = true` and the invoke system returns
@@ -149,25 +157,39 @@ pub struct OperatorParameters(pub BTreeMap<String, PropertyValue>);
 
 impl OperatorParameters {
     /// Read an `i64` parameter by key.
+    ///
+    /// A value that arrived as text is parsed, as in [`Self::as_bool`].
     pub fn as_int(&self, key: &str) -> Option<i64> {
         match self.get(key)? {
             PropertyValue::Int(i) => Some(*i),
+            PropertyValue::String(s) => s.parse().ok(),
             _ => None,
         }
     }
 
-    /// Read an `f64` parameter by key.
+    /// Read an `f64` parameter by key. Text is parsed, as in
+    /// [`Self::as_bool`].
     pub fn as_float(&self, key: &str) -> Option<f64> {
         match self.get(key)? {
             PropertyValue::Float(f) => Some(*f),
+            PropertyValue::Int(i) => Some(*i as f64),
+            PropertyValue::String(s) => s.parse().ok(),
             _ => None,
         }
     }
 
     /// Read a `bool` parameter by key.
+    ///
+    /// `"true"` and `"false"` in string form read as the bool they spell, since
+    /// a menu row's `op:<id>?key=value` action carries every value as text.
     pub fn as_bool(&self, key: &str) -> Option<bool> {
         match self.get(key)? {
             PropertyValue::Bool(b) => Some(*b),
+            PropertyValue::String(s) => match s.as_ref() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -451,6 +473,15 @@ impl<'a, T> OperatorCallBuilder<'a, T> {
         self
     }
 
+    /// Passes a whole parameter set at once, for a dispatcher handed one it did
+    /// not build. [`Self::param`] is for a call site that knows its parameters
+    /// at compile time.
+    #[must_use = "Operators must be called with `.call()` to execute them"]
+    pub fn params(mut self, params: OperatorParameters) -> Self {
+        self.params = params;
+        self
+    }
+
     #[must_use = "Operators must be called with `.call()` to execute them"]
     pub fn settings(mut self, settings: CallOperatorSettings) -> Self {
         self.settings = settings;
@@ -657,7 +688,11 @@ fn dispatch_operator(
     // `resource_scope` lifts `ActiveSnapshotter` out of the world
     // temporarily so `capture` can take `&mut World` (needed for
     // snapshotters that walk entities via `World::query`).
-    let before_snapshot = settings.creates_history_entry.then(|| {
+    //
+    // Gated on `allows_undo` as well as on the caller's request: a snapshot is a
+    // full copy of the scene, and an operator that pushes its own commands
+    // never consumes one.
+    let before_snapshot = (settings.creates_history_entry && op.allows_undo).then(|| {
         world.resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| {
             snapshotter.0.capture(world)
         })
@@ -725,6 +760,67 @@ fn save_history(
         }));
 }
 
+/// What the operator that just ran wants its caller told.
+///
+/// An operator logs a refusal, which reaches a person at a terminal and nobody
+/// else; a remote or scripted caller reads it here instead, clearing it before
+/// the call. Separate from [`OperatorResult`], since a gesture can do most of
+/// what was asked and still have ignored a parameter.
+#[derive(Resource, Default, Debug)]
+pub struct OperatorWarnings(pub Vec<String>);
+
+/// Tells whoever dispatched the running operator something, as well as logging
+/// it.
+pub fn warn_caller(world: &mut World, message: impl Into<String>) {
+    let message = message.into();
+    warn!("{message}");
+    world
+        .get_resource_or_init::<OperatorWarnings>()
+        .0
+        .push(message);
+}
+
+/// What the operator that just ran did, for a caller that cannot see it: how
+/// many groups were replaced, to a caller with no viewport to count them in.
+///
+/// Separate from [`OperatorWarnings`], so a receipt stays distinguishable from
+/// a complaint.
+#[derive(Resource, Default, Debug)]
+pub struct OperatorReports(pub Vec<String>);
+
+/// Tells whoever dispatched the running operator what it did.
+pub fn report_to_caller(world: &mut World, message: impl Into<String>) {
+    let message = message.into();
+    info!("{message}");
+    world
+        .get_resource_or_init::<OperatorReports>()
+        .0
+        .push(message);
+}
+
+/// Runs `body` as one undo entry labelled `label`.
+///
+/// A single operator call already gets its own entry and nested calls collapse
+/// into the outermost one, but several top-level calls the user asked for as
+/// one action have no outermost call to nest inside. Everything pushed while
+/// `body` runs is collapsed, whether a framework snapshot or an operator's own
+/// [`EditorCommand`]s, so calls inside should keep asking for history as usual.
+///
+/// Spans nest exactly: an inner span contributes one entry to the enclosing
+/// span, not the several it collapsed.
+pub fn with_history_span<R>(
+    world: &mut World,
+    label: impl Into<String>,
+    body: impl FnOnce(&mut World) -> R,
+) -> R {
+    let span = world.resource_mut::<CommandHistory>().begin_span();
+    let out = body(world);
+    world
+        .resource_mut::<CommandHistory>()
+        .end_span(span, label.into());
+    out
+}
+
 /// One undo entry. Swaps the active scene snapshot on execute / undo.
 struct SnapshotDiff {
     before: Box<dyn SceneSnapshot>,
@@ -741,6 +837,12 @@ impl EditorCommand for SnapshotDiff {
     }
     fn description(&self) -> &str {
         &self.label
+    }
+    /// Both snapshots, which on a document-backed snapshotter is the whole
+    /// scene twice. Without it the history's budget reads every entry as free
+    /// and never trims.
+    fn heap_bytes(&self) -> usize {
+        self.before.heap_bytes() + self.after.heap_bytes() + self.label.capacity()
     }
 }
 /// Tick system added to Update by `ExtensionLoaderPlugin`. Re-runs the
@@ -866,5 +968,50 @@ fn finalize_modal(
         world.run_system_cached_with(save_history, (op.label, snapshot.before_snapshot))
     {
         error!("Failed to finalize modal operator {}: {err:?}", op.label);
+    }
+}
+
+#[cfg(test)]
+mod parameter_tests {
+    use super::*;
+
+    fn params(key: &str, value: PropertyValue) -> OperatorParameters {
+        OperatorParameters([(key.to_string(), value)].into_iter().collect())
+    }
+
+    /// A menu row, a context-menu entry and a `JACKDAW_RUN_OP` clause carry
+    /// every value as text.
+    #[test]
+    fn a_value_that_arrived_as_text_reads_as_its_type() {
+        assert_eq!(
+            params("ui", PropertyValue::String("true".into())).as_bool("ui"),
+            Some(true),
+        );
+        assert_eq!(
+            params("ui", PropertyValue::String("false".into())).as_bool("ui"),
+            Some(false),
+        );
+        assert_eq!(
+            params("axis", PropertyValue::String("2".into())).as_int("axis"),
+            Some(2),
+        );
+        assert_eq!(
+            params("scale", PropertyValue::String("1.5".into())).as_float("scale"),
+            Some(1.5),
+        );
+    }
+
+    /// Text that spells no such value is still nothing, so the caller's default
+    /// stands.
+    #[test]
+    fn text_that_spells_nothing_reads_as_nothing() {
+        assert_eq!(
+            params("ui", PropertyValue::String("yes".into())).as_bool("ui"),
+            None,
+        );
+        assert_eq!(
+            params("axis", PropertyValue::String("up".into())).as_int("axis"),
+            None,
+        );
     }
 }

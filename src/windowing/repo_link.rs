@@ -1,12 +1,9 @@
 //! Clickable Jackdaw icon that opens the repository in the system browser.
 
 use bevy::asset::{embedded_asset, load_embedded_asset};
-use bevy::feathers::cursor::EntityCursor;
-use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::window::SystemCursorIcon;
-use jackdaw_feathers::button::{ButtonClickEvent, ButtonSize, ButtonVariant, EditorButton};
-use jackdaw_feathers::tokens::{BORDER_RADIUS_MD, ICON_MD_PX};
+use jackdaw_feathers::button::{ButtonClickEvent, ButtonProps, ButtonSize, ButtonVariant, button};
+use jackdaw_feathers::tokens::ICON_MD_PX;
 
 use crate::EditorEntity;
 
@@ -50,37 +47,13 @@ pub fn title_bar_repo_link(image: Handle<Image>) -> impl Bundle {
 
 /// Button with icon to open the Jackdaw repository in the system browser.
 fn jackdaw_link_button(image: Handle<Image>) -> impl Bundle {
-    let variant = ButtonVariant::Ghost;
     (
         JackdawRepoLinkButton,
         EditorEntity,
-        Button,
-        EditorButton,
-        variant,
-        ButtonSize::Icon,
-        Hovered::default(),
-        EntityCursor::System(SystemCursorIcon::Pointer),
-        Node {
-            width: ButtonSize::Icon.width(),
-            height: ButtonSize::Icon.height(),
-            padding: UiRect::ZERO,
-            border: UiRect::all(variant.border()),
-            border_radius: BorderRadius::all(px(BORDER_RADIUS_MD)),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            flex_shrink: 0.0,
-            ..default()
-        },
-        BackgroundColor(
-            variant
-                .bg_color(false)
-                .with_alpha(variant.bg_opacity(false))
-                .into(),
-        ),
-        BorderColor::all(
-            variant
-                .border_color()
-                .with_alpha(variant.border_opacity(false)),
+        button(
+            ButtonProps::new("")
+                .with_variant(ButtonVariant::Ghost)
+                .with_size(ButtonSize::Icon),
         ),
         children![(
             ImageNode::new(image),

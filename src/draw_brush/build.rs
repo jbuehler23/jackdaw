@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use jackdaw_scene_types::Brush;
 
 /// Rotation that maps local X -> `axis_u`, local Y -> `normal`,
-/// local Z -> `axis_u` × `normal` (right-handed).
+/// local Z -> `axis_u` x `normal` (right-handed).
 pub(crate) fn rotation_from_draw_axes(normal: Vec3, axis_u: Vec3) -> Quat {
     Quat::from_mat3(&Mat3::from_cols(axis_u, normal, axis_u.cross(normal)))
 }

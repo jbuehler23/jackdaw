@@ -61,6 +61,11 @@ use bevy::prelude::Resource;
 /// and installed; skip the initial-build step in the launcher and
 /// go straight to the editor." Prevents the scaffold -> build ->
 /// restart -> auto-open -> build -> restart infinite loop.
+///
+/// The other gate a launch can be waved past is
+/// [`jackdaw_project_build::bootstrap::ENV_SKIP_SETUP_CHECK`], which skips
+/// the first-run SDK setup screen. This one skips the project build; that
+/// one skips the SDK build behind it.
 pub const ENV_SKIP_INITIAL_BUILD: &str = "JACKDAW_SKIP_INITIAL_BUILD";
 
 /// The project directory this process's asset root was built from.

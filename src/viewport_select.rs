@@ -40,19 +40,70 @@ impl Plugin for ViewportSelectPlugin {
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BoxSelectOp>()
         .register_operator::<SelectionClearOp>();
+    ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SelectionClearOp>([
+        jackdaw_api_internal::keymap::PresetInput::key("Escape"),
+    ]);
 }
 
-fn has_selection(selection: Res<Selection>) -> bool {
-    !selection.entities.is_empty()
+/// Whether Escape means "drop the selection" right now.
+///
+/// Escape is the universal back-out, so nearly everything on screen has a
+/// prior claim on it: a modal operator cancels, a dialog closes, an open
+/// menu or radial menu closes, a running gesture on the canvas or in a
+/// viewport is abandoned, and a keybind being recorded stops recording.
+/// Only with none of those in flight, and something actually selected,
+/// does the press reach this far.
+///
+/// The gestures are asked of their own state rather than of the pointer:
+/// a drag is in flight for as long as its resource holds nodes, whatever
+/// the pointer is doing meanwhile.
+fn escape_is_free(
+    selection: Res<Selection>,
+    guards: InteractionGuards,
+    keybind_focus: crate::keybind_focus::KeybindFocus,
+    ui_gesture: Res<crate::ui_stage::UiManipulation>,
+    guide_gesture: Res<crate::ui_stage::GuideManipulation>,
+    marquee: Res<crate::ui_stage::MarqueeSelect>,
+    box_select: Res<BoxSelectState>,
+    menu_bar: Res<jackdaw_widgets::menu_bar::MenuBarState>,
+    context_menu: Res<jackdaw_widgets::context_menu::ContextMenuState>,
+    radial: Res<jackdaw_widgets::RadialMenuState>,
+    recording: Res<crate::keybind_settings::KeybindRecordingState>,
+    add_entity_picker: Query<(), With<crate::add_entity_picker::AddEntityPicker>>,
+) -> bool {
+    if selection.entities.is_empty() || guards.is_any_interaction_active() {
+        return false;
+    }
+    // Escape ends an F2 rename, and closes the Add Entity picker, before it
+    // means anything else. Neither is about the selection, and both would
+    // otherwise take it with them on the way out.
+    if keybind_focus.keyboard_is_spoken_for() || !add_entity_picker.is_empty() {
+        return false;
+    }
+    if ui_gesture.is_running()
+        || guide_gesture.position().is_some()
+        || marquee.corners().is_some()
+        || box_select.active
+    {
+        return false;
+    }
+    if menu_bar.open_menu.is_some()
+        || context_menu.menu_entity.is_some()
+        || radial.open.is_some()
+        || recording.is_recording()
+    {
+        return false;
+    }
+    true
 }
 
-/// Deselect everything, for scripted runs that need the empty-selection state
-/// without a click on empty viewport space.
+/// Deselect everything, for callers that need the empty-selection state without
+/// a click on empty viewport space.
 #[operator(
     id = "selection.clear",
     label = "Deselect All",
     description = "Clear the current selection.",
-    is_available = has_selection,
+    is_available = escape_is_free,
     allows_undo = false,
 )]
 pub(crate) fn selection_clear(
@@ -155,6 +206,15 @@ pub(crate) fn handle_viewport_click(
         return;
     };
 
+    // Overlays like the terrain tool palette are UI children of the
+    // `SceneViewport` node, positioned on top of it, so a click inside the
+    // viewport's screen rect is not necessarily a click on the 3D scene.
+    // Without this check, clicking a palette button also runs the raycast
+    // below, finds nothing under the cursor, and deselects the terrain the
+    // palette needs to stay visible.
+    if vp.blocked_by_overlay() {
+        return;
+    }
     let map = crate::viewport_util::ViewportRemap::new(camera, vp_computed, vp_tf);
     let local_cursor = (cursor_pos - map.top_left) * map.remap;
 

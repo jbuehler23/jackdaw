@@ -40,8 +40,8 @@ use jackdaw_dylib;
 pub use jackdaw_api_internal::{
     DefaultArea, ExtensionContext, ExtensionInputContext, ExtensionPoint, ExtensionRegistrar,
     HierarchyWindow, InspectorWindow, JackdawExtension, MenuEntryDescriptor, PanelContext,
-    ToAnchorId as _, TopLevelMenu, WidgetDefinition, WidgetInstantiateContext, WidgetPreviewState,
-    WidgetProperty, WidgetPropertyKind, WidgetRegistry, WidgetSlot, WindowDescriptor,
+    ToAnchorId as _, TopLevelMenu, WidgetDefinition, WidgetInstantiateContext, WidgetRegistry,
+    WindowDescriptor,
 };
 
 pub use jackdaw_api_internal::lifecycle::ExtensionKind;
@@ -75,8 +75,9 @@ pub use jackdaw_api_macros::operator;
 pub mod op {
     pub use jackdaw_api_internal::operator::{
         CallOperatorError, CallOperatorSettings, ExecutionContext, Operator, OperatorCallBuilder,
-        OperatorCommandsExt, OperatorParameters, OperatorResult, OperatorSignature,
-        OperatorSystemId, OperatorWorldExt, ParamSpec, RefreshOperatorButtons,
+        OperatorCommandsExt, OperatorParameters, OperatorReports, OperatorResult,
+        OperatorSignature, OperatorSystemId, OperatorWarnings, OperatorWorldExt, ParamSpec,
+        RefreshOperatorButtons, report_to_caller, warn_caller,
     };
 }
 
@@ -171,6 +172,7 @@ pub mod prelude {
         CallOperatorError, CallOperatorSettings, ExecutionContext, Operator,
         OperatorCommandsExt as _, OperatorParameters, OperatorResult, OperatorSignature,
         OperatorSystemId, OperatorWorldExt as _, ParamSpec, RefreshOperatorButtons,
+        report_to_caller, warn_caller,
     };
     pub use crate::pie::PlayState;
     pub use crate::runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems};
@@ -178,8 +180,7 @@ pub mod prelude {
         DefaultArea, ExtensionContext, ExtensionInputContext, ExtensionKind, ExtensionPoint,
         ExtensionRegistrar, HierarchyWindow, InspectorWindow, JackdawExtension,
         MenuEntryDescriptor, PanelContext, TopLevelMenu, WidgetDefinition,
-        WidgetInstantiateContext, WidgetPreviewState, WidgetProperty, WidgetPropertyKind,
-        WidgetRegistry, WidgetSlot, WindowDescriptor, operator,
+        WidgetInstantiateContext, WidgetRegistry, WindowDescriptor, operator,
     };
 
     /// Helper [`SystemParam`](bevy::ecs::system::SystemParam) for

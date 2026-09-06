@@ -3,9 +3,23 @@
 //! same API third-party authors do. Disable one in File > Extensions
 //! to remove its windows from the layout.
 
-use bevy::prelude::*;
+use bevy::{
+    feathers::{
+        controls::ButtonVariant,
+        cursor::EntityCursor,
+        focus::FocusIndicator,
+        theme::{
+            InheritableThemeTextColor, ThemeBackgroundColor, ThemeBorderColor, ThemeTextColor,
+            ThemeToken, ThemedText,
+        },
+        tokens as feathers_tokens,
+    },
+    input_focus::tab_navigation::TabIndex,
+    prelude::*,
+    window::SystemCursorIcon,
+};
 use jackdaw_api::{
-    DefaultArea, ExtensionPoint, HierarchyWindow, InspectorWindow,
+    DefaultArea, ExtensionPoint, HierarchyWindow, InspectorWindow, WidgetDefinition,
     prelude::{ExtensionContext, ExtensionKind, JackdawExtension, WindowDescriptor},
 };
 use jackdaw_feathers::icons::Icon;
@@ -18,11 +32,16 @@ use jackdaw_feathers::tokens;
 pub(crate) const WORLD_ENTITY_ICONS: &[(&str, Icon)] = &[
     ("jackdaw_scene_types::types::Brush", Icon::Cuboid),
     ("jackdaw_scene_types::types::Terrain", Icon::Mountain),
+    // Ahead of the `Mesh3d` rule: an instance carries no mesh of its own.
+    ("jackdaw_scene_types::types::GltfSource", Icon::Boxes),
     ("jackdaw::entity_ops::SceneFogVolume", Icon::CloudFog),
     ("jackdaw::entity_ops::SceneReflectionProbe", Icon::Sparkles),
     ("jackdaw::entity_ops::SceneAnimationPlayer", Icon::Play),
     ("jackdaw::entity_ops::SceneAudioSource", Icon::Volume2),
-    ("jackdaw::reference_image::ReferenceImage", Icon::Image),
+    (
+        "jackdaw::reference_image::ReferenceImage",
+        Icon::PictureInPicture,
+    ),
 ];
 
 /// Icon for the camera-rig component, gated to match the `camera_rig`
@@ -48,11 +67,20 @@ impl JackdawExtension for CoreWindowsExtension {
     }
 
     fn register(&self, ctx: &mut ExtensionContext) {
+        for (type_path, icon) in scene_kind_icons() {
+            ctx.register_entity_icon(type_path, icon);
+        }
         for (type_path, icon) in WORLD_ENTITY_ICONS {
             ctx.register_entity_icon(*type_path, *icon);
         }
         #[cfg(feature = "camera_rig")]
         ctx.register_entity_icon(CAMERA_RIG_ICON.0, CAMERA_RIG_ICON.1);
+        for (type_path, icon) in world_kind_icons() {
+            ctx.register_entity_icon(type_path, icon);
+        }
+        // Every `Node` is a container of some sort, so this must not answer
+        // before an extension has named its own UI kind.
+        ctx.register_entity_icon_last_resort_predicate(container_icon);
 
         ctx.register_window(
             WindowDescriptor::new(HierarchyWindow::ID)
@@ -88,7 +116,7 @@ impl JackdawExtension for CoreWindowsExtension {
                                 font_size: tokens::TEXT_SIZE_SM,
                                 ..default()
                             },
-                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+                            TextColor(tokens::TEXT_DISABLED),
                         )],
                     ));
                 }),
@@ -190,9 +218,10 @@ impl JackdawExtension for CoreWindowsExtension {
     }
 }
 
-/// 3D viewport, registered as a regular dock panel so multiple
+/// The viewport, registered as a regular dock panel so multiple
 /// instances (quad-view, stacked viewports for animation work, etc.)
-/// can coexist in the dock tree.
+/// can coexist in the dock tree. One panel shows either the 3D world or the
+/// 2D canvas, so the canvas operators are registered here too.
 #[derive(Default)]
 pub struct ViewportExtension;
 
@@ -210,77 +239,15 @@ impl JackdawExtension for ViewportExtension {
     }
 
     fn register(&self, ctx: &mut ExtensionContext) {
+        crate::viewport_2d::add_to_extension(ctx);
         ctx.register_window(
-            WindowDescriptor::new("jackdaw.viewport")
+            WindowDescriptor::new(crate::viewport::VIEWPORT_WINDOW_ID)
                 .with_name("Viewport")
                 .with_default_area(DefaultArea::Center)
                 .with_priority(0)
                 .with_build(|window| {
                     let parent = window.target_entity();
                     crate::viewport::build_viewport_panel(window.world_mut(), parent);
-                }),
-        );
-    }
-}
-
-/// Generic ECS-native UI authoring windows.
-#[derive(Default)]
-pub struct UiEditorExtension;
-
-impl JackdawExtension for UiEditorExtension {
-    fn id(&self) -> String {
-        "jackdaw.ui_editor".to_string()
-    }
-
-    fn label(&self) -> String {
-        "UI Editor".to_string()
-    }
-
-    fn kind(&self) -> ExtensionKind {
-        ExtensionKind::Builtin
-    }
-
-    fn register(&self, ctx: &mut ExtensionContext) {
-        ctx.register_entity_icon("jackdaw_ui::UiCanvas", Icon::LayoutTemplate);
-        ctx.register_entity_icon("jackdaw_ui::UiButton", Icon::MousePointer);
-        ctx.register_entity_icon("jackdaw_ui::UiCheckbox", Icon::Check);
-        ctx.register_entity_icon("jackdaw_ui::UiToggle", Icon::ToggleLeft);
-        ctx.register_entity_icon("jackdaw_ui::UiSlider", Icon::SlidersHorizontal);
-        ctx.register_entity_icon("jackdaw_ui::UiTextInput", Icon::TextCursorInput);
-        for definition in [
-            crate::ui_authoring::canvas_definition(),
-            crate::ui_authoring::panel_definition(),
-            crate::ui_authoring::row_definition(),
-            crate::ui_authoring::column_definition(),
-            crate::ui_authoring::label_definition(),
-            crate::ui_authoring::button_definition(),
-            crate::ui_authoring::checkbox_definition(),
-            crate::ui_authoring::toggle_definition(),
-            crate::ui_authoring::slider_definition(),
-            crate::ui_authoring::text_input_definition(),
-        ] {
-            ctx.register_widget(definition);
-        }
-        ctx.register_window(
-            WindowDescriptor::new(crate::ui_canvas::UI_CANVAS_WINDOW_ID)
-                .with_name("UI Canvas")
-                .with_icon(Icon::LayoutTemplate.unicode())
-                .with_default_area(DefaultArea::Center)
-                .with_priority(1)
-                .with_build(|window| {
-                    let parent = window.target_entity();
-                    crate::ui_canvas::build_ui_canvas_panel(window.world_mut(), parent);
-                }),
-        );
-        ctx.register_window(
-            WindowDescriptor::new(crate::ui_widgets_panel::UI_WIDGETS_WINDOW_ID)
-                .with_name("UI Widgets")
-                .with_icon(Icon::PanelsTopLeft.unicode())
-                .with_default_area(DefaultArea::Left)
-                .with_priority(2)
-                .with_build(|window| {
-                    let parent = window.target_entity();
-                    crate::ui_widgets_panel::build_ui_widgets_panel(window.world_mut(), parent);
                 }),
         );
     }
@@ -428,7 +395,7 @@ impl JackdawExtension for TerminalExtension {
                                 font_size: tokens::TEXT_SIZE_SM,
                                 ..default()
                             },
-                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+                            TextColor(tokens::TEXT_DISABLED),
                         )],
                     ));
                 }),
@@ -483,7 +450,7 @@ impl JackdawExtension for InspectorExtension {
             WindowDescriptor::new("jackdaw.inspector.materials")
                 .with_name("Materials")
                 .with_default_area(DefaultArea::RightSidebar)
-                .with_priority(2)
+                .with_priority(3)
                 .with_build(|window| {
                     let icon_font = window
                         .world()
@@ -502,7 +469,7 @@ impl JackdawExtension for InspectorExtension {
             WindowDescriptor::new("jackdaw.inspector.resources")
                 .with_name("Resources")
                 .with_default_area(DefaultArea::RightSidebar)
-                .with_priority(3)
+                .with_priority(4)
                 .with_build(|window| {
                     window.spawn((
                         Node {
@@ -517,17 +484,25 @@ impl JackdawExtension for InspectorExtension {
                                 font_size: tokens::TEXT_SIZE_SM,
                                 ..default()
                             },
-                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+                            TextColor(tokens::TEXT_DISABLED),
                         )],
                     ));
                 }),
         );
 
         ctx.register_window(
+            WindowDescriptor::new(crate::preview_context::PREVIEW_CONTEXT_WINDOW_ID)
+                .with_name("Preview")
+                .with_default_area(DefaultArea::RightSidebar)
+                .with_priority(2)
+                .with_build(crate::preview_context::build_preview_context_panel),
+        );
+
+        ctx.register_window(
             WindowDescriptor::new("jackdaw.inspector.systems")
                 .with_name("Systems")
                 .with_default_area(DefaultArea::RightSidebar)
-                .with_priority(4)
+                .with_priority(5)
                 .with_build(|window| {
                     window.spawn((
                         Node {
@@ -542,12 +517,696 @@ impl JackdawExtension for InspectorExtension {
                                 font_size: tokens::TEXT_SIZE_SM,
                                 ..default()
                             },
-                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+                            TextColor(tokens::TEXT_DISABLED),
                         )],
                     ));
                 }),
         );
     }
+}
+
+/// The UI widget vocabulary the Add menu's UI Widgets section lists.
+///
+/// Definitions assemble `bevy_ui` and `bevy_ui_widgets` rather than
+/// `bevy_feathers` controls, which are `SceneComponent`s and do not survive a
+/// document round trip; feathers' theme-token components are plain `Reflect`
+/// components and are spawned directly.
+#[derive(Default)]
+pub struct UiPaletteExtension;
+
+impl JackdawExtension for UiPaletteExtension {
+    fn id(&self) -> String {
+        "jackdaw.ui_palette".to_string()
+    }
+
+    fn label(&self) -> String {
+        "UI Widgets".to_string()
+    }
+
+    fn kind(&self) -> ExtensionKind {
+        ExtensionKind::Builtin
+    }
+
+    fn register(&self, ctx: &mut ExtensionContext) {
+        for definition in builtin_widget_definitions() {
+            ctx.register_widget(definition);
+        }
+        for (type_path, widget_id) in widget_kind_sources() {
+            if let Some(icon) = ctx.widget_definition(widget_id).and_then(|it| it.icon) {
+                ctx.register_entity_icon(type_path, icon);
+            }
+        }
+    }
+}
+
+/// Spawn one authored widget under the resolved parent.
+///
+/// An entity `Name` carries no space even where the menu label does: an
+/// operator clause's `name=` value has no quoting.
+fn spawn_widget(world: &mut World, parent: Option<Entity>, bundle: impl Bundle) -> Entity {
+    let mut entity = world.spawn(bundle);
+    if let Some(parent) = parent {
+        entity.insert(ChildOf(parent));
+    }
+    entity.id()
+}
+
+/// Scene-shaped kinds, registered first so they win over the components an
+/// entity is also made of.
+fn scene_kind_icons() -> Vec<(String, Icon)> {
+    use bevy::reflect::TypePath;
+    vec![
+        (
+            jackdaw_scene_types::UiSceneRoot::type_path().to_string(),
+            Icon::LayoutTemplate,
+        ),
+        (
+            jackdaw_scene_types::Scene2dRoot::type_path().to_string(),
+            Icon::Frame,
+        ),
+        (
+            jackdaw_scene_types::SceneRootTag::type_path().to_string(),
+            Icon::Clapperboard,
+        ),
+        (
+            jackdaw_prefab::components::IsA::type_path().to_string(),
+            Icon::Component,
+        ),
+    ]
+}
+
+/// The 3D kinds, after jackdaw's own authorable components: a brush and
+/// a terrain both carry `Mesh3d`, and they are the more particular thing.
+fn world_kind_icons() -> Vec<(String, Icon)> {
+    use bevy::reflect::TypePath;
+    vec![
+        (Camera::type_path().to_string(), Icon::Video),
+        (DirectionalLight::type_path().to_string(), Icon::Sun),
+        (PointLight::type_path().to_string(), Icon::Lightbulb),
+        (SpotLight::type_path().to_string(), Icon::Flashlight),
+        (Mesh3d::type_path().to_string(), Icon::Box),
+    ]
+}
+
+/// The component that identifies each built-in UI widget in the outliner,
+/// paired with the id of the widget whose glyph it takes. An id with no
+/// definition, or a definition with no icon, contributes nothing.
+fn widget_kind_sources() -> [(String, &'static str); 16] {
+    use bevy::reflect::TypePath;
+    use bevy::ui_widgets::{Button, Checkbox, RadioButton, ScrollArea, Slider};
+
+    [
+        (Button::type_path().to_string(), "ui.button"),
+        (
+            jackdaw_widgets_runtime::Spacer::type_path().to_string(),
+            "ui.spacer",
+        ),
+        (
+            jackdaw_widgets_runtime::Separator::type_path().to_string(),
+            "ui.separator",
+        ),
+        (
+            jackdaw_widgets_runtime::Progress::type_path().to_string(),
+            "ui.progress",
+        ),
+        (
+            jackdaw_widgets_runtime::Dropdown::type_path().to_string(),
+            "ui.dropdown",
+        ),
+        (
+            jackdaw_widgets_runtime::RadioOptions::type_path().to_string(),
+            "ui.radio_group",
+        ),
+        (
+            jackdaw_widgets_runtime::TabStrip::type_path().to_string(),
+            "ui.tabs",
+        ),
+        // Before the image rule: a nine-patch is an `ImageNode` too.
+        (
+            jackdaw_widgets_runtime::NineSlice::type_path().to_string(),
+            "ui.nine_patch",
+        ),
+        // Before the checkbox: a toggle switch is a `Checkbox` too.
+        (
+            jackdaw_widgets_runtime::ToggleSwitch::type_path().to_string(),
+            "ui.toggle",
+        ),
+        (Checkbox::type_path().to_string(), "ui.checkbox"),
+        (RadioButton::type_path().to_string(), "ui.radio"),
+        (Slider::type_path().to_string(), "ui.slider"),
+        (
+            jackdaw_widgets_runtime::TextValue::type_path().to_string(),
+            "ui.text_input",
+        ),
+        (ScrollArea::type_path().to_string(), "ui.scroll_area"),
+        (Text::type_path().to_string(), "ui.label"),
+        (ImageNode::type_path().to_string(), "ui.image"),
+    ]
+}
+
+/// A `Node` that is nothing more particular is a container; its own values say
+/// which kind.
+fn container_icon(entity: bevy::ecs::world::EntityRef) -> Option<Icon> {
+    let node = entity.get::<Node>()?;
+    if node.display == Display::Grid {
+        return Some(Icon::Grid3x3);
+    }
+    match node.flex_direction {
+        FlexDirection::Row | FlexDirection::RowReverse => Some(Icon::Columns3),
+        // A surface behind a column is what separates a panel from a plain one.
+        FlexDirection::Column | FlexDirection::ColumnReverse => {
+            if entity.contains::<ThemeBackgroundColor>() {
+                Some(Icon::PanelTop)
+            } else {
+                Some(Icon::Rows3)
+            }
+        }
+    }
+}
+
+/// A container preset: a `Node` plus the theme token that makes it a surface.
+/// `None` spawns a transparent background instead, which the theme leaves
+/// alone.
+fn container_definition(
+    id: &'static str,
+    name: &'static str,
+    icon: Icon,
+    node: fn() -> Node,
+    surface: Option<ThemeToken>,
+) -> WidgetDefinition {
+    WidgetDefinition::new(id, name, "Layout", move |world, context| {
+        let entity = spawn_widget(world, context.parent, (Name::new(name), node()));
+        match surface.clone() {
+            Some(token) => world.entity_mut(entity).insert(ThemeBackgroundColor(token)),
+            None => world
+                .entity_mut(entity)
+                .insert(BackgroundColor(Color::NONE)),
+        };
+        Ok(entity)
+    })
+    .with_icon(icon)
+}
+
+/// The widgets Jackdaw ships in the Add menu.
+fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
+    use bevy::ui_widgets::{
+        Button, Checkbox, RadioButton, ScrollArea, Slider, SliderRange, SliderValue,
+    };
+
+    vec![
+        container_definition(
+            "ui.panel",
+            "Panel",
+            Icon::PanelTop,
+            || Node {
+                min_width: px(160),
+                min_height: px(120),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(px(8)),
+                row_gap: px(6),
+                ..default()
+            },
+            Some(feathers_tokens::PANE_BODY_BG),
+        ),
+        container_definition(
+            "ui.row",
+            "Row",
+            Icon::Columns3,
+            || Node {
+                min_width: px(160),
+                min_height: px(32),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(6),
+                ..default()
+            },
+            None,
+        ),
+        container_definition(
+            "ui.column",
+            "Column",
+            Icon::Rows3,
+            || Node {
+                min_width: px(120),
+                min_height: px(80),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(6),
+                ..default()
+            },
+            None,
+        ),
+        container_definition(
+            "ui.grid",
+            "Grid",
+            Icon::Grid3x3,
+            || Node {
+                min_width: px(160),
+                min_height: px(120),
+                display: Display::Grid,
+                grid_template_columns: RepeatedGridTrack::flex(2, 1.0),
+                row_gap: px(6),
+                column_gap: px(6),
+                ..default()
+            },
+            None,
+        ),
+        WidgetDefinition::new("ui.spacer", "Spacer", "Layout", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Spacer"),
+                    Node {
+                        flex_grow: 1.0,
+                        flex_basis: px(0),
+                        ..default()
+                    },
+                    jackdaw_widgets_runtime::Spacer,
+                    BackgroundColor(Color::NONE),
+                ),
+            ))
+        })
+        .with_icon(Icon::Space),
+        // Authored as a horizontal rule; `separator_follows_parent_axis` turns
+        // it on its side under a row parent, keeping this thickness.
+        WidgetDefinition::new("ui.separator", "Separator", "Layout", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Separator"),
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: px(1),
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
+                    jackdaw_widgets_runtime::Separator,
+                    ThemeBackgroundColor(feathers_tokens::PANE_HEADER_DIVIDER),
+                ),
+            ))
+        })
+        .with_icon(Icon::SeparatorHorizontal),
+        // A track and the bar inside it; `progress_fill_follows_value` writes
+        // the bar's width from `Progress`.
+        WidgetDefinition::new(
+            "ui.progress",
+            "Progress Bar",
+            "Display",
+            |world, context| {
+                let track = spawn_widget(
+                    world,
+                    context.parent,
+                    (
+                        Name::new("ProgressBar"),
+                        Node {
+                            width: px(180),
+                            height: px(8),
+                            border_radius: BorderRadius::all(px(4)),
+                            overflow: Overflow::clip(),
+                            ..default()
+                        },
+                        jackdaw_widgets_runtime::Progress { value: 0.5 },
+                        ThemeBackgroundColor(feathers_tokens::SLIDER_BG),
+                    ),
+                );
+                world.spawn((
+                    Name::new("Fill"),
+                    Node {
+                        width: Val::Percent(50.0),
+                        height: Val::Percent(100.0),
+                        border_radius: BorderRadius::all(px(4)),
+                        ..default()
+                    },
+                    jackdaw_widgets_runtime::ProgressFill,
+                    ThemeBackgroundColor(feathers_tokens::SLIDER_BAR),
+                    ChildOf(track),
+                ));
+                Ok(track)
+            },
+        )
+        .with_icon(Icon::Gauge),
+        // `ThemeTextColor` rather than the inheritable variant: this entity
+        // holds the text itself.
+        WidgetDefinition::new("ui.label", "Label", "Display", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Label"),
+                    Text::new("Label"),
+                    TextFont {
+                        font_size: FontSize::Px(16.0),
+                        ..default()
+                    },
+                    ThemeTextColor(feathers_tokens::TEXT_MAIN),
+                ),
+            ))
+        })
+        .with_icon(Icon::Type),
+        WidgetDefinition::new("ui.image", "Image", "Display", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Image"),
+                    Node {
+                        width: px(96),
+                        height: px(96),
+                        ..default()
+                    },
+                    ImageNode::default(),
+                ),
+            ))
+        })
+        .with_icon(Icon::Image),
+        // The caption is a child because the inheritable text colour
+        // propagates downward only.
+        WidgetDefinition::new("ui.button", "Button", "Controls", |world, context| {
+            let button = spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Button"),
+                    Node {
+                        min_width: px(96),
+                        min_height: px(32),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        padding: UiRect::axes(px(12), px(6)),
+                        border_radius: BorderRadius::all(tokens::CORNER_RADIUS_LG),
+                        ..default()
+                    },
+                    Button,
+                    ButtonVariant::Normal,
+                    TabIndex(0),
+                    FocusIndicator,
+                    EntityCursor::System(SystemCursorIcon::Pointer),
+                    ThemeBackgroundColor(feathers_tokens::BUTTON_BG),
+                    InheritableThemeTextColor(feathers_tokens::BUTTON_TEXT),
+                ),
+            );
+            world.spawn((
+                Name::new("Caption"),
+                Text::new("Button"),
+                ThemedText,
+                TextLayout {
+                    justify: Justify::Center,
+                    ..default()
+                },
+                TextFont {
+                    font_size: FontSize::Px(14.0),
+                    ..default()
+                },
+                ChildOf(button),
+            ));
+            Ok(button)
+        })
+        .with_icon(Icon::MousePointerClick),
+        // Unchecked is the absence of `Checked`, so a fresh checkbox spawns
+        // without it. The tokens match feathers' outline child, which
+        // `jackdaw_widgets_runtime::authored_check_styles` swaps here instead.
+        WidgetDefinition::new("ui.checkbox", "Checkbox", "Controls", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Checkbox"),
+                    Node {
+                        width: px(18),
+                        height: px(18),
+                        border: UiRect::all(px(2)),
+                        border_radius: BorderRadius::all(tokens::CORNER_RADIUS),
+                        ..default()
+                    },
+                    Checkbox,
+                    TabIndex(0),
+                    FocusIndicator,
+                    EntityCursor::System(SystemCursorIcon::Pointer),
+                    ThemeBackgroundColor(feathers_tokens::CHECKBOX_BG),
+                    ThemeBorderColor(feathers_tokens::CHECKBOX_BORDER),
+                ),
+            ))
+        })
+        .with_icon(Icon::SquareCheck),
+        // Spawned outside a `RadioGroup`, so it does not self-update until one
+        // is added: `bevy_ui_widgets` addresses a radio change to the group.
+        WidgetDefinition::new("ui.radio", "Radio Button", "Controls", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("RadioButton"),
+                    Node {
+                        width: px(18),
+                        height: px(18),
+                        border: UiRect::all(px(2)),
+                        border_radius: BorderRadius::all(px(9)),
+                        ..default()
+                    },
+                    RadioButton,
+                    TabIndex(0),
+                    FocusIndicator,
+                    EntityCursor::System(SystemCursorIcon::Pointer),
+                    BackgroundColor(Color::NONE),
+                    ThemeBorderColor(feathers_tokens::RADIO_BORDER),
+                ),
+            ))
+        })
+        .with_icon(Icon::CircleDot),
+        // Without feathers' generated knob, the track taking `SWITCH_BG_CHECKED`
+        // is the only thing that shows the switch is on.
+        WidgetDefinition::new(
+            "ui.toggle",
+            "Toggle Switch",
+            "Controls",
+            |world, context| {
+                Ok(spawn_widget(
+                    world,
+                    context.parent,
+                    (
+                        Name::new("ToggleSwitch"),
+                        Node {
+                            width: px(40),
+                            height: px(22),
+                            border: UiRect::all(px(2)),
+                            border_radius: BorderRadius::all(px(11)),
+                            ..default()
+                        },
+                        Checkbox,
+                        jackdaw_widgets_runtime::ToggleSwitch,
+                        TabIndex(0),
+                        FocusIndicator,
+                        EntityCursor::System(SystemCursorIcon::Pointer),
+                        ThemeBackgroundColor(feathers_tokens::SWITCH_BG),
+                        ThemeBorderColor(feathers_tokens::SWITCH_BORDER),
+                    ),
+                ))
+            },
+        )
+        .with_icon(Icon::ToggleLeft),
+        // `SliderValue` and `SliderRange` are spawned explicitly rather than
+        // left to required components, so the document states the value.
+        WidgetDefinition::new("ui.slider", "Slider", "Controls", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Slider"),
+                    Node {
+                        width: px(180),
+                        height: px(16),
+                        border_radius: BorderRadius::all(px(8)),
+                        ..default()
+                    },
+                    Slider::default(),
+                    SliderValue(0.0),
+                    SliderRange::new(0.0, 1.0),
+                    TabIndex(0),
+                    FocusIndicator,
+                    ThemeBackgroundColor(feathers_tokens::SLIDER_BG),
+                ),
+            ))
+        })
+        .with_icon(Icon::SlidersHorizontal),
+        WidgetDefinition::new(
+            "ui.text_input",
+            "Text Input",
+            "Controls",
+            |world, context| {
+                Ok(spawn_widget(
+                    world,
+                    context.parent,
+                    (
+                        Name::new("TextInput"),
+                        Node {
+                            width: px(200),
+                            min_height: px(28),
+                            padding: UiRect::axes(px(8), px(4)),
+                            border_radius: BorderRadius::all(tokens::CORNER_RADIUS),
+                            ..default()
+                        },
+                        bevy::text::EditableText::default(),
+                        // `EditableText` is not reflectable, so the document
+                        // carries the text here instead.
+                        jackdaw_widgets_runtime::TextValue::default(),
+                        TextFont {
+                            font_size: FontSize::Px(14.0),
+                            ..default()
+                        },
+                        TabIndex(0),
+                        FocusIndicator,
+                        EntityCursor::System(SystemCursorIcon::Text),
+                        ThemeTextColor(feathers_tokens::TEXT_INPUT_TEXT),
+                        ThemeBackgroundColor(feathers_tokens::TEXT_INPUT_BG),
+                    ),
+                ))
+            },
+        )
+        .with_icon(Icon::TextCursorInput),
+        WidgetDefinition::new(
+            "ui.scroll_area",
+            "Scroll Area",
+            "Controls",
+            |world, context| {
+                Ok(spawn_widget(
+                    world,
+                    context.parent,
+                    (
+                        Name::new("ScrollArea"),
+                        Node {
+                            width: px(220),
+                            height: px(160),
+                            flex_direction: FlexDirection::Column,
+                            overflow: Overflow::scroll_y(),
+                            row_gap: px(4),
+                            ..default()
+                        },
+                        ScrollArea,
+                        ThemeBackgroundColor(feathers_tokens::PANE_BODY_BG),
+                    ),
+                ))
+            },
+        )
+        .with_icon(Icon::ScrollText),
+        // The options are the whole widget: `jackdaw_widgets_runtime` rebuilds
+        // the button, popup, and rows from them.
+        WidgetDefinition::new("ui.dropdown", "Dropdown", "Controls", |world, context| {
+            Ok(spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Dropdown"),
+                    Node {
+                        min_width: px(140),
+                        min_height: px(28),
+                        align_items: AlignItems::Stretch,
+                        justify_content: JustifyContent::Stretch,
+                        ..default()
+                    },
+                    jackdaw_widgets_runtime::Dropdown {
+                        options: vec!["One".to_string(), "Two".to_string(), "Three".to_string()],
+                        selected: 0,
+                    },
+                    BackgroundColor(Color::NONE),
+                ),
+            ))
+        })
+        .with_icon(Icon::SquareChevronDown),
+        // The rows are built from the options, so the document carries only the
+        // choices and the selection.
+        WidgetDefinition::new(
+            "ui.radio_group",
+            "Radio Group",
+            "Controls",
+            |world, context| {
+                Ok(spawn_widget(
+                    world,
+                    context.parent,
+                    (
+                        Name::new("RadioGroup"),
+                        Node {
+                            min_width: px(140),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(4),
+                            ..default()
+                        },
+                        bevy::ui_widgets::RadioGroup,
+                        jackdaw_widgets_runtime::RadioOptions {
+                            options: vec![
+                                "One".to_string(),
+                                "Two".to_string(),
+                                "Three".to_string(),
+                            ],
+                            selected: 0,
+                        },
+                        BackgroundColor(Color::NONE),
+                    ),
+                ))
+            },
+        )
+        .with_icon(Icon::ListChecks),
+        // The panes are authored children, in tab order; the strip above them
+        // is built from the labels.
+        WidgetDefinition::new("ui.tabs", "Tabs", "Layout", |world, context| {
+            let tabs = spawn_widget(
+                world,
+                context.parent,
+                (
+                    Name::new("Tabs"),
+                    Node {
+                        min_width: px(200),
+                        min_height: px(120),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(6),
+                        ..default()
+                    },
+                    jackdaw_widgets_runtime::TabStrip {
+                        labels: vec!["First".to_string(), "Second".to_string()],
+                        active: 0,
+                    },
+                    BackgroundColor(Color::NONE),
+                ),
+            );
+            for name in ["FirstPane", "SecondPane"] {
+                world.spawn((
+                    Name::new(name),
+                    Node {
+                        flex_grow: 1.0,
+                        flex_direction: FlexDirection::Column,
+                        padding: UiRect::all(px(8)),
+                        ..default()
+                    },
+                    ThemeBackgroundColor(feathers_tokens::PANE_BODY_BG),
+                    ChildOf(tabs),
+                ));
+            }
+            Ok(tabs)
+        })
+        .with_icon(Icon::PanelsTopLeft),
+        WidgetDefinition::new(
+            "ui.nine_patch",
+            "Nine Patch",
+            "Display",
+            |world, context| {
+                Ok(spawn_widget(
+                    world,
+                    context.parent,
+                    (
+                        Name::new("NinePatch"),
+                        Node {
+                            width: px(160),
+                            height: px(96),
+                            ..default()
+                        },
+                        ImageNode::default(),
+                        jackdaw_widgets_runtime::NineSlice { border: 12.0 },
+                    ),
+                ))
+            },
+        )
+        .with_icon(Icon::Grid2x2),
+    ]
 }
 
 #[cfg(test)]
@@ -615,7 +1274,7 @@ mod tests {
                 world
                     .spawn(crate::reference_image::ReferenceImage::default())
                     .id(),
-                Icon::Image,
+                Icon::PictureInPicture,
             ),
         ];
         for (entity, expected) in cases {

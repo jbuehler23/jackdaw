@@ -37,6 +37,11 @@ fn main() -> AppExit {
         std::process::exit(130);
     });
 
+    // Claim the IO task pool before `TaskPoolPlugin` can, so scenes
+    // with hundreds of models get a stack their nested glTF loads fit
+    // in. Has to run before the app is built.
+    jackdaw::io_pool::init();
+
     // The asset root is fixed at startup, so it has to agree with the
     // project this process will actually open. `jd open <path>` names
     // one explicitly; without this, opening anything other than the
@@ -57,12 +62,9 @@ fn main() -> AppExit {
     // - `JACKDAW_AUTO_OPEN=1` env var: opt in to "re-open last
     //   project on launch" for power users who prefer that flow.
     //
-    // We previously defaulted to auto-open; reverted because static
-    // game projects need a 5-10 minute build on first run, and
-    // auto-opening one means the user stares at a launcher window
-    // doing apparently nothing for several minutes. Showing the
-    // picker first lets the user explicitly choose to start that
-    // build.
+    // The picker comes first otherwise: a static game project needs a
+    // 5-10 minute build on first run, so auto-opening one leaves the
+    // user staring at an idle-looking launcher.
     let respawn_skip_build = std::env::var_os(jackdaw::restart::ENV_SKIP_INITIAL_BUILD).is_some();
     let auto_open_opt_in = std::env::var_os("JACKDAW_AUTO_OPEN").is_some();
     let auto_open = if respawn_skip_build {
@@ -88,41 +90,57 @@ fn main() -> AppExit {
         None
     };
 
+    // GPU timestamps are a device feature, so a diagnostics run has to
+    // ask for them before the device exists. `None` on every other
+    // launch, which leaves `RenderPlugin` exactly as it was.
+    let render_plugin =
+        jackdaw::render_diagnostics::wgpu_settings().map(|settings| bevy::render::RenderPlugin {
+            render_creation: settings.into(),
+            ..default()
+        });
+
+    let mut default_plugins = DefaultPlugins
+        .set(AssetPlugin {
+            file_path: project_root.join("assets").to_string_lossy().to_string(),
+            ..default()
+        })
+        .set(ImagePlugin {
+            default_sampler: ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                address_mode_w: ImageAddressMode::Repeat,
+                ..ImageSamplerDescriptor::linear()
+            },
+        })
+        // `editor_window_plugin` disables Bevy's default
+        // window-close -> AppExit wiring so `intercept_window_close`
+        // in ScenesPlugin owns the exit path, and it honors
+        // `JACKDAW_WINDOW_SIZE`. Spelling its fields out here instead
+        // would drop that override.
+        .set(editor_window_plugin())
+        // Its overlay inserts on every camera through a command
+        // buffer with no ordering against the dock reconciler, which
+        // despawns a rebuilt panel's cameras in the same frame.
+        .disable::<bevy::dev_tools::render_debug::RenderDebugOverlayPlugin>();
+    if let Some(render_plugin) = render_plugin {
+        default_plugins = default_plugins.set(render_plugin);
+    }
+
     let mut app = App::new();
     app
         // The default error handler panics, which we never *ever*
         // want to happen to the editor. Log an error instead.
         .set_error_handler(error_handler)
-        .add_plugins(
-            DefaultPlugins
-                .set(AssetPlugin {
-                    file_path: project_root.join("assets").to_string_lossy().to_string(),
-                    ..default()
-                })
-                .set(ImagePlugin {
-                    default_sampler: ImageSamplerDescriptor {
-                        address_mode_u: ImageAddressMode::Repeat,
-                        address_mode_v: ImageAddressMode::Repeat,
-                        address_mode_w: ImageAddressMode::Repeat,
-                        ..ImageSamplerDescriptor::linear()
-                    },
-                })
-                // `editor_window_plugin` disables Bevy's default
-                // window-close -> AppExit wiring so `intercept_window_close`
-                // in ScenesPlugin owns the exit path, and honors
-                // `JACKDAW_WINDOW_SIZE`. Duplicating its fields here would
-                // drop that override.
-                .set(editor_window_plugin()),
-        )
+        .add_plugins(default_plugins)
         // Ambient plugins added next to `DefaultPlugins`. The
         // editor's `EditorCorePlugin` and `PhysicsSimulationPlugin`
         // assert presence, so user `MyGamePlugin`s can add the
         // same plugins without conflict.
-        .add_plugins((
-            avian3d::prelude::PhysicsPlugins::default(),
-            bevy_enhanced_input::prelude::EnhancedInputPlugin,
-        ))
-        .add_plugins(editor_plugins);
+        .add_plugins(bevy_enhanced_input::prelude::EnhancedInputPlugin);
+    if std::env::var_os("JD_PERF_NO_PHYSICS").is_none() {
+        app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
+    }
+    app.add_plugins(editor_plugins);
 
     // The resolved asset root, so the open flow can tell whether a requested project is
     // the one this process reads assets for.
@@ -151,6 +169,11 @@ fn main() -> AppExit {
 /// they do not share a type graph with those libraries.
 fn editor_plugins(app: &mut App) {
     app.add_plugins(JackdawEditorPlugins::default());
+    // The remote-control server belongs to the editor *process*, not to
+    // the plugin group: a headless test app builds the same group, and
+    // two of them would fight over the port. It refuses to start when the
+    // project turns `remote.enabled` off.
+    app.add_plugins(jackdaw::remote::server::JackdawEditorRemotePlugin::default());
     #[cfg(feature = "dylib")]
     app.add_plugins(DylibLoaderPlugin);
 }

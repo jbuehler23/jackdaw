@@ -281,11 +281,11 @@ fn extension_checkbox(id: String, label: String) -> impl Scene {
                 return;
             }
 
-            if checked {
-                commands.entity(source).insert(Checked);
-            } else {
-                commands.entity(source).remove::<Checked>();
-            }
+            jackdaw_feathers::utils::set_marker_if_alive::<Checked>(
+                &mut commands,
+                source,
+                checked,
+            );
 
             let name = id.clone();
             commands.queue(move |world: &mut World| {

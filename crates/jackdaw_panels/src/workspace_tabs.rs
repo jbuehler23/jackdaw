@@ -1,7 +1,10 @@
 use std::collections::HashMap as StdHashMap;
 
 use bevy::input_focus::{FocusCause, InputFocus};
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use bevy::ui::Checked;
+use bevy::ui_widgets::{Activate, Button, RadioButton, RadioGroup, ValueChange};
 use jackdaw_feathers::text_edit::{
     self, EditorTextEdit, TextEditCommitEvent, TextEditConfig, TextEditProps,
 };
@@ -109,6 +112,9 @@ pub fn populate_workspace_tabs(
     let icon_font = world.get_resource::<IconFontHandle>().map(|f| f.0.clone());
 
     for strip_entity in strips {
+        if let Ok(mut strip) = world.get_entity_mut(strip_entity) {
+            strip.insert(RadioGroup);
+        }
         for workspace in registry.iter() {
             spawn_workspace_tab(
                 world,
@@ -149,26 +155,29 @@ fn spawn_workspace_tab(
         TAB_INACTIVE_LABEL
     };
 
-    let tab_entity = world
-        .spawn((
-            WorkspaceTab {
-                workspace_id: workspace.id.clone(),
-            },
-            Interaction::default(),
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                padding: UiRect::axes(Val::Px(7.0), Val::Px(4.0)),
-                column_gap: Val::Px(5.0),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(bg),
-            BorderColor::all(border),
-            ChildOf(strip),
-        ))
-        .id();
+    let mut tab = world.spawn((
+        WorkspaceTab {
+            workspace_id: workspace.id.clone(),
+        },
+        RadioButton,
+        Hovered::default(),
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(Val::Px(7.0), Val::Px(4.0)),
+            column_gap: Val::Px(5.0),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(4.0)),
+            ..default()
+        },
+        BackgroundColor(bg),
+        BorderColor::all(border),
+        ChildOf(strip),
+    ));
+    if is_active {
+        tab.insert(Checked);
+    }
+    let tab_entity = tab.id();
 
     world.spawn((
         Node {
@@ -217,7 +226,6 @@ fn spawn_workspace_tab(
                 WorkspaceTabCloseButton {
                     workspace_id: workspace.id.clone(),
                 },
-                Interaction::default(),
                 Node {
                     width: Val::Px(14.0),
                     height: Val::Px(14.0),
@@ -248,7 +256,7 @@ fn spawn_add_workspace_button(world: &mut World, strip: Entity, icon_font: Optio
     let btn = world
         .spawn((
             AddWorkspaceButton,
-            Interaction::default(),
+            Button,
             Node {
                 width: Val::Px(20.0),
                 height: Val::Px(20.0),
@@ -282,11 +290,11 @@ fn spawn_add_workspace_button(world: &mut World, strip: Entity, icon_font: Optio
 /// pressed. Hide it otherwise. Mirrors `tabs::show_close_on_hover` for
 /// dock tabs.
 pub fn show_workspace_close_on_hover(
-    tabs: Query<(&Interaction, &Children), (Changed<Interaction>, With<WorkspaceTab>)>,
+    tabs: Query<(&Hovered, &Children), (Changed<Hovered>, With<WorkspaceTab>)>,
     mut close_buttons: Query<&mut Node, With<WorkspaceTabCloseButton>>,
 ) {
-    for (interaction, children) in tabs.iter() {
-        let show = matches!(*interaction, Interaction::Hovered | Interaction::Pressed);
+    for (hovered, children) in tabs.iter() {
+        let show = hovered.get();
         for child in children.iter() {
             if let Ok(mut node) = close_buttons.get_mut(child) {
                 node.display = if show { Display::Flex } else { Display::None };
@@ -295,76 +303,81 @@ pub fn show_workspace_close_on_hover(
     }
 }
 
-pub fn handle_workspace_tab_clicks(
-    tab_query: Query<(&WorkspaceTab, &Interaction), Changed<Interaction>>,
+/// The strip is a [`RadioGroup`], so a tab chosen with the pointer or
+/// with an arrow key arrives here as the group's `ValueChange` naming
+/// the tab entity.
+pub fn on_workspace_tab_chosen(
+    change: On<ValueChange<Entity>>,
+    tabs: Query<&WorkspaceTab>,
     registry: Res<WorkspaceRegistry>,
     mut commands: Commands,
 ) {
-    for (tab, interaction) in tab_query.iter() {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-
-        let new_id = &tab.workspace_id;
-        if registry.active.as_ref() == Some(new_id) {
-            continue;
-        }
-
-        let old = registry.active.clone();
-        // The observer is the sole owner of `registry.active`; setting
-        // it eagerly here would race with auto-save (save snapshots live
-        // -> active and would corrupt the incoming workspace).
-        commands.trigger(WorkspaceChanged {
-            old,
-            new: new_id.clone(),
-        });
+    let Ok(tab) = tabs.get(change.value) else {
+        return;
+    };
+    let new_id = &tab.workspace_id;
+    if registry.active.as_ref() == Some(new_id) {
+        return;
     }
+
+    let old = registry.active.clone();
+    // The observer is the sole owner of `registry.active`; setting
+    // it eagerly here would race with auto-save (save snapshots live
+    // -> active and would corrupt the incoming workspace).
+    commands.trigger(WorkspaceChanged {
+        old,
+        new: new_id.clone(),
+    });
 }
 
 /// Click `+` to create a new workspace. Copies the current `DockTree`
 /// (so the new workspace starts visually identical to the current one)
 /// and switches to it.
-pub fn handle_add_workspace_clicks(
-    button_query: Query<&Interaction, (Changed<Interaction>, With<AddWorkspaceButton>)>,
+pub fn on_add_workspace_activated(
+    activate: On<Activate>,
+    buttons: Query<(), With<AddWorkspaceButton>>,
     mut registry: ResMut<WorkspaceRegistry>,
     tree: Res<DockTree>,
     mut commands: Commands,
 ) {
-    for interaction in button_query.iter() {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-
-        let next_index = registry.workspaces.len() + 1;
-        let new_id = format!("workspace_{next_index}");
-        let new_name = format!("Workspace {next_index}");
-
-        let current_active = registry.active.clone();
-        if let Some(active_id) = current_active.as_ref()
-            && let Some(ws) = registry.get_mut(active_id)
-        {
-            ws.tree = tree.clone();
-        }
-
-        registry.workspaces.push(WorkspaceDescriptor {
-            id: new_id.clone(),
-            name: new_name,
-            icon: None,
-            accent_color: NEW_WORKSPACE_ACCENT,
-            layout: crate::layout::LayoutState::default(),
-            tree: tree.clone(),
-        });
-
-        let old = registry.active.clone();
-        commands.trigger(WorkspaceChanged { old, new: new_id });
+    if buttons.contains(activate.entity) {
+        add_workspace(&mut registry, &tree, &mut commands);
     }
+}
+
+/// Append a workspace that starts as a copy of the current `DockTree`,
+/// and switch to it. Shared by the dock's own `+` tab and the title
+/// bar's workspace dropdown, which reach it from different click paths.
+pub fn add_workspace(registry: &mut WorkspaceRegistry, tree: &DockTree, commands: &mut Commands) {
+    let next_index = registry.workspaces.len() + 1;
+    let new_id = format!("workspace_{next_index}");
+    let new_name = format!("Workspace {next_index}");
+
+    let current_active = registry.active.clone();
+    if let Some(active_id) = current_active.as_ref()
+        && let Some(ws) = registry.get_mut(active_id)
+    {
+        ws.tree = tree.clone();
+    }
+
+    registry.workspaces.push(WorkspaceDescriptor {
+        id: new_id.clone(),
+        name: new_name,
+        icon: None,
+        accent_color: NEW_WORKSPACE_ACCENT,
+        layout: crate::layout::LayoutState::default(),
+        tree: tree.clone(),
+    });
+
+    let old = registry.active.clone();
+    commands.trigger(WorkspaceChanged { old, new: new_id });
 }
 
 /// Click X on a tab -> delete that workspace. Last workspace can't be
 /// deleted. Active-deleted falls through to the first remaining via
 /// `WorkspaceChanged`.
 pub fn on_workspace_close_click(
-    trigger: On<Pointer<Click>>,
+    mut trigger: On<Pointer<Click>>,
     close_buttons: Query<&WorkspaceTabCloseButton>,
     mut registry: ResMut<WorkspaceRegistry>,
     tree: Res<DockTree>,
@@ -373,6 +386,9 @@ pub fn on_workspace_close_click(
     let Ok(close_btn) = close_buttons.get(trigger.event_target()) else {
         return;
     };
+    // The X sits inside the tab, which is a radio button: without this
+    // the same click would also choose the workspace being closed.
+    trigger.propagate(false);
     if registry.workspaces.len() <= 1 {
         return;
     }
@@ -603,6 +619,7 @@ pub fn update_workspace_tab_visuals(
     mut border_query: Query<&mut BorderColor>,
     children_query: Query<&Children>,
     mut text_color_query: Query<&mut TextColor>,
+    mut commands: Commands,
 ) {
     if !registry.is_changed() {
         return;
@@ -610,6 +627,11 @@ pub fn update_workspace_tab_visuals(
 
     for (tab_entity, tab) in tabs.iter() {
         let is_active = registry.active.as_ref() == Some(&tab.workspace_id);
+        jackdaw_feathers::utils::set_marker_if_alive::<Checked>(
+            &mut commands,
+            tab_entity,
+            is_active,
+        );
 
         if let Ok(mut bg) = bg_query.get_mut(tab_entity) {
             bg.0 = if is_active {

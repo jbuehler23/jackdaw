@@ -18,7 +18,7 @@ use bevy::ecs::relationship::Relationship;
 use bevy::picking::events::{Click, Drag, DragEnd, DragStart, Pointer};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
-use jackdaw_commands::CommandHistory;
+use jackdaw_commands::{CommandHistory, KeymapCapture};
 use std::collections::HashMap;
 
 use crate::commands::{
@@ -413,10 +413,16 @@ pub fn on_terminal_right_click(
 /// incident connections) via `RemoveGraphNodesCmd`.
 pub fn handle_delete_key(
     keys: Res<ButtonInput<KeyCode>>,
+    capture: Option<Res<KeymapCapture>>,
     selection: Res<GraphSelection>,
     nodes: Query<Option<&ChildOf>, With<GraphNode>>,
     mut commands: Commands,
 ) {
+    // The graph reads these keys itself rather than through the keymap, so
+    // it has to stand down for a recording on its own.
+    if KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     if !keys.just_pressed(KeyCode::Delete) && !keys.just_pressed(KeyCode::Backspace) {
         return;
     }
@@ -451,7 +457,14 @@ pub fn handle_delete_key(
 
 /// Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) drive undo/redo against the shared
 /// `CommandHistory`.
-pub fn handle_undo_redo_keys(keys: Res<ButtonInput<KeyCode>>, mut commands: Commands) {
+pub fn handle_undo_redo_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    capture: Option<Res<KeymapCapture>>,
+    mut commands: Commands,
+) {
+    if KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     if !ctrl {
         return;

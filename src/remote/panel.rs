@@ -1,4 +1,5 @@
 use bevy::{prelude::*, ui_widgets::observe};
+use jackdaw_feathers::button::{ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::{popover, tokens};
 
 use super::connection::{ConnectionManager, ConnectionState};
@@ -40,15 +41,7 @@ const DOT_ERROR: Color = Color::srgba(0.9, 0.2, 0.2, 1.0);
 pub fn connection_indicator() -> impl Bundle {
     (
         ConnectionIndicator,
-        Interaction::default(),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(tokens::SPACING_XS),
-            padding: UiRect::horizontal(Val::Px(tokens::SPACING_SM)),
-            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
-            ..Default::default()
-        },
+        button(ButtonProps::new("").with_variant(ButtonVariant::Ghost)),
         children![
             // Colored dot
             (
@@ -188,33 +181,15 @@ pub fn on_connection_indicator_click(
                     });
 
                     // Connect / Disconnect button
-                    let (button_text, button_color) = if is_connected {
-                        ("Disconnect", Color::srgba(0.7, 0.2, 0.2, 1.0))
+                    let (button_text, button_variant) = if is_connected {
+                        ("Disconnect", ButtonVariant::Destructive)
                     } else {
-                        ("Connect", Color::srgba(0.2, 0.5, 0.8, 1.0))
+                        ("Connect", ButtonVariant::Primary)
                     };
 
                     col.spawn((
                         ConnectButton,
-                        Interaction::default(),
-                        Node {
-                            padding: UiRect::axes(
-                                Val::Px(tokens::SPACING_LG),
-                                Val::Px(tokens::SPACING_SM),
-                            ),
-                            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
-                            justify_content: JustifyContent::Center,
-                            ..Default::default()
-                        },
-                        BackgroundColor(button_color),
-                        children![(
-                            Text::new(button_text),
-                            TextFont {
-                                font_size: tokens::TEXT_SIZE_SM,
-                                ..Default::default()
-                            },
-                            TextColor(tokens::TEXT_PRIMARY),
-                        )],
+                        button(ButtonProps::new(button_text).with_variant(button_variant)),
                         observe(
                             move |_: On<Pointer<Click>>,
                                   mut commands: Commands,
@@ -235,25 +210,7 @@ pub fn on_connection_indicator_click(
                     // Refresh Registry button (only when connected)
                     if is_connected {
                         col.spawn((
-                            Interaction::default(),
-                            Node {
-                                padding: UiRect::axes(
-                                    Val::Px(tokens::SPACING_LG),
-                                    Val::Px(tokens::SPACING_SM),
-                                ),
-                                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
-                                justify_content: JustifyContent::Center,
-                                ..Default::default()
-                            },
-                            BackgroundColor(Color::srgba(0.3, 0.3, 0.5, 1.0)),
-                            children![(
-                                Text::new("Refresh Registry"),
-                                TextFont {
-                                    font_size: tokens::TEXT_SIZE_SM,
-                                    ..Default::default()
-                                },
-                                TextColor(tokens::TEXT_PRIMARY),
-                            )],
+                            button(ButtonProps::new("Refresh Registry")),
                             observe(
                                 |_: On<Pointer<Click>>,
                                  mut commands: Commands,

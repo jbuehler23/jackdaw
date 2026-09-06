@@ -58,6 +58,13 @@ pub fn sync_to_ast(world: &mut World, entity: Entity, component_type_id: TypeId)
 ///
 /// Inserts the node into the parent's `Children` patch (or roots if no parent).
 pub fn create_entity_in_ast(world: &mut World, entity: Entity, parent: Option<Entity>) {
+    // Nothing to author a node for, and the link would name a dead id: the
+    // node would then outlive anything that could reach it, and every later
+    // lookup of that index would find it. Checked before the resource is
+    // touched, not after, because the link goes in before the component does.
+    if world.get_entity(entity).is_err() {
+        return;
+    }
     let name = world.get::<Name>(entity).map(ToString::to_string);
 
     let mut initial_patches = Vec::new();
@@ -103,6 +110,10 @@ pub fn sync_hierarchy_to_ast(world: &mut World, entity: Entity, new_parent: Opti
 }
 
 /// Move an ECS entity's AST node to an exact ordered sibling position.
+///
+/// An entity with no document node is left alone, and said so: the caller
+/// still moves it in the ECS, so the document and the visible hierarchy part
+/// ways there and a save would not hold the move.
 pub fn sync_hierarchy_to_ast_at(
     world: &mut World,
     entity: Entity,
@@ -110,6 +121,7 @@ pub fn sync_hierarchy_to_ast_at(
     index: usize,
 ) {
     let Some(ast_ref) = world.get::<AstNodeRef>(entity) else {
+        log::warn!("{entity} has no document node; its move was not written to the document");
         return;
     };
     let node_ast = ast_ref.patches_entity;

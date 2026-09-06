@@ -12,7 +12,30 @@ use jackdaw::prelude::*;
 use jackdaw_api_internal::lifecycle::{ExtensionAppExt as _, OperatorEntity, enable_extension};
 use jackdaw_api_internal::snapshot::{ActiveSnapshotter, SceneSnapshot};
 
+/// Wave the first-run SDK setup check past, for every test process. A test binary
+/// is built from the workspace the embedded recipe is cut from, so any edit to it
+/// makes the bootstrap stamp stale and every editor app a test builds would put
+/// up the setup screen. Set before the first plugin is added.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "shared across test binaries")]
+pub fn skip_setup_check() {
+    jackdaw_project_build::bootstrap::skip_setup_check();
+}
+
 pub fn headless_app() -> App {
+    let mut app = ambient_app();
+    add_editor_plugins(&mut app);
+    app
+}
+
+/// Everything under the editor: the plugins a binary adds before
+/// `add_editor_plugins`, and nothing of jackdaw's own. Split out so a
+/// test can stand a game's plugins between the two, which is the
+/// arrangement the editor meets when it loads one.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "shared across test binaries")]
+pub fn ambient_app() -> App {
+    skip_setup_check();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -27,7 +50,8 @@ pub fn headless_app() -> App {
             // backend avoids attempts to connect to host ALSA/JACK services,
             // which can otherwise block an otherwise-complete test process.
             .disable::<bevy::audio::AudioPlugin>()
-            .disable::<WinitPlugin>(),
+            .disable::<WinitPlugin>()
+            .disable::<bevy::dev_tools::render_debug::RenderDebugOverlayPlugin>(),
     )
     // Ambient plugins moved to the binary entry point (matches
     // the launcher's `src/main.rs` and the static template's
@@ -37,8 +61,16 @@ pub fn headless_app() -> App {
     .add_plugins((
         avian3d::prelude::PhysicsPlugins::default(),
         bevy_enhanced_input::prelude::EnhancedInputPlugin,
-    ))
-    .add_plugins(JackdawEditorPlugins::default());
+    ));
+    app
+}
+
+/// The editor itself, over an app that already carries the ambient
+/// plugins.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "shared across test binaries")]
+pub fn add_editor_plugins(app: &mut App) {
+    app.add_plugins(JackdawEditorPlugins::default());
     // Bevy 0.19's component-sync hooks (`On<Remove, SyncToRenderWorld>`) read the
     // main-world `PendingSyncEntity` resource that `SyncWorldPlugin` installs.
     // The headless `RenderPlugin` (no backend) never spins up the render world,
@@ -47,7 +79,6 @@ pub fn headless_app() -> App {
     if !app.is_plugin_added::<bevy::render::sync_world::SyncWorldPlugin>() {
         app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
     }
-    app
 }
 
 /// Like [`headless_app`] but also runs the startup pass and ticks one
@@ -66,6 +97,20 @@ pub fn editor_test_app() -> App {
     // built-in's operator entities are spawned.
     app.update();
     app
+}
+
+/// Advance the app's clock by a fixed step per frame, so gestures measured
+/// in seconds (double clicks, spring loads) read the same on a loaded
+/// runner as on a fast machine.
+#[expect(clippy::allow_attributes, reason = "Some tests use this")]
+#[allow(
+    dead_code,
+    reason = "shared across integration test binaries; not every test file calls it."
+)]
+pub fn fixed_frame_clock(app: &mut App) {
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        std::time::Duration::from_millis(16),
+    ));
 }
 
 /// Register `T` in the catalog AND enable it.
@@ -120,6 +165,8 @@ pub fn iter_operator_ids(app: &mut App) -> Vec<Cow<'static, str>> {
 /// `target/` and return the staged path. Building one writes a lockfile, a
 /// redirect plan and a target dir, none of which belong in the committed tree.
 /// The staged target dir survives between runs so dependencies are not rebuilt.
+/// The path carries the test binary's name, so two binaries staging the same
+/// fixture at once do not write over each other.
 ///
 /// Staging preserves the layout, so a fixture depending on `../sibling` works
 /// as long as the caller stages that sibling too.
@@ -129,7 +176,10 @@ pub fn stage_fixture(name: &str) -> std::path::PathBuf {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let src = root.join("tests/fixtures").join(name);
     assert!(src.is_dir(), "no fixture crate at {}", src.display());
-    let dst = root.join("target/fixture-stage").join(name);
+    let dst = root
+        .join("target/fixture-stage")
+        .join(env!("CARGO_CRATE_NAME"))
+        .join(name);
     copy_dir(&src, &dst);
     dst
 }

@@ -49,7 +49,7 @@ fn can_run_element_op(
     edge_drag: Res<EdgeDragState>,
 ) -> bool {
     matches!(*edit_mode, EditMode::BrushEdit(_))
-        && !keybind_focus.is_typing()
+        && !keybind_focus.keyboard_is_spoken_for()
         && !face_drag.active
         && !vertex_drag.active
         && !edge_drag.active

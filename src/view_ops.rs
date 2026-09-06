@@ -31,6 +31,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ViewToggleColliderGizmosOp>()
         .register_operator::<ViewToggleHierarchyArrowsOp>()
         .register_operator::<ViewSetAxisOp>()
+        .register_operator::<ViewLookAtOp>()
+        .register_operator::<ViewOrbitOp>()
         .register_operator::<ViewTogglePerspOrthoOp>()
         .register_operator::<ViewFrameSelectedOp>()
         .register_operator::<ViewFrameAllOp>()
@@ -222,16 +224,9 @@ fn read_int_param(params: &OperatorParameters, name: &str) -> Option<i64> {
     })
 }
 
-/// Resolve which viewport's camera a framing op acts on: the hovered viewport,
-/// otherwise the sole `MainViewportCamera` if there is exactly one. More than
-/// one and unhovered is ambiguous, so no camera is returned.
-///
-/// `ActiveViewport` reflects a literal cursor-over-the-panel hover
-/// (`update_active_viewport`), which never happens from `JACKDAW_RUN_OP` (no
-/// synthetic pointer) and can miss a keypress fired while the cursor sits over
-/// other UI in a single-viewport layout. Only `view.frame_selected` and
-/// `view.frame_all` use this fallback; `view.set_axis` and
-/// `view.toggle_persp_ortho` keep the hover-only gate (`active_viewport_ready`).
+/// Resolve which viewport's camera a framing op should act on: the hovered
+/// viewport if one exists, otherwise the sole `MainViewportCamera` if there
+/// is exactly one. More than one is ambiguous, so nothing resolves.
 fn resolve_frame_camera(
     active: &ActiveViewport,
     cameras: &Query<Entity, With<MainViewportCamera>>,
@@ -252,10 +247,23 @@ fn frame_selected_available(
     selection.primary().is_some() && resolve_frame_camera(&active, &cameras).is_some()
 }
 
+/// Framing the world needs a camera to frame it in, and needs the 3D viewport
+/// to be the panel Home belongs to. Home is bound in the 2D viewport too, so
+/// without this gate one press over the canvas would do both.
 fn frame_all_available(
     active: Res<ActiveViewport>,
     cameras: Query<Entity, With<MainViewportCamera>>,
+    hover_map: Res<bevy::picking::hover::HoverMap>,
+    parents: Query<&ChildOf>,
+    tree: Res<jackdaw_panels::tree::DockTree>,
+    contents: Query<(Entity, &jackdaw_panels::area::DockTabContent)>,
+    viewports: Query<&crate::viewport_host::ViewportHost>,
 ) -> bool {
+    if crate::viewport_2d::focused_viewport_mode(&hover_map, &parents, &tree, &contents, &viewports)
+        != Some(crate::viewport_host::ViewportMode::ThreeD)
+    {
+        return false;
+    }
     resolve_frame_camera(&active, &cameras).is_some()
 }
 
@@ -303,6 +311,13 @@ fn orthographic_default() -> Projection {
     label = "Set Axis-Aligned View",
     description = "Snap the active viewport to look down a world axis (orthographic).",
     is_available = active_viewport_ready,
+    params(
+        axis(i64, doc = "Axis to look along: 0 = X (side), 1 = Y (top), 2 = Z (front)."),
+        sign(
+            i64,
+            doc = "Which side of that axis the camera stands on: 1 positive, -1 negative."
+        ),
+    )
 )]
 pub(crate) fn view_set_axis(
     params: In<OperatorParameters>,
@@ -417,6 +432,7 @@ pub(crate) fn view_frame_selected(
     bounded: Query<(&GlobalTransform, &Aabb), Without<crate::ViewDependentBounds>>,
     camera_entities: Query<Entity, With<MainViewportCamera>>,
     mut cameras: Query<&mut Transform, With<MainViewportCamera>>,
+    mut commands: Commands,
 ) -> OperatorResult {
     let camera_entity = resolve_frame_camera(&active, &camera_entities)?;
     let primary = selection.primary()?;
@@ -441,6 +457,170 @@ pub(crate) fn view_frame_selected(
     let forward = transform.forward().as_vec3();
     transform.translation = target - forward * dist;
     *transform = transform.looking_at(target, Vec3::Y);
+    commands.entity(camera_entity).insert(ViewportFocus(target));
+    OperatorResult::Finished
+}
+
+/// The point an orbit turns around. A camera transform does not carry one, so
+/// it persists on the camera and everything that moves the camera keeps it
+/// current.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ViewportFocus(pub Vec3);
+
+/// Carry [`ViewportFocus`] along with a camera the pointer is flying, keeping
+/// its distance ahead of the camera.
+///
+/// Runs in `Last` so it reads the transform the camera controller left, not the
+/// one it is about to replace.
+pub(crate) fn track_pointer_focus(
+    nav: Res<jackdaw_camera::CameraNavInput>,
+    cameras: Query<(Entity, &Transform, Option<&ViewportFocus>), With<MainViewportCamera>>,
+    mut commands: Commands,
+) {
+    let flying = nav.fly_active && (nav.look_delta != Vec2::ZERO || nav.move_axes != Vec3::ZERO);
+    if !flying && nav.zoom_ticks == 0.0 {
+        return;
+    }
+    for (entity, transform, focus) in &cameras {
+        let distance = focus
+            .map(|ViewportFocus(point)| transform.translation.distance(*point))
+            .filter(|d| d.is_finite() && *d > 0.01);
+        let point = match distance {
+            Some(distance) => transform.translation + transform.forward().as_vec3() * distance,
+            None => orbit_focus(transform, None, FRAME_SELECTED_MIN_DIST),
+        };
+        commands.entity(entity).insert(ViewportFocus(point));
+    }
+}
+
+/// The point `camera` turns around: what it was last told, else where its
+/// sightline meets the ground, else a point `distance` ahead when the sightline
+/// is parallel to the ground.
+fn orbit_focus(transform: &Transform, focus: Option<&ViewportFocus>, distance: f32) -> Vec3 {
+    if let Some(ViewportFocus(point)) = focus {
+        return *point;
+    }
+    let forward = transform.forward().as_vec3();
+    let ahead = transform.translation + forward * distance;
+    if forward.y.abs() < 1e-3 {
+        return ahead;
+    }
+    let travel = -transform.translation.y / forward.y;
+    if travel > 0.0 {
+        transform.translation + forward * travel
+    } else {
+        ahead
+    }
+}
+
+/// Put the active viewport's camera at a place, looking at another. Switches to
+/// perspective, since the orthographic views are axis snaps and an arbitrary eye
+/// point is not one.
+#[operator(
+    id = "view.look_at",
+    label = "Look At",
+    description = "Put the active viewport's camera at a point, looking at another.",
+    allows_undo = false,
+    is_available = dolly_available,
+    params(
+        eye_x(f64, doc = "World X the camera sits at, in metres."),
+        eye_y(f64, doc = "World Y the camera sits at, in metres."),
+        eye_z(f64, doc = "World Z the camera sits at, in metres."),
+        target_x(f64, doc = "World X the camera looks at. Defaults to 0."),
+        target_y(f64, doc = "World Y the camera looks at. Defaults to 0."),
+        target_z(f64, doc = "World Z the camera looks at. Defaults to 0."),
+    )
+)]
+pub(crate) fn view_look_at(
+    params: In<OperatorParameters>,
+    active: Res<ActiveViewport>,
+    camera_entities: Query<Entity, With<MainViewportCamera>>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<MainViewportCamera>>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let camera_entity = resolve_frame_camera(&active, &camera_entities)?;
+    let axis = |key: &str| params.as_float(key).unwrap_or(0.0) as f32;
+    let eye = Vec3::new(axis("eye_x"), axis("eye_y"), axis("eye_z"));
+    let target = Vec3::new(axis("target_x"), axis("target_y"), axis("target_z"));
+    if eye == target {
+        warn!("view.look_at: the eye and the target are the same point");
+        return OperatorResult::Cancelled;
+    }
+
+    let (mut transform, mut projection) = cameras.get_mut(camera_entity)?;
+    transform.translation = eye;
+    // Straight down needs a hint that is not world up, or `looking_at` has no
+    // way to spell the roll.
+    let up = if (target - eye).normalize().y.abs() > 0.999 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+    *transform = transform.looking_at(target, up);
+    *projection = perspective_default();
+    commands.entity(camera_entity).insert(ViewportFocus(target));
+    OperatorResult::Finished
+}
+
+/// Turn the active viewport's camera around its focus point. Angles are in
+/// degrees.
+#[operator(
+    id = "view.orbit",
+    label = "Orbit Camera",
+    description = "Turn the active viewport's camera around its focus point.",
+    allows_undo = false,
+    is_available = dolly_available,
+    params(
+        yaw(f64, doc = "Compass angle in degrees, measured about world up."),
+        pitch(
+            f64,
+            doc = "Angle above the ground in degrees; 90 looks straight down. \
+                   Defaults to 30."
+        ),
+        distance(f64, doc = "Metres from the focus point. Defaults to the current distance."),
+    )
+)]
+pub(crate) fn view_orbit(
+    params: In<OperatorParameters>,
+    active: Res<ActiveViewport>,
+    camera_entities: Query<Entity, With<MainViewportCamera>>,
+    mut cameras: Query<
+        (&mut Transform, &mut Projection, Option<&ViewportFocus>),
+        With<MainViewportCamera>,
+    >,
+    mut commands: Commands,
+) -> OperatorResult {
+    let camera_entity = resolve_frame_camera(&active, &camera_entities)?;
+    let (mut transform, mut projection, focus) = cameras.get_mut(camera_entity)?;
+
+    let asked_distance = params.as_float("distance").map(|d| d as f32);
+    let focus_point = orbit_focus(
+        &transform,
+        focus,
+        asked_distance.unwrap_or(FRAME_SELECTED_MIN_DIST),
+    );
+    let distance = asked_distance
+        .unwrap_or_else(|| transform.translation.distance(focus_point))
+        .max(0.01);
+
+    let yaw = (params.as_float("yaw").unwrap_or(0.0) as f32).to_radians();
+    // Clamped short of the poles: straight down leaves the orientation with no
+    // roll to pick.
+    let pitch = (params.as_float("pitch").unwrap_or(30.0) as f32)
+        .to_radians()
+        .clamp(-1.5533, 1.5533);
+
+    let offset = Vec3::new(
+        yaw.sin() * pitch.cos(),
+        pitch.sin(),
+        yaw.cos() * pitch.cos(),
+    ) * distance;
+    transform.translation = focus_point + offset;
+    *transform = transform.looking_at(focus_point, Vec3::Y);
+    *projection = perspective_default();
+    commands
+        .entity(camera_entity)
+        .insert(ViewportFocus(focus_point));
     OperatorResult::Finished
 }
 
@@ -548,6 +728,7 @@ pub(crate) fn view_frame_all(
     bounded: Query<(&GlobalTransform, &Aabb), Without<crate::ViewDependentBounds>>,
     camera_entities: Query<Entity, With<MainViewportCamera>>,
     mut cameras: Query<&mut Transform, With<MainViewportCamera>>,
+    mut commands: Commands,
 ) -> OperatorResult {
     let camera_entity = resolve_frame_camera(&active, &camera_entities)?;
     let mut transform = cameras.get_mut(camera_entity)?;
@@ -583,6 +764,7 @@ pub(crate) fn view_frame_all(
     let forward = transform.forward().as_vec3();
     transform.translation = center - forward * dist;
     *transform = transform.looking_at(center, Vec3::Y);
+    commands.entity(camera_entity).insert(ViewportFocus(center));
     OperatorResult::Finished
 }
 
@@ -649,10 +831,10 @@ fn expand_world_aabb(transform: &GlobalTransform, aabb: &Aabb, min: &mut Vec3, m
 pub(crate) fn axis_view_keys(
     keyboard: Res<ButtonInput<KeyCode>>,
     modal: Res<crate::modal_transform::ModalTransformState>,
-    input_focus: Res<bevy::input_focus::InputFocus>,
+    focus: crate::keybind_focus::KeybindFocus,
     mut commands: Commands,
 ) {
-    if modal.active.is_some() || input_focus.get().is_some() {
+    if modal.active.is_some() || focus.keyboard_is_spoken_for() {
         return;
     }
 
@@ -691,14 +873,13 @@ mod resolve_frame_camera_tests {
         world.spawn(MainViewportCamera);
         let active = ActiveViewport {
             camera: Some(hovered),
-            ui_node: None,
+            ..default()
         };
         let mut state = SystemState::<Query<Entity, With<MainViewportCamera>>>::new(&mut world);
         let cameras = state.get(&world).unwrap();
         assert_eq!(resolve_frame_camera(&active, &cameras), Some(hovered));
     }
 
-    /// The no-hover case `JACKDAW_RUN_OP` hits: falls back to the sole viewport camera.
     #[test]
     fn nothing_hovered_falls_back_to_the_sole_camera() {
         let mut world = World::new();
@@ -709,7 +890,6 @@ mod resolve_frame_camera_tests {
         assert_eq!(resolve_frame_camera(&active, &cameras), Some(camera));
     }
 
-    /// Two viewports and nothing hovered is ambiguous, so no camera resolves.
     #[test]
     fn nothing_hovered_with_two_cameras_resolves_to_nothing() {
         let mut world = World::new();

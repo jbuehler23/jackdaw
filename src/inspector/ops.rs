@@ -20,19 +20,53 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<PhysicsEnableOp>()
         .register_operator::<PhysicsDisableOp>()
         .register_operator::<AnimationToggleKeyframeOp>()
+        .register_operator::<FieldSetOp>()
+        .register_operator::<super::bindings_card::BindingAddOp>()
+        .register_operator::<super::bindings_card::BindingSetOp>()
         .register_operator::<super::brush_display::BrushFaceClearMaterialOp>()
         .register_operator::<super::brush_display::BrushFaceApplyTextureToAllOp>()
         .register_operator::<super::brush_display::BrushFaceSetUvScalePresetOp>()
         .register_operator::<super::brush_display::BrushClearAllMaterialsOp>()
-        .register_operator::<InspectorCategoryOp>();
+        .register_operator::<InspectorCategoryOp>()
+        .register_operator::<InspectorCardOp>();
+}
+
+/// Open or close one inspector card, writing the same collapse state the
+/// header's disclosure toggle writes. A name no card carries still applies:
+/// the entry waits until a selection brings that card up.
+#[operator(
+    id = "inspector.card",
+    label = "Open Inspector Card",
+    description = "Open or close the inspector card with this name.",
+    allows_undo = false,
+    params(
+        name(String, doc = "Card name as the inspector shows it, e.g. \"Node\"."),
+        open(bool, doc = "`true` opens the card, `false` collapses it.")
+    )
+)]
+pub(crate) fn inspector_card(
+    params: In<OperatorParameters>,
+    mut collapse: ResMut<super::InspectorCollapseState>,
+    selection: Res<Selection>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(name) = params.as_str("name").filter(|name| !name.is_empty()) else {
+        warn!("inspector.card: missing 'name' parameter");
+        return OperatorResult::Cancelled;
+    };
+    let open = params.as_bool("open").unwrap_or(true);
+    collapse.0.insert(name.to_string(), !open);
+    if let Some(primary) = selection.primary() {
+        commands.entity(primary).insert(super::InspectorDirty);
+    }
+    OperatorResult::Finished
 }
 
 /// Show one of the inspector's category tabs.
 ///
-/// The strip's own tabs write the same resource, so a click and a scripted call
-/// take the same path. An id with no matching tab still applies: the strip
-/// resolves back to an applicable category on its next rebuild, as it does when
-/// the selection changes.
+/// The strip's own tabs write the same resource, so a click and a scripted
+/// call take the same path. An id no tab exists for still applies: the strip
+/// resolves back to an applicable category on its next rebuild.
 #[operator(
     id = "inspector.category",
     label = "Inspector Category",
@@ -56,7 +90,7 @@ pub(crate) fn inspector_category(
 /// Inspector operators all act on the inspected entity (the primary
 /// selection). Buttons that dispatch them get greyed out when nothing
 /// is selected.
-fn has_primary_selection(selection: Res<Selection>) -> bool {
+pub(crate) fn has_primary_selection(selection: Res<Selection>) -> bool {
     selection.primary().is_some()
 }
 
@@ -255,6 +289,14 @@ pub(crate) fn component_remove(
             );
             return;
         }
+        // A running preview owns the components its evaluator writes.
+        if crate::preview_context::preview_writes_type_path(world, entity, &type_path) {
+            warn!(
+                "{}: `{type_path}` on {entity}",
+                crate::preview_context::PREVIEW_EDIT_REFUSED
+            );
+            return;
+        }
         let Some((component_id, _)) = component_id_for_path(world, &type_path) else {
             return;
         };
@@ -262,6 +304,60 @@ pub(crate) fn component_remove(
             ec.remove_by_id(component_id);
             ec.insert(super::InspectorDirty);
         }
+    });
+    OperatorResult::Finished
+}
+
+/// Read a parameter as the JSON a field edit commits. A string is parsed as
+/// JSON first, so `{"Px": 120}` arrives as the enum variant it spells, and
+/// falls back to being the string it is.
+fn param_json(params: &OperatorParameters, key: &str) -> Option<serde_json::Value> {
+    use jackdaw_scene_types::PropertyValue;
+    match params.get(key)? {
+        PropertyValue::Bool(value) => Some(serde_json::Value::Bool(*value)),
+        PropertyValue::Int(value) => Some(serde_json::json!(value)),
+        PropertyValue::Float(value) => Some(serde_json::json!(value)),
+        PropertyValue::String(value) => Some(
+            serde_json::from_str(value)
+                .unwrap_or_else(|_| serde_json::Value::String(value.to_string())),
+        ),
+        _ => None,
+    }
+}
+
+/// Set one field of one component, through the same commit the inspector's own
+/// rows use.
+///
+/// The commit acts on the selection, so a target outside it replaces the
+/// selection; a multi-entity selection takes the edit on every member as one
+/// undo entry.
+#[operator(
+    id = "field.set",
+    label = "Set Field",
+    description = "Set one field on a component of the selected entity.",
+    allows_undo = false,
+    is_available = has_primary_selection,
+    params(
+        entity(Entity, doc = "Entity whose component is edited."),
+        type_path(String, doc = "Fully-qualified Bevy reflected type path of the component that owns the field."),
+        field(String, doc = "Dotted path to the field within the component (e.g. \"width\")."),
+        value(String, doc = "New value as JSON: 12, true, text, or {\"Px\": 12}."),
+    ),
+)]
+pub(crate) fn field_set(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    let entity = params.as_entity("entity")?;
+    let type_path = params.as_str("type_path").map(str::to_string)?;
+    let field_path = params.as_str("field").map(str::to_string)?;
+    let value = param_json(&params, "value")?;
+    commands.queue(move |world: &mut World| {
+        crate::selection::select_for_edit(world, entity);
+        crate::commands::field_edit_commit(
+            world,
+            &type_path,
+            &field_path,
+            &value,
+            "Set field on multiple entities",
+        );
     });
     OperatorResult::Finished
 }
@@ -336,6 +432,14 @@ pub(crate) fn physics_disable(
 ) -> OperatorResult {
     let entity = params.as_entity("entity")?;
     commands.queue(move |world: &mut World| {
+        // A running preview owns the components its evaluator writes.
+        if let Some(owned) = super::physics_display::preview_owned_physics(world, entity) {
+            warn!(
+                "{}: `{owned}` on {entity}",
+                crate::preview_context::PREVIEW_EDIT_REFUSED
+            );
+            return;
+        }
         let mut cmd: Box<dyn EditorCommand> = Box::new(DisablePhysics::from_world(world, entity));
         cmd.execute(world);
         world.resource_mut::<CommandHistory>().push_executed(cmd);

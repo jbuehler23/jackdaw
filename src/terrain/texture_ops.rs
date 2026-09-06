@@ -490,16 +490,18 @@ impl EditorCommand for SetTerrainMaterials {
     }
 }
 
-/// Switch the Paint tool's options bar between scatter masks and textures.
+/// Switch the Paint tool's options bar between scatter masks, textures
+/// and the colour layer.
 #[operator(
     id = "terrain.paint.target",
     label = "Paint Target",
-    description = "Switch the paint brush between scatter masks and textures.",
+    description = "Switch the paint brush between scatter masks, textures and the colour layer.",
     allows_undo = false,
     params(target(
         String,
         default = "channels",
-        doc = "Which domain the brush paints: \"channels\" (scatter masks) or \"textures\"."
+        doc = "Which domain the brush paints: \"channels\" (scatter masks), \"textures\", \
+               or \"color\" (the macro tint)."
     ))
 )]
 pub(crate) fn terrain_paint_target(
@@ -509,6 +511,7 @@ pub(crate) fn terrain_paint_target(
     let target = params.as_str("target").unwrap_or("channels");
     paint.domain = match target {
         "textures" => PaintDomain::Textures,
+        "color" => PaintDomain::Color,
         "channels" => PaintDomain::Channels,
         other => {
             warn!(
@@ -1358,6 +1361,14 @@ mod tests {
         assert_eq!(
             world.resource::<TerrainPaintState>().domain,
             PaintDomain::Textures
+        );
+
+        let _ = world
+            .run_system_cached_with(terrain_paint_target, params(&[("target", text("color"))]))
+            .expect("system runs");
+        assert_eq!(
+            world.resource::<TerrainPaintState>().domain,
+            PaintDomain::Color
         );
 
         let _ = world

@@ -64,8 +64,14 @@ its own Bevy; see [Which one to use](#which-one-to-use).
 ## Cargo install
 
 ```bash
-cargo install --git https://github.com/jbuehler23/jackdaw jackdaw --locked
+cargo +nightly-2026-03-05 install --git https://github.com/jbuehler23/jackdaw jackdaw --locked
 ```
+
+The editor uses unstable compiler features, so it builds on nightly. A
+source checkout picks that up from its `rust-toolchain.toml`, but `cargo
+install` builds outside any checkout and would otherwise use your default
+toolchain; on a stable one the build stops at a feature gate. `jd doctor`
+reports the channel under `editor toolchain`.
 
 The editor is installed from git rather than crates.io because it depends on
 `bevy_rerecast` by git, which crates.io does not accept. That restriction is

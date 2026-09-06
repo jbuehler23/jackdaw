@@ -271,9 +271,13 @@ pub fn on_backdrop_click(
 /// closure on its own.
 pub fn handle_popover_escape(
     keys: Res<ButtonInput<KeyCode>>,
+    capture: Option<Res<jackdaw_commands::KeymapCapture>>,
     popovers: Query<(Entity, &AddNodePopover)>,
     mut commands: Commands,
 ) {
+    if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     if !keys.just_pressed(KeyCode::Escape) {
         return;
     }
@@ -391,9 +395,13 @@ pub fn handle_tab_quick_add(
     registry: Res<NodeTypeRegistry>,
     existing: Query<Entity, With<AddNodePopover>>,
     existing_backdrops: Query<Entity, With<AddNodeBackdrop>>,
+    capture: Option<Res<jackdaw_commands::KeymapCapture>>,
     mut commands: Commands,
     ui_scale: Res<bevy::ui::UiScale>,
 ) {
+    if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     if !keys.just_pressed(KeyCode::Tab) {
         return;
     }

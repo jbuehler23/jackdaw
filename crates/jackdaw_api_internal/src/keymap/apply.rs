@@ -11,9 +11,10 @@ use crate::keymap_conditions::{DoubleClick, ScrollTick};
 
 use crate::lifecycle::OperatorAction;
 
+use super::persist::UserKeymap;
 use super::types::{
-    BuiltinActions, KeymapPreset, PresetContext, PresetInput, PresetPhase, key_code_from_name,
-    mouse_button_from_name,
+    BuiltinActions, KeymapPreset, PresetBinding, PresetContext, PresetInput, PresetPhase,
+    key_code_from_name, mouse_button_from_name,
 };
 
 /// Outcome of one preset application, for conformance checks and logs.
@@ -29,6 +30,9 @@ pub struct KeymapApplyReport {
     /// Entries skipped because their input type, phase, or context is not
     /// handled by the applier. Each entry is `"operator-or-name: reason"`.
     pub skipped_unsupported: Vec<String>,
+    /// Chords claimed by more than one action. Each entry is
+    /// `"chord (phase, context): op-a, op-b"`. See [`find_conflicts`].
+    pub conflicts: Vec<String>,
 }
 
 /// Marker on binding entities spawned by [`apply_keymap_preset`].
@@ -85,7 +89,10 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
         .map(|b| b.map.clone())
         .unwrap_or_default();
 
-    let mut report = KeymapApplyReport::default();
+    let mut report = KeymapApplyReport {
+        conflicts: find_conflicts(preset),
+        ..KeymapApplyReport::default()
+    };
     for entry in &preset.bindings {
         // Resolve the input to a binding + phase shape. Scroll entries always
         // use ScrollTick regardless of the phase field; the phase is ignored.
@@ -195,8 +202,143 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
             report.skipped_unsupported,
         );
     }
+    if !report.conflicts.is_empty() && conflicts_are_new(&report.conflicts) {
+        warn!(
+            "preset '{}' has {} chords claimed by more than one action: {:?}",
+            preset.name,
+            report.conflicts.len(),
+            report.conflicts,
+        );
+    }
 
     report
+}
+
+/// Whether `conflicts` differs from the set the last warning named, recording
+/// it as the new set.
+///
+/// The shipped preset carries deliberate shared chords, so re-applying it
+/// unchanged would otherwise repeat the same warning.
+fn conflicts_are_new(conflicts: &[String]) -> bool {
+    static LAST: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if last.as_deref() == Some(conflicts) {
+        return false;
+    }
+    *last = Some(conflicts.to_vec());
+    true
+}
+
+/// Layers the user's own bindings over the shipped defaults.
+///
+/// The unit of replacement is the operator, not the chord: naming one in
+/// [`UserKeymap`] drops every default row it had. That is what makes a rebind
+/// complete and a reset a deletion. Default rows keep their order and the
+/// user's follow them.
+pub fn resolve_keymap(defaults: &KeymapPreset, user: &UserKeymap) -> KeymapPreset {
+    let overridden: std::collections::HashSet<&str> = user
+        .bindings
+        .iter()
+        .map(|binding| binding.operator.as_str())
+        .collect();
+    let mut bindings: Vec<PresetBinding> = defaults
+        .bindings
+        .iter()
+        .filter(|binding| !overridden.contains(binding.operator.as_str()))
+        .cloned()
+        .collect();
+    bindings.extend(user.bindings.iter().cloned());
+    KeymapPreset {
+        name: defaults.name.clone(),
+        bindings,
+    }
+}
+
+/// Every chord in `preset` that more than one action claims, as
+/// `"chord (phase, context): op-a, op-b"` in written order.
+///
+/// Two actions on one chord both fire, and their `is_available` checks decide
+/// which does anything, which is how a key means one thing in the timeline and
+/// another on the canvas. So a shared chord is reported and never resolved
+/// here. Only distinct operator names count.
+pub fn find_conflicts(preset: &KeymapPreset) -> Vec<String> {
+    let mut claims: Vec<(&PresetBinding, Vec<&str>)> = Vec::new();
+    for entry in &preset.bindings {
+        let seen = claims.iter_mut().find(|(first, _)| {
+            first.input == entry.input
+                && first.phase == entry.phase
+                && first.context == entry.context
+        });
+        match seen {
+            Some((_, operators)) => {
+                if !operators.contains(&entry.operator.as_str()) {
+                    operators.push(entry.operator.as_str());
+                }
+            }
+            None => claims.push((entry, vec![entry.operator.as_str()])),
+        }
+    }
+    claims
+        .into_iter()
+        .filter(|(_, operators)| operators.len() > 1)
+        .map(|(entry, operators)| {
+            format!(
+                "{} ({:?}, {:?}): {}",
+                describe_input(&entry.input),
+                entry.phase,
+                entry.context,
+                operators.join(", "),
+            )
+        })
+        .collect()
+}
+
+/// One chord as a reader sees it, e.g. `Ctrl+Shift+KeyC`.
+fn describe_input(input: &PresetInput) -> String {
+    let (ctrl, shift, alt, super_, tail) = match input {
+        PresetInput::Key {
+            key,
+            ctrl,
+            shift,
+            alt,
+            super_,
+        } => (*ctrl, *shift, *alt, *super_, key.clone()),
+        PresetInput::MouseButton {
+            button,
+            ctrl,
+            shift,
+            alt,
+            super_,
+        } => (*ctrl, *shift, *alt, *super_, format!("Mouse{button}")),
+        PresetInput::Scroll {
+            up,
+            ctrl,
+            shift,
+            alt,
+            super_,
+        } => (
+            *ctrl,
+            *shift,
+            *alt,
+            *super_,
+            format!("Scroll{}", if *up { "Up" } else { "Down" }),
+        ),
+    };
+    let mut parts = Vec::new();
+    for (held, name) in [
+        (ctrl, "Ctrl"),
+        (shift, "Shift"),
+        (alt, "Alt"),
+        (super_, "Super"),
+    ] {
+        if held {
+            parts.push(name);
+        }
+    }
+    parts.push(&tail);
+    parts.join("+")
 }
 
 /// Build a `ModKeys` bitmask from the three preset boolean fields.
@@ -305,6 +447,63 @@ mod tests {
         world
             .spawn((OperatorAction(operator_id), TriggerState::default()))
             .id()
+    }
+
+    fn user_row(operator: &str, key: &str) -> PresetBinding {
+        PresetBinding {
+            operator: operator.to_string(),
+            input: PresetInput::key(key),
+            phase: PresetPhase::Press,
+            context: PresetContext::Operators,
+        }
+    }
+
+    #[test]
+    fn resolve_replaces_every_row_of_an_overridden_operator() {
+        let defaults = KeymapPreset {
+            name: "classic".into(),
+            bindings: vec![
+                user_row("tool.select", "KeyQ"),
+                user_row("tool.select", "KeyE"),
+                user_row("history.undo", "KeyZ"),
+            ],
+        };
+        let user = UserKeymap {
+            bindings: vec![user_row("tool.select", "KeyT")],
+        };
+        let resolved = resolve_keymap(&defaults, &user);
+        assert_eq!(
+            resolved.bindings,
+            vec![
+                user_row("history.undo", "KeyZ"),
+                user_row("tool.select", "KeyT")
+            ],
+            "an overridden operator loses all of its default rows, and no other operator changes"
+        );
+    }
+
+    #[test]
+    fn resolve_with_no_user_rows_is_the_defaults() {
+        let defaults = KeymapPreset {
+            name: "classic".into(),
+            bindings: vec![user_row("tool.select", "KeyQ")],
+        };
+        let resolved = resolve_keymap(&defaults, &UserKeymap::default());
+        assert_eq!(resolved, defaults);
+    }
+
+    #[test]
+    fn resolve_keeps_a_user_row_naming_an_operator_with_no_default() {
+        let defaults = KeymapPreset {
+            name: "classic".into(),
+            bindings: vec![user_row("tool.select", "KeyQ")],
+        };
+        let user = UserKeymap {
+            bindings: vec![user_row("never.bound", "KeyN")],
+        };
+        let resolved = resolve_keymap(&defaults, &user);
+        assert_eq!(resolved.bindings.len(), 2);
+        assert!(resolved.bindings.contains(&user_row("never.bound", "KeyN")));
     }
 
     #[test]

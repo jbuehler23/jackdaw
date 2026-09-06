@@ -99,6 +99,7 @@ pub(crate) fn brush_edge_slide_modal(
     mut modal_state: ResMut<EdgeSlideModalState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    keybind_focus: crate::keybind_focus::KeybindFocus,
     modal_inputs: crate::modal_inputs::ModalInputs,
     cursor: crate::viewport::UiCursorPos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
@@ -217,7 +218,7 @@ pub(crate) fn brush_edge_slide_modal(
     };
 
     // Snap respects the global translate_snap toggle; Ctrl flips it.
-    let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let ctrl = keybind_focus.any_pressed(&keyboard, [KeyCode::ControlLeft, KeyCode::ControlRight]);
     modal_state.current_factor = if snap_settings.translate_active(ctrl)
         && snap_settings.translate_increment > 0.0
         && world_len > 1e-6

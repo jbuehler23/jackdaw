@@ -88,10 +88,7 @@ pub use lifecycle::{ActiveModalOperator, Extension, ExtensionCatalog};
 pub use operator::{CallOperatorError, OperatorResult, OperatorWorldExt};
 pub use pie::PlayState;
 pub use snapshot::SceneSnapshotter;
-pub use widgets::{
-    WidgetDefinition, WidgetInstantiateContext, WidgetPreviewState, WidgetProperty,
-    WidgetPropertyKind, WidgetRegistry, WidgetSlot,
-};
+pub use widgets::{WidgetDefinition, WidgetInstantiateContext, WidgetRegistry};
 
 /// Re-exports plugin authors will want in one import.
 pub mod prelude {
@@ -111,10 +108,7 @@ pub mod prelude {
         pie::PlayState,
         runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems},
         snapshot::{ActiveSnapshotter, SceneSnapshot, SceneSnapshotter},
-        widgets::{
-            WidgetDefinition, WidgetInstantiateContext, WidgetPreviewState, WidgetProperty,
-            WidgetPropertyKind, WidgetRegistry, WidgetSlot,
-        },
+        widgets::{WidgetDefinition, WidgetInstantiateContext, WidgetRegistry},
     };
     // BEI types extension authors need for `actions!` / `bindings!` / observers.
     pub use bevy_enhanced_input::prelude::*;
@@ -256,7 +250,7 @@ impl<'a> ExtensionContext<'a> {
         self
     }
 
-    /// Register a selectable UI widget for the editor palette.
+    /// Register a UI widget the editor can create from its Add menu.
     ///
     /// The registration is owned by this extension entity and is removed
     /// automatically when the extension unloads.
@@ -340,18 +334,29 @@ impl<'a> ExtensionContext<'a> {
                 cancel,
                 modal: O::MODAL,
                 allows_undo: O::ALLOWS_UNDO,
+                remote_hidden: O::REMOTE_HIDDEN,
             },
             ChildOf(ext),
             children![
-                Observer::new(move |_: On<Fire<O>>, mut commands: Commands| {
-                    commands
-                        .operator(O::ID)
-                        .settings(CallOperatorSettings {
-                            execution_context: ExecutionContext::Invoke,
-                            creates_history_entry: true,
-                        })
-                        .call();
-                },),
+                Observer::new(
+                    move |_: On<Fire<O>>,
+                          capture: Option<Res<crate::keymap::KeymapCapture>>,
+                          mut commands: Commands| {
+                        // While the keybind dialog is recording, the press
+                        // naming a chord must not also mean what that chord
+                        // currently means.
+                        if capture.is_some_and(|c| c.recording) {
+                            return;
+                        }
+                        commands
+                            .operator(O::ID)
+                            .settings(CallOperatorSettings {
+                                execution_context: ExecutionContext::Invoke,
+                                creates_history_entry: true,
+                            })
+                            .call();
+                    },
+                ),
                 // Auto-tag any BEI action entity for this operator with
                 // `OperatorAction(Op::ID)` so id-keyed lookups (tooltip
                 // keybind discovery, future command palette) can find the
@@ -430,12 +435,23 @@ impl<'a> ExtensionContext<'a> {
     /// operator stays reachable through menus and the command palette
     /// and can be bound by presets or user rebinds.
     ///
-    /// The context component `C` must live on the extension's root entity; that is where `ActionOf` points.
+    /// The context component `C` must live on the extension's root
+    /// entity; that is where `ActionOf` points. An action pointed at an
+    /// entity with no such context is in no context instance at all:
+    /// the keymap attaches the chord, the dialog lists it, and nothing
+    /// ever evaluates it. That is a chord bound and dead, and silent, so
+    /// it is said out loud here.
     ///
     /// `require_reset` guards against operators firing from already-held keys when bindings or
     /// contexts are (re)applied.
     pub fn action_for<C: bevy::prelude::Component, O: crate::Operator>(&mut self) -> &mut Self {
         let ext = self.extension_entity;
+        if self.world.get::<C>(ext).is_none() {
+            warn!(
+                "operator '{}' binds into a context its extension does not carry: the chord can never fire",
+                O::ID
+            );
+        }
         self.spawn((
             Action::<O>::new(),
             ActionOf::<C>::new(ext),
@@ -512,6 +528,43 @@ impl<'a> ExtensionContext<'a> {
             .get_resource_or_insert_with(EntityIconRegistry::default)
             .register(type_path, icon);
         self
+    }
+
+    /// Register a rule that picks the outliner icon from an entity's
+    /// component values, for kinds no single component separates. Runs
+    /// in registration order alongside the component rules, so register
+    /// it after every component that would make the same entity
+    /// something more specific.
+    pub fn register_entity_icon_predicate(
+        &mut self,
+        predicate: crate::entity_icons::IconPredicate,
+    ) -> &mut Self {
+        self.world
+            .get_resource_or_insert_with(EntityIconRegistry::default)
+            .register_predicate(predicate);
+        self
+    }
+
+    /// Register a rule asked only once every rule that names a kind has
+    /// declined, for a rule that answers for a whole shape rather than a
+    /// kind: every `Node` is a container of some sort, and a rule saying
+    /// so must not answer ahead of an extension that has a name for this
+    /// particular one.
+    pub fn register_entity_icon_last_resort_predicate(
+        &mut self,
+        predicate: crate::entity_icons::IconPredicate,
+    ) -> &mut Self {
+        self.world
+            .get_resource_or_insert_with(EntityIconRegistry::default)
+            .register_last_resort_predicate(predicate);
+        self
+    }
+
+    /// The widget definition registered under `id`, so a registration can
+    /// read what the widget vocabulary already says about a kind rather
+    /// than restating it.
+    pub fn widget_definition(&self, id: &str) -> Option<std::sync::Arc<WidgetDefinition>> {
+        self.world.get_resource::<WidgetRegistry>()?.get(id)
     }
 
     /// Add an inspector category tab. The six built-in categories are

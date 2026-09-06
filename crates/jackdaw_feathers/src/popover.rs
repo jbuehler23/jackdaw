@@ -1,12 +1,13 @@
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::ui::{UiGlobalTransform, UiScale};
-use bevy::window::PrimaryWindow;
+use bevy::ui::OverrideClip;
+use bevy::ui_widgets::popover::{
+    Popover, PopoverAlign, PopoverPlacement as PopoverPosition, PopoverSide,
+};
+use jackdaw_commands::KeymapCapture;
 use lucide_icons::Icon;
 
-use crate::button::{
-    ButtonClickEvent, ButtonVariant, IconButtonProps, icon_button, set_button_variant,
-};
+use crate::button::{ButtonClickEvent, ButtonVariant, IconButtonProps, icon_button};
 use crate::tokens::{
     BACKGROUND_COLOR, BORDER_COLOR, CORNER_RADIUS_LG, TEXT_DISPLAY_COLOR, TEXT_SIZE,
 };
@@ -14,11 +15,15 @@ use crate::utils::is_descendant_of;
 
 const POPOVER_GAP: f32 = 4.0;
 
+/// How close to the window edge the widget lets a popover go.
+const WINDOW_MARGIN: f32 = 4.0;
+
 pub fn plugin(app: &mut App) {
     app.add_observer(handle_popover_close_click).add_systems(
         Update,
         (
-            handle_popover_position,
+            anchor_popovers,
+            reveal_positioned_popovers,
             handle_popover_dismiss,
             cleanup_tracked_popovers,
         ),
@@ -41,23 +46,15 @@ impl PopoverTracker {
     }
 }
 
-pub fn activate_trigger(
-    trigger: Entity,
-    button_styles: &mut Query<(&mut BackgroundColor, &mut BorderColor, &mut ButtonVariant)>,
-) {
-    if let Ok((mut bg, mut border, mut variant)) = button_styles.get_mut(trigger) {
+pub fn activate_trigger(trigger: Entity, button_styles: &mut Query<&mut ButtonVariant>) {
+    if let Ok(mut variant) = button_styles.get_mut(trigger) {
         *variant = ButtonVariant::ActiveAlt;
-        set_button_variant(ButtonVariant::ActiveAlt, &mut bg, &mut border);
     }
 }
 
-pub fn deactivate_trigger(
-    trigger: Entity,
-    button_styles: &mut Query<(&mut BackgroundColor, &mut BorderColor, &mut ButtonVariant)>,
-) {
-    if let Ok((mut bg, mut border, mut variant)) = button_styles.get_mut(trigger) {
+pub fn deactivate_trigger(trigger: Entity, button_styles: &mut Query<&mut ButtonVariant>) {
+    if let Ok(mut variant) = button_styles.get_mut(trigger) {
         *variant = ButtonVariant::Default;
-        set_button_variant(ButtonVariant::Default, &mut bg, &mut border);
     }
 }
 
@@ -88,60 +85,37 @@ pub enum PopoverPlacement {
 }
 
 impl PopoverPlacement {
-    fn offset(&self, anchor_size: Vec2, popover_size: Vec2) -> Vec2 {
+    fn side(&self) -> PopoverSide {
         match self {
-            Self::TopStart => Vec2::new(0.0, -popover_size.y - POPOVER_GAP),
-            Self::Top => Vec2::new(
-                (anchor_size.x - popover_size.x) / 2.0,
-                -popover_size.y - POPOVER_GAP,
-            ),
-            Self::TopEnd => Vec2::new(
-                anchor_size.x - popover_size.x,
-                -popover_size.y - POPOVER_GAP,
-            ),
-            Self::RightStart => Vec2::new(anchor_size.x + POPOVER_GAP, 0.0),
-            Self::Right => Vec2::new(
-                anchor_size.x + POPOVER_GAP,
-                (anchor_size.y - popover_size.y) / 2.0,
-            ),
-            Self::RightEnd => {
-                Vec2::new(anchor_size.x + POPOVER_GAP, anchor_size.y - popover_size.y)
-            }
-            Self::BottomStart => Vec2::new(0.0, anchor_size.y + POPOVER_GAP),
-            Self::Bottom => Vec2::new(
-                (anchor_size.x - popover_size.x) / 2.0,
-                anchor_size.y + POPOVER_GAP,
-            ),
-            Self::BottomEnd => {
-                Vec2::new(anchor_size.x - popover_size.x, anchor_size.y + POPOVER_GAP)
-            }
-            Self::LeftStart => Vec2::new(-popover_size.x - POPOVER_GAP, 0.0),
-            Self::Left => Vec2::new(
-                -popover_size.x - POPOVER_GAP,
-                (anchor_size.y - popover_size.y) / 2.0,
-            ),
-            Self::LeftEnd => Vec2::new(
-                -popover_size.x - POPOVER_GAP,
-                anchor_size.y - popover_size.y,
-            ),
+            Self::TopStart | Self::Top | Self::TopEnd => PopoverSide::Top,
+            Self::RightStart | Self::Right | Self::RightEnd => PopoverSide::Right,
+            Self::BottomStart | Self::Bottom | Self::BottomEnd => PopoverSide::Bottom,
+            Self::LeftStart | Self::Left | Self::LeftEnd => PopoverSide::Left,
         }
     }
 
-    fn flip(&self) -> Self {
+    fn align(&self) -> PopoverAlign {
         match self {
-            Self::TopStart => Self::BottomStart,
-            Self::Top => Self::Bottom,
-            Self::TopEnd => Self::BottomEnd,
-            Self::RightStart => Self::LeftStart,
-            Self::Right => Self::Left,
-            Self::RightEnd => Self::LeftEnd,
-            Self::BottomStart => Self::TopStart,
-            Self::Bottom => Self::Top,
-            Self::BottomEnd => Self::TopEnd,
-            Self::LeftStart => Self::RightStart,
-            Self::Left => Self::Right,
-            Self::LeftEnd => Self::RightEnd,
+            Self::TopStart | Self::RightStart | Self::BottomStart | Self::LeftStart => {
+                PopoverAlign::Start
+            }
+            Self::Top | Self::Right | Self::Bottom | Self::Left => PopoverAlign::Center,
+            Self::TopEnd | Self::RightEnd | Self::BottomEnd | Self::LeftEnd => PopoverAlign::End,
         }
+    }
+
+    /// The placement asked for, then its mirror. The widget takes the
+    /// first that fits in the window and the least occluded otherwise.
+    fn positions(&self) -> Vec<PopoverPosition> {
+        let align = self.align();
+        [self.side(), self.side().mirror()]
+            .into_iter()
+            .map(|side| PopoverPosition {
+                side,
+                align,
+                gap: POPOVER_GAP,
+            })
+            .collect()
     }
 }
 
@@ -199,28 +173,43 @@ impl PopoverProps {
     }
 }
 
+/// The behaviour a popover needs and none of its looks: where it is
+/// placed, how it is dismissed and what it stacks above. Spawn this
+/// alongside a widget's own scene when the frame is the widget's;
+/// [`popover`] is this plus the editor's own frame.
+pub fn popover_shell(props: &PopoverProps) -> impl Bundle + use<> {
+    (
+        EditorPopover,
+        PopoverAnchor {
+            entity: props.anchor,
+            position: props.position,
+        },
+        PopoverLayoutReady::default(),
+        Popover {
+            positions: props.placement.positions(),
+            window_margin: WINDOW_MARGIN,
+        },
+        // The popover is a child of what it points at, so it is inside
+        // whatever clips and stacks that: the override and the z index
+        // are what lift it back out.
+        OverrideClip,
+        props.placement,
+        Hovered::default(),
+        Visibility::Hidden,
+        GlobalZIndex(props.z_index),
+    )
+}
+
 pub fn popover(props: PopoverProps) -> impl Bundle {
+    let shell = popover_shell(&props);
     let PopoverProps {
-        placement,
-        anchor,
-        node,
-        padding,
-        gap,
-        z_index,
-        position,
+        node, padding, gap, ..
     } = props;
 
     let base_node = node.unwrap_or_default();
 
     (
-        EditorPopover,
-        PopoverAnchor {
-            entity: anchor,
-            position,
-        },
-        PopoverLayoutReady::default(),
-        placement,
-        Hovered::default(),
+        shell,
         Interaction::None,
         Node {
             position_type: PositionType::Absolute,
@@ -231,95 +220,67 @@ pub fn popover(props: PopoverProps) -> impl Bundle {
             flex_direction: FlexDirection::Column,
             ..base_node
         },
-        Visibility::Hidden,
         BackgroundColor(BACKGROUND_COLOR.into()),
         BorderColor::all(BORDER_COLOR),
-        GlobalZIndex(z_index),
     )
 }
 
-fn handle_popover_position(
+/// Hang each popover off what it points at, which is where the widget
+/// reads the rectangle to place it against. A popover asked for at a
+/// free position gets a zero-size node there to point at instead.
+fn anchor_popovers(
+    mut commands: Commands,
+    popovers: Query<(Entity, &PopoverAnchor), Added<PopoverAnchor>>,
+) {
+    for (entity, anchor) in &popovers {
+        let parent = match anchor.position {
+            Some(position) => commands
+                .spawn((
+                    PopoverPoint(entity),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(position.x),
+                        top: px(position.y),
+                        ..default()
+                    },
+                ))
+                .id(),
+            None => anchor.entity,
+        };
+        commands.entity(entity).insert(ChildOf(parent));
+    }
+}
+
+/// A zero-size node standing in for a free cursor position, despawned
+/// with the popover it holds.
+#[derive(Component)]
+struct PopoverPoint(Entity);
+
+/// A popover is spawned hidden: the widget places it after the frame's
+/// layout, so showing it any sooner draws one frame at the origin.
+fn reveal_positioned_popovers(
+    mut commands: Commands,
     mut popovers: Query<
-        (
-            &PopoverAnchor,
-            &PopoverPlacement,
-            &ComputedNode,
-            &mut Node,
-            &mut Visibility,
-            &mut PopoverLayoutReady,
-        ),
+        (&ComputedNode, &mut Visibility, &mut PopoverLayoutReady),
         With<EditorPopover>,
     >,
-    anchors: Query<(&ComputedNode, &UiGlobalTransform)>,
-    window: Single<&Window, With<PrimaryWindow>>,
-    ui_scale: Res<UiScale>,
+    points: Query<(Entity, &PopoverPoint)>,
 ) {
-    let window = window.into_inner();
-
-    // Convert to UI coordinates
-    let window_size = Vec2::new(window.width(), window.height()) / ui_scale.0;
-
-    for (
-        anchor_ref,
-        placement,
-        popover_computed,
-        mut popover_node,
-        mut visibility,
-        mut layout_ready,
-    ) in &mut popovers
-    {
-        let Ok((anchor_computed, anchor_transform)) = anchors.get(anchor_ref.entity) else {
-            continue;
-        };
-
-        let popover_size = popover_computed.size() * popover_computed.inverse_scale_factor();
-
-        if popover_size.x == 0.0 || popover_size.y == 0.0 {
+    for (computed, mut visibility, mut ready) in &mut popovers {
+        let size = computed.size();
+        if size.x == 0.0 || size.y == 0.0 {
             continue;
         }
-
-        let (anchor_top_left, anchor_size) = if let Some(pos) = anchor_ref.position {
-            (pos / ui_scale.0, Vec2::ZERO)
-        } else {
-            let scale = anchor_computed.inverse_scale_factor();
-            let anchor_center = anchor_transform.translation * scale;
-            let anchor_size = anchor_computed.size() * scale;
-            let top_left = Vec2::new(
-                anchor_center.x - anchor_size.x * 0.5,
-                anchor_center.y - anchor_size.y * 0.5,
-            );
-            (top_left, anchor_size)
-        };
-
-        let mut pos = anchor_top_left + placement.offset(anchor_size, popover_size);
-
-        if pos.x < 0.0
-            || pos.x + popover_size.x > window_size.x
-            || pos.y < 0.0
-            || pos.y + popover_size.y > window_size.y
-        {
-            let flipped = placement.flip();
-            let flipped_pos = anchor_top_left + flipped.offset(anchor_size, popover_size);
-
-            if flipped_pos.x >= 0.0
-                && flipped_pos.x + popover_size.x <= window_size.x
-                && flipped_pos.y >= 0.0
-                && flipped_pos.y + popover_size.y <= window_size.y
-            {
-                pos = flipped_pos;
-            }
-        }
-
-        pos.x = pos.x.clamp(0.0, (window_size.x - popover_size.x).max(0.0));
-        pos.y = pos.y.clamp(0.0, (window_size.y - popover_size.y).max(0.0));
-
-        popover_node.left = px(pos.x);
-        popover_node.top = px(pos.y);
-
-        if layout_ready.0 {
+        if ready.0 {
             *visibility = Visibility::Visible;
         } else {
-            layout_ready.0 = true;
+            ready.0 = true;
+        }
+    }
+
+    for (entity, point) in &points {
+        if commands.get_entity(point.0).is_err() {
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -330,8 +291,12 @@ fn handle_popover_dismiss(
     parents: Query<&ChildOf>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    capture: Option<Res<KeymapCapture>>,
     anchor_hovered: Query<&Hovered, Without<EditorPopover>>,
 ) {
+    if KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     let esc_pressed = keyboard.just_pressed(KeyCode::Escape);
     let clicked = mouse.get_just_pressed().next().is_some();
 
@@ -466,7 +431,7 @@ pub fn popover_content() -> impl Bundle {
 fn cleanup_tracked_popovers(
     mut trackers: Query<&mut PopoverTracker>,
     popovers: Query<Entity, With<EditorPopover>>,
-    mut button_styles: Query<(&mut BackgroundColor, &mut BorderColor, &mut ButtonVariant)>,
+    mut button_styles: Query<&mut ButtonVariant>,
 ) {
     for mut tracker in &mut trackers {
         let Some(popover_entity) = tracker.popover else {
@@ -494,4 +459,52 @@ fn handle_popover_close_click(
         return;
     };
     commands.entity(close_button.0).try_despawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Escape dismisses an open popover, and Escape is also a chord somebody
+    /// may be recording. The popover a recorder has open is often the thing
+    /// holding the recorder.
+    #[test]
+    fn a_recorded_escape_leaves_an_open_popover_open() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.init_resource::<ButtonInput<MouseButton>>();
+        app.insert_resource(KeymapCapture { recording: true });
+        let anchor = app.world_mut().spawn(Hovered::default()).id();
+        let popover = app
+            .world_mut()
+            .spawn((
+                EditorPopover,
+                PopoverAnchor {
+                    entity: anchor,
+                    position: None,
+                },
+                Hovered::default(),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+
+        app.world_mut()
+            .run_system_cached(handle_popover_dismiss)
+            .expect("the system runs");
+        assert!(
+            app.world().get_entity(popover).is_ok(),
+            "the popover survived the press that was naming a chord",
+        );
+
+        app.world_mut().resource_mut::<KeymapCapture>().recording = false;
+        app.world_mut()
+            .run_system_cached(handle_popover_dismiss)
+            .expect("the system runs");
+        assert!(
+            app.world().get_entity(popover).is_err(),
+            "and with nobody recording the same press dismisses it",
+        );
+    }
 }

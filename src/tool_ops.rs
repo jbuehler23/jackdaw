@@ -62,8 +62,17 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// Tool switching is allowed in any edit mode (Object / Vertex / Edge / Face).
 /// In-flight brush drags are blocked by `is_modal_running` since drag systems
 /// install an `ActiveModalOperator` for their duration.
-fn can_change_tool(keybind_focus: KeybindFocus, active: ActiveModalQuery) -> bool {
-    !keybind_focus.is_typing() && !active.is_modal_running()
+///
+/// Not on the canvas: the tools move, rotate and scale a thing in a world
+/// with three axes, and a UI node is placed by its layout. Q, W, E and R
+/// there are four letters of whatever is being typed at a panel that
+/// never took the focus.
+fn can_change_tool(
+    keybind_focus: KeybindFocus,
+    active: ActiveModalQuery,
+    viewport: crate::viewport_2d::FrontedViewport,
+) -> bool {
+    !keybind_focus.keyboard_is_spoken_for() && !active.is_modal_running() && viewport.is_three_d()
 }
 
 /// The Rotate tool shares `KeyE` with brush face Extrude. To keep both from
@@ -74,9 +83,10 @@ fn can_change_tool(keybind_focus: KeybindFocus, active: ActiveModalQuery) -> boo
 fn can_rotate_tool(
     keybind_focus: KeybindFocus,
     active: ActiveModalQuery,
+    viewport: crate::viewport_2d::FrontedViewport,
     edit_mode: Res<crate::brush::EditMode>,
 ) -> bool {
-    can_change_tool(keybind_focus, active)
+    can_change_tool(keybind_focus, active, viewport)
         && *edit_mode != crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face)
 }
 

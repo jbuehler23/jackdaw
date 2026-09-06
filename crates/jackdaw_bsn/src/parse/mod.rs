@@ -4,6 +4,11 @@
 //! (plus the jackdaw `map[...]` literal and duplicate-field rejection); the
 //! parser builds the editor document types directly, so its output is a
 //! [`SceneBsnAst`] with no separate parse-time representation.
+//!
+//! There is no tuple literal. A Rust tuple is written as a list, and a list of
+//! pairs as a list of two-element lists: `[["class", "Mage"]]`, never
+//! `[("class", "Mage")]`, which fails at the `(`. The emitter writes that shape
+//! (see `document::from_reflect`), so this constrains hand-authored text.
 
 use std::cell::RefCell;
 

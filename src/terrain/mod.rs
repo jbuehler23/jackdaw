@@ -12,11 +12,14 @@ pub mod panel;
 pub mod quantize_ops;
 pub mod regions;
 pub mod scatter;
+pub mod scatter_data;
 pub mod sculpt;
 pub mod shape_ops;
 pub mod splat;
+pub mod stamp_ops;
 pub mod store;
 pub mod texture_ops;
+pub mod tint_ops;
 pub(crate) mod ui_fields;
 
 use std::collections::HashSet;
@@ -46,11 +49,18 @@ impl Plugin for TerrainPlugin {
                     ensure_terrain_data_path,
                     sync_terrain_bounds,
                     prune_terrain_heightmaps,
+                    scatter_data::sync_terrain_scatter,
                 )
                     .chain()
+                    // The projection this writes is what the renderer
+                    // rebuilds from, so it is written before the rebuild
+                    // reads it rather than a frame behind it.
+                    .before(jackdaw_terrain::render::ScatterSystems::Rebuild)
                     .run_if(in_state(crate::AppState::Editor)),
             )
+            .add_observer(scatter_data::hide_drawn_scatter)
             .add_plugins((
+                jackdaw_terrain::render::ScatterRenderPlugin,
                 mesh::plugin,
                 sculpt::plugin,
                 paint::plugin,
@@ -543,6 +553,7 @@ pub(crate) mod pointer_harness {
     use super::{TerrainDataStore, TerrainDirtyChunks};
     use crate::selection::Selection;
     use crate::viewport::{ActiveViewport, MainViewportCamera, SceneViewport};
+    use crate::viewport_host::ViewportMode;
 
     const VIEWPORT_SIZE: Vec2 = Vec2::new(800.0, 600.0);
 
@@ -650,6 +661,8 @@ pub(crate) mod pointer_harness {
         *app.world_mut().resource_mut::<ActiveViewport>() = ActiveViewport {
             camera: Some(camera_entity),
             ui_node: Some(viewport_entity),
+            mode: Some(ViewportMode::ThreeD),
+            ..default()
         };
         hover(&mut app, viewport_entity);
         app
@@ -707,9 +720,21 @@ pub(crate) mod pointer_harness {
         *app.world_mut().resource_mut::<ActiveViewport>() = ActiveViewport {
             camera: Some(camera_entity),
             ui_node: Some(ui_node),
+            mode: Some(ViewportMode::ThreeD),
+            ..default()
         };
         hover(app, ui_node);
         ui_node
+    }
+
+    /// Puts the cursor over a viewport panel showing its 2D canvas, which is
+    /// what the hover pass writes for one: a mode, and none of the 3D
+    /// presentation it fills in only for the world.
+    pub(crate) fn hover_2d_viewport(app: &mut App) {
+        *app.world_mut().resource_mut::<ActiveViewport>() = ActiveViewport {
+            mode: Some(ViewportMode::TwoD),
+            ..default()
+        };
     }
 
     /// Puts a fresh overlay node, such as a tool-palette button, under the

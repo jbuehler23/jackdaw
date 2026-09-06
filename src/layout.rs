@@ -1,10 +1,16 @@
 use bevy::feathers::controls::{ButtonVariant, FeathersToolButton};
-use bevy::{picking::hover::Hovered, prelude::*, ui_widgets::observe};
+use bevy::{
+    prelude::*,
+    ui_widgets::{ValueChange, observe},
+};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
-    button::ButtonOperatorCall,
+    button::{
+        ButtonOperatorCall, ButtonProps, ButtonSize, ButtonVariant as EditorButtonVariant,
+        IconButtonProps, button, icon_button,
+    },
     icons::{EditorFont, IconFont, icon_scene},
-    menu_bar, status_bar,
+    menu_bar, segmented, status_bar,
     text_edit::{self, TextEditProps},
     tokens,
     tree_view::tree_container_drop_observers,
@@ -99,9 +105,8 @@ pub struct DocumentTabButton(pub TabKind);
 #[derive(Component)]
 pub struct DocumentRoot(pub TabKind);
 
-/// Marker on the center column container. Retained as a hook for
-/// systems that want to find the main viewport-plus-bottom-panels
-/// area. Formerly driven by `SceneViewPreset`; now unconditional.
+/// Marker on the center column container: the hook for systems that want
+/// to find the main viewport-plus-bottom-panels area.
 #[derive(Component)]
 pub struct SceneCenter;
 
@@ -288,33 +293,23 @@ fn play_pause_controls(icon_font: Handle<Font>) -> impl Bundle {
 }
 
 /// Caret button next to Play that opens the run-config dropdown. Shares
-/// `pie_transport_button`'s glyph shape but carries the `PieMenuButton`
+/// `pie_transport_button`'s shape but carries the `PieMenuButton`
 /// marker, which `PieMenuPlugin` observes to open the menu.
 fn pie_menu_button(icon_font: Handle<Font>) -> impl Bundle {
     (
         crate::pie_menu::PieMenuButton,
         EditorEntity,
-        Interaction::default(),
-        Node {
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            padding: UiRect::horizontal(px(2.0)),
-            ..Default::default()
-        },
-        children![(
-            Text::new(String::from(Icon::ChevronDown.unicode())),
-            TextFont {
-                font: icon_font.into(),
-                font_size: tokens::TEXT_SIZE_XS,
-                ..Default::default()
-            },
-            TextColor(tokens::HEADER_CONTROL_LABEL),
-            Pickable::IGNORE,
-        )],
+        icon_button(
+            IconButtonProps::new(Icon::ChevronDown)
+                .variant(EditorButtonVariant::Ghost)
+                .with_size(ButtonSize::IconSM)
+                .color(tokens::HEADER_CONTROL_LABEL),
+            &icon_font,
+        ),
     )
 }
 
-/// Single clickable glyph. The `PieButton` marker is the hook the
+/// Single transport button. The `PieButton` marker is the hook the
 /// `PiePlugin` uses to attach the click observer. Lucide glyphs live
 /// in the Private Use Area, so the icon font handle must be passed
 /// explicitly: without it the default font (`FiraSans`) renders the
@@ -327,22 +322,13 @@ fn pie_transport_button(
     (
         kind,
         EditorEntity,
-        Node {
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            padding: UiRect::horizontal(px(2.0)),
-            ..Default::default()
-        },
-        children![(
-            Text::new(String::from(icon.unicode())),
-            TextFont {
-                font: icon_font.into(),
-                font_size: tokens::TEXT_SIZE,
-                ..Default::default()
-            },
-            TextColor(tokens::HEADER_CONTROL_LABEL),
-            Pickable::IGNORE,
-        )],
+        icon_button(
+            IconButtonProps::new(icon)
+                .variant(EditorButtonVariant::Ghost)
+                .with_size(ButtonSize::IconSM)
+                .color(tokens::HEADER_CONTROL_LABEL),
+            &icon_font,
+        ),
     )
 }
 
@@ -632,64 +618,23 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
                     crate::live_edits_ui::live_edits_badge(),
                     (
                         HierarchyShowAllButton,
-                        Interaction::default(),
-                        Hovered::default(),
                         jackdaw_feathers::tooltip::Tooltip::title("Show All Entities")
                             .with_description(
                                 "Toggle visibility of editor-internal entities and \
                                  hidden objects in the hierarchy.",
                             ),
-                        Node {
-                            width: px(24.0),
-                            height: px(24.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-                            ..Default::default()
-                        },
-                        children![(
-                            Text::new(String::from(Icon::Eye.unicode())),
-                            TextFont {
-                                font: icon_font.into(),
-                                font_size: tokens::TEXT_SIZE,
-                                ..Default::default()
-                            },
-                            TextColor(tokens::TEXT_SECONDARY),
-                        )],
+                        icon_button(
+                            IconButtonProps::new(Icon::Eye)
+                                .variant(EditorButtonVariant::Ghost)
+                                .color(tokens::TEXT_SECONDARY),
+                            &icon_font,
+                        ),
                     ),
                 ],
             ),
             (
                 crate::add_entity_picker::AddEntityButton,
-                Interaction::default(),
-                Hovered::default(),
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    width: percent(100),
-                    height: px(tokens::ROW_HEIGHT),
-                    column_gap: px(tokens::SPACING_SM),
-                    border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
-                    margin: UiRect::vertical(px(tokens::SPACING_XS)),
-                    flex_shrink: 0.0,
-                    ..Default::default()
-                },
-                BackgroundColor(tokens::ELEVATED_BG),
-                observe(
-                    |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
-                        if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                            bg.0 = tokens::TOOLBAR_ACTIVE_BG;
-                        }
-                    },
-                ),
-                observe(
-                    |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-                        if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                            bg.0 = tokens::ELEVATED_BG;
-                        }
-                    },
-                ),
+                button(ButtonProps::new("").align_left()),
                 observe(|mut click: On<Pointer<Click>>, mut commands: Commands| {
                     click.propagate(false);
                     commands.queue(|world: &mut World| {
@@ -973,12 +918,14 @@ fn editor_status_bar() -> impl Bundle {
                     ..Default::default()
                 },
                 children![
-                    // Fixed-width, right-aligned, clipped box: the build
-                    // status text changes length as crates compile, and a
-                    // bare text node would reflow the rest of the footer on
-                    // every frame. A stable box keeps the count visible at
-                    // the right edge and clips an over-long crate name.
+                    // Fixed-width clipped box: the build status text changes
+                    // length as crates compile, and a bare text node would
+                    // reflow the rest of the footer on every frame. Which end
+                    // is clipped is decided per message by
+                    // [`status_bar::align_status_right`], which is why the
+                    // box is marked.
                     (
+                        crate::status_bar::StatusBarRightBox,
                         Node {
                             width: Val::Px(210.0),
                             overflow: Overflow::clip(),
@@ -1028,6 +975,11 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
                     flex_direction: FlexDirection::Column,
                     flex_grow: 1.0,
                     min_height: px(0.0),
+                    // The dock sets the panel's width. Without this floor the
+                    // column takes its own min-content width, so one
+                    // unbreakable component title widens the whole column and
+                    // the surplus is clipped at the panel's edge.
+                    min_width: px(0.0),
                     ..Default::default()
                 },
                 children![
@@ -1101,43 +1053,8 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
 fn save_to_scene_button(icon_font: Handle<Font>) -> impl Bundle {
     (
         crate::inspector::SaveToSceneButton,
-        Interaction::default(),
-        Node {
-            flex_direction: FlexDirection::Row,
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            width: percent(100),
-            height: px(tokens::ROW_HEIGHT),
-            column_gap: px(tokens::SPACING_SM),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
-            flex_shrink: 0.0,
-            // Hidden until Live mode; the appearance system flips this.
-            display: Display::None,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        observe(|hover: On<Pointer<Over>>, mut commands: Commands| {
-            // Only the enabled button reacts to hover; a dimmed one stays
-            // at its base color (the same condition the click path uses).
-            let target = hover.event_target();
-            commands.queue(move |world: &mut World| {
-                if !crate::pie::can_save_live_to_scene(world) {
-                    return;
-                }
-                if let Ok(mut e) = world.get_entity_mut(target)
-                    && let Some(mut bg) = e.get_mut::<BackgroundColor>()
-                {
-                    bg.0 = tokens::TOOLBAR_ACTIVE_BG;
-                }
-            });
-        }),
-        observe(
-            |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-                if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                    bg.0 = tokens::ELEVATED_BG;
-                }
-            },
-        ),
+        // Hidden until Live mode; the appearance system flips this.
+        button(ButtonProps::new("").align_left().hidden()),
         children![
             (
                 Text::new(String::from(Icon::Save.unicode())),
@@ -1191,15 +1108,10 @@ pub fn update_save_to_scene_button(world: &mut World) {
         .collect();
 
     for (button, children) in buttons.drain(..) {
-        if let Ok(mut e) = world.get_entity_mut(button) {
-            if let Some(mut node) = e.get_mut::<Node>() {
-                node.display = if live { Display::Flex } else { Display::None };
-            }
-            if let Some(mut bg) = e.get_mut::<BackgroundColor>() {
-                // Reset to the base color; the hover observer only brightens the
-                // enabled button, and `Out` restores this same value.
-                bg.0 = tokens::ELEVATED_BG;
-            }
+        if let Ok(mut e) = world.get_entity_mut(button)
+            && let Some(mut node) = e.get_mut::<Node>()
+        {
+            node.display = if live { Display::Flex } else { Display::None };
         }
         for child in children {
             if let Ok(mut e) = world.get_entity_mut(child)
@@ -1217,47 +1129,15 @@ pub fn update_save_to_scene_button(world: &mut World) {
 /// appearance system handle activation; only presentation lives here.
 fn pie_view_toggle(icon_font: Handle<Font>) -> impl Bundle {
     (
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            overflow: Overflow::clip(),
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
-        children![
-            pie_view_segment(PieViewSegment::Scene, "Scene", icon_font.clone()),
-            pie_view_segment(PieViewSegment::Live, "Live", icon_font),
-        ],
-    )
-}
-
-/// One clickable segment inside the Scene/Live toggle.
-fn pie_view_segment(
-    segment: PieViewSegment,
-    label: &'static str,
-    icon_font: Handle<Font>,
-) -> impl Bundle {
-    (
-        segment,
-        Interaction::default(),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            column_gap: px(tokens::SPACING_XS),
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-            ..Default::default()
-        },
-        BackgroundColor(Color::NONE),
+        segmented::segmented_bar(),
         observe(
-            move |click: On<Pointer<Click>>,
-                  mut commands: Commands,
-                  play_state: Res<State<PlayState>>| {
-                let _ = click;
+            |change: On<ValueChange<Entity>>,
+             segments: Query<&PieViewSegment>,
+             play_state: Res<State<PlayState>>,
+             mut commands: Commands| {
+                let Ok(&segment) = segments.get(change.value) else {
+                    return;
+                };
                 if segment == PieViewSegment::Live && *play_state.get() == PlayState::Stopped {
                     return;
                 }
@@ -1292,16 +1172,28 @@ fn pie_view_segment(
             },
         ),
         children![
-            (
-                Text::new(label),
-                TextFont {
-                    font_size: tokens::TEXT_SIZE_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-            ),
+            pie_view_segment(PieViewSegment::Scene, "Scene", icon_font.clone()),
+            pie_view_segment(PieViewSegment::Live, "Live", icon_font),
+        ],
+    )
+}
+
+/// One segment inside the Scene/Live toggle.
+fn pie_view_segment(
+    segment: PieViewSegment,
+    label: &'static str,
+    icon_font: Handle<Font>,
+) -> impl Bundle {
+    (
+        segment,
+        Node {
+            column_gap: px(tokens::SPACING_XS),
+            ..segmented::segment_node()
+        },
+        segmented::segment_chrome(),
+        children![
+            segmented::segment_label(label),
             // Live-dot: only visible when this is the Live segment and mode is Live.
-            // Shown as a small Radio icon glyph; hidden via display toggle.
             (
                 PieViewLiveDot,
                 Text::new(String::from(Icon::Radio.unicode())),
@@ -1332,24 +1224,22 @@ pub struct PieViewLiveDot;
 pub fn update_pie_view_toggle_appearance(
     mode: Res<PieViewMode>,
     play_state: Res<State<PlayState>>,
-    mut segments: Query<(&PieViewSegment, &mut BackgroundColor, &Children)>,
+    mut segments: Query<(Entity, &PieViewSegment, &mut BackgroundColor, &Children)>,
     mut texts: Query<(&mut TextColor, Option<&PieViewLiveDot>, Option<&mut Node>)>,
+    mut commands: Commands,
 ) {
     if !mode.is_changed() && !play_state.is_changed() {
         return;
     }
     let stopped = *play_state.get() == PlayState::Stopped;
-    for (segment, mut bg, children) in &mut segments {
+    for (entity, segment, mut bg, children) in &mut segments {
         let is_active = (*segment == PieViewSegment::Scene && *mode == PieViewMode::Scene)
             || (*segment == PieViewSegment::Live && *mode == PieViewMode::Live);
         let is_live_seg = *segment == PieViewSegment::Live;
         let disabled = is_live_seg && stopped;
 
-        bg.0 = if is_active {
-            tokens::TOOLBAR_ACTIVE_BG
-        } else {
-            Color::NONE
-        };
+        bg.0 = segmented::segment_background(is_active);
+        segmented::set_segment_checked(&mut commands, entity, is_active);
 
         for child in children.iter() {
             if let Ok((mut tc, dot, mut node_opt)) = texts.get_mut(child) {
@@ -1506,21 +1396,8 @@ pub struct PieFocusedInstanceLabel;
 fn pie_instance_cycle_button() -> impl Bundle {
     (
         PieInstanceCycleButton,
-        Interaction::default(),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            // Hidden until Live mode; the appearance system flips this.
-            display: Display::None,
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
+        // Hidden until Live mode; the appearance system flips this.
+        button(ButtonProps::new("").hidden()),
         observe(|_: On<Pointer<Click>>, mut commands: Commands| {
             commands.queue(|world: &mut World| {
                 cycle_focused_instance(world);
@@ -1629,20 +1506,7 @@ pub struct WindowModeLabel;
 fn window_mode_button() -> impl Bundle {
     (
         WindowModeButton,
-        Interaction::default(),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-            border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            display: Display::Flex,
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
+        button(ButtonProps::new("")),
         jackdaw_feathers::tooltip::Tooltip::title("Game window: embedded or separate window"),
         observe(|_: On<Pointer<Click>>, mut commands: Commands| {
             commands

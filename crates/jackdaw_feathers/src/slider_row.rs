@@ -1,21 +1,15 @@
-//! The row shape for a continuous value: a [`crate::field_row`] row with a
-//! native `bevy::feathers` `FeathersSlider` in its control slot, its digits
-//! drawn inside the bar.
+//! The one row shape for a continuous value: the [`crate::field_row`] row with a
+//! native `bevy::feathers` `FeathersSlider` in its control slot, its digits drawn
+//! inside the bar.
 //!
-//! Used by every surface that edits a continuous value: terrain brush and
-//! generation fields, the scatter section, the material kit's scalars.
+//! The row is generic over a tag component, so each surface brings its own binding
+//! enum and reads commits back in its own
+//! `On<bevy::ui_widgets::ValueChange<f32>>` observer.
 //!
-//! The row is generic over a tag component, so each surface brings its own
-//! binding enum and reads commits back in its own
-//! `On<bevy::ui_widgets::ValueChange<f32>>` observer rather than one handler
-//! covering every field in the editor.
-//!
-//! `FeathersSlider` does not self-manage `SliderValue`: the caller re-inserts
-//! it on the returned slider whenever the backing state changes for a reason
-//! other than the widget's own drag (undo/redo, an edit on another surface),
-//! and on every frame the caller's `ValueChange` handler writes that state
-//! during a drag, so the fill and digits follow the gesture rather than
-//! snapping into place on release.
+//! `FeathersSlider` does not self-manage `SliderValue`: the caller re-inserts it
+//! on the returned slider whenever the backing state changes for a reason other
+//! than the widget's own drag, including every frame of a drag, so the fill and
+//! digits follow the gesture live.
 
 use std::ops::Range;
 
@@ -28,18 +22,18 @@ use crate::field_row::{FieldRow, FieldRowProps, spawn_field_row};
 use crate::tokens;
 use crate::tooltip::Tooltip;
 
-/// Decimal places a [`FieldKind::Continuous`] row shows. Without it a dragged
-/// `f32` shows float noise in its digits (`0.45000012` instead of `0.45`).
+/// Decimal places a [`FieldKind::Continuous`] row shows. Without it a
+/// dragged `f32` accumulates float noise in its digits (`0.45000012`
+/// instead of `0.45`).
 pub const CONTINUOUS_PRECISION: i32 = 2;
 
-/// Whether a row's field is a whole-number count (Seed, Octaves, Iterations,
-/// a layer count) or a continuous quantity. Changes display and drag rounding
-/// only; both scrub over the same range, through the `SliderPrecision` the
+/// Whether a row's field is a whole-number count or a continuous quantity. Only
+/// changes display and drag rounding, wired through the same `SliderPrecision` the
 /// slider already reads.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum FieldKind {
     /// Whole numbers only: 0 decimal places, and a drag rounds to the
-    /// nearest integer.
+    /// nearest integer rather than drifting fractional.
     Count,
     /// Fractional values: [`CONTINUOUS_PRECISION`] decimal places.
     #[default]
@@ -59,18 +53,18 @@ impl FieldKind {
 pub struct SliderRow {
     /// The row itself: where a marker or observer goes.
     pub row: Entity,
-    /// The slider: where the tag rides, where `ValueChange<f32>` fires, and
-    /// what a caller re-inserts `SliderValue` on.
+    /// The slider: where the tag rides, where `ValueChange<f32>` fires,
+    /// and what a caller re-inserts `SliderValue` on.
     pub slider: Entity,
 }
 
 /// `range` is a hard limit on what the widget can produce: a slider has no
-/// typed entry, so drag and range are the same bound.
+/// typed-entry escape hatch, so drag and range are the same bound.
 #[derive(Clone)]
 pub struct SliderRowProps {
     pub label: String,
-    /// Shown on hover rather than as a second line, so the row stays one
-    /// line high.
+    /// Shown on hover rather than as a permanent second line, so the row
+    /// stays one line high.
     pub tooltip: Option<String>,
     /// Nesting depth, passed through to [`FieldRowProps::indented`].
     pub indent: u8,
@@ -119,14 +113,14 @@ pub fn spawn_slider_row<C: Component>(
         parent,
         FieldRowProps::new(props.label.clone())
             .indented(props.indent)
-            // A slider needs more room than a plain control; below that the
-            // row wraps the track under the label rather than squeezing it.
+            // A slider needs more room than a plain control before it stops
+            // reading as one; past that the row wraps the track under the
+            // label rather than squeezing it.
             .with_control_min_width(tokens::SLIDER_MIN_WIDTH),
     );
 
-    // Always tooltipped, description or not: the label column clips in a
-    // narrow dock, so hover is the only way back to a cut name. See
-    // `field_row`'s label node.
+    // Always tooltipped, description or not: the label column is clipped in a
+    // narrow dock, so hover is the only way back to a name that was cut.
     let mut tip = Tooltip::title(props.label);
     if let Some(description) = props.tooltip {
         tip = tip.with_description(description);
@@ -136,10 +130,8 @@ pub fn spawn_slider_row<C: Component>(
     let (min, max) = (props.range.start, props.range.end);
     let value = props.value.clamp(min, max);
     // The row's layout is patched onto the widget's own `Node` rather than
-    // replacing it. `FeathersSlider` carries its track height, its padding and
-    // the centring that positions the digits inside the track, and a
-    // whole-`Node` insert drops all three, leaving a zero-height track with
-    // its digits at the control's top-left.
+    // replacing it: `FeathersSlider` carries its track height, its padding and the
+    // centring that positions the digits inside the track.
     let slider = commands
         .spawn_scene(bsn! {
             @FeathersSlider { @value: {value}, @min: {min}, @max: {max} }
@@ -198,10 +190,9 @@ mod tests {
         SliderRowProps::new("Persistence", 0.5, 0.0..1.0)
     }
 
-    /// A slider draws its digits centred inside its own track, so it keeps
+    /// A slider draws its digits centred inside its own track, so it has to keep
     /// the track height, the padding and the centring `FeathersSlider` spawns
-    /// with. Replacing the widget's `Node` with the row's layout drops all
-    /// three, leaving digits over the label with no track under them.
+    /// with.
     #[test]
     fn the_row_layout_is_added_to_the_widgets_own_node_not_swapped_for_it() {
         let app = spawn(row_props());
@@ -222,8 +213,12 @@ mod tests {
     }
 
     /// In a dock too narrow for both, the row wraps the track under the label
-    /// rather than squeezing it, so the control slot asks for a slider's worth
-    /// of room rather than a plain control's.
+    /// rather than squeezing it, so the control slot asks for a slider's worth of
+    /// room.
+    ///
+    /// The ask is the basis alone: a `min_width` beside it would be a floor the
+    /// row cannot lower, and a narrower dock would hold the track past the panel's
+    /// edge. See [`spawn_field_row`].
     #[test]
     fn the_control_slot_asks_for_a_sliders_width_before_the_row_wraps() {
         let app = spawn(row_props());
@@ -231,7 +226,11 @@ mod tests {
         let control = app.world().get::<Children>(control).unwrap()[1];
         let node = app.world().get::<Node>(control).unwrap();
 
-        assert_eq!(node.min_width, Val::Px(tokens::SLIDER_MIN_WIDTH));
+        assert_eq!(
+            node.min_width,
+            Val::Px(0.0),
+            "the row's own width is the ceiling",
+        );
         assert_eq!(
             node.flex_basis,
             Val::Px(tokens::SLIDER_MIN_WIDTH),
@@ -243,7 +242,7 @@ mod tests {
     }
 
     /// The label column clips rather than wraps, so every slider row is
-    /// hoverable back to its full label, not only ones carrying a
+    /// hoverable back to its full label, not only the rows carrying a
     /// description.
     #[test]
     fn a_row_with_no_description_is_still_hoverable_back_to_its_label() {
@@ -265,15 +264,15 @@ mod tests {
         );
     }
 
-    /// `Count` fields display whole numbers: `SliderPrecision(0)`, which
-    /// `bevy::feathers` formats as `{:.0}` with no decimal point, so Seed,
-    /// Octaves and Iterations do not read as `42.00`.
+    /// `Count` fields display whole numbers - `SliderPrecision(0)`, per
+    /// `bevy::feathers`'s own formatting (`{:.0}`, no decimal point) - so
+    /// Seed/Octaves/Iterations stop reading as `42.00`.
     #[test]
     fn count_fields_show_zero_decimals() {
         assert_eq!(FieldKind::Count.precision(), 0);
     }
 
-    /// Continuous fields use 2 decimal places.
+    /// Continuous fields keep the house 2-decimal convention.
     #[test]
     fn continuous_fields_keep_two_decimals() {
         assert_eq!(FieldKind::Continuous.precision(), CONTINUOUS_PRECISION);

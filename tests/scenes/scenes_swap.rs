@@ -1,0 +1,2053 @@
+use bevy::prelude::Name;
+use jackdaw::scenes::{SceneTab, Scenes, TabContent};
+
+#[test]
+fn scenes_default_is_empty() {
+    let scenes = Scenes::default();
+    assert!(scenes.tabs.is_empty());
+    assert_eq!(scenes.active, 0);
+}
+
+#[test]
+fn push_tab_appends_to_end() {
+    let mut scenes = Scenes::default();
+    let idx = scenes.push_tab(SceneTab::new_untitled(1));
+    assert_eq!(idx, 0);
+    assert_eq!(scenes.tabs.len(), 1);
+}
+
+#[test]
+fn untitled_tab_has_correct_display_name() {
+    let tab = SceneTab::new_untitled(3);
+    assert_eq!(tab.display_name, "untitled-3");
+    assert!(tab.path.is_none());
+    assert!(!tab.dirty);
+}
+
+#[test]
+fn scene_tab_has_ast_snapshot_field() {
+    let tab = jackdaw::scenes::SceneTab::new_untitled(1);
+    assert!(
+        matches!(tab.content, TabContent::Scene(None)),
+        "fresh tab starts with no AST snapshot"
+    );
+}
+
+#[test]
+fn view_state_round_trips_camera_transform() {
+    use bevy::math::Vec3;
+    use bevy::prelude::Transform;
+    use jackdaw::scenes::ViewState;
+    let vs = ViewState {
+        camera_transform: Transform::from_xyz(1.0, 2.0, 3.0),
+        ..ViewState::default()
+    };
+    assert_eq!(vs.camera_transform.translation, Vec3::new(1.0, 2.0, 3.0));
+}
+
+#[test]
+fn view_state_default_has_empty_selection_and_no_sub_selection() {
+    use jackdaw::scenes::ViewState;
+    let vs = ViewState::default();
+    assert!(vs.selection.is_empty());
+    assert!(vs.brush_sub_selection.active_brush.is_none());
+    assert!(vs.brush_sub_selection.brushes.is_empty());
+}
+
+#[test]
+fn document_capture_includes_brushes() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+    use jackdaw_scene_types::Brush;
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: None,
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+    let brush = app
+        .world_mut()
+        .spawn((Brush::cuboid(1.0, 1.0, 1.0), Name::new("test_brush")))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), brush);
+
+    let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new("."),
+    );
+    assert!(
+        text.contains("test_brush"),
+        "expected the brush entity in the captured document:\n{text}"
+    );
+}
+
+#[test]
+fn swap_round_trips_a_single_brush() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+    use jackdaw_scene_types::Brush;
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: None,
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+
+    // Only `Name` is round-tripped through deserialization here: `Brush`
+    // carries a `Handle<StandardMaterial>` needing the editor's asset-aware
+    // deserializer.
+    let brush_entity = app
+        .world_mut()
+        .spawn((Brush::cuboid(1.0, 1.0, 1.0), Name::new("a")))
+        .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("a".to_string())]);
+        ast.add_to_roots(node);
+        ast.link(brush_entity, node);
+    }
+
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(1));
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(2));
+        scenes.active = 0;
+    }
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+
+    assert!(app.world().get::<Brush>(brush_entity).is_none());
+
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    assert_eq!(scenes.active, 1);
+    let TabContent::Scene(Some(captured)) = &scenes.tabs[0].content else {
+        panic!("expected captured scene document");
+    };
+    assert!(!captured.roots.is_empty());
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+    let name_count: usize = app
+        .world_mut()
+        .query::<&Name>()
+        .iter(app.world())
+        .filter(|n| n.as_str() == "a")
+        .count();
+    assert_eq!(name_count, 1, "tab A's AST entity should respawn");
+}
+
+/// A tab swap round-trips the scene through BSN text and respawns every entity,
+/// with no disk involved, which would destroy a sculpted heightmap if heights
+/// lived on the component: the sidecar path travels as a reflected `String` and
+/// the heights live in a `Resource`.
+#[test]
+fn swap_preserves_a_sculpted_terrain() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+    use jackdaw::terrain::TerrainDataStore;
+    use jackdaw_scene_types::Terrain;
+    use jackdaw_terrain::{RegionTerrainData, TerrainData};
+
+    const DATA_PATH: &str = "zone.terrain-0.jdterrain";
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: None,
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+    app.init_resource::<TerrainDataStore>();
+
+    // A sculpted 4x4 terrain: heights in the store, path on the component.
+    let sculpted: Vec<f32> = (0..16).map(|i| i as f32 * 0.5).collect();
+    app.world_mut().resource_mut::<TerrainDataStore>().insert(
+        DATA_PATH.to_string(),
+        RegionTerrainData::from_legacy_v1(&TerrainData {
+            resolution: 4,
+            heights: sculpted.clone(),
+            channels: vec![],
+        })
+        .expect("a power-of-two resolution migrates"),
+    );
+    let terrain_entity = app
+        .world_mut()
+        .spawn((
+            Terrain {
+                resolution: 4,
+                data_path: DATA_PATH.to_string(),
+                ..default()
+            },
+            Name::new("ground"),
+        ))
+        .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("ground".to_string())]);
+        ast.add_to_roots(node);
+        ast.link(terrain_entity, node);
+    }
+    {
+        let terrain = app.world().get::<Terrain>(terrain_entity).cloned().unwrap();
+        jackdaw::commands::sync_component_to_ast(
+            app.world_mut(),
+            terrain_entity,
+            "jackdaw_scene_types::types::Terrain",
+            &terrain,
+        );
+    }
+
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(1));
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(2));
+        scenes.active = 0;
+    }
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    assert!(
+        app.world().get::<Terrain>(terrain_entity).is_none(),
+        "the original entity is despawned by the swap"
+    );
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+
+    let respawned = app
+        .world_mut()
+        .query::<&Terrain>()
+        .iter(app.world())
+        .next()
+        .cloned()
+        .expect("terrain respawns from the AST");
+    assert_eq!(
+        respawned.data_path, DATA_PATH,
+        "the sidecar path survives the BSN text round-trip"
+    );
+    assert!(
+        respawned.heights.is_empty(),
+        "heights never enter the scene document"
+    );
+
+    let store = app.world().resource::<TerrainDataStore>();
+    assert_eq!(store.heights(DATA_PATH), sculpted.as_slice());
+}
+
+#[test]
+fn scene_tabs_keep_same_named_terrain_sidecars_isolated() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+    use jackdaw::terrain::TerrainDataStore;
+    use jackdaw_scene_types::Terrain;
+    use jackdaw_terrain::{TerrainData, sidecar};
+
+    const DATA_PATH: &str = "zone.terrain-0.jdterrain";
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: None,
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+    app.init_resource::<jackdaw::scene_io::SceneFilePath>();
+    app.init_resource::<TerrainDataStore>();
+
+    let terrain_entity = app
+        .world_mut()
+        .spawn((
+            Terrain {
+                resolution: 4,
+                data_path: DATA_PATH.to_string(),
+                ..default()
+            },
+            Name::new("ground"),
+        ))
+        .id();
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("ground".to_string())]);
+        ast.add_to_roots(node);
+        ast.link(terrain_entity, node);
+    }
+    {
+        let terrain = app.world().get::<Terrain>(terrain_entity).cloned().unwrap();
+        jackdaw::commands::sync_component_to_ast(
+            app.world_mut(),
+            terrain_entity,
+            "jackdaw_scene_types::types::Terrain",
+            &terrain,
+        );
+    }
+    let scene_text = jackdaw_bsn::emit_scene(app.world().resource::<jackdaw_bsn::SceneBsnAst>());
+    app.world_mut().despawn(terrain_entity);
+    app.world_mut()
+        .insert_resource(jackdaw_bsn::SceneBsnAst::default());
+
+    let first_dir = tempfile::tempdir().unwrap();
+    let second_dir = tempfile::tempdir().unwrap();
+    let first_scene = first_dir.path().join("zone.bsn");
+    let second_scene = second_dir.path().join("zone.bsn");
+    std::fs::write(&first_scene, &scene_text).unwrap();
+    std::fs::write(&second_scene, &scene_text).unwrap();
+
+    let first_heights = vec![1.0; 16];
+    let second_heights = vec![2.0; 16];
+    for (dir, heights) in [
+        (first_dir.path(), first_heights.as_slice()),
+        (second_dir.path(), second_heights.as_slice()),
+    ] {
+        let bytes = sidecar::encode(&TerrainData {
+            resolution: 4,
+            heights: heights.to_vec(),
+            channels: vec![],
+        })
+        .expect("terrain data encodes");
+        std::fs::write(dir.join(DATA_PATH), bytes).unwrap();
+    }
+
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &first_scene);
+    assert_eq!(
+        app.world()
+            .resource::<TerrainDataStore>()
+            .heights(DATA_PATH),
+        first_heights,
+    );
+
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &second_scene);
+    assert_eq!(
+        app.world()
+            .resource::<TerrainDataStore>()
+            .heights(DATA_PATH),
+        second_heights,
+        "the second tab must hydrate its own same-named sidecar",
+    );
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+    assert_eq!(
+        app.world()
+            .resource::<TerrainDataStore>()
+            .heights(DATA_PATH),
+        first_heights,
+        "switching back must restore the first tab's terrain data",
+    );
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    assert_eq!(
+        app.world()
+            .resource::<TerrainDataStore>()
+            .heights(DATA_PATH),
+        second_heights,
+        "switching again must restore the second tab's terrain data",
+    );
+}
+
+#[test]
+fn swap_preserves_camera_transform_per_tab() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: None,
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+
+    let cam = app
+        .world_mut()
+        .spawn((
+            Camera3d::default(),
+            Transform::from_xyz(1.0, 2.0, 3.0),
+            jackdaw::viewport::MainViewportCamera,
+        ))
+        .id();
+
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(1));
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(2));
+        scenes.active = 0;
+    }
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    if let Some(mut tf) = app.world_mut().get_mut::<Transform>(cam) {
+        *tf = Transform::from_xyz(10.0, 20.0, 30.0);
+    }
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+
+    let tf = app.world().get::<Transform>(cam).unwrap();
+    assert_eq!(tf.translation, Vec3::new(1.0, 2.0, 3.0));
+}
+
+#[test]
+fn scene_new_appends_an_untitled_tab() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: None,
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+    app.init_resource::<jackdaw::scenes::operators::UntitledCounter>();
+
+    // The first run appends and activates tab 0; the second swaps to tab 1.
+    app.world_mut()
+        .run_system_cached(jackdaw::scenes::operators::scene_new_system)
+        .unwrap();
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    assert_eq!(scenes.tabs.len(), 1);
+    assert_eq!(scenes.active, 0);
+    assert!(scenes.tabs[0].path.is_none());
+    assert!(scenes.tabs[0].display_name.starts_with("untitled-"));
+    let has_light = {
+        let mut names = app.world_mut().query::<&Name>();
+        names
+            .iter(app.world())
+            .any(|name| name.as_str() == "Directional Light")
+    };
+    assert!(
+        has_light,
+        "new untitled scene should spawn the default directional light"
+    );
+
+    app.world_mut()
+        .run_system_cached(jackdaw::scenes::operators::scene_new_system)
+        .unwrap();
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    assert_eq!(scenes.tabs.len(), 2);
+    assert_eq!(scenes.active, 1);
+    assert_ne!(scenes.tabs[0].display_name, scenes.tabs[1].display_name);
+}
+
+#[test]
+fn scene_open_dedupes_by_path() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: None,
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+    app.init_resource::<jackdaw::scenes::operators::UntitledCounter>();
+
+    // The swap inside scene_open needs an active tab to capture from.
+    app.world_mut()
+        .run_system_cached(jackdaw::scenes::operators::scene_new_system)
+        .unwrap();
+
+    let tmp_dir = std::env::temp_dir();
+    let path = tmp_dir.join("jackdaw_scene_open_dedupe_test.jsn");
+    std::fs::write(
+        &path,
+        r#"{"jsn":{"format_version":[3,0,0],"editor_version":"0.1.0","bevy_version":"0.18"},"metadata":{"name":"","description":"","author":"","created":"","modified":""},"assets":{},"scene":[]}"#,
+    )
+    .unwrap();
+
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &path);
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &path);
+
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    // The open converted the legacy file, so the surviving tab holds the
+    // .bsn path; the second .jsn open deduped against it.
+    let bsn_path = path.with_extension("bsn");
+    let canonical = bsn_path.canonicalize().unwrap_or_else(|_| bsn_path.clone());
+    let matches = scenes
+        .tabs
+        .iter()
+        .filter(|t| {
+            t.path
+                .as_ref()
+                .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()) == canonical)
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(matches, 1);
+
+    let _ = std::fs::remove_file(&bsn_path);
+}
+
+fn make_app_with_n_tabs(n: usize) -> bevy::app::App {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: None,
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+    app.init_resource::<jackdaw::scenes::operators::UntitledCounter>();
+    app.init_resource::<jackdaw::scene_io::SceneFilePath>();
+    app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        for i in 0..n {
+            scenes
+                .tabs
+                .push(jackdaw::scenes::SceneTab::new_untitled((i + 1) as u32));
+        }
+        scenes.active = 0;
+    }
+    app
+}
+
+#[test]
+fn scene_switch_changes_active_index() {
+    let mut app = make_app_with_n_tabs(2);
+    jackdaw::scenes::operators::scene_switch_system(app.world_mut(), 1);
+    assert_eq!(app.world().resource::<jackdaw::scenes::Scenes>().active, 1);
+}
+
+#[test]
+fn scene_save_all_writes_each_path_bound_tab() {
+    // Both tabs hold legacy .jsn paths, and saves persist as BSN siblings.
+    let mut app = make_app_with_n_tabs(2);
+    let tmp_a = std::env::temp_dir().join("jackdaw_save_all_a.jsn");
+    let tmp_b = std::env::temp_dir().join("jackdaw_save_all_b.jsn");
+    let bsn_a = tmp_a.with_extension("bsn");
+    let bsn_b = tmp_b.with_extension("bsn");
+    let _ = std::fs::remove_file(&tmp_a);
+    let _ = std::fs::remove_file(&tmp_b);
+    let _ = std::fs::remove_file(&bsn_a);
+    let _ = std::fs::remove_file(&bsn_b);
+    let _ = std::fs::remove_file(format!("{}.bak", tmp_a.to_string_lossy()));
+    let _ = std::fs::remove_file(format!("{}.bak", tmp_b.to_string_lossy()));
+    std::fs::write(&tmp_a, "legacy scene").expect("create legacy scene A");
+    std::fs::write(&tmp_b, "legacy scene").expect("create legacy scene B");
+
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs[0].path = Some(tmp_a.clone());
+        scenes.tabs[1].path = Some(tmp_b.clone());
+    }
+
+    assert!(jackdaw::scenes::operators::scene_save_all_system(
+        app.world_mut()
+    ));
+
+    assert!(bsn_a.exists(), "tab 0 should have been saved as .bsn");
+    assert!(bsn_b.exists(), "tab 1 should have been saved as .bsn");
+
+    let _ = std::fs::remove_file(&bsn_a);
+    let _ = std::fs::remove_file(&bsn_b);
+    let _ = std::fs::remove_file(format!("{}.bak", tmp_a.to_string_lossy()));
+    let _ = std::fs::remove_file(format!("{}.bak", tmp_b.to_string_lossy()));
+}
+
+#[test]
+fn scene_save_all_reports_failure_and_keeps_a_tab_dirty() {
+    let mut app = make_app_with_n_tabs(1);
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let blocked_parent = tmp.path().join("not-a-directory");
+    std::fs::write(&blocked_parent, b"file blocks directory creation")
+        .expect("create blocking file");
+    let scene_path = blocked_parent.join("zone.bsn");
+
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs[0].path = Some(scene_path);
+        scenes.tabs[0].dirty = true;
+    }
+    let data_path = "zone.terrain-0.jdterrain";
+    let mut store = jackdaw::terrain::TerrainDataStore::default();
+    store.insert(
+        data_path.to_string(),
+        jackdaw_terrain::RegionTerrainData::from_legacy_v1(&jackdaw_terrain::TerrainData {
+            resolution: 2,
+            heights: vec![0.0; 4],
+            channels: vec![],
+        })
+        .expect("a power-of-two resolution migrates"),
+    );
+    app.world_mut().insert_resource(store);
+    app.world_mut().spawn(jackdaw_scene_types::Terrain {
+        resolution: 2,
+        data_path: data_path.to_string(),
+        ..Default::default()
+    });
+
+    let saved = jackdaw::scenes::operators::scene_save_all_system(app.world_mut());
+
+    assert!(
+        !saved,
+        "Save All must report an authoritative write failure"
+    );
+    assert!(app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty);
+}
+
+/// A refused tab's document never spawned, but its path is still set, and
+/// `scene.save_all` reaches the write without passing the single-save entry
+/// point: otherwise Ctrl+Shift+S replaces the user's scene with an empty world.
+#[test]
+fn scene_save_all_leaves_a_refused_tabs_file_untouched() {
+    let mut app = make_app_with_n_tabs(1);
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let scene_path = tmp.path().join("zone.bsn");
+    let original = "// the user's scene, which the editor could not spawn\n";
+    std::fs::write(&scene_path, original).expect("write the scene the tab names");
+
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs[0].path = Some(scene_path.clone());
+        scenes.tabs[0].dirty = true;
+        scenes.tabs[0].refusal = Some(jackdaw::scenes::TabRefusal::Rejected(
+            "names a retired component".to_string(),
+        ));
+    }
+
+    let saved = jackdaw::scenes::operators::scene_save_all_system(app.world_mut());
+
+    assert!(
+        !saved,
+        "Save All must report failure when a tab could not be written"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&scene_path).expect("the file is still there"),
+        original,
+        "the refused tab's file was overwritten from a world that never held it",
+    );
+    assert!(
+        app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty,
+        "a tab that was not written stays dirty",
+    );
+}
+
+#[test]
+fn scene_close_blocks_closing_last_tab() {
+    let mut app = make_app_with_n_tabs(1);
+    jackdaw::scenes::operators::scene_close_system(app.world_mut(), 0);
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    assert_eq!(scenes.tabs.len(), 1);
+    assert_eq!(scenes.active, 0);
+}
+
+#[test]
+fn scene_close_drops_inactive_tab_and_shifts_active_index() {
+    let mut app = make_app_with_n_tabs(2);
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.active = 1;
+    }
+    jackdaw::scenes::operators::scene_close_system(app.world_mut(), 0);
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    assert_eq!(scenes.tabs.len(), 1);
+    assert_eq!(scenes.active, 0);
+}
+
+#[test]
+fn scene_close_drops_active_tab_and_picks_neighbor() {
+    let mut app = make_app_with_n_tabs(2);
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.active = 1;
+    }
+    jackdaw::scenes::operators::scene_close_system(app.world_mut(), 1);
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    assert_eq!(scenes.tabs.len(), 1);
+    assert_eq!(scenes.active, 0);
+}
+
+#[test]
+fn pushing_to_history_marks_active_tab_dirty() {
+    use bevy::prelude::*;
+
+    struct NoOpCommand;
+    impl jackdaw::commands::EditorCommand for NoOpCommand {
+        fn execute(&mut self, _world: &mut World) {}
+        fn undo(&mut self, _world: &mut World) {}
+        fn description(&self) -> &str {
+            "noop"
+        }
+    }
+
+    let mut app = make_app_with_n_tabs(1);
+    assert!(!app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty);
+
+    app.world_mut()
+        .resource_mut::<jackdaw::commands::CommandHistory>()
+        .push_executed(Box::new(NoOpCommand));
+
+    app.world_mut()
+        .run_system_cached(jackdaw::scenes::mark_active_dirty_on_history_growth)
+        .unwrap();
+
+    assert!(app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty);
+}
+
+#[test]
+fn project_config_persists_tab_paths_and_active_index() {
+    use jackdaw::project::ProjectConfig;
+
+    let mut app = make_app_with_n_tabs(0);
+
+    let tmp_root = std::env::temp_dir().join("jackdaw_persist_tabs_test_root");
+    std::fs::create_dir_all(&tmp_root).unwrap();
+    let scene_path = tmp_root.join("level1.jsn");
+    std::fs::write(
+        &scene_path,
+        r#"{"jsn":{"format_version":[3,0,0],"editor_version":"0.1.0","bevy_version":"0.18"},"metadata":{"name":"","description":"","author":"","created":"","modified":""},"assets":{},"scene":[]}"#,
+    )
+    .unwrap();
+
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot::new(
+            tmp_root.clone(),
+            ProjectConfig {
+                name: "test".into(),
+                ..Default::default()
+            },
+        ));
+
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &scene_path);
+    app.world_mut()
+        .run_system_cached(jackdaw::scenes::persist_tabs_to_project_config)
+        .unwrap();
+
+    // Opening the legacy file converted it, so the config lists the .bsn path.
+    let saved = jackdaw::project::load_project_config(&tmp_root).unwrap();
+    assert_eq!(saved.last_open_tabs, vec!["level1.bsn".to_string()]);
+
+    let _ = std::fs::remove_file(&scene_path);
+    let _ = std::fs::remove_file(scene_path.with_extension("bsn"));
+    let _ = std::fs::remove_dir_all(&tmp_root);
+}
+
+#[test]
+fn closing_dirty_tab_defers_via_pending_close_resource() {
+    let mut app = make_app_with_n_tabs(2);
+    // Also register PendingTabClose so the test can query it.
+    app.init_resource::<jackdaw::scenes::confirm_dialog::PendingTabClose>();
+
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs[0].dirty = true;
+        scenes.active = 1;
+    }
+
+    assert!(
+        app.world()
+            .resource::<jackdaw::scenes::confirm_dialog::PendingTabClose>()
+            .tab_index
+            .is_none()
+    );
+
+    jackdaw::scenes::operators::scene_close_system(app.world_mut(), 0);
+
+    assert_eq!(
+        app.world().resource::<jackdaw::scenes::Scenes>().tabs.len(),
+        2
+    );
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::scenes::confirm_dialog::PendingTabClose>()
+            .tab_index,
+        Some(0)
+    );
+}
+
+#[test]
+fn window_close_with_dirty_tabs_does_not_exit() {
+    let mut app = make_app_with_n_tabs(2);
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs[0].dirty = true;
+    }
+    app.world_mut()
+        .init_resource::<jackdaw::scenes::confirm_dialog::PendingQuit>();
+
+    app.add_systems(
+        bevy::prelude::Update,
+        jackdaw::scenes::intercept_window_close,
+    );
+    app.add_message::<bevy::window::WindowCloseRequested>();
+    app.add_message::<bevy::app::AppExit>();
+
+    app.world_mut()
+        .resource_mut::<bevy::ecs::message::Messages<bevy::window::WindowCloseRequested>>()
+        .write(bevy::window::WindowCloseRequested {
+            window: bevy::prelude::Entity::PLACEHOLDER,
+        });
+    app.update();
+
+    let exits: Vec<_> = app
+        .world_mut()
+        .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
+        .drain()
+        .collect();
+    assert!(exits.is_empty(), "should not have emitted AppExit");
+
+    assert!(
+        app.world()
+            .resource::<jackdaw::scenes::confirm_dialog::PendingQuit>()
+            .active
+    );
+}
+
+#[test]
+fn swap_captures_ast_snapshot_into_outgoing_tab() {
+    let mut app = make_app_with_n_tabs(2);
+    {
+        let marker = app.world_mut().spawn(Name::new("marker")).id();
+        let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("marker".to_string())]);
+        ast.add_to_roots(node);
+        ast.link(marker, node);
+    }
+    app.world_mut()
+        .resource_mut::<jackdaw::scenes::Scenes>()
+        .active = 0;
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    let TabContent::Scene(Some(captured)) = &scenes.tabs[0].content else {
+        panic!("outgoing tab has a captured scene document");
+    };
+    assert!(
+        captured
+            .roots
+            .iter()
+            .any(|&root| captured.get_name(root) == Some("marker")),
+        "outgoing tab's stored document is the one we marked"
+    );
+}
+
+#[test]
+fn activate_restores_ast_snapshot_from_tab() {
+    let mut app = make_app_with_n_tabs(2);
+    // activate_tab spawns fresh entities for each node and links them, so the
+    // assertions are on the node count and the link map, not on entity ids.
+    {
+        let mut prepared = jackdaw_bsn::SceneBsnAst::default();
+        let node =
+            prepared.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("marker".to_string())]);
+        prepared.add_to_roots(node);
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs[1].content = TabContent::Scene(Some(Box::new(prepared)));
+        scenes.active = 0;
+    }
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    assert_eq!(
+        ast.roots.len(),
+        1,
+        "activating tab 1 installed its document snapshot (node count preserved)"
+    );
+    // The link map was rebuilt: the node maps to a live entity carrying the
+    // marker name.
+    let node = ast.roots[0];
+    let entity = ast
+        .ecs_for_ast(node)
+        .expect("node linked to a fresh entity");
+    assert_eq!(
+        app.world().get::<Name>(entity).map(Name::as_str),
+        Some("marker")
+    );
+}
+
+#[test]
+fn swap_does_not_keep_a_jsn_scene_snapshot_field() {
+    // Compile-only: the literal omits `snapshot`, so a re-added field fails to
+    // build.
+    let _tab = jackdaw::scenes::SceneTab {
+        path: None,
+        display_name: "x".to_string(),
+        dirty: false,
+        kind: jackdaw::scenes::TabKind::Scene,
+        content: TabContent::Scene(None),
+        view_state: jackdaw::scenes::ViewState::default(),
+        history: jackdaw::commands::CommandHistory::default(),
+        terrain_data_store: jackdaw::terrain::TerrainDataStore::default(),
+        navmesh: jackdaw::terrain::navmesh_bake::TabNavmesh::default(),
+        history_depth_at_last_check: 0,
+        refusal: None,
+    };
+}
+
+#[test]
+fn tab_swap_preserves_entity_ordering_and_components() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: None,
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+    app.init_resource::<jackdaw::scene_io::SceneFilePath>();
+    app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(1));
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(2));
+        scenes.active = 0;
+    }
+
+    {
+        let e1 = app.world_mut().spawn(Name::new("alpha")).id();
+        let e2 = app.world_mut().spawn(Name::new("beta")).id();
+        let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        let n1 = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("alpha".to_string())]);
+        let n2 = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name("beta".to_string())]);
+        ast.add_to_roots(n1);
+        ast.add_to_roots(n2);
+        ast.link(e1, n1);
+        ast.link(e2, n2);
+    }
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+
+    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    assert_eq!(ast.roots.len(), 2, "both nodes survived round-trip");
+    assert_eq!(ast.get_name(ast.roots[0]), Some("alpha"));
+    assert_eq!(ast.get_name(ast.roots[1]), Some("beta"));
+
+    let names: Vec<String> = app
+        .world_mut()
+        .query::<&Name>()
+        .iter(app.world())
+        .map(|n| n.as_str().to_string())
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "alpha"),
+        "respawned entities include alpha; got {:?}",
+        names
+    );
+    assert!(
+        names.iter().any(|n| n == "beta"),
+        "respawned entities include beta; got {:?}",
+        names
+    );
+}
+
+#[test]
+fn window_close_with_no_dirty_tabs_exits_cleanly() {
+    let mut app = make_app_with_n_tabs(1);
+    app.world_mut()
+        .init_resource::<jackdaw::scenes::confirm_dialog::PendingQuit>();
+
+    app.add_systems(
+        bevy::prelude::Update,
+        jackdaw::scenes::intercept_window_close,
+    );
+    app.add_message::<bevy::window::WindowCloseRequested>();
+    app.add_message::<bevy::app::AppExit>();
+
+    app.world_mut()
+        .resource_mut::<bevy::ecs::message::Messages<bevy::window::WindowCloseRequested>>()
+        .write(bevy::window::WindowCloseRequested {
+            window: bevy::prelude::Entity::PLACEHOLDER,
+        });
+    app.update();
+
+    let exits: Vec<_> = app
+        .world_mut()
+        .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
+        .drain()
+        .collect();
+    assert_eq!(exits.len(), 1);
+}
+
+#[test]
+fn open_prefab_file_sets_tab_kind_prefab() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.jsn");
+    std::fs::write(
+        &prefab_path,
+        r#"{
+            "jsn": { "format_version": [3,0,0], "editor_version": "0", "bevy_version": "0.18" },
+            "metadata": { "name": "p", "created": "", "modified": "" },
+            "assets": {},
+            "scene": [{
+                "components": {
+                    "jackdaw::prefab::components::Prefab": null,
+                    "jackdaw::prefab::components::PrefabEntityId": 0
+                }
+            }]
+        }"#,
+    )
+    .unwrap();
+
+    let mut app = make_app_with_n_tabs(0);
+    app.world_mut()
+        .init_resource::<jackdaw::prefab::PrefabAstCache>();
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &prefab_path);
+
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    let tab = scenes.tabs.last().expect("tab pushed by open");
+    assert!(
+        matches!(tab.kind, jackdaw::scenes::TabKind::Prefab),
+        "opening a prefab file sets TabKind::Prefab"
+    );
+}
+
+#[test]
+fn scene_open_flags_dirty_when_ids_need_migration() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: None,
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+    app.init_resource::<jackdaw::scenes::operators::UntitledCounter>();
+
+    // The swap inside scene_open needs an active tab to capture from.
+    app.world_mut()
+        .run_system_cached(jackdaw::scenes::operators::scene_new_system)
+        .unwrap();
+
+    // Two entities share id 10, so the scene needs migration.
+    let tmp_dir = std::env::temp_dir();
+    let path = tmp_dir.join("jackdaw_scene_open_dirty_migration_test.jsn");
+    std::fs::write(
+        &path,
+        r#"{"jsn":{"format_version":[3,0,0],"editor_version":"0.1.0","bevy_version":"0.18"},"metadata":{"name":"","description":"","author":"","created":"","modified":""},"assets":{},"scene":[{"id":10,"components":{}},{"id":10,"components":{}}]}"#,
+    )
+    .unwrap();
+
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &path);
+
+    // The healed ids are persisted in the written .bsn, so nothing is unsaved.
+    let bsn_path = path.with_extension("bsn");
+    let converted = std::fs::read_to_string(&bsn_path).expect("converted .bsn written");
+    let doc = jackdaw_bsn::parse_bsn_text(&converted).expect("converted .bsn parses");
+    let id_type = jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH;
+    let mut ids = Vec::new();
+    for &root in &doc.roots {
+        if let Some(jackdaw_bsn::BsnValue::TupleStruct(data)) =
+            jackdaw_bsn::get_bsn_field(&doc, root, id_type, "")
+            && let Some(jackdaw_bsn::BsnValue::Int(id)) = data.values.first()
+        {
+            ids.push(*id);
+        }
+    }
+    assert_eq!(ids.len(), 2, "both entities persisted with node ids");
+    assert_ne!(
+        ids[0], ids[1],
+        "colliding ids healed to unique values on disk"
+    );
+
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    let active = scenes.active;
+    assert!(
+        !scenes.tabs[active].dirty,
+        "the heal persisted during conversion; nothing unsaved"
+    );
+    let _ = std::fs::remove_file(&bsn_path);
+}
+
+#[test]
+fn open_regular_scene_file_sets_tab_kind_scene() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scene_path = tmp.path().join("s.jsn");
+    std::fs::write(
+        &scene_path,
+        r#"{
+            "jsn": { "format_version": [3,0,0], "editor_version": "0", "bevy_version": "0.18" },
+            "metadata": { "name": "s", "created": "", "modified": "" },
+            "assets": {},
+            "scene": [{ "components": { "bevy_ecs::name::Name": "x" } }]
+        }"#,
+    )
+    .unwrap();
+
+    let mut app = make_app_with_n_tabs(0);
+    app.world_mut()
+        .init_resource::<jackdaw::prefab::PrefabAstCache>();
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &scene_path);
+
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    let tab = scenes.tabs.last().expect("tab pushed");
+    assert!(matches!(tab.kind, jackdaw::scenes::TabKind::Scene));
+}
+
+#[test]
+fn each_tab_has_its_own_undo_stack() {
+    use bevy::prelude::*;
+
+    struct CounterCommand;
+    impl jackdaw::commands::EditorCommand for CounterCommand {
+        fn execute(&mut self, _world: &mut World) {}
+        fn undo(&mut self, _world: &mut World) {}
+        fn description(&self) -> &str {
+            "counter"
+        }
+    }
+
+    let mut app = make_app_with_n_tabs(2);
+
+    app.world_mut()
+        .resource_mut::<jackdaw::commands::CommandHistory>()
+        .push_executed(Box::new(CounterCommand));
+    app.world_mut()
+        .resource_mut::<jackdaw::commands::CommandHistory>()
+        .push_executed(Box::new(CounterCommand));
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        2,
+        "tab A has 2 entries"
+    );
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        0,
+        "tab B has its own empty undo stack"
+    );
+
+    app.world_mut()
+        .resource_mut::<jackdaw::commands::CommandHistory>()
+        .push_executed(Box::new(CounterCommand));
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        1,
+        "tab B has 1 entry"
+    );
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        2,
+        "tab A's 2-entry stack is restored after swap-back"
+    );
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::commands::CommandHistory>()
+            .undo_stack
+            .len(),
+        1,
+        "tab B's stack persists across the round-trip"
+    );
+}
+
+#[test]
+fn finish_load_scene_entities_and_ast_share_ids_after_heal() {
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::winit::WinitPlugin;
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: None,
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>(),
+    );
+    app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::commands::CommandHistory>();
+    app.init_resource::<jackdaw_bsn::SceneBsnAst>();
+    app.init_resource::<jackdaw::selection::Selection>();
+    app.init_resource::<jackdaw::scene_io::SceneFilePath>();
+    app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
+    app.init_resource::<jackdaw::prefab::PrefabAstCache>();
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(1));
+        scenes.active = 0;
+    }
+
+    // Two entities share id 10, so both are re-minted. `from_jsn_scene` must not
+    // run a second time on the colliding input: that advances the atomic counter
+    // past the ids already stamped on the spawned entities.
+    let tmp_dir = std::env::temp_dir();
+    let path = tmp_dir.join("jackdaw_finish_load_scene_id_match_test.jsn");
+    std::fs::write(
+        &path,
+        r#"{"jsn":{"format_version":[3,0,0],"editor_version":"0.1.0","bevy_version":"0.18"},"metadata":{"name":"","description":"","author":"","created":"","modified":""},"assets":{},"scene":[{"id":10,"components":{}},{"id":10,"components":{}}]}"#,
+    )
+    .unwrap();
+
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &path);
+
+    let world = app.world();
+    let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+
+    let mut bound_count = 0usize;
+    let mut stack: Vec<bevy::prelude::Entity> = ast.roots.clone();
+    while let Some(node) = stack.pop() {
+        stack.extend(ast.get_children_ast(node));
+        let Some(entity) = ast.ecs_for_ast(node) else {
+            continue;
+        };
+        let node_id = ast.stable_id_of(node).expect("healed node must have an id");
+        let live = world
+            .get::<jackdaw_scene_types::SceneNodeId>(entity)
+            .expect("spawned entity must have SceneNodeId");
+        assert_eq!(
+            live.0, node_id,
+            "entity {entity:?}: live SceneNodeId {} != document node id {} after heal",
+            live.0, node_id,
+        );
+        bound_count += 1;
+    }
+    assert!(
+        bound_count >= 2,
+        "expected at least two bound nodes from the two-entity scene, got {bound_count}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A tab switch into a UI scene has to bring the viewport forward the way
+/// `finish_load_scene` does, or the scene activates behind whichever panel was
+/// in front while the editor insists it is open.
+#[test]
+fn activating_a_ui_scene_tab_brings_the_viewport_forward() {
+    let mut app = make_app_with_n_tabs(2);
+    let leaf = dock_tree_with_a_viewport(&mut app);
+    assert_eq!(
+        active_window(&app, leaf).as_deref(),
+        Some("jackdaw.outliner"),
+        "the viewport starts behind another tab",
+    );
+
+    set_tab_document(&mut app, 1, ui_scene_document());
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+
+    assert_eq!(
+        active_window(&app, leaf).as_deref(),
+        Some(jackdaw::viewport::VIEWPORT_WINDOW_ID),
+        "activating a UI-scene tab must front the panel that can show it",
+    );
+    assert_eq!(
+        viewport_mode(&app),
+        Some(jackdaw::viewport_host::ViewportMode::TwoD),
+        "and ask it for the canvas the scene is drawn on",
+    );
+}
+
+/// The other half of the same rule: an ordinary scene must not yank the
+/// viewport forward over whatever the user was working in.
+#[test]
+fn activating_an_ordinary_scene_tab_leaves_the_front_panel_alone() {
+    let mut app = make_app_with_n_tabs(2);
+    let leaf = dock_tree_with_a_viewport(&mut app);
+
+    let doc =
+        jackdaw_bsn::parse_bsn_text("#World\nbevy_transform::components::transform::Transform\n")
+            .expect("the fixture parses");
+    set_tab_document(&mut app, 1, doc);
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+
+    assert_eq!(
+        active_window(&app, leaf).as_deref(),
+        Some("jackdaw.outliner"),
+        "a scene with no UI root must leave the dock as the user left it",
+    );
+}
+
+/// `finish_load_scene` returns before focusing when a UI document fails to
+/// spawn. `activate_tab` cannot return, since the tab bookkeeping still has to
+/// run, so it gates the focus explicitly.
+#[test]
+fn a_ui_scene_tab_that_fails_to_spawn_does_not_steal_the_viewport() {
+    let mut app = make_app_with_n_tabs(2);
+    let leaf = dock_tree_with_a_viewport(&mut app);
+    app.world_mut()
+        .insert_resource(jackdaw::viewport_host::ViewportModeIntent {
+            mode: jackdaw::viewport_host::ViewportMode::ThreeD,
+            chosen: false,
+        });
+
+    // Declares a UI root, but carries a patch that cannot survive the
+    // emit-and-reparse round trip `activate_tab` spawns through.
+    let mut doc = jackdaw_bsn::SceneBsnAst::default();
+    let node = doc.create_entity_node(vec![
+        jackdaw_bsn::BsnPatch::Type("jackdaw_scene_types::UiSceneRoot".to_string()),
+        jackdaw_bsn::BsnPatch::Type("Unclosed [ bracket".to_string()),
+    ]);
+    doc.add_to_roots(node);
+    assert!(
+        jackdaw::scene_io::declares_ui_scene_root(&doc),
+        "the fixture must still read as a UI scene, or it proves nothing",
+    );
+    set_tab_document(&mut app, 1, doc);
+    // And the tab carries an override of its own, which the restore would
+    // apply after the activation had already declined to.
+    app.world_mut().resource_mut::<Scenes>().tabs[1]
+        .view_state
+        .viewport_mode = Some(jackdaw::viewport_host::ViewportMode::TwoD);
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+
+    assert_eq!(
+        active_window(&app, leaf).as_deref(),
+        Some("jackdaw.outliner"),
+        "a scene that never spawned must not front an empty stage",
+    );
+    assert_eq!(
+        viewport_mode(&app),
+        Some(jackdaw::viewport_host::ViewportMode::ThreeD),
+        "nor put the viewport in a mode read from a document that is not there",
+    );
+    assert_eq!(
+        *app.world()
+            .resource::<jackdaw::viewport_host::ViewportModeIntent>(),
+        jackdaw::viewport_host::ViewportModeIntent {
+            mode: jackdaw::viewport_host::ViewportMode::ThreeD,
+            chosen: false,
+        },
+        "and the refused tab's stored mode is not the choice the panels follow",
+    );
+}
+
+/// A tab switch installs a document the same way an open does, so it owes the
+/// same refusal of the removed facade UI vocabulary.
+#[test]
+fn activating_a_tab_holding_retired_ui_components_spawns_nothing() {
+    use bevy::prelude::Name;
+
+    let mut app = make_app_with_n_tabs(2);
+    let doc = jackdaw_bsn::parse_bsn_text(
+        r#"
+bevy_ecs::hierarchy::Children [
+    #Overlay
+    jackdaw_ui::UiCanvas
+    ,
+    #World
+    bevy_transform::components::transform::Transform
+]
+"#,
+    )
+    .expect("the fixture parses");
+    set_tab_document(&mut app, 1, doc);
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+
+    let mut names = app.world_mut().query::<&Name>();
+    let spawned: Vec<String> = names
+        .iter(app.world())
+        .map(|name| name.as_str().to_string())
+        .collect();
+    assert!(
+        !spawned
+            .iter()
+            .any(|name| name == "Overlay" || name == "World"),
+        "a refused document spawns nothing at all, not the half that still parses: {spawned:?}"
+    );
+}
+
+/// A prefab base can hand the retired vocabulary to an instance whose own
+/// document never names it, so the gate has to read the resolved document.
+const RETIRED_BASE_BSN: &str = r#"#Overlay
+bevy_ui::ui_node::Node
+jackdaw_ui::UiCanvas
+Children [
+    #Greeting
+    bevy_ui::ui_node::Node
+]
+"#;
+
+/// An instance node naming `base`, beside an ordinary entity of its own, so a
+/// refusal shows up as neither of them spawning.
+fn document_inheriting_from(base: &std::path::Path) -> jackdaw_bsn::SceneBsnAst {
+    jackdaw_bsn::parse_bsn_text(&format!(
+        r#"bevy_ecs::hierarchy::Children [
+    jackdaw::prefab::components::IsA {{ source: "{}", deleted: [] }}
+    jackdaw::prefab::components::PrefabEntityId(0)
+    ,
+    #World
+    bevy_transform::components::transform::Transform
+]
+"#,
+        base.display()
+    ))
+    .expect("the fixture parses")
+}
+
+/// A scene file whose one entity instances `base`.
+fn isa_scene_text(base: &std::path::Path) -> String {
+    format!(
+        "jackdaw::prefab::components::IsA {{ source: \"{}\", deleted: [] }}\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n",
+        base.display()
+    )
+}
+
+fn spawned_names(app: &mut bevy::app::App) -> Vec<String> {
+    use bevy::prelude::Name;
+    let mut names = app.world_mut().query::<&Name>();
+    names
+        .iter(app.world())
+        .map(|name| name.as_str().to_string())
+        .collect()
+}
+
+fn entity_named(app: &mut bevy::app::App, target: &str) -> Option<bevy::prelude::Entity> {
+    use bevy::prelude::{Entity, Name};
+    let mut names = app.world_mut().query::<(Entity, &Name)>();
+    names
+        .iter(app.world())
+        .find_map(|(entity, name)| (name.as_str() == target).then_some(entity))
+}
+
+#[test]
+fn activating_a_tab_inheriting_retired_ui_components_spawns_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().join("base.bsn");
+    std::fs::write(&base, RETIRED_BASE_BSN).unwrap();
+
+    let mut app = make_app_with_n_tabs(2);
+    app.world_mut()
+        .init_resource::<jackdaw::prefab::PrefabAstCache>();
+    set_tab_document(&mut app, 1, document_inheriting_from(&base));
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+
+    let spawned = spawned_names(&mut app);
+    assert!(
+        !spawned
+            .iter()
+            .any(|name| name == "Greeting" || name == "World"),
+        "a component inherited from the base is still a component the editor \
+         cannot load: {spawned:?}"
+    );
+}
+
+/// The same hole on the open path, plus what a refusal there must not cost:
+/// the scene the user already had.
+#[test]
+fn opening_a_scene_inheriting_retired_ui_components_keeps_the_open_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().join("base.bsn");
+    std::fs::write(&base, RETIRED_BASE_BSN).unwrap();
+    let scene = tmp.path().join("scene.bsn");
+    std::fs::write(&scene, isa_scene_text(&base)).unwrap();
+    let keeper = tmp.path().join("keeper.bsn");
+    std::fs::write(
+        &keeper,
+        "#Keeper\nbevy_transform::components::transform::Transform\n",
+    )
+    .unwrap();
+
+    let mut app = make_app_with_n_tabs(1);
+    app.world_mut()
+        .init_resource::<jackdaw::prefab::PrefabAstCache>();
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &keeper);
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene);
+
+    let spawned = spawned_names(&mut app);
+    assert!(
+        !spawned.iter().any(|name| name == "Greeting"),
+        "the inherited facade component is refused, not applied: {spawned:?}"
+    );
+    assert!(
+        spawned.iter().any(|name| name == "Keeper"),
+        "a document the editor refuses must not also take the open scene with \
+         it: {spawned:?}"
+    );
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::scene_io::SceneFilePath>()
+            .path
+            .as_deref(),
+        Some(keeper.to_string_lossy().as_ref()),
+        "and the editor still points at the file it has open, so the next save \
+         goes where the user thinks it does",
+    );
+}
+
+/// Reading the resolved document populates the prefab cache, and a moved cache
+/// makes the on-change driver respawn the active scene. Behind a refusal that
+/// respawn would take away the scene and selection the refusal exists to keep.
+#[test]
+fn a_refused_open_does_not_respawn_the_scene_the_user_still_has() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().join("base.bsn");
+    std::fs::write(&base, RETIRED_BASE_BSN).unwrap();
+    let scene = tmp.path().join("scene.bsn");
+    std::fs::write(&scene, isa_scene_text(&base)).unwrap();
+    let keeper = tmp.path().join("keeper.bsn");
+    std::fs::write(
+        &keeper,
+        "#Keeper\nbevy_transform::components::transform::Transform\n",
+    )
+    .unwrap();
+
+    let mut app = make_app_with_n_tabs(1);
+    app.add_plugins(jackdaw::prefab::PrefabPlugin);
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &keeper);
+    let kept = entity_named(&mut app, "Keeper").expect("the open scene spawned");
+    jackdaw::selection::select_only(app.world_mut(), kept);
+
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene);
+
+    // Asked before the driver runs, because running it would settle the two
+    // by doing the respawn this test exists to rule out.
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::prefab::sync::LastResolvedEpoch>()
+            .0,
+        app.world()
+            .resource::<jackdaw::prefab::PrefabAstCache>()
+            .epoch(),
+        "the refused load left a cache bump nobody answered for",
+    );
+
+    app.world_mut()
+        .run_system_cached(jackdaw::prefab::sync::drive_respawn_on_prefab_cache_change)
+        .expect("the cache-change driver runs");
+    assert!(
+        app.world().get_entity(kept).is_ok(),
+        "the scene the user still has was torn down and rebuilt behind a refusal",
+    );
+    assert!(
+        app.world()
+            .resource::<jackdaw::selection::Selection>()
+            .is_selected(kept),
+        "and their selection went with it",
+    );
+}
+
+/// A refusal answers for its own cache bumps and no one else's: taking the epoch
+/// as read wholesale would swallow a watcher's prefab change.
+#[test]
+fn a_refused_open_leaves_a_change_it_did_not_cause_still_to_answer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().join("base.bsn");
+    std::fs::write(&base, RETIRED_BASE_BSN).unwrap();
+    let scene = tmp.path().join("scene.bsn");
+    std::fs::write(&scene, isa_scene_text(&base)).unwrap();
+    let keeper = tmp.path().join("keeper.bsn");
+    std::fs::write(
+        &keeper,
+        "#Keeper\nbevy_transform::components::transform::Transform\n",
+    )
+    .unwrap();
+
+    let mut app = make_app_with_n_tabs(1);
+    app.add_plugins(jackdaw::prefab::PrefabPlugin);
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &keeper);
+
+    // What the prefab watcher does when a file changes under the editor.
+    app.world_mut()
+        .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+        .insert(
+            tmp.path().join("watched.bsn"),
+            jackdaw_bsn::parse_bsn_text("#Watched\njackdaw::prefab::components::Prefab\n")
+                .expect("the fixture parses"),
+        );
+    let unanswered = app
+        .world()
+        .resource::<jackdaw::prefab::PrefabAstCache>()
+        .epoch();
+
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene);
+
+    assert_ne!(
+        app.world()
+            .resource::<jackdaw::prefab::sync::LastResolvedEpoch>()
+            .0,
+        app.world()
+            .resource::<jackdaw::prefab::PrefabAstCache>()
+            .epoch(),
+        "the refusal swallowed a change it did not cause; the watcher's edit \
+         would never reach the open scene",
+    );
+    assert!(
+        unanswered > 0,
+        "the fixture has to leave a bump behind, or it proves nothing",
+    );
+
+    // And one run of the driver settles exactly that one change.
+    app.world_mut()
+        .run_system_cached(jackdaw::prefab::sync::drive_respawn_on_prefab_cache_change)
+        .expect("the cache-change driver runs");
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::prefab::sync::LastResolvedEpoch>()
+            .0,
+        app.world()
+            .resource::<jackdaw::prefab::PrefabAstCache>()
+            .epoch(),
+        "the driver answered the outstanding change",
+    );
+}
+
+/// A legacy scene is converted in memory and the file written only once the
+/// document is accepted, so a refusal leaves the directory as it found it.
+#[test]
+fn a_refused_legacy_scene_leaves_no_converted_file_behind() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().join("base.bsn");
+    std::fs::write(&base, RETIRED_BASE_BSN).unwrap();
+    let scene = tmp.path().join("level.jsn");
+    std::fs::write(
+        &scene,
+        format!(
+            r#"{{
+            "jsn": {{ "format_version": [3,0,0], "editor_version": "0", "bevy_version": "0.18" }},
+            "metadata": {{ "name": "level", "created": "", "modified": "" }},
+            "assets": {{}},
+            "scene": [{{
+                "components": {{
+                    "jackdaw::prefab::components::IsA": {{ "source": "{}", "deleted": [] }},
+                    "jackdaw::prefab::components::PrefabEntityId": 0
+                }}
+            }}]
+        }}"#,
+            base.to_string_lossy().replace('\\', "/")
+        ),
+    )
+    .unwrap();
+
+    let mut app = make_app_with_n_tabs(1);
+    app.world_mut()
+        .init_resource::<jackdaw::prefab::PrefabAstCache>();
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene);
+
+    let spawned = spawned_names(&mut app);
+    assert!(
+        !spawned.iter().any(|name| name == "Greeting"),
+        "the fixture has to be refused, or it proves nothing: {spawned:?}"
+    );
+    assert!(
+        !scene.with_extension("bsn").exists(),
+        "a refused document must not leave a converted file on disk",
+    );
+    assert!(
+        scene.exists(),
+        "and the original must still be where the user left it",
+    );
+}
+
+/// The other half: the gate must not stand in the way of an ordinary tab.
+#[test]
+fn activating_an_ordinary_tab_still_spawns_it() {
+    use bevy::prelude::Name;
+
+    let mut app = make_app_with_n_tabs(2);
+    let doc =
+        jackdaw_bsn::parse_bsn_text("#World\nbevy_transform::components::transform::Transform\n")
+            .expect("the fixture parses");
+    set_tab_document(&mut app, 1, doc);
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+
+    let mut names = app.world_mut().query::<&Name>();
+    assert!(
+        names.iter(app.world()).any(|name| name.as_str() == "World"),
+        "the gate must leave an ordinary document alone"
+    );
+}
+
+fn ui_scene_document() -> jackdaw_bsn::SceneBsnAst {
+    jackdaw_bsn::parse_bsn_text("#Overlay\njackdaw_scene_types::UiSceneRoot\n")
+        .expect("the fixture parses")
+}
+
+fn set_tab_document(app: &mut bevy::app::App, tab: usize, doc: jackdaw_bsn::SceneBsnAst) {
+    let mut scenes = app.world_mut().resource_mut::<Scenes>();
+    scenes.tabs[tab].content = TabContent::Scene(Some(Box::new(doc)));
+}
+
+/// What the viewport panels of the active tab are being asked to show, or
+/// `None` before anything has asked them for anything.
+fn viewport_mode(app: &bevy::app::App) -> Option<jackdaw::viewport_host::ViewportMode> {
+    app.world()
+        .get_resource::<jackdaw::viewport_host::ViewportModeIntent>()
+        .map(|intent| intent.mode)
+}
+
+/// A dock holding the viewport behind another tab, so a focus change is
+/// visible as a change rather than as the starting state.
+fn dock_tree_with_a_viewport(app: &mut bevy::app::App) -> jackdaw_panels::tree::NodeId {
+    use jackdaw_panels::{
+        area::DockAreaStyle,
+        tree::{DockLeaf, DockTree},
+    };
+
+    app.init_resource::<DockTree>();
+    let mut tree = app.world_mut().resource_mut::<DockTree>();
+    tree.set_root_leaf(
+        DockLeaf::new("center", DockAreaStyle::default()).with_windows(vec![
+            "jackdaw.outliner".to_string(),
+            jackdaw::viewport::VIEWPORT_WINDOW_ID.to_string(),
+        ]),
+    )
+}
+
+fn active_window(app: &bevy::app::App, leaf: jackdaw_panels::tree::NodeId) -> Option<String> {
+    let tree = app.world().resource::<jackdaw_panels::tree::DockTree>();
+    let leaf = tree.get(leaf)?.as_leaf()?;
+    let active = leaf.active?;
+    leaf.tabs()
+        .find_map(|(window, tab)| (tab == active).then(|| window.to_string()))
+}
+
+/// The editor seeds a default `Sun` on entering the editor, after the project's
+/// persisted tabs have opened. A document written without a light must not pick
+/// one up, or the next save writes an entity the author never made.
+#[test]
+fn an_opened_document_with_no_light_does_not_gain_a_sun() {
+    let mut app = make_app_with_n_tabs(0);
+
+    let dir = std::env::temp_dir().join("jackdaw_no_sun_on_open");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("unlit.bsn");
+    std::fs::write(
+        &path,
+        "// jackdaw 0.19.0 | bevy 0.19\n#Prop\nbevy_transform::components::transform::Transform\n",
+    )
+    .unwrap();
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &path);
+
+    // What `OnEnter(AppState::Editor)` does in the binary.
+    jackdaw::scene_io::spawn_default_lighting(app.world_mut());
+
+    let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new("."),
+    );
+    assert!(
+        !text.contains("DirectionalLight"),
+        "a saved document must not carry a light the author never wrote:\n{text}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The template case the seed exists for: nothing is open, so a new
+/// scene still gets its `Sun`.
+#[test]
+fn a_scene_with_nothing_open_still_gets_its_default_sun() {
+    let mut app = make_app_with_n_tabs(0);
+    jackdaw::scenes::operators::scene_new_system(app.world_mut());
+
+    jackdaw::scene_io::spawn_default_lighting(app.world_mut());
+
+    let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new("."),
+    );
+    assert!(
+        text.contains("DirectionalLight"),
+        "a new scene keeps its default lighting:\n{text}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A tab that would not spawn is not a tab a save may write over
+// ---------------------------------------------------------------------------
+
+/// The document that every activation path refuses.
+const RETIRED_TAB_BSN: &str = r#"#Overlay
+jackdaw_ui::UiCanvas
+"#;
+
+/// A two-tab app whose second tab names a real file and holds a document the
+/// activation will refuse. Returns the file and what it held before the swap.
+fn refused_tab_over_a_file() -> (
+    bevy::app::App,
+    std::path::PathBuf,
+    String,
+    tempfile::TempDir,
+) {
+    let tmp = tempfile::tempdir().expect("a temp dir");
+    let scene = tmp.path().join("overlay.bsn");
+    std::fs::write(&scene, RETIRED_TAB_BSN).expect("the fixture lands on disk");
+    let before = std::fs::read_to_string(&scene).expect("read it back");
+
+    let mut app = make_app_with_n_tabs(2);
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs[1].path = Some(scene.clone());
+        scenes.tabs[1].display_name = "overlay".to_string();
+    }
+    let doc = jackdaw_bsn::parse_bsn_text(RETIRED_TAB_BSN).expect("the fixture parses");
+    set_tab_document(&mut app, 1, doc);
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    (app, scene, before, tmp)
+}
+
+#[test]
+fn a_refused_activation_marks_the_tab_rather_than_leaving_a_live_save_path() {
+    let (app, _scene, _before, _tmp) = refused_tab_over_a_file();
+
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    assert_eq!(scenes.active, 1, "the refused tab is the one in front");
+    assert!(
+        scenes.tabs[1].is_refused(),
+        "a tab the editor would not spawn has to say so, or every write path \
+         below it believes the empty world is the file's contents",
+    );
+    assert!(
+        matches!(
+            scenes.tabs[1].content,
+            jackdaw::scenes::TabContent::Scene(Some(_)),
+        ),
+        "and it keeps the document it could not spawn, so a fix has something \
+         to try again with",
+    );
+}
+
+#[test]
+fn saving_a_refused_tab_does_not_touch_the_file_it_names() {
+    let (mut app, scene, before, _tmp) = refused_tab_over_a_file();
+
+    assert!(
+        !jackdaw::scene_io::save_scene(app.world_mut()),
+        "the save has to refuse, not report success over an empty world",
+    );
+    assert_eq!(
+        jackdaw::scene_io::save_scene_with_outcome(app.world_mut()),
+        jackdaw::scene_io::SaveOutcome::Failed,
+        "and say it failed rather than that it opened a dialog",
+    );
+
+    let after = std::fs::read_to_string(&scene).expect("the file is still there");
+    assert_eq!(after, before, "the user's file is exactly as they left it",);
+}
+
+#[test]
+fn leaving_a_refused_tab_does_not_capture_the_empty_world_over_its_document() {
+    let (mut app, _scene, _before, _tmp) = refused_tab_over_a_file();
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    let jackdaw::scenes::TabContent::Scene(Some(doc)) = &scenes.tabs[1].content else {
+        panic!("the refused tab still holds a document");
+    };
+    let text = jackdaw_bsn::emit_scene(doc);
+    assert!(
+        text.contains("UiCanvas"),
+        "leaving the tab must not snapshot the empty world over what it holds; \
+         the tab now holds:\n{text}",
+    );
+}
+
+#[test]
+fn an_activation_that_works_takes_the_refusal_back_off() {
+    let (mut app, _scene, _before, _tmp) = refused_tab_over_a_file();
+
+    let doc =
+        jackdaw_bsn::parse_bsn_text("#Overlay\nbevy_transform::components::transform::Transform\n")
+            .expect("the corrected fixture parses");
+    set_tab_document(&mut app, 1, doc);
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+
+    assert!(
+        !app.world().resource::<jackdaw::scenes::Scenes>().tabs[1].is_refused(),
+        "a tab refused once is not refused forever",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A drag does not outlive the entities it grabbed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn respawning_the_scene_ends_every_drag_that_was_holding_it() {
+    use bevy::prelude::*;
+
+    let mut app = make_app_with_n_tabs(2);
+    app.init_resource::<jackdaw::modal_transform::ViewportDragState>();
+    app.init_resource::<jackdaw::gizmos::GizmoDragState>();
+
+    let dragged = app
+        .world_mut()
+        .spawn((Name::new("Crate"), Transform::default()))
+        .id();
+    let camera = app.world_mut().spawn(Name::new("Camera")).id();
+    let viewport = app.world_mut().spawn(Name::new("Viewport")).id();
+
+    {
+        let mut drag = app
+            .world_mut()
+            .resource_mut::<jackdaw::modal_transform::ViewportDragState>();
+        drag.active = Some(jackdaw::modal_transform::ActiveDrag {
+            entity: dragged,
+            start_transform: Transform::default(),
+            start_viewport_cursor: Vec2::ZERO,
+            camera,
+            viewport,
+        });
+    }
+    {
+        let mut gizmo = app
+            .world_mut()
+            .resource_mut::<jackdaw::gizmos::GizmoDragState>();
+        gizmo.active = true;
+        gizmo.targets.push(jackdaw::gizmos::GizmoTarget {
+            entity: dragged,
+            start_transform: Transform::default(),
+        });
+        gizmo.camera = Some(camera);
+    }
+
+    // A tab switch replaces every authored entity, so the ids both drags are
+    // holding stop meaning what they meant.
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+
+    let drag = app
+        .world()
+        .resource::<jackdaw::modal_transform::ViewportDragState>();
+    assert!(
+        drag.active.is_none() && drag.pending.is_none(),
+        "a viewport drag cannot keep writing transforms onto ids the reload freed",
+    );
+    let gizmo = app.world().resource::<jackdaw::gizmos::GizmoDragState>();
+    assert!(
+        !gizmo.active && gizmo.targets.is_empty() && gizmo.camera.is_none(),
+        "and neither can a gizmo drag: it held {} target(s)",
+        gizmo.targets.len(),
+    );
+}

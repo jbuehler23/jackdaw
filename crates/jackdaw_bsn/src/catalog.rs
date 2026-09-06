@@ -169,10 +169,104 @@ pub fn load_bsn_scene(world: &mut World, text: &str) -> Result<LoadedBsnScene, B
     world.insert_resource(crate::BsnSceneAssets(names));
 
     world.insert_resource(ast);
+    if let Some(mut unresolved) = world.get_resource_mut::<crate::UnresolvedTypes>() {
+        unresolved.start_scene();
+    }
     let entities = crate::spawn_from_ast(world);
     crate::apply_dirty_ast_patches(world);
+    report_unresolved_types(world);
 
     Ok(LoadedBsnScene { entities, assets })
+}
+
+/// Reports once, after a load, that the editor's picture of the project is
+/// older than the scene and a rebuild refreshes it.
+fn report_unresolved_types(world: &mut World) {
+    let Some(mut unresolved) = world.get_resource_mut::<crate::UnresolvedTypes>() else {
+        return;
+    };
+    if let Some(remedy) = unresolved.take_remedy() {
+        log::warn!("{remedy}");
+    }
+}
+
+/// Adopts `source`'s named asset entries into the open scene.
+///
+/// Each entry's value goes into its `Assets<T>` store, both reference spellings
+/// join [`crate::BsnSceneAssets`], and the entry joins the live document as a
+/// root unless a root of that name is already there.
+///
+/// A name the scene already uses is adopted again only when the value matches;
+/// a different value under the same name is unreachable by any spelling and is
+/// refused. Returns the names of the entries that could not be adopted.
+pub fn adopt_asset_roots(world: &mut World, source: &SceneBsnAst) -> Vec<String> {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let roots = {
+        let reg = registry.read();
+        asset_roots(source, &reg)
+    };
+    if roots.is_empty() {
+        return Vec::new();
+    }
+
+    let mut dropped = Vec::new();
+    let mut adopted = Vec::new();
+    for root in roots {
+        let Some(name) = source.get_name(root).map(str::to_owned) else {
+            continue;
+        };
+        let value = asset_value_from_root(source, root);
+        let entry = value.and_then(|(type_path, asset_value)| {
+            let reg = registry.read();
+            load_asset_entry(world, &reg, &name, &type_path, &asset_value)
+        });
+        match entry {
+            Some(entry) => adopted.push((root, entry)),
+            None => dropped.push(name),
+        }
+    }
+
+    // Split before any handle is published: a refused entry must not have taken
+    // the name over on its way to being refused.
+    let mut fresh = Vec::new();
+    {
+        let live = world.resource::<SceneBsnAst>();
+        for (root, entry) in adopted {
+            let existing = live
+                .roots
+                .iter()
+                .copied()
+                .find(|&existing| live.get_name(existing) == Some(entry.name.as_str()));
+            match existing {
+                None => fresh.push((Some(root), entry)),
+                Some(existing)
+                    if asset_value_from_root(live, existing)
+                        == asset_value_from_root(source, root) =>
+                {
+                    fresh.push((None, entry));
+                }
+                Some(_) => dropped.push(entry.name),
+            }
+        }
+    }
+
+    let mut names = world
+        .get_resource::<crate::BsnSceneAssets>()
+        .map(|assets| assets.0.clone())
+        .unwrap_or_default();
+    for (_, entry) in &fresh {
+        names.insert(format!("#{}", entry.name), entry.handle.clone());
+        names.insert(format!("@{}", entry.name), entry.handle.clone());
+    }
+    world.insert_resource(crate::BsnSceneAssets(names));
+
+    let mut live = world.resource_mut::<SceneBsnAst>();
+    for (root, _) in fresh {
+        if let Some(root) = root {
+            crate::clone_subtree_into(&mut live, source, root, None);
+        }
+    }
+    dropped
 }
 
 /// Build one named asset from its document value and insert it into its
@@ -239,8 +333,8 @@ pub fn serialize_assets_to_bsn(world: &World, assets: &[CatalogAssetRef]) -> Str
 ///
 /// Emission drops an entry silently when its type is unregistered, generic,
 /// carries no `ReflectAsset`, or the asset is gone from its store. The text
-/// alone does not distinguish an empty input from a fully skipped one, so the
-/// skipped names are returned alongside it.
+/// alone does not distinguish "nothing to write" from "everything skipped", so
+/// a caller deciding a file's fate gets the skipped names here.
 pub fn serialize_assets_to_bsn_reporting(
     world: &World,
     assets: &[CatalogAssetRef],
@@ -347,6 +441,114 @@ mod tests {
             .resource::<Assets<TestMaterial>>()
             .get(&handle.clone().typed::<TestMaterial>())
             .expect("asset should exist")
+    }
+
+    /// A copied subtree carries the assets its components name, and paste
+    /// adopts them into the store, the reference names and the document.
+    #[test]
+    fn adopting_a_clipboard_document_s_assets_makes_its_references_resolvable() {
+        let mut world = scalar_world();
+        world.insert_resource(SceneBsnAst::default());
+
+        let handle = world
+            .resource_mut::<Assets<TestMaterial>>()
+            .add(TestMaterial {
+                metallic: 0.5,
+                roughness: 0.25,
+            });
+        let mut source = SceneBsnAst::default();
+        append_assets_to_ast(
+            &mut source,
+            &world,
+            &[CatalogAssetRef {
+                name: "Copied".into(),
+                type_id: TypeId::of::<TestMaterial>(),
+                asset_id: handle.id().untyped(),
+            }],
+        );
+        world.resource_mut::<Assets<TestMaterial>>().remove(&handle);
+
+        let dropped = adopt_asset_roots(&mut world, &source);
+
+        assert!(dropped.is_empty(), "nothing was dropped: {dropped:?}");
+        let names = &world.resource::<crate::BsnSceneAssets>().0;
+        let adopted = names
+            .get("#Copied")
+            .expect("the inline reference name resolves");
+        assert!(
+            names.contains_key("@Copied"),
+            "and the catalog spelling too"
+        );
+        assert_eq!(get_material(&world, adopted).roughness, 0.25);
+        assert_eq!(
+            world.resource::<SceneBsnAst>().roots.len(),
+            1,
+            "the entry joined the open document, so a save keeps it"
+        );
+
+        adopt_asset_roots(&mut world, &source);
+        assert_eq!(world.resource::<SceneBsnAst>().roots.len(), 1);
+    }
+
+    /// A different value under a name the scene already uses is refused, and
+    /// refusing it must not take the name off the one already there.
+    #[test]
+    fn a_second_entry_of_the_same_name_is_adopted_only_when_it_is_the_same_asset() {
+        let mut world = scalar_world();
+        world.insert_resource(SceneBsnAst::default());
+
+        let source_of = |world: &mut World, roughness: f32| {
+            let handle = world
+                .resource_mut::<Assets<TestMaterial>>()
+                .add(TestMaterial {
+                    metallic: 0.5,
+                    roughness,
+                });
+            let mut ast = SceneBsnAst::default();
+            append_assets_to_ast(
+                &mut ast,
+                world,
+                &[CatalogAssetRef {
+                    name: "Shared".into(),
+                    type_id: TypeId::of::<TestMaterial>(),
+                    asset_id: handle.id().untyped(),
+                }],
+            );
+            ast
+        };
+
+        let first = source_of(&mut world, 0.25);
+        assert!(adopt_asset_roots(&mut world, &first).is_empty());
+        let published = world.resource::<crate::BsnSceneAssets>().0["#Shared"].clone();
+        assert_eq!(get_material(&world, &published).roughness, 0.25);
+
+        let again = source_of(&mut world, 0.25);
+        assert!(
+            adopt_asset_roots(&mut world, &again).is_empty(),
+            "the same value under the same name is the same asset",
+        );
+        assert_eq!(world.resource::<SceneBsnAst>().roots.len(), 1);
+
+        let other = source_of(&mut world, 0.75);
+        assert_eq!(
+            adopt_asset_roots(&mut world, &other),
+            vec!["Shared".to_string()],
+            "a different value under a name already in use is refused",
+        );
+        assert_eq!(
+            world.resource::<SceneBsnAst>().roots.len(),
+            1,
+            "and did not join the document",
+        );
+        assert_eq!(
+            get_material(
+                &world,
+                &world.resource::<crate::BsnSceneAssets>().0["#Shared"]
+            )
+            .roughness,
+            0.25,
+            "and the name still reaches the asset the scene was already using",
+        );
     }
 
     #[test]

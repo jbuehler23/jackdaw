@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use jackdaw_commands::KeymapCapture;
 use lucide_icons::Icon;
 
 use crate::button::{
@@ -32,6 +33,131 @@ pub fn plugin(app: &mut App) {
 
 #[derive(Component)]
 pub struct EditorDialog;
+
+/// What a dialog is asking and what it will take for an answer.
+///
+/// The footer's buttons carry their labels in `Text` children several levels
+/// down, which is enough to draw them and not enough to answer one from anywhere
+/// but a pointer. Recorded here at open time so a caller with no pointer can read
+/// the question and name a button.
+#[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
+pub struct DialogChoices {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    /// The primary button, on the right.
+    pub action: Option<String>,
+    /// The secondary button, on the far left, when there is one.
+    pub secondary: Option<String>,
+    /// The cancel button. Dismissing the dialog any other way (Esc, a
+    /// click outside, the close cross) means the same thing.
+    pub cancel: Option<String>,
+}
+
+impl DialogChoices {
+    /// The buttons a caller may name, in the order their indices run:
+    /// the primary action first, because that is the answer a dialog is
+    /// asking for.
+    pub fn labels(&self) -> Vec<String> {
+        [&self.action, &self.secondary, &self.cancel]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect()
+    }
+}
+
+/// Which button of a dialog an answer means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DialogChoice {
+    Action,
+    Secondary,
+    Cancel,
+}
+
+/// Why [`resolve_dialog_choice`] pressed nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DialogChoiceError {
+    /// Nothing on the dialog is spelled or numbered like this.
+    NoMatch,
+    /// The prefix fits more than one button, named here in the order the
+    /// dialog offers them. Pressing one of them would be a guess, so the
+    /// caller is asked to say which.
+    Ambiguous(Vec<String>),
+}
+
+impl core::fmt::Display for DialogChoiceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NoMatch => write!(f, "no button on this dialog answers to it"),
+            Self::Ambiguous(candidates) => {
+                write!(f, "it is a prefix of more than one button: {candidates:?}")
+            }
+        }
+    }
+}
+
+/// The button `choice` names: a label, or an index into
+/// [`DialogChoices::labels`].
+///
+/// A label matches exactly first, so a button literally spelled `1` is reachable
+/// by name. Failing that, a value that parses as an integer is an index. Failing
+/// that, one case-insensitive prefix match answers, so `Reload` presses a button
+/// spelled `Reload (discards your unsaved changes)`.
+///
+/// A prefix that fits two buttons presses neither and comes back as
+/// [`DialogChoiceError::Ambiguous`] naming both.
+pub fn resolve_dialog_choice(
+    choices: &DialogChoices,
+    choice: &str,
+) -> Result<DialogChoice, DialogChoiceError> {
+    let slots = [
+        (DialogChoice::Action, choices.action.as_deref()),
+        (DialogChoice::Secondary, choices.secondary.as_deref()),
+        (DialogChoice::Cancel, choices.cancel.as_deref()),
+    ];
+    let present: Vec<(DialogChoice, &str)> = slots
+        .iter()
+        .filter_map(|(which, label)| label.map(|label| (*which, label)))
+        .collect();
+
+    let wanted = choice.trim();
+    if let Some((which, _)) = present.iter().find(|(_, label)| *label == wanted) {
+        return Ok(*which);
+    }
+    if let Ok(index) = wanted.parse::<usize>() {
+        return present
+            .get(index)
+            .map(|(which, _)| *which)
+            .ok_or(DialogChoiceError::NoMatch);
+    }
+
+    let lowered = wanted.to_lowercase();
+    let matches: Vec<&(DialogChoice, &str)> = present
+        .iter()
+        .filter(|(_, label)| label.to_lowercase().starts_with(&lowered))
+        .collect();
+    match matches.as_slice() {
+        [(which, _)] => Ok(*which),
+        [] => Err(DialogChoiceError::NoMatch),
+        many => Err(DialogChoiceError::Ambiguous(
+            many.iter().map(|(_, label)| (*label).to_string()).collect(),
+        )),
+    }
+}
+
+/// Press one of `dialog`'s buttons, as a click on it would: fire the event the
+/// button fires, then take the dialog down. Cancel fires nothing, which is what
+/// makes a dismissal and a cancel the same answer.
+pub fn answer_dialog(commands: &mut Commands, dialog: Entity, choice: DialogChoice) {
+    match choice {
+        DialogChoice::Action => commands.trigger(DialogActionEvent { entity: dialog }),
+        DialogChoice::Secondary => {
+            commands.trigger(DialogSecondaryActionEvent { entity: dialog });
+        }
+        DialogChoice::Cancel => {}
+    }
+    dismiss_dialog(commands, dialog);
+}
 
 #[derive(Component)]
 struct DialogBackdrop;
@@ -315,9 +441,8 @@ fn spawn_dialog(
 
         let footer_id = footer.id();
 
-        // Secondary action on the far left (margin-right: auto pushes it left).
-        // The button is wrapped in a layout node to avoid a duplicate `Node` component
-        // (since `button()` already provides one via `button_base()`).
+        // Secondary action on the far left (margin-right: auto pushes it left),
+        // wrapped in a layout node to avoid a duplicate `Node` component.
         if let Some(secondary) = &event.secondary_action {
             let btn = commands
                 .spawn((
@@ -403,6 +528,13 @@ fn spawn_dialog(
     commands
         .spawn((
             EditorDialog,
+            DialogChoices {
+                title: event.title.clone(),
+                description: event.description.clone(),
+                action: event.action.clone(),
+                secondary: event.secondary_action.clone(),
+                cancel: event.cancel.clone(),
+            },
             event.variant,
             DialogConfig {
                 close_on_click_outside: event.close_on_click_outside,
@@ -463,11 +595,18 @@ fn handle_backdrop_click(
     }
 }
 
+/// Escape closes a dialog -- except while the keybind settings are recording, when
+/// the press belongs to the recorder. Without this Escape could never be bound to
+/// anything.
 fn handle_esc_key(
     keyboard: Res<ButtonInput<KeyCode>>,
+    capture: Option<Res<KeymapCapture>>,
     dialogs: Query<(Entity, &DialogConfig), With<EditorDialog>>,
     mut commands: Commands,
 ) {
+    if KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
     if !keyboard.just_pressed(KeyCode::Escape) {
         return;
     }

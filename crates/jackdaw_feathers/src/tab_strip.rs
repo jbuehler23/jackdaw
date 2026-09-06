@@ -1,9 +1,12 @@
-//! A row of labeled tabs sharing one active highlight and one dispatch
+//! A horizontal row of labeled tabs sharing one active highlight and one dispatch
 //! operator.
 //!
-//! `jackdaw_panels`' `DockTabBar` renders a similar shape without using this
-//! widget: its drag-to-reorder and close-button affordances depend on
-//! `jackdaw_panels`-only types this crate cannot depend on.
+//! Tabs dispatch a named operator with a per-tab parameter, so a consumer needs
+//! no tab-specific glue. A control whose click has to reach a particular entity is
+//! not served here.
+//!
+//! `jackdaw_panels`' `DockTabBar` is not built on this: its drag-to-reorder and
+//! close-button affordances need types this crate cannot depend on.
 
 use std::borrow::Cow;
 
@@ -23,10 +26,9 @@ pub struct TabStripTab;
 
 /// Layout direction for a [`spawn_tab_strip`] row.
 ///
-/// A parameter rather than two functions: consumers share one
-/// dispatch/highlight mechanism and differ only in the axis tabs stack along.
-/// The Terrain panel's and the inspector/dock header's strips run
-/// horizontally; the bottom window dock's runs vertically along its edge.
+/// A parameter rather than two functions: every consumer shares one
+/// dispatch/highlight mechanism and differs only in which axis the tabs stack
+/// along.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum TabStripOrientation {
     #[default]
@@ -63,17 +65,13 @@ impl TabStripItem {
 }
 
 /// Spawn a row of tabs under `parent`. Clicking a tab dispatches `op_id` with
-/// `param_key` set to that tab's [`TabStripItem::param`], carried by the same
-/// [`ButtonOperatorCall`] every other clickable widget in this crate uses, so
-/// `dispatch_button_operator_call` fires it with no tab-specific glue and the
+/// `param_key` set to that tab's [`TabStripItem::param`], carried on the
+/// [`ButtonOperatorCall`] every other clickable widget in this crate uses, so this
 /// widget stays independent of the operator API.
 ///
-/// The active tab uses [`ButtonVariant::Active`]; an inactive tab uses
-/// [`ButtonVariant::Ghost`].
-///
-/// `orientation` picks the axis tabs stack along, see
-/// [`TabStripOrientation`]. Both the row's layout and the gap between tabs
-/// follow it, so a vertical strip carries no leftover horizontal gap.
+/// The active tab reuses [`ButtonVariant::Active`]; an inactive one is
+/// [`ButtonVariant::Ghost`]. `orientation` picks the axis tabs stack along, and
+/// both the row's layout and its gap follow it.
 ///
 /// Returns the row entity.
 pub fn spawn_tab_strip(
@@ -191,8 +189,8 @@ mod tests {
         assert!(params.contains(&PropertyValue::String("scatter".into())));
     }
 
-    /// A vertical strip lays its tabs out top-to-bottom rather than
-    /// defaulting to a horizontal row.
+    /// A vertical strip lays its tabs out top-to-bottom, as the bottom
+    /// window dock needs, rather than falling back to a horizontal row.
     #[test]
     fn vertical_orientation_stacks_the_row_in_a_column() {
         let (world, _parent, row) = spawn_and_flush(

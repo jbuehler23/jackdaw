@@ -49,7 +49,7 @@ pub(crate) fn place_point_invoke_trigger(
 ) {
     if !mouse.just_pressed(MouseButton::Left)
         || !is_clip_mode_value(&edit_mode)
-        || keybind_focus.is_typing()
+        || keybind_focus.keyboard_is_spoken_for()
         || clip_state.points.len() >= 3
     {
         return;
@@ -73,7 +73,7 @@ fn is_clip_mode_open(
     edit_mode: &EditMode,
     keybind_focus: &crate::keybind_focus::KeybindFocus,
 ) -> bool {
-    !keybind_focus.is_typing() && is_clip_mode_value(edit_mode)
+    !keybind_focus.keyboard_is_spoken_for() && is_clip_mode_value(edit_mode)
 }
 
 fn can_place_point(

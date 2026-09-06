@@ -32,12 +32,20 @@ pub struct ProjectSelectPlugin;
 
 impl Plugin for ProjectSelectPlugin {
     fn build(&self, app: &mut App) {
+        // The preflight banner exists to tell the person at the launcher that
+        // their toolchain will not build a project. A run with no windowing
+        // backend has nobody reading it, so it skips the checks rather than
+        // spawning `rustc` and `cmake` on every boot.
+        let windowed = app.is_plugin_added::<bevy::winit::WinitPlugin>();
         app.init_resource::<NewProjectState>()
             .init_resource::<crate::build_status::BuildStatus>()
             .init_resource::<PreflightState>()
             .add_systems(
                 OnEnter(AppState::ProjectSelect),
-                (spawn_project_selector, start_preflight),
+                (
+                    spawn_project_selector,
+                    start_preflight.run_if(move || windowed),
+                ),
             )
             .add_systems(
                 Update,
@@ -485,10 +493,9 @@ fn spawn_project_selector(
 
     // Detect CWD project candidate
     let cwd = std::env::current_dir().unwrap_or_default();
-    // What actually marks a project now. The old markers predate
-    // `jackdaw.toml`: `assets/` in particular promoted any folder that
-    // happened to have one to the top of the launcher, where clicking it
-    // landed on the not-a-project card.
+    // What marks a project: a marker like `assets/` promotes any folder
+    // that happens to have one to the top of the launcher, where clicking
+    // it lands on the not-a-project card.
     let cwd_has_project = cwd.join("jackdaw.toml").is_file() || cwd.join("Cargo.toml").is_file();
 
     let slots = spawn_window_shell(
@@ -828,8 +835,8 @@ fn spawn_project_row(
                 column_gap: Val::Px(10.0),
                 ..Default::default()
             },
-            BackgroundColor(tokens::INPUT_BG),
             BorderColor::all(tokens::BORDER_SUBTLE),
+            jackdaw_feathers::list_view::list_row(),
             RecentRow(project_path.clone()),
         ))
         .id();
@@ -890,9 +897,8 @@ fn spawn_project_row(
                         ),
                         if_cwd_badge(is_cwd, font.clone()),
                         // A folder that has been moved or deleted is
-                        // still listed, and used to look perfectly
-                        // healthy until the click that failed. One stat
-                        // per row says so up front.
+                        // still listed, so one stat per row says so up
+                        // front rather than at the failing click.
                         missing_badge(&project_path, font.clone()),
                         // The engine a project targets decides whether
                         // this editor can build it at all, so it belongs
@@ -942,21 +948,6 @@ fn spawn_project_row(
 
         parent.commands().entity(row_entity).add_child(x_button);
     }
-
-    parent.commands().entity(row_entity).observe(
-        |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
-            if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                bg.0 = tokens::HOVER_BG;
-            }
-        },
-    );
-    parent.commands().entity(row_entity).observe(
-        |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
-            if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                bg.0 = tokens::INPUT_BG;
-            }
-        },
-    );
 
     parent.commands().entity(row_entity).observe(
         move |_: On<Pointer<Click>>, mut commands: Commands| {
@@ -1124,8 +1115,8 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
         return;
     }
     // A folder that is gone (a stale recent entry) or that was never a
-    // cargo project used to open the editor rooted at it, with an
-    // untitled scene and no indication anything was wrong.
+    // cargo project gets an explanatory card instead of an editor rooted
+    // at it with an untitled scene.
     if !root.is_dir() {
         show_not_a_project_card(world, root, NotAProject::Missing);
         return;
@@ -1226,6 +1217,11 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
 
     let mut next_state = world.resource_mut::<NextState<AppState>>();
     next_state.set(AppState::Editor);
+
+    // Every scene below opens in this same exclusive run, before the schema
+    // watcher's first tick, so the project's component types must be known here
+    // or the session's first load reads them all as unknown.
+    crate::pie::refresh_project_types(world);
 
     let last_open_tabs = world
         .resource::<crate::project::ProjectRoot>()
@@ -2319,6 +2315,7 @@ fn package_picker_list() -> impl Scene {
             overflow: Overflow::scroll_y(),
         }
         ScrollPosition::default()
+        bevy::ui_widgets::ScrollArea
         bevy::picking::hover::Hovered::default()
     }
 }
@@ -2634,6 +2631,7 @@ pub fn open_new_project_modal(world: &mut World, kind: TemplateKind) {
                 ..Default::default()
             },
             ScrollPosition::default(),
+            bevy::ui_widgets::ScrollArea,
             bevy::picking::hover::Hovered::default(),
             ChildOf(card_root),
         ))

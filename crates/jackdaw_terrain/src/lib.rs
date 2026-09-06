@@ -2,10 +2,13 @@ pub mod brush;
 pub mod channel;
 pub mod clipmap;
 pub mod control;
+#[cfg(feature = "procgen")]
 pub mod erosion;
+#[cfg(feature = "procgen")]
 pub mod generate;
 pub mod heightmap;
 pub mod navmesh;
+pub mod placement;
 pub mod quantize;
 pub mod rect;
 pub mod region;
@@ -15,6 +18,7 @@ pub mod scatter;
 pub mod sidecar;
 pub mod splat;
 pub mod texture_set;
+pub mod tint;
 
 pub use brush::{SculptTool, affected_chunks, affected_chunks_at, apply_brush, apply_brush_at};
 pub use channel::{ChannelData, ChannelDescriptor, ChannelElement, apply_channel_brush};
@@ -25,18 +29,28 @@ pub use clipmap::{
 pub use control::{
     Control, MANUAL_BIT, MAX_BLEND, MAX_TEXTURE_ID, apply_control_brush, apply_restore_brush,
 };
+#[cfg(feature = "procgen")]
 pub use erosion::{ErosionParams, hydraulic_erosion};
+#[cfg(feature = "procgen")]
 pub use generate::{GenerateSettings, NoiseType, generate_heightmap};
 pub use heightmap::{Heightmap, SurfaceHit};
 pub use navmesh::{BakeParams, NavPolygon, NavmeshArtifact, NavmeshError, SurfaceMesh};
+pub use placement::{
+    MAX_SCATTER_GROUP_LEN, MAX_SCATTER_TABLE, ScatterAssetError, ScatterGroupError, ScatterPalette,
+    ScatterPaletteEntry, ScatterPlacement, validate_scatter_asset, validate_scatter_group,
+};
 pub use quantize::{quantize_height, quantize_heights, quantize_region};
 pub use rect::GridRect;
 pub use region::{Region, RegionCoord, RegionSize, RegionSizeError, TerrainRegions};
 pub use scatter::{Placement, ScatterMask, ScatterParams, scatter};
 pub use sidecar::{
-    AutoTerrainSettings, GridGeometry, GridShape, RegionTerrainData, SidecarError, TerrainData,
+    AutoTerrainSettings, GridGeometry, GridShape, RegionTerrainData, SidecarError, SurfaceSettings,
+    TerrainData,
 };
 pub use splat::{
     ControlTexels, control_cell, control_corner, grid_uv, layers_covered, write_control_rect,
 };
 pub use texture_set::{TextureSet, TextureSetEntry, TextureSetError};
+pub use tint::apply_color_brush;
+#[cfg(feature = "procgen")]
+pub use tint::{color_variation, fill_color_variation};

@@ -79,9 +79,27 @@ density, spacing, scale, yaw, normal alignment, and an optional
 paint-channel mask. A seed produces the same placement for the
 same terrain and channel data.
 
-Re-running the same scatter group replaces untouched generated
-instances. Instances moved, rotated, or scaled by hand are
-preserved. The whole run is a single undoable edit.
+A run stores its placements on the terrain rather than spawning an
+entity per instance, so nothing reaches the outliner and the group is
+one line in the sidecar. Re-running the same group replaces what it
+placed before, in a single undoable edit. A stored placement is a
+position, a yaw and a scale, so it stands upright; normal alignment
+applies only to a group that is still entities, and a run that stores
+its placements reports that it was skipped.
+
+The **Groups** list shows every group under the terrain with its
+placement count, and re-scatters or clears one. **Adopt selected
+group** stores each direct model child of a hand-placed group as a
+placement and removes the entities; one undo puts them back.
+`terrain.scatter.promote` turns a single placement back into an
+ordinary model entity for hand editing.
+
+Stored placements draw as batched instances, one draw per model per
+region, culled a region at a time, and ground cover stops drawing past
+a distance. A navmesh bake stands an obstacle in for each placement
+whose palette entry blocks agents, so scatter needs no
+`NavmeshExclude` tagging; a placement whose model has not loaded gets a
+default footprint, counted in the bake summary.
 
 ## Sidecars and export
 

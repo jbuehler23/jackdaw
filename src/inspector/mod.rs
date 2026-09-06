@@ -1,5 +1,6 @@
 pub(crate) mod add_header;
 pub(crate) mod anim_diamond;
+pub mod bindings_card;
 mod brush_display;
 pub(crate) mod category_strip;
 pub(crate) mod component_display;
@@ -10,12 +11,14 @@ mod live_edit_dots;
 pub(crate) mod material_card_routing;
 mod material_display;
 mod modifier_display;
+pub mod node_card;
 pub(crate) mod ops;
 pub(crate) mod physics_display;
 mod prefab_field_dots;
 pub(crate) mod prefab_menu;
 pub(crate) mod project_component_display;
 pub(crate) mod reflect_fields;
+pub mod val_field;
 
 use crate::EditorEntity;
 
@@ -121,6 +124,8 @@ impl Plugin for InspectorPlugin {
 
         app.init_resource::<category_strip::ActiveInspectorCategory>();
         app.init_resource::<InspectorCollapseState>();
+        app.init_resource::<bindings_card::BindingsCardEcho>();
+        app.init_resource::<PendingInspectorRebuild>();
 
         let mut denylist = component_picker::PickerDenylist::default();
         component_picker::populate_avian_picker_denylist(&mut denylist);
@@ -140,6 +145,16 @@ impl Plugin for InspectorPlugin {
             .add_observer(reflect_fields::on_numeric_value_change_i64)
             .add_observer(reflect_fields::on_color_plane_change)
             .add_observer(reflect_fields::on_color_slider_change)
+            .add_observer(val_field::on_val_number_change)
+            .add_observer(val_field::on_val_unit_change)
+            .add_observer(node_card::on_node_enum_change)
+            .add_observer(node_card::on_optional_number_change)
+            .add_observer(node_card::on_optional_number_mode_change)
+            .add_observer(bindings_card::on_binding_combobox_change)
+            .add_observer(bindings_card::on_binding_button_click)
+            .add_observer(reflect_fields::on_reflect_list_button_click)
+            .add_observer(bindings_card::on_binding_checkbox_change)
+            .add_observer(bindings_card::on_binding_text_commit)
             .add_observer(custom_props_display::on_custom_property_checkbox_commit)
             .add_observer(custom_props_display::on_custom_property_text_commit)
             .add_observer(brush_display::on_brush_face_text_commit)
@@ -154,8 +169,18 @@ impl Plugin for InspectorPlugin {
             .add_systems(
                 Update,
                 (
+                    apply_pending_inspector_rebuild,
                     reflect_fields::refresh_inspector_fields,
                     reflect_fields::refresh_enum_variants,
+                    val_field::refresh_val_fields,
+                    // The structured cards' refresh passes, which pull each
+                    // card back in line with the component behind it.
+                    (
+                        node_card::paint_node_segments,
+                        node_card::refresh_node_enum_combos,
+                        node_card::refresh_node_optional_numbers,
+                        bindings_card::refresh_bindings_card_on_change,
+                    ),
                     brush_display::update_brush_face_properties,
                     category_strip::resolve_active_on_rebuild,
                     component_display::filter_inspector_components
@@ -165,6 +190,13 @@ impl Plugin for InspectorPlugin {
                     prefab_field_dots::decorate_prefab_field_rows,
                     prefab_field_dots::refresh_prefab_field_dots,
                     live_edit_dots::refresh_live_edit_field_dots,
+                    // After the three passes that spawn and remove the marks.
+                    // Their spawns are deferred, so the gutter follows a new
+                    // mark on the next pass rather than the same one.
+                    jackdaw_feathers::field_row::reserve_decoration_gutters
+                        .after(anim_diamond::decorate_animatable_fields)
+                        .after(prefab_field_dots::decorate_prefab_field_rows)
+                        .after(live_edit_dots::refresh_live_edit_field_dots),
                     refresh_name_field,
                     flag_inspector_dirty_on_archetype_change,
                     flag_inspector_dirty_on_modifier_stack_change,
@@ -362,6 +394,15 @@ pub(super) struct FieldBinding {
     pub(super) field_path: String,
 }
 
+/// The component path and field path a widget edits, or `None` when it
+/// edits nothing. Addresses a control by the field it writes rather than
+/// by its position in a section.
+pub fn field_edited_by(world: &World, widget: Entity) -> Option<(&str, &str)> {
+    world
+        .get::<FieldBinding>(widget)
+        .map(|binding| (binding.type_path.as_str(), binding.field_path.as_str()))
+}
+
 /// Marker on the row-level container of a labeled inspector field,
 /// carrying the **root** `(component_type_path, field_path)` for the
 /// row regardless of how many scalar inputs sit inside it.
@@ -384,7 +425,7 @@ pub(super) struct InspectorFieldRow {
 /// variant's field rows. `refresh_enum_variants` polls these and rebuilds the
 /// subtree (menu + field rows) in place whenever the ECS variant changes.
 #[derive(Component)]
-pub(super) struct EnumVariantHost {
+pub struct EnumVariantHost {
     pub(super) source_entity: Entity,
     pub(super) type_path: String,
     pub(super) field_path: String,
@@ -441,6 +482,25 @@ pub(crate) struct InspectorDirty;
 /// Force inspector rebuild by marking the source entity dirty.
 pub(super) fn rebuild_inspector(world: &mut World, source_entity: Entity) {
     world.entity_mut(source_entity).insert(InspectorDirty);
+}
+
+/// A source whose inspector has to be rebuilt, one frame from now.
+///
+/// A control that changes the shape of its own card -- a list row added or
+/// taken away -- cannot rebuild the card inside the click: the rebuild
+/// despawns the button the click came from, and the hover and cursor commands
+/// already queued for it that frame then land on an entity that is gone. A
+/// frame's delay lets those finish first.
+#[derive(Resource, Default)]
+pub(crate) struct PendingInspectorRebuild(pub(crate) Option<Entity>);
+
+fn apply_pending_inspector_rebuild(
+    mut pending: ResMut<PendingInspectorRebuild>,
+    mut commands: Commands,
+) {
+    if let Some(source) = pending.0.take() {
+        commands.entity(source).try_insert(InspectorDirty);
+    }
 }
 
 /// Flag the inspector dirty when the displayed entity's `ModifierStack`

@@ -13,7 +13,7 @@ use bevy::{
         reflect::{AppTypeRegistry, ReflectComponent},
     },
     feathers::containers::{pane, pane_body, pane_header},
-    feathers::controls::FeathersDisclosureToggle,
+    feathers::controls::{ButtonVariant, FeathersDisclosureToggle, FeathersToolButton},
     prelude::*,
     reflect::serde::TypedReflectSerializer,
     ui::Checked,
@@ -21,7 +21,7 @@ use bevy::{
 };
 use jackdaw_feathers::{
     button::ButtonOperatorCall,
-    icons::{EditorFont, Icon, IconFont},
+    icons::{EditorFont, Icon, IconFont, icon_scene},
     tokens,
 };
 use jackdaw_localization::LocalizedText;
@@ -39,9 +39,10 @@ use jackdaw_runtime::EditorCategory;
 use super::{
     ComponentDisplay, ComponentDisplayBody, ComponentDisplayTypePath, ComponentName,
     ComponentPicker, Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch,
-    InspectorTarget, ReflectDisplayable, brush_display, category_strip::ActiveInspectorCategory,
-    component_tooltip::ReflectedTypeTooltip, custom_props_display, extract_module_group,
-    material_display, modifier_display, reflect_fields,
+    InspectorTarget, ReflectDisplayable, bindings_card, brush_display,
+    category_strip::ActiveInspectorCategory, component_tooltip::ReflectedTypeTooltip,
+    custom_props_display, extract_module_group, material_display, modifier_display, node_card,
+    reflect_fields,
 };
 use crate::inspector::prefab_field_dots::{PrefabInstanceCtx, inspector_type_paths_for};
 use crate::prefab::PrefabAstCache;
@@ -127,16 +128,18 @@ pub(crate) fn add_component_displays(
 /// Scene-document components that live under `jackdaw_scene_types` and
 /// carry the inspector's dedicated tool surfaces: `Brush` mounts the
 /// mesh card (`brush_display`, and with it the whole Mesh tab), `Terrain`
-/// mounts the scatter / quantization / channel / generation sections.
+/// mounts the scatter / quantization / channel / generation sections;
+/// `CanvasGuides` is where a canvas guide's exact position is typed.
 ///
 /// [`hidden_by_namespace`] exists to keep jackdaw's own bookkeeping
 /// components out of the generic list. These two are not bookkeeping --
 /// they are the scene data the user selected the entity to edit -- so
 /// culling them takes their entire tool surface with them and leaves a
 /// cube or a terrain showing nothing but `Transform`.
-const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 2] = [
+const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 3] = [
     "jackdaw_scene_types::types::Brush",
     "jackdaw_scene_types::types::Terrain",
+    "jackdaw_scene_types::CanvasGuides",
 ];
 
 /// Whether a `jackdaw*` type is editor bookkeeping rather than something
@@ -153,7 +156,28 @@ fn hidden_by_namespace(full_path: &str) -> bool {
         && !full_path.starts_with("jackdaw_avian_integration")
         && !full_path.starts_with("jackdaw_animation")
         && !full_path.starts_with("jackdaw_multiplayer")
+        && !full_path.starts_with("jackdaw_bind::")
         && !SCENE_TYPES_WITH_INSPECTOR_CARDS.contains(&full_path)
+        && !authored_widget_components().contains(&full_path)
+}
+
+/// The reflected components a widget's author edits, exempted from the
+/// `jackdaw_widgets_runtime` cull that hides the crate's chrome bookkeeping.
+fn authored_widget_components() -> [&'static str; 10] {
+    use bevy::reflect::TypePath;
+    use jackdaw_widgets_runtime as widgets;
+    [
+        widgets::TextValue::type_path(),
+        widgets::ToggleSwitch::type_path(),
+        widgets::Separator::type_path(),
+        widgets::Spacer::type_path(),
+        widgets::Progress::type_path(),
+        widgets::ProgressFill::type_path(),
+        widgets::Dropdown::type_path(),
+        widgets::RadioOptions::type_path(),
+        widgets::TabStrip::type_path(),
+        widgets::NineSlice::type_path(),
+    ]
 }
 
 #[expect(
@@ -299,15 +323,9 @@ pub(crate) fn build_inspector_displays(
                 return Some((short, module_group, component_id, full_path.to_string()));
             }
 
-            // Fallback: use Components name
+            // Unreflected components fall back to the `Components` name.
             let name = components.get_name(component_id)?;
-            if name.starts_with("jackdaw")
-                && !name.starts_with("jackdaw_jsn")
-                && !name.starts_with("jackdaw_geometry")
-                && !name.starts_with("jackdaw::reference_image")
-                && !name.starts_with("jackdaw_avian_integration")
-                && !name.starts_with("jackdaw_animation")
-            {
+            if hidden_by_namespace(&name) {
                 return None;
             }
             let full = name.to_string();
@@ -459,9 +477,7 @@ pub(crate) fn build_inspector_displays(
                 collapse_state,
             },
         );
-        commands
-            .entity(display_entity)
-            .insert(ChildOf(inspector_entity));
+        jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, display_entity);
 
         // Try Displayable first, then reflection, then fallback
         let type_id = components
@@ -540,6 +556,25 @@ pub(crate) fn build_inspector_displays(
                 continue;
             }
 
+            // Priority 3d: Node, the structured layout card. Filled
+            // world-exclusive after the flush, like the material cards.
+            if type_id == TypeId::of::<Node>() {
+                let body = body_entity;
+                commands.queue(move |world: &mut World| {
+                    node_card::fill_node_card_body(world, source_entity, body);
+                });
+                continue;
+            }
+
+            // Priority 3e: Bindings, the declarative connections card.
+            if type_id == TypeId::of::<jackdaw_bind::Bindings>() {
+                let body = body_entity;
+                commands.queue(move |world: &mut World| {
+                    bindings_card::fill_bindings_card_body(world, source_entity, body);
+                });
+                continue;
+            }
+
             // Priority 3: Generic reflection display
             let full_path = registration.type_info().type_path_table().path();
             reflect_fields::spawn_reflected_fields(
@@ -598,9 +633,7 @@ pub(crate) fn build_inspector_displays(
                     collapse_state,
                 },
             );
-            commands
-                .entity(display_entity)
-                .insert(ChildOf(inspector_entity));
+            jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, display_entity);
             super::project_component_display::spawn_project_component_fields(
                 commands,
                 body_entity,
@@ -794,8 +827,8 @@ pub(crate) fn on_inspector_dirty(
     }
 }
 
-/// The disclosure link and its handler live with the shared card widget, used by
-/// both component cards and material cards.
+/// The disclosure link and its handler live with the shared card widget;
+/// component cards and material cards both use it.
 pub(crate) use jackdaw_feathers::panel_card::DisclosureSection;
 
 /// Inputs to [`spawn_component_display`]. Bundled into a single
@@ -913,6 +946,10 @@ pub(crate) fn spawn_component_display(
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(tokens::SPACING_SM),
                 flex_grow: 1.0,
+                // A generic type path is one unbreakable word wider than the
+                // sidebar; the full path is on the hover tooltip.
+                min_width: Val::Px(0.0),
+                overflow: Overflow::clip_x(),
                 ..Default::default()
             },
             Hovered::default(),
@@ -960,7 +997,18 @@ pub(crate) fn spawn_component_display(
             weight: FontWeight::MEDIUM,
             ..Default::default()
         },
+        // Cut, never wrapped: a second line would move the card's controls
+        // down the panel.
+        TextLayout {
+            linebreak: bevy::text::LineBreak::NoWrap,
+            ..Default::default()
+        },
         TextColor(name_color),
+        Node {
+            min_width: Val::Px(0.0),
+            flex_shrink: 1.0,
+            ..Default::default()
+        },
         ChildOf(toggle_area),
     ));
 
@@ -1055,25 +1103,14 @@ pub(crate) fn spawn_component_display(
             let remove_call = ButtonOperatorCall::new(super::ops::ComponentRemoveOp::ID)
                 .with_param("entity", entity_param)
                 .with_param("type_path", remove_path.clone());
-            commands.spawn((
-                Text::new(String::from(Icon::X.unicode())),
-                TextFont {
-                    font: font.clone().into(),
-                    font_size: tokens::TEXT_SIZE_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-                Hovered::default(),
-                remove_call,
-                ChildOf(header),
-                bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
-                    commands
-                        .operator(super::ops::ComponentRemoveOp::ID)
-                        .param("entity", entity_param)
-                        .param("type_path", type_path_owned.clone())
-                        .call();
-                }),
-            ));
+            commands
+                .spawn_scene(bsn! {
+                    @FeathersToolButton {
+                        @caption: bsn! { icon_scene(Icon::X.unicode(), tokens::TEXT_SIZE_SM_PX) },
+                        @variant: {ButtonVariant::Plain}
+                    }
+                })
+                .insert((Hovered::default(), remove_call, ChildOf(header)));
         }
     }
 
@@ -1203,8 +1240,61 @@ pub(crate) fn filter_inspector_components(
 
 #[cfg(test)]
 mod tests {
-    use super::hidden_by_namespace;
+    use super::{ComponentDisplaySpec, hidden_by_namespace, spawn_component_display};
+    use bevy::feathers::controls::FeathersToolButton;
     use bevy::prelude::*;
+    use jackdaw_api_internal::operator::Operator;
+    use jackdaw_feathers::button::ButtonOperatorCall;
+
+    /// The card's remove control is a tool button carrying the remove operator.
+    #[test]
+    fn the_remove_control_is_a_feathers_tool_button() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+        ))
+        .init_asset::<Image>()
+        .init_asset::<Font>();
+
+        let component = app.world_mut().register_component::<Transform>();
+        let spawn = app
+            .world_mut()
+            .register_system(move |mut commands: Commands| {
+                let entity = commands.spawn_empty().id();
+                let font: Handle<Font> = Handle::default();
+                let collapse_state = crate::inspector::InspectorCollapseState::default();
+                spawn_component_display(
+                    &mut commands,
+                    ComponentDisplaySpec {
+                        name: "Transform",
+                        type_path: "bevy_transform::components::transform::Transform",
+                        entity,
+                        component: Some(component),
+                        is_overridden: false,
+                        is_derived: false,
+                        prefab_ctx: None,
+                        revert_through_prefab: false,
+                        icon_font: &font,
+                        editor_font: &font,
+                        collapse_state: &collapse_state,
+                    },
+                );
+            });
+        app.world_mut().run_system(spawn).expect("system runs");
+        app.world_mut().flush();
+
+        let mut removes = app
+            .world_mut()
+            .query_filtered::<&ButtonOperatorCall, With<FeathersToolButton>>();
+        assert!(
+            removes
+                .iter(app.world())
+                .any(|call| call.id == crate::inspector::ops::ComponentRemoveOp::ID),
+            "the remove control is a feathers tool button carrying the remove operator",
+        );
+    }
 
     /// The card's layout is patched onto the feathers pane rather than replacing its
     /// `Node`, which would drop the padding, row gap and rounded corners `pane_body`
@@ -1256,6 +1346,10 @@ mod tests {
         // takes a whole tool panel out of the editor.
         assert!(!hidden_by_namespace("jackdaw_scene_types::types::Brush"));
         assert!(!hidden_by_namespace("jackdaw_scene_types::types::Terrain"));
+        assert!(
+            !hidden_by_namespace(std::any::type_name::<jackdaw_scene_types::CanvasGuides>()),
+            "the UI root's guides show as a card, so their positions are typeable",
+        );
     }
 
     #[test]
@@ -1274,5 +1368,31 @@ mod tests {
         assert!(!hidden_by_namespace(
             "bevy_transform::components::transform::Transform"
         ));
+    }
+
+    /// Bindings are authored data, not editor bookkeeping.
+    #[test]
+    fn binding_types_survive_the_namespace_cull() {
+        assert!(!hidden_by_namespace("jackdaw_bind::types::Bindings"));
+        assert!(!hidden_by_namespace("jackdaw_bind::types::BindContext"));
+        // The exemption is that crate, not every crate sharing its prefix.
+        assert!(hidden_by_namespace("jackdaw_bindings::Foo"));
+    }
+
+    /// `AuthoredWidget` is not `Reflect`, so it reaches the inspector through
+    /// the `Components`-name fallback and is culled by its namespace.
+    #[test]
+    fn the_runtime_widget_marker_stays_out_of_the_generic_list() {
+        assert!(hidden_by_namespace(std::any::type_name::<
+            jackdaw_widgets_runtime::AuthoredWidget,
+        >()));
+    }
+
+    /// What a widget's author edits is not bookkeeping, so it survives the cull.
+    #[test]
+    fn the_authored_widget_components_survive_the_namespace_cull() {
+        for path in super::authored_widget_components() {
+            assert!(!hidden_by_namespace(path), "{path} is hidden");
+        }
     }
 }

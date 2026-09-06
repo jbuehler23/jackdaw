@@ -79,7 +79,7 @@ impl Plugin for ModalTransformPlugin {
     fn build(&self, app: &mut App) {
         // ModalTransformState is kept so other systems can check `modal.active.is_some()`.
         // Modal activate/constrain/update/confirm/cancel/draw systems are disabled
-        // (G/R/S no longer trigger modal transforms, TrenchBroom-style keybinds instead.)
+        // (G/R/S bind to TrenchBroom-style keybinds rather than modal transforms.)
         // The code is preserved in this file for a future alternate keymap option.
         app.init_resource::<ModalTransformState>()
             .init_resource::<ViewportDragState>()

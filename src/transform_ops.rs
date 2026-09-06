@@ -10,16 +10,17 @@
 //! Alt+G/R/S for reset, Alt+Arrow and Alt+PageUp/Down for `rotate_90`,
 //! plain Arrow and PageUp/Down for nudge.
 
-use bevy::{input_focus::InputFocus, prelude::*};
+use bevy::prelude::*;
 use bevy_enhanced_input::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::core_extension::CoreExtensionInputContext;
 use crate::entity_ops::{
-    TransformReset, camera_snapped_rotation_axes, nudge_selected, reset_transform_selected,
-    rotate_selected,
+    TransformReset, camera_snapped_rotation_axes, can_act_on_entities, nudge_selected,
+    reset_transform_selected, rotate_selected,
 };
+use jackdaw_api_internal::lifecycle::ActiveModalQuery;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TransformResetPositionOp>()
@@ -112,48 +113,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
             bindings![KeyCode::PageDown],
         ));
     });
-}
-
-/// Shared availability check for transform operators. Matches the
-/// guards the legacy `handle_entity_keys` applied.
-///
-/// Returns `false` when the timeline dock window is active so the
-/// arrow-key playhead-scrub and Ctrl+C/V keyframe copy/paste operators
-/// can claim those keys without fighting entity nudge / component
-/// copy/paste.
-fn can_act_on_entities(
-    input_focus: Res<InputFocus>,
-    active: ActiveModalQuery,
-    modal: Res<crate::modal_transform::ModalTransformState>,
-    draw_state: Res<crate::draw_brush::DrawBrushState>,
-    edit_mode: Res<crate::brush::EditMode>,
-    tree: Res<jackdaw_panels::tree::DockTree>,
-) -> bool {
-    if input_focus.get().is_some() || active.is_modal_running() || modal.active.is_some() {
-        return false;
-    }
-    if draw_state.active.is_some() {
-        return false;
-    }
-    if active_tab_kind_present(&tree, "jackdaw.timeline") {
-        return false;
-    }
-    matches!(*edit_mode, crate::brush::EditMode::Object)
-}
-
-/// True if any leaf in the dock tree has its active tab pointing at a
-/// window of the given kind. The active tab is keyed by `TabId`, so
-/// "is the timeline currently focused somewhere?" requires looking
-/// up the active id back to its window kind.
-pub(crate) fn active_tab_kind_present(
-    tree: &jackdaw_panels::tree::DockTree,
-    window_id: &str,
-) -> bool {
-    tree.leaves().any(|(_, leaf)| {
-        leaf.active
-            .and_then(|tab| leaf.windows.iter().find(|t| t.id == tab))
-            .is_some_and(|t| t.window_id == window_id)
-    })
 }
 
 // -- Reset ops ---------------------------------------------------
@@ -300,17 +259,68 @@ fn transform_rotate_90_roll_cw(
 
 // -- Nudge ops ---------------------------------------------------
 
+/// Nudge the selection: a 3D selection moves through `Transform`, a UI
+/// selection through `Node` in authored pixels. The canvas answers first and
+/// reports whether the selection was its to move; routing is by the selection,
+/// not by panel focus.
 fn nudge_by_axis(world: &mut World, offset_direction: Vec3) {
+    if let Some(direction) = ui_nudge_direction(offset_direction)
+        && crate::ui_stage::nudge_ui_selection(world, direction)
+    {
+        return;
+    }
     let grid_size = world
         .resource::<crate::snapping::SnapSettings>()
         .grid_size();
     nudge_selected(world, offset_direction * grid_size);
 }
 
+/// The canvas direction a world-space nudge axis means, or `None` for
+/// the one that means nothing there.
+///
+/// The arrows map onto the two axes a canvas has: world x is left and right,
+/// and the ground plane's z is up and down the screen. `PageUp`/`PageDown`
+/// nudge along world y, which a flat canvas has no axis for.
+fn ui_nudge_direction(offset_direction: Vec3) -> Option<Vec2> {
+    if offset_direction.x != 0.0 {
+        Some(Vec2::new(offset_direction.x.signum(), 0.0))
+    } else if offset_direction.z != 0.0 {
+        Some(Vec2::new(0.0, offset_direction.z.signum()))
+    } else {
+        None
+    }
+}
+
+/// `is_available` for the nudge ops: everything [`can_act_on_entities`] asks,
+/// under a bare key and no other. `bevy_enhanced_input` only matches the
+/// modifiers a binding names, so a bare arrow would otherwise answer
+/// Ctrl+Arrow (outliner reorder) and Alt+Arrow (90-degree rotate) as well.
+pub(crate) fn can_nudge(
+    keybind_focus: crate::keybind_focus::KeybindFocus,
+    active: ActiveModalQuery,
+    modal: Res<crate::modal_transform::ModalTransformState>,
+    draw_state: Res<crate::draw_brush::DrawBrushState>,
+    edit_mode: Res<crate::brush::EditMode>,
+    panel_focus: crate::panel_focus::PanelFocus,
+    keyboard: Res<ButtonInput<KeyCode>>,
+) -> bool {
+    if crate::keybinds::unwanted_modifier(&keyboard, crate::draw_brush::BRUSH_CHORD) {
+        return false;
+    }
+    can_act_on_entities(
+        keybind_focus,
+        active,
+        modal,
+        draw_state,
+        edit_mode,
+        panel_focus,
+    )
+}
+
 #[operator(
     id = "transform.nudge_x_neg",
     label = "Nudge -X",
-    is_available = can_act_on_entities
+    is_available = can_nudge
 )]
 fn transform_nudge_x_neg(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| nudge_by_axis(world, Vec3::NEG_X));
@@ -320,7 +330,7 @@ fn transform_nudge_x_neg(_: In<OperatorParameters>, mut commands: Commands) -> O
 #[operator(
     id = "transform.nudge_x_pos",
     label = "Nudge +X",
-    is_available = can_act_on_entities
+    is_available = can_nudge
 )]
 fn transform_nudge_x_pos(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| nudge_by_axis(world, Vec3::X));
@@ -330,7 +340,7 @@ fn transform_nudge_x_pos(_: In<OperatorParameters>, mut commands: Commands) -> O
 #[operator(
     id = "transform.nudge_y_neg",
     label = "Nudge -Y",
-    is_available = can_act_on_entities
+    is_available = can_nudge
 )]
 fn transform_nudge_y_neg(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| nudge_by_axis(world, Vec3::NEG_Y));
@@ -340,7 +350,7 @@ fn transform_nudge_y_neg(_: In<OperatorParameters>, mut commands: Commands) -> O
 #[operator(
     id = "transform.nudge_y_pos",
     label = "Nudge +Y",
-    is_available = can_act_on_entities
+    is_available = can_nudge
 )]
 fn transform_nudge_y_pos(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| nudge_by_axis(world, Vec3::Y));
@@ -350,7 +360,7 @@ fn transform_nudge_y_pos(_: In<OperatorParameters>, mut commands: Commands) -> O
 #[operator(
     id = "transform.nudge_z_neg",
     label = "Nudge -Z",
-    is_available = can_act_on_entities
+    is_available = can_nudge
 )]
 fn transform_nudge_z_neg(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| nudge_by_axis(world, Vec3::NEG_Z));
@@ -360,7 +370,7 @@ fn transform_nudge_z_neg(_: In<OperatorParameters>, mut commands: Commands) -> O
 #[operator(
     id = "transform.nudge_z_pos",
     label = "Nudge +Z",
-    is_available = can_act_on_entities
+    is_available = can_nudge
 )]
 fn transform_nudge_z_pos(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| nudge_by_axis(world, Vec3::Z));

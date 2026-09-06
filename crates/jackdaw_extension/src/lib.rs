@@ -5,8 +5,7 @@
 pub use jackdaw_api::{
     ExtensionInputContext, ExtensionKind, ExtensionPoint, ExtensionRegistrar, JackdawExtension,
     MenuEntryDescriptor, PanelContext, TopLevelMenu, WidgetDefinition, WidgetInstantiateContext,
-    WidgetPreviewState, WidgetProperty, WidgetPropertyKind, WidgetRegistry, WidgetSlot,
-    WindowDescriptor, keymap, op, scene, ui,
+    WidgetRegistry, WindowDescriptor, keymap, op, scene, ui,
 };
 pub use jackdaw_api_macros::extension_operator as operator;
 
@@ -23,8 +22,8 @@ pub mod prelude {
         ExtensionInputContext, ExtensionKind, ExtensionPoint, ExtensionRegistrar, Icon,
         JackdawExtension, MenuEntryDescriptor, Operator, OperatorParameters, OperatorResult,
         OperatorSignature, OperatorSystemId, PanelContext, ParamSpec, RefreshOperatorButtons,
-        TopLevelMenu, WidgetDefinition, WidgetInstantiateContext, WidgetPreviewState,
-        WidgetProperty, WidgetPropertyKind, WidgetRegistry, WidgetSlot, WindowDescriptor, button,
+        TopLevelMenu, WidgetDefinition, WidgetInstantiateContext, WidgetRegistry, WindowDescriptor,
+        button,
     };
     pub use jackdaw_api::ui::ButtonPropsOpExt as _;
     pub use jackdaw_api_macros::extension_operator as operator;

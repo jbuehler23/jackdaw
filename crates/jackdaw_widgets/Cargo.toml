@@ -10,6 +10,7 @@ repository = "https://github.com/jbuehler23/jackdaw"
 bevy.workspace = true
 bevy_monitors.workspace = true
 bevy_enhanced_input.workspace = true
+jackdaw_commands.workspace = true
 lucide-icons.workspace = true
 
 [lints]

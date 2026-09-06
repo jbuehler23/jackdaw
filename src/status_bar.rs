@@ -19,6 +19,67 @@ pub struct GitInfo {
     pub display: String,
 }
 
+/// How long a [`StatusNotice`] stays in front of the user, in seconds.
+const NOTICE_SECONDS: f32 = 6.0;
+
+/// A short-lived message about something the editor refused to do, or did only
+/// in part. Takes over the status bar's right slot for a few seconds; the log
+/// carries the detail.
+#[derive(Resource, Default)]
+pub struct StatusNotice {
+    text: String,
+    error: bool,
+    remaining: f32,
+}
+
+impl StatusNotice {
+    fn set(&mut self, text: String, error: bool) {
+        self.text = text;
+        self.error = error;
+        self.remaining = NOTICE_SECONDS;
+    }
+
+    /// Whether a notice is currently showing.
+    pub fn is_active(&self) -> bool {
+        self.remaining > 0.0 && !self.text.is_empty()
+    }
+
+    /// What the status bar is currently showing, if anything.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+/// Put a refusal in front of the user: the editor did not do what was asked.
+pub fn notify_error(world: &mut World, text: impl Into<String>) {
+    notify(world, text.into(), true);
+}
+
+/// Put a partial result in front of the user: it did some of what was asked.
+pub fn notify_warn(world: &mut World, text: impl Into<String>) {
+    notify(world, text.into(), false);
+}
+
+fn notify(world: &mut World, text: String, error: bool) {
+    // The launcher has no status bar, and tests build worlds without one, so
+    // a missing resource is not an error.
+    if let Some(mut notice) = world.get_resource_mut::<StatusNotice>() {
+        notice.set(text, error);
+    }
+}
+
+/// Age the current notice out. Real time rather than virtual: a paused or
+/// slowed scene must not freeze a message about the editor on screen.
+fn tick_status_notice(time: Res<Time<Real>>, mut notice: ResMut<StatusNotice>) {
+    if notice.remaining <= 0.0 {
+        return;
+    }
+    notice.remaining = (notice.remaining - time.delta_secs()).max(0.0);
+    if notice.remaining == 0.0 {
+        notice.text.clear();
+    }
+}
+
 pub struct StatusBarPlugin;
 
 impl Plugin for StatusBarPlugin {
@@ -28,15 +89,19 @@ impl Plugin for StatusBarPlugin {
         app.insert_resource(GitInfo {
             display: git_display,
         });
+        app.init_resource::<StatusNotice>();
         app.add_systems(
             Update,
             (
                 update_status_left,
                 update_status_center,
+                tick_status_notice,
                 update_status_right,
+                align_status_right,
                 update_scene_stats,
                 update_build_bar,
             )
+                .chain()
                 .run_if(in_state(crate::AppState::Editor)),
         );
         // Click observer on `StatusBarRight` so a Ready / Failed
@@ -119,6 +184,29 @@ fn update_status_center(
 #[derive(Component)]
 pub struct SceneStatsText;
 
+/// The fixed-width clipped box holding [`StatusBarRight`].
+#[derive(Component)]
+pub struct StatusBarRightBox;
+
+/// Pin the right-hand slot's text to the edge worth keeping: a build line ends
+/// in the crate count, so it is pinned right; a notice opens by naming its
+/// subject, so it is pinned left and loses its end instead.
+fn align_status_right(
+    notice: Res<StatusNotice>,
+    mut boxes: Query<&mut Node, With<StatusBarRightBox>>,
+) {
+    let wanted = if notice.is_active() {
+        JustifyContent::FlexStart
+    } else {
+        JustifyContent::FlexEnd
+    };
+    for mut node in &mut boxes {
+        if node.justify_content != wanted {
+            node.justify_content = wanted;
+        }
+    }
+}
+
 fn update_status_right(
     mode: Res<ActiveTool>,
     space: Res<GizmoSpace>,
@@ -127,8 +215,20 @@ fn update_status_right(
     draw_state: Res<DrawBrushState>,
     build_status: Res<BuildStatus>,
     numeric: Res<NumericTransformState>,
+    notice: Res<StatusNotice>,
     mut text_query: Query<(&mut Text, &mut TextColor), With<StatusBarRight>>,
 ) {
+    if notice.is_active() {
+        if let Ok((mut text, mut color)) = text_query.single_mut() {
+            text.0 = notice.text.clone();
+            color.0 = if notice.error {
+                jackdaw_feathers::tokens::TEXT_ERROR
+            } else {
+                jackdaw_feathers::tokens::TEXT_WARNING
+            };
+        }
+        return;
+    }
     // The build-progress states (`Building` / `Ready` / `Failed`)
     // need to re-render every frame because the `progress` Arc is
     // mutated by the cargo reader thread (no `is_changed`
@@ -149,6 +249,8 @@ fn update_status_right(
         && !modal.is_changed()
         && !edit_mode.is_changed()
         && !draw_state.is_changed()
+        // An expired notice has to be painted over.
+        && !notice.is_changed()
         && !numeric.is_changed()
     {
         return;

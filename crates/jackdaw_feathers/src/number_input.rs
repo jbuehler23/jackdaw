@@ -3,8 +3,9 @@
 //! [`ScrubNumberInput`] adds an invisible scrubber overlay on top of a
 //! numeric text entry. Dragging the overlay emits [`ValueChange<T>`] with
 //! `is_final == false`, governed by [`SoftLimit`], [`HardLimit`],
-//! [`NumberInputPrecision`], and [`NumberInputStep`]. Releasing, Enter, or
-//! blur emits a final [`ValueChange<T>`] with `is_final == true`.
+//! [`NumberInputPrecision`], and [`NumberInputStep`]. Releasing emits a
+//! final [`ValueChange<T>`] with `is_final == true`, and so do Enter and
+//! blur, on a field whose text has been typed in.
 //!
 //! The public types are prefixed `Scrub*`, and the value/format enums are
 //! named to avoid colliding with the names `bevy::feathers` exports when
@@ -106,7 +107,7 @@ const BASE_DRAG_SPEED: f64 = 0.01f64;
 ///
 /// Domain behavior riding on top (limits, precision, tooltips, field bindings) is attached as
 /// separate components plus observers at the widget's entity boundary rather than folded into
-/// its scene.
+/// its scene, so a native equivalent can replace the widget without disturbing them.
 #[derive(SceneComponent, Default, Clone, Reflect)]
 #[scene(ScrubNumberInputProps)]
 #[reflect(Component, Default, Clone)]
@@ -528,12 +529,11 @@ impl NumberInputPrecision {
 /// The digits a field shows for `value`.
 ///
 /// A fractional value is shown to its field's own precision rather than to
-/// `f32`'s full decimal expansion: a value arriving from a scroll-wheel resize
-/// or a scaled drag carries float noise several places down (`1.889105`).
-/// Whole-number kinds pass a precision of 0 and show no decimal point.
+/// whatever `f32`'s full decimal expansion happens to be: a value arriving from a
+/// scaled drag is float noise several places down (`1.889105`). Whole-number
+/// kinds pass a precision of 0 and show no decimal point.
 ///
-/// Shared by the initial spawn and every later re-insert, so a field's digits
-/// do not depend on which of the two last wrote them.
+/// Shared by the initial spawn and every later re-insert.
 pub(crate) fn display_digits(
     value: &ScrubNumberInputValue,
     precision: Option<&NumberInputPrecision>,
@@ -629,6 +629,12 @@ fn number_input_on_insert_value(
         if editable_text.value().to_string() != new_digits {
             editable_text.queue_edit(TextEdit::SelectAll);
             editable_text.queue_edit(TextEdit::Insert(new_digits.into()));
+            // Insert leaves the caret after the last digit, and an unfocused
+            // field is scrolled to wherever its caret is, so a value too long for
+            // the field would show its tail and cut the LEADING digits. Parked at
+            // the start, the cut lands on the trailing decimals. `justify` cannot
+            // do this: parley start-aligns any line wider than its bounds.
+            editable_text.queue_edit(TextEdit::TextStart(false));
         }
 
         update_slider_pos(&clamped_value, soft_limit, &mut gradient);
@@ -725,6 +731,10 @@ fn number_input_init(
         if old_digits != new_digits {
             editable_text.queue_edit(TextEdit::SelectAll);
             editable_text.queue_edit(TextEdit::Insert(new_digits.into()));
+            // Parked at the first digit, as on every other write of the readout:
+            // otherwise a field spawned holding a value too long for it opens
+            // showing its tail with the leading digits cut.
+            editable_text.queue_edit(TextEdit::TextStart(false));
         }
 
         update_slider_pos(input_value, limit, &mut gradient);
@@ -778,7 +788,14 @@ fn number_input_hovered(
 fn number_input_on_enter_key(
     key_input: On<FocusedInput<KeyboardInput>>,
     q_parent: Query<&ChildOf>,
-    q_number_input: Query<(&ScrubNumberInputValue, Option<&HardLimit>), With<ScrubNumberInput>>,
+    q_number_input: Query<
+        (
+            &ScrubNumberInputValue,
+            Option<&HardLimit>,
+            Option<&NumberInputPrecision>,
+        ),
+        With<ScrubNumberInput>,
+    >,
     q_text_input: Query<&EditableText>,
     mut commands: Commands,
 ) {
@@ -787,10 +804,10 @@ fn number_input_on_enter_key(
     }
 
     if let Ok(&ChildOf(root)) = q_parent.get(key_input.event_target())
-        && let Ok((input_value, hard_limit)) = q_number_input.get(root)
+        && let Ok((input_value, hard_limit, precision)) = q_number_input.get(root)
         && let Ok(editable_text) = q_text_input.get(key_input.event_target())
+        && let Some(text_value) = typed_text(editable_text, input_value, precision)
     {
-        let text_value = editable_text.value().to_string();
         emit_value_change(
             text_value,
             input_value.format(),
@@ -800,6 +817,22 @@ fn number_input_on_enter_key(
             true,
         );
     }
+}
+
+/// The field's text when the user has changed it, and `None` when it still reads
+/// as the value the field was given.
+///
+/// The text is drawn to the field's own precision, so it stands for the value
+/// rather than being it. A field is focused by a click alone, so an Enter or a
+/// blur reaches one nobody typed in, and committing its text would author that
+/// rounding over a value the user never touched.
+fn typed_text(
+    editable_text: &EditableText,
+    value: &ScrubNumberInputValue,
+    precision: Option<&NumberInputPrecision>,
+) -> Option<String> {
+    let text = editable_text.value().to_string();
+    (text != display_digits(value, precision)).then_some(text)
 }
 
 fn number_input_on_focus_gained(focus_gained: On<FocusGained>, mut commands: Commands) {
@@ -813,25 +846,33 @@ fn number_input_on_focus_gained(focus_gained: On<FocusGained>, mut commands: Com
 fn number_input_on_focus_lost(
     focus_lost: On<FocusLost>,
     q_parent: Query<&ChildOf>,
-    q_number_input: Query<(&ScrubNumberInputValue, Option<&HardLimit>), With<ScrubNumberInput>>,
+    q_number_input: Query<
+        (
+            &ScrubNumberInputValue,
+            Option<&HardLimit>,
+            Option<&NumberInputPrecision>,
+        ),
+        With<ScrubNumberInput>,
+    >,
     mut q_text_input: Query<&mut EditableText>,
     mut commands: Commands,
 ) {
     let editable_text_id = focus_lost.event_target();
 
     if let Ok(&ChildOf(root)) = q_parent.get(editable_text_id)
-        && let Ok((input_value, hard_limit)) = q_number_input.get(root)
+        && let Ok((input_value, hard_limit, precision)) = q_number_input.get(root)
         && let Ok(editable_text) = q_text_input.get_mut(editable_text_id)
     {
-        let text_value = editable_text.value().to_string();
-        emit_value_change(
-            text_value,
-            input_value.format(),
-            root,
-            hard_limit,
-            &mut commands,
-            true,
-        );
+        if let Some(text_value) = typed_text(&editable_text, input_value, precision) {
+            emit_value_change(
+                text_value,
+                input_value.format(),
+                root,
+                hard_limit,
+                &mut commands,
+                true,
+            );
+        }
 
         // Restore cursor back to normal.
         commands
@@ -922,11 +963,10 @@ fn scrubber_on_release(
     }
 }
 
-/// Conversion factor from pixels dragged to value change, in priority order:
-/// a [`SoftLimit`] maps the full slider width to the full range, so dragging
-/// edge to edge covers the range exactly; otherwise [`NumberInputStep`] or
-/// integer formatting give a step-sized nudge per pixel; otherwise
-/// [`NumberInputPrecision`] or the value's own magnitude are used.
+/// Conversion factor from pixels dragged to value change, in priority order: a
+/// [`SoftLimit`] maps the full slider width to the full range; failing that,
+/// [`NumberInputStep`] or integer formatting give a step-sized nudge per pixel;
+/// failing that, [`NumberInputPrecision`] or the value's own magnitude.
 fn compute_drag_speed(
     soft_limit: Option<&SoftLimit>,
     step: Option<&NumberInputStep>,
@@ -953,7 +993,7 @@ fn compute_drag_speed(
         // Derive from precision
         10.0_f64.powf(-(prec.0 as f64))
     } else {
-        // Nothing to derive from, so scale by the nearest power of 10 to the
+        // No clues present. Fall back to the nearest power of 10 to the
         // current magnitude.
         let m = input_value.as_f64().abs();
         let decade = if m >= 1.0 { m.log10().floor() } else { 0.0 };
@@ -1346,15 +1386,12 @@ pub fn is_scrubbing_or_focused(world: &World, root: Entity, focus: Option<Entity
     walk(world, root, focus)
 }
 
-/// Returns `true` while `root`'s editable-text descendant holds keyboard
-/// focus, meaning the user is mid-type. Unlike [`is_scrubbing_or_focused`],
-/// this does not guard an in-progress drag: the caller's re-inserted value and
-/// the drag's relative math (`ScrubberDragState::base_value` + `value_offset`,
-/// on a private child entity untouched by inserting `ScrubNumberInputValue`)
-/// never read from each other, so a resync mid-drag clobbers nothing. Use this
-/// where the drag gesture itself is the source of the resync (`ValueChange` ->
-/// app state -> resync within one frame), so live drag feedback is not
-/// suppressed for the span of the drag.
+/// Returns `true` while `root`'s editable-text descendant holds keyboard focus.
+///
+/// Unlike [`is_scrubbing_or_focused`], this does not also guard an in-progress
+/// drag: the caller's re-inserted value and the drag's own relative math never
+/// read from each other, so there is nothing to clobber. For callers where the
+/// drag gesture itself is the source of the resync.
 pub fn is_focused_for_editing(world: &World, root: Entity, focus: Option<Entity>) -> bool {
     fn walk(world: &World, entity: Entity, focus: Option<Entity>) -> bool {
         if focus == Some(entity) && world.get::<EditableText>(entity).is_some() {
@@ -1372,9 +1409,9 @@ pub fn is_focused_for_editing(world: &World, root: Entity, focus: Option<Entity>
 mod display_tests {
     use super::*;
 
-    /// A brush radius arriving from a scroll-wheel resize is a scaled `f32`,
-    /// and printing it raw puts `1.889105` in a field asking for two
-    /// places.
+    /// A brush radius arriving from a scroll-wheel resize is a scaled
+    /// `f32`, and printing it raw puts `1.889105` in a field whose kind
+    /// asks for two places.
     #[test]
     fn a_fractional_value_shows_its_fields_precision_not_float_noise() {
         let noisy = ScrubNumberInputValue::F32(1.889105);
@@ -1385,8 +1422,8 @@ mod display_tests {
         assert_eq!(display_digits(&noisy, Some(&NumberInputPrecision(0))), "2");
     }
 
-    /// A count field shows no decimal point, so Seed and Octaves do not read
-    /// as `42.00`.
+    /// A count field shows no decimal point at all, so Seed/Octaves stop
+    /// reading as `42.00`.
     #[test]
     fn a_count_precision_shows_whole_numbers() {
         assert_eq!(
@@ -1406,8 +1443,8 @@ mod display_tests {
         );
     }
 
-    /// Without a precision there is nothing to round to, and the value keeps
-    /// its own spelling.
+    /// Precision is what a field asks for; without one there is nothing to
+    /// round to and the value keeps its own spelling.
     #[test]
     fn a_field_with_no_precision_keeps_the_values_own_digits() {
         assert_eq!(
@@ -1416,8 +1453,8 @@ mod display_tests {
         );
     }
 
-    /// A value landing on a whole number mid-drag keeps its padding, so the
-    /// digits do not jump between `4` and `4.25`.
+    /// Padding is part of it: a value that lands exactly on a whole number
+    /// mid-drag must not make the digits jump between `4` and `4.25`.
     #[test]
     fn a_whole_value_still_shows_its_fields_places() {
         assert_eq!(
@@ -1434,16 +1471,17 @@ mod display_tests {
 mod drag_speed_tests {
     use super::*;
 
-    /// A wider box, checking that sensitivity scales with width rather than
-    /// being pinned to one field size.
+    /// A generic wider box, to cross-check sensitivity scales with width
+    /// rather than being pinned to one field size.
     const ROW_WIDTH: f64 = 88.0;
     /// The options-bar chip's own scrub box (`SCRUB_CHIP_INPUT_WIDTH` in
-    /// `src/terrain/ui_fields.rs`).
+    /// `src/terrain/ui_fields.rs`); panel rows use `FeathersSlider`.
     const CHIP_WIDTH: f64 = 64.0;
 
     /// A bounded 0-1 field (Persistence, Inertia, Deposition, Evaporation)
-    /// maps the field's own width to the full range, so dragging across a
-    /// panel row moves 0 -> 1 exactly.
+    /// must map the field's own width to the full range: dragging clear
+    /// across a panel row moves 0 -> 1 exactly, not some coarse fraction
+    /// of it and not nothing.
     #[test]
     fn zero_to_one_range_spans_its_own_field_width() {
         let limit = SoftLimit::f32(0.0..1.0);
@@ -1462,8 +1500,8 @@ mod drag_speed_tests {
         );
     }
 
-    /// Same range, narrower chip: sensitivity scales with the box being
-    /// dragged across, not a fixed pixel count.
+    /// Same range, narrower chip: sensitivity scales with the box the
+    /// user is actually dragging across, not a fixed pixel count.
     #[test]
     fn zero_to_one_range_scales_with_chip_width() {
         let limit = SoftLimit::f32(0.0..1.0);
@@ -1477,7 +1515,7 @@ mod drag_speed_tests {
         assert_eq!(speed * CHIP_WIDTH, 1.0);
     }
 
-    /// A wide range (Amplitude, 0..200) resolves edge-to-edge, so a
+    /// A wide range (Amplitude, 0..200) still resolves edge-to-edge, so a
     /// full-width drag is never a no-op even though each pixel moves the
     /// value further.
     #[test]
@@ -1498,9 +1536,9 @@ mod drag_speed_tests {
         );
     }
 
-    /// A whole-frame relative-scrub simulation: starting at 0.45 and dragging
-    /// the full row width right-to-left (negative delta) lands on the bottom
-    /// of the soft range.
+    /// A whole-frame relative-scrub simulation: starting at 0.45 and
+    /// dragging the full row width right-to-left (negative delta) must
+    /// land exactly on the bottom of the soft range, not stay put.
     #[test]
     fn full_width_drag_right_to_left_reaches_the_bottom_of_the_range() {
         let limit = SoftLimit::f32(0.0..1.0);

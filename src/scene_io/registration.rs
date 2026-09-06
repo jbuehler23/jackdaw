@@ -8,6 +8,13 @@ use super::{doc_skip_type_ids, should_skip_component};
 /// minting a fresh one otherwise) so the node keeps a cross-process
 /// identity. Skips entities already in the document.
 pub fn register_entity_in_ast(world: &mut World, entity: Entity) {
+    // A dead entity has no components to read and no node worth linking.
+    // Guarded here rather than at each read below, one of which is a bare
+    // `world.entity(entity)` that turns a stale id into a panic a long way
+    // from wherever the id went stale.
+    if world.get_entity(entity).is_err() {
+        return;
+    }
     let Some(doc) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
         return;
     };

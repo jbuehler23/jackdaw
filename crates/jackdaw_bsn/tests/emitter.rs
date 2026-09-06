@@ -568,3 +568,44 @@ fn single_grouping_root_with_only_children_survives_roundtrip() {
         "the surviving patch is Children"
     );
 }
+
+/// A generic enum's variant reaches the file under a path the grammar can lex.
+/// `Option<String>::Some`, the form reflection hands out, carries angle
+/// brackets the lexer rejects, which makes the whole document unreadable
+/// rather than only that field.
+#[test]
+fn a_generic_enums_variant_emits_without_its_type_arguments() {
+    use bevy::ecs::component::Component;
+    use bevy::reflect::{Reflect, TypeRegistry};
+    use jackdaw_bsn::component_to_bsn_patch;
+
+    #[derive(Component, Reflect)]
+    struct Labelled {
+        via: Option<String>,
+    }
+
+    let mut registry = TypeRegistry::new();
+    registry.register::<Labelled>();
+    let patch = component_to_bsn_patch(
+        &Labelled {
+            via: Some("ratio".to_string()),
+        },
+        &registry,
+    );
+
+    let mut ast = SceneBsnAst::default();
+    let patch_entity = ast.world.spawn(patch).id();
+    let node = ast.world.spawn(BsnPatches(vec![patch_entity])).id();
+    ast.roots.push(node);
+    let text = emit_scene(&ast);
+
+    assert!(
+        text.contains("core::option::Option::Some(\"ratio\")"),
+        "the variant is named without its type arguments:\n{text}"
+    );
+    assert!(
+        !text.contains('<'),
+        "nothing the lexer rejects reaches the file:\n{text}"
+    );
+    parse_bsn_text(&text).expect("what the writer emits is what the reader takes");
+}

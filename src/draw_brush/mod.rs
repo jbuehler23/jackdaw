@@ -5,7 +5,8 @@ use crate::prelude::*;
 use crate::{selection::Selection, viewport::ViewportCursor};
 use bevy::{input_focus::InputFocus, prelude::*};
 use bevy_enhanced_input::prelude::Press;
-use jackdaw_api_internal::keymap::PresetInput;
+use jackdaw_api_internal::keymap::{KeymapCapture, PresetInput};
+use jackdaw_api_internal::lifecycle::OperatorChordSite;
 use jackdaw_scene_types::Brush;
 
 mod build;
@@ -47,15 +48,20 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         ActionOf::<CoreExtensionInputContext>::new(ext),
         bindings![(MouseButton::Right, Press::default())],
     ));
-    // StartDrawBrushAddAppendAction / StartDrawBrushCutAction: not operators; left unchanged.
+    // Not operators of their own: each is a chord that starts the
+    // draw-brush modal with particular parameters. Tagged as a chord site
+    // for it, so the keybind dialog and the tooltips say the modal has
+    // these chords too rather than only the two on its own action.
     ctx.spawn((
         Action::<StartDrawBrushAddAppendAction>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
+        OperatorChordSite(ActivateDrawBrushModalOp::ID),
         bindings![(KeyCode::KeyB.with_mod_keys(ModKeys::ALT), Press::default(),)],
     ));
     ctx.spawn((
         Action::<StartDrawBrushCutAction>::new(),
         ActionOf::<CoreExtensionInputContext>::new(ext),
+        OperatorChordSite(ActivateDrawBrushModalOp::ID),
         bindings![(KeyCode::KeyC, Press::default())],
     ));
 
@@ -97,11 +103,18 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 }
 
 /// Draw a new brush in the viewport.
+///
+/// A brush is a solid in the 3D world, so the canvas is not somewhere it
+/// can be drawn. Without the gate, B or C typed with no field focused
+/// starts a modal that every entity operator then refuses to run behind
+/// (`can_act_on_entities`), and the editor stops answering Ctrl+C,
+/// Ctrl+V and the reorder chords with no visible cause.
 #[operator(
     id = "viewport.draw_brush_modal",
     label = "Draw Brush",
     cancel = cancel_draw_brush_modal,
     modal = true,
+    is_available = crate::viewport_2d::three_d_world_is_current,
     params(
         mode(String, default = "Add", doc = "Draw mode: \"Add\" or \"Cut\"."),
         append(bool, default = false, doc = "When true and mode = Add, fold the new brush into the selected one."),
@@ -179,13 +192,13 @@ fn cancel_draw_brush_modal(mut draw_state: ResMut<DrawBrushState>) {
 /// True only while a draw is in progress and the input field isn't
 /// focused. Used as `is_available` for the in-modal keybinds.
 fn is_drawing(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushState>) -> bool {
-    !keybind_focus.is_typing() && draw_state.active.is_some()
+    !keybind_focus.keyboard_is_spoken_for() && draw_state.active.is_some()
 }
 
 /// True while a draw's polygon is being placed (multi-vertex Add/Cut
 /// before Enter commits the shape).
 fn is_drawing_polygon(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushState>) -> bool {
-    if keybind_focus.is_typing() {
+    if keybind_focus.keyboard_is_spoken_for() {
         return false;
     }
     draw_state
@@ -197,7 +210,7 @@ fn is_drawing_polygon(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushStat
 /// True while a Cut-mode draw is in progress. Cut doesn't go through
 /// the modal-finalize path on cancel, so it gets its own RMB binding.
 fn is_drawing_cut(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushState>) -> bool {
-    if keybind_focus.is_typing() {
+    if keybind_focus.keyboard_is_spoken_for() {
         return false;
     }
     draw_state
@@ -213,6 +226,7 @@ fn is_drawing_cut(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushState>) 
     description = "Flip between adding and cutting while drawing.",
     is_available = is_drawing,
     allows_undo = false,
+    remote_hidden = "continues the draw-brush gesture, which only the pointer starts",
 )]
 pub(crate) fn draw_brush_toggle_mode(
     _: In<OperatorParameters>,
@@ -233,6 +247,7 @@ pub(crate) fn draw_brush_toggle_mode(
     description = "Close the polygon and start extruding it.",
     is_available = is_drawing_polygon,
     allows_undo = false,
+    remote_hidden = "continues the draw-brush gesture, which only the pointer starts",
 )]
 pub(crate) fn draw_brush_commit_polygon(
     _: In<OperatorParameters>,
@@ -267,6 +282,7 @@ pub(crate) fn draw_brush_commit_polygon(
     description = "Take back the last polygon point you placed.",
     is_available = is_drawing_polygon,
     allows_undo = false,
+    remote_hidden = "continues the draw-brush gesture, which only the pointer starts",
 )]
 pub(crate) fn draw_brush_remove_last_vertex(
     _: In<OperatorParameters>,
@@ -288,6 +304,7 @@ pub(crate) fn draw_brush_remove_last_vertex(
     description = "Bail out of the current cut.",
     is_available = is_drawing_cut,
     allows_undo = false,
+    remote_hidden = "continues the draw-brush gesture, which only the pointer starts",
 )]
 pub(crate) fn draw_brush_cancel_cut(
     _: In<OperatorParameters>,
@@ -457,20 +474,49 @@ fn configure_draw_brush_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
 }
 
 /// Marker action: Alt+B starts a draw that appends the new brush to
-/// the selected one. Observed by [`dispatch_start_add_append`] which
+/// the selected one. Observed by `dispatch_start_add_append`, which
 /// fires `viewport.draw_brush_modal` with `append=true`.
 #[derive(Default, InputAction)]
 #[action_output(bool)]
-pub(crate) struct StartDrawBrushAddAppendAction;
+pub struct StartDrawBrushAddAppendAction;
 
 /// Marker action: C starts a Cut-mode draw. Observed by
-/// [`dispatch_start_cut`] which fires `viewport.draw_brush_modal` with
+/// `dispatch_start_cut`, which fires `viewport.draw_brush_modal` with
 /// `mode="Cut"`.
 #[derive(Default, InputAction)]
 #[action_output(bool)]
-pub(crate) struct StartDrawBrushCutAction;
+pub struct StartDrawBrushCutAction;
 
-fn dispatch_start_add_append(_: On<Start<StartDrawBrushAddAppendAction>>, mut commands: Commands) {
+/// The brush chords name no modifier of their own. Shift is theirs all
+/// the same: the drag reads it as the constrain key, so holding it is part
+/// of the gesture rather than a different chord.
+pub(crate) const BRUSH_CHORD: crate::keybinds::ChordModifiers = crate::keybinds::ChordModifiers {
+    ctrl: false,
+    alt: false,
+    shift: true,
+};
+
+/// The append variant, which names Alt.
+const BRUSH_CHORD_ALT: crate::keybinds::ChordModifiers = crate::keybinds::ChordModifiers {
+    alt: true,
+    ..BRUSH_CHORD
+};
+
+fn dispatch_start_add_append(
+    _: On<Start<StartDrawBrushAddAppendAction>>,
+    capture: Option<Res<KeymapCapture>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
+) {
+    // These two chords hang off marker actions rather than off the
+    // operator, so the dispatcher's own capture gate never sees them: the
+    // recorder would name the chord and start a brush with it.
+    if KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
+    if crate::keybinds::unwanted_modifier(&keyboard, BRUSH_CHORD_ALT) {
+        return;
+    }
     commands
         .operator(ActivateDrawBrushModalOp::ID)
         .param("mode", "Add")
@@ -485,8 +531,17 @@ fn dispatch_start_add_append(_: On<Start<StartDrawBrushAddAppendAction>>, mut co
 fn dispatch_start_cut(
     _: On<Start<StartDrawBrushCutAction>>,
     edit_mode: Res<crate::brush::EditMode>,
+    capture: Option<Res<KeymapCapture>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
 ) {
+    if KeymapCapture::is_recording(capture.as_deref()) {
+        return;
+    }
+    // Bare C, and only bare C: Ctrl+C is copy.
+    if crate::keybinds::unwanted_modifier(&keyboard, BRUSH_CHORD) {
+        return;
+    }
     // In a brush edit sub-mode, C opens the mesh quick-menu instead. Starting a
     // cut brush there would force Object mode and pull the user out of the edit
     // they are in; the cut gesture still works from object mode.

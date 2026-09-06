@@ -5,9 +5,9 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-#[cfg(feature = "render")]
+#[cfg(feature = "reflect")]
 use bevy::reflect::Reflect;
-#[cfg(feature = "render")]
+#[cfg(feature = "reflect")]
 use bevy::reflect::prelude::ReflectDefault;
 use bitflags::bitflags;
 use glam::{Vec2, Vec3};
@@ -17,8 +17,8 @@ use crate::newell::newell_normal;
 use crate::{BrushFaceData, BrushPlane};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "render", derive(Reflect))]
-#[cfg_attr(feature = "render", reflect(Default))]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
+#[cfg_attr(feature = "reflect", reflect(Default))]
 pub struct BrushTopology {
     pub vertices: Vec<MeshVert>,
     pub edges: Vec<MeshEdge>,
@@ -28,18 +28,18 @@ pub struct BrushTopology {
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "render", derive(Reflect))]
-#[cfg_attr(feature = "render", reflect(Default))]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
+#[cfg_attr(feature = "reflect", reflect(Default))]
 pub struct MeshVert {
     pub position: Vec3,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "render", derive(Reflect))]
-#[cfg_attr(feature = "render", reflect(Default))]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
+#[cfg_attr(feature = "reflect", reflect(Default))]
 pub struct MeshEdge {
     pub v: [u32; 2],
-    #[cfg_attr(feature = "render", reflect(ignore))]
+    #[cfg_attr(feature = "reflect", reflect(ignore))]
     pub flags: EdgeFlag,
 }
 
@@ -53,16 +53,16 @@ impl Default for MeshEdge {
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "render", derive(Reflect))]
-#[cfg_attr(feature = "render", reflect(Default))]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
+#[cfg_attr(feature = "reflect", reflect(Default))]
 pub struct MeshPoly {
     pub loop_start: u32,
     pub loop_total: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "render", derive(Reflect))]
-#[cfg_attr(feature = "render", reflect(Default))]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
+#[cfg_attr(feature = "reflect", reflect(Default))]
 pub struct MeshLoop {
     pub vert: u32,
     pub edge: u32,
@@ -91,8 +91,8 @@ impl<'de> Deserialize<'de> for EdgeFlag {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "render", derive(Reflect))]
-#[cfg_attr(feature = "render", reflect(Default))]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
+#[cfg_attr(feature = "reflect", reflect(Default))]
 pub struct AttributeStack {
     pub vert: HashMap<Cow<'static, str>, AttributeData>,
     pub edge: HashMap<Cow<'static, str>, AttributeData>,
@@ -102,7 +102,7 @@ pub struct AttributeStack {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "render", derive(Reflect))]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
 pub enum AttributeData {
     F32(Vec<f32>),
     Vec2(Vec<Vec2>),

@@ -9,7 +9,7 @@ use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
 use jackdaw_feathers::{
-    button::{ButtonClickEvent, ButtonOperatorCall},
+    button::ButtonOperatorCall,
     picker::{DismissPickerEvent, Picker},
 };
 use jackdaw_scene_types::PropertyValue;
@@ -25,7 +25,6 @@ pub const CORE_EXTENSION_ID: &str = "jackdaw.core";
 pub(super) fn plugin(app: &mut App) {
     app.add_input_context::<CoreExtensionInputContext>()
         .register_extension::<JackdawCoreExtension>()
-        .add_observer(dispatch_button_operator_call)
         .add_observer(dispatch_activate_operator)
         .add_observer(update_operator_button_availability)
         .add_observer(seed_operator_button_on_add)
@@ -37,10 +36,9 @@ pub(super) fn plugin(app: &mut App) {
 /// whatever tool currently owns the modal slot, then dispatches the
 /// referenced operator with the button's statically-declared parameters.
 ///
-/// Both dispatch entry points call this: [`dispatch_button_operator_call`]
-/// for the `ButtonClickEvent` from `feathers::button`, and
-/// [`dispatch_activate_operator`] for the `Activate` from a
-/// `FeathersButton`.
+/// [`dispatch_activate_operator`] is the one caller: every editor button
+/// is a `FeathersButton`, so `Activate` is the only click signal an
+/// operator button dispatches from.
 fn queue_operator_dispatch(commands: &mut Commands, call: &ButtonOperatorCall) {
     let id = call.id.clone().into_owned();
     let params: Vec<(String, PropertyValue)> = call
@@ -69,28 +67,10 @@ fn queue_operator_dispatch(commands: &mut Commands, call: &ButtonOperatorCall) {
     });
 }
 
-/// Dispatches when a `feathers::button` carrying a [`ButtonOperatorCall`]
-/// is clicked and fires `ButtonClickEvent`. This also covers menu and
-/// context-menu `op:`-prefixed entries, which attach `ButtonOperatorCall`
-/// via feathers. The feathers-level click handlers skip firing their own
-/// `MenuAction`/`ContextMenuAction` events when they see
-/// `ButtonOperatorCall`, so this observer is the sole dispatch path for
-/// those items and won't double-fire.
-fn dispatch_button_operator_call(
-    event: On<ButtonClickEvent>,
-    button_op: Query<&ButtonOperatorCall>,
-    mut commands: Commands,
-) {
-    if let Ok(call) = button_op.get(event.entity) {
-        queue_operator_dispatch(&mut commands, call);
-    }
-}
-
-/// Dispatches when a `bevy_feathers` button authored via
-/// `jackdaw_feathers::button::operator_button` emits `Activate` on click
-/// or keyboard activation. Entities without a `ButtonOperatorCall` are
-/// ignored, so other `Activate` sources such as a button with its own
-/// `on(Activate)` observer don't double-fire.
+/// Dispatches when a button carrying a [`ButtonOperatorCall`] emits `Activate`.
+/// Entities without one are ignored. Menu and context-menu `op:` entries come
+/// through here too: their feathers click handlers skip their own events when
+/// they see `ButtonOperatorCall`, so this is the sole dispatch path.
 fn dispatch_activate_operator(
     activate: On<Activate>,
     button_op: Query<&ButtonOperatorCall>,
@@ -114,8 +94,6 @@ fn dispatch_activate_operator(
 /// buttons seed off the same event via [`seed_operator_button_on_add`].
 /// Reading `is_available` needs `&mut World`, so the recompute is queued.
 ///
-/// Scoped to `FeathersButton` so the `feathers::button` path, which gates
-/// clicks via its own `ButtonVariant::Disabled`, is left untouched.
 /// `is_available` returning `Err` keeps the button enabled. That covers an
 /// unknown id or a modal op while a modal runs; dispatch cancels the
 /// active modal first, so modal-op buttons must stay clickable.
@@ -204,7 +182,11 @@ impl JackdawExtension for JackdawCoreExtension {
         ctx.register_operator::<CancelModalOp>();
         ctx.register_operator::<crate::asset_browser::ApplyTextureOp>();
         ctx.register_operator::<crate::WindowOpenOp>()
-            .register_operator::<crate::WindowResetLayoutOp>();
+            .register_operator::<crate::WindowResetLayoutOp>()
+            .register_operator::<crate::MenuOpenOp>()
+            .register_operator::<crate::MenuHoverOp>()
+            .register_operator::<crate::ProjectOpenRecentOp>()
+            .register_operator::<crate::PreviewSetOp>();
         ctx.register_operator::<crate::ClipDeleteKeyframesOp>()
             .register_operator::<crate::ClipTimelineStepLeftOp>()
             .register_operator::<crate::ClipTimelineStepRightOp>()
@@ -268,6 +250,9 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::numeric_transform::add_to_extension(ctx);
         crate::edit_mode_ops::add_to_extension(ctx);
         crate::entity_ops::add_to_extension(ctx);
+        crate::ui_align::add_to_extension(ctx);
+        crate::ui_grouping::add_to_extension(ctx);
+        crate::ui_layout_presets::add_to_extension(ctx);
         crate::transform_ops::add_to_extension(ctx);
         crate::physics_tool::add_to_extension(ctx);
         crate::hierarchy::add_to_extension(ctx);
@@ -324,8 +309,10 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::terrain::quantize_ops::add_to_extension(ctx);
         crate::terrain::shape_ops::add_to_extension(ctx);
         crate::terrain::scatter::add_to_extension(ctx);
+        crate::terrain::stamp_ops::add_to_extension(ctx);
         crate::terrain::panel::add_to_extension(ctx);
         crate::terrain::texture_ops::add_to_extension(ctx);
+        crate::terrain::tint_ops::add_to_extension(ctx);
         crate::terrain::autoterrain_ops::add_to_extension(ctx);
         crate::asset_browser::add_to_extension(ctx);
         crate::material_browser::add_to_extension(ctx);
@@ -335,6 +322,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::command_palette::add_to_extension(ctx);
         crate::document_ops::add_to_extension(ctx);
         crate::dock_ops::add_to_extension(ctx);
+        crate::remote_ops::add_to_extension(ctx);
     }
 }
 

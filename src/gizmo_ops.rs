@@ -19,8 +19,15 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
 /// Space toggle is allowed in any edit mode. Modal drags block it via
 /// `is_modal_running`; the toggle is a no-op when no gizmo is visible.
-fn can_toggle_space(keybind_focus: KeybindFocus, active: ActiveModalQuery) -> bool {
-    !keybind_focus.is_typing() && !active.is_modal_running()
+///
+/// World and local are the 3D gizmo's two frames, so the chord belongs to
+/// the world: over the canvas the letter is one a name is spelled with.
+fn can_toggle_space(
+    keybind_focus: KeybindFocus,
+    active: ActiveModalQuery,
+    viewport: crate::viewport_2d::FrontedViewport,
+) -> bool {
+    !keybind_focus.keyboard_is_spoken_for() && !active.is_modal_running() && viewport.is_three_d()
 }
 
 #[operator(

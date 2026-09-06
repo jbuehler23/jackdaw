@@ -1,5 +1,6 @@
 use std::{ffi::OsStr, process::Command};
 
+pub mod editor_endpoint;
 pub mod paths;
 
 pub const RUSTUP_TOOLCHAIN: &str = "nightly-2026-03-05";

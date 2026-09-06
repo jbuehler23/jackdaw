@@ -20,6 +20,7 @@
 
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{Binding, Bindings};
+use jackdaw_api_internal::keymap::{PresetInput, key_code_from_name};
 use jackdaw_api_internal::lifecycle::{OperatorAction, OperatorEntity};
 use jackdaw_commands::keybinds::key_display_name;
 use jackdaw_feathers::button::ButtonOperatorCall;
@@ -119,7 +120,7 @@ pub fn display_keybind(
 /// Stringify a single [`Binding`]. Returns `None` for variants the
 /// tooltip deliberately skips (mouse motion, mouse wheel, gamepad
 /// axes; nothing useful to surface as a single key glyph).
-fn format_binding(binding: Binding) -> Option<String> {
+pub(crate) fn format_binding(binding: Binding) -> Option<String> {
     match binding {
         Binding::Keyboard { key, mod_keys } => {
             let key_name = key_display_name(key);
@@ -151,10 +152,66 @@ fn format_binding(binding: Binding) -> Option<String> {
     }
 }
 
+/// The same chord text for a keymap row that has not been applied yet.
+///
+/// A row the settings dialog is holding has no [`Binding`] entity behind
+/// it, so it cannot go through [`format_binding`]; this renders the same
+/// string from the preset form, and the two must agree or a pending row
+/// and a live one would read differently side by side.
+pub(crate) fn format_preset_input(input: &PresetInput) -> String {
+    let (ctrl, shift, alt, super_, tail) = match input {
+        PresetInput::Key {
+            key,
+            ctrl,
+            shift,
+            alt,
+            super_,
+        } => {
+            let name = key_code_from_name(key)
+                .map_or_else(|| key.clone(), |code| key_display_name(code).to_string());
+            (*ctrl, *shift, *alt, *super_, name)
+        }
+        PresetInput::MouseButton {
+            button,
+            ctrl,
+            shift,
+            alt,
+            super_,
+        } => (*ctrl, *shift, *alt, *super_, format!("Mouse {button}")),
+        PresetInput::Scroll {
+            up,
+            ctrl,
+            shift,
+            alt,
+            super_,
+        } => (
+            *ctrl,
+            *shift,
+            *alt,
+            *super_,
+            format!("Scroll {}", if *up { "Up" } else { "Down" }),
+        ),
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for (held, name) in [
+        (ctrl, "Ctrl"),
+        (shift, "Shift"),
+        (alt, "Alt"),
+        (super_, "Super"),
+    ] {
+        if held {
+            parts.push(name);
+        }
+    }
+    parts.push(&tail);
+    parts.join(" + ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy_enhanced_input::prelude::ModKeys;
+    use jackdaw_api_internal::keymap::PresetPhase;
 
     #[test]
     fn keyboard_binding_no_modifier() {
@@ -208,5 +265,63 @@ mod tests {
         );
         assert!(format_binding(Binding::AnyKey).is_none());
         assert!(format_binding(Binding::None).is_none());
+    }
+
+    /// The pending form and the applied form of one chord must read the
+    /// same, or a row would change its wording the moment it is saved.
+    #[test]
+    fn a_pending_chord_reads_like_the_applied_one() {
+        for (input, binding) in [
+            (
+                PresetInput::key("KeyR"),
+                Binding::Keyboard {
+                    key: KeyCode::KeyR,
+                    mod_keys: ModKeys::empty(),
+                },
+            ),
+            (
+                PresetInput::key("KeyW").ctrl().shift(),
+                Binding::Keyboard {
+                    key: KeyCode::KeyW,
+                    mod_keys: ModKeys::CONTROL | ModKeys::SHIFT,
+                },
+            ),
+            (
+                PresetInput::mouse("Middle").alt(),
+                Binding::MouseButton {
+                    button: MouseButton::Middle,
+                    mod_keys: ModKeys::ALT,
+                },
+            ),
+        ] {
+            assert_eq!(
+                Some(format_preset_input(&input)),
+                format_binding(binding),
+                "pending and applied text must agree for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scroll_chord_has_pending_text_even_though_a_binding_has_none() {
+        assert_eq!(
+            format_preset_input(&PresetInput::scroll(false).ctrl()),
+            "Ctrl + Scroll Down"
+        );
+    }
+
+    #[test]
+    fn an_unparseable_key_name_still_renders_as_itself() {
+        let input = PresetInput::Key {
+            key: "NotAKey".into(),
+            ctrl: false,
+            shift: false,
+            alt: false,
+            super_: false,
+        };
+        assert_eq!(format_preset_input(&input), "NotAKey");
+        // The phase import is what the dialog's row model carries alongside
+        // the input; naming it here keeps this module's view of a row whole.
+        assert!(PresetPhase::Press.is_press());
     }
 }

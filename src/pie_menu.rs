@@ -6,6 +6,7 @@
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
+use jackdaw_feathers::button::{ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::icons::{EditorFont, Icon, IconFont};
 use jackdaw_feathers::tokens;
 
@@ -13,7 +14,6 @@ use crate::pie::{InstanceKey, PieSession, launch_instance, stop_instance};
 use crate::run_config::{CargoMeta, RunConfigs, read_run_configs, scaffold_manifest};
 
 const MENU_MIN_WIDTH: f32 = 220.0;
-const ROW_HEIGHT: f32 = 26.0;
 const CHECK_SLOT_WIDTH: f32 = 16.0;
 
 pub struct PieMenuPlugin;
@@ -128,7 +128,7 @@ fn spawn_menu(world: &mut World, right_x: f32, top_y: f32) -> Entity {
         spawn_scaffold_row(world, popover, editor_font, icon_font);
     } else {
         for row in rows {
-            spawn_instance_row(world, popover, row, editor_font.clone(), icon_font.clone());
+            spawn_instance_row(world, popover, row, editor_font.clone());
         }
     }
 
@@ -170,7 +170,6 @@ fn spawn_instance_row(
     popover: Entity,
     spec: RowSpec,
     editor_font: Option<Handle<Font>>,
-    icon_font: Option<Handle<Font>>,
 ) {
     let label_color = if spec.running {
         tokens::DOC_TAB_ACTIVE_LABEL
@@ -181,22 +180,16 @@ fn spawn_instance_row(
     let row = world
         .spawn((
             PieInstanceRow(spec.key),
-            Interaction::default(),
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(6.0),
-                padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
-                height: Val::Px(ROW_HEIGHT),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
-                ..Default::default()
-            },
-            BackgroundColor(Color::NONE),
+            button(
+                ButtonProps::new("")
+                    .with_variant(ButtonVariant::Ghost)
+                    .align_left(),
+            ),
             ChildOf(popover),
         ))
         .id();
 
-    spawn_check_slot(world, row, spec.running, icon_font);
+    spawn_check_slot(world, row, spec.running);
 
     let mut label_font = TextFont {
         font_size: tokens::TEXT_SIZE_SM,
@@ -214,14 +207,9 @@ fn spawn_instance_row(
     ));
 }
 
-/// Fixed-width slot showing a check glyph when running, or an empty
-/// spacer so labels stay aligned across rows.
-fn spawn_check_slot(
-    world: &mut World,
-    row: Entity,
-    running: bool,
-    icon_font: Option<Handle<Font>>,
-) {
+/// Fixed-width slot holding the row's checkbox, so labels stay aligned
+/// across rows whether or not the run is up.
+fn spawn_check_slot(world: &mut World, row: Entity, running: bool) {
     let slot = world
         .spawn((
             Node {
@@ -235,19 +223,7 @@ fn spawn_check_slot(
         ))
         .id();
 
-    if let (true, Some(handle)) = (running, icon_font) {
-        world.spawn((
-            Text::new(String::from(Icon::Check.unicode())),
-            TextFont {
-                font: handle.into(),
-                font_size: tokens::TEXT_SIZE,
-                ..Default::default()
-            },
-            TextColor(tokens::DOC_TAB_ACTIVE_LABEL),
-            Pickable::IGNORE,
-            ChildOf(slot),
-        ));
-    }
+    jackdaw_feathers::button::spawn_inert_checkbox(world, slot, running);
 }
 
 fn spawn_scaffold_row(
@@ -259,17 +235,11 @@ fn spawn_scaffold_row(
     let row = world
         .spawn((
             PieScaffoldRow,
-            Interaction::default(),
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(8.0),
-                padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
-                height: Val::Px(ROW_HEIGHT),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
-                ..Default::default()
-            },
-            BackgroundColor(Color::NONE),
+            button(
+                ButtonProps::new("")
+                    .with_variant(ButtonVariant::Ghost)
+                    .align_left(),
+            ),
             ChildOf(popover),
         ))
         .id();
@@ -396,11 +366,15 @@ fn close_menu_on_outside_click(
     popovers: Query<&ComputedNode, With<PieMenuPopover>>,
     popover_transforms: Query<&UiGlobalTransform, With<PieMenuPopover>>,
     windows: Query<&Window>,
+    focus: crate::keybind_focus::KeybindFocus,
     mut commands: Commands,
 ) {
     let Some(popover_entity) = state.popover_entity else {
         return;
     };
+    if focus.keyboard_is_spoken_for() {
+        return;
+    }
     if !mouse.just_pressed(MouseButton::Left) && !keyboard.just_pressed(KeyCode::Escape) {
         return;
     }
@@ -452,4 +426,66 @@ where
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::feathers::controls::FeathersCheckbox;
+    use bevy::ui::Checked;
+
+    fn check_slot_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+        ))
+        .init_asset::<Image>()
+        .init_asset::<Font>();
+        app
+    }
+
+    fn spawn_slot(app: &mut App, running: bool) {
+        let row = app.world_mut().spawn(Node::default()).id();
+        spawn_check_slot(app.world_mut(), row, running);
+    }
+
+    /// A run's row is marked with the native checkbox, checked while the run
+    /// is up and clear while it is not.
+    #[test]
+    fn a_running_instance_is_marked_with_a_checked_feathers_checkbox() {
+        let mut app = check_slot_app();
+        spawn_slot(&mut app, true);
+
+        let mut boxes = app
+            .world_mut()
+            .query_filtered::<Entity, With<FeathersCheckbox>>();
+        let checkbox = boxes
+            .iter(app.world())
+            .next()
+            .expect("the slot holds a feathers checkbox");
+        assert!(
+            app.world().get::<Checked>(checkbox).is_some(),
+            "a running instance reads as checked",
+        );
+    }
+
+    #[test]
+    fn a_stopped_instance_leaves_the_box_clear() {
+        let mut app = check_slot_app();
+        spawn_slot(&mut app, false);
+
+        let mut boxes = app
+            .world_mut()
+            .query_filtered::<Entity, With<FeathersCheckbox>>();
+        let checkbox = boxes
+            .iter(app.world())
+            .next()
+            .expect("the slot holds a feathers checkbox");
+        assert!(
+            app.world().get::<Checked>(checkbox).is_none(),
+            "a stopped instance reads as unchecked",
+        );
+    }
 }

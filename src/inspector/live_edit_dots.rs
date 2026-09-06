@@ -104,12 +104,15 @@ fn spawn_live_edit_dot(
     entry: &crate::live_edits::LiveEditEntry,
 ) {
     let wrapper = commands
-        .spawn(Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(2.0),
-            right: Val::Px(34.0),
-            ..default()
-        })
+        .spawn((
+            jackdaw_feathers::field_row::FieldRowDecoration,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(2.0),
+                right: Val::Px(34.0),
+                ..default()
+            },
+        ))
         .id();
 
     let baseline = crate::live_edits::truncate_json_for_display(entry.baseline.as_ref());
