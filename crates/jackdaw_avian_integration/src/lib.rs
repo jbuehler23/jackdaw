@@ -139,7 +139,7 @@ pub struct PhysicsOverlayConfig {
 impl Default for PhysicsOverlayConfig {
     fn default() -> Self {
         Self {
-            show_colliders: true,
+            show_colliders: false,
             show_hierarchy_arrows: false,
         }
     }
