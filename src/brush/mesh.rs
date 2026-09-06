@@ -418,6 +418,7 @@ pub fn regenerate_brush_meshes(
         commands.entity(entity).insert(BrushMeshCache {
             vertices,
             face_polygons,
+            face_normals: evaluated_faces.iter().map(|f| f.plane.normal).collect(),
             chunk_entities,
             face_source,
             vert_source,

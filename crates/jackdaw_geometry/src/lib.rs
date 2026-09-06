@@ -33,6 +33,7 @@ pub use ray::ray_plane_intersection;
 pub mod triangulate;
 pub use triangulate::{
     triangulate_face_polygon, triangulate_polygon, triangulate_polygon_with_holes,
+    triangulate_polygons,
 };
 
 pub mod topology_convexity;

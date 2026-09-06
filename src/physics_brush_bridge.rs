@@ -10,7 +10,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use jackdaw_avian_integration::AvianCollider;
-use jackdaw_geometry::is_convex_topology;
+use jackdaw_geometry::{is_convex_topology, triangulate_polygons};
 
 use crate::brush::{Brush, BrushMeshCache};
 
@@ -111,22 +111,21 @@ pub(crate) fn sync_editor_collider_config(
     }
 }
 
-/// Build a triangulated `Mesh` from a `BrushMeshCache`, fan-triangulating each face polygon.
+/// Build a triangulated `Mesh` from a `BrushMeshCache`.
 fn brush_mesh_from_cache(cache: &BrushMeshCache) -> Option<Mesh> {
     if cache.vertices.is_empty() {
         return None;
     }
-    let positions: Vec<[f32; 3]> = cache.vertices.iter().map(|v| [v.x, v.y, v.z]).collect();
-    let mut indices: Vec<u32> = Vec::new();
-    for polygon in &cache.face_polygons {
-        if polygon.len() >= 3 {
-            for i in 1..polygon.len() - 1 {
-                indices.push(polygon[0] as u32);
-                indices.push(polygon[i] as u32);
-                indices.push(polygon[i + 1] as u32);
-            }
-        }
+    let tris = triangulate_polygons(
+        &cache.vertices,
+        &cache.face_polygons,
+        cache.face_normals.iter().copied(),
+    );
+    if tris.is_empty() {
+        return None;
     }
+    let positions: Vec<[f32; 3]> = cache.vertices.iter().map(|v| [v.x, v.y, v.z]).collect();
+    let indices: Vec<u32> = tris.iter().copied().flatten().collect();
     let mut m = Mesh::new(
         bevy::mesh::PrimitiveTopology::TriangleList,
         bevy::asset::RenderAssetUsages::default(),

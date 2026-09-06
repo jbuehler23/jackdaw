@@ -49,6 +49,8 @@ pub struct BrushMeshCache {
     pub vertices: Vec<Vec3>,
     /// Per-face: ordered vertex indices into `vertices`.
     pub face_polygons: Vec<Vec<usize>>,
+    /// Plane normal for each evaluated face, parallel to `face_polygons`.
+    pub face_normals: Vec<Vec3>,
     /// Child entities rendering this brush, one per material chunk.
     pub chunk_entities: Vec<Entity>,
     /// Evaluated face index -> authored face index. Empty when no mirror is active (identity).

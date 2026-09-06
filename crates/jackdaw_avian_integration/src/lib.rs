@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use avian3d::debug_render::{PhysicsGizmoExt, PhysicsGizmos};
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use jackdaw_geometry::{ModifierStack, is_convex_topology};
+use jackdaw_geometry::{ModifierStack, is_convex_topology, triangulate_polygons};
 use jackdaw_scene_types::{Brush, evaluate_brush_geometry};
 
 pub mod simulation;
@@ -98,7 +98,7 @@ pub fn brush_collider(
         return Collider::try_from_constructor(cfg.0.clone(), None);
     }
 
-    let (vertices, face_polygons, _) = evaluate_brush_geometry(brush, stack);
+    let (vertices, face_polygons, faces) = evaluate_brush_geometry(brush, stack);
     if vertices.is_empty() {
         return None;
     }
@@ -107,12 +107,11 @@ pub fn brush_collider(
         return Collider::convex_hull(vertices);
     }
 
-    let mut indices: Vec<[u32; 3]> = Vec::new();
-    for polygon in &face_polygons {
-        for i in 1..polygon.len().saturating_sub(1) {
-            indices.push([polygon[0] as u32, polygon[i] as u32, polygon[i + 1] as u32]);
-        }
-    }
+    let indices = triangulate_polygons(
+        &vertices,
+        &face_polygons,
+        faces.iter().map(|f| f.plane.normal),
+    );
     if indices.is_empty() {
         return None;
     }
