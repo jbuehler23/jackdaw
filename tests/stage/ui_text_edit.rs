@@ -230,6 +230,7 @@ fn undo_depth(app: &App) -> usize {
 #[test]
 fn a_double_click_on_text_opens_an_entry_over_it() {
     let mut app = util::editor_test_app();
+    util::fixed_frame_clock(&mut app);
     let panel = panel(&mut app);
     let (label, _plain) = scene(&mut app);
 
@@ -266,6 +267,7 @@ fn a_double_click_on_text_opens_an_entry_over_it() {
 #[test]
 fn a_double_click_on_a_node_with_no_text_opens_nothing() {
     let mut app = util::editor_test_app();
+    util::fixed_frame_clock(&mut app);
     let panel = panel(&mut app);
     let (_label, _plain) = scene(&mut app);
 
@@ -283,6 +285,7 @@ fn a_double_click_on_a_node_with_no_text_opens_nothing() {
 #[test]
 fn enter_commits_the_text_as_one_entry_that_undoes() {
     let mut app = util::editor_test_app();
+    util::fixed_frame_clock(&mut app);
     let panel = panel(&mut app);
     let (label, _plain) = scene(&mut app);
     open_entry(&mut app, panel, Vec2::new(400.0, 200.0));
@@ -313,6 +316,7 @@ fn enter_commits_the_text_as_one_entry_that_undoes() {
 #[test]
 fn escape_puts_the_entry_away_and_writes_nothing() {
     let mut app = util::editor_test_app();
+    util::fixed_frame_clock(&mut app);
     let panel = panel(&mut app);
     let (label, _plain) = scene(&mut app);
     open_entry(&mut app, panel, Vec2::new(400.0, 200.0));
@@ -335,6 +339,7 @@ fn escape_puts_the_entry_away_and_writes_nothing() {
 #[test]
 fn text_that_came_back_unchanged_records_nothing() {
     let mut app = util::editor_test_app();
+    util::fixed_frame_clock(&mut app);
     let panel = panel(&mut app);
     let (label, _plain) = scene(&mut app);
     open_entry(&mut app, panel, Vec2::new(400.0, 200.0));
@@ -353,6 +358,7 @@ fn text_that_came_back_unchanged_records_nothing() {
 #[test]
 fn the_entry_follows_the_canvas_it_is_drawn_on() {
     let mut app = util::editor_test_app();
+    util::fixed_frame_clock(&mut app);
     let panel = panel(&mut app);
     let (_label, _plain) = scene(&mut app);
     open_entry(&mut app, panel, Vec2::new(400.0, 200.0));
@@ -384,6 +390,7 @@ fn the_entry_follows_the_canvas_it_is_drawn_on() {
 #[test]
 fn a_commit_writes_one_node_and_leaves_the_selection_as_it_was() {
     let mut app = util::editor_test_app();
+    util::fixed_frame_clock(&mut app);
     let panel = panel(&mut app);
     let (label, _plain) = scene(&mut app);
     let root = app
