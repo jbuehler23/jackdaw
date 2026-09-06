@@ -327,6 +327,11 @@ impl Plugin for EditorCorePlugin {
              add `EnhancedInputPlugin` in main.rs before JackdawEditorPlugins."
         );
         app.init_state::<AppState>();
+        // Check plugin from `FeathersPlugin` group is not already loaded.
+        if !app.is_plugin_added::<bevy::input_focus::tab_navigation::TabNavigationPlugin>() {
+            app.add_plugins(FeathersPlugins);
+        }
+        app.add_plugins(EditorFeathersPlugin);
         // A game whose own UI is built on feathers adds the group itself,
         // and the editor loads that game's plugin into this app. Adding a
         // plugin twice is a panic, so the editor takes each of these only
