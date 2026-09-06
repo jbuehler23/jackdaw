@@ -384,6 +384,9 @@ mod tests {
             fields: Vec::new(),
             kind: jackdaw_schema::TypeKind::Marker,
             default: None,
+            variants: Vec::new(),
+            entity_fields: Vec::new(),
+            fills_gaps: false,
         }
     }
 
@@ -393,6 +396,8 @@ mod tests {
             &jackdaw_schema::ProjectSchema {
                 components: vec![schema],
                 resources: Vec::new(),
+                events: Vec::new(),
+                functions: Vec::new(),
             },
             &std::collections::HashSet::new(),
         );

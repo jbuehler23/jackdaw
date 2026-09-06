@@ -23,7 +23,7 @@ const SEGOE_MDL2_ASSETS_FILE: &str = "segmdl2.ttf";
 pub struct CaptionFont {
     pub handle: Handle<Font>,
     #[cfg(target_os = "windows")]
-    use_segoe_glyphs: bool,
+    pub(crate) use_segoe_glyphs: bool,
 }
 
 /// Identifies each caption button for hover/pressed styling.
