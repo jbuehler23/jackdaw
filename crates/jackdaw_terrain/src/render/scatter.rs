@@ -258,16 +258,22 @@ pub enum ScatterSystems {
     Cull,
 }
 
+fn init_asset_if_absent<A: Asset>(app: &mut App) {
+    if !app.world().contains_resource::<Assets<A>>() {
+        app.init_asset::<A>();
+    }
+}
+
 impl Plugin for ScatterRenderPlugin {
     fn build(&self, app: &mut App) {
-        // The asset types this reads, declared rather than assumed: these
-        // systems are also scheduled in a headless build with no glTF loader,
-        // where a missing collection would fail their validation.
-        app.init_asset::<Gltf>()
-            .init_asset::<GltfNode>()
-            .init_asset::<GltfMesh>()
-            .init_asset::<Mesh>()
-            .init_asset::<StandardMaterial>();
+        // A headless build has no glTF loader to register these; a rendering
+        // build already owns them, and registering again would replace the
+        // stores under every handle minted so far.
+        init_asset_if_absent::<Gltf>(app);
+        init_asset_if_absent::<GltfNode>(app);
+        init_asset_if_absent::<GltfMesh>(app);
+        init_asset_if_absent::<Mesh>(app);
+        init_asset_if_absent::<StandardMaterial>(app);
         app.init_resource::<ScatterAssets>().add_systems(
             Update,
             (
