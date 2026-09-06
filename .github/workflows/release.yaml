@@ -158,6 +158,7 @@ jobs:
         # new dependency cannot silently drop out of the release.
         run: >
           cargo publish --locked
+          -p jackdaw_animation_runtime
           -p jackdaw_api
           -p jackdaw_api_internal
           -p jackdaw_api_macros
