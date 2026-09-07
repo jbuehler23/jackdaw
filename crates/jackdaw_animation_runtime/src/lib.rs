@@ -212,7 +212,6 @@ fn bind_animation_sets(
     >,
     children: Query<&Children>,
     names: Query<&Name>,
-    targets: Query<&AnimationTargetId>,
 ) {
     for (entity, set, sources, state) in &unbound {
         let Some(sources) = sources else {
@@ -263,15 +262,9 @@ fn bind_animation_sets(
         }
         let graph = graphs.add(graph);
 
-        tag_animation_targets(
-            &mut commands,
-            root,
-            root,
-            &mut Vec::new(),
-            &children,
-            &names,
-            &targets,
-        );
+        commands.queue(move |world: &mut World| {
+            tag_animation_targets(world, root);
+        });
 
         let wanted = state.map_or(set.default_state.as_str(), |state| state.0.as_str());
         let mut player = AnimationPlayer::default();
@@ -321,7 +314,6 @@ fn merge_part_skeletons(
     children: Query<&Children>,
     names: Query<&Name>,
     child_of: Query<&ChildOf>,
-    targets: Query<&AnimationTargetId>,
     animated: Query<(), With<AnimationPlayer>>,
     mut skins: Query<&mut SkinnedMesh>,
 ) {
@@ -362,16 +354,7 @@ fn merge_part_skeletons(
                     "an animated part does not answer to the same bone names as the skeleton it \
                      was placed under, so it keeps its own"
                 );
-                bind_extra_root(
-                    &mut commands,
-                    part,
-                    &bound,
-                    set,
-                    state,
-                    &children,
-                    &names,
-                    &targets,
-                );
+                bind_extra_root(&mut commands, part, &bound, set, state);
                 bound.parts.push(part);
                 continue;
             };
@@ -501,19 +484,10 @@ fn bind_extra_root(
     bound: &AnimationSetBound,
     set: &AnimationSet,
     state: Option<&AnimationState>,
-    children: &Query<&Children>,
-    names: &Query<&Name>,
-    targets: &Query<&AnimationTargetId>,
 ) {
-    tag_animation_targets(
-        commands,
-        root,
-        root,
-        &mut Vec::new(),
-        children,
-        names,
-        targets,
-    );
+    commands.queue(move |world: &mut World| {
+        tag_animation_targets(world, root);
+    });
     let wanted = state.map_or(set.default_state.as_str(), |state| state.0.as_str());
     let mut player = AnimationPlayer::default();
     let mut transitions = AnimationTransitions::new();
@@ -549,32 +523,43 @@ fn remap_joints(
 }
 
 /// Gives every named entity under `root` the target id of its name path, so a
-/// clip authored against a skeleton of the same names drives this one.
+/// clip authored against a skeleton of the same names drives this one, and
+/// reports the entities that had none.
 ///
 /// An unnamed entity ends the walk: its descendants have no path to hash, and
 /// glTF's own loader passes over them for the same reason.
-fn tag_animation_targets(
-    commands: &mut Commands,
+///
+/// Public because the editor tags a skeleton the same way to preview a clip on
+/// it, and untags exactly what it was handed back when the preview stops.
+pub fn tag_animation_targets(world: &mut World, root: Entity) -> Vec<Entity> {
+    let mut tagged = Vec::new();
+    tag_from(world, root, root, &mut Vec::new(), &mut tagged);
+    tagged
+}
+
+fn tag_from(
+    world: &mut World,
     root: Entity,
     entity: Entity,
     path: &mut Vec<Name>,
-    children: &Query<&Children>,
-    names: &Query<&Name>,
-    targets: &Query<&AnimationTargetId>,
+    tagged: &mut Vec<Entity>,
 ) {
-    let Ok(name) = names.get(entity) else {
+    let Some(name) = world.get::<Name>(entity).cloned() else {
         return;
     };
-    path.push(name.clone());
-    if !targets.contains(entity) {
-        commands
-            .entity(entity)
+    path.push(name);
+    if world.get::<AnimationTargetId>(entity).is_none() {
+        world
+            .entity_mut(entity)
             .insert((AnimationTargetId::from_names(path.iter()), AnimatedBy(root)));
+        tagged.push(entity);
     }
-    if let Ok(kids) = children.get(entity) {
-        for child in kids.iter() {
-            tag_animation_targets(commands, root, child, path, children, names, targets);
-        }
+    let kids: Vec<Entity> = world
+        .get::<Children>(entity)
+        .map(|kids| kids.iter().collect())
+        .unwrap_or_default();
+    for child in kids {
+        tag_from(world, root, child, path, tagged);
     }
     path.pop();
 }

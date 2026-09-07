@@ -15,6 +15,7 @@ pub mod blend_graph;
 pub mod clip;
 pub mod commands;
 pub mod compile;
+pub mod graph_owner;
 pub mod player;
 pub mod timeline;
 
@@ -25,13 +26,13 @@ pub use clip::{
     TimelineSnap, TimelineSnapHint, Vec3Keyframe,
 };
 pub use compile::{
-    CompiledClip, clip_display_duration, compile_blend_graphs, compile_clips, compile_gltf_clips,
-    max_keyframe_time,
+    CompiledClip, clip_display_duration, compile_blend_graphs, compile_clips, max_keyframe_time,
 };
+pub use graph_owner::{LoanedPlayer, PlayerLoan, lend_player, return_player};
 pub use player::{
-    ActiveClipBinding, AnimationPause, AnimationPlay, AnimationSeek, AnimationStop, BindMode,
-    TimelineCursor, TimelineEngagement, auto_bind_player, handle_pause, handle_play, handle_seek,
-    handle_stop, sync_cursor_from_player,
+    ActiveClipBinding, AnimationPause, AnimationPlay, AnimationSeek, AnimationStop, TimelineCursor,
+    TimelineEngagement, auto_bind_player, handle_pause, handle_play, handle_seek, handle_stop,
+    sync_cursor_from_player,
 };
 pub use timeline::{
     TimelineAddKeyframeButton, TimelineClipNameInput, TimelineClipSelector,
@@ -83,10 +84,7 @@ impl Plugin for AnimationPlugin {
             .add_observer(handle_scrubber_drag_end)
             .add_observer(clear_snap_hint_on_drag_end)
             .add_systems(Startup, blend_graph::register_animation_node_types)
-            .add_systems(
-                PostUpdate,
-                (compile_clips, compile_gltf_clips, compile_blend_graphs).chain(),
-            )
+            .add_systems(PostUpdate, (compile_clips, compile_blend_graphs).chain())
             .add_systems(
                 Update,
                 (

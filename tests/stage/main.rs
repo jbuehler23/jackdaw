@@ -7,6 +7,7 @@
 #[path = "../util/mod.rs"]
 mod util;
 
+mod animation_library;
 mod brush_ops;
 mod canvas_guides;
 mod canvas_snap;

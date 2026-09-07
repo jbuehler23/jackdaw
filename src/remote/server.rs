@@ -1031,7 +1031,48 @@ pub fn assets_handler(
         return Ok(None);
     };
     waits.requests.remove(&key);
-    Ok(Some(json!({ "assets": found })))
+    if !params
+        .get("details")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(Some(json!({ "assets": found })));
+    }
+    if let Some(mut demand) = world.get_resource_mut::<crate::animation::LibraryDemand>() {
+        demand.requested = true;
+    }
+    let library = world.get_resource::<crate::animation::AnimationLibrary>();
+    let detailed: Vec<Value> = found
+        .into_iter()
+        .map(|path| {
+            let clips: Vec<&str> = library
+                .and_then(|library| library.file(&path))
+                .map(|file| file.clips.iter().map(|clip| clip.name.as_str()).collect())
+                .unwrap_or_default();
+            json!({ "path": path, "kind": asset_kind(&path), "clips": clips })
+        })
+        .collect();
+    Ok(Some(json!({ "assets": detailed })))
+}
+
+/// What kind of thing an asset path names, from its extension.
+///
+/// Coarse on purpose: a caller uses it to tell a model from a document, and
+/// asks the editor about anything finer.
+fn asset_kind(path: &str) -> &'static str {
+    let extension = path
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "glb" | "gltf" | "obj" | "fbx" => "model",
+        "png" | "jpg" | "jpeg" | "ktx2" | "basis" | "exr" | "hdr" | "dds" => "image",
+        "ogg" | "wav" | "flac" | "mp3" => "audio",
+        "bsn" | "jsn" | "scn" | "ron" => "scene",
+        "ttf" | "otf" => "font",
+        "wgsl" | "glsl" | "spv" => "shader",
+        _ => "file",
+    }
 }
 
 /// Walk `dir` and collect every file whose path under `root` matches `pattern`.

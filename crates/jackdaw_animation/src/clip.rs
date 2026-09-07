@@ -126,10 +126,13 @@ pub struct F32Keyframe {
     pub value: f32,
 }
 
-/// Marker on a [`Clip`] whose source is a glTF-imported animation.
-/// The compile step loads `Gltf::named_animations[clip_name]` directly
-/// instead of building from keyframe children. Read-only in the
-/// timeline; persisted as two strings and re-resolved on reload.
+/// A clip an earlier version of the editor imported from a glTF file into
+/// the document.
+///
+/// glTF clips are now indexed into the editor's animation library instead of
+/// spawned as document entities, and a load drops the children that carry
+/// this. The type stays registered so a document written before that reads
+/// without complaint.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Default)]
 #[reflect(Component, Serialize, Deserialize, @jackdaw_scene_types::EditorHidden)]
 pub struct GltfClipRef {
