@@ -198,6 +198,14 @@ impl Plugin for JackdawPlugin {
         #[cfg(feature = "render")]
         app.add_plugins(MaterialTextureFormatPlugin);
 
+        // Game code may add a model to an entity long after the scene it lives
+        // in was loaded, and such a source resolves exactly as an authored one.
+        #[cfg(feature = "render")]
+        app.add_systems(
+            Update,
+            attach_inserted_gltf_sources.after(spawn_loaded_scenes),
+        );
+
         #[cfg(feature = "terrain")]
         app.add_plugins(terrain::plugin);
 
@@ -730,26 +738,19 @@ fn spawn_scene_entities(
 
     #[cfg(feature = "render")]
     {
+        let assets_dir = assets_root(world);
         let asset_server = world.resource::<AssetServer>().clone();
-        let gltf_entities: Vec<(Entity, String, usize)> = spawned
+        let gltf_entities: Vec<(Entity, jackdaw_scene_types::GltfSource)> = spawned
             .iter()
             .filter_map(|&e| {
                 world
                     .get::<jackdaw_scene_types::GltfSource>(e)
-                    .map(|gs| (e, gs.path.clone(), gs.scene_index))
+                    .map(|source| (e, source.clone()))
             })
             .collect();
-        for (entity, gltf_path, scene_index) in gltf_entities {
-            let resolved = if Path::new(&gltf_path).is_relative() {
-                parent_path.join(&gltf_path).to_string_lossy().into_owned()
-            } else {
-                gltf_path
-            };
-            let full_path = format!("{resolved}#Scene{scene_index}");
-            let scene_handle: Handle<WorldAsset> = asset_server.load(full_path);
-            world
-                .entity_mut(entity)
-                .insert(WorldAssetRoot(scene_handle));
+        for (entity, source) in gltf_entities {
+            let root = world_asset_root(&asset_server, &source, assets_dir.as_deref());
+            world.entity_mut(entity).insert(root);
         }
     }
     // A terrain's sidecar is named relative to the scene file, whose
@@ -757,10 +758,67 @@ fn spawn_scene_entities(
     #[cfg(feature = "terrain")]
     terrain::attach_sidecars(world, &spawned, parent_path);
 
-    #[cfg(not(feature = "render"))]
+    #[cfg(not(feature = "terrain"))]
     let _ = parent_path;
 
     members
+}
+
+/// The glTF scene an authored [`GltfSource`] names, as the handle the
+/// world-asset spawner instantiates.
+///
+/// The path is read the way the editor reads it, from the assets root rather
+/// than from beside the scene file, so a prefab stored in a subdirectory shows
+/// the same model in a built game that it showed while it was authored.
+///
+/// [`GltfSource`]: jackdaw_scene_types::GltfSource
+#[cfg(feature = "render")]
+fn world_asset_root(
+    asset_server: &AssetServer,
+    source: &jackdaw_scene_types::GltfSource,
+    assets_dir: Option<&Path>,
+) -> WorldAssetRoot {
+    let path = jackdaw_scene_types::to_asset_path(&source.path, assets_dir);
+    let scene: Handle<WorldAsset> =
+        asset_server.load(format!("{path}#Scene{}", source.scene_index));
+    WorldAssetRoot(scene)
+}
+
+/// Give a [`GltfSource`] inserted by game code the same `WorldAssetRoot` a
+/// scene-authored one gets at spawn.
+///
+/// Scene loading attaches the handle as it spawns, so this finds only sources
+/// that arrived some other way; re-inserting an equal handle would make the
+/// world-asset spawner despawn and rebuild the instance, so an entity that
+/// already points at the same glTF scene is left alone.
+///
+/// [`GltfSource`]: jackdaw_scene_types::GltfSource
+#[cfg(feature = "render")]
+fn attach_inserted_gltf_sources(
+    added: Query<
+        (Entity, &jackdaw_scene_types::GltfSource),
+        Added<jackdaw_scene_types::GltfSource>,
+    >,
+    existing: Query<&WorldAssetRoot>,
+    catalog_path: Option<Res<JackdawCatalogPath>>,
+    asset_folder: Option<Res<AssetFolder>>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+) {
+    if added.is_empty() {
+        return;
+    }
+    let assets_dir = resolve_assets_root(catalog_path.as_deref(), asset_folder.as_deref());
+    for (entity, source) in &added {
+        let root = world_asset_root(&asset_server, source, assets_dir.as_deref());
+        if existing
+            .get(entity)
+            .is_ok_and(|current| current.0 == root.0)
+        {
+            continue;
+        }
+        commands.entity(entity).insert(root);
+    }
 }
 
 /// Spawn one document node and its subtree.
@@ -1370,12 +1428,22 @@ struct AssetFolder(Option<PathBuf>);
 /// directory [`JackdawCatalogPath`] points into when it is set, else the
 /// folder the app's [`AssetPlugin`] reads from.
 pub(crate) fn assets_root(world: &World) -> Option<PathBuf> {
-    if let Some(path) = world.get_resource::<JackdawCatalogPath>() {
+    resolve_assets_root(
+        world.get_resource::<JackdawCatalogPath>(),
+        world.get_resource::<AssetFolder>(),
+    )
+}
+
+/// [`assets_root`] over the two resources it reads, for systems that take them
+/// as parameters rather than reaching into the world.
+fn resolve_assets_root(
+    catalog_path: Option<&JackdawCatalogPath>,
+    asset_folder: Option<&AssetFolder>,
+) -> Option<PathBuf> {
+    if let Some(path) = catalog_path {
         return path.0.parent().map(ToOwned::to_owned);
     }
-    world
-        .get_resource::<AssetFolder>()
-        .and_then(|f| f.0.clone())
+    asset_folder.and_then(|folder| folder.0.clone())
 }
 
 /// Where the app reads assets from: [`AssetPlugin::file_path`] resolved the

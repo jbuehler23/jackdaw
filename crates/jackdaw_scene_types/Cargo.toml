@@ -12,10 +12,14 @@ bevy = { version = "0.19", default-features = false, features = [
     "std",
     "serialize",
     "bevy_color",
+    "bevy_log",
 ] }
 jackdaw_geometry = { version = "0.19.0", path = "../jackdaw_geometry", default-features = false, features = [
     "reflect",
 ] }
+# Absolute authored paths are compared against the assets directory, which on
+# Windows may arrive with a verbatim prefix that no plain prefix test matches.
+dunce = "1.0.5"
 glam.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

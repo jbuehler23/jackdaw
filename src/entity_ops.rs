@@ -1727,27 +1727,11 @@ fn hide_all_entities(world: &mut World, scene_entities: &mut SystemState<SceneEn
 /// Bevy's default asset source reads from `<base>/assets/` where `<base>` is
 /// `BEVY_ASSET_ROOT`, `CARGO_MANIFEST_DIR`, or the executable's parent directory.
 ///
-/// Strips the assets-dir prefix when the input is absolute so the load goes
-/// through Bevy's approved-path machinery (no `UnapprovedPathMode::Allow`
-/// needed). Returns the original path on a miss and warns; callers should not
-/// rely on the fallback ever loading successfully under `Forbid`.
+/// The rule itself lives in [`jackdaw_scene_types::to_asset_path`], which the
+/// standalone runtime applies to the same authored paths; this only supplies
+/// the editor's notion of where the assets directory is.
 pub fn to_asset_path(path: &str) -> String {
-    let path = dunce::simplified(Path::new(path));
-    if let Some(assets_dir) = get_assets_base_dir()
-        && let Ok(relative) = path.strip_prefix(dunce::simplified(&assets_dir))
-    {
-        return relative.to_string_lossy().to_string();
-    }
-    // Fallback: if already a simple relative path, use as-is
-    if !path.is_absolute() {
-        return path.to_string_lossy().to_string();
-    }
-    warn!(
-        "Cannot load '{}': file is outside the assets directory. \
-         Move it into your project's assets/ folder.",
-        path.display()
-    );
-    path.to_string_lossy().to_string()
+    jackdaw_scene_types::to_asset_path(path, get_assets_base_dir().as_deref())
 }
 
 /// Get the absolute path of Bevy's assets directory.
