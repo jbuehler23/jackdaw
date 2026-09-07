@@ -6,10 +6,10 @@ use std::path::Path;
 use crate::prefab::canonical_path::{CanonicalPrefabPath, canonical_prefab_path};
 
 /// Snapshot of a prefab file's identity at the moment the editor
-/// wrote it. The watcher compares the current on-disk fingerprint
-/// against this entry to recognise its own echoed write event and
-/// skip the reload that would otherwise clobber in-memory edits
-/// landing between the save and the watcher firing.
+/// wrote or read it. The watcher compares the current on-disk
+/// fingerprint against this entry to recognise its own echoed write,
+/// or the first look it takes when a watch starts, and skip the reload
+/// that would otherwise clobber in-memory edits.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SavedFingerprint {
     pub mtime: std::time::SystemTime,

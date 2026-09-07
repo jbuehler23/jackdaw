@@ -219,9 +219,11 @@ fn drain_changes(world: &mut World) {
 
         match crate::prefab::save_load::read_prefab_ast(&path) {
             Ok(new_ast) => {
-                world
-                    .resource_mut::<PrefabAstCache>()
-                    .insert(cache_key.clone(), new_ast);
+                let mut cache = world.resource_mut::<PrefabAstCache>();
+                cache.insert(cache_key.clone(), new_ast);
+                if let Ok(fingerprint) = crate::prefab::cache::compute_file_fingerprint(&path) {
+                    cache.record_saved_fingerprint(&path, fingerprint);
+                }
             }
             Err(e) => {
                 // Keep the last copy that parsed: without a baseline to
