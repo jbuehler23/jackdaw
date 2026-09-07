@@ -13,7 +13,8 @@ use std::collections::HashSet;
 
 use bevy::animation::{
     AnimationClip, AnimationTargetId, animated_field,
-    animation_curves::{AnimatableCurve, AnimatableKeyframeCurve},
+    animation_curves::{AnimatableCurve, AnimatableKeyframeCurve, AnimatableProperty},
+    gltf_curves::{CubicKeyframeCurve, CubicRotationCurve, SteppedKeyframeCurve},
     graph::{AnimationGraph, AnimationNodeIndex},
 };
 use bevy::prelude::*;
@@ -115,15 +116,7 @@ pub fn compile_clips(
             let Ok((track, track_children)) = tracks.get(*track_entity) else {
                 continue;
             };
-            if matches!(track.interpolation, Interpolation::Step) {
-                // Scaffolded: step interpolation is modeled in the data
-                // model but not yet implemented in the compile step.
-                // When the first user needs it, add a `StepCurve<T>`
-                // impl and a dispatch arm below.
-                warn!(
-                    "Step interpolation not yet supported (track targets {}.{})",
-                    track.component_type_path, track.field_path
-                );
+            if !track.enabled {
                 continue;
             }
             build_curve_for_track(
@@ -279,33 +272,31 @@ fn build_curve_for_track(
     f32_keyframes: &Query<&F32Keyframe>,
     clip: &mut AnimationClip,
 ) {
+    let interpolation = track.interpolation;
     match track.property_path() {
         (TRANSFORM, TRANSLATION) => {
             let kfs = collect_vec3_keyframes(track_children, vec3_keyframes);
-            if let Some(curve) = build_vec3_curve(kfs) {
-                clip.add_curve_to_target(
-                    target_id,
-                    AnimatableCurve::new(animated_field!(Transform::translation), curve),
-                );
-            }
+            add_vec3_curve(
+                clip,
+                target_id,
+                animated_field!(Transform::translation),
+                interpolation,
+                kfs,
+            );
         }
         (TRANSFORM, ROTATION) => {
             let kfs = collect_quat_keyframes(track_children, quat_keyframes);
-            if let Some(curve) = build_quat_curve(kfs) {
-                clip.add_curve_to_target(
-                    target_id,
-                    AnimatableCurve::new(animated_field!(Transform::rotation), curve),
-                );
-            }
+            add_quat_curve(clip, target_id, interpolation, kfs);
         }
         (TRANSFORM, SCALE) => {
             let kfs = collect_vec3_keyframes(track_children, vec3_keyframes);
-            if let Some(curve) = build_vec3_curve(kfs) {
-                clip.add_curve_to_target(
-                    target_id,
-                    AnimatableCurve::new(animated_field!(Transform::scale), curve),
-                );
-            }
+            add_vec3_curve(
+                clip,
+                target_id,
+                animated_field!(Transform::scale),
+                interpolation,
+                kfs,
+            );
         }
         (component, field) => {
             warn!(
@@ -315,6 +306,125 @@ fn build_curve_for_track(
             let _ = f32_keyframes; // reserved for future scalar fields
         }
     }
+}
+
+/// Add the curve one interpolation mode asks for over a `Vec3`-valued
+/// property. Every mode reads the same authored keys; only the shape between
+/// them differs.
+fn add_vec3_curve<P>(
+    clip: &mut AnimationClip,
+    target_id: AnimationTargetId,
+    property: P,
+    interpolation: Interpolation,
+    kfs: Vec<(f32, Vec3)>,
+) where
+    P: AnimatableProperty<Property = Vec3> + Clone + Send + Sync + 'static,
+{
+    let kfs = padded(kfs);
+    if kfs.is_empty() {
+        return;
+    }
+    match interpolation {
+        Interpolation::Linear => {
+            if let Ok(curve) = AnimatableKeyframeCurve::new(kfs) {
+                clip.add_curve_to_target(target_id, AnimatableCurve::new(property, curve));
+            }
+        }
+        Interpolation::Step => {
+            if let Ok(curve) = SteppedKeyframeCurve::new(kfs) {
+                clip.add_curve_to_target(target_id, AnimatableCurve::new(property, curve));
+            }
+        }
+        Interpolation::Cubic => {
+            let times: Vec<f32> = kfs.iter().map(|(t, _)| *t).collect();
+            let values = spline_samples(&kfs, |a, b| a - b, |v, k| v * k, Vec3::ZERO);
+            if let Ok(curve) = CubicKeyframeCurve::new(times, values) {
+                clip.add_curve_to_target(target_id, AnimatableCurve::new(property, curve));
+            }
+        }
+    }
+}
+
+/// Add the curve one interpolation mode asks for over the rotation, which
+/// takes its own curve types because a quaternion is not a vector space.
+fn add_quat_curve(
+    clip: &mut AnimationClip,
+    target_id: AnimationTargetId,
+    interpolation: Interpolation,
+    kfs: Vec<(f32, Quat)>,
+) {
+    let kfs = padded(kfs);
+    if kfs.is_empty() {
+        return;
+    }
+    let property = animated_field!(Transform::rotation);
+    match interpolation {
+        Interpolation::Linear => {
+            if let Ok(curve) = AnimatableKeyframeCurve::new(kfs) {
+                clip.add_curve_to_target(target_id, AnimatableCurve::new(property, curve));
+            }
+        }
+        Interpolation::Step => {
+            if let Ok(curve) = SteppedKeyframeCurve::new(kfs) {
+                clip.add_curve_to_target(target_id, AnimatableCurve::new(property, curve));
+            }
+        }
+        Interpolation::Cubic => {
+            // The cubic rotation curve works in `Vec4` and normalizes what it
+            // samples back into a quaternion, so the tangents are built on the
+            // same four components.
+            let times: Vec<f32> = kfs.iter().map(|(t, _)| *t).collect();
+            let as_vec4: Vec<(f32, Vec4)> = kfs.iter().map(|(t, q)| (*t, Vec4::from(*q))).collect();
+            let values = spline_samples(&as_vec4, |a, b| a - b, |v, k| v * k, Vec4::ZERO);
+            if let Ok(curve) = CubicRotationCurve::new(times, values) {
+                clip.add_curve_to_target(target_id, AnimatableCurve::new(property, curve));
+            }
+        }
+    }
+}
+
+/// The `in-tangent, value, out-tangent` triple a cubic keyframe curve wants,
+/// for each authored key.
+///
+/// Tangents are not authored, so each is the slope through the neighbouring
+/// keys; the ends repeat their one-sided slope. That is the smooth reading of
+/// a set of keys, and it is why editing a tangent is not offered.
+fn spline_samples<T: Copy>(
+    kfs: &[(f32, T)],
+    subtract: impl Fn(T, T) -> T,
+    scale: impl Fn(T, f32) -> T,
+    zero: T,
+) -> Vec<T> {
+    let mut out = Vec::with_capacity(kfs.len() * 3);
+    for (at, &(time, value)) in kfs.iter().enumerate() {
+        let before = kfs
+            .get(at.wrapping_sub(1))
+            .copied()
+            .unwrap_or((time, value));
+        let after = kfs.get(at + 1).copied().unwrap_or((time, value));
+        let span = after.0 - before.0;
+        let tangent = if span > f32::EPSILON {
+            scale(subtract(after.1, before.1), 1.0 / span)
+        } else {
+            zero
+        };
+        out.extend([tangent, value, tangent]);
+    }
+    out
+}
+
+/// Keys with a lone key doubled, because Bevy's keyframe curves want two
+/// samples at strictly increasing times.
+///
+/// Duplicating the single authored key makes the curve a constant, which is
+/// what lets scrubbing show the authored value while a track is still being
+/// built up.
+fn padded<T: Copy>(mut kfs: Vec<(f32, T)>) -> Vec<(f32, T)> {
+    if kfs.len() == 1 {
+        let (t, v) = kfs[0];
+        kfs.push((t + 1.0, v));
+    }
+    kfs
 }
 
 fn collect_vec3_keyframes(
@@ -341,33 +451,6 @@ fn collect_quat_keyframes(
         .collect();
     sort_and_dedupe_by_time(&mut kfs, |kf| kf.0);
     kfs
-}
-
-fn build_vec3_curve(mut kfs: Vec<(f32, Vec3)>) -> Option<AnimatableKeyframeCurve<Vec3>> {
-    if kfs.is_empty() {
-        return None;
-    }
-    if kfs.len() == 1 {
-        // Bevy's keyframe curve requires at least two samples with
-        // strictly increasing times. Duplicate the single authored
-        // keyframe so the curve is a trivial constant - this is what
-        // lets scrubbing show the authored value at all times while
-        // the user is still building up the track.
-        let (t, v) = kfs[0];
-        kfs.push((t + 1.0, v));
-    }
-    AnimatableKeyframeCurve::new(kfs).ok()
-}
-
-fn build_quat_curve(mut kfs: Vec<(f32, Quat)>) -> Option<AnimatableKeyframeCurve<Quat>> {
-    if kfs.is_empty() {
-        return None;
-    }
-    if kfs.len() == 1 {
-        let (t, v) = kfs[0];
-        kfs.push((t + 1.0, v));
-    }
-    AnimatableKeyframeCurve::new(kfs).ok()
 }
 
 /// Return the clip's visible/playback duration.
@@ -457,4 +540,129 @@ fn sort_and_dedupe_by_time<T>(items: &mut Vec<T>, time_of: impl Fn(&T) -> f32) {
             .unwrap_or(Ordering::Equal)
     });
     items.dedup_by(|a, b| (time_of(a) - time_of(b)).abs() < f32::EPSILON);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::asset::AssetPlugin;
+
+    /// An app holding just enough to run the compile step.
+    fn app_that_compiles() -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<AnimationClip>()
+            .init_asset::<AnimationGraph>()
+            .add_systems(Update, compile_clips);
+        app
+    }
+
+    /// A door with a clip on it, holding a translation track and a scale track
+    /// of two keys each.
+    fn door_with_two_tracks(app: &mut App) -> (Entity, Entity) {
+        let door = app.world_mut().spawn(Name::new("Door")).id();
+        let clip = app.world_mut().spawn((Clip::default(), ChildOf(door))).id();
+        let mut track_of = |field: &str| {
+            let track = app
+                .world_mut()
+                .spawn((AnimationTrack::new(TRANSFORM, field), ChildOf(clip)))
+                .id();
+            for (time, value) in [(0.0, Vec3::ZERO), (1.0, Vec3::ONE)] {
+                app.world_mut()
+                    .spawn((Vec3Keyframe { time, value }, ChildOf(track)));
+            }
+            track
+        };
+        let translation = track_of(TRANSLATION);
+        track_of(SCALE);
+        (clip, translation)
+    }
+
+    /// How many curves the compiled clip drives its target with.
+    fn compiled_curve_count(app: &mut App, clip: Entity) -> usize {
+        let handle = app
+            .world()
+            .get::<CompiledClip>(clip)
+            .expect("the clip compiled")
+            .clip
+            .clone();
+        app.world()
+            .resource::<Assets<AnimationClip>>()
+            .get(&handle)
+            .expect("the compiled asset")
+            .curves()
+            .values()
+            .map(Vec::len)
+            .sum()
+    }
+
+    #[test]
+    fn a_disabled_track_is_left_out_of_the_compiled_clip() {
+        let mut app = app_that_compiles();
+        let (clip, translation) = door_with_two_tracks(&mut app);
+        app.update();
+        assert_eq!(
+            compiled_curve_count(&mut app, clip),
+            2,
+            "both tracks should compile while both are on"
+        );
+
+        app.world_mut()
+            .get_mut::<AnimationTrack>(translation)
+            .expect("the track")
+            .enabled = false;
+        app.update();
+
+        assert_eq!(
+            compiled_curve_count(&mut app, clip),
+            1,
+            "a track switched off must not drive its property"
+        );
+        assert_eq!(
+            app.world()
+                .get::<Children>(translation)
+                .map(RelationshipTarget::len),
+            Some(2),
+            "and its keys have to stay where they are"
+        );
+    }
+
+    #[test]
+    fn every_interpolation_mode_compiles_to_a_curve() {
+        for mode in [
+            Interpolation::Linear,
+            Interpolation::Cubic,
+            Interpolation::Step,
+        ] {
+            let mut app = app_that_compiles();
+            let (clip, translation) = door_with_two_tracks(&mut app);
+            app.world_mut()
+                .get_mut::<AnimationTrack>(translation)
+                .expect("the track")
+                .interpolation = mode;
+
+            app.update();
+
+            assert_eq!(
+                compiled_curve_count(&mut app, clip),
+                2,
+                "{mode:?} left a track without a curve"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cubic_track_reads_its_tangents_off_the_keys_beside_each_one() {
+        let keys = [(0.0, 0.0_f32), (1.0, 2.0), (2.0, 2.0)];
+        let samples = spline_samples(&keys, |a, b| a - b, |v, k| v * k, 0.0);
+
+        assert_eq!(samples.len(), keys.len() * 3);
+        // Every triple carries the key's own value in the middle.
+        assert!((samples[1] - 0.0).abs() < 1e-6, "{samples:?}");
+        assert!((samples[4] - 2.0).abs() < 1e-6, "{samples:?}");
+        // The middle key rises from 0 to 2 over two seconds, so its slope is
+        // one; the last key sits on a flat pair, so its slope is nothing.
+        assert!((samples[3] - 1.0).abs() < 1e-6, "{samples:?}");
+        assert!((samples[6] - 0.0).abs() < 1e-6, "{samples:?}");
+    }
 }

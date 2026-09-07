@@ -213,6 +213,7 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "animation.toggle_keyframe",
     "binding.add",
     "binding.set",
+    "clip.select",
     "component.add",
     "component.remove",
     "component.revert_baseline",
@@ -230,8 +231,12 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
 /// `(operator, parameter)` pairs whose `Entity` parameter means something by
 /// being left out, so a clause without one is complete rather than short of a
 /// target.
-pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] =
-    &[("entity.add.group", "parent"), ("widget.add", "parent")];
+pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] = &[
+    ("clip.track.enable", "track"),
+    ("clip.track.interpolation", "track"),
+    ("entity.add.group", "parent"),
+    ("widget.add", "parent"),
+];
 
 /// How one declared `Entity` parameter was filled in, returned so a caller can
 /// tell a resolver refusal from an availability gate.

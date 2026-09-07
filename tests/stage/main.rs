@@ -8,6 +8,7 @@
 mod util;
 
 mod animation_library;
+mod animation_timeline;
 mod brush_ops;
 mod canvas_guides;
 mod canvas_snap;

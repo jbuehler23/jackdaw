@@ -3,6 +3,8 @@
 pub mod library;
 pub mod panel;
 pub mod preview;
+pub mod timeline_glue;
+pub mod timeline_ops;
 
 pub use library::{AnimationLibrary, LibraryClip, LibraryDemand, LibraryFile};
 pub use panel::{AnimationPanelState, AnimationPanelTab, animation_panel_content};
@@ -12,7 +14,12 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 
 pub(crate) fn plugin(app: &mut App) {
-    app.add_plugins((library::plugin, panel::plugin, preview::plugin));
+    app.add_plugins((
+        library::plugin,
+        panel::plugin,
+        preview::plugin,
+        timeline_glue::plugin,
+    ));
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -22,4 +29,5 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<preview::AnimationPreviewOp>()
         .register_operator::<preview::AnimationPreviewPauseOp>()
         .register_operator::<preview::AnimationPreviewStopOp>();
+    timeline_ops::add_to_extension(ctx);
 }

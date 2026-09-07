@@ -164,8 +164,8 @@ use jackdaw_api_internal::{
 /// The camera controller the viewport drives, so a test can feed it the
 /// pointer input the editor would.
 pub use jackdaw_camera;
+use jackdaw_feathers::EditorFeathersPlugin;
 use jackdaw_feathers::dialog::EditorDialog;
-use jackdaw_feathers::{EditorFeathersPlugin, button::ButtonOperatorCall};
 pub use jackdaw_loader::DylibLoaderPlugin;
 use jackdaw_widgets::menu_bar::MenuAction;
 use selection::Selection;
@@ -560,7 +560,6 @@ impl Plugin for EditorCorePlugin {
                 layout::update_window_mode_button,
                 layout::update_live_badge,
                 auto_hide_internal_entities,
-                decorate_timeline_tooltips,
                 register_animation_entities_in_ast,
                 drop_imported_clip_entities.after(register_animation_entities_in_ast),
                 follow_scene_selection_to_clip,
@@ -577,7 +576,6 @@ impl Plugin for EditorCorePlugin {
         .add_observer(on_create_clip_for_selection)
         .add_observer(on_create_blend_graph_for_selection)
         .add_observer(on_clip_selector_change)
-        .add_observer(on_clip_name_commit)
         .add_observer(on_duration_input_commit)
         .add_observer(on_timeline_keyframe_click);
 
@@ -863,92 +861,6 @@ fn on_clip_selector_change(
             dirty.0 = true;
         }
     });
-}
-
-/// Observer: when the inline clip-name `text_edit` commits, route the
-/// rename through `SetBsnField` on the `Name` component so it
-/// participates in undo and round-trips through the scene document.
-fn on_clip_name_commit(
-    event: On<jackdaw_feathers::text_edit::TextEditCommitEvent>,
-    name_inputs: Query<&jackdaw_animation::TimelineClipNameInput>,
-    child_of_query: Query<&ChildOf>,
-    names: Query<&Name>,
-    mut commands: Commands,
-) {
-    let mut current = event.entity;
-    let mut clip_entity = None;
-    for _ in 0..6 {
-        if let Ok(input) = name_inputs.get(current) {
-            clip_entity = Some(input.clip);
-            break;
-        }
-        let Ok(parent) = child_of_query.get(current) else {
-            break;
-        };
-        current = parent.parent();
-    }
-    let Some(clip_entity) = clip_entity else {
-        return;
-    };
-    let new_name = event.text.clone();
-    if new_name.is_empty() {
-        return;
-    }
-    let Ok(old_name) = names.get(clip_entity) else {
-        return;
-    };
-    if old_name.as_str() == new_name {
-        return;
-    }
-    commands.queue(move |world: &mut World| {
-        if let Some(mut name) = world.get_mut::<Name>(clip_entity) {
-            *name = Name::new(new_name);
-        }
-        if let Some(mut dirty) = world.get_resource_mut::<jackdaw_animation::TimelineDirty>() {
-            dirty.0 = true;
-        }
-    });
-}
-
-/// One-shot decorator: when timeline transport / header buttons
-/// appear, stamp them with [`ButtonOperatorCall`] so the editor's
-/// click-dispatch observer routes them through the operator API and
-/// the rich hover tooltip resolves the operator's label / description
-/// / signature. Runs every frame but short-circuits via `Added<T>`
-/// filters, so it only fires once per button spawn.
-fn decorate_timeline_tooltips(
-    play: Query<Entity, Added<jackdaw_animation::TimelinePlayButton>>,
-    pause: Query<Entity, Added<jackdaw_animation::TimelinePauseButton>>,
-    stop: Query<Entity, Added<jackdaw_animation::TimelineStopButton>>,
-    new_clip: Query<Entity, Added<jackdaw_animation::TimelineHeaderNewClipButton>>,
-    new_blend: Query<Entity, Added<jackdaw_animation::TimelineHeaderNewBlendGraphButton>>,
-    mut commands: Commands,
-) {
-    for e in &play {
-        commands
-            .entity(e)
-            .insert(ButtonOperatorCall::new(ClipPlayOp::ID));
-    }
-    for e in &pause {
-        commands
-            .entity(e)
-            .insert(ButtonOperatorCall::new(ClipPauseOp::ID));
-    }
-    for e in &stop {
-        commands
-            .entity(e)
-            .insert(ButtonOperatorCall::new(ClipStopOp::ID));
-    }
-    for e in &new_clip {
-        commands
-            .entity(e)
-            .insert(ButtonOperatorCall::new(ClipNewOp::ID));
-    }
-    for e in &new_blend {
-        commands
-            .entity(e)
-            .insert(ButtonOperatorCall::new(ClipNewBlendGraphOp::ID));
-    }
 }
 
 /// Observer: when the placeholder "Create Blend Graph" button is

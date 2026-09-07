@@ -17,32 +17,42 @@ pub mod commands;
 pub mod compile;
 pub mod graph_owner;
 pub mod player;
+pub mod sheet;
 pub mod timeline;
+pub mod toolbar;
 
 pub use blend_graph::{AdditiveBlendNode, AnimationBlendGraph, BlendNode, ClipNodeRef, OutputNode};
 pub use clip::{
-    AnimationTrack, Clip, F32Keyframe, GltfClipRef, Interpolation, KeyframeClipboard,
-    KeyframeClipboardEntry, KeyframeValue, QuatKeyframe, SelectedClip, SelectedKeyframes,
-    TimelineSnap, TimelineSnapHint, Vec3Keyframe,
+    AnimationTrack, Clip, ClipRecording, F32Keyframe, GltfClipRef, ImportedClipView, Interpolation,
+    KeyframeClipboard, KeyframeClipboardEntry, KeyframeValue, LoopMode, OnionSkin, QuatKeyframe,
+    SelectedClip, SelectedKeyframes, SelectedTrack, TimelineSnap, TimelineSnapHint, TimelineView,
+    TimelineZoom, Vec3Keyframe,
 };
 pub use compile::{
     CompiledClip, clip_display_duration, compile_blend_graphs, compile_clips, max_keyframe_time,
 };
 pub use graph_owner::{LoanedPlayer, PlayerLoan, lend_player, return_player};
+pub use jackdaw_animation_runtime::ClipEvent;
 pub use player::{
     ActiveClipBinding, AnimationPause, AnimationPlay, AnimationSeek, AnimationStop, TimelineCursor,
     TimelineEngagement, auto_bind_player, handle_pause, handle_play, handle_seek, handle_stop,
     sync_cursor_from_player,
 };
+pub use sheet::{
+    SheetRow, TimelineAddPropertyInput, TimelineEventHandle, TimelineKeyframeHandle,
+    TimelineTrackRow, TimelineViewSegment, TimelineZoomSlider,
+};
 pub use timeline::{
-    TimelineAddKeyframeButton, TimelineClipNameInput, TimelineClipSelector,
-    TimelineCreateBlendGraphButton, TimelineCreateClipButton, TimelineDirty, TimelineDurationInput,
-    TimelineHeaderNewBlendGraphButton, TimelineHeaderNewClipButton, TimelineKeyframeHandle,
-    TimelinePanelRoot, TimelinePauseButton, TimelinePlayButton, TimelineStopButton, TrackField,
-    clear_snap_hint_on_drag_end, handle_add_keyframe_click, handle_scrubber_click,
-    handle_scrubber_drag, handle_scrubber_drag_end, handle_scrubber_drag_start,
-    mark_timeline_dirty_on_data_change, pick_tick_step, rebuild_timeline, timeline_panel,
-    update_keyframe_highlight, update_playhead_position,
+    KeyframeRetimed, KeyframesMarqueeSelected, TimelineCreateBlendGraphButton,
+    TimelineCreateClipButton, TimelineDirty, TimelinePanelRoot, clear_snap_hint_on_drag_end,
+    handle_scrubber_click, handle_scrubber_drag, handle_scrubber_drag_end,
+    handle_scrubber_drag_start, mark_timeline_dirty_on_data_change, pick_tick_step,
+    rebuild_timeline, timeline_panel, update_key_readout, update_keyframe_highlight,
+    update_playhead_position,
+};
+pub use toolbar::{
+    TimelineClipSelector, TimelineDurationInput, TimelineFrameInput, TimelineLoopSegment,
+    TimelineSnapRateInput, TimelineSpeedInput, TimelineTimeInput,
 };
 
 /// Plugin that registers the animation authoring data model and wires
@@ -59,15 +69,26 @@ impl Plugin for AnimationPlugin {
             .init_resource::<TimelineDirty>()
             .init_resource::<TimelineSnap>()
             .init_resource::<TimelineSnapHint>()
+            .init_resource::<TimelineView>()
+            .init_resource::<TimelineZoom>()
+            .init_resource::<SelectedTrack>()
+            .init_resource::<ClipRecording>()
+            .init_resource::<OnionSkin>()
+            .init_resource::<ImportedClipView>()
+            .init_resource::<timeline::TimelineMarquee>()
+            .init_resource::<timeline::KeyframeDragOrigin>()
             .init_resource::<ActiveClipBinding>()
             .init_resource::<TimelineEngagement>()
             .add_message::<AnimationPlay>()
             .add_message::<AnimationPause>()
             .add_message::<AnimationStop>()
             .add_message::<AnimationSeek>()
+            .add_message::<KeyframeRetimed>()
+            .add_message::<KeyframesMarqueeSelected>()
             .register_type::<Clip>()
             .register_type::<AnimationTrack>()
             .register_type::<Interpolation>()
+            .register_type::<LoopMode>()
             .register_type::<Vec3Keyframe>()
             .register_type::<QuatKeyframe>()
             .register_type::<F32Keyframe>()
@@ -77,12 +98,17 @@ impl Plugin for AnimationPlugin {
             .register_type::<BlendNode>()
             .register_type::<AdditiveBlendNode>()
             .register_type::<OutputNode>()
-            .add_observer(handle_add_keyframe_click)
             .add_observer(handle_scrubber_click)
             .add_observer(handle_scrubber_drag)
             .add_observer(handle_scrubber_drag_start)
             .add_observer(handle_scrubber_drag_end)
             .add_observer(clear_snap_hint_on_drag_end)
+            .add_observer(timeline::handle_keyframe_drag)
+            .add_observer(timeline::handle_keyframe_drag_start)
+            .add_observer(timeline::handle_keyframe_drag_end)
+            .add_observer(timeline::handle_marquee_start)
+            .add_observer(timeline::handle_marquee_drag)
+            .add_observer(timeline::handle_marquee_end)
             .add_systems(Startup, blend_graph::register_animation_node_types)
             .add_systems(PostUpdate, (compile_clips, compile_blend_graphs).chain())
             .add_systems(
@@ -104,6 +130,8 @@ impl Plugin for AnimationPlugin {
                     rebuild_timeline,
                     update_playhead_position,
                     update_keyframe_highlight,
+                    update_key_readout,
+                    timeline::update_marquee_box,
                 )
                     .chain()
                     .after(sync_cursor_from_player),

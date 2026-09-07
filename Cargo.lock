@@ -4897,6 +4897,7 @@ name = "jackdaw_animation"
 version = "0.19.0"
 dependencies = [
  "bevy",
+ "jackdaw_animation_runtime",
  "jackdaw_commands",
  "jackdaw_feathers",
  "jackdaw_localization",

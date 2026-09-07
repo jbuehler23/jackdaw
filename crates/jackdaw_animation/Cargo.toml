@@ -9,6 +9,7 @@ include = ["src/**/*", "Cargo.toml", "LICENSE*"]
 
 [dependencies]
 bevy.workspace = true
+jackdaw_animation_runtime.workspace = true
 jackdaw_feathers.workspace = true
 jackdaw_commands.workspace = true
 jackdaw_node_graph.workspace = true

@@ -32,6 +32,10 @@ use bevy::{
 };
 use serde::{Deserialize, Serialize};
 
+pub mod events;
+
+pub use events::{AnimationEvent, ClipEvent, ClipPlayhead, fire_clip_events};
+
 /// The clips an entity can play and the states that choose between them.
 ///
 /// A component equal to its `Default` emits as a bare type path, so changing
@@ -160,22 +164,25 @@ pub struct AnimationRuntimePlugin;
 impl Plugin for AnimationRuntimePlugin {
     fn build(&self, app: &mut App) {
         register_animation_set_types(app);
-        app.add_message::<AnimationStateFinished>().add_systems(
-            Update,
-            (
-                bind_animation_sets,
-                merge_part_skeletons,
-                apply_animation_state,
-                report_finished_states,
-            )
-                .chain()
-                .in_set(AnimationSetSystems)
-                .run_if(
-                    resource_exists::<AssetServer>
-                        .and_then(resource_exists::<Assets<Gltf>>)
-                        .and_then(resource_exists::<Assets<AnimationGraph>>),
-                ),
-        );
+        app.add_message::<AnimationStateFinished>()
+            .add_message::<AnimationEvent>()
+            .add_systems(Update, fire_clip_events)
+            .add_systems(
+                Update,
+                (
+                    bind_animation_sets,
+                    merge_part_skeletons,
+                    apply_animation_state,
+                    report_finished_states,
+                )
+                    .chain()
+                    .in_set(AnimationSetSystems)
+                    .run_if(
+                        resource_exists::<AssetServer>
+                            .and_then(resource_exists::<Assets<Gltf>>)
+                            .and_then(resource_exists::<Assets<AnimationGraph>>),
+                    ),
+            );
     }
 }
 
@@ -187,7 +194,8 @@ impl Plugin for AnimationRuntimePlugin {
 pub fn register_animation_set_types(app: &mut App) {
     app.register_type::<AnimationSet>()
         .register_type::<AnimationStateDef>()
-        .register_type::<AnimationState>();
+        .register_type::<AnimationState>()
+        .register_type::<ClipEvent>();
 }
 
 /// Builds the player, the graph and the bone target ids of every set whose
