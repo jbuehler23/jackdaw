@@ -72,6 +72,17 @@ struct PreviewTargetLabel;
 #[derive(Component)]
 struct LibraryFileList;
 
+/// The project walk is worth its loads only while the file list is on screen.
+fn demand_project_walk(
+    lists: Query<(), With<LibraryFileList>>,
+    mut demand: ResMut<super::library::LibraryDemand>,
+) {
+    let showing = !lists.is_empty();
+    if demand.panel != showing {
+        demand.panel = showing;
+    }
+}
+
 /// Marker on the scrolling column of clips.
 #[derive(Component)]
 struct LibraryClipList;
@@ -757,6 +768,7 @@ pub(super) fn plugin(app: &mut App) {
                 update_library_filter,
                 update_animation_panel_tabs,
                 update_animation_panel_body,
+                demand_project_walk,
                 update_library_files,
                 update_library_clips,
                 update_preview_progress,

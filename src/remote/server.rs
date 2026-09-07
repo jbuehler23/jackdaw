@@ -1038,6 +1038,9 @@ pub fn assets_handler(
     {
         return Ok(Some(json!({ "assets": found })));
     }
+    if let Some(mut demand) = world.get_resource_mut::<crate::animation::LibraryDemand>() {
+        demand.requested = true;
+    }
     let library = world.get_resource::<crate::animation::AnimationLibrary>();
     let detailed: Vec<Value> = found
         .into_iter()

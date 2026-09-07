@@ -140,6 +140,25 @@ impl LibraryScan {
     }
 }
 
+/// Who is asking for the whole project's clips rather than the open scene's.
+///
+/// The walk over the assets directory loads every glTF it finds, so it runs
+/// only while the Library tab is showing or a remote listing asked for clip
+/// details; the open scene's own sources are indexed regardless.
+#[derive(Resource, Default, Debug)]
+pub struct LibraryDemand {
+    /// The Library tab is on screen.
+    pub panel: bool,
+    /// A remote listing asked for clip details.
+    pub requested: bool,
+}
+
+impl LibraryDemand {
+    fn project_walk(&self) -> bool {
+        self.panel || self.requested
+    }
+}
+
 /// Ask one more file, and walk one more directory, per frame.
 ///
 /// Spread over frames rather than done at once: a project's assets directory
@@ -151,6 +170,7 @@ fn index_animation_library(
     asset_server: Res<AssetServer>,
     gltfs: Res<Assets<Gltf>>,
     clip_assets: Res<Assets<AnimationClip>>,
+    demand: Res<LibraryDemand>,
     mut scan: ResMut<LibraryScan>,
     mut library: ResMut<AnimationLibrary>,
 ) {
@@ -173,7 +193,9 @@ fn index_animation_library(
         scan.want(&path);
     }
 
-    walk_one_directory(&mut scan);
+    if demand.project_walk() {
+        walk_one_directory(&mut scan);
+    }
     ask_one_file(&mut scan, &asset_server, &gltfs, &clip_assets, &mut library);
 }
 
@@ -264,6 +286,7 @@ fn ask_one_file(
 }
 
 pub(super) fn plugin(app: &mut App) {
+    app.init_resource::<LibraryDemand>();
     app.init_resource::<AnimationLibrary>()
         .init_resource::<LibraryScan>()
         .add_systems(

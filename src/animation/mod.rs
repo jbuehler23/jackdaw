@@ -4,7 +4,7 @@ pub mod library;
 pub mod panel;
 pub mod preview;
 
-pub use library::{AnimationLibrary, LibraryClip, LibraryFile};
+pub use library::{AnimationLibrary, LibraryClip, LibraryDemand, LibraryFile};
 pub use panel::{AnimationPanelState, AnimationPanelTab, animation_panel_content};
 pub use preview::{AnimationPreview, PreviewMannequin};
 
