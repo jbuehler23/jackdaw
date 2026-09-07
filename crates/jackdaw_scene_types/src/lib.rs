@@ -17,12 +17,14 @@
 //! `jackdaw_runtime` and `jackdaw` re-export both newtypes
 //! through their preludes.
 
+pub mod asset_path;
 pub mod brush_chunks;
 #[cfg(feature = "render")]
 pub mod mesh_rebuild;
 pub mod node_id;
 pub mod types;
 
+pub use asset_path::to_asset_path;
 pub use brush_chunks::{MeshChunk, build_brush_chunks};
 #[cfg(feature = "render")]
 pub use mesh_rebuild::evaluate_brush_geometry;
