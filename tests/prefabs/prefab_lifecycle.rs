@@ -718,6 +718,42 @@ fn prefab_file_change_triggers_reload() {
 }
 
 #[test]
+fn a_prefab_is_not_reloaded_when_its_watch_starts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.bsn");
+    let scene_path = tmp.path().join("s.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    app.add_plugins(jackdaw::prefab::watcher::PrefabWatcherPlugin);
+    write_bsn_prefab(&mut app, &prefab_path, &prefab_with_name("v1"));
+    std::fs::write(&scene_path, scene_referencing(&prefab_path)).unwrap();
+
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
+    app.update();
+
+    let entity_named = |app: &mut App| {
+        let mut names = app.world_mut().query::<(Entity, &Name)>();
+        names
+            .iter(app.world())
+            .find(|(_, name)| name.as_str() == "v1")
+            .map(|(entity, _)| entity)
+    };
+    let before = entity_named(&mut app).expect("the instance spawned");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(800);
+    while std::time::Instant::now() < deadline {
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+
+    assert_eq!(
+        entity_named(&mut app),
+        Some(before),
+        "the watch starting is not a change; the instance keeps its entity"
+    );
+}
+
+#[test]
 fn spawn_instance_caches_and_spawns_inherited_entity() {
     let tmp = tempfile::tempdir().unwrap();
     let prefab_path = tmp.path().join("rock.bsn");

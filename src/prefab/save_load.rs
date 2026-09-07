@@ -40,7 +40,14 @@ fn cache_prefab_tree_inner(path: &Path, cache: &mut PrefabAstCache, depth: usize
     }
     if cache.get(path).is_none() {
         match read_prefab_ast(path) {
-            Ok(prefab_ast) => cache.insert(path, prefab_ast),
+            Ok(prefab_ast) => {
+                cache.insert(path, prefab_ast);
+                // The file as read is the watcher's baseline: the first look
+                // it takes when the watch starts must not read as an edit.
+                if let Ok(fingerprint) = crate::prefab::cache::compute_file_fingerprint(path) {
+                    cache.record_saved_fingerprint(path, fingerprint);
+                }
+            }
             Err(_) => return,
         }
     }
