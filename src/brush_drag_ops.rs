@@ -446,6 +446,17 @@ pub fn brush_face_drag(
         match drag_state.extrude_mode {
             FaceExtrudeMode::Merge => {
                 drag_state.start_brush = Some(brush.clone());
+                if let Ok(cache) = params.brush_caches.get(brush_entity)
+                    && let Some(&face_idx) = active_faces.first()
+                    && let Some(polygon) = cache.face_polygons.get(face_idx)
+                    && !polygon.is_empty()
+                {
+                    drag_state.drag_face_centroid = polygon
+                        .iter()
+                        .map(|&vi| brush_global.transform_point(cache.vertices[vi]))
+                        .sum::<Vec3>()
+                        / polygon.len() as f32;
+                }
             }
             FaceExtrudeMode::Extend => {
                 let (_, brush_rot, _) = brush_global.to_scale_rotation_translation();
@@ -472,31 +483,22 @@ pub fn brush_face_drag(
             .unwrap_or_default();
         match drag_state.extrude_mode {
             FaceExtrudeMode::Merge => {
-                // Calibrate pixels-per-world at the dragged face in world space,
-                // not the brush origin: perspective px-per-world is depth-
-                // dependent, and the local face normal must be rotated into world
-                // space so rotated brushes track the cursor too. Mirrors the
-                // Extend branch and `compute_brush_drag_offset`.
-                let face_idx = drag_faces.first().copied()?;
-                let cache = params.brush_caches.get(brush_entity).ok()?;
-                let polygon = cache.face_polygons.get(face_idx)?;
-                if polygon.is_empty() {
-                    return OperatorResult::Running;
-                }
+                // Calibrate pixels-per-world at the dragged face's start
+                // centroid, not the brush origin: perspective px-per-world is
+                // depth-dependent, and the local face normal must be rotated
+                // into world space so rotated brushes track the cursor too.
+                // Mirrors the Extend branch and `compute_brush_drag_offset`.
                 let (mut brush, brush_global) = params.brushes.get_mut(brush_entity)?;
                 let start = drag_state.start_brush.as_ref()?;
                 let (_, brush_rot, _) = brush_global.to_scale_rotation_translation();
                 let world_normal = (brush_rot * drag_state.drag_face_normal).normalize();
-                let face_centroid: Vec3 = polygon
-                    .iter()
-                    .map(|&vi| brush_global.transform_point(cache.vertices[vi]))
-                    .sum::<Vec3>()
-                    / polygon.len() as f32;
-                let Ok(origin_screen) = camera.world_to_viewport(cam_tf, face_centroid) else {
+                let Ok(origin_screen) =
+                    camera.world_to_viewport(cam_tf, drag_state.drag_face_centroid)
+                else {
                     return OperatorResult::Running;
                 };
                 let Ok(normal_screen) =
-                    camera.world_to_viewport(cam_tf, face_centroid + world_normal)
+                    camera.world_to_viewport(cam_tf, drag_state.drag_face_centroid + world_normal)
                 else {
                     return OperatorResult::Running;
                 };
@@ -644,6 +646,7 @@ fn clear_face_drag_state(drag_state: &mut BrushDragState) {
     drag_state.extend_face_polygon.clear();
     drag_state.extend_depth = 0.0;
     drag_state.start_brush = None;
+    drag_state.drag_face_centroid = Vec3::ZERO;
     drag_state.quick_action = false;
     drag_state.drag_camera = None;
     drag_state.drag_viewport = None;

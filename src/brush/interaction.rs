@@ -68,6 +68,8 @@ pub(crate) struct BrushDragState {
     pub(crate) start_brush: Option<Brush>,
     pub(crate) start_cursor: Vec2,
     pub(crate) drag_face_normal: Vec3,
+    /// World-space centroid of the dragged face at gesture start.
+    pub(crate) drag_face_centroid: Vec3,
     /// World-space face polygon vertices for extend preview.
     pub extend_face_polygon: Vec<Vec3>,
     /// World-space face normal for extend preview.
