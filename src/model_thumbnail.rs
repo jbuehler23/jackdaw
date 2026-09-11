@@ -34,7 +34,6 @@ use bevy::{
     gltf::GltfAssetLabel,
     image::{CompressedImageFormats, ImageSampler, ImageType},
     prelude::*,
-    render::render_resource::TextureFormat,
     render::view::screenshot::{Screenshot, ScreenshotCaptured},
     ui::UiGlobalTransform,
     world_serialization::{WorldAsset, WorldAssetRoot},
@@ -340,6 +339,17 @@ struct ThumbnailSubject;
 #[derive(Resource)]
 struct ThumbnailTarget(Handle<Image>);
 
+/// The image the thumbnail stage renders into, in a format `write_png` reads
+/// back.
+pub(crate) fn thumbnail_target_image() -> Image {
+    Image::new_target_texture(
+        THUMBNAIL_SIZE,
+        THUMBNAIL_SIZE,
+        crate::viewport::EDITOR_VIEW_FORMAT,
+        None,
+    )
+}
+
 fn setup_thumbnail_stage(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -349,17 +359,7 @@ fn setup_thumbnail_stage(
 ) {
     let layer = RenderLayers::layer(THUMBNAIL_LAYER);
 
-    // `Bgra8UnormSrgb` rather than the material preview's `Rgba8Unorm`:
-    // these pixels come back through `ScreenshotCaptured`, and
-    // `Image::try_into_dynamic` (which `screenshot::write_png` calls)
-    // rejects a non-srgb `Rgba8Unorm`. This is the format the viewport's own
-    // capture path already proves out.
-    let target = images.add(Image::new_target_texture(
-        THUMBNAIL_SIZE,
-        THUMBNAIL_SIZE,
-        TextureFormat::Bgra8UnormSrgb,
-        None,
-    ));
+    let target = images.add(thumbnail_target_image());
     commands.insert_resource(ThumbnailTarget(target.clone()));
 
     thumbnails.cache_dir = project.map(|p| p.jackdaw_dir().join("thumbnails"));
