@@ -1,7 +1,7 @@
-//! `JackdawPlugin` loads `catalog.bsn` at `Startup` and exposes its named
-//! entries via the `JackdawCatalog` resource, keyed as `@Name`. Without this,
-//! scene fields like `material: "@bricks"` silently fall back to defaults at
-//! runtime.
+//! `JackdawPlugin` reads the project's asset files at `Startup` and exposes
+//! them through the `JackdawCatalog` resource, keyed by the path each file sits
+//! at and by the `@Name` the references written before paths spell. Without it,
+//! a scene field naming a material silently falls back to a default at runtime.
 
 use std::path::PathBuf;
 
@@ -96,18 +96,18 @@ struct Painted {
 }
 
 #[test]
-fn a_scene_reaches_a_material_by_the_path_of_its_file() {
+fn a_scene_reaches_a_material_in_any_folder_by_the_path_of_its_file() {
     let dir = unique_temp_dir("catalog-loading-path");
-    std::fs::create_dir_all(dir.join("materials")).unwrap();
+    std::fs::create_dir_all(dir.join("content/props")).unwrap();
     std::fs::write(
-        dir.join("materials/grass.material.bsn"),
+        dir.join("content/props/grass.bsn"),
         "#grass\nbevy_pbr::pbr_material::StandardMaterial {\n    perceptual_roughness: 0.25,\n}\n",
     )
     .unwrap();
     std::fs::write(
         dir.join("scene.bsn"),
         format!(
-            "{} {{ material: \"materials/grass.material.bsn\" }}\n",
+            "{} {{ material: \"content/props/grass.bsn\" }}\n",
             <Painted as TypePath>::type_path()
         ),
     )
@@ -148,8 +148,15 @@ fn a_scene_reaches_a_material_by_the_path_of_its_file() {
     assert_eq!(
         Some(painted.id().untyped()),
         catalog
-            .get("materials/grass.material.bsn")
+            .get("content/props/grass.bsn")
             .map(bevy::asset::UntypedHandle::id),
         "the path names the material the catalog loaded, not a fresh load of the document"
     );
+    assert_eq!(
+        Some(painted.id().untyped()),
+        catalog.get("@grass").map(bevy::asset::UntypedHandle::id),
+        "the name the file was spelled by before paths reaches the same material"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

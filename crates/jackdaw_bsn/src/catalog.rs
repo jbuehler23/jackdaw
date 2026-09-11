@@ -273,6 +273,18 @@ pub fn adopt_asset_roots(world: &mut World, source: &SceneBsnAst) -> Vec<String>
     dropped
 }
 
+/// Load the asset one document root holds into its `Assets<T>` store.
+pub fn load_asset_root(
+    world: &mut World,
+    ast: &SceneBsnAst,
+    root: bevy::ecs::entity::Entity,
+) -> Option<UntypedHandle> {
+    let (type_path, asset_value) = asset_value_from_root(ast, root)?;
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let reg = registry.read();
+    load_asset_value(world, &reg, &type_path, &asset_value)
+}
+
 /// Build one named asset from its document value and insert it into its
 /// `Assets<T>` store.
 fn load_asset_entry(
@@ -282,6 +294,20 @@ fn load_asset_entry(
     type_path: &str,
     asset_value: &BsnValue,
 ) -> Option<CatalogEntry> {
+    load_asset_value(world, reg, type_path, asset_value).map(|handle| CatalogEntry {
+        name: name.to_owned(),
+        handle,
+    })
+}
+
+/// Build one asset from its document value and insert it into its `Assets<T>`
+/// store.
+fn load_asset_value(
+    world: &mut World,
+    reg: &bevy::reflect::TypeRegistry,
+    type_path: &str,
+    asset_value: &BsnValue,
+) -> Option<UntypedHandle> {
     let registration = reg.get_with_type_path(type_path)?;
     let reflect_asset = registration.data::<ReflectAsset>()?;
     let type_id = registration.type_id();
@@ -292,11 +318,7 @@ fn load_asset_entry(
         local: None,
     });
     let value = bsn_value_to_reflect(asset_value, type_id, reg, assets_ctx.as_ref())?;
-    let handle = reflect_asset.add(world, &*value);
-    Some(CatalogEntry {
-        name: name.to_owned(),
-        handle,
-    })
+    Some(reflect_asset.add(world, &*value))
 }
 
 /// The type path and value a document root's first non-name patch names.

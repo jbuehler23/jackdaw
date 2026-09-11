@@ -39,7 +39,7 @@ pub struct IsA {
 }
 
 /// Reflect type path of [`Prefab`], as scene documents spell it.
-pub const PREFAB_TYPE: &str = "jackdaw::prefab::components::Prefab";
+pub use jackdaw_bsn::PREFAB_TYPE;
 /// Reflect type path of [`PrefabEntityId`], as scene documents spell it.
 pub const PREFAB_ENTITY_ID_TYPE: &str = "jackdaw::prefab::components::PrefabEntityId";
 /// Reflect type path of [`IsA`], as scene documents spell it.

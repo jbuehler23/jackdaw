@@ -20,11 +20,15 @@ pub mod writer;
 
 pub use catalog::{
     CatalogAssetRef, CatalogEntry, LoadedBsnScene, adopt_asset_roots, append_assets_to_ast,
-    asset_roots, asset_value_from_root, entity_roots, is_asset_root, load_bsn_assets,
-    load_bsn_scene, serialize_assets_to_bsn, serialize_assets_to_bsn_reporting,
+    asset_roots, asset_value_from_root, entity_roots, is_asset_root, load_asset_root,
+    load_bsn_assets, load_bsn_scene, serialize_assets_to_bsn, serialize_assets_to_bsn_reporting,
 };
 
-pub use header::{ASSET_HEADER, read_asset_header, root_type_path, with_asset_header};
+pub use header::{
+    ASSET_HEADER, AssetFileError, PREFAB_TYPE, asset_file_type, asset_text_type,
+    document_type_path, read_asset_file, read_asset_header, root_type_path, walk_asset_files,
+    walk_document_files, with_asset_header,
+};
 
 pub use parse::{ParseError, parse_bsn};
 
