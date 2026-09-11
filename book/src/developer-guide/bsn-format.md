@@ -122,6 +122,44 @@ catalogs at `.jsn/catalog.jsn` or `assets/catalog.jsn` are read
 for migration and rewritten to `assets/catalog.bsn` on the
 next save.
 
+## Asset files in a game
+
+The runtime reads the project's asset files itself: at startup it walks
+every `.bsn` under the asset folder, takes the type each file holds
+from its header or its first root, and loads the ones whose type the
+game registered as a reflected asset into that type's store. A file is
+reachable by the path it sits at, and, while a project still spells
+references by name, by its stem where only one file carries that stem.
+A file naming a type the game has not registered is skipped with a
+warning; scenes and prefabs are left to the loaders that own them.
+
+This is a walk rather than a Bevy `AssetLoader` for `.bsn`, because a
+typed handle needs one loader per concrete asset type the game
+registers, while the walk is generic over reflection and matches the
+index the editor builds for the same folder. Loading a type
+asynchronously through the asset server can come later without changing
+how a file is written or referenced.
+
+A game that keeps its definitions as rows rather than as assets reads
+the same files directly:
+
+```rust,ignore
+use jackdaw_bsn::{read_asset_file, walk_asset_files};
+
+for (path, type_path) in walk_asset_files(Path::new("assets")) {
+    if type_path == ItemDef::type_path() {
+        let item: ItemDef = read_asset_file(&path)?;
+        items.insert(item.id.clone(), item);
+    }
+}
+```
+
+`walk_asset_files` yields one entry per asset file with the type it
+holds, leaving scenes and prefabs out. `read_asset_file` reads the
+value the file's first root holds, refusing a file whose root is
+another type; fields naming other assets by path stay at their
+defaults, since resolving those takes an asset server.
+
 ## What is not in BSN
 
 - Mesh data. Brushes serialize as their face planes; the mesh

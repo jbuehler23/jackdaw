@@ -799,7 +799,7 @@ mod tests {
         app.register_asset_reflect::<Image>();
         app.register_asset_reflect::<StandardMaterial>();
         app.init_resource::<JackdawCatalog>();
-        crate::load_material_files(app.world_mut(), assets_root);
+        crate::load_walked_assets(app.world_mut(), assets_root, None);
         app
     }
 
