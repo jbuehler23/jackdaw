@@ -189,10 +189,8 @@ fn axis_constraint(axis: usize) -> VertexDragConstraint {
 }
 
 /// World units that one cursor pixel spans along the brush-local `axis` at
-/// `anchor_world`, measured against the live projection the same way
-/// [`compute_brush_drag_offset`]'s axis branch calibrates the drag. Used to
-/// turn [`PLANE_SNAP_PIXELS`] into a world-space snap tolerance so the lock
-/// distance reads the same at any zoom or brush scale.
+/// `anchor_world`. Used to turn [`PLANE_SNAP_PIXELS`] into a world-space snap
+/// tolerance so the lock distance reads the same at any zoom or brush scale.
 fn world_per_pixel_along_axis(
     axis: usize,
     cam_tf: &GlobalTransform,
@@ -358,10 +356,10 @@ pub fn mirror_plane_drag(
         return OperatorResult::Running;
     };
 
-    let mouse_delta = viewport_cursor - drag_state.start_cursor;
     let Some(local_delta) = compute_brush_drag_offset(
         axis_constraint(axis),
-        mouse_delta,
+        drag_state.start_cursor,
+        viewport_cursor,
         cam_tf,
         camera,
         brush_global,

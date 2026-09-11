@@ -354,30 +354,56 @@ fn viewport_drag_update(
     };
 
     let start_pos = active.start_transform.translation;
-    let cam_dist = (cam_tf.translation() - start_pos).length();
-    let scale = cam_dist * 0.003;
-    let mouse_delta = viewport_cursor - active.start_viewport_cursor;
 
     let offset = if let Some(axis) = numeric.axis {
-        // Armed numeric axis: constrain the drag to that world axis with the
-        // same screen projection the gizmo handle drag uses, so dragging the
-        // body and dragging the handle feel identical.
+        // Armed numeric axis: constrain the drag to that world axis the same
+        // way the gizmo handle does, so body and handle feel identical.
         let axis_dir = crate::numeric_transform::axis_direction(axis);
-        let amount =
-            crate::gizmos::translate_axis_amount(mouse_delta, camera, cam_tf, start_pos, axis_dir)
-                .unwrap_or(0.0);
+        let amount = crate::viewport_util::drag_along_axis(
+            camera,
+            cam_tf,
+            active.start_viewport_cursor,
+            viewport_cursor,
+            start_pos,
+            axis_dir,
+        )
+        .unwrap_or(0.0);
         axis_dir * amount
     } else if alt {
-        // Alt+drag: move along Y axis only (vertical)
-        Vec3::Y * (-mouse_delta.y) * scale
+        crate::viewport_util::drag_along_axis(
+            camera,
+            cam_tf,
+            active.start_viewport_cursor,
+            viewport_cursor,
+            start_pos,
+            Vec3::Y,
+        )
+        .map(|amount| Vec3::Y * amount)
+        .unwrap_or(Vec3::ZERO)
     } else {
-        // Normal drag: move in XZ plane
-        let cam_right = cam_tf.right().as_vec3();
-        let cam_forward = cam_tf.forward().as_vec3();
-        let right_h = Vec3::new(cam_right.x, 0.0, cam_right.z).normalize_or_zero();
-        let forward_h = Vec3::new(cam_forward.x, 0.0, cam_forward.z).normalize_or_zero();
-
-        let raw = right_h * mouse_delta.x * scale + forward_h * (-mouse_delta.y) * scale;
+        // Move on the ground plane through the grab point. If the ray is
+        // parallel to the ground (looking horizontally), fall back to a
+        // camera-facing plane flattened onto XZ.
+        let raw = crate::viewport_util::drag_on_plane(
+            camera,
+            cam_tf,
+            active.start_viewport_cursor,
+            viewport_cursor,
+            start_pos,
+            Vec3::Y,
+        )
+        .or_else(|| {
+            crate::viewport_util::drag_on_plane(
+                camera,
+                cam_tf,
+                active.start_viewport_cursor,
+                viewport_cursor,
+                start_pos,
+                cam_tf.forward().as_vec3(),
+            )
+            .map(|d| Vec3::new(d.x, 0.0, d.z))
+        })
+        .unwrap_or(Vec3::ZERO);
 
         if shift {
             // Shift+drag: restrict to dominant axis

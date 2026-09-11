@@ -84,7 +84,6 @@ const AXIS_HIT_DISTANCE: f32 = 35.0;
 /// scale handle. Smaller than `AXIS_START_OFFSET` projected, so it never
 /// competes with the axis arms.
 const UNIFORM_HANDLE_RADIUS: f32 = 12.0;
-const EPSILON: f32 = 1e-6;
 
 #[derive(Resource, Default, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum GizmoSpace {
@@ -584,10 +583,14 @@ pub fn gizmo_drag(
 
     match *mode {
         ActiveTool::Translate => {
-            // Use the pivot as the reference point for projecting the axis onto screen.
-            let Some(projected) =
-                translate_axis_amount(mouse_delta, camera, cam_tf, pivot, axis_dir)
-            else {
+            let Some(projected) = crate::viewport_util::drag_along_axis(
+                camera,
+                cam_tf,
+                drag_state.drag_start_screen,
+                viewport_cursor,
+                pivot,
+                axis_dir,
+            ) else {
                 return OperatorResult::Running;
             };
             let snapped = snap_settings.snap_translate_vec3_if(axis_dir * projected, ctrl);
@@ -835,9 +838,14 @@ pub fn gizmo_drag_edit(
 
     match *mode {
         ActiveTool::Translate => {
-            let Some(projected) =
-                translate_axis_amount(mouse_delta, camera, cam_tf, pivot, axis_dir)
-            else {
+            let Some(projected) = crate::viewport_util::drag_along_axis(
+                camera,
+                cam_tf,
+                drag_state.drag_start_screen,
+                viewport_cursor,
+                pivot,
+                axis_dir,
+            ) else {
                 return OperatorResult::Running;
             };
             let world_delta = snap_settings.snap_translate_vec3_if(axis_dir * projected, ctrl);
@@ -1358,27 +1366,6 @@ fn scale_factor(
         }
         Some(factor)
     }
-}
-
-/// Signed distance the selection should move along `axis_dir` for the current
-/// mouse delta, found by projecting the delta onto the axis as it appears on
-/// screen. Returns `None` when the pivot or axis endpoint fails to project, or
-/// when the projected axis is degenerate (zero length on screen).
-pub(crate) fn translate_axis_amount(
-    mouse_delta: Vec2,
-    camera: &Camera,
-    cam_tf: &GlobalTransform,
-    pivot: Vec3,
-    axis_dir: Vec3,
-) -> Option<f32> {
-    let origin_screen = camera.world_to_viewport(cam_tf, pivot).ok()?;
-    let axis_screen = camera.world_to_viewport(cam_tf, pivot + axis_dir).ok()?;
-    let screen_axis = axis_screen - origin_screen;
-    let len_sq = screen_axis.length_squared();
-    if len_sq < EPSILON {
-        return None;
-    }
-    Some(mouse_delta.dot(screen_axis) / len_sq)
 }
 
 /// Camera and `SceneViewport` UI-node entities a gizmo drag should use this

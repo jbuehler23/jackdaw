@@ -136,37 +136,28 @@ pub(crate) struct VertexDragState {
 
 /// Compute a local-space offset for brush vertex/edge drag based on mouse
 /// movement. `anchor_world` is the world position of the dragged element;
-/// the pixels-per-world calibration happens at its depth so the drag tracks
-/// the cursor exactly, even when the element is far from the brush origin.
+/// the cursor ray meets a plane through that point so the drag tracks the
+/// pointer under perspective.
 pub(crate) fn compute_brush_drag_offset(
     constraint: VertexDragConstraint,
-    mouse_delta: Vec2,
+    start_cursor: Vec2,
+    current_cursor: Vec2,
     cam_tf: &GlobalTransform,
     camera: &Camera,
     brush_global: &GlobalTransform,
     anchor_world: Vec3,
 ) -> Option<Vec3> {
-    // Calibrate cursor pixels to world units against the live projection by
-    // measuring how many screen pixels one world unit spans at the dragged
-    // element's depth. Keeps the drag cursor-locked at any zoom or scale.
-    let origin_screen = camera.world_to_viewport(cam_tf, anchor_world).ok()?;
-
+    let (_, brush_rot, _) = brush_global.to_scale_rotation_translation();
     let offset = match constraint {
         VertexDragConstraint::Free => {
-            let cam_right = cam_tf.right().as_vec3();
-            let cam_up = cam_tf.up().as_vec3();
-            let right_screen = camera
-                .world_to_viewport(cam_tf, anchor_world + cam_right)
-                .ok()?;
-            let up_screen = camera
-                .world_to_viewport(cam_tf, anchor_world + cam_up)
-                .ok()?;
-            let px_per_world_x = (right_screen - origin_screen).length().max(1e-4);
-            let px_per_world_y = (up_screen - origin_screen).length().max(1e-4);
-            // Screen Y grows downward, so a downward cursor move is -up.
-            let world_offset = cam_right * (mouse_delta.x / px_per_world_x)
-                + cam_up * (-mouse_delta.y / px_per_world_y);
-            let (_, brush_rot, _) = brush_global.to_scale_rotation_translation();
+            let world_offset = crate::viewport_util::drag_on_plane(
+                camera,
+                cam_tf,
+                start_cursor,
+                current_cursor,
+                anchor_world,
+                cam_tf.forward().as_vec3(),
+            )?;
             brush_rot.inverse() * world_offset
         }
         constraint => {
@@ -176,18 +167,16 @@ pub(crate) fn compute_brush_drag_offset(
                 VertexDragConstraint::AxisZ => Vec3::Z,
                 VertexDragConstraint::Free => unreachable!(),
             };
-            let (_, brush_rot, _) = brush_global.to_scale_rotation_translation();
             let world_axis = brush_rot * axis_dir;
-            let axis_screen = camera
-                .world_to_viewport(cam_tf, anchor_world + world_axis)
-                .ok()?;
-            let screen_axis = axis_screen - origin_screen;
-            let px_per_world = screen_axis.length();
-            if px_per_world < 1e-4 {
-                return Some(Vec3::ZERO);
-            }
-            let projected_px = mouse_delta.dot(screen_axis / px_per_world);
-            axis_dir * (projected_px / px_per_world)
+            let amount = crate::viewport_util::drag_along_axis(
+                camera,
+                cam_tf,
+                start_cursor,
+                current_cursor,
+                anchor_world,
+                world_axis,
+            )?;
+            axis_dir * amount
         }
     };
     Some(offset)

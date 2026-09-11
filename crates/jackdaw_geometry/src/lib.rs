@@ -28,7 +28,7 @@ pub mod newell;
 pub use newell::newell_normal;
 
 pub mod ray;
-pub use ray::ray_plane_intersection;
+pub use ray::{ray_axis_param, ray_plane_intersection};
 
 pub mod triangulate;
 pub use triangulate::{

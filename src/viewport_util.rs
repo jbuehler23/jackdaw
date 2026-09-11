@@ -124,6 +124,65 @@ pub(crate) fn point_in_polygon_2d(point: Vec2, polygon: &[Vec2]) -> bool {
     inside
 }
 
+/// Signed world distance along `axis_dir` matching cursor motion from `start`
+/// to `current`. Uses a camera-facing plane containing the axis so perspective
+/// drags stay under the pointer. Returns `None` when the axis points at the
+/// camera or a ray misses.
+pub(crate) fn drag_along_axis(
+    camera: &Camera,
+    cam_tf: &GlobalTransform,
+    start: Vec2,
+    current: Vec2,
+    pivot: Vec3,
+    axis_dir: Vec3,
+) -> Option<f32> {
+    let start_ray = camera.viewport_to_world(cam_tf, start).ok()?;
+    let current_ray = camera.viewport_to_world(cam_tf, current).ok()?;
+    let cam_pos = cam_tf.translation();
+    let a = jackdaw_geometry::ray_axis_param(
+        start_ray.origin,
+        *start_ray.direction,
+        pivot,
+        axis_dir,
+        cam_pos,
+    )?;
+    let b = jackdaw_geometry::ray_axis_param(
+        current_ray.origin,
+        *current_ray.direction,
+        pivot,
+        axis_dir,
+        cam_pos,
+    )?;
+    Some(b - a)
+}
+
+/// World delta on the plane through `plane_point` matching cursor motion from
+/// `start` to `current`. Returns `None` when a ray is parallel to the plane.
+pub(crate) fn drag_on_plane(
+    camera: &Camera,
+    cam_tf: &GlobalTransform,
+    start: Vec2,
+    current: Vec2,
+    plane_point: Vec3,
+    plane_normal: Vec3,
+) -> Option<Vec3> {
+    let start_ray = camera.viewport_to_world(cam_tf, start).ok()?;
+    let current_ray = camera.viewport_to_world(cam_tf, current).ok()?;
+    let a = jackdaw_geometry::ray_plane_intersection(
+        start_ray.origin,
+        *start_ray.direction,
+        plane_point,
+        plane_normal,
+    )?;
+    let b = jackdaw_geometry::ray_plane_intersection(
+        current_ray.origin,
+        *current_ray.direction,
+        plane_point,
+        plane_normal,
+    )?;
+    Some(b - a)
+}
+
 /// Distance from a point to a line segment.
 pub(crate) fn point_to_segment_dist(point: Vec2, a: Vec2, b: Vec2) -> f32 {
     let ab = b - a;

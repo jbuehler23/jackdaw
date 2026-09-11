@@ -424,7 +424,6 @@ pub fn add_brush(_params: In<OperatorParameters>) -> OperatorResult {
     OperatorResult::Finished
 }
 
-pub(crate) const EXTRUDE_DEPTH_SENSITIVITY: f32 = 0.003;
 pub(crate) const MIN_FOOTPRINT_SIZE: f32 = 0.01;
 pub(crate) const MIN_EXTRUDE_DEPTH: f32 = 0.01;
 pub(crate) const MIN_FRAGMENT_SIZE: f32 = 0.005;

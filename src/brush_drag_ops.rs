@@ -484,32 +484,21 @@ pub fn brush_face_drag(
             .unwrap_or_default();
         match drag_state.extrude_mode {
             FaceExtrudeMode::Merge => {
-                // Calibrate pixels-per-world at the dragged face's start
-                // centroid, not the brush origin: perspective px-per-world is
-                // depth-dependent, and the local face normal must be rotated
-                // into world space so rotated brushes track the cursor too.
-                // Mirrors the Extend branch and `compute_brush_drag_offset`.
                 let (mut brush, brush_global) = params.brushes.get_mut(brush_entity)?;
                 let start = drag_state.start_brush.as_ref()?;
                 let (_, brush_rot, _) = brush_global.to_scale_rotation_translation();
                 let world_normal = (brush_rot * drag_state.drag_face_normal).normalize();
-                let Ok(origin_screen) =
-                    camera.world_to_viewport(cam_tf, drag_state.drag_face_centroid)
-                else {
+                let Some(drag_amount) = crate::viewport_util::drag_along_axis(
+                    camera,
+                    cam_tf,
+                    drag_state.start_cursor,
+                    viewport_cursor,
+                    drag_state.drag_face_centroid,
+                    world_normal,
+                )
+                .map(|amount| snap_translate(amount, &snap_settings, ctrl)) else {
                     return OperatorResult::Running;
                 };
-                let Ok(normal_screen) =
-                    camera.world_to_viewport(cam_tf, drag_state.drag_face_centroid + world_normal)
-                else {
-                    return OperatorResult::Running;
-                };
-                // Pixels per world unit along the face normal at this depth, so
-                // the push/pull tracks the cursor at any zoom or scale.
-                let screen_span = normal_screen - origin_screen;
-                let px_per_world = screen_span.length().max(1e-4);
-                let mouse_delta = viewport_cursor - drag_state.start_cursor;
-                let projected = mouse_delta.dot(screen_span / px_per_world);
-                let drag_amount = snap_translate(projected / px_per_world, &snap_settings, ctrl);
                 if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
                     // HalfedgeMesh path: translate each selected face's ring vertices along the face normal.
                     let face_keys = halfedge.face_keys.clone();
@@ -592,20 +581,17 @@ pub fn brush_face_drag(
                 let face_centroid: Vec3 = drag_state.extend_face_polygon.iter().sum::<Vec3>()
                     / drag_state.extend_face_polygon.len() as f32;
                 let world_normal = drag_state.extend_face_normal;
-                let Ok(origin_screen) = camera.world_to_viewport(cam_tf, face_centroid) else {
+                let Some(depth) = crate::viewport_util::drag_along_axis(
+                    camera,
+                    cam_tf,
+                    drag_state.start_cursor,
+                    viewport_cursor,
+                    face_centroid,
+                    world_normal,
+                ) else {
                     return OperatorResult::Running;
                 };
-                let Ok(normal_screen) =
-                    camera.world_to_viewport(cam_tf, face_centroid + world_normal)
-                else {
-                    return OperatorResult::Running;
-                };
-                let screen_span = normal_screen - origin_screen;
-                let px_per_world = screen_span.length().max(1e-4);
-                let mouse_delta = viewport_cursor - drag_state.start_cursor;
-                let projected = mouse_delta.dot(screen_span / px_per_world);
-                drag_state.extend_depth =
-                    snap_translate(projected / px_per_world, &snap_settings, ctrl);
+                drag_state.extend_depth = snap_translate(depth, &snap_settings, ctrl);
             }
         }
     }
@@ -1064,7 +1050,6 @@ pub fn brush_vertex_drag(
     }
 
     if drag_state.active {
-        let mouse_delta = viewport_cursor - drag_state.start_cursor;
         let primary_start = drag_state
             .start_vertex_positions
             .first()
@@ -1072,7 +1057,8 @@ pub fn brush_vertex_drag(
             .unwrap_or(Vec3::ZERO);
         apply_shared_drag(
             drag_state.constraint,
-            mouse_delta,
+            drag_state.start_cursor,
+            viewport_cursor,
             primary_start,
             cam_tf,
             camera,
@@ -1380,7 +1366,6 @@ pub fn brush_edge_drag(
     }
 
     if drag_state.active {
-        let mouse_delta = viewport_cursor - drag_state.start_cursor;
         let primary_start = drag_state
             .start_edge_vertices
             .first()
@@ -1388,7 +1373,8 @@ pub fn brush_edge_drag(
             .unwrap_or(Vec3::ZERO);
         apply_shared_drag(
             drag_state.constraint,
-            mouse_delta,
+            drag_state.start_cursor,
+            viewport_cursor,
             primary_start,
             cam_tf,
             camera,
@@ -1483,7 +1469,7 @@ pub(crate) fn capture_edit_brushes(
     captures
 }
 
-/// Resolve the current mouse delta into a snapped world displacement and
+/// Resolve the current cursor into a snapped world displacement and
 /// broadcast it to every captured brush. Shared by the vertex and edge drag
 /// per-frame tails, which differ only in how `primary_start` (the local start
 /// position the free-drag snap rounds against) is sourced. Does nothing when
@@ -1491,7 +1477,8 @@ pub(crate) fn capture_edit_brushes(
 /// return.
 fn apply_shared_drag(
     constraint: VertexDragConstraint,
-    mouse_delta: Vec2,
+    start_cursor: Vec2,
+    current_cursor: Vec2,
     primary_start: Vec3,
     cam_tf: &GlobalTransform,
     camera: &Camera,
@@ -1503,11 +1490,11 @@ fn apply_shared_drag(
     halfedge_q: &mut Query<&mut crate::brush::BrushHalfedge>,
     mirrors: &Query<&jackdaw_geometry::ModifierStack>,
 ) {
-    // Calibrate the cursor-to-world scale at the dragged element's depth.
     let anchor_world = brush_global.transform_point(primary_start);
     let Some(local_offset) = compute_brush_drag_offset(
         constraint,
-        mouse_delta,
+        start_cursor,
+        current_cursor,
         cam_tf,
         camera,
         brush_global,
