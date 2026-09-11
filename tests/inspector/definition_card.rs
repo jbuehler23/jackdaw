@@ -71,16 +71,8 @@ fn app_with_open_definition() -> (App, tempfile::TempDir) {
 }
 
 fn open_mob(app: &App) -> MobDef {
-    let entity = app
-        .world()
-        .resource::<OpenDefinition>()
-        .0
-        .expect("a definition is open");
-    let handle = app
-        .world()
-        .get::<DefinitionAssetEdit>(entity)
-        .expect("the entity is editing a definition")
-        .value
+    let handle = jackdaw::definition_assets::open_definition_value(app.world())
+        .expect("a definition is open")
         .handle()
         .expect("a compiled definition")
         .clone();

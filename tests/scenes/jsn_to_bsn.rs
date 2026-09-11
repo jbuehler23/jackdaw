@@ -708,7 +708,6 @@ fn catalog_round_trips_as_bsn() {
         // Saving and loading a catalog both go through the material files,
         // which this minimal app has to supply the bookkeeping for.
         app.init_resource::<jackdaw::material_assets::MaterialRegistry>();
-        app.init_resource::<jackdaw::material_assets::SavedMaterials>();
         app.world_mut().insert_resource(ProjectRoot::new(
             root.to_path_buf(),
             jackdaw::project::ProjectConfig::default(),

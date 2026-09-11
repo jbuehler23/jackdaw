@@ -38,7 +38,6 @@ impl Plugin for MaterialBrowserPlugin {
             .init_resource::<MaterialBrowserState>()
             .init_resource::<MaterialPreviewState>()
             .init_resource::<MaterialRegistry>()
-            .init_resource::<crate::material_assets::SavedMaterials>()
             .add_systems(
                 OnEnter(crate::AppState::Editor),
                 (
@@ -46,11 +45,15 @@ impl Plugin for MaterialBrowserPlugin {
                     rebuild_material_registry,
                     |world: &mut World| crate::asset_catalog::save_catalog(world),
                 )
-                    .chain(),
+                    .chain()
+                    .after(crate::asset_index::open_asset_index),
             )
             .add_systems(
                 Update,
                 (
+                    follow_asset_index
+                        .run_if(resource_changed::<crate::asset_index::AssetIndex>)
+                        .before(rescan_material_definitions),
                     rescan_material_definitions,
                     save_catalog_if_dirty,
                     apply_material_filter,
@@ -239,13 +242,14 @@ fn collect_texture_paths(dir: &Path, paths: &mut Vec<String>) {
     }
 }
 
-/// Rebuild [`MaterialRegistry`] from the catalog plus a fresh scan of both
-/// `assets/materials` and the texture sets under `assets/`.
+/// Rebuild [`MaterialRegistry`] from the asset index plus a fresh scan of the
+/// texture sets under `assets/`.
 ///
-/// Saved materials are listed first and win their base name: a detected set
-/// whose name already belongs to a saved material is skipped. Detected sets
-/// enter the in-memory catalog (so `@Name` face references resolve and scene
-/// saves emit them) but stay unsaved until `material.save` writes a file.
+/// Materials with a file of their own are listed first and win their base name,
+/// wherever their file sits: a detected set whose name already belongs to one is
+/// skipped. Detected sets enter the in-memory catalog (so `@Name` face
+/// references resolve and scene saves emit them) but stay unsaved until
+/// `material.save` writes a file.
 fn rebuild_material_registry(world: &mut World) {
     let assets_dir = world
         .get_resource::<crate::project::ProjectRoot>()
@@ -254,30 +258,37 @@ fn rebuild_material_registry(world: &mut World) {
     world.resource_mut::<MaterialBrowserState>().scan_directory = assets_dir.clone();
     world.resource_mut::<MaterialRegistry>().entries.clear();
 
-    // Material files written since the last scan (by another tool, by hand, or by a second
-    // editor) become saved materials here, without reopening the project.
-    crate::material_assets::rescan_material_files(world);
-
-    let durable = world
-        .resource::<crate::material_assets::SavedMaterials>()
-        .0
-        .clone();
     let mut saved: Vec<(String, Handle<StandardMaterial>)> = world
-        .resource::<crate::asset_catalog::AssetCatalog>()
-        .handles
-        .iter()
-        .filter(|(name, handle)| {
-            handle.type_id() == std::any::TypeId::of::<StandardMaterial>()
-                && durable.contains(name.trim_start_matches(['@', '#']))
-        })
-        .map(|(name, handle)| {
-            (
-                name.trim_start_matches(['@', '#']).to_string(),
-                handle.clone().typed::<StandardMaterial>(),
-            )
+        .resource::<crate::asset_index::AssetIndex>()
+        .of_kind(crate::definition_assets::MATERIAL_KIND)
+        .filter_map(|entry| {
+            let handle = entry.value.handle()?;
+            (handle.type_id() == std::any::TypeId::of::<StandardMaterial>())
+                .then(|| (entry.name(), handle.clone().typed::<StandardMaterial>()))
         })
         .collect();
+    let inline = world
+        .resource::<crate::asset_catalog::AssetCatalog>()
+        .inline_materials
+        .clone();
+    saved.extend(
+        world
+            .resource::<crate::asset_catalog::AssetCatalog>()
+            .handles
+            .iter()
+            .filter(|(name, handle)| {
+                handle.type_id() == std::any::TypeId::of::<StandardMaterial>()
+                    && inline.contains(name.trim_start_matches(['@', '#']))
+            })
+            .map(|(name, handle)| {
+                (
+                    name.trim_start_matches(['@', '#']).to_string(),
+                    handle.clone().typed::<StandardMaterial>(),
+                )
+            }),
+    );
     saved.sort_by(|a, b| a.0.cmp(&b.0));
+    saved.dedup_by(|a, b| a.0 == b.0);
     for (name, handle) in saved {
         world
             .resource_mut::<MaterialRegistry>()
@@ -362,6 +373,12 @@ fn on_material_grid_added(
     mut state: ResMut<MaterialBrowserState>,
 ) {
     info!("MaterialBrowserGrid added, triggering rescan");
+    state.needs_rescan = true;
+}
+
+/// A file indexed, reloaded or removed since the last frame changes what the
+/// panel has to list.
+fn follow_asset_index(mut state: ResMut<MaterialBrowserState>) {
     state.needs_rescan = true;
 }
 
@@ -1422,10 +1439,49 @@ mod tests {
             config: crate::project::ProjectConfig::default(),
         });
         app.init_resource::<MaterialRegistry>();
-        app.init_resource::<crate::material_assets::SavedMaterials>();
         app.init_resource::<crate::asset_catalog::AssetCatalog>();
         app.init_resource::<MaterialBrowserState>();
+        app.init_resource::<crate::asset_index::AssetIndex>();
+        app.init_resource::<crate::asset_files::AssetKindCache>();
+        app.init_resource::<jackdaw_api::prelude::AssetKinds>();
+        app.world_mut()
+            .resource_mut::<jackdaw_api::prelude::AssetKinds>()
+            .register(jackdaw_api::prelude::AssetKind::compiled(
+                crate::definition_assets::MATERIAL_KIND,
+                "Material",
+                StandardMaterial::type_path(),
+            ));
         (app, tmp)
+    }
+
+    /// The panel lists what the index holds, so a material filed anywhere under
+    /// the project shows up beside the ones in `materials/`.
+    #[test]
+    fn a_material_filed_outside_the_materials_folder_is_listed() {
+        let (mut app, tmp) = project_browser_app();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let elsewhere = tmp.path().join("assets/zones/hedgerow");
+        std::fs::create_dir_all(&elsewhere).expect("the directory is made");
+        crate::definition_assets::write_asset_file(
+            app.world(),
+            "bramble",
+            &crate::asset_index::AssetValue::Handle(handle.untyped()),
+            &elsewhere.join("bramble.material.bsn"),
+        )
+        .expect("the material file is written");
+
+        crate::asset_index::rescan_asset_index(app.world_mut());
+        rebuild_material_registry(app.world_mut());
+
+        assert!(
+            app.world()
+                .resource::<MaterialRegistry>()
+                .is_saved("bramble"),
+            "a material is listed by what it is, not by where it sits",
+        );
     }
 
     /// A material whose file went missing stays in the list so its name resolves, and lists
@@ -1439,6 +1495,7 @@ mod tests {
             .add(StandardMaterial::default());
         crate::material_assets::write_material_file(app.world(), "slate", &handle).expect("write");
 
+        crate::asset_index::rescan_asset_index(app.world_mut());
         rebuild_material_registry(app.world_mut());
         assert!(
             app.world().resource::<MaterialRegistry>().is_saved("slate"),
@@ -1447,6 +1504,7 @@ mod tests {
 
         std::fs::remove_file(tmp.path().join("assets/materials/slate.material.bsn"))
             .expect("remove");
+        crate::asset_index::rescan_asset_index(app.world_mut());
         rebuild_material_registry(app.world_mut());
 
         let registry = app.world().resource::<MaterialRegistry>();

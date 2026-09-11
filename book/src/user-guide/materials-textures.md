@@ -75,9 +75,11 @@ Two storage tiers:
 
 - Scene-local: the material lives only inside the current
   `.bsn`. References use `#Name`.
-- Project-wide: it lives in `assets/catalog.bsn` and any
-  scene in the project can reference it. References use
-  `@Name`.
+- Project-wide: it lives in a `.bsn` file of its own, in
+  whatever folder you keep it in; the editor finds it by
+  reading what the file holds. A save with no folder in mind
+  puts it under `assets/materials/`. Any scene in the project
+  can reference it, and references use `@Name`.
 
 The browser shows both, with the source labelled.
 
