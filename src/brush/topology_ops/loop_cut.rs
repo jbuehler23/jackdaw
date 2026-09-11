@@ -88,9 +88,7 @@ pub(crate) fn brush_loop_cut(
 ) -> OperatorResult {
     // --- Cursor position ---
     // Use raw UI-space cursor so dragging outside the viewport panel
-    // doesn't cancel the modal (the bounds check in window_to_viewport_cursor
-    // returns None when the cursor leaves the UI node, cancelling the modal
-    // mid-drag).
+    // doesn't cancel the modal.
     let (camera, cam_tf) = camera_query.single()?;
     let cursor_pos = cursor.get()?;
 

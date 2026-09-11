@@ -212,10 +212,42 @@ pub fn brush_face_drag(
     mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
     mut override_cursor: ResMut<OverrideCursor>,
 ) -> OperatorResult {
+    let modal_running = modal.is_some();
+    if modal_running {
+        if drag_state.active && mouse.just_pressed(MouseButton::Right) {
+            return OperatorResult::Cancelled;
+        }
+        if vp.cursor().is_none() || mouse.just_released(MouseButton::Left) {
+            if drag_state.active {
+                match drag_state.extrude_mode {
+                    FaceExtrudeMode::Merge => {}
+                    FaceExtrudeMode::Extend => {
+                        if drag_state.extend_depth.abs() > MIN_EXTRUDE_DEPTH {
+                            spawn_extruded_brush(
+                                &drag_state.extend_face_polygon,
+                                drag_state.extend_face_normal,
+                                drag_state.extend_depth,
+                                &mut commands,
+                            );
+                        }
+                    }
+                }
+            }
+            let was_quick = drag_state.quick_action;
+            clear_face_drag_state(&mut drag_state);
+            clear_grab_cursor(&mut override_cursor);
+            if was_quick {
+                *edit_mode = EditMode::Object;
+                brush_selection.clear();
+            }
+            return OperatorResult::Finished;
+        }
+    }
+
     let cursor_pos = vp.cursor()?;
     // First invoke uses the hovered viewport; subsequent invokes use
     // the captured one so the drag stays bound to its origin panel.
-    let (camera_entity, viewport_entity) = if modal.is_none() {
+    let (camera_entity, viewport_entity) = if !modal_running {
         let camera_entity = vp.camera_entity()?;
         let viewport_entity = vp.viewport_entity()?;
         (camera_entity, viewport_entity)
@@ -392,38 +424,7 @@ pub fn brush_face_drag(
         return OperatorResult::Running;
     }
 
-    // Subsequent invoke: handle right-click cancel, release commit,
-    // pending -> active promotion, and per-frame drag math.
-    if drag_state.active && mouse.just_pressed(MouseButton::Right) {
-        return OperatorResult::Cancelled;
-    }
-
-    if mouse.just_released(MouseButton::Left) {
-        if drag_state.active {
-            match drag_state.extrude_mode {
-                FaceExtrudeMode::Merge => {}
-                FaceExtrudeMode::Extend => {
-                    if drag_state.extend_depth.abs() > MIN_EXTRUDE_DEPTH {
-                        spawn_extruded_brush(
-                            &drag_state.extend_face_polygon,
-                            drag_state.extend_face_normal,
-                            drag_state.extend_depth,
-                            &mut commands,
-                        );
-                    }
-                }
-            }
-        }
-        let was_quick = drag_state.quick_action;
-        clear_face_drag_state(&mut drag_state);
-        clear_grab_cursor(&mut override_cursor);
-        if was_quick {
-            *edit_mode = EditMode::Object;
-            brush_selection.clear();
-        }
-        return OperatorResult::Finished;
-    }
-
+    // Subsequent invoke: pending -> active promotion, and per-frame drag math.
     if let Some(ref pending) = drag_state.pending
         && mouse.pressed(MouseButton::Left)
         && !drag_state.active
@@ -824,8 +825,20 @@ pub fn brush_vertex_drag(
     snap_settings: Res<SnapSettings>,
     mut override_cursor: ResMut<OverrideCursor>,
 ) -> OperatorResult {
+    let modal_running = modal.is_some();
+    if modal_running {
+        if drag_state.active && mouse.just_pressed(MouseButton::Right) {
+            return OperatorResult::Cancelled;
+        }
+        if vp.cursor().is_none() || mouse.just_released(MouseButton::Left) {
+            clear_vertex_drag_state(&mut drag_state);
+            clear_grab_cursor(&mut override_cursor);
+            return OperatorResult::Finished;
+        }
+    }
+
     let cursor_pos = vp.cursor()?;
-    let (camera_entity, viewport_entity) = if modal.is_none() {
+    let (camera_entity, viewport_entity) = if !modal_running {
         let camera_entity = vp.camera_entity()?;
         let viewport_entity = vp.viewport_entity()?;
         (camera_entity, viewport_entity)
@@ -977,7 +990,7 @@ pub fn brush_vertex_drag(
     let brush_entity = brush_selection.active_brush?;
     let brush_global = brush_transforms.get(brush_entity)?;
 
-    // Subsequent invokes: constraint cycling, RMB cancel, release commit, drag math.
+    // Subsequent invokes: constraint cycling and drag math.
     if drag_state.active {
         if modal_inputs.axis_x() {
             drag_state.constraint =
@@ -989,16 +1002,6 @@ pub fn brush_vertex_drag(
             drag_state.constraint =
                 toggle_constraint(drag_state.constraint, VertexDragConstraint::AxisZ);
         }
-    }
-
-    if drag_state.active && mouse.just_pressed(MouseButton::Right) {
-        return OperatorResult::Cancelled;
-    }
-
-    if mouse.just_released(MouseButton::Left) {
-        clear_vertex_drag_state(&mut drag_state);
-        clear_grab_cursor(&mut override_cursor);
-        return OperatorResult::Finished;
     }
 
     if let Some(ref pending) = drag_state.pending
@@ -1191,8 +1194,20 @@ pub fn brush_edge_drag(
     snap_settings: Res<SnapSettings>,
     mut override_cursor: ResMut<OverrideCursor>,
 ) -> OperatorResult {
+    let modal_running = modal.is_some();
+    if modal_running {
+        if drag_state.active && mouse.just_pressed(MouseButton::Right) {
+            return OperatorResult::Cancelled;
+        }
+        if vp.cursor().is_none() || mouse.just_released(MouseButton::Left) {
+            clear_edge_drag_state(&mut drag_state);
+            clear_grab_cursor(&mut override_cursor);
+            return OperatorResult::Finished;
+        }
+    }
+
     let cursor_pos = vp.cursor()?;
-    let (camera_entity, viewport_entity) = if modal.is_none() {
+    let (camera_entity, viewport_entity) = if !modal_running {
         let camera_entity = vp.camera_entity()?;
         let viewport_entity = vp.viewport_entity()?;
         (camera_entity, viewport_entity)
@@ -1305,16 +1320,6 @@ pub fn brush_edge_drag(
             drag_state.constraint =
                 toggle_constraint(drag_state.constraint, VertexDragConstraint::AxisZ);
         }
-    }
-
-    if drag_state.active && mouse.just_pressed(MouseButton::Right) {
-        return OperatorResult::Cancelled;
-    }
-
-    if mouse.just_released(MouseButton::Left) {
-        clear_edge_drag_state(&mut drag_state);
-        clear_grab_cursor(&mut override_cursor);
-        return OperatorResult::Finished;
     }
 
     if let Some(ref pending) = drag_state.pending

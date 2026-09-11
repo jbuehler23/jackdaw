@@ -344,13 +344,14 @@ fn viewport_drag_update(
     let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     let shift = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
 
-    let viewport_cursor = crate::viewport_util::window_to_viewport_cursor_for(
+    let Some(viewport_cursor) = crate::viewport_util::window_to_viewport_cursor_for(
         cursor_pos,
         camera,
         active.viewport,
         &viewport_query,
-    )
-    .unwrap_or(cursor_pos);
+    ) else {
+        return;
+    };
 
     let start_pos = active.start_transform.translation;
     let cam_dist = (cam_tf.translation() - start_pos).length();
@@ -399,13 +400,14 @@ fn viewport_drag_update(
 
 fn viewport_drag_finish(
     mouse: Res<ButtonInput<MouseButton>>,
+    cursor: crate::viewport::UiCursorPos,
     mut drag_state: ResMut<ViewportDragState>,
     transforms: Query<&Transform>,
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
     mut numeric: ResMut<crate::numeric_transform::NumericTransformState>,
     mut commands: Commands,
 ) {
-    if !mouse.just_released(MouseButton::Left) {
+    if !mouse.just_released(MouseButton::Left) && cursor.get().is_some() {
         return;
     }
 
