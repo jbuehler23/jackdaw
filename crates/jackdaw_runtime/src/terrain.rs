@@ -187,12 +187,20 @@ fn load_sidecars(
         (Entity, &Terrain, Option<&TerrainSidecar>),
         (Without<TerrainDocument>, Without<TerrainUnreadable>),
     >,
+    catalog_path: Option<Res<crate::JackdawCatalogPath>>,
+    asset_folder: Option<Res<crate::AssetFolder>>,
 ) {
+    let assets = crate::resolve_assets_root(catalog_path.as_deref(), asset_folder.as_deref());
     for (entity, terrain, sidecar_path) in &terrains {
         let data = match sidecar_path {
             Some(TerrainSidecar(path)) => match std::fs::read(path) {
-                Ok(bytes) => match sidecar::load(&bytes) {
-                    Ok(data) => data,
+                Ok(bytes) => match sidecar::load_from(&bytes, assets.as_deref()) {
+                    Ok(loaded) => {
+                        for message in loaded.warnings() {
+                            warn!("{message}");
+                        }
+                        loaded.data
+                    }
                     Err(err) => {
                         error!(
                             "terrain data {} is unreadable ({err}); this terrain draws nothing \
@@ -243,16 +251,29 @@ fn document_of(data: RegionTerrainData, terrain: &Terrain) -> TerrainDocument {
     }
 }
 
-/// The `StandardMaterial` a slot's name addresses, through the project catalog
-/// that `materials/<name>.material.bsn` and `catalog.bsn` both feed.
+/// The `StandardMaterial` a slot's reference addresses, through the project
+/// catalog that `materials/<name>.material.bsn` and `catalog.bsn` both feed.
+///
+/// A slot spells the path of its material file; the catalog is keyed by the
+/// name that path's file carries, so a path is looked up by its own last
+/// segment when nothing answers to the path itself.
 ///
 /// [`resolve_with`] decides what a resolved material means: which of its slots
-/// is albedo, and that a vacated or unfound name keeps its texture id.
-fn catalog_material(catalog: &JackdawCatalog, name: &str) -> Option<Handle<StandardMaterial>> {
+/// is albedo, and that a vacated or unfound reference keeps its texture id.
+fn catalog_material(catalog: &JackdawCatalog, reference: &str) -> Option<Handle<StandardMaterial>> {
+    let name = material_name_of(reference);
     catalog
-        .get(&format!("@{name}"))
+        .get(reference)
+        .or_else(|| catalog.get(&format!("@{name}")))
         .cloned()
         .and_then(|handle| handle.try_typed::<StandardMaterial>().ok())
+}
+
+/// The name a material reference carries: the part of its last path segment
+/// before the first dot, which is what a bare name already is.
+fn material_name_of(reference: &str) -> &str {
+    let file = reference.rsplit('/').next().unwrap_or(reference);
+    file.split_once('.').map_or(file, |(stem, _)| stem)
 }
 
 /// Keep every terrain's resolved set following its material list.
@@ -778,7 +799,7 @@ mod tests {
         app.register_asset_reflect::<Image>();
         app.register_asset_reflect::<StandardMaterial>();
         app.init_resource::<JackdawCatalog>();
-        crate::load_material_files(app.world_mut(), &assets_root.join("materials"));
+        crate::load_material_files(app.world_mut(), assets_root);
         app
     }
 

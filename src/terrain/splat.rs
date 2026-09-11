@@ -4,10 +4,10 @@
 //! least one material slot and everything those materials name has loaded.
 //! Otherwise it draws with the plain editor material.
 //!
-//! The editor contributes the name store: it hands [`resolve_with`] a closure
-//! that looks a slot's name up in [`MaterialRegistry`]. The id space and the
-//! array stacking live in the shared crate, so the editor and a built game
-//! turn the same names into the same pixels.
+//! The editor contributes the lookup: it hands [`resolve_with`] a closure that
+//! finds the file a slot's path names, or the material a bare name stands for.
+//! The id space and the array stacking live in the shared crate, so the editor
+//! and a built game turn the same references into the same pixels.
 
 use std::sync::Arc;
 
@@ -194,8 +194,8 @@ impl TerrainSplatMaterials {
 
 /// Resolve every terrain's material list into the array builder's input.
 ///
-/// Runs every frame rather than on a change signal: resolution is a registry
-/// lookup per slot and the result is compared before it is stored, so an
+/// Runs every frame rather than on a change signal: resolution is one lookup
+/// per slot and the result is compared before it is stored, so an
 /// unchanged terrain writes nothing and a material that loaded late is picked
 /// up without invalidation bookkeeping.
 fn resolve_terrain_materials(
@@ -203,6 +203,7 @@ fn resolve_terrain_materials(
     mut paint_state: ResMut<super::TerrainPaintState>,
     store: Res<TerrainDataStore>,
     registry: Res<MaterialRegistry>,
+    index: Option<Res<crate::asset_index::AssetIndex>>,
     standard: Res<Assets<StandardMaterial>>,
     assets: Res<AssetServer>,
     terrains: Query<&jackdaw_scene_types::Terrain>,
@@ -222,10 +223,13 @@ fn resolve_terrain_materials(
         let slots = store.materials(&data_path).to_vec();
         let resolved = resolve_with(
             &slots,
-            |name| {
-                registry
-                    .get_by_name(name)
-                    .and_then(|entry| standard.get(&entry.handle))
+            |reference| {
+                crate::material_assets::material_of_reference(
+                    index.as_deref(),
+                    &registry,
+                    reference,
+                )
+                .and_then(|handle| standard.get(&handle))
             },
             &assets,
         );

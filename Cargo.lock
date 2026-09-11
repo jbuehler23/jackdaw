@@ -5391,6 +5391,7 @@ dependencies = [
  "noise",
  "path-slash",
  "rand 0.10.2",
+ "tempfile",
 ]
 
 [[package]]

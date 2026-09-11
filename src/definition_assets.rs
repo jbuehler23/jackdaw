@@ -463,7 +463,8 @@ fn asset_field_json(
         value.reflect_path(field_path).ok()?
     };
     let server = world.get_resource::<AssetServer>();
-    if let Some(path) = crate::typed_values::asset_path_json(&registry, server, field) {
+    let index = world.get_resource::<crate::asset_index::AssetIndex>();
+    if let Some(path) = crate::typed_values::asset_path_json(&registry, server, index, field) {
         return Some(path);
     }
     crate::inspector::reflect_fields::reflect_to_json(field, &registry)
@@ -553,11 +554,12 @@ fn text_value_for_asset_field(
         value.reflect_path(field_path).ok()?
     };
     let type_id = field.get_represented_type_info()?.type_id();
-    if crate::typed_values::takes_asset_path(&registry, type_id) {
+    let references = jackdaw_bsn::apply_reference_map(world);
+    if crate::typed_values::takes_asset_path(&registry, type_id) && !references.contains_key(text) {
         report_missing_asset(text);
     }
     let server = world.get_resource::<AssetServer>();
-    crate::typed_values::text_value_for_field(&registry, server, type_id, text)
+    crate::typed_values::text_value_for_field(&registry, server, Some(&references), type_id, text)
 }
 
 /// Say when a path names nothing under the project's assets, without refusing

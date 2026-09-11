@@ -219,8 +219,22 @@ pub const VERSION_6: u16 = 6;
 /// What [`save`] writes.
 pub const VERSION_7: u16 = 7;
 
+/// Region documents whose material slots hold the path of a material file
+/// under the project's assets rather than a bare name. A version-7 or older
+/// file's name becomes `materials/<name>.material.bsn` where that file is
+/// there, and stays a name where it is not. What [`save`] writes.
+pub const VERSION_8: u16 = 8;
+
 /// Conventional file extension for a terrain sidecar.
 pub const EXTENSION: &str = "jdterrain";
+
+/// Where a material file written before references were paths sits, relative
+/// to the project's assets.
+pub const MATERIALS_DIR: &str = "materials";
+
+/// What a material file written before references were paths is called after
+/// its stem.
+pub const MATERIAL_FILE_SUFFIX: &str = ".material.bsn";
 
 /// Region flags bit: this region has a color layer, written right after
 /// its control words.
@@ -322,8 +336,8 @@ pub fn validate_asset_ref(path: &str) -> Result<(), SidecarPathError> {
 /// Why a material name could not be stored on a terrain slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaterialNameError {
-    /// A character that cannot appear in a file stem, so the name could
-    /// never address one material file.
+    /// A character that cannot appear in a path under the project's assets,
+    /// so the reference could never address one material file.
     InvalidCharacter,
     /// `.` or `..`, which name a directory rather than a material.
     Reserved,
@@ -334,9 +348,10 @@ impl core::fmt::Display for MaterialNameError {
         match self {
             Self::InvalidCharacter => write!(
                 f,
-                "material name may hold only letters, digits, '.', '_' and '-'"
+                "a material reference may hold only letters, digits, '.', '_', '-' \
+                 and the '/' between path segments"
             ),
-            Self::Reserved => write!(f, "'.' and '..' are not material names"),
+            Self::Reserved => write!(f, "'.' and '..' are not material references"),
         }
     }
 }
@@ -345,24 +360,35 @@ impl core::error::Error for MaterialNameError {}
 
 /// Validate a terrain slot's material reference.
 ///
-/// A material's name, its `@Name` identity and its file stem are one string, so
-/// a name that could not be a file stem could never resolve. Checked at the
-/// format boundary, because an unchecked name fails every subsequent save.
+/// A reference is the path of a material file under the project's assets, and
+/// the files written before version 8 spell a bare name, which is that path's
+/// last segment without its extensions. Either way every segment must be able
+/// to name a directory or a file, so a reference that could not address one is
+/// refused at the format boundary, where an unchecked one would fail every
+/// subsequent save.
 ///
-/// The empty name is valid and means a tombstone; see
+/// The empty reference is valid and means a tombstone; see
 /// [`TerrainMaterialSlot::tombstone`].
 pub fn validate_material_name(name: &str) -> Result<(), MaterialNameError> {
     if name.is_empty() {
         return Ok(());
     }
-    if name == "." || name == ".." {
-        return Err(MaterialNameError::Reserved);
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-    {
+    if name.starts_with('/') || name.ends_with('/') {
         return Err(MaterialNameError::InvalidCharacter);
+    }
+    for segment in name.split('/') {
+        if segment.is_empty() {
+            return Err(MaterialNameError::InvalidCharacter);
+        }
+        if segment == "." || segment == ".." {
+            return Err(MaterialNameError::Reserved);
+        }
+        if !segment
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        {
+            return Err(MaterialNameError::InvalidCharacter);
+        }
     }
     Ok(())
 }
@@ -379,8 +405,9 @@ pub fn validate_material_name(name: &str) -> Result<(), MaterialNameError> {
 /// painted with them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TerrainMaterialSlot {
-    /// Name of a saved material: the `@Name` identity, which is also the
-    /// `.material.bsn` file stem. Empty for a tombstone.
+    /// The material this id draws: the path of its file under the project's
+    /// assets, or the bare name a file written before version 8 spells. Empty
+    /// for a tombstone.
     pub material: String,
     /// Texture repeats per world unit. Unused by a tombstone, which draws
     /// nothing.
@@ -1544,7 +1571,7 @@ pub fn encode_regions(data: &RegionTerrainData) -> Result<Vec<u8>, SidecarError>
     let mut out = Vec::with_capacity(data.encoded_len().ok_or(SidecarError::TooLarge)?);
 
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&VERSION_7.to_le_bytes());
+    out.extend_from_slice(&VERSION_8.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     out.extend_from_slice(&(data.channels.len() as u32).to_le_bytes());
     encode_channel_directory(&mut out, &data.channels);
@@ -1668,7 +1695,7 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
         return Err(SidecarError::BadMagic);
     }
     let version = r.u16()?;
-    if !(VERSION_2..=VERSION_7).contains(&version) {
+    if !(VERSION_2..=VERSION_8).contains(&version) {
         return Err(SidecarError::UnsupportedVersion(version));
     }
     if r.u16()? != 0 {
@@ -1955,11 +1982,40 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
     })
 }
 
-/// Load a sidecar of either format version, upgrading version 1 to a
-/// region document and normalizing it before returning. Refuses a file
-/// written by a newer build, and a version-1 file whose resolution cannot
-/// become a region.
+/// A sidecar as it was read, with whatever its material references could not
+/// be given a path.
+pub struct LoadedSidecar {
+    pub data: RegionTerrainData,
+    /// Slots of a file older than version 8 whose material name has no file
+    /// under `materials/`, left as the names they were.
+    pub kept_names: Vec<(usize, String)>,
+}
+
+impl LoadedSidecar {
+    /// What to say about each name that stayed a name.
+    pub fn warnings(&self) -> impl Iterator<Item = String> + '_ {
+        self.kept_names.iter().map(|(slot, name)| {
+            format!(
+                "terrain slot {slot} keeps the material name '{name}': \
+                 there is no materials/{name}{MATERIAL_FILE_SUFFIX} to point it at"
+            )
+        })
+    }
+}
+
+/// Load a sidecar of any format version, upgrading version 1 to a region
+/// document and normalizing it before returning. Refuses a file written by a
+/// newer build, and a version-1 file whose resolution cannot become a region.
 pub fn load(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
+    Ok(load_from(bytes, None)?.data)
+}
+
+/// Load a sidecar and give the material slots of a file older than version 8
+/// the path of the file each name stands for under `assets`.
+///
+/// A name with no file of its own keeps the name, so a project whose materials
+/// live somewhere else still draws what it drew.
+pub fn load_from(bytes: &[u8], assets: Option<&Path>) -> Result<LoadedSidecar, SidecarError> {
     let mut r = Reader { bytes, at: 0 };
     if r.take(MAGIC.len())? != MAGIC {
         return Err(SidecarError::BadMagic);
@@ -1969,11 +2025,38 @@ pub fn load(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
     let mut data = match version {
         0 => Err(SidecarError::UnsupportedVersion(0)),
         VERSION => decode(bytes).and_then(|legacy| RegionTerrainData::from_legacy_v1(&legacy)),
-        VERSION_2..=VERSION_7 => decode_regions(bytes),
+        VERSION_2..=VERSION_8 => decode_regions(bytes),
         other => Err(SidecarError::UnsupportedVersion(other)),
     }?;
     data.normalize();
-    Ok(data)
+    let kept_names = if version < VERSION_8 {
+        name_slots_as_paths(&mut data.materials, assets)
+    } else {
+        Vec::new()
+    };
+    Ok(LoadedSidecar { data, kept_names })
+}
+
+/// Point every bare material name at the file it stands for, and report the
+/// slots whose name has no file.
+fn name_slots_as_paths(
+    materials: &mut [TerrainMaterialSlot],
+    assets: Option<&Path>,
+) -> Vec<(usize, String)> {
+    let mut kept = Vec::new();
+    for (index, slot) in materials.iter_mut().enumerate() {
+        if slot.is_tombstone() || slot.material.contains('/') {
+            continue;
+        }
+        let path = format!("{MATERIALS_DIR}/{}{MATERIAL_FILE_SUFFIX}", slot.material);
+        let exists = assets.is_some_and(|assets| assets.join(&path).is_file());
+        if exists {
+            slot.material = path;
+        } else {
+            kept.push((index, slot.material.clone()));
+        }
+    }
+    kept
 }
 
 /// Serialize a terrain document as the current format version. The inverse
@@ -2538,7 +2621,7 @@ mod tests {
         migrated.grid = Some(GridGeometry::DEFAULT);
 
         let v2_bytes = save(&migrated).expect("encodes");
-        assert_eq!(u16::from_le_bytes([v2_bytes[8], v2_bytes[9]]), VERSION_7);
+        assert_eq!(u16::from_le_bytes([v2_bytes[8], v2_bytes[9]]), VERSION_8);
         assert_ne!(v2_bytes[8..10], v1_bytes[8..10]);
 
         let reloaded = load(&v2_bytes).expect("loads");
@@ -2645,15 +2728,88 @@ mod tests {
     fn rejects_a_v2_file_written_by_a_newer_build() {
         let bytes = encode_regions(&sample_regions()).expect("encodes");
         let mut newer = bytes.clone();
-        newer[8..10].copy_from_slice(&(VERSION_7 + 1).to_le_bytes());
+        newer[8..10].copy_from_slice(&(VERSION_8 + 1).to_le_bytes());
         assert_eq!(
             decode_regions(&newer),
-            Err(SidecarError::UnsupportedVersion(VERSION_7 + 1))
+            Err(SidecarError::UnsupportedVersion(VERSION_8 + 1))
         );
         assert_eq!(
             load(&newer),
-            Err(SidecarError::UnsupportedVersion(VERSION_7 + 1))
+            Err(SidecarError::UnsupportedVersion(VERSION_8 + 1))
         );
+    }
+
+    /// Version 7 and version 8 lay the same bytes out; only what a slot's
+    /// string means changed, so a version-7 file is this build's bytes under
+    /// the older version word.
+    fn version_7_bytes(data: &RegionTerrainData) -> Vec<u8> {
+        let mut bytes = encode_regions(data).expect("encodes");
+        bytes[8..10].copy_from_slice(&VERSION_7.to_le_bytes());
+        bytes
+    }
+
+    fn assets_holding_material(name: &str) -> tempfile::TempDir {
+        let assets = tempfile::tempdir().expect("tempdir");
+        let dir = assets.path().join(MATERIALS_DIR);
+        std::fs::create_dir_all(&dir).expect("materials dir");
+        std::fs::write(dir.join(format!("{name}{MATERIAL_FILE_SUFFIX}")), "").expect("write");
+        assets
+    }
+
+    #[test]
+    fn a_version_7_slot_reads_as_the_path_of_the_material_file_it_names() {
+        let assets = assets_holding_material("grass");
+        let bytes = version_7_bytes(&RegionTerrainData {
+            materials: vec![TerrainMaterialSlot::new("grass")],
+            ..RegionTerrainData::default()
+        });
+
+        let loaded = load_from(&bytes, Some(assets.path())).expect("loads");
+
+        assert_eq!(
+            loaded.data.materials[0].material,
+            "materials/grass.material.bsn"
+        );
+        assert!(loaded.kept_names.is_empty());
+    }
+
+    #[test]
+    fn a_version_7_file_saves_forward_as_version_8() {
+        let assets = assets_holding_material("grass");
+        let bytes = version_7_bytes(&RegionTerrainData {
+            materials: vec![TerrainMaterialSlot::new("grass")],
+            ..RegionTerrainData::default()
+        });
+
+        let loaded = load_from(&bytes, Some(assets.path())).expect("loads");
+        let forward = save(&loaded.data).expect("encodes");
+
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_8);
+        assert_eq!(
+            load(&forward).expect("reloads").materials[0].material,
+            "materials/grass.material.bsn",
+            "a file already holding paths is read back as it stands"
+        );
+    }
+
+    #[test]
+    fn a_version_7_name_with_no_file_keeps_the_name_and_says_so() {
+        let assets = tempfile::tempdir().expect("tempdir");
+        let bytes = version_7_bytes(&RegionTerrainData {
+            materials: vec![
+                TerrainMaterialSlot::tombstone(),
+                TerrainMaterialSlot::new("grass"),
+            ],
+            ..RegionTerrainData::default()
+        });
+
+        let loaded = load_from(&bytes, Some(assets.path())).expect("loads");
+
+        assert_eq!(loaded.data.materials[1].material, "grass");
+        assert_eq!(loaded.kept_names, vec![(1, "grass".to_string())]);
+        let said: Vec<String> = loaded.warnings().collect();
+        assert!(said[0].contains("slot 1"), "{said:?}");
+        assert!(said[0].contains("grass"), "{said:?}");
     }
 
     #[test]
@@ -2666,7 +2822,7 @@ mod tests {
         );
         assert_eq!(
             decode(&regions_bytes),
-            Err(SidecarError::UnsupportedVersion(VERSION_7))
+            Err(SidecarError::UnsupportedVersion(VERSION_8))
         );
     }
 
@@ -2912,14 +3068,32 @@ mod tests {
     }
 
     #[test]
-    fn material_names_accept_a_file_stem_and_reject_anything_that_is_not_one() {
-        for good in ["grass", "rock_05", "moss-2", "a.b"] {
+    fn material_references_accept_a_path_under_the_assets_and_reject_anything_else() {
+        for good in [
+            "grass",
+            "rock_05",
+            "moss-2",
+            "a.b",
+            "materials/grass.material.bsn",
+            "content/ground/a.b",
+        ] {
             assert!(
                 validate_material_name(good).is_ok(),
                 "{good:?} must validate"
             );
         }
-        for bad in [".", "..", "../x", "a/b", r"a\b", "C:x", "my material"] {
+        for bad in [
+            ".",
+            "..",
+            "../x",
+            "a//b",
+            "/a",
+            "a/",
+            "a/../b",
+            r"a\b",
+            "C:x",
+            "my material",
+        ] {
             assert!(
                 validate_material_name(bad).is_err(),
                 "{bad:?} must not validate"
@@ -3063,7 +3237,7 @@ mod tests {
         assert_eq!(decoded.materials[0].detile, 0.5);
 
         let forward = save(&decoded).expect("encodes");
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_7);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_8);
         assert_eq!(
             load(&forward).expect("reloads").autoterrain,
             decoded.autoterrain
@@ -3152,7 +3326,7 @@ mod tests {
         });
 
         let bytes = encode_regions(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_7);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_8);
         assert_eq!(decode_regions(&bytes).expect("decodes"), data);
         assert_eq!(load(&bytes).expect("loads"), data);
     }
@@ -3243,7 +3417,7 @@ mod tests {
     fn a_scatter_palette_and_its_placements_round_trip() {
         let data = scattered_document();
         let bytes = save(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_7);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_8);
         assert_eq!(bytes.len(), data.encoded_len().expect("fits"));
         assert_eq!(load(&bytes).expect("loads"), data);
     }
@@ -3258,7 +3432,7 @@ mod tests {
         // Saving it forward writes the empty palette and one zero
         // placement count per region, and reads back the same document.
         let forward = save(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_7);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_8);
         assert_eq!(load(&forward).expect("loads"), data);
     }
 
@@ -3436,11 +3610,11 @@ mod tests {
     /// Loading a version-5 file and saving it back writes version 6 with
     /// the defaults spelled out, and reloading that changes nothing.
     #[test]
-    fn a_version_5_file_saves_forward_as_version_6() {
+    fn a_version_5_file_saves_forward_as_the_current_version() {
         let data = load(VERSION_5_FILE).expect("loads");
         let forward = save(&data).expect("encodes");
 
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_7);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_8);
         assert_eq!(load(&forward).expect("reloads"), data);
     }
 
@@ -3455,7 +3629,7 @@ mod tests {
         };
 
         let bytes = save(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_7);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_8);
         let back = load(&bytes).expect("decodes");
         assert_eq!(back.surface, data.surface);
         assert_eq!(back, data);

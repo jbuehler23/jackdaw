@@ -140,6 +140,52 @@ impl MaterialRegistry {
     }
 }
 
+/// The name a material reference carries: the part of its last path segment
+/// before the first dot, which is what a bare name already is.
+pub fn material_name_of(reference: &str) -> &str {
+    let file = reference.rsplit('/').next().unwrap_or(reference);
+    file.split_once('.').map_or(file, |(stem, _)| stem)
+}
+
+/// The file a material reference names, if one holds it: the file at that
+/// path, or, for the references written before paths, the file whose stem is
+/// that bare name.
+pub fn material_file_of<'a>(
+    index: &'a crate::asset_index::AssetIndex,
+    reference: &str,
+) -> Option<&'a crate::asset_index::AssetEntry> {
+    if reference.is_empty() {
+        return None;
+    }
+    let path = <PathBuf as path_slash::PathBufExt>::from_slash(reference);
+    index
+        .get(&path)
+        .filter(|entry| entry.kind == crate::definition_assets::MATERIAL_KIND)
+        .or_else(|| index.material_named(material_name_of(reference)))
+}
+
+/// The material a reference names: the file it spells the path of, or, for the
+/// references written before paths, the bare name a file's stem gives it.
+pub fn material_of_reference(
+    index: Option<&crate::asset_index::AssetIndex>,
+    registry: &MaterialRegistry,
+    reference: &str,
+) -> Option<Handle<StandardMaterial>> {
+    if reference.is_empty() {
+        return None;
+    }
+    if let Some(handle) = index
+        .and_then(|index| material_file_of(index, reference))
+        .and_then(|entry| entry.value.handle())
+        && let Ok(typed) = handle.clone().try_typed::<StandardMaterial>()
+    {
+        return Some(typed);
+    }
+    registry
+        .get_by_name(material_name_of(reference))
+        .map(|entry| entry.handle.clone())
+}
+
 /// Strip path separators and other characters that cannot appear in a file
 /// stem, so a material name always maps to exactly one file.
 pub fn sanitize_material_name(name: &str) -> String {

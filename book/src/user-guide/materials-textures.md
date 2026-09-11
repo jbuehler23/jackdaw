@@ -51,9 +51,9 @@ recognises common suffixes (`_albedo`, `_diffuse`, `_normal`,
 `_height`, `_displacement`).
 
 You can edit the resulting material in the inspector.
-Material values serialize into the scene's asset table
-(or the project-wide catalog) keyed by
-`bevy_pbr::StandardMaterial` and ride along with save.
+A material saved to a file of its own is referenced by that
+file's path; a material that belongs to one scene serializes
+into that scene's asset table and rides along with save.
 
 ### Applying
 
@@ -79,7 +79,10 @@ Two storage tiers:
   whatever folder you keep it in; the editor finds it by
   reading what the file holds. A save with no folder in mind
   puts it under `assets/materials/`. Any scene in the project
-  can reference it, and references use `@Name`.
+  can reference it, and references spell its path, such as
+  `materials/slate.material.bsn`. Scenes written before paths
+  spell `@Name` instead; they still load, and the next save
+  writes the path.
 
 The browser shows both, with the source labelled.
 
@@ -92,7 +95,8 @@ The browser shows both, with the source labelled.
   Filename heuristics are coarse. Rename the files or open
   the affected definition and split it manually.
 - **Material disappears in the standalone build.** Standalone
-  loads the scene file plus `assets/catalog.bsn`. Scene-local
-  materials still ship inline; project references resolve
-  from the catalog at load time, so a missing catalog file
-  causes `@Name` references to fall back to defaults.
+  loads the scene file plus every material file under
+  `assets/materials/`. Scene-local materials still ship inline;
+  a reference resolves to the file at that path, so a material
+  file left out of the build, or kept in another folder, falls
+  back to a default.

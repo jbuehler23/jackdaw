@@ -62,21 +62,30 @@ nesting, not of a flat entity list.
 
 ## Asset references
 
-Materials and other shared assets are referenced by name:
+A material or any other asset file is referenced by its path
+under `assets/`:
 
-- `#Name` for a scene-local asset, defined inline in the same
-  `.bsn` file.
-- `@Name` for a project-wide asset, resolved from the project
-  catalog.
+```
+my_game::Signpost { board: "materials/slate.material.bsn" }
+```
 
-Both prefixes resolve against the same name-to-handle table at
-load time, populated from the scene's own inline definitions and
-the project catalog. A name that resolves to nothing falls back
-to a default handle rather than failing the load, so a missing
-material shows up as untextured geometry, not an error.
+A scene-local asset, defined inline in the same `.bsn` file, is
+referenced as `#Name`. The `@Name` spelling of a project-wide
+asset is what files written before paths use; it still resolves
+while a project catches up, as long as one file answers to that
+name, and the next save writes the path.
 
-A component value that is a plain path string (no prefix) is
-loaded through the asset server as a file path instead.
+Every reference resolves against the same table at load time:
+the project's asset files under their paths, plus the scene's
+own inline definitions. A reference that resolves to nothing is
+left as the file spelled it and falls back to a default handle
+rather than failing the load, so a missing material shows up as
+untextured geometry, not an error, and a save does not quietly
+drop what could not be found.
+
+A reference no asset file answers to is loaded through the asset
+server as a file path, which is how an image, a mesh or any other
+file the engine loads for itself is named.
 
 ## Project file
 

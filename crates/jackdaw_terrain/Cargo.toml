@@ -44,5 +44,8 @@ render = [
     "bevy/bevy_log",
 ]
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

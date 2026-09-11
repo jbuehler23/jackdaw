@@ -434,6 +434,7 @@ pub fn rescan_asset_index(world: &mut World) -> AssetRescan {
             mtime,
         });
     }
+    publish_reference_map(world);
     scan
 }
 
@@ -450,6 +451,52 @@ fn publish_name(world: &mut World, path: &Path, kind: &AssetKind, value: &AssetV
     world
         .resource_mut::<crate::asset_catalog::AssetCatalog>()
         .insert(format!("@{name}"), handle.clone());
+}
+
+/// Publish what the index holds as the references a document reads and writes:
+/// every loaded file under the path that names it, under the bare name it was
+/// spelled by before paths when no other file shares that stem, and every
+/// loaded handle under the path it is emitted as.
+///
+/// The open scene resolves those as well as what it embeds, and what it embeds
+/// wins the spellings they share. Only its `#` entries are the document's own,
+/// so a name published for a file that has since gone is not carried over.
+pub fn publish_reference_map(world: &mut World) {
+    let mut references: bevy::platform::collections::HashMap<String, UntypedHandle> =
+        bevy::platform::collections::HashMap::default();
+    let mut paths: bevy::platform::collections::HashMap<UntypedAssetId, String> =
+        bevy::platform::collections::HashMap::default();
+    let mut stems: HashMap<String, usize> = HashMap::new();
+    let index = world.resource::<AssetIndex>();
+    for entry in index.iter() {
+        *stems.entry(entry.name()).or_default() += 1;
+    }
+    for entry in index.iter() {
+        let Some(handle) = entry.value.handle() else {
+            continue;
+        };
+        let path = entry.path.to_slash_lossy().into_owned();
+        paths.insert(handle.id(), path.clone());
+        references.insert(path, handle.clone());
+        let name = entry.name();
+        if stems.get(&name) == Some(&1) {
+            references.insert(format!("@{name}"), handle.clone());
+            references.entry(name).or_insert_with(|| handle.clone());
+        }
+    }
+    let mut scene = references.clone();
+    if let Some(embedded) = world.get_resource::<jackdaw_bsn::BsnSceneAssets>() {
+        for (reference, handle) in &embedded.0 {
+            let Some(name) = reference.strip_prefix('#') else {
+                continue;
+            };
+            scene.insert(reference.clone(), handle.clone());
+            scene.insert(format!("@{name}"), handle.clone());
+        }
+    }
+    world.insert_resource(jackdaw_bsn::BsnProjectAssets(references));
+    world.insert_resource(jackdaw_bsn::BsnSceneAssets(scene));
+    world.insert_resource(jackdaw_bsn::BsnAssetPaths(paths));
 }
 
 /// Record a file the editor itself wrote, holding the value it wrote, and
@@ -475,6 +522,7 @@ pub fn index_written(
         value,
         mtime,
     });
+    publish_reference_map(world);
     Some(indexed)
 }
 

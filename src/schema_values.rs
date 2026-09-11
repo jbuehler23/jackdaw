@@ -494,6 +494,7 @@ fn enum_bsn_for_json(
 pub fn native_value_for_json(
     registry: &bevy::reflect::TypeRegistry,
     server: Option<&AssetServer>,
+    references: Option<&crate::typed_values::References>,
     type_path: &str,
     json: &Value,
 ) -> Option<Box<dyn PartialReflect>> {
@@ -502,6 +503,7 @@ pub fn native_value_for_json(
         && let Some(value) = crate::typed_values::text_value_for_field(
             registry,
             server,
+            references,
             registration.type_id(),
             text,
         )
@@ -521,7 +523,8 @@ fn native_bsn_for_json(world: &World, type_path: &str, json: &Value) -> Option<B
         ));
     }
     let server = world.get_resource::<AssetServer>();
-    let reflected = native_value_for_json(&registry, server, type_path, json)?;
+    let references = jackdaw_bsn::apply_reference_map(world);
+    let reflected = native_value_for_json(&registry, server, Some(&references), type_path, json)?;
     Some(match server {
         Some(server) => BsnValue::from_reflect_with_assets(
             reflected.as_ref(),

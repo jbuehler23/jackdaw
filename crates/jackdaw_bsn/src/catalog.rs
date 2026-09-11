@@ -160,8 +160,12 @@ pub fn load_bsn_scene(world: &mut World, text: &str) -> Result<LoadedBsnScene, B
         }
     }
 
-    // Record both reference spellings: scene-inline (`#`) and catalog (`@`).
-    let mut names = bevy::platform::collections::HashMap::default();
+    // The project's asset files by path, then the document's own entries in
+    // both spellings: scene-inline (`#`) and catalog (`@`).
+    let mut names = world
+        .get_resource::<crate::BsnProjectAssets>()
+        .map(|project| project.0.clone())
+        .unwrap_or_default();
     for entry in &assets {
         names.insert(format!("#{}", entry.name), entry.handle.clone());
         names.insert(format!("@{}", entry.name), entry.handle.clone());
@@ -356,6 +360,7 @@ pub fn append_assets_to_ast(
     let registry = world.resource::<AppTypeRegistry>().clone();
     let reg = registry.read();
     let asset_server = world.get_resource::<AssetServer>();
+    let paths = world.get_resource::<crate::BsnAssetPaths>();
 
     let mut sorted: Vec<&CatalogAssetRef> = assets.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
@@ -387,7 +392,7 @@ pub fn append_assets_to_ast(
             let ctx = BsnAssetContext {
                 asset_server: server,
                 parent_path: Path::new(""),
-                asset_names: None,
+                asset_names: paths.as_ref().map(|paths| &paths.0),
             };
             component_to_bsn_patch_with_assets(asset_value.as_partial_reflect(), &reg, &ctx)
         } else {
