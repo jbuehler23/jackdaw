@@ -236,8 +236,9 @@ impl Plugin for JackdawPlugin {
     }
 }
 
-/// Project-wide asset catalog. Maps `@Name` references found in
-/// scene files to loaded `UntypedHandle`s.
+/// Project-wide asset catalog. Maps the references found in scene files to
+/// loaded `UntypedHandle`s: the assets-relative path of a material file, and
+/// the `@Name` the same material was spelled by before references were paths.
 ///
 /// Populated at startup from `assets/catalog.bsn` under the Bevy
 /// asset root (mirrors `FileAssetReader::get_base_path()`). To
@@ -246,12 +247,14 @@ impl Plugin for JackdawPlugin {
 #[derive(Resource, Default)]
 pub struct JackdawCatalog {
     handles: HashMap<String, UntypedHandle>,
+    files: HashMap<String, UntypedHandle>,
 }
 
 impl JackdawCatalog {
-    /// Look up a catalog handle by its `@Name` reference.
+    /// Look up a catalog handle by the reference a document spells it as: the
+    /// path of the file holding it, or its `@Name`.
     pub fn get(&self, name: &str) -> Option<&UntypedHandle> {
-        self.handles.get(name)
+        self.handles.get(name).or_else(|| self.files.get(name))
     }
 
     /// Number of catalog entries (each `@Name`).
@@ -261,7 +264,7 @@ impl JackdawCatalog {
 
     /// True when no catalog has been loaded.
     pub fn is_empty(&self) -> bool {
-        self.handles.is_empty()
+        self.handles.is_empty() && self.files.is_empty()
     }
 }
 
@@ -703,11 +706,21 @@ fn spawn_scene_entities(
     let _preloaded_textures = preload_linear_textures(world, ast);
 
     // Embedded assets keyed as both `#Name` (scene-inline) and `@Name`
-    // (catalog spelling), merged with the project catalog. Kept in
-    // `BsnSceneAssets` so `apply_component_patch` resolves reference strings.
+    // (catalog spelling), merged with the project catalog under every
+    // reference it answers to. Kept in `BsnSceneAssets` so
+    // `apply_component_patch` resolves reference strings.
     let mut local_assets = load_embedded_assets(world, ast, &registry);
-    for (name, handle) in world.resource::<JackdawCatalog>().handles.clone() {
-        local_assets.entry(name).or_insert(handle);
+    {
+        let catalog = world.resource::<JackdawCatalog>();
+        let entries: Vec<(String, UntypedHandle)> = catalog
+            .handles
+            .iter()
+            .chain(catalog.files.iter())
+            .map(|(name, handle)| (name.clone(), handle.clone()))
+            .collect();
+        for (name, handle) in entries {
+            local_assets.entry(name).or_insert(handle);
+        }
     }
     let mut scene_assets = bevy::platform::collections::HashMap::default();
     for (name, handle) in &local_assets {
@@ -1276,6 +1289,9 @@ fn promote_material_texture_formats(
 /// it is the material's `@Name`.
 const MATERIAL_FILE_SUFFIX: &str = ".material.bsn";
 
+/// Where a saved material file sits, relative to the project's assets.
+const MATERIALS_DIR: &str = "materials";
+
 /// Startup system: discover the project catalog and populate
 /// [`JackdawCatalog`]. Honours [`JackdawCatalogPath`] if present;
 /// otherwise mirrors Bevy's `FileAssetReader::get_base_path()` to
@@ -1297,7 +1313,7 @@ fn load_project_catalog(world: &mut World) {
     // right color space and a saved material wins its name over any inline
     // entry in the catalog file.
     if let Some(root) = &root {
-        load_material_files(world, &root.join("materials"));
+        load_material_files(world, root);
     }
 
     if !catalog_path.is_file() {
@@ -1347,10 +1363,11 @@ fn load_project_catalog(world: &mut World) {
 }
 
 /// Load every `assets/materials/*.material.bsn` into [`JackdawCatalog`] under
-/// its file stem. A file that fails to read or parse is reported and skipped
-/// so one bad material never costs the rest.
-fn load_material_files(world: &mut World, dir: &Path) {
-    let Ok(read_dir) = std::fs::read_dir(dir) else {
+/// the path that names it and under its file stem. A file that fails to read
+/// or parse is reported and skipped so one bad material never costs the rest.
+fn load_material_files(world: &mut World, root: &Path) {
+    let dir = root.join(MATERIALS_DIR);
+    let Ok(read_dir) = std::fs::read_dir(&dir) else {
         return;
     };
     let mut files: Vec<PathBuf> = read_dir
@@ -1408,10 +1425,12 @@ fn load_material_files(world: &mut World, dir: &Path) {
                     warn!("{} is not a StandardMaterial", path.display());
                     continue;
                 }
-                world
-                    .resource_mut::<JackdawCatalog>()
-                    .handles
-                    .insert(format!("@{name}"), entry.handle);
+                let mut catalog = world.resource_mut::<JackdawCatalog>();
+                catalog.files.insert(
+                    format!("{MATERIALS_DIR}/{name}{MATERIAL_FILE_SUFFIX}"),
+                    entry.handle.clone(),
+                );
+                catalog.handles.insert(format!("@{name}"), entry.handle);
                 count += 1;
             }
             Err(err) => warn!("Failed to parse material {}: {err}", path.display()),
@@ -1495,7 +1514,7 @@ mod material_file_tests {
     fn a_missing_materials_directory_is_not_an_error() {
         let mut app = runtime_app();
         let tmp = tempfile::tempdir().expect("tempdir");
-        load_material_files(app.world_mut(), &tmp.path().join("materials"));
+        load_material_files(app.world_mut(), tmp.path());
         assert!(app.world().resource::<JackdawCatalog>().is_empty());
     }
 
@@ -1513,7 +1532,7 @@ mod material_file_tests {
         )
         .expect("write");
 
-        load_material_files(app.world_mut(), &dir);
+        load_material_files(app.world_mut(), tmp.path());
 
         assert_eq!(
             app.world().resource::<Assets<Image>>().len(),
@@ -1527,6 +1546,26 @@ mod material_file_tests {
     }
 
     #[test]
+    fn a_material_file_answers_to_the_path_that_names_it() {
+        let mut app = runtime_app();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("materials");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("grass.material.bsn"), GRASS).expect("write");
+
+        load_material_files(app.world_mut(), tmp.path());
+
+        let catalog = app.world().resource::<JackdawCatalog>();
+        assert_eq!(
+            catalog
+                .get("materials/grass.material.bsn")
+                .map(UntypedHandle::id),
+            catalog.get("@grass").map(UntypedHandle::id),
+            "a scene saved with the path reaches the same material the name did"
+        );
+    }
+
+    #[test]
     fn a_material_file_outranks_an_inline_catalog_entry_of_the_same_name() {
         let mut app = runtime_app();
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -1534,7 +1573,7 @@ mod material_file_tests {
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(dir.join("grass.material.bsn"), GRASS).expect("write");
 
-        load_material_files(app.world_mut(), &dir);
+        load_material_files(app.world_mut(), tmp.path());
         let from_file = app
             .world()
             .resource::<JackdawCatalog>()

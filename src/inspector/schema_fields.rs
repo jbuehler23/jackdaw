@@ -106,7 +106,7 @@ fn spawn_one_field(
     }
     let value = {
         let registry = ctx.registry.read();
-        native_value_for_json(&registry, ctx.server, &field.type_path, held)
+        native_value_for_json(&registry, ctx.server, None, &field.type_path, held)
     };
     let Some(value) = value else {
         spawn_read_only(commands, parent, &field.name, held, depth);
@@ -199,7 +199,7 @@ fn spawn_item_value(
 ) {
     let value = {
         let registry = ctx.registry.read();
-        native_value_for_json(&registry, ctx.server, item_type, item)
+        native_value_for_json(&registry, ctx.server, None, item_type, item)
     };
     let Some(value) = value else {
         spawn_read_only(commands, parent, "", item, depth);

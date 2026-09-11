@@ -28,21 +28,60 @@ use crate::{
 #[derive(Component)]
 pub struct AstDirty;
 
-/// Assets available while applying document values: the asset server for
-/// path-string handles, plus the scene's local named assets so `#Name` and
-/// `@Name` reference strings resolve to their loaded handles.
+/// Assets available while applying document values: a map of the references
+/// already loaded, consulted first for any string a handle field spells, and
+/// the asset server for everything else.
 pub struct BsnApplyAssets<'a> {
     pub server: &'a AssetServer,
     pub local: Option<&'a bevy::platform::collections::HashMap<String, bevy::asset::UntypedHandle>>,
 }
 
-/// The scene's named local assets (`#Name` inline entries and `@Name`
-/// catalog entries), kept as a resource so document applies after load can
-/// resolve reference strings.
+/// The references the open scene resolves: the paths of the project's asset
+/// files, the `#Name` entries the document embeds, and the `@Name` spelling
+/// older files use. Kept as a resource so document applies after load resolve
+/// what a handle field names.
 #[derive(Resource, Default)]
 pub struct BsnSceneAssets(
     pub bevy::platform::collections::HashMap<String, bevy::asset::UntypedHandle>,
 );
+
+/// The references the project holds outside any one scene: an asset file under
+/// the path that names it, and the bare name older files spell it by.
+///
+/// A scene load folds this into [`BsnSceneAssets`], so a scene resolves the
+/// project's asset files as well as the ones it embeds.
+#[derive(Resource, Default)]
+pub struct BsnProjectAssets(
+    pub bevy::platform::collections::HashMap<String, bevy::asset::UntypedHandle>,
+);
+
+/// The reference each loaded asset is emitted under: the path of the file it
+/// came from, for the handles the asset server cannot name.
+#[derive(Resource, Default)]
+pub struct BsnAssetPaths(
+    pub bevy::platform::collections::HashMap<bevy::asset::UntypedAssetId, String>,
+);
+
+/// Every reference a value can be resolved against: the project's asset files,
+/// with the open scene's own entries over them.
+///
+/// A scene load folds the project's references into [`BsnSceneAssets`], so an
+/// apply reads that one map; this is for the callers that resolve a reference
+/// outside a scene, such as an operator setting a field by path.
+pub fn apply_reference_map(
+    world: &World,
+) -> bevy::platform::collections::HashMap<String, bevy::asset::UntypedHandle> {
+    let mut map = world
+        .get_resource::<BsnProjectAssets>()
+        .map(|assets| assets.0.clone())
+        .unwrap_or_default();
+    if let Some(scene) = world.get_resource::<BsnSceneAssets>() {
+        for (reference, handle) in &scene.0 {
+            map.insert(reference.clone(), handle.clone());
+        }
+    }
+    map
+}
 
 /// Type paths the open project's schema reports and the editor has no ECS
 /// registration for, so apply skips a patch naming one without the "not in the
@@ -450,7 +489,9 @@ fn dynamic_struct_from_patch(
 
 fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
     let server = world.get_resource::<AssetServer>().cloned();
-    let local = world.get_resource::<BsnSceneAssets>().map(|r| r.0.clone());
+    let local = world
+        .get_resource::<BsnSceneAssets>()
+        .map(|assets| assets.0.clone());
     let assets_ctx = server.as_ref().map(|s| BsnApplyAssets {
         server: s,
         local: local.as_ref(),
@@ -713,7 +754,9 @@ fn apply_tuple_variant_patch(
 
 fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleStructData) {
     let server = world.get_resource::<AssetServer>().cloned();
-    let local = world.get_resource::<BsnSceneAssets>().map(|r| r.0.clone());
+    let local = world
+        .get_resource::<BsnSceneAssets>()
+        .map(|assets| assets.0.clone());
     let assets_ctx = server.as_ref().map(|s| BsnApplyAssets {
         server: s,
         local: local.as_ref(),
@@ -915,13 +958,14 @@ pub fn bsn_value_to_reflect(
             && !path.is_empty()
             && let Some(assets) = assets
         {
+            if let Some(local) = assets.local
+                && let Some(handle) = local.get(path)
+                && handle.type_id() == reflect_handle.asset_type_id()
+            {
+                let typed = reflect_handle.typed(handle.clone());
+                return Some(typed.into_partial_reflect());
+            }
             if path.starts_with('#') || path.starts_with('@') {
-                if let Some(local) = assets.local
-                    && let Some(handle) = local.get(path)
-                {
-                    let typed = reflect_handle.typed(handle.clone());
-                    return Some(typed.into_partial_reflect());
-                }
                 log::warn!(
                     "asset reference '{path}' did not resolve in the project catalog or \
                      embedded assets; using the default handle"

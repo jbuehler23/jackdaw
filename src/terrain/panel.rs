@@ -265,6 +265,7 @@ struct TexturesTabRefs<'w> {
     paint: Res<'w, TerrainPaintState>,
     picker: Res<'w, TerrainMaterialPicker>,
     registry: Res<'w, MaterialRegistry>,
+    index: Option<Res<'w, crate::asset_index::AssetIndex>>,
     materials: Res<'w, Assets<StandardMaterial>>,
     italic_font: Res<'w, EditorFontItalic>,
     icon_font: Res<'w, IconFont>,
@@ -1407,14 +1408,21 @@ fn spawn_slot_editor(
     refs: &TexturesTabRefs,
 ) {
     let icon_font = refs.icon_font.0.clone();
-    let entry = refs.registry.get_by_name(&slot.material);
-    let saved = entry.is_some_and(|entry| entry.saved);
+    let name = crate::material_assets::material_name_of(&slot.material);
+    let handle = crate::material_assets::material_of_reference(
+        refs.index.as_deref(),
+        &refs.registry,
+        &slot.material,
+    );
+    let saved = refs.index.as_deref().is_some_and(|index| {
+        crate::material_assets::material_file_of(index, &slot.material).is_some()
+    }) || refs.registry.is_saved(name);
 
     spawn_action_header(
         commands,
         parent,
         ActionHeaderProps {
-            name: format!("Slot {index}: {}", slot.material),
+            name: format!("Slot {index}: {name}"),
             saved,
             italic_font: &refs.italic_font.0,
             icon_font: &icon_font,
@@ -1422,7 +1430,7 @@ fn spawn_slot_editor(
         },
     );
 
-    let Some(handle) = entry.map(|entry| entry.handle.clone()) else {
+    let Some(handle) = handle else {
         spawn_error_hint(
             commands,
             parent,

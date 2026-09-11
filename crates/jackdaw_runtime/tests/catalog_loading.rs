@@ -86,3 +86,70 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         std::process::id()
     ))
 }
+
+/// A component holding one material, so a scene can spell a reference without
+/// a mesh in the way.
+#[derive(Component, Reflect, Clone, Default)]
+#[reflect(Component, Default)]
+struct Painted {
+    material: Handle<StandardMaterial>,
+}
+
+#[test]
+fn a_scene_reaches_a_material_by_the_path_of_its_file() {
+    let dir = unique_temp_dir("catalog-loading-path");
+    std::fs::create_dir_all(dir.join("materials")).unwrap();
+    std::fs::write(
+        dir.join("materials/grass.material.bsn"),
+        "#grass\nbevy_pbr::pbr_material::StandardMaterial {\n    perceptual_roughness: 0.25,\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.bsn"),
+        format!(
+            "{} {{ material: \"materials/grass.material.bsn\" }}\n",
+            <Painted as TypePath>::type_path()
+        ),
+    )
+    .unwrap();
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::transform::TransformPlugin);
+    app.add_plugins(bevy::asset::AssetPlugin {
+        file_path: dir.to_string_lossy().into_owned(),
+        ..Default::default()
+    });
+    app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+    app.add_plugins(bevy::image::ImagePlugin::default());
+    app.init_asset::<StandardMaterial>();
+    app.register_asset_reflect::<StandardMaterial>();
+    app.register_type::<Painted>();
+    app.add_plugins(JackdawPlugin);
+
+    let handle: Handle<jackdaw_runtime::JackdawScene> =
+        app.world().resource::<AssetServer>().load("scene.bsn");
+    app.world_mut()
+        .spawn(jackdaw_runtime::JackdawSceneRoot(handle));
+
+    let mut painted = None;
+    for _ in 0..200 {
+        app.update();
+        let mut query = app.world_mut().query::<&Painted>();
+        if let Some(found) = query.iter(app.world()).next() {
+            painted = Some(found.material.clone());
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let painted = painted.expect("the scene spawned its painted entity");
+
+    let catalog = app.world().resource::<JackdawCatalog>();
+    assert_eq!(
+        Some(painted.id().untyped()),
+        catalog
+            .get("materials/grass.material.bsn")
+            .map(bevy::asset::UntypedHandle::id),
+        "the path names the material the catalog loaded, not a fresh load of the document"
+    );
+}

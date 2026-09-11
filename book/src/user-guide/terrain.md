@@ -109,6 +109,12 @@ the scene in versioned `.jdterrain` files, along with the terrain's
 texture-set reference. Save and move those sidecars with the `.bsn`
 scene that references them.
 
+Each material slot holds the path of the material file it draws,
+such as `materials/slate.material.bsn`. A sidecar written before
+slots held paths spells a bare name; opening the scene points each
+name at `materials/<name>.material.bsn` where that file is there,
+and leaves it a name where it is not, saying which slot it left.
+
 A sidecar in an older format migrates when the scene opens and is
 rewritten in the current format on the next save. A sidecar this
 build cannot read, such as one written by a newer jackdaw or one

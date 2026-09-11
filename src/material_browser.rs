@@ -1157,17 +1157,22 @@ pub(crate) fn material_select(
     allows_undo = false,
     params(material(
         String,
-        doc = "Name of the material to apply. Defaults to the previewed one."
+        doc = "Path of the material file to apply, such as \
+               materials/slate.material.bsn. A bare name still resolves for \
+               one release. Defaults to the previewed one."
     ))
 )]
 pub(crate) fn material_apply(
     params: In<OperatorParameters>,
     registry: Res<MaterialRegistry>,
+    index: Option<Res<crate::asset_index::AssetIndex>>,
     preview_state: Res<MaterialPreviewState>,
     mut commands: Commands,
 ) -> OperatorResult {
     let handle = match params.as_str("material") {
-        Some(name) => registry.get_by_name(name).map(|e| e.handle.clone()),
+        Some(reference) => {
+            crate::material_assets::material_of_reference(index.as_deref(), &registry, reference)
+        }
         None => preview_state.active_material.clone(),
     };
     let Some(material) = handle.filter(|h| *h != Handle::default()) else {
