@@ -26,8 +26,9 @@ use bevy::render::mesh::allocator::MeshAllocator;
 use bevy::render::mesh::{RenderMesh, RenderMeshBufferInfo};
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_phase::{
-    AddRenderCommand, BinnedRenderPhaseType, DrawFunctions, PhaseItem, RenderCommand,
-    RenderCommandResult, SetItemPipeline, TrackedRenderPass, ViewBinnedRenderPhases,
+    AddRenderCommand, BinnedRenderPhase, BinnedRenderPhaseType, DrawFunctions, InputUniformIndex,
+    PhaseItem, RenderCommand, RenderCommandResult, SetItemPipeline, TrackedRenderPass,
+    ViewBinnedRenderPhases,
 };
 use bevy::render::render_resource::{
     AsBindGroup, BindGroup, BindGroupLayoutDescriptor, BufferUsages, Extent3d, PipelineCache,
@@ -993,9 +994,31 @@ pub struct DetailInstanceBuffer {
 #[derive(Resource, Default)]
 pub struct DetailBindGroups(HashMap<DetailKey, BindGroup>);
 
-/// The tiles each view has in its bin. A binned phase retains what it is given.
+/// The bin a tile was last placed in: its batch set key and its bin key.
+type DetailBin = (Opaque3dBatchSetKey, Opaque3dBinKey);
+
+/// The bin each view holds each tile in, a binned phase retaining what it is
+/// given across frames.
 #[derive(Resource, Default)]
-struct QueuedDetailTiles(HashMap<bevy::render::view::RetainedViewEntity, HashSet<MainEntity>>);
+struct QueuedDetailTiles(
+    HashMap<bevy::render::view::RetainedViewEntity, HashMap<MainEntity, DetailBin>>,
+);
+
+/// Place a tile in `bin`, taking it out of the bin it was last placed in when
+/// that differs.
+fn rebin_tile(
+    phase: &mut BinnedRenderPhase<Opaque3d>,
+    last: Option<&DetailBin>,
+    ids: (Entity, MainEntity),
+    bin: DetailBin,
+    uniform_index: InputUniformIndex,
+) {
+    if last.is_some_and(|last| *last != bin) {
+        phase.remove(ids.1);
+    }
+    let draws_its_own_instances = BinnedRenderPhaseType::NonMesh;
+    phase.add(bin.0, bin.1, ids, uniform_index, draws_its_own_instances);
+}
 
 /// The detail pipeline: the mesh pipeline with a per-instance vertex buffer, a
 /// bind group of its own, and both stages replaced.
@@ -1152,7 +1175,6 @@ fn queue_detail_tiles(
     tiles: Query<(Entity, &MainEntity), With<DetailTile>>,
 ) {
     let draw_function = draw_functions.read().id::<DrawDetail>();
-    let draws_its_own_instances = BinnedRenderPhaseType::NonMesh;
     let live: HashSet<_> = views.iter().map(|view| view.retained_view_entity).collect();
     queued.0.retain(|view, _| live.contains(view));
 
@@ -1165,7 +1187,7 @@ fn queue_detail_tiles(
         };
 
         let held = queued.0.entry(view.retained_view_entity).or_default();
-        let mut present = HashSet::new();
+        let mut present = HashMap::new();
 
         for (entity, main_entity) in &tiles {
             let Some(instance) = mesh_instances.render_mesh_queue_data(*main_entity) else {
@@ -1187,8 +1209,7 @@ fn queue_detail_tiles(
             else {
                 continue;
             };
-            present.insert(*main_entity);
-            phase.add(
+            let bin = (
                 Opaque3dBatchSetKey {
                     draw_function,
                     pipeline: pipeline_id,
@@ -1199,13 +1220,18 @@ fn queue_detail_tiles(
                 Opaque3dBinKey {
                     asset_id: instance.mesh_asset_id().into(),
                 },
-                (entity, *main_entity),
-                instance.current_uniform_index,
-                draws_its_own_instances,
             );
+            rebin_tile(
+                phase,
+                held.get(main_entity),
+                (entity, *main_entity),
+                bin.clone(),
+                instance.current_uniform_index,
+            );
+            present.insert(*main_entity, bin);
         }
 
-        for gone in held.difference(&present) {
+        for gone in held.keys().filter(|tile| !present.contains_key(*tile)) {
             phase.remove(*gone);
         }
         *held = present;
@@ -2123,6 +2149,57 @@ mod tests {
         for location in &locations {
             assert!(*location >= 4, "slot {location} is already the mesh's");
         }
+    }
+
+    #[test]
+    fn requeuing_a_tile_under_a_new_pipeline_leaves_one_bin_entry() {
+        use bevy::render::batching::gpu_preprocessing::GpuPreprocessingMode;
+        use bevy::render::mesh::allocator::MeshSlabs;
+        use bevy::render::render_phase::DrawFunctionId;
+        use bevy::render::render_resource::CachedRenderPipelineId;
+        use bevy::render::view::RetainedViewEntity;
+
+        let bin = |pipeline| {
+            (
+                Opaque3dBatchSetKey {
+                    draw_function: DrawFunctionId(0),
+                    pipeline: CachedRenderPipelineId::new(pipeline),
+                    material_bind_group_index: None,
+                    slabs: MeshSlabs::default(),
+                    lightmap_slab: None,
+                },
+                Opaque3dBinKey {
+                    asset_id: AssetId::<Mesh>::invalid().into(),
+                },
+            )
+        };
+        let view = RetainedViewEntity::new(Entity::PLACEHOLDER.into(), None, 0);
+        let tile = MainEntity::from(Entity::PLACEHOLDER);
+        let ids = (Entity::PLACEHOLDER, tile);
+
+        let mut phases = ViewBinnedRenderPhases::<Opaque3d>::default();
+        phases.prepare_for_new_frame(view, GpuPreprocessingMode::None);
+        let phase = phases.get_mut(&view).unwrap();
+        rebin_tile(phase, None, ids, bin(0), InputUniformIndex::default());
+
+        phases.prepare_for_new_frame(view, GpuPreprocessingMode::None);
+        let phase = phases.get_mut(&view).unwrap();
+        rebin_tile(
+            phase,
+            Some(&bin(0)),
+            ids,
+            bin(1),
+            InputUniformIndex::default(),
+        );
+
+        let placed: Vec<_> = phase
+            .non_mesh_items
+            .iter()
+            .filter(|(_, items)| items.entities.contains_key(&tile))
+            .map(|(key, _)| key.clone())
+            .collect();
+        assert_eq!(placed.len(), 1, "the tile is left in its old bin as well");
+        assert!(placed[0] == bin(1), "the tile is not in its new bin");
     }
 
     #[test]

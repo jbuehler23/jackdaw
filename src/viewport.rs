@@ -414,6 +414,30 @@ pub fn build_viewport_panel(world: &mut World, parent: Entity) {
     crate::viewport_host::build_viewport_panel_in(world, parent, intent);
 }
 
+/// The colour format every editor view renders in: the one bevy falls back to
+/// for a camera whose target image has no texture yet.
+pub(crate) const EDITOR_VIEW_FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
+
+/// The image a 3D viewport panel renders into.
+fn viewport_target_image() -> Image {
+    let size = Extent3d {
+        width: DEFAULT_VIEWPORT_WIDTH,
+        height: DEFAULT_VIEWPORT_HEIGHT,
+        depth_or_array_layers: 1,
+    };
+    let mut image = Image::new_fill(
+        size,
+        TextureDimension::D2,
+        &[0, 0, 0, 255],
+        EDITOR_VIEW_FORMAT,
+        default(),
+    );
+    image.texture_descriptor.usage =
+        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
+    image.sampler = ImageSampler::linear();
+    image
+}
+
 /// Build the panel's 3D presentation: a camera rendering into its own image,
 /// the toolbar/`SceneViewport` column that projects it, and the floating chrome
 /// that overlays it. Returns the column, which the mode switch shows and hides.
@@ -421,26 +445,8 @@ pub fn build_viewport_panel(world: &mut World, parent: Entity) {
 /// The despawn observer on `parent` (via [`ViewportPanelHost`]) cleans up the
 /// camera when the panel content is torn down.
 pub(crate) fn build_3d_presentation(world: &mut World, parent: Entity) -> Entity {
-    // Allocate a render-target image dedicated to this viewport. The
-    // size is a starting point; `ViewportNode` will resize the camera
-    // viewport to match the SceneViewport UI node automatically.
     let image_handle = {
-        let size = Extent3d {
-            width: DEFAULT_VIEWPORT_WIDTH,
-            height: DEFAULT_VIEWPORT_HEIGHT,
-            depth_or_array_layers: 1,
-        };
-        let mut image = Image::new_fill(
-            size,
-            TextureDimension::D2,
-            &[0, 0, 0, 255],
-            TextureFormat::Bgra8UnormSrgb,
-            default(),
-        );
-        image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING
-            | TextureUsages::COPY_DST
-            | TextureUsages::RENDER_ATTACHMENT;
-        image.sampler = ImageSampler::linear();
+        let image = viewport_target_image();
         world.resource_mut::<Assets<Image>>().add(image)
     };
 
@@ -1258,6 +1264,31 @@ mod tests {
         let mut map = HoverMap::default();
         map.insert(PointerId::Mouse, hits);
         map
+    }
+
+    #[test]
+    fn editor_views_render_into_the_same_format() {
+        assert_eq!(EDITOR_VIEW_FORMAT, TextureFormat::Rgba8UnormSrgb);
+        for (view, image) in [
+            ("3d viewport", viewport_target_image()),
+            (
+                "model thumbnail",
+                crate::model_thumbnail::thumbnail_target_image(),
+            ),
+            (
+                "2d viewport",
+                crate::viewport_2d::viewport_2d_target_image(),
+            ),
+            (
+                "parked ui scene",
+                crate::viewport_2d::parked_ui_target_image(),
+            ),
+        ] {
+            assert_eq!(
+                image.texture_descriptor.format, EDITOR_VIEW_FORMAT,
+                "{view} renders in a format of its own"
+            );
+        }
     }
 
     #[test]

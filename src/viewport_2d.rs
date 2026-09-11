@@ -18,7 +18,7 @@ use bevy::{
         pointer::{Location, PointerId, PointerInput, PointerLocation, PointerPress},
     },
     prelude::*,
-    render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
+    render::render_resource::{Extent3d, TextureDimension, TextureUsages},
     ui::{Checked, UiGlobalTransform, UiSystems, UiTargetCamera},
     ui_widgets::{ValueChange, observe},
 };
@@ -728,10 +728,8 @@ fn aim_ui_roots<'a>(
     }
 }
 
-/// Spawn the parking camera: where an authored UI scene root points while no 2D
-/// viewport panel is open. Inactive and targeting a 1x1 image, so a parked root
-/// resolves against a single pixel and `DefaultUiCamera` never picks it up.
-fn park_ui_scene_roots(commands: &mut Commands, images: &mut Assets<Image>) -> Entity {
+/// The single pixel a parked UI scene root resolves against.
+pub(crate) fn parked_ui_target_image() -> Image {
     let mut image = Image::new_fill(
         Extent3d {
             width: 1,
@@ -740,12 +738,19 @@ fn park_ui_scene_roots(commands: &mut Commands, images: &mut Assets<Image>) -> E
         },
         TextureDimension::D2,
         &[0, 0, 0, 255],
-        TextureFormat::Bgra8UnormSrgb,
+        crate::viewport::EDITOR_VIEW_FORMAT,
         default(),
     );
     image.texture_descriptor.usage =
         TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
-    let handle = images.add(image);
+    image
+}
+
+/// Spawn the parking camera: where an authored UI scene root points while no 2D
+/// viewport panel is open. Inactive and targeting a 1x1 image, so a parked root
+/// resolves against a single pixel and `DefaultUiCamera` never picks it up.
+fn park_ui_scene_roots(commands: &mut Commands, images: &mut Assets<Image>) -> Entity {
+    let handle = images.add(parked_ui_target_image());
 
     commands
         .spawn((
@@ -1525,6 +1530,26 @@ pub fn build_viewport_2d_panel(world: &mut World, parent: Entity) {
     );
 }
 
+/// The image a 2D viewport panel renders into, at the size
+/// `size_targets_to_reference` starts from.
+pub(crate) fn viewport_2d_target_image() -> Image {
+    let mut image = Image::new_fill(
+        Extent3d {
+            width: DEFAULT_VIEWPORT_WIDTH,
+            height: DEFAULT_VIEWPORT_HEIGHT,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &[0, 0, 0, 255],
+        crate::viewport::EDITOR_VIEW_FORMAT,
+        default(),
+    );
+    image.texture_descriptor.usage =
+        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
+    image.sampler = ImageSampler::linear();
+    image
+}
+
 /// Build the panel's 2D presentation: a camera plus a render-target image
 /// dedicated to this panel, then a column holding a header row above a
 /// [`Scene2dStageArea`], with the [`Scene2dViewport`] stage placed inside it
@@ -1534,28 +1559,9 @@ pub fn build_viewport_2d_panel(world: &mut World, parent: Entity) {
 /// The despawn observer on `parent` (via [`Viewport2dPanelHost`]) cleans
 /// the camera up when the reconciler tears the panel down.
 pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity {
-    // A render-target image dedicated to this panel. The size is only a starting
-    // point: `size_targets_to_reference` holds it at the authored reference size
-    // while a UI scene is open.
-    let image_handle = {
-        let size = Extent3d {
-            width: DEFAULT_VIEWPORT_WIDTH,
-            height: DEFAULT_VIEWPORT_HEIGHT,
-            depth_or_array_layers: 1,
-        };
-        let mut image = Image::new_fill(
-            size,
-            TextureDimension::D2,
-            &[0, 0, 0, 255],
-            TextureFormat::Bgra8UnormSrgb,
-            default(),
-        );
-        image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING
-            | TextureUsages::COPY_DST
-            | TextureUsages::RENDER_ATTACHMENT;
-        image.sampler = ImageSampler::linear();
-        world.resource_mut::<Assets<Image>>().add(image)
-    };
+    let image_handle = world
+        .resource_mut::<Assets<Image>>()
+        .add(viewport_2d_target_image());
 
     // A private render layer per panel, so per-viewport overlays can be drawn to
     // this camera alone. Layer 0 stays in the mask so default-layer scene
