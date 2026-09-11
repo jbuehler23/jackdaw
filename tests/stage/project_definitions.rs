@@ -9,7 +9,8 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use jackdaw::definition_assets::{DefinitionRegistry, DefinitionValues, OpenDefinition};
+use jackdaw::asset_index::{AssetEntry, AssetIndex};
+use jackdaw::definition_assets::OpenDefinition;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::AssetKindSource;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext, OperatorReports};
@@ -106,21 +107,24 @@ fn material_schema() -> jackdaw_schema::TypeSchema {
     }
 }
 
+/// The names the index gives a kind's files, sorted.
+fn names_of(app: &App, kind: &str) -> Vec<String> {
+    let mut names: Vec<String> = app
+        .world()
+        .resource::<AssetIndex>()
+        .of_kind(kind)
+        .map(AssetEntry::name)
+        .collect();
+    names.sort();
+    names
+}
+
 /// The open definition as JSON: what its file authors over what its type
 /// defaults to.
 fn open_item(app: &App) -> serde_json::Value {
-    let entity = app
-        .world()
-        .resource::<OpenDefinition>()
-        .0
+    let path = jackdaw::definition_assets::open_definition_path(app.world())
         .expect("a definition is open");
-    let name = app
-        .world()
-        .get::<jackdaw::definition_assets::DefinitionAssetEdit>(entity)
-        .expect("the entity is editing a definition")
-        .name
-        .clone();
-    jackdaw::definition_assets::schema_definition_json(app.world(), "item", &name)
+    jackdaw::definition_assets::schema_definition_json(app.world(), "item", &path)
         .expect("the definition reads back")
 }
 
@@ -319,9 +323,7 @@ fn a_new_definition_asked_for_by_file_path_takes_that_name_and_folder() {
     let path = tmp.path().join("assets/content/lantern.bsn");
     assert!(path.is_file(), "asset.new writes the file at {path:?}");
     assert_eq!(
-        app.world()
-            .resource::<DefinitionRegistry>()
-            .names_of("item"),
+        names_of(&app, "item"),
         vec!["lantern".to_string()],
         "the file the caller named is the name it goes by"
     );
@@ -366,10 +368,7 @@ fn an_asset_file_in_another_folder_is_found_by_the_scan() {
     let reopened = editor_on(tmp.path());
 
     assert_eq!(
-        reopened
-            .world()
-            .resource::<DefinitionRegistry>()
-            .names_of("item"),
+        names_of(&reopened, "item"),
         vec!["lantern".to_string()],
         "a file says what it is wherever it sits"
     );
@@ -398,16 +397,16 @@ fn a_saved_definition_is_listed_and_read_back_when_the_project_is_opened_again()
 
     let reopened = editor_on(tmp.path());
     assert_eq!(
-        reopened
-            .world()
-            .resource::<DefinitionRegistry>()
-            .names_of("item"),
+        names_of(&reopened, "item"),
         vec!["torch".to_string()],
         "the scan lists what the project holds"
     );
-    let read_back =
-        jackdaw::definition_assets::schema_definition_json(reopened.world(), "item", "torch")
-            .expect("the definition reads back");
+    let read_back = jackdaw::definition_assets::schema_definition_json(
+        reopened.world(),
+        "item",
+        std::path::Path::new("torch.bsn"),
+    )
+    .expect("the definition reads back");
     assert_eq!(read_back["stack_size"], 12);
     assert_eq!(read_back["rarity"], "Rare");
 }
@@ -582,10 +581,8 @@ fn a_kind_whose_type_leaves_the_schema_takes_its_entries_and_its_card_with_it() 
     );
     assert!(app.world().resource::<OpenDefinition>().0.is_none());
     assert!(
-        app.world()
-            .resource::<DefinitionValues>()
-            .get("item", "torch")
-            .is_none()
+        names_of(&app, "item").is_empty(),
+        "and the index lets go of what its files held"
     );
 }
 
@@ -669,9 +666,7 @@ fn a_kind_reports_what_the_project_holds() {
     );
 
     assert_eq!(
-        app.world()
-            .resource::<DefinitionRegistry>()
-            .names_of("item"),
+        names_of(&app, "item"),
         vec!["lantern".to_string(), "torch".to_string()]
     );
 
@@ -682,8 +677,8 @@ fn a_kind_reports_what_the_project_holds() {
     call(&mut app, "asset.list", &[("type", "item".into())]);
     assert_eq!(
         app.world().resource::<OperatorReports>().0,
-        vec!["item: lantern, torch".to_string()],
-        "asset.list answers for a kind the schema brought"
+        vec!["item: lantern.bsn, torch.bsn".to_string()],
+        "asset.list answers for a kind the schema brought, by path"
     );
 }
 
@@ -832,9 +827,7 @@ fn a_new_definition_goes_by_the_file_it_was_asked_for_rather_than_the_name() {
         "the file the caller named is the file that is written"
     );
     assert_eq!(
-        app.world()
-            .resource::<DefinitionRegistry>()
-            .names_of("item"),
+        names_of(&app, "item"),
         vec!["lantern".to_string()],
         "and the name is the one a scan would read back from it"
     );
@@ -877,9 +870,7 @@ fn a_definition_is_named_by_the_stem_before_the_first_dot_of_its_file() {
     let (app, _tmp, _path) = editor_on_an_authored_torch();
 
     assert_eq!(
-        app.world()
-            .resource::<DefinitionRegistry>()
-            .names_of("item"),
+        names_of(&app, "item"),
         vec!["torch".to_string()],
         "the kind segment the file carries is no part of the name"
     );
@@ -900,12 +891,7 @@ fn a_new_definition_asked_for_by_a_file_path_drops_its_kind_segment() {
 
     let path = tmp.path().join("assets/content/lantern.item.bsn");
     assert!(path.is_file(), "asset.new writes the file at {path:?}");
-    assert_eq!(
-        app.world()
-            .resource::<DefinitionRegistry>()
-            .names_of("item"),
-        vec!["lantern".to_string()],
-    );
+    assert_eq!(names_of(&app, "item"), vec!["lantern".to_string()],);
     let written = std::fs::read_to_string(&path).expect("the file reads");
     assert!(
         written.contains("#lantern\n"),

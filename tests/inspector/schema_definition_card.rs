@@ -71,7 +71,9 @@ fn app_with_open_item() -> (App, tempfile::TempDir) {
 }
 
 fn open_item(app: &App) -> serde_json::Value {
-    jackdaw::definition_assets::schema_definition_json(app.world(), "item", "torch")
+    let path = jackdaw::definition_assets::open_definition_path(app.world())
+        .expect("a definition is open");
+    jackdaw::definition_assets::schema_definition_json(app.world(), "item", &path)
         .expect("the definition reads back")
 }
 

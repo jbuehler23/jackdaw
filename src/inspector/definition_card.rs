@@ -55,12 +55,13 @@ fn despawn_existing_card(world: &mut World, inspector: Entity) {
 /// Build the card for the definition `source` is editing under `inspector`.
 pub(crate) fn fill_definition_card(world: &mut World, inspector: Entity, source: Entity) {
     despawn_existing_card(world, inspector);
-    let Some((kind, name, type_path, dirty)) =
+    let Some((kind, name, type_path, path, dirty)) =
         world.get::<DefinitionAssetEdit>(source).map(|edit| {
             (
                 edit.kind.clone(),
                 edit.name.clone(),
                 edit.type_path.clone(),
+                edit.path.clone(),
                 edit.dirty,
             )
         })
@@ -82,7 +83,7 @@ pub(crate) fn fill_definition_card(world: &mut World, inspector: Entity, source:
             );
             return;
         };
-        let Some(value) = crate::definition_assets::schema_definition_json(world, &kind, &name)
+        let Some(value) = crate::definition_assets::schema_definition_json(world, &kind, &path)
         else {
             bevy::log::warn_once!(
                 "no {kind} named '{name}' is loaded, so its {type_path} card is empty"

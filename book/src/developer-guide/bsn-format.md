@@ -104,8 +104,11 @@ intentionally opaque to the config (consumers parse it as the
 
 ## Catalog file
 
-Project-wide named assets live in `assets/catalog.bsn`. Any
-scene in the project can reference them with `@Name`. Legacy
+An asset file is a `.bsn` naming the type it holds, and it can
+sit in any folder under `assets/`; the editor indexes every one
+it finds by the path it sits at. `assets/catalog.bsn` holds only
+what has no file of its own. Any scene in the project can
+reference either with `@Name`. Legacy
 catalogs at `.jsn/catalog.jsn` or `assets/catalog.jsn` are read
 for migration and rewritten to `assets/catalog.bsn` on the
 next save.

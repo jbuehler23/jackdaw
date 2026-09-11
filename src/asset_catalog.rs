@@ -22,6 +22,9 @@ pub struct AssetCatalog {
     pub id_to_name: HashMap<UntypedAssetId, String>,
     /// Whether the catalog has unsaved changes.
     pub dirty: bool,
+    /// Names of material entries the catalog file still holds inline, which
+    /// the next save writes out as files of their own.
+    pub inline_materials: HashSet<String>,
     /// Set when `catalog.bsn` existed but could not be read or parsed.
     ///
     /// The loaded map is then an unknown fraction of the file, so writing it
@@ -57,6 +60,12 @@ impl AssetCatalog {
     }
 }
 
+/// Whether a catalog entry is a `StandardMaterial`, and so belongs in a file
+/// of its own rather than in the catalog file.
+fn is_material(handle: &UntypedHandle) -> bool {
+    handle.type_id() == std::any::TypeId::of::<StandardMaterial>()
+}
+
 /// Whether catalog text carries no entries: only comments and whitespace. Such
 /// a file loads as an empty catalog rather than as a parse failure.
 fn is_empty_catalog_text(text: &str) -> bool {
@@ -65,42 +74,16 @@ fn is_empty_catalog_text(text: &str) -> bool {
         .all(|line| line.trim().is_empty())
 }
 
-/// Populate [`AssetCatalog`] for the open project: the `assets/materials`
-/// files first, then whatever `catalog.bsn` holds.
+/// Populate [`AssetCatalog`] from whatever `catalog.bsn` holds.
 ///
-/// Inline material entries in `catalog.bsn` load normally and are flagged dirty,
-/// so the next save writes them out as `.material.bsn` files and drops them from
-/// the catalog file.
+/// The project's material files are indexed and named before this runs, so
+/// their linear-space textures have claimed their paths and a filed material
+/// wins its name over an inline entry of the same name.
+///
+/// Inline material entries in `catalog.bsn` load normally and are flagged
+/// dirty, so the next save writes them out as files of their own and drops them
+/// from the catalog file.
 pub fn load_catalog(world: &mut World) {
-    // Materials load first so their linear-space textures claim their paths before the
-    // catalog file's generic applier resolves the same paths as sRGB, and so a saved
-    // material wins its name.
-    let materials = crate::material_assets::load_material_files(world);
-    let count = materials.len();
-    for (name, handle) in materials {
-        world
-            .resource_mut::<AssetCatalog>()
-            .insert(format!("@{name}"), handle);
-        world
-            .resource_mut::<crate::material_assets::SavedMaterials>()
-            .0
-            .insert(name);
-    }
-    if count > 0 {
-        info!("Loaded {count} saved materials");
-    }
-
-    load_catalog_file(world);
-}
-
-/// Whether a catalog entry is a `StandardMaterial`, and so belongs in
-/// `assets/materials` rather than the catalog file.
-fn is_material(handle: &UntypedHandle) -> bool {
-    handle.type_id() == std::any::TypeId::of::<StandardMaterial>()
-}
-
-/// Load `assets/catalog.bsn` (or a legacy location) into [`AssetCatalog`].
-fn load_catalog_file(world: &mut World) {
     let catalog_path = catalog_file_path(world);
     let Some(catalog_path) = catalog_path else {
         info!("No project root, skipping catalog load");
@@ -147,8 +130,8 @@ fn load_catalog_file(world: &mut World) {
                         {
                             migratable += 1;
                             world
-                                .resource_mut::<crate::material_assets::SavedMaterials>()
-                                .0
+                                .resource_mut::<AssetCatalog>()
+                                .inline_materials
                                 .insert(entry.name.clone());
                         } else {
                             warn!(
@@ -318,7 +301,7 @@ fn catalog_save_path(world: &World) -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::material_assets::{MaterialRegistry, SavedMaterials};
+    use crate::material_assets::MaterialRegistry;
     use crate::project::{ProjectConfig, ProjectRoot};
     use bevy::app::App;
     use bevy::asset::{AssetApp, AssetPlugin};
@@ -339,7 +322,6 @@ mod tests {
         });
         app.init_resource::<AssetCatalog>();
         app.init_resource::<MaterialRegistry>();
-        app.init_resource::<SavedMaterials>();
         std::fs::create_dir_all(tmp.path().join("assets")).expect("assets dir");
         (app, tmp)
     }

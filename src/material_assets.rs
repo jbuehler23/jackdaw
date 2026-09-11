@@ -1,9 +1,10 @@
-//! Saved material assets: `assets/materials/<name>.material.bsn`.
+//! Saved material assets: one reflected `StandardMaterial` per `.bsn` file.
 //!
-//! A saved material is one reflected `StandardMaterial` in its own `.bsn`
-//! file, named by the file stem. Every editor surface that shows or edits
-//! materials reads the same [`MaterialRegistry`] and dispatches the same
-//! operators from this module; nothing here depends on a particular panel.
+//! A material file can sit in any folder; [`crate::asset_index::AssetIndex`]
+//! finds it by reading what it holds. `materials/` is only where a save puts a
+//! material the user has not filed elsewhere. Every editor surface that shows
+//! or edits materials reads the same [`MaterialRegistry`] and dispatches the
+//! same operators from this module; nothing here depends on a particular panel.
 //!
 //! # Saved vs unsaved
 //!
@@ -17,13 +18,12 @@
 //!
 //! # The catalog file
 //!
-//! `assets/materials/` *is* the material index: the file stems are the
-//! `@Name`s. `assets/catalog.bsn` holds only what has no file of its own:
-//! catalog entries of other asset types, and inline material entries. Inline
-//! material entries load normally and are rewritten as `.material.bsn` files
-//! on the next save, which removes them from `catalog.bsn`.
+//! The index *is* the material list: a file's stem is the `@Name` older scenes
+//! spell. `assets/catalog.bsn` holds only what has no file of its own: catalog
+//! entries of other asset types, and inline material entries. Inline material
+//! entries load normally and are rewritten as files on the next save, which
+//! removes them from `catalog.bsn`.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use bevy::asset::{UntypedAssetId, UntypedHandle};
@@ -53,14 +53,6 @@ const LINEAR_SLOTS: [&str; 4] = [
     "occlusion_texture",
     "depth_map",
 ];
-
-/// Material names that are durable: backed by a `.material.bsn` file, or by an
-/// inline `catalog.bsn` entry awaiting migration.
-///
-/// Outlives registry rebuilds, so a rescan keeps a detected set ephemeral and a
-/// saved material of the same name saved.
-#[derive(Resource, Default)]
-pub struct SavedMaterials(pub HashSet<String>);
 
 /// The materials editor surfaces browse, in display order.
 ///
@@ -195,7 +187,8 @@ pub fn material_to_bsn(world: &World, name: &str, asset_id: UntypedAssetId) -> S
     )
 }
 
-/// Write `assets/materials/<name>.material.bsn` for a live material.
+/// Write a live material back to the file the index holds it at, or to
+/// `assets/materials/<name>.material.bsn` when it has none yet.
 pub fn write_material_file(
     world: &World,
     name: &str,
@@ -204,11 +197,17 @@ pub fn write_material_file(
     let project = world
         .get_resource::<ProjectRoot>()
         .ok_or_else(|| std::io::Error::other("no project root"))?;
-    let path = material_file_path(project, name);
-    crate::definition_assets::write_definition_file(
+    let stem = sanitize_material_name(name);
+    let filed = world
+        .get_resource::<crate::asset_index::AssetIndex>()
+        .and_then(|index| index.by_handle(&handle.clone().untyped()))
+        .filter(|entry| entry.name() == stem)
+        .map(|entry| project.assets_dir().join(&entry.path));
+    let path = filed.unwrap_or_else(|| material_file_path(project, name));
+    crate::definition_assets::write_asset_file(
         world,
-        &sanitize_material_name(name),
-        &crate::definition_assets::DefinitionValue::Asset(handle.clone().untyped()),
+        &stem,
+        &crate::asset_index::AssetValue::Handle(handle.clone().untyped()),
         &path,
     )
 }
@@ -218,30 +217,16 @@ pub fn remove_material_file(world: &World, name: &str) {
     let Some(project) = world.get_resource::<ProjectRoot>() else {
         return;
     };
-    let path = material_file_path(project, name);
+    let filed = world
+        .get_resource::<crate::asset_index::AssetIndex>()
+        .and_then(|index| index.material_named(name))
+        .map(|entry| project.assets_dir().join(&entry.path));
+    let path = filed.unwrap_or_else(|| material_file_path(project, name));
     match std::fs::remove_file(&path) {
         Ok(()) => info!("Removed {}", path.display()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => warn!("Failed to remove {}: {err}", path.display()),
     }
-}
-
-/// Every `assets/materials/*.material.bsn` as `(name, path)`, sorted by path
-/// so scan order is stable.
-pub fn material_files(world: &World) -> Vec<(String, PathBuf)> {
-    let Some(project) = world.get_resource::<ProjectRoot>() else {
-        return Vec::new();
-    };
-    let Ok(read_dir) = std::fs::read_dir(materials_dir(project)) else {
-        return Vec::new();
-    };
-    let mut files: Vec<(String, PathBuf)> = read_dir
-        .flatten()
-        .map(|e| e.path())
-        .filter_map(|path| Some((material_name_from_file(&path)?, path)))
-        .collect();
-    files.sort_by(|a, b| a.1.cmp(&b.1));
-    files
 }
 
 /// Load one material file. A file that fails to read or parse is reported and
@@ -260,86 +245,6 @@ pub fn load_material_file(world: &mut World, path: &Path) -> Option<UntypedHandl
         warn!("No material found in {}", path.display());
     }
     handle
-}
-
-/// Load every `assets/materials/*.material.bsn`, returning `(name, handle)`
-/// pairs keyed by file stem.
-pub fn load_material_files(world: &mut World) -> Vec<(String, UntypedHandle)> {
-    material_files(world)
-        .into_iter()
-        .filter_map(|(name, path)| Some((name, load_material_file(world, &path)?)))
-        .collect()
-}
-
-/// What a rescan of `assets/materials` found.
-#[derive(Default, Debug, PartialEq, Eq)]
-pub struct MaterialRescan {
-    /// Names whose file appeared since the last scan. Loaded and marked saved.
-    pub added: Vec<String>,
-    /// Names whose file has gone. Demoted to unsaved; see
-    /// [`rescan_material_files`] for what that keeps and what it drops.
-    pub demoted: Vec<String>,
-}
-
-/// Rescan `assets/materials` while the editor is up. Files that appeared since
-/// the last scan load and register as they would at project open.
-///
-/// A file that has disappeared demotes its material to *unsaved*:
-///
-/// - **Memory**: the material is kept. Faces and terrain slots reference it
-///   by name, and dropping it would orphan them over a file that may be
-///   moving rather than gone.
-/// - **Disk**: it is not recreated. Leaving it saved would have the next
-///   `persist_materials` write the file back, undoing the user's deletion. A
-///   scene that references it embeds it inline, staying self-contained.
-/// - **Marker**: it lists as unsaved wherever materials are shown.
-///   `material.save` promotes it again and writes a fresh file.
-///
-/// The material file has no asset-server handle behind it, so a file changed
-/// on disk is not reloaded here; its images are, through the asset server's
-/// own watcher.
-pub fn rescan_material_files(world: &mut World) -> MaterialRescan {
-    let files = material_files(world);
-    let known = world.resource::<SavedMaterials>().0.clone();
-    let on_disk: HashSet<&String> = files.iter().map(|(name, _)| name).collect();
-
-    let mut scan = MaterialRescan::default();
-    for gone in known.iter().filter(|name| !on_disk.contains(name)) {
-        info!("Material file for '{gone}' is gone; keeping it as an unsaved material");
-        world.resource_mut::<SavedMaterials>().0.remove(gone);
-        scan.demoted.push(gone.clone());
-    }
-    scan.demoted.sort();
-
-    for (name, path) in files {
-        if known.contains(&name) {
-            continue;
-        }
-        let Some(handle) = load_material_file(world, &path) else {
-            continue;
-        };
-        world
-            .resource_mut::<AssetCatalog>()
-            .insert(format!("@{name}"), handle);
-        world
-            .resource_mut::<SavedMaterials>()
-            .0
-            .insert(name.clone());
-        scan.added.push(name);
-    }
-    if !scan.added.is_empty() {
-        info!("Loaded {} new saved materials", scan.added.len());
-    }
-    scan
-}
-
-/// The material name a file path denotes, or `None` if it is not a material
-/// file.
-pub fn material_name_from_file(path: &Path) -> Option<String> {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .and_then(|n| n.strip_suffix(MATERIAL_FILE_SUFFIX))
-        .map(str::to_owned)
 }
 
 /// Build a material from `.bsn` text, rehydrating its texture slots through
@@ -727,16 +632,20 @@ fn write_and_promote(
         return;
     }
 
-    if let Err(err) = write_material_file(world, name, handle) {
-        warn!("material.save: failed to write '{name}': {err}");
-        return;
-    }
+    let file = match write_material_file(world, name, handle) {
+        Ok(file) => file,
+        Err(err) => {
+            warn!("material.save: failed to write '{name}': {err}");
+            return;
+        }
+    };
 
     let renamed = current.is_some_and(|old| old != name);
     if renamed && let Some(old) = current {
         remove_material_file(world, old);
-        world.resource_mut::<SavedMaterials>().0.remove(old);
+        forget_material_file(world, old);
     }
+    index_material_file(world, &file, handle);
 
     let mut registry = world.resource_mut::<MaterialRegistry>();
     if let Some(entry) = registry.entries.iter_mut().find(|e| e.handle == *handle) {
@@ -753,10 +662,46 @@ fn write_and_promote(
         .insert(format!("@{name}"), handle.clone().untyped());
     world.resource_mut::<AssetCatalog>().dirty = true;
     world
-        .resource_mut::<SavedMaterials>()
-        .0
-        .insert(name.to_owned());
+        .resource_mut::<AssetCatalog>()
+        .inline_materials
+        .remove(name);
     info!("Saved material '{name}'");
+}
+
+/// Record a material file the editor just wrote, so the index holds it under
+/// the handle that was saved rather than reading a second copy back.
+fn index_material_file(world: &mut World, file: &Path, handle: &Handle<StandardMaterial>) {
+    let Some(kind) = world
+        .get_resource::<jackdaw_api::prelude::AssetKinds>()
+        .and_then(|kinds| kinds.by_kind(crate::definition_assets::MATERIAL_KIND))
+        .cloned()
+    else {
+        return;
+    };
+    crate::asset_index::index_written(
+        world,
+        file,
+        &kind,
+        crate::asset_index::AssetValue::Handle(handle.clone().untyped()),
+    );
+}
+
+/// Drop whatever the index held for a material name, for a file that has been
+/// removed or renamed away.
+fn forget_material_file(world: &mut World, name: &str) {
+    let filed = world
+        .get_resource::<crate::asset_index::AssetIndex>()
+        .and_then(|index| index.material_named(name))
+        .map(|entry| entry.path.clone());
+    if let Some(path) = filed {
+        world
+            .resource_mut::<crate::asset_index::AssetIndex>()
+            .remove(&path);
+    }
+    world
+        .resource_mut::<AssetCatalog>()
+        .inline_materials
+        .remove(name);
 }
 
 /// The material a confirmed delete will remove, and the dialog asking about it.
@@ -886,7 +831,7 @@ fn on_material_delete_confirmed(
 /// Remove every trace of a material name from this project.
 fn delete_material(world: &mut World, name: &str) {
     remove_material_file(world, name);
-    world.resource_mut::<SavedMaterials>().0.remove(name);
+    forget_material_file(world, name);
 
     let mut registry = world.resource_mut::<MaterialRegistry>();
     let removed = registry
@@ -1093,16 +1038,6 @@ mod tests {
         assert_eq!(sanitize_material_name("../escape"), ".._escape");
     }
 
-    #[test]
-    fn material_file_names_round_trip_through_their_stem() {
-        let path = PathBuf::from("/p/assets/materials/grass_05.material.bsn");
-        assert_eq!(material_name_from_file(&path).as_deref(), Some("grass_05"));
-        assert_eq!(
-            material_name_from_file(Path::new("/p/assets/catalog.bsn")),
-            None
-        );
-    }
-
     fn params(pairs: &[(&str, &str)]) -> OperatorParameters {
         let mut params = OperatorParameters::default();
         for (key, value) in pairs {
@@ -1122,9 +1057,36 @@ mod tests {
             config: crate::project::ProjectConfig::default(),
         });
         app.init_resource::<MaterialRegistry>();
-        app.init_resource::<SavedMaterials>();
         app.init_resource::<AssetCatalog>();
+        app.init_resource::<crate::asset_index::AssetIndex>();
+        app.init_resource::<crate::asset_files::AssetKindCache>();
+        app.init_resource::<jackdaw_api::prelude::AssetKinds>();
+        app.world_mut()
+            .resource_mut::<jackdaw_api::prelude::AssetKinds>()
+            .register(jackdaw_api::prelude::AssetKind::compiled(
+                crate::definition_assets::MATERIAL_KIND,
+                "Material",
+                STANDARD_MATERIAL,
+            ));
         (app, tmp)
+    }
+
+    /// The handle the index holds a material under.
+    fn filed_handle(app: &App, name: &str) -> Handle<StandardMaterial> {
+        app.world()
+            .resource::<crate::asset_index::AssetIndex>()
+            .material_named(name)
+            .and_then(|entry| entry.value.handle().cloned())
+            .expect("the index holds the material")
+            .typed::<StandardMaterial>()
+    }
+
+    /// Where the index holds a material, if it holds one.
+    fn filed_at(app: &App, name: &str) -> Option<PathBuf> {
+        app.world()
+            .resource::<crate::asset_index::AssetIndex>()
+            .material_named(name)
+            .map(|entry| entry.path.clone())
     }
 
     #[test]
@@ -1153,9 +1115,10 @@ mod tests {
                 .contains("t/grass_basecolor.png")
         );
         assert!(app.world().resource::<MaterialRegistry>().is_saved("grass"));
-        assert!(
-            app.world().resource::<SavedMaterials>().0.contains("grass"),
-            "the name must stay durable across registry rebuilds"
+        assert_eq!(
+            filed_at(&app, "grass"),
+            Some(PathBuf::from("materials/grass.material.bsn")),
+            "the index must hold the file the save wrote"
         );
         assert!(
             app.world()
@@ -1287,9 +1250,11 @@ mod tests {
             Some("@meadow"),
             "new saves must emit the new name"
         );
-        let saved = app.world().resource::<SavedMaterials>();
-        assert!(saved.0.contains("meadow"));
-        assert!(!saved.0.contains("grass"));
+        assert_eq!(
+            filed_at(&app, "meadow"),
+            Some(PathBuf::from("materials/meadow.material.bsn"))
+        );
+        assert_eq!(filed_at(&app, "grass"), None);
     }
 
     #[test]
@@ -1334,7 +1299,7 @@ mod tests {
     }
 
     #[test]
-    fn saved_material_files_reload_by_their_stem() {
+    fn a_saved_material_file_reloads_through_the_index() {
         let (mut app, tmp) = project_app();
         let handle = {
             let normal = textured(&mut app, "t/rock_normal.png", false);
@@ -1348,13 +1313,16 @@ mod tests {
         };
         write_material_file(app.world(), "rock", &handle).expect("write");
 
-        let loaded = load_material_files(app.world_mut());
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].0, "rock");
+        let scan = crate::asset_index::rescan_asset_index(app.world_mut());
+        assert_eq!(
+            scan.added,
+            vec![PathBuf::from("materials/rock.material.bsn")]
+        );
+        let reloaded = filed_handle(&app, "rock");
         let material = app
             .world()
             .resource::<Assets<StandardMaterial>>()
-            .get(&loaded[0].1.clone().typed::<StandardMaterial>())
+            .get(&reloaded)
             .expect("reloaded material")
             .clone();
         assert!((material.perceptual_roughness - 0.31).abs() < f32::EPSILON);
@@ -1397,16 +1365,15 @@ mod tests {
                 ..default()
             });
         write_material_file(app.world(), "slate", &handle).expect("write");
-        assert!(
-            !app.world().resource::<SavedMaterials>().0.contains("slate"),
-            "nothing has scanned yet",
+        assert_eq!(filed_at(&app, "slate"), None, "nothing has scanned yet");
+
+        let scan = crate::asset_index::rescan_asset_index(app.world_mut());
+
+        assert_eq!(
+            scan.added,
+            vec![PathBuf::from("materials/slate.material.bsn")]
         );
-
-        let scan = rescan_material_files(app.world_mut());
-
-        assert_eq!(scan.added, vec!["slate".to_string()]);
-        assert!(scan.demoted.is_empty());
-        assert!(app.world().resource::<SavedMaterials>().0.contains("slate"));
+        assert!(scan.removed.is_empty());
         let loaded = app
             .world()
             .resource::<AssetCatalog>()
@@ -1424,9 +1391,76 @@ mod tests {
         assert!((roughness - 0.42).abs() < f32::EPSILON);
 
         assert_eq!(
-            rescan_material_files(app.world_mut()),
-            MaterialRescan::default(),
-            "a second rescan re-registers nothing",
+            crate::asset_index::rescan_asset_index(app.world_mut()),
+            crate::asset_index::AssetRescan::default(),
+            "a second scan reads nothing again",
+        );
+    }
+
+    /// A catalog holding one inline material reads exactly like a material
+    /// file, and indexing it would list the catalog as a material and write a
+    /// save back over it.
+    #[test]
+    fn the_catalog_file_is_not_indexed_as_a_material() {
+        let (mut app, tmp) = project_app();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let catalog = tmp.path().join("assets/catalog.bsn");
+        std::fs::create_dir_all(catalog.parent().expect("the assets directory"))
+            .expect("the directory is made");
+        let entry = material_to_bsn(app.world(), "slate", handle.id().untyped());
+        std::fs::write(&catalog, entry).expect("the catalog is written");
+
+        let scan = crate::asset_index::rescan_asset_index(app.world_mut());
+
+        assert!(scan.added.is_empty(), "got {:?}", scan.added);
+        assert!(
+            app.world()
+                .resource::<crate::asset_index::AssetIndex>()
+                .get(Path::new("catalog.bsn"))
+                .is_none(),
+            "the catalog holds what has no file of its own"
+        );
+    }
+
+    /// A material filed outside `materials/` is still the material that name
+    /// stands for, so the panel lists it and a save goes back to its own file.
+    #[test]
+    fn a_material_filed_in_another_folder_is_indexed_by_its_path() {
+        let (mut app, tmp) = project_app();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial {
+                perceptual_roughness: 0.17,
+                ..default()
+            });
+        let elsewhere = tmp.path().join("assets/zones/hedgerow");
+        std::fs::create_dir_all(&elsewhere).expect("the directory is made");
+        crate::definition_assets::write_asset_file(
+            app.world(),
+            "slate",
+            &crate::asset_index::AssetValue::Handle(handle.clone().untyped()),
+            &elsewhere.join("slate.material.bsn"),
+        )
+        .expect("the material file is written");
+
+        crate::asset_index::rescan_asset_index(app.world_mut());
+
+        assert_eq!(
+            filed_at(&app, "slate"),
+            Some(PathBuf::from("zones/hedgerow/slate.material.bsn")),
+            "the index keys it by where it sits"
+        );
+        let filed = filed_handle(&app, "slate");
+        write_material_file(app.world(), "slate", &filed).expect("write");
+        assert!(
+            !tmp.path()
+                .join("assets/materials/slate.material.bsn")
+                .exists(),
+            "a save goes back to the file the material came from"
         );
     }
 
@@ -1438,7 +1472,7 @@ mod tests {
             .resource_mut::<Assets<StandardMaterial>>()
             .add(StandardMaterial::default());
         write_material_file(app.world(), name, &handle).expect("write");
-        rescan_material_files(app.world_mut());
+        crate::asset_index::rescan_asset_index(app.world_mut());
         app.world_mut()
             .resource_mut::<MaterialRegistry>()
             .add_saved(name.to_string(), handle);
@@ -1457,9 +1491,12 @@ mod tests {
     fn a_deleted_file_demotes_its_material_instead_of_dropping_it() {
         let (mut app, _tmp) = deleted_behind_our_back("slate");
 
-        let scan = rescan_material_files(app.world_mut());
+        let scan = crate::asset_index::rescan_asset_index(app.world_mut());
 
-        assert_eq!(scan.demoted, vec!["slate".to_string()]);
+        assert_eq!(
+            scan.removed,
+            vec![PathBuf::from("materials/slate.material.bsn")]
+        );
         assert!(scan.added.is_empty());
         assert!(
             app.world()
@@ -1468,8 +1505,9 @@ mod tests {
                 .contains_key("@slate"),
             "the loaded material outlives its file",
         );
-        assert!(
-            !app.world().resource::<SavedMaterials>().0.contains("slate"),
+        assert_eq!(
+            filed_at(&app, "slate"),
+            None,
             "nothing on disk backs it any more",
         );
     }
@@ -1479,8 +1517,8 @@ mod tests {
     #[test]
     fn a_deleted_file_is_not_written_back_by_the_next_persist() {
         let (mut app, tmp) = deleted_behind_our_back("slate");
-        rescan_material_files(app.world_mut());
-        // The browser rebuilds the registry from `SavedMaterials`; stand in for that here.
+        crate::asset_index::rescan_asset_index(app.world_mut());
+        // The browser rebuilds the registry from the index; stand in for that here.
         app.world_mut().resource_mut::<MaterialRegistry>().entries = Vec::new();
         let handle = app
             .world()
@@ -1504,7 +1542,10 @@ mod tests {
 
         // An explicit save writes the file again.
         write_and_promote(app.world_mut(), &handle, Some("slate"), "slate");
-        assert!(app.world().resource::<SavedMaterials>().0.contains("slate"));
+        assert_eq!(
+            filed_at(&app, "slate"),
+            Some(PathBuf::from("materials/slate.material.bsn"))
+        );
         assert!(
             tmp.path()
                 .join("assets/materials/slate.material.bsn")
@@ -1536,12 +1577,7 @@ mod tests {
                 .join("assets/materials/meadow.material.bsn")
                 .exists()
         );
-        assert!(
-            !app.world()
-                .resource::<SavedMaterials>()
-                .0
-                .contains("meadow")
-        );
+        assert_eq!(filed_at(&app, "meadow"), None);
         assert!(
             app.world()
                 .resource::<MaterialRegistry>()

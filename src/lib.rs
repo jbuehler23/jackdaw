@@ -14,6 +14,7 @@ pub mod app_ops;
 pub mod asset_browser;
 pub mod asset_catalog;
 pub mod asset_files;
+pub mod asset_index;
 pub mod asset_ingest;
 pub mod authored_widgets;
 pub mod boot_ops;
@@ -469,6 +470,7 @@ impl Plugin for EditorCorePlugin {
         ))
         .add_plugins(native_dialog::NativeDialogPlugin)
         .add_plugins(definition_assets::plugin)
+        .add_plugins(asset_index::plugin)
         .add_plugins(model_thumbnail::plugin)
         .add_plugins(boot_ops::plugin)
         .add_plugins(fps_overlay::plugin)
@@ -2758,19 +2760,17 @@ fn cleanup_editor(world: &mut World) {
         }
     }
 
-    // 5. Reset resources. The catalog, the durable-name set and the
-    // material registry all describe the project being closed.
+    // 5. Reset resources. The catalog, the asset index and the material
+    // registry all describe the project being closed.
     world.insert_resource(scene_io::SceneFilePath::default());
     world.insert_resource(scene_io::SceneDirtyState::default());
     world.insert_resource(Selection::default());
     world.insert_resource(commands::CommandHistory::default());
     world.insert_resource(asset_catalog::AssetCatalog::default());
-    world.insert_resource(material_assets::SavedMaterials::default());
     world.insert_resource(material_assets::MaterialRegistry::default());
     project_definitions::forget_project_definitions(world);
     world.insert_resource(asset_files::AssetKindCache::default());
-    world.insert_resource(definition_assets::DefinitionRegistry::default());
-    world.insert_resource(definition_assets::DefinitionValues::default());
+    world.insert_resource(asset_index::AssetIndex::default());
     world.insert_resource(definition_assets::OpenDefinition::default());
 
     // 6. Remove project root
