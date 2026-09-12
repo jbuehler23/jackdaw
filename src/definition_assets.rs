@@ -802,6 +802,82 @@ pub(crate) fn commit_definition_field(
     true
 }
 
+/// The path a field of the open asset names, whichever way the asset is held.
+pub(crate) fn asset_field_text(
+    world: &World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+) -> Option<String> {
+    let json = field_as_json(world, entity, type_path, field_path)?;
+    Some(json.as_str().unwrap_or_default().to_string())
+}
+
+/// The path a field of the asset behind a handle names.
+pub(crate) fn handle_field_text(
+    world: &World,
+    handle: &UntypedHandle,
+    field_path: &str,
+) -> Option<String> {
+    let type_path = handle_type_path(world, handle)?;
+    let json = asset_field_json(world, handle, &type_path, field_path)?;
+    Some(json.as_str().unwrap_or_default().to_string())
+}
+
+/// Set one field of the asset a handle points at, as one undo entry.
+///
+/// An asset with a file of its own is edited through that file, so undo reaches
+/// it the way it reaches the open card. One the editor only holds in memory,
+/// such as a material created and not yet saved, is written straight to its
+/// store and mints no history, since there is no file to key an entry by.
+pub(crate) fn commit_handle_field(
+    world: &mut World,
+    handle: &UntypedHandle,
+    field_path: &str,
+    new_json: &serde_json::Value,
+) -> bool {
+    let entry = world
+        .get_resource::<AssetIndex>()
+        .and_then(|index| index.by_handle(handle))
+        .map(|entry| (entry.path.clone(), entry.type_path.clone()));
+    let Some((path, type_path)) = entry else {
+        let Some(type_path) = handle_type_path(world, handle) else {
+            return false;
+        };
+        return write_asset_field(world, handle, &type_path, field_path, new_json);
+    };
+    let Some(old_json) = asset_field_json(world, handle, &type_path, field_path) else {
+        return false;
+    };
+    let command = SetDefinitionField {
+        path,
+        type_path,
+        field_path: field_path.to_string(),
+        old_json,
+        new_json: new_json.clone(),
+        rebuilds_rows: false,
+    };
+    if !command.apply(world, new_json) {
+        return false;
+    }
+    world
+        .resource_mut::<CommandHistory>()
+        .push_executed(Box::new(command));
+    true
+}
+
+/// The type a handle's asset store holds, as its files name it.
+fn handle_type_path(world: &World, handle: &UntypedHandle) -> Option<String> {
+    let registry = world.resource::<AppTypeRegistry>().read();
+    Some(
+        registry
+            .get(handle.type_id())?
+            .type_info()
+            .type_path()
+            .to_string(),
+    )
+}
+
 /// Write a field of the open asset without an undo entry, for the ticks of a
 /// drag.
 pub(crate) fn preview_definition_field(
@@ -1093,6 +1169,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<AssetSaveOp>()
         .register_operator::<AssetDeleteOp>()
         .register_operator::<AssetSetOp>()
+        .register_operator::<AssetPickOp>()
+        .register_operator::<AssetClearOp>()
         .register_operator::<AssetListOp>();
 }
 
@@ -1187,7 +1265,7 @@ fn new_definition(world: &mut World, kind: &str, name: Option<&str>, dir: Option
 }
 
 /// Write a fresh default value of a registered kind to its file and index it.
-fn create_definition(
+pub(crate) fn create_definition(
     world: &mut World,
     kind: &str,
     name: Option<&str>,
@@ -1197,10 +1275,6 @@ fn create_definition(
         warn!("asset.new: '{kind}' is not a registered asset type");
         return None;
     };
-    if !definition.scanned() {
-        warn!("asset.new: {kind} files are created by the panel that loads them");
-        return None;
-    }
     let (dir, file) = match dir {
         Some(file) if names_a_file(file) => (
             file.parent().unwrap_or(file).to_path_buf(),
@@ -1415,6 +1489,92 @@ fn set_definition_field(world: &mut World, field: &str, value: &str) {
     } else {
         warn!("asset.set: {type_path} did not take '{value}' for '{field}'");
     }
+}
+
+/// Drive the Pick beside an asset field, so the row's own choice can be made
+/// without the pointer.
+#[operator(
+    id = "asset.pick",
+    label = "Pick Asset",
+    description = "Choose the file an asset field names, or put up the list to choose from.",
+    allows_undo = false,
+    params(
+        field(
+            String,
+            doc = "Field path of the asset field, for example 'materials[0]'."
+        ),
+        value(
+            String,
+            doc = "File to assign, as a path under the project's assets. Left \
+                   out, the picker opens on the field instead."
+        )
+    )
+)]
+pub(crate) fn asset_pick(
+    params: In<OperatorParameters>,
+    rows: Query<(Entity, &crate::inspector::asset_row::AssetFieldRow)>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(field) = params.as_str("field").map(str::to_owned) else {
+        warn!("asset.pick: no field given");
+        return OperatorResult::Cancelled;
+    };
+    let Some(row) = showing_asset_field(&rows, &field) else {
+        warn!("asset.pick: no asset field is showing for '{field}'");
+        return OperatorResult::Cancelled;
+    };
+    let value = params.as_str("value").map(str::to_owned);
+    commands.queue(move |world: &mut World| match value {
+        Some(value) => {
+            if crate::inspector::asset_row::commit_asset_row(world, row, &value) {
+                report_to_caller(world, format!("Set {field}"));
+            } else {
+                warn!("asset.pick: '{field}' did not take '{value}'");
+            }
+        }
+        None => crate::inspector::asset_row::open_asset_picker(world, row),
+    });
+    OperatorResult::Finished
+}
+
+/// The row writing this field, for an operator that names a field rather than
+/// clicking a row.
+fn showing_asset_field(
+    rows: &Query<(Entity, &crate::inspector::asset_row::AssetFieldRow)>,
+    field: &str,
+) -> Option<Entity> {
+    rows.iter()
+        .find(|(_, row)| row.field_path == field)
+        .map(|(entity, _)| entity)
+}
+
+/// Leave an asset field naming nothing.
+#[operator(
+    id = "asset.clear",
+    label = "Clear Asset",
+    description = "Leave an asset field naming no file.",
+    allows_undo = false,
+    params(field(String, doc = "Field path of the asset field to clear."))
+)]
+pub(crate) fn asset_clear(
+    params: In<OperatorParameters>,
+    rows: Query<(Entity, &crate::inspector::asset_row::AssetFieldRow)>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(field) = params.as_str("field").map(str::to_owned) else {
+        warn!("asset.clear: no field given");
+        return OperatorResult::Cancelled;
+    };
+    let Some(row) = showing_asset_field(&rows, &field) else {
+        warn!("asset.clear: no asset field is showing for '{field}'");
+        return OperatorResult::Cancelled;
+    };
+    commands.queue(move |world: &mut World| {
+        if crate::inspector::asset_row::commit_asset_row(world, row, "") {
+            report_to_caller(world, format!("Cleared {field}"));
+        }
+    });
+    OperatorResult::Finished
 }
 
 /// Report the files of a kind this project holds.

@@ -105,13 +105,19 @@ pub fn asset_text_type(text: &str, path: &Path) -> Option<String> {
 /// Every `.bsn` and `.jsn` file under `dir`, as absolute paths, skipping
 /// hidden directories and following no symlink out of the tree.
 pub fn walk_document_files(dir: &Path) -> Vec<PathBuf> {
+    walk_files_with_extensions(dir, &["bsn", "jsn"])
+}
+
+/// Every file under `dir` whose extension is one of `extensions`, as absolute
+/// paths, skipping hidden directories and following no symlink out of the tree.
+pub fn walk_files_with_extensions(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     let mut found = Vec::new();
-    collect_document_files(dir, 0, &mut found);
+    collect_files(dir, extensions, 0, &mut found);
     found.sort();
     found
 }
 
-fn collect_document_files(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+fn collect_files(dir: &Path, extensions: &[&str], depth: usize, found: &mut Vec<PathBuf>) {
     if depth > MAX_ASSET_DEPTH {
         return;
     }
@@ -132,12 +138,14 @@ fn collect_document_files(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
             continue;
         }
         if file_type.is_dir() {
-            collect_document_files(&path, depth + 1, found);
+            collect_files(&path, extensions, depth + 1, found);
         } else if path
             .extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("bsn") || extension.eq_ignore_ascii_case("jsn")
+                extensions
+                    .iter()
+                    .any(|wanted| extension.eq_ignore_ascii_case(wanted))
             })
         {
             found.push(path);

@@ -161,6 +161,7 @@ pub(crate) fn fill_definition_card(world: &mut World, inspector: Entity, source:
             state.apply(world);
         }
         CardBody::Schema(schema, value) => {
+            let asset_types = super::schema_fields::asset_path_types(world);
             world.resource_scope(|world, types: Mut<crate::project_types::ProjectTypes>| {
                 let mut state: SystemState<(Commands, Query<&Name>)> = SystemState::new(world);
                 let Ok((mut commands, names)) = state.get_mut(world) else {
@@ -173,6 +174,7 @@ pub(crate) fn fill_definition_card(world: &mut World, inspector: Entity, source:
                     names: &names,
                     registry: &registry,
                     server: server.as_ref(),
+                    asset_types: &asset_types,
                     editor_font: &editor_font,
                     icon_font: &icon_font,
                 };

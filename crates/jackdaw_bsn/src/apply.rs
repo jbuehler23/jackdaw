@@ -980,13 +980,12 @@ pub fn bsn_value_to_reflect(
                 return Some(typed.into_partial_reflect());
             }
         }
-        // Empty string or no asset server: return the default handle.
-        if let Some(registration) = registry.get(expected)
-            && let Some(reflect_default) = registration.data::<ReflectDefault>()
-        {
-            return Some(reflect_default.default().into_partial_reflect());
-        }
-        return None;
+        // Empty string or no asset server: the handle a field holds when it
+        // names nothing.
+        let cleared = reflect_handle.typed(bevy::asset::UntypedHandle::default_for_type(
+            reflect_handle.asset_type_id(),
+        ));
+        return Some(cleared.into_partial_reflect());
     }
 
     // If the expected type is `Option<Handle<T>>`, resolve a path string into

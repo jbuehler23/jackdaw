@@ -1603,6 +1603,15 @@ pub(crate) fn json_field_edit_to_bsn_value(
     let mut merged: Box<dyn Reflect> = registration
         .data::<bevy::reflect::ReflectFromReflect>()?
         .from_reflect(component.as_partial_reflect())?;
+    // A field naming an asset is authored as the path itself.
+    if let Some(text) = value.as_str()
+        && let Ok(field) = merged.reflect_path(field_path)
+        && field
+            .get_represented_type_info()
+            .is_some_and(|info| crate::typed_values::takes_asset_path(&registry, info.type_id()))
+    {
+        return Some(jackdaw_bsn::BsnValue::String(text.to_string()));
+    }
     if let Ok(field) = merged.reflect_path_mut(field_path) {
         apply_json_to_reflect(field, value, &registry);
     }
