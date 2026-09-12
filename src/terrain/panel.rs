@@ -1408,7 +1408,7 @@ fn spawn_slot_editor(
     refs: &TexturesTabRefs,
 ) {
     let icon_font = refs.icon_font.0.clone();
-    let name = crate::material_assets::material_name_of(&slot.material);
+    let name = jackdaw_bsn::asset_stem(&slot.material);
     let handle = crate::material_assets::material_of_reference(
         refs.index.as_deref(),
         &refs.registry,

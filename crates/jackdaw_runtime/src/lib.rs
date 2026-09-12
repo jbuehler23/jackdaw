@@ -63,7 +63,7 @@
 //! - `pie`: play-in-editor, streaming this world to a running editor.
 
 use std::any::TypeId;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 // Only the texture-format promotion pass gathers bound image ids, and that is
 // a rendering build's concern.
 #[cfg(feature = "render")]
@@ -1365,8 +1365,9 @@ fn load_asset_files(world: &mut World) {
 /// The walk costs one parse per `.bsn`, which is what telling a file that
 /// holds an asset from one that spawns a scene takes.
 fn load_walked_assets(world: &mut World, root: &Path, catalog_path: Option<&Path>) {
-    let mut stems: HashMap<String, Vec<(String, UntypedHandle)>> = HashMap::new();
-    let mut count = 0usize;
+    let mut stems = jackdaw_bsn::StemIndex::default();
+    let mut loaded: Vec<(String, String, UntypedHandle)> = Vec::new();
+    let mut skipped = SkippedTypes::default();
 
     for path in jackdaw_bsn::walk_document_files(root) {
         let is_bsn = path
@@ -1379,39 +1380,87 @@ fn load_walked_assets(world: &mut World, root: &Path, catalog_path: Option<&Path
         let Some(key) = assets_relative_key(root, &path) else {
             continue;
         };
-        let Some(handle) = load_asset_file(world, &path) else {
+        stems.insert(PathBuf::from(&key));
+        let Some(handle) = load_asset_file(world, &path, &mut skipped) else {
             continue;
         };
-        let stem = file_stem_name(&path);
         world
             .resource_mut::<JackdawCatalog>()
             .files
             .insert(key.clone(), handle.clone());
-        stems.entry(stem).or_default().push((key, handle));
-        count += 1;
+        loaded.push((jackdaw_bsn::path_stem(&path), key, handle));
     }
 
-    let mut catalog = world.resource_mut::<JackdawCatalog>();
-    for (stem, found) in stems {
-        match found.as_slice() {
-            [(_, handle)] => {
-                catalog.handles.insert(format!("@{stem}"), handle.clone());
+    let count = loaded.len();
+    let mut ambiguous: Vec<String> = Vec::new();
+    {
+        let mut catalog = world.resource_mut::<JackdawCatalog>();
+        for (stem, _, handle) in loaded {
+            if stems.unique(&stem).is_some() {
+                catalog.handles.insert(format!("@{stem}"), handle);
+            } else if !ambiguous.contains(&stem) {
+                ambiguous.push(stem);
             }
-            [(first, _), (second, _), ..] => {
-                warn!("'{stem}' names both {first} and {second}; spell the one you mean as a path");
-            }
-            [] => {}
+        }
+    }
+    for stem in ambiguous {
+        if let Some((first, second)) = stems.shared(&stem) {
+            warn!(
+                "'{stem}' names both {} and {}; spell the one you mean as a path",
+                first.display(),
+                second.display()
+            );
         }
     }
 
+    skipped.report();
     if count > 0 {
         info!("Loaded {count} asset files from {}", root.display());
     }
 }
 
+/// The types the walk passed over, so a project whose materials this app does
+/// not render costs one line rather than one per file.
+#[derive(Default)]
+struct SkippedTypes {
+    unregistered: BTreeMap<String, usize>,
+    unreflected: BTreeMap<String, usize>,
+}
+
+impl SkippedTypes {
+    fn report(&self) {
+        if !self.unregistered.is_empty() {
+            warn!(
+                "Skipped {} asset files holding types this app has not registered: {}",
+                self.unregistered.values().sum::<usize>(),
+                summarize(&self.unregistered)
+            );
+        }
+        if !self.unreflected.is_empty() {
+            warn!(
+                "Skipped {} asset files holding types this app registered without register_asset_reflect: {}",
+                self.unreflected.values().sum::<usize>(),
+                summarize(&self.unreflected)
+            );
+        }
+    }
+}
+
+fn summarize(counts: &BTreeMap<String, usize>) -> String {
+    counts
+        .iter()
+        .map(|(type_path, count)| format!("{type_path} ({count})"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Load the asset the file at `path` holds, or nothing when it holds a scene,
 /// a prefab, or a type this app has not registered as an asset.
-fn load_asset_file(world: &mut World, path: &Path) -> Option<UntypedHandle> {
+fn load_asset_file(
+    world: &mut World,
+    path: &Path,
+    skipped: &mut SkippedTypes,
+) -> Option<UntypedHandle> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) => {
@@ -1445,18 +1494,12 @@ fn load_asset_file(world: &mut World, path: &Path) -> Option<UntypedHandle> {
     };
     match registered {
         None => {
-            warn!(
-                "{} holds a {type_path}, which this app has not registered; skipping it",
-                path.display()
-            );
+            *skipped.unregistered.entry(type_path).or_default() += 1;
             return None;
         }
         Some(false) => {
             if jackdaw_bsn::read_asset_header(&text).is_some() {
-                warn!(
-                    "{} holds a {type_path}, which this app registered without register_asset_reflect; skipping it",
-                    path.display()
-                );
+                *skipped.unreflected.entry(type_path).or_default() += 1;
             }
             return None;
         }
@@ -1490,18 +1533,6 @@ fn assets_relative_key(root: &Path, path: &Path) -> Option<String> {
         key.push_str(component.as_os_str().to_str()?);
     }
     (!key.is_empty()).then_some(key)
-}
-
-/// The bare name a file's stem gives it: everything before the first dot of its
-/// file name, so `grass.material.bsn` is `grass`.
-fn file_stem_name(path: &Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .map_or_else(String::new, |name| {
-            name.split_once('.')
-                .map_or(name, |(stem, _)| stem)
-                .to_owned()
-        })
 }
 
 /// The folder Bevy reads assets from, as this app's [`AssetPlugin`] was

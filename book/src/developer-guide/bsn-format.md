@@ -115,12 +115,27 @@ intentionally opaque to the config (consumers parse it as the
 
 An asset file is a `.bsn` naming the type it holds, and it can
 sit in any folder under `assets/`; the editor indexes every one
-it finds by the path it sits at. `assets/catalog.bsn` holds only
-what has no file of its own. Any scene in the project can
-reference either with `@Name`. Legacy
-catalogs at `.jsn/catalog.jsn` or `assets/catalog.jsn` are read
-for migration and rewritten to `assets/catalog.bsn` on the
-next save.
+it finds by the path it sits at.
+
+`assets/catalog.bsn` is how a project kept its named assets
+before each had a file. It is read, never written: its entries
+load under the `@Name` a scene spells them by, and opening a
+project whose catalog still holds entries says how many and
+points at `project.migrate_asset_references`, which writes each
+one out as a file of its own. Legacy catalogs at
+`.jsn/catalog.jsn` or `assets/catalog.jsn` are read the same
+way. The game's runtime reads the catalog too, so a project
+that has not migrated yet still runs.
+
+The suffixes jackdaw grew for itself are decoration now. A
+material and an animation graph are asset files like any other,
+known by the type their document holds, so either can sit in any
+folder under any name: the Materials panel lists every material
+the index holds, the Graph window opens every graph, and a game
+loads one through the asset server by the path it sits at.
+`assets/materials/<name>.bsn` and
+`assets/animation/<name>.animgraph.bsn` are only where a save
+with no folder in mind puts one.
 
 ## Asset files in a game
 

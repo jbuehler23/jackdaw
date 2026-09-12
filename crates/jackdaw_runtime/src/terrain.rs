@@ -261,19 +261,12 @@ fn document_of(data: RegionTerrainData, terrain: &Terrain) -> TerrainDocument {
 /// [`resolve_with`] decides what a resolved material means: which of its slots
 /// is albedo, and that a vacated or unfound reference keeps its texture id.
 fn catalog_material(catalog: &JackdawCatalog, reference: &str) -> Option<Handle<StandardMaterial>> {
-    let name = material_name_of(reference);
+    let name = jackdaw_bsn::asset_stem(reference);
     catalog
         .get(reference)
         .or_else(|| catalog.get(&format!("@{name}")))
         .cloned()
         .and_then(|handle| handle.try_typed::<StandardMaterial>().ok())
-}
-
-/// The name a material reference carries: the part of its last path segment
-/// before the first dot, which is what a bare name already is.
-fn material_name_of(reference: &str) -> &str {
-    let file = reference.rsplit('/').next().unwrap_or(reference);
-    file.split_once('.').map_or(file, |(stem, _)| stem)
 }
 
 /// Keep every terrain's resolved set following its material list.

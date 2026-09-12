@@ -25,10 +25,11 @@ use jackdaw_node_graph::{
 
 use crate::project::ProjectRoot;
 
-/// Directory under `assets/` holding graph files.
+/// Directory a graph with no folder in mind is created in.
 pub const GRAPH_DIR: &str = "animation";
 
-/// Suffix identifying a graph file. The name is the stem before it.
+/// Suffix a graph created with no name in mind carries. A graph file is known
+/// by the type it holds, so a graph in any folder under any name is one too.
 pub const GRAPH_FILE_SUFFIX: &str = ".animgraph.bsn";
 
 /// Registry key of the node one state is drawn as.
@@ -147,11 +148,6 @@ pub struct GraphAnyStateNode;
 #[derive(Component, Debug)]
 pub struct GraphCanvasPart;
 
-/// `<project>/assets/animation`.
-pub fn graphs_dir(project: &ProjectRoot) -> PathBuf {
-    project.assets_dir().join(GRAPH_DIR)
-}
-
 /// The file an assets-relative graph path names, refusing one that climbs out
 /// of the project.
 pub fn graph_file_path(project: &ProjectRoot, path: &str) -> Option<PathBuf> {
@@ -192,28 +188,13 @@ pub fn sanitize_graph_name(name: &str) -> String {
     }
 }
 
-/// Every `assets/animation/*.animgraph.bsn` as an assets-relative path, sorted.
+/// Every graph file the project holds, wherever it sits, as an assets-relative
+/// path, sorted.
 pub fn graph_files(world: &World) -> Vec<String> {
-    let Some(project) = world.get_resource::<ProjectRoot>() else {
+    let Some(index) = world.get_resource::<crate::asset_index::AssetIndex>() else {
         return Vec::new();
     };
-    graph_files_in(project)
-}
-
-/// Every `assets/animation/*.animgraph.bsn` of a project, sorted.
-pub fn graph_files_in(project: &ProjectRoot) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(graphs_dir(project)) else {
-        return Vec::new();
-    };
-    let mut paths: Vec<String> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter_map(|path| {
-            let name = path.file_name()?.to_str()?;
-            name.ends_with(GRAPH_FILE_SUFFIX)
-                .then(|| format!("{GRAPH_DIR}/{name}"))
-        })
-        .collect();
+    let mut paths = index.paths_of_kind(crate::definition_assets::ANIMATION_GRAPH_KIND);
     paths.sort();
     paths
 }
@@ -1026,6 +1007,46 @@ mod tests {
             "animation/Player_Locomotion.animgraph.bsn"
         );
         assert_eq!(graph_path_for_name("///"), "animation/graph.animgraph.bsn");
+    }
+
+    /// The Graph window lists what the index holds, so a graph filed anywhere
+    /// under the project is one it can open.
+    #[test]
+    fn a_graph_filed_outside_the_animation_folder_is_listed_and_reads_back() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = bevy::app::App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+        ));
+        app.register_type::<AnimationGraphDef>();
+        app.insert_resource(ProjectRoot {
+            root: tmp.path().to_path_buf(),
+            config: crate::project::ProjectConfig::default(),
+        });
+        app.init_resource::<crate::asset_index::AssetIndex>();
+        app.init_resource::<crate::asset_files::AssetKindCache>();
+        app.init_resource::<jackdaw_api::prelude::AssetKinds>();
+        app.world_mut()
+            .resource_mut::<jackdaw_api::prelude::AssetKinds>()
+            .register(jackdaw_api::prelude::AssetKind::compiled(
+                crate::definition_assets::ANIMATION_GRAPH_KIND,
+                "Animation Graph",
+                <AnimationGraphDef as bevy::reflect::TypePath>::type_path(),
+            ));
+        let rigs = tmp.path().join("assets/rigs");
+        std::fs::create_dir_all(&rigs).expect("the folder is made");
+        std::fs::write(
+            rigs.join("hero.bsn"),
+            "#hero\njackdaw_animation_runtime::graph::AnimationGraphDef { entry: \"idle\" }\n",
+        )
+        .expect("the file is written");
+
+        crate::asset_index::rescan_asset_index(app.world_mut());
+
+        assert_eq!(graph_files(app.world()), vec!["rigs/hero.bsn".to_string()]);
+        let def = read_graph_file(app.world(), "rigs/hero.bsn").expect("the graph reads back");
+        assert_eq!(def.entry, "idle");
     }
 
     #[test]

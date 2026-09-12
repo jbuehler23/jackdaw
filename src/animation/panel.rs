@@ -796,13 +796,12 @@ fn spawn_graph_tab(commands: &mut Commands, body: Entity, state: &AnimationPanel
 
 /// Refill the list of graph files the project holds.
 ///
-/// The directory is read when the tab is built and when the open graph
-/// changes, rather than every frame: nothing else in the editor writes these
-/// files behind the panel's back.
+/// The index is read when the tab is built and when the open graph changes,
+/// rather than every frame.
 fn update_graph_list(
     mut commands: Commands,
     doc: Res<crate::animation::graph_doc::AnimationGraphDoc>,
-    project: Option<Res<crate::project::ProjectRoot>>,
+    index: Option<Res<crate::asset_index::AssetIndex>>,
     lists: Query<(Entity, Option<&Children>), With<AnimationGraphList>>,
     mut last: Local<Option<String>>,
 ) {
@@ -816,9 +815,10 @@ fn update_graph_list(
     }
     *last = Some(open.clone());
 
-    let files = project
-        .map(|project| crate::animation::graph_doc::graph_files_in(&project))
+    let mut files = index
+        .map(|index| index.paths_of_kind(crate::definition_assets::ANIMATION_GRAPH_KIND))
         .unwrap_or_default();
+    files.sort();
     for (list, children) in &lists {
         despawn_children(&mut commands, children);
         if files.is_empty() {

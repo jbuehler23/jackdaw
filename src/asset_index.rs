@@ -21,11 +21,11 @@ use std::time::SystemTime;
 use bevy::asset::{ReflectAsset, UntypedAssetId, UntypedHandle};
 use bevy::prelude::*;
 use jackdaw_api::prelude::{AssetKind, AssetKinds};
-use jackdaw_bsn::BsnStructData;
+use jackdaw_bsn::{BsnStructData, StemIndex};
 use path_slash::PathExt as _;
 
 use crate::asset_files::{AssetFileKind, AssetKindCache, walk_document_files};
-use crate::definition_assets::{MATERIAL_KIND, definition_name_of};
+use crate::definition_assets::MATERIAL_KIND;
 use crate::project::ProjectRoot;
 
 /// What the editor loaded out of an asset file.
@@ -72,7 +72,7 @@ impl AssetEntry {
     /// The bare name the file's stem gives it: everything before the first dot
     /// of its file name, so `torch.item.bsn` is `torch`.
     pub fn name(&self) -> String {
-        definition_name_of(&self.path)
+        jackdaw_bsn::path_stem(&self.path)
     }
 }
 
@@ -81,6 +81,7 @@ impl AssetEntry {
 pub struct AssetIndex {
     entries: BTreeMap<PathBuf, AssetEntry>,
     by_id: HashMap<UntypedAssetId, PathBuf>,
+    stems: StemIndex,
     warned_stems: Mutex<HashSet<String>>,
 }
 
@@ -120,30 +121,36 @@ impl AssetIndex {
         self.entries.get(self.by_id.get(&handle.id())?)
     }
 
-    /// Every file whose stem is `stem`.
+    /// Every document whose stem is `stem`, asset file or not.
     pub fn stem_paths(&self, stem: &str) -> Vec<PathBuf> {
-        self.entries
-            .values()
-            .filter(|entry| entry.name() == stem)
-            .map(|entry| entry.path.clone())
-            .collect()
+        self.stems.paths(stem).to_vec()
+    }
+
+    /// The names every document the walk saw counts towards, so a name this
+    /// editor calls ambiguous is ambiguous in the runtime too.
+    pub fn stems(&self) -> &StemIndex {
+        &self.stems
+    }
+
+    /// Take the documents a walk saw as the set names are counted over.
+    pub fn set_documents<I: IntoIterator<Item = PathBuf>>(&mut self, paths: I) {
+        self.stems = StemIndex::from_paths(paths);
     }
 
     /// The file a bare name stands for, for the references written before
-    /// paths. A stem two files share stands for neither, and says so once.
+    /// paths. A stem two documents share stands for neither, and says so once.
     pub fn by_stem(&self, stem: &str) -> Option<&AssetEntry> {
-        let mut matching = self.entries.values().filter(|entry| entry.name() == stem);
-        let first = matching.next()?;
-        let Some(second) = matching.next() else {
-            return Some(first);
-        };
-        if let Ok(mut warned) = self.warned_stems.lock()
+        if let Some(path) = self.stems.unique(stem) {
+            return self.entries.get(path);
+        }
+        if let Some((first, second)) = self.stems.shared(stem)
+            && let Ok(mut warned) = self.warned_stems.lock()
             && warned.insert(stem.to_string())
         {
             warn!(
                 "'{stem}' names both {} and {}; spell the one you mean as a path",
-                first.path.display(),
-                second.path.display()
+                first.display(),
+                second.display()
             );
         }
         None
@@ -160,6 +167,7 @@ impl AssetIndex {
         if let Some(handle) = entry.value.handle() {
             self.by_id.insert(handle.id(), entry.path.clone());
         }
+        self.stems.insert(entry.path.clone());
         self.entries.insert(entry.path.clone(), entry);
     }
 
@@ -168,6 +176,7 @@ impl AssetIndex {
         if let Some(handle) = entry.value.handle() {
             self.by_id.remove(&handle.id());
         }
+        self.stems.remove(path);
         Some(entry)
     }
 
@@ -264,10 +273,9 @@ pub fn load_asset_value(world: &mut World, kind: &AssetKind, path: &Path) -> Opt
 }
 
 /// The handle a material's name already answers to, when no file of its own
-/// has claimed it: a set detected from its textures, or one created and saved
-/// in this session.
+/// has claimed it: one created and saved in this session.
 fn material_handle_in_use(world: &World, path: &Path) -> Option<UntypedHandle> {
-    let name = definition_name_of(path);
+    let name = jackdaw_bsn::path_stem(path);
     let listed = world
         .get_resource::<crate::material_assets::MaterialRegistry>()
         .and_then(|registry| registry.get_by_name(&name))
@@ -347,17 +355,25 @@ pub fn rescan_asset_index(world: &mut World) -> AssetRescan {
         world.init_resource::<AssetIndex>();
     }
 
+    let documents: Vec<PathBuf> = walk_document_files(&assets)
+        .into_iter()
+        .filter_map(|path| {
+            let relative = path.strip_prefix(&assets).ok()?.to_path_buf();
+            (!is_catalog_file(&relative)).then_some(relative)
+        })
+        .collect();
+    world
+        .resource_mut::<AssetIndex>()
+        .set_documents(documents.clone());
+
     let found = world.resource_scope(|world, mut cache: Mut<AssetKindCache>| {
         let Some(kinds) = world.get_resource::<AssetKinds>() else {
             return Vec::new();
         };
-        walk_document_files(&assets)
+        documents
             .into_iter()
-            .filter_map(|path| {
-                let relative = path.strip_prefix(&assets).ok()?.to_path_buf();
-                if is_catalog_file(&relative) {
-                    return None;
-                }
+            .filter_map(|relative| {
+                let path = assets.join(&relative);
                 let kind = kind_of_file(&path, kinds, &mut cache)?;
                 let mtime = std::fs::metadata(&path)
                     .and_then(|meta| meta.modified())
@@ -447,7 +463,7 @@ fn publish_name(world: &mut World, path: &Path, kind: &AssetKind, value: &AssetV
     let Some(handle) = value.handle() else {
         return;
     };
-    let name = definition_name_of(path);
+    let name = jackdaw_bsn::path_stem(path);
     world
         .resource_mut::<crate::asset_catalog::AssetCatalog>()
         .insert(format!("@{name}"), handle.clone());
@@ -466,11 +482,7 @@ pub fn publish_reference_map(world: &mut World) {
         bevy::platform::collections::HashMap::default();
     let mut paths: bevy::platform::collections::HashMap<UntypedAssetId, String> =
         bevy::platform::collections::HashMap::default();
-    let mut stems: HashMap<String, usize> = HashMap::new();
     let index = world.resource::<AssetIndex>();
-    for entry in index.iter() {
-        *stems.entry(entry.name()).or_default() += 1;
-    }
     for entry in index.iter() {
         let Some(handle) = entry.value.handle() else {
             continue;
@@ -479,7 +491,7 @@ pub fn publish_reference_map(world: &mut World) {
         paths.insert(handle.id(), path.clone());
         references.insert(path, handle.clone());
         let name = entry.name();
-        if stems.get(&name) == Some(&1) {
+        if index.stems().unique(&name).is_some() {
             references.insert(format!("@{name}"), handle.clone());
             references.entry(name).or_insert_with(|| handle.clone());
         }
@@ -691,6 +703,68 @@ mod tests {
         assert_eq!(
             index.by_stem("torch").map(|entry| entry.path.clone()),
             Some(PathBuf::from("anywhere/torch.item.bsn"))
+        );
+    }
+
+    /// The runtime counts a name over every document its walk saw, and so does
+    /// this: a scene sharing a stem with an asset makes the name ambiguous in
+    /// both.
+    #[test]
+    fn a_name_a_scene_and_an_asset_share_stands_for_neither() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+        ));
+        app.init_asset::<Image>();
+        app.init_asset::<StandardMaterial>();
+        app.register_asset_reflect::<Image>();
+        app.register_asset_reflect::<StandardMaterial>();
+        app.register_type::<StandardMaterial>();
+        app.insert_resource(ProjectRoot {
+            root: tmp.path().to_path_buf(),
+            config: crate::project::ProjectConfig::default(),
+        });
+        app.init_resource::<AssetIndex>();
+        app.init_resource::<AssetKindCache>();
+        app.init_resource::<crate::asset_catalog::AssetCatalog>();
+        app.init_resource::<crate::material_assets::MaterialRegistry>();
+        app.init_resource::<AssetKinds>();
+        app.world_mut()
+            .resource_mut::<AssetKinds>()
+            .register(AssetKind::compiled(
+                MATERIAL_KIND,
+                "Material",
+                <StandardMaterial as bevy::reflect::TypePath>::type_path(),
+            ));
+        for (relative, text) in [
+            (
+                "materials/grass.bsn",
+                "#grass\nbevy_pbr::pbr_material::StandardMaterial {}\n",
+            ),
+            (
+                "zones/grass.bsn",
+                "#Root\nbevy_transform::components::transform::Transform\n\
+                 bevy_ecs::hierarchy::Children [\n    \
+                 bevy_transform::components::transform::Transform\n]\n",
+            ),
+        ] {
+            let path = tmp.path().join("assets").join(relative);
+            std::fs::create_dir_all(path.parent().expect("a parent")).expect("the folder is made");
+            std::fs::write(path, text).expect("the file is written");
+        }
+
+        rescan_asset_index(app.world_mut());
+
+        let index = app.world().resource::<AssetIndex>();
+        assert!(
+            index.by_stem("grass").is_none(),
+            "a name a scene also carries stands for neither file"
+        );
+        assert!(
+            index.get(Path::new("materials/grass.bsn")).is_some(),
+            "the file is there to be named by its path"
         );
     }
 

@@ -107,17 +107,6 @@ pub fn definition_file_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{}.bsn", sanitize_definition_name(name)))
 }
 
-/// The name a file gives what it holds: everything before the first dot of its
-/// file name, so `torch.item.bsn` holds `torch`.
-pub fn definition_name_of(path: &Path) -> String {
-    let file = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .trim_start_matches('.');
-    file.split('.').next().unwrap_or(file).to_string()
-}
-
 /// The folder a new asset lands in: the one the browser is showing when it is
 /// under the project's assets, and the assets directory otherwise.
 pub fn new_definition_dir(world: &World) -> Option<PathBuf> {
@@ -670,6 +659,15 @@ fn open_card_for(world: &mut World, path: &Path) -> Option<Entity> {
         .iter(world)
         .find(|(_, edit)| edit.path == path)
         .map(|(entity, _)| entity)
+}
+
+/// Whether an open card holds edits that are not on disk.
+pub fn open_card_has_unsaved_edits(world: &World) -> bool {
+    world
+        .get_resource::<OpenDefinition>()
+        .and_then(|open| open.0)
+        .and_then(|entity| world.get::<DefinitionAssetEdit>(entity))
+        .is_some_and(|edit| edit.dirty)
 }
 
 /// Whether the card editing this file holds edits that are not on disk.
@@ -1314,7 +1312,7 @@ pub(crate) fn create_definition(
         .filter(|asked| asked.contains('.'))
         .map(|asked| dir.join(bsn_file_name(asked)));
     let file = file.or_else(|| named_file.clone());
-    let named_by_path = file.as_deref().map(definition_name_of);
+    let named_by_path = file.as_deref().map(jackdaw_bsn::path_stem);
     let name = match named_by_path.or_else(|| asked_for.clone()) {
         Some(name) => sanitize_definition_name(&name),
         None => next_free_name(world, kind, &dir),
@@ -1658,7 +1656,7 @@ mod tests {
             (".torch.item.bsn", "torch"),
         ] {
             assert_eq!(
-                definition_name_of(Path::new(file)),
+                jackdaw_bsn::path_stem(Path::new(file)),
                 expected,
                 "{file} names an asset"
             );

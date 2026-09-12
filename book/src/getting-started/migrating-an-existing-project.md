@@ -73,6 +73,30 @@ That rewrites the `[jackdaw]` pins and moves any `jackdaw_*` dependency to the
 matching version, leaving your run configurations, comments, features, and
 every other dependency untouched. Path and git dependencies are left alone.
 
+## Bringing asset references up to date
+
+A project written before assets were files at paths spells a material or any
+other asset by a bare name (`@grass`), keeps entries in `assets/catalog.bsn`,
+carries asset files with no header naming their type, and holds terrain
+sidecars at an older format version. All of that still loads. One operator
+writes it out in the current spelling:
+
+```
+project.migrate_asset_references
+```
+
+It rewrites every name a scene or a prefab spells for an asset as the path of
+the file that answers to it, writes each `catalog.bsn` entry out as a file of
+its own and leaves the catalog empty, puts the header naming its type on every
+asset file that has none, and re-encodes every terrain sidecar with its
+material slots as paths. It reports what it rewrote and what it left alone: a
+name two files carry, which stands for neither, and a name no file carries,
+such as a material that was never saved.
+
+The operator writes over the project's files and undo does not reach them, so
+it refuses to run while anything open has unsaved edits. Running it a second
+time reports that there is nothing to migrate.
+
 ## Checking a project
 
 ```bash

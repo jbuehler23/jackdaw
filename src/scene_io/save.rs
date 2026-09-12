@@ -363,9 +363,6 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         }
     }
 
-    // Save catalog alongside scene if dirty
-    crate::asset_catalog::save_catalog(world);
-
     // Persist current editor layout to project.jsn
     save_layout_to_project(world);
 

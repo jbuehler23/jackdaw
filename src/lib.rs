@@ -16,6 +16,7 @@ pub mod asset_catalog;
 pub mod asset_files;
 pub mod asset_index;
 pub mod asset_ingest;
+pub mod asset_migration;
 pub mod authored_widgets;
 pub mod boot_ops;
 pub mod brush;

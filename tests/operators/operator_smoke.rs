@@ -7,7 +7,7 @@ use crate::util;
 
 use jackdaw::asset_browser::AssetSelectFolderOp;
 use jackdaw::entity_ops::{EntityAddImageOp, EntityAddPrefabOp};
-use jackdaw::material_browser::MaterialSelectFolderOp;
+use jackdaw::material_browser::MaterialSaveAsOp;
 use jackdaw::scene_ops::{SceneSaveAsOp, SceneSaveOp};
 use jackdaw::scenes::operators::SceneOpenOp;
 use jackdaw_api::prelude::*;
@@ -37,7 +37,7 @@ const SMOKE_SKIP_LIST: &[SkipOp] = &[
         "falls through to scene.save_as (native dialog) when no SceneFilePath is set",
     ),
     SkipOp::new::<AssetSelectFolderOp>("spawns native folder picker"),
-    SkipOp::new::<MaterialSelectFolderOp>("spawns native folder picker"),
+    SkipOp::new::<MaterialSaveAsOp>("spawns native file-save dialog"),
     SkipOp::new::<EntityAddImageOp>("spawns native image-file picker"),
     SkipOp::new::<EntityAddPrefabOp>("spawns native prefab-file picker"),
 ];

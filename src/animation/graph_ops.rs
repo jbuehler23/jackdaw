@@ -75,7 +75,7 @@ pub(crate) fn animation_graph_new(
 #[operator(
     id = "animation.graph.open",
     label = "Open Animation Graph",
-    description = "Show an existing .animgraph.bsn file in the Graph window.",
+    description = "Show a graph file the project holds in the Graph window.",
     allows_undo = false,
     params(path(String, doc = "Assets-relative path of the graph file to open."))
 )]
