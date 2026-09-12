@@ -148,7 +148,7 @@ fn folder_for_kind(kind: &AssetKind) -> &str {
 /// Write every entry `catalog.bsn` holds out as a file of its own, and leave
 /// the file holding none.
 ///
-/// The file is read again rather than taken from [`AssetCatalog`], which also
+/// The file is read again rather than taken from [`AssetCatalog`](crate::asset_catalog::AssetCatalog), which also
 /// holds what the editor named for itself this run.
 fn write_catalog_out(world: &mut World, assets: &Path, report: &mut MigrationReport) {
     let catalog_file = assets.join("catalog.bsn");
