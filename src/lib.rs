@@ -50,6 +50,7 @@ pub mod keybind_focus;
 pub mod keybind_settings;
 pub mod keybinds;
 pub mod migrate_dialog;
+pub mod new_asset;
 pub mod panel_focus;
 
 use std::{collections::BTreeMap, marker::PhantomData};
@@ -2678,6 +2679,18 @@ fn unescape_action_value(value: &str) -> String {
 /// free-standing `op:` events. Always plain `op:OP_ID` form ;
 /// parametrised dispatch goes through `ButtonOperatorCall.params`.
 fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
+    // An Assets row creates a file of its kind in the folder the browser is
+    // showing, which is what `asset.new` does with no path of its own.
+    if let Some(kind) = event
+        .action
+        .strip_prefix(creation_taxonomy::ASSET_ACTION_PREFIX)
+    {
+        commands
+            .operator(definition_assets::AssetNewOp::ID)
+            .param("type", kind.to_string())
+            .call();
+        return;
+    }
     // The UI Widgets rows go through `instantiate_widget` so the new node
     // is authored, undoable, and in the document.
     if let Some(widget_id) = event

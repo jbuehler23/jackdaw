@@ -20,6 +20,9 @@ use crate::entity_ops::{EntityAddNetworkRoomOp, EntityAddSpawnPointOp, EntityAdd
 /// Action prefix of an entry that creates a registered UI widget.
 pub const WIDGET_ACTION_PREFIX: &str = "widget:";
 
+/// Action prefix of an entry that creates an asset file; the kind follows it.
+pub const ASSET_ACTION_PREFIX: &str = "asset:";
+
 /// The group holding entity kinds that belong to no other group.
 pub const GENERAL_GROUP: &str = "general";
 
@@ -43,8 +46,17 @@ const UI_GROUP_ORDER: i32 = -8;
 /// Sort order of a widget group whose category is not in `UI_CATEGORY_ORDER`.
 const UI_UNKNOWN_CATEGORY_ORDER: i32 = UI_GROUP_ORDER - UI_CATEGORY_ORDER.len() as i32;
 
+/// The group holding one entry per asset kind.
+pub const ASSETS_GROUP: &str = "assets";
+
+/// Label of [`ASSETS_GROUP`].
+pub const ASSETS_SECTION: &str = "Assets";
+
+/// Sort order of the assets group, after the entity kinds.
+const ASSETS_GROUP_ORDER: i32 = UI_UNKNOWN_CATEGORY_ORDER - 1;
+
 /// Sort order of the per-extension groups, last in the menu.
-const EXTENSION_GROUP_ORDER: i32 = UI_UNKNOWN_CATEGORY_ORDER - 1;
+const EXTENSION_GROUP_ORDER: i32 = ASSETS_GROUP_ORDER - 1;
 
 /// Heading for entries whose owning extension cannot be named.
 pub const EXTENSIONS_SECTION: &str = "Extensions";
@@ -86,8 +98,8 @@ pub struct CreationEntry {
     pub group: String,
     /// The name shown for the entry.
     pub label: String,
-    /// What activating it does: an `op:` operator call, or a
-    /// [`WIDGET_ACTION_PREFIX`] widget id.
+    /// What activating it does: an `op:` operator call, a
+    /// [`WIDGET_ACTION_PREFIX`] widget id, or an [`ASSET_ACTION_PREFIX`] kind.
     pub action: String,
 }
 
@@ -253,6 +265,31 @@ fn widgets(taxonomy: &mut CreationTaxonomy, world: &mut World) {
     }
 }
 
+/// One entry per asset kind the editor can write a file of. An asset needs a
+/// project to land in, so the group is absent until one is open.
+fn assets(taxonomy: &mut CreationTaxonomy, world: &mut World) {
+    if world
+        .get_resource::<crate::project::ProjectRoot>()
+        .is_none()
+    {
+        return;
+    }
+    let kinds = crate::new_asset::creatable_kinds(world);
+    if kinds.is_empty() {
+        return;
+    }
+    taxonomy
+        .groups
+        .push(group(ASSETS_GROUP, ASSETS_SECTION, ASSETS_GROUP_ORDER));
+    for kind in kinds {
+        taxonomy.entries.push(entry(
+            ASSETS_GROUP,
+            &kind.label,
+            format!("{ASSET_ACTION_PREFIX}{}", kind.kind),
+        ));
+    }
+}
+
 fn ui_group_id(category: &str) -> String {
     format!("{UI_GROUP}.{}", category.to_lowercase())
 }
@@ -315,6 +352,7 @@ impl CreationTaxonomy {
         let mut taxonomy = Self::default();
         builtin(&mut taxonomy);
         widgets(&mut taxonomy, world);
+        assets(&mut taxonomy, world);
         extensions(&mut taxonomy, world);
         taxonomy.groups.sort_by_key(|group| {
             (
@@ -374,6 +412,11 @@ impl CreationTaxonomy {
     fn renders_inline(&self, group: &CreationGroup) -> bool {
         if group.id == GENERAL_GROUP {
             return true;
+        }
+        // A lone asset kind reads as an entity kind without the heading that
+        // says it writes a file.
+        if group.id == ASSETS_GROUP {
+            return false;
         }
         // An extension's group name credits the extension; inlining would make
         // its entries look built-in.

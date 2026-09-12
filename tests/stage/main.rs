@@ -19,6 +19,7 @@ mod definition_assets;
 mod gltf_authoring;
 mod mesh_quick_menu;
 mod modeling_essentials;
+mod new_asset;
 mod positionable_mirror_plane;
 mod project_definitions;
 mod selection_undo;

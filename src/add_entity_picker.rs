@@ -74,7 +74,7 @@ pub fn add_menu_rows(world: &mut World) -> Vec<(String, String)> {
 
 /// Open the searchable Add Entity picker, the way the scene tree's Add Entity
 /// button does. Shares [`collect_add_menu_items`] with the Add menu, so the two
-/// offer the same vocabulary. Calling it again closes it.
+/// offer the same entity vocabulary. Calling it again closes it.
 #[operator(
     id = "entity.add_picker",
     label = "Add Entity",
@@ -110,7 +110,16 @@ pub fn open_add_entity_picker(
         return;
     }
 
-    let items = collect_add_menu_items(world);
+    // The picker adds an entity to the scene, so the rows that write an asset
+    // file instead stay in the Add menu.
+    let items: Vec<AddMenuItem> = collect_add_menu_items(world)
+        .into_iter()
+        .filter(|item| {
+            !item
+                .action
+                .starts_with(crate::creation_taxonomy::ASSET_ACTION_PREFIX)
+        })
+        .collect();
 
     let picker = PickerProps::new(spawn_item, on_select)
         .items(items)
