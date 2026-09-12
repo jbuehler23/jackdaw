@@ -74,7 +74,7 @@ members = [
 ]
 
 [dependencies]
-bevy.workspace = true
+bevy = { workspace = true, features = ["system_font_discovery"] }
 jackdaw_jsn.workspace = true
 jackdaw_bsn.workspace = true
 jackdaw_prefab.workspace = true
@@ -198,10 +198,13 @@ webbrowser.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = ["Win32_System_JobObjects"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
 # Powers the Linux `PR_SET_PDEATHSIG` hook that takes PIE game processes down
 # with the editor when it is killed (`src/pie.rs`).
-[target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+fontique = { version = "0.9", default-features = false, features = [
+    "fontconfig-dlopen",
+] }
 
 # Every workspace crate inherits this version (`version.workspace = true`).
 # It is anchored to Bevy's minor: 0.19.x targets Bevy 0.19, and bumps to
