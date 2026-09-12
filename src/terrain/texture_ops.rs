@@ -17,6 +17,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_terrain::sidecar::{AutoTerrainSettings, TerrainMaterialSlot};
 use jackdaw_terrain::texture_set::{DEFAULT_UV_SCALE, MAX_DETILE, MAX_UV_SCALE, MIN_UV_SCALE};
+use path_slash::PathExt as _;
 
 use super::TerrainDataStore;
 use super::ops::has_selected_terrain;
@@ -119,34 +120,38 @@ fn commit(
     description = "Give the selected terrain another texture id, drawn by a saved material.",
     is_available = has_selected_terrain,
     allows_undo = false,
-    params(material(String, doc = "Name of a saved material.")),
+    params(material(
+        String,
+        doc = "Path of a saved material file, such as \
+               materials/slate.material.bsn. A bare name still resolves for \
+               one release."
+    )),
 )]
 pub(crate) fn terrain_material_add(
     params: In<OperatorParameters>,
     selection: Res<Selection>,
     terrains: Query<&jackdaw_scene_types::Terrain>,
     registry: Res<MaterialRegistry>,
+    index: Option<Res<crate::asset_index::AssetIndex>>,
     mut store: ResMut<TerrainDataStore>,
     mut picker: ResMut<TerrainMaterialPicker>,
     mut history: ResMut<CommandHistory>,
 ) -> OperatorResult {
     let data_path = selected_data_path(&selection, &terrains)?;
-    let name = params.as_str("material").unwrap_or("").trim().to_string();
+    let named = params.as_str("material").unwrap_or("").trim();
 
-    let refusal = match registry.get_by_name(&name) {
-        None => Some(TerrainMaterialError::Unknown(name.clone())),
-        Some(entry) if !entry.saved => Some(TerrainMaterialError::Unsaved(name.clone())),
-        Some(_) => None,
+    let reference = match slot_reference(index.as_deref(), &registry, named) {
+        Ok(reference) => reference,
+        Err(refusal) => {
+            picker.error = Some(refusal.to_string());
+            return OperatorResult::Cancelled;
+        }
     };
-    if let Some(refusal) = refusal {
-        picker.error = Some(refusal.to_string());
-        return OperatorResult::Cancelled;
-    }
 
     let mut materials = store.materials(&data_path).to_vec();
     match materials.iter().position(TerrainMaterialSlot::is_tombstone) {
-        Some(vacant) => materials[vacant] = TerrainMaterialSlot::new(name),
-        None => materials.push(TerrainMaterialSlot::new(name)),
+        Some(vacant) => materials[vacant] = TerrainMaterialSlot::new(reference),
+        None => materials.push(TerrainMaterialSlot::new(reference)),
     }
     let result = commit(
         &mut store,
@@ -161,6 +166,27 @@ pub(crate) fn terrain_material_add(
         picker.open = false;
     }
     result
+}
+
+/// What a slot stores for the material a caller named: the path of the file
+/// holding it, or the bare name of a material no file has claimed, which is
+/// what the slots written before paths spell.
+fn slot_reference(
+    index: Option<&crate::asset_index::AssetIndex>,
+    registry: &MaterialRegistry,
+    named: &str,
+) -> Result<String, TerrainMaterialError> {
+    let name = jackdaw_bsn::asset_stem(named);
+    if let Some(entry) =
+        index.and_then(|index| crate::material_assets::material_file_of(index, named))
+    {
+        return Ok(entry.path.to_slash_lossy().into_owned());
+    }
+    match registry.get_by_name(name) {
+        None => Err(TerrainMaterialError::Unknown(named.to_string())),
+        Some(entry) if !entry.saved => Err(TerrainMaterialError::Unsaved(named.to_string())),
+        Some(entry) => Ok(entry.name.clone()),
+    }
 }
 
 /// Take the material off one of the selected terrain's texture ids.

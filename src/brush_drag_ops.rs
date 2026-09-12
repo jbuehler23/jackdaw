@@ -212,10 +212,42 @@ pub fn brush_face_drag(
     mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
     mut override_cursor: ResMut<OverrideCursor>,
 ) -> OperatorResult {
+    let modal_running = modal.is_some();
+    if modal_running {
+        if drag_state.active && mouse.just_pressed(MouseButton::Right) {
+            return OperatorResult::Cancelled;
+        }
+        if vp.cursor().is_none() || mouse.just_released(MouseButton::Left) {
+            if drag_state.active {
+                match drag_state.extrude_mode {
+                    FaceExtrudeMode::Merge => {}
+                    FaceExtrudeMode::Extend => {
+                        if drag_state.extend_depth.abs() > MIN_EXTRUDE_DEPTH {
+                            spawn_extruded_brush(
+                                &drag_state.extend_face_polygon,
+                                drag_state.extend_face_normal,
+                                drag_state.extend_depth,
+                                &mut commands,
+                            );
+                        }
+                    }
+                }
+            }
+            let was_quick = drag_state.quick_action;
+            clear_face_drag_state(&mut drag_state);
+            clear_grab_cursor(&mut override_cursor);
+            if was_quick {
+                *edit_mode = EditMode::Object;
+                brush_selection.clear();
+            }
+            return OperatorResult::Finished;
+        }
+    }
+
     let cursor_pos = vp.cursor()?;
     // First invoke uses the hovered viewport; subsequent invokes use
     // the captured one so the drag stays bound to its origin panel.
-    let (camera_entity, viewport_entity) = if modal.is_none() {
+    let (camera_entity, viewport_entity) = if !modal_running {
         let camera_entity = vp.camera_entity()?;
         let viewport_entity = vp.viewport_entity()?;
         (camera_entity, viewport_entity)
@@ -392,38 +424,7 @@ pub fn brush_face_drag(
         return OperatorResult::Running;
     }
 
-    // Subsequent invoke: handle right-click cancel, release commit,
-    // pending -> active promotion, and per-frame drag math.
-    if drag_state.active && mouse.just_pressed(MouseButton::Right) {
-        return OperatorResult::Cancelled;
-    }
-
-    if mouse.just_released(MouseButton::Left) {
-        if drag_state.active {
-            match drag_state.extrude_mode {
-                FaceExtrudeMode::Merge => {}
-                FaceExtrudeMode::Extend => {
-                    if drag_state.extend_depth.abs() > MIN_EXTRUDE_DEPTH {
-                        spawn_extruded_brush(
-                            &drag_state.extend_face_polygon,
-                            drag_state.extend_face_normal,
-                            drag_state.extend_depth,
-                            &mut commands,
-                        );
-                    }
-                }
-            }
-        }
-        let was_quick = drag_state.quick_action;
-        clear_face_drag_state(&mut drag_state);
-        clear_grab_cursor(&mut override_cursor);
-        if was_quick {
-            *edit_mode = EditMode::Object;
-            brush_selection.clear();
-        }
-        return OperatorResult::Finished;
-    }
-
+    // Subsequent invoke: pending -> active promotion, and per-frame drag math.
     if let Some(ref pending) = drag_state.pending
         && mouse.pressed(MouseButton::Left)
         && !drag_state.active
@@ -446,6 +447,17 @@ pub fn brush_face_drag(
         match drag_state.extrude_mode {
             FaceExtrudeMode::Merge => {
                 drag_state.start_brush = Some(brush.clone());
+                if let Ok(cache) = params.brush_caches.get(brush_entity)
+                    && let Some(&face_idx) = active_faces.first()
+                    && let Some(polygon) = cache.face_polygons.get(face_idx)
+                    && !polygon.is_empty()
+                {
+                    drag_state.drag_face_centroid = polygon
+                        .iter()
+                        .map(|&vi| brush_global.transform_point(cache.vertices[vi]))
+                        .sum::<Vec3>()
+                        / polygon.len() as f32;
+                }
             }
             FaceExtrudeMode::Extend => {
                 let (_, brush_rot, _) = brush_global.to_scale_rotation_translation();
@@ -472,41 +484,21 @@ pub fn brush_face_drag(
             .unwrap_or_default();
         match drag_state.extrude_mode {
             FaceExtrudeMode::Merge => {
-                // Calibrate pixels-per-world at the dragged face in world space,
-                // not the brush origin: perspective px-per-world is depth-
-                // dependent, and the local face normal must be rotated into world
-                // space so rotated brushes track the cursor too. Mirrors the
-                // Extend branch and `compute_brush_drag_offset`.
-                let face_idx = drag_faces.first().copied()?;
-                let cache = params.brush_caches.get(brush_entity).ok()?;
-                let polygon = cache.face_polygons.get(face_idx)?;
-                if polygon.is_empty() {
-                    return OperatorResult::Running;
-                }
                 let (mut brush, brush_global) = params.brushes.get_mut(brush_entity)?;
                 let start = drag_state.start_brush.as_ref()?;
                 let (_, brush_rot, _) = brush_global.to_scale_rotation_translation();
                 let world_normal = (brush_rot * drag_state.drag_face_normal).normalize();
-                let face_centroid: Vec3 = polygon
-                    .iter()
-                    .map(|&vi| brush_global.transform_point(cache.vertices[vi]))
-                    .sum::<Vec3>()
-                    / polygon.len() as f32;
-                let Ok(origin_screen) = camera.world_to_viewport(cam_tf, face_centroid) else {
+                let Some(drag_amount) = crate::viewport_util::drag_along_axis(
+                    camera,
+                    cam_tf,
+                    drag_state.start_cursor,
+                    viewport_cursor,
+                    drag_state.drag_face_centroid,
+                    world_normal,
+                )
+                .map(|amount| snap_translate(amount, &snap_settings, ctrl)) else {
                     return OperatorResult::Running;
                 };
-                let Ok(normal_screen) =
-                    camera.world_to_viewport(cam_tf, face_centroid + world_normal)
-                else {
-                    return OperatorResult::Running;
-                };
-                // Pixels per world unit along the face normal at this depth, so
-                // the push/pull tracks the cursor at any zoom or scale.
-                let screen_span = normal_screen - origin_screen;
-                let px_per_world = screen_span.length().max(1e-4);
-                let mouse_delta = viewport_cursor - drag_state.start_cursor;
-                let projected = mouse_delta.dot(screen_span / px_per_world);
-                let drag_amount = snap_translate(projected / px_per_world, &snap_settings, ctrl);
                 if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
                     // HalfedgeMesh path: translate each selected face's ring vertices along the face normal.
                     let face_keys = halfedge.face_keys.clone();
@@ -589,20 +581,17 @@ pub fn brush_face_drag(
                 let face_centroid: Vec3 = drag_state.extend_face_polygon.iter().sum::<Vec3>()
                     / drag_state.extend_face_polygon.len() as f32;
                 let world_normal = drag_state.extend_face_normal;
-                let Ok(origin_screen) = camera.world_to_viewport(cam_tf, face_centroid) else {
+                let Some(depth) = crate::viewport_util::drag_along_axis(
+                    camera,
+                    cam_tf,
+                    drag_state.start_cursor,
+                    viewport_cursor,
+                    face_centroid,
+                    world_normal,
+                ) else {
                     return OperatorResult::Running;
                 };
-                let Ok(normal_screen) =
-                    camera.world_to_viewport(cam_tf, face_centroid + world_normal)
-                else {
-                    return OperatorResult::Running;
-                };
-                let screen_span = normal_screen - origin_screen;
-                let px_per_world = screen_span.length().max(1e-4);
-                let mouse_delta = viewport_cursor - drag_state.start_cursor;
-                let projected = mouse_delta.dot(screen_span / px_per_world);
-                drag_state.extend_depth =
-                    snap_translate(projected / px_per_world, &snap_settings, ctrl);
+                drag_state.extend_depth = snap_translate(depth, &snap_settings, ctrl);
             }
         }
     }
@@ -644,6 +633,7 @@ fn clear_face_drag_state(drag_state: &mut BrushDragState) {
     drag_state.extend_face_polygon.clear();
     drag_state.extend_depth = 0.0;
     drag_state.start_brush = None;
+    drag_state.drag_face_centroid = Vec3::ZERO;
     drag_state.quick_action = false;
     drag_state.drag_camera = None;
     drag_state.drag_viewport = None;
@@ -729,6 +719,8 @@ fn spawn_extruded_brush(
         let entity = world
             .spawn((Name::new("Brush"), brush, transform, Visibility::default()))
             .id();
+        crate::scene_io::register_entity_in_ast(world, entity);
+        crate::physics_brush_bridge::insert_default_brush_physics(world, entity);
 
         let selection = world.resource::<Selection>();
         let old_selected: Vec<Entity> = selection.entities.clone();
@@ -819,8 +811,20 @@ pub fn brush_vertex_drag(
     snap_settings: Res<SnapSettings>,
     mut override_cursor: ResMut<OverrideCursor>,
 ) -> OperatorResult {
+    let modal_running = modal.is_some();
+    if modal_running {
+        if drag_state.active && mouse.just_pressed(MouseButton::Right) {
+            return OperatorResult::Cancelled;
+        }
+        if vp.cursor().is_none() || mouse.just_released(MouseButton::Left) {
+            clear_vertex_drag_state(&mut drag_state);
+            clear_grab_cursor(&mut override_cursor);
+            return OperatorResult::Finished;
+        }
+    }
+
     let cursor_pos = vp.cursor()?;
-    let (camera_entity, viewport_entity) = if modal.is_none() {
+    let (camera_entity, viewport_entity) = if !modal_running {
         let camera_entity = vp.camera_entity()?;
         let viewport_entity = vp.viewport_entity()?;
         (camera_entity, viewport_entity)
@@ -972,7 +976,7 @@ pub fn brush_vertex_drag(
     let brush_entity = brush_selection.active_brush?;
     let brush_global = brush_transforms.get(brush_entity)?;
 
-    // Subsequent invokes: constraint cycling, RMB cancel, release commit, drag math.
+    // Subsequent invokes: constraint cycling and drag math.
     if drag_state.active {
         if modal_inputs.axis_x() {
             drag_state.constraint =
@@ -984,16 +988,6 @@ pub fn brush_vertex_drag(
             drag_state.constraint =
                 toggle_constraint(drag_state.constraint, VertexDragConstraint::AxisZ);
         }
-    }
-
-    if drag_state.active && mouse.just_pressed(MouseButton::Right) {
-        return OperatorResult::Cancelled;
-    }
-
-    if mouse.just_released(MouseButton::Left) {
-        clear_vertex_drag_state(&mut drag_state);
-        clear_grab_cursor(&mut override_cursor);
-        return OperatorResult::Finished;
     }
 
     if let Some(ref pending) = drag_state.pending
@@ -1056,7 +1050,6 @@ pub fn brush_vertex_drag(
     }
 
     if drag_state.active {
-        let mouse_delta = viewport_cursor - drag_state.start_cursor;
         let primary_start = drag_state
             .start_vertex_positions
             .first()
@@ -1064,7 +1057,8 @@ pub fn brush_vertex_drag(
             .unwrap_or(Vec3::ZERO);
         apply_shared_drag(
             drag_state.constraint,
-            mouse_delta,
+            drag_state.start_cursor,
+            viewport_cursor,
             primary_start,
             cam_tf,
             camera,
@@ -1186,8 +1180,20 @@ pub fn brush_edge_drag(
     snap_settings: Res<SnapSettings>,
     mut override_cursor: ResMut<OverrideCursor>,
 ) -> OperatorResult {
+    let modal_running = modal.is_some();
+    if modal_running {
+        if drag_state.active && mouse.just_pressed(MouseButton::Right) {
+            return OperatorResult::Cancelled;
+        }
+        if vp.cursor().is_none() || mouse.just_released(MouseButton::Left) {
+            clear_edge_drag_state(&mut drag_state);
+            clear_grab_cursor(&mut override_cursor);
+            return OperatorResult::Finished;
+        }
+    }
+
     let cursor_pos = vp.cursor()?;
-    let (camera_entity, viewport_entity) = if modal.is_none() {
+    let (camera_entity, viewport_entity) = if !modal_running {
         let camera_entity = vp.camera_entity()?;
         let viewport_entity = vp.viewport_entity()?;
         (camera_entity, viewport_entity)
@@ -1302,16 +1308,6 @@ pub fn brush_edge_drag(
         }
     }
 
-    if drag_state.active && mouse.just_pressed(MouseButton::Right) {
-        return OperatorResult::Cancelled;
-    }
-
-    if mouse.just_released(MouseButton::Left) {
-        clear_edge_drag_state(&mut drag_state);
-        clear_grab_cursor(&mut override_cursor);
-        return OperatorResult::Finished;
-    }
-
     if let Some(ref pending) = drag_state.pending
         && mouse.pressed(MouseButton::Left)
         && !drag_state.active
@@ -1370,7 +1366,6 @@ pub fn brush_edge_drag(
     }
 
     if drag_state.active {
-        let mouse_delta = viewport_cursor - drag_state.start_cursor;
         let primary_start = drag_state
             .start_edge_vertices
             .first()
@@ -1378,7 +1373,8 @@ pub fn brush_edge_drag(
             .unwrap_or(Vec3::ZERO);
         apply_shared_drag(
             drag_state.constraint,
-            mouse_delta,
+            drag_state.start_cursor,
+            viewport_cursor,
             primary_start,
             cam_tf,
             camera,
@@ -1473,7 +1469,7 @@ pub(crate) fn capture_edit_brushes(
     captures
 }
 
-/// Resolve the current mouse delta into a snapped world displacement and
+/// Resolve the current cursor into a snapped world displacement and
 /// broadcast it to every captured brush. Shared by the vertex and edge drag
 /// per-frame tails, which differ only in how `primary_start` (the local start
 /// position the free-drag snap rounds against) is sourced. Does nothing when
@@ -1481,7 +1477,8 @@ pub(crate) fn capture_edit_brushes(
 /// return.
 fn apply_shared_drag(
     constraint: VertexDragConstraint,
-    mouse_delta: Vec2,
+    start_cursor: Vec2,
+    current_cursor: Vec2,
     primary_start: Vec3,
     cam_tf: &GlobalTransform,
     camera: &Camera,
@@ -1493,11 +1490,11 @@ fn apply_shared_drag(
     halfedge_q: &mut Query<&mut crate::brush::BrushHalfedge>,
     mirrors: &Query<&jackdaw_geometry::ModifierStack>,
 ) {
-    // Calibrate the cursor-to-world scale at the dragged element's depth.
     let anchor_world = brush_global.transform_point(primary_start);
     let Some(local_offset) = compute_brush_drag_offset(
         constraint,
-        mouse_delta,
+        start_cursor,
+        current_cursor,
         cam_tf,
         camera,
         brush_global,

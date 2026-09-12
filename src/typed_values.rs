@@ -5,14 +5,19 @@
 //! and a `Color`, which a person writes as channels, hex or a name. Both are
 //! resolved here, against the field's own type, and everything else is left to
 //! the JSON paths.
+//!
+//! A handle field is resolved against the references the project already
+//! holds before the asset server is asked, so a path names the file the editor
+//! loaded rather than a second copy of it.
 
 use std::any::TypeId;
 
-use bevy::asset::{AssetServer, ReflectHandle};
+use bevy::asset::{AssetServer, ReflectHandle, UntypedHandle};
 use bevy::color::palettes::css;
 use bevy::prelude::*;
 use bevy::reflect::{PartialReflect, TypeInfo, TypeRegistry, enums::VariantInfo};
 use jackdaw_bsn::{BsnApplyAssets, BsnValue, bsn_value_to_reflect};
+use path_slash::PathExt as _;
 
 /// Whether a field of this type names its value by asset path.
 pub fn takes_asset_path(registry: &TypeRegistry, type_id: TypeId) -> bool {
@@ -73,24 +78,29 @@ fn named_color(name: &str) -> Option<Color> {
     Some(Color::Srgba(srgba))
 }
 
+/// The references a field's text is resolved against: what the project holds
+/// under that spelling, keyed by path and by the bare name older files use.
+pub type References = bevy::platform::collections::HashMap<String, UntypedHandle>;
+
 /// The value `text` stands for in a field of `type_id`, or `None` when the
 /// field's type takes its value some other way.
 pub fn text_value_for_field(
     registry: &TypeRegistry,
     server: Option<&AssetServer>,
+    references: Option<&References>,
     type_id: TypeId,
     text: &str,
 ) -> Option<Box<dyn PartialReflect>> {
     if takes_asset_path(registry, type_id) {
-        let assets = BsnApplyAssets {
-            server: server?,
-            local: None,
-        };
+        let assets = server.map(|server| BsnApplyAssets {
+            server,
+            local: references,
+        });
         return bsn_value_to_reflect(
             &BsnValue::String(text.to_string()),
             type_id,
             registry,
-            Some(&assets),
+            assets.as_ref(),
         );
     }
     if type_id == TypeId::of::<Color>() {
@@ -104,16 +114,59 @@ pub fn text_value_for_field(
 pub fn asset_path_json(
     registry: &TypeRegistry,
     server: Option<&AssetServer>,
+    index: Option<&crate::asset_index::AssetIndex>,
     field: &dyn PartialReflect,
 ) -> Option<serde_json::Value> {
     if !takes_asset_path(registry, field.get_represented_type_info()?.type_id()) {
         return None;
     }
-    let path = handle_of(registry, field)
-        .and_then(|handle| server.and_then(|server| server.get_path(handle.id())))
-        .map(|path| path.to_string())
+    let handle = handle_of(registry, field);
+    let indexed = handle.as_ref().and_then(|handle| {
+        index
+            .and_then(|index| index.path_of_id(handle.id()))
+            .map(|path| path.to_slash_lossy().into_owned())
+    });
+    let path = indexed
+        .or_else(|| {
+            handle
+                .and_then(|handle| server.and_then(|server| server.get_path(handle.id())))
+                .map(|path| path.to_string())
+        })
         .unwrap_or_default();
     Some(serde_json::Value::String(path))
+}
+
+/// The type path of the asset a field names, for the rows and pickers that
+/// offer the files holding it. `None` when the field takes no asset path.
+pub fn asset_type_path(registry: &TypeRegistry, type_id: TypeId) -> Option<String> {
+    let handle_type = handle_type_id(registry, type_id)?;
+    let asset_type = registry
+        .get_type_data::<ReflectHandle>(handle_type)?
+        .asset_type_id();
+    Some(
+        registry
+            .get(asset_type)?
+            .type_info()
+            .type_path()
+            .to_string(),
+    )
+}
+
+/// The `Handle<T>` a field's type is, reaching through an `Option` to find it.
+fn handle_type_id(registry: &TypeRegistry, type_id: TypeId) -> Option<TypeId> {
+    if registry.get_type_data::<ReflectHandle>(type_id).is_some() {
+        return Some(type_id);
+    }
+    if !takes_asset_path(registry, type_id) {
+        return None;
+    }
+    let TypeInfo::Enum(info) = registry.get(type_id)?.type_info() else {
+        return None;
+    };
+    let VariantInfo::Tuple(variant) = info.variant("Some")? else {
+        return None;
+    };
+    Some(variant.field_at(0)?.type_id())
 }
 
 /// The handle a field holds, reaching through an `Option` to find it.

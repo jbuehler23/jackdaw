@@ -62,21 +62,30 @@ nesting, not of a flat entity list.
 
 ## Asset references
 
-Materials and other shared assets are referenced by name:
+A material or any other asset file is referenced by its path
+under `assets/`:
 
-- `#Name` for a scene-local asset, defined inline in the same
-  `.bsn` file.
-- `@Name` for a project-wide asset, resolved from the project
-  catalog.
+```
+my_game::Signpost { board: "materials/slate.material.bsn" }
+```
 
-Both prefixes resolve against the same name-to-handle table at
-load time, populated from the scene's own inline definitions and
-the project catalog. A name that resolves to nothing falls back
-to a default handle rather than failing the load, so a missing
-material shows up as untextured geometry, not an error.
+A scene-local asset, defined inline in the same `.bsn` file, is
+referenced as `#Name`. The `@Name` spelling of a project-wide
+asset is what files written before paths use; it still resolves
+while a project catches up, as long as one file answers to that
+name, and the next save writes the path.
 
-A component value that is a plain path string (no prefix) is
-loaded through the asset server as a file path instead.
+Every reference resolves against the same table at load time:
+the project's asset files under their paths, plus the scene's
+own inline definitions. A reference that resolves to nothing is
+left as the file spelled it and falls back to a default handle
+rather than failing the load, so a missing material shows up as
+untextured geometry, not an error, and a save does not quietly
+drop what could not be found.
+
+A reference no asset file answers to is loaded through the asset
+server as a file path, which is how an image, a mesh or any other
+file the engine loads for itself is named.
 
 ## Project file
 
@@ -104,11 +113,67 @@ intentionally opaque to the config (consumers parse it as the
 
 ## Catalog file
 
-Project-wide named assets live in `assets/catalog.bsn`. Any
-scene in the project can reference them with `@Name`. Legacy
-catalogs at `.jsn/catalog.jsn` or `assets/catalog.jsn` are read
-for migration and rewritten to `assets/catalog.bsn` on the
-next save.
+An asset file is a `.bsn` naming the type it holds, and it can
+sit in any folder under `assets/`; the editor indexes every one
+it finds by the path it sits at.
+
+`assets/catalog.bsn` is how a project kept its named assets
+before each had a file. It is read, never written: its entries
+load under the `@Name` a scene spells them by, and opening a
+project whose catalog still holds entries says how many and
+points at `project.migrate_asset_references`, which writes each
+one out as a file of its own. Legacy catalogs at
+`.jsn/catalog.jsn` or `assets/catalog.jsn` are read the same
+way. The game's runtime reads the catalog too, so a project
+that has not migrated yet still runs.
+
+The suffixes jackdaw grew for itself are decoration now. A
+material and an animation graph are asset files like any other,
+known by the type their document holds, so either can sit in any
+folder under any name: the Materials panel lists every material
+the index holds, the Graph window opens every graph, and a game
+loads one through the asset server by the path it sits at.
+`assets/materials/<name>.bsn` and
+`assets/animation/<name>.animgraph.bsn` are only where a save
+with no folder in mind puts one.
+
+## Asset files in a game
+
+The runtime reads the project's asset files itself: at startup it walks
+every `.bsn` under the asset folder, takes the type each file holds
+from its header or its first root, and loads the ones whose type the
+game registered as a reflected asset into that type's store. A file is
+reachable by the path it sits at, and, while a project still spells
+references by name, by its stem where only one file carries that stem.
+A file naming a type the game has not registered is skipped with a
+warning; scenes and prefabs are left to the loaders that own them.
+
+This is a walk rather than a Bevy `AssetLoader` for `.bsn`, because a
+typed handle needs one loader per concrete asset type the game
+registers, while the walk is generic over reflection and matches the
+index the editor builds for the same folder. Loading a type
+asynchronously through the asset server can come later without changing
+how a file is written or referenced.
+
+A game that keeps its definitions as rows rather than as assets reads
+the same files directly:
+
+```rust,ignore
+use jackdaw_bsn::{read_asset_file, walk_asset_files};
+
+for (path, type_path) in walk_asset_files(Path::new("assets")) {
+    if type_path == ItemDef::type_path() {
+        let item: ItemDef = read_asset_file(&path)?;
+        items.insert(item.id.clone(), item);
+    }
+}
+```
+
+`walk_asset_files` yields one entry per asset file with the type it
+holds, leaving scenes and prefabs out. `read_asset_file` reads the
+value the file's first root holds, refusing a file whose root is
+another type; fields naming other assets by path stay at their
+defaults, since resolving those takes an asset server.
 
 ## What is not in BSN
 

@@ -14,7 +14,9 @@ pub mod app_ops;
 pub mod asset_browser;
 pub mod asset_catalog;
 pub mod asset_files;
+pub mod asset_index;
 pub mod asset_ingest;
+pub mod asset_migration;
 pub mod authored_widgets;
 pub mod boot_ops;
 pub mod brush;
@@ -49,6 +51,7 @@ pub mod keybind_focus;
 pub mod keybind_settings;
 pub mod keybinds;
 pub mod migrate_dialog;
+pub mod new_asset;
 pub mod panel_focus;
 
 use std::{collections::BTreeMap, marker::PhantomData};
@@ -469,6 +472,7 @@ impl Plugin for EditorCorePlugin {
         ))
         .add_plugins(native_dialog::NativeDialogPlugin)
         .add_plugins(definition_assets::plugin)
+        .add_plugins(asset_index::plugin)
         .add_plugins(model_thumbnail::plugin)
         .add_plugins(boot_ops::plugin)
         .add_plugins(fps_overlay::plugin)
@@ -2676,6 +2680,18 @@ fn unescape_action_value(value: &str) -> String {
 /// free-standing `op:` events. Always plain `op:OP_ID` form ;
 /// parametrised dispatch goes through `ButtonOperatorCall.params`.
 fn handle_menu_action(event: On<MenuAction>, mut commands: Commands) {
+    // An Assets row creates a file of its kind in the folder the browser is
+    // showing, which is what `asset.new` does with no path of its own.
+    if let Some(kind) = event
+        .action
+        .strip_prefix(creation_taxonomy::ASSET_ACTION_PREFIX)
+    {
+        commands
+            .operator(definition_assets::AssetNewOp::ID)
+            .param("type", kind.to_string())
+            .call();
+        return;
+    }
     // The UI Widgets rows go through `instantiate_widget` so the new node
     // is authored, undoable, and in the document.
     if let Some(widget_id) = event
@@ -2758,19 +2774,17 @@ fn cleanup_editor(world: &mut World) {
         }
     }
 
-    // 5. Reset resources. The catalog, the durable-name set and the
-    // material registry all describe the project being closed.
+    // 5. Reset resources. The catalog, the asset index and the material
+    // registry all describe the project being closed.
     world.insert_resource(scene_io::SceneFilePath::default());
     world.insert_resource(scene_io::SceneDirtyState::default());
     world.insert_resource(Selection::default());
     world.insert_resource(commands::CommandHistory::default());
     world.insert_resource(asset_catalog::AssetCatalog::default());
-    world.insert_resource(material_assets::SavedMaterials::default());
     world.insert_resource(material_assets::MaterialRegistry::default());
     project_definitions::forget_project_definitions(world);
     world.insert_resource(asset_files::AssetKindCache::default());
-    world.insert_resource(definition_assets::DefinitionRegistry::default());
-    world.insert_resource(definition_assets::DefinitionValues::default());
+    world.insert_resource(asset_index::AssetIndex::default());
     world.insert_resource(definition_assets::OpenDefinition::default());
 
     // 6. Remove project root

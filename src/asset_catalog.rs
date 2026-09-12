@@ -10,36 +10,34 @@ use jackdaw_jsn::format::JsnCatalog;
 /// while scene-local inline assets use `#Name`. When multiple scenes reference
 /// the same `@Name`, they share the same handle (zero duplication).
 ///
-/// The map holds every named asset the editor has loaded, saved or not, so
-/// `@Name` references resolve while it runs. What *persists* is decided at save
-/// time: materials go to their own files (see [`crate::material_assets`]),
-/// everything else to `catalog.bsn`.
+/// The map holds every named asset the editor has loaded, so `@Name`
+/// references resolve while it runs. Nothing here is written back:
+/// `catalog.bsn` is read for what older projects put in it, and
+/// `project.migrate_asset_references` writes those entries out as files of
+/// their own.
 #[derive(Resource, Default)]
 pub struct AssetCatalog {
     /// `@Name` -> loaded `UntypedHandle` (populated at project open).
     pub handles: HashMap<String, UntypedHandle>,
-    /// Reverse lookup: asset ID -> `@Name` (used during save to emit catalog refs).
+    /// Reverse lookup: asset ID -> `@Name`, for the names a scene save falls
+    /// back to when no file holds the asset.
     pub id_to_name: HashMap<UntypedAssetId, String>,
-    /// Whether the catalog has unsaved changes.
-    pub dirty: bool,
-    /// Set when `catalog.bsn` existed but could not be read or parsed.
-    ///
-    /// The loaded map is then an unknown fraction of the file, so writing it
-    /// back would destroy whatever failed to load. While this is set, saving
-    /// does not touch the catalog file.
-    pub load_failed: bool,
-    /// Whether the quarantine refusal has already been reported this run.
-    quarantine_reported: bool,
+    /// Names of material entries the catalog file still holds inline, which
+    /// the migration writes out as files of their own.
+    pub inline_materials: HashSet<String>,
 }
 
-/// What a catalog file with no entries holds. A blank file is indistinguishable
-/// from a truncated one, and deleting the file would un-shadow the older catalog
-/// locations and resurrect their contents.
-const EMPTY_CATALOG: &str = "// no catalog entries\n";
+/// What `catalog.bsn` held when the project opened.
+#[derive(Resource, Default)]
+pub struct CatalogImport {
+    /// How many entries the file holds, all of them without a file of their own.
+    pub entries: usize,
+    /// Whether the entries have already been reported this run.
+    reported: bool,
+}
 
 impl AssetCatalog {
-    /// Insert a runtime handle into the catalog. Does not mark dirty; the
-    /// caller sets `dirty` when the change should persist.
+    /// Insert a runtime handle into the catalog.
     pub fn insert(&mut self, name: String, handle: UntypedHandle) {
         self.id_to_name.insert(handle.id(), name.clone());
         self.handles.insert(name, handle);
@@ -49,12 +47,27 @@ impl AssetCatalog {
     pub fn contains_name(&self, name: &str) -> bool {
         self.handles.contains_key(name)
     }
+}
 
-    /// Refuse further writes to the catalog file: what is in memory may not be
-    /// the whole of what is on disk.
-    pub fn quarantine(&mut self) {
-        self.load_failed = true;
+/// Say once that the catalog file holds entries that belong in files of their
+/// own, and how to move them.
+fn report_catalog_entries(world: &mut World, count: usize) {
+    let mut import = world.get_resource_or_init::<CatalogImport>();
+    import.entries = count;
+    if count == 0 || import.reported {
+        return;
     }
+    import.reported = true;
+    warn!(
+        "catalog.bsn holds {count} entries, which is how assets were kept before each had a \
+         file of its own; run project.migrate_asset_references to write them out"
+    );
+}
+
+/// Whether a catalog entry is a `StandardMaterial`, and so belongs in a file
+/// of its own rather than in the catalog file.
+fn is_material(handle: &UntypedHandle) -> bool {
+    handle.type_id() == std::any::TypeId::of::<StandardMaterial>()
 }
 
 /// Whether catalog text carries no entries: only comments and whitespace. Such
@@ -65,42 +78,15 @@ fn is_empty_catalog_text(text: &str) -> bool {
         .all(|line| line.trim().is_empty())
 }
 
-/// Populate [`AssetCatalog`] for the open project: the `assets/materials`
-/// files first, then whatever `catalog.bsn` holds.
+/// Populate [`AssetCatalog`] from whatever `catalog.bsn` holds.
 ///
-/// Inline material entries in `catalog.bsn` load normally and are flagged dirty,
-/// so the next save writes them out as `.material.bsn` files and drops them from
-/// the catalog file.
+/// The project's material files are indexed and named before this runs, so
+/// their linear-space textures have claimed their paths and a filed material
+/// wins its name over an inline entry of the same name.
+///
+/// Inline material entries load normally; `project.migrate_asset_references`
+/// writes them out as files of their own.
 pub fn load_catalog(world: &mut World) {
-    // Materials load first so their linear-space textures claim their paths before the
-    // catalog file's generic applier resolves the same paths as sRGB, and so a saved
-    // material wins its name.
-    let materials = crate::material_assets::load_material_files(world);
-    let count = materials.len();
-    for (name, handle) in materials {
-        world
-            .resource_mut::<AssetCatalog>()
-            .insert(format!("@{name}"), handle);
-        world
-            .resource_mut::<crate::material_assets::SavedMaterials>()
-            .0
-            .insert(name);
-    }
-    if count > 0 {
-        info!("Loaded {count} saved materials");
-    }
-
-    load_catalog_file(world);
-}
-
-/// Whether a catalog entry is a `StandardMaterial`, and so belongs in
-/// `assets/materials` rather than the catalog file.
-fn is_material(handle: &UntypedHandle) -> bool {
-    handle.type_id() == std::any::TypeId::of::<StandardMaterial>()
-}
-
-/// Load `assets/catalog.bsn` (or a legacy location) into [`AssetCatalog`].
-fn load_catalog_file(world: &mut World) {
     let catalog_path = catalog_file_path(world);
     let Some(catalog_path) = catalog_path else {
         info!("No project root, skipping catalog load");
@@ -116,7 +102,6 @@ fn load_catalog_file(world: &mut World) {
         Ok(json) => json,
         Err(err) => {
             warn!("Failed to read {}: {err}", catalog_path.display());
-            world.resource_mut::<AssetCatalog>().quarantine();
             return;
         }
     };
@@ -132,7 +117,6 @@ fn load_catalog_file(world: &mut World) {
         match jackdaw_bsn::load_bsn_assets(world, &json) {
             Ok(entries) => {
                 let count = entries.len();
-                let mut migratable = 0;
                 for entry in entries {
                     // Scenes reference catalog assets as `@Name`.
                     let name = format!("@{}", entry.name);
@@ -145,10 +129,9 @@ fn load_catalog_file(world: &mut World) {
                         // `@Name` scenes reference, so the entry stays inline.
                         if crate::material_assets::sanitize_material_name(&entry.name) == entry.name
                         {
-                            migratable += 1;
                             world
-                                .resource_mut::<crate::material_assets::SavedMaterials>()
-                                .0
+                                .resource_mut::<AssetCatalog>()
+                                .inline_materials
                                 .insert(entry.name.clone());
                         } else {
                             warn!(
@@ -161,14 +144,10 @@ fn load_catalog_file(world: &mut World) {
                     catalog.id_to_name.insert(entry.handle.id(), name.clone());
                     catalog.handles.insert(name, entry.handle);
                 }
-                // Migrate the inline materials out on the next save.
-                world.resource_mut::<AssetCatalog>().dirty = migratable > 0;
                 info!("Loaded asset catalog with {count} entries");
+                report_catalog_entries(world, count);
             }
-            Err(err) => {
-                warn!("Failed to parse {}: {err}", catalog_path.display());
-                world.resource_mut::<AssetCatalog>().quarantine();
-            }
+            Err(err) => warn!("Failed to parse {}: {err}", catalog_path.display()),
         }
         return;
     }
@@ -177,7 +156,6 @@ fn load_catalog_file(world: &mut World) {
         Ok(c) => c,
         Err(err) => {
             warn!("Failed to parse asset catalog: {err}");
-            world.resource_mut::<AssetCatalog>().quarantine();
             return;
         }
     };
@@ -188,98 +166,15 @@ fn load_catalog_file(world: &mut World) {
     // Use the same load_inline_assets function scenes use
     let loaded = crate::scene_io::load_inline_assets(world, &jsn_catalog.assets, &assets_dir);
 
-    // Populate the catalog resource
     let mut catalog = world.resource_mut::<AssetCatalog>();
     for (name, handle) in loaded {
         catalog.id_to_name.insert(handle.id(), name.clone());
         catalog.handles.insert(name, handle);
     }
-    catalog.dirty = false;
+    let count = catalog.handles.len();
 
-    info!(
-        "Loaded asset catalog with {} entries",
-        catalog.handles.len()
-    );
-}
-
-/// Persist the catalog: saved materials to their own files, everything else to
-/// `assets/catalog.bsn`.
-///
-/// A material written to `assets/materials` and an unsaved material (a detected
-/// set or a fresh `material.create`) are both left out of the catalog file: the
-/// first has its own file, the second is ephemeral and travels inline inside the
-/// scenes that use it. Any other entry (another asset type, or a material whose
-/// name is not a legal file stem) is written inline.
-///
-/// The file is never unlinked. With nothing left to write it holds an empty
-/// document, which keeps it shadowing the other catalog locations
-/// `catalog_file_path` reads.
-pub fn save_catalog(world: &mut World) {
-    let Some(catalog_path) = catalog_save_path(world) else {
-        return;
-    };
-
-    if !world.resource::<AssetCatalog>().dirty {
-        return;
-    }
-
-    if world.resource::<AssetCatalog>().load_failed {
-        let mut catalog = world.resource_mut::<AssetCatalog>();
-        if !catalog.quarantine_reported {
-            catalog.quarantine_reported = true;
-            warn!("Asset catalog failed to load; refusing to write over it");
-        }
-        return;
-    }
-
-    let in_files: HashSet<UntypedAssetId> = crate::material_assets::persist_materials(world)
-        .into_iter()
-        .collect();
-    let ephemeral = crate::material_assets::ephemeral_material_ids(world);
-
-    let catalog = world.resource::<AssetCatalog>();
-    let refs: Vec<jackdaw_bsn::CatalogAssetRef> = catalog
-        .id_to_name
-        .iter()
-        .filter(|(asset_id, _)| !in_files.contains(asset_id) && !ephemeral.contains(asset_id))
-        .map(|(&asset_id, name)| jackdaw_bsn::CatalogAssetRef {
-            name: name.trim_start_matches(['@', '#']).to_string(),
-            type_id: asset_id.type_id(),
-            asset_id,
-        })
-        .collect();
-
-    // Emptiness is decided from the entries, not the emitted text: the serializer drops
-    // entries it cannot express, which must not read as having nothing to keep.
-    let text = if refs.is_empty() {
-        EMPTY_CATALOG.to_string()
-    } else {
-        let (text, skipped) = jackdaw_bsn::serialize_assets_to_bsn_reporting(world, &refs);
-        if !skipped.is_empty() {
-            warn!(
-                "Catalog entries could not be serialized and are missing from {}: {}",
-                catalog_path.display(),
-                skipped.join(", ")
-            );
-        }
-        if is_empty_catalog_text(&text) {
-            EMPTY_CATALOG.to_string()
-        } else {
-            text
-        }
-    };
-
-    if let Some(parent) = catalog_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    match crate::scene_io::save::write_atomic(&catalog_path, text.as_bytes()) {
-        Ok(()) => {
-            info!("Catalog saved to {}", catalog_path.display());
-            world.resource_mut::<AssetCatalog>().dirty = false;
-        }
-        Err(err) => warn!("Failed to write catalog: {err}"),
-    }
+    info!("Loaded asset catalog with {count} entries");
+    report_catalog_entries(world, count);
 }
 
 /// Resolve the catalog file path for loading.
@@ -306,19 +201,10 @@ fn catalog_file_path(world: &World) -> Option<std::path::PathBuf> {
     Some(project.assets_dir().join("catalog.bsn"))
 }
 
-/// Always returns `assets/catalog.bsn`. The catalog is committed project
-/// data (scenes reference its `@Name` entries), so it lives with the assets,
-/// not in the gitignored `.jackdaw/`. Materials are not among those entries;
-/// they live one per file under `assets/materials`.
-fn catalog_save_path(world: &World) -> Option<std::path::PathBuf> {
-    let project = world.get_resource::<crate::project::ProjectRoot>()?;
-    Some(project.assets_dir().join("catalog.bsn"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::material_assets::{MaterialRegistry, SavedMaterials};
+    use crate::material_assets::MaterialRegistry;
     use crate::project::{ProjectConfig, ProjectRoot};
     use bevy::app::App;
     use bevy::asset::{AssetApp, AssetPlugin};
@@ -339,7 +225,6 @@ mod tests {
         });
         app.init_resource::<AssetCatalog>();
         app.init_resource::<MaterialRegistry>();
-        app.init_resource::<SavedMaterials>();
         std::fs::create_dir_all(tmp.path().join("assets")).expect("assets dir");
         (app, tmp)
     }
@@ -348,114 +233,66 @@ mod tests {
         tmp.path().join("assets/catalog.bsn")
     }
 
+    /// The catalog file is an import, not a store: the editor reads what an
+    /// older project put there and never writes it, so what is on disk stays
+    /// as the project committed it until the migration moves it.
     #[test]
-    fn a_catalog_that_failed_to_load_is_never_written_over() {
+    fn nothing_the_editor_does_writes_the_catalog_file() {
         let (mut app, tmp) = catalog_app();
         let path = catalog_file(&tmp);
-        std::fs::write(&path, "this is not $$ valid bsn {{{").expect("write");
+        let held = "#slate\nbevy_pbr::pbr_material::StandardMaterial {}\n";
+        std::fs::write(&path, held).expect("write");
 
         load_catalog(app.world_mut());
-        assert!(
-            app.world().resource::<AssetCatalog>().load_failed,
-            "a parse failure must quarantine the catalog"
-        );
-
-        app.world_mut().resource_mut::<AssetCatalog>().dirty = true;
-        save_catalog(app.world_mut());
+        app.update();
+        app.update();
 
         assert_eq!(
             std::fs::read_to_string(&path).expect("still there"),
-            "this is not $$ valid bsn {{{",
-            "the unreadable file must survive untouched"
+            held,
+            "the file must survive an editor run untouched"
         );
     }
 
+    /// The entries belong in files of their own, and the user is told once
+    /// where to put them.
     #[test]
-    fn an_emptied_catalog_is_written_empty_rather_than_unlinked() {
+    fn opening_a_project_whose_catalog_holds_entries_reports_them_once() {
         let (mut app, tmp) = catalog_app();
-        let path = catalog_file(&tmp);
-        std::fs::write(&path, "// placeholder\n").expect("write");
+        std::fs::write(
+            catalog_file(&tmp),
+            "#slate\nbevy_pbr::pbr_material::StandardMaterial {}\n",
+        )
+        .expect("write");
 
-        app.world_mut().resource_mut::<AssetCatalog>().dirty = true;
-        save_catalog(app.world_mut());
+        load_catalog(app.world_mut());
 
-        assert!(
-            path.is_file(),
-            "unlinking would un-shadow the legacy catalog locations"
-        );
-        assert!(is_empty_catalog_text(
-            &std::fs::read_to_string(&path).expect("read")
-        ));
-    }
+        let import = app.world().resource::<CatalogImport>();
+        assert_eq!(import.entries, 1);
+        assert!(import.reported, "the count is said once");
 
-    #[test]
-    fn a_non_material_entry_sharing_a_materials_name_is_kept() {
-        let (mut app, tmp) = catalog_app();
-        let material = app
-            .world_mut()
-            .resource_mut::<Assets<StandardMaterial>>()
-            .add(StandardMaterial::default());
-        let mesh = app
-            .world_mut()
-            .resource_mut::<Assets<Mesh>>()
-            .add(Mesh::from(bevy::math::primitives::Cuboid::default()));
-        {
-            let mut catalog = app.world_mut().resource_mut::<AssetCatalog>();
-            catalog.insert("@shared".into(), mesh.clone().untyped());
-            catalog.dirty = true;
-        }
-        // The material carries the same display name but is ephemeral, so only its own id
-        // is filtered out of the catalog file.
-        app.world_mut()
-            .resource_mut::<MaterialRegistry>()
-            .add("shared".into(), material);
-
-        save_catalog(app.world_mut());
-
-        let text = std::fs::read_to_string(catalog_file(&tmp)).expect("read");
-        assert!(
-            text.contains("#shared"),
-            "the mesh entry must survive a same-named material, got:\n{text}"
-        );
-    }
-
-    #[test]
-    fn a_material_that_could_not_be_written_stays_in_the_catalog() {
-        let (mut app, tmp) = catalog_app();
-        let handle = app
-            .world_mut()
-            .resource_mut::<Assets<StandardMaterial>>()
-            .add(StandardMaterial::default());
-        {
-            let mut catalog = app.world_mut().resource_mut::<AssetCatalog>();
-            catalog.insert("@blocked".into(), handle.clone().untyped());
-            catalog.dirty = true;
-        }
-        app.world_mut()
-            .resource_mut::<MaterialRegistry>()
-            .add_saved("blocked".into(), handle);
-
-        // A file where the materials directory belongs, so the write cannot land.
-        std::fs::write(tmp.path().join("assets/materials"), "not a directory").expect("write");
-
-        save_catalog(app.world_mut());
-
-        let text = std::fs::read_to_string(catalog_file(&tmp)).expect("read");
-        assert!(
-            text.contains("#blocked"),
-            "a failed migration must leave the entry inline, got:\n{text}"
+        load_catalog(app.world_mut());
+        assert_eq!(
+            app.world().resource::<CatalogImport>().entries,
+            1,
+            "a second read says the same thing and no more"
         );
     }
 
     #[test]
     fn comment_only_and_blank_catalogs_load_as_empty_not_as_failures() {
-        for text in ["", "   \n", EMPTY_CATALOG] {
+        for text in ["", "   \n", "// no catalog entries\n"] {
             let (mut app, tmp) = catalog_app();
             std::fs::write(catalog_file(&tmp), text).expect("write");
             load_catalog(app.world_mut());
-            let catalog = app.world().resource::<AssetCatalog>();
-            assert!(!catalog.load_failed, "{text:?} must not quarantine");
-            assert!(catalog.handles.is_empty());
+            assert!(app.world().resource::<AssetCatalog>().handles.is_empty());
+            assert_eq!(
+                app.world()
+                    .get_resource::<CatalogImport>()
+                    .map_or(0, |import| import.entries),
+                0,
+                "{text:?} holds nothing to migrate"
+            );
         }
     }
 }

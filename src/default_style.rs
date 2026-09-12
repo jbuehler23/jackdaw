@@ -128,8 +128,8 @@ pub const CAPTURE_ACCENT: Color = Color::srgb(1.0, 0.62, 0.1);
 pub const LIVE_HEADER_TINT: Color = Color::srgba(0.0, 0.667, 0.733, 0.15);
 
 // -- Brush default material variants --
-pub const DEFAULT_MATERIAL_COLOR: Color = Color::srgba(0.980, 0.8549, 0.3686, 0.5);
-pub const DEFAULT_MATERIAL_SELECTED_COLOR: Color = Color::srgba(0.980, 0.8549, 0.3686, 0.75);
+pub const DEFAULT_MATERIAL_COLOR: Color = Color::srgb(0.980, 0.8549, 0.3686);
+pub const DEFAULT_MATERIAL_SELECTED_COLOR: Color = Color::srgb(0.980, 0.8549, 0.3686);
 pub const X_RAY_MATERIAL_COLOR: Color = Color::srgba(0.65, 0.75, 0.9, 0.35);
 pub const X_RAY_MATERIAL_SELECTED_COLOR: Color = Color::srgba(1.0, 0.6, 0.2, 0.45);
 

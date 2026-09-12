@@ -531,6 +531,7 @@ pub(crate) fn import_terrain_sidecars(
             });
         }
     }
+    let assets = crate::asset_index::assets_dir(world);
     let mut imported: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (data_path, no_inline_heights) in wanted {
         let full = match sidecar::resolve_path(&scene_dir, &data_path) {
@@ -541,10 +542,14 @@ pub(crate) fn import_terrain_sidecars(
             }
         };
         match std::fs::read(&full) {
-            // `load` takes either format version: a sidecar written before
-            // regions existed migrates on the way in.
-            Ok(bytes) => match sidecar::load(&bytes) {
-                Ok(data) => {
+            // A sidecar written before regions existed, or before slots held
+            // paths, migrates on the way in.
+            Ok(bytes) => match sidecar::load_from(&bytes, assets.as_deref()) {
+                Ok(loaded) => {
+                    for message in loaded.warnings() {
+                        warn!("{message}");
+                    }
+                    let data = loaded.data;
                     let mtime = std::fs::metadata(&full)
                         .and_then(|meta| meta.modified())
                         .ok();

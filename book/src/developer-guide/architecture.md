@@ -110,12 +110,28 @@ that shows on `+ Add Component` enumerates the type registry,
 filters out anything tagged `@EditorHidden`, and sorts by
 category.
 
+A field holding a handle is an asset field: the row shows the path
+of the file behind it, with Pick, Clear and New beside it, and takes
+a file dragged onto it from the asset browser. Pick lists the files
+the project holds of that field's asset type, and offers the
+desktop's file dialog for a type with no asset files of its own,
+such as an image. Every one of the three writes through the same
+undoable field edit a scalar row uses, so one choice is one history
+entry. A material's texture slots are the same row.
+
+A project whose schema spells a reference as the path itself rather
+than as a handle gets the row too: a string field of an asset whose
+value names a file the project holds is shown as that file, and every
+element of a list of them keeps the row even while it is empty, so a
+list of material paths is picked from rather than typed.
+
 Code:
 
 - `src/inspector/mod.rs` is the dispatcher.
 - `src/inspector/component_picker.rs` is the `+ Add Component`
   flow.
 - `src/inspector/reflect_fields.rs` renders primitive fields.
+- `src/inspector/asset_row.rs` renders a field that names an asset.
 
 ## Extensions
 

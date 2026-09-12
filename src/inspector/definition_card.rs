@@ -55,12 +55,13 @@ fn despawn_existing_card(world: &mut World, inspector: Entity) {
 /// Build the card for the definition `source` is editing under `inspector`.
 pub(crate) fn fill_definition_card(world: &mut World, inspector: Entity, source: Entity) {
     despawn_existing_card(world, inspector);
-    let Some((kind, name, type_path, dirty)) =
+    let Some((kind, name, type_path, path, dirty)) =
         world.get::<DefinitionAssetEdit>(source).map(|edit| {
             (
                 edit.kind.clone(),
                 edit.name.clone(),
                 edit.type_path.clone(),
+                edit.path.clone(),
                 edit.dirty,
             )
         })
@@ -82,7 +83,7 @@ pub(crate) fn fill_definition_card(world: &mut World, inspector: Entity, source:
             );
             return;
         };
-        let Some(value) = crate::definition_assets::schema_definition_json(world, &kind, &name)
+        let Some(value) = crate::definition_assets::schema_definition_json(world, &kind, &path)
         else {
             bevy::log::warn_once!(
                 "no {kind} named '{name}' is loaded, so its {type_path} card is empty"
@@ -160,6 +161,7 @@ pub(crate) fn fill_definition_card(world: &mut World, inspector: Entity, source:
             state.apply(world);
         }
         CardBody::Schema(schema, value) => {
+            let asset_types = super::schema_fields::asset_path_types(world);
             world.resource_scope(|world, types: Mut<crate::project_types::ProjectTypes>| {
                 let mut state: SystemState<(Commands, Query<&Name>)> = SystemState::new(world);
                 let Ok((mut commands, names)) = state.get_mut(world) else {
@@ -172,6 +174,7 @@ pub(crate) fn fill_definition_card(world: &mut World, inspector: Entity, source:
                     names: &names,
                     registry: &registry,
                     server: server.as_ref(),
+                    asset_types: &asset_types,
                     editor_font: &editor_font,
                     icon_font: &icon_font,
                 };

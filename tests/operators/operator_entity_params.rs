@@ -249,10 +249,66 @@ fn physics_disable_with_entity_param_detaches_components() {
     );
 }
 
+#[test]
+fn add_cube_authors_static_physics_by_default() {
+    use avian3d::prelude::RigidBody;
+    use jackdaw_bsn::SceneBsnAst;
+    use jackdaw_scene_types::Brush;
+
+    let mut app = util::editor_test_app();
+    let result = app
+        .world_mut()
+        .operator("entity.add.cube")
+        .call()
+        .expect("dispatch resolves");
+    assert_eq!(result, OperatorResult::Finished);
+    app.update();
+
+    let entity = app
+        .world_mut()
+        .query_filtered::<Entity, With<Brush>>()
+        .iter(app.world())
+        .next()
+        .expect("entity.add.cube spawned a brush");
+    let entity_ref = app.world().entity(entity);
+    assert_eq!(
+        entity_ref.get::<RigidBody>().copied(),
+        Some(RigidBody::Static),
+        "new brushes should spawn as static bodies"
+    );
+    assert!(
+        entity_ref.contains::<AvianCollider>(),
+        "new brushes should spawn with AvianCollider"
+    );
+
+    let ast = app.world().resource::<SceneBsnAst>();
+    let node = ast
+        .ast_for(entity)
+        .expect("cube is tracked in the document");
+    let paths = ast.component_type_paths(node);
+    assert!(
+        paths
+            .iter()
+            .any(|p| p.starts_with("avian3d::dynamics::rigid_body::RigidBody")),
+        "RigidBody should be authored, not only live ECS: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .any(|p| p == "jackdaw_avian_integration::AvianCollider"),
+        "AvianCollider should be authored, not only live ECS: {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|p| p.ends_with("::Position")),
+        "avian require companions must stay off the document: {paths:?}"
+    );
+}
+
 /// Every operator reading `entity` through `as_entity("entity")` must reject a
 /// `PropertyValue::Int`. `type_path` / `field_path` are filled with valid
 /// placeholders so the rejected entity param is the only thing that can drive
 /// the call to `Cancelled`.
+
 #[test]
 fn entity_param_rejects_int_across_inspector_and_hierarchy_ops() {
     let mut app = app_with_test_marker();

@@ -24,7 +24,7 @@ use bevy::{
     ui::Checked,
     ui_widgets::{Activate, SliderDragState, SliderValue, ValueChange},
 };
-use jackdaw_api::op::{Operator as _, OperatorCommandsExt as _};
+use jackdaw_api::op::Operator as _;
 use jackdaw_feathers::{
     button::{ButtonOperatorCall, ButtonVariant, IconButtonProps, icon_button},
     field_row::{FieldRowProps, spawn_field_row},
@@ -171,11 +171,12 @@ pub(crate) struct MaterialTextureSlotRow;
 #[derive(Component)]
 pub(crate) struct MaterialFieldMarker;
 
-/// A texture slot row: square swatch, the bound file's name, then assign and clear.
+/// A texture slot row: square swatch, the bound file's path, then the actions
+/// every asset field has.
 ///
-/// Assign and clear route the slot and target material through
-/// [`crate::material_browser::PendingTextureSlot`] before dispatching the operators, because
-/// a material handle is not a `PropertyValue`.
+/// The slot is a field of the material like any other, so it hosts the shared
+/// asset row; only the write is its own, since an image bound to a slot that is
+/// not colour has to load in linear space.
 pub(crate) fn spawn_texture_slot_row(
     commands: &mut Commands,
     parent: Entity,
@@ -184,73 +185,139 @@ pub(crate) fn spawn_texture_slot_row(
     handle: Handle<StandardMaterial>,
     icon_font: &Handle<Font>,
 ) -> Entity {
-    use crate::material_browser::{
-        MaterialBrowseTextureSlotOp, MaterialClearTextureSlotOp, PendingTextureSlot,
+    use crate::inspector::asset_row::{
+        AssetFieldTarget, AssetFieldWriter, AssetRowProps, attach_asset_field,
     };
+    use bevy::reflect::TypePath as _;
 
     let name = current
         .as_ref()
         .and_then(Handle::path)
-        .and_then(|p| {
-            p.path()
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-        })
+        .map(|path| crate::inspector::asset_row::shown_name(&path.path().to_string_lossy()))
         .unwrap_or_else(|| "None".to_string());
 
-    let props = SwatchRowProps::new(slot.label());
+    let props = SwatchRowProps::new(slot.label())
+        .with_control_min_width(crate::inspector::asset_row::ASSET_CONTROL_MIN_WIDTH);
     let props = match current.clone() {
         Some(image) => props.bound(image, name),
         None => props.placeholder(name),
     };
     let row = spawn_swatch_row(commands, parent, props);
 
+    let material = handle.clone();
     commands
         .entity(row.row)
         .insert((MaterialTextureSlotRow, Hovered::default()))
-        .insert(Tooltip::title(slot.label()).with_description(slot.field()));
+        .insert(Tooltip::title(slot.label()).with_description(slot.field()))
+        .insert(AssetFieldWriter(Box::new(move |world, path| {
+            commit_texture_slot(world, &material, slot, path)
+        })));
 
-    let browse_handle = handle.clone();
-    commands
-        .spawn((
-            icon_button(
-                IconButtonProps::new(Icon::FolderOpen).variant(ButtonVariant::Ghost),
-                icon_font,
-            ),
-            ChildOf(row.actions),
-        ))
-        .observe(
-            move |_: On<Pointer<Click>>,
-                  mut pending: ResMut<PendingTextureSlot>,
-                  mut commands: Commands| {
-                pending.slot = Some(slot);
-                pending.material_handle = Some(browse_handle.clone());
-                commands.operator(MaterialBrowseTextureSlotOp::ID).call();
-            },
-        );
-
-    if current.is_some() {
-        let clear_handle = handle;
-        commands
-            .spawn((
-                icon_button(
-                    IconButtonProps::new(Icon::X).variant(ButtonVariant::Ghost),
-                    icon_font,
-                ),
-                ChildOf(row.actions),
-            ))
-            .observe(
-                move |_: On<Pointer<Click>>,
-                      mut pending: ResMut<PendingTextureSlot>,
-                      mut commands: Commands| {
-                    pending.slot = Some(slot);
-                    pending.material_handle = Some(clear_handle.clone());
-                    commands.operator(MaterialClearTextureSlotOp::ID).call();
-                },
-            );
-    }
+    attach_asset_field(
+        commands,
+        row.row,
+        row.actions,
+        AssetRowProps {
+            target: AssetFieldTarget::Held(handle.untyped()),
+            field_path: slot.field().to_string(),
+            asset_type_path: Image::type_path().to_string(),
+            label: slot.label().to_string(),
+            indent: 0,
+        },
+        Some(row.value),
+        icon_font,
+    );
 
     row.row
+}
+
+/// Bind one texture slot of a material to a file, or to nothing, as one undo
+/// entry.
+struct SetTextureSlot {
+    material: Handle<StandardMaterial>,
+    slot: TextureSlot,
+    old_path: String,
+    new_path: String,
+}
+
+impl crate::commands::EditorCommand for SetTextureSlot {
+    fn execute(&mut self, world: &mut World) {
+        bind_texture_slot(world, &self.material, self.slot, &self.new_path);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        bind_texture_slot(world, &self.material, self.slot, &self.old_path);
+    }
+
+    fn description(&self) -> &str {
+        "Bind texture slot"
+    }
+}
+
+/// Write a texture slot and push the entry undo walks back over.
+fn commit_texture_slot(
+    world: &mut World,
+    material: &Handle<StandardMaterial>,
+    slot: TextureSlot,
+    path: &str,
+) -> bool {
+    let old_path = world
+        .resource::<Assets<StandardMaterial>>()
+        .get(material)
+        .and_then(|value| slot.get_from(value))
+        .and_then(|image| {
+            image
+                .path()
+                .map(|path| path.path().to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
+    if !bind_texture_slot(world, material, slot, path) {
+        return false;
+    }
+    world
+        .resource_mut::<jackdaw_commands::CommandHistory>()
+        .push_executed(Box::new(SetTextureSlot {
+            material: material.clone(),
+            slot,
+            old_path,
+            new_path: path.to_string(),
+        }));
+    true
+}
+
+/// Load the file a slot names in the colour space that slot reads and put it on
+/// the material. An empty path leaves the slot bound to nothing.
+fn bind_texture_slot(
+    world: &mut World,
+    material: &Handle<StandardMaterial>,
+    slot: TextureSlot,
+    path: &str,
+) -> bool {
+    let image = (!path.is_empty()).then(|| {
+        let server = world.resource::<AssetServer>();
+        if slot.is_srgb() {
+            server.load::<Image>(path.to_string())
+        } else {
+            server
+                .load_builder()
+                .with_settings(|settings: &mut bevy::image::ImageLoaderSettings| {
+                    settings.is_srgb = false;
+                })
+                .load::<Image>(path.to_string())
+        }
+    });
+    {
+        let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+        let Some(mut value) = materials.get_mut(material) else {
+            return false;
+        };
+        slot.set_on(&mut value, image);
+    }
+    world
+        .get_resource_or_init::<crate::material_assets::EditedMaterials>()
+        .edited(material);
+    world.resource_mut::<MaterialPreviewState>().set_changed();
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -342,7 +409,7 @@ pub(crate) fn on_material_slider_commit(
     event: On<ValueChange<f32>>,
     mut bindings: Query<&mut MaterialFieldBinding>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    catalog: Option<ResMut<crate::asset_catalog::AssetCatalog>>,
+    edited: Option<ResMut<crate::material_assets::EditedMaterials>>,
     mut commands: Commands,
 ) {
     let slider = event.source;
@@ -356,7 +423,7 @@ pub(crate) fn on_material_slider_commit(
     }
     binding.shown = value;
     if event.is_final {
-        mark_catalog_dirty(catalog);
+        material_edited(edited, &binding.material_handle);
     }
 }
 
@@ -436,35 +503,38 @@ fn holds_focus(entity: Entity, focus: &InputFocus, child_of: &Query<&ChildOf>) -
             .any(|ancestor| ancestor == entity)
 }
 
-/// Flag the catalog once a material slider's drag has ended, however it ended.
+/// Write a material back once a slider's drag has ended, however it ended.
 ///
-/// [`on_material_slider_commit`] persists on the final `ValueChange` that closes an ordinary
+/// [`on_material_slider_commit`] writes on the final `ValueChange` that closes an ordinary
 /// drag. A drag that ends any other way (the pointer leaving the window, the widget disabled
 /// mid-gesture, the gesture cancelled) emits no final event, so the edit would sit in memory
-/// until something else dirties the catalog. The end is detected from the drag state, since
+/// until something else wrote the material. The end is detected from the drag state, since
 /// there is no event to read.
 fn flush_material_slider_drag(
     mut fields: Query<(&mut MaterialFieldBinding, Option<&SliderDragState>)>,
-    catalog: Option<ResMut<crate::asset_catalog::AssetCatalog>>,
+    mut edited: Option<ResMut<crate::material_assets::EditedMaterials>>,
 ) {
-    let mut ended = false;
     for (mut binding, drag) in &mut fields {
         let dragging = drag.is_some_and(|drag| drag.dragging);
         if binding.dragging == dragging {
             continue;
         }
-        ended |= binding.dragging;
+        if binding.dragging
+            && let Some(edited) = edited.as_mut()
+        {
+            edited.edited(&binding.material_handle);
+        }
         binding.dragging = dragging;
-    }
-    if ended {
-        mark_catalog_dirty(catalog);
     }
 }
 
-/// Schedule the catalog and the edited material's file to be rewritten.
-fn mark_catalog_dirty(catalog: Option<ResMut<crate::asset_catalog::AssetCatalog>>) {
-    if let Some(mut catalog) = catalog {
-        catalog.dirty = true;
+/// Schedule the edited material's file to be rewritten.
+fn material_edited(
+    edited: Option<ResMut<crate::material_assets::EditedMaterials>>,
+    handle: &Handle<StandardMaterial>,
+) {
+    if let Some(mut edited) = edited {
+        edited.edited(handle);
     }
 }
 
@@ -512,7 +582,7 @@ pub(crate) fn on_material_checkbox_commit(
     event: On<ValueChange<bool>>,
     bindings: Query<&MaterialCheckboxBinding>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    catalog: Option<ResMut<crate::asset_catalog::AssetCatalog>>,
+    edited: Option<ResMut<crate::material_assets::EditedMaterials>>,
     mut commands: Commands,
 ) {
     let target = event.source;
@@ -524,7 +594,7 @@ pub(crate) fn on_material_checkbox_commit(
     if let Some(mut material) = materials.get_mut(&binding.material_handle) {
         (binding.apply_fn)(&mut material, checked);
     }
-    mark_catalog_dirty(catalog);
+    material_edited(edited, &binding.material_handle);
 }
 
 // ---------------------------------------------------------------------------
@@ -900,8 +970,14 @@ pub(crate) fn library_actions() -> Vec<HeaderAction> {
         HeaderAction::new(
             Icon::Save,
             "Save Material",
-            "Write this material to assets/materials as a reusable asset.",
+            "Write this material to a file of its own as a reusable asset.",
             ButtonOperatorCall::new(crate::material_assets::MaterialSaveOp::ID),
+        ),
+        HeaderAction::new(
+            Icon::FolderOpen,
+            "Save Material As",
+            "Choose the file to write this material to.",
+            ButtonOperatorCall::new(crate::material_browser::MaterialSaveAsOp::ID),
         ),
         HeaderAction::new(
             Icon::Trash2,
@@ -1487,15 +1563,22 @@ mod scalar_commit_tests {
         let mut app = App::new();
         app.add_plugins((bevy::app::TaskPoolPlugin::default(), AssetPlugin::default()));
         app.init_asset::<StandardMaterial>();
-        app.init_resource::<crate::asset_catalog::AssetCatalog>();
+        app.init_resource::<crate::material_assets::EditedMaterials>();
         app.add_observer(on_material_slider_commit);
         app
     }
 
-    fn catalog_is_dirty(app: &App) -> bool {
-        app.world()
-            .resource::<crate::asset_catalog::AssetCatalog>()
-            .dirty
+    /// Whether the material is queued to be written back to its file.
+    fn is_queued_for_writing(app: &App) -> bool {
+        !app.world()
+            .resource::<crate::material_assets::EditedMaterials>()
+            .is_empty()
+    }
+
+    fn clear_queue(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<crate::material_assets::EditedMaterials>()
+            .clear();
     }
 
     /// A slider entity carrying the binding a spawned row would have.
@@ -1590,10 +1673,10 @@ mod scalar_commit_tests {
         assert!((metallic - 0.4).abs() < 1e-5, "got {metallic}");
     }
 
-    /// Dirtying the catalog schedules the material's file and `catalog.bsn` to be rewritten,
-    /// and a drag emits an event per frame.
+    /// Queueing a material schedules its file to be rewritten, and a drag emits an
+    /// event per frame.
     #[test]
-    fn a_value_mid_drag_leaves_the_catalog_clean() {
+    fn a_value_mid_drag_queues_no_write() {
         let mut app = commit_app();
         let handle = app
             .world_mut()
@@ -1606,7 +1689,7 @@ mod scalar_commit_tests {
         }
 
         assert!(
-            !catalog_is_dirty(&app),
+            !is_queued_for_writing(&app),
             "an unfinished drag schedules no write",
         );
         let metallic = app
@@ -1622,7 +1705,7 @@ mod scalar_commit_tests {
     }
 
     #[test]
-    fn the_end_of_a_drag_dirties_the_catalog() {
+    fn the_end_of_a_drag_queues_the_write() {
         let mut app = commit_app();
         let handle = app
             .world_mut()
@@ -1631,16 +1714,16 @@ mod scalar_commit_tests {
         let slider = bound_slider(&mut app, handle);
 
         drag_to(&mut app, slider, 0.4, false);
-        assert!(!catalog_is_dirty(&app));
+        assert!(!is_queued_for_writing(&app));
 
         drag_to(&mut app, slider, 0.5, true);
-        assert!(catalog_is_dirty(&app), "the finished edit persists");
+        assert!(is_queued_for_writing(&app), "the finished edit persists");
     }
 
     /// A drag can end without the final event that normally persists it: the pointer leaves
     /// the window, the widget is disabled mid-gesture, the gesture is cancelled.
     #[test]
-    fn a_drag_that_ends_without_a_final_event_still_flags_the_catalog() {
+    fn a_drag_that_ends_without_a_final_event_still_queues_the_write() {
         let mut app = commit_app();
         app.add_systems(Update, flush_material_slider_drag);
         let handle = app
@@ -1657,21 +1740,19 @@ mod scalar_commit_tests {
         drag_to(&mut app, slider, 0.6, false);
         app.update();
         assert!(
-            !catalog_is_dirty(&app),
+            !is_queued_for_writing(&app),
             "a drag in progress is not worth a pair of disk writes a frame",
         );
 
         set_dragging(&mut app, slider, false);
         app.update();
-        assert!(catalog_is_dirty(&app), "the abandoned edit persists");
+        assert!(is_queued_for_writing(&app), "the abandoned edit persists");
 
-        app.world_mut()
-            .resource_mut::<crate::asset_catalog::AssetCatalog>()
-            .dirty = false;
+        clear_queue(&mut app);
         app.update();
         app.update();
         assert!(
-            !catalog_is_dirty(&app),
+            !is_queued_for_writing(&app),
             "the flush fires once per drag, not every frame after one",
         );
     }
@@ -1913,5 +1994,169 @@ mod focus_gate_tests {
         });
         app.update();
         assert_eq!(app.world().get::<TabIndex>(control).expect("index").0, 0);
+    }
+}
+
+#[cfg(test)]
+mod texture_slot_tests {
+    use super::fill_texture_rows;
+    use crate::inspector::asset_row::AssetFieldRow;
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::prelude::*;
+
+    /// The texture slots of a material are asset rows, so the material card and
+    /// the terrain panel's slot editor both show a path, a picker and a drop
+    /// target where they used to show a browse button.
+    #[test]
+    fn every_texture_slot_is_an_asset_field_naming_an_image() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::scene::ScenePlugin)
+            .init_asset::<StandardMaterial>()
+            .init_asset::<Image>()
+            .init_asset::<Font>();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let body = app.world_mut().spawn_empty().id();
+
+        let material = handle.clone();
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                fill_texture_rows(
+                    &mut commands,
+                    body,
+                    &StandardMaterial::default(),
+                    &material,
+                    &Handle::default(),
+                );
+            })
+            .expect("the rows spawn");
+        app.world_mut().flush();
+
+        let mut rows = app.world_mut().query::<&AssetFieldRow>();
+        let mut fields: Vec<String> = rows
+            .iter(app.world())
+            .map(|row| row.field_path.clone())
+            .collect();
+        fields.sort();
+        assert_eq!(
+            fields,
+            vec![
+                "base_color_texture".to_string(),
+                "depth_map".to_string(),
+                "emissive_texture".to_string(),
+                "metallic_roughness_texture".to_string(),
+                "normal_map_texture".to_string(),
+                "occlusion_texture".to_string(),
+            ],
+            "every slot on the material is an asset row",
+        );
+        let image = <Image as bevy::reflect::TypePath>::type_path();
+        assert!(
+            rows.iter(app.world())
+                .all(|row| row.asset_type_path == image),
+            "and each of them names an image",
+        );
+    }
+
+    /// The slot reads the material rather than the value it was built with, so
+    /// a bind made from anywhere, and the undo that walks it back, both show.
+    #[test]
+    fn a_slot_shows_the_file_bound_to_it_and_none_again_after_undo() {
+        use crate::inspector::asset_row::{commit_asset_row, refresh_asset_rows};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::scene::ScenePlugin)
+            .init_asset::<StandardMaterial>()
+            .init_asset::<Image>()
+            .init_asset::<Font>()
+            .register_type::<StandardMaterial>()
+            .register_asset_reflect::<StandardMaterial>()
+            .init_resource::<crate::asset_catalog::AssetCatalog>()
+            .init_resource::<crate::material_preview::MaterialPreviewState>()
+            .init_resource::<jackdaw_commands::CommandHistory>();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let body = app.world_mut().spawn_empty().id();
+        let material = handle.clone();
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                fill_texture_rows(
+                    &mut commands,
+                    body,
+                    &StandardMaterial::default(),
+                    &material,
+                    &Handle::default(),
+                );
+            })
+            .expect("the rows spawn");
+        app.world_mut().flush();
+
+        let row = app
+            .world_mut()
+            .query::<(Entity, &AssetFieldRow)>()
+            .iter(app.world())
+            .find(|(_, row)| row.field_path == "base_color_texture")
+            .map(|(entity, _)| entity)
+            .expect("the base colour slot is an asset row");
+
+        assert!(commit_asset_row(app.world_mut(), row, "textures/rock.png"));
+        assert_eq!(
+            slot_text(&mut app, row),
+            "rock.png",
+            "the slot names the file, on one line",
+        );
+        assert_eq!(
+            slot_tooltip(&mut app, row),
+            "textures/rock.png",
+            "and carries the whole path for a hover",
+        );
+
+        app.world_mut().resource_scope(
+            |world, mut history: Mut<jackdaw_commands::CommandHistory>| {
+                history.undo(world);
+            },
+        );
+        app.world_mut()
+            .run_system_once(refresh_asset_rows)
+            .expect("the rows refresh");
+        assert_eq!(
+            slot_text(&mut app, row),
+            "None",
+            "undo puts the slot back to naming nothing",
+        );
+    }
+
+    /// The whole path the slot's own line stands for.
+    fn slot_tooltip(app: &mut App, row: Entity) -> String {
+        let text = app
+            .world()
+            .get::<AssetFieldRow>(row)
+            .and_then(|row| row.path_text)
+            .expect("the slot draws its path");
+        app.world()
+            .get::<jackdaw_feathers::tooltip::Tooltip>(text)
+            .map(|tip| tip.title.clone())
+            .expect("the path is there to hover")
+    }
+
+    /// The line under a slot row that names what is bound.
+    fn slot_text(app: &mut App, row: Entity) -> String {
+        let text = app
+            .world()
+            .get::<AssetFieldRow>(row)
+            .and_then(|row| row.path_text)
+            .expect("the slot draws its path");
+        app.world()
+            .get::<Text>(text)
+            .map(|text| text.0.clone())
+            .expect("the path is written")
     }
 }

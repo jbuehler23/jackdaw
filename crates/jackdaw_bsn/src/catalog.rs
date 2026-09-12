@@ -160,8 +160,12 @@ pub fn load_bsn_scene(world: &mut World, text: &str) -> Result<LoadedBsnScene, B
         }
     }
 
-    // Record both reference spellings: scene-inline (`#`) and catalog (`@`).
-    let mut names = bevy::platform::collections::HashMap::default();
+    // The project's asset files by path, then the document's own entries in
+    // both spellings: scene-inline (`#`) and catalog (`@`).
+    let mut names = world
+        .get_resource::<crate::BsnProjectAssets>()
+        .map(|project| project.0.clone())
+        .unwrap_or_default();
     for entry in &assets {
         names.insert(format!("#{}", entry.name), entry.handle.clone());
         names.insert(format!("@{}", entry.name), entry.handle.clone());
@@ -269,6 +273,18 @@ pub fn adopt_asset_roots(world: &mut World, source: &SceneBsnAst) -> Vec<String>
     dropped
 }
 
+/// Load the asset one document root holds into its `Assets<T>` store.
+pub fn load_asset_root(
+    world: &mut World,
+    ast: &SceneBsnAst,
+    root: bevy::ecs::entity::Entity,
+) -> Option<UntypedHandle> {
+    let (type_path, asset_value) = asset_value_from_root(ast, root)?;
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let reg = registry.read();
+    load_asset_value(world, &reg, &type_path, &asset_value)
+}
+
 /// Build one named asset from its document value and insert it into its
 /// `Assets<T>` store.
 fn load_asset_entry(
@@ -278,6 +294,20 @@ fn load_asset_entry(
     type_path: &str,
     asset_value: &BsnValue,
 ) -> Option<CatalogEntry> {
+    load_asset_value(world, reg, type_path, asset_value).map(|handle| CatalogEntry {
+        name: name.to_owned(),
+        handle,
+    })
+}
+
+/// Build one asset from its document value and insert it into its `Assets<T>`
+/// store.
+fn load_asset_value(
+    world: &mut World,
+    reg: &bevy::reflect::TypeRegistry,
+    type_path: &str,
+    asset_value: &BsnValue,
+) -> Option<UntypedHandle> {
     let registration = reg.get_with_type_path(type_path)?;
     let reflect_asset = registration.data::<ReflectAsset>()?;
     let type_id = registration.type_id();
@@ -288,11 +318,7 @@ fn load_asset_entry(
         local: None,
     });
     let value = bsn_value_to_reflect(asset_value, type_id, reg, assets_ctx.as_ref())?;
-    let handle = reflect_asset.add(world, &*value);
-    Some(CatalogEntry {
-        name: name.to_owned(),
-        handle,
-    })
+    Some(reflect_asset.add(world, &*value))
 }
 
 /// The type path and value a document root's first non-name patch names.
@@ -356,6 +382,7 @@ pub fn append_assets_to_ast(
     let registry = world.resource::<AppTypeRegistry>().clone();
     let reg = registry.read();
     let asset_server = world.get_resource::<AssetServer>();
+    let paths = world.get_resource::<crate::BsnAssetPaths>();
 
     let mut sorted: Vec<&CatalogAssetRef> = assets.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
@@ -387,7 +414,7 @@ pub fn append_assets_to_ast(
             let ctx = BsnAssetContext {
                 asset_server: server,
                 parent_path: Path::new(""),
-                asset_names: None,
+                asset_names: paths.as_ref().map(|paths| &paths.0),
             };
             component_to_bsn_patch_with_assets(asset_value.as_partial_reflect(), &reg, &ctx)
         } else {

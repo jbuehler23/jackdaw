@@ -33,7 +33,7 @@ pub(super) fn fill_graph_reference_picker(world: &mut World, entity: Entity, bod
         .id();
     if files.is_empty() {
         world.spawn((
-            Text::new("No graph file in assets/animation yet."),
+            Text::new("No graph file in this project yet."),
             TextFont {
                 font_size: tokens::TEXT_SIZE_SM,
                 ..default()

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use bevy::asset::{ReflectAsset, ReflectHandle, UntypedAssetId};
-use bevy::reflect::TypeRegistry;
+use bevy::reflect::{TypeInfo, TypeRegistry};
 use bevy::{ecs::reflect::AppTypeRegistry, prelude::*, tasks::AsyncComputeTaskPool};
 
 use super::load::SceneDialogTask;
@@ -363,9 +363,6 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         }
     }
 
-    // Save catalog alongside scene if dirty
-    crate::asset_catalog::save_catalog(world);
-
     // Persist current editor layout to project.jsn
     save_layout_to_project(world);
 
@@ -523,6 +520,41 @@ pub fn save_layout_to_project(world: &mut World) {
     } else {
         world.resource_mut::<crate::project::ProjectRoot>().config = project;
     }
+}
+
+/// What each loaded asset is referenced by when a document emits a handle to
+/// it: the path of the file the index holds it under, else the `#Name` the
+/// open document embeds it as, else the name the catalog resolves.
+///
+/// An unsaved material is left out so it embeds inline: a name for it would
+/// resolve nowhere outside this editor run.
+fn asset_reference_seed(
+    world: &World,
+) -> bevy::platform::collections::HashMap<UntypedAssetId, String> {
+    let mut seed: bevy::platform::collections::HashMap<UntypedAssetId, String> =
+        bevy::platform::collections::HashMap::default();
+    if let Some(paths) = world.get_resource::<jackdaw_bsn::BsnAssetPaths>() {
+        for (id, path) in &paths.0 {
+            seed.insert(*id, path.clone());
+        }
+    }
+    if let Some(scene_assets) = world.get_resource::<jackdaw_bsn::BsnSceneAssets>() {
+        for (reference, handle) in &scene_assets.0 {
+            if reference.starts_with('#') {
+                seed.entry(handle.id()).or_insert_with(|| reference.clone());
+            }
+        }
+    }
+    let ephemeral = crate::material_assets::ephemeral_material_ids(world);
+    if let Some(catalog) = world.get_resource::<crate::asset_catalog::AssetCatalog>() {
+        for (id, name) in &catalog.id_to_name {
+            if ephemeral.contains(id) {
+                continue;
+            }
+            seed.entry(*id).or_insert_with(|| name.clone());
+        }
+    }
+    seed
 }
 
 /// The runtime inline assets referenced by a BSN document's kept components,
@@ -933,28 +965,7 @@ fn emit_bsn_scene_authored(
     let registry = world.resource::<AppTypeRegistry>().clone();
     normalize_derived_button_styles(world, &mut ast, &registry);
 
-    // Seed the reference map with assets that already resolve: catalog entries
-    // and scene-inline entries already embedded as document roots.
-    // An unsaved material is left unseeded so it embeds inline: an `@Name`
-    // for it would resolve nowhere outside this editor run.
-    let mut seed: bevy::platform::collections::HashMap<UntypedAssetId, String> =
-        bevy::platform::collections::HashMap::default();
-    let ephemeral = crate::material_assets::ephemeral_material_ids(world);
-    if let Some(catalog) = world.get_resource::<crate::asset_catalog::AssetCatalog>() {
-        for (id, name) in &catalog.id_to_name {
-            if ephemeral.contains(id) {
-                continue;
-            }
-            seed.entry(*id).or_insert_with(|| name.clone());
-        }
-    }
-    if let Some(scene_assets) = world.get_resource::<jackdaw_bsn::BsnSceneAssets>() {
-        for (ref_name, handle) in &scene_assets.0 {
-            if ref_name.starts_with('#') {
-                seed.insert(handle.id(), ref_name.clone());
-            }
-        }
-    }
+    let seed = asset_reference_seed(world);
 
     let entities = doc_entities_in_order(&ast);
     let pass = {
@@ -1017,6 +1028,7 @@ fn rederive_handle_patches(
         parent_path,
         asset_names: Some(&pass.names),
     };
+    let mut kept: Vec<String> = Vec::new();
     for (entity, type_path) in &pass.touched {
         let Some(patches_entity) = ast.ast_for(*entity) else {
             continue;
@@ -1036,12 +1048,183 @@ fn rederive_handle_patches(
         let Some(component) = reflect_component.reflect(entity_ref) else {
             continue;
         };
-        let new_patch = jackdaw_bsn::component_to_bsn_patch_with_assets(
+        let mut new_patch = jackdaw_bsn::component_to_bsn_patch_with_assets(
             component.as_partial_reflect(),
             &reg,
             &ctx,
         );
+        if let Some(authored) = ast.get_patch(patch_entity) {
+            keep_unresolved_references(
+                &reg,
+                registration.type_id(),
+                authored,
+                &mut new_patch,
+                &mut kept,
+            );
+        }
         ast.set_patch(patch_entity, new_patch);
+    }
+    for reference in kept {
+        warn!("keeping the asset reference '{reference}', which this project does not resolve");
+    }
+}
+
+/// Keep a reference the editor could not resolve.
+///
+/// A handle field whose reference resolved to nothing holds the default handle,
+/// which re-derives as an empty string. What the file said is better than
+/// nothing: another project, or this one once the file is there, resolves it,
+/// so the authored string stays and is reported. The emitter elides a field
+/// left at its default, so a kept reference brings its field back with it, and
+/// a component whose every field elided comes back as a struct patch.
+fn keep_unresolved_references(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+    authored: &jackdaw_bsn::BsnPatch,
+    fresh: &mut jackdaw_bsn::BsnPatch,
+    kept: &mut Vec<String>,
+) {
+    use jackdaw_bsn::BsnPatch;
+    match (authored, &mut *fresh) {
+        (BsnPatch::Struct(authored), BsnPatch::Struct(fresh)) => {
+            keep_in_fields(reg, type_id, &authored.fields, &mut fresh.fields, kept);
+        }
+        (BsnPatch::TupleStruct(authored), BsnPatch::TupleStruct(fresh)) => {
+            keep_in_values(reg, type_id, &authored.values, &mut fresh.values, kept);
+        }
+        (BsnPatch::Struct(authored), BsnPatch::Type(type_path)) => {
+            let type_path = type_path.clone();
+            let mut fields = jackdaw_bsn::BsnStructFields::default();
+            keep_in_fields(reg, type_id, &authored.fields, &mut fields, kept);
+            if !fields.0.is_empty() {
+                *fresh = BsnPatch::Struct(jackdaw_bsn::BsnStructData { type_path, fields });
+            }
+        }
+        _ => {}
+    }
+}
+
+fn keep_in_fields(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+    authored: &jackdaw_bsn::BsnStructFields,
+    fresh: &mut jackdaw_bsn::BsnStructFields,
+    kept: &mut Vec<String>,
+) {
+    let Some(TypeInfo::Struct(info)) = reg
+        .get(type_id)
+        .map(bevy::reflect::TypeRegistration::type_info)
+    else {
+        return;
+    };
+    for field in &mut fresh.0 {
+        let Some(field_type) = info
+            .field(&field.name)
+            .map(bevy::reflect::NamedField::type_id)
+        else {
+            continue;
+        };
+        let Some(was) = authored.0.iter().find(|other| other.name == field.name) else {
+            continue;
+        };
+        keep_in_value(reg, field_type, &was.value, &mut field.value, kept);
+    }
+    for was in &authored.0 {
+        if fresh.0.iter().any(|field| field.name == was.name) {
+            continue;
+        }
+        let Some(field_type) = info
+            .field(&was.name)
+            .map(bevy::reflect::NamedField::type_id)
+        else {
+            continue;
+        };
+        let jackdaw_bsn::BsnValue::String(reference) = &was.value else {
+            continue;
+        };
+        if reference.is_empty() || !crate::typed_values::takes_asset_path(reg, field_type) {
+            continue;
+        }
+        if !kept.contains(reference) {
+            kept.push(reference.clone());
+        }
+        fresh.0.push(jackdaw_bsn::BsnField {
+            name: was.name.clone(),
+            value: was.value.clone(),
+        });
+    }
+}
+
+fn keep_in_values(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+    authored: &[jackdaw_bsn::BsnValue],
+    fresh: &mut [jackdaw_bsn::BsnValue],
+    kept: &mut Vec<String>,
+) {
+    let Some(TypeInfo::TupleStruct(info)) = reg
+        .get(type_id)
+        .map(bevy::reflect::TypeRegistration::type_info)
+    else {
+        return;
+    };
+    for (index, value) in fresh.iter_mut().enumerate() {
+        let Some(field_type) = info
+            .field_at(index)
+            .map(bevy::reflect::UnnamedField::type_id)
+        else {
+            continue;
+        };
+        let Some(was) = authored.get(index) else {
+            continue;
+        };
+        keep_in_value(reg, field_type, was, value, kept);
+    }
+}
+
+fn keep_in_value(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+    authored: &jackdaw_bsn::BsnValue,
+    fresh: &mut jackdaw_bsn::BsnValue,
+    kept: &mut Vec<String>,
+) {
+    use jackdaw_bsn::BsnValue;
+    if crate::typed_values::takes_asset_path(reg, type_id) {
+        if let (BsnValue::String(was), BsnValue::String(now)) = (authored, &mut *fresh)
+            && now.is_empty()
+            && !was.is_empty()
+        {
+            now.clone_from(was);
+            if !kept.contains(was) {
+                kept.push(was.clone());
+            }
+        }
+        return;
+    }
+    match (authored, fresh) {
+        (BsnValue::Struct(authored), BsnValue::Struct(fresh)) => {
+            keep_in_fields(reg, type_id, &authored.fields, &mut fresh.fields, kept);
+        }
+        (BsnValue::TupleStruct(authored), BsnValue::TupleStruct(fresh)) => {
+            keep_in_values(reg, type_id, &authored.values, &mut fresh.values, kept);
+        }
+        (BsnValue::List(authored), BsnValue::List(fresh)) => {
+            let Some(TypeInfo::List(info)) = reg
+                .get(type_id)
+                .map(bevy::reflect::TypeRegistration::type_info)
+            else {
+                return;
+            };
+            let item = info.item_ty().id();
+            for (index, value) in fresh.iter_mut().enumerate() {
+                let Some(was) = authored.get(index) else {
+                    continue;
+                };
+                keep_in_value(reg, item, was, value, kept);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1081,27 +1264,7 @@ fn emit_bsn_entities_authored(world: &mut World, parent_path: &Path, nodes: &[En
     let registry = world.resource::<AppTypeRegistry>().clone();
     normalize_derived_button_styles(world, &mut ast, &registry);
 
-    // Seed catalog and live scene-inline names so same-scene copy keeps the
-    // existing `#Name` refs. Unsaved materials are left unseeded so the clip
-    // carries them inline.
-    let mut seed: bevy::platform::collections::HashMap<UntypedAssetId, String> =
-        bevy::platform::collections::HashMap::default();
-    let ephemeral = crate::material_assets::ephemeral_material_ids(world);
-    if let Some(catalog) = world.get_resource::<crate::asset_catalog::AssetCatalog>() {
-        for (id, name) in &catalog.id_to_name {
-            if ephemeral.contains(id) {
-                continue;
-            }
-            seed.entry(*id).or_insert_with(|| name.clone());
-        }
-    }
-    if let Some(scene_assets) = world.get_resource::<jackdaw_bsn::BsnSceneAssets>() {
-        for (ref_name, handle) in &scene_assets.0 {
-            if ref_name.starts_with('#') {
-                seed.insert(handle.id(), ref_name.clone());
-            }
-        }
-    }
+    let seed = asset_reference_seed(world);
 
     // The copied subtrees' document nodes and their live ECS entities.
     let mut subtree_nodes: Vec<Entity> = Vec::new();
@@ -1698,7 +1861,7 @@ mod terrain_sidecar_tests {
         let sidecar_path = tmp.join("zone.terrain-0.jdterrain");
 
         let mut original = sidecar::save(&document(&sculpted())).expect("encodes");
-        original[8..10].copy_from_slice(&(sidecar::VERSION_7 + 1).to_le_bytes());
+        original[8..10].copy_from_slice(&(sidecar::VERSION_8 + 1).to_le_bytes());
         std::fs::write(&sidecar_path, &original).expect("write sidecar");
 
         let mut world = World::new();
@@ -1930,7 +2093,7 @@ mod terrain_sidecar_tests {
         let rewritten = std::fs::read(&sidecar_path).expect("read back");
         assert_eq!(
             u16::from_le_bytes([rewritten[8], rewritten[9]]),
-            sidecar::VERSION_7,
+            sidecar::VERSION_8,
         );
         // The load settled this terrain onto the geometry its declared rectangle drew with
         // (four vertices across the default 100 metres, cornered at -size/2) and the rewrite

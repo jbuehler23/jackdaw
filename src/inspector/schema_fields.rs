@@ -28,6 +28,9 @@ pub(crate) struct SchemaFieldContext<'a> {
     pub(crate) names: &'a Query<'a, 'a, &'static Name>,
     pub(crate) registry: &'a AppTypeRegistry,
     pub(crate) server: Option<&'a AssetServer>,
+    /// What each file the project holds says it is, for a field spelling a
+    /// reference as the path itself.
+    pub(crate) asset_types: &'a AssetPathTypes,
     pub(crate) editor_font: &'a Handle<Font>,
     pub(crate) icon_font: &'a Handle<Font>,
 }
@@ -61,6 +64,18 @@ fn spawn_one_field(
     path: &str,
     depth: usize,
 ) {
+    if let Some(asset_type_path) = asset_type_of_path(ctx, &field.type_path, held) {
+        spawn_path_row(
+            commands,
+            parent,
+            ctx,
+            &field.name,
+            asset_type_path,
+            path,
+            depth,
+        );
+        return;
+    }
     if let Some(item_type) = item_type_path(field) {
         spawn_list_field(
             commands,
@@ -106,7 +121,7 @@ fn spawn_one_field(
     }
     let value = {
         let registry = ctx.registry.read();
-        native_value_for_json(&registry, ctx.server, &field.type_path, held)
+        native_value_for_json(&registry, ctx.server, None, &field.type_path, held)
     };
     let Some(value) = value else {
         spawn_read_only(commands, parent, &field.name, held, depth);
@@ -143,6 +158,9 @@ fn spawn_list_field(
     depth: usize,
 ) {
     let items = held.as_array().cloned().unwrap_or_default();
+    let element_asset = items
+        .iter()
+        .find_map(|item| asset_type_of_path(ctx, item_type, item));
     spawn_text_row(
         commands,
         parent,
@@ -172,7 +190,28 @@ fn spawn_list_field(
                         depth + 1,
                     );
                 }
-                _ => spawn_item_value(commands, row, ctx, item_type, item, &item_path, depth + 1),
+                _ => match element_asset.clone() {
+                    Some(asset_type_path) => spawn_path_row(
+                        commands,
+                        row,
+                        ctx,
+                        "",
+                        asset_type_path,
+                        &item_path,
+                        depth + 1,
+                    ),
+                    None => {
+                        spawn_item_value(
+                            commands,
+                            row,
+                            ctx,
+                            item_type,
+                            item,
+                            &item_path,
+                            depth + 1,
+                        );
+                    }
+                },
             }
             spawn_list_row_controls(
                 commands,
@@ -188,6 +227,69 @@ fn spawn_list_field(
     spawn_list_add_button(commands, parent, ctx.source, ctx.type_path, path);
 }
 
+/// The asset a string field names, for a schema that spells a reference as the
+/// path itself rather than as a handle. `None` when the type is not a string,
+/// or the string names no file this project holds.
+fn asset_type_of_path(ctx: &SchemaFieldContext, type_path: &str, held: &Value) -> Option<String> {
+    use bevy::reflect::TypePath as _;
+
+    if type_path != String::type_path() {
+        return None;
+    }
+    let named = held.as_str().filter(|path| !path.is_empty())?;
+    ctx.asset_types.get(named).cloned()
+}
+
+/// The type each file the project holds is, keyed by the path naming it.
+pub(crate) type AssetPathTypes = bevy::platform::collections::HashMap<String, String>;
+
+/// Read what every indexed file says it is, so the walk can tell a path from
+/// any other string without the index in hand.
+pub(crate) fn asset_path_types(world: &World) -> AssetPathTypes {
+    use path_slash::PathExt as _;
+
+    let Some(index) = world.get_resource::<crate::asset_index::AssetIndex>() else {
+        return AssetPathTypes::default();
+    };
+    index
+        .iter()
+        .map(|entry| {
+            (
+                entry.path.to_slash_lossy().into_owned(),
+                entry.type_path.clone(),
+            )
+        })
+        .collect()
+}
+
+/// A row for a field naming a file, whether the schema spells it as a handle
+/// or as the path itself.
+fn spawn_path_row(
+    commands: &mut Commands,
+    parent: Entity,
+    ctx: &SchemaFieldContext,
+    label: &str,
+    asset_type_path: String,
+    path: &str,
+    depth: usize,
+) {
+    super::asset_row::spawn_asset_row(
+        commands,
+        parent,
+        super::asset_row::AssetRowProps {
+            target: super::asset_row::AssetFieldTarget::Inspected {
+                source: ctx.source,
+                type_path: ctx.type_path.to_string(),
+            },
+            field_path: path.to_string(),
+            asset_type_path,
+            label: label.to_string(),
+            indent: depth.min(u8::MAX as usize) as u8,
+        },
+        ctx.icon_font,
+    );
+}
+
 fn spawn_item_value(
     commands: &mut Commands,
     parent: Entity,
@@ -199,7 +301,7 @@ fn spawn_item_value(
 ) {
     let value = {
         let registry = ctx.registry.read();
-        native_value_for_json(&registry, ctx.server, item_type, item)
+        native_value_for_json(&registry, ctx.server, None, item_type, item)
     };
     let Some(value) = value else {
         spawn_read_only(commands, parent, "", item, depth);

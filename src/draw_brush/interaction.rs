@@ -1,8 +1,8 @@
 use crate::default_style;
 use crate::draw_brush::{
     ConfirmDrawBrushOp, DrawBrushDashedGizmoGroup, DrawBrushGizmoGroup, DrawBrushState, DrawMode,
-    DrawPhase, DrawPlane, EXTRUDE_DEPTH_SENSITIVITY, MIN_FOOTPRINT_SIZE, draw_plane_grid,
-    footprint_corners, ray_plane_intersection, snap_to_diagonal, snap_to_plane_grid,
+    DrawPhase, DrawPlane, MIN_FOOTPRINT_SIZE, draw_plane_grid, footprint_corners,
+    ray_plane_intersection, snap_to_diagonal, snap_to_plane_grid,
 };
 use crate::prelude::*;
 use crate::{
@@ -243,25 +243,19 @@ pub(crate) fn draw_brush_update(
             }
         }
         DrawPhase::ExtrudingDepth => {
-            // Use polygon centroid if in polygon mode, otherwise rectangle midpoint
             let center = if !active.polygon_vertices.is_empty() {
                 active.polygon_vertices.iter().sum::<Vec3>() / active.polygon_vertices.len() as f32
             } else {
                 (active.corner1 + active.corner2) / 2.0
             };
-            let cam_dist = (cam_tf.translation() - center).length();
-
-            // Project the plane normal to screen space to determine drag direction
-            if let (Ok(origin_screen), Ok(normal_screen)) = (
-                camera.world_to_viewport(cam_tf, center),
-                camera.world_to_viewport(cam_tf, center + active.plane.normal),
+            if let Some(raw_depth) = crate::viewport_util::drag_along_axis(
+                camera,
+                cam_tf,
+                active.extrude_start_cursor,
+                viewport_cursor,
+                center,
+                active.plane.normal,
             ) {
-                let screen_dir = (normal_screen - origin_screen).normalize_or_zero();
-                let mouse_delta = viewport_cursor - active.extrude_start_cursor;
-                let projected = mouse_delta.dot(screen_dir);
-                let raw_depth = projected * cam_dist * EXTRUDE_DEPTH_SENSITIVITY;
-
-                // Snap depth
                 let depth = if snap_settings.translate_active(ctrl)
                     && snap_settings.translate_increment > 0.0
                 {

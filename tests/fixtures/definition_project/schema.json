@@ -110,6 +110,52 @@
       "entity_fields": [],
       "fills_gaps": true,
       "asset": false
+    },
+    {
+      "type_path": "definition_project::content::OutfitDef",
+      "short_name": "OutfitDef",
+      "module_path": "definition_project::content",
+      "category": "",
+      "description": "",
+      "editor_description": "",
+      "hidden": false,
+      "preview": "",
+      "default_constructible": true,
+      "fields": [
+        {
+          "name": "material",
+          "type_path": "bevy_asset::handle::Handle<bevy_pbr::pbr_material::StandardMaterial>",
+          "item_type_path": ""
+        },
+        {
+          "name": "materials",
+          "type_path": "alloc::vec::Vec<bevy_asset::handle::Handle<bevy_pbr::pbr_material::StandardMaterial>>",
+          "item_type_path": "bevy_asset::handle::Handle<bevy_pbr::pbr_material::StandardMaterial>"
+        },
+        {
+          "name": "skin",
+          "type_path": "alloc::string::String",
+          "item_type_path": ""
+        },
+        {
+          "name": "skins",
+          "type_path": "alloc::vec::Vec<alloc::string::String>",
+          "item_type_path": "alloc::string::String"
+        }
+      ],
+      "kind": "Struct",
+      "default": {
+        "definition_project::content::OutfitDef": {
+          "material": "",
+          "materials": [],
+          "skin": "",
+          "skins": []
+        }
+      },
+      "variants": [],
+      "entity_fields": [],
+      "fills_gaps": true,
+      "asset": true
     }
   ]
 }

@@ -48,47 +48,14 @@ pub fn read_asset_kind(path: &Path, kinds: &AssetKinds) -> AssetFileKind {
 /// naming the marker its roots carry, and its header for a document that names
 /// nothing. `None` when neither names a type.
 pub fn read_file_type(path: &Path) -> Option<String> {
-    let extension = path
+    if path
         .extension()
         .and_then(|extension| extension.to_str())
-        .unwrap_or_default();
-    if extension.eq_ignore_ascii_case("jsn") {
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("jsn"))
+    {
         return jsn_type(path);
     }
-    if !extension.eq_ignore_ascii_case("bsn") {
-        return None;
-    }
-    let text = std::fs::read_to_string(path).ok()?;
-    let header = jackdaw_bsn::read_asset_header(&text);
-    let Some(found) = document_type(&text) else {
-        return header;
-    };
-    if let Some(header) = header.filter(|header| *header != found) {
-        warn!(
-            "{} says it holds a {header} but its first root is a {found}; going by the root",
-            path.display()
-        );
-    }
-    Some(found)
-}
-
-/// The type a document's own first root names, or `None` for a document that
-/// spawns a hierarchy rather than holding one value.
-fn document_type(text: &str) -> Option<String> {
-    let ast = jackdaw_bsn::parse_bsn_text(text).ok()?;
-    if text.contains(PREFAB_TYPE)
-        && ast
-            .roots
-            .iter()
-            .any(|&root| ast.find_patch_by_type_path(root, PREFAB_TYPE).is_some())
-    {
-        return Some(PREFAB_TYPE.to_string());
-    }
-    let root = *ast.roots.first()?;
-    if !ast.get_children_ast(root).is_empty() {
-        return None;
-    }
-    jackdaw_bsn::root_type_path(&ast, root)
+    jackdaw_bsn::asset_file_type(path)
 }
 
 /// What a type path means to the editor: the marker a prefab carries, a kind
@@ -158,50 +125,7 @@ impl AssetKindCache {
     }
 }
 
-/// Every `.bsn` and `.jsn` file under `dir`, as absolute paths, skipping
-/// hidden directories and following no symlink out of the tree.
-pub fn walk_document_files(dir: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    collect_document_files(dir, 0, &mut found);
-    found.sort();
-    found
-}
-
-const MAX_ASSET_DEPTH: usize = 12;
-
-fn collect_document_files(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
-    if depth > MAX_ASSET_DEPTH {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with('.') {
-            continue;
-        }
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_symlink() {
-            continue;
-        }
-        if file_type.is_dir() {
-            collect_document_files(&path, depth + 1, found);
-        } else if path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("bsn") || extension.eq_ignore_ascii_case("jsn")
-            })
-        {
-            found.push(path);
-        }
-    }
-}
+pub use jackdaw_bsn::walk_document_files;
 
 #[cfg(test)]
 mod tests {

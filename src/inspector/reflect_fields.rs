@@ -351,6 +351,27 @@ pub(crate) fn spawn_field_row(
         return;
     }
 
+    // Ahead of the enum and opaque arms, which a handle would otherwise fall
+    // into.
+    if let Some(asset_type_path) = super::asset_row::asset_type_of_field(type_registry, value) {
+        super::asset_row::spawn_asset_row(
+            commands,
+            parent,
+            super::asset_row::AssetRowProps {
+                target: super::asset_row::AssetFieldTarget::Inspected {
+                    source: source_entity,
+                    type_path: type_path.to_string(),
+                },
+                field_path,
+                asset_type_path,
+                label: name.to_string(),
+                indent: depth.min(u8::MAX as usize) as u8,
+            },
+            icon_font,
+        );
+        return;
+    }
+
     // List/Array -> expand with ListView
     if let ReflectRef::List(list) = value.reflect_ref() {
         spawn_text_row(

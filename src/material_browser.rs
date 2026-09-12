@@ -1,19 +1,4 @@
-use std::path::{Path, PathBuf};
-
-use bevy::{
-    feathers::theme::ThemedText,
-    image::ImageLoaderSettings,
-    prelude::*,
-    tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
-};
-use jackdaw_feathers::{
-    button::{ButtonOperatorCall, ButtonVariant, IconButtonProps, icon_button},
-    icons::{self, Icon},
-    panel_card::PanelCardCollapseState,
-    text_edit::{self, TextEditProps, TextEditValue},
-    tokens,
-};
-use path_slash::PathExt as _;
+use std::path::Path;
 
 use crate::brush::LastUsedMaterial;
 use crate::material_ui::{
@@ -28,7 +13,21 @@ use crate::{
     prelude::*,
     selection::Selection,
 };
+use bevy::{
+    feathers::theme::ThemedText,
+    image::ImageLoaderSettings,
+    prelude::*,
+    tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
+};
 use jackdaw_commands::{CommandGroup, EditorCommand};
+use jackdaw_feathers::{
+    button::{ButtonOperatorCall, ButtonVariant, IconButtonProps, icon_button},
+    icons::{self, Icon},
+    panel_card::PanelCardCollapseState,
+    text_edit::{self, TextEditProps, TextEditValue},
+    tokens,
+};
+use path_slash::PathExt as _;
 
 pub struct MaterialBrowserPlugin;
 
@@ -38,34 +37,32 @@ impl Plugin for MaterialBrowserPlugin {
             .init_resource::<MaterialBrowserState>()
             .init_resource::<MaterialPreviewState>()
             .init_resource::<MaterialRegistry>()
-            .init_resource::<crate::material_assets::SavedMaterials>()
             .add_systems(
                 OnEnter(crate::AppState::Editor),
                 (
                     |world: &mut World| crate::asset_catalog::load_catalog(world),
                     rebuild_material_registry,
-                    |world: &mut World| crate::asset_catalog::save_catalog(world),
                 )
-                    .chain(),
+                    .chain()
+                    .after(crate::asset_index::open_asset_index),
             )
             .add_systems(
                 Update,
                 (
+                    follow_asset_index
+                        .run_if(resource_changed::<crate::asset_index::AssetIndex>)
+                        .before(rescan_material_definitions),
                     rescan_material_definitions,
-                    save_catalog_if_dirty,
                     apply_material_filter,
                     update_material_browser_ui.after(rescan_material_definitions),
                     update_preview_area,
-                    poll_material_browser_folder,
-                    poll_texture_slot_pick,
+                    poll_material_save_folder,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             )
             .add_observer(on_material_grid_added)
             .add_observer(handle_apply_material)
-            .add_observer(handle_select_material_preview)
-            .add_observer(handle_browse_texture_slot)
-            .add_observer(handle_clear_texture_slot);
+            .add_observer(handle_select_material_preview);
     }
 }
 
@@ -75,7 +72,6 @@ pub use crate::material_assets::{MaterialRegistry, MaterialRegistryEntry};
 pub struct MaterialBrowserState {
     pub filter: String,
     pub needs_rescan: bool,
-    pub scan_directory: PathBuf,
 }
 
 #[derive(Event, Clone)]
@@ -97,11 +93,8 @@ pub struct MaterialBrowserGrid;
 #[derive(Component)]
 pub struct MaterialBrowserFilter;
 
-#[derive(Component)]
-struct MaterialBrowserRootLabel;
-
 #[derive(Resource)]
-struct MaterialBrowserFolderTask(Task<Option<rfd::FileHandle>>);
+struct MaterialSaveFolderTask(Task<Option<rfd::FileHandle>>);
 
 /// Fixed bar under the panel title holding the material action header. Outside the
 /// scrolling body, so the actions stay put.
@@ -112,24 +105,9 @@ struct MaterialActionBar;
 #[derive(Component)]
 struct PreviewAreaContainer;
 
-#[derive(Event)]
-struct BrowseTextureSlot {
-    slot: TextureSlot,
-    material_handle: Handle<StandardMaterial>,
-}
-
-#[derive(Event)]
-struct ClearTextureSlot {
-    slot: TextureSlot,
-    material_handle: Handle<StandardMaterial>,
-}
-
-#[derive(Resource)]
-struct TextureSlotPickTask {
-    task: Task<Option<rfd::FileHandle>>,
-    slot: TextureSlot,
-    material_handle: Handle<StandardMaterial>,
-}
+/// The file extensions the filename pattern behind [`detect_material_sets`]
+/// can match.
+const TEXTURE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "ktx2", "bmp", "tga", "webp"];
 
 /// Load a texture path into an `Image` handle for the given role, choosing the
 /// color space from `role.is_srgb()`.
@@ -152,12 +130,27 @@ fn load_role_image(
     }
 }
 
-/// Scan a directory for PBR texture sets. `group_texture_sets` already returns
-/// them sorted by base name.
-fn detect_material_sets(dir: &Path) -> Vec<jackdaw_material::MaterialSet> {
-    let mut paths = Vec::new();
-    collect_texture_paths(dir, &mut paths);
+/// Every PBR texture set the project's assets hold, sorted by base name.
+///
+/// The walk is the one the asset index uses, so it skips hidden directories
+/// and follows no symlink out of the tree, and it reads only the extensions
+/// the filename pattern can match.
+fn detect_material_sets(assets: &Path) -> Vec<jackdaw_material::MaterialSet> {
+    let paths: Vec<String> = jackdaw_bsn::walk_files_with_extensions(assets, TEXTURE_EXTENSIONS)
+        .into_iter()
+        .filter(|path| !is_non_2d_ktx2(path))
+        .map(|path| path.to_slash_lossy().into_owned())
+        .collect();
     jackdaw_material::group_texture_sets(&paths)
+}
+
+/// Whether a file is a KTX2 cubemap or array, which cannot bind to a
+/// `StandardMaterial` slot. The bytes the answer is read from say nothing in
+/// any other format, so only a KTX2 file is asked.
+fn is_non_2d_ktx2(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ktx2"))
+        && crate::asset_browser::is_ktx2_non_2d(path)
 }
 
 /// Bind a detected set's files to a fresh `StandardMaterial`.
@@ -212,124 +205,63 @@ fn material_from_set(
     })
 }
 
-/// Recursively walk a directory, collecting candidate texture file paths as
-/// forward-slash strings. The crate's regex is the authority on which of these
-/// actually parse into material sets; this walk only filters out non-2D KTX2
-/// files (cubemaps, texture arrays) that can't bind to a `StandardMaterial`
-/// texture slot.
-fn collect_texture_paths(dir: &Path, paths: &mut Vec<String>) {
-    let Ok(read_dir) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in read_dir.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_texture_paths(&path, paths);
-        } else {
-            if path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("ktx2"))
-                && crate::asset_browser::is_ktx2_non_2d(&path)
-            {
-                continue;
-            }
-
-            paths.push(path.to_slash_lossy().into_owned());
-        }
-    }
-}
-
-/// Rebuild [`MaterialRegistry`] from the catalog plus a fresh scan of both
-/// `assets/materials` and the texture sets under `assets/`.
+/// Rebuild [`MaterialRegistry`] from the asset index plus the materials that
+/// have no file behind them.
 ///
-/// Saved materials are listed first and win their base name: a detected set
-/// whose name already belongs to a saved material is skipped. Detected sets
-/// enter the in-memory catalog (so `@Name` face references resolve and scene
-/// saves emit them) but stay unsaved until `material.save` writes a file.
+/// Materials with a file of their own are listed first and win their base name,
+/// wherever their file sits. What is left is ephemeral: a texture set detected
+/// under the project's assets, a material created this run and never saved, or
+/// one whose file has gone. It is in memory and references to it resolve, so it
+/// is listed, marked unsaved. A detected set whose name a file already claims is
+/// left out, so saving one moves it from the detected list to the index without
+/// the two sitting side by side.
 fn rebuild_material_registry(world: &mut World) {
-    let assets_dir = world
+    let assets = world
         .get_resource::<crate::project::ProjectRoot>()
-        .map(super::project::ProjectRoot::assets_dir)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("assets"));
-    world.resource_mut::<MaterialBrowserState>().scan_directory = assets_dir.clone();
+        .map(crate::project::ProjectRoot::assets_dir);
     world.resource_mut::<MaterialRegistry>().entries.clear();
 
-    // Material files written since the last scan (by another tool, by hand, or by a second
-    // editor) become saved materials here, without reopening the project.
-    crate::material_assets::rescan_material_files(world);
-
-    let durable = world
-        .resource::<crate::material_assets::SavedMaterials>()
-        .0
-        .clone();
     let mut saved: Vec<(String, Handle<StandardMaterial>)> = world
-        .resource::<crate::asset_catalog::AssetCatalog>()
-        .handles
-        .iter()
-        .filter(|(name, handle)| {
-            handle.type_id() == std::any::TypeId::of::<StandardMaterial>()
-                && durable.contains(name.trim_start_matches(['@', '#']))
-        })
-        .map(|(name, handle)| {
-            (
-                name.trim_start_matches(['@', '#']).to_string(),
-                handle.clone().typed::<StandardMaterial>(),
-            )
+        .resource::<crate::asset_index::AssetIndex>()
+        .of_kind(crate::definition_assets::MATERIAL_KIND)
+        .filter_map(|entry| {
+            let handle = entry.value.handle()?;
+            (handle.type_id() == std::any::TypeId::of::<StandardMaterial>())
+                .then(|| (entry.name(), handle.clone().typed::<StandardMaterial>()))
         })
         .collect();
+    let inline = world
+        .resource::<crate::asset_catalog::AssetCatalog>()
+        .inline_materials
+        .clone();
+    saved.extend(
+        world
+            .resource::<crate::asset_catalog::AssetCatalog>()
+            .handles
+            .iter()
+            .filter(|(name, handle)| {
+                handle.type_id() == std::any::TypeId::of::<StandardMaterial>()
+                    && inline.contains(name.trim_start_matches(['@', '#']))
+            })
+            .map(|(name, handle)| {
+                (
+                    name.trim_start_matches(['@', '#']).to_string(),
+                    handle.clone().typed::<StandardMaterial>(),
+                )
+            }),
+    );
     saved.sort_by(|a, b| a.0.cmp(&b.0));
+    saved.dedup_by(|a, b| a.0 == b.0);
     for (name, handle) in saved {
         world
             .resource_mut::<MaterialRegistry>()
             .add_saved(name, handle);
     }
 
-    let sets = detect_material_sets(&assets_dir);
-    info!(
-        "Material scan: {} detected sets in {}",
-        sets.len(),
-        assets_dir.display()
-    );
-    for set in sets {
-        // The registry key, the file stem a save would use and the `@Name` scenes reference
-        // are one string, so detection commits to the file-safe spelling up front.
-        let name = crate::material_assets::sanitize_material_name(&set.base_name);
-        if world
-            .resource::<MaterialRegistry>()
-            .get_by_name(&name)
-            .is_some()
-        {
-            continue;
-        }
-        let catalog_name = format!("@{name}");
-        // Reuse the handle a previous scan published under this name, so a rescan does not
-        // orphan the material on faces that reference it.
-        let existing = world
-            .resource::<crate::asset_catalog::AssetCatalog>()
-            .handles
-            .get(&catalog_name)
-            .filter(|handle| handle.type_id() == std::any::TypeId::of::<StandardMaterial>())
-            .map(|handle| handle.clone().typed::<StandardMaterial>());
-        let handle = match existing {
-            Some(handle) => handle,
-            None => {
-                let handle = {
-                    let asset_server = world.resource::<AssetServer>().clone();
-                    let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-                    material_from_set(&set, &asset_server, &mut materials)
-                };
-                world
-                    .resource_mut::<crate::asset_catalog::AssetCatalog>()
-                    .insert(catalog_name, handle.clone().untyped());
-                handle
-            }
-        };
-        world.resource_mut::<MaterialRegistry>().add(name, handle);
+    if let Some(assets) = assets {
+        add_detected_sets(world, &assets);
     }
 
-    // Whatever the catalog holds that neither pass claimed: a material created this run and
-    // never saved, or one whose file is gone. It is in memory and references to it resolve,
-    // so it is listed as unsaved.
     let mut orphans: Vec<(String, Handle<StandardMaterial>)> = world
         .resource::<crate::asset_catalog::AssetCatalog>()
         .handles
@@ -357,11 +289,62 @@ fn rebuild_material_registry(world: &mut World) {
     world.resource_mut::<MaterialRegistry>().ensure_none_entry();
 }
 
+/// List every texture set the project's assets hold that no material file
+/// already answers for.
+///
+/// A detected set is unsaved: it lives in `Assets<StandardMaterial>` and in the
+/// shared catalog, so a face can reference it and a scene save embeds it, until
+/// `material.save` writes it a file. The handle a previous scan published under
+/// the same name is reused, so a rescan does not orphan the material on the
+/// faces holding it.
+fn add_detected_sets(world: &mut World, assets: &Path) {
+    for set in detect_material_sets(assets) {
+        // The registry key, the file stem a save would use and the `@Name` scenes reference
+        // are one string, so detection commits to the file-safe spelling up front.
+        let name = crate::material_assets::sanitize_material_name(&set.base_name);
+        if world
+            .resource::<MaterialRegistry>()
+            .get_by_name(&name)
+            .is_some()
+        {
+            continue;
+        }
+        let catalog_name = format!("@{name}");
+        let existing = world
+            .resource::<crate::asset_catalog::AssetCatalog>()
+            .handles
+            .get(&catalog_name)
+            .filter(|handle| handle.type_id() == std::any::TypeId::of::<StandardMaterial>())
+            .map(|handle| handle.clone().typed::<StandardMaterial>());
+        let handle = match existing {
+            Some(handle) => handle,
+            None => {
+                let handle = {
+                    let asset_server = world.resource::<AssetServer>().clone();
+                    let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+                    material_from_set(&set, &asset_server, &mut materials)
+                };
+                world
+                    .resource_mut::<crate::asset_catalog::AssetCatalog>()
+                    .insert(catalog_name, handle.clone().untyped());
+                handle
+            }
+        };
+        world.resource_mut::<MaterialRegistry>().add(name, handle);
+    }
+}
+
 fn on_material_grid_added(
     _trigger: On<Add, MaterialBrowserGrid>,
     mut state: ResMut<MaterialBrowserState>,
 ) {
     info!("MaterialBrowserGrid added, triggering rescan");
+    state.needs_rescan = true;
+}
+
+/// A file indexed, reloaded or removed since the last frame changes what the
+/// panel has to list.
+fn follow_asset_index(mut state: ResMut<MaterialBrowserState>) {
     state.needs_rescan = true;
 }
 
@@ -371,17 +354,6 @@ fn rescan_material_definitions(world: &mut World) {
     }
     world.resource_mut::<MaterialBrowserState>().needs_rescan = false;
     rebuild_material_registry(world);
-}
-
-fn save_catalog_if_dirty(world: &mut World) {
-    let is_dirty = world
-        .get_resource::<crate::asset_catalog::AssetCatalog>()
-        .is_some_and(|c| c.dirty);
-    if !is_dirty {
-        return;
-    }
-
-    crate::asset_catalog::save_catalog(world);
 }
 
 fn apply_material_filter(
@@ -404,13 +376,9 @@ fn handle_apply_material(
     mut history: ResMut<CommandHistory>,
     children_query: Query<&Children>,
     mut last_material: ResMut<LastUsedMaterial>,
-    mut catalog: ResMut<crate::asset_catalog::AssetCatalog>,
     mut commands: Commands,
 ) {
     last_material.material = Some(event.material.clone());
-    // The assignment is durable in the scene, so the catalog is rewritten; an unsaved
-    // material stays flagged as needing its own save.
-    catalog.dirty = true;
 
     let active_faces: Vec<usize> = brush_selection
         .active_sub()
@@ -685,132 +653,22 @@ fn browser_actions() -> Vec<HeaderAction> {
     actions
 }
 
-fn poll_material_browser_folder(world: &mut World) {
-    let Some(mut task_res) = world.get_resource_mut::<MaterialBrowserFolderTask>() else {
+/// Take the file the Save As dialog came back with and write the previewed
+/// material there. A dismissed dialog writes nothing.
+fn poll_material_save_folder(world: &mut World) {
+    let Some(mut task_res) = world.get_resource_mut::<MaterialSaveFolderTask>() else {
         return;
     };
     let Some(result) = future::block_on(future::poll_once(&mut task_res.0)) else {
         return;
     };
-    world.remove_resource::<MaterialBrowserFolderTask>();
+    world.remove_resource::<MaterialSaveFolderTask>();
 
-    if let Some(handle) = result {
-        let path = handle.path().to_path_buf();
-        let mut state = world.resource_mut::<MaterialBrowserState>();
-        state.scan_directory = path.clone();
-        state.needs_rescan = true;
-
-        let mut label_query = world.query_filtered::<&mut Text, With<MaterialBrowserRootLabel>>();
-        for mut text in label_query.iter_mut(world) {
-            **text = path.to_string_lossy().to_string();
-        }
-    }
-}
-
-fn handle_browse_texture_slot(
-    event: On<BrowseTextureSlot>,
-    mut commands: Commands,
-    existing_task: Option<Res<TextureSlotPickTask>>,
-) {
-    if existing_task.is_some() {
-        return;
-    }
-    let slot = event.slot;
-    let material_handle = event.material_handle.clone();
-    commands.queue(move |world: &mut World| {
-        if world.contains_resource::<TextureSlotPickTask>() {
-            return;
-        }
-        let directory = material_file_directory(world, &material_handle);
-        let dialog = match directory {
-            Some(directory) => crate::native_dialog::dialog_starting_at(world, Some(directory)),
-            None => crate::native_dialog::file_dialog(
-                world,
-                crate::native_dialog::DialogPurpose::Texture,
-            ),
-        }
-        .set_title(format!("Select image for {}", slot.field()))
-        .add_filter(
-            "Images",
-            &["png", "jpg", "jpeg", "ktx2", "bmp", "tga", "webp"],
-        );
-        let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_file().await });
-        world.insert_resource(TextureSlotPickTask {
-            task,
-            slot,
-            material_handle,
-        });
-    });
-}
-
-/// The folder holding the material's own asset file, when it came from one.
-fn material_file_directory(
-    world: &World,
-    material_handle: &Handle<StandardMaterial>,
-) -> Option<PathBuf> {
-    let asset_server = world.get_resource::<AssetServer>()?;
-    let asset_path = asset_server.get_path(material_handle.id())?;
-    let assets_root = crate::project::open_project_assets_dir()?;
-    texture_browse_directory(&assets_root, asset_path.path())
-}
-
-/// The folder a texture browse starts in for a material stored at
-/// `material_path`, relative to `assets_root`.
-fn texture_browse_directory(assets_root: &Path, material_path: &Path) -> Option<PathBuf> {
-    let directory = assets_root.join(material_path.parent()?);
-    directory.is_dir().then_some(directory)
-}
-
-fn poll_texture_slot_pick(world: &mut World) {
-    let Some(mut task_res) = world.get_resource_mut::<TextureSlotPickTask>() else {
+    let Some(picked) = result else {
         return;
     };
-    let Some(result) = future::block_on(future::poll_once(&mut task_res.task)) else {
-        return;
-    };
-    let slot = task_res.slot;
-    let material_handle = task_res.material_handle.clone();
-    world.remove_resource::<TextureSlotPickTask>();
-
-    let Some(file_handle) = result else {
-        return;
-    };
-    let path = file_handle.path().to_path_buf();
-    crate::native_dialog::remember_pick(world, crate::native_dialog::DialogPurpose::Texture, &path);
-    let fs_path = path.to_slash_lossy();
-    let asset_path = crate::entity_ops::to_asset_path(&fs_path);
-    let asset_server = world.resource::<AssetServer>().clone();
-    let image_handle = if slot.is_srgb() {
-        asset_server.load::<Image>(asset_path)
-    } else {
-        asset_server
-            .load_builder()
-            .with_settings(|s: &mut ImageLoaderSettings| s.is_srgb = false)
-            .load::<Image>(asset_path)
-    };
-
-    let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-    if let Some(mut mat) = materials.get_mut(&material_handle) {
-        slot.set_on(&mut mat, Some(image_handle));
-    }
-
-    world
-        .resource_mut::<crate::asset_catalog::AssetCatalog>()
-        .dirty = true;
-    world.resource_mut::<MaterialPreviewState>().set_changed();
-}
-
-fn handle_clear_texture_slot(
-    event: On<ClearTextureSlot>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut catalog: ResMut<crate::asset_catalog::AssetCatalog>,
-    mut preview_state: ResMut<MaterialPreviewState>,
-) {
-    if let Some(mut mat) = materials.get_mut(&event.material_handle) {
-        event.slot.set_on(&mut mat, None);
-    }
-    catalog.dirty = true;
-    preview_state.set_changed();
+    let picked = picked.path().to_path_buf();
+    crate::material_assets::save_previewed_material_to(world, &picked);
 }
 
 fn update_material_browser_ui(
@@ -818,22 +676,13 @@ fn update_material_browser_ui(
     registry: Res<MaterialRegistry>,
     state: Res<MaterialBrowserState>,
     materials: Res<Assets<StandardMaterial>>,
-    project_root: Res<crate::project::ProjectRoot>,
     italic_font: Res<icons::EditorFontItalic>,
     grid_query: Query<(Entity, Option<&Children>), With<MaterialBrowserGrid>>,
-    mut root_label_query: Query<&mut Text, With<MaterialBrowserRootLabel>>,
 ) {
     let italic_font = italic_font.0.clone();
     let needs_rebuild = registry.is_changed() || state.is_changed();
     if !needs_rebuild {
         return;
-    }
-
-    for mut text in root_label_query.iter_mut() {
-        **text = project_root
-            .to_relative(&state.scan_directory)
-            .to_string_lossy()
-            .to_string();
     }
 
     let Ok((grid_entity, grid_children)) = grid_query.single() else {
@@ -915,53 +764,15 @@ pub fn material_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
                 },
                 BackgroundColor(tokens::PANEL_HEADER_BG),
                 children![
-                    // Left side: title + path
                     (
-                        Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: Val::Px(tokens::SPACING_MD),
-                            overflow: Overflow::clip(),
-                            flex_shrink: 1.0,
+                        Text::new("Materials"),
+                        TextFont {
+                            font_size: tokens::TEXT_SIZE,
                             ..Default::default()
                         },
-                        children![
-                            (
-                                Text::new("Materials"),
-                                TextFont {
-                                    font_size: tokens::TEXT_SIZE,
-                                    ..Default::default()
-                                },
-                                ThemedText,
-                            ),
-                            (
-                                MaterialBrowserRootLabel,
-                                Node {
-                                    margin: UiRect::vertical(Val::Px(tokens::SPACING_MD)),
-                                    ..Default::default()
-                                },
-                                Text::default(),
-                                TextFont {
-                                    font_size: tokens::TEXT_SIZE_SM,
-                                    ..Default::default()
-                                },
-                                TextColor(tokens::TEXT_SECONDARY),
-                            ),
-                        ],
+                        ThemedText,
                     ),
-                    // Right side: folder picker + rescan
-                    (
-                        Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: Val::Px(tokens::SPACING_XS),
-                            ..Default::default()
-                        },
-                        children![
-                            material_folder_button(icon_font.clone()),
-                            rescan_button(icon_font),
-                        ],
-                    ),
+                    rescan_button(icon_font),
                 ],
             ),
             // Action header.
@@ -1029,16 +840,6 @@ pub fn material_browser_panel(icon_font: Handle<Font>) -> impl Bundle {
     )
 }
 
-fn material_folder_button(icon_font: Handle<Font>) -> impl Bundle {
-    (
-        icon_button(
-            IconButtonProps::new(Icon::FolderOpen).variant(ButtonVariant::Ghost),
-            &icon_font,
-        ),
-        ButtonOperatorCall::new(MaterialSelectFolderOp::ID),
-    )
-}
-
 fn rescan_button(icon_font: Handle<Font>) -> impl Bundle {
     (
         icon_button(
@@ -1051,30 +852,12 @@ fn rescan_button(icon_font: Handle<Font>) -> impl Bundle {
 
 // -- Operators --------------------------------------------------------------
 
-/// Resource set by the texture-slot button click before dispatching
-/// `material.browse_texture_slot` / `material.clear_texture_slot`. The
-/// operator reads this and clears it. `Handle<StandardMaterial>` doesn't
-/// fit `PropertyValue`, so we route it through a sidecar resource the
-/// same way `hierarchy.rename_begin` uses `PendingRenameTarget`.
-#[derive(Resource, Default)]
-pub(crate) struct PendingTextureSlot {
-    pub(crate) slot: Option<TextureSlot>,
-    pub(crate) material_handle: Option<Handle<StandardMaterial>>,
-}
-
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.init_resource::<PendingTextureSlot>()
-        .register_operator::<MaterialCreateOp>()
+    ctx.register_operator::<MaterialCreateOp>()
         .register_operator::<MaterialSelectOp>()
         .register_operator::<MaterialApplyOp>()
         .register_operator::<MaterialRescanOp>()
-        .register_operator::<MaterialSelectFolderOp>()
-        .register_operator::<MaterialBrowseTextureSlotOp>()
-        .register_operator::<MaterialClearTextureSlotOp>();
-}
-
-fn pending_texture_slot_set(pending: Res<PendingTextureSlot>) -> bool {
-    pending.slot.is_some() && pending.material_handle.is_some()
+        .register_operator::<MaterialSaveAsOp>();
 }
 
 /// Create a fresh empty material and select it for preview. It stays unsaved
@@ -1111,19 +894,26 @@ pub(crate) fn material_create(
     label = "Select Material",
     description = "Load a material into the material preview.",
     allows_undo = false,
-    params(material(String, doc = "Name of the material to preview."))
+    params(material(
+        String,
+        doc = "Path of the material file to preview, such as \
+               materials/slate.bsn. A bare name still resolves for one release."
+    ))
 )]
 pub(crate) fn material_select(
     params: In<OperatorParameters>,
     registry: Res<MaterialRegistry>,
+    index: Option<Res<crate::asset_index::AssetIndex>>,
     mut preview_state: ResMut<MaterialPreviewState>,
 ) -> OperatorResult {
-    let name = params.as_str("material")?;
-    let Some(entry) = registry.get_by_name(name) else {
-        warn!("material.select: no material named '{name}'");
+    let reference = params.as_str("material")?;
+    let Some(handle) =
+        crate::material_assets::material_of_reference(index.as_deref(), &registry, reference)
+    else {
+        warn!("material.select: no material at '{reference}'");
         return OperatorResult::Cancelled;
     };
-    preview_state.active_material = Some(entry.handle.clone());
+    preview_state.active_material = Some(handle);
     preview_state.orbit_yaw = 0.5;
     preview_state.orbit_pitch = -0.3;
     preview_state.zoom_distance = 3.0;
@@ -1140,17 +930,22 @@ pub(crate) fn material_select(
     allows_undo = false,
     params(material(
         String,
-        doc = "Name of the material to apply. Defaults to the previewed one."
+        doc = "Path of the material file to apply, such as \
+               materials/slate.material.bsn. A bare name still resolves for \
+               one release. Defaults to the previewed one."
     ))
 )]
 pub(crate) fn material_apply(
     params: In<OperatorParameters>,
     registry: Res<MaterialRegistry>,
+    index: Option<Res<crate::asset_index::AssetIndex>>,
     preview_state: Res<MaterialPreviewState>,
     mut commands: Commands,
 ) -> OperatorResult {
     let handle = match params.as_str("material") {
-        Some(name) => registry.get_by_name(name).map(|e| e.handle.clone()),
+        Some(reference) => {
+            crate::material_assets::material_of_reference(index.as_deref(), &registry, reference)
+        }
         None => preview_state.active_material.clone(),
     };
     let Some(material) = handle.filter(|h| *h != Handle::default()) else {
@@ -1161,11 +956,11 @@ pub(crate) fn material_apply(
     OperatorResult::Finished
 }
 
-/// Refresh the material browser from disk.
+/// Refresh the material browser from what the project holds.
 #[operator(
     id = "material.rescan",
     label = "Rescan Materials",
-    description = "Refresh the material browser from disk."
+    description = "Refresh the material browser from the project's asset files."
 )]
 pub(crate) fn material_rescan(
     _: In<OperatorParameters>,
@@ -1175,74 +970,29 @@ pub(crate) fn material_rescan(
     OperatorResult::Finished
 }
 
-/// Choose a different folder as the materials directory.
+/// Choose the file the previewed material saves to, starting where a save
+/// with no folder in mind would put it.
 #[operator(
-    id = "material.select_folder",
-    label = "Select Materials Folder",
-    description = "Choose a different folder as the materials directory."
+    id = "material.save_as",
+    label = "Save Material As",
+    description = "Choose the file to write this material to.",
+    allows_undo = false
 )]
-pub fn material_select_folder(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub fn material_save_as(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
-        if world.contains_resource::<MaterialBrowserFolderTask>() {
+        if world.contains_resource::<MaterialSaveFolderTask>() {
             return;
         }
-        let current = world
-            .get_resource::<MaterialBrowserState>()
-            .map(|state| state.scan_directory.clone());
-        let dialog = crate::native_dialog::dialog_starting_at(world, current)
-            .set_title("Select materials directory");
-        let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_folder().await });
-        world.insert_resource(MaterialBrowserFolderTask(task));
-    });
-    OperatorResult::Finished
-}
-
-/// Pick an image from disk for the targeted material's texture slot.
-///
-/// The slot and target material are routed through the
-/// [`PendingTextureSlot`] resource by the inspector button before
-/// dispatch.
-#[operator(
-    id = "material.browse_texture_slot",
-    label = "Browse Texture",
-    description = "Pick an image to assign to this material's texture slot.",
-    is_available = pending_texture_slot_set
-)]
-pub(crate) fn material_browse_texture_slot(
-    _: In<OperatorParameters>,
-    mut pending: ResMut<PendingTextureSlot>,
-    mut commands: Commands,
-) -> OperatorResult {
-    let slot = pending.slot.take()?;
-    let material_handle = pending.material_handle.take()?;
-    commands.trigger(BrowseTextureSlot {
-        slot,
-        material_handle,
-    });
-    OperatorResult::Finished
-}
-
-/// Remove the image from the targeted material's texture slot.
-///
-/// The slot and target material are routed through the
-/// [`PendingTextureSlot`] resource by the inspector button before
-/// dispatch.
-#[operator(
-    id = "material.clear_texture_slot",
-    label = "Clear Texture",
-    description = "Remove the image from this material's texture slot.",
-    is_available = pending_texture_slot_set
-)]
-pub(crate) fn material_clear_texture_slot(
-    _: In<OperatorParameters>,
-    mut pending: ResMut<PendingTextureSlot>,
-    mut commands: Commands,
-) -> OperatorResult {
-    let slot = pending.slot.take()?;
-    let material_handle = pending.material_handle.take()?;
-    commands.trigger(ClearTextureSlot {
-        slot,
-        material_handle,
+        let Some((folder, file_name)) = crate::material_assets::previewed_material_target(world)
+        else {
+            warn!("material.save_as: no material to save");
+            return;
+        };
+        let dialog = crate::native_dialog::dialog_starting_at(world, Some(folder))
+            .set_title("Save material")
+            .set_file_name(file_name);
+        let task = AsyncComputeTaskPool::get().spawn(async move { dialog.save_file().await });
+        world.insert_resource(MaterialSaveFolderTask(task));
     });
     OperatorResult::Finished
 }
@@ -1258,27 +1008,6 @@ mod tests {
         app.init_asset::<Image>();
         app.init_asset::<StandardMaterial>();
         app
-    }
-
-    #[test]
-    fn a_texture_browse_starts_in_the_folder_holding_the_material() {
-        let dir = tempfile::tempdir().expect("a temporary directory");
-        let assets = dir.path();
-        std::fs::create_dir_all(assets.join("materials/stone")).expect("the material folder");
-
-        let start = texture_browse_directory(assets, Path::new("materials/stone/granite.bsn"))
-            .expect("a start directory");
-        assert_eq!(start, assets.join("materials/stone"));
-    }
-
-    #[test]
-    fn a_texture_browse_ignores_a_material_folder_that_is_not_there() {
-        let dir = tempfile::tempdir().expect("a temporary directory");
-
-        assert_eq!(
-            texture_browse_directory(dir.path(), Path::new("materials/gone/granite.bsn")),
-            None
-        );
     }
 
     fn detected(paths: &[&str]) -> jackdaw_material::MaterialSet {
@@ -1318,6 +1047,16 @@ mod tests {
             scalars.max_parallax_layer_count
         );
         assert!(material.parallax_depth_scale > 0.0);
+    }
+
+    #[test]
+    fn a_detected_set_with_no_height_map_leaves_parallax_off() {
+        let mut app = browser_app();
+        let material = built(&mut app, &detected(&["pack/rock_albedo.png"]));
+
+        assert!(material.depth_map.is_none());
+        assert_eq!(material.parallax_depth_scale, 0.0);
+        assert_eq!(material.max_parallax_layer_count, 0.0);
     }
 
     /// The preview's drag observer lives inside the subtree a rebuild despawns, and the
@@ -1399,16 +1138,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_detected_set_with_no_height_map_leaves_parallax_off() {
-        let mut app = browser_app();
-        let material = built(&mut app, &detected(&["pack/rock_albedo.png"]));
-
-        assert!(material.depth_map.is_none());
-        assert_eq!(material.parallax_depth_scale, 0.0);
-        assert_eq!(material.max_parallax_layer_count, 0.0);
-    }
-
     fn project_browser_app() -> (App, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut app = browser_app();
@@ -1422,10 +1151,115 @@ mod tests {
             config: crate::project::ProjectConfig::default(),
         });
         app.init_resource::<MaterialRegistry>();
-        app.init_resource::<crate::material_assets::SavedMaterials>();
         app.init_resource::<crate::asset_catalog::AssetCatalog>();
         app.init_resource::<MaterialBrowserState>();
+        app.init_resource::<crate::asset_index::AssetIndex>();
+        app.init_resource::<crate::asset_files::AssetKindCache>();
+        app.init_resource::<jackdaw_api::prelude::AssetKinds>();
+        app.world_mut()
+            .resource_mut::<jackdaw_api::prelude::AssetKinds>()
+            .register(jackdaw_api::prelude::AssetKind::compiled(
+                crate::definition_assets::MATERIAL_KIND,
+                "Material",
+                StandardMaterial::type_path(),
+            ));
         (app, tmp)
+    }
+
+    /// A PNG's bytes are not a KTX2 header, and the fields that say a KTX2
+    /// holds a cubemap land on picture data in one.
+    #[test]
+    fn a_texture_that_is_not_a_ktx2_is_never_read_as_a_cubemap() {
+        let (mut app, tmp) = project_browser_app();
+        let textures = tmp.path().join("assets/textures");
+        std::fs::create_dir_all(&textures).expect("the folder is made");
+        for file in ["moss_albedo.png", "moss_normal.png"] {
+            std::fs::write(textures.join(file), [0xffu8; 64]).expect("the texture is written");
+        }
+
+        rebuild_material_registry(app.world_mut());
+
+        assert!(
+            app.world()
+                .resource::<MaterialRegistry>()
+                .get_by_name("moss")
+                .is_some(),
+            "the set is offered whatever its picture data reads as"
+        );
+    }
+
+    /// Drop a folder of consistently named textures anywhere under the assets
+    /// and the panel offers it as a material to save; once it has a file of its
+    /// own the index carries it and the detected entry goes.
+    #[test]
+    fn a_texture_set_in_any_folder_is_offered_unsaved_until_it_has_a_file() {
+        let (mut app, tmp) = project_browser_app();
+        let textures = tmp.path().join("assets/models/kit/bark");
+        std::fs::create_dir_all(&textures).expect("the folder is made");
+        for file in ["bark_albedo.png", "bark_normal.png", "bark_roughness.png"] {
+            std::fs::write(textures.join(file), [0xffu8; 64]).expect("the texture is written");
+        }
+
+        crate::asset_index::rescan_asset_index(app.world_mut());
+        rebuild_material_registry(app.world_mut());
+
+        let entry = app
+            .world()
+            .resource::<MaterialRegistry>()
+            .get_by_name("bark")
+            .expect("the set is offered as a material");
+        assert!(!entry.saved, "a detected set has no file behind it yet");
+        let handle = entry.handle.clone();
+
+        crate::material_assets::write_material_file(app.world(), "bark", &handle)
+            .expect("the material file is written");
+        crate::asset_index::rescan_asset_index(app.world_mut());
+        rebuild_material_registry(app.world_mut());
+
+        let registry = app.world().resource::<MaterialRegistry>();
+        assert!(
+            registry.is_saved("bark"),
+            "the file the save wrote is what the panel lists now",
+        );
+        assert_eq!(
+            registry
+                .entries
+                .iter()
+                .filter(|entry| entry.name == "bark")
+                .count(),
+            1,
+            "the detected set must not sit beside the file it became",
+        );
+    }
+
+    /// The panel lists what the index holds, so a material filed anywhere under
+    /// the project shows up beside the ones in `materials/`.
+    #[test]
+    fn a_material_filed_outside_the_materials_folder_is_listed() {
+        let (mut app, tmp) = project_browser_app();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let elsewhere = tmp.path().join("assets/zones/hedgerow");
+        std::fs::create_dir_all(&elsewhere).expect("the directory is made");
+        crate::definition_assets::write_asset_file(
+            app.world(),
+            "bramble",
+            &crate::asset_index::AssetValue::Handle(handle.untyped()),
+            &elsewhere.join("bramble.material.bsn"),
+        )
+        .expect("the material file is written");
+
+        crate::asset_index::rescan_asset_index(app.world_mut());
+        rebuild_material_registry(app.world_mut());
+
+        assert!(
+            app.world()
+                .resource::<MaterialRegistry>()
+                .is_saved("bramble"),
+            "a material is listed by what it is, not by where it sits",
+        );
     }
 
     /// A material whose file went missing stays in the list so its name resolves, and lists
@@ -1439,14 +1273,15 @@ mod tests {
             .add(StandardMaterial::default());
         crate::material_assets::write_material_file(app.world(), "slate", &handle).expect("write");
 
+        crate::asset_index::rescan_asset_index(app.world_mut());
         rebuild_material_registry(app.world_mut());
         assert!(
             app.world().resource::<MaterialRegistry>().is_saved("slate"),
             "a material with a file behind it is saved",
         );
 
-        std::fs::remove_file(tmp.path().join("assets/materials/slate.material.bsn"))
-            .expect("remove");
+        std::fs::remove_file(tmp.path().join("assets/materials/slate.bsn")).expect("remove");
+        crate::asset_index::rescan_asset_index(app.world_mut());
         rebuild_material_registry(app.world_mut());
 
         let registry = app.world().resource::<MaterialRegistry>();

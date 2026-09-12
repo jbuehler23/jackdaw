@@ -7,12 +7,14 @@
 #[path = "../util/mod.rs"]
 mod util;
 
+mod asset_row;
 mod bindings_card;
 mod bindings_link;
 mod definition_card;
 mod inspector_panel_width;
 mod inspector_preview_guard;
 mod inspector_val;
+mod new_asset_list;
 mod opened_definition_card;
 mod schema_definition_card;
 mod widget_cards;

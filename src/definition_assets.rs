@@ -1,22 +1,20 @@
-//! Definition assets: one reflected value per file, anywhere under the
-//! project's assets.
+//! Editing one asset file: opening it, writing its fields and saving it back.
 //!
 //! A file says which type it holds, so the editor finds a kind's files by
-//! reading them rather than by where they sit. A type the editor has compiled
-//! in loads through [`jackdaw_bsn::load_bsn_assets`] and saves through
-//! [`jackdaw_bsn::serialize_assets_to_bsn`]; a type the open project reported
-//! in its schema is known no other way, so its files load into
-//! [`DefinitionValues`] as the patch they hold and save back through the same
-//! emitter. Either way a file holds only what the value changes from its
-//! default.
+//! reading them rather than by where they sit, and
+//! [`crate::asset_index::AssetIndex`] holds what every one of them loaded to. A
+//! type the editor has compiled in loads through [`jackdaw_bsn::load_bsn_assets`]
+//! and saves through [`jackdaw_bsn::serialize_assets_to_bsn`]; a type the open
+//! project reported in its schema is known no other way, so its files load as
+//! the patch they hold and save back through the same emitter. Either way a
+//! file holds only what the value changes from its default.
 //!
-//! Opening a definition puts it in the inspector: the open definition rides on
-//! an editor entity carrying [`DefinitionAssetEdit`], the field rows read the
-//! value it names instead of a component, and their edits come back here as
+//! Opening an asset puts it in the inspector: the open asset rides on an editor
+//! entity carrying [`DefinitionAssetEdit`], the field rows read the value at
+//! the path it names instead of a component, and their edits come back here as
 //! [`SetDefinitionField`] undo entries.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, mpsc};
 
 use bevy::asset::{ReflectAsset, UntypedHandle};
 use bevy::prelude::*;
@@ -28,143 +26,46 @@ use jackdaw_commands::CommandHistory;
 
 use crate::EditorEntity;
 use crate::asset_files::{AssetFileKind, asset_file_text, read_asset_kind};
+use crate::asset_index::{AssetEntry, AssetIndex, AssetValue, absolute_path, indexed_path};
 use crate::commands::EditorCommand;
 use crate::prelude::*;
 use crate::project::ProjectRoot;
 
-/// Where a definition's value lives: in its type's asset store, or, for a type
-/// the editor knows only as the project's schema, in [`DefinitionValues`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DefinitionValue {
-    Asset(UntypedHandle),
-    Schema { kind: String, name: String },
-}
-
-impl DefinitionValue {
-    /// The handle behind a definition whose type the editor has compiled in.
-    pub fn handle(&self) -> Option<&UntypedHandle> {
-        match self {
-            Self::Asset(handle) => Some(handle),
-            Self::Schema { .. } => None,
-        }
-    }
-
-    fn schema_key(&self) -> Option<(&str, &str)> {
-        match self {
-            Self::Asset(_) => None,
-            Self::Schema { kind, name } => Some((kind, name)),
-        }
-    }
-}
-
-/// Every value whose type the editor knows only as schema, held as the BSN
-/// patch its file spells, by the kind and name of the definition holding it.
-#[derive(Resource, Default)]
-pub struct DefinitionValues {
-    values: std::collections::HashMap<(String, String), BsnStructData>,
-}
-
-impl DefinitionValues {
-    pub fn get(&self, kind: &str, name: &str) -> Option<&BsnStructData> {
-        self.values.get(&(kind.to_string(), name.to_string()))
-    }
-
-    pub fn insert(&mut self, kind: &str, name: &str, data: BsnStructData) {
-        self.values
-            .insert((kind.to_string(), name.to_string()), data);
-    }
-
-    pub fn remove(&mut self, kind: &str, name: &str) {
-        self.values.remove(&(kind.to_string(), name.to_string()));
-    }
-}
-
-/// A definition loaded from a file, by the name its file stem gives it.
-pub struct DefinitionEntry {
-    pub kind: String,
-    pub name: String,
-    pub value: DefinitionValue,
-    pub path: PathBuf,
-}
-
-/// Every loaded definition, across all registered types.
-#[derive(Resource, Default)]
-pub struct DefinitionRegistry {
-    pub entries: Vec<DefinitionEntry>,
-}
-
-impl DefinitionRegistry {
-    pub fn get(&self, kind: &str, name: &str) -> Option<&DefinitionEntry> {
-        self.entries
-            .iter()
-            .find(|entry| entry.kind == kind && entry.name == name)
-    }
-
-    pub fn names_of(&self, kind: &str) -> Vec<String> {
-        let mut names: Vec<String> = self
-            .entries
-            .iter()
-            .filter(|entry| entry.kind == kind)
-            .map(|entry| entry.name.clone())
-            .collect();
-        names.sort();
-        names
-    }
-
-    /// Record a loaded definition, replacing any entry of the same kind and
-    /// name.
-    pub fn insert(&mut self, entry: DefinitionEntry) {
-        self.entries
-            .retain(|known| known.kind != entry.kind || known.name != entry.name);
-        self.entries.push(entry);
-    }
-
-    pub fn remove(&mut self, kind: &str, name: &str) {
-        self.entries
-            .retain(|known| known.kind != kind || known.name != name);
-    }
-
-    /// The definition loaded from a file, whichever kind claims it.
-    pub fn by_path(&self, path: &Path) -> Option<&DefinitionEntry> {
-        self.entries.iter().find(|entry| entry.path == path)
-    }
-}
-
 /// The first `<kind>_N` name with neither an entry nor a file of its own in
 /// the folder the new file lands in.
 fn next_free_name(world: &World, kind: &str, dir: &Path) -> String {
-    let registry = world.resource::<DefinitionRegistry>();
-    let mut index = 1u32;
+    let mut counter = 1u32;
     loop {
-        let candidate = format!("{kind}_{index}");
-        let taken = registry.get(kind, &candidate).is_some()
-            || definition_file_path(dir, &candidate).exists();
-        if !taken {
+        let candidate = format!("{kind}_{counter}");
+        let file = definition_file_path(dir, &candidate);
+        let indexed = crate::asset_index::indexed_path(world, &file)
+            .is_some_and(|path| world.resource::<AssetIndex>().get(&path).is_some());
+        if !file.exists() && !indexed {
             return candidate;
         }
-        index += 1;
+        counter += 1;
     }
 }
 
-/// The definition open in the inspector, on its own editor entity.
+/// The asset open in the inspector, on its own editor entity.
 #[derive(Component)]
 #[require(EditorEntity)]
 pub struct DefinitionAssetEdit {
     pub kind: String,
     pub name: String,
     pub type_path: String,
-    pub value: DefinitionValue,
+    /// The file being edited, as the index keys it.
     pub path: PathBuf,
-    /// Whether the definition has been edited since it was loaded or saved.
+    /// Whether the asset has been edited since it was loaded or saved.
     pub dirty: bool,
 }
 
-/// The entity carrying the open definition, if one is open.
+/// The entity carrying the open asset, if one is open.
 #[derive(Resource, Default)]
 pub struct OpenDefinition(pub Option<Entity>);
 
-/// Strip what cannot appear in a file stem, so a definition name always maps
-/// to exactly one file.
+/// Strip what cannot appear in a file stem, so an asset name always maps to
+/// exactly one file.
 pub fn sanitize_definition_name(name: &str) -> String {
     let cleaned: String = name
         .trim()
@@ -192,25 +93,22 @@ fn names_a_file(path: &Path) -> bool {
             .is_some_and(|extension| extension.eq_ignore_ascii_case("bsn"))
 }
 
-/// The file a definition of this name lands in, in a folder of the user's
-/// choosing.
+/// A name that carries its own extension as the file it names, so `torch.bsn`
+/// and `torch.item.bsn` each write one file rather than two extensions.
+fn bsn_file_name(name: &str) -> String {
+    match Path::new(name).extension() {
+        Some(extension) if extension.eq_ignore_ascii_case("bsn") => name.to_string(),
+        _ => format!("{name}.bsn"),
+    }
+}
+
+/// The file an asset of this name lands in, in a folder of the user's choosing.
 pub fn definition_file_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{}.bsn", sanitize_definition_name(name)))
 }
 
-/// The name a file gives the definition it holds: everything before the first
-/// dot of its file name, so `torch.item.bsn` holds `torch`.
-pub fn definition_name_of(path: &Path) -> String {
-    let file = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .trim_start_matches('.');
-    file.split('.').next().unwrap_or(file).to_string()
-}
-
-/// The folder a new definition lands in: the one the browser is showing when
-/// it is under the project's assets, and the assets directory otherwise.
+/// The folder a new asset lands in: the one the browser is showing when it is
+/// under the project's assets, and the assets directory otherwise.
 pub fn new_definition_dir(world: &World) -> Option<PathBuf> {
     let assets = world.get_resource::<ProjectRoot>()?.assets_dir();
     let showing = world
@@ -222,14 +120,9 @@ pub fn new_definition_dir(world: &World) -> Option<PathBuf> {
     }
 }
 
-/// Load one file into wherever its type's values live. A file that cannot be
-/// read or parsed, or that holds a value of another type, is reported and
-/// skipped.
-pub fn load_definition_file(
-    world: &mut World,
-    definition: &AssetKind,
-    path: &Path,
-) -> Option<DefinitionValue> {
+/// Read one asset file into a value. A file that cannot be read or parsed, or
+/// that holds a value of another type, is reported and skipped.
+pub fn read_asset_file(world: &mut World, kind: &AssetKind, path: &Path) -> Option<AssetValue> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) => {
@@ -237,10 +130,10 @@ pub fn load_definition_file(
             return None;
         }
     };
-    if definition.schema_backed() {
-        return load_schema_definition(world, definition, path, &text);
+    if kind.schema_backed() {
+        return read_schema_asset(kind, path, &text);
     }
-    let type_id = registered_type_id(world, &definition.type_path)?;
+    let type_id = registered_type_id(world, &kind.type_path)?;
     let entries = match jackdaw_bsn::load_bsn_assets(world, &text) {
         Ok(entries) => entries,
         Err(err) => {
@@ -250,25 +143,15 @@ pub fn load_definition_file(
     };
     let entry = entries.into_iter().next()?;
     if entry.handle.type_id() != type_id {
-        warn!(
-            "{} does not hold a {}",
-            path.display(),
-            definition.type_path
-        );
+        warn!("{} does not hold a {}", path.display(), kind.type_path);
         return None;
     }
-    Some(DefinitionValue::Asset(entry.handle))
+    Some(AssetValue::Handle(entry.handle))
 }
 
-/// Load a file whose type the editor knows only as schema: the patch it holds
-/// goes into [`DefinitionValues`] as it stands.
-fn load_schema_definition(
-    world: &mut World,
-    definition: &AssetKind,
-    path: &Path,
-    text: &str,
-) -> Option<DefinitionValue> {
-    let name = definition_name_of(path);
+/// Read a file whose type the editor knows only as schema: the patch it holds
+/// is the value.
+fn read_schema_asset(kind: &AssetKind, path: &Path, text: &str) -> Option<AssetValue> {
     let ast = match jackdaw_bsn::parse_bsn_text(text) {
         Ok(ast) => ast,
         Err(err) => {
@@ -280,23 +163,17 @@ fn load_schema_definition(
         .roots
         .iter()
         .find_map(|&root| patch_of_root(&ast, root))
-        .unwrap_or_else(|| empty_patch(&definition.type_path));
-    if data.type_path != definition.type_path {
+        .unwrap_or_else(|| empty_patch(&kind.type_path));
+    if data.type_path != kind.type_path {
         warn!(
             "{} holds a {} where a {} was expected",
             path.display(),
             data.type_path,
-            definition.type_path
+            kind.type_path
         );
         return None;
     }
-    world
-        .get_resource_or_init::<DefinitionValues>()
-        .insert(&definition.kind, &name, data);
-    Some(DefinitionValue::Schema {
-        kind: definition.kind.clone(),
-        name,
-    })
+    Some(AssetValue::Schema(Box::new(data)))
 }
 
 /// The struct patch a document root carries, with a bare type reading as a
@@ -335,13 +212,13 @@ fn root_name_of(text: &str) -> Option<String> {
     })
 }
 
-/// Write one definition to the file it was opened from or created in, under
-/// the root name that file already carries. An identical rewrite is skipped so
-/// the asset watcher does not reload behind an unchanged save.
-pub fn write_definition_file(
+/// Write one asset to the file it was opened from or created in, under the
+/// root name that file already carries. An identical rewrite is skipped so the
+/// asset watcher does not reload behind an unchanged save.
+pub fn write_asset_file(
     world: &World,
     name: &str,
-    value: &DefinitionValue,
+    value: &AssetValue,
     path: &Path,
 ) -> std::io::Result<PathBuf> {
     let existing = std::fs::read_to_string(path).ok();
@@ -349,7 +226,7 @@ pub fn write_definition_file(
         .as_deref()
         .and_then(root_name_of)
         .unwrap_or_else(|| name.to_string());
-    let text = definition_text(world, &name, value).unwrap_or_default();
+    let text = asset_text(world, &name, value).unwrap_or_default();
     if text.trim().is_empty() {
         return Err(std::io::Error::other(format!(
             "nothing to write for '{name}'"
@@ -365,12 +242,12 @@ pub fn write_definition_file(
     Ok(path.to_path_buf())
 }
 
-/// The text one definition saves as: the stamp and the header naming its
-/// type, then an asset catalog entry for a compiled type or the patch it holds
-/// for a schema-backed one.
-fn definition_text(world: &World, name: &str, value: &DefinitionValue) -> Option<String> {
+/// The text one asset saves as: the stamp and the header naming its type, then
+/// an asset catalog entry for a compiled type or the patch it holds for a
+/// schema-backed one.
+fn asset_text(world: &World, name: &str, value: &AssetValue) -> Option<String> {
     let body = match value {
-        DefinitionValue::Asset(handle) => jackdaw_bsn::serialize_assets_to_bsn(
+        AssetValue::Handle(handle) => jackdaw_bsn::serialize_assets_to_bsn(
             world,
             &[CatalogAssetRef {
                 name: sanitize_definition_name(name),
@@ -378,23 +255,21 @@ fn definition_text(world: &World, name: &str, value: &DefinitionValue) -> Option
                 asset_id: handle.id(),
             }],
         ),
-        DefinitionValue::Schema { kind, name: stored } => {
-            let data = world
-                .get_resource::<DefinitionValues>()?
-                .get(kind, stored)?;
-            emit_definition_patch(&sanitize_definition_name(name), data.clone())
+        AssetValue::Schema(data) => {
+            emit_definition_patch(&sanitize_definition_name(name), (**data).clone())
         }
+        AssetValue::Unloaded => return None,
     };
     if body.trim().is_empty() {
         return None;
     }
-    Some(asset_file_text(&definition_type_path(world, value)?, &body))
+    Some(asset_file_text(&asset_type_path(world, value)?, &body))
 }
 
-/// The type a definition's value holds, as its files name it.
-fn definition_type_path(world: &World, value: &DefinitionValue) -> Option<String> {
+/// The type an asset's value holds, as its files name it.
+fn asset_type_path(world: &World, value: &AssetValue) -> Option<String> {
     match value {
-        DefinitionValue::Asset(handle) => {
+        AssetValue::Handle(handle) => {
             let registry = world.resource::<AppTypeRegistry>().read();
             Some(
                 registry
@@ -404,13 +279,8 @@ fn definition_type_path(world: &World, value: &DefinitionValue) -> Option<String
                     .to_string(),
             )
         }
-        DefinitionValue::Schema { kind, name } => Some(
-            world
-                .get_resource::<DefinitionValues>()?
-                .get(kind, name)?
-                .type_path
-                .clone(),
-        ),
+        AssetValue::Schema(data) => Some(data.type_path.clone()),
+        AssetValue::Unloaded => None,
     }
 }
 
@@ -427,29 +297,17 @@ fn emit_definition_patch(name: &str, data: BsnStructData) -> String {
     jackdaw_bsn::emit_scene(&ast)
 }
 
-/// Put a fresh default value where this kind's values live.
-pub fn default_definition_value(
-    world: &mut World,
-    definition: &AssetKind,
-    name: &str,
-) -> Option<DefinitionValue> {
-    if definition.schema_backed() {
-        world.get_resource_or_init::<DefinitionValues>().insert(
-            &definition.kind,
-            name,
-            empty_patch(&definition.type_path),
-        );
-        return Some(DefinitionValue::Schema {
-            kind: definition.kind.clone(),
-            name: name.to_string(),
-        });
+/// A fresh default value of a registered kind.
+pub fn default_asset_value(world: &mut World, kind: &AssetKind) -> Option<AssetValue> {
+    if kind.schema_backed() {
+        return Some(AssetValue::Schema(Box::new(empty_patch(&kind.type_path))));
     }
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
-    let registration = registry.get_with_type_path(&definition.type_path)?;
+    let registration = registry.get_with_type_path(&kind.type_path)?;
     let reflect_asset = registration.data::<ReflectAsset>()?;
     let value = registration.data::<ReflectDefault>()?.default();
-    Some(DefinitionValue::Asset(
+    Some(AssetValue::Handle(
         reflect_asset.add(world, value.as_partial_reflect()),
     ))
 }
@@ -459,125 +317,18 @@ fn registered_type_id(world: &World, type_path: &str) -> Option<std::any::TypeId
     Some(registry.get_with_type_path(type_path)?.type_id())
 }
 
-fn registered_types(world: &World) -> Vec<AssetKind> {
+// -- Reading and writing an asset's fields ----------------------------------
+
+/// The value at an indexed path, if the index loaded one.
+fn value_at(world: &World, path: &Path) -> Option<AssetValue> {
     world
-        .get_resource::<AssetKinds>()
-        .map(|types| types.iter().cloned().collect())
-        .unwrap_or_default()
+        .get_resource::<AssetIndex>()?
+        .get(path)
+        .map(|entry| entry.value.clone())
 }
-
-/// What a rescan of the project's asset files found.
-#[derive(Default, Debug, PartialEq, Eq)]
-pub struct DefinitionRescan {
-    /// `(kind, name)` of files that appeared since the last scan.
-    pub added: Vec<(String, String)>,
-    /// `(kind, name)` of entries whose file has gone.
-    pub removed: Vec<(String, String)>,
-}
-
-/// Every definition file the project holds, as `(kind, name, path)`, read from
-/// what each file says it is. A name a file of the same kind already took is
-/// reported and left out, so one name means one file.
-fn scan_definition_files(
-    world: &World,
-    cache: &mut crate::asset_files::AssetKindCache,
-) -> Vec<(String, String, PathBuf)> {
-    let Some(assets) = world
-        .get_resource::<ProjectRoot>()
-        .map(ProjectRoot::assets_dir)
-    else {
-        return Vec::new();
-    };
-    let Some(kinds) = world.get_resource::<AssetKinds>() else {
-        return Vec::new();
-    };
-    let mut found: Vec<(String, String, PathBuf)> = Vec::new();
-    for path in crate::asset_files::walk_document_files(&assets) {
-        let AssetFileKind::Asset { type_path } = cache.check(&path, kinds) else {
-            continue;
-        };
-        let Some(definition) = kinds.by_type_path(&type_path).filter(|kind| kind.scanned()) else {
-            continue;
-        };
-        let name = definition_name_of(&path);
-        if found
-            .iter()
-            .any(|(kind, known, _)| kind == &definition.kind && known == &name)
-        {
-            warn!(
-                "two {} files are called '{name}'; {} stays unopened",
-                definition.kind,
-                path.display()
-            );
-            continue;
-        }
-        found.push((definition.kind.clone(), name, path));
-    }
-    found
-}
-
-/// Scan the project's assets: files that appeared are loaded, entries whose
-/// file has gone are dropped.
-///
-/// A file changed in place is not reloaded, and a definition open in the
-/// inspector keeps its value when its file disappears: the loaded value is
-/// what the editor is editing, and its Save writes the file again.
-pub fn rescan_definitions(world: &mut World) -> DefinitionRescan {
-    let mut scan = DefinitionRescan::default();
-    world.get_resource_or_init::<crate::asset_files::AssetKindCache>();
-    let found = world.resource_scope(
-        |world, mut cache: Mut<crate::asset_files::AssetKindCache>| {
-            scan_definition_files(world, &mut cache)
-        },
-    );
-    for definition in registered_types(world) {
-        if !definition.scanned() {
-            continue;
-        }
-        let files: Vec<(String, PathBuf)> = found
-            .iter()
-            .filter(|(kind, _, _)| kind == &definition.kind)
-            .map(|(_, name, path)| (name.clone(), path.clone()))
-            .collect();
-        let known = world
-            .resource::<DefinitionRegistry>()
-            .names_of(&definition.kind);
-
-        for gone in known
-            .iter()
-            .filter(|name| !files.iter().any(|(found, _)| found == *name))
-        {
-            world
-                .resource_mut::<DefinitionRegistry>()
-                .remove(&definition.kind, gone);
-            scan.removed.push((definition.kind.clone(), gone.clone()));
-        }
-
-        for (name, path) in files {
-            if known.contains(&name) {
-                continue;
-            }
-            let Some(value) = load_definition_file(world, &definition, &path) else {
-                continue;
-            };
-            world
-                .resource_mut::<DefinitionRegistry>()
-                .insert(DefinitionEntry {
-                    kind: definition.kind.clone(),
-                    name: name.clone(),
-                    value,
-                    path,
-                });
-            scan.added.push((definition.kind.clone(), name));
-        }
-    }
-    scan
-}
-
-// -- Reading and writing a definition's fields ------------------------------
 
 /// The asset a definition-editing entity stands for, reflected out of its
-/// store. `None` when the entity is not editing a definition of `type_path`.
+/// store. `None` when the entity is not editing an asset of `type_path`.
 pub fn definition_value<'w>(
     world: &'w World,
     entity: Entity,
@@ -588,14 +339,30 @@ pub fn definition_value<'w>(
     if edit.type_path != type_path {
         return None;
     }
+    let handle = world
+        .get_resource::<AssetIndex>()?
+        .get(&edit.path)?
+        .value
+        .handle()?;
     let reflect_asset = registry
         .get_with_type_path(type_path)?
         .data::<ReflectAsset>()?;
-    reflect_asset.get(world, edit.value.handle()?.id())
+    reflect_asset.get(world, handle.id())
 }
 
-/// The schema the project reported for a definition kind's type, when the
-/// editor knows the type no other way.
+/// The file the open card is editing, as the index keys it.
+pub fn open_definition_path(world: &World) -> Option<PathBuf> {
+    let entity = world.get_resource::<OpenDefinition>()?.0?;
+    Some(world.get::<DefinitionAssetEdit>(entity)?.path.clone())
+}
+
+/// The value the open card is editing.
+pub fn open_definition_value(world: &World) -> Option<AssetValue> {
+    value_at(world, &open_definition_path(world)?)
+}
+
+/// The schema the project reported for a kind's type, when the editor knows
+/// the type no other way.
 pub fn definition_schema(world: &World, kind: &str) -> Option<jackdaw_schema::TypeSchema> {
     let definition = definition_of_kind(world, kind)?;
     world
@@ -604,25 +371,26 @@ pub fn definition_schema(world: &World, kind: &str) -> Option<jackdaw_schema::Ty
         .cloned()
 }
 
-/// The whole of a schema-backed definition as JSON: what its file authors,
-/// over what its type defaults to.
-pub fn schema_definition_json(world: &World, kind: &str, name: &str) -> Option<serde_json::Value> {
+/// The whole of a schema-backed asset as JSON: what its file authors, over
+/// what its type defaults to.
+pub fn schema_definition_json(world: &World, kind: &str, path: &Path) -> Option<serde_json::Value> {
     let schema = definition_schema(world, kind)?;
-    let data = world.get_resource::<DefinitionValues>()?.get(kind, name)?;
+    let value = value_at(world, path)?;
+    let data = value.schema()?;
     let types = world.get_resource::<crate::project_types::ProjectTypes>()?;
     Some(crate::schema_values::value_json(
         world, types, &schema, data,
     ))
 }
 
-/// Whether this entity is editing a definition of `type_path`.
+/// Whether this entity is editing an asset of `type_path`.
 fn edits_definition(world: &World, entity: Entity, type_path: &str) -> bool {
     world
         .get::<DefinitionAssetEdit>(entity)
         .is_some_and(|edit| edit.type_path == type_path)
 }
 
-/// The open definition's entity, while the inspector is showing it and it is
+/// The open asset's entity, while the inspector is showing it and it is
 /// editing `type_path`. Selecting a scene entity again hands the same type's
 /// edits back to the scene.
 fn open_edit_of(world: &World, type_path: &str) -> Option<Entity> {
@@ -651,23 +419,25 @@ fn field_as_json(
     if edit.type_path != type_path {
         return None;
     }
-    definition_field_json(world, &edit.value, type_path, field_path)
+    definition_field_json(world, &edit.path, type_path, field_path)
 }
 
-/// One field of a definition, whichever way its value is held.
+/// One field of the asset at a path, whichever way its value is held.
 fn definition_field_json(
     world: &World,
-    value: &DefinitionValue,
+    path: &Path,
     type_path: &str,
     field_path: &str,
 ) -> Option<serde_json::Value> {
-    match value {
-        DefinitionValue::Asset(handle) => asset_field_json(world, handle, type_path, field_path),
-        DefinitionValue::Schema { kind, name } => {
-            let whole = schema_definition_json(world, kind, name)?;
+    let kind = world.get_resource::<AssetIndex>()?.get(path)?.kind.clone();
+    match value_at(world, path)? {
+        AssetValue::Handle(handle) => asset_field_json(world, &handle, type_path, field_path),
+        AssetValue::Schema(_) => {
+            let whole = schema_definition_json(world, &kind, path)?;
             let steps = crate::schema_values::parse_path(field_path);
             crate::schema_values::json_at(&whole, &steps).cloned()
         }
+        AssetValue::Unloaded => None,
     }
 }
 
@@ -691,31 +461,34 @@ fn asset_field_json(
         value.reflect_path(field_path).ok()?
     };
     let server = world.get_resource::<AssetServer>();
-    if let Some(path) = crate::typed_values::asset_path_json(&registry, server, field) {
+    let index = world.get_resource::<crate::asset_index::AssetIndex>();
+    if let Some(path) = crate::typed_values::asset_path_json(&registry, server, index, field) {
         return Some(path);
     }
     crate::inspector::reflect_fields::reflect_to_json(field, &registry)
 }
 
-/// Write one field of a definition, and mark whatever card is editing it as
-/// having unsaved changes.
+/// Write one field of the asset at a path, and mark whatever card is editing
+/// it as having unsaved changes.
 fn write_field(
     world: &mut World,
-    value: &DefinitionValue,
+    path: &Path,
     type_path: &str,
     field_path: &str,
     json: &serde_json::Value,
 ) -> bool {
+    let Some(value) = value_at(world, path) else {
+        return false;
+    };
     let written = match value {
-        DefinitionValue::Asset(handle) => {
-            write_asset_field(world, handle, type_path, field_path, json)
+        AssetValue::Handle(handle) => {
+            write_asset_field(world, &handle, type_path, field_path, json)
         }
-        DefinitionValue::Schema { kind, name } => {
-            write_schema_field(world, kind, name, field_path, json)
-        }
+        AssetValue::Schema(_) => write_schema_field(world, path, field_path, json),
+        AssetValue::Unloaded => false,
     };
     if written {
-        mark_dirty(world, value);
+        mark_dirty(world, path);
     }
     written
 }
@@ -779,11 +552,12 @@ fn text_value_for_asset_field(
         value.reflect_path(field_path).ok()?
     };
     let type_id = field.get_represented_type_info()?.type_id();
-    if crate::typed_values::takes_asset_path(&registry, type_id) {
+    let references = jackdaw_bsn::apply_reference_map(world);
+    if crate::typed_values::takes_asset_path(&registry, type_id) && !references.contains_key(text) {
         report_missing_asset(text);
     }
     let server = world.get_resource::<AssetServer>();
-    crate::typed_values::text_value_for_field(&registry, server, type_id, text)
+    crate::typed_values::text_value_for_field(&registry, server, Some(&references), type_id, text)
 }
 
 /// Say when a path names nothing under the project's assets, without refusing
@@ -803,21 +577,27 @@ fn report_missing_asset(path: &str) {
 
 /// Write one field of a value the editor knows only as schema. A field set
 /// back to what its type defaults to stops being authored at all, so the file
-/// keeps holding only what the definition changes.
+/// keeps holding only what the asset changes.
 fn write_schema_field(
     world: &mut World,
-    kind: &str,
-    name: &str,
+    path: &Path,
     field_path: &str,
     json: &serde_json::Value,
 ) -> bool {
-    let Some(schema) = definition_schema(world, kind) else {
-        warn!("this project reported no schema for its {kind} definitions");
+    let Some(kind) = world
+        .get_resource::<AssetIndex>()
+        .and_then(|index| index.get(path))
+        .map(|entry| entry.kind.clone())
+    else {
         return false;
     };
-    let Some(mut data) = world
-        .get_resource::<DefinitionValues>()
-        .and_then(|values| values.get(kind, name))
+    let Some(schema) = definition_schema(world, &kind) else {
+        warn!("this project reported no schema for its {kind} files");
+        return false;
+    };
+    let Some(mut data) = value_at(world, path)
+        .as_ref()
+        .and_then(AssetValue::schema)
         .cloned()
     else {
         return false;
@@ -866,25 +646,71 @@ fn write_schema_field(
         }
         true
     });
-    if written {
-        world
-            .get_resource_or_init::<DefinitionValues>()
-            .insert(kind, name, data);
+    if written && let Some(entry) = world.resource_mut::<AssetIndex>().get_mut(path) {
+        entry.value = AssetValue::Schema(Box::new(data));
     }
     written
 }
 
-/// The entity editing this value, if one is open.
-fn edit_of_value(world: &mut World, value: &DefinitionValue) -> Option<Entity> {
+/// The entity editing the file at this path, if one is open.
+fn open_card_for(world: &mut World, path: &Path) -> Option<Entity> {
     let mut edits = world.query::<(Entity, &DefinitionAssetEdit)>();
     edits
         .iter(world)
-        .find(|(_, edit)| edit.value == *value)
+        .find(|(_, edit)| edit.path == path)
         .map(|(entity, _)| entity)
 }
 
-fn mark_dirty(world: &mut World, value: &DefinitionValue) {
-    let Some(entity) = edit_of_value(world, value) else {
+/// Whether an open card holds edits that are not on disk.
+pub fn open_card_has_unsaved_edits(world: &World) -> bool {
+    world
+        .get_resource::<OpenDefinition>()
+        .and_then(|open| open.0)
+        .and_then(|entity| world.get::<DefinitionAssetEdit>(entity))
+        .is_some_and(|edit| edit.dirty)
+}
+
+/// Whether the card editing this file holds edits that are not on disk.
+pub fn card_has_unsaved_edits(world: &World, path: &Path) -> bool {
+    let Some(entity) = world
+        .get_resource::<OpenDefinition>()
+        .and_then(|open| open.0)
+    else {
+        return false;
+    };
+    world
+        .get::<DefinitionAssetEdit>(entity)
+        .is_some_and(|edit| edit.path == path && edit.dirty)
+}
+
+/// Close the card editing this file, for a file that has left the project.
+pub fn close_card_for(world: &mut World, path: &Path) {
+    let editing = world
+        .get_resource::<OpenDefinition>()
+        .and_then(|open| open.0)
+        .and_then(|entity| world.get::<DefinitionAssetEdit>(entity))
+        .is_some_and(|edit| edit.path == path);
+    if editing {
+        close_open_definition(world);
+    }
+}
+
+/// Close the card when the kind it was opened under is no longer registered.
+pub fn close_card_of_missing_kind(world: &mut World, kinds: &[String]) {
+    let open_kind = world
+        .get_resource::<OpenDefinition>()
+        .and_then(|open| open.0)
+        .and_then(|entity| world.get::<DefinitionAssetEdit>(entity))
+        .map(|edit| edit.kind.clone());
+    if let Some(kind) = open_kind
+        && !kinds.contains(&kind)
+    {
+        close_open_definition(world);
+    }
+}
+
+fn mark_dirty(world: &mut World, path: &Path) {
+    let Some(entity) = open_card_for(world, path) else {
         return;
     };
     if let Some(mut edit) = world.get_mut::<DefinitionAssetEdit>(entity) {
@@ -892,12 +718,12 @@ fn mark_dirty(world: &mut World, value: &DefinitionValue) {
     }
 }
 
-/// Set one field of a definition, as one undo entry.
+/// Set one field of an asset, as one undo entry.
 ///
-/// Keyed by the value rather than by the entity the definition was open on, so
-/// undo still reaches it after the card has been closed and reopened.
+/// Keyed by the file rather than by the entity the asset was open on, so undo
+/// still reaches it after the card has been closed and reopened.
 pub struct SetDefinitionField {
-    pub value: DefinitionValue,
+    pub path: PathBuf,
     pub type_path: String,
     pub field_path: String,
     pub old_json: serde_json::Value,
@@ -908,12 +734,12 @@ pub struct SetDefinitionField {
 }
 
 impl SetDefinitionField {
-    /// Write the value, reporting whether the definition took it.
+    /// Write the value, reporting whether the asset took it.
     fn apply(&self, world: &mut World, json: &serde_json::Value) -> bool {
-        if !write_field(world, &self.value, &self.type_path, &self.field_path, json) {
+        if !write_field(world, &self.path, &self.type_path, &self.field_path, json) {
             return false;
         }
-        let open = edit_of_value(world, &self.value);
+        let open = open_card_for(world, &self.path);
         if self.rebuilds_rows
             && let Some(open) = open
             && let Some(mut pending) =
@@ -941,11 +767,11 @@ impl EditorCommand for SetDefinitionField {
     }
 }
 
-/// Commit a field edit to the open definition, pushing one undo entry.
+/// Commit a field edit to the open asset, pushing one undo entry.
 ///
-/// Returns whether the edit landed on a definition; a caller whose edit is
-/// refused here writes to the selection as usual. A value the definition will
-/// not take mints no history, so undo does not walk back over a no-op.
+/// Returns whether the edit landed on an asset; a caller whose edit is refused
+/// here writes to the selection as usual. A value the asset will not take mints
+/// no history, so undo does not walk back over a no-op.
 pub(crate) fn commit_definition_field(
     world: &mut World,
     type_path: &str,
@@ -955,9 +781,9 @@ pub(crate) fn commit_definition_field(
     let Some(entity) = open_edit_of(world, type_path) else {
         return false;
     };
-    let Some(value) = world
+    let Some(path) = world
         .get::<DefinitionAssetEdit>(entity)
-        .map(|edit| edit.value.clone())
+        .map(|edit| edit.path.clone())
     else {
         return false;
     };
@@ -967,7 +793,7 @@ pub(crate) fn commit_definition_field(
     let old_json = take_baseline(world, type_path, field_path).unwrap_or(current);
     let rebuilds_rows = field_rebuilds_rows(world, entity, type_path, field_path);
     let command = SetDefinitionField {
-        value,
+        path,
         type_path: type_path.to_string(),
         field_path: field_path.to_string(),
         old_json,
@@ -983,8 +809,84 @@ pub(crate) fn commit_definition_field(
     true
 }
 
-/// Write a field of the open definition without an undo entry, for the ticks
-/// of a drag.
+/// The path a field of the open asset names, whichever way the asset is held.
+pub(crate) fn asset_field_text(
+    world: &World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+) -> Option<String> {
+    let json = field_as_json(world, entity, type_path, field_path)?;
+    Some(json.as_str().unwrap_or_default().to_string())
+}
+
+/// The path a field of the asset behind a handle names.
+pub(crate) fn handle_field_text(
+    world: &World,
+    handle: &UntypedHandle,
+    field_path: &str,
+) -> Option<String> {
+    let type_path = handle_type_path(world, handle)?;
+    let json = asset_field_json(world, handle, &type_path, field_path)?;
+    Some(json.as_str().unwrap_or_default().to_string())
+}
+
+/// Set one field of the asset a handle points at, as one undo entry.
+///
+/// An asset with a file of its own is edited through that file, so undo reaches
+/// it the way it reaches the open card. One the editor only holds in memory,
+/// such as a material created and not yet saved, is written straight to its
+/// store and mints no history, since there is no file to key an entry by.
+pub(crate) fn commit_handle_field(
+    world: &mut World,
+    handle: &UntypedHandle,
+    field_path: &str,
+    new_json: &serde_json::Value,
+) -> bool {
+    let entry = world
+        .get_resource::<AssetIndex>()
+        .and_then(|index| index.by_handle(handle))
+        .map(|entry| (entry.path.clone(), entry.type_path.clone()));
+    let Some((path, type_path)) = entry else {
+        let Some(type_path) = handle_type_path(world, handle) else {
+            return false;
+        };
+        return write_asset_field(world, handle, &type_path, field_path, new_json);
+    };
+    let Some(old_json) = asset_field_json(world, handle, &type_path, field_path) else {
+        return false;
+    };
+    let command = SetDefinitionField {
+        path,
+        type_path,
+        field_path: field_path.to_string(),
+        old_json,
+        new_json: new_json.clone(),
+        rebuilds_rows: false,
+    };
+    if !command.apply(world, new_json) {
+        return false;
+    }
+    world
+        .resource_mut::<CommandHistory>()
+        .push_executed(Box::new(command));
+    true
+}
+
+/// The type a handle's asset store holds, as its files name it.
+fn handle_type_path(world: &World, handle: &UntypedHandle) -> Option<String> {
+    let registry = world.resource::<AppTypeRegistry>().read();
+    Some(
+        registry
+            .get(handle.type_id())?
+            .type_info()
+            .type_path()
+            .to_string(),
+    )
+}
+
+/// Write a field of the open asset without an undo entry, for the ticks of a
+/// drag.
 pub(crate) fn preview_definition_field(
     world: &mut World,
     type_path: &str,
@@ -994,14 +896,14 @@ pub(crate) fn preview_definition_field(
     let Some(entity) = open_edit_of(world, type_path) else {
         return false;
     };
-    let Some(value) = world
+    let Some(path) = world
         .get::<DefinitionAssetEdit>(entity)
-        .map(|edit| edit.value.clone())
+        .map(|edit| edit.path.clone())
     else {
         return false;
     };
     remember_baseline(world, entity, type_path, field_path);
-    write_field(world, &value, type_path, field_path, new_json)
+    write_field(world, &path, type_path, field_path, new_json)
 }
 
 /// Record what the field held before a drag's first tick.
@@ -1041,7 +943,7 @@ fn take_baseline(
 fn field_rebuilds_rows(world: &World, entity: Entity, type_path: &str, field_path: &str) -> bool {
     if let Some(kind) = world
         .get::<DefinitionAssetEdit>(entity)
-        .filter(|edit| edit.value.schema_key().is_some())
+        .filter(|edit| is_schema_backed(world, &edit.path))
         .map(|edit| edit.kind.clone())
     {
         return schema_field_rebuilds_rows(world, &kind, field_path);
@@ -1063,8 +965,17 @@ fn field_rebuilds_rows(world: &World, entity: Entity, type_path: &str, field_pat
     })
 }
 
-/// The elements of a list field on a schema-backed definition, as the JSON a
-/// field edit takes. `None` when the entity is editing something else.
+/// Whether the file at this path holds a value the editor knows only as the
+/// project's schema.
+fn is_schema_backed(world: &World, path: &Path) -> bool {
+    world
+        .get_resource::<AssetIndex>()
+        .and_then(|index| index.get(path))
+        .is_some_and(|entry| entry.value.schema().is_some())
+}
+
+/// The elements of a list field on a schema-backed asset, as the JSON a field
+/// edit takes. `None` when the entity is editing something else.
 pub(crate) fn schema_list_items(
     world: &World,
     entity: Entity,
@@ -1072,16 +983,15 @@ pub(crate) fn schema_list_items(
     field_path: &str,
 ) -> Option<Vec<serde_json::Value>> {
     let edit = world.get::<DefinitionAssetEdit>(entity)?;
-    if edit.type_path != type_path {
+    if edit.type_path != type_path || !is_schema_backed(world, &edit.path) {
         return None;
     }
-    edit.value.schema_key()?;
-    let held = definition_field_json(world, &edit.value, type_path, field_path)?;
+    let held = definition_field_json(world, &edit.path, type_path, field_path)?;
     held.as_array().cloned()
 }
 
-/// A fresh element for a list field on a schema-backed definition, from what
-/// its item type defaults to.
+/// A fresh element for a list field on a schema-backed asset, from what its
+/// item type defaults to.
 pub(crate) fn schema_default_list_item(
     world: &World,
     entity: Entity,
@@ -1089,10 +999,9 @@ pub(crate) fn schema_default_list_item(
     field_path: &str,
 ) -> Option<serde_json::Value> {
     let edit = world.get::<DefinitionAssetEdit>(entity)?;
-    if edit.type_path != type_path {
+    if edit.type_path != type_path || !is_schema_backed(world, &edit.path) {
         return None;
     }
-    edit.value.schema_key()?;
     let types = world.get_resource::<crate::project_types::ProjectTypes>()?;
     let steps = crate::schema_values::parse_path(field_path);
     let field_type = crate::schema_values::field_type_path(types, type_path, &steps)?;
@@ -1136,61 +1045,67 @@ pub fn kind_of_file(world: &World, path: &Path) -> Option<AssetKind> {
     kinds.by_type_path(&type_path).cloned()
 }
 
-/// Load a definition file, or reuse the loaded one, and put it in the
-/// inspector. A kind loaded elsewhere is only ever shown through the value its
-/// owner published.
+/// The entry for a file, reading and indexing it if the walk has not reached it
+/// yet.
+fn entry_for_file(world: &mut World, path: &Path) -> Option<AssetEntry> {
+    let indexed = indexed_path(world, path)?;
+    if crate::asset_index::is_catalog_file(&indexed) {
+        return None;
+    }
+    if let Some(entry) = world
+        .get_resource::<AssetIndex>()
+        .and_then(|index| index.get(&indexed))
+    {
+        return Some(entry.clone());
+    }
+    let file = absolute_path(world, &indexed);
+    let kind = kind_of_file(world, &file)?;
+    let value = crate::asset_index::load_asset_value(world, &kind, &file)?;
+    let mtime = std::fs::metadata(&file)
+        .and_then(|meta| meta.modified())
+        .ok()?;
+    let entry = AssetEntry {
+        path: indexed,
+        kind: kind.kind.clone(),
+        type_path: kind.type_path.clone(),
+        file_kind: AssetFileKind::Asset {
+            type_path: kind.type_path,
+        },
+        value,
+        mtime,
+    };
+    world.resource_mut::<AssetIndex>().insert(entry.clone());
+    Some(entry)
+}
+
+/// Load an asset file, or reuse the loaded one, and put it in the inspector.
 pub fn open_definition_file(world: &mut World, path: &Path) -> bool {
-    let Some(definition) = kind_of_file(world, path) else {
+    let Some(entry) = entry_for_file(world, path) else {
         return false;
     };
-    let name = definition_name_of(path);
-
-    let known = world
-        .resource::<DefinitionRegistry>()
-        .get(&definition.kind, &name)
-        .map(|entry| entry.value.clone());
-    let value = match known {
-        Some(value) => value,
-        None => {
-            if !definition.scanned() {
-                warn!("No {} named '{name}' is loaded", definition.kind);
-                return false;
-            }
-            let Some(value) = load_definition_file(world, &definition, path) else {
-                return false;
-            };
-            world
-                .resource_mut::<DefinitionRegistry>()
-                .insert(DefinitionEntry {
-                    kind: definition.kind.clone(),
-                    name: name.clone(),
-                    value: value.clone(),
-                    path: path.to_path_buf(),
-                });
-            value
-        }
+    let Some(kind) = definition_of_kind(world, &entry.kind) else {
+        return false;
     };
-
-    show_definition(world, &definition, &name, value, path.to_path_buf());
+    if matches!(entry.value, AssetValue::Unloaded) {
+        warn!(
+            "{} is opened by the panel that loads its kind",
+            path.display()
+        );
+        return false;
+    }
+    show_definition(world, &kind, &entry.name(), entry.path);
     true
 }
 
-fn show_definition(
-    world: &mut World,
-    definition: &AssetKind,
-    name: &str,
-    value: DefinitionValue,
-    path: PathBuf,
-) {
+fn show_definition(world: &mut World, kind: &AssetKind, name: &str, path: PathBuf) {
     close_open_definition(world);
     let entity = world
         .spawn((
-            Name::new(format!("{} ({})", name, definition.label)),
+            Name::new(format!("{} ({})", name, kind.label)),
             DefinitionAssetEdit {
-                kind: definition.kind.clone(),
+                kind: kind.kind.clone(),
                 name: name.to_string(),
-                type_path: definition.type_path.clone(),
-                value,
+                type_path: kind.type_path.clone(),
                 path,
                 dirty: false,
             },
@@ -1200,8 +1115,8 @@ fn show_definition(
     crate::selection::select_only(world, entity);
 }
 
-/// Drop the editing entity for whatever definition was open. The definition
-/// itself stays loaded and registered.
+/// Drop the editing entity for whatever asset was open. The asset itself stays
+/// loaded and indexed.
 pub fn close_open_definition(world: &mut World) {
     let Some(entity) = world.resource_mut::<OpenDefinition>().0.take() else {
         return;
@@ -1217,92 +1132,58 @@ pub fn close_open_definition(world: &mut World) {
     }
 }
 
-/// Write the open definition back to its file, reporting the name it saved
-/// under.
+/// Write the open asset back to its file, reporting the name it saved under.
 fn save_open_definition(world: &mut World, entity: Entity) -> Option<String> {
-    let (kind, name, value, path) = world.get::<DefinitionAssetEdit>(entity).map(|edit| {
-        (
-            edit.kind.clone(),
-            edit.name.clone(),
-            edit.value.clone(),
-            edit.path.clone(),
-        )
-    })?;
-    save_definition(world, &kind, &name, &value, &path)
+    let path = world
+        .get::<DefinitionAssetEdit>(entity)
+        .map(|edit| edit.path.clone())?;
+    save_indexed_asset(world, &path)
 }
 
-/// Write the definition a file path names back to that file, without taking
-/// the inspector off whatever it is showing.
+/// Write the asset a file path names back to that file, without taking the
+/// inspector off whatever it is showing.
 fn save_definition_at(world: &mut World, path: &Path) -> Option<String> {
-    if let Some(entry) = world.resource::<DefinitionRegistry>().by_path(path) {
-        let (kind, name, value) = (entry.kind.clone(), entry.name.clone(), entry.value.clone());
-        return save_definition(world, &kind, &name, &value, path);
-    }
-    let Some(definition) = kind_of_file(world, path) else {
+    let Some(entry) = entry_for_file(world, path) else {
         warn!("asset.save: {} is not an asset file", path.display());
         return None;
     };
-    let name = definition_name_of(path);
-    let Some(value) = world
-        .resource::<DefinitionRegistry>()
-        .get(&definition.kind, &name)
-        .map(|entry| entry.value.clone())
-    else {
-        warn!(
-            "asset.save: no {} named '{name}' is loaded",
-            definition.kind
-        );
-        return None;
-    };
-    save_definition(world, &definition.kind, &name, &value, path)
+    save_indexed_asset(world, &entry.path)
 }
 
-/// Write one definition back to the file it came from and record where it
-/// landed.
-fn save_definition(
-    world: &mut World,
-    kind: &str,
-    name: &str,
-    value: &DefinitionValue,
-    path: &Path,
-) -> Option<String> {
-    let path = match write_definition_file(world, name, value, path) {
-        Ok(path) => path,
-        Err(err) => {
-            warn!("asset.save: failed to write '{name}': {err}");
-            return None;
-        }
-    };
-    if let Some(open) = edit_of_value(world, value)
+/// Write one indexed asset back to the file it came from.
+fn save_indexed_asset(world: &mut World, path: &Path) -> Option<String> {
+    let entry = world.get_resource::<AssetIndex>()?.get(path)?.clone();
+    let name = entry.name();
+    let file = absolute_path(world, path);
+    if let Err(err) = write_asset_file(world, &name, &entry.value, &file) {
+        warn!("asset.save: failed to write '{name}': {err}");
+        return None;
+    }
+    crate::asset_index::note_written(world, &file);
+    if let Some(open) = open_card_for(world, path)
         && let Some(mut edit) = world.get_mut::<DefinitionAssetEdit>(open)
     {
         edit.dirty = false;
-        edit.path = path.clone();
     }
-    world
-        .resource_mut::<DefinitionRegistry>()
-        .insert(DefinitionEntry {
-            kind: kind.to_string(),
-            name: name.to_string(),
-            value: value.clone(),
-            path,
-        });
-    Some(name.to_string())
+    Some(name)
 }
 
 // -- Operators --------------------------------------------------------------
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<AssetNewOp>()
+        .register_operator::<crate::new_asset::AssetNewPickerOp>()
         .register_operator::<AssetOpenOp>()
         .register_operator::<AssetSaveOp>()
         .register_operator::<AssetDeleteOp>()
         .register_operator::<AssetSetOp>()
+        .register_operator::<AssetPickOp>()
+        .register_operator::<AssetClearOp>()
         .register_operator::<AssetListOp>();
 }
 
 /// The kind saved materials list under, so a material is browsed, opened and
-/// edited through the same registry as any other asset.
+/// edited through the same index as any other asset.
 pub const MATERIAL_KIND: &str = "material";
 
 /// The kind an animation graph file holds.
@@ -1311,8 +1192,7 @@ pub const ANIMATION_GRAPH_KIND: &str = "animation_graph";
 /// The kind a packed prefab holds.
 pub const PREFAB_KIND: &str = "prefab";
 
-/// The types the editor has compiled in, each loaded by the panel that owns
-/// it rather than by the asset scan.
+/// The types the editor has compiled in.
 fn compiled_kinds() -> [AssetKind; 3] {
     use jackdaw_api_internal::lucide_icons::Icon;
     [
@@ -1340,168 +1220,8 @@ pub(crate) fn plugin(app: &mut App) {
             kinds.register(kind);
         }
     }
-    app.init_resource::<DefinitionRegistry>()
-        .init_resource::<crate::asset_files::AssetKindCache>()
-        .init_resource::<DefinitionValues>()
-        .init_resource::<DefinitionEditSession>()
-        .init_resource::<OpenDefinition>()
-        .init_resource::<DefinitionScanPending>()
-        .add_systems(OnEnter(crate::AppState::Editor), watch_definition_files)
-        .add_systems(
-            Update,
-            (
-                follow_registered_types.run_if(resource_changed::<AssetKinds>),
-                poll_definition_watcher,
-                apply_definition_scan,
-            )
-                .chain()
-                .run_if(in_state(crate::AppState::Editor)),
-        )
-        .add_systems(
-            Update,
-            mirror_material_definitions
-                .run_if(resource_exists_and_changed::<crate::material_assets::MaterialRegistry>),
-        );
-}
-
-/// Publish the saved materials into the definition registry, so the material
-/// directory browses and opens like any other kind.
-fn mirror_material_definitions(world: &mut World) {
-    if definition_of_kind(world, MATERIAL_KIND).is_none() {
-        return;
-    }
-    let saved: Vec<(String, UntypedHandle)> = world
-        .resource::<crate::material_assets::MaterialRegistry>()
-        .saved_entries()
-        .map(|entry| {
-            (
-                sanitize_definition_name(&entry.name),
-                entry.handle.clone().untyped(),
-            )
-        })
-        .collect();
-    let paths: Vec<PathBuf> = {
-        let Some(project) = world.get_resource::<ProjectRoot>() else {
-            return;
-        };
-        saved
-            .iter()
-            .map(|(name, _)| crate::material_assets::material_file_path(project, name))
-            .collect()
-    };
-
-    let mut registry = world.resource_mut::<DefinitionRegistry>();
-    registry.entries.retain(|entry| entry.kind != MATERIAL_KIND);
-    for ((name, handle), path) in saved.into_iter().zip(paths) {
-        registry.insert(DefinitionEntry {
-            kind: MATERIAL_KIND.to_string(),
-            name,
-            value: DefinitionValue::Asset(handle),
-            path,
-        });
-    }
-}
-
-/// Watches the project's assets directory so a definition file written by
-/// another tool registers without reopening the project.
-#[derive(Resource)]
-struct DefinitionFileWatcher {
-    _watcher: notify::RecommendedWatcher,
-    receiver: Mutex<mpsc::Receiver<()>>,
-}
-
-#[derive(Resource, Default)]
-struct DefinitionScanPending(bool);
-
-fn watch_definition_files(
-    project: Option<Res<ProjectRoot>>,
-    mut pending: ResMut<DefinitionScanPending>,
-    mut commands: Commands,
-) {
-    pending.0 = true;
-    let Some(assets) = project.map(|project| project.assets_dir()) else {
-        return;
-    };
-    let (sender, receiver) = mpsc::channel();
-    let watcher =
-        notify::recommended_watcher(move |event: Result<notify::Event, notify::Error>| {
-            use notify::EventKind;
-            if let Ok(event) = event
-                && matches!(
-                    event.kind,
-                    EventKind::Create(_)
-                        | EventKind::Remove(_)
-                        | EventKind::Modify(notify::event::ModifyKind::Name(_))
-                )
-            {
-                let _ = sender.send(());
-            }
-        });
-    if let Ok(mut watcher) = watcher {
-        use notify::Watcher as _;
-        if watcher
-            .watch(&assets, notify::RecursiveMode::Recursive)
-            .is_ok()
-        {
-            commands.insert_resource(DefinitionFileWatcher {
-                _watcher: watcher,
-                receiver: Mutex::new(receiver),
-            });
-        }
-    }
-}
-
-fn poll_definition_watcher(
-    watcher: Option<Res<DefinitionFileWatcher>>,
-    mut pending: ResMut<DefinitionScanPending>,
-) {
-    let Some(watcher) = watcher else { return };
-    let Ok(receiver) = watcher.receiver.lock() else {
-        return;
-    };
-    if receiver.try_recv().is_ok() {
-        while receiver.try_recv().is_ok() {}
-        pending.0 = true;
-    }
-}
-
-/// Follow the registered types: a kind that has gone takes its loaded entries
-/// and its open card with it, and a kind that has arrived gets its directory
-/// scanned.
-fn follow_registered_types(world: &mut World) {
-    let kinds: Vec<String> = registered_types(world)
-        .into_iter()
-        .map(|definition| definition.kind)
-        .collect();
-    world
-        .resource_mut::<DefinitionRegistry>()
-        .entries
-        .retain(|entry| kinds.contains(&entry.kind));
-    world
-        .get_resource_or_init::<DefinitionValues>()
-        .values
-        .retain(|(kind, _), _| kinds.contains(kind));
-    let open_kind = world
-        .resource::<OpenDefinition>()
-        .0
-        .and_then(|entity| world.get::<DefinitionAssetEdit>(entity))
-        .map(|edit| edit.kind.clone());
-    if let Some(kind) = open_kind
-        && !kinds.contains(&kind)
-    {
-        close_open_definition(world);
-    }
-    world.resource_mut::<DefinitionScanPending>().0 = true;
-}
-
-fn apply_definition_scan(world: &mut World) {
-    if !std::mem::take(&mut world.resource_mut::<DefinitionScanPending>().0) {
-        return;
-    }
-    let scan = rescan_definitions(world);
-    if !scan.added.is_empty() {
-        info!("Loaded {} definition files", scan.added.len());
-    }
+    app.init_resource::<DefinitionEditSession>()
+        .init_resource::<OpenDefinition>();
 }
 
 fn definition_of_kind(world: &World, kind: &str) -> Option<AssetKind> {
@@ -1511,11 +1231,11 @@ fn definition_of_kind(world: &World, kind: &str) -> Option<AssetKind> {
         .cloned()
 }
 
-/// Create a definition file of a registered type and open it.
+/// Create an asset file of a registered type and open it.
 #[operator(
     id = "asset.new",
-    label = "New Definition",
-    description = "Create a definition file of a registered type and open it in the inspector.",
+    label = "New Asset",
+    description = "Create an asset file of a registered type and open it in the inspector.",
     allows_undo = false,
     params(
         r#type(String, doc = "Kind of asset to create, as its type registered it."),
@@ -1544,30 +1264,34 @@ pub fn asset_new(params: In<OperatorParameters>, mut commands: Commands) -> Oper
     OperatorResult::Finished
 }
 
-fn new_definition(world: &mut World, kind: &str, name: Option<&str>, dir: Option<&Path>) {
-    let Some((definition, name, value, path)) = create_definition(world, kind, name, dir) else {
-        return;
-    };
-    show_definition(world, &definition, &name, value, path);
-    report_to_caller(world, format!("Created {kind} '{name}'"));
-}
-
-/// Write a fresh default value of a registered kind to its file and register
-/// it.
-fn create_definition(
+/// Create an asset of a kind, open its card and report the file it landed in.
+pub(crate) fn new_definition(
     world: &mut World,
     kind: &str,
     name: Option<&str>,
     dir: Option<&Path>,
-) -> Option<(AssetKind, String, DefinitionValue, PathBuf)> {
-    let Some(definition) = definition_of_kind(world, kind) else {
-        warn!("asset.new: '{kind}' is not a registered definition type");
+) -> Option<PathBuf> {
+    let Some((definition, name, path)) = create_definition(world, kind, name, dir) else {
+        crate::status_bar::notify_error(world, format!("no {kind} could be created there"));
         return None;
     };
-    if !definition.scanned() {
-        warn!("asset.new: {kind} definitions are created by whoever loads them");
+    show_definition(world, &definition, &name, path.clone());
+    use path_slash::PathExt as _;
+    report_to_caller(world, path.to_slash_lossy().into_owned());
+    Some(path)
+}
+
+/// Write a fresh default value of a registered kind to its file and index it.
+pub(crate) fn create_definition(
+    world: &mut World,
+    kind: &str,
+    name: Option<&str>,
+    dir: Option<&Path>,
+) -> Option<(AssetKind, String, PathBuf)> {
+    let Some(definition) = definition_of_kind(world, kind) else {
+        warn!("asset.new: '{kind}' is not a registered asset type");
         return None;
-    }
+    };
     let (dir, file) = match dir {
         Some(file) if names_a_file(file) => (
             file.parent().unwrap_or(file).to_path_buf(),
@@ -1583,57 +1307,65 @@ fn create_definition(
         }
     };
     let asked_for = name.map(sanitize_definition_name);
-    let named_by_path = file.as_deref().map(definition_name_of);
+    let named_file = asked_for
+        .as_deref()
+        .filter(|asked| asked.contains('.'))
+        .map(|asked| dir.join(bsn_file_name(asked)));
+    let file = file.or_else(|| named_file.clone());
+    let named_by_path = file.as_deref().map(jackdaw_bsn::path_stem);
     let name = match named_by_path.or_else(|| asked_for.clone()) {
         Some(name) => sanitize_definition_name(&name),
         None => next_free_name(world, kind, &dir),
     };
-    if asked_for.is_some_and(|asked| asked != name) {
+    if named_file.is_none() && asked_for.is_some_and(|asked| asked != name) {
         warn!("asset.new: the file asked for names this {kind} '{name}'");
-    }
-    if world
-        .resource::<DefinitionRegistry>()
-        .get(kind, &name)
-        .is_some()
-    {
-        warn!("asset.new: a {kind} named '{name}' already exists");
-        return None;
     }
     let path = file.unwrap_or_else(|| definition_file_path(&dir, &name));
     if path.exists() {
         warn!("asset.new: {} is already there", path.display());
         return None;
     }
-    let Some(value) = default_definition_value(world, &definition, &name) else {
+    let under_assets = crate::asset_index::indexed_path(world, &path).is_some_and(|relative| {
+        !relative
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+    });
+    if !under_assets {
+        warn!(
+            "asset.new: {} is outside this project's assets",
+            path.display()
+        );
+        return None;
+    }
+    let Some(value) = default_asset_value(world, &definition) else {
         warn!(
             "asset.new: {} has no registered default",
             definition.type_path
         );
         return None;
     };
-    let path = match write_definition_file(world, &name, &value, &path) {
+    let path = match write_asset_file(world, &name, &value, &path) {
         Ok(path) => path,
         Err(err) => {
             warn!("asset.new: failed to write '{name}': {err}");
             return None;
         }
     };
-    world
-        .resource_mut::<DefinitionRegistry>()
-        .insert(DefinitionEntry {
-            kind: definition.kind.clone(),
-            name: name.clone(),
-            value: value.clone(),
-            path: path.clone(),
-        });
-    Some((definition, name, value, path))
+    let Some(indexed) = crate::asset_index::index_written(world, &path, &definition, value) else {
+        warn!(
+            "asset.new: {} is outside this project's assets",
+            path.display()
+        );
+        return None;
+    };
+    Some((definition, name, indexed))
 }
 
-/// Open a definition file in the inspector.
+/// Open an asset file in the inspector.
 #[operator(
     id = "asset.open",
-    label = "Open Definition",
-    description = "Open a definition file in the inspector.",
+    label = "Open Asset",
+    description = "Open an asset file in the inspector.",
     allows_undo = false,
     params(path(String, doc = "File to open, as a path under the project."))
 )]
@@ -1645,22 +1377,19 @@ pub fn asset_open(params: In<OperatorParameters>, mut commands: Commands) -> Ope
     commands.queue(move |world: &mut World| {
         let path = resolve_project_path(world, &path);
         if !open_definition_file(world, &path) {
-            warn!("asset.open: {} is not a definition file", path.display());
+            warn!("asset.open: {} is not an asset file", path.display());
         }
     });
     OperatorResult::Finished
 }
 
-/// Write a definition back to its file.
+/// Write an asset back to its file.
 #[operator(
     id = "asset.save",
-    label = "Save Definition",
-    description = "Write the open definition back to its file.",
+    label = "Save Asset",
+    description = "Write the open asset back to its file.",
     allows_undo = false,
-    params(path(
-        String,
-        doc = "Definition file to save. Defaults to the open definition."
-    ))
+    params(path(String, doc = "Asset file to save. Defaults to the open asset."))
 )]
 pub fn asset_save(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     let path = params.as_str("path").map(PathBuf::from);
@@ -1672,7 +1401,7 @@ pub fn asset_save(params: In<OperatorParameters>, mut commands: Commands) -> Ope
             }
             None => {
                 let Some(entity) = world.resource::<OpenDefinition>().0 else {
-                    warn!("asset.save: no definition is open");
+                    warn!("asset.save: no asset is open");
                     return;
                 };
                 save_open_definition(world, entity)
@@ -1685,13 +1414,13 @@ pub fn asset_save(params: In<OperatorParameters>, mut commands: Commands) -> Ope
     OperatorResult::Finished
 }
 
-/// Delete a definition file and forget what it held.
+/// Delete an asset file and forget what it held.
 #[operator(
     id = "asset.delete",
-    label = "Delete Definition",
-    description = "Delete a definition file and drop it from this project.",
+    label = "Delete Asset",
+    description = "Delete an asset file and drop it from this project.",
     allows_undo = false,
-    params(path(String, doc = "Definition file to delete."))
+    params(path(String, doc = "Asset file to delete."))
 )]
 pub fn asset_delete(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     let Some(path) = params.as_str("path").map(PathBuf::from) else {
@@ -1717,7 +1446,6 @@ fn delete_definition(world: &mut World, path: &Path) {
         );
         return;
     }
-    let name = definition_name_of(path);
     match std::fs::remove_file(path) {
         Ok(()) => info!("Removed {}", path.display()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -1726,34 +1454,21 @@ fn delete_definition(world: &mut World, path: &Path) {
             return;
         }
     }
-    world
-        .resource_mut::<DefinitionRegistry>()
-        .remove(&definition.kind, &name);
-    world
-        .get_resource_or_init::<DefinitionValues>()
-        .remove(&definition.kind, &name);
-    let open_is_gone = world
-        .resource::<OpenDefinition>()
-        .0
-        .and_then(|entity| world.get::<DefinitionAssetEdit>(entity))
-        .is_some_and(|edit| edit.kind == definition.kind && edit.name == name);
-    if open_is_gone {
-        close_open_definition(world);
-    }
+    let Some(indexed) = indexed_path(world, path) else {
+        return;
+    };
+    world.resource_mut::<AssetIndex>().remove(&indexed);
+    close_card_for(world, &indexed);
 }
 
-/// Set a field of the open definition, for edits driven from outside the
-/// inspector.
+/// Set a field of the open asset, for edits driven from outside the inspector.
 #[operator(
     id = "asset.set",
-    label = "Set Definition Field",
-    description = "Set a field of the open definition.",
+    label = "Set Asset Field",
+    description = "Set a field of the open asset.",
     allows_undo = false,
     params(
-        field(
-            String,
-            doc = "Field path on the definition, for example 'stack_size'."
-        ),
+        field(String, doc = "Field path on the asset, for example 'stack_size'."),
         value(
             String,
             doc = "Value to set: JSON, a plain scalar, an asset path for a slot \
@@ -1777,7 +1492,7 @@ pub fn asset_set(params: In<OperatorParameters>, mut commands: Commands) -> Oper
 
 fn set_definition_field(world: &mut World, field: &str, value: &str) {
     let Some(entity) = world.resource::<OpenDefinition>().0 else {
-        warn!("asset.set: no definition is open");
+        warn!("asset.set: no asset is open");
         return;
     };
     let Some(type_path) = world
@@ -1802,13 +1517,99 @@ fn set_definition_field(world: &mut World, field: &str, value: &str) {
     }
 }
 
-/// Report the definitions of a kind this project holds.
+/// Drive the Pick beside an asset field, so the row's own choice can be made
+/// without the pointer.
+#[operator(
+    id = "asset.pick",
+    label = "Pick Asset",
+    description = "Choose the file an asset field names, or put up the list to choose from.",
+    allows_undo = false,
+    params(
+        field(
+            String,
+            doc = "Field path of the asset field, for example 'materials[0]'."
+        ),
+        value(
+            String,
+            doc = "File to assign, as a path under the project's assets. Left \
+                   out, the picker opens on the field instead."
+        )
+    )
+)]
+pub(crate) fn asset_pick(
+    params: In<OperatorParameters>,
+    rows: Query<(Entity, &crate::inspector::asset_row::AssetFieldRow)>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(field) = params.as_str("field").map(str::to_owned) else {
+        warn!("asset.pick: no field given");
+        return OperatorResult::Cancelled;
+    };
+    let Some(row) = showing_asset_field(&rows, &field) else {
+        warn!("asset.pick: no asset field is showing for '{field}'");
+        return OperatorResult::Cancelled;
+    };
+    let value = params.as_str("value").map(str::to_owned);
+    commands.queue(move |world: &mut World| match value {
+        Some(value) => {
+            if crate::inspector::asset_row::commit_asset_row(world, row, &value) {
+                report_to_caller(world, format!("Set {field}"));
+            } else {
+                warn!("asset.pick: '{field}' did not take '{value}'");
+            }
+        }
+        None => crate::inspector::asset_row::open_asset_picker(world, row),
+    });
+    OperatorResult::Finished
+}
+
+/// The row writing this field, for an operator that names a field rather than
+/// clicking a row.
+fn showing_asset_field(
+    rows: &Query<(Entity, &crate::inspector::asset_row::AssetFieldRow)>,
+    field: &str,
+) -> Option<Entity> {
+    rows.iter()
+        .find(|(_, row)| row.field_path == field)
+        .map(|(entity, _)| entity)
+}
+
+/// Leave an asset field naming nothing.
+#[operator(
+    id = "asset.clear",
+    label = "Clear Asset",
+    description = "Leave an asset field naming no file.",
+    allows_undo = false,
+    params(field(String, doc = "Field path of the asset field to clear."))
+)]
+pub(crate) fn asset_clear(
+    params: In<OperatorParameters>,
+    rows: Query<(Entity, &crate::inspector::asset_row::AssetFieldRow)>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(field) = params.as_str("field").map(str::to_owned) else {
+        warn!("asset.clear: no field given");
+        return OperatorResult::Cancelled;
+    };
+    let Some(row) = showing_asset_field(&rows, &field) else {
+        warn!("asset.clear: no asset field is showing for '{field}'");
+        return OperatorResult::Cancelled;
+    };
+    commands.queue(move |world: &mut World| {
+        if crate::inspector::asset_row::commit_asset_row(world, row, "") {
+            report_to_caller(world, format!("Cleared {field}"));
+        }
+    });
+    OperatorResult::Finished
+}
+
+/// Report the files of a kind this project holds.
 #[operator(
     id = "asset.list",
-    label = "List Definitions",
-    description = "Report the definitions of a registered type this project holds.",
+    label = "List Assets",
+    description = "Report the files of a registered asset type this project holds.",
     allows_undo = false,
-    params(r#type(String, doc = "Kind of definition to list."))
+    params(r#type(String, doc = "Kind of asset to list."))
 )]
 pub fn asset_list(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     let Some(kind) = params.as_str("type").map(str::to_owned) else {
@@ -1817,18 +1618,18 @@ pub fn asset_list(params: In<OperatorParameters>, mut commands: Commands) -> Ope
     };
     commands.queue(move |world: &mut World| {
         if definition_of_kind(world, &kind).is_none() {
-            warn!("asset.list: '{kind}' is not a registered definition type");
+            warn!("asset.list: '{kind}' is not a registered asset type");
             return;
         }
-        let names = world.resource::<DefinitionRegistry>().names_of(&kind);
-        report_to_caller(world, format!("{kind}: {}", names.join(", ")));
+        let paths = world.resource::<AssetIndex>().paths_of_kind(&kind);
+        report_to_caller(world, format!("{kind}: {}", paths.join(", ")));
     });
     OperatorResult::Finished
 }
 
 /// Accept both a path under the project and one relative to its assets
 /// directory, so a caller can pass what the asset browser lists.
-fn resolve_project_path(world: &World, path: &Path) -> PathBuf {
+pub(crate) fn resolve_project_path(world: &World, path: &Path) -> PathBuf {
     if path.is_absolute() {
         return path.to_path_buf();
     }
@@ -1845,74 +1646,9 @@ fn resolve_project_path(world: &World, path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::asset::{Asset, AssetPlugin};
-    use bevy::reflect::Reflect;
-
-    #[derive(Reflect, Clone, Default, PartialEq, Debug)]
-    #[reflect(Default)]
-    struct LootRoll {
-        item: String,
-        weight: u32,
-    }
-
-    #[derive(Reflect, Clone, Default, PartialEq, Debug)]
-    #[reflect(Default)]
-    enum Rarity {
-        #[default]
-        Common,
-        Rare,
-    }
-
-    #[derive(Asset, Reflect, Clone, Default)]
-    #[reflect(Default)]
-    struct ItemDef {
-        stack_size: u32,
-        rarity: Rarity,
-        loot: Vec<LootRoll>,
-    }
-
-    fn item_type() -> AssetKind {
-        AssetKind::extension("item", "Item", "jackdaw::definition_assets::tests::ItemDef")
-    }
-
-    fn item_file(tmp: &tempfile::TempDir, name: &str) -> PathBuf {
-        let dir = tmp.path().join("assets/content/items");
-        std::fs::create_dir_all(&dir).expect("the directory is made");
-        definition_file_path(&dir, name)
-    }
-
-    fn definition_app() -> (App, tempfile::TempDir) {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let mut app = App::new();
-        app.add_plugins((bevy::app::TaskPoolPlugin::default(), AssetPlugin::default()));
-        app.init_asset::<ItemDef>();
-        app.register_asset_reflect::<ItemDef>();
-        app.register_type::<ItemDef>();
-        app.register_type::<LootRoll>();
-        app.register_type::<Rarity>();
-        app.init_resource::<AssetKinds>();
-        app.init_resource::<DefinitionRegistry>();
-        app.insert_resource(ProjectRoot {
-            root: tmp.path().to_path_buf(),
-            config: crate::project::ProjectConfig::default(),
-        });
-        app.world_mut()
-            .resource_mut::<AssetKinds>()
-            .register(item_type());
-        (app, tmp)
-    }
-
-    fn item_of(app: &App, value: &DefinitionValue) -> ItemDef {
-        let handle = value.handle().expect("a compiled definition").clone();
-        app.world()
-            .resource::<Assets<ItemDef>>()
-            .get(&handle.typed::<ItemDef>())
-            .expect("the definition is in its store")
-            .clone()
-    }
 
     #[test]
-    fn a_file_names_its_definition_by_the_stem_before_its_first_dot() {
+    fn a_file_names_what_it_holds_by_the_stem_before_its_first_dot() {
         for (file, expected) in [
             ("torch.item.bsn", "torch"),
             ("torch.bsn", "torch"),
@@ -1920,9 +1656,9 @@ mod tests {
             (".torch.item.bsn", "torch"),
         ] {
             assert_eq!(
-                definition_name_of(Path::new(file)),
+                jackdaw_bsn::path_stem(Path::new(file)),
                 expected,
-                "{file} names a definition"
+                "{file} names an asset"
             );
         }
     }
@@ -1942,155 +1678,6 @@ mod tests {
             root_name_of("jackdaw::Item {\n}\n"),
             None,
             "a root that names nothing leaves the name to the caller"
-        );
-    }
-
-    #[test]
-    fn a_written_definition_reloads_from_the_folder_it_was_written_in() {
-        let (mut app, tmp) = definition_app();
-        let handle = app
-            .world_mut()
-            .resource_mut::<Assets<ItemDef>>()
-            .add(ItemDef {
-                stack_size: 20,
-                rarity: Rarity::Rare,
-                loot: vec![LootRoll {
-                    item: "coin".into(),
-                    weight: 3,
-                }],
-            });
-
-        let path = item_file(&tmp, "torch");
-        write_definition_file(
-            app.world(),
-            "torch",
-            &DefinitionValue::Asset(handle.untyped()),
-            &path,
-        )
-        .expect("the file is written");
-        assert!(path.is_file());
-
-        let scan = rescan_definitions(app.world_mut());
-        assert_eq!(scan.added, vec![("item".to_string(), "torch".to_string())]);
-
-        let loaded = app
-            .world()
-            .resource::<DefinitionRegistry>()
-            .get("item", "torch")
-            .expect("the scan registered it")
-            .value
-            .clone();
-        let item = item_of(&app, &loaded);
-        assert_eq!(item.stack_size, 20);
-        assert_eq!(item.rarity, Rarity::Rare);
-        assert_eq!(
-            item.loot,
-            vec![LootRoll {
-                item: "coin".into(),
-                weight: 3
-            }]
-        );
-    }
-
-    #[test]
-    fn a_file_deleted_on_disk_drops_its_entry_on_the_next_scan() {
-        let (mut app, tmp) = definition_app();
-        let handle = app
-            .world_mut()
-            .resource_mut::<Assets<ItemDef>>()
-            .add(ItemDef::default());
-        let path = item_file(&tmp, "torch");
-        write_definition_file(
-            app.world(),
-            "torch",
-            &DefinitionValue::Asset(handle.untyped()),
-            &path,
-        )
-        .expect("the file is written");
-        rescan_definitions(app.world_mut());
-
-        std::fs::remove_file(&path).expect("the file is removed");
-        let scan = rescan_definitions(app.world_mut());
-
-        assert_eq!(
-            scan.removed,
-            vec![("item".to_string(), "torch".to_string())]
-        );
-        assert!(
-            app.world()
-                .resource::<DefinitionRegistry>()
-                .get("item", "torch")
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn a_definition_is_found_in_whatever_folder_it_was_written_in() {
-        let (mut app, tmp) = definition_app();
-        let handle = app
-            .world_mut()
-            .resource_mut::<Assets<ItemDef>>()
-            .add(ItemDef {
-                stack_size: 7,
-                ..Default::default()
-            });
-        let deep = tmp.path().join("assets/somewhere/else");
-        std::fs::create_dir_all(&deep).expect("the directory is made");
-        write_definition_file(
-            app.world(),
-            "torch",
-            &DefinitionValue::Asset(handle.untyped()),
-            &definition_file_path(&deep, "torch"),
-        )
-        .expect("the file is written");
-
-        let scan = rescan_definitions(app.world_mut());
-
-        assert_eq!(scan.added, vec![("item".to_string(), "torch".to_string())]);
-        let loaded = app
-            .world()
-            .resource::<DefinitionRegistry>()
-            .get("item", "torch")
-            .expect("the scan registered it")
-            .value
-            .clone();
-        assert_eq!(item_of(&app, &loaded).stack_size, 7);
-    }
-
-    #[test]
-    fn a_file_a_kind_would_call_the_same_name_is_left_unopened() {
-        let (mut app, tmp) = definition_app();
-        let handle = app
-            .world_mut()
-            .resource_mut::<Assets<ItemDef>>()
-            .add(ItemDef::default());
-        let value = DefinitionValue::Asset(handle.untyped());
-        write_definition_file(app.world(), "torch", &value, &item_file(&tmp, "torch"))
-            .expect("the file is written");
-        let elsewhere = tmp.path().join("assets/other");
-        std::fs::create_dir_all(&elsewhere).expect("the directory is made");
-        write_definition_file(
-            app.world(),
-            "torch",
-            &value,
-            &definition_file_path(&elsewhere, "torch"),
-        )
-        .expect("the second file is written");
-
-        let scan = rescan_definitions(app.world_mut());
-
-        assert_eq!(
-            scan.added,
-            vec![("item".to_string(), "torch".to_string())],
-            "one name means one file"
-        );
-        assert_eq!(
-            app.world()
-                .resource::<DefinitionRegistry>()
-                .get("item", "torch")
-                .map(|entry| entry.path.clone()),
-            Some(item_file(&tmp, "torch")),
-            "the first file the walk reaches is the one that opens"
         );
     }
 
