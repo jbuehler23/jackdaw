@@ -3,7 +3,7 @@
 use bevy::gltf::GltfAssetLabel;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
-use bevy::world_serialization::WorldAssetRoot;
+use bevy::world_serialization::{WorldAssetRoot, WorldInstanceReady, WorldInstanceSpawner};
 use jackdaw_bsn::{AstNodeRef, SceneBsnAst};
 use jackdaw_scene_types::{Brush, GltfSource};
 
@@ -19,11 +19,27 @@ pub struct SchemaPreviewPlugin;
 
 impl Plugin for SchemaPreviewPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.add_observer(unpin_schema_preview_instance).add_systems(
             Update,
             sync_schema_previews.run_if(in_state(AppState::Editor)),
         );
     }
+}
+
+/// Bevy's world-asset spawner treats `AssetEvent::Modified` as a hot reload
+/// and rebuilds every instance of that scene. A glTF's meshes and textures
+/// each fire that during (and after) the first load, which unparents some
+/// preview meshes and leaves them at the origin. Forgetting the instance
+/// once it is spawned keeps the entities and stops the rebuild.
+fn unpin_schema_preview_instance(
+    ready: On<WorldInstanceReady>,
+    previews: Query<(), With<SchemaPreview>>,
+    mut spawner: ResMut<WorldInstanceSpawner>,
+) {
+    if !previews.contains(ready.event_target()) {
+        return;
+    }
+    spawner.unregister_instance(ready.event().instance_id);
 }
 
 fn sync_schema_previews(
