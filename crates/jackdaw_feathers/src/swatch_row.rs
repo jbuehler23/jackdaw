@@ -15,6 +15,8 @@ pub struct SwatchRow {
     pub row: Entity,
     /// The square image node, for a caller that wants to observe it.
     pub swatch: Entity,
+    /// The text naming what is bound, for a caller that keeps it in step.
+    pub value: Entity,
     /// Trailing slot for assign/clear buttons.
     pub actions: Entity,
 }
@@ -30,6 +32,8 @@ pub struct SwatchRowProps {
     /// Dim the value text: nothing is bound, so the text is a placeholder
     /// rather than a name.
     pub unbound: bool,
+    /// Room the swatch, the name and the buttons need before the row wraps.
+    pub control_min_width: Option<f32>,
 }
 
 impl SwatchRowProps {
@@ -40,6 +44,7 @@ impl SwatchRowProps {
             image: None,
             indent: 0,
             unbound: true,
+            control_min_width: None,
         }
     }
 
@@ -60,6 +65,13 @@ impl SwatchRowProps {
         self.indent = levels;
         self
     }
+
+    /// Raise the floor under the control, so a row carrying more than a name
+    /// wraps rather than squeezing the name away.
+    pub fn with_control_min_width(mut self, width: f32) -> Self {
+        self.control_min_width = Some(width);
+        self
+    }
 }
 
 pub fn spawn_swatch_row(
@@ -67,11 +79,11 @@ pub fn spawn_swatch_row(
     parent: Entity,
     props: SwatchRowProps,
 ) -> SwatchRow {
-    let field = spawn_field_row(
-        commands,
-        parent,
-        FieldRowProps::new(props.label).indented(props.indent),
-    );
+    let mut row_props = FieldRowProps::new(props.label).indented(props.indent);
+    if let Some(width) = props.control_min_width {
+        row_props = row_props.with_control_min_width(width);
+    }
+    let field = spawn_field_row(commands, parent, row_props);
 
     let mut swatch = commands.spawn((
         Node {
@@ -89,26 +101,42 @@ pub fn spawn_swatch_row(
     }
     let swatch = swatch.id();
 
-    commands.spawn((
-        Text::new(props.value),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(if props.unbound {
-            tokens::TEXT_DISABLED
-        } else {
-            tokens::TEXT_TERTIARY
-        }),
-        Node {
-            flex_grow: 1.0,
-            flex_shrink: 1.0,
-            min_width: Val::Px(0.0),
-            overflow: Overflow::clip(),
-            ..Default::default()
-        },
-        ChildOf(field.control),
-    ));
+    // The text cannot clip its own glyphs, so it rides in a box that can: a
+    // name too long for the row is cut at the edge rather than drawn over
+    // whatever sits beside it.
+    let name_box = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                flex_grow: 1.0,
+                flex_shrink: 1.0,
+                min_width: Val::Px(0.0),
+                overflow: Overflow::clip(),
+                ..Default::default()
+            },
+            ChildOf(field.control),
+        ))
+        .id();
+    let value = commands
+        .spawn((
+            Text::new(props.value),
+            TextFont {
+                font_size: tokens::TEXT_SIZE_SM,
+                ..Default::default()
+            },
+            TextColor(if props.unbound {
+                tokens::TEXT_DISABLED
+            } else {
+                tokens::TEXT_TERTIARY
+            }),
+            Node {
+                flex_shrink: 0.0,
+                ..Default::default()
+            },
+            ChildOf(name_box),
+        ))
+        .id();
 
     let actions = commands
         .spawn((
@@ -126,6 +154,7 @@ pub fn spawn_swatch_row(
     SwatchRow {
         row: field.row,
         swatch,
+        value,
         actions,
     }
 }

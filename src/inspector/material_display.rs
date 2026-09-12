@@ -81,7 +81,7 @@ pub(super) fn fill_textures_card(
     };
     let icon_font = world
         .get_resource::<IconFont>()
-        .map(|f| f.0.clone())
+        .map(|font| font.0.clone())
         .unwrap_or_default();
     fill_texture_rows(&mut world.commands(), body, &m, &handle, &icon_font);
     world.flush();

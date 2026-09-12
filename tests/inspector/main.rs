@@ -7,6 +7,7 @@
 #[path = "../util/mod.rs"]
 mod util;
 
+mod asset_row;
 mod bindings_card;
 mod bindings_link;
 mod definition_card;

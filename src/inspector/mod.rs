@@ -1,6 +1,7 @@
 pub(crate) mod add_header;
 pub(crate) mod anim_diamond;
 mod animation_graph_card;
+pub(crate) mod asset_row;
 pub mod bindings_card;
 mod brush_display;
 pub(crate) mod category_strip;
@@ -128,6 +129,7 @@ impl Plugin for InspectorPlugin {
             .add_observer(add_header::on_add_header_mount_added)
             .add_observer(add_header::on_physics_chip_click)
             .add_observer(add_header::on_material_new_click)
+            .add_observer(asset_row::on_asset_row_button)
             .add_systems(
                 Update,
                 component_display::sync_inspector_to_selection
@@ -148,6 +150,8 @@ impl Plugin for InspectorPlugin {
                         node_card::refresh_node_optional_numbers,
                         bindings_card::refresh_bindings_card_on_change,
                         definition_card::keep_unsaved_marker_in_step,
+                        asset_row::refresh_asset_rows,
+                        asset_row::poll_asset_browse_pick,
                     ),
                     brush_display::update_brush_face_properties,
                     category_strip::resolve_active_on_rebuild,
@@ -369,6 +373,22 @@ pub fn field_edited_by(world: &World, widget: Entity) -> Option<(&str, &str)> {
     world
         .get::<FieldBinding>(widget)
         .map(|binding| (binding.type_path.as_str(), binding.field_path.as_str()))
+}
+
+/// The asset type a row names, and the field path it writes, or `None` when
+/// the entity is no asset row. Addresses an asset row by the field it writes.
+pub fn asset_field_shown_by(world: &World, row: Entity) -> Option<(&str, &str)> {
+    world
+        .get::<asset_row::AssetFieldRow>(row)
+        .map(|row| (row.asset_type_path.as_str(), row.field_path.as_str()))
+}
+
+/// The control an asset row draws the file it names on, or `None` when the
+/// entity is no asset row. Clicking it is what opens the row's picker.
+pub fn asset_field_value_of(world: &World, row: Entity) -> Option<Entity> {
+    world
+        .get::<asset_row::AssetFieldRow>(row)
+        .and_then(|row| row.path_text)
 }
 
 /// Marker on the row-level container of a labeled inspector field,

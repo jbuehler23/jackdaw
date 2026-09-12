@@ -60,15 +60,12 @@ impl Plugin for MaterialBrowserPlugin {
                     update_material_browser_ui.after(rescan_material_definitions),
                     update_preview_area,
                     poll_material_browser_folder,
-                    poll_texture_slot_pick,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             )
             .add_observer(on_material_grid_added)
             .add_observer(handle_apply_material)
-            .add_observer(handle_select_material_preview)
-            .add_observer(handle_browse_texture_slot)
-            .add_observer(handle_clear_texture_slot);
+            .add_observer(handle_select_material_preview);
     }
 }
 
@@ -114,25 +111,6 @@ struct MaterialActionBar;
 /// Container for the editing sections shown for the selected material.
 #[derive(Component)]
 struct PreviewAreaContainer;
-
-#[derive(Event)]
-struct BrowseTextureSlot {
-    slot: TextureSlot,
-    material_handle: Handle<StandardMaterial>,
-}
-
-#[derive(Event)]
-struct ClearTextureSlot {
-    slot: TextureSlot,
-    material_handle: Handle<StandardMaterial>,
-}
-
-#[derive(Resource)]
-struct TextureSlotPickTask {
-    task: Task<Option<rfd::FileHandle>>,
-    slot: TextureSlot,
-    material_handle: Handle<StandardMaterial>,
-}
 
 /// Load a texture path into an `Image` handle for the given role, choosing the
 /// color space from `role.is_srgb()`.
@@ -724,112 +702,6 @@ fn poll_material_browser_folder(world: &mut World) {
     }
 }
 
-fn handle_browse_texture_slot(
-    event: On<BrowseTextureSlot>,
-    mut commands: Commands,
-    existing_task: Option<Res<TextureSlotPickTask>>,
-) {
-    if existing_task.is_some() {
-        return;
-    }
-    let slot = event.slot;
-    let material_handle = event.material_handle.clone();
-    commands.queue(move |world: &mut World| {
-        if world.contains_resource::<TextureSlotPickTask>() {
-            return;
-        }
-        let directory = material_file_directory(world, &material_handle);
-        let dialog = match directory {
-            Some(directory) => crate::native_dialog::dialog_starting_at(world, Some(directory)),
-            None => crate::native_dialog::file_dialog(
-                world,
-                crate::native_dialog::DialogPurpose::Texture,
-            ),
-        }
-        .set_title(format!("Select image for {}", slot.field()))
-        .add_filter(
-            "Images",
-            &["png", "jpg", "jpeg", "ktx2", "bmp", "tga", "webp"],
-        );
-        let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_file().await });
-        world.insert_resource(TextureSlotPickTask {
-            task,
-            slot,
-            material_handle,
-        });
-    });
-}
-
-/// The folder holding the material's own asset file, when it came from one.
-fn material_file_directory(
-    world: &World,
-    material_handle: &Handle<StandardMaterial>,
-) -> Option<PathBuf> {
-    let asset_server = world.get_resource::<AssetServer>()?;
-    let asset_path = asset_server.get_path(material_handle.id())?;
-    let assets_root = crate::project::open_project_assets_dir()?;
-    texture_browse_directory(&assets_root, asset_path.path())
-}
-
-/// The folder a texture browse starts in for a material stored at
-/// `material_path`, relative to `assets_root`.
-fn texture_browse_directory(assets_root: &Path, material_path: &Path) -> Option<PathBuf> {
-    let directory = assets_root.join(material_path.parent()?);
-    directory.is_dir().then_some(directory)
-}
-
-fn poll_texture_slot_pick(world: &mut World) {
-    let Some(mut task_res) = world.get_resource_mut::<TextureSlotPickTask>() else {
-        return;
-    };
-    let Some(result) = future::block_on(future::poll_once(&mut task_res.task)) else {
-        return;
-    };
-    let slot = task_res.slot;
-    let material_handle = task_res.material_handle.clone();
-    world.remove_resource::<TextureSlotPickTask>();
-
-    let Some(file_handle) = result else {
-        return;
-    };
-    let path = file_handle.path().to_path_buf();
-    crate::native_dialog::remember_pick(world, crate::native_dialog::DialogPurpose::Texture, &path);
-    let fs_path = path.to_slash_lossy();
-    let asset_path = crate::entity_ops::to_asset_path(&fs_path);
-    let asset_server = world.resource::<AssetServer>().clone();
-    let image_handle = if slot.is_srgb() {
-        asset_server.load::<Image>(asset_path)
-    } else {
-        asset_server
-            .load_builder()
-            .with_settings(|s: &mut ImageLoaderSettings| s.is_srgb = false)
-            .load::<Image>(asset_path)
-    };
-
-    let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-    if let Some(mut mat) = materials.get_mut(&material_handle) {
-        slot.set_on(&mut mat, Some(image_handle));
-    }
-
-    world
-        .resource_mut::<crate::asset_catalog::AssetCatalog>()
-        .dirty = true;
-    world.resource_mut::<MaterialPreviewState>().set_changed();
-}
-
-fn handle_clear_texture_slot(
-    event: On<ClearTextureSlot>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut catalog: ResMut<crate::asset_catalog::AssetCatalog>,
-    mut preview_state: ResMut<MaterialPreviewState>,
-) {
-    if let Some(mut mat) = materials.get_mut(&event.material_handle) {
-        event.slot.set_on(&mut mat, None);
-    }
-    catalog.dirty = true;
-    preview_state.set_changed();
-}
-
 fn update_material_browser_ui(
     mut commands: Commands,
     registry: Res<MaterialRegistry>,
@@ -1068,30 +940,12 @@ fn rescan_button(icon_font: Handle<Font>) -> impl Bundle {
 
 // -- Operators --------------------------------------------------------------
 
-/// Resource set by the texture-slot button click before dispatching
-/// `material.browse_texture_slot` / `material.clear_texture_slot`. The
-/// operator reads this and clears it. `Handle<StandardMaterial>` doesn't
-/// fit `PropertyValue`, so we route it through a sidecar resource the
-/// same way `hierarchy.rename_begin` uses `PendingRenameTarget`.
-#[derive(Resource, Default)]
-pub(crate) struct PendingTextureSlot {
-    pub(crate) slot: Option<TextureSlot>,
-    pub(crate) material_handle: Option<Handle<StandardMaterial>>,
-}
-
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.init_resource::<PendingTextureSlot>()
-        .register_operator::<MaterialCreateOp>()
+    ctx.register_operator::<MaterialCreateOp>()
         .register_operator::<MaterialSelectOp>()
         .register_operator::<MaterialApplyOp>()
         .register_operator::<MaterialRescanOp>()
-        .register_operator::<MaterialSelectFolderOp>()
-        .register_operator::<MaterialBrowseTextureSlotOp>()
-        .register_operator::<MaterialClearTextureSlotOp>();
-}
-
-fn pending_texture_slot_set(pending: Res<PendingTextureSlot>) -> bool {
-    pending.slot.is_some() && pending.material_handle.is_some()
+        .register_operator::<MaterialSelectFolderOp>();
 }
 
 /// Create a fresh empty material and select it for preview. It stays unsaved
@@ -1219,56 +1073,6 @@ pub fn material_select_folder(_: In<OperatorParameters>, mut commands: Commands)
     OperatorResult::Finished
 }
 
-/// Pick an image from disk for the targeted material's texture slot.
-///
-/// The slot and target material are routed through the
-/// [`PendingTextureSlot`] resource by the inspector button before
-/// dispatch.
-#[operator(
-    id = "material.browse_texture_slot",
-    label = "Browse Texture",
-    description = "Pick an image to assign to this material's texture slot.",
-    is_available = pending_texture_slot_set
-)]
-pub(crate) fn material_browse_texture_slot(
-    _: In<OperatorParameters>,
-    mut pending: ResMut<PendingTextureSlot>,
-    mut commands: Commands,
-) -> OperatorResult {
-    let slot = pending.slot.take()?;
-    let material_handle = pending.material_handle.take()?;
-    commands.trigger(BrowseTextureSlot {
-        slot,
-        material_handle,
-    });
-    OperatorResult::Finished
-}
-
-/// Remove the image from the targeted material's texture slot.
-///
-/// The slot and target material are routed through the
-/// [`PendingTextureSlot`] resource by the inspector button before
-/// dispatch.
-#[operator(
-    id = "material.clear_texture_slot",
-    label = "Clear Texture",
-    description = "Remove the image from this material's texture slot.",
-    is_available = pending_texture_slot_set
-)]
-pub(crate) fn material_clear_texture_slot(
-    _: In<OperatorParameters>,
-    mut pending: ResMut<PendingTextureSlot>,
-    mut commands: Commands,
-) -> OperatorResult {
-    let slot = pending.slot.take()?;
-    let material_handle = pending.material_handle.take()?;
-    commands.trigger(ClearTextureSlot {
-        slot,
-        material_handle,
-    });
-    OperatorResult::Finished
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1280,27 +1084,6 @@ mod tests {
         app.init_asset::<Image>();
         app.init_asset::<StandardMaterial>();
         app
-    }
-
-    #[test]
-    fn a_texture_browse_starts_in_the_folder_holding_the_material() {
-        let dir = tempfile::tempdir().expect("a temporary directory");
-        let assets = dir.path();
-        std::fs::create_dir_all(assets.join("materials/stone")).expect("the material folder");
-
-        let start = texture_browse_directory(assets, Path::new("materials/stone/granite.bsn"))
-            .expect("a start directory");
-        assert_eq!(start, assets.join("materials/stone"));
-    }
-
-    #[test]
-    fn a_texture_browse_ignores_a_material_folder_that_is_not_there() {
-        let dir = tempfile::tempdir().expect("a temporary directory");
-
-        assert_eq!(
-            texture_browse_directory(dir.path(), Path::new("materials/gone/granite.bsn")),
-            None
-        );
     }
 
     fn detected(paths: &[&str]) -> jackdaw_material::MaterialSet {
