@@ -129,20 +129,10 @@ pub mod physics_colors {
 }
 
 #[cfg(feature = "overlays")]
-#[derive(Resource, Clone, PartialEq)]
+#[derive(Resource, Clone, PartialEq, Default)]
 pub struct PhysicsOverlayConfig {
     pub show_colliders: bool,
     pub show_hierarchy_arrows: bool,
-}
-
-#[cfg(feature = "overlays")]
-impl Default for PhysicsOverlayConfig {
-    fn default() -> Self {
-        Self {
-            show_colliders: false,
-            show_hierarchy_arrows: false,
-        }
-    }
 }
 
 /// Plugin that renders collider wireframes and hierarchy arrows.
