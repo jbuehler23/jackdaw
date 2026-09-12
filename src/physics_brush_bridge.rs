@@ -1,8 +1,9 @@
 //! Bridge between editor collider configuration and avian `Collider` components.
 //!
-//! The user adds `AvianCollider` via the inspector. This module builds
-//! the actual `Collider` from it  -- handling both mesh-backed entities and
-//! brush entities (which have `BrushMeshCache` instead of `Mesh3d`).
+//! New brushes spawn with [`RigidBody::Static`] and [`AvianCollider`]. This
+//! module builds the runtime `Collider` from that wrapper  -- handling both
+//! mesh-backed entities and brushes (which have `BrushMeshCache` instead of
+//! `Mesh3d`).
 //!
 //! `ColliderConstructor` is never placed on entities, so avian's
 //! `init_collider_constructors` system never fires and can't interfere.
@@ -10,7 +11,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use jackdaw_avian_integration::AvianCollider;
-use jackdaw_geometry::is_convex_topology;
+use jackdaw_geometry::{is_convex_topology, triangulate_polygons};
 
 use crate::brush::{Brush, BrushMeshCache};
 
@@ -20,6 +21,38 @@ impl Plugin for PhysicsBrushBridgePlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(remove_collider_when_avian_collider_removed);
     }
+}
+
+/// Insert the default authored physics pair on a newly spawned brush.
+pub(crate) fn insert_default_brush_physics(world: &mut World, entity: Entity) {
+    let Ok(entity_ref) = world.get_entity(entity) else {
+        return;
+    };
+    if entity_ref.contains::<RigidBody>() || entity_ref.contains::<AvianCollider>() {
+        return;
+    }
+
+    if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+        entity_mut
+            .insert(AvianCollider::default())
+            .insert(RigidBody::Static);
+    }
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let rigid_body = RigidBody::Static;
+    crate::commands::sync_component_to_bsn_doc(
+        world,
+        entity,
+        rigid_body.as_partial_reflect(),
+        &registry,
+    );
+    let collider = AvianCollider::default();
+    crate::commands::sync_component_to_bsn_doc(
+        world,
+        entity,
+        collider.as_partial_reflect(),
+        &registry,
+    );
 }
 
 /// Copy a recentered brush `Transform` into avian `Position` / `Rotation`.
@@ -111,22 +144,21 @@ pub(crate) fn sync_editor_collider_config(
     }
 }
 
-/// Build a triangulated `Mesh` from a `BrushMeshCache`, fan-triangulating each face polygon.
+/// Build a triangulated `Mesh` from a `BrushMeshCache`.
 fn brush_mesh_from_cache(cache: &BrushMeshCache) -> Option<Mesh> {
     if cache.vertices.is_empty() {
         return None;
     }
-    let positions: Vec<[f32; 3]> = cache.vertices.iter().map(|v| [v.x, v.y, v.z]).collect();
-    let mut indices: Vec<u32> = Vec::new();
-    for polygon in &cache.face_polygons {
-        if polygon.len() >= 3 {
-            for i in 1..polygon.len() - 1 {
-                indices.push(polygon[0] as u32);
-                indices.push(polygon[i] as u32);
-                indices.push(polygon[i + 1] as u32);
-            }
-        }
+    let tris = triangulate_polygons(
+        &cache.vertices,
+        &cache.face_polygons,
+        cache.face_normals.iter().copied(),
+    );
+    if tris.is_empty() {
+        return None;
     }
+    let positions: Vec<[f32; 3]> = cache.vertices.iter().map(|v| [v.x, v.y, v.z]).collect();
+    let indices: Vec<u32> = tris.iter().copied().flatten().collect();
     let mut m = Mesh::new(
         bevy::mesh::PrimitiveTopology::TriangleList,
         bevy::asset::RenderAssetUsages::default(),

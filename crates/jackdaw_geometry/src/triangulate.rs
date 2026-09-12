@@ -65,6 +65,23 @@ pub fn triangulate_face_polygon(positions: &[Vec3], normal: Vec3) -> Vec<[u32; 3
     triangulate_polygon(positions, &ring, normal)
 }
 
+/// Earcut every face ring using the matching face-plane normal.
+pub fn triangulate_polygons(
+    vertices: &[Vec3],
+    polygons: &[Vec<usize>],
+    normals: impl IntoIterator<Item = Vec3>,
+) -> Vec<[u32; 3]> {
+    let mut indices = Vec::new();
+    for (polygon, normal) in polygons.iter().zip(normals) {
+        if polygon.len() < 3 {
+            continue;
+        }
+        let ring: Vec<u32> = polygon.iter().map(|&i| i as u32).collect();
+        indices.extend(triangulate_polygon(vertices, &ring, normal));
+    }
+    indices
+}
+
 /// Triangulate a polygon with one or more interior holes.
 ///
 /// `outer` and each entry in `holes` reference vertices in `positions` by

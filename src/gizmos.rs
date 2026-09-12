@@ -17,10 +17,7 @@ use crate::{
     selection::{Selected, Selection},
     snapping::SnapSettings,
     viewport::{MainViewportCamera, SceneViewport},
-    viewport_util::{
-        point_to_segment_dist, window_to_viewport_cursor_for,
-        window_to_viewport_cursor_for_unbounded,
-    },
+    viewport_util::{point_to_segment_dist, window_to_viewport_cursor_for},
 };
 
 /// Gizmo group for transform gizmos, rendered on top of all geometry.
@@ -87,7 +84,6 @@ const AXIS_HIT_DISTANCE: f32 = 35.0;
 /// scale handle. Smaller than `AXIS_START_OFFSET` projected, so it never
 /// competes with the axis arms.
 const UNIFORM_HANDLE_RADIUS: f32 = 12.0;
-const EPSILON: f32 = 1e-6;
 
 #[derive(Resource, Default, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum GizmoSpace {
@@ -467,37 +463,46 @@ pub fn gizmo_drag(
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut commands: Commands,
 ) -> OperatorResult {
+    let modal_running = modal.is_some();
+    if modal_running
+        && (viewport_ctx.cursor.get().is_none() || mouse.just_released(MouseButton::Left))
+    {
+        // Sync ECS -> AST before Finished so the framework's after-snapshot
+        // (and a later save) see the dragged Transforms. Undo remains the
+        // SnapshotDiff; this only brings the document up to date. Leaving the
+        // OS window commits the same way LMB release does.
+        queue_sync_gizmo_transforms_to_ast(&drag_state, &transforms, &mut commands);
+        clear_gizmo_drag_state(&mut drag_state, &mut cursor_query);
+        return OperatorResult::Finished;
+    }
+
     let cursor_pos = viewport_ctx.cursor.get()?;
     // First-frame: pick the active (hovered) viewport. Subsequent
     // frames: use the captured one so the drag stays attached even
     // if the cursor strays into a different viewport. A captured
     // viewport that is no longer available finishes the drag; a missing
-    // active viewport on the first frame cancels it. Dragging across
-    // into a sibling viewport (or off the panel) yields no viewport
-    // cursor, cancelling the drag so the cancel handler restores the
-    // start transform, which the user sees as a snap-back.
+    // active viewport on the first frame cancels it.
     let Some((camera_entity, viewport_entity)) = resolve_drag_viewport(
-        modal.is_some(),
+        modal_running,
         &viewport_ctx,
         drag_state.camera,
         drag_state.viewport,
     ) else {
-        return if modal.is_some() {
+        return if modal_running {
             OperatorResult::Finished
         } else {
             OperatorResult::Cancelled
         };
     };
     let (camera, cam_tf) = camera_query.get(camera_entity)?;
-    let viewport_cursor = resolve_viewport_cursor(
-        modal.is_some(),
+    let viewport_cursor = window_to_viewport_cursor_for(
         cursor_pos,
         camera,
         viewport_entity,
         &viewport_ctx.viewport_query,
     )?;
 
-    if modal.is_none() {
+    if !modal_running {
         let axis = hover.hovered_axis?;
         let target_entities = topmost_selected(
             &selection.entities,
@@ -532,15 +537,6 @@ pub fn gizmo_drag(
             cursor_opts.grab_mode = CursorGrabMode::Confined;
         }
         return OperatorResult::Running;
-    }
-
-    if mouse.just_released(MouseButton::Left) {
-        // Sync ECS -> AST before Finished so the framework's after-snapshot
-        // (and a later save) see the dragged Transforms. Undo remains the
-        // SnapshotDiff; this only brings the document up to date.
-        queue_sync_gizmo_transforms_to_ast(&drag_state, &transforms, &mut commands);
-        clear_gizmo_drag_state(&mut drag_state, &mut cursor_query);
-        return OperatorResult::Finished;
     }
 
     if drag_state.targets.is_empty() {
@@ -587,10 +583,14 @@ pub fn gizmo_drag(
 
     match *mode {
         ActiveTool::Translate => {
-            // Use the pivot as the reference point for projecting the axis onto screen.
-            let Some(projected) =
-                translate_axis_amount(mouse_delta, camera, cam_tf, pivot, axis_dir)
-            else {
+            let Some(projected) = crate::viewport_util::drag_along_axis(
+                camera,
+                cam_tf,
+                drag_state.drag_start_screen,
+                viewport_cursor,
+                pivot,
+                axis_dir,
+            ) else {
                 return OperatorResult::Running;
             };
             let snapped = snap_settings.snap_translate_vec3_if(axis_dir * projected, ctrl);
@@ -737,6 +737,19 @@ pub fn gizmo_drag_edit(
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut override_cursor: ResMut<OverrideCursor>,
 ) -> OperatorResult {
+    let modal_running = modal.is_some();
+    if modal_running
+        && (viewport_ctx.cursor.get().is_none() || mouse.just_released(MouseButton::Left))
+    {
+        // The framework captured a before-snapshot on start; returning
+        // Finished triggers the after-snapshot + SnapshotDiff push, so one
+        // Undo restores every brush touched. Leaving the OS window commits
+        // the same way LMB release does.
+        clear_gizmo_edit_drag_state(&mut drag_state, &mut cursor_query);
+        clear_gizmo_grab_cursor(&mut override_cursor);
+        return OperatorResult::Finished;
+    }
+
     let cursor_pos = viewport_ctx.cursor.get()?;
     // First frame picks the active (hovered) viewport; subsequent frames use
     // the captured one so the drag stays attached even if the cursor strays
@@ -744,27 +757,26 @@ pub fn gizmo_drag_edit(
     // finishes the drag; a missing active viewport on the first frame cancels
     // it.
     let Some((camera_entity, viewport_entity)) = resolve_drag_viewport(
-        modal.is_some(),
+        modal_running,
         &viewport_ctx,
         drag_state.camera,
         drag_state.viewport,
     ) else {
-        return if modal.is_some() {
+        return if modal_running {
             OperatorResult::Finished
         } else {
             OperatorResult::Cancelled
         };
     };
     let (camera, cam_tf) = camera_query.get(camera_entity)?;
-    let viewport_cursor = resolve_viewport_cursor(
-        modal.is_some(),
+    let viewport_cursor = window_to_viewport_cursor_for(
         cursor_pos,
         camera,
         viewport_entity,
         &viewport_ctx.viewport_query,
     )?;
 
-    if modal.is_none() {
+    if !modal_running {
         let axis = hover.hovered_axis?;
         let captures = crate::brush_drag_ops::capture_edit_brushes(
             &brush_selection,
@@ -793,15 +805,6 @@ pub fn gizmo_drag_edit(
         }
         override_cursor.0 = Some(EntityCursor::System(SystemCursorIcon::Grabbing));
         return OperatorResult::Running;
-    }
-
-    if mouse.just_released(MouseButton::Left) {
-        // The framework captured a before-snapshot on start; returning
-        // Finished triggers the after-snapshot + SnapshotDiff push, so one
-        // Undo restores every brush touched.
-        clear_gizmo_edit_drag_state(&mut drag_state, &mut cursor_query);
-        clear_gizmo_grab_cursor(&mut override_cursor);
-        return OperatorResult::Finished;
     }
 
     if drag_state.captures.is_empty() {
@@ -835,9 +838,14 @@ pub fn gizmo_drag_edit(
 
     match *mode {
         ActiveTool::Translate => {
-            let Some(projected) =
-                translate_axis_amount(mouse_delta, camera, cam_tf, pivot, axis_dir)
-            else {
+            let Some(projected) = crate::viewport_util::drag_along_axis(
+                camera,
+                cam_tf,
+                drag_state.drag_start_screen,
+                viewport_cursor,
+                pivot,
+                axis_dir,
+            ) else {
                 return OperatorResult::Running;
             };
             let world_delta = snap_settings.snap_translate_vec3_if(axis_dir * projected, ctrl);
@@ -1360,27 +1368,6 @@ fn scale_factor(
     }
 }
 
-/// Signed distance the selection should move along `axis_dir` for the current
-/// mouse delta, found by projecting the delta onto the axis as it appears on
-/// screen. Returns `None` when the pivot or axis endpoint fails to project, or
-/// when the projected axis is degenerate (zero length on screen).
-pub(crate) fn translate_axis_amount(
-    mouse_delta: Vec2,
-    camera: &Camera,
-    cam_tf: &GlobalTransform,
-    pivot: Vec3,
-    axis_dir: Vec3,
-) -> Option<f32> {
-    let origin_screen = camera.world_to_viewport(cam_tf, pivot).ok()?;
-    let axis_screen = camera.world_to_viewport(cam_tf, pivot + axis_dir).ok()?;
-    let screen_axis = axis_screen - origin_screen;
-    let len_sq = screen_axis.length_squared();
-    if len_sq < EPSILON {
-        return None;
-    }
-    Some(mouse_delta.dot(screen_axis) / len_sq)
-}
-
 /// Camera and `SceneViewport` UI-node entities a gizmo drag should use this
 /// frame. On the first frame (`modal_active` false) this is the active
 /// (hovered) viewport; once the modal is running it is the viewport captured at
@@ -1400,25 +1387,6 @@ fn resolve_drag_viewport(
         let camera_entity = stored_camera?;
         let viewport_entity = stored_viewport?;
         Some((camera_entity, viewport_entity))
-    }
-}
-
-/// Viewport-local cursor position for a gizmo drag. The first frame is
-/// bounds-checked so a press that misses the viewport does not grab the gizmo;
-/// once the modal is running the cursor belongs to the drag, so positions
-/// outside the viewport rectangle are accepted. Returns `None` when the cursor
-/// is rejected.
-fn resolve_viewport_cursor(
-    modal_active: bool,
-    cursor_pos: Vec2,
-    camera: &Camera,
-    viewport_entity: Entity,
-    viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
-) -> Option<Vec2> {
-    if !modal_active {
-        window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, viewport_query)
-    } else {
-        window_to_viewport_cursor_for_unbounded(cursor_pos, camera, viewport_entity, viewport_query)
     }
 }
 

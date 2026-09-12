@@ -63,14 +63,14 @@ pub fn setup_default_materials(
     palette.default_material = materials.add(StandardMaterial {
         base_color: default_style::DEFAULT_MATERIAL_COLOR,
         base_color_texture: Some(grid_handle.clone()),
-        alpha_mode: AlphaMode::Blend,
+        alpha_mode: AlphaMode::Opaque,
         uv_transform: uv_tile,
         ..default()
     });
     palette.default_selected_material = materials.add(StandardMaterial {
         base_color: default_style::DEFAULT_MATERIAL_SELECTED_COLOR,
         base_color_texture: Some(grid_handle.clone()),
-        alpha_mode: AlphaMode::Blend,
+        alpha_mode: AlphaMode::Opaque,
         uv_transform: uv_tile,
         ..default()
     });
@@ -418,6 +418,7 @@ pub fn regenerate_brush_meshes(
         commands.entity(entity).insert(BrushMeshCache {
             vertices,
             face_polygons,
+            face_normals: evaluated_faces.iter().map(|f| f.plane.normal).collect(),
             chunk_entities,
             face_source,
             vert_source,

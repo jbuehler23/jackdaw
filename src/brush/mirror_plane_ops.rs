@@ -189,10 +189,8 @@ fn axis_constraint(axis: usize) -> VertexDragConstraint {
 }
 
 /// World units that one cursor pixel spans along the brush-local `axis` at
-/// `anchor_world`, measured against the live projection the same way
-/// [`compute_brush_drag_offset`]'s axis branch calibrates the drag. Used to
-/// turn [`PLANE_SNAP_PIXELS`] into a world-space snap tolerance so the lock
-/// distance reads the same at any zoom or brush scale.
+/// `anchor_world`. Used to turn [`PLANE_SNAP_PIXELS`] into a world-space snap
+/// tolerance so the lock distance reads the same at any zoom or brush scale.
 fn world_per_pixel_along_axis(
     axis: usize,
     cam_tf: &GlobalTransform,
@@ -299,9 +297,20 @@ pub fn mirror_plane_drag(
     mut drag_state: ResMut<MirrorPlaneDragState>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
 ) -> OperatorResult {
+    let modal_running = modal.is_some();
+    if modal_running {
+        if mouse.just_pressed(MouseButton::Right) {
+            return OperatorResult::Cancelled;
+        }
+        if vp.cursor().is_none() || mouse.just_released(MouseButton::Left) {
+            clear_drag_state(&mut drag_state);
+            return OperatorResult::Finished;
+        }
+    }
+
     let cursor_pos = vp.cursor()?;
 
-    if modal.is_none() {
+    if !modal_running {
         // First invoke: grab the hovered handle and capture the baseline.
         let Some((entity, axis)) = hover.target else {
             return OperatorResult::Cancelled;
@@ -333,15 +342,6 @@ pub fn mirror_plane_drag(
         return OperatorResult::Running;
     }
 
-    // Subsequent invokes: RMB cancel, release commit, per-frame plane slide.
-    if mouse.just_pressed(MouseButton::Right) {
-        return OperatorResult::Cancelled;
-    }
-    if mouse.just_released(MouseButton::Left) {
-        clear_drag_state(&mut drag_state);
-        return OperatorResult::Finished;
-    }
-
     let (Some(entity), Some(camera_entity), Some(viewport_entity)) = (
         drag_state.entity,
         drag_state.camera_entity,
@@ -351,17 +351,15 @@ pub fn mirror_plane_drag(
     };
     let axis = drag_state.axis;
     let (camera, cam_tf) = vp.camera_for(camera_entity)?;
-    let Some(viewport_cursor) = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos) else {
-        return OperatorResult::Running;
-    };
+    let viewport_cursor = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)?;
     let Ok((brush, brush_global, mut stack)) = brushes.get_mut(entity) else {
         return OperatorResult::Running;
     };
 
-    let mouse_delta = viewport_cursor - drag_state.start_cursor;
     let Some(local_delta) = compute_brush_drag_offset(
         axis_constraint(axis),
-        mouse_delta,
+        drag_state.start_cursor,
+        viewport_cursor,
         cam_tf,
         camera,
         brush_global,

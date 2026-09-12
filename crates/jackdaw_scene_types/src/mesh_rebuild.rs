@@ -104,15 +104,12 @@ pub fn mark_brushes_changed_on_modifier_removal(
 /// Evaluate a brush's geometry: authored topology rings (or plane intersection
 /// for legacy plane-only brushes) with the in-game modifier stack folded in.
 ///
-/// Returns the vertex positions, the per-face vertex-index rings, and the
-/// evaluated-to-authored face map. The face map is empty when no modifiers ran;
-/// otherwise it maps each evaluated face index back to its authored face index
-/// so callers can recover face data. Used by both the brush mesh build and the
-/// runtime collider bridge so the collision shape matches the rendered geometry.
+/// Returns vertex positions, per-face rings, and face data (mirrored copies
+/// get their plane recomputed from the reflected ring).
 pub fn evaluate_brush_geometry(
     brush: &Brush,
     stack: Option<&jackdaw_geometry::ModifierStack>,
-) -> (Vec<Vec3>, Vec<Vec<usize>>, Vec<u32>) {
+) -> (Vec<Vec3>, Vec<Vec<usize>>, Vec<crate::types::BrushFaceData>) {
     // Plane-intersection fallback for brushes without authored topology
     // (plane-only legacy data).
     let (vertices, face_polygons) = if !brush.topology.polygons.is_empty() {
@@ -125,10 +122,6 @@ pub fn evaluate_brush_geometry(
         compute_brush_geometry_from_planes(&brush.faces)
     };
 
-    // Fold the game-enabled modifiers (the `in_game` entries) over the
-    // authored geometry: evaluated copies append after the authored elements.
-    // Authored indices are unchanged (identity prefix); face_source maps
-    // evaluated face indices back to authored face indices for face-data lookup.
     let game_mods: Vec<&jackdaw_geometry::Modifier> = stack
         .map(|s| {
             s.modifiers
@@ -139,7 +132,7 @@ pub fn evaluate_brush_geometry(
         })
         .unwrap_or_default();
     if game_mods.is_empty() {
-        (vertices, face_polygons, Vec::new())
+        (vertices, face_polygons, brush.faces.clone())
     } else {
         let eval = jackdaw_geometry::evaluate_modifier_stack(
             &vertices,
@@ -147,7 +140,13 @@ pub fn evaluate_brush_geometry(
             &brush.faces,
             &game_mods,
         );
-        (eval.vertices, eval.face_polygons, eval.face_source)
+        let faces = jackdaw_geometry::resolve_evaluated_faces(
+            &eval.face_source,
+            &eval.vertices,
+            &eval.face_polygons,
+            &brush.faces,
+        );
+        (eval.vertices, eval.face_polygons, faces)
     }
 }
 
@@ -160,21 +159,7 @@ fn build_brush_meshes(
     materials: &mut Assets<StandardMaterial>,
     assets: &AssetServer,
 ) {
-    let (vertices, face_polygons, face_source) = evaluate_brush_geometry(brush, stack);
-
-    // Resolve the evaluated face data (mirrored polygons get their plane
-    // recomputed from the reflected ring) and mesh it into per-material chunks.
-    // `build_brush_chunks` is the shared editor / runtime build.
-    let evaluated_faces = if face_source.is_empty() {
-        brush.faces.clone()
-    } else {
-        jackdaw_geometry::resolve_evaluated_faces(
-            &face_source,
-            &vertices,
-            &face_polygons,
-            &brush.faces,
-        )
-    };
+    let (vertices, face_polygons, evaluated_faces) = evaluate_brush_geometry(brush, stack);
     let chunks = crate::build_brush_chunks(&vertices, &face_polygons, &evaluated_faces);
 
     let mut fallback_material: Option<Handle<StandardMaterial>> = None;

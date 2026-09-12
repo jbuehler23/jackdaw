@@ -233,9 +233,10 @@ impl ViewportCursor<'_, '_> {
     }
 
     /// Convert a window-space cursor position into the camera-space
-    /// coordinates of a specific viewport, returning `None` if the
-    /// cursor falls outside the viewport's bounds. Used by modal
-    /// operators that captured a viewport entity at drag-start.
+    /// coordinates of a specific viewport. Positions outside the pane
+    /// are still remapped, so a captured-viewport drag can keep updating
+    /// over adjacent UI. Returns `None` only if `viewport_entity` is no
+    /// longer a `SceneViewport`.
     pub fn viewport_cursor_for(
         &self,
         camera: &Camera,
@@ -244,13 +245,7 @@ impl ViewportCursor<'_, '_> {
     ) -> Option<Vec2> {
         let (computed, vp_tf, _) = self.viewports.get(viewport_entity).ok()?;
         let map = crate::viewport_util::ViewportRemap::new(camera, computed, vp_tf);
-        let local = cursor - map.top_left;
-        if local.x >= 0.0 && local.y >= 0.0 && local.x <= map.vp_size.x && local.y <= map.vp_size.y
-        {
-            Some(local * map.remap)
-        } else {
-            None
-        }
+        Some((cursor - map.top_left) * map.remap)
     }
 
     /// Cursor position in ui-logical pixels

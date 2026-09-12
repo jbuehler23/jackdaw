@@ -1,20 +1,17 @@
 use crate::commands::{
-    CommandGroup, CommandHistory, DespawnEntity, EditorCommand, collect_entity_ids,
-    deselect_entities, despawn_scene_entity,
+    CommandGroup, CommandHistory, DespawnEntity, EditorCommand, despawn_scene_entity,
 };
 use crate::draw_brush::{
-    ActiveDraw, BrushData, DrawBrushState, MIN_FRAGMENT_SIZE, brush_data_from_entity,
-    cut_brush_from_active, spawn_brush_from_data, topology_aabbs_overlap,
+    ActiveDraw, DrawBrushState, MIN_FRAGMENT_SIZE, cut_brush_from_active, topology_aabbs_overlap,
 };
 use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
-use crate::scene_io::entity_by_scene_node_id;
 use crate::selection::{Selected, Selection};
 use bevy::prelude::*;
 use jackdaw_geometry::{
     clean_degenerate_faces, compute_brush_geometry_from_planes, compute_brush_topology,
 };
-use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane, SceneNodeId};
+use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
 
 struct SubtractionResult {
     original_entity: Entity,
@@ -40,44 +37,31 @@ fn parent_translations_of(
 fn spawn_subtract_fragments(
     world: &mut World,
     results: &[SubtractionResult],
-    originals: &[BrushData],
     parent_translations: &std::collections::HashMap<Entity, Vec3>,
-) -> Vec<BrushData> {
-    let fragment_node_ids: Vec<Vec<SceneNodeId>> = results
-        .iter()
-        .map(|result| {
-            result
-                .fragments
-                .iter()
-                .map(|_| SceneNodeId::next())
-                .collect()
-        })
-        .collect();
-
-    let mut fragments = Vec::new();
-    for (result_index, result) in results.iter().enumerate() {
-        let parent_node_id = originals
-            .get(result_index)
-            .and_then(|original| original.parent_node_id);
+) {
+    for result in results {
         let parent_translation = parent_translations.get(&result.original_entity);
-        for (fragment_index, (brush, transform)) in result.fragments.iter().enumerate() {
+        for (brush, transform) in &result.fragments {
             let local_transform = if let Some(parent_translation) = parent_translation {
                 Transform::from_translation(transform.translation - *parent_translation)
             } else {
                 *transform
             };
-            let brush_data = BrushData {
-                node_id: fragment_node_ids[result_index][fragment_index],
-                brush: brush.clone(),
-                transform: local_transform,
-                name: "Brush".to_string(),
-                parent_node_id,
-            };
-            spawn_brush_from_data(world, &brush_data);
-            fragments.push(brush_data);
+            if crate::entity_ops::spawn_cloned_brush_with_geometry(
+                world,
+                result.original_entity,
+                brush.clone(),
+                local_transform,
+            )
+            .is_none()
+            {
+                warn!(
+                    "CSG fragment spawn failed: source {:?} has no document node",
+                    result.original_entity
+                );
+            }
         }
     }
-    fragments
 }
 
 /// Perform CSG subtraction: subtract the drawn solid from all intersecting brushes.
@@ -297,18 +281,11 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
             return;
         }
 
-        // Third, capture brush data for originals (assigns stable IDs).
-        let mut originals: Vec<BrushData> = Vec::new();
-        for result in &results {
-            originals.push(brush_data_from_entity(world, result.original_entity));
-        }
-
         let parent_translations = parent_translations_of(
             world,
             results.iter().map(|result| result.original_entity),
         );
 
-        // Clean up selection: remove originals that are about to be despawned
         {
             let despawning: Vec<Entity> = results.iter().map(|r| r.original_entity).collect();
             let mut selection = world.resource_mut::<Selection>();
@@ -320,65 +297,12 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
             }
         }
 
+        spawn_subtract_fragments(world, &results, &parent_translations);
+
         for result in &results {
             despawn_scene_entity(world, result.original_entity);
         }
-
-        let fragments =
-            spawn_subtract_fragments(world, &results, &originals, &parent_translations);
-
-        // Push undo command
-        let cmd = SubtractBrushCommand {
-            originals,
-            fragments,
-        };
-        let mut history = world.resource_mut::<CommandHistory>();
-        history.push_executed(Box::new(cmd));
     });
-}
-
-struct SubtractBrushCommand {
-    originals: Vec<BrushData>,
-    fragments: Vec<BrushData>,
-}
-
-impl EditorCommand for SubtractBrushCommand {
-    fn execute(&mut self, world: &mut World) {
-        let orig_entities: Vec<Entity> = self
-            .originals
-            .iter()
-            .filter_map(|d| entity_by_scene_node_id(world, d.node_id))
-            .collect();
-        deselect_entities(world, &orig_entities);
-        for entity in &orig_entities {
-            despawn_scene_entity(world, *entity);
-        }
-        for data in &self.fragments {
-            spawn_brush_from_data(world, data);
-        }
-    }
-
-    fn undo(&mut self, world: &mut World) {
-        let mut all_entities = Vec::new();
-        for data in &self.fragments {
-            if let Some(entity) = entity_by_scene_node_id(world, data.node_id) {
-                collect_entity_ids(world, entity, &mut all_entities);
-            }
-        }
-        deselect_entities(world, &all_entities);
-        for data in &self.fragments {
-            if let Some(entity) = entity_by_scene_node_id(world, data.node_id) {
-                despawn_scene_entity(world, entity);
-            }
-        }
-        for data in &self.originals {
-            spawn_brush_from_data(world, data);
-        }
-    }
-
-    fn description(&self) -> &str {
-        "Subtract brush"
-    }
 }
 
 /// Core logic for Join (convex merge). Callable from both keyboard shortcut and menu.
@@ -688,16 +612,9 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
         return;
     }
 
-    // Capture brush data for originals (assigns stable IDs)
-    let mut originals: Vec<BrushData> = Vec::new();
-    for result in &results {
-        originals.push(brush_data_from_entity(world, result.original_entity));
-    }
-
     let parent_translations =
         parent_translations_of(world, results.iter().map(|result| result.original_entity));
 
-    // Clean up selection: remove targets about to be despawned
     {
         let despawning: Vec<Entity> = results.iter().map(|r| r.original_entity).collect();
         let mut selection = world.resource_mut::<Selection>();
@@ -709,19 +626,11 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
         }
     }
 
+    spawn_subtract_fragments(world, &results, &parent_translations);
+
     for result in &results {
         despawn_scene_entity(world, result.original_entity);
     }
-
-    let fragments = spawn_subtract_fragments(world, &results, &originals, &parent_translations);
-
-    // Push undo command
-    let cmd = SubtractBrushCommand {
-        originals,
-        fragments,
-    };
-    let mut history = world.resource_mut::<CommandHistory>();
-    history.push_executed(Box::new(cmd));
 }
 
 /// Core logic for CSG Intersect. Replaces all selected brushes with their intersection.
@@ -807,12 +716,6 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
         v.position -= centroid;
     }
 
-    // Capture brush data for originals (assigns stable IDs)
-    let mut originals: Vec<BrushData> = Vec::new();
-    for (entity, _, _) in &selected_brushes {
-        originals.push(brush_data_from_entity(world, *entity));
-    }
-
     // Clean up selection
     {
         let despawning: Vec<Entity> = selected_brushes.iter().map(|(e, _, _)| *e).collect();
@@ -825,13 +728,6 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
         }
     }
 
-    for (entity, _, _) in &selected_brushes {
-        despawn_scene_entity(world, *entity);
-    }
-
-    // Spawn the intersection brush. Reuse the manifold-derived topology
-    // when cleaning didn't prune faces; otherwise re-derive from planes
-    // so the parallel-array invariant with `faces` is preserved.
     let topology = if clean.len() == running.faces.len() {
         local_topo
     } else {
@@ -841,29 +737,28 @@ pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
         faces: clean,
         topology,
     };
-    let brush_data = BrushData {
-        node_id: SceneNodeId::next(),
-        brush: new_brush,
-        transform: Transform::from_translation(centroid),
-        name: "Brush".to_string(),
-        parent_node_id: None,
+    let Some(source) = selected_brushes.first().map(|(entity, _, _)| *entity) else {
+        return;
     };
-    let entity = spawn_brush_from_data(world, &brush_data);
+    let Some(entity) = crate::entity_ops::spawn_cloned_brush_with_geometry(
+        world,
+        source,
+        new_brush,
+        Transform::from_translation(centroid),
+    ) else {
+        warn!("CSG intersect spawn failed: source {source:?} has no document node");
+        return;
+    };
 
-    // Select the new brush
+    for (entity, _, _) in &selected_brushes {
+        despawn_scene_entity(world, *entity);
+    }
+
     {
         let mut selection = world.resource_mut::<Selection>();
         selection.entities.push(entity);
     }
     world.entity_mut(entity).insert(Selected);
-
-    // Push undo command (reuses SubtractBrushCommand, same undo/redo pattern).
-    let cmd = SubtractBrushCommand {
-        originals,
-        fragments: vec![brush_data],
-    };
-    let mut history = world.resource_mut::<CommandHistory>();
-    history.push_executed(Box::new(cmd));
 }
 
 #[operator(
