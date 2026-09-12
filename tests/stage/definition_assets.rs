@@ -598,7 +598,7 @@ fn a_material_file_is_not_deleted_through_the_definition_operator() {
         .add(StandardMaterial::default());
     jackdaw::material_assets::write_material_file(app.world(), "slate", &handle)
         .expect("the material file is written");
-    let path = tmp.path().join("assets/materials/slate.material.bsn");
+    let path = tmp.path().join("assets/materials/slate.bsn");
 
     call(
         &mut app,
@@ -656,16 +656,12 @@ fn a_material_file_is_indexed_alongside_every_other_kind() {
         });
     jackdaw::material_assets::write_material_file(app.world(), "slate", &handle)
         .expect("the material file is written");
-    assert!(
-        tmp.path()
-            .join("assets/materials/slate.material.bsn")
-            .is_file()
-    );
+    assert!(tmp.path().join("assets/materials/slate.bsn").is_file());
 
     let scan = jackdaw::asset_index::rescan_asset_index(app.world_mut());
     assert_eq!(
         scan.added,
-        vec![std::path::PathBuf::from("materials/slate.material.bsn")]
+        vec![std::path::PathBuf::from("materials/slate.bsn")]
     );
 
     let entry_path = app
@@ -675,10 +671,7 @@ fn a_material_file_is_indexed_alongside_every_other_kind() {
         .map(|entry| entry.path.clone())
         .next()
         .expect("the material lists like any other asset");
-    assert_eq!(
-        entry_path,
-        std::path::PathBuf::from("materials/slate.material.bsn")
-    );
+    assert_eq!(entry_path, std::path::PathBuf::from("materials/slate.bsn"));
 }
 
 #[test]
@@ -693,7 +686,7 @@ fn a_material_saved_by_its_own_operator_carries_what_asset_set_wrote() {
     call(
         &mut app,
         "asset.open",
-        &[("path", "assets/materials/slate.material.bsn".into())],
+        &[("path", "assets/materials/slate.bsn".into())],
     );
     call(
         &mut app,
@@ -703,7 +696,7 @@ fn a_material_saved_by_its_own_operator_carries_what_asset_set_wrote() {
     call(&mut app, "material.save", &[("material", "slate".into())]);
     app.update();
 
-    let written = std::fs::read_to_string(tmp.path().join("assets/materials/slate.material.bsn"))
+    let written = std::fs::read_to_string(tmp.path().join("assets/materials/slate.bsn"))
         .expect("the file reads");
     assert!(written.contains("metallic: 0.75"), "got:\n{written}");
 }
@@ -722,7 +715,7 @@ fn a_material_is_opened_and_its_fields_set_through_the_definition_operators() {
     call(
         &mut app,
         "asset.open",
-        &[("path", "assets/materials/slate.material.bsn".into())],
+        &[("path", "assets/materials/slate.bsn".into())],
     );
     call(
         &mut app,
@@ -744,7 +737,7 @@ fn a_material_is_opened_and_its_fields_set_through_the_definition_operators() {
         (roughness - 0.25).abs() < f32::EPSILON,
         "the edit lands on the loaded material, not on a copy"
     );
-    let written = std::fs::read_to_string(tmp.path().join("assets/materials/slate.material.bsn"))
+    let written = std::fs::read_to_string(tmp.path().join("assets/materials/slate.bsn"))
         .expect("the file reads");
     assert!(
         written.contains("perceptual_roughness: 0.25"),
@@ -766,7 +759,7 @@ fn asset_set_fills_a_texture_slot_from_a_path_and_the_save_keeps_it() {
     call(
         &mut app,
         "asset.open",
-        &[("path", "assets/materials/slate.material.bsn".into())],
+        &[("path", "assets/materials/slate.bsn".into())],
     );
     call(
         &mut app,
@@ -795,7 +788,7 @@ fn asset_set_fills_a_texture_slot_from_a_path_and_the_save_keeps_it() {
         Some("textures/slate_base.png".to_string()),
         "the slot names the image the caller asked for, whether or not it is there yet"
     );
-    let written = std::fs::read_to_string(tmp.path().join("assets/materials/slate.material.bsn"))
+    let written = std::fs::read_to_string(tmp.path().join("assets/materials/slate.bsn"))
         .expect("the file reads");
     assert!(
         written.contains("textures/slate_base.png"),
@@ -817,7 +810,7 @@ fn asset_set_takes_a_colour_as_channels_and_undo_puts_the_old_one_back() {
     call(
         &mut app,
         "asset.open",
-        &[("path", "assets/materials/slate.material.bsn".into())],
+        &[("path", "assets/materials/slate.bsn".into())],
     );
     call(
         &mut app,

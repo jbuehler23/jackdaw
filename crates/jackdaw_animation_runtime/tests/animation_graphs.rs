@@ -979,3 +979,45 @@ fn a_clip_that_takes_the_blend_partway_through_sends_no_marker_behind_it() {
         "and it sends the marker on the pass that reaches it"
     );
 }
+
+/// A graph file says what it is, so one under any name in any folder loads
+/// like one written as `animation/<name>.animgraph.bsn`.
+#[test]
+fn a_graph_file_in_another_folder_loads_under_a_plain_bsn_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("rigs")).expect("the folder is made");
+    let text = "// jackdaw asset jackdaw_animation_runtime::graph::AnimationGraphDef\n\
+                #hero\n\
+                jackdaw_animation_runtime::graph::AnimationGraphDef {\n\
+                    entry: \"idle\",\n\
+                }\n";
+    std::fs::write(dir.path().join("rigs/hero.bsn"), text).expect("the file is written");
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(AssetPlugin {
+            file_path: dir.path().to_string_lossy().into_owned(),
+            ..AssetPlugin::default()
+        })
+        .add_plugins(bevy::transform::TransformPlugin)
+        .add_plugins(bevy::animation::AnimationPlugin)
+        .add_plugins(AnimationRuntimePlugin);
+
+    let handle: Handle<AnimationGraphAsset> =
+        app.world().resource::<AssetServer>().load("rigs/hero.bsn");
+    let mut loaded = None;
+    for _ in 0..200 {
+        app.update();
+        if let Some(asset) = app
+            .world()
+            .resource::<Assets<AnimationGraphAsset>>()
+            .get(&handle)
+        {
+            loaded = Some(asset.def.clone());
+            break;
+        }
+        std::thread::sleep(millis(5));
+    }
+
+    assert_eq!(loaded.expect("the graph file loads").entry, "idle");
+}

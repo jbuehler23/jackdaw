@@ -7,6 +7,7 @@
 //! file before it parses; the first document root's type is the truth.
 
 use std::any::TypeId;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use bevy::ecs::entity::Entity;
@@ -45,6 +46,94 @@ pub fn read_asset_header(text: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The bare name a path or a reference carries: the last segment's text
+/// before its first dot, so `materials/grass.material.bsn` and `grass` are
+/// both `grass`.
+pub fn asset_stem(reference: &str) -> &str {
+    let last = reference
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(reference)
+        .trim_start_matches('.');
+    last.split_once('.').map_or(last, |(stem, _)| stem)
+}
+
+/// [`asset_stem`] of the file a path names.
+pub fn path_stem(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map_or_else(String::new, |name| asset_stem(name).to_string())
+}
+
+/// What each bare name stands for, over the documents a walk saw.
+///
+/// A name one file carries stands for that file; a name two files carry stands
+/// for neither, and the two are there to be named in what says so. The editor
+/// and the runtime both count over every document their walk saw, so a name
+/// one calls ambiguous is ambiguous in the other.
+#[derive(Default, Debug, Clone)]
+pub struct StemIndex(BTreeMap<String, Vec<PathBuf>>);
+
+impl StemIndex {
+    /// The stems of every path given.
+    pub fn from_paths<I, P>(paths: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        let mut index = Self::default();
+        for path in paths {
+            index.insert(path);
+        }
+        index
+    }
+
+    pub fn insert(&mut self, path: impl Into<PathBuf>) {
+        let path = path.into();
+        let stem = path_stem(&path);
+        if stem.is_empty() {
+            return;
+        }
+        let held = self.0.entry(stem).or_default();
+        if !held.contains(&path) {
+            held.push(path);
+        }
+    }
+
+    /// Forget a file, for one that has left the walk.
+    pub fn remove(&mut self, path: &Path) {
+        let stem = path_stem(path);
+        let Some(held) = self.0.get_mut(&stem) else {
+            return;
+        };
+        held.retain(|held| held != path);
+        if held.is_empty() {
+            self.0.remove(&stem);
+        }
+    }
+
+    /// The one file this name stands for, or `None` when no file or several do.
+    pub fn unique(&self, stem: &str) -> Option<&Path> {
+        match self.0.get(stem)?.as_slice() {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
+
+    /// The first two files a name several carry stands for, to name in a report.
+    pub fn shared(&self, stem: &str) -> Option<(&Path, &Path)> {
+        match self.0.get(stem)?.as_slice() {
+            [first, second, ..] => Some((first, second)),
+            _ => None,
+        }
+    }
+
+    /// Every file this name stands for.
+    pub fn paths(&self, stem: &str) -> &[PathBuf] {
+        self.0.get(stem).map_or(&[], Vec::as_slice)
+    }
 }
 
 /// The type path a document root names, or `None` when the root names none.
@@ -264,6 +353,47 @@ mod tests {
         let text =
             format!("my_game::content::ItemDef {{}}\n{ASSET_HEADER}my_game::content::Impostor\n");
         assert!(read_asset_header(&text).is_none());
+    }
+
+    #[test]
+    fn a_name_is_the_last_segment_before_its_first_dot() {
+        assert_eq!(asset_stem("materials/grass.material.bsn"), "grass");
+        assert_eq!(asset_stem("grass"), "grass");
+        assert_eq!(asset_stem("zones/hedgerow/grass.bsn"), "grass");
+        assert_eq!(
+            path_stem(Path::new("content/items/torch.item.bsn")),
+            "torch"
+        );
+    }
+
+    #[test]
+    fn a_name_two_documents_carry_stands_for_neither_and_names_both() {
+        let index = StemIndex::from_paths([
+            Path::new("zones/grass.bsn").to_path_buf(),
+            Path::new("materials/grass.material.bsn").to_path_buf(),
+        ]);
+
+        assert!(index.unique("grass").is_none());
+        assert_eq!(
+            index
+                .shared("grass")
+                .map(|(first, second)| (first.to_path_buf(), second.to_path_buf())),
+            Some((
+                PathBuf::from("zones/grass.bsn"),
+                PathBuf::from("materials/grass.material.bsn")
+            ))
+        );
+    }
+
+    #[test]
+    fn a_name_one_document_carries_stands_for_it() {
+        let index = StemIndex::from_paths([PathBuf::from("materials/grass.material.bsn")]);
+
+        assert_eq!(
+            index.unique("grass"),
+            Some(Path::new("materials/grass.material.bsn"))
+        );
+        assert!(index.unique("slate").is_none());
     }
 
     #[test]

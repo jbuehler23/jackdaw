@@ -160,3 +160,50 @@ fn a_scene_reaches_a_material_in_any_folder_by_the_path_of_its_file() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The name counts over every document the walk saw, scenes included, so a
+/// name the editor calls ambiguous is ambiguous here too.
+#[test]
+fn a_name_a_scene_and_an_asset_share_stands_for_neither() {
+    let type_path = <CatalogMaterial as TypePath>::type_path();
+
+    let dir = unique_temp_dir("catalog-loading-shared-name");
+    std::fs::create_dir_all(dir.join("materials")).unwrap();
+    std::fs::create_dir_all(dir.join("zones")).unwrap();
+    std::fs::write(
+        dir.join("materials/grass.bsn"),
+        format!("#grass\n{type_path}\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("zones/grass.bsn"),
+        "#Root\nbevy_transform::components::transform::Transform\n\
+         bevy_ecs::hierarchy::Children [\n    bevy_transform::components::transform::Transform\n]\n",
+    )
+    .unwrap();
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::transform::TransformPlugin);
+    app.add_plugins(bevy::asset::AssetPlugin::default());
+    app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+    app.add_plugins(bevy::image::ImagePlugin::default());
+    app.init_asset::<CatalogMaterial>();
+    app.register_asset_reflect::<CatalogMaterial>();
+    app.insert_resource(JackdawCatalogPath(dir.join("catalog.bsn")));
+    app.add_plugins(JackdawPlugin);
+
+    app.update();
+
+    let catalog = app.world().resource::<JackdawCatalog>();
+    assert!(
+        catalog.get("@grass").is_none(),
+        "a name a scene also carries stands for neither file"
+    );
+    assert!(
+        catalog.get("materials/grass.bsn").is_some(),
+        "the file is there to be named by its path"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

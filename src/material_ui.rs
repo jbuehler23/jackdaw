@@ -314,8 +314,8 @@ fn bind_texture_slot(
         slot.set_on(&mut value, image);
     }
     world
-        .resource_mut::<crate::asset_catalog::AssetCatalog>()
-        .dirty = true;
+        .get_resource_or_init::<crate::material_assets::EditedMaterials>()
+        .edited(material);
     world.resource_mut::<MaterialPreviewState>().set_changed();
     true
 }
@@ -409,7 +409,7 @@ pub(crate) fn on_material_slider_commit(
     event: On<ValueChange<f32>>,
     mut bindings: Query<&mut MaterialFieldBinding>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    catalog: Option<ResMut<crate::asset_catalog::AssetCatalog>>,
+    edited: Option<ResMut<crate::material_assets::EditedMaterials>>,
     mut commands: Commands,
 ) {
     let slider = event.source;
@@ -423,7 +423,7 @@ pub(crate) fn on_material_slider_commit(
     }
     binding.shown = value;
     if event.is_final {
-        mark_catalog_dirty(catalog);
+        material_edited(edited, &binding.material_handle);
     }
 }
 
@@ -503,35 +503,38 @@ fn holds_focus(entity: Entity, focus: &InputFocus, child_of: &Query<&ChildOf>) -
             .any(|ancestor| ancestor == entity)
 }
 
-/// Flag the catalog once a material slider's drag has ended, however it ended.
+/// Write a material back once a slider's drag has ended, however it ended.
 ///
-/// [`on_material_slider_commit`] persists on the final `ValueChange` that closes an ordinary
+/// [`on_material_slider_commit`] writes on the final `ValueChange` that closes an ordinary
 /// drag. A drag that ends any other way (the pointer leaving the window, the widget disabled
 /// mid-gesture, the gesture cancelled) emits no final event, so the edit would sit in memory
-/// until something else dirties the catalog. The end is detected from the drag state, since
+/// until something else wrote the material. The end is detected from the drag state, since
 /// there is no event to read.
 fn flush_material_slider_drag(
     mut fields: Query<(&mut MaterialFieldBinding, Option<&SliderDragState>)>,
-    catalog: Option<ResMut<crate::asset_catalog::AssetCatalog>>,
+    mut edited: Option<ResMut<crate::material_assets::EditedMaterials>>,
 ) {
-    let mut ended = false;
     for (mut binding, drag) in &mut fields {
         let dragging = drag.is_some_and(|drag| drag.dragging);
         if binding.dragging == dragging {
             continue;
         }
-        ended |= binding.dragging;
+        if binding.dragging
+            && let Some(edited) = edited.as_mut()
+        {
+            edited.edited(&binding.material_handle);
+        }
         binding.dragging = dragging;
-    }
-    if ended {
-        mark_catalog_dirty(catalog);
     }
 }
 
-/// Schedule the catalog and the edited material's file to be rewritten.
-fn mark_catalog_dirty(catalog: Option<ResMut<crate::asset_catalog::AssetCatalog>>) {
-    if let Some(mut catalog) = catalog {
-        catalog.dirty = true;
+/// Schedule the edited material's file to be rewritten.
+fn material_edited(
+    edited: Option<ResMut<crate::material_assets::EditedMaterials>>,
+    handle: &Handle<StandardMaterial>,
+) {
+    if let Some(mut edited) = edited {
+        edited.edited(handle);
     }
 }
 
@@ -579,7 +582,7 @@ pub(crate) fn on_material_checkbox_commit(
     event: On<ValueChange<bool>>,
     bindings: Query<&MaterialCheckboxBinding>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    catalog: Option<ResMut<crate::asset_catalog::AssetCatalog>>,
+    edited: Option<ResMut<crate::material_assets::EditedMaterials>>,
     mut commands: Commands,
 ) {
     let target = event.source;
@@ -591,7 +594,7 @@ pub(crate) fn on_material_checkbox_commit(
     if let Some(mut material) = materials.get_mut(&binding.material_handle) {
         (binding.apply_fn)(&mut material, checked);
     }
-    mark_catalog_dirty(catalog);
+    material_edited(edited, &binding.material_handle);
 }
 
 // ---------------------------------------------------------------------------
@@ -967,8 +970,14 @@ pub(crate) fn library_actions() -> Vec<HeaderAction> {
         HeaderAction::new(
             Icon::Save,
             "Save Material",
-            "Write this material to assets/materials as a reusable asset.",
+            "Write this material to a file of its own as a reusable asset.",
             ButtonOperatorCall::new(crate::material_assets::MaterialSaveOp::ID),
+        ),
+        HeaderAction::new(
+            Icon::FolderOpen,
+            "Save Material As",
+            "Choose the file to write this material to.",
+            ButtonOperatorCall::new(crate::material_browser::MaterialSaveAsOp::ID),
         ),
         HeaderAction::new(
             Icon::Trash2,
@@ -1554,15 +1563,22 @@ mod scalar_commit_tests {
         let mut app = App::new();
         app.add_plugins((bevy::app::TaskPoolPlugin::default(), AssetPlugin::default()));
         app.init_asset::<StandardMaterial>();
-        app.init_resource::<crate::asset_catalog::AssetCatalog>();
+        app.init_resource::<crate::material_assets::EditedMaterials>();
         app.add_observer(on_material_slider_commit);
         app
     }
 
-    fn catalog_is_dirty(app: &App) -> bool {
-        app.world()
-            .resource::<crate::asset_catalog::AssetCatalog>()
-            .dirty
+    /// Whether the material is queued to be written back to its file.
+    fn is_queued_for_writing(app: &App) -> bool {
+        !app.world()
+            .resource::<crate::material_assets::EditedMaterials>()
+            .is_empty()
+    }
+
+    fn clear_queue(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<crate::material_assets::EditedMaterials>()
+            .clear();
     }
 
     /// A slider entity carrying the binding a spawned row would have.
@@ -1657,10 +1673,10 @@ mod scalar_commit_tests {
         assert!((metallic - 0.4).abs() < 1e-5, "got {metallic}");
     }
 
-    /// Dirtying the catalog schedules the material's file and `catalog.bsn` to be rewritten,
-    /// and a drag emits an event per frame.
+    /// Queueing a material schedules its file to be rewritten, and a drag emits an
+    /// event per frame.
     #[test]
-    fn a_value_mid_drag_leaves_the_catalog_clean() {
+    fn a_value_mid_drag_queues_no_write() {
         let mut app = commit_app();
         let handle = app
             .world_mut()
@@ -1673,7 +1689,7 @@ mod scalar_commit_tests {
         }
 
         assert!(
-            !catalog_is_dirty(&app),
+            !is_queued_for_writing(&app),
             "an unfinished drag schedules no write",
         );
         let metallic = app
@@ -1689,7 +1705,7 @@ mod scalar_commit_tests {
     }
 
     #[test]
-    fn the_end_of_a_drag_dirties_the_catalog() {
+    fn the_end_of_a_drag_queues_the_write() {
         let mut app = commit_app();
         let handle = app
             .world_mut()
@@ -1698,16 +1714,16 @@ mod scalar_commit_tests {
         let slider = bound_slider(&mut app, handle);
 
         drag_to(&mut app, slider, 0.4, false);
-        assert!(!catalog_is_dirty(&app));
+        assert!(!is_queued_for_writing(&app));
 
         drag_to(&mut app, slider, 0.5, true);
-        assert!(catalog_is_dirty(&app), "the finished edit persists");
+        assert!(is_queued_for_writing(&app), "the finished edit persists");
     }
 
     /// A drag can end without the final event that normally persists it: the pointer leaves
     /// the window, the widget is disabled mid-gesture, the gesture is cancelled.
     #[test]
-    fn a_drag_that_ends_without_a_final_event_still_flags_the_catalog() {
+    fn a_drag_that_ends_without_a_final_event_still_queues_the_write() {
         let mut app = commit_app();
         app.add_systems(Update, flush_material_slider_drag);
         let handle = app
@@ -1724,21 +1740,19 @@ mod scalar_commit_tests {
         drag_to(&mut app, slider, 0.6, false);
         app.update();
         assert!(
-            !catalog_is_dirty(&app),
+            !is_queued_for_writing(&app),
             "a drag in progress is not worth a pair of disk writes a frame",
         );
 
         set_dragging(&mut app, slider, false);
         app.update();
-        assert!(catalog_is_dirty(&app), "the abandoned edit persists");
+        assert!(is_queued_for_writing(&app), "the abandoned edit persists");
 
-        app.world_mut()
-            .resource_mut::<crate::asset_catalog::AssetCatalog>()
-            .dirty = false;
+        clear_queue(&mut app);
         app.update();
         app.update();
         assert!(
-            !catalog_is_dirty(&app),
+            !is_queued_for_writing(&app),
             "the flush fires once per drag, not every frame after one",
         );
     }
