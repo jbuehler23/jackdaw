@@ -42,16 +42,31 @@ struct PendingProjectFilesAction {
     path: PathBuf,
 }
 
+/// Context-menu action that opens the list of asset kinds on a folder.
+const NEW_ASSET_ACTION: &str = "project_files.new_asset";
+
 fn on_project_files_context_action(
     event: On<jackdaw_widgets::context_menu::ContextMenuAction>,
     mut commands: Commands,
     pending: Res<PendingProjectFilesAction>,
     mut state: ResMut<jackdaw_widgets::context_menu::ContextMenuState>,
 ) {
+    let path = pending.path.to_string_lossy().into_owned();
+    if event.action == NEW_ASSET_ACTION {
+        commands
+            .operator(crate::new_asset::AssetNewPickerOp::ID)
+            .param("path", path)
+            .call();
+        if let Some(menu) = state.menu_entity.take()
+            && let Ok(mut ec) = commands.get_entity(menu)
+        {
+            ec.despawn();
+        }
+        return;
+    }
     if event.action != "project_files.delete" {
         return;
     }
-    let path = pending.path.to_string_lossy().into_owned();
     commands.operator("file.delete").param("path", path).call();
     if let Some(menu) = state.menu_entity.take()
         && let Ok(mut ec) = commands.get_entity(menu)
@@ -437,7 +452,7 @@ fn spawn_file_tree_row(
         },
     );
 
-    // Right-click: open a per-row context menu with a Delete entry.
+    // Right-click: open a per-row context menu, with New Asset on a folder.
     let rmb_path = path.to_path_buf();
     commands.entity(content).observe(
         move |click: On<Pointer<Click>>,
@@ -458,11 +473,16 @@ fn spawn_file_tree_row(
                 ec.despawn();
             }
             let path_owned = rmb_path.clone();
+            let mut items: Vec<(&str, &str)> = Vec::new();
+            if is_dir {
+                items.push((NEW_ASSET_ACTION, crate::new_asset::NEW_ASSET_LABEL));
+            }
+            items.push(("project_files.delete", "Delete"));
             let menu = jackdaw_feathers::context_menu::spawn_context_menu(
                 &mut commands,
                 cursor_pos,
                 None,
-                &[("project_files.delete", "Delete")],
+                &items,
             );
             state.menu_entity = Some(menu);
             commands.insert_resource(PendingProjectFilesAction { path: path_owned });

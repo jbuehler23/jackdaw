@@ -34,13 +34,13 @@ use crate::project::ProjectRoot;
 /// The first `<kind>_N` name with neither an entry nor a file of its own in
 /// the folder the new file lands in.
 fn next_free_name(world: &World, kind: &str, dir: &Path) -> String {
-    let index = world.resource::<AssetIndex>();
     let mut counter = 1u32;
     loop {
         let candidate = format!("{kind}_{counter}");
-        let taken = index.of_kind(kind).any(|entry| entry.name() == candidate)
-            || definition_file_path(dir, &candidate).exists();
-        if !taken {
+        let file = definition_file_path(dir, &candidate);
+        let indexed = crate::asset_index::indexed_path(world, &file)
+            .is_some_and(|path| world.resource::<AssetIndex>().get(&path).is_some());
+        if !file.exists() && !indexed {
             return candidate;
         }
         counter += 1;
@@ -91,6 +91,15 @@ fn names_a_file(path: &Path) -> bool {
         && path
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("bsn"))
+}
+
+/// A name that carries its own extension as the file it names, so `torch.bsn`
+/// and `torch.item.bsn` each write one file rather than two extensions.
+fn bsn_file_name(name: &str) -> String {
+    match Path::new(name).extension() {
+        Some(extension) if extension.eq_ignore_ascii_case("bsn") => name.to_string(),
+        _ => format!("{name}.bsn"),
+    }
 }
 
 /// The file an asset of this name lands in, in a folder of the user's choosing.
@@ -1165,6 +1174,7 @@ fn save_indexed_asset(world: &mut World, path: &Path) -> Option<String> {
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<AssetNewOp>()
+        .register_operator::<crate::new_asset::AssetNewPickerOp>()
         .register_operator::<AssetOpenOp>()
         .register_operator::<AssetSaveOp>()
         .register_operator::<AssetDeleteOp>()
@@ -1256,12 +1266,21 @@ pub fn asset_new(params: In<OperatorParameters>, mut commands: Commands) -> Oper
     OperatorResult::Finished
 }
 
-fn new_definition(world: &mut World, kind: &str, name: Option<&str>, dir: Option<&Path>) {
+/// Create an asset of a kind, open its card and report the file it landed in.
+pub(crate) fn new_definition(
+    world: &mut World,
+    kind: &str,
+    name: Option<&str>,
+    dir: Option<&Path>,
+) -> Option<PathBuf> {
     let Some((definition, name, path)) = create_definition(world, kind, name, dir) else {
-        return;
+        crate::status_bar::notify_error(world, format!("no {kind} could be created there"));
+        return None;
     };
-    show_definition(world, &definition, &name, path);
-    report_to_caller(world, format!("Created {kind} '{name}'"));
+    show_definition(world, &definition, &name, path.clone());
+    use path_slash::PathExt as _;
+    report_to_caller(world, path.to_slash_lossy().into_owned());
+    Some(path)
 }
 
 /// Write a fresh default value of a registered kind to its file and index it.
@@ -1290,25 +1309,34 @@ pub(crate) fn create_definition(
         }
     };
     let asked_for = name.map(sanitize_definition_name);
+    let named_file = asked_for
+        .as_deref()
+        .filter(|asked| asked.contains('.'))
+        .map(|asked| dir.join(bsn_file_name(asked)));
+    let file = file.or_else(|| named_file.clone());
     let named_by_path = file.as_deref().map(definition_name_of);
     let name = match named_by_path.or_else(|| asked_for.clone()) {
         Some(name) => sanitize_definition_name(&name),
         None => next_free_name(world, kind, &dir),
     };
-    if asked_for.is_some_and(|asked| asked != name) {
+    if named_file.is_none() && asked_for.is_some_and(|asked| asked != name) {
         warn!("asset.new: the file asked for names this {kind} '{name}'");
-    }
-    if world
-        .resource::<AssetIndex>()
-        .of_kind(kind)
-        .any(|entry| entry.name() == name)
-    {
-        warn!("asset.new: a {kind} named '{name}' already exists");
-        return None;
     }
     let path = file.unwrap_or_else(|| definition_file_path(&dir, &name));
     if path.exists() {
         warn!("asset.new: {} is already there", path.display());
+        return None;
+    }
+    let under_assets = crate::asset_index::indexed_path(world, &path).is_some_and(|relative| {
+        !relative
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+    });
+    if !under_assets {
+        warn!(
+            "asset.new: {} is outside this project's assets",
+            path.display()
+        );
         return None;
     }
     let Some(value) = default_asset_value(world, &definition) else {
@@ -1603,7 +1631,7 @@ pub fn asset_list(params: In<OperatorParameters>, mut commands: Commands) -> Ope
 
 /// Accept both a path under the project and one relative to its assets
 /// directory, so a caller can pass what the asset browser lists.
-fn resolve_project_path(world: &World, path: &Path) -> PathBuf {
+pub(crate) fn resolve_project_path(world: &World, path: &Path) -> PathBuf {
     if path.is_absolute() {
         return path.to_path_buf();
     }

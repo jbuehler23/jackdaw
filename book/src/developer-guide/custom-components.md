@@ -84,10 +84,22 @@ app.init_asset::<ItemDef>().register_asset_reflect::<ItemDef>();
 ```
 
 Nothing is declared anywhere else. The schema the build extracts
-reports the type, the editor names the kind after it (`ItemDef`
-gives `item`, `Item` on menus), and right-clicking a folder in the
-asset browser offers **New Item**. The file is a plain `.bsn`
-whose second line names the type it holds:
+reports the type and the editor names the kind after it (`ItemDef`
+gives `item`, `Item` on menus).
+
+There are three ways to create one, and none of them asks what
+flavour of file to write. Right-click any folder in the asset
+browser or the project files tree and pick **New Asset...**: the
+list offers every kind, searchable by its name or by the type it
+holds, and the one you pick lands in that folder with its card in
+the inspector. The **Add** menu lists the same kinds under
+**Assets**, creating in the folder the browser is showing. The
+**New** beside an asset field in the inspector writes one of that
+field's type and assigns it. A name of its own is optional: without
+one the file is `<kind>_1.bsn`, then `<kind>_2.bsn`.
+
+The file is a plain `.bsn` whose second line names the type it
+holds:
 
 ```text
 // jackdaw 0.19.0 | bevy 0.19

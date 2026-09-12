@@ -262,9 +262,8 @@ fn spawn_asset_drag_ghost(
         .id()
 }
 
-/// Context-menu action prefix for creating a definition of a registered kind;
-/// the kind follows it.
-const NEW_DEFINITION_ACTION: &str = "asset_browser.new.";
+/// Context-menu action that opens the list of asset kinds on a folder.
+const NEW_ASSET_ACTION: &str = "asset_browser.new_asset";
 
 fn on_asset_browser_context_action(
     event: On<jackdaw_widgets::context_menu::ContextMenuAction>,
@@ -272,14 +271,13 @@ fn on_asset_browser_context_action(
     state: Res<AssetBrowserState>,
     mut menu_state: ResMut<jackdaw_widgets::context_menu::ContextMenuState>,
 ) {
-    if let Some(kind) = event.action.strip_prefix(NEW_DEFINITION_ACTION) {
+    if event.action == NEW_ASSET_ACTION {
         let folder = state
             .selected_file
             .clone()
             .unwrap_or_else(|| state.current_directory.to_string_lossy().into_owned());
         commands
-            .operator(crate::definition_assets::AssetNewOp::ID)
-            .param("type", kind.to_string())
+            .operator(crate::new_asset::AssetNewPickerOp::ID)
             .param("path", folder)
             .call();
         if let Some(menu) = menu_state.menu_entity.take()
@@ -853,16 +851,15 @@ fn refresh_browser_on_change(
                     },
                 );
 
-            // Right-click: open context menu with a Delete entry. The
-            // click also selects the row so the breadcrumb shows the
-            // target and the Delete dispatch can pick it up.
+            // Right-click: open a context menu, with New Asset on a folder.
+            // The click also selects the row so the breadcrumb shows the
+            // target and the dispatch can pick it up.
             let rmb_path = entry.path.clone();
             commands.entity(item_entity).observe(
                 move |click: On<Pointer<Click>>,
                       mut commands: Commands,
                       mut state: ResMut<AssetBrowserState>,
                       windows: Query<&Window>,
-                      asset_kinds: Res<jackdaw_api::prelude::AssetKinds>,
                       project: Option<Res<crate::project::ProjectRoot>>,
                       mut menu_state: ResMut<jackdaw_widgets::context_menu::ContextMenuState>| {
                     if click.event().button != PointerButton::Secondary {
@@ -883,13 +880,10 @@ fn refresh_browser_on_change(
                     }
                     let mut items: Vec<(String, String)> = Vec::new();
                     if project.is_some() && rmb_path.is_dir() {
-                        for definition in asset_kinds.iter().filter(|kind| kind.scanned()) {
-                            items.push((
-                                format!("{NEW_DEFINITION_ACTION}{}", definition.kind),
-                                format!("New {}", definition.label),
-                            ));
-                        }
-                        items.sort();
+                        items.push((
+                            NEW_ASSET_ACTION.to_string(),
+                            crate::new_asset::NEW_ASSET_LABEL.to_string(),
+                        ));
                     }
                     items.push(("asset_browser.delete".to_string(), "Delete".to_string()));
                     let entries: Vec<(&str, &str)> = items
