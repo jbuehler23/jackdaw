@@ -38,21 +38,10 @@ pub(crate) fn insert_default_brush_physics(world: &mut World, entity: Entity) {
             .insert(RigidBody::Static);
     }
 
-    let registry = world.resource::<AppTypeRegistry>().clone();
     let rigid_body = RigidBody::Static;
-    crate::commands::sync_component_to_bsn_doc(
-        world,
-        entity,
-        rigid_body.as_partial_reflect(),
-        &registry,
-    );
+    crate::commands::sync_component_to_bsn_doc(world, entity, rigid_body.as_partial_reflect());
     let collider = AvianCollider::default();
-    crate::commands::sync_component_to_bsn_doc(
-        world,
-        entity,
-        collider.as_partial_reflect(),
-        &registry,
-    );
+    crate::commands::sync_component_to_bsn_doc(world, entity, collider.as_partial_reflect());
 }
 
 /// Copy a recentered brush `Transform` into avian `Position` / `Rotation`.

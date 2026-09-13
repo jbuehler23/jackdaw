@@ -5,7 +5,7 @@
 //! command palette can still toggle the canonical bundle in one shot.
 
 use avian3d::prelude::*;
-use bevy::{ecs::reflect::AppTypeRegistry, prelude::*};
+use bevy::prelude::*;
 use jackdaw_avian_integration::AvianCollider;
 
 use crate::commands::{AddComponent, CommandGroup, CommandHistory, EditorCommand};
@@ -82,32 +82,39 @@ impl DisablePhysics {
 
 impl EditorCommand for DisablePhysics {
     fn execute(&mut self, world: &mut World) {
-        // Remove ECS components
-        if let Ok(mut ec) = world.get_entity_mut(self.entity) {
+        let tracked = world.get::<jackdaw_bsn::AstNodeRef>(self.entity).is_some();
+        if tracked {
+            {
+                let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+                if let Some(node) = ast.ast_for(self.entity) {
+                    let physics_paths: Vec<String> = ast
+                        .component_type_paths(node)
+                        .into_iter()
+                        .filter(|tp| is_physics_type_path(tp))
+                        .collect();
+                    for type_path in physics_paths {
+                        ast.remove_component_patch(node, &type_path);
+                    }
+                }
+            }
+            crate::scene_io::resync_entity_from_ast(world, self.entity);
+        } else if let Ok(mut ec) = world.get_entity_mut(self.entity) {
             ec.remove::<RigidBody>();
             ec.remove::<AvianCollider>();
             ec.remove::<Collider>();
         }
-        // Clean up authored physics patches from the document.
-        let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
-        if let Some(node) = ast.ast_for(self.entity) {
-            let physics_paths: Vec<String> = ast
-                .component_type_paths(node)
-                .into_iter()
-                .filter(|tp| is_physics_type_path(tp))
-                .collect();
-            for type_path in physics_paths {
-                ast.remove_component_patch(node, &type_path);
-            }
-        }
     }
 
     fn undo(&mut self, world: &mut World) {
-        // Restore the document patches, then mirror them onto the ECS entity.
         {
             let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
             if let Some(node) = ast.ast_for(self.entity) {
                 for patch in &self.removed_patches {
+                    if patch_type_path(patch).is_some_and(|type_path| {
+                        ast.find_patch_by_type_path(node, type_path).is_some()
+                    }) {
+                        continue;
+                    }
                     let pe = ast.world.spawn(patch.clone()).id();
                     if let Some(patches) = ast.get_patches_mut(node) {
                         patches.0.push(pe);
@@ -115,10 +122,7 @@ impl EditorCommand for DisablePhysics {
                 }
             }
         }
-        for patch in &self.removed_patches {
-            jackdaw_bsn::apply_component_patch(world, self.entity, patch);
-        }
-        // Rebuild inspector to reflect restored state
+        crate::scene_io::resync_entity_from_ast(world, self.entity);
         if let Ok(mut ec) = world.get_entity_mut(self.entity) {
             ec.insert(super::InspectorDirty);
         }
@@ -130,19 +134,25 @@ impl EditorCommand for DisablePhysics {
 }
 
 pub(crate) fn enable_physics(world: &mut World, entity: Entity) {
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let reg = registry.read();
-    let components_res = world.components();
+    if world
+        .resource::<jackdaw_bsn::SceneBsnAst>()
+        .ast_for(entity)
+        .is_none()
+    {
+        warn!(
+            "enable_physics: entity {entity:?} is not tracked in the scene document; \
+             physics was not added."
+        );
+        return;
+    }
 
     let rb_type_id = std::any::TypeId::of::<RigidBody>();
-    let rb_component_id = components_res.get_id(rb_type_id);
+    let rb_component_id = world.components().get_id(rb_type_id);
 
     let ac_type_id = std::any::TypeId::of::<AvianCollider>();
-    let ac_component_id = components_res.get_id(ac_type_id);
+    let ac_component_id = world.components().get_id(ac_type_id);
 
-    drop(reg);
-
-    let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
+    let mut pending: Vec<AddComponent> = Vec::new();
 
     // Add AvianCollider FIRST so the Collider is built before RigidBody
     // triggers mass computation (avoids "no mass or inertia" warning).
@@ -151,12 +161,12 @@ pub(crate) fn enable_physics(world: &mut World, entity: Entity) {
             .get_entity(entity)
             .is_ok_and(|e| e.contains::<AvianCollider>())
     {
-        sub_commands.push(Box::new(AddComponent::new(
+        pending.push(AddComponent::new(
             entity,
             ac_type_id,
             ac_cid,
             AVIAN_COLLIDER_TYPE_PATH.to_string(),
-        )));
+        ));
     }
 
     if let Some(rb_cid) = rb_component_id
@@ -164,27 +174,30 @@ pub(crate) fn enable_physics(world: &mut World, entity: Entity) {
             .get_entity(entity)
             .is_ok_and(|e| e.contains::<RigidBody>())
     {
-        sub_commands.push(Box::new(AddComponent::new(
+        pending.push(AddComponent::new(
             entity,
             rb_type_id,
             rb_cid,
             RIGID_BODY_TYPE_PATH.to_string(),
-        )));
+        ));
     }
 
-    if sub_commands.is_empty() {
+    let mut commands: Vec<Box<dyn EditorCommand>> = Vec::new();
+    for mut cmd in pending {
+        cmd.execute(world);
+        commands.push(Box::new(cmd));
+    }
+    if commands.is_empty() {
         return;
     }
 
-    let mut cmd: Box<dyn EditorCommand> = if sub_commands.len() == 1 {
-        sub_commands.pop().unwrap()
+    let cmd = if commands.len() == 1 {
+        commands.remove(0)
     } else {
         Box::new(CommandGroup {
             label: "Enable physics".to_string(),
-            commands: sub_commands,
+            commands,
         })
     };
-    cmd.execute(world);
-    let mut history = world.resource_mut::<CommandHistory>();
-    history.push_executed(cmd);
+    world.resource_mut::<CommandHistory>().push_executed(cmd);
 }

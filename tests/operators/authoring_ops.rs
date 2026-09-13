@@ -286,6 +286,15 @@ fn component_remove_takes_it_off_the_named_entity_again() {
         !app.world().entity(target).contains::<AuthoringMarker>(),
         "component.remove left the component on the named entity"
     );
+    let ast = app.world().resource::<SceneBsnAst>();
+    let node = ast.ast_for(target).expect("the named entity is tracked");
+    assert!(
+        !ast.component_type_paths(node)
+            .iter()
+            .any(|type_path| type_path == "operators::authoring_ops::AuthoringMarker"),
+        "component.remove left the component in the document; document holds {:?}",
+        ast.component_type_paths(node)
+    );
 }
 
 #[test]

@@ -8,7 +8,8 @@
 use crate::util;
 
 use bevy::prelude::*;
-use jackdaw::selection::Selection;
+use jackdaw::commands::CommandHistory;
+use jackdaw::selection::{Selected, Selection};
 use jackdaw_api::prelude::*;
 use jackdaw_avian_integration::AvianCollider;
 use jackdaw_scene_types::PropertyValue;
@@ -49,10 +50,16 @@ fn spawn_selected_target(app: &mut App) -> Entity {
     entity
 }
 
+fn spawn_authored_selected_target(app: &mut App) -> Entity {
+    let entity = spawn_selected_target(app);
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
+    entity
+}
+
 #[test]
 fn component_add_with_entity_param_inserts_component() {
     let mut app = app_with_test_marker();
-    let entity = spawn_selected_target(&mut app);
+    let entity = spawn_authored_selected_target(&mut app);
 
     let result = app
         .world_mut()
@@ -87,7 +94,7 @@ fn component_add_inserts_component_without_default_derive() {
     // Components without a `Default` derive must still insert via
     // `build_reflective_default`, which walks field defaults.
     let mut app = app_with_test_marker();
-    let entity = spawn_selected_target(&mut app);
+    let entity = spawn_authored_selected_target(&mut app);
 
     let result = app
         .world_mut()
@@ -148,6 +155,38 @@ fn component_add_with_int_entity_param_cancels() {
 }
 
 #[test]
+fn component_add_refuses_an_untracked_entity() {
+    let mut app = app_with_test_marker();
+    let entity = spawn_selected_target(&mut app);
+    let undo_before = app.world().resource::<CommandHistory>().undo_stack.len();
+
+    let result = app
+        .world_mut()
+        .operator("component.add")
+        .param("entity", entity)
+        .param(
+            "type_path",
+            "operators::operator_entity_params::OperatorParamTestMarker".to_string(),
+        )
+        .call()
+        .expect("dispatch resolves");
+    assert_eq!(result, OperatorResult::Finished);
+
+    app.update();
+    assert!(
+        !app.world()
+            .entity(entity)
+            .contains::<OperatorParamTestMarker>(),
+        "component.add must not insert onto an entity that is not in the document"
+    );
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        undo_before,
+        "a refused add must not land on the undo stack"
+    );
+}
+
+#[test]
 fn component_remove_with_entity_param_removes_component() {
     let mut app = app_with_test_marker();
     let entity = spawn_selected_target(&mut app);
@@ -156,6 +195,7 @@ fn component_remove_with_entity_param_removes_component() {
     app.world_mut()
         .entity_mut(entity)
         .insert(OperatorParamTestMarker { value: 42 });
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
     assert!(
         app.world()
             .entity(entity)
@@ -181,6 +221,15 @@ fn component_remove_with_entity_param_removes_component() {
             .contains::<OperatorParamTestMarker>(),
         "component.remove did not remove the component"
     );
+    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    let node = ast.ast_for(entity).expect("the target is tracked");
+    assert!(
+        !ast.component_type_paths(node)
+            .iter()
+            .any(|path| { path == "operators::operator_entity_params::OperatorParamTestMarker" }),
+        "component.remove left the component in the document; document holds {:?}",
+        ast.component_type_paths(node)
+    );
 }
 
 #[test]
@@ -188,7 +237,7 @@ fn physics_enable_with_entity_param_attaches_components() {
     use avian3d::prelude::RigidBody;
 
     let mut app = util::editor_test_app();
-    let entity = spawn_selected_target(&mut app);
+    let entity = spawn_authored_selected_target(&mut app);
 
     let result = app
         .world_mut()
@@ -301,6 +350,166 @@ fn add_cube_authors_static_physics_by_default() {
     assert!(
         !paths.iter().any(|p| p.ends_with("::Position")),
         "avian require companions must stay off the document: {paths:?}"
+    );
+}
+
+#[test]
+fn component_remove_drops_authored_physics_from_the_document() {
+    use avian3d::prelude::RigidBody;
+    use jackdaw_bsn::SceneBsnAst;
+    use jackdaw_scene_types::Brush;
+
+    let mut app = util::editor_test_app();
+    let result = app
+        .world_mut()
+        .operator("entity.add.cube")
+        .call()
+        .expect("dispatch resolves");
+    assert_eq!(result, OperatorResult::Finished);
+    app.update();
+
+    let entity = app
+        .world_mut()
+        .query_filtered::<Entity, With<Brush>>()
+        .iter(app.world())
+        .next()
+        .expect("entity.add.cube spawned a brush");
+    app.world_mut().resource_mut::<Selection>().entities = vec![entity];
+    app.update();
+
+    for type_path in [
+        "avian3d::dynamics::rigid_body::RigidBody",
+        "jackdaw_avian_integration::AvianCollider",
+    ] {
+        let result = app
+            .world_mut()
+            .operator("component.remove")
+            .param("entity", entity)
+            .param("type_path", type_path.to_string())
+            .call()
+            .expect("dispatch resolves");
+        assert_eq!(result, OperatorResult::Finished);
+        app.update();
+    }
+
+    let entity_ref = app.world().entity(entity);
+    assert!(
+        !entity_ref.contains::<RigidBody>(),
+        "component.remove should take RigidBody off the brush"
+    );
+    assert!(
+        !entity_ref.contains::<AvianCollider>(),
+        "component.remove should take AvianCollider off the brush"
+    );
+    assert!(
+        !entity_ref.contains::<avian3d::prelude::Position>(),
+        "component.remove should take RigidBody's #[require] companions off the brush"
+    );
+    assert!(
+        !entity_ref.contains::<avian3d::prelude::Rotation>(),
+        "component.remove should take RigidBody's #[require] companions off the brush"
+    );
+
+    let ast = app.world().resource::<SceneBsnAst>();
+    let node = ast
+        .ast_for(entity)
+        .expect("cube is tracked in the document");
+    let paths = ast.component_type_paths(node);
+    assert!(
+        !paths
+            .iter()
+            .any(|p| p.starts_with("avian3d::dynamics::rigid_body::RigidBody")),
+        "RigidBody should leave the document: {paths:?}"
+    );
+    assert!(
+        !paths
+            .iter()
+            .any(|p| p == "jackdaw_avian_integration::AvianCollider"),
+        "AvianCollider should leave the document: {paths:?}"
+    );
+}
+
+#[test]
+fn component_remove_keeps_entity_identity_and_undo_restores_requires() {
+    use avian3d::prelude::{Position, RigidBody};
+    use jackdaw_scene_types::Brush;
+
+    let mut app = util::editor_test_app();
+    let result = app
+        .world_mut()
+        .operator("entity.add.cube")
+        .call()
+        .expect("dispatch resolves");
+    assert_eq!(result, OperatorResult::Finished);
+    app.update();
+
+    let entity = app
+        .world_mut()
+        .query_filtered::<Entity, With<Brush>>()
+        .iter(app.world())
+        .next()
+        .expect("entity.add.cube spawned a brush");
+    app.world_mut().entity_mut(entity).insert(Selected);
+    app.world_mut().resource_mut::<Selection>().entities = vec![entity];
+    app.update();
+
+    assert!(
+        app.world().entity(entity).contains::<Position>(),
+        "precondition: RigidBody's require companion is live"
+    );
+
+    let result = app
+        .world_mut()
+        .operator("component.remove")
+        .param("entity", entity)
+        .param(
+            "type_path",
+            "avian3d::dynamics::rigid_body::RigidBody".to_string(),
+        )
+        .call()
+        .expect("dispatch resolves");
+    assert_eq!(result, OperatorResult::Finished);
+    app.update();
+
+    let entity_ref = app.world().entity(entity);
+    assert!(
+        !entity_ref.contains::<RigidBody>(),
+        "RigidBody should leave ECS"
+    );
+    assert!(
+        !entity_ref.contains::<Position>(),
+        "Position should leave with its RigidBody invoker"
+    );
+    assert!(
+        entity_ref.contains::<AvianCollider>(),
+        "AvianCollider was not removed and should survive"
+    );
+    assert!(
+        entity_ref.contains::<Selected>(),
+        "resync must keep the same entity selected"
+    );
+    assert_eq!(
+        app.world().resource::<Selection>().entities,
+        vec![entity],
+        "selection resource must still name the same entity"
+    );
+
+    app.world_mut()
+        .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
+    app.update();
+
+    let entity_ref = app.world().entity(entity);
+    assert!(
+        entity_ref.contains::<RigidBody>(),
+        "undo should put RigidBody back"
+    );
+    assert!(
+        entity_ref.contains::<Position>(),
+        "undo resync should restore RigidBody's require companions"
+    );
+    assert!(
+        entity_ref.contains::<Selected>(),
+        "undo resync must keep selection"
     );
 }
 

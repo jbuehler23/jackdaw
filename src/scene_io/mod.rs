@@ -5,6 +5,8 @@ use std::any::TypeId;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use bevy::ecs::component::ComponentId;
+use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::prelude::*;
 
 mod legacy;
@@ -211,6 +213,58 @@ pub(crate) fn doc_skip_type_ids() -> HashSet<TypeId> {
     ids.insert(TypeId::of::<jackdaw_bsn::AstNodeRef>());
     ids.insert(TypeId::of::<jackdaw_bsn::AstDirty>());
     ids
+}
+
+/// Rebuild an entity's scene-derived ECS components from its document node.
+///
+/// Strips reflected scene components, then applies the live AST onto the same
+/// entity so `#[require]` companions follow the document rather than lingering.
+/// Hierarchy, computed transform/visibility, and skip-listed editor/runtime
+/// components stay, so identity, selection, and children survive.
+pub(crate) fn resync_entity_from_ast(world: &mut World, entity: Entity) {
+    if world.get::<jackdaw_bsn::AstNodeRef>(entity).is_none() {
+        return;
+    }
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let skip_ids = structural_skip_type_ids();
+    let component_ids: Vec<ComponentId> = {
+        let Ok(entity_ref) = world.get_entity(entity) else {
+            return;
+        };
+        entity_ref.archetype().iter_components().collect()
+    };
+    let to_remove: Vec<ComponentId> = {
+        let reg = registry.read();
+        component_ids
+            .into_iter()
+            .filter(|&component_id| {
+                let Some(type_id) = world
+                    .components()
+                    .get_info(component_id)
+                    .and_then(bevy::ecs::component::ComponentInfo::type_id)
+                else {
+                    return false;
+                };
+                if skip_ids.contains(&type_id) {
+                    return false;
+                }
+                let Some(registration) = reg.get(type_id) else {
+                    return false;
+                };
+                if registration.data::<ReflectComponent>().is_none() {
+                    return false;
+                }
+                let type_path = registration.type_info().type_path_table().path();
+                !should_skip_component(type_path)
+            })
+            .collect()
+    };
+    if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+        for component_id in to_remove {
+            entity_mut.remove_by_id(component_id);
+        }
+    }
+    jackdaw_bsn::apply_ast_to_ecs(world, entity);
 }
 
 pub struct SceneIoPlugin;

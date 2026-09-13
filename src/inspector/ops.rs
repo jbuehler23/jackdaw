@@ -9,7 +9,10 @@ use jackdaw_api::prelude::*;
 
 use super::physics_display::{DisablePhysics, enable_physics};
 use super::prefab_field_dots::revert_component_to_baseline;
-use crate::commands::{AddComponent, AddProjectComponent, CommandHistory, EditorCommand};
+use crate::commands::{
+    AddComponent, AddProjectComponent, CommandHistory, EditorCommand, RemoveComponent,
+    RemoveProjectComponent,
+};
 use crate::project_types::ProjectTypes;
 use crate::selection::Selection;
 
@@ -225,6 +228,17 @@ pub(crate) fn component_add(
             );
             return;
         }
+        if world
+            .resource::<jackdaw_bsn::SceneBsnAst>()
+            .ast_for(entity)
+            .is_none()
+        {
+            warn!(
+                "component.add: entity {entity:?} is not tracked in the scene document; \
+                 {type_path} was not added."
+            );
+            return;
+        }
         // A project component is never a real ECS component in the
         // editor. It lives in the scene document as a dynamic patch;
         // its real type exists only in the game binary at Play.
@@ -232,10 +246,18 @@ pub(crate) fn component_add(
             .get_resource::<ProjectTypes>()
             .is_some_and(|pt| pt.is_project_component(&type_path))
         {
-            let mut cmd: Box<dyn EditorCommand> =
-                Box::new(AddProjectComponent::new(entity, type_path));
+            let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+            if ast
+                .ast_for(entity)
+                .is_some_and(|node| ast.find_patch_by_type_path(node, &type_path).is_some())
+            {
+                return;
+            }
+            let mut cmd = AddProjectComponent::new(entity, type_path);
             cmd.execute(world);
-            world.resource_mut::<CommandHistory>().push_executed(cmd);
+            world
+                .resource_mut::<CommandHistory>()
+                .push_executed(Box::new(cmd));
             if let Ok(mut ec) = world.get_entity_mut(entity) {
                 ec.insert(super::InspectorDirty);
             }
@@ -249,10 +271,11 @@ pub(crate) fn component_add(
             );
             return;
         };
-        let mut cmd: Box<dyn EditorCommand> =
-            Box::new(AddComponent::new(entity, type_id, component_id, type_path));
+        let mut cmd = AddComponent::new(entity, type_id, component_id, type_path);
         cmd.execute(world);
-        world.resource_mut::<CommandHistory>().push_executed(cmd);
+        world
+            .resource_mut::<CommandHistory>()
+            .push_executed(Box::new(cmd));
         if let Ok(mut ec) = world.get_entity_mut(entity) {
             ec.insert(super::InspectorDirty);
         }
@@ -303,20 +326,27 @@ pub(crate) fn component_remove(
             .get_resource::<ProjectTypes>()
             .is_some_and(|pt| pt.is_project_component(&type_path))
         {
-            let mut cmd: Box<dyn EditorCommand> = Box::new(
-                crate::commands::RemoveProjectComponent::new(entity, type_path),
-            );
+            let Some(mut cmd) = RemoveProjectComponent::from_world(world, entity, type_path) else {
+                return;
+            };
             cmd.execute(world);
-            world.resource_mut::<CommandHistory>().push_executed(cmd);
+            world
+                .resource_mut::<CommandHistory>()
+                .push_executed(Box::new(cmd));
             return;
         }
-        let Some((component_id, _)) = component_id_for_path(world, &type_path) else {
+        let Some((component_id, type_id)) = component_id_for_path(world, &type_path) else {
             return;
         };
-        if let Ok(mut ec) = world.get_entity_mut(entity) {
-            ec.remove_by_id(component_id);
-            ec.insert(super::InspectorDirty);
-        }
+        let mut cmd: Box<dyn EditorCommand> = Box::new(RemoveComponent::from_world(
+            world,
+            entity,
+            type_id,
+            component_id,
+            type_path,
+        ));
+        cmd.execute(world);
+        world.resource_mut::<CommandHistory>().push_executed(cmd);
     });
     OperatorResult::Finished
 }

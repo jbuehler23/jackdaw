@@ -51,7 +51,7 @@ pub fn register_entity_in_ast(world: &mut World, entity: Entity) {
             .collect()
     };
     for value in values {
-        crate::commands::sync_component_to_bsn_doc(world, entity, &*value, &registry);
+        crate::commands::sync_component_to_bsn_doc(world, entity, &*value);
     }
 }
 

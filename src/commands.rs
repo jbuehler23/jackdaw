@@ -6,6 +6,7 @@ use bevy::{
         reflect::{AppTypeRegistry, ReflectComponent},
     },
     prelude::*,
+    reflect::PartialReflect,
 };
 use serde::de::DeserializeSeed;
 
@@ -565,9 +566,6 @@ pub struct AddComponent {
     pub type_id: TypeId,
     pub component_id: ComponentId,
     pub type_path: String,
-    /// Type paths of components inserted by `#[require]` (or other side
-    /// effects) during `execute`.
-    required_companions: Vec<String>,
 }
 
 impl AddComponent {
@@ -582,7 +580,6 @@ impl AddComponent {
             type_id,
             component_id,
             type_path,
-            required_companions: Vec::new(),
         }
     }
 }
@@ -593,6 +590,19 @@ impl EditorCommand for AddComponent {
             "AddComponent::execute entered: type_path={}, type_id={:?}, component_id={:?}, entity={:?}",
             self.type_path, self.type_id, self.component_id, self.entity
         );
+        if world
+            .resource::<jackdaw_bsn::SceneBsnAst>()
+            .ast_for(self.entity)
+            .is_none()
+        {
+            warn!(
+                "AddComponent: entity {:?} is not tracked in the scene document; \
+                 {} was not added.",
+                self.entity, self.type_path
+            );
+            return;
+        }
+
         let registry = world.resource::<AppTypeRegistry>().clone();
         let registry = registry.read();
 
@@ -627,15 +637,14 @@ impl EditorCommand for AddComponent {
             );
             return;
         }
-
-        // Snapshot reflected components before insert to identify which companions
-        // `#[require]` (and similar) added, without writing them into the document.
         drop(registry);
-        let before = reflected_component_type_paths(world, self.entity);
 
-        // Insert triggers `#[require]`, which may pull in
-        // dependents (e.g. `RigidBody` requires `Position`,
-        // `Rotation`, etc.).
+        sync_component_to_bsn_doc(world, self.entity, default_value.as_partial_reflect());
+
+        // Insert through reflection so types without `ReflectDefault` still
+        // land, and so `#[require]` companions appear the same way they do
+        // on a fresh spawn. Remove/undo resync from the document; add does
+        // not, because apply cannot rebuild every user type.
         info!(
             "AddComponent: inserting `{}` (type_id {:?}, component_id {:?}) on entity {:?}",
             self.type_path, self.type_id, self.component_id, self.entity
@@ -664,73 +673,16 @@ impl EditorCommand for AddComponent {
             "AddComponent: post-insert, entity {:?} has component_id {:?}: {has_after}",
             self.entity, self.component_id
         );
-
-        let after = reflected_component_type_paths(world, self.entity);
-        self.required_companions = after
-            .into_iter()
-            .filter(|type_path| type_path != &self.type_path && !before.contains(type_path))
-            .collect();
-        if !self.required_companions.is_empty() {
-            info!(
-                "AddComponent: {} #[require] companions stay ECS-only (not authored): {:?}",
-                self.required_companions.len(),
-                self.required_companions
-            );
-        }
-
-        // Sync only the explicitly-added component into the scene document.
-        // Companions remain live ECS state until the user edits one (which
-        // mints an authored override patch).
-        let tracked = world
-            .resource::<jackdaw_bsn::SceneBsnAst>()
-            .ast_for(self.entity)
-            .is_some();
-        if tracked {
-            let registry = world.resource::<AppTypeRegistry>().clone();
-            sync_component_to_bsn_doc(
-                world,
-                self.entity,
-                default_value.as_partial_reflect(),
-                &registry,
-            );
-        } else {
-            warn!(
-                "AddComponent: entity {:?} is not tracked in the scene document; \
-                 {} is on the entity but won't persist through save/load.",
-                self.entity, self.type_path
-            );
-        }
     }
 
     fn undo(&mut self, world: &mut World) {
-        // Resolve require-companions' ComponentIds so undo strips them from
-        // the live entity. They were never written to the document.
-        let registry = world.resource::<AppTypeRegistry>().clone();
-        let reg = registry.read();
-        let companion_ids: Vec<bevy::ecs::component::ComponentId> = self
-            .required_companions
-            .iter()
-            .filter_map(|type_path| {
-                let type_id = reg.get_with_type_path(type_path)?.type_id();
-                world.components().get_id(type_id)
-            })
-            .collect();
-        drop(reg);
-
-        if let Ok(mut entity) = world.get_entity_mut(self.entity) {
-            entity.remove_by_id(self.component_id);
-            for cid in &companion_ids {
-                entity.remove_by_id(*cid);
-            }
-        }
-        // Remove only the explicitly-added component from the document.
         {
             let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
             if let Some(node) = ast.ast_for(self.entity) {
                 ast.remove_component_patch(node, &self.type_path);
             }
         }
-        // Trigger inspector rebuild so the UI reflects the removal immediately.
+        crate::scene_io::resync_entity_from_ast(world, self.entity);
         if let Ok(mut ec) = world.get_entity_mut(self.entity) {
             ec.insert(crate::inspector::InspectorDirty);
         }
@@ -750,18 +702,11 @@ impl EditorCommand for AddComponent {
 pub struct AddProjectComponent {
     pub entity: Entity,
     pub type_path: String,
-    /// Whether execute actually inserted a patch (false if the node
-    /// already carried the component or is untracked); gates undo.
-    added: bool,
 }
 
 impl AddProjectComponent {
     pub fn new(entity: Entity, type_path: String) -> Self {
-        Self {
-            entity,
-            type_path,
-            added: false,
-        }
+        Self { entity, type_path }
     }
 }
 
@@ -774,11 +719,9 @@ impl EditorCommand for AddProjectComponent {
                  project component {} cannot be added.",
                 self.entity, self.type_path
             );
-            self.added = false;
             return;
         };
         if ast.find_patch_by_type_path(node, &self.type_path).is_some() {
-            self.added = false;
             return;
         }
         // A struct patch with no field overrides materializes as the
@@ -792,7 +735,6 @@ impl EditorCommand for AddProjectComponent {
         if let Some(patches) = ast.get_patches_mut(node) {
             patches.0.push(patch_entity);
         }
-        self.added = true;
 
         if let Ok(mut ec) = world.get_entity_mut(self.entity) {
             ec.insert(crate::inspector::InspectorDirty);
@@ -800,9 +742,6 @@ impl EditorCommand for AddProjectComponent {
     }
 
     fn undo(&mut self, world: &mut World) {
-        if !self.added {
-            return;
-        }
         {
             let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
             if let Some(node) = ast.ast_for(self.entity) {
@@ -819,61 +758,54 @@ impl EditorCommand for AddProjectComponent {
     }
 }
 
-/// Drop a project component's patch from the scene document, as one undo
-/// entry. Project types are never real ECS components, so there is nothing to
-/// remove from the world and [`RemoveComponent`] has no id to remove it by.
+/// Drop a project component's document patch. Project types have no live ECS
+/// component in the editor, so this is the whole of the removal.
 pub struct RemoveProjectComponent {
     pub entity: Entity,
     pub type_path: String,
-    /// The patch as it stood, put back on undo.
-    removed: Option<jackdaw_bsn::BsnPatch>,
+    ast_snapshot: jackdaw_bsn::BsnPatch,
 }
 
 impl RemoveProjectComponent {
-    pub fn new(entity: Entity, type_path: String) -> Self {
-        Self {
+    pub fn from_world(world: &World, entity: Entity, type_path: String) -> Option<Self> {
+        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        let ast_snapshot = ast.ast_for(entity).and_then(|node| {
+            ast.find_patch_by_type_path(node, &type_path)
+                .and_then(|pe| ast.get_patch(pe))
+                .cloned()
+        })?;
+        Some(Self {
             entity,
             type_path,
-            removed: None,
-        }
+            ast_snapshot,
+        })
     }
 }
 
 impl EditorCommand for RemoveProjectComponent {
     fn execute(&mut self, world: &mut World) {
-        let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
-        let Some(node) = ast.ast_for(self.entity) else {
-            return;
-        };
-        self.removed = ast
-            .find_patch_by_type_path(node, &self.type_path)
-            .and_then(|patch| ast.get_patch(patch))
-            .cloned();
-        if self.removed.is_none() {
-            return;
-        }
-        ast.remove_component_patch(node, &self.type_path);
-        if let Ok(mut ec) = world.get_entity_mut(self.entity) {
-            ec.insert(crate::inspector::InspectorDirty);
-        }
-    }
-
-    fn undo(&mut self, world: &mut World) {
-        let Some(patch) = self.removed.take() else {
-            return;
-        };
         {
             let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
             let Some(node) = ast.ast_for(self.entity) else {
                 return;
             };
             if ast.find_patch_by_type_path(node, &self.type_path).is_none() {
-                let patch_entity = ast.world.spawn(patch).id();
-                if let Some(patches) = ast.get_patches_mut(node) {
-                    patches.0.push(patch_entity);
-                }
+                return;
             }
+            ast.remove_component_patch(node, &self.type_path);
         }
+        if let Ok(mut ec) = world.get_entity_mut(self.entity) {
+            ec.insert(crate::inspector::InspectorDirty);
+        }
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        restore_ast_component_patch(
+            world,
+            self.entity,
+            &self.type_path,
+            self.ast_snapshot.clone(),
+        );
         if let Ok(mut ec) = world.get_entity_mut(self.entity) {
             ec.insert(crate::inspector::InspectorDirty);
         }
@@ -889,62 +821,90 @@ pub struct RemoveComponent {
     pub type_id: TypeId,
     pub component_id: ComponentId,
     pub type_path: String,
-    /// Snapshot of the component's value before removal, for undo.
-    pub snapshot: Box<dyn PartialReflect>,
+    /// Live value when the type was not in the document, so undo can put a
+    /// derived component back without authoring it.
+    derived_snapshot: Option<Box<dyn PartialReflect>>,
     /// Document patch snapshot for undo.
-    pub ast_snapshot: Option<jackdaw_bsn::BsnPatch>,
+    ast_snapshot: Option<jackdaw_bsn::BsnPatch>,
+}
+
+impl RemoveComponent {
+    pub fn from_world(
+        world: &World,
+        entity: Entity,
+        type_id: TypeId,
+        component_id: ComponentId,
+        type_path: String,
+    ) -> Self {
+        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        let ast_snapshot = ast.ast_for(entity).and_then(|node| {
+            ast.find_patch_by_type_path(node, &type_path)
+                .and_then(|pe| ast.get_patch(pe))
+                .cloned()
+        });
+        let derived_snapshot = if ast_snapshot.is_none() {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            let registry = registry.read();
+            registry
+                .get(type_id)
+                .and_then(|registration| registration.data::<ReflectComponent>())
+                .and_then(|reflect_component| {
+                    let entity_ref = world.get_entity(entity).ok()?;
+                    reflect_component.reflect(entity_ref)
+                })
+                .map(PartialReflect::to_dynamic)
+        } else {
+            None
+        };
+        Self {
+            entity,
+            type_id,
+            component_id,
+            type_path,
+            derived_snapshot,
+            ast_snapshot,
+        }
+    }
 }
 
 impl EditorCommand for RemoveComponent {
     fn execute(&mut self, world: &mut World) {
-        // Snapshot the document patch before removal
-        {
-            let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
-            self.ast_snapshot = ast.ast_for(self.entity).and_then(|node| {
-                ast.find_patch_by_type_path(node, &self.type_path)
-                    .and_then(|pe| ast.get_patch(pe))
-                    .cloned()
-            });
-        }
-        if let Ok(mut entity) = world.get_entity_mut(self.entity) {
+        let tracked = world
+            .resource::<jackdaw_bsn::SceneBsnAst>()
+            .ast_for(self.entity)
+            .is_some();
+        if tracked {
+            {
+                let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+                if let Some(node) = ast.ast_for(self.entity) {
+                    ast.remove_component_patch(node, &self.type_path);
+                }
+            }
+            crate::scene_io::resync_entity_from_ast(world, self.entity);
+        } else if let Ok(mut entity) = world.get_entity_mut(self.entity) {
             entity.remove_by_id(self.component_id);
         }
-        // Remove from the document
-        let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
-        if let Some(node) = ast.ast_for(self.entity) {
-            ast.remove_component_patch(node, &self.type_path);
+        if let Ok(mut ec) = world.get_entity_mut(self.entity) {
+            ec.insert(crate::inspector::InspectorDirty);
         }
     }
 
     fn undo(&mut self, world: &mut World) {
-        let registry = world.resource::<AppTypeRegistry>().clone();
-        let registry = registry.read();
-
-        let Some(registration) = registry.get(self.type_id) else {
-            return;
-        };
-        let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-            return;
-        };
-
-        reflect_component.insert(
-            &mut world.entity_mut(self.entity),
-            &*self.snapshot,
-            &registry,
-        );
-        drop(registry);
-
-        // Restore the document patch snapshot
-        if let Some(patch) = self.ast_snapshot.take() {
-            let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
-            if let Some(node) = ast.ast_for(self.entity)
-                && ast.find_patch_by_type_path(node, &self.type_path).is_none()
+        if let Some(patch) = self.ast_snapshot.clone() {
+            restore_ast_component_patch(world, self.entity, &self.type_path, patch);
+            crate::scene_io::resync_entity_from_ast(world, self.entity);
+        } else if let Some(snapshot) = &self.derived_snapshot {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            let registry = registry.read();
+            if let Some(registration) = registry.get(self.type_id)
+                && let Some(reflect_component) = registration.data::<ReflectComponent>()
+                && let Ok(mut entity_mut) = world.get_entity_mut(self.entity)
             {
-                let pe = ast.world.spawn(patch).id();
-                if let Some(patches) = ast.get_patches_mut(node) {
-                    patches.0.push(pe);
-                }
+                reflect_component.insert(&mut entity_mut, snapshot.as_ref(), &registry);
             }
+        }
+        if let Ok(mut ec) = world.get_entity_mut(self.entity) {
+            ec.insert(crate::inspector::InspectorDirty);
         }
     }
 
@@ -1866,8 +1826,7 @@ pub fn sync_component_to_ast<T: bevy::reflect::Reflect>(
     value: &T,
 ) {
     let _ = type_path;
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    sync_component_to_bsn_doc(world, entity, value.as_partial_reflect(), &registry);
+    sync_component_to_bsn_doc(world, entity, value.as_partial_reflect());
 }
 
 /// Record an authored layout edit a live gesture already applied to the ECS,
@@ -2016,17 +1975,36 @@ impl EditorCommand for SetCanvasGuides {
     }
 }
 
+/// Put `patch` back on `entity`'s document node when that type is absent.
+fn restore_ast_component_patch(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    patch: jackdaw_bsn::BsnPatch,
+) {
+    let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+    let Some(node) = ast.ast_for(entity) else {
+        return;
+    };
+    if ast.find_patch_by_type_path(node, type_path).is_some() {
+        return;
+    }
+    let pe = ast.world.spawn(patch).id();
+    if let Some(patches) = ast.get_patches_mut(node) {
+        patches.0.push(pe);
+    }
+}
+
 /// Upsert one component's patch on the entity's BSN document node from a
 /// reflected value.
 pub(crate) fn sync_component_to_bsn_doc(
     world: &mut World,
     entity: Entity,
     value: &dyn bevy::reflect::PartialReflect,
-    registry: &AppTypeRegistry,
 ) {
     let patch = {
-        let reg = registry.read();
-        jackdaw_bsn::component_to_bsn_patch(value, &reg)
+        let registry = world.resource::<AppTypeRegistry>().read();
+        jackdaw_bsn::component_to_bsn_patch(value, &registry)
     };
     let type_path = match value.get_represented_type_info() {
         Some(info) => info.type_path().to_string(),
@@ -2046,39 +2024,6 @@ pub(crate) fn sync_component_to_bsn_doc(
             patches.0.push(patch_entity);
         }
     }
-}
-
-/// Reflected component type paths currently on `entity`, excluding structural
-/// / skip-listed types. Used to diff `#[require]` companions around an insert
-/// without writing them into the scene document.
-fn reflected_component_type_paths(
-    world: &World,
-    entity: Entity,
-) -> std::collections::HashSet<String> {
-    use std::collections::HashSet;
-
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let reg = registry.read();
-    let skip_ids = crate::scene_io::structural_skip_type_ids();
-    let Ok(entity_ref) = world.get_entity(entity) else {
-        return HashSet::new();
-    };
-    reg.iter()
-        .filter(|registration| !skip_ids.contains(&registration.type_id()))
-        .filter_map(|registration| {
-            let type_path = registration
-                .type_info()
-                .type_path_table()
-                .path()
-                .to_string();
-            if crate::scene_io::should_skip_component(&type_path) {
-                return None;
-            }
-            let reflect_component = registration.data::<ReflectComponent>()?;
-            reflect_component.reflect(entity_ref)?;
-            Some(type_path)
-        })
-        .collect()
 }
 
 /// Reflect a live ECS component field into a [`jackdaw_bsn::BsnValue`] for

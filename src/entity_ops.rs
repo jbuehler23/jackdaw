@@ -3264,12 +3264,10 @@ mod clone_brush_tests {
         crate::physics_brush_bridge::insert_default_brush_physics(app.world_mut(), source);
 
         app.world_mut().entity_mut(source).insert(ExtraBrushMarker);
-        let registry = app.world().resource::<AppTypeRegistry>().clone();
         crate::commands::sync_component_to_bsn_doc(
             app.world_mut(),
             source,
             ExtraBrushMarker.as_partial_reflect(),
-            &registry,
         );
 
         let new_brush = Brush::cuboid(1.0, 1.0, 1.0);
