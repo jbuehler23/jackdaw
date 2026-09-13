@@ -1002,8 +1002,7 @@ fn preview_entity_components_as_bsn(
         return Vec::new();
     };
 
-    // The same structural/derived components that register_entity_in_ast skips.
-    let skip_ids = crate::scene_io::structural_skip_type_ids();
+    let skip_ids = crate::scene_io::doc_skip_type_ids();
 
     let mut out: Vec<(String, jackdaw_bsn::BsnValue)> = registry
         .iter()

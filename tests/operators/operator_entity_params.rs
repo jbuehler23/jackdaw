@@ -409,6 +409,14 @@ fn component_remove_drops_authored_physics_from_the_document() {
         !entity_ref.contains::<avian3d::prelude::Rotation>(),
         "component.remove should take RigidBody's #[require] companions off the brush"
     );
+    assert!(
+        !entity_ref.contains::<avian3d::prelude::Collider>(),
+        "component.remove should take the built Collider off the brush"
+    );
+    assert!(
+        !entity_ref.contains::<avian3d::collider_tree::ColliderTreeProxyKey>(),
+        "unreflected collider requires must leave with AvianCollider"
+    );
 
     let ast = app.world().resource::<SceneBsnAst>();
     let node = ast

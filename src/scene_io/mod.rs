@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use bevy::ecs::component::ComponentId;
-use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
+use bevy::ecs::reflect::AppTypeRegistry;
 use bevy::prelude::*;
 
 mod legacy;
@@ -191,42 +191,47 @@ pub fn editor_writer_config() -> jackdaw_bsn::BsnWriterConfig {
         .skip_path(ViewVisibility::type_path())
 }
 
-/// Component types that never persist to the scene document: derived
-/// structural state the engine rebuilds every frame or on spawn (transform
-/// propagation, visibility resolution, hierarchy links).
-pub(crate) fn structural_skip_type_ids() -> HashSet<TypeId> {
+/// Component types that never persist as document component patches:
+/// engine-derived pose/hierarchy the engine rebuilds, `Name` (a `#name`
+/// reference patch), and the document's own bookkeeping.
+pub(crate) fn doc_skip_type_ids() -> HashSet<TypeId> {
     HashSet::from([
         TypeId::of::<GlobalTransform>(),
         TypeId::of::<InheritedVisibility>(),
         TypeId::of::<ViewVisibility>(),
         TypeId::of::<ChildOf>(),
         TypeId::of::<Children>(),
+        TypeId::of::<Name>(),
+        TypeId::of::<jackdaw_bsn::AstNodeRef>(),
+        TypeId::of::<jackdaw_bsn::AstDirty>(),
     ])
 }
 
-/// [`structural_skip_type_ids`] plus the document's own bookkeeping
-/// components and `Name`, which persists as a `#name` reference patch
-/// rather than a component patch.
-pub(crate) fn doc_skip_type_ids() -> HashSet<TypeId> {
-    let mut ids = structural_skip_type_ids();
-    ids.insert(TypeId::of::<Name>());
-    ids.insert(TypeId::of::<jackdaw_bsn::AstNodeRef>());
-    ids.insert(TypeId::of::<jackdaw_bsn::AstDirty>());
+/// Components [`resync_entity_from_ast`] must leave on the entity: document
+/// bookkeeping, identity, selection, and prefab override baselines. Everything
+/// else is torn down and rebuilt from the AST, including unreflected `#[require]`
+/// companions.
+fn resync_keep_type_ids() -> HashSet<TypeId> {
+    let mut ids = doc_skip_type_ids();
+    ids.insert(TypeId::of::<jackdaw_scene_types::SceneNodeId>());
+    ids.insert(TypeId::of::<jackdaw_scene_types::PrefabBaseline>());
+    ids.insert(TypeId::of::<crate::selection::Selected>());
     ids
 }
 
 /// Rebuild an entity's scene-derived ECS components from its document node.
 ///
-/// Strips reflected scene components, then applies the live AST onto the same
-/// entity so `#[require]` companions follow the document rather than lingering.
-/// Hierarchy, computed transform/visibility, and skip-listed editor/runtime
-/// components stay, so identity, selection, and children survive.
+/// Tears down every component that is not keep-listed or skip-listed, then
+/// applies the live AST onto the same entity so `#[require]` companions follow
+/// the document rather than lingering. Hierarchy, computed transform/visibility,
+/// skip-listed editor/runtime components, and document identity stay, so
+/// selection and children survive.
 pub(crate) fn resync_entity_from_ast(world: &mut World, entity: Entity) {
     if world.get::<jackdaw_bsn::AstNodeRef>(entity).is_none() {
         return;
     }
     let registry = world.resource::<AppTypeRegistry>().clone();
-    let skip_ids = structural_skip_type_ids();
+    let skip_ids = resync_keep_type_ids();
     let component_ids: Vec<ComponentId> = {
         let Ok(entity_ref) = world.get_entity(entity) else {
             return;
@@ -238,23 +243,20 @@ pub(crate) fn resync_entity_from_ast(world: &mut World, entity: Entity) {
         component_ids
             .into_iter()
             .filter(|&component_id| {
-                let Some(type_id) = world
-                    .components()
-                    .get_info(component_id)
-                    .and_then(bevy::ecs::component::ComponentInfo::type_id)
-                else {
+                let Some(info) = world.components().get_info(component_id) else {
+                    return false;
+                };
+                let Some(type_id) = info.type_id() else {
                     return false;
                 };
                 if skip_ids.contains(&type_id) {
                     return false;
                 }
-                let Some(registration) = reg.get(type_id) else {
-                    return false;
+                let fallback_name = info.name();
+                let type_path = match reg.get(type_id) {
+                    Some(registration) => registration.type_info().type_path_table().path(),
+                    None => &*fallback_name,
                 };
-                if registration.data::<ReflectComponent>().is_none() {
-                    return false;
-                }
-                let type_path = registration.type_info().type_path_table().path();
                 !should_skip_component(type_path)
             })
             .collect()

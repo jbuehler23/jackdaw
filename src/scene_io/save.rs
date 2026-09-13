@@ -6,7 +6,7 @@ use bevy::reflect::{TypeInfo, TypeRegistry};
 use bevy::{ecs::reflect::AppTypeRegistry, prelude::*, tasks::AsyncComputeTaskPool};
 
 use super::load::SceneDialogTask;
-use super::{SceneDirtyState, SceneFilePath, should_skip_component, structural_skip_type_ids};
+use super::{SceneDirtyState, SceneFilePath, doc_skip_type_ids, should_skip_component};
 
 /// Write `contents` to `path` atomically: write to a temp file beside
 /// `path`, then rename over the target. `std::fs::write` truncates the
@@ -611,7 +611,7 @@ fn collect_bsn_inline_assets(
     entities: &[Entity],
     mut names: bevy::platform::collections::HashMap<UntypedAssetId, String>,
 ) -> BsnInlineAssetPass {
-    let skip_ids = structural_skip_type_ids();
+    let skip_ids = doc_skip_type_ids();
 
     let mut refs: Vec<jackdaw_bsn::CatalogAssetRef> = Vec::new();
     let mut touched: Vec<(Entity, String)> = Vec::new();
