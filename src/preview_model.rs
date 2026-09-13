@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 use path_slash::PathExt as _;
 
-use crate::model_thumbnail::is_model_path;
+use crate::thumbnail::is_model_path;
 
 pub(crate) const PREVIEW_MODELS_DIR: &str = "jackdaw_preview_models";
 

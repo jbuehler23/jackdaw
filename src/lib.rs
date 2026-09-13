@@ -90,7 +90,6 @@ pub mod mesh_quick_menu;
 pub mod migrate;
 pub mod modal_inputs;
 pub mod modal_transform;
-pub mod model_thumbnail;
 pub mod modifier_ops;
 pub mod native_dialog;
 pub mod new_project;
@@ -137,6 +136,7 @@ pub mod status_bar;
 pub mod terrain;
 pub mod test_input;
 pub mod texture_files;
+pub mod thumbnail;
 pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod transform_ops;
@@ -475,7 +475,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(native_dialog::NativeDialogPlugin)
         .add_plugins(definition_assets::plugin)
         .add_plugins(asset_index::plugin)
-        .add_plugins(model_thumbnail::plugin)
+        .add_plugins(thumbnail::plugin)
         .add_plugins(boot_ops::plugin)
         .add_plugins(fps_overlay::plugin)
         .add_plugins(render_diagnostics::plugin)

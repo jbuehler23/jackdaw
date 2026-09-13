@@ -144,7 +144,7 @@ pub fn queue_capture(
 }
 
 /// The camera the first viewport panel is showing through.
-fn viewport_camera(world: &mut World) -> Option<Entity> {
+pub(crate) fn viewport_camera(world: &mut World) -> Option<Entity> {
     let mut panels = world.query::<(Entity, &ViewportHost)>();
     let (panel, mode) = panels.iter(world).next().map(|(e, host)| (e, host.mode))?;
     match mode {
@@ -266,6 +266,45 @@ pub(crate) fn write_png(image: &Image, path: &Path) -> bool {
             info!("screenshot: wrote {}", path.display());
             true
         }
+        Err(err) => {
+            error!("screenshot: cannot write {}: {err}", path.display());
+            false
+        }
+    }
+}
+
+/// Encode a captured frame as a PNG on disk, cropped to the square at its
+/// centre and scaled to `edge` pixels. Returns whether it landed.
+pub(crate) fn write_scaled_png(image: &Image, path: &Path, edge: u32) -> bool {
+    let dynamic = match image.clone().try_into_dynamic() {
+        Ok(dynamic) => dynamic,
+        Err(err) => {
+            error!("screenshot: cannot convert the captured frame: {err}");
+            return false;
+        }
+    };
+    let mut rgb = dynamic.to_rgb8();
+    let side = rgb.width().min(rgb.height());
+    if side == 0 {
+        return false;
+    }
+    let (x, y) = ((rgb.width() - side) / 2, (rgb.height() - side) / 2);
+    let square = ::image::imageops::crop(&mut rgb, x, y, side, side).to_image();
+    let scaled = ::image::imageops::resize(
+        &square,
+        edge.max(1),
+        edge.max(1),
+        ::image::imageops::FilterType::Triangle,
+    );
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        error!("screenshot: cannot make {}: {err}", parent.display());
+        return false;
+    }
+    match scaled.save_with_format(path, ::image::ImageFormat::Png) {
+        Ok(()) => true,
         Err(err) => {
             error!("screenshot: cannot write {}: {err}", path.display());
             false

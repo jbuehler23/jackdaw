@@ -107,15 +107,15 @@ pub struct ViewportGrid(pub Entity);
 
 /// Shared counter that hands out a unique [`RenderLayers`] index per
 /// viewport. Layer 0 is the default world; layer 1 is reserved for the
-/// material preview and layer 2 for the Project window's model thumbnail
-/// stage ([`crate::model_thumbnail::THUMBNAIL_LAYER`]). Per-viewport grids
-/// start after those so they only render to "their" camera.
+/// material preview and layer 2 for the Project window's thumbnail stage
+/// ([`crate::thumbnail::THUMBNAIL_LAYER`]). Per-viewport grids start after
+/// those so they only render to "their" camera.
 #[derive(Resource)]
 pub(crate) struct ViewportLayerCounter(usize);
 
 impl Default for ViewportLayerCounter {
     fn default() -> Self {
-        Self(crate::model_thumbnail::THUMBNAIL_LAYER)
+        Self(crate::thumbnail::THUMBNAIL_LAYER)
     }
 }
 
@@ -1266,10 +1266,7 @@ mod tests {
         assert_eq!(EDITOR_VIEW_FORMAT, TextureFormat::Rgba8UnormSrgb);
         for (view, image) in [
             ("3d viewport", viewport_target_image()),
-            (
-                "model thumbnail",
-                crate::model_thumbnail::thumbnail_target_image(),
-            ),
+            ("thumbnail", crate::thumbnail::thumbnail_target_image()),
             (
                 "2d viewport",
                 crate::viewport_2d::viewport_2d_target_image(),

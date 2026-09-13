@@ -368,6 +368,8 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     // Persist current editor layout to project.jsn
     save_layout_to_project(world);
 
+    crate::thumbnail::capture_scene_thumbnail(world, Path::new(&path));
+
     Ok(())
 }
 

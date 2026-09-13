@@ -6,7 +6,7 @@
 //! action for anything else. The kind filter narrows the tiles to one sort of
 //! file, which is what the catalog listing used to be a window for.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
 
@@ -34,6 +34,7 @@ use jackdaw_widgets::tree_view::{
     TreeChildrenPopulated, TreeNodeExpandToggle, TreeNodeExpanded, TreeRowChildren, TreeRowContent,
     TreeRowLabel,
 };
+use path_slash::PathExt as _;
 
 use crate::EditorEntity;
 use crate::asset_drag::ActiveAssetDrag;
@@ -52,6 +53,10 @@ pub const RETIRED_WINDOW_IDS: [&str; 2] = ["jackdaw.assets", "jackdaw.project_fi
 /// is read and counted in full, but only this many are drawn, so opening a
 /// folder of thousands of files costs a screenful rather than all of them.
 const MAX_TILES: usize = 500;
+
+/// How many entries a narrowed view reads before it stops looking deeper. A
+/// project whose assets run to millions of files still answers a search.
+const MAX_WALKED_ENTRIES: usize = 20_000;
 
 /// The extensions the editor counts as sound.
 const AUDIO_EXTENSIONS: [&str; 4] = ["ogg", "wav", "mp3", "flac"];
@@ -159,6 +164,9 @@ pub struct DirEntry {
     pub texture_info: Option<TextureInfo>,
     /// What the file says it holds; `Scene` for everything that says nothing.
     pub kind: AssetFileKind,
+    /// The folder the file sits in, relative to the one the tiles are
+    /// showing, for a result the search or the filter found further down.
+    pub folder: Option<String>,
 }
 
 impl DirEntry {
@@ -186,6 +194,9 @@ pub struct ProjectWindowState {
     needs_tiles: bool,
     /// The file whose tile is showing a rename field.
     pub renaming: Option<PathBuf>,
+    /// Whether the last narrowed listing gave up before it reached the bottom
+    /// of the tree.
+    stopped_looking: bool,
     /// The folders whose rows are open, so a rebuild puts the tree back the
     /// way the user left it.
     expanded: HashSet<PathBuf>,
@@ -207,6 +218,7 @@ impl Default for ProjectWindowState {
             needs_tree_refresh: true,
             needs_tiles: true,
             renaming: None,
+            stopped_looking: false,
             expanded: HashSet::new(),
             last_click_time: 0.0,
             kind_cache: crate::asset_files::AssetKindCache::default(),
@@ -227,10 +239,41 @@ impl ProjectWindowState {
 
     /// Show `directory`, dropping a selection that is no longer on screen.
     pub fn show_folder(&mut self, directory: PathBuf) {
+        self.expand_to(&directory);
         self.current_directory = directory;
         self.selected_file = None;
         self.renaming = None;
         self.needs_refresh = true;
+    }
+
+    /// Open every folder row on the way down to `directory`, so what the
+    /// tiles are showing is reachable in the tree rather than hidden under a
+    /// closed ancestor.
+    pub fn expand_to(&mut self, directory: &Path) {
+        let root = self.root_directory.clone();
+        let folders: Vec<PathBuf> = directory
+            .ancestors()
+            .take_while(|path| path.starts_with(&root))
+            .map(Path::to_path_buf)
+            .collect();
+        let opened = folders
+            .into_iter()
+            .filter(|folder| self.expanded.insert(folder.clone()))
+            .count();
+        if opened > 0 {
+            self.needs_tree_refresh = true;
+        }
+    }
+
+    /// Whether the tiles are narrowed to a search or to one kind of file, in
+    /// which case they answer for the whole tree below the folder shown.
+    pub fn is_narrowed(&self) -> bool {
+        !self.search.is_empty() || self.kind_filter != KindFilter::All
+    }
+
+    /// Whether the tree row for `directory` is open.
+    pub fn is_expanded(&self, directory: &Path) -> bool {
+        self.expanded.contains(directory)
     }
 
     fn rebuild(&mut self) {
@@ -270,6 +313,10 @@ pub struct ProjectFolderNode(pub PathBuf);
 /// Links a folder row's disclosure control to the row it opens.
 #[derive(Component)]
 struct FolderDisclosure(Entity);
+
+/// Marks the row of the folder the tiles are showing.
+#[derive(Component)]
+pub struct ShownFolder;
 
 /// Marks the field a rename is typed into.
 #[derive(Component)]
@@ -312,6 +359,7 @@ impl Plugin for ProjectWindowPlugin {
                     check_project_watcher,
                     poll_project_folder_pick,
                     refresh_folder_tree,
+                    mark_the_shown_folder.after(refresh_folder_tree),
                     read_the_folder,
                     rebuild_tiles,
                     read_search_field,
@@ -556,6 +604,7 @@ fn spawn_folder_row(
                 width: Val::Percent(100.0),
                 ..default()
             },
+            BackgroundColor(Color::NONE),
             ChildOf(row),
         ))
         .id();
@@ -711,44 +760,96 @@ fn on_folder_toggled(
 
 // -- The tile grid ----------------------------------------------------------
 
+/// One listing row for `path`, or `None` for a file the tiles never show.
+///
+/// `current` is the folder the tiles are showing, which a result found
+/// further down is captioned with its distance from.
+fn dir_entry(path: PathBuf, current: &Path, selected: Option<&str>) -> Option<DirEntry> {
+    let file_name = path.file_name()?.to_string_lossy().into_owned();
+    if file_name.starts_with('.') {
+        return None;
+    }
+    let is_selected = selected == Some(path.to_string_lossy().as_ref());
+    if !is_selected && jackdaw_bsn::is_binary_path(&path) && path.with_extension("bsn").is_file() {
+        return None;
+    }
+    let folder = path
+        .parent()
+        .filter(|parent| *parent != current)
+        .and_then(|parent| parent.strip_prefix(current).ok())
+        .map(|relative| relative.to_slash_lossy().into_owned());
+    // `DirEntry::file_type` reports the link itself, which takes a
+    // symlinked directory for a file. Ask the path, which follows it.
+    let is_directory = path.is_dir();
+    Some(DirEntry {
+        path,
+        file_name,
+        is_directory,
+        texture_info: None,
+        kind: AssetFileKind::Scene,
+        folder,
+    })
+}
+
+/// Every file under `root` other than its own direct children, which the
+/// listing already holds, and whether `limit` stopped the walk short of the
+/// bottom of the tree.
+fn walk_below(root: &Path, limit: usize) -> (Vec<PathBuf>, bool) {
+    let mut found = Vec::new();
+    let mut pending: VecDeque<PathBuf> = scan_folders(root).into_iter().collect();
+    let mut read = 0usize;
+    while let Some(folder) = pending.pop_front() {
+        let Ok(read_dir) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in read_dir.flatten() {
+            read += 1;
+            if read > limit {
+                return (found, true);
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || name == "target" {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push_back(path);
+            } else {
+                found.push(path);
+            }
+        }
+    }
+    (found, false)
+}
+
 /// Read the folder the window is showing, applying the search and the kind
 /// filter, and memoing what each document holds by its modification time.
+///
+/// A search or a kind filter looks through the whole tree below the folder,
+/// not only the folder itself, so a name the user half-remembers is found
+/// from the root; each result carries the folder it was found in.
 ///
 /// A document held in both forms is one file to the user, so only the text one
 /// is listed, and the selected file is listed whatever the search and the
 /// filter say, so narrowing the view never takes the inspector's subject off
 /// the screen.
 fn scan_current_directory(state: &mut ProjectWindowState, kinds: &AssetKinds) -> Vec<DirEntry> {
-    let Ok(read_dir) = std::fs::read_dir(&state.current_directory) else {
-        return Vec::new();
+    let current = state.current_directory.clone();
+    let selected = state.selected_file.clone();
+    let mut paths: Vec<PathBuf> = match std::fs::read_dir(&current) {
+        Ok(read_dir) => read_dir.flatten().map(|entry| entry.path()).collect(),
+        Err(_) => Vec::new(),
     };
-    let mut entries: Vec<DirEntry> = read_dir
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let file_name = entry.file_name().to_string_lossy().to_string();
-            if file_name.starts_with('.') {
-                return None;
-            }
-            let path = entry.path();
-            let is_selected =
-                state.selected_file.as_deref() == Some(path.to_string_lossy().as_ref());
-            if !is_selected
-                && jackdaw_bsn::is_binary_path(&path)
-                && path.with_extension("bsn").is_file()
-            {
-                return None;
-            }
-            // `DirEntry::file_type` reports the link itself, which takes a
-            // symlinked directory for a file. Ask the path, which follows it.
-            let is_directory = path.is_dir();
-            Some(DirEntry {
-                path,
-                file_name,
-                is_directory,
-                texture_info: None,
-                kind: AssetFileKind::Scene,
-            })
-        })
+    state.stopped_looking = false;
+    if state.is_narrowed() {
+        let (deeper, stopped) = walk_below(&current, MAX_WALKED_ENTRIES);
+        paths.extend(deeper);
+        state.stopped_looking = stopped;
+    }
+
+    let mut entries: Vec<DirEntry> = paths
+        .into_iter()
+        .filter_map(|path| dir_entry(path, &current, selected.as_deref()))
         .collect();
 
     for entry in entries.iter_mut() {
@@ -768,7 +869,6 @@ fn scan_current_directory(state: &mut ProjectWindowState, kinds: &AssetKinds) ->
 
     let filter = state.kind_filter;
     let search = state.search.to_lowercase();
-    let selected = state.selected_file.clone();
     entries.retain(|entry| {
         if selected.as_deref() == Some(entry.path.to_string_lossy().as_ref()) {
             return true;
@@ -877,6 +977,26 @@ fn rebuild_tiles(
             .id();
         jackdaw_feathers::utils::attach_or_despawn(&mut commands, grid, note);
     }
+    if state.stopped_looking {
+        let note = commands
+            .spawn((
+                Text::new(format!(
+                    "stopped looking after {MAX_WALKED_ENTRIES} files; open a folder to look inside it"
+                )),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+                Node {
+                    width: percent(100),
+                    margin: UiRect::all(px(tokens::SPACING_SM)),
+                    ..default()
+                },
+            ))
+            .id();
+        jackdaw_feathers::utils::attach_or_despawn(&mut commands, grid, note);
+    }
 
     rebuild_path_bar(&mut commands, &path_bars, &state);
 }
@@ -907,17 +1027,21 @@ fn spawn_tile(
             let icon = definition
                 .map(|kind| kind.icon)
                 .or_else(|| entry.is_prefab().then_some(icons::Icon::Package));
-            let tile = if crate::model_thumbnail::is_model_path(&entry.path) && !entry.is_directory
-            {
-                commands
-                    .spawn(model_tile(&item, icon_font, entry.path.clone()))
-                    .id()
-            } else {
-                commands
+            let tile = match tile_subject(entry, kinds) {
+                Some(subject) => commands
+                    .spawn(thumbnail_tile(
+                        &item,
+                        icon_font,
+                        entry.path.clone(),
+                        subject,
+                        icon,
+                    ))
+                    .id(),
+                None => commands
                     .spawn(file_browser::file_browser_item_with_icon(
                         &item, icon_font, icon,
                     ))
-                    .id()
+                    .id(),
             };
             if let Some(definition) = definition {
                 commands
@@ -931,6 +1055,9 @@ fn spawn_tile(
         }
     };
 
+    if let Some(folder) = &entry.folder {
+        attach_folder_caption(commands, tile, &entry.path, folder);
+    }
     if is_selected {
         commands
             .entity(tile)
@@ -1036,12 +1163,41 @@ fn spawn_image_tile(
     tile
 }
 
-/// The tile a `.glb` or `.gltf` gets: the same shape as the file browser's own
-/// row, with the icon inside a square [`crate::model_thumbnail::ModelThumbnailSlot`]
+/// What a file's tile is pictured with, or `None` for one that keeps its
+/// icon.
+fn tile_subject(entry: &DirEntry, kinds: &AssetKinds) -> Option<crate::thumbnail::Subject> {
+    use crate::thumbnail::Subject;
+    if entry.is_directory {
+        return None;
+    }
+    if crate::thumbnail::is_model_path(&entry.path) {
+        return Some(Subject::Model);
+    }
+    if entry_kind_id(entry, kinds)
+        .is_some_and(|kind| kind == crate::definition_assets::MATERIAL_KIND)
+    {
+        return Some(Subject::Material);
+    }
+    if entry.is_prefab() {
+        return Some(Subject::Prefab);
+    }
+    (entry.kind == AssetFileKind::Scene && jackdaw_bsn::is_document_path(&entry.path))
+        .then_some(Subject::Scene)
+}
+
+/// The tile a pictured file gets: the same shape as the file browser's own
+/// row, with the icon inside a square [`crate::thumbnail::ThumbnailSlot`]
 /// that the rendered picture replaces once there is one. The glyph is the
 /// fallback, so a pending or failed thumbnail looks like any other file.
-fn model_tile(item: &FileBrowserItem, icon_font: &IconFont, path: PathBuf) -> impl Bundle {
-    let slot_size = crate::model_thumbnail::THUMBNAIL_DISPLAY_SIZE;
+fn thumbnail_tile(
+    item: &FileBrowserItem,
+    icon_font: &IconFont,
+    path: PathBuf,
+    subject: crate::thumbnail::Subject,
+    icon: Option<icons::Icon>,
+) -> impl Bundle {
+    let slot_size = crate::thumbnail::THUMBNAIL_DISPLAY_SIZE;
+    let glyph = icon.unwrap_or_else(|| file_browser::file_icon(&item.file_name));
     (
         item.clone(),
         Node {
@@ -1055,7 +1211,7 @@ fn model_tile(item: &FileBrowserItem, icon_font: &IconFont, path: PathBuf) -> im
         BackgroundColor(Color::NONE),
         children![
             (
-                crate::model_thumbnail::ModelThumbnailSlot::new(path),
+                crate::thumbnail::ThumbnailSlot::new(path, subject),
                 Node {
                     width: Val::Px(slot_size),
                     height: Val::Px(slot_size),
@@ -1064,9 +1220,7 @@ fn model_tile(item: &FileBrowserItem, icon_font: &IconFont, path: PathBuf) -> im
                     ..default()
                 },
                 children![(
-                    Text::new(String::from(
-                        file_browser::file_icon(&item.file_name).unicode()
-                    )),
+                    Text::new(String::from(glyph.unicode())),
                     TextFont {
                         font: icon_font.0.clone().into(),
                         font_size: tokens::ICON_LG,
@@ -1085,6 +1239,39 @@ fn model_tile(item: &FileBrowserItem, icon_font: &IconFont, path: PathBuf) -> im
             ),
         ],
     )
+}
+
+/// Put the folder a result was found in under its tile, as a control that
+/// takes the window there.
+fn attach_folder_caption(commands: &mut Commands, tile: Entity, path: &Path, folder: &str) {
+    let caption = commands
+        .spawn((
+            Text::new(truncate_tile_name(folder, 14)),
+            TextFont {
+                font_size: tokens::TEXT_SIZE_XS,
+                ..default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+            Hovered::default(),
+            Tooltip::title(folder.to_string()),
+            ChildOf(tile),
+        ))
+        .id();
+    let folder = path.parent().map(Path::to_path_buf);
+    commands.entity(caption).observe(
+        move |mut click: On<Pointer<Click>>, mut commands: Commands| {
+            if click.event().button != PointerButton::Primary {
+                return;
+            }
+            click.propagate(false);
+            let Some(folder) = folder.clone() else {
+                return;
+            };
+            commands.queue(move |world: &mut World| {
+                select_path(world, &folder);
+            });
+        },
+    );
 }
 
 /// Shorten a name to fit a tile, cutting on a character boundary so a
@@ -1214,9 +1401,51 @@ fn highlight_on_hover(hover: On<Pointer<Over>>, mut backgrounds: Query<&mut Back
     }
 }
 
-fn unhighlight_on_out(out: On<Pointer<Out>>, mut backgrounds: Query<&mut BackgroundColor>) {
-    if let Ok(mut background) = backgrounds.get_mut(out.event_target()) {
-        background.0 = Color::NONE;
+fn unhighlight_on_out(
+    out: On<Pointer<Out>>,
+    shown: Query<(), With<ShownFolder>>,
+    mut backgrounds: Query<&mut BackgroundColor>,
+) {
+    let target = out.event_target();
+    if let Ok(mut background) = backgrounds.get_mut(target) {
+        background.0 = if shown.contains(target) {
+            tokens::ELEVATED_BG
+        } else {
+            Color::NONE
+        };
+    }
+}
+
+/// Mark the tree row whose folder the tiles are showing, so the two columns
+/// say the same thing about where the user is.
+fn mark_the_shown_folder(
+    state: Res<ProjectWindowState>,
+    rows: Query<(&ProjectFolderNode, &Children)>,
+    row_contents: Query<(), With<TreeRowContent>>,
+    shown: Query<(), With<ShownFolder>>,
+    mut backgrounds: Query<&mut BackgroundColor>,
+    mut commands: Commands,
+) {
+    for (folder, children) in &rows {
+        let Some(content) = children.iter().find(|child| row_contents.contains(*child)) else {
+            continue;
+        };
+        let is_shown = folder.0 == state.current_directory;
+        if is_shown == shown.contains(content) {
+            continue;
+        }
+        if is_shown {
+            commands.entity(content).insert(ShownFolder);
+        } else {
+            commands.entity(content).remove::<ShownFolder>();
+        }
+        if let Ok(mut background) = backgrounds.get_mut(content) {
+            background.0 = if is_shown {
+                tokens::ELEVATED_BG
+            } else {
+                Color::NONE
+            };
+        }
     }
 }
 
@@ -1324,8 +1553,11 @@ pub fn select_path(world: &mut World, path: &Path) {
     }
     let folder = path.parent().map(Path::to_path_buf);
     if let Some(mut state) = world.get_resource_mut::<ProjectWindowState>() {
-        if let Some(folder) = folder.filter(|folder| *folder != state.current_directory) {
-            state.current_directory = folder;
+        if let Some(folder) = folder {
+            state.expand_to(&folder);
+            if folder != state.current_directory {
+                state.current_directory = folder;
+            }
         }
         state.selected_file = Some(path.to_string_lossy().into_owned());
         state.renaming = None;
@@ -2028,6 +2260,7 @@ mod tests {
             is_directory: false,
             texture_info: None,
             kind,
+            folder: None,
         }
     }
 
@@ -2179,6 +2412,160 @@ mod tests {
             );
         }
         assert_eq!(operator_for_action("something.else"), None);
+    }
+
+    /// A search at the root answers for the whole tree below it, and each
+    /// result says which folder it came from.
+    #[test]
+    fn a_search_at_the_root_finds_a_file_two_folders_down() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let deep = temp.path().join("content").join("mobs");
+        std::fs::create_dir_all(&deep).expect("the folders are made");
+        std::fs::write(deep.join("giant_rat.bsn"), "rat").expect("the file is written");
+        std::fs::write(temp.path().join("town.bsn"), "town").expect("the file is written");
+
+        let mut state = ProjectWindowState::at(temp.path());
+        state.search = "rat".to_string();
+        let entries = scan_current_directory(&mut state, &AssetKinds::default());
+
+        let found = entries
+            .iter()
+            .find(|entry| entry.file_name == "giant_rat.bsn")
+            .expect("the search reaches two folders down");
+        assert_eq!(
+            found.folder.as_deref(),
+            Some("content/mobs"),
+            "the result carries the folder it was found in"
+        );
+        assert!(
+            !entries.iter().any(|entry| entry.file_name == "town.bsn"),
+            "the search still narrows what is shown"
+        );
+    }
+
+    /// A tree too big to read in full says so, rather than quietly answering
+    /// for the part of it the walk reached.
+    #[test]
+    fn a_search_that_gives_up_early_says_so() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let deep = temp.path().join("content");
+        std::fs::create_dir_all(&deep).expect("the folder is made");
+        for index in 0..4 {
+            std::fs::write(deep.join(format!("rat_{index}.bsn")), "rat")
+                .expect("the file is written");
+        }
+
+        let (found, stopped) = walk_below(temp.path(), 2);
+        assert!(stopped, "the walk gave up before the bottom of the tree");
+        assert!(found.len() < 4, "and answered for only part of it");
+
+        let (found, stopped) = walk_below(temp.path(), 100);
+        assert!(!stopped, "a tree it can read in full is not cut short");
+        assert_eq!(found.len(), 4);
+    }
+
+    /// With nothing narrowing the view the tiles are the folder itself, so a
+    /// deep file is not dragged up into it.
+    #[test]
+    fn an_unnarrowed_folder_lists_only_its_own_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let deep = temp.path().join("content");
+        std::fs::create_dir_all(&deep).expect("the folder is made");
+        std::fs::write(deep.join("giant_rat.bsn"), "rat").expect("the file is written");
+
+        let mut state = ProjectWindowState::at(temp.path());
+        let entries = scan_current_directory(&mut state, &AssetKinds::default());
+
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry.file_name == "giant_rat.bsn"),
+            "a file a folder down is reached by opening the folder"
+        );
+        assert!(entries.iter().any(|entry| entry.is_directory));
+    }
+
+    /// The tree says where the tiles are: the row of the folder shown is
+    /// marked, and only that one.
+    #[test]
+    fn the_tree_marks_the_shown_folder() {
+        let mut app = app_with_a_folder_row();
+        app.add_systems(Update, mark_the_shown_folder);
+
+        let folder = PathBuf::from("/project/assets");
+        app.world_mut()
+            .resource_mut::<ProjectWindowState>()
+            .current_directory = folder.clone();
+        app.update();
+
+        let mut marked = app
+            .world_mut()
+            .query_filtered::<Entity, With<ShownFolder>>();
+        assert_eq!(
+            marked.iter(app.world()).count(),
+            1,
+            "the folder the tiles are showing is the marked one"
+        );
+
+        app.world_mut()
+            .resource_mut::<ProjectWindowState>()
+            .current_directory = PathBuf::from("/project/assets/elsewhere");
+        app.update();
+
+        let mut marked = app
+            .world_mut()
+            .query_filtered::<Entity, With<ShownFolder>>();
+        assert_eq!(
+            marked.iter(app.world()).count(),
+            0,
+            "a folder the tiles left is no longer marked"
+        );
+    }
+
+    /// Selecting something deep in the tree opens the rows down to it, so it
+    /// is not shown under a closed ancestor.
+    #[test]
+    fn project_select_expands_the_tree() {
+        let root = PathBuf::from("/project/assets");
+        let deep = root.join("content").join("mobs");
+        let mut state = ProjectWindowState::at(root.clone());
+        assert!(!state.is_expanded(&deep));
+
+        state.show_folder(deep.clone());
+
+        assert!(state.is_expanded(&deep), "the folder shown is open");
+        assert!(
+            state.is_expanded(&root.join("content")),
+            "and so is every row on the way down to it"
+        );
+        assert!(state.needs_tree_refresh, "the tree is rebuilt to show them");
+    }
+
+    /// A prefab is pictured, a material is pictured on a sphere, and a folder
+    /// keeps its icon.
+    #[test]
+    fn a_prefab_tile_is_pictured_and_a_folder_is_not() {
+        let kinds = AssetKinds::default();
+        assert_eq!(
+            tile_subject(&entry("rat.bsn", AssetFileKind::Prefab), &kinds),
+            Some(crate::thumbnail::Subject::Prefab)
+        );
+        assert_eq!(
+            tile_subject(&entry("town.bsn", AssetFileKind::Scene), &kinds),
+            Some(crate::thumbnail::Subject::Scene)
+        );
+        assert_eq!(
+            tile_subject(&entry("tree.glb", AssetFileKind::Scene), &kinds),
+            Some(crate::thumbnail::Subject::Model)
+        );
+
+        let mut folder = entry("content", AssetFileKind::Scene);
+        folder.is_directory = true;
+        assert_eq!(tile_subject(&folder, &kinds), None);
+        assert_eq!(
+            tile_subject(&entry("bark.png", AssetFileKind::Scene), &kinds),
+            None
+        );
     }
 
     #[test]

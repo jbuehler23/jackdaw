@@ -476,7 +476,7 @@ fn refill_preview_box(world: &mut World, box_entity: Entity) {
 
 fn update_preview_thumbnails(
     mut commands: Commands,
-    mut thumbnails: ResMut<crate::model_thumbnail::ModelThumbnails>,
+    mut thumbnails: ResMut<crate::thumbnail::Thumbnails>,
     project: Option<Res<ProjectRoot>>,
     mut slots: Query<(
         Entity,
@@ -498,7 +498,7 @@ fn update_preview_thumbnails(
                 slot.applied = true;
                 continue;
             }
-            thumbnails.request(&source);
+            thumbnails.request(&source, crate::thumbnail::Subject::Model);
             continue;
         };
         // The type-settings pane starts `Display::None`. Spawning the image
