@@ -476,21 +476,21 @@ impl AssetLoader for AnimationGraphLoader {
         &self,
         reader: &mut dyn Reader,
         _settings: &Self::Settings,
-        _load_context: &mut LoadContext<'_>,
+        load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader
             .read_to_end(&mut bytes)
             .await
             .map_err(|err| AnimationGraphLoadError::Io(err.to_string()))?;
-        let text = std::str::from_utf8(&bytes)
+        let text = jackdaw_bsn::document_text_from_bytes(&bytes, load_context.path().path())
             .map_err(|err| AnimationGraphLoadError::Parse(err.to_string()))?;
-        let def = parse_animation_graph(text, &self.registry.read())?;
+        let def = parse_animation_graph(&text, &self.registry.read())?;
         Ok(AnimationGraphAsset { def })
     }
 
     fn extensions(&self) -> &[&str] {
-        &["animgraph.bsn"]
+        &["animgraph.bsn", "animgraph.bsb"]
     }
 }
 

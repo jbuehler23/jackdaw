@@ -96,6 +96,9 @@ pub(crate) fn resolve_source_path(source: &Path, scene_dir: &Path) -> PathBuf {
     // Scenes written before (or after) their prefab converted formats may
     // reference the other extension; fall back to the sibling.
     if !resolved.exists() {
+        if let Some(held) = jackdaw_bsn::existing_form(&resolved) {
+            return held;
+        }
         let sibling = match resolved.extension().and_then(|e| e.to_str()) {
             Some("jsn") => Some(resolved.with_extension("bsn")),
             Some("bsn") => Some(resolved.with_extension("jsn")),
@@ -112,7 +115,7 @@ pub(crate) fn resolve_source_path(source: &Path, scene_dir: &Path) -> PathBuf {
 
 /// Read a prefab file into a document.
 pub fn read_prefab_ast(path: &Path) -> Result<SceneBsnAst, std::io::Error> {
-    if path.extension().is_some_and(|e| e == "bsn") {
+    if jackdaw_bsn::is_document_path(path) {
         return jackdaw_prefab::source::read_prefab_document(path);
     }
     // TODO: legacy `.jsn` prefabs with no `.bsn` sibling cannot be cached

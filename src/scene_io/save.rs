@@ -46,7 +46,7 @@ fn spawn_save_dialog(world: &mut World) {
         crate::native_dialog::DialogPurpose::Scene,
         "scene.bsn",
     )
-    .add_filter("BSN Scene", &["bsn"]);
+    .add_filter("BSN Scene", &["bsn", "bsb"]);
 
     let task = AsyncComputeTaskPool::get().spawn(async move { dialog.save_file().await });
     world.insert_resource(SceneDialogTask::Save(task));
@@ -330,13 +330,15 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
             ))
         })?;
     }
-    write_atomic(Path::new(&path), contents.as_bytes())
+    let contents = jackdaw_bsn::document_bytes(Path::new(&path), &contents)
+        .map_err(|err| BevyError::from(format!("failed to write scene file {path}: {err}")))?;
+    write_atomic(Path::new(&path), &contents)
         .map_err(|err| BevyError::from(format!("failed to write scene file {path}: {err}")))?;
     info!("Scene saved to {path}");
 
     // Record the written bytes so the open-tab watcher does not read this
     // write back as an outside edit.
-    crate::scenes::external_watch::note_known_content(world, Path::new(&path), contents.as_bytes());
+    crate::scenes::external_watch::note_known_content(world, Path::new(&path), &contents);
 
     // A terrain bake writes its own artifact when it finishes; this covers a scene that has
     // moved since, keeping the two files named after each other.

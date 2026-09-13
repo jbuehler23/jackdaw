@@ -276,7 +276,7 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     }
 
     // Read the file.
-    let file_text = match std::fs::read_to_string(&canonical) {
+    let file_text = match jackdaw_bsn::read_document_text(&canonical) {
         Ok(t) => t,
         Err(err) => {
             warn!("scene.open: failed to read {canonical:?}: {err}");
@@ -284,34 +284,33 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
         }
     };
 
-    // `.bsn` parses directly. Legacy `.jsn` converts to a `.bsn` document held
-    // in memory until it is accepted below.
+    // A BSN document parses directly. Legacy `.jsn` converts to a `.bsn`
+    // document held in memory until it is accepted below.
     let mut saved_camera: Option<Transform> = None;
     // The path the user picked; `canonical` becomes the conversion's target,
     // which does not exist until the commit below.
     let opened = canonical.clone();
-    let (canonical, file_text, pending_conversion) =
-        if canonical.extension().is_some_and(|e| e == "bsn") {
-            (canonical, file_text, None)
-        } else {
-            // Read the camera framing sidecar before the source is renamed.
-            saved_camera = serde_json::from_str::<jackdaw_jsn::format::JsnScene>(&file_text)
-                .ok()
-                .and_then(|jsn| jsn.editor.as_ref().and_then(|e| e.camera.clone()))
-                .map(std::convert::Into::into);
-            let pending = match crate::jsn_to_bsn::convert_scene_file_pending(world, &canonical) {
-                Ok(pending) => pending,
-                Err(err) => {
-                    warn!("scene.open: legacy conversion of {canonical:?} failed: {err}");
-                    return;
-                }
-            };
-            (
-                pending.bsn_path.clone(),
-                pending.scene_bsn.clone(),
-                Some(pending),
-            )
+    let (canonical, file_text, pending_conversion) = if jackdaw_bsn::is_document_path(&canonical) {
+        (canonical, file_text, None)
+    } else {
+        // Read the camera framing sidecar before the source is renamed.
+        saved_camera = serde_json::from_str::<jackdaw_jsn::format::JsnScene>(&file_text)
+            .ok()
+            .and_then(|jsn| jsn.editor.as_ref().and_then(|e| e.camera.clone()))
+            .map(std::convert::Into::into);
+        let pending = match crate::jsn_to_bsn::convert_scene_file_pending(world, &canonical) {
+            Ok(pending) => pending,
+            Err(err) => {
+                warn!("scene.open: legacy conversion of {canonical:?} failed: {err}");
+                return;
+            }
         };
+        (
+            pending.bsn_path.clone(),
+            pending.scene_bsn.clone(),
+            Some(pending),
+        )
+    };
     let dirty = false;
     let doc = match jackdaw_bsn::parse_bsn_text(&file_text) {
         Ok(doc) => doc,
@@ -344,7 +343,8 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     }
     // Record the bytes before the tab exists: the watcher starts with the tab,
     // and an edit landing in that gap still has to be reported.
-    crate::scenes::external_watch::note_known_content(world, &canonical, file_text.as_bytes());
+    let known = std::fs::read(&canonical).unwrap_or_else(|_| file_text.clone().into_bytes());
+    crate::scenes::external_watch::note_known_content(world, &canonical, &known);
 
     let is_prefab = document_is_prefab(&doc);
 

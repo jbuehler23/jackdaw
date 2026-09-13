@@ -190,6 +190,32 @@ fn a_reference_deeper_than_the_cap_is_refused() {
     );
 }
 
+#[test]
+fn a_prefab_held_only_in_the_binary_form_still_resolves() {
+    let dir = tempfile::tempdir().unwrap();
+    jackdaw_bsn::write_document_text(&dir.path().join("panel.bsb"), PANEL_BSN).unwrap();
+
+    let mut app = runtime_app(dir.path());
+    let scene = add_scene(
+        &mut app,
+        "jackdaw::prefab::components::IsA { source: \"panel.bsn\", deleted: [] }\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n",
+    );
+    app.world_mut().spawn(JackdawSceneRoot(scene));
+
+    app.update();
+    app.update();
+
+    assert!(
+        named_entity(app.world_mut(), "Panel").is_some(),
+        "the reference an export left spelled .bsn found the file that is there"
+    );
+    assert!(
+        named_entity(app.world_mut(), "Label").is_some(),
+        "and the inherited child spawned with it"
+    );
+}
+
 fn add_scene(app: &mut App, bsn: &str) -> Handle<JackdawScene> {
     app.world_mut()
         .resource_mut::<Assets<JackdawScene>>()

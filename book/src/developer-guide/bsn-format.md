@@ -5,12 +5,47 @@ scenes. It is a reflection-based notation: each entity lists
 its components by full type path, with values in a compact
 struct / enum / tuple syntax that round-trips through Bevy's
 reflect system. Scene files are human-readable and
-line-diffable in git.
+line-diffable in git, and every document has a binary twin
+for the cases where that does not matter (see
+[Binary form](#binary-form)).
 
 The parser and scene document live in `crates/jackdaw_bsn`.
 The live in-editor document is the BSN AST (`SceneBsnAst`);
 saving writes it back out as `.bsn` text. Source of truth for
 the grammar is that crate; this page is the orientation.
+
+## Binary form
+
+The same document also writes as `.bsb`, a binary encoding of the
+roots, patches and values the text holds, with the comment lines it
+opens with carried as a field. It exists for two cases: a shipped
+game, where nobody reads the assets, and a file so large that nobody
+diffs it. Text stays the form a repository keeps.
+
+Readers never go by the extension. A document is binary when its first
+four bytes are the magic, whose leading byte is a UTF-8 continuation
+byte that no text file can start with, so the two forms can never be
+mistaken for each other. `jackdaw_bsn::read_document` sniffs and
+returns either; `read_document_text` hands back `.bsn` text whichever
+form the file was in. The comment lines a document opens with travel in
+the binary form verbatim, so the asset header and the version stamp come
+back on the text a conversion writes.
+
+Writers go the other way: the extension picks the form, which is how a
+save keeps a file in the form it was opened in. The editor's file
+context menus offer Convert to Binary and Convert to Text on one
+document, each removing the other form once the new one is written and
+refusing outright when a file already sits where it would write, and
+`project.export_binary` writes a whole tree out as binary beside the
+source, copying every other file through untouched. An export into the
+source tree, or into a folder inside it, is refused rather than left to
+walk over what it just wrote.
+
+A pair is one asset. `foo.bsn` and `foo.bsb` are keyed by the `.bsn`
+path, the text file wins when both exist, and a reference to
+`materials/grass.bsn` resolves to `grass.bsb` when that is the only
+form on disk. References are never rewritten by an export; the readers
+that follow them resolve either form instead.
 
 ## Legacy JSN import
 
@@ -140,11 +175,12 @@ with no folder in mind puts one.
 ## Asset files in a game
 
 The runtime reads the project's asset files itself: at startup it walks
-every `.bsn` under the asset folder, takes the type each file holds
-from its header or its first root, and loads the ones whose type the
-game registered as a reflected asset into that type's store. A file is
-reachable by the path it sits at, and, while a project still spells
-references by name, by its stem where only one file carries that stem.
+every document under the asset folder, in either form, takes the type
+each file holds from its header or its first root, and loads the ones
+whose type the game registered as a reflected asset into that type's
+store. A file is reachable by the path it sits at, and, while a project
+still spells references by name, by its stem where only one file
+carries that stem.
 A file naming a type the game has not registered is skipped with a
 warning; scenes and prefabs are left to the loaders that own them.
 

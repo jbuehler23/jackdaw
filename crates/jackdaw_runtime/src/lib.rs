@@ -377,14 +377,14 @@ impl AssetLoader for JackdawSceneLoader {
             .await
             .map_err(|e| JackdawLoadError::Io(e.to_string()))?;
 
-        let text =
-            std::str::from_utf8(&bytes).map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
+        let text = jackdaw_bsn::document_text_from_bytes(&bytes, load_context.path().path())
+            .map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
 
         // Parse once at load so a malformed scene fails here with a clear
         // error rather than silently spawning nothing later. The document is
         // rebuilt from `bsn` on spawn (it owns a `World` and cannot be stored
         // in the asset).
-        let ast = parse_bsn_text(text).map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
+        let ast = parse_bsn_text(&text).map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
 
         // A document naming a component the engine does not have would load as
         // a scene missing part of itself, so the load fails here by name.
@@ -398,14 +398,14 @@ impl AssetLoader for JackdawSceneLoader {
             .map(|s| s.to_string_lossy().into_owned());
 
         Ok(JackdawScene {
-            bsn: text.to_owned(),
+            bsn: text,
             parent_path,
             stem,
         })
     }
 
     fn extensions(&self) -> &[&str] {
-        &["bsn"]
+        &["bsn", "bsb"]
     }
 }
 
@@ -663,7 +663,8 @@ fn read_prefab_sources(
         if !path.starts_with(assets_root) {
             return Err(path);
         }
-        match jackdaw_prefab::read_prefab_document(&path) {
+        let file = jackdaw_bsn::existing_form(&path).unwrap_or_else(|| path.clone());
+        match jackdaw_prefab::read_prefab_document(&file) {
             Ok(document) => {
                 pending.extend(isa_sources(&document));
                 documents.insert(path, document);
@@ -1305,7 +1306,8 @@ fn load_asset_files(world: &mut World) {
     let catalog_path = world
         .get_resource::<JackdawCatalogPath>()
         .map(|path| path.0.clone())
-        .or_else(|| root.as_ref().map(|root| root.join(CATALOG_FILE)));
+        .or_else(|| root.as_ref().map(|root| root.join(CATALOG_FILE)))
+        .and_then(|path| jackdaw_bsn::existing_form(&path).or(Some(path)));
 
     if let Some(root) = root.clone() {
         load_walked_assets(world, &root, catalog_path.as_deref());
@@ -1322,8 +1324,8 @@ fn load_asset_files(world: &mut World) {
         return;
     }
 
-    let text = match std::fs::read_to_string(&catalog_path) {
-        Ok(t) => t,
+    let text = match jackdaw_bsn::read_document_text(&catalog_path) {
+        Ok(text) => text,
         Err(err) => {
             warn!("Failed to read catalog {}: {err}", catalog_path.display());
             return;
@@ -1370,24 +1372,23 @@ fn load_walked_assets(world: &mut World, root: &Path, catalog_path: Option<&Path
     let mut skipped = SkippedTypes::default();
 
     for path in jackdaw_bsn::walk_document_files(root) {
-        let is_bsn = path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("bsn"));
-        if !is_bsn || Some(path.as_path()) == catalog_path {
+        if !jackdaw_bsn::is_document_path(&path) || Some(path.as_path()) == catalog_path {
             continue;
         }
-        let Some(key) = assets_relative_key(root, &path) else {
+        let Some(key) = assets_relative_key(root, &jackdaw_bsn::text_twin(&path)) else {
             continue;
         };
         stems.insert(PathBuf::from(&key));
         let Some(handle) = load_asset_file(world, &path, &mut skipped) else {
             continue;
         };
-        world
-            .resource_mut::<JackdawCatalog>()
-            .files
-            .insert(key.clone(), handle.clone());
+        {
+            let mut catalog = world.resource_mut::<JackdawCatalog>();
+            catalog.files.insert(key.clone(), handle.clone());
+            if let Some(written) = assets_relative_key(root, &path) {
+                catalog.files.insert(written, handle.clone());
+            }
+        }
         loaded.push((jackdaw_bsn::path_stem(&path), key, handle));
     }
 
@@ -1461,7 +1462,7 @@ fn load_asset_file(
     path: &Path,
     skipped: &mut SkippedTypes,
 ) -> Option<UntypedHandle> {
-    let text = match std::fs::read_to_string(path) {
+    let text = match jackdaw_bsn::read_document_text(path) {
         Ok(text) => text,
         Err(err) => {
             warn!("Failed to read {}: {err}", path.display());

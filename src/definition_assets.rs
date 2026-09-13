@@ -123,7 +123,7 @@ pub fn new_definition_dir(world: &World) -> Option<PathBuf> {
 /// Read one asset file into a value. A file that cannot be read or parsed, or
 /// that holds a value of another type, is reported and skipped.
 pub fn read_asset_file(world: &mut World, kind: &AssetKind, path: &Path) -> Option<AssetValue> {
-    let text = match std::fs::read_to_string(path) {
+    let text = match jackdaw_bsn::read_document_text(path) {
         Ok(text) => text,
         Err(err) => {
             warn!("Failed to read {}: {err}", path.display());
@@ -221,7 +221,8 @@ pub fn write_asset_file(
     value: &AssetValue,
     path: &Path,
 ) -> std::io::Result<PathBuf> {
-    let existing = std::fs::read_to_string(path).ok();
+    let path = &jackdaw_bsn::existing_form(path).unwrap_or_else(|| path.to_path_buf());
+    let existing = jackdaw_bsn::read_document_text(path).ok();
     let name = existing
         .as_deref()
         .and_then(root_name_of)
@@ -238,7 +239,8 @@ pub fn write_asset_file(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    crate::scene_io::save::write_atomic(path, text.as_bytes())?;
+    let bytes = jackdaw_bsn::document_bytes(path, &text).map_err(std::io::Error::other)?;
+    crate::scene_io::save::write_atomic(path, &bytes)?;
     Ok(path.to_path_buf())
 }
 

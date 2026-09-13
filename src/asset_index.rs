@@ -215,13 +215,11 @@ pub fn assets_dir(world: &World) -> Option<PathBuf> {
 
 /// An indexed path as the file it names on disk.
 pub fn absolute_path(world: &World, path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        return path.to_path_buf();
-    }
-    match assets_dir(world) {
-        Some(assets) => assets.join(path),
-        None => path.to_path_buf(),
-    }
+    let path = match (path.is_absolute(), assets_dir(world)) {
+        (true, _) | (false, None) => path.to_path_buf(),
+        (false, Some(assets)) => assets.join(path),
+    };
+    jackdaw_bsn::existing_form(&path).unwrap_or(path)
 }
 
 /// A file on disk as the path the index keys it by. `None` for a file outside
@@ -241,7 +239,17 @@ pub fn indexed_path(world: &World, path: &Path) -> Option<PathBuf> {
 /// Whether an indexed path is the project's catalog file, which holds what has
 /// no file of its own and is no asset in its own right.
 pub fn is_catalog_file(path: &Path) -> bool {
-    matches!(path.to_str(), Some("catalog.bsn") | Some("catalog.jsn"))
+    matches!(
+        path.to_str(),
+        Some("catalog.bsn") | Some("catalog.bsb") | Some("catalog.jsn")
+    )
+}
+
+/// The file a keyed document sits in: the text file, or the binary twin where
+/// that is the only form on disk.
+fn document_file(assets: &Path, relative: &Path) -> PathBuf {
+    let path = assets.join(relative);
+    jackdaw_bsn::existing_form(&path).unwrap_or(path)
 }
 
 /// What a file says it holds, and the kind that claims it.
@@ -359,7 +367,13 @@ pub fn rescan_asset_index(world: &mut World) -> AssetRescan {
         .into_iter()
         .filter_map(|path| {
             let relative = path.strip_prefix(&assets).ok()?.to_path_buf();
-            (!is_catalog_file(&relative)).then_some(relative)
+            if is_catalog_file(&relative) {
+                return None;
+            }
+            Some(match jackdaw_bsn::is_binary_path(&relative) {
+                true => jackdaw_bsn::text_twin(&relative),
+                false => relative,
+            })
         })
         .collect();
     world
@@ -373,7 +387,7 @@ pub fn rescan_asset_index(world: &mut World) -> AssetRescan {
         documents
             .into_iter()
             .filter_map(|relative| {
-                let path = assets.join(&relative);
+                let path = document_file(&assets, &relative);
                 let kind = kind_of_file(&path, kinds, &mut cache)?;
                 let mtime = std::fs::metadata(&path)
                     .and_then(|meta| meta.modified())
@@ -409,7 +423,7 @@ pub fn rescan_asset_index(world: &mut World) -> AssetRescan {
             .resource::<AssetIndex>()
             .get(&relative)
             .map(|entry| (entry.mtime, entry.value.clone(), entry.kind.clone()));
-        let file = assets.join(&relative);
+        let file = document_file(&assets, &relative);
         let value = match held {
             Some((known, _, _)) if known == mtime => continue,
             Some((_, _, known_kind)) if known_kind != kind.kind => {
@@ -706,12 +720,8 @@ mod tests {
         );
     }
 
-    /// The runtime counts a name over every document its walk saw, and so does
-    /// this: a scene sharing a stem with an asset makes the name ambiguous in
-    /// both.
-    #[test]
-    fn a_name_a_scene_and_an_asset_share_stands_for_neither() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+    /// A project holding one registered asset kind, for the walk to index.
+    fn material_project(root: &Path) -> App {
         let mut app = App::new();
         app.add_plugins((
             bevy::app::TaskPoolPlugin::default(),
@@ -723,7 +733,7 @@ mod tests {
         app.register_asset_reflect::<StandardMaterial>();
         app.register_type::<StandardMaterial>();
         app.insert_resource(ProjectRoot {
-            root: tmp.path().to_path_buf(),
+            root: root.to_path_buf(),
             config: crate::project::ProjectConfig::default(),
         });
         app.init_resource::<AssetIndex>();
@@ -738,22 +748,34 @@ mod tests {
                 "Material",
                 <StandardMaterial as bevy::reflect::TypePath>::type_path(),
             ));
-        for (relative, text) in [
-            (
-                "materials/grass.bsn",
-                "#grass\nbevy_pbr::pbr_material::StandardMaterial {}\n",
-            ),
-            (
-                "zones/grass.bsn",
-                "#Root\nbevy_transform::components::transform::Transform\n\
-                 bevy_ecs::hierarchy::Children [\n    \
-                 bevy_transform::components::transform::Transform\n]\n",
-            ),
-        ] {
-            let path = tmp.path().join("assets").join(relative);
-            std::fs::create_dir_all(path.parent().expect("a parent")).expect("the folder is made");
-            std::fs::write(path, text).expect("the file is written");
-        }
+        app
+    }
+
+    /// Write one document under the project's assets, in the form its
+    /// extension names.
+    fn write_asset(root: &Path, relative: &str, text: &str) {
+        let path = root.join("assets").join(relative);
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the folder is made");
+        jackdaw_bsn::write_document_text(&path, text).expect("the file is written");
+    }
+
+    const GRASS: &str = "#grass\nbevy_pbr::pbr_material::StandardMaterial {}\n";
+
+    /// The runtime counts a name over every document its walk saw, and so does
+    /// this: a scene sharing a stem with an asset makes the name ambiguous in
+    /// both.
+    #[test]
+    fn a_name_a_scene_and_an_asset_share_stands_for_neither() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = material_project(tmp.path());
+        write_asset(tmp.path(), "materials/grass.bsn", GRASS);
+        write_asset(
+            tmp.path(),
+            "zones/grass.bsn",
+            "#Root\nbevy_transform::components::transform::Transform\n\
+             bevy_ecs::hierarchy::Children [\n    \
+             bevy_transform::components::transform::Transform\n]\n",
+        );
 
         rescan_asset_index(app.world_mut());
 
@@ -765,6 +787,47 @@ mod tests {
         assert!(
             index.get(Path::new("materials/grass.bsn")).is_some(),
             "the file is there to be named by its path"
+        );
+    }
+
+    #[test]
+    fn a_document_held_only_in_binary_is_keyed_by_the_path_its_text_twin_would_sit_at() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = material_project(tmp.path());
+        write_asset(tmp.path(), "materials/grass.bsb", GRASS);
+
+        rescan_asset_index(app.world_mut());
+
+        let index = app.world().resource::<AssetIndex>();
+        assert!(
+            index.get(Path::new("materials/grass.bsn")).is_some(),
+            "a reference written before the export still names it"
+        );
+        assert!(index.get(Path::new("materials/grass.bsb")).is_none());
+        assert_eq!(
+            index.by_stem("grass").map(|entry| entry.path.clone()),
+            Some(PathBuf::from("materials/grass.bsn")),
+            "and the one name it carries is not made ambiguous by its own form"
+        );
+    }
+
+    #[test]
+    fn a_document_held_in_both_forms_is_keyed_once_and_read_from_its_text() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = material_project(tmp.path());
+        write_asset(tmp.path(), "materials/grass.bsn", GRASS);
+        write_asset(tmp.path(), "materials/grass.bsb", GRASS);
+
+        rescan_asset_index(app.world_mut());
+
+        let assets = tmp.path().join("assets");
+        let index = app.world().resource::<AssetIndex>();
+        assert_eq!(index.iter().count(), 1, "the pair is one asset");
+        assert!(index.get(Path::new("materials/grass.bsn")).is_some());
+        assert_eq!(
+            document_file(&assets, Path::new("materials/grass.bsn")),
+            assets.join("materials/grass.bsn"),
+            "and the text file is the one it is read from"
         );
     }
 

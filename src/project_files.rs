@@ -64,10 +64,13 @@ fn on_project_files_context_action(
         }
         return;
     }
-    if event.action != "project_files.delete" {
-        return;
-    }
-    commands.operator("file.delete").param("path", path).call();
+    let operator = match event.action.as_str() {
+        "project_files.delete" => "file.delete",
+        "project_files.convert_to_binary" => "file.convert_to_binary",
+        "project_files.convert_to_text" => "file.convert_to_text",
+        _ => return,
+    };
+    commands.operator(operator).param("path", path).call();
     if let Some(menu) = state.menu_entity.take()
         && let Ok(mut ec) = commands.get_entity(menu)
     {
@@ -476,6 +479,12 @@ fn spawn_file_tree_row(
             let mut items: Vec<(&str, &str)> = Vec::new();
             if is_dir {
                 items.push((NEW_ASSET_ACTION, crate::new_asset::NEW_ASSET_LABEL));
+            }
+            if jackdaw_bsn::is_document_path(&rmb_path) {
+                items.push(match jackdaw_bsn::is_binary_path(&rmb_path) {
+                    true => ("project_files.convert_to_text", "Convert to Text"),
+                    false => ("project_files.convert_to_binary", "Convert to Binary"),
+                });
             }
             items.push(("project_files.delete", "Delete"));
             let menu = jackdaw_feathers::context_menu::spawn_context_menu(

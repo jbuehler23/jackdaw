@@ -23,7 +23,7 @@ pub const ASSET_HEADER: &str = "// jackdaw asset ";
 pub const PREFAB_TYPE: &str = "jackdaw::prefab::components::Prefab";
 
 /// How deep under the assets directory a walk looks.
-const MAX_ASSET_DEPTH: usize = 12;
+pub(crate) const MAX_ASSET_DEPTH: usize = 12;
 
 /// Prepend the header naming the type an asset file holds.
 pub fn with_asset_header(type_path: &str, body: &str) -> String {
@@ -161,17 +161,14 @@ pub fn document_type_path(text: &str) -> Option<String> {
     root_type_path(&ast, root)
 }
 
-/// The type the `.bsn` file at `path` holds, taken from its first root and
-/// from its header only where the document names no type of its own.
+/// The type the document at `path` holds, taken from its first root and from
+/// its header only where the document names no type of its own. Either form
+/// of the document reads.
 pub fn asset_file_type(path: &Path) -> Option<String> {
-    if !path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("bsn"))
-    {
+    if !crate::file::is_document_path(path) {
         return None;
     }
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = crate::file::read_document_text(path).ok()?;
     asset_text_type(&text, path)
 }
 
@@ -191,10 +188,23 @@ pub fn asset_text_type(text: &str, path: &Path) -> Option<String> {
     Some(found)
 }
 
-/// Every `.bsn` and `.jsn` file under `dir`, as absolute paths, skipping
-/// hidden directories and following no symlink out of the tree.
+/// Every document under `dir`, as absolute paths, skipping hidden directories
+/// and following no symlink out of the tree.
+///
+/// A document held in both forms is listed once, as its text file.
 pub fn walk_document_files(dir: &Path) -> Vec<PathBuf> {
-    walk_files_with_extensions(dir, &["bsn", "jsn"])
+    let found = walk_files_with_extensions(dir, &["bsn", "bsb", "jsn"]);
+    let text: std::collections::HashSet<PathBuf> = found
+        .iter()
+        .filter(|path| !crate::file::is_binary_path(path))
+        .cloned()
+        .collect();
+    found
+        .into_iter()
+        .filter(|path| {
+            !crate::file::is_binary_path(path) || !text.contains(&crate::file::text_twin(path))
+        })
+        .collect()
 }
 
 /// Every file under `dir` whose extension is one of `extensions`, as absolute
@@ -256,8 +266,8 @@ pub fn walk_asset_files(assets_root: &Path) -> impl Iterator<Item = (PathBuf, St
 /// Why an asset file did not read as the value it was asked for.
 #[derive(Debug, thiserror::Error)]
 pub enum AssetFileError {
-    #[error("failed to read {}: {}", .0.display(), .1)]
-    Read(PathBuf, std::io::Error),
+    #[error("{1}")]
+    Read(PathBuf, crate::file::DocumentError),
     #[error("failed to parse {}: {}", .0.display(), .1)]
     Parse(PathBuf, BsnLoadError),
     #[error("{} holds no value", .0.display())]
@@ -283,7 +293,7 @@ where
     T: FromReflect + TypePath + GetTypeRegistration,
 {
     let expected = T::type_path();
-    let text = std::fs::read_to_string(path)
+    let text = crate::file::read_document_text(path)
         .map_err(|err| AssetFileError::Read(path.to_path_buf(), err))?;
     if let Some(header) = read_asset_header(&text).filter(|header| header != expected) {
         return Err(AssetFileError::WrongType {
