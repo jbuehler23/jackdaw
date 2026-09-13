@@ -179,7 +179,7 @@ impl JackdawExtension for JackdawCoreExtension {
         ));
 
         ctx.register_operator::<CancelModalOp>();
-        ctx.register_operator::<crate::asset_browser::ApplyTextureOp>();
+        ctx.register_operator::<crate::texture_files::ApplyTextureOp>();
         ctx.register_operator::<crate::WindowOpenOp>()
             .register_operator::<crate::WindowResetLayoutOp>()
             .register_operator::<crate::MenuOpenOp>()
@@ -317,7 +317,8 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::terrain::tint_ops::add_to_extension(ctx);
         crate::terrain::detail_ops::add_to_extension(ctx);
         crate::terrain::autoterrain_ops::add_to_extension(ctx);
-        crate::asset_browser::add_to_extension(ctx);
+        crate::texture_files::add_to_extension(ctx);
+        crate::project_window::add_to_extension(ctx);
         crate::material_browser::add_to_extension(ctx);
         crate::inspector::ops::add_to_extension(ctx);
         crate::viewport::add_to_extension(ctx);

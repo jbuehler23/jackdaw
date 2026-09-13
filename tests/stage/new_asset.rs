@@ -241,7 +241,7 @@ fn the_add_menu_offers_every_kind_and_creates_where_the_browser_is() {
     let (mut app, tmp) = editor_with_kinds();
     let dir = folder(&tmp, "content/things");
     app.world_mut()
-        .resource_mut::<jackdaw::asset_browser::AssetBrowserState>()
+        .resource_mut::<jackdaw::project_window::ProjectWindowState>()
         .current_directory = dir.clone();
 
     let items = jackdaw::add_entity_picker::collect_add_menu_items(app.world_mut());
@@ -267,7 +267,7 @@ fn the_add_menu_offers_every_kind_and_creates_where_the_browser_is() {
 
     assert!(
         dir.join("item_1.bsn").is_file(),
-        "the menu writes into the folder the browser is showing"
+        "the menu writes into the folder the Project window is showing"
     );
     assert!(indexed(&app, "content/things/item_1.bsn"));
 }

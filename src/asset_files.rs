@@ -1,7 +1,7 @@
 //! What a file on disk is: a scene, a prefab, or an asset of some kind.
 //!
 //! An asset file carries a header naming the type it holds, written after the
-//! version stamp. The header is a hint the browser can read without parsing;
+//! version stamp. The header is a hint a file listing can read without parsing;
 //! the document's own root is the truth, so a header that disagrees with it is
 //! reported and ignored. A file with no header at all is still known by its
 //! root, which is how everything written before headers existed keeps working.

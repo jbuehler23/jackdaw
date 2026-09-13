@@ -18,7 +18,7 @@ normal Bevy crate: a folder with a `Cargo.toml`, a
 The dialogs that reach for project files -- opening and saving
 scenes, picking a prefab, a reference image, a preview model or
 a texture -- start in the folder you are already looking at: the
-asset browser's folder while it points inside the project,
+Project window's folder while it points inside the project,
 otherwise the folder of the scene you have open, otherwise the
 project's `assets/`. Installing an extension bundle instead
 starts where you picked the last bundle from, since bundles

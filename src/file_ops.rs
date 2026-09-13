@@ -1,10 +1,10 @@
-//! Filesystem operators for the asset browser and project files panel.
+//! Filesystem operators for the Project window.
 //!
 //! `file.delete` confirms via a dialog before removing the path from disk,
 //! `file.convert_to_binary` and `file.convert_to_text` rewrite one document in
 //! the other form, and `project.export_binary` writes a whole tree out as
-//! binary for a shipped game. Both the asset browser and the project files
-//! panel reach these from a right-click menu.
+//! binary for a shipped game. The Project window reaches these from its
+//! right-click menu.
 
 use std::path::{Path, PathBuf};
 
@@ -48,9 +48,9 @@ fn default_export_dir(source: &Path) -> PathBuf {
         .join(format!("{name}-binary"))
 }
 
-/// Confirm and delete a file or directory from disk. The path is taken
-/// either from the `path` param (preferred) or, if absent, from the
-/// asset browser's currently selected file.
+/// Confirm and delete a file or directory from disk. The path is taken either
+/// from the `path` param (preferred) or, if absent, from the file the Project
+/// window has selected.
 #[operator(
     id = "file.delete",
     label = "Delete File",
@@ -62,16 +62,16 @@ pub fn file_delete(
     params: In<OperatorParameters>,
     mut commands: Commands,
     mut pending: ResMut<PendingFileDelete>,
-    browser: Option<Res<crate::asset_browser::AssetBrowserState>>,
+    project: Option<Res<crate::project_window::ProjectWindowState>>,
 ) -> OperatorResult {
     let path: Option<PathBuf> = params.as_str("path").map(PathBuf::from).or_else(|| {
-        browser
+        project
             .as_ref()
-            .and_then(|b| b.selected_file.as_ref())
+            .and_then(|state| state.selected_file.as_ref())
             .map(PathBuf::from)
     });
     let Some(path) = path else {
-        warn!("file.delete: no path provided and no asset browser selection");
+        warn!("file.delete: no path provided and nothing selected in the Project window");
         return OperatorResult::Cancelled;
     };
     if !path.exists() {
@@ -93,7 +93,7 @@ pub fn file_delete(
 fn on_file_delete_confirmed(
     _event: On<DialogActionEvent>,
     mut pending: ResMut<PendingFileDelete>,
-    asset_browser: Option<ResMut<crate::asset_browser::AssetBrowserState>>,
+    project: Option<ResMut<crate::project_window::ProjectWindowState>>,
 ) {
     let Some(path) = pending.path.take() else {
         return;
@@ -107,14 +107,15 @@ fn on_file_delete_confirmed(
         Ok(()) => info!("file.delete: removed {}", path.display()),
         Err(err) => warn!("file.delete: failed to remove {}: {err}", path.display()),
     }
-    // Clear any stale asset-browser selection that pointed at the
-    // deleted path so the breadcrumb / highlight don't lag.
-    if let Some(mut browser) = asset_browser {
-        let path_str = path.to_string_lossy().to_string();
-        if browser.selected_file.as_deref() == Some(path_str.as_str()) {
-            browser.selected_file = None;
-            browser.needs_refresh = true;
+    // Drop a selection that pointed at the deleted path so the path bar and
+    // the highlight do not lag behind the filesystem.
+    if let Some(mut project) = project {
+        let deleted = path.to_string_lossy().to_string();
+        if project.selected_file.as_deref() == Some(deleted.as_str()) {
+            project.selected_file = None;
         }
+        project.needs_refresh = true;
+        project.needs_tree_refresh = true;
     }
 }
 

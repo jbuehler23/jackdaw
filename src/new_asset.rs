@@ -1,6 +1,5 @@
-//! Creating an asset file from wherever the user is: a folder in the asset
-//! browser or the project files tree, an entry in the Add menu, or the New
-//! beside an asset field.
+//! Creating an asset file from wherever the user is: a folder in the Project
+//! window, an entry in the Add menu, or the New beside an asset field.
 //!
 //! The user never picks a file flavour. One list offers every kind the editor
 //! can write a default value for, searchable by its name and by the type it
@@ -186,21 +185,21 @@ pub fn create_in_folder(world: &mut World, kind: &str, folder: &Path) -> Option<
     Some(path)
 }
 
-/// Point the asset browser at a file the editor just wrote.
+/// Point the Project window at a file the editor just wrote.
 fn show_in_browser(world: &mut World, indexed: &Path) {
     let file = crate::asset_index::absolute_path(world, indexed);
     let Some(folder) = file.parent().map(Path::to_path_buf) else {
         return;
     };
-    let Some(mut browser) = world.get_resource_mut::<crate::asset_browser::AssetBrowserState>()
+    let Some(mut project) = world.get_resource_mut::<crate::project_window::ProjectWindowState>()
     else {
         return;
     };
-    if folder.starts_with(&browser.root_directory) {
-        browser.current_directory = folder;
+    if folder.starts_with(&project.root_directory) {
+        project.current_directory = folder;
     }
-    browser.selected_file = Some(file.to_string_lossy().into_owned());
-    browser.needs_refresh = true;
+    project.selected_file = Some(file.to_string_lossy().into_owned());
+    project.needs_refresh = true;
 }
 
 #[cfg(test)]

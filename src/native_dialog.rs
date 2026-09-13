@@ -106,8 +106,8 @@ fn within_project(root: &Path, candidate: &Path) -> bool {
     resolved(candidate).starts_with(resolved(root))
 }
 
-fn asset_browser_directory(world: &World) -> Option<PathBuf> {
-    let state = world.get_resource::<crate::asset_browser::AssetBrowserState>()?;
+fn browsed_directory(world: &World) -> Option<PathBuf> {
+    let state = world.get_resource::<crate::project_window::ProjectWindowState>()?;
     let directory = existing_directory(&state.current_directory)?;
     let root = project_root_path(world)?;
     within_project(&root, &directory).then_some(directory)
@@ -139,17 +139,17 @@ fn project_directory(world: &World) -> Option<PathBuf> {
     existing_directory(&project.assets_dir()).or_else(|| existing_directory(&project.root))
 }
 
-/// The folder the user is looking at: the Asset Browser's folder while
+/// The folder the user is looking at: the Project window's folder while
 /// it points inside the project, else the open file's folder, else the
 /// project's `assets/`, else the project root.
 pub fn browsing_directory(world: &World) -> Option<PathBuf> {
-    asset_browser_directory(world)
+    browsed_directory(world)
         .or_else(|| open_file_directory(world))
         .or_else(|| project_directory(world))
 }
 
-/// Where a dialog opened for `purpose` should start. The Asset Browser
-/// wins for the purposes that read project files; the folder the purpose
+/// Where a dialog opened for `purpose` should start. The Project window
+/// wins for the purposes that read the project's files; the folder the purpose
 /// was last used in comes first for the ones that read files from outside
 /// the project, and otherwise fills in when the browser has nothing.
 pub fn start_directory(world: &World, purpose: DialogPurpose) -> Option<PathBuf> {
@@ -157,7 +157,7 @@ pub fn start_directory(world: &World, purpose: DialogPurpose) -> Option<PathBuf>
     if purpose.looks_outside_the_project() {
         return remembered.or_else(|| browsing_directory(world));
     }
-    asset_browser_directory(world)
+    browsed_directory(world)
         .or(remembered)
         .or_else(|| browsing_directory(world))
 }

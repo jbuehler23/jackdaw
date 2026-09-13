@@ -100,6 +100,7 @@ impl Plugin for StatusBarPlugin {
             (
                 update_status_left,
                 update_status_center,
+                update_status_inspected,
                 tick_status_notice,
                 update_status_right,
                 align_status_right,
@@ -183,6 +184,50 @@ fn update_status_center(
         });
 
     text.0 = format!("Jackdaw v{version}{path_str}");
+}
+
+/// Marker on the slot naming what the inspector is showing.
+#[derive(Component)]
+pub struct StatusBarInspected;
+
+/// Say whether the inspector is on an entity or on a file, and which one, so
+/// clicking a file in the Project window and clicking an entity in the
+/// outliner are told apart at a glance.
+fn update_status_inspected(
+    inspectors: Query<&crate::inspector::InspectorTarget, With<crate::inspector::Inspector>>,
+    files: Query<&crate::inspector::file_card::SelectedFile>,
+    definitions: Query<&crate::definition_assets::DefinitionAssetEdit>,
+    names: Query<&Name>,
+    mut slots: Query<&mut Text, With<StatusBarInspected>>,
+) {
+    let Ok(mut text) = slots.single_mut() else {
+        return;
+    };
+    let line = inspectors
+        .iter()
+        .next()
+        .map(|target| target.0)
+        .map(|entity| {
+            if let Ok(file) = files.get(entity) {
+                let name = file
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                return format!("File: {name}");
+            }
+            if let Ok(definition) = definitions.get(entity) {
+                return format!("File: {}", definition.name);
+            }
+            match names.get(entity) {
+                Ok(name) => format!("Entity: {name}"),
+                Err(_) => "Entity".to_string(),
+            }
+        })
+        .unwrap_or_default();
+    if text.0 != line {
+        text.0 = line;
+    }
 }
 
 /// Marker for the scene stats text in the hierarchy panel footer.

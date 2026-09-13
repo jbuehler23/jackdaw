@@ -1,4 +1,4 @@
-//! Dropping an image from the asset browser onto the 2D canvas.
+//! Dropping an image from the Project window onto the 2D canvas.
 //!
 //! What is under the cursor decides the landing: an `ImageNode` takes the
 //! texture, a container takes a new image as its last child, and bare canvas

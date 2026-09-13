@@ -10,6 +10,7 @@ pub mod component_picker;
 pub(crate) mod component_tooltip;
 mod custom_props_display;
 mod definition_card;
+pub mod file_card;
 mod live_edit_dots;
 pub(crate) mod material_card_routing;
 mod material_display;
@@ -97,6 +98,7 @@ impl Plugin for InspectorPlugin {
 
         app.register_type_data::<Name, ReflectDisplayable>()
             .add_plugins(component_tooltip::plugin)
+            .add_plugins(file_card::plugin)
             .add_plugins(prefab_menu::plugin)
             .add_plugins(type_metadata_pane::plugin)
             .add_observer(component_display::on_inspector_dirty)
@@ -461,7 +463,7 @@ pub(super) struct CustomPropertyNameInput;
 
 /// Stores the entity currently being inspected.
 #[derive(Component)]
-pub(super) struct InspectorTarget(pub Entity);
+pub(crate) struct InspectorTarget(pub Entity);
 
 /// Marker inserted on a selected entity to signal the inspector needs rebuilding.
 #[derive(Component)]

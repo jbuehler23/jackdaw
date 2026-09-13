@@ -148,9 +148,14 @@ fn handle_file_drops(
                 continue;
             }
         };
-        // The asset browser watches the assets dir with `notify`, so the
-        // freshly-copied file shows up on the next refresh on its own; no
-        // explicit rescan trigger is fired here.
+        // The Project window watches the assets dir with `notify`, so the
+        // freshly-copied file shows up on the next refresh on its own. It is
+        // selected as well, since a search or a kind filter would otherwise
+        // leave the drop with nothing to show for it.
+        let landed = assets_dir.join(&rel);
+        commands.queue(move |world: &mut World| {
+            crate::project_window::select_path(world, &landed);
+        });
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         match classify(ext) {

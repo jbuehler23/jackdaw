@@ -107,7 +107,7 @@ pub struct ViewportGrid(pub Entity);
 
 /// Shared counter that hands out a unique [`RenderLayers`] index per
 /// viewport. Layer 0 is the default world; layer 1 is reserved for the
-/// material preview and layer 2 for the asset browser's model thumbnail
+/// material preview and layer 2 for the Project window's model thumbnail
 /// stage ([`crate::model_thumbnail::THUMBNAIL_LAYER`]). Per-viewport grids
 /// start after those so they only render to "their" camera.
 #[derive(Resource)]
@@ -659,7 +659,7 @@ pub(crate) fn on_viewport_panel_despawn(
     }
 }
 
-/// Handle files dropped from the asset browser onto the viewport.
+/// Handle files dropped from the Project window onto the viewport.
 fn handle_viewport_drop(
     event: On<Pointer<DragDrop>>,
     file_items: Query<&FileBrowserItem>,
@@ -669,12 +669,12 @@ fn handle_viewport_drop(
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     active: Res<ActiveViewport>,
     snap_settings: Res<crate::snapping::SnapSettings>,
-    mut drag: ResMut<crate::asset_browser::ActiveAssetDrag>,
+    mut drag: ResMut<crate::asset_drag::ActiveAssetDrag>,
     mut ray_cast: MeshRayCast,
     editor_entities: Query<(), With<crate::EditorEntity>>,
     mut commands: Commands,
 ) {
-    // The asset browser sets `ActiveAssetDrag.path` only for entries
+    // The Project window sets `ActiveAssetDrag.path` only for entries
     // whose underlying file actually carries a `Prefab` component, so a
     // present path here means "route this drop through the prefab
     // system". `ActiveAssetDrag.image` is set for image-thumbnail

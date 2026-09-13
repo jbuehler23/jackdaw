@@ -1,4 +1,4 @@
-//! Rendered thumbnails for `.glb` / `.gltf` entries in the asset browser.
+//! Rendered thumbnails for `.glb` / `.gltf` entries in the Project window.
 //!
 //! Without them a folder of models browses as a wall of identical font
 //! glyphs, which makes a 300-model kit unusable. This module photographs
@@ -810,7 +810,7 @@ fn apply_layer_recursive(commands: &mut Commands, entity: Entity, children: &Que
 // -- Browser tiles -----------------------------------------------------------
 
 /// The square of a model tile that holds either the fallback glyph or the
-/// rendered thumbnail. Placed by the asset browser; driven from here so the
+/// rendered thumbnail. Placed by the Project window; driven from here so the
 /// browser does not have to know about render state.
 #[derive(Component)]
 pub struct ModelThumbnailSlot {
@@ -848,7 +848,7 @@ fn update_thumbnail_slots(
     )>,
     content: Query<
         (&UiGlobalTransform, &ComputedNode),
-        With<crate::asset_browser::AssetBrowserContent>,
+        With<crate::project_window::ProjectFileGrid>,
     >,
     children: Query<&Children>,
 ) {

@@ -49,7 +49,7 @@ pub(crate) const WORLD_ENTITY_ICONS: &[(&str, Icon)] = &[
 #[cfg(feature = "camera_rig")]
 pub(crate) const CAMERA_RIG_ICON: (&str, Icon) = ("jackdaw_camera_rig::CameraRig", Icon::Orbit);
 
-/// Scene Tree, Import, and Project Files in the left dock.
+/// Scene Tree and Import in the left dock.
 #[derive(Default)]
 pub struct CoreWindowsExtension;
 
@@ -121,20 +121,6 @@ impl JackdawExtension for CoreWindowsExtension {
                     ));
                 }),
         );
-        ctx.register_window(
-            WindowDescriptor::new("jackdaw.project_files")
-                .with_name("Project Files")
-                .with_default_area(DefaultArea::Left)
-                .with_priority(10)
-                .with_build(|window| {
-                    window.spawn(crate::layout::project_files_panel_content());
-                    window
-                        .world_mut()
-                        .resource_mut::<crate::project_files::ProjectFilesState>()
-                        .needs_refresh = true;
-                }),
-        );
-
         ctx.register_window(
             WindowDescriptor::new("jackdaw.remote.entities")
                 .with_name("Remote Entities")
@@ -253,17 +239,18 @@ impl JackdawExtension for ViewportExtension {
     }
 }
 
-/// Assets window in the bottom dock.
+/// Project window in the bottom dock: the project's files as a folder tree
+/// beside the selected folder's contents.
 #[derive(Default)]
-pub struct AssetBrowserExtension;
+pub struct ProjectWindowExtension;
 
-impl JackdawExtension for AssetBrowserExtension {
+impl JackdawExtension for ProjectWindowExtension {
     fn id(&self) -> String {
-        "jackdaw.asset_browser".to_string()
+        "jackdaw.project_window".to_string()
     }
 
     fn label(&self) -> String {
-        "Asset Browser".to_string()
+        "Project".to_string()
     }
 
     fn kind(&self) -> ExtensionKind {
@@ -272,8 +259,8 @@ impl JackdawExtension for AssetBrowserExtension {
 
     fn register(&self, ctx: &mut ExtensionContext) {
         ctx.register_window(
-            WindowDescriptor::new("jackdaw.assets")
-                .with_name("Assets")
+            WindowDescriptor::new(crate::project_window::PROJECT_WINDOW_ID)
+                .with_name("Project")
                 .with_icon(Icon::FolderOpen.unicode())
                 .with_default_area(DefaultArea::BottomDock)
                 .with_priority(0)
@@ -283,11 +270,12 @@ impl JackdawExtension for AssetBrowserExtension {
                         .get_resource::<jackdaw_feathers::icons::IconFont>()
                         .map(|f| f.0.clone())
                         .unwrap_or_default();
-                    window.spawn(crate::asset_browser::asset_browser_panel(icon_font));
-                    window
+                    window.spawn(crate::project_window::project_panel_content(icon_font));
+                    let mut state = window
                         .world_mut()
-                        .resource_mut::<crate::asset_browser::AssetBrowserState>()
-                        .needs_refresh = true;
+                        .resource_mut::<crate::project_window::ProjectWindowState>();
+                    state.needs_refresh = true;
+                    state.needs_tree_refresh = true;
                 }),
         );
     }

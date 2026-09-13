@@ -76,7 +76,7 @@ impl Plugin for ReferenceImagePlugin {
 }
 
 /// Spawn a reference image plane at `position`. Single spawn path
-/// shared by the `entity.add.image` operator and the asset-browser
+/// shared by the `entity.add.image` operator and the Project window's
 /// image drop. Render state (quad mesh, material, aspect scale) is
 /// attached by [`maintain_reference_images`], the same way brushes and
 /// terrains derive their meshes from the authored component.

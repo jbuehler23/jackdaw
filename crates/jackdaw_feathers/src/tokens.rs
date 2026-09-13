@@ -317,16 +317,16 @@ pub const TEXT_SIZE: FontSize = FontSize::Px(TEXT_SIZE_PX);
 pub const TEXT_SIZE_LG: FontSize = FontSize::Px(TEXT_SIZE_LG_PX);
 pub const TEXT_SIZE_XL: FontSize = FontSize::Px(TEXT_SIZE_XL_PX);
 
-/// Truncation width for browser thumbnail filename labels (asset
-/// browser, material browser).
+/// Truncation width for browser thumbnail filename labels (Project
+/// window, material browser).
 pub const THUMB_NAME_MAX_WIDTH: f32 = 60.0;
-/// Browser thumbnail cell width (asset browser, material browser).
+/// Browser thumbnail cell width (Project window, material browser).
 pub const THUMB_CELL_WIDTH: f32 = 64.0;
-/// Browser thumbnail cell height (asset browser, material browser).
+/// Browser thumbnail cell height (Project window, material browser).
 pub const THUMB_CELL_HEIGHT: f32 = 80.0;
-/// Browser thumbnail image size (asset browser, material browser).
+/// Browser thumbnail image size (Project window, material browser).
 pub const THUMB_IMAGE_SIZE: f32 = 56.0;
-/// Browser preview image size (asset browser, material browser).
+/// Browser preview image size (Project window, material browser).
 pub const PREVIEW_IMAGE_SIZE: f32 = 128.0;
 
 // ---------------------------------------------------------------------------
@@ -399,7 +399,7 @@ pub const PANEL_GAP: f32 = 4.0;
 pub const COMPONENT_CARD_RADIUS: f32 = 5.0;
 /// Breadcrumb bar height
 pub const BREADCRUMB_HEIGHT: f32 = 34.0;
-/// Asset browser sidebar width
+/// Dock sidebar width
 pub const SIDEBAR_WIDTH: f32 = 30.0;
 /// Search input default width
 pub const SEARCH_INPUT_WIDTH: f32 = 200.0;

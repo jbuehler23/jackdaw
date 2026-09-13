@@ -332,50 +332,6 @@ fn pie_transport_button(
     )
 }
 
-/// Project Files panel. File tree browser.
-pub fn project_files_panel_content() -> impl Bundle {
-    (
-        EditorEntity,
-        Node {
-            flex_direction: FlexDirection::Column,
-            width: percent(100),
-            height: percent(100),
-            ..Default::default()
-        },
-        children![
-            // Search input
-            (
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    width: percent(100),
-                    padding: UiRect::all(px(tokens::SPACING_SM)),
-                    flex_shrink: 0.0,
-                    ..Default::default()
-                },
-                children![(text_edit::text_edit(
-                    TextEditProps::default()
-                        .with_placeholder("Search...")
-                        .allow_empty()
-                ),)],
-            ),
-            // File tree content, populated by ProjectFilesPlugin.
-            (
-                crate::project_files::ProjectFilesTree,
-                EditorEntity,
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    width: percent(100),
-                    flex_grow: 1.0,
-                    min_height: px(0.0),
-                    overflow: Overflow::scroll_y(),
-                    padding: UiRect::all(px(tokens::SPACING_SM)),
-                    ..Default::default()
-                },
-            ),
-        ],
-    )
-}
-
 /// Bundle the editor toolbar and the `SceneViewport` node together so
 /// `setup_viewport` can mount the whole thing inside the dock tree's
 /// "center" leaf in one go. Public to the crate because it's spawned
@@ -902,6 +858,15 @@ fn editor_status_bar() -> impl Bundle {
             ),
             (
                 status_bar::StatusBarCenter,
+                Text::default(),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+            ),
+            (
+                crate::status_bar::StatusBarInspected,
                 Text::default(),
                 TextFont {
                     font_size: tokens::TEXT_SIZE_SM,

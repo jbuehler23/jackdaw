@@ -3,11 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use jackdaw::asset_browser::AssetBrowserState;
 use jackdaw::native_dialog::{
     DialogMemory, DialogPurpose, browsing_directory, remember_pick, start_directory,
 };
 use jackdaw::project::{ProjectConfig, ProjectRoot, load_project_config};
+use jackdaw::project_window::ProjectWindowState;
 use jackdaw::scene_io::SceneFilePath;
 use jackdaw::scenes::{SceneTab, Scenes};
 
@@ -35,7 +35,7 @@ fn world_with(project: &Project) -> World {
 }
 
 fn browse_at(world: &mut World, directory: &Path) {
-    world.insert_resource(AssetBrowserState::at(directory));
+    world.insert_resource(ProjectWindowState::at(directory));
 }
 
 fn open_scene_at(world: &mut World, path: &Path) {
@@ -53,7 +53,7 @@ fn same_folder(left: &Path, right: &Path) -> bool {
 }
 
 #[test]
-fn a_dialog_opens_in_the_folder_the_asset_browser_is_showing() {
+fn a_dialog_opens_in_the_folder_the_project_window_is_showing() {
     let project = project();
     let mut world = world_with(&project);
     let props = project.root.join("assets/props");
@@ -147,7 +147,7 @@ fn the_bundle_dialog_reopens_where_the_last_bundle_came_from() {
             &start_directory(&world, DialogPurpose::Prefab).expect("a start directory"),
             &props
         ),
-        "a project file still follows the asset browser"
+        "a project file still follows the Project window"
     );
 }
 

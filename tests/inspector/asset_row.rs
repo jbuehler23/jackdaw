@@ -12,7 +12,7 @@ use bevy::picking::events::{DragDrop, Pointer};
 use bevy::picking::pointer::{Location, PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowRef};
-use jackdaw::asset_browser::ActiveAssetDrag;
+use jackdaw::asset_drag::ActiveAssetDrag;
 use jackdaw::commands::CommandHistory;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
@@ -488,7 +488,7 @@ fn primary_target(app: &mut App) -> NormalizedRenderTarget {
         .expect("the primary window normalizes")
 }
 
-/// Drag a file out of the asset browser and drop it on a row.
+/// Drag a file out of the Project window and drop it on a row.
 fn drop_file_on(app: &mut App, row: Entity, file: PathBuf) {
     app.world_mut().resource_mut::<ActiveAssetDrag>().path = Some(file);
     let target = primary_target(app);

@@ -5,9 +5,9 @@
 
 use crate::util;
 
-use jackdaw::asset_browser::AssetSelectFolderOp;
 use jackdaw::entity_ops::{EntityAddImageOp, EntityAddPrefabOp};
 use jackdaw::material_browser::MaterialSaveAsOp;
+use jackdaw::project_window::AssetSelectFolderOp;
 use jackdaw::scene_ops::{SceneSaveAsOp, SceneSaveOp};
 use jackdaw::scenes::operators::SceneOpenOp;
 use jackdaw_api::prelude::*;

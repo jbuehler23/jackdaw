@@ -1530,7 +1530,7 @@ fn on_stage_press(
     }
 }
 
-/// Land an asset dragged out of the asset browser on the canvas, claimed
+/// Land an asset dragged out of the Project window on the canvas, claimed
 /// off the dock the way a press is and only in [`Viewport2dMode::Edit`].
 /// What the drop means is decided by what is under the cursor; see
 /// [`crate::ui_asset_drop::classify_drop`].
@@ -1543,7 +1543,7 @@ fn on_stage_asset_drop(
     roots: Query<(Entity, &UiTargetCamera), AuthoredUiSceneRoot>,
     nodes: AuthoredNodes,
     children: Query<&Children>,
-    mut drag: ResMut<crate::asset_browser::ActiveAssetDrag>,
+    mut drag: ResMut<crate::asset_drag::ActiveAssetDrag>,
     mut commands: Commands,
     mut hit_cache: ResMut<StageHitCache>,
 ) {

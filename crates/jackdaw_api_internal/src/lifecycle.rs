@@ -306,7 +306,7 @@ struct CatalogEntry {
 #[repr(u8)]
 pub enum ExtensionKind {
     /// Ships with Jackdaw as a core feature area (scene tree, inspector,
-    /// asset browser, etc.). Present in every build.
+    /// Project window, etc.). Present in every build.
     Builtin = 0,
     /// Everything else: example extensions bundled for demonstration,
     /// third-party extensions loaded from disk, user-authored addons.

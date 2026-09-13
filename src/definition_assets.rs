@@ -107,12 +107,12 @@ pub fn definition_file_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{}.bsn", sanitize_definition_name(name)))
 }
 
-/// The folder a new asset lands in: the one the browser is showing when it is
-/// under the project's assets, and the assets directory otherwise.
+/// The folder a new asset lands in: the one the Project window is showing when
+/// it is under the project's assets, and the assets directory otherwise.
 pub fn new_definition_dir(world: &World) -> Option<PathBuf> {
     let assets = world.get_resource::<ProjectRoot>()?.assets_dir();
     let showing = world
-        .get_resource::<crate::asset_browser::AssetBrowserState>()
+        .get_resource::<crate::project_window::ProjectWindowState>()
         .map(|state| state.current_directory.clone());
     match showing {
         Some(dir) if dir.starts_with(&assets) && dir.is_dir() => Some(dir),
@@ -1630,7 +1630,7 @@ pub fn asset_list(params: In<OperatorParameters>, mut commands: Commands) -> Ope
 }
 
 /// Accept both a path under the project and one relative to its assets
-/// directory, so a caller can pass what the asset browser lists.
+/// directory, so a caller can pass what the Project window lists.
 pub(crate) fn resolve_project_path(world: &World, path: &Path) -> PathBuf {
     if path.is_absolute() {
         return path.to_path_buf();

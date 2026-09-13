@@ -56,7 +56,7 @@ fn scene_with_a_terrain() -> (App, Entity) {
 }
 
 /// A group of models placed by hand beside the terrain, the shape
-/// `gen_zone` and a drag from the asset browser both leave.
+/// `gen_zone` and a drag from the Project window both leave.
 fn hand_authored_group(app: &mut App) -> (Entity, Entity) {
     let group = app
         .world_mut()

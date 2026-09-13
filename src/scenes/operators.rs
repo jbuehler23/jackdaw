@@ -248,7 +248,7 @@ pub fn document_is_prefab(doc: &jackdaw_bsn::SceneBsnAst) -> bool {
     })
 }
 
-/// Sync system body. Public so tests and the asset browser can call it
+/// Sync system body. Public so tests and the Project window can call it
 /// without going through the file-dialog path.
 pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());

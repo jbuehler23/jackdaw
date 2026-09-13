@@ -20,7 +20,7 @@ App::new()
 ```
 
 `JackdawEditorPlugins` pulls in everything jackdaw needs: the launcher,
-viewport, hierarchy, inspector, brush tools, asset browser,
+viewport, hierarchy, inspector, brush tools, the Project window,
 scene IO, and the extension loader. Game project code is not
 compiled into this binary; the editor builds the project's own
 cargo binary and talks to it out of process (see below).
@@ -112,7 +112,7 @@ category.
 
 A field holding a handle is an asset field: the row shows the path
 of the file behind it, with Pick, Clear and New beside it, and takes
-a file dragged onto it from the asset browser. Pick lists the files
+a file dragged onto it from the Project window. Pick lists the files
 the project holds of that field's asset type, and offers the
 desktop's file dialog for a type with no asset files of its own,
 such as an image. Every one of the three writes through the same

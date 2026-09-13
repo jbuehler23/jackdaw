@@ -1,28 +1,33 @@
 # Materials and textures
 
-Two panels handle this: the **Asset Browser** and the
+Two panels handle this: the **Project** window and the
 **Material Browser**. Earlier builds had a separate texture
-browser, but it was absorbed into the asset browser and only
-the two remain.
+browser and a separate file tree, and both were folded into
+the Project window.
 
-## Asset browser
+## Project window
 
-The bottom-left panel by default. Shows the project's
-`assets/` directory as a tree on the left and a tile grid of
-the current folder on the right. Image files (png, jpg, jpeg,
+The bottom panel by default. Shows the project's `assets/`
+directory as a folder tree on the left and a tile grid of the
+selected folder on the right. Image files (png, jpg, jpeg,
 bmp, tga, webp, ktx2) render as thumbnails; everything else
 shows a generic file tile.
 
 What you do here:
 
-- Click an image to preview it in the side panel (KTX2
-  arrays show a layer slider).
-- Drag an image tile onto a brush face in the viewport to
-  apply it as the face's `texture_path`. This routes through
-  the `ApplyTextureOp` operator, so it goes on the undo
-  stack.
+- Click an image to select it; the inspector shows its card,
+  with the picture, what the header says it holds, an Apply
+  button, and layer steps for a KTX2 array.
+- Narrow the grid with the kind menu (scenes, prefabs,
+  materials, definitions, images, audio) or the search box.
+- Double-click an image to apply it to the selection. This
+  routes through the `material.apply_texture` operator, so it
+  goes on the undo stack.
 - Drag a `.glb` into the viewport to spawn a model entity.
-- Drag a `.bsn` to open it.
+- Drag an image into the viewport to place it as a reference
+  image.
+- Drag a `.bsn` into the viewport to spawn an instance, or
+  double-click it to open it in a tab.
 - Drop new files into `assets/` from your file manager.
   The editor watches `assets/`, so they show up without a
   manual refresh.

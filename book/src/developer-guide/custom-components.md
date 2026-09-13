@@ -88,12 +88,12 @@ reports the type and the editor names the kind after it (`ItemDef`
 gives `item`, `Item` on menus).
 
 There are three ways to create one, and none of them asks what
-flavour of file to write. Right-click any folder in the asset
-browser or the project files tree and pick **New Asset...**: the
-list offers every kind, searchable by its name or by the type it
-holds, and the one you pick lands in that folder with its card in
-the inspector. The **Add** menu lists the same kinds under
-**Assets**, creating in the folder the browser is showing. The
+flavour of file to write. Right-click any folder in the
+Project window and pick **New Asset...**: the list offers every
+kind, searchable by its name or by the type it holds, and the one
+you pick lands in that folder with its card in the inspector. The
+**Add** menu lists the same kinds under **Assets**, creating in
+the folder the Project window is showing. The
 **New** beside an asset field in the inspector writes one of that
 field's type and assigns it. A name of its own is optional: without
 one the file is `<kind>_1.bsn`, then `<kind>_2.bsn`.
@@ -108,7 +108,7 @@ holds:
 my_game::content::ItemDef { stack_size: 4 }
 ```
 
-The header is how the browser reads what a file is cheaply; the
+The header is how the Project window reads what a file is cheaply; the
 document's own root is the truth, so a file written before headers
 existed still opens. A file can live in any folder.
 

@@ -587,6 +587,11 @@ impl DockTree {
         }
     }
 
+    /// Whether any leaf holds a tab on this window.
+    pub fn has_window_kind(&self, window_id: &str) -> bool {
+        self.tabs().any(|(_, tab)| tab.window_id == window_id)
+    }
+
     /// Point every tab carrying `from` at `to` instead.
     ///
     /// For a window id that used to name its own panel and now names another

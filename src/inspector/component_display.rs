@@ -56,6 +56,7 @@ pub(crate) struct InspectorLineage<'w, 's> {
     pub(crate) child_of: Query<'w, 's, &'static bevy::ecs::hierarchy::ChildOf>,
     pub(crate) is_a: Query<'w, 's, &'static crate::prefab::IsA>,
     pub(crate) definitions: Query<'w, 's, (), With<crate::definition_assets::DefinitionAssetEdit>>,
+    pub(crate) files: Query<'w, 's, (), With<super::file_card::SelectedFile>>,
 }
 
 /// The live scene-document resource bundled into one param so the systems
@@ -110,6 +111,7 @@ pub(crate) fn sync_inspector_to_selection(
             && current.is_none()
             && entity_query.get(primary).is_err()
             && !lineage.definitions.contains(primary)
+            && !lineage.files.contains(primary)
         {
             continue;
         }
@@ -122,6 +124,17 @@ pub(crate) fn sync_inspector_to_selection(
         let Some(primary) = desired else {
             continue;
         };
+        if lineage.files.contains(primary) {
+            commands.queue(move |world: &mut World| {
+                super::file_card::fill_file_card(world, inspector, primary);
+            });
+            commands.entity(inspector).insert((
+                InspectorTarget(primary),
+                Monitor(primary),
+                NotifyAdded::<InspectorDirty>::default(),
+            ));
+            continue;
+        }
         if lineage.definitions.contains(primary) {
             commands.queue(move |world: &mut World| {
                 super::definition_card::fill_definition_card(world, inspector, primary);
@@ -812,6 +825,15 @@ pub(crate) fn on_inspector_dirty(
         let mut source_entity = target.0;
 
         despawn_inspector_display_children(&mut commands, children, &displays);
+
+        if lineage.files.contains(source_entity) {
+            let source = source_entity;
+            commands.queue(move |world: &mut World| {
+                super::file_card::fill_file_card(world, inspector_entity, source);
+            });
+            clear_dirty_for = clear_dirty_for.or(Some(source_entity));
+            continue;
+        }
 
         if lineage.definitions.contains(source_entity) {
             let source = source_entity;

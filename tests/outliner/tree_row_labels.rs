@@ -116,7 +116,7 @@ fn a_name_too_long_for_the_row_is_cut_and_kept_on_a_tooltip() {
 }
 
 /// A tree whose labels are laid out to their own text is left alone. This is the
-/// shape `project_files.rs` spawns, where cutting spirals: the cut narrows the
+/// shape the Project window spawns, where cutting spirals: the cut narrows the
 /// label, the narrower label lowers the budget, and "assets" came to read "a".
 #[test]
 fn a_label_laid_out_to_its_own_text_is_never_cut() {

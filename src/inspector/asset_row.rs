@@ -2,7 +2,7 @@
 //!
 //! A field holding a `Handle<T>`, an `Option<Handle<T>>`, or a path a schema
 //! asset spells as a string, shows the file it names, with Pick, Clear and New
-//! beside it and a drop target for the asset browser's drag. Every action
+//! beside it and a drop target for the Project window's drag. Every action
 //! commits through the undoable field edit the scalar rows use, so one choice
 //! is one history entry and undo puts the previous path back.
 
@@ -24,7 +24,7 @@ use jackdaw_feathers::{
     tooltip::Tooltip,
 };
 
-use crate::asset_browser::ActiveAssetDrag;
+use crate::asset_drag::ActiveAssetDrag;
 use crate::asset_index::AssetIndex;
 
 /// Shown in place of a path when the field names nothing.
@@ -756,7 +756,7 @@ fn folder_beside(assets_root: &Path, asset: &Path) -> Option<PathBuf> {
 
 // -- Dropping --------------------------------------------------------------
 
-/// Take a file dragged out of the asset browser, when it holds what the field
+/// Take a file dragged out of the Project window, when it holds what the field
 /// names, and say so when it does not.
 fn accept_asset_drop(world: &mut World, row: Entity, dropped: &Path) {
     let Some(field) = world.get::<AssetFieldRow>(row).cloned() else {

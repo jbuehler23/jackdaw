@@ -150,7 +150,7 @@ fn detect_material_sets(assets: &Path) -> Vec<jackdaw_material::MaterialSet> {
 fn is_non_2d_ktx2(path: &Path) -> bool {
     path.extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("ktx2"))
-        && crate::asset_browser::is_ktx2_non_2d(path)
+        && crate::texture_files::is_ktx2_non_2d(path)
 }
 
 /// Bind a detected set's files to a fresh `StandardMaterial`.

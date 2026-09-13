@@ -11,8 +11,8 @@ pub mod add_entity_picker;
 pub mod alignment_guides;
 pub mod animation;
 pub mod app_ops;
-pub mod asset_browser;
 pub mod asset_catalog;
+pub mod asset_drag;
 pub mod asset_files;
 pub mod asset_index;
 pub mod asset_ingest;
@@ -110,10 +110,10 @@ pub(crate) mod preview_model;
 pub mod project;
 pub mod project_build;
 pub mod project_definitions;
-pub mod project_files;
 pub mod project_select;
 pub mod project_settings;
 pub mod project_types;
+pub mod project_window;
 pub mod reference_image;
 pub mod reflect_default;
 pub mod remote;
@@ -136,6 +136,7 @@ pub mod snapping;
 pub mod status_bar;
 pub mod terrain;
 pub mod test_input;
+pub mod texture_files;
 pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod transform_ops;
@@ -418,7 +419,8 @@ impl Plugin for EditorCorePlugin {
                 scene_io::SceneIoPlugin,
                 scenes::ScenesPlugin,
                 workspace_dropdown::WorkspaceDropdownPlugin,
-                asset_browser::AssetBrowserPlugin,
+                asset_drag::AssetDragPlugin,
+                texture_files::TextureFilesPlugin,
                 viewport_select::ViewportSelectPlugin,
                 snapping::SnappingPlugin,
                 jackdaw_localization::LocalizationPlugin,
@@ -438,7 +440,7 @@ impl Plugin for EditorCorePlugin {
                 view_modes::ViewModesPlugin,
                 status_bar::StatusBarPlugin,
                 build_panel::BuildPanelPlugin,
-                project_files::ProjectFilesPlugin,
+                project_window::ProjectWindowPlugin,
                 modal_transform::ModalTransformPlugin,
             ),
             (
@@ -642,7 +644,7 @@ impl ExtensionPlugin {
     }
 
     /// Control whether Jackdaw's built-in feature-area extensions
-    /// (Scene Tree, Asset Browser, Timeline, Terminal, Inspector) are
+    /// (Scene Tree, Project, Timeline, Terminal, Inspector) are
     /// registered. Defaults to `true`.
     pub fn with_builtin_extensions(mut self, enable: bool) -> Self {
         self.enable_builtin_extensiosn = enable;
@@ -662,7 +664,7 @@ impl Plugin for ExtensionPlugin {
                 .register_extension::<builtin_extensions::CoreWindowsExtension>()
                 .register_extension::<builtin_extensions::ViewportExtension>()
                 .register_extension::<builtin_extensions::UiPaletteExtension>()
-                .register_extension::<builtin_extensions::AssetBrowserExtension>()
+                .register_extension::<builtin_extensions::ProjectWindowExtension>()
                 .register_extension::<builtin_extensions::GamePanelExtension>()
                 .register_extension::<builtin_extensions::TimelineExtension>()
                 .register_extension::<builtin_extensions::AnimationGraphExtension>()
@@ -3114,7 +3116,7 @@ fn build_debug_tree() -> jackdaw_panels::tree::DockTree {
 /// Quad-view workspace: one perspective viewport + three orthographic
 /// viewports (the user toggles each to top / front / right via Numpad
 /// 7 / 1 / 3 once activated). Inspector on the right, hierarchy +
-/// project files on the left, asset/timeline/terminal on the bottom.
+/// the outliner on the left, project/timeline/terminal on the bottom.
 fn build_level_design_tree() -> jackdaw_panels::tree::DockTree {
     use jackdaw_panels::DockAreaStyle;
     use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
@@ -3126,16 +3128,6 @@ fn build_level_design_tree() -> jackdaw_panels::tree::DockTree {
             .with_windows(vec!["jackdaw.hierarchy".into(), "jackdaw.import".into()])
             .persistent(),
     ));
-    let project_files = tree.insert(DockNode::Leaf(
-        DockLeaf::new("split.jackdaw.project_files.preset", DockAreaStyle::TabBar)
-            .with_windows(vec!["jackdaw.project_files".into()]),
-    ));
-    let left_split = tree.insert(DockNode::Split(DockSplit {
-        axis: SplitAxis::Vertical,
-        fraction: 0.75,
-        a: left,
-        b: project_files,
-    }));
 
     // Quad-view: 4 viewport panels in a 2x2 grid. Each gets its own
     // jackdaw.viewport panel (and thus its own camera + render
@@ -3180,7 +3172,7 @@ fn build_level_design_tree() -> jackdaw_panels::tree::DockTree {
     let bottom = tree.insert(DockNode::Leaf(
         DockLeaf::new("bottom_dock", DockAreaStyle::IconSidebar)
             .with_windows(vec![
-                "jackdaw.assets".into(),
+                crate::project_window::PROJECT_WINDOW_ID.into(),
                 "jackdaw.build".into(),
                 "jackdaw.timeline".into(),
                 "jackdaw.terminal".into(),
@@ -3213,7 +3205,7 @@ fn build_level_design_tree() -> jackdaw_panels::tree::DockTree {
     let root = tree.insert(DockNode::Split(DockSplit {
         axis: SplitAxis::Horizontal,
         fraction: 0.15,
-        a: left_split,
+        a: left,
         b: center_and_right,
     }));
     tree.root = Some(root);
@@ -3222,7 +3214,7 @@ fn build_level_design_tree() -> jackdaw_panels::tree::DockTree {
 
 /// Stacked viewports for animation work: top viewport renders the
 /// camera POV, bottom viewport is the scene/bone manipulation view.
-/// Timeline + asset browser docked at the bottom; hierarchy on the
+/// Timeline + Project window docked at the bottom; hierarchy on the
 /// left, inspector on the right.
 fn build_animation_tree() -> jackdaw_panels::tree::DockTree {
     use jackdaw_panels::DockAreaStyle;
@@ -3254,7 +3246,10 @@ fn build_animation_tree() -> jackdaw_panels::tree::DockTree {
 
     let bottom = tree.insert(DockNode::Leaf(
         DockLeaf::new("bottom_dock", DockAreaStyle::IconSidebar)
-            .with_windows(vec!["jackdaw.timeline".into(), "jackdaw.assets".into()])
+            .with_windows(vec![
+                "jackdaw.timeline".into(),
+                crate::project_window::PROJECT_WINDOW_ID.into(),
+            ])
             .persistent(),
     ));
     let center_over_bottom = tree.insert(DockNode::Split(DockSplit {
@@ -3338,7 +3333,7 @@ fn auto_save_layout_on_change(
 /// reconciler materializes any content. This way each window's `build_fn`
 /// runs exactly once into its final home with no rebuild churn, which
 /// would otherwise despawn freshly-spawned content while its deferred
-/// init systems (`project_files` refresh, `material_browser` scan, etc.)
+/// init systems (the Project window's refresh, `material_browser`'s scan, etc.)
 /// still hold pointers to it.
 ///
 /// Supports three save formats (in priority order):
@@ -3415,6 +3410,18 @@ fn canonicalise_persisted_windows(tree: &mut jackdaw_panels::tree::DockTree) {
         viewport::VIEWPORT_2D_WINDOW_ID,
         viewport::VIEWPORT_WINDOW_ID,
     );
+    // The file tree and the asset browser became one window. The first tab
+    // naming either becomes it; a second one would only put the same panel in
+    // two places, so it goes.
+    let mut claimed = tree.has_window_kind(project_window::PROJECT_WINDOW_ID);
+    for retired in project_window::RETIRED_WINDOW_IDS {
+        if claimed {
+            tree.remove_window_kind(retired);
+            continue;
+        }
+        tree.alias_window_kind(retired, project_window::PROJECT_WINDOW_ID);
+        claimed = tree.has_window_kind(project_window::PROJECT_WINDOW_ID);
+    }
 }
 
 /// Open `window_id` in its registered `default_area` leaf. If the
@@ -3595,11 +3602,11 @@ fn sync_active_workspace_from_live_tree(world: &mut World) {
 ///
 /// ```text
 /// root: H-split 0.15
-///   |- left            (gets vertically split below if project_files exists)
+///   |- left
 ///   `- H-split 0.85
 ///       |- V-split 0.8
 ///       |   |- center        (viewport host, headless)
-///       |   `- bottom_dock   (asset / texture / material browsers)
+///       |   `- bottom_dock   (the Project window, the timeline, the terminal)
 ///       `- right_sidebar     (inspector + friends)
 /// ```
 ///
@@ -3609,10 +3616,6 @@ fn sync_active_workspace_from_live_tree(world: &mut World) {
 /// panel, whose mode decides whether it opens on the world or on the
 /// canvas.
 ///
-/// Project Files is split off the bottom of the `left` leaf via the
-/// runtime split API so the resulting bottom-left leaf gets a
-/// non-persistent synthetic id and collapses naturally back into the
-/// rest of the left sidebar if the user closes it.
 /// True for the debugger's dock windows (remote panels and debug views), which
 /// group together in the Window menu and stay out of the default scene layout.
 fn is_remote_window(id: &str) -> bool {
@@ -3620,7 +3623,7 @@ fn is_remote_window(id: &str) -> bool {
 }
 
 fn build_default_tree(world: &mut World) {
-    use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, Edge, SplitAxis};
+    use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
     use jackdaw_panels::{DockAreaStyle, WindowRegistry};
 
     // Remote/debug windows live in the Remote Debug workspace, not the default
@@ -3685,20 +3688,6 @@ fn build_default_tree(world: &mut World) {
         b: center_and_right,
     }));
     tree.root = Some(root);
-
-    // Split project_files off the bottom of the left leaf so it lives
-    // in its own pane (matching the original hardcoded layout). The
-    // new leaf gets a synthetic area_id, so closing project_files
-    // collapses it back into the rest of the left sidebar.
-    if left_windows.iter().any(|w| w == "jackdaw.project_files") {
-        tree.remove_window_kind("jackdaw.project_files");
-        if let Some((new_leaf, _)) =
-            tree.split(left, Edge::Bottom, "jackdaw.project_files".to_string())
-            && let Some(split_id) = tree.parent_of(new_leaf)
-        {
-            tree.set_fraction(split_id, 0.75);
-        }
-    }
 }
 
 fn sync_icon_font(
@@ -3707,6 +3696,65 @@ fn sync_icon_font(
 ) {
     if let Some(font) = icon_font {
         commands.insert_resource(jackdaw_panels::IconFontHandle(font.0.clone()));
+    }
+}
+
+#[cfg(test)]
+mod retired_window_tests {
+    use jackdaw_panels::DockAreaStyle;
+    use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
+
+    use super::*;
+
+    /// A layout saved when the file tree and the asset browser were separate
+    /// windows: one in the left sidebar, one in the bottom dock.
+    fn tree_naming_the_retired_windows() -> DockTree {
+        let mut tree = DockTree::new();
+        let left = tree.insert(DockNode::Leaf(
+            DockLeaf::new("left", DockAreaStyle::TabBar).with_windows(vec![
+                "jackdaw.hierarchy".to_string(),
+                "jackdaw.project_files".to_string(),
+            ]),
+        ));
+        let bottom = tree.insert(DockNode::Leaf(
+            DockLeaf::new("bottom_dock", DockAreaStyle::IconSidebar).with_windows(vec![
+                "jackdaw.assets".to_string(),
+                "jackdaw.terminal".to_string(),
+            ]),
+        ));
+        tree.root = Some(tree.insert(DockNode::Split(DockSplit {
+            axis: SplitAxis::Vertical,
+            fraction: 0.75,
+            a: left,
+            b: bottom,
+        })));
+        tree
+    }
+
+    /// A saved layout naming the retired ids opens the one window they became,
+    /// in one place, rather than asking for panels nobody offers.
+    #[test]
+    fn a_layout_naming_the_retired_windows_loads_with_one_project_window() {
+        let mut tree = tree_naming_the_retired_windows();
+
+        canonicalise_persisted_windows(&mut tree);
+
+        let project: Vec<&str> = tree
+            .tabs()
+            .map(|(_, tab)| tab.window_id.as_str())
+            .filter(|id| *id == project_window::PROJECT_WINDOW_ID)
+            .collect();
+        assert_eq!(project.len(), 1, "the two panels became one tab");
+        for retired in project_window::RETIRED_WINDOW_IDS {
+            assert!(
+                !tree.has_window_kind(retired),
+                "{retired} is still named in the tree"
+            );
+        }
+        assert!(
+            tree.has_window_kind("jackdaw.terminal"),
+            "the rest of the layout is untouched"
+        );
     }
 }
 

@@ -1,4 +1,4 @@
-//! Dropping an image out of the asset browser onto the 2D canvas.
+//! Dropping an image out of the Project window onto the 2D canvas.
 
 use crate::util;
 
@@ -13,7 +13,7 @@ use bevy::{
     ui::ComputedNode,
     window::{PrimaryWindow, WindowRef},
 };
-use jackdaw::asset_browser::ActiveAssetDrag;
+use jackdaw::asset_drag::ActiveAssetDrag;
 use jackdaw::commands::CommandHistory;
 use jackdaw::viewport_2d::{Viewport2dPanelHost, build_viewport_2d_panel};
 use jackdaw_feathers::tokens::TOOLBAR_HEIGHT;
@@ -132,7 +132,7 @@ fn drop_image_at(app: &mut App, panel: Entity, authored: Vec2) {
 }
 
 /// `drop_image_at` for a drag carrying a particular path, which is how the
-/// asset browser hands one over: the file's own, and absolute.
+/// the Project window hands one over: the file's own, and absolute.
 fn drop_path_at(app: &mut App, panel: Entity, authored: Vec2, path: std::path::PathBuf) {
     app.world_mut().resource_mut::<ActiveAssetDrag>().image = Some(path);
     let (stage, camera) = app
