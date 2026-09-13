@@ -1089,7 +1089,7 @@ fn asset_kind(path: &str) -> &'static str {
         "glb" | "gltf" | "obj" | "fbx" => "model",
         "png" | "jpg" | "jpeg" | "ktx2" | "basis" | "exr" | "hdr" | "dds" => "image",
         "ogg" | "wav" | "flac" | "mp3" => "audio",
-        "bsn" | "jsn" | "scn" | "ron" => "scene",
+        "bsn" | "bsb" | "jsn" | "scn" | "ron" => "scene",
         "ttf" | "otf" => "font",
         "wgsl" | "glsl" | "spv" => "shader",
         _ => "file",

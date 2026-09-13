@@ -236,7 +236,10 @@ pub fn material_save_path(
         .get_resource::<crate::asset_index::AssetIndex>()
         .and_then(|index| index.by_handle(&handle.clone().untyped()))
         .filter(|entry| entry.name() == stem)
-        .map(|entry| project.assets_dir().join(&entry.path));
+        .map(|entry| {
+            let filed = project.assets_dir().join(&entry.path);
+            jackdaw_bsn::existing_form(&filed).unwrap_or(filed)
+        });
     Some(filed.unwrap_or_else(|| material_file_path(project, name)))
 }
 
@@ -291,6 +294,7 @@ pub fn remove_material_file(world: &World, name: &str) {
         .and_then(|index| index.material_named(name))
         .map(|entry| project.assets_dir().join(&entry.path));
     let path = filed.unwrap_or_else(|| material_file_path(project, name));
+    let path = jackdaw_bsn::existing_form(&path).unwrap_or(path);
     match std::fs::remove_file(&path) {
         Ok(()) => info!("Removed {}", path.display()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -302,7 +306,7 @@ pub fn remove_material_file(world: &World, name: &str) {
 /// skipped; a missing texture path still produces a handle (the asset server
 /// surfaces the missing file), so one dead texture never drops the material.
 pub fn load_material_file(world: &mut World, path: &Path) -> Option<UntypedHandle> {
-    let text = match std::fs::read_to_string(path) {
+    let text = match jackdaw_bsn::read_document_text(path) {
         Ok(text) => text,
         Err(err) => {
             warn!("Failed to read {}: {err}", path.display());

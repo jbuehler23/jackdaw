@@ -106,7 +106,7 @@ pub fn load_catalog(world: &mut World) {
         }
     };
 
-    if catalog_path.extension().is_some_and(|e| e == "bsn") {
+    if jackdaw_bsn::is_document_path(&catalog_path) {
         if is_empty_catalog_text(&json) {
             info!("Asset catalog holds no entries");
             return;

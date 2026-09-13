@@ -191,7 +191,8 @@ pub fn normalize_as_prefab_source(ast: &mut SceneBsnAst, display_name: &str) {
 /// directory it came from. The file stem names a synthetic root when the
 /// document needs one.
 pub fn read_prefab_document(path: &Path) -> Result<SceneBsnAst, std::io::Error> {
-    let text = std::fs::read_to_string(path)?;
+    let text = jackdaw_bsn::read_document_text(path)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
     let mut ast = jackdaw_bsn::parse_bsn_text(&text)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     let display_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("scene");

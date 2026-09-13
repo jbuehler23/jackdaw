@@ -287,13 +287,16 @@ fn on_asset_browser_context_action(
         }
         return;
     }
-    if event.action != "asset_browser.delete" {
-        return;
-    }
+    let operator = match event.action.as_str() {
+        "asset_browser.delete" => "file.delete",
+        "asset_browser.convert_to_binary" => "file.convert_to_binary",
+        "asset_browser.convert_to_text" => "file.convert_to_text",
+        _ => return,
+    };
     let Some(path) = state.selected_file.clone() else {
         return;
     };
-    commands.operator("file.delete").param("path", path).call();
+    commands.operator(operator).param("path", path).call();
     if let Some(menu) = menu_state.menu_entity.take()
         && let Ok(mut ec) = commands.get_entity(menu)
     {
@@ -569,7 +572,9 @@ fn refresh_browser_on_change(
                     .path
                     .extension()
                     .and_then(|e| e.to_str())
-                    .is_some_and(|e| e.eq_ignore_ascii_case("jsn") || e.eq_ignore_ascii_case("bsn"))
+                    .is_some_and(|e| {
+                        e.eq_ignore_ascii_case("jsn") || jackdaw_bsn::is_document_extension(e)
+                    })
             {
                 entry.kind = state.kind_cache.check(&entry.path, &asset_kinds);
             }
@@ -885,6 +890,13 @@ fn refresh_browser_on_change(
                             crate::new_asset::NEW_ASSET_LABEL.to_string(),
                         ));
                     }
+                    if jackdaw_bsn::is_document_path(&rmb_path) {
+                        let convert = match jackdaw_bsn::is_binary_path(&rmb_path) {
+                            true => ("asset_browser.convert_to_text", "Convert to Text"),
+                            false => ("asset_browser.convert_to_binary", "Convert to Binary"),
+                        };
+                        items.push((convert.0.to_string(), convert.1.to_string()));
+                    }
                     items.push(("asset_browser.delete".to_string(), "Delete".to_string()));
                     let entries: Vec<(&str, &str)> = items
                         .iter()
@@ -905,8 +917,8 @@ fn refresh_browser_on_change(
             // out of `ActiveAssetDrag` and route through `spawn_instance`,
             // which normalizes a plain scene into an instanceable prefab.
             // Clear on DragEnd if nothing consumed it.
-            let is_bsn_scene = entry.path.extension().is_some_and(|e| e == "bsn");
-            if entry.is_prefab() || is_bsn_scene {
+            let is_document = jackdaw_bsn::is_document_path(&entry.path);
+            if entry.is_prefab() || is_document {
                 let drag_path = entry.path.clone();
                 commands.entity(item_entity).observe(
                     move |_: On<Pointer<DragStart>>, mut drag: ResMut<ActiveAssetDrag>| {
@@ -1161,7 +1173,7 @@ fn handle_file_double_click(
     }
 
     let path_lower = event.path.to_lowercase();
-    if path_lower.ends_with(".jsn") || path_lower.ends_with(".bsn") {
+    if path_lower.ends_with(".jsn") || jackdaw_bsn::is_document_path(Path::new(&path_lower)) {
         let path_owned = std::path::PathBuf::from(&event.path);
         commands.queue(move |world: &mut World| {
             crate::scenes::operators::scene_open_system(world, &path_owned);

@@ -7,10 +7,12 @@
 //! dynamic-BSN work in bevyengine/bevy#23576.
 
 pub mod apply;
+pub mod binary;
 pub mod catalog;
 pub mod delta;
 pub mod document;
 pub mod emitter;
+pub mod file;
 pub mod header;
 pub mod loader;
 pub mod parse;
@@ -29,6 +31,16 @@ pub use header::{
     asset_text_type, document_type_path, path_stem, read_asset_file, read_asset_header,
     root_type_path, walk_asset_files, walk_document_files, walk_files_with_extensions,
     with_asset_header,
+};
+
+pub use binary::{BinaryError, DecodedDocument, is_binary};
+
+pub use file::{
+    BINARY_EXTENSION, Document, DocumentError, DocumentForm, TEXT_EXTENSION, binary_twin,
+    convert_to_binary, convert_to_text, document_as_text, document_bytes, document_from_bytes,
+    document_text_from_bytes, existing_form, export_binary, is_binary_path, is_document_extension,
+    is_document_path, leading_comments, read_document, read_document_text, text_as_binary,
+    text_twin, write_document_text,
 };
 
 pub use parse::{ParseError, parse_bsn};

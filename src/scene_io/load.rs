@@ -57,7 +57,7 @@ pub fn spawn_open_dialog(world: &mut World) {
     let dialog =
         crate::native_dialog::file_dialog(world, crate::native_dialog::DialogPurpose::Scene)
             .set_title("Open scene")
-            .add_filter("Jackdaw scene", &["bsn", "jsn"]);
+            .add_filter("Jackdaw scene", &["bsn", "bsb", "jsn"]);
     let task =
         bevy::tasks::AsyncComputeTaskPool::get().spawn(async move { dialog.pick_file().await });
     world.insert_resource(SceneDialogTask::Open(task));
@@ -126,7 +126,16 @@ pub fn load_scene_from_file_with_outcome(
 fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome {
     let mut path = chosen.to_string_lossy().to_string();
 
-    let json = match std::fs::read_to_string(&path) {
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return refuse(
+                RefusalCategory::Unreadable,
+                format!("failed to read scene file '{path}': {err}"),
+            );
+        }
+    };
+    let json = match jackdaw_bsn::document_text_from_bytes(&bytes, Path::new(&path)) {
         Ok(json) => json,
         Err(err) => {
             return refuse(
@@ -183,7 +192,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
         // editor opens that. The conversion is held in memory until the
         // document below is accepted, so a refused scene leaves nothing behind.
         // The legacy metadata and camera framing carry over below.
-        let (bsn_text, legacy_jsn, pending_conversion) = if path.ends_with(".bsn") {
+        let (bsn_text, legacy_jsn, pending_conversion) = if !path.ends_with(".jsn") {
             (json, None, None)
         } else {
             let jsn = match jackdaw_jsn::format::parse_scene(&json) {
@@ -222,9 +231,13 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
         };
 
         // Hash of what was read rather than of a later look at disk, so an edit
-        // landing in between still registers as an external edit.
+        // landing in between still registers as an external edit, and as the
+        // bytes it was stored as, which is what the watcher reads back.
         loaded_hash = Some(crate::scenes::external_watch::hash_bytes(
-            bsn_text.as_bytes(),
+            match legacy_jsn.is_none() {
+                true => &bytes,
+                false => bsn_text.as_bytes(),
+            },
         ));
 
         // Migrate reflect type-paths for scenes written under an older Bevy,

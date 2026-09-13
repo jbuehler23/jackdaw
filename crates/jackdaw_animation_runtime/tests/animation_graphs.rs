@@ -499,6 +499,63 @@ fn an_any_state_transition_fires_from_every_state() {
 }
 
 #[test]
+fn a_graph_file_saved_in_the_binary_form_reads_back_through_the_loader() {
+    let dir = tempfile::tempdir().expect("a directory to save into");
+    let text = "\
+jackdaw_animation_runtime::graph::AnimationGraphDef {
+    entry: \"idle\",
+    states: [
+        jackdaw_animation_runtime::graph::AnimationGraphState {
+            name: \"idle\",
+            motion: jackdaw_animation_runtime::graph::AnimationMotion::Clip(
+                jackdaw_animation_runtime::graph::AnimationClipRef {
+                    source: \"rig.glb\",
+                    clip: \"Idle\",
+                },
+            ),
+        },
+    ],
+}
+";
+    jackdaw_bsn::write_document_text(&dir.path().join("rig.animgraph.bsb"), text)
+        .expect("the file is written");
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(AssetPlugin {
+            file_path: dir.path().to_string_lossy().into_owned(),
+            ..AssetPlugin::default()
+        })
+        .add_plugins(bevy::transform::TransformPlugin)
+        .add_plugins(bevy::animation::AnimationPlugin)
+        .add_plugins(AnimationRuntimePlugin);
+
+    let handle: Handle<AnimationGraphAsset> = app
+        .world()
+        .resource::<AssetServer>()
+        .load("rig.animgraph.bsb");
+    let mut loaded = None;
+    for _ in 0..200 {
+        app.update();
+        if let Some(asset) = app
+            .world()
+            .resource::<Assets<AnimationGraphAsset>>()
+            .get(&handle)
+        {
+            loaded = Some(asset.def.clone());
+            break;
+        }
+        std::thread::sleep(millis(5));
+    }
+
+    assert_eq!(
+        loaded.expect("the binary graph file loads").entry,
+        "idle",
+        "the loader that owns .animgraph.bsn owns its binary twin too"
+    );
+}
+
+#[test]
 fn a_saved_graph_file_reads_back_through_the_loader() {
     let dir = tempfile::tempdir().expect("a directory to save into");
     let text = r#"
