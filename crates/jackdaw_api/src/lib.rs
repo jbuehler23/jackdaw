@@ -30,10 +30,9 @@
 #[cfg(feature = "dynamic_linking")]
 #[expect(
     unused_imports,
-    clippy::single_component_path_imports,
     reason = "this forces the shared Jackdaw runtime to be linked"
 )]
-use jackdaw_dylib;
+use jackdaw_dylib as _;
 
 // --- Extension authoring surface ---
 
