@@ -745,6 +745,7 @@ fn setup_text_edit_input(
                         display: Display::None,
                         ..default()
                     },
+                    Pickable::IGNORE,
                 ))
                 .id();
             crate::utils::attach_or_despawn(&mut commands, wrapper_entity, placeholder_entity);
@@ -768,6 +769,7 @@ fn setup_text_edit_input(
                         display: Display::None,
                         ..default()
                     },
+                    Pickable::IGNORE,
                 ))
                 .id();
             crate::utils::attach_or_despawn(&mut commands, wrapper_entity, suffix_entity);
