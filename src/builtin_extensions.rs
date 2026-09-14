@@ -1080,7 +1080,7 @@ fn builtin_widget_definitions() -> Vec<WidgetDefinition> {
                         FocusIndicator,
                         EntityCursor::System(SystemCursorIcon::Text),
                         ThemeTextColor(feathers_tokens::TEXT_INPUT_TEXT),
-                        ThemeBackgroundColor(feathers_tokens::TEXT_INPUT_BG),
+                        BackgroundColor(tokens::ELEVATED_BG),
                     ),
                 ))
             },

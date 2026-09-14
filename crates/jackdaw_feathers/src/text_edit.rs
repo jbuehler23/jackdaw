@@ -13,7 +13,8 @@ use bevy::ui::{
 
 use crate::icons::{EditorFont, IconFont};
 use crate::tokens::{
-    self, AXIS_LABEL_BG, TEXT_BODY_COLOR, TEXT_MUTED_COLOR, TEXT_SIZE, TEXT_SIZE_PX, TEXT_SIZE_SM,
+    self, AXIS_LABEL_BG, BORDER_COLOR, ELEVATED_BG, SHADOW_COLOR_LIGHT, TEXT_BODY_COLOR,
+    TEXT_MUTED_COLOR, TEXT_SIZE, TEXT_SIZE_PX, TEXT_SIZE_SM,
 };
 
 pub fn plugin(app: &mut App) {
@@ -464,8 +465,18 @@ fn setup_text_edit_input(
                         AlignItems::Center
                     },
                     column_gap: px(tokens::SPACING_MD),
+                    border: UiRect::all(px(1)),
                     ..default()
                 },
+                BackgroundColor(ELEVATED_BG),
+                BorderColor::all(Color::Srgba(BORDER_COLOR)),
+                BoxShadow(vec![ShadowStyle {
+                    x_offset: Val::ZERO,
+                    y_offset: Val::ZERO,
+                    blur_radius: Val::Px(1.0),
+                    spread_radius: Val::Px(1.0),
+                    color: SHADOW_COLOR_LIGHT,
+                }]),
                 Hovered::default(),
             ))
             .observe(
@@ -792,7 +803,18 @@ fn apply_feathers_text_input(world: &mut World, frame: Entity, input: Entity) {
         return;
     }
     if let (Some(node), Ok(mut frame)) = (frame_node, world.get_entity_mut(frame)) {
-        frame.insert(node);
+        frame.insert((
+            node,
+            BackgroundColor(ELEVATED_BG),
+            BorderColor::all(Color::Srgba(BORDER_COLOR)),
+            BoxShadow(vec![ShadowStyle {
+                x_offset: Val::ZERO,
+                y_offset: Val::ZERO,
+                blur_radius: Val::Px(1.0),
+                spread_radius: Val::Px(1.0),
+                color: SHADOW_COLOR_LIGHT,
+            }]),
+        ));
     }
 
     let input_node = world.get::<Node>(input).cloned();

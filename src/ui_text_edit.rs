@@ -95,6 +95,7 @@ pub fn open_text_editor(world: &mut World, node: Entity, host: Entity) {
         EditorEntity,
         ZIndex(EDITOR_Z),
         ChildOf(stage),
+        BackgroundColor(jackdaw_feathers::tokens::ELEVATED_BG),
     ));
     let overlay = overlay.id();
     if let Some(mut node) = world.get_mut::<Node>(overlay) {

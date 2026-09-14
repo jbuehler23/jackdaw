@@ -355,6 +355,7 @@ fn spawn_custom_text_with(
         binding,
         PendingCustomText(current_value.to_string()),
         ChildOf(parent),
+        BackgroundColor(tokens::ELEVATED_BG),
     ));
 }
 

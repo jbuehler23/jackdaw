@@ -52,9 +52,10 @@ use bevy::text::{
     TextLayout,
 };
 use bevy::ui::{
-    AlignItems, AlignSelf, BackgroundGradient, ColorStop, ComputedNode, ComputedUiRenderTargetInfo,
-    Display, Gradient, InteractionDisabled, InterpolationColorSpace, JustifyContent,
-    LinearGradient, Node, PositionType, UiGlobalTransform, UiRect, UiScale, percent, px,
+    AlignItems, AlignSelf, BackgroundColor, BackgroundGradient, ColorStop, ComputedNode,
+    ComputedUiRenderTargetInfo, Display, Gradient, InteractionDisabled, InterpolationColorSpace,
+    JustifyContent, LinearGradient, Node, PositionType, UiGlobalTransform, UiRect, UiScale,
+    percent, px,
     widget::{Text, TextScroll},
 };
 use bevy::ui_widgets::ValueChange;
@@ -148,6 +149,7 @@ impl ScrubNumberInput {
                 },
             }
             ThemeBorderColor({props.sigil_color})
+            BackgroundColor({crate::tokens::ELEVATED_BG})
             ScrubNumberInput
             on(number_input_on_insert_value)
             on(number_input_on_insert_disabled)

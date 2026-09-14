@@ -53,6 +53,7 @@ fn spawn_brush_face_text(
         BrushFaceFieldBinding { field },
         PendingBrushFaceText(current_value.to_string()),
         ChildOf(parent),
+        BackgroundColor(tokens::ELEVATED_BG),
     ));
 }
 

@@ -1501,7 +1501,11 @@ pub(crate) fn spawn_color_picker(
     // via a deferred insert once the scene tree spawns.
     let hex_container = commands
         .spawn_scene(hex_input_scene())
-        .insert((PendingFieldText(srgba.to_hex()), ChildOf(header)))
+        .insert((
+            PendingFieldText(srgba.to_hex()),
+            ChildOf(header),
+            BackgroundColor(tokens::ELEVATED_BG),
+        ))
         .id();
     commands.queue(move |world: &mut World| {
         let mut descendants: Vec<Entity> = Vec::new();
@@ -2382,6 +2386,7 @@ fn spawn_string_input(
         },
         PendingFieldText(current_value.to_string()),
         ChildOf(parent),
+        BackgroundColor(tokens::ELEVATED_BG),
     ));
 }
 
