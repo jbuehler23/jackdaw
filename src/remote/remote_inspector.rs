@@ -377,7 +377,6 @@ pub(crate) fn spawn_fallback_section(
                 name: &short_name,
                 type_path,
                 entity: source_entity,
-                component: None,
                 is_overridden: false,
                 is_derived: false,
                 removable: false,

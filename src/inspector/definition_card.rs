@@ -123,7 +123,6 @@ pub(crate) fn fill_definition_card(world: &mut World, inspector: Entity, source:
                 name: &card_name,
                 type_path: &type_path,
                 entity: source,
-                component: None,
                 is_overridden: false,
                 is_derived: false,
                 removable: false,

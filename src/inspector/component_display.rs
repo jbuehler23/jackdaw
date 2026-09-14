@@ -539,7 +539,6 @@ pub(crate) fn build_inspector_displays(
                 name,
                 type_path,
                 entity: source_entity,
-                component: Some(component_id),
                 is_overridden,
                 is_derived,
                 removable: true,
@@ -721,7 +720,6 @@ pub(crate) fn build_inspector_displays(
                     name: &schema.short_name,
                     type_path: &type_path,
                     entity: source_entity,
-                    component: None,
                     is_overridden: false,
                     is_derived: false,
                     removable: true,
@@ -924,7 +922,6 @@ pub(crate) struct ComponentDisplaySpec<'a> {
     pub name: &'a str,
     pub type_path: &'a str,
     pub entity: Entity,
-    pub component: Option<ComponentId>,
     pub is_overridden: bool,
     /// True when the component is on the live entity but has no authored
     /// document patch (`#[require]` companions, runtime inserts, etc.).
@@ -965,7 +962,6 @@ pub(crate) fn spawn_component_display(
         name,
         type_path,
         entity,
-        component,
         is_overridden,
         is_derived,
         removable,
@@ -1135,7 +1131,7 @@ pub(crate) fn spawn_component_display(
             });
         });
 
-    if component.is_some() && is_overridden {
+    if is_overridden {
         let revert_type_path = type_path.to_string();
         let entity_param = entity;
 
@@ -1204,8 +1200,7 @@ pub(crate) fn spawn_component_display(
     }
 
     // Remove component button (X icon). See revert button for the
-    // tooltip-data + manual-dispatch pattern. Project components have no
-    // ComponentId, so this keys off `removable` rather than `component`.
+    // tooltip-data + manual-dispatch pattern.
     if removable && !is_derived {
         let remove_path = type_path.to_string();
         let entity_param = entity;
@@ -1382,7 +1377,6 @@ mod tests {
         .init_asset::<Image>()
         .init_asset::<Font>();
 
-        let component = app.world_mut().register_component::<Transform>();
         let spawn = app
             .world_mut()
             .register_system(move |mut commands: Commands| {
@@ -1395,7 +1389,6 @@ mod tests {
                         name: "Transform",
                         type_path: "bevy_transform::components::transform::Transform",
                         entity,
-                        component: Some(component),
                         is_overridden: false,
                         is_derived: false,
                         removable: true,
@@ -1421,8 +1414,7 @@ mod tests {
         );
     }
 
-    /// Project components are document-only, so they have no ComponentId.
-    /// The card still offers remove; `component.remove` already handles them.
+    /// A card keyed only by type path still offers remove.
     #[test]
     fn a_project_component_card_has_the_remove_control() {
         let mut app = App::new();
@@ -1446,7 +1438,6 @@ mod tests {
                         name: "PlayerSpawnPoint",
                         type_path: "web_shooter::player::PlayerSpawnPoint",
                         entity,
-                        component: None,
                         is_overridden: false,
                         is_derived: false,
                         removable: true,
