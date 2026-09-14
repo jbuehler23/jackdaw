@@ -29,6 +29,18 @@ use jackdaw_env::rust_env_command;
 
 use crate::sdk_paths::SdkPaths;
 
+const NO_FEATURES: &str = "-";
+
+fn parse_feature_list(list: &str) -> BTreeSet<String> {
+    if list == NO_FEATURES {
+        return BTreeSet::new();
+    }
+    list.split(',')
+        .filter(|f| !f.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 #[derive(Debug)]
 pub enum PlanError {
     Io(std::io::Error),
@@ -63,6 +75,7 @@ impl From<std::io::Error> for PlanError {
 /// workspace build in dev.
 pub struct SdkManifest {
     artifacts: BTreeMap<(String, String), String>,
+    features: BTreeMap<(String, String), BTreeSet<String>>,
 }
 
 impl SdkManifest {
@@ -70,19 +83,22 @@ impl SdkManifest {
     pub fn load(path: &Path) -> Result<Self, PlanError> {
         let contents = std::fs::read_to_string(path)?;
         let mut artifacts = BTreeMap::new();
+        let mut features = BTreeMap::new();
         for line in contents.lines() {
-            let mut parts = line.splitn(3, ' ');
-            let (Some(name), Some(version), Some(artifact)) =
-                (parts.next(), parts.next(), parts.next())
+            let mut parts = line.splitn(4, ' ');
+            let (Some(name), Some(version), Some(enabled), Some(artifact)) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
             else {
                 return Err(PlanError::Parse(format!("bad manifest line: {line}")));
             };
-            artifacts.insert(
-                (name.to_string(), version.to_string()),
-                artifact.to_string(),
-            );
+            let key = (name.to_string(), version.to_string());
+            features.insert(key.clone(), parse_feature_list(enabled));
+            artifacts.insert(key, artifact.to_string());
         }
-        Ok(Self { artifacts })
+        Ok(Self {
+            artifacts,
+            features,
+        })
     }
 
     /// Generate the manifest from a dev workspace: the SDK's runtime
@@ -157,6 +173,7 @@ impl SdkManifest {
         };
         let roots = build_private_roots(sdk);
         let mut artifacts = BTreeMap::new();
+        let mut features: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
         let mut link_paths: BTreeSet<String> = BTreeSet::new();
         let mut host_deps: BTreeSet<String> = BTreeSet::new();
         for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -258,6 +275,14 @@ impl SdkManifest {
                         .find(|f| f.ends_with(".rmeta"))
                 });
             if let Some(artifact) = artifact {
+                let enabled = msg["features"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|f| f.as_str())
+                    .map(str::to_string)
+                    .collect();
+                features.insert((name.clone(), version.to_string()), enabled);
                 artifacts.insert((name, version.to_string()), artifact.to_string());
             }
         }
@@ -290,7 +315,10 @@ impl SdkManifest {
 
         write_link_paths(&link_paths_path(&sdk.manifest), &link_paths)?;
         write_lines(&host_deps_path(&sdk.manifest), &host_deps)?;
-        let manifest = Self { artifacts };
+        let manifest = Self {
+            artifacts,
+            features,
+        };
         manifest.write(&sdk.manifest)?;
         Ok(manifest)
     }
@@ -298,7 +326,13 @@ impl SdkManifest {
     pub fn write(&self, path: &Path) -> Result<(), PlanError> {
         let mut file = std::fs::File::create(path)?;
         for ((name, version), artifact) in &self.artifacts {
-            writeln!(file, "{name} {version} {artifact}")?;
+            let enabled = self
+                .features
+                .get(&(name.clone(), version.clone()))
+                .map(|set| set.iter().cloned().collect::<Vec<_>>().join(","))
+                .filter(|list| !list.is_empty())
+                .unwrap_or_else(|| NO_FEATURES.to_string());
+            writeln!(file, "{name} {version} {enabled} {artifact}")?;
         }
         Ok(())
     }
@@ -330,6 +364,12 @@ impl SdkManifest {
             .take(limit)
             .map(|((name, version), _)| format!("{name} {version}"))
             .collect()
+    }
+
+    pub fn covers(&self, name: &str, version: &str, wanted: &BTreeSet<String>) -> bool {
+        self.features
+            .get(&(name.to_string(), version.to_string()))
+            .is_some_and(|enabled| wanted.is_subset(enabled))
     }
 
     pub fn artifact(&self, name: &str, version: &str) -> Option<&str> {
@@ -422,6 +462,22 @@ fn plan_contents(
     let mut edges = 0;
     let mut absent: BTreeSet<String> = BTreeSet::new();
     let empty = Vec::new();
+    let no_features = BTreeSet::new();
+    let mut wanted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for node in metadata["resolve"]["nodes"].as_array().unwrap_or(&empty) {
+        if let Some(id) = node["id"].as_str() {
+            wanted.insert(
+                id.to_string(),
+                node["features"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|f| f.as_str())
+                    .map(str::to_string)
+                    .collect(),
+            );
+        }
+    }
     for node in metadata["resolve"]["nodes"].as_array().unwrap_or(&empty) {
         let Some(consumer_id) = node["id"].as_str() else {
             continue;
@@ -445,6 +501,13 @@ fn plan_contents(
                 continue;
             };
             if let Some(artifact) = manifest.artifact(&dep_name, dep_version) {
+                if !manifest.covers(
+                    &dep_name,
+                    dep_version,
+                    wanted.get(pkg_id).unwrap_or(&no_features),
+                ) {
+                    continue;
+                }
                 // Key the edge on the consumer's exact version: a graph
                 // can hold two versions of one crate (two `rand`s), each
                 // wanting a different version of the same dependency, so
@@ -706,13 +769,23 @@ mod tests {
             ("glam".to_string(), "0.32.1".to_string()),
             "/sdk/deps/libglam-abc.rlib".to_string(),
         );
-        let manifest = SdkManifest { artifacts };
+        let mut features = BTreeMap::new();
+        features.insert(
+            ("glam".to_string(), "0.32.1".to_string()),
+            BTreeSet::from(["std".to_string()]),
+        );
+        let manifest = SdkManifest {
+            artifacts,
+            features,
+        };
         manifest.write(&path).unwrap();
         let back = SdkManifest::load(&path).unwrap();
         assert_eq!(
             back.artifact("glam", "0.32.1"),
             Some("/sdk/deps/libglam-abc.rlib")
         );
+        assert!(back.covers("glam", "0.32.1", &BTreeSet::from(["std".to_string()])));
+        assert!(!back.covers("glam", "0.32.1", &BTreeSet::from(["serde".to_string()])));
     }
 
     #[test]
@@ -778,17 +851,43 @@ mod tests {
     }
 
     fn sdk_manifest(entries: &[&str]) -> SdkManifest {
-        let artifacts = entries
-            .iter()
-            .map(|spec| {
-                let (name, version) = spec.split_once('@').expect("name@version");
-                (
-                    (name.to_string(), version.to_string()),
-                    format!("lib{name}-abc.rlib"),
-                )
-            })
-            .collect();
-        SdkManifest { artifacts }
+        sdk_manifest_built_with(
+            &entries
+                .iter()
+                .map(|spec| (*spec, &[][..]))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn sdk_manifest_built_with(entries: &[(&str, &[&str])]) -> SdkManifest {
+        let mut artifacts = BTreeMap::new();
+        let mut features = BTreeMap::new();
+        for (spec, enabled) in entries {
+            let (name, version) = spec.split_once('@').expect("name@version");
+            let key = (name.to_string(), version.to_string());
+            artifacts.insert(key.clone(), format!("lib{name}-abc.rlib"));
+            features.insert(
+                key,
+                enabled
+                    .iter()
+                    .map(|f| (*f).to_string())
+                    .collect::<BTreeSet<_>>(),
+            );
+        }
+        SdkManifest {
+            artifacts,
+            features,
+        }
+    }
+
+    fn resolving(mut graph: serde_json::Value, spec: &str, features: &[&str]) -> serde_json::Value {
+        let id = package_id(spec);
+        for node in graph["resolve"]["nodes"].as_array_mut().expect("nodes") {
+            if node["id"] == serde_json::Value::String(id.clone()) {
+                node["features"] = serde_json::json!(features);
+            }
+        }
+        graph
     }
 
     fn shadows(metadata: &serde_json::Value, manifest: &SdkManifest) -> Vec<String> {
@@ -918,6 +1017,39 @@ mod tests {
         ]);
         let manifest = sdk_manifest(&["serde@1.0.228"]);
         assert_eq!(shadows(&graph, &manifest), ["serde"]);
+    }
+
+    #[test]
+    fn an_edge_the_sdk_did_not_build_the_features_for_is_not_redirected() {
+        let deps_dir = std::env::temp_dir().join(format!("jackdaw_cover_{}", std::process::id()));
+        std::fs::create_dir_all(&deps_dir).unwrap();
+        std::fs::write(deps_dir.join("librand-abc.rlib"), b"rlib").unwrap();
+
+        let graph = resolving(
+            metadata(
+                &[
+                    ("shim@0.0.0", &["my-game@0.1.0"]),
+                    ("my-game@0.1.0", &["rand@0.10.1"]),
+                    ("rand@0.10.1", &[]),
+                ],
+                &[],
+            ),
+            "rand@0.10.1",
+            &["std", "std_rng"],
+        );
+
+        let narrow = sdk_manifest_built_with(&[("rand@0.10.1", &["std"])]);
+        let (contents, edges) = plan_contents(&graph, &narrow, &deps_dir).unwrap();
+        let contents = String::from_utf8(contents).unwrap();
+        assert_eq!(edges, 0, "{contents}");
+        assert!(!contents.contains("my_game@0.1.0:rand="), "{contents}");
+
+        let wide = sdk_manifest_built_with(&[("rand@0.10.1", &["std", "std_rng"])]);
+        let (contents, edges) = plan_contents(&graph, &wide, &deps_dir).unwrap();
+        let contents = String::from_utf8(contents).unwrap();
+        assert_eq!(edges, 1, "{contents}");
+
+        let _ = std::fs::remove_dir_all(&deps_dir);
     }
 
     /// Both halves of the plan, over one graph: an edge line per covered
