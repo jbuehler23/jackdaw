@@ -36,16 +36,15 @@ use bevy::ecs::system::SystemId;
 use bevy::ecs::world::DeferredWorld;
 use bevy::feathers::font_styles::InheritableFont;
 use bevy::feathers::theme::ThemedText;
-use bevy::input_focus::tab_navigation::{TabGroup, TabIndex};
-use bevy::input_focus::{FocusCause, InputFocus};
+use bevy::input_focus::{InputFocus, tab_navigation::TabGroup};
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use bevy::ui_widgets::observe;
 use jackdaw_fuzzy::FuzzyMatcher;
 pub use jackdaw_fuzzy::{Category, Match, Matchable, MatchedStr};
 use lucide_icons::Icon;
 
-use crate::button::{
-    ButtonClickEvent, ButtonProps, ButtonSize, ButtonVariant, IconButtonProps, button, icon_button,
-};
+use crate::button::{ButtonClickEvent, ButtonSize, ButtonVariant, IconButtonProps, icon_button};
 use crate::icons::{EditorFont, IconFont};
 use crate::scroll::scrollbar;
 use crate::separator::{SeparatorProps, separator};
@@ -68,6 +67,7 @@ pub struct Picker {
     spawn_item: SystemId<In<SpawnItemInput>, Result>,
     on_select: SystemId<In<SelectInput>, Result>,
     on_dismiss: SystemId<In<PickerEntities>, Result>,
+    highlighted: Option<Entity>,
 }
 
 /// Relationship target representing the text input of a [`Picker`]
@@ -190,6 +190,7 @@ impl<T: Pickable> PickerProps<T> {
             on_select,
             on_dismiss,
             dismissible: props.dismissible,
+            highlighted: None,
         };
 
         let mut text_edit_props = TextEditProps::default().auto_focus();
@@ -376,38 +377,52 @@ pub struct PickerItem(pub usize);
 #[must_use]
 pub fn picker_item(index: usize) -> impl Bundle {
     (
-        button(
-            ButtonProps::new("")
-                .with_variant(ButtonVariant::Ghost)
-                .with_size(ButtonSize::MD)
-                .align_left()
-                .with_direction(FlexDirection::Column)
-                .with_border_radius(BorderRadius::ZERO),
-        ),
+        Node {
+            flex_direction: FlexDirection::Column,
+            width: percent(100),
+            padding: UiRect::axes(px(tokens::SPACING_LG), px(6.0)),
+            row_gap: px(6.0),
+            justify_content: JustifyContent::Start,
+            align_items: AlignItems::Start,
+            ..default()
+        },
+        Hovered::default(),
+        BackgroundColor(Color::NONE),
         PickerItem(index),
-        // if everything is the same tab index, it's ordered by the child index
-        TabIndex(0),
+        observe(on_picker_item_clicked),
     )
 }
 
-fn on_picker_item_activated(
-    trigger: On<ButtonClickEvent>,
+fn on_picker_item_clicked(
+    mut click: On<Pointer<Click>>,
     item: Query<&PickerItem>,
     list: Query<&PickerListOf>,
     child_of: Query<&ChildOf>,
     mut commands: Commands,
 ) {
-    let Ok(item) = item.get(trigger.entity) else {
+    if click.event.button != PointerButton::Primary {
         return;
-    };
+    }
 
-    let Some(list_of) = std::iter::once(trigger.entity)
-        .chain(child_of.iter_ancestors(trigger.entity))
-        .find_map(|e| list.get(e).ok())
+    let Some(item_entity) = std::iter::once(click.entity)
+        .chain(child_of.iter_ancestors(click.entity))
+        .find(|&entity| item.contains(entity))
     else {
         return;
     };
 
+    let Ok(item) = item.get(item_entity) else {
+        return;
+    };
+
+    let Some(list_of) = std::iter::once(item_entity)
+        .chain(child_of.iter_ancestors(item_entity))
+        .find_map(|entity| list.get(entity).ok())
+    else {
+        return;
+    };
+
+    click.propagate(false);
     commands.trigger(PickerSelect {
         entity: list_of.0,
         index: item.0,
@@ -415,53 +430,52 @@ fn on_picker_item_activated(
 }
 
 fn scroll_to_picker_item(
+    pickers: Query<&Picker, Changed<Picker>>,
     picker_items: Query<(&ComputedNode, &UiGlobalTransform, &ChildOf), With<PickerItem>>,
     mut scroll_position: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform)>,
-    focus: Res<InputFocus>,
 ) {
-    if !focus.is_changed() {
-        return;
-    };
+    for picker in &pickers {
+        let Some(highlighted) = picker.highlighted else {
+            continue;
+        };
 
-    let Some(focused) = focus.get() else {
-        return;
-    };
+        let Ok((computed, transform, parent)) = picker_items.get(highlighted) else {
+            continue;
+        };
 
-    let Ok((computed, transform, parent)) = picker_items.get(focused) else {
-        return;
-    };
+        let Ok((mut scroll_position, parent_computed, parent_transform)) =
+            scroll_position.get_mut(parent.0)
+        else {
+            continue;
+        };
 
-    let Ok((mut scroll_position, parent_computed, parent_transform)) =
-        scroll_position.get_mut(parent.0)
-    else {
-        return;
-    };
+        let child_top = transform.translation.y - computed.size().y / 2.0;
+        let child_bottom = transform.translation.y + computed.size().y / 2.0;
+        let parent_top =
+            parent_transform.translation.y - parent_computed.content_box().size().y / 2.0;
 
-    let child_top = transform.translation.y - computed.size().y / 2.0;
-    let child_bottom = transform.translation.y + computed.size().y / 2.0;
-    let parent_top = parent_transform.translation.y - parent_computed.content_box().size().y / 2.0;
+        // since scrolling changes the child positions, we add back the scroll to counteract that
+        let child_top_relative = child_top - parent_top + scroll_position.y;
+        let child_bottom_relative = child_bottom - parent_top + scroll_position.y;
 
-    // since scrolling changes the child positions, we add back the scroll to counteract that
-    let child_top_relative = child_top - parent_top + scroll_position.y;
-    let child_bottom_relative = child_bottom - parent_top + scroll_position.y;
+        // the bottom most visible point
+        let bottom_visible = scroll_position.y + parent_computed.content_box().size().y;
 
-    // the bottom most visible point
-    let bottom_visible = scroll_position.y + parent_computed.content_box().size().y;
+        // ui position increases downwards, so if the top is above the scroll position, we scroll
+        if child_top_relative < scroll_position.y {
+            // off screen at the top
+            scroll_position.y = child_top_relative;
+        }
 
-    // ui position increases downwards, so if the top is above the scroll position, we scroll
-    if child_top_relative < scroll_position.y {
-        // off screen at the top
-        scroll_position.y = child_top_relative;
-    }
-
-    // and if the bottom is below the bottom most visible point, we scroll
-    if child_bottom_relative > bottom_visible {
-        // off screen at the bottom
-        // subtract to account for the parent size
-        scroll_position.y = f32::max(
-            child_bottom_relative - parent_computed.content_box().size().y,
-            0.0,
-        );
+        // and if the bottom is below the bottom most visible point, we scroll
+        if child_bottom_relative > bottom_visible {
+            // off screen at the bottom
+            // subtract to account for the parent size
+            scroll_position.y = f32::max(
+                child_bottom_relative - parent_computed.content_box().size().y,
+                0.0,
+            );
+        }
     }
 }
 
@@ -572,6 +586,7 @@ fn process_pickers(
             continue;
         };
         commands.entity(list.0).despawn_children();
+        picker.highlighted = None;
 
         picker.matcher.update_pattern(&input.0);
 
@@ -660,6 +675,7 @@ fn on_text_edit_submit(
     inputs: Query<&PickerInputOf>,
     child_of: Query<&ChildOf>,
     mut pickers: Query<(Entity, &mut Picker)>,
+    picker_items: Query<&PickerItem>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
 ) {
@@ -679,15 +695,24 @@ fn on_text_edit_submit(
         return;
     }
 
-    picker.matcher.update_pattern(&commit.text);
-    let matches = picker.matcher.matches();
-    let Some(first) = matches.first().and_then(|c| c.items.first()) else {
-        return;
+    let index = picker
+        .highlighted
+        .and_then(|entity| picker_items.get(entity).ok().map(|item| item.0));
+    let index = match index {
+        Some(index) => index,
+        None => {
+            picker.matcher.update_pattern(&commit.text);
+            let matches = picker.matcher.matches();
+            let Some(first) = matches.first().and_then(|c| c.items.first()) else {
+                return;
+            };
+            first.index
+        }
     };
 
     commands.trigger(PickerSelect {
         entity: picker_entity,
-        index: first.index,
+        index,
     });
 }
 
@@ -740,10 +765,10 @@ fn picker_navigation_should_tick(
 fn display_ordered_picker_items(
     entity: Entity,
     children: &Query<&Children>,
-    picker_items: &Query<(Entity, &PickerItem)>,
+    picker_items: &Query<(), With<PickerItem>>,
 ) -> Vec<Entity> {
     let mut items = Vec::new();
-    if picker_items.get(entity).is_ok() {
+    if picker_items.contains(entity) {
         items.push(entity);
     }
     let Ok(child_entities) = children.get(entity) else {
@@ -758,34 +783,28 @@ fn display_ordered_picker_items(
 fn picker_host_from_focus(
     focused_entity: Entity,
     child_of: &Query<&ChildOf>,
-    pickers: &Query<(Entity, &Picker, &WithPickerList)>,
-) -> Option<(Entity, Entity)> {
-    for candidate in std::iter::once(focused_entity).chain(child_of.iter_ancestors(focused_entity))
-    {
-        if let Ok((picker_entity, _, with_list)) = pickers.get(candidate) {
-            return Some((picker_entity, with_list.0));
-        }
-    }
-    None
+    pickers: &Query<(Entity, &mut Picker, &WithPickerList)>,
+) -> Option<Entity> {
+    std::iter::once(focused_entity)
+        .chain(child_of.iter_ancestors(focused_entity))
+        .find(|entity| pickers.contains(*entity))
 }
 
 fn picker_keyboard_navigation(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
     capture: Option<Res<jackdaw_commands::KeymapCapture>>,
-    mut focus: ResMut<InputFocus>,
+    focus: Res<InputFocus>,
     mut navigation_repeat: ResMut<PickerNavigationRepeat>,
     child_of: Query<&ChildOf>,
     children: Query<&Children>,
-    pickers: Query<(Entity, &Picker, &WithPickerList)>,
-    picker_items: Query<(Entity, &PickerItem)>,
+    mut pickers: Query<(Entity, &mut Picker, &WithPickerList)>,
+    picker_items: Query<(), With<PickerItem>>,
     mut commands: Commands,
 ) {
     if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
         return;
     }
-    let pressed_enter =
-        keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::NumpadEnter);
 
     let navigation_key = match (
         keyboard.pressed(KeyCode::ArrowDown),
@@ -800,7 +819,7 @@ fn picker_keyboard_navigation(
         *navigation_repeat = PickerNavigationRepeat::default();
     }
 
-    if navigation_key.is_none() && !pressed_enter {
+    if navigation_key.is_none() && !keyboard.just_pressed(KeyCode::Escape) {
         return;
     }
 
@@ -808,32 +827,18 @@ fn picker_keyboard_navigation(
         return;
     };
 
-    let Some((picker_entity, list_entity)) =
-        picker_host_from_focus(focused_entity, &child_of, &pickers)
-    else {
+    let Some(picker_entity) = picker_host_from_focus(focused_entity, &child_of, &pickers) else {
+        return;
+    };
+
+    let Ok((_, mut picker, list)) = pickers.get_mut(picker_entity) else {
         return;
     };
 
     if keyboard.just_pressed(KeyCode::Escape) {
-        if let Ok((_, picker, _)) = pickers.get(picker_entity)
-            && picker.dismissible
-        {
+        if picker.dismissible {
             commands.trigger(DismissPickerEvent(picker_entity));
         }
-        return;
-    }
-
-    let items_for_picker = display_ordered_picker_items(list_entity, &children, &picker_items);
-
-    if items_for_picker.is_empty() {
-        return;
-    }
-
-    if pressed_enter && let Ok((_, item)) = picker_items.get(focused_entity) {
-        commands.trigger(PickerSelect {
-            entity: picker_entity,
-            index: item.0,
-        });
         return;
     }
 
@@ -841,16 +846,24 @@ fn picker_keyboard_navigation(
         return;
     };
 
+    let items_for_picker = display_ordered_picker_items(list.0, &children, &picker_items);
+
+    if items_for_picker.is_empty() {
+        return;
+    }
+
     if !picker_navigation_should_tick(navigation_key, &keyboard, &time, &mut navigation_repeat) {
         return;
     }
 
-    let current_position = items_for_picker
-        .iter()
-        .position(|&entity| entity == focused_entity);
+    let current_position = picker.highlighted.and_then(|highlighted| {
+        items_for_picker
+            .iter()
+            .position(|&entity| entity == highlighted)
+    });
 
     let item_count = items_for_picker.len();
-    let next_focus = match navigation_key {
+    let next_highlight = match navigation_key {
         KeyCode::ArrowDown => match current_position {
             Some(position) => {
                 let next_index = (position + 1) % item_count;
@@ -868,8 +881,37 @@ fn picker_keyboard_navigation(
         _ => None,
     };
 
-    if let Some(entity) = next_focus {
-        focus.set(entity, FocusCause::Navigated);
+    if let Some(entity) = next_highlight
+        && picker.highlighted != Some(entity)
+    {
+        picker.highlighted = Some(entity);
+    }
+}
+
+fn paint_picker_item_highlight(
+    pickers: Query<&Picker>,
+    changed_pickers: Query<(), Changed<Picker>>,
+    changed_hover: Query<(), (With<PickerItem>, Changed<Hovered>)>,
+    mut items: Query<(Entity, &mut BackgroundColor, &Hovered), With<PickerItem>>,
+) {
+    if changed_pickers.is_empty() && changed_hover.is_empty() {
+        return;
+    }
+
+    let highlighted: Vec<Entity> = pickers
+        .iter()
+        .filter_map(|picker| picker.highlighted)
+        .collect();
+
+    for (entity, mut background, hovered) in &mut items {
+        let color = if highlighted.contains(&entity) || hovered.get() {
+            tokens::HOVER_BG
+        } else {
+            Color::NONE
+        };
+        if background.0 != color {
+            background.0 = color;
+        }
     }
 }
 
@@ -994,12 +1036,14 @@ pub(crate) fn plugin(app: &mut App) {
             Update,
             (
                 process_pickers,
-                (picker_keyboard_navigation, scroll_to_picker_item).chain(),
-            ),
+                picker_keyboard_navigation,
+                scroll_to_picker_item,
+                paint_picker_item_highlight,
+            )
+                .chain(),
         )
         .add_observer(on_text_edit_submit)
         .add_observer(on_picker_selected)
         .add_observer(on_picker_dismissed)
-        .add_observer(on_picker_item_activated)
         .add_observer(on_dismiss_activated);
 }
