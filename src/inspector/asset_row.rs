@@ -112,6 +112,11 @@ const ACTIONS: [(Action, Icon, &str, &str); 3] = [
 #[derive(Component)]
 pub(crate) struct AssetFieldWriter(pub(crate) Box<dyn Fn(&mut World, &str) -> bool + Send + Sync>);
 
+/// A row whose host reads the path itself, for a slot no component field and
+/// no asset field names, such as the material a brush face wears.
+#[derive(Component)]
+pub(crate) struct AssetFieldReader(pub(crate) Box<dyn Fn(&World) -> Option<String> + Send + Sync>);
+
 /// The picker a row's Pick opened, so its choice reaches the row that asked.
 #[derive(Component)]
 pub(crate) struct AssetFieldPicker(pub(crate) Entity);
@@ -289,21 +294,24 @@ pub(crate) fn asset_type_of_field(
 // -- Reading what a row shows ----------------------------------------------
 
 /// The path a row's field names, or `None` when the editor cannot read it.
-fn field_path_text(world: &World, row: &AssetFieldRow) -> Option<String> {
-    match &row.target {
+fn field_path_text(world: &World, row: Entity, field: &AssetFieldRow) -> Option<String> {
+    if let Some(reader) = world.get::<AssetFieldReader>(row) {
+        return (reader.0)(world);
+    }
+    match &field.target {
         AssetFieldTarget::Inspected { source, type_path } => {
             if let Some(text) = crate::definition_assets::asset_field_text(
                 world,
                 *source,
                 type_path,
-                &row.field_path,
+                &field.field_path,
             ) {
                 return Some(text);
             }
-            component_field_text(world, *source, type_path, &row.field_path)
+            component_field_text(world, *source, type_path, &field.field_path)
         }
         AssetFieldTarget::Held(handle) => {
-            crate::definition_assets::handle_field_text(world, handle, &row.field_path)
+            crate::definition_assets::handle_field_text(world, handle, &field.field_path)
         }
     }
 }
@@ -341,7 +349,7 @@ pub(crate) fn show_asset_row_path(world: &mut World, row: Entity) {
     let Some(text_entity) = field.path_text else {
         return;
     };
-    let Some(path) = field_path_text(world, &field) else {
+    let Some(path) = field_path_text(world, row, &field) else {
         return;
     };
     let shown = if path.is_empty() {
@@ -387,8 +395,9 @@ pub(crate) fn shown_name(path: &str) -> String {
 ///
 /// A row reading the inspected entity is read only when something it shows
 /// changed, the way the scalar rows refresh, so a still panel costs nothing. A
-/// row reading an asset of its own, such as a material's texture slot, sits
-/// outside that entity and is read every run.
+/// row reading an asset of its own, such as a material's texture slot, or one
+/// reading through a hook of its own, sits outside that entity and is read
+/// every run.
 pub(crate) fn refresh_asset_rows(
     world: &mut World,
     mut last_run: Local<Option<bevy::ecs::change_detection::Tick>>,
@@ -401,10 +410,11 @@ pub(crate) fn refresh_asset_rows(
         .iter(world)
         .collect();
     for row in rows {
-        let held = world
-            .get::<AssetFieldRow>(row)
-            .is_some_and(|field| matches!(field.target, AssetFieldTarget::Held(_)));
-        if held || inspected_changed {
+        let outside = world.get::<AssetFieldReader>(row).is_some()
+            || world
+                .get::<AssetFieldRow>(row)
+                .is_some_and(|field| matches!(field.target, AssetFieldTarget::Held(_)));
+        if outside || inspected_changed {
             show_asset_row_path(world, row);
         }
     }
@@ -460,7 +470,7 @@ pub(crate) fn commit_asset_row(world: &mut World, row: Entity, path: &str) -> bo
                 &json,
                 "Set asset field",
             );
-            field_path_text(world, &field).is_none_or(|now| now == path)
+            field_path_text(world, row, &field).is_none_or(|now| now == path)
         }
         AssetFieldTarget::Held(handle) => {
             crate::definition_assets::commit_handle_field(world, handle, &field.field_path, &json)

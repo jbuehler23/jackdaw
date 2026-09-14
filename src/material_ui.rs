@@ -756,12 +756,14 @@ fn gate_collapsed_color_picker_focus(
             };
             match (collapsed, stowed) {
                 (true, None) => {
-                    commands.entity(descendant).insert(StowedTabIndex(index.0));
+                    commands
+                        .entity(descendant)
+                        .try_insert(StowedTabIndex(index.0));
                     index.0 = -1;
                 }
                 (false, Some(stowed)) => {
                     index.0 = stowed.0;
-                    commands.entity(descendant).remove::<StowedTabIndex>();
+                    commands.entity(descendant).try_remove::<StowedTabIndex>();
                 }
                 _ => {}
             }

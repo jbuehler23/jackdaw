@@ -40,7 +40,8 @@ use super::{
     ComponentPicker, Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch,
     InspectorTarget, ReflectDisplayable, animation_graph_card, bindings_card, brush_display,
     category_strip::ActiveInspectorCategory, component_tooltip::ReflectedTypeTooltip,
-    custom_props_display, material_display, modifier_display, node_card, reflect_fields,
+    custom_props_display, material_display, material_row, modifier_display, node_card,
+    reflect_fields,
 };
 use crate::inspector::prefab_field_dots::{PrefabInstanceCtx, inspector_type_paths_for};
 use crate::prefab::PrefabAstCache;
@@ -366,6 +367,7 @@ pub(crate) fn build_inspector_displays(
                         || full_path.starts_with("jackdaw_avian_integration")
                         || full_path.starts_with("jackdaw_multiplayer"));
                 if !is_user_type
+                    && full_path != material_row::MESH_MATERIAL_TYPE_PATH
                     && !authored_type_paths.is_empty()
                     && !jackdaw_bsn::type_paths_include(
                         authored_type_paths.iter().map(String::as_str),
@@ -520,7 +522,7 @@ pub(crate) fn build_inspector_displays(
         // MeshMaterial3d<StandardMaterial> gets four dedicated material cards
         // (Preview, Surface, Textures, Settings) rather than a single generic
         // wrapper. Skip the generic card and inject the four cards directly.
-        if *type_path == BRUSH_MATERIAL_TYPE_PATH {
+        if *type_path == material_row::MESH_MATERIAL_TYPE_PATH {
             material_display::inject_material_cards(
                 commands,
                 source_entity,
@@ -769,12 +771,6 @@ pub(crate) fn build_inspector_displays(
         );
     }
 }
-
-/// The type path used to route the brush material card to the Material inspector tab.
-/// Also the `ComponentDisplayTypePath` of the entity-bound `MeshMaterial3d` card,
-/// so a targeted refresh keyed on this string finds both material card variants.
-pub(crate) const BRUSH_MATERIAL_TYPE_PATH: &str =
-    "bevy_pbr::mesh_material::MeshMaterial3d<bevy_pbr::pbr_material::StandardMaterial>";
 
 /// Despawn inspector card and picker children as one queued world step so
 /// lazy combobox/button setup cannot interleave and orphan UI.

@@ -270,6 +270,37 @@ pub(crate) fn field_edit_commit_on(
     true
 }
 
+/// Set one field on one entity's component, as one undo entry, undoing to the
+/// baseline the caller supplies rather than one read back off the live value.
+///
+/// An asset `Handle<T>` reflects as no path at all, so a row that already
+/// knows the file the handle names hands that path over and undo puts it back.
+pub(crate) fn field_edit_commit_on_from(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+    new_json: &serde_json::Value,
+    baseline: jackdaw_bsn::BsnValue,
+) -> bool {
+    let key = FieldEditSessionKey {
+        entity,
+        type_path: type_path.to_string(),
+        field_path: field_path.to_string(),
+    };
+    let held = world
+        .resource_mut::<FieldEditSessions>()
+        .live_at_begin
+        .insert(key.clone(), baseline);
+    let written = field_edit_commit_on(world, entity, type_path, field_path, new_json);
+    let mut sessions = world.resource_mut::<FieldEditSessions>();
+    match held {
+        Some(held) => sessions.live_at_begin.insert(key, held),
+        None => sessions.live_at_begin.remove(&key),
+    };
+    written
+}
+
 pub struct SetTransform {
     pub entity: Entity,
     pub old_transform: Transform,

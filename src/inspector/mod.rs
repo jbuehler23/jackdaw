@@ -14,6 +14,7 @@ pub mod file_card;
 mod live_edit_dots;
 pub(crate) mod material_card_routing;
 mod material_display;
+pub(crate) mod material_row;
 mod modifier_display;
 pub mod node_card;
 pub(crate) mod ops;
@@ -154,6 +155,7 @@ impl Plugin for InspectorPlugin {
                         definition_card::keep_unsaved_marker_in_step,
                         asset_row::refresh_asset_rows,
                         asset_row::poll_asset_browse_pick,
+                        material_row::follow_the_material_the_entity_wears,
                     ),
                     brush_display::update_brush_face_properties,
                     category_strip::resolve_active_on_rebuild,

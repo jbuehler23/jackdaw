@@ -284,6 +284,9 @@ pub(crate) fn fill_material_card_body(
     if world.get_entity(body).is_err() {
         return;
     }
+    if kind == MaterialCardKind::Preview {
+        super::material_row::spawn_material_asset_row(world, source, body);
+    }
     let Some(handle) = resolve_material_handle(world, source) else {
         if kind == MaterialCardKind::Surface {
             world.spawn((
