@@ -16,8 +16,25 @@ use std::cell::RefCell;
 grammar(ast: &RefCell<SceneBsnAst>);
 
 pub TopLevelPatches: Entity = {
-    <p:Patch*> => ast.borrow_mut().world.spawn(BsnPatches(p)).id(),
+    => ast.borrow_mut().world.spawn(BsnPatches(Vec::new())).id(),
+    <g:TopLevelGroups> ","? => {
+        if g.len() == 1 {
+            g[0]
+        } else {
+            let mut ast = ast.borrow_mut();
+            let children = ast.world.spawn(BsnPatch::Children(g)).id();
+            ast.world.spawn(BsnPatches(vec![children])).id()
+        }
+    },
 }
+
+// Top-level siblings, comma-separated. Several groups take the same shape a
+// multi-root document has on disk, an anonymous node holding only `Children`,
+// which the loader unwraps back into roots.
+TopLevelGroups: Vec<Entity> = {
+    <t:Patches> => { let mut v = Vec::new(); v.push(t); v },
+    <h:TopLevelGroups> "," <t:Patches> => { let mut h = h; h.push(t); h },
+};
 
 pub Patches: Entity = {
     <p:Patch+> => ast.borrow_mut().world.spawn(BsnPatches(p)).id(),

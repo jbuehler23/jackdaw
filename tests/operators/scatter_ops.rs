@@ -312,3 +312,111 @@ fn clearing_with_no_terrain_says_so_rather_than_finishing_quietly() {
         report.message
     );
 }
+
+/// A scatter mask's channels and palette entries carry names, and the numbers
+/// behind them are the one thing a caller outside the editor can see least of.
+/// A name that is dropped rather than resolved leaves no mask at all, which
+/// scatters over the whole terrain instead of the painted part of it.
+#[test]
+fn scatter_takes_a_mask_and_a_palette_value_by_name() {
+    let (mut app, terrain) = scene_with_a_terrain();
+    app.world_mut().resource_mut::<Selection>().entities = vec![terrain];
+    app.update();
+    run(&mut app, "terrain.channel.add");
+    paint_a_corner_of_the_mask(&mut app, terrain, 1);
+
+    run(
+        &mut app,
+        "terrain.scatter group=Everywhere assets=kit/Tree.gltf density=0.05 spacing=0.0",
+    );
+    run(
+        &mut app,
+        "terrain.scatter group=Painted channel=channel-0 accept=value-1 \
+         assets=kit/Tree.gltf density=0.05 spacing=0.0",
+    );
+
+    let everywhere = placed_in(&app, terrain, "Everywhere");
+    let painted = placed_in(&app, terrain, "Painted");
+    assert!(painted > 0, "the painted corner took no instances");
+    assert!(
+        painted < everywhere,
+        "the palette name left no mask: {painted} of {everywhere} placed"
+    );
+}
+
+/// A name no palette carries is a caller's mistake, and the answer has to say
+/// which names it could have used.
+#[test]
+fn scatter_answers_an_unknown_palette_name_with_the_ones_the_mask_has() {
+    let (mut app, terrain) = scene_with_a_terrain();
+    app.world_mut().resource_mut::<Selection>().entities = vec![terrain];
+    app.update();
+    run(&mut app, "terrain.channel.add");
+    paint_a_corner_of_the_mask(&mut app, terrain, 1);
+
+    app.world_mut()
+        .get_resource_or_init::<jackdaw_api_internal::operator::OperatorReports>()
+        .0
+        .clear();
+    run(
+        &mut app,
+        "terrain.scatter group=Wrong channel=channel-0 accept=meadow \
+         assets=kit/Tree.gltf density=0.05 spacing=0.0",
+    );
+
+    assert_eq!(placed_in(&app, terrain, "Wrong"), 0);
+    let reports = app
+        .world_mut()
+        .get_resource_or_init::<jackdaw_api_internal::operator::OperatorReports>()
+        .0
+        .clone();
+    assert!(
+        reports.iter().any(
+            |report| report.contains("no palette value 'meadow'") && report.contains("value-1")
+        ),
+        "the answer did not say what the mask's palette holds: {reports:?}"
+    );
+}
+
+/// How many instances one scatter group holds on this terrain.
+fn placed_in(app: &App, terrain: Entity, group: &str) -> usize {
+    stored_groups(app, terrain)
+        .into_iter()
+        .filter(|(key, _)| key == group)
+        .map(|(_, count)| count)
+        .sum()
+}
+
+/// Ground under the whole terrain, with one value painted into a corner of
+/// its first mask.
+fn paint_a_corner_of_the_mask(app: &mut App, terrain: Entity, value: u16) {
+    const SIDE: i32 = 64;
+    const CORNER: i32 = 16;
+
+    let data_path = app
+        .world()
+        .get::<jackdaw_scene_types::Terrain>(terrain)
+        .expect("a terrain")
+        .data_path
+        .clone();
+    let mut document = jackdaw_terrain::RegionTerrainData {
+        channels: vec![jackdaw_terrain::ChannelDescriptor::new(
+            "channel-0",
+            jackdaw_terrain::ChannelElement::U8,
+        )],
+        ..default()
+    };
+    document.regions.set_channel_count(1);
+    for z in 0..SIDE {
+        for x in 0..SIDE {
+            document.regions.set_height(x, z, 1.0);
+            if x < CORNER && z < CORNER {
+                document.regions.set_channel(0, x, z, value);
+            }
+        }
+    }
+    app.world_mut()
+        .resource_mut::<jackdaw::terrain::TerrainDataStore>()
+        .insert(&data_path, document);
+    app.update();
+}

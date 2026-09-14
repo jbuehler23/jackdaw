@@ -188,8 +188,11 @@ pub(crate) enum ScatterField {
         ),
         density(f64, doc = "Instances per square world unit."),
         spacing(f64, doc = "Minimum world-unit distance between instances."),
-        channel(i64, doc = "Index of the mask channel."),
-        accept(String, doc = "Comma-separated palette values that accept a cell."),
+        channel(String, doc = "Mask channel, by index or by the name it carries."),
+        accept(
+            String,
+            doc = "Comma-separated palette values or labels that accept a cell."
+        ),
         weight_channel(i64, doc = "Channel index scaling density per cell. -1 for none."),
         assets(String, doc = "Comma-separated model paths to place."),
         scale_min(f64, doc = "Smallest uniform scale."),
@@ -639,8 +642,30 @@ fn reparent_group_onto_terrain(world: &mut World, group: Entity, terrain: Entity
     }
 }
 
+/// The names of a terrain's mask channels, for a caller that asked for one it
+/// does not have.
+fn channel_names(terrain: &jackdaw_scene_types::Terrain) -> Vec<&str> {
+    terrain
+        .channels
+        .iter()
+        .map(|channel| channel.name.as_str())
+        .collect()
+}
+
+/// The labels a mask's palette carries, paired with the value each writes.
+fn palette_labels(channel: &jackdaw_scene_types::TerrainChannel) -> Vec<String> {
+    channel
+        .palette
+        .iter()
+        .map(|entry| format!("{} = {}", entry.label, entry.value))
+        .collect()
+}
+
 fn set_report(world: &mut World, report: TerrainScatterReport) {
-    info!("terrain.scatter: {}", report.message);
+    jackdaw_api_internal::operator::report_to_caller(
+        world,
+        format!("terrain.scatter: {}", report.message),
+    );
     *world.resource_mut::<TerrainScatterReport>() = report;
 }
 
@@ -687,17 +712,63 @@ fn run_scatter(world: &mut World, params: &OperatorParameters) {
         return;
     }
 
+    let channel = match super::channel_ops::named_param(params, "channel") {
+        Some(named) => match super::channel_ops::channel_index(&terrain.channels, &named) {
+            Some(index) => index,
+            None => {
+                set_report(
+                    world,
+                    TerrainScatterReport {
+                        message: format!(
+                            "no mask channel '{named}'; this terrain has {:?}",
+                            channel_names(&terrain)
+                        ),
+                        ..default()
+                    },
+                );
+                return;
+            }
+        },
+        None => state.mask_channel,
+    };
     let accept: Vec<u16> = match params.as_str("accept").filter(|s| !s.trim().is_empty()) {
-        Some(list) => list
-            .split(',')
-            .filter_map(|v| v.trim().parse::<u16>().ok())
-            .collect(),
+        Some(list) => {
+            let Some(descriptor) = terrain.channels.get(channel) else {
+                set_report(
+                    world,
+                    TerrainScatterReport {
+                        message: format!(
+                            "mask channel {channel} is past the {} this terrain has",
+                            terrain.channels.len()
+                        ),
+                        ..default()
+                    },
+                );
+                return;
+            };
+            let mut values = Vec::new();
+            for named in list.split(',').map(str::trim).filter(|v| !v.is_empty()) {
+                let picked = super::channel_ops::Picked::Named(named.to_string());
+                let Some(value) = super::channel_ops::palette_value(descriptor, &picked) else {
+                    set_report(
+                        world,
+                        TerrainScatterReport {
+                            message: format!(
+                                "no palette value '{named}' on mask '{}'; it has {:?}",
+                                descriptor.name,
+                                palette_labels(descriptor)
+                            ),
+                            ..default()
+                        },
+                    );
+                    return;
+                };
+                values.push(value);
+            }
+            values
+        }
         None => state.accept.clone(),
     };
-    let channel = params
-        .as_int("channel")
-        .and_then(|v| usize::try_from(v).ok())
-        .unwrap_or(state.mask_channel);
     let weight_channel = match params.as_int("weight_channel") {
         Some(value) => usize::try_from(value).ok(),
         None => state.weight_channel,

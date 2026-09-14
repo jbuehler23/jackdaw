@@ -15,6 +15,7 @@ use jackdaw::selection::Selection;
 use jackdaw::type_metadata::TypeMetadata;
 use jackdaw_api::prelude::*;
 use jackdaw_bsn::SceneBsnAst;
+use jackdaw_commands::CommandHistory;
 use jackdaw_runtime::{EditorCategory, EditorHidden};
 
 #[derive(Component, Reflect)]
@@ -323,11 +324,18 @@ fn project_schema() -> jackdaw_schema::ProjectSchema {
             entry(
                 PROJECT_STRUCT,
                 jackdaw_schema::TypeKind::Struct,
-                vec![jackdaw_schema::FieldSchema {
-                    name: "current".to_string(),
-                    type_path: "f32".to_string(),
-                    item_type_path: String::new(),
-                }],
+                vec![
+                    jackdaw_schema::FieldSchema {
+                        name: "current".to_string(),
+                        type_path: "f32".to_string(),
+                        item_type_path: String::new(),
+                    },
+                    jackdaw_schema::FieldSchema {
+                        name: "tint".to_string(),
+                        type_path: "bevy_color::color::Color".to_string(),
+                        item_type_path: String::new(),
+                    },
+                ],
             ),
             entry(PROJECT_ENUM, jackdaw_schema::TypeKind::Enum, Vec::new()),
         ],
@@ -541,4 +549,170 @@ fn a_type_absent_from_the_schema_is_still_reported() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An entity in the document carrying one of the project's own components,
+/// which is what every edit below writes to.
+fn entity_carrying(app: &mut App, type_path: &str) -> Entity {
+    let entity = spawn_authored_entity(app);
+    let result = app
+        .world_mut()
+        .operator("component.add")
+        .param("entity", entity)
+        .param("type_path", type_path.to_string())
+        .call()
+        .expect("component.add dispatches");
+    assert_eq!(
+        result,
+        OperatorResult::Finished,
+        "component.add on {type_path}"
+    );
+    app.update();
+    entity
+}
+
+#[track_caller]
+fn set_field(app: &mut App, entity: Entity, type_path: &str, field: &str, value: &str) {
+    let result = app
+        .world_mut()
+        .operator("component.set")
+        .param("entity", entity)
+        .param("type_path", type_path.to_string())
+        .param("field", field.to_string())
+        .param("value", value.to_string())
+        .call()
+        .expect("component.set dispatches");
+    assert_eq!(result, OperatorResult::Finished, "component.set on {field}");
+    app.update();
+}
+
+/// One field of a project component as the document authors it, read back as
+/// the JSON the field's type stands for.
+fn authored_field(
+    app: &App,
+    entity: Entity,
+    type_path: &str,
+    field_type_path: &str,
+    field: &str,
+) -> Option<serde_json::Value> {
+    let ast = app.world().resource::<SceneBsnAst>();
+    let node = ast.ast_for(entity)?;
+    let patch = ast.find_patch_by_type_path(node, type_path)?;
+    let jackdaw_bsn::BsnPatch::Struct(data) = ast.get_patch(patch)? else {
+        return None;
+    };
+    let value = data
+        .fields
+        .0
+        .iter()
+        .find(|authored| authored.name == field)
+        .map(|authored| authored.value.clone())?;
+    let types = app
+        .world()
+        .resource::<jackdaw::project_types::ProjectTypes>();
+    jackdaw::schema_values::json_for_bsn(app.world(), types, field_type_path, &value)
+}
+
+const COLOR: &str = "bevy_color::color::Color";
+
+/// A colour is not a scalar, and a project component has no registration to
+/// read one through, so it used to land in the document as its own JSON text.
+#[test]
+fn a_colour_set_on_a_project_component_reads_back_as_a_colour() {
+    let mut app = app_with_project_schema();
+    let entity = entity_carrying(&mut app, PROJECT_STRUCT);
+
+    set_field(
+        &mut app,
+        entity,
+        PROJECT_STRUCT,
+        "tint",
+        r#"{"LinearRgba":{"red":0.25,"green":0.5,"blue":0.75,"alpha":1.0}}"#,
+    );
+
+    let tint = authored_field(&app, entity, PROJECT_STRUCT, COLOR, "tint")
+        .expect("the document authors the colour");
+    assert_eq!(tint["LinearRgba"]["red"], serde_json::json!(0.25), "{tint}");
+    assert_eq!(
+        tint["LinearRgba"]["blue"],
+        serde_json::json!(0.75),
+        "{tint}"
+    );
+}
+
+/// A path naming a variant reaches one channel of the colour the field holds,
+/// rather than replacing the whole colour with the number.
+#[test]
+fn a_path_into_a_variant_sets_one_channel_of_a_project_component_field() {
+    let mut app = app_with_project_schema();
+    let entity = entity_carrying(&mut app, PROJECT_STRUCT);
+
+    set_field(
+        &mut app,
+        entity,
+        PROJECT_STRUCT,
+        "tint",
+        r#"{"LinearRgba":{"red":0.25,"green":0.5,"blue":0.75,"alpha":1.0}}"#,
+    );
+    set_field(
+        &mut app,
+        entity,
+        PROJECT_STRUCT,
+        "tint.LinearRgba.red",
+        "0.125",
+    );
+
+    let tint = authored_field(&app, entity, PROJECT_STRUCT, COLOR, "tint")
+        .expect("the document still authors a colour");
+    assert_eq!(
+        tint["LinearRgba"]["red"],
+        serde_json::json!(0.125),
+        "{tint}"
+    );
+    assert_eq!(
+        tint["LinearRgba"]["blue"],
+        serde_json::json!(0.75),
+        "the rest of the colour was replaced: {tint}"
+    );
+}
+
+/// A project component lives only in the document, so removing it has to take
+/// the patch with it, and undo has to bring it back.
+#[test]
+fn removing_a_project_component_takes_its_patch_out_of_the_document() {
+    let mut app = app_with_project_schema();
+    let entity = entity_carrying(&mut app, PROJECT_STRUCT);
+    set_field(&mut app, entity, PROJECT_STRUCT, "current", "12.0");
+
+    let result = app
+        .world_mut()
+        .operator("component.remove")
+        .param("entity", entity)
+        .param("type_path", PROJECT_STRUCT.to_string())
+        .call()
+        .expect("component.remove dispatches");
+    assert_eq!(result, OperatorResult::Finished);
+    app.update();
+
+    assert!(
+        authored_patch(&app, entity, PROJECT_STRUCT).is_none(),
+        "the removed component is still in the document"
+    );
+
+    app.world_mut()
+        .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
+    app.update();
+
+    assert_eq!(
+        authored_field(&app, entity, PROJECT_STRUCT, "f32", "current"),
+        Some(serde_json::json!(12.0)),
+        "undo did not bring the component back as it stood"
+    );
+}
+
+/// Whether the document node carries a patch for this component.
+fn authored_patch(app: &App, entity: Entity, type_path: &str) -> Option<Entity> {
+    let ast = app.world().resource::<SceneBsnAst>();
+    let node = ast.ast_for(entity)?;
+    ast.find_patch_by_type_path(node, type_path)
 }

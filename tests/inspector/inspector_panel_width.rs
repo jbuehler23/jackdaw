@@ -232,3 +232,127 @@ fn the_node_card_is_on_the_tab_the_inspector_opens_on() {
         "object",
     );
 }
+
+/// A caller outside the editor cannot drag a splitter, so the sidebar holding
+/// the cards stays the hundred pixels the default layout gives it and no card
+/// can be read. The operator is how it is widened.
+#[test]
+fn a_dock_panel_takes_the_width_the_resize_operator_asks_for() {
+    use jackdaw_api::prelude::*;
+    use jackdaw_panels::DockAreaStyle;
+    use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
+
+    let mut app = util::editor_test_app();
+    let window_width = app
+        .world_mut()
+        .query_filtered::<&Window, With<bevy::window::PrimaryWindow>>()
+        .single(app.world())
+        .expect("the app has a primary window")
+        .width();
+
+    {
+        let mut tree = app.world_mut().resource_mut::<DockTree>();
+        *tree = DockTree::new();
+        let center = tree.insert(DockNode::Leaf(
+            DockLeaf::new("center", DockAreaStyle::TabBar).with_windows(vec!["viewport".into()]),
+        ));
+        let sidebar = tree.insert(DockNode::Leaf(
+            DockLeaf::new("right_sidebar", DockAreaStyle::TabBar)
+                .with_windows(vec!["inspector".into()]),
+        ));
+        let root = tree.insert(DockNode::Split(DockSplit {
+            axis: SplitAxis::Horizontal,
+            fraction: 0.9,
+            a: center,
+            b: sidebar,
+        }));
+        tree.root = Some(root);
+    }
+
+    let result = app
+        .world_mut()
+        .operator("window.resize_panel")
+        .param("window_id", "inspector".to_string())
+        .param("width", window_width as f64 / 4.0)
+        .call()
+        .expect("window.resize_panel dispatches");
+    assert_eq!(result, OperatorResult::Finished);
+
+    let tree = app.world().resource::<DockTree>();
+    let split = tree
+        .parent_of(
+            tree.find_leaf_with_window("inspector")
+                .expect("the sidebar"),
+        )
+        .and_then(|id| tree.get(id))
+        .and_then(DockNode::as_split)
+        .expect("the sidebar shares a split");
+    assert!(
+        (split.fraction - 0.75).abs() < 0.01,
+        "the sidebar took {} of the split rather than a quarter",
+        1.0 - split.fraction
+    );
+
+    // A caller reading a saved layout knows the dock areas before it knows
+    // which windows are docked in them, so an area names its panel too.
+    let result = app
+        .world_mut()
+        .operator("window.resize_panel")
+        .param("window_id", "right_sidebar".to_string())
+        .param("width", window_width as f64 / 2.0)
+        .call()
+        .expect("window.resize_panel dispatches");
+    assert_eq!(result, OperatorResult::Finished);
+
+    let tree = app.world().resource::<DockTree>();
+    let split = tree
+        .parent_of(
+            tree.find_leaf_with_window("inspector")
+                .expect("the sidebar"),
+        )
+        .and_then(|id| tree.get(id))
+        .and_then(DockNode::as_split)
+        .expect("the sidebar shares a split");
+    assert!(
+        (split.fraction - 0.5).abs() < 0.01,
+        "naming the area did not size the panel: {}",
+        split.fraction
+    );
+}
+
+/// A caller outside the editor has no log in front of it, so a name no panel
+/// answers to has to come back with the names that do.
+#[test]
+fn a_panel_that_cannot_be_sized_tells_the_caller_why() {
+    use jackdaw_api::op::OperatorWarnings;
+    use jackdaw_api::prelude::*;
+
+    let mut app = util::editor_test_app();
+    app.update();
+
+    let warnings = |app: &mut App| -> Vec<String> {
+        app.world_mut()
+            .get_resource_or_init::<OperatorWarnings>()
+            .0
+            .clone()
+    };
+    app.world_mut()
+        .get_resource_or_init::<OperatorWarnings>()
+        .0
+        .clear();
+
+    let result = app
+        .world_mut()
+        .operator("window.resize_panel")
+        .param("window_id", "nothing_is_called_this".to_string())
+        .param("width", 400.0)
+        .call()
+        .expect("window.resize_panel dispatches");
+    assert_eq!(result, OperatorResult::Cancelled);
+    let said = warnings(&mut app);
+    assert!(
+        said.iter()
+            .any(|line| line.contains("no dock panel holds 'nothing_is_called_this'")),
+        "the caller was not told which panels there are: {said:?}"
+    );
+}

@@ -1175,20 +1175,18 @@ fn enum_variant_value_to_reflect(
 
     let mut dynamic_enum = DynamicEnum::new(variant_name.clone(), dynamic_variant);
     dynamic_enum.set_represented_type(Some(enum_registration.type_info()));
-    // A variant that names fewer fields than the variant declares is a document
-    // written against an older shape. `FromReflect` fills a field the type marks
-    // `#[reflect(default)]` and refuses the rest, so it decides rather than the
-    // count alone.
-    if let Some(short) = elided {
-        let Some(concrete) = enum_registration
-            .data::<ReflectFromReflect>()
-            .and_then(|from_reflect| from_reflect.from_reflect(&dynamic_enum))
-        else {
-            return refused_variant(enum_info, &variant_name, &short);
-        };
-        return Some(concrete.into_partial_reflect());
+    // A dynamic enum answers 0 for its variant index whatever it is named, which
+    // a serializer reads as the type's first variant, so the value is made
+    // concrete. `FromReflect` also decides a variant naming fewer fields than
+    // the type declares, filling the ones marked `#[reflect(default)]`.
+    let concrete = enum_registration
+        .data::<ReflectFromReflect>()
+        .and_then(|from_reflect| from_reflect.from_reflect(&dynamic_enum));
+    match (concrete, elided) {
+        (Some(concrete), _) => Some(concrete.into_partial_reflect()),
+        (None, Some(short)) => refused_variant(enum_info, &variant_name, &short),
+        (None, None) => Some(Box::new(dynamic_enum)),
     }
-    Some(Box::new(dynamic_enum))
 }
 
 fn float_to_reflect(f: f64, expected: TypeId) -> Option<Box<dyn PartialReflect>> {

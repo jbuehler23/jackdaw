@@ -142,38 +142,3 @@ fn json_to_scalar_reflect(
     };
     Some(boxed)
 }
-
-/// Convert one reflect-format JSON field edit into the [`BsnValue`] to author,
-/// using the field's reflected type path to pick the scalar variant. The
-/// registration-free counterpart to [`crate::commands::json_field_edit_to_bsn_value`]
-/// for project components.
-pub(crate) fn json_to_bsn_value_typed(field_type_path: &str, json: &serde_json::Value) -> BsnValue {
-    let short = field_type_path
-        .rsplit("::")
-        .next()
-        .unwrap_or(field_type_path);
-    match short {
-        "f32" | "f64" => BsnValue::Float(json.as_f64().unwrap_or(0.0)),
-        "bool" => BsnValue::Bool(json.as_bool().unwrap_or(false)),
-        "String" => BsnValue::String(json.as_str().unwrap_or_default().to_string()),
-        "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => {
-            BsnValue::Int(i128::from(json.as_i64().unwrap_or(0)))
-        }
-        _ => infer_bsn_value(json),
-    }
-}
-
-/// Best-effort scalar `BsnValue` from raw JSON when the field type is unknown.
-fn infer_bsn_value(json: &serde_json::Value) -> BsnValue {
-    if let Some(b) = json.as_bool() {
-        BsnValue::Bool(b)
-    } else if let Some(i) = json.as_i64() {
-        BsnValue::Int(i128::from(i))
-    } else if let Some(f) = json.as_f64() {
-        BsnValue::Float(f)
-    } else if let Some(s) = json.as_str() {
-        BsnValue::String(s.to_string())
-    } else {
-        BsnValue::String(json.to_string())
-    }
-}

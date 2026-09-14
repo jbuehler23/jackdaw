@@ -450,3 +450,53 @@ fn redo(app: &mut App) {
     app.update();
     app.update();
 }
+
+/// A set whose skeleton is built at run time has nothing to play on here, so a
+/// model of the clip's own file stands in. The set is still what the marker
+/// belongs to, and the row has to hang under it rather than nowhere.
+#[test]
+fn a_set_whose_skeleton_spawns_later_still_owns_its_markers() {
+    use jackdaw_animation_runtime::AnimationSet;
+
+    let mut app = editor_on_the_test_project();
+    let actor = app
+        .world_mut()
+        .spawn((
+            Name::new("Player"),
+            Transform::default(),
+            AnimationSet {
+                sources: vec![ANIMATED_FILE.to_string()],
+                skeleton_root: "SpawnedLater".to_string(),
+                ..default()
+            },
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), actor);
+    jackdaw::selection::select_only(app.world_mut(), actor);
+
+    call(
+        &mut app,
+        "animation.preview",
+        &[("clip", format!("{ANIMATED_FILE}#{CLIP}").into())],
+    );
+    settle_until(&mut app, "the clip came up on a preview model", |app| {
+        app.world().resource::<ImportedClipView>().clip.is_some()
+    });
+    call(&mut app, "animation.preview.pause", &[]);
+    add_event(&mut app, "hit", 0.0);
+
+    let row = clip_row(&app, actor).expect("the row hangs under the set that was previewed");
+    let names: Vec<String> = app
+        .world()
+        .get::<Children>(row)
+        .into_iter()
+        .flatten()
+        .filter_map(|&child| app.world().get::<ClipEvent>(child))
+        .map(|event| event.name.clone())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["hit".to_string()],
+        "the marker landed on the row"
+    );
+}

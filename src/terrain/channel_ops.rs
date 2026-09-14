@@ -41,6 +41,151 @@ fn seed_color(index: usize) -> Color {
     SEED_COLORS[index % SEED_COLORS.len()].into()
 }
 
+/// How a caller picked a row: the position a tile in the options bar sends, or
+/// the text a remote caller sends.
+pub(crate) enum Picked {
+    Position(usize),
+    Named(String),
+}
+
+impl std::fmt::Display for Picked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Position(position) => write!(f, "{position}"),
+            Self::Named(text) => write!(f, "{text}"),
+        }
+    }
+}
+
+/// The row a parameter picks out.
+pub(crate) fn named_param(params: &OperatorParameters, key: &str) -> Option<Picked> {
+    match params.get(key)? {
+        jackdaw_scene_types::PropertyValue::String(text) => {
+            Some(Picked::Named(text.trim().to_string()))
+        }
+        jackdaw_scene_types::PropertyValue::Int(position) => {
+            usize::try_from(*position).ok().map(Picked::Position)
+        }
+        _ => None,
+    }
+}
+
+/// Tell the caller the mask it asked for is not there, and which are, since a
+/// caller with no options bar in front of it has no other way of knowing.
+fn no_such_mask(
+    commands: &mut Commands,
+    id: &'static str,
+    picked: &Picked,
+    terrain: &jackdaw_scene_types::Terrain,
+) {
+    let names: Vec<&str> = terrain
+        .channels
+        .iter()
+        .map(|channel| channel.name.as_str())
+        .collect();
+    let message = format!("{id}: no scatter mask '{picked}'; this terrain has {names:?}");
+    commands.queue(move |world: &mut World| warn_caller(world, message));
+}
+
+/// The row `picked` reaches among `len` rows named by `name_of`. Text is read
+/// as a name first, so a row named `1` is that row rather than the second one,
+/// and falls back to a position for a caller counting.
+fn picked_row(picked: &Picked, len: usize, name_of: impl Fn(usize) -> String) -> Option<usize> {
+    match picked {
+        Picked::Position(position) => (*position < len).then_some(*position),
+        Picked::Named(text) => (0..len).find(|&row| &name_of(row) == text).or_else(|| {
+            text.parse::<usize>()
+                .ok()
+                .filter(|position| *position < len)
+        }),
+    }
+}
+
+/// The channel a caller picks, by the name it carries or by position.
+pub(crate) fn channel_index(channels: &[TerrainChannel], picked: &Picked) -> Option<usize> {
+    picked_row(picked, channels.len(), |row| channels[row].name.clone())
+}
+
+/// The palette entry a caller picks, by its label or by position.
+pub(crate) fn palette_index(channel: &TerrainChannel, picked: &Picked) -> Option<usize> {
+    picked_row(picked, channel.palette.len(), |row| {
+        channel.palette[row].label.clone()
+    })
+}
+
+/// The value the brush writes for the palette entry a caller picks: the label
+/// carrying it, or the value itself, which is what a mask file holds.
+pub(crate) fn palette_value(channel: &TerrainChannel, picked: &Picked) -> Option<u16> {
+    match picked {
+        Picked::Position(row) => channel.palette.get(*row).map(|entry| entry.value),
+        Picked::Named(text) => channel
+            .palette
+            .iter()
+            .find(|entry| &entry.label == text)
+            .map(|entry| entry.value)
+            .or_else(|| text.parse::<u16>().ok()),
+    }
+}
+
+#[cfg(test)]
+mod picked_tests {
+    use super::*;
+
+    fn channel(name: &str, labels: &[&str]) -> TerrainChannel {
+        TerrainChannel {
+            name: name.to_string(),
+            element: TerrainChannelElement::U8,
+            palette: labels
+                .iter()
+                .enumerate()
+                .map(|(value, label)| TerrainPaletteEntry {
+                    value: value as u16 + 7,
+                    label: (*label).to_string(),
+                    color: Color::BLACK,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_mask_named_like_a_number_is_that_mask_and_not_that_position() {
+        let channels = [channel("grass", &[]), channel("1", &[])];
+        assert_eq!(
+            channel_index(&channels, &Picked::Named("1".to_string())),
+            Some(1)
+        );
+        assert_eq!(
+            channel_index(&channels, &Picked::Position(1)),
+            Some(1),
+            "a tile still picks by position"
+        );
+        assert_eq!(
+            channel_index(&channels, &Picked::Named("0".to_string())),
+            Some(0),
+            "a name no mask carries still counts"
+        );
+    }
+
+    #[test]
+    fn a_palette_label_that_looks_like_a_number_wins_over_the_number() {
+        let mask = channel("biome", &["meadow", "3"]);
+        assert_eq!(
+            palette_value(&mask, &Picked::Named("3".to_string())),
+            Some(8),
+            "the entry labelled 3 writes its own value"
+        );
+        assert_eq!(
+            palette_value(&mask, &Picked::Named("9".to_string())),
+            Some(9),
+            "a label no entry carries is the value itself"
+        );
+        assert_eq!(
+            palette_index(&mask, &Picked::Named("meadow".to_string())),
+            Some(0)
+        );
+    }
+}
+
 /// Mint a channel name unique against `existing`, first free `channel-N`.
 ///
 /// Naming by `existing.len()` alone collides once a channel has been
@@ -165,7 +310,10 @@ pub(crate) fn terrain_channel_add(
     description = "Remove a scatter mask and everything painted into it.",
     is_available = has_selected_terrain,
     allows_undo = false,
-    params(index(i64, doc = "Scatter mask index to remove."))
+    params(index(
+        String,
+        doc = "Scatter mask to remove, by the name it carries or by position."
+    ))
 )]
 pub(crate) fn terrain_channel_remove(
     params: In<OperatorParameters>,
@@ -176,11 +324,12 @@ pub(crate) fn terrain_channel_remove(
     mut commands: Commands,
 ) -> OperatorResult {
     let entity = selection.primary()?;
-    let index = usize::try_from(params.as_int("index")?).ok()?;
     let terrain = terrains.get(entity)?;
-    if index >= terrain.channels.len() {
+    let named = named_param(&params, "index")?;
+    let Some(index) = channel_index(&terrain.channels, &named) else {
+        no_such_mask(&mut commands, "terrain.channel.remove", &named, terrain);
         return OperatorResult::Cancelled;
-    }
+    };
     let descriptor = terrain.channels[index].clone();
     // The values live per region, so undo holds the plane gathered across
     // them: dropping the channel drops every region's plane at once.
@@ -411,13 +560,27 @@ mod remove_tests {
     label = "Select Scatter Mask",
     description = "Choose which scatter mask the brush paints into.",
     allows_undo = false,
-    params(index(i64, doc = "Scatter mask index to select."))
+    params(index(
+        String,
+        doc = "Scatter mask to paint into, by the name it carries or by position."
+    ))
 )]
 pub(crate) fn terrain_channel_select(
     params: In<OperatorParameters>,
+    selection: Res<Selection>,
+    terrains: Query<&jackdaw_scene_types::Terrain>,
     mut paint: ResMut<TerrainPaintState>,
+    mut commands: Commands,
 ) -> OperatorResult {
-    paint.active_channel = usize::try_from(params.as_int("index")?).ok()?;
+    let terrain = selection
+        .primary()
+        .and_then(|entity| terrains.get(entity).ok())?;
+    let named = named_param(&params, "index")?;
+    let Some(index) = channel_index(&terrain.channels, &named) else {
+        no_such_mask(&mut commands, "terrain.channel.select", &named, terrain);
+        return OperatorResult::Cancelled;
+    };
+    paint.active_channel = index;
     paint.active_entry = 0;
     OperatorResult::Finished
 }
@@ -475,13 +638,35 @@ pub(crate) fn terrain_channel_value_add(
     label = "Select Palette Value",
     description = "Choose which value the brush paints.",
     allows_undo = false,
-    params(index(i64, doc = "Palette entry index to select."))
+    params(index(String, doc = "Palette entry to paint, by its label or by position."))
 )]
 pub(crate) fn terrain_channel_value_select(
     params: In<OperatorParameters>,
+    selection: Res<Selection>,
+    terrains: Query<&jackdaw_scene_types::Terrain>,
     mut paint: ResMut<TerrainPaintState>,
+    mut commands: Commands,
 ) -> OperatorResult {
-    paint.active_entry = usize::try_from(params.as_int("index")?).ok()?;
+    let terrain = selection
+        .primary()
+        .and_then(|entity| terrains.get(entity).ok())?;
+    let channel = terrain.channels.get(paint.active_channel)?;
+    let named = named_param(&params, "index")?;
+    let Some(index) = palette_index(channel, &named) else {
+        let labels: Vec<String> = channel
+            .palette
+            .iter()
+            .map(|entry| entry.label.clone())
+            .collect();
+        let message = format!(
+            "terrain.channel.value.select: no palette entry '{named}' on mask '{}'; it has \
+             {labels:?}",
+            channel.name
+        );
+        commands.queue(move |world: &mut World| warn_caller(world, message));
+        return OperatorResult::Cancelled;
+    };
+    paint.active_entry = index;
     OperatorResult::Finished
 }
 

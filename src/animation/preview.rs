@@ -35,6 +35,9 @@ struct Request {
     gltf: Option<Handle<Gltf>>,
     /// A model spawned for this request, waiting for its skeleton to appear.
     mannequin: Option<Entity>,
+    /// The entity whose `AnimationSet` the clip belongs to, when the skeleton
+    /// it names is built at run time and a model stands in for it here.
+    set_owner: Option<Entity>,
     /// Frames spent waiting on that model, so a file whose scene carries no
     /// skeleton is given up on rather than retried forever.
     waited: u32,
@@ -48,7 +51,8 @@ const MANNEQUIN_PATIENCE_FRAMES: u32 = 600;
 struct Active {
     target: Entity,
     /// The document entity the clip plays on, which is what an event added to
-    /// it hangs under. `None` when the clip is playing on a mannequin.
+    /// it hangs under. A mannequin has no owner of its own, so it keeps the
+    /// entity whose set was previewed.
     owner: Option<Entity>,
     mannequin: Option<Entity>,
     file: String,
@@ -152,6 +156,7 @@ pub(crate) fn animation_preview(
         entity,
         gltf: None,
         mannequin: None,
+        set_owner: None,
         waited: 0,
     });
     OperatorResult::Finished
@@ -314,7 +319,7 @@ fn start_requested_preview(world: &mut World) {
 /// The player a preview drives, and the document entity it plays on.
 struct PreviewTarget {
     player: Entity,
-    /// `None` for a mannequin, which no document entity owns.
+    /// `None` only where no document entity is behind the playback at all.
     owner: Option<Entity>,
 }
 
@@ -335,10 +340,10 @@ fn resolve_target(
 ) -> Option<PreviewTarget> {
     if let Some(mannequin) = request.mannequin {
         if let Some(player) = player_descendant(world, mannequin) {
-            return Some(PreviewTarget {
-                player,
-                owner: None,
-            });
+            let owner = request
+                .set_owner
+                .filter(|&owner| world.entities().contains(owner));
+            return Some(PreviewTarget { player, owner });
         }
         request.waited += 1;
         if request.waited > MANNEQUIN_PATIENCE_FRAMES {
@@ -370,6 +375,7 @@ fn resolve_target(
                 continue;
             };
             skeleton_is_built_elsewhere = true;
+            request.set_owner.get_or_insert(candidate);
             let wanted = set.skeleton_root.clone();
             if let Some(root) = descendant_named(world, candidate, &wanted) {
                 return Some(PreviewTarget {

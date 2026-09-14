@@ -359,6 +359,174 @@ fn applied_bsn_lands_under_the_named_parent() {
     );
 }
 
+/// A source that spells a hierarchy keeps it: the children the caller wrote
+/// stay under their own root rather than landing beside it on the parent.
+#[test]
+fn applied_bsn_keeps_the_hierarchy_the_source_spells() {
+    let mut app = editor_with_a_scene();
+    app.world_mut()
+        .operator("entity.add.group")
+        .param("name", "Props")
+        .call()
+        .expect("entity.add.group dispatches")
+        .assert_finished();
+    app.update();
+
+    call(
+        &mut app,
+        apply_bsn_handler,
+        json!({
+            "source": "#Crate\n\
+                bevy_transform::components::transform::Transform\n\
+                bevy_ecs::hierarchy::Children [\n\
+                    #Lid bevy_transform::components::transform::Transform\n\
+                ]\n",
+            "parent": "Props",
+        }),
+    );
+    app.update();
+
+    let tree = call(&mut app, scene_tree_handler, json!({ "root": "Props" }));
+    let props = &tree["tree"][0];
+    let crates = props["children"].as_array().expect("an array");
+    assert_eq!(crates.len(), 1, "{tree}");
+    assert_eq!(crates[0]["name"], json!("Crate"), "{tree}");
+    let lids = crates[0]["children"].as_array().expect("an array");
+    assert_eq!(lids.len(), 1, "{tree}");
+    assert_eq!(lids[0]["name"], json!("Lid"), "{tree}");
+}
+
+/// Several roots in one source all arrive, each under the name the source
+/// gives it, rather than the last one overwriting the rest.
+#[test]
+fn applied_bsn_spawns_every_root_in_the_source() {
+    let mut app = editor_with_a_scene();
+
+    let spawned = call(
+        &mut app,
+        apply_bsn_handler,
+        json!({
+            "source": "#Barrel bevy_transform::components::transform::Transform,\n\
+                #Sack bevy_transform::components::transform::Transform\n",
+        }),
+    );
+    app.update();
+
+    assert_eq!(
+        spawned["entities"].as_array().expect("an array").len(),
+        2,
+        "{spawned}"
+    );
+    let names = root_names(&mut app);
+    assert!(names.contains(&"Barrel".to_string()), "{names:?}");
+    assert!(names.contains(&"Sack".to_string()), "{names:?}");
+}
+
+/// A UI screen hangs off `Node`, which carries `UiTransform` rather than
+/// `Transform`, so the walk has to follow it or the screen reads as empty.
+#[test]
+fn the_tree_walks_a_ui_screen() {
+    let mut app = editor_with_a_scene();
+    let root = app
+        .world_mut()
+        .spawn((
+            Name::new("Hud"),
+            Node::default(),
+            jackdaw_scene_types::UiSceneRoot::default(),
+        ))
+        .id();
+    app.world_mut()
+        .spawn((Name::new("HealthBar"), Node::default(), ChildOf(root)));
+    app.update();
+
+    // The editor's own panels are `Node` all the way down, so a bare node is
+    // not a scene root however the walk treats one under a screen.
+    app.world_mut()
+        .spawn((Name::new("Chrome"), Node::default()));
+    app.update();
+
+    let tree = call(&mut app, scene_tree_handler, json!({ "root": "Hud" }));
+    let children = tree["tree"][0]["children"].as_array().expect("an array");
+    assert_eq!(children.len(), 1, "{tree}");
+    assert_eq!(children[0]["name"], json!("HealthBar"), "{tree}");
+
+    assert!(
+        !root_names(&mut app).contains(&"Chrome".to_string()),
+        "a bare UI node reached the caller as a scene root"
+    );
+}
+
+/// Naming a root is how a caller reaches into a UI screen, and the editor's
+/// own panels are the same `Node` a screen is made of. A panel is not the
+/// scene, so naming one answers nothing rather than handing back the chrome.
+#[test]
+fn the_tree_refuses_a_panel_of_the_editors_own_chrome() {
+    let mut app = editor_with_a_scene();
+    let panel = app
+        .world_mut()
+        .spawn((Name::new("Sidebar"), Node::default()))
+        .id();
+    app.world_mut()
+        .spawn((Name::new("SidebarRow"), Node::default(), ChildOf(panel)));
+    app.update();
+
+    for named in ["Sidebar", "SidebarRow"] {
+        let tree = call(&mut app, scene_tree_handler, json!({ "root": named }));
+        assert_eq!(
+            tree["tree"].as_array().expect("an array").len(),
+            0,
+            "{named} reached the caller: {tree}"
+        );
+    }
+}
+
+/// A mask's values are numbers in the file and names on the screen. The entity
+/// view is where a caller with no screen learns which name carries which
+/// number, so `terrain.scatter` can be given one.
+#[test]
+fn the_entity_view_reports_a_terrains_mask_palettes() {
+    use jackdaw_scene_types::{Terrain, TerrainChannel, TerrainPaletteEntry};
+
+    let mut app = editor_with_a_scene();
+    app.world_mut().spawn((
+        Name::new("Ground"),
+        Transform::default(),
+        Terrain {
+            channels: vec![TerrainChannel {
+                name: "biome".to_string(),
+                element: jackdaw_scene_types::TerrainChannelElement::U8,
+                palette: vec![
+                    TerrainPaletteEntry {
+                        value: 0,
+                        label: "unset".to_string(),
+                        color: Color::BLACK,
+                    },
+                    TerrainPaletteEntry {
+                        value: 3,
+                        label: "meadow".to_string(),
+                        color: Color::WHITE,
+                    },
+                ],
+            }],
+            ..default()
+        },
+    ));
+    app.update();
+
+    let view = call(&mut app, entity_handler, json!({ "name": "Ground" }));
+    let masks = view["masks"].as_array().expect("an array");
+    assert_eq!(masks.len(), 1, "{view}");
+    assert_eq!(masks[0]["name"], json!("biome"), "{view}");
+    assert_eq!(
+        masks[0]["palette"],
+        json!([
+            { "value": 0, "label": "unset" },
+            { "value": 3, "label": "meadow" },
+        ]),
+        "{view}"
+    );
+}
+
 /// The screenshot method answers only once the PNG is on disk. The capture
 /// itself needs a GPU, so this drives the completion half.
 #[test]

@@ -360,3 +360,40 @@ bevy_ecs::hierarchy::Children [
     );
     assert!(ast.node_by_stable_id(999).is_none());
 }
+
+#[test]
+fn comma_separated_top_level_groups_each_become_a_root() {
+    let ast = parse_bsn_text(
+        "#First bevy_transform::components::transform::Transform,\n\
+         #Second bevy_transform::components::transform::Transform\n",
+    )
+    .expect("two sibling roots should load");
+
+    assert_eq!(ast.roots.len(), 2, "root count");
+    assert_eq!(ast.get_name(ast.roots[0]), Some("First"), "first root name");
+    assert_eq!(
+        ast.get_name(ast.roots[1]),
+        Some("Second"),
+        "second root name"
+    );
+}
+
+#[test]
+fn a_sibling_root_keeps_its_own_children() {
+    let ast = parse_bsn_text(
+        "#First bevy_transform::components::transform::Transform bevy_ecs::hierarchy::Children [\n\
+             #Nested bevy_transform::components::transform::Transform\n\
+         ],\n\
+         #Second bevy_transform::components::transform::Transform\n",
+    )
+    .expect("a nested sibling root should load");
+
+    assert_eq!(ast.roots.len(), 2, "root count");
+    let nested = ast.get_children_ast(ast.roots[0]);
+    assert_eq!(nested.len(), 1, "first root child count");
+    assert_eq!(ast.get_name(nested[0]), Some("Nested"), "nested name");
+    assert!(
+        ast.get_children_ast(ast.roots[1]).is_empty(),
+        "second root should have no children"
+    );
+}

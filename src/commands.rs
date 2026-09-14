@@ -819,6 +819,71 @@ impl EditorCommand for AddProjectComponent {
     }
 }
 
+/// Drop a project component's patch from the scene document, as one undo
+/// entry. Project types are never real ECS components, so there is nothing to
+/// remove from the world and [`RemoveComponent`] has no id to remove it by.
+pub struct RemoveProjectComponent {
+    pub entity: Entity,
+    pub type_path: String,
+    /// The patch as it stood, put back on undo.
+    removed: Option<jackdaw_bsn::BsnPatch>,
+}
+
+impl RemoveProjectComponent {
+    pub fn new(entity: Entity, type_path: String) -> Self {
+        Self {
+            entity,
+            type_path,
+            removed: None,
+        }
+    }
+}
+
+impl EditorCommand for RemoveProjectComponent {
+    fn execute(&mut self, world: &mut World) {
+        let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        let Some(node) = ast.ast_for(self.entity) else {
+            return;
+        };
+        self.removed = ast
+            .find_patch_by_type_path(node, &self.type_path)
+            .and_then(|patch| ast.get_patch(patch))
+            .cloned();
+        if self.removed.is_none() {
+            return;
+        }
+        ast.remove_component_patch(node, &self.type_path);
+        if let Ok(mut ec) = world.get_entity_mut(self.entity) {
+            ec.insert(crate::inspector::InspectorDirty);
+        }
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        let Some(patch) = self.removed.take() else {
+            return;
+        };
+        {
+            let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+            let Some(node) = ast.ast_for(self.entity) else {
+                return;
+            };
+            if ast.find_patch_by_type_path(node, &self.type_path).is_none() {
+                let patch_entity = ast.world.spawn(patch).id();
+                if let Some(patches) = ast.get_patches_mut(node) {
+                    patches.0.push(patch_entity);
+                }
+            }
+        }
+        if let Ok(mut ec) = world.get_entity_mut(self.entity) {
+            ec.insert(crate::inspector::InspectorDirty);
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Remove component"
+    }
+}
+
 pub struct RemoveComponent {
     pub entity: Entity,
     pub type_id: TypeId,
@@ -1629,7 +1694,7 @@ pub(crate) fn json_field_edit_to_bsn_value(
         // Project (schema-reported) components have no editor registration; the
         // field's authored value comes straight from the extracted schema type.
         drop(registry);
-        return project_field_edit_to_bsn_value(world, type_path, field_path, value);
+        return project_field_edit_to_bsn_value(world, entity, type_path, field_path, value);
     };
     if field_path.is_empty() {
         let deserializer =
@@ -1666,33 +1731,73 @@ pub(crate) fn json_field_edit_to_bsn_value(
 /// Convert a field edit on a project (schema-reported) component into the
 /// [`jackdaw_bsn::BsnValue`] to author, without an editor registration. The
 /// value is read as the field's schema type, so a type the editor does know --
-/// a colour, an asset path -- converts through its own registration, and the
-/// scalar variant is chosen from the type path only when nothing else fits.
+/// a colour, an asset path -- converts through its own registration, and a
+/// value the type does not take is refused rather than authored as its own
+/// JSON text.
+///
+/// A path reaching past the field itself is merged into the field's current
+/// value, so `tint.Srgba.red` writes one channel of the colour the field
+/// already holds and the answer is still the whole field, which is what
+/// [`set_project_field`] authors.
 fn project_field_edit_to_bsn_value(
     world: &World,
+    entity: Entity,
     type_path: &str,
     field_path: &str,
     value: &serde_json::Value,
 ) -> Option<jackdaw_bsn::BsnValue> {
+    use crate::schema_values::{self, Step};
+
     let types = world.get_resource::<crate::project_types::ProjectTypes>()?;
     let schema = types.component(type_path)?;
-    let name = field_path.split('.').next().unwrap_or(field_path);
-    let field = schema.fields.iter().find(|f| f.name == name)?;
-    crate::schema_values::bsn_for_json(world, types, &field.type_path, value).or_else(|| {
-        Some(
-            crate::inspector::project_component_display::json_to_bsn_value_typed(
-                &field.type_path,
-                value,
-            ),
-        )
-    })
+    let steps = schema_values::parse_path(field_path);
+    let Some(Step::Field(name)) = steps.first() else {
+        return schema_values::bsn_for_json(world, types, type_path, value);
+    };
+    let field = schema.fields.iter().find(|f| &f.name == name)?;
+    if steps.len() == 1 {
+        return schema_values::bsn_for_json(world, types, &field.type_path, value);
+    }
+
+    let mut held = authored_project_field_json(world, entity, types, schema, field)?;
+    if !schema_values::json_set(&mut held, &steps[1..], value.clone()) {
+        warn!("`{field_path}` does not reach into the value `{type_path}` holds");
+        return None;
+    }
+    schema_values::bsn_for_json(world, types, &field.type_path, &held)
 }
 
-/// Author a flat field value on a project component's document patch without a
+/// One field of a project component as JSON: what the document authors for it,
+/// and the type's default where the document is silent.
+fn authored_project_field_json(
+    world: &World,
+    entity: Entity,
+    types: &crate::project_types::ProjectTypes,
+    schema: &jackdaw_schema::TypeSchema,
+    field: &jackdaw_schema::FieldSchema,
+) -> Option<serde_json::Value> {
+    let authored = world
+        .get_resource::<jackdaw_bsn::SceneBsnAst>()
+        .and_then(|ast| {
+            let node = ast.ast_for(entity)?;
+            let patch = ast.find_patch_by_type_path(node, &schema.type_path)?;
+            match ast.get_patch(patch)? {
+                jackdaw_bsn::BsnPatch::Struct(data) => Some(data.clone()),
+                _ => None,
+            }
+        });
+    match authored {
+        Some(data) => crate::schema_values::field_json(world, types, schema, &data, field),
+        None => crate::schema_values::default_field_json(schema, &field.name),
+    }
+}
+
+/// Author a field value on a project component's document patch without a
 /// registration. Project types are never in the editor registry, so the
 /// registry-gated [`jackdaw_bsn::set_bsn_field`] refuses them; this upserts the
-/// named field directly on the node's struct patch instead. Nested paths set
-/// only their leading segment (v1 only renders flat scalar fields).
+/// named field directly on the node's struct patch instead. A path reaching
+/// deeper names the same top-level field, whose whole new value
+/// [`project_field_edit_to_bsn_value`] has already merged.
 fn set_project_field(
     ast: &mut jackdaw_bsn::SceneBsnAst,
     node: Entity,
@@ -1736,12 +1841,15 @@ fn set_project_field(
     let jackdaw_bsn::BsnPatch::Struct(data) = patch else {
         return;
     };
-    let name = field_path.split('.').next().unwrap_or(field_path);
-    if let Some(existing) = data.fields.0.iter_mut().find(|f| f.name == name) {
+    let steps = crate::schema_values::parse_path(field_path);
+    let Some(crate::schema_values::Step::Field(name)) = steps.first() else {
+        return;
+    };
+    if let Some(existing) = data.fields.0.iter_mut().find(|f| &f.name == name) {
         existing.value = value;
     } else {
         data.fields.0.push(jackdaw_bsn::BsnField {
-            name: name.to_string(),
+            name: name.clone(),
             value,
         });
     }

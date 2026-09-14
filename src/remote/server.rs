@@ -772,7 +772,9 @@ pub fn scene_tree_handler(In(params): In<Option<Value>>, world: &mut World) -> B
         .and_then(Value::as_u64)
         .unwrap_or(u64::from(u32::MAX)) as u32;
 
-    let roots = match named_root(&params)? {
+    let asked_for = named_root(&params)?;
+    let named = asked_for.is_some();
+    let roots = match asked_for {
         None => {
             let mut query = world.query_filtered::<Entity, Without<ChildOf>>();
             query.iter(world).collect::<Vec<_>>()
@@ -780,9 +782,17 @@ pub fn scene_tree_handler(In(params): In<Option<Value>>, world: &mut World) -> B
         Some(root) => vec![entity_from_params(world, &root)?],
     };
 
+    // A named root may be a row inside a UI screen, which is not a scene root;
+    // the whole scene is narrowed to the rows the outliner would draw.
     let roots: Vec<Entity> = roots
         .into_iter()
-        .filter(|entity| is_scene_node(world, *entity))
+        .filter(|entity| {
+            if named {
+                belongs_to_the_scene(world, *entity)
+            } else {
+                is_scene_node(world, *entity)
+            }
+        })
         .collect();
     let tree: Vec<Value> = roots
         .into_iter()
@@ -808,19 +818,60 @@ fn named_root(params: &Value) -> Result<Option<Value>, BrpError> {
     }
 }
 
-/// Whether the outliner would draw a row for `entity`, asking the same questions
-/// `crate::hierarchy::queue_root_row_spawn` does.
+/// Whether the outliner would draw a root row for `entity`, asking the same
+/// questions `crate::hierarchy::queue_root_row_spawn` does.
 fn is_scene_node(world: &World, entity: Entity) -> bool {
-    if world.get::<crate::EditorEntity>(entity).is_some()
-        || world
-            .get::<jackdaw_scene_types::EditorHidden>(entity)
-            .is_some()
-    {
+    if is_editor_furniture(world, entity) {
         return false;
     }
     world.get::<Transform>(entity).is_some()
         || world
             .get::<jackdaw_scene_types::UiSceneRoot>(entity)
+            .is_some()
+}
+
+/// Whether a node under a scene node belongs in the tree. A UI node carries
+/// `UiTransform` rather than `Transform`, so under a scene root `Node` counts
+/// too; at the top level it would take in the editor's own chrome, which is
+/// `Node` all the way down and carries no scene marker.
+fn is_scene_descendant(world: &World, entity: Entity) -> bool {
+    if is_editor_furniture(world, entity) {
+        return false;
+    }
+    is_scene_node(world, entity) || world.get::<Node>(entity).is_some()
+}
+
+/// Whether `entity` is in the open scene: a scene node, or a UI node under
+/// one. The editor's own chrome is `Node` all the way up to a root that is no
+/// scene node at all, so naming a piece of it reaches nothing.
+fn belongs_to_the_scene(world: &World, entity: Entity) -> bool {
+    let mut current = entity;
+    for _ in 0..MAX_SCENE_DEPTH {
+        if is_editor_furniture(world, current) {
+            return false;
+        }
+        if is_scene_node(world, current) {
+            return true;
+        }
+        if world.get::<Node>(current).is_none() {
+            return false;
+        }
+        match world.get::<ChildOf>(current) {
+            Some(parent) => current = parent.parent(),
+            None => return false,
+        }
+    }
+    false
+}
+
+/// How far up a UI hierarchy the walk looks for the scene root it hangs from.
+const MAX_SCENE_DEPTH: usize = 64;
+
+/// The editor's own entities, which no caller reading the scene asked for.
+fn is_editor_furniture(world: &World, entity: Entity) -> bool {
+    world.get::<crate::EditorEntity>(entity).is_some()
+        || world
+            .get::<jackdaw_scene_types::EditorHidden>(entity)
             .is_some()
 }
 
@@ -848,7 +899,7 @@ fn node_json(world: &mut World, entity: Entity, depth: u32) -> Value {
     };
     let children: Vec<Entity> = children
         .into_iter()
-        .filter(|child| is_scene_node(world, *child))
+        .filter(|child| is_scene_descendant(world, *child))
         .collect();
     let children: Vec<Value> = children
         .into_iter()
@@ -863,13 +914,38 @@ fn node_json(world: &mut World, entity: Entity, depth: u32) -> Value {
     })
 }
 
-/// One node as BSN text.
+/// One node as BSN text, with the mask palettes a terrain paints and scatters
+/// by, which a caller cannot name without being told them.
 pub fn entity_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
     check_enabled(world)?;
     let params = params.ok_or_else(|| invalid_params("expected an \"entity\" or a \"name\""))?;
     let entity = entity_from_params(world, &params)?;
     let bsn = jackdaw_remote::bsn_methods::entity_bsn(world, entity).map_err(invalid_params)?;
-    Ok(json!({ "entity": entity.to_bits(), "bsn": bsn }))
+    let mut answer = json!({ "entity": entity.to_bits(), "bsn": bsn });
+    if let Some(masks) = terrain_masks(world, entity) {
+        answer["masks"] = masks;
+    }
+    Ok(answer)
+}
+
+/// A terrain's mask channels, each with the palette `terrain.channel.*` and
+/// `terrain.scatter` take names from.
+fn terrain_masks(world: &World, entity: Entity) -> Option<Value> {
+    let terrain = world.get::<jackdaw_scene_types::Terrain>(entity)?;
+    let masks: Vec<Value> = terrain
+        .channels
+        .iter()
+        .enumerate()
+        .map(|(index, channel)| {
+            let palette: Vec<Value> = channel
+                .palette
+                .iter()
+                .map(|entry| json!({ "value": entry.value, "label": entry.label }))
+                .collect();
+            json!({ "index": index, "name": channel.name, "palette": palette })
+        })
+        .collect();
+    Some(Value::Array(masks))
 }
 
 /// Spawn BSN text into the open scene, optionally under a chosen node.
@@ -942,14 +1018,22 @@ impl EditorCommand for ApplyBsn {
             })
             .unwrap_or_default();
 
-        // Registering puts the spawned nodes in the document, so they save and
-        // appear in the outliner.
+        // Only the roots of the applied source move under `parent`; the rest
+        // already carry the `ChildOf` the source spelled, and reparenting them
+        // too would flatten the subtree onto the parent.
         for entity in &self.spawned {
             if let Some(parent) = self.parent
+                && world.get::<ChildOf>(*entity).is_none()
                 && world.get_entity(parent).is_ok()
             {
                 world.entity_mut(*entity).insert(ChildOf(parent));
             }
+        }
+
+        // Registering puts the spawned nodes in the document, so they save and
+        // appear in the outliner. Parents come first in `spawned`, so a child
+        // finds its parent's node already there.
+        for entity in &self.spawned {
             crate::scene_io::register_entity_in_ast(world, *entity);
         }
     }

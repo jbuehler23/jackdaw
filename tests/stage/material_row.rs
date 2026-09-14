@@ -208,3 +208,41 @@ fn a_brush_takes_the_material_its_row_names_onto_its_faces() {
         "every face wears the material the row chose",
     );
 }
+
+/// The operator a caller outside the editor reaches for takes the material's
+/// path and puts it on the selected brush's faces.
+#[test]
+fn a_brush_takes_the_material_the_apply_operator_names_by_path() {
+    let (mut app, _tmp) = editor_with_a_material();
+    let brush = app
+        .world_mut()
+        .spawn((
+            Name::new("wall"),
+            jackdaw_scene_types::Brush::cuboid(0.5, 0.5, 0.5),
+            Transform::default(),
+            Visibility::default(),
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), brush);
+    app.world_mut().resource_mut::<Selection>().entities = vec![brush];
+    settle(&mut app);
+
+    call(
+        &mut app,
+        "material.apply",
+        &[("material", "materials/slate.bsn".into())],
+    );
+
+    let chosen = filed_material(&app);
+    let faces = app
+        .world()
+        .get::<jackdaw_scene_types::Brush>(brush)
+        .expect("the brush is still there");
+    assert!(
+        faces
+            .faces
+            .iter()
+            .all(|face| face.material.id().untyped() == chosen.id()),
+        "every face wears the material the path named",
+    );
+}

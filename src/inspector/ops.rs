@@ -297,6 +297,19 @@ pub(crate) fn component_remove(
             );
             return;
         }
+        // A project component lives only as a document patch, so there is no
+        // ECS component to remove and dropping the patch is the removal.
+        if world
+            .get_resource::<ProjectTypes>()
+            .is_some_and(|pt| pt.is_project_component(&type_path))
+        {
+            let mut cmd: Box<dyn EditorCommand> = Box::new(
+                crate::commands::RemoveProjectComponent::new(entity, type_path),
+            );
+            cmd.execute(world);
+            world.resource_mut::<CommandHistory>().push_executed(cmd);
+            return;
+        }
         let Some((component_id, _)) = component_id_for_path(world, &type_path) else {
             return;
         };
