@@ -683,6 +683,21 @@ pub(crate) fn spawn_field_row(
         return;
     }
 
+    // String fields -> text input
+    if let Some(s) = value.try_downcast_ref::<String>() {
+        spawn_editable_field(
+            commands,
+            parent,
+            name,
+            s,
+            field_path,
+            source_entity,
+            type_path,
+            depth,
+        );
+        return;
+    }
+
     // Numeric fields -> drag input
     if let Some(&v) = value.try_downcast_ref::<f32>() {
         spawn_numeric_field(
@@ -2138,14 +2153,13 @@ fn color_to_canonical_json(
 
 /// Apply a field value change with undo support via the field-edit lifecycle
 /// ([`crate::commands::field_edit_commit`]). Propagates to the current selection.
-fn apply_field_value_with_undo(
+fn apply_field_json_with_undo(
     world: &mut World,
     entity: Entity,
     type_path: &str,
     field_path: &str,
-    new_value_str: &str,
+    new_json: serde_json::Value,
 ) {
-    let new_json = parse_to_json_value(new_value_str);
     if try_route_pie_live_field_edit(world, entity, type_path, field_path, new_json.clone()) {
         return;
     }
@@ -2291,6 +2305,10 @@ fn spawn_list_item_value(
         spawn_entity_link(commands, parent, entity_val, &label);
         return;
     }
+    if let Some(s) = value.try_downcast_ref::<String>() {
+        spawn_inline_editable(commands, parent, s, field_path, source_entity, type_path);
+        return;
+    }
     // Editable primitive -> inline text input
     if is_editable_primitive(value) {
         spawn_inline_editable(
@@ -2347,7 +2365,7 @@ struct PendingFieldText(String);
 /// Spawn a `FeathersTextInput` bound to a reflected string field. The
 /// `FieldBinding` and initial text ride on the container entity; the inner
 /// text entry emits `ValueChange<String>` on Enter or blur, which
-/// `on_text_edit_commit` writes back through `apply_field_value_with_undo`.
+/// `on_text_edit_commit` writes back as a JSON string.
 fn spawn_string_input(
     commands: &mut Commands,
     parent: Entity,
@@ -2515,7 +2533,7 @@ fn format_partial_reflect_value(value: &dyn PartialReflect) -> String {
 }
 
 /// Handle `ValueChange<String>` for inspector string fields. The committed
-/// text is applied verbatim. The event fires on the text entry, so the field
+/// text is stored as a JSON string, The event fires on the text entry, so the field
 /// binding is found by walking up to its container. Numeric and
 /// vector-component fields go through `ScrubNumberInput` and its
 /// `on_numeric_value_change_*` observers instead.
@@ -2576,7 +2594,13 @@ pub(crate) fn on_text_edit_commit(
 
     let value_str = event.value.clone();
     commands.queue(move |world: &mut World| {
-        apply_field_value_with_undo(world, source_entity, &tp, &path, &value_str);
+        apply_field_json_with_undo(
+            world,
+            source_entity,
+            &tp,
+            &path,
+            serde_json::Value::String(value_str),
+        );
     });
 }
 
@@ -2638,7 +2662,7 @@ pub(crate) fn on_numeric_value_change_f64(
     let value_str = format!("{value}");
     commands.queue(move |world: &mut World| {
         if is_final {
-            apply_field_value_with_undo(world, target, &tp, &path, &value_str);
+            apply_field_json_with_undo(world, target, &tp, &path, serde_json::json!(value));
         } else {
             apply_field_value_live(world, target, &tp, &path, &value_str);
         }
@@ -2676,7 +2700,7 @@ pub(crate) fn on_numeric_value_change_i64(
     let value_str = format!("{value}");
     commands.queue(move |world: &mut World| {
         if is_final {
-            apply_field_value_with_undo(world, target, &tp, &path, &value_str);
+            apply_field_json_with_undo(world, target, &tp, &path, serde_json::json!(value));
         } else {
             apply_field_value_live(world, target, &tp, &path, &value_str);
         }
@@ -2707,9 +2731,8 @@ pub(crate) fn on_checkbox_commit(
     // The checkbox does not self-update `Checked`; reflect the new value so
     // the box renders the change. Feathers styles the box off `Checked`.
     jackdaw_feathers::utils::set_marker_if_alive::<Checked>(&mut commands, target, checked);
-    let val = format!("{checked}");
     commands.queue(move |world: &mut World| {
-        apply_field_value_with_undo(world, source, &tp, &path, &val);
+        apply_field_json_with_undo(world, source, &tp, &path, serde_json::json!(checked));
     });
 }
 
