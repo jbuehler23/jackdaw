@@ -37,10 +37,12 @@ impl Plugin for MaterialBrowserPlugin {
             .init_resource::<MaterialBrowserState>()
             .init_resource::<MaterialPreviewState>()
             .init_resource::<MaterialRegistry>()
+            .init_resource::<DetectedTextureSets>()
             .add_systems(
                 OnEnter(crate::AppState::Editor),
                 (
                     |world: &mut World| crate::asset_catalog::load_catalog(world),
+                    restart_texture_set_scan,
                     rebuild_material_registry,
                 )
                     .chain()
@@ -52,6 +54,10 @@ impl Plugin for MaterialBrowserPlugin {
                     follow_asset_index
                         .run_if(resource_changed::<crate::asset_index::AssetIndex>)
                         .before(rescan_material_definitions),
+                    start_texture_set_scan
+                        .run_if(resource_changed::<crate::asset_index::AssetWalks>)
+                        .before(finish_texture_set_scan),
+                    finish_texture_set_scan.before(rescan_material_definitions),
                     rescan_material_definitions,
                     apply_material_filter,
                     update_material_browser_ui.after(rescan_material_definitions),
@@ -60,7 +66,6 @@ impl Plugin for MaterialBrowserPlugin {
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             )
-            .add_observer(on_material_grid_added)
             .add_observer(handle_apply_material)
             .add_observer(handle_select_material_preview);
     }
@@ -128,6 +133,63 @@ fn load_role_image(
             .with_settings(|s: &mut ImageLoaderSettings| s.is_srgb = false)
             .load::<Image>(asset_path)
     }
+}
+
+/// The texture sets the project's assets hold, as the last walk found them.
+///
+/// The walk reads the filesystem, so it runs on the IO pool and the panel
+/// lists what the walk before it found until the next one lands.
+#[derive(Resource, Default)]
+struct DetectedTextureSets(Vec<jackdaw_material::MaterialSet>);
+
+/// A walk for texture sets running on the IO pool.
+#[derive(Resource)]
+struct TextureSetScan(Task<Vec<jackdaw_material::MaterialSet>>);
+
+/// Drop what the project just closed left behind and walk this one's textures.
+fn restart_texture_set_scan(world: &mut World) {
+    world.remove_resource::<TextureSetScan>();
+    world.resource_mut::<DetectedTextureSets>().0.clear();
+    start_texture_set_scan(world);
+}
+
+/// Ask for a walk of the project's textures, unless one is already running.
+fn start_texture_set_scan(world: &mut World) {
+    if world.contains_resource::<TextureSetScan>() {
+        return;
+    }
+    let Some(assets) = world
+        .get_resource::<crate::project::ProjectRoot>()
+        .map(crate::project::ProjectRoot::assets_dir)
+    else {
+        return;
+    };
+    let task = bevy::tasks::IoTaskPool::get().spawn(async move { detect_material_sets(&assets) });
+    world.insert_resource(TextureSetScan(task));
+}
+
+/// Take what a finished walk found, and ask the panel to list it when it found
+/// something other than what is already listed.
+fn finish_texture_set_scan(world: &mut World) {
+    let Some(mut scan) = world.remove_resource::<TextureSetScan>() else {
+        return;
+    };
+    let Some(sets) = future::block_on(future::poll_once(&mut scan.0)) else {
+        world.insert_resource(scan);
+        return;
+    };
+    take_texture_sets(world, sets);
+}
+
+/// Take what a walk found. A walk that found what is already listed asks
+/// nothing of the panel, so one change to the project rebuilds the list once
+/// rather than once per walk that followed it.
+fn take_texture_sets(world: &mut World, sets: Vec<jackdaw_material::MaterialSet>) {
+    if world.resource::<DetectedTextureSets>().0 == sets {
+        return;
+    }
+    world.resource_mut::<DetectedTextureSets>().0 = sets;
+    world.resource_mut::<MaterialBrowserState>().needs_rescan = true;
 }
 
 /// Every PBR texture set the project's assets hold, sorted by base name.
@@ -216,9 +278,6 @@ fn material_from_set(
 /// left out, so saving one moves it from the detected list to the index without
 /// the two sitting side by side.
 fn rebuild_material_registry(world: &mut World) {
-    let assets = world
-        .get_resource::<crate::project::ProjectRoot>()
-        .map(crate::project::ProjectRoot::assets_dir);
     world.resource_mut::<MaterialRegistry>().entries.clear();
 
     let mut saved: Vec<(String, Handle<StandardMaterial>)> = world
@@ -258,9 +317,7 @@ fn rebuild_material_registry(world: &mut World) {
             .add_saved(name, handle);
     }
 
-    if let Some(assets) = assets {
-        add_detected_sets(world, &assets);
-    }
+    add_detected_sets(world);
 
     let mut orphans: Vec<(String, Handle<StandardMaterial>)> = world
         .resource::<crate::asset_catalog::AssetCatalog>()
@@ -297,8 +354,8 @@ fn rebuild_material_registry(world: &mut World) {
 /// `material.save` writes it a file. The handle a previous scan published under
 /// the same name is reused, so a rescan does not orphan the material on the
 /// faces holding it.
-fn add_detected_sets(world: &mut World, assets: &Path) {
-    for set in detect_material_sets(assets) {
+fn add_detected_sets(world: &mut World) {
+    for set in world.resource::<DetectedTextureSets>().0.clone() {
         // The registry key, the file stem a save would use and the `@Name` scenes reference
         // are one string, so detection commits to the file-safe spelling up front.
         let name = crate::material_assets::sanitize_material_name(&set.base_name);
@@ -332,14 +389,6 @@ fn add_detected_sets(world: &mut World, assets: &Path) {
         };
         world.resource_mut::<MaterialRegistry>().add(name, handle);
     }
-}
-
-fn on_material_grid_added(
-    _trigger: On<Add, MaterialBrowserGrid>,
-    mut state: ResMut<MaterialBrowserState>,
-) {
-    info!("MaterialBrowserGrid added, triggering rescan");
-    state.needs_rescan = true;
 }
 
 /// A file indexed, reloaded or removed since the last frame changes what the
@@ -671,6 +720,36 @@ fn poll_material_save_folder(world: &mut World) {
     crate::material_assets::save_previewed_material_to(world, &picked);
 }
 
+/// What one tile in the grid is drawn from. The panel redraws when this list
+/// changes and not merely when the registry was written again.
+#[derive(PartialEq)]
+struct MaterialTileKey {
+    name: String,
+    saved: bool,
+    thumbnail: Option<Handle<Image>>,
+}
+
+/// The tiles the grid would hold for this registry and filter.
+fn tile_keys(
+    registry: &MaterialRegistry,
+    filter: &str,
+    materials: &Assets<StandardMaterial>,
+) -> Vec<MaterialTileKey> {
+    let filter_lower = filter.to_lowercase();
+    registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            filter_lower.is_empty() || entry.name.to_lowercase().contains(&filter_lower)
+        })
+        .map(|entry| MaterialTileKey {
+            name: entry.name.clone(),
+            saved: entry.saved,
+            thumbnail: crate::material_assets::material_thumbnail(materials, &entry.handle),
+        })
+        .collect()
+}
+
 fn update_material_browser_ui(
     mut commands: Commands,
     registry: Res<MaterialRegistry>,
@@ -678,12 +757,25 @@ fn update_material_browser_ui(
     materials: Res<Assets<StandardMaterial>>,
     italic_font: Res<icons::EditorFontItalic>,
     grid_query: Query<(Entity, Option<&Children>), With<MaterialBrowserGrid>>,
+    fresh_grid: Query<(), Added<MaterialBrowserGrid>>,
+    mut drawn: Local<Vec<MaterialTileKey>>,
 ) {
     let italic_font = italic_font.0.clone();
-    let needs_rebuild = registry.is_changed() || state.is_changed();
-    if !needs_rebuild {
+    // The registry is rewritten from scratch on every rescan, and the state is
+    // written again just to clear the rescan flag, so neither says whether the
+    // grid would come out any different. What the tiles are drawn from does.
+    //
+    // A grid spawned this frame is empty whatever the registry has been doing,
+    // so it is filled here rather than by rescanning the project for it.
+    let fresh = !fresh_grid.is_empty();
+    if !fresh && !registry.is_changed() && !state.is_changed() {
         return;
     }
+    let wanted = tile_keys(&registry, &state.filter, &materials);
+    if !fresh && *drawn == wanted {
+        return;
+    }
+    *drawn = wanted;
 
     let Ok((grid_entity, grid_children)) = grid_query.single() else {
         info!(
@@ -1153,6 +1245,7 @@ mod tests {
         app.init_resource::<MaterialRegistry>();
         app.init_resource::<crate::asset_catalog::AssetCatalog>();
         app.init_resource::<MaterialBrowserState>();
+        app.init_resource::<DetectedTextureSets>();
         app.init_resource::<crate::asset_index::AssetIndex>();
         app.init_resource::<crate::asset_files::AssetKindCache>();
         app.init_resource::<jackdaw_api::prelude::AssetKinds>();
@@ -1166,6 +1259,16 @@ mod tests {
         (app, tmp)
     }
 
+    /// Stand in for the walk the IO pool runs, so a test can list what is on
+    /// disk without ticking the app.
+    fn scan_textures(app: &mut App) {
+        let assets = app
+            .world()
+            .resource::<crate::project::ProjectRoot>()
+            .assets_dir();
+        app.world_mut().resource_mut::<DetectedTextureSets>().0 = detect_material_sets(&assets);
+    }
+
     /// A PNG's bytes are not a KTX2 header, and the fields that say a KTX2
     /// holds a cubemap land on picture data in one.
     #[test]
@@ -1177,6 +1280,7 @@ mod tests {
             std::fs::write(textures.join(file), [0xffu8; 64]).expect("the texture is written");
         }
 
+        scan_textures(&mut app);
         rebuild_material_registry(app.world_mut());
 
         assert!(
@@ -1201,6 +1305,7 @@ mod tests {
         }
 
         crate::asset_index::rescan_asset_index(app.world_mut());
+        scan_textures(&mut app);
         rebuild_material_registry(app.world_mut());
 
         let entry = app
@@ -1214,6 +1319,7 @@ mod tests {
         crate::material_assets::write_material_file(app.world(), "bark", &handle)
             .expect("the material file is written");
         crate::asset_index::rescan_asset_index(app.world_mut());
+        scan_textures(&mut app);
         rebuild_material_registry(app.world_mut());
 
         let registry = app.world().resource::<MaterialRegistry>();
@@ -1259,6 +1365,36 @@ mod tests {
                 .resource::<MaterialRegistry>()
                 .is_saved("bramble"),
             "a material is listed by what it is, not by where it sits",
+        );
+    }
+
+    /// Every walk of the project's textures used to put the whole panel up
+    /// again, so a project that walked its files three times as it opened
+    /// listed every material three times over.
+    #[test]
+    fn a_walk_that_found_the_same_textures_does_not_ask_the_panel_to_list_again() {
+        let (mut app, tmp) = project_browser_app();
+        let textures = tmp.path().join("assets/textures");
+        std::fs::create_dir_all(&textures).expect("the folder is made");
+        for file in ["moss_albedo.png", "moss_normal.png"] {
+            std::fs::write(textures.join(file), [0xffu8; 64]).expect("the texture is written");
+        }
+        let assets = tmp.path().join("assets");
+
+        take_texture_sets(app.world_mut(), detect_material_sets(&assets));
+        assert!(
+            app.world().resource::<MaterialBrowserState>().needs_rescan,
+            "the first walk found textures nothing had listed yet"
+        );
+        app.world_mut()
+            .resource_mut::<MaterialBrowserState>()
+            .needs_rescan = false;
+
+        take_texture_sets(app.world_mut(), detect_material_sets(&assets));
+
+        assert!(
+            !app.world().resource::<MaterialBrowserState>().needs_rescan,
+            "a walk over the same files leaves the panel listing what it already lists"
         );
     }
 

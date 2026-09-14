@@ -55,6 +55,63 @@ impl StatusNotice {
     }
 }
 
+/// The long operations the editor is in the middle of, named in the footer for
+/// as long as they run.
+///
+/// A [`StatusNotice`] is a line about something already done and ages out; a
+/// phase is what is happening now and stays until whoever began it says it is
+/// over. Opening a project runs several at once, so each names itself under a
+/// key of its own and the footer shows the one begun most recently, which is
+/// what the editor has most recently turned to; when that one ends the footer
+/// falls back to whatever is still going. A bake or an export names itself the
+/// same way.
+#[derive(Resource, Default)]
+pub struct EditorPhase {
+    running: Vec<(&'static str, String)>,
+}
+
+impl EditorPhase {
+    /// Name what `owner` is busy with, replacing what it named before.
+    pub fn begin(&mut self, owner: &'static str, what: impl Into<String>) {
+        let what = what.into();
+        match self.running.iter_mut().find(|(key, _)| *key == owner) {
+            Some((_, named)) => *named = what,
+            None => self.running.push((owner, what)),
+        }
+    }
+
+    /// Say that what `owner` was doing is over.
+    pub fn finish(&mut self, owner: &'static str) {
+        self.running.retain(|(key, _)| *key != owner);
+    }
+
+    /// What the footer names: the phase begun most recently that is still
+    /// running.
+    pub fn current(&self) -> Option<&str> {
+        self.running.last().map(|(_, named)| named.as_str())
+    }
+
+    /// Every phase still running, in the order they began. What the footer has
+    /// room for is one of them; this is all of them.
+    pub fn running(&self) -> impl Iterator<Item = &str> {
+        self.running.iter().map(|(_, named)| named.as_str())
+    }
+}
+
+/// Name what the editor is busy with, from a path that holds the whole world.
+pub fn begin_phase(world: &mut World, owner: &'static str, what: impl Into<String>) {
+    if let Some(mut phase) = world.get_resource_mut::<EditorPhase>() {
+        phase.begin(owner, what);
+    }
+}
+
+/// Say that the phase `owner` began is over.
+pub fn finish_phase(world: &mut World, owner: &'static str) {
+    if let Some(mut phase) = world.get_resource_mut::<EditorPhase>() {
+        phase.finish(owner);
+    }
+}
+
 /// Put a refusal in front of the user: the editor did not do what was asked.
 pub fn notify_error(world: &mut World, text: impl Into<String>) {
     notify(world, text.into(), true);
@@ -95,6 +152,7 @@ impl Plugin for StatusBarPlugin {
             display: git_display,
         });
         app.init_resource::<StatusNotice>();
+        app.init_resource::<EditorPhase>();
         app.add_systems(
             Update,
             (
@@ -239,13 +297,14 @@ pub struct SceneStatsText;
 pub struct StatusBarRightBox;
 
 /// Pin the right-hand slot's text to the edge worth keeping: a build line ends
-/// in the crate count, so it is pinned right; a notice opens by naming its
-/// subject, so it is pinned left and loses its end instead.
+/// in the crate count, so it is pinned right; a notice or a phase opens by
+/// naming its subject, so it is pinned left and loses its end instead.
 fn align_status_right(
     notice: Res<StatusNotice>,
+    phase: Res<EditorPhase>,
     mut boxes: Query<&mut Node, With<StatusBarRightBox>>,
 ) {
-    let wanted = if notice.is_active() {
+    let wanted = if notice.is_active() || phase.current().is_some() {
         JustifyContent::FlexStart
     } else {
         JustifyContent::FlexEnd
@@ -266,8 +325,24 @@ fn update_status_right(
     build_status: Res<BuildStatus>,
     numeric: Res<NumericTransformState>,
     notice: Res<StatusNotice>,
+    phase: Res<EditorPhase>,
     mut text_query: Query<(&mut Text, &mut TextColor), With<StatusBarRight>>,
 ) {
+    // A phase says what the editor is doing right now, so it outranks the tool
+    // and the build line; a notice is a refusal the user still has to read, so
+    // it outranks the phase.
+    if !notice.is_active()
+        && let Some(current) = phase.current()
+        && let Ok((mut text, mut color)) = text_query.single_mut()
+    {
+        // A phase names a count that ticks down, so this runs every frame of a
+        // load; only a line that actually changed is worth relaying out.
+        if text.0 != current {
+            text.0 = current.to_string();
+        }
+        color.0 = jackdaw_feathers::tokens::TEXT_SECONDARY;
+        return;
+    }
     if notice.is_active() {
         if let Ok((mut text, mut color)) = text_query.single_mut() {
             text.0 = notice.text.clone();
@@ -299,8 +374,9 @@ fn update_status_right(
         && !modal.is_changed()
         && !edit_mode.is_changed()
         && !draw_state.is_changed()
-        // An expired notice has to be painted over.
+        // An expired notice or a finished phase has to be painted over.
         && !notice.is_changed()
+        && !phase.is_changed()
         && !numeric.is_changed()
     {
         return;

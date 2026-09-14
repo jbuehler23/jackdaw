@@ -65,6 +65,12 @@ impl Plugin for ProjectSelectPlugin {
             )
             .add_systems(
                 Update,
+                open_pending_scenes
+                    .run_if(in_state(AppState::Editor))
+                    .run_if(resource_exists::<PendingSceneOpens>),
+            )
+            .add_systems(
+                Update,
                 update_preflight_banner
                     .run_if(in_state(AppState::ProjectSelect))
                     .run_if(resource_changed::<PreflightState>),
@@ -1168,10 +1174,11 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
 /// `Editor`. Called from [`enter_project`] (no build needed) and
 /// from the build-complete poller (build finished, transitioning).
 ///
-/// If the project has a file at `<root>/assets/scene.jsn`, that
-/// scene is auto-loaded so the user lands in a populated editor
-/// rather than an empty one. This is the convention the game
-/// template ships with.
+/// The scenes the project was last left on are queued rather than opened here;
+/// [`open_pending_scenes`] takes them one a frame, and falls back to
+/// `<root>/assets/scene.bsn` when the project remembers none, so the user
+/// lands in a populated editor rather than an empty one. That is the
+/// convention the game template ships with.
 ///
 /// Every open funnels through here, so the asset-root check lives here: no
 /// other path can install a [`ProjectRoot`] whose `assets/` the asset server is
@@ -1216,9 +1223,9 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
     let mut next_state = world.resource_mut::<NextState<AppState>>();
     next_state.set(AppState::Editor);
 
-    // Every scene below opens in this same exclusive run, before the schema
-    // watcher's first tick, so the project's component types must be known here
-    // or the session's first load reads them all as unknown.
+    // The scenes queued below open before the schema watcher's first tick, so
+    // the project's component types must be known here or the first load reads
+    // them all as unknown.
     crate::pie::refresh_project_types(world);
 
     let last_open_tabs = world
@@ -1231,29 +1238,81 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
         .config
         .last_active_tab;
 
-    if !last_open_tabs.is_empty() {
-        for rel in &last_open_tabs {
+    let paths: Vec<PathBuf> = last_open_tabs
+        .iter()
+        .filter_map(|rel| {
             let abs = root.join(rel);
             if !abs.is_file() {
                 warn!("Persisted tab not found, skipping: {abs:?}");
-                continue;
+                return None;
             }
-            crate::scenes::operators::scene_open_system(world, &abs);
-        }
-        // Clamp last_active to current tab count.
-        let tab_count = world.resource::<crate::scenes::Scenes>().tabs.len();
-        if tab_count > 0 {
-            let target = last_active.min(tab_count - 1);
-            crate::scenes::swap::swap_active_tab(world, target);
-        }
-    }
+            Some(abs)
+        })
+        .collect();
+    world.insert_resource(PendingSceneOpens {
+        paths: paths.into(),
+        active: last_active,
+        named: false,
+        root,
+    });
+}
 
-    // If we ended up with zero tabs (no persisted list, or every
-    // persisted entry was missing on disk), fall back to `assets/scene.bsn`
-    // (the legacy `.jsn` sibling if that is all that exists) or an empty
-    // untitled scene, so the user never lands in the editor with no scene.
-    if world.resource::<crate::scenes::Scenes>().tabs.is_empty() {
-        let assets = root.join("assets");
+/// What the footer calls the scenes a project opens with.
+const SCENE_OPEN_PHASE: &str = "scene open";
+
+/// The scenes an opening project still has to put in front of the user.
+///
+/// Spawning one costs a whole frame on a scene of any size, so they open one a
+/// frame with the footer naming the one coming next: the window draws, says
+/// what it is about to do, and only then does it.
+#[derive(Resource)]
+struct PendingSceneOpens {
+    paths: std::collections::VecDeque<PathBuf>,
+    /// The tab the project was last left on.
+    active: usize,
+    /// Whether the footer has already had a frame to name the next scene.
+    named: bool,
+    root: PathBuf,
+}
+
+fn open_pending_scenes(world: &mut World) {
+    let Some(next) = world.resource::<PendingSceneOpens>().paths.front().cloned() else {
+        finish_pending_scene_opens(world);
+        return;
+    };
+    if !world.resource::<PendingSceneOpens>().named {
+        world.resource_mut::<PendingSceneOpens>().named = true;
+        let name = next
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| next.display().to_string());
+        crate::status_bar::begin_phase(world, SCENE_OPEN_PHASE, format!("Opening {name}"));
+        return;
+    }
+    {
+        let mut pending = world.resource_mut::<PendingSceneOpens>();
+        pending.paths.pop_front();
+        pending.named = false;
+    }
+    crate::scenes::operators::scene_open_system(world, &next);
+}
+
+/// Bring the tab the project was last left on forward, and fall back to a
+/// scene of some kind when nothing opened.
+///
+/// A project with no persisted tabs, or whose every persisted entry has gone
+/// from disk, falls back to `assets/scene.bsn` (the legacy `.jsn` sibling if
+/// that is all there is) or an empty untitled scene, so the user never lands
+/// in the editor with no scene at all.
+fn finish_pending_scene_opens(world: &mut World) {
+    let Some(pending) = world.remove_resource::<PendingSceneOpens>() else {
+        return;
+    };
+    let tab_count = world.resource::<crate::scenes::Scenes>().tabs.len();
+    if tab_count > 0 {
+        crate::scenes::swap::swap_active_tab(world, pending.active.min(tab_count - 1));
+    } else {
+        let assets = pending.root.join("assets");
         let bsn = assets.join("scene.bsn");
         let jsn = assets.join("scene.jsn");
         let scene_path = if bsn.is_file() {
@@ -1263,12 +1322,12 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
         } else {
             None
         };
-        if let Some(scene_path) = scene_path {
-            crate::scenes::operators::scene_open_system(world, &scene_path);
-        } else {
-            crate::scenes::operators::scene_new_system(world);
+        match scene_path {
+            Some(scene_path) => crate::scenes::operators::scene_open_system(world, &scene_path),
+            None => crate::scenes::operators::scene_new_system(world),
         }
     }
+    crate::status_bar::finish_phase(world, SCENE_OPEN_PHASE);
 }
 
 /// Hand `root` to a process rooted at it, without letting this one shut down

@@ -33,6 +33,9 @@ fn place(app: &mut App, path: &str) {
         .call()
         .expect("dispatch")
         .assert_finished();
+    // The model is handed to the scene spawner on the frame after its source
+    // is set, so a whole document's worth never lands in one frame.
+    app.update();
 }
 
 /// The skip list is matched by string, so a typo silently disables the skip.
@@ -99,6 +102,7 @@ fn undo_redo_restores_a_loadable_gltf() {
 /// The asset path behind the derived handle: asserting the component merely
 /// exists would pass with a defaulted handle.
 fn current_handle(app: &mut App) -> String {
+    app.update();
     let mut q = app
         .world_mut()
         .query::<(&jackdaw_scene_types::GltfSource, &WorldAssetRoot)>();
@@ -113,4 +117,173 @@ fn current_handle(app: &mut App) -> String {
         "handle points at {path:?}, not the placed model"
     );
     path
+}
+
+/// A model's render root goes out a frame or more after its source is set, so
+/// the placement can be taken back in between. Bringing the model on anyway
+/// would leave an instance under an entity that names no model, which nothing
+/// owns and nothing takes down again.
+#[test]
+fn a_model_whose_source_went_while_its_root_waited_never_comes_on() {
+    let mut app = util::editor_test_app();
+
+    let entity = app
+        .world_mut()
+        .spawn(jackdaw_scene_types::GltfSource {
+            path: "models/cube.gltf".into(),
+            scene_index: 0,
+        })
+        .id();
+    app.world_mut()
+        .entity_mut(entity)
+        .remove::<jackdaw_scene_types::GltfSource>();
+    app.update();
+    app.update();
+
+    assert!(
+        app.world().get::<WorldAssetRoot>(entity).is_none(),
+        "a model whose source went before its turn came was brought on anyway"
+    );
+}
+
+/// Models wait their turn, so an undo can land while a crowd of them is still
+/// queued. The undo respawns every entity in the document, which leaves those
+/// entries waiting on entities that have gone: handing a render root to one of
+/// those puts an instance under nothing, and the instance keeps the glTF's
+/// meshes and materials alive after the scene that named them is gone.
+#[test]
+fn an_undo_that_respawns_the_scene_leaves_no_model_queued_for_an_entity_that_has_gone() {
+    let mut app = util::editor_test_app();
+    place(&mut app, "models/dungeon.glb");
+
+    // A crowd still waiting its turn when the undo lands.
+    for index in 0..8 {
+        app.world_mut().spawn((
+            Name::new(format!("Waiting{index}")),
+            Transform::default(),
+            jackdaw_scene_types::GltfSource {
+                path: format!("models/waiting{index}.gltf"),
+                scene_index: 0,
+            },
+        ));
+    }
+    app.world_mut().flush();
+    assert!(
+        !app.world()
+            .resource::<jackdaw::entity_ops::PendingModelRoots>()
+            .is_empty(),
+        "the crowd is queued, so the undo has something to strand"
+    );
+
+    app.world_mut()
+        .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
+
+    let named = app
+        .world_mut()
+        .query::<&jackdaw_scene_types::GltfSource>()
+        .iter(app.world())
+        .count();
+    let queued = app
+        .world()
+        .resource::<jackdaw::entity_ops::PendingModelRoots>()
+        .len();
+    assert!(
+        queued <= named,
+        "{queued} models are queued for a scene that names {named}"
+    );
+
+    // The frames after the undo hand out whatever is left; a root reaching an
+    // entity that names no model would be a command error, and every root that
+    // did land belongs to an entity that is still there.
+    for _ in 0..8 {
+        app.update();
+    }
+    let stranded = app
+        .world_mut()
+        .query_filtered::<Entity, (
+            With<WorldAssetRoot>,
+            Without<jackdaw_scene_types::GltfSource>,
+        )>()
+        .iter(app.world())
+        .count();
+    assert_eq!(
+        stranded, 0,
+        "a model came on under an entity that names none"
+    );
+}
+
+/// The thumbnail stage builds its subjects beside the open scene, under an
+/// editor root a scene teardown leaves standing. Taking the scene down used to
+/// empty the whole queue, so a thumbnail whose model was still waiting its turn
+/// lost it with nothing left to ask for it again and drew an empty tile.
+#[test]
+fn a_model_queued_beside_the_scene_survives_the_scene_being_taken_down() {
+    let mut app = util::editor_test_app();
+    let stage = app
+        .world_mut()
+        .spawn((jackdaw::EditorEntity, Transform::default()))
+        .id();
+    let subject = app
+        .world_mut()
+        .spawn((
+            ChildOf(stage),
+            Transform::default(),
+            jackdaw_scene_types::GltfSource {
+                path: "models/lantern.glb".into(),
+                scene_index: 0,
+            },
+        ))
+        .id();
+    app.world_mut().flush();
+
+    jackdaw::scenes::operators::scene_new_system(app.world_mut());
+
+    assert!(
+        app.world().get_entity(subject).is_ok(),
+        "the teardown took the thumbnail stage down with the scene"
+    );
+    for _ in 0..8 {
+        app.update();
+    }
+    assert!(
+        app.world().get::<WorldAssetRoot>(subject).is_some(),
+        "a model queued beside the scene was forgotten when the scene went"
+    );
+}
+
+/// A scene root is despawned with its descendants, and the models the
+/// descendants name are queued under their own entities. Forgetting only the
+/// root would leave those entries waiting on entities that have gone.
+#[test]
+fn a_despawned_parent_takes_the_models_its_children_queued_with_it() {
+    let mut app = util::editor_test_app();
+    let parent = app
+        .world_mut()
+        .spawn((Name::new("Group"), Transform::default()))
+        .id();
+    app.world_mut().spawn((
+        ChildOf(parent),
+        Transform::default(),
+        jackdaw_scene_types::GltfSource {
+            path: "models/lantern.glb".into(),
+            scene_index: 0,
+        },
+    ));
+    app.world_mut().flush();
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::entity_ops::PendingModelRoots>()
+            .len(),
+        1,
+        "the child's model is queued, so the despawn has something to forget"
+    );
+
+    app.world_mut().entity_mut(parent).despawn();
+
+    assert!(
+        app.world()
+            .resource::<jackdaw::entity_ops::PendingModelRoots>()
+            .is_empty(),
+        "a child despawned with its parent left its model queued"
+    );
 }

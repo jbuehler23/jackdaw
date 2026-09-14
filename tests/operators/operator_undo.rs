@@ -176,6 +176,9 @@ fn entity_place_gltf_survives_later_history_and_scene_tabs() {
 
 #[track_caller]
 fn assert_single_renderable_gltf(app: &mut App, path: &str, position: Vec3) -> Entity {
+    // The render root goes out on the frame after its source is set, so a
+    // document's worth of models never lands in one frame.
+    app.update();
     let (entity, source, transform, root) = app
         .world_mut()
         .query::<(

@@ -182,6 +182,11 @@ pub fn activate_tab(world: &mut World, target: usize) {
         .as_ref()
         .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
+    // Filling the cache for this document bumps its epoch, and the driver that
+    // watches for that respawns the whole scene. The scene below is built from
+    // the cache as this fills it, so those bumps are answered here rather than
+    // by a respawn of what was just spawned.
+    let epoch_before = crate::scene_io::prefab_cache_epoch(world);
     let resolved: Option<jackdaw_bsn::SceneBsnAst> = if world
         .get_resource::<crate::prefab::PrefabAstCache>()
         .is_some()
@@ -229,6 +234,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
             Some(crate::scenes::TabRefusal::Rejected(err.to_string()))
         }
     };
+    crate::scene_io::forget_prefab_cache_bump(world, epoch_before);
     let spawned_ok = refusal.is_none();
 
     // Only a scene that spawned gets the viewport; a failed activation would

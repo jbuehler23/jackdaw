@@ -60,7 +60,7 @@ pub fn read_file_type(path: &Path) -> Option<String> {
 
 /// What a type path means to the editor: the marker a prefab carries, a kind
 /// it knows, or nothing it can open.
-fn kind_of_type(type_path: Option<&str>, kinds: &AssetKinds) -> AssetFileKind {
+pub(crate) fn kind_of_type(type_path: Option<&str>, kinds: &AssetKinds) -> AssetFileKind {
     let Some(type_path) = type_path else {
         return AssetFileKind::Scene;
     };
@@ -108,7 +108,9 @@ impl AssetKindCache {
         kind_of_type(self.type_of(path).as_deref(), kinds)
     }
 
-    fn type_of(&mut self, path: &Path) -> Option<String> {
+    /// The type the file at `path` names, from the memo where the file has
+    /// not changed since it was last read.
+    pub(crate) fn type_of(&mut self, path: &Path) -> Option<String> {
         let Ok(mtime) = std::fs::metadata(path).and_then(|meta| meta.modified()) else {
             self.entries.remove(path);
             return None;

@@ -20,6 +20,7 @@ use std::time::SystemTime;
 
 use bevy::asset::{ReflectAsset, UntypedAssetId, UntypedHandle};
 use bevy::prelude::*;
+use bevy::tasks::{IoTaskPool, Task, futures_lite::future};
 use jackdaw_api::prelude::{AssetKind, AssetKinds};
 use jackdaw_bsn::{BsnStructData, StemIndex};
 use path_slash::PathExt as _;
@@ -83,9 +84,18 @@ pub struct AssetIndex {
     by_id: HashMap<UntypedAssetId, PathBuf>,
     stems: StemIndex,
     warned_stems: Mutex<HashSet<String>>,
+    /// Counts every write to the index, so a walk that was out while one
+    /// landed can tell that what it found is already behind.
+    writes: u64,
 }
 
 impl AssetIndex {
+    /// How many times the index has been written. A reader that holds an
+    /// older count is looking at a project that has moved on.
+    pub fn writes(&self) -> u64 {
+        self.writes
+    }
+
     pub fn get(&self, path: &Path) -> Option<&AssetEntry> {
         self.entries.get(path)
     }
@@ -135,6 +145,7 @@ impl AssetIndex {
     /// Take the documents a walk saw as the set names are counted over.
     pub fn set_documents<I: IntoIterator<Item = PathBuf>>(&mut self, paths: I) {
         self.stems = StemIndex::from_paths(paths);
+        self.writes += 1;
     }
 
     /// The file a bare name stands for, for the references written before
@@ -164,6 +175,7 @@ impl AssetIndex {
     }
 
     pub fn insert(&mut self, entry: AssetEntry) {
+        self.writes += 1;
         if let Some(handle) = entry.value.handle() {
             self.by_id.insert(handle.id(), entry.path.clone());
         }
@@ -173,6 +185,7 @@ impl AssetIndex {
 
     pub fn remove(&mut self, path: &Path) -> Option<AssetEntry> {
         let entry = self.entries.remove(path)?;
+        self.writes += 1;
         if let Some(handle) = entry.value.handle() {
             self.by_id.remove(&handle.id());
         }
@@ -252,9 +265,51 @@ fn document_file(assets: &Path, relative: &Path) -> PathBuf {
     jackdaw_bsn::existing_form(&path).unwrap_or(path)
 }
 
-/// What a file says it holds, and the kind that claims it.
-fn kind_of_file(path: &Path, kinds: &AssetKinds, cache: &mut AssetKindCache) -> Option<AssetKind> {
-    let AssetFileKind::Asset { type_path } = cache.check(path, kinds) else {
+/// What one walk of a project's assets found: every document it saw, and the
+/// type each file names, with the modification time that reading it saw.
+struct AssetWalk {
+    documents: Vec<PathBuf>,
+    named: Vec<(PathBuf, String, SystemTime)>,
+}
+
+/// Walk `assets` and read what every file says it holds.
+///
+/// Filesystem only, with no world to touch, so the open and the watcher run it
+/// on the IO pool while the editor keeps drawing; [`apply_walk`] takes what it
+/// found.
+fn walk_assets(assets: &Path, cache: &mut AssetKindCache) -> AssetWalk {
+    let documents: Vec<PathBuf> = walk_document_files(assets)
+        .into_iter()
+        .filter_map(|path| {
+            let relative = path.strip_prefix(assets).ok()?.to_path_buf();
+            if is_catalog_file(&relative) {
+                return None;
+            }
+            Some(match jackdaw_bsn::is_binary_path(&relative) {
+                true => jackdaw_bsn::text_twin(&relative),
+                false => relative,
+            })
+        })
+        .collect();
+    let named = documents
+        .iter()
+        .filter_map(|relative| {
+            let path = document_file(assets, relative);
+            let type_path = cache.type_of(&path)?;
+            let mtime = std::fs::metadata(&path)
+                .and_then(|meta| meta.modified())
+                .ok()?;
+            Some((relative.clone(), type_path, mtime))
+        })
+        .collect();
+    AssetWalk { documents, named }
+}
+
+/// The kind that claims a type a file names, for the files a walk read.
+fn claimed_kind(type_path: &str, kinds: &AssetKinds) -> Option<AssetKind> {
+    let AssetFileKind::Asset { type_path } =
+        crate::asset_files::kind_of_type(Some(type_path), kinds)
+    else {
         return None;
     };
     kinds.by_type_path(&type_path).cloned()
@@ -354,48 +409,45 @@ fn move_value(
 /// has somewhere to write the file back from; its handle stays alive so
 /// whatever already references it keeps rendering.
 pub fn rescan_asset_index(world: &mut World) -> AssetRescan {
+    let Some(assets) = assets_dir(world) else {
+        return AssetRescan::default();
+    };
+    world.get_resource_or_init::<AssetKindCache>();
+    let walk = world
+        .resource_scope(|_world, mut cache: Mut<AssetKindCache>| walk_assets(&assets, &mut cache));
+    apply_walk(world, walk)
+}
+
+/// Bring the index up to what a walk found. Everything here touches the world,
+/// so it is the half that stays on the main thread.
+fn apply_walk(world: &mut World, walk: AssetWalk) -> AssetRescan {
     let mut scan = AssetRescan::default();
     let Some(assets) = assets_dir(world) else {
         return scan;
     };
-    world.get_resource_or_init::<AssetKindCache>();
     if !world.contains_resource::<AssetIndex>() {
         world.init_resource::<AssetIndex>();
     }
-
-    let documents: Vec<PathBuf> = walk_document_files(&assets)
-        .into_iter()
-        .filter_map(|path| {
-            let relative = path.strip_prefix(&assets).ok()?.to_path_buf();
-            if is_catalog_file(&relative) {
-                return None;
-            }
-            Some(match jackdaw_bsn::is_binary_path(&relative) {
-                true => jackdaw_bsn::text_twin(&relative),
-                false => relative,
-            })
-        })
-        .collect();
+    world.get_resource_or_init::<AssetWalks>().0 += 1;
+    // A walk that found the project exactly as the index already has it must
+    // leave the index alone: everything that lists what the index holds
+    // rebuilds when it changes, and the watcher walks often.
     world
         .resource_mut::<AssetIndex>()
-        .set_documents(documents.clone());
+        .bypass_change_detection()
+        .set_documents(walk.documents);
 
-    let found = world.resource_scope(|world, mut cache: Mut<AssetKindCache>| {
+    let found = {
         let Some(kinds) = world.get_resource::<AssetKinds>() else {
-            return Vec::new();
+            return scan;
         };
-        documents
+        walk.named
             .into_iter()
-            .filter_map(|relative| {
-                let path = document_file(&assets, &relative);
-                let kind = kind_of_file(&path, kinds, &mut cache)?;
-                let mtime = std::fs::metadata(&path)
-                    .and_then(|meta| meta.modified())
-                    .ok()?;
-                Some((relative, kind, mtime))
+            .filter_map(|(relative, type_path, mtime)| {
+                Some((relative, claimed_kind(&type_path, kinds)?, mtime))
             })
             .collect::<Vec<_>>()
-    });
+    };
 
     let gone: Vec<PathBuf> = world
         .resource::<AssetIndex>()
@@ -577,10 +629,33 @@ struct AssetFileWatcher {
 #[derive(Resource, Default)]
 struct AssetScanPending(bool);
 
+/// Counts the walks of the project's files that have landed, so a panel that
+/// lists something the index itself does not hold -- the texture sets, say --
+/// has a change to follow when a file appears or goes.
+#[derive(Resource, Default)]
+pub(crate) struct AssetWalks(u64);
+
+/// What the footer calls the walk that fills the index.
+const ASSET_WALK_PHASE: &str = "asset index";
+
+/// A walk of the project's assets running on the IO pool, carrying the memo of
+/// file types it took with it.
+#[derive(Resource)]
+struct AssetWalkTask {
+    task: Task<(AssetWalk, AssetKindCache)>,
+    /// Whether a frame has drawn since the walk was asked for. Taking the
+    /// result in the frame that asked for it would put the footer's line up
+    /// and take it down again without the window ever showing it.
+    seen: bool,
+    /// What the index's write count was when the walk set out.
+    writes: u64,
+}
+
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<AssetIndex>()
         .init_resource::<AssetKindCache>()
         .init_resource::<AssetScanPending>()
+        .init_resource::<AssetWalks>()
         .add_systems(OnEnter(crate::AppState::Editor), open_asset_index)
         .add_systems(
             Update,
@@ -588,19 +663,74 @@ pub(crate) fn plugin(app: &mut App) {
                 follow_asset_kinds.run_if(resource_changed::<AssetKinds>),
                 poll_asset_watcher,
                 apply_asset_scan,
+                finish_asset_walk,
             )
                 .chain()
                 .run_if(in_state(crate::AppState::Editor)),
         );
 }
 
-/// Index the open project's assets and start watching them.
+/// Start watching the open project's assets and ask for the walk that indexes
+/// them. The walk runs off the main thread, so the index arrives a frame or
+/// two after the project opens rather than inside the frame that opens it.
 pub fn open_asset_index(world: &mut World) {
+    // A walk of the project just closed is still out, and what it found says
+    // nothing about this one; dropping it also lets this project ask for one.
+    world.remove_resource::<AssetWalkTask>();
+    world.get_resource_or_init::<AssetScanPending>().0 = false;
     watch_asset_files(world);
-    let scan = rescan_asset_index(world);
+    start_asset_walk(world);
+}
+
+/// Ask for a walk of the project's assets, unless one is already running.
+fn start_asset_walk(world: &mut World) {
+    if world.contains_resource::<AssetWalkTask>() {
+        return;
+    }
+    let Some(assets) = assets_dir(world) else {
+        crate::status_bar::finish_phase(world, ASSET_WALK_PHASE);
+        return;
+    };
+    let mut cache = std::mem::take(&mut *world.get_resource_or_init::<AssetKindCache>());
+    let task = IoTaskPool::get().spawn(async move {
+        let walk = walk_assets(&assets, &mut cache);
+        (walk, cache)
+    });
+    let writes = world.resource::<AssetIndex>().writes();
+    world.insert_resource(AssetWalkTask {
+        task,
+        seen: false,
+        writes,
+    });
+    crate::status_bar::begin_phase(world, ASSET_WALK_PHASE, "Indexing the project's assets");
+}
+
+/// Take what a finished walk found into the index.
+fn finish_asset_walk(world: &mut World) {
+    let Some(mut task) = world.remove_resource::<AssetWalkTask>() else {
+        return;
+    };
+    if !std::mem::replace(&mut task.seen, true) {
+        world.insert_resource(task);
+        return;
+    }
+    let Some((walk, cache)) = future::block_on(future::poll_once(&mut task.task)) else {
+        world.insert_resource(task);
+        return;
+    };
+    *world.resource_mut::<AssetKindCache>() = cache;
+    if world.resource::<AssetIndex>().writes() != task.writes {
+        // Something wrote the index while the walk was out -- a file the editor
+        // saved, or a rescan asked for outright -- so what the walk found is
+        // already behind it. Applying it would take that write back out.
+        start_asset_walk(world);
+        return;
+    }
+    let scan = apply_walk(world, walk);
     if !scan.added.is_empty() {
         info!("Indexed {} asset files", scan.added.len());
     }
+    crate::status_bar::finish_phase(world, ASSET_WALK_PHASE);
 }
 
 fn watch_asset_files(world: &mut World) {
@@ -660,10 +790,15 @@ fn follow_asset_kinds(world: &mut World) {
 }
 
 fn apply_asset_scan(world: &mut World) {
+    // A walk already running was asked for before this change, so it cannot
+    // report it; the flag keeps until that walk lands and then asks again.
+    if world.contains_resource::<AssetWalkTask>() {
+        return;
+    }
     if !std::mem::take(&mut world.resource_mut::<AssetScanPending>().0) {
         return;
     }
-    rescan_asset_index(world);
+    start_asset_walk(world);
 }
 
 #[cfg(test)]

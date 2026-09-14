@@ -1,14 +1,18 @@
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use bevy::{
     ecs::system::{SystemParam, SystemState},
     gltf::GltfAssetLabel,
     prelude::*,
+    world_serialization::WorldAsset,
 };
 
 use crate::{
     EditorEntity,
     commands::{CommandHistory, DespawnEntity, EditorCommand, HierarchyLocation, MoveEntity},
+    frame_work::FramePace,
     selection::{Selected, Selection},
 };
 
@@ -57,7 +61,11 @@ impl Plugin for EntityOpsPlugin {
             }
         }
         app.init_resource::<EntityClipboard>()
+            .init_resource::<PendingModelRoots>()
+            .add_systems(Update, hand_out_model_roots)
+            .add_systems(PostUpdate, measure_model_cost)
             .add_observer(derive_world_asset_root)
+            .add_observer(forget_model_root)
             .register_type::<EmptyEntity>()
             .register_type::<SceneCamera>()
             .register_type::<SceneLight>()
@@ -65,6 +73,126 @@ impl Plugin for EntityOpsPlugin {
             .register_type::<SceneReflectionProbe>()
             .register_type::<SceneAnimationPlayer>()
             .register_type::<SceneAudioSource>();
+    }
+}
+
+/// The least a frame will spend bringing models on, whatever else it is doing.
+const MODEL_FLOOR_BUDGET: Duration = Duration::from_millis(16);
+
+/// The fewest and the most models one frame hands over.
+const MODEL_BATCH_FLOOR: usize = 1;
+const MODEL_BATCH_CEILING: usize = 256;
+
+/// Models whose render root has been derived but not yet handed to the
+/// world-asset spawner.
+///
+/// Inserting `WorldAssetRoot` registers an instance the spawner builds later
+/// in the same frame, and a large scene holds thousands of them: handing a
+/// whole document over at once spends the frame in the spawner and the window
+/// never paints. They wait here and go out a batch a frame instead.
+#[derive(Resource)]
+pub struct PendingModelRoots {
+    /// The order models come on in, first derived first.
+    order: VecDeque<Entity>,
+    /// The model each waiting entity is to be given. An entity whose source
+    /// changed again before its turn keeps its place and takes the later
+    /// model, so nothing comes on twice.
+    wanted: HashMap<Entity, Handle<WorldAsset>>,
+    pace: FramePace,
+    /// When this frame's batch went out, so what bringing it on cost can be
+    /// read once the spawner has run.
+    handed: Option<Instant>,
+    /// What the last batch cost, from handing it over to the spawner finishing.
+    /// The frame time as a whole says nothing useful here: a heavy scene
+    /// renders slowly whether or not anything is still coming on.
+    cost: Duration,
+}
+
+impl Default for PendingModelRoots {
+    fn default() -> Self {
+        Self {
+            order: VecDeque::new(),
+            wanted: HashMap::new(),
+            pace: FramePace::new(MODEL_BATCH_FLOOR, MODEL_BATCH_CEILING),
+            handed: None,
+            cost: Duration::ZERO,
+        }
+    }
+}
+
+impl PendingModelRoots {
+    /// How many models are still waiting to come on. What is still wanted, not
+    /// what is still in the order: an entity that has gone leaves its place in
+    /// the order behind and is stepped over when its turn comes.
+    pub fn len(&self) -> usize {
+        self.wanted.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.wanted.is_empty()
+    }
+
+    fn push(&mut self, entity: Entity, scene: Handle<WorldAsset>) {
+        if self.wanted.insert(entity, scene).is_none() {
+            self.order.push_back(entity);
+        }
+    }
+
+    /// Stop waiting to bring a model on. The model it was to be given goes
+    /// with it, so the glTF it names is held only for models still wanted.
+    fn forget(&mut self, entity: Entity) {
+        self.wanted.remove(&entity);
+    }
+
+    /// The models this frame takes on.
+    ///
+    /// Bringing them on may cost the frame about as much as everything else in
+    /// it already does, so a scene that is slow to draw still fills in at a
+    /// useful rate and a frame never much more than doubles.
+    fn take(&mut self, frame: Duration) -> Vec<(Entity, Handle<WorldAsset>)> {
+        let budget = frame.saturating_sub(self.cost).max(MODEL_FLOOR_BUDGET);
+        let count = self.pace.take(self.cost, budget, self.wanted.len());
+        let mut taking = Vec::with_capacity(count);
+        while taking.len() < count {
+            let Some(entity) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(scene) = self.wanted.remove(&entity) {
+                taking.push((entity, scene));
+            }
+        }
+        if !taking.is_empty() {
+            self.handed = Some(Instant::now());
+        }
+        taking
+    }
+}
+
+/// Stop waiting to bring on a model whose source has gone, rather than leaving
+/// it queued until its turn comes.
+///
+/// A queued model holds the glTF it names, and the footer and the wait for an
+/// idle editor both count what is queued; an entry nothing will use any more
+/// would hold an asset nothing renders and a wait nothing can end.
+fn forget_model_root(remove: On<Remove, GltfSource>, mut pending: ResMut<PendingModelRoots>) {
+    pending.forget(remove.entity);
+}
+
+/// Stop waiting to bring on the models queued for `entities`, for a caller
+/// taking them down itself.
+///
+/// What is queued belongs to whoever authored it: a scene taken down takes its
+/// own queue with it, and leaves alone the models queued beside it for the
+/// thumbnail stage and anything else that outlives one scene.
+pub(crate) fn forget_model_roots<'a>(
+    world: &mut World,
+    entities: impl IntoIterator<Item = &'a Entity>,
+) {
+    let Some(mut pending) = world.get_resource_mut::<PendingModelRoots>() else {
+        return;
+    };
+    for entity in entities {
+        pending.forget(*entity);
     }
 }
 
@@ -79,7 +207,7 @@ fn derive_world_asset_root(
     sources: Query<&GltfSource>,
     existing: Query<&WorldAssetRoot>,
     asset_server: Res<AssetServer>,
-    mut commands: Commands,
+    mut pending: ResMut<PendingModelRoots>,
 ) {
     let entity = insert.entity;
     let Ok(source) = sources.get(entity) else {
@@ -88,7 +216,7 @@ fn derive_world_asset_root(
     // Scenes authored before paths were normalised still hold an absolute
     // path; `to_asset_path` reduces those and passes a relative one through.
     let asset_path = to_asset_path(&source.path);
-    let scene: Handle<bevy::world_serialization::WorldAsset> =
+    let scene: Handle<WorldAsset> =
         asset_server.load(GltfAssetLabel::Scene(source.scene_index).from_asset(asset_path));
     // Re-inserting an equal handle still trips `Changed`, and the world-asset
     // spawner despawns and respawns the whole instance on every change.
@@ -97,7 +225,72 @@ fn derive_world_asset_root(
     if existing.get(entity).is_ok_and(|root| root.0 == scene) {
         return;
     }
-    commands.entity(entity).insert(WorldAssetRoot(scene));
+    pending.push(entity, scene);
+}
+
+/// What the footer calls the models still coming on.
+const MODEL_PHASE: &str = "models";
+
+/// Hand the next batch of models to the world-asset spawner. Runs in `Update`,
+/// so what it inserts is spawned in the same frame's `SpawnScene`.
+fn hand_out_model_roots(
+    time: Res<Time<Real>>,
+    mut pending: ResMut<PendingModelRoots>,
+    // Worlds without a footer -- the launcher, and the test harnesses -- still
+    // bring models on.
+    mut phase: Option<ResMut<crate::status_bar::EditorPhase>>,
+    mut named: Local<bool>,
+    mut commands: Commands,
+) {
+    if pending.is_empty() {
+        if std::mem::take(&mut *named)
+            && let Some(phase) = phase.as_mut()
+        {
+            phase.finish(MODEL_PHASE);
+        }
+        return;
+    }
+    if let Some(phase) = phase.as_mut() {
+        phase.begin(MODEL_PHASE, format!("Placing {} models", pending.len()));
+        *named = true;
+    }
+    let batch = pending.take(time.delta());
+    commands.queue(move |world: &mut World| {
+        for (entity, scene) in batch {
+            // Between deriving the root and this frame the entity may have
+            // been despawned, or already given this very handle.
+            let Ok(mut entity) = world.get_entity_mut(entity) else {
+                continue;
+            };
+            // The source may also have gone -- an undo of the placement that
+            // set it, say. An instance under an entity that no longer names a
+            // model is one nothing owns and nothing takes down again.
+            if entity.get::<GltfSource>().is_none() {
+                continue;
+            }
+            if entity
+                .get::<WorldAssetRoot>()
+                .is_some_and(|root| root.0 == scene)
+            {
+                continue;
+            }
+            entity.insert(WorldAssetRoot(scene));
+        }
+    });
+}
+
+/// Read what the batch this frame handed over cost, once the scene spawner
+/// that builds it has run.
+fn measure_model_cost(pending: ResMut<PendingModelRoots>) {
+    // Reaching through `ResMut` marks the resource changed, and most frames
+    // hand nothing over, so the empty case answers before it does.
+    if pending.handed.is_none() {
+        return;
+    }
+    let pending = pending.into_inner();
+    if let Some(handed) = pending.handed.take() {
+        pending.cost = handed.elapsed();
+    }
 }
 
 /// Marks an entity as an intentionally-empty scene entity (`Add > Empty`).

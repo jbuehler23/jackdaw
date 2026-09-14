@@ -22,6 +22,7 @@ mod modeling_essentials;
 mod new_asset;
 mod positionable_mirror_plane;
 mod project_definitions;
+mod project_startup;
 mod project_window;
 mod selection_undo;
 mod synthetic_input;

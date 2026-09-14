@@ -752,6 +752,41 @@ fn waiting_for_idle_holds_while_a_model_is_still_coming_in() {
     );
 }
 
+/// Models are handed to the scene spawner a batch a frame, so for the first
+/// frames of a scene the entity that names one has no handle to ask the asset
+/// server about. Idle has to hold over those frames too.
+#[test]
+fn waiting_for_idle_holds_while_a_model_is_still_queued_for_the_spawner() {
+    let (mut app, _project) = editor_with_a_project();
+
+    app.world_mut().spawn((
+        Name::new("QueuedModel"),
+        Transform::default(),
+        jackdaw_scene_types::GltfSource {
+            path: "pending.gltf".into(),
+            scene_index: 0,
+        },
+    ));
+    app.world_mut().flush();
+
+    assert!(
+        !app.world()
+            .resource::<jackdaw::entity_ops::PendingModelRoots>()
+            .is_empty(),
+        "the model is waiting its turn, so the wait has something to hold for"
+    );
+    let held = app
+        .world_mut()
+        .run_system_cached_with(wait_handler, Some(json!({ "until": "idle" })))
+        .expect("the handler ran")
+        .expect("the handler did not refuse");
+
+    assert_eq!(
+        held, None,
+        "idle answered over a scene whose models had not been handed over yet"
+    );
+}
+
 /// An operator that could not use a parameter says so to whoever called it, not
 /// only to the log: a remote caller has no terminal to read it in.
 #[test]

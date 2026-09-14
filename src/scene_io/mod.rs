@@ -20,7 +20,8 @@ pub use load::{
     spawn_default_lighting, spawn_open_dialog,
 };
 pub(crate) use load::{
-    SidecarImport, clear_scene_entities, despawn_scene_entities, import_terrain_sidecars,
+    SidecarImport, clear_scene_entities, despawn_scene_entities, forget_prefab_cache_bump,
+    import_terrain_sidecars, prefab_cache_epoch,
 };
 pub use registration::{register_entities_in_ast, register_entity_in_ast};
 pub use save::{

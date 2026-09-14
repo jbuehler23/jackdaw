@@ -37,6 +37,7 @@ pub mod draw_brush;
 pub mod edit_mode_ops;
 pub mod entity_ops;
 pub mod face_grid;
+pub mod frame_work;
 pub mod game_panel;
 pub mod gizmo_ops;
 pub mod gizmos;

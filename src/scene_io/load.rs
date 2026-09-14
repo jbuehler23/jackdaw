@@ -15,16 +15,17 @@ use super::registration::{register_entities_in_ast, register_entity_in_ast};
 use super::save::save_scene_inner;
 use super::{SceneDirtyState, SceneFilePath};
 
-fn prefab_cache_epoch(world: &World) -> Option<u64> {
+pub(crate) fn prefab_cache_epoch(world: &World) -> Option<u64> {
     world
         .get_resource::<crate::prefab::PrefabAstCache>()
         .map(crate::prefab::PrefabAstCache::epoch)
 }
 
-/// Mark the prefab-cache bumps this load caused as answered, so a refused load
-/// does not respawn the scene that is still open. A bump that was already
-/// pending stays pending.
-fn forget_prefab_cache_bump(world: &mut World, before: Option<u64>) {
+/// Mark the prefab-cache bumps this load caused as answered, so the driver
+/// that respawns the scene on a cache change does not respawn the scene that
+/// was just built from that very cache. A bump that was already pending stays
+/// pending.
+pub(crate) fn forget_prefab_cache_bump(world: &mut World, before: Option<u64>) {
     let (Some(before), Some(now)) = (before, prefab_cache_epoch(world)) else {
         return;
     };
@@ -860,6 +861,12 @@ pub(crate) fn despawn_scene_entities(world: &mut World) -> Result<(), BevyError>
         .collect();
 
     let scene_set = collect_subtree(world, roots);
+
+    // Models still queued for these entities belong to the scene going away.
+    // Whoever respawns asks for them again, and holding them would both keep
+    // the glTFs they name alive and hand render roots to entities of a scene
+    // that is no longer open.
+    crate::entity_ops::forget_model_roots(world, &scene_set);
 
     for entity in scene_set {
         if let Ok(entity_mut) = world.get_entity_mut(entity) {

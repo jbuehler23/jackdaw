@@ -1403,7 +1403,15 @@ fn editor_is_busy(world: &mut World) -> bool {
                 crate::build_status::BuildState::Building { .. }
             )
         });
-    building || crate::terrain::navmesh_bake::bake_in_flight(world) || scene_is_loading(world)
+    // A model still queued for the scene spawner is not loading and has no
+    // handle to ask about, so the queue is asked before the load states.
+    let placing = world
+        .get_resource::<crate::entity_ops::PendingModelRoots>()
+        .is_some_and(|pending| !pending.is_empty());
+    building
+        || placing
+        || crate::terrain::navmesh_bake::bake_in_flight(world)
+        || scene_is_loading(world)
 }
 
 /// Whether any model the open scene names is still coming off disk. Opening a
