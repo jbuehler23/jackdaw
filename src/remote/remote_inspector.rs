@@ -380,6 +380,7 @@ pub(crate) fn spawn_fallback_section(
                 component: None,
                 is_overridden: false,
                 is_derived: false,
+                removable: false,
                 prefab_ctx: None,
                 revert_through_prefab: false,
                 icon_font: &icon_font.0,

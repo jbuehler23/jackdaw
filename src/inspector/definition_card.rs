@@ -126,6 +126,7 @@ pub(crate) fn fill_definition_card(world: &mut World, inspector: Entity, source:
                 component: None,
                 is_overridden: false,
                 is_derived: false,
+                removable: false,
                 prefab_ctx: None,
                 revert_through_prefab: false,
                 icon_font: &icon_font,
