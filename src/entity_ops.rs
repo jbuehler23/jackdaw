@@ -714,15 +714,19 @@ fn spawn_gltf_in_world(world: &mut World, path: &str, position: Vec3) {
 }
 
 pub fn delete_selected(world: &mut World) {
-    let selection = world.resource::<Selection>();
-    let entities: Vec<Entity> = selection.entities.clone();
+    let entities: Vec<Entity> = world.resource::<Selection>().entities.clone();
+    delete_entities(world, &entities);
+}
 
+/// Delete these entities as one history entry, dropping each from the
+/// selection.
+pub fn delete_entities(world: &mut World, entities: &[Entity]) {
     if entities.is_empty() {
         return;
     }
 
     let mut cmds: Vec<Box<dyn EditorCommand>> = Vec::new();
-    for &entity in &entities {
+    for &entity in entities {
         if world.get_entity(entity).is_err() {
             continue;
         }
@@ -734,13 +738,13 @@ pub fn delete_selected(world: &mut World) {
 
     // Drop Selected and Selection before despawn so neither holds ids
     // of entities that are about to disappear.
-    for &entity in &entities {
+    for &entity in entities {
         if let Ok(mut ec) = world.get_entity_mut(entity) {
             ec.remove::<Selected>();
         }
     }
     let mut selection = world.resource_mut::<Selection>();
-    selection.entities.clear();
+    selection.entities.retain(|held| !entities.contains(held));
 
     // Execute all despawn commands
     for cmd in &mut cmds {
@@ -2133,12 +2137,18 @@ pub(crate) const TIMELINE_WINDOW_ID: &str = "jackdaw.timeline";
     params(
         path(String, doc = "Path to the GLTF asset."),
         pos_x(f64, doc = "World-space X position."),
-        pos_y(f64, doc = "World-space Y position."),
+        pos_y(
+            f64,
+            doc = "World-space Y position. The terrain height under the point \
+                   when omitted."
+        ),
         pos_z(f64, doc = "World-space Z position."),
     )
 )]
 pub(crate) fn entity_place_gltf(
     params: In<OperatorParameters>,
+    terrains: crate::terrain::ground::TerrainSurfaces,
+    store: Res<crate::terrain::TerrainDataStore>,
     mut commands: Commands,
 ) -> OperatorResult {
     let Some(path) = params.as_str("path").map(str::to_owned) else {
@@ -2149,15 +2159,20 @@ pub(crate) fn entity_place_gltf(
         warn!("entity.place_gltf: missing `pos_x` param");
         return OperatorResult::Cancelled;
     };
-    let Some(y) = params.as_float("pos_y") else {
-        warn!("entity.place_gltf: missing `pos_y` param");
-        return OperatorResult::Cancelled;
-    };
     let Some(z) = params.as_float("pos_z") else {
         warn!("entity.place_gltf: missing `pos_z` param");
         return OperatorResult::Cancelled;
     };
-    let position = Vec3::new(x as f32, y as f32, z as f32);
+    let ground =
+        || crate::terrain::ground::height_under(&terrains, &store, Vec2::new(x as f32, z as f32));
+    // Placing a model on the ground is what a caller with no viewport asks
+    // for, so an omitted height is the ground rather than a refusal.
+    let y = params
+        .as_float("pos_y")
+        .map(|y| y as f32)
+        .or_else(ground)
+        .unwrap_or(0.0);
+    let position = Vec3::new(x as f32, y, z as f32);
     commands.queue(move |world: &mut World| {
         spawn_gltf_in_world(world, &path, position);
     });
@@ -2167,10 +2182,32 @@ pub(crate) fn entity_place_gltf(
 #[operator(
     id = "entity.delete",
     label = "Delete",
-    is_available = can_act_on_entities
+    is_available = can_act_on_entities,
+    params(
+        entity(Entity, doc = "Entity to delete. Defaults to the selection."),
+        entities(
+            String,
+            doc = "Entities to delete, as a comma-separated list of ids. Defaults \
+                   to the selection."
+        ),
+    )
 )]
-pub(crate) fn entity_delete(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(delete_selected);
+pub(crate) fn entity_delete(
+    params: In<OperatorParameters>,
+    selection: Res<Selection>,
+    authored: Query<(), Without<crate::EditorEntity>>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let targets = match crate::boot_ops::target_entities(&params, &selection, &authored) {
+        Ok(targets) => targets,
+        Err(refusal) => {
+            commands.queue(move |world: &mut World| {
+                warn_caller(world, format!("entity.delete: {refusal}"));
+            });
+            return OperatorResult::Cancelled;
+        }
+    };
+    commands.queue(move |world: &mut World| delete_entities(world, &targets));
     OperatorResult::Finished
 }
 

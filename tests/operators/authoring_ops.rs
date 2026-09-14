@@ -484,10 +484,10 @@ fn a_two_entity_op_takes_both_targets_by_name_and_neither_from_the_selection() {
     );
 }
 
-/// The boot path must not be the hole in the `as_entity` guard: a number
-/// where an entity belongs is refused there too, not coerced.
+/// A number where an entity belongs is an id, and an id the scene does not
+/// hold is refused rather than acted on against the selection.
 #[test]
-fn a_number_where_an_entity_belongs_is_refused_on_the_boot_path_too() {
+fn an_id_no_entity_answers_to_is_refused_on_the_boot_path_too() {
     let mut app = authoring_app();
     run_finished(&mut app, "scene.new ui=true");
     let root = ui_roots(app.world_mut())[0];
@@ -498,18 +498,18 @@ fn a_number_where_an_entity_belongs_is_refused_on_the_boot_path_too() {
     assert!(
         matches!(
             outcomes.as_slice(),
-            [EntityParam::NotAName {
+            [EntityParam::NoSuchId {
                 param: "entity",
                 ..
             }]
         ),
-        "an Int for `entity` was treated as a target: {outcomes:?}"
+        "an id no entity answers to was treated as a target: {outcomes:?}"
     );
     let line = outcomes[0]
         .line("component.add")
         .expect("a refusal says why");
     assert!(
-        line.contains("neither an entity nor a name"),
+        line.contains("no entity in this scene has id 42"),
         "the refusal says what is wrong with the value: {line}"
     );
 
@@ -537,8 +537,10 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
     ("component.revert_baseline", &["entity"], true),
     ("component.set", &["entity"], true),
     ("entity.add.group", &["parent"], false),
+    ("entity.delete", &["entity"], false),
     ("entity.reparent", &["child", "parent"], false),
     ("entity.set_transform", &["entity"], true),
+    ("entity.snap_to_ground", &["entity"], false),
     ("field.set", &["entity"], true),
     ("hierarchy.rename_begin", &["entity"], true),
     ("physics.disable", &["entity"], true),
@@ -550,12 +552,14 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
     ("prefab.revert_all", &["instance_entity"], false),
     ("prefab.revert_component", &["entity"], false),
     ("prefab.revert_field", &["entity"], false),
+    ("prefab.spawn_instance", &["parent"], false),
     ("prefab.unbundle_instance", &["instance_entity"], false),
     (
         "prefab.unpack_child",
         &["child_entity", "drop_target_entity"],
         false,
     ),
+    ("selection.select", &["entity"], false),
     ("terrain.scatter.adopt", &["entity"], true),
     ("widget.add", &["parent"], false),
 ];

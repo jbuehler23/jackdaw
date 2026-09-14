@@ -1172,6 +1172,30 @@ pub fn poll_prefab_pick(world: &mut World) {
 /// ordinary `.bsn`, and only the placement differs; see
 /// `source_root_is_ui_scene`.
 pub fn spawn_instance(world: &mut World, prefab_path: &Path, world_pos: Vec3) {
+    spawn_instance_under(world, prefab_path, world_pos, None);
+}
+
+/// The scene's own root, when it has exactly one: where an instance belongs
+/// unless the caller says otherwise.
+///
+/// A second root is a second `Children` list in the saved file, and the
+/// document grows an anonymous wrapper to hold both, reindenting every line
+/// of it.
+fn sole_root(world: &World) -> Option<Entity> {
+    match top_level_entities(world).as_slice() {
+        [root] => Some(*root),
+        _ => None,
+    }
+}
+
+/// [`spawn_instance`] under a parent, which is where an instance placed in a
+/// scene that has a root belongs.
+pub fn spawn_instance_under(
+    world: &mut World,
+    prefab_path: &Path,
+    world_pos: Vec3,
+    parent: Option<Entity>,
+) {
     // Caches the prefab's own `IsA` ancestry alongside it, without which a
     // two-level prefab resolves to nothing.
     crate::prefab::save_load::cache_prefab_tree(
@@ -1195,19 +1219,85 @@ pub fn spawn_instance(world: &mut World, prefab_path: &Path, world_pos: Vec3) {
         .get(prefab_path)
         .is_some_and(source_root_is_ui_scene);
 
-    {
+    let parent_node = parent.and_then(|parent| world.resource::<SceneBsnAst>().ast_for(parent));
+    if parent.is_some() && parent_node.is_none() {
+        warn!(
+            "spawn_instance: the parent is not in the document, so the instance goes to the top \
+             level"
+        );
+    }
+    // The patch is the instance's own transform, so a parented instance
+    // carries where it sits inside the parent rather than where it sits in
+    // the world; one that ends up at the top level carries the world position
+    // it was placed at.
+    let local_pos = parent_node
+        .and(parent)
+        .and_then(|parent| world.get::<GlobalTransform>(parent))
+        .map_or(world_pos, |parent| {
+            parent.affine().inverse().transform_point3(world_pos)
+        });
+    let node = {
         let mut live = world.resource_mut::<SceneBsnAst>();
         let source = prefab_path.to_string_lossy().into_owned();
         let mut patches = vec![isa_patch(&source, &[]), peid_patch(0)];
         if !ui_scene {
-            patches.push(transform_translation_patch(world_pos));
+            patches.push(transform_translation_patch(local_pos));
         }
         let node = live.create_entity_node(patches);
-        live.add_to_roots(node);
-    }
+        match parent_node {
+            Some(parent_node) => live.add_child_to_ast(parent_node, node),
+            None => live.add_to_roots(node),
+        }
+        node
+    };
+
+    let path = document_path(world.resource::<SceneBsnAst>(), node);
 
     crate::prefab::watcher::reload_all_instances(world);
-    record_spawned_roots(world, 1);
+    // The respawn reads the document back and mints new ids for every node,
+    // so the instance is found again by where it sits rather than by the node
+    // it was, and the caller is told which entity it became.
+    if let Some(spawned) = node_at_path(world.resource::<SceneBsnAst>(), &path)
+        .and_then(|node| world.resource::<SceneBsnAst>().ecs_for_ast(node))
+    {
+        crate::commands::SpawnedEntities::record(world, spawned);
+    }
+}
+
+/// Where a node sits in the document, as the child indices leading from the
+/// root list down to it.
+///
+/// A node's id does not survive a respawn; its place in the document does.
+fn document_path(live: &SceneBsnAst, node: Entity) -> Vec<usize> {
+    let mut path = Vec::new();
+    let mut current = node;
+    while let Some(parent) = live.ast_parent_of(current) {
+        let Some(index) = live
+            .get_children_ast(parent)
+            .iter()
+            .position(|&child| child == current)
+        else {
+            return Vec::new();
+        };
+        path.push(index);
+        current = parent;
+    }
+    let Some(index) = live.roots.iter().position(|&root| root == current) else {
+        return Vec::new();
+    };
+    path.push(index);
+    path.reverse();
+    path
+}
+
+/// The node [`document_path`] describes, in whatever document is live now.
+fn node_at_path(live: &SceneBsnAst, path: &[usize]) -> Option<Entity> {
+    let (root, rest) = path.split_first()?;
+    let mut node = *live.roots.get(*root)?;
+    for &index in rest {
+        node = *live.get_children_ast(node).get(index)?;
+    }
+    Some(node)
 }
 
 /// Whether instancing this source produces a UI scene root, asked of the
@@ -1898,6 +1988,11 @@ pub fn prefab_open_source(
         pos_x(f64, doc = "World-space X position."),
         pos_y(f64, doc = "World-space Y position."),
         pos_z(f64, doc = "World-space Z position."),
+        parent(
+            Entity,
+            doc = "Entity that adopts the instance. The scene's own root when \
+                   omitted."
+        ),
     )
 )]
 pub fn prefab_spawn_instance(
@@ -1917,12 +2012,14 @@ pub fn prefab_spawn_instance(
     let Some(z) = require_float(&params, "pos_z", op) else {
         return OperatorResult::Cancelled;
     };
+    let parent = params.as_entity("parent");
     let pos = Vec3::new(x as f32, y as f32, z as f32);
     commands.queue(move |world: &mut World| {
         let Some(path) = resolve_asset_path(world, &path, op) else {
             return;
         };
-        spawn_instance(world, &path, pos);
+        let parent = parent.or_else(|| sole_root(world));
+        spawn_instance_under(world, &path, pos, parent);
     });
     OperatorResult::Finished
 }

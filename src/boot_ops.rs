@@ -186,6 +186,16 @@ pub(crate) fn unique_named_entity<'a>(
     }
 }
 
+/// The entity an id names, or `None` when the authored scene no longer holds
+/// it. Editor chrome answers to no id, the way it answers to no name.
+fn entity_with_id(world: &World, id: i64) -> Option<Entity> {
+    Entity::try_from_bits(id as u64).filter(|entity| {
+        world
+            .get_entity(*entity)
+            .is_ok_and(|entity| !entity.contains::<crate::EditorEntity>())
+    })
+}
+
 fn entity_named(world: &mut World, wanted: &str) -> Option<Entity> {
     let mut state = world.query_filtered::<(Entity, &Name), Without<crate::EditorEntity>>();
     unique_named_entity(state.iter(world), wanted)
@@ -235,8 +245,63 @@ pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] = &[
     ("clip.track.enable", "track"),
     ("clip.track.interpolation", "track"),
     ("entity.add.group", "parent"),
+    ("entity.delete", "entity"),
+    ("entity.snap_to_ground", "entity"),
+    ("prefab.spawn_instance", "parent"),
+    ("selection.select", "entity"),
     ("widget.add", "parent"),
 ];
+
+/// The entities an operator's `entity=` or `entities=` parameters name, or
+/// the selection when they name none.
+///
+/// `entities=` is a comma-separated list of the ids `jackdaw/scene_tree`
+/// reports, which is how a caller acts on two entities that carry the same
+/// `Name`. A list holding anything else, an id the scene has since minted past,
+/// or anything belonging to the editor rather than to the scene, is refused
+/// whole rather than acted on as far as it reads.
+pub(crate) fn target_entities(
+    params: &OperatorParameters,
+    selection: &Selection,
+    authored: &Query<(), Without<crate::EditorEntity>>,
+) -> Result<Vec<Entity>, String> {
+    if let Some(list) = params.get("entities") {
+        // A single id reads as a number rather than as a list of one.
+        let list = match list {
+            PropertyValue::String(text) => text.to_string(),
+            PropertyValue::Int(id) => id.to_string(),
+            other => return Err(format!("{other} is not a list of entity ids")),
+        };
+        let targets = parse_entity_ids(&list)?;
+        if let Some(gone) = targets.iter().find(|&&entity| !authored.contains(entity)) {
+            return Err(format!("{} names no entity in this scene", gone.to_bits()));
+        }
+        return Ok(targets);
+    }
+    if let Some(entity) = params.get("entity") {
+        // An `entity=` the resolver could not fill in is a refusal, never a
+        // quiet fall back to whatever happens to be selected.
+        return match entity {
+            PropertyValue::Entity(entity) => Ok(vec![*entity]),
+            other => Err(format!("{other} names no entity in this scene")),
+        };
+    }
+    Ok(selection.entities.clone())
+}
+
+/// The entities a comma-separated list of ids names.
+fn parse_entity_ids(list: &str) -> Result<Vec<Entity>, String> {
+    list.split([',', ' '])
+        .filter(|token| !token.is_empty())
+        .map(|token| {
+            token
+                .parse::<u64>()
+                .ok()
+                .and_then(Entity::try_from_bits)
+                .ok_or_else(|| format!("`{token}` is not an entity id"))
+        })
+        .collect()
+}
 
 /// How one declared `Entity` parameter was filled in, returned so a caller can
 /// tell a resolver refusal from an availability gate.
@@ -257,8 +322,17 @@ pub enum EntityParam {
         entity: Entity,
         entity_name: String,
     },
+    /// An id resolved to the entity carrying it, which two entities of the
+    /// same name cannot both be.
+    ById {
+        param: &'static str,
+        entity: Entity,
+        entity_name: String,
+    },
     /// The name the clause carried answers to no entity, or to two.
     NoSuchName { param: &'static str, name: String },
+    /// The id the clause carried answers to no entity in this scene.
+    NoSuchId { param: &'static str, id: i64 },
     /// The clause named nothing and this operator does not take the selection.
     NeedsAName { param: &'static str },
     /// The clause named nothing, and this parameter means something by being
@@ -277,6 +351,7 @@ impl EntityParam {
         matches!(
             self,
             Self::NoSuchName { .. }
+                | Self::NoSuchId { .. }
                 | Self::NeedsAName { .. }
                 | Self::NothingSelected { .. }
                 | Self::NotAName { .. }
@@ -299,10 +374,18 @@ impl EntityParam {
                 entity,
                 entity_name,
             } => format!("{op}: `{param}` = {entity} ({entity_name}), from the selection"),
+            Self::ById {
+                param,
+                entity,
+                entity_name,
+            } => format!("{op}: `{param}` = {entity} ({entity_name}), by id"),
             Self::NoSuchName { param, name } => format!(
                 "{op}: `{param}` was not set: `{name}` names no entity in this scene, or more \
                  than one"
             ),
+            Self::NoSuchId { param, id } => {
+                format!("{op}: `{param}` was not set: no entity in this scene has id {id}")
+            }
             Self::NeedsAName { param } => format!(
                 "{op}: `{param}` was not set: this operator does not take its target from the \
                  selection, so name it with `{param}=<Name>`"
@@ -363,6 +446,28 @@ pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityPa
                 continue;
             }
             Some(PropertyValue::String(name)) => Some(name.to_string()),
+            // An id names one entity where a `Name` can name two, so a caller
+            // reading ids out of the scene tree can act on either of them.
+            Some(PropertyValue::Int(id)) => {
+                let id = *id;
+                let outcome = match entity_with_id(world, id) {
+                    Some(entity) => {
+                        if sole_target {
+                            crate::selection::select_only(world, entity);
+                        }
+                        op.params[at.expect("the value came from this index")].1 =
+                            PropertyValue::Entity(entity);
+                        EntityParam::ById {
+                            param,
+                            entity,
+                            entity_name: name_of(world, entity),
+                        }
+                    }
+                    None => EntityParam::NoSuchId { param, id },
+                };
+                outcomes.push(outcome);
+                continue;
+            }
             Some(other) => {
                 outcomes.push(EntityParam::NotAName {
                     param,

@@ -137,6 +137,20 @@ impl Heightmap {
         Vec2::new(self.size.x / cells as f32, self.size.y / cells as f32)
     }
 
+    /// Surface height under a terrain-local XZ point, or `None` when the
+    /// point lies outside the cells this map covers.
+    ///
+    /// [`Self::sample_bilinear`] clamps a coordinate past the border back
+    /// onto the last row, which reads an edge height for a point with no
+    /// ground under it at all. A caller dropping something onto the terrain
+    /// needs the two told apart.
+    pub fn height_at_local(&self, local: Vec2) -> Option<f32> {
+        let last = self.cells_per_axis()? as f32;
+        let grid = self.world_to_grid(local);
+        (grid.x >= 0.0 && grid.y >= 0.0 && grid.x <= last && grid.y <= last)
+            .then(|| self.sample_bilinear(grid.x, grid.y))
+    }
+
     /// Cells along each axis, or `None` when the map spans no cell at
     /// all: one vertex is a point, not a cell.
     fn cells_per_axis(&self) -> Option<u32> {
@@ -362,6 +376,20 @@ mod tests {
             }
         }
         map
+    }
+
+    /// The ramp rises one unit per unit of +X from the map's west edge, so
+    /// a point a quarter of the way across sits a quarter of the width up,
+    /// and a point past the east edge has no ground under it at all.
+    #[test]
+    fn a_point_off_the_terrain_has_no_height_under_it() {
+        let map = ramp(33, 64.0, 1.0);
+
+        assert_eq!(map.height_at_local(Vec2::new(-32.0, 0.0)), Some(0.0));
+        assert_eq!(map.height_at_local(Vec2::new(-16.0, 0.0)), Some(16.0));
+        assert_eq!(map.height_at_local(Vec2::new(32.0, 0.0)), Some(64.0));
+        assert_eq!(map.height_at_local(Vec2::new(32.5, 0.0)), None);
+        assert_eq!(map.height_at_local(Vec2::new(0.0, -40.0)), None);
     }
 
     #[test]

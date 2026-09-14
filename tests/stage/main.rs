@@ -25,6 +25,7 @@ mod positionable_mirror_plane;
 mod project_definitions;
 mod project_startup;
 mod project_window;
+mod remote_placement;
 mod selection_undo;
 mod synthetic_input;
 mod ui_align;

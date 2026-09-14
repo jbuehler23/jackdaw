@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
+use jackdaw_api::prelude::warn_caller;
 use jackdaw_feathers::dialog::{DialogActionEvent, DialogVariant, EditorDialog, OpenDialogEvent};
 use jackdaw_feathers::icons::EditorFont;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -217,6 +218,43 @@ pub fn answer_external_change(world: &mut World, path: &Path, choice: ExternalRe
         note_known_hash(world, &change.path, change.hash);
     }
     queue_recheck(world, &change.path);
+}
+
+/// Whether the bytes at `path` differ from the ones the editor believes are
+/// there.
+///
+/// A path the editor has never read answers `false`: nothing is known to have
+/// moved on, and a caller that wants the file read regardless asks for that.
+pub(crate) fn file_has_moved_on(world: &World, path: &Path) -> bool {
+    let Some(state) = world.get_resource::<ExternalWatchState>() else {
+        return false;
+    };
+    let Some(known) = state.known.get(&canonical(path)) else {
+        return false;
+    };
+    std::fs::read(path).is_ok_and(|bytes| hash_bytes(&bytes) != *known)
+}
+
+/// Read the file back into the tab holding `path`, as answering a reload
+/// prompt does. A refusal leaves the open scene standing and says why.
+pub(crate) fn reread_tab_from_disk(world: &mut World, path: &Path) {
+    let path = canonical(path);
+    match reload_tab_from_disk(world, &path) {
+        Ok(()) => {
+            world
+                .resource_mut::<ExternalSceneChanges>()
+                .prompts
+                .retain(|prompt| prompt.path != path);
+            if let Ok(bytes) = std::fs::read(&path) {
+                note_known_content(world, &path, &bytes);
+            }
+        }
+        Err(refusal) => {
+            let reason = refusal.description();
+            world.resource_mut::<ExternalSceneChanges>().refused = Some(refusal);
+            warn_caller(world, format!("scene.open: {reason}"));
+        }
+    }
 }
 
 /// Ask the drain to look at `path` once more, without waiting for the

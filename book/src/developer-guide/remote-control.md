@@ -81,8 +81,9 @@ call_operator(id: "terrain.sculpt.stamp",
 
 Parameters are coerced from the operator's declared schema rather than the JSON
 spelling, so `radius: "6"` reaches a float parameter and `name: 7` a string one.
-An `Entity` parameter takes a name; operators that act on the selection use it
-when nothing is named.
+An `Entity` parameter takes a name or an entity id, which is how two entities of
+one name are told apart; operators that act on the selection use it when nothing
+is named.
 
 Group calls that mean one action with `batch` -- inside one span they are a
 single undo entry:
@@ -103,6 +104,17 @@ call_operator(id: "entity.add.cube")            -> { entities: [4294967301], ...
 call_operator(id: "entity.set_transform",
               params: { entity: 4294967301, x: 4, y: 0, z: -2 })
 ```
+
+Placing something on the ground takes no guess at `y`. `terrain.height` reports
+the surface under a point, `entity.place_gltf` stands a model on it when `pos_y`
+is left out, and `entity.snap_to_ground` drops the selection, or the ids given as
+`entities`, onto it as one undo entry.
+
+`prefab.spawn_instance` takes a `parent` and joins the scene's own root when it
+is left out, so a placed instance does not stand beside the scene. `scene.open`
+takes `reload`: a path whose tab is already open is activated in place, reread
+when `reload` is set, and reread anyway when the file has moved on under a tab
+holding no unsaved edits.
 
 `scene_tree` takes a `root` as an entity id or a name, and a `depth` counting
 generations below it: `0` is the node alone, `1` adds its children, and no

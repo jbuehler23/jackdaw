@@ -177,14 +177,23 @@ fn activate_pushed_tab(world: &mut World, target: usize) {
     id = "scene.open",
     label = "Open Scene...",
     allows_undo = false,
-    params(path(
-        String,
-        doc = "Scene file to open, absolute or relative to the project's assets \
-               directory. Asks for one when omitted."
-    ))
+    params(
+        path(
+            String,
+            doc = "Scene file to open, absolute or relative to the project's assets \
+                   directory. Asks for one when omitted."
+        ),
+        reload(
+            bool,
+            doc = "Reread the file when its tab is already open. Defaults to \
+                   false, which reads it only when the file has moved on and the \
+                   tab holds no unsaved edits."
+        ),
+    )
 )]
 pub fn scene_open(In(params): In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     let path = params.as_str("path").map(std::path::PathBuf::from);
+    let reload = params.as_bool("reload").unwrap_or(false);
     commands.queue(move |world: &mut World| {
         let path = match path.map(|path| resolve_scene_path(world, path)) {
             Some(Ok(path)) => Some(path),
@@ -198,6 +207,11 @@ pub fn scene_open(In(params): In<OperatorParameters>, mut commands: Commands) ->
             crate::scene_io::spawn_open_dialog(world);
             return;
         };
+        // An already open tab is activated in place, and reread when asked
+        // for or when the file has moved on under it.
+        if reopen_open_tab(world, &path, reload) {
+            return;
+        }
         // Legacy .jsn picks confirm conversion before opening.
         crate::migrate_dialog::request_open_with_conversion(world, &path);
     });
@@ -248,28 +262,98 @@ pub fn document_is_prefab(doc: &jackdaw_bsn::SceneBsnAst) -> bool {
     })
 }
 
+/// The open tab holding `path`, if one does.
+///
+/// A legacy `.jsn` pick also matches its converted `.bsn` sibling, since
+/// opening it would convert to (or already produced) that file.
+fn tab_holding(world: &World, canonical: &std::path::Path) -> Option<usize> {
+    let bsn_sibling = canonical
+        .extension()
+        .is_some_and(|e| e == "jsn")
+        .then(|| canonical.with_extension("bsn"));
+    world.resource::<Scenes>().tabs.iter().position(|tab| {
+        tab.path
+            .as_ref()
+            .map(|path| {
+                let tab_path = dunce::canonicalize(path).unwrap_or_else(|_| path.clone());
+                tab_path == *canonical || Some(&tab_path) == bsn_sibling.as_ref()
+            })
+            .unwrap_or(false)
+    })
+}
+
+/// Activate the tab already holding `path`, rereading the file when `asked`
+/// for or when the file has moved on under a tab holding no unsaved edits.
+///
+/// Answers whether a tab held the path at all; a caller opens it itself when
+/// none did.
+fn reopen_open_tab(world: &mut World, path: &std::path::Path, asked: bool) -> bool {
+    let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let Some(index) = tab_holding(world, &canonical) else {
+        return false;
+    };
+    let tab_path = world.resource::<Scenes>().tabs[index]
+        .path
+        .clone()
+        .unwrap_or(canonical);
+    let dirty = world.resource::<Scenes>().tabs[index].dirty;
+    let reread = if dirty {
+        if asked {
+            warn_caller(
+                world,
+                "scene.open: the tab holds unsaved edits, so the file was not reread",
+            );
+        }
+        false
+    } else {
+        asked || crate::scenes::external_watch::file_has_moved_on(world, &tab_path)
+    };
+    if !reread {
+        // The swap also refreshes any sidecar the file has moved on from.
+        swap_active_tab(world, index);
+        return true;
+    }
+    let kept: Vec<String> = selected_names(world);
+    crate::scenes::external_watch::reread_tab_from_disk(world, &tab_path);
+    reselect_by_name(world, &kept);
+    true
+}
+
+/// The names of the selected entities, which is all a respawned scene keeps
+/// of a selection: the entities themselves are gone with the document.
+fn selected_names(world: &mut World) -> Vec<String> {
+    let selection = world
+        .resource::<crate::selection::Selection>()
+        .entities
+        .clone();
+    selection
+        .into_iter()
+        .filter_map(|entity| world.get::<Name>(entity).map(ToString::to_string))
+        .collect()
+}
+
+/// Select the entities carrying `names` again. A name the reread document no
+/// longer holds is dropped.
+fn reselect_by_name(world: &mut World, names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+    let mut query = world.query_filtered::<(Entity, &Name), Without<crate::EditorEntity>>();
+    let found: Vec<Entity> = query
+        .iter(world)
+        .filter(|(_, name)| names.iter().any(|kept| kept == name.as_str()))
+        .map(|(entity, _)| entity)
+        .collect();
+    crate::selection::select_many(world, &found);
+}
+
 /// Sync system body. Public so tests and the Project window can call it
 /// without going through the file-dialog path.
 pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
-    // De-dupe: if a tab with this path is already open, switch to it. A
-    // legacy `.jsn` pick also matches its converted `.bsn` sibling, since
-    // opening it would convert to (or already produced) that file.
-    let bsn_sibling = canonical
-        .extension()
-        .is_some_and(|e| e == "jsn")
-        .then(|| canonical.with_extension("bsn"));
-    let existing = world.resource::<Scenes>().tabs.iter().position(|t| {
-        t.path
-            .as_ref()
-            .map(|p| {
-                let tab_path = dunce::canonicalize(p).unwrap_or_else(|_| p.clone());
-                tab_path == canonical || Some(&tab_path) == bsn_sibling.as_ref()
-            })
-            .unwrap_or(false)
-    });
-    if let Some(idx) = existing {
+    // De-dupe: if a tab with this path is already open, switch to it.
+    if let Some(idx) = tab_holding(world, &canonical) {
         // The swap also refreshes any sidecar the file has moved on from.
         swap_active_tab(world, idx);
         return;
@@ -312,13 +396,24 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
         )
     };
     let dirty = false;
-    let doc = match jackdaw_bsn::parse_bsn_text(&file_text) {
+    let mut doc = match jackdaw_bsn::parse_bsn_text(&file_text) {
         Ok(doc) => doc,
         Err(err) => {
             warn!("scene.open: failed to parse {opened:?}: {err}");
             return;
         }
     };
+
+    // A saved scene names its prefabs relative to itself; in memory they are
+    // absolute, since the cache is keyed by path. Without this the sources
+    // resolve against whatever directory the editor was launched from, and a
+    // scene holding instances opens with none of them.
+    let scene_dir = canonical.parent().map_or_else(
+        || std::path::PathBuf::from("."),
+        std::path::Path::to_path_buf,
+    );
+    jackdaw_prefab::absolutize_isa_sources(&mut doc, &scene_dir);
+    crate::prefab::save_load::retarget_isa_sources(&mut doc, &scene_dir);
 
     // A document naming the removed facade UI vocabulary gets no tab at all,
     // rather than opening with its UI silently missing.

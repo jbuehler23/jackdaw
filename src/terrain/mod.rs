@@ -3,6 +3,7 @@ pub mod channel_ops;
 pub mod detail;
 pub mod detail_ops;
 pub mod export;
+pub mod ground;
 pub mod inspector;
 pub mod mesh;
 pub mod navmesh_bake;

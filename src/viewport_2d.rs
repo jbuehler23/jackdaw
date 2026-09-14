@@ -2318,25 +2318,47 @@ fn parse_viewport_2d_mode(mode: &str) -> Option<Viewport2dMode> {
     }
 }
 
-/// Select the authored entity with this name. Editor chrome is excluded, so the
-/// name resolves against the authored scene alone, and an ambiguous name is
-/// refused rather than guessed.
+/// Select the authored entity with this name, or the ones the ids name.
+/// Editor chrome is excluded, so a name resolves against the authored scene
+/// alone, and an ambiguous name is refused rather than guessed.
 #[operator(
     id = "selection.select",
     label = "Select By Name",
     description = "Select the entity with this name in the current scene.",
     allows_undo = false,
-    params(name(
-        String,
-        doc = "`Name` of the entity to select. Must match exactly one."
-    ))
+    params(
+        name(
+            String,
+            doc = "`Name` of the entity to select. Must match exactly one."
+        ),
+        entity(
+            Entity,
+            doc = "Entity to select, which a name cannot tell from \
+                              its namesake."
+        ),
+        entities(String, doc = "Entities to select, as a comma-separated list of ids."),
+    )
 )]
 pub(crate) fn selection_select(
     params: In<OperatorParameters>,
     named: Query<(Entity, &Name), Without<crate::EditorEntity>>,
+    authored: Query<(), Without<crate::EditorEntity>>,
     mut selection: ResMut<Selection>,
     mut commands: Commands,
 ) -> OperatorResult {
+    if params.get("entity").is_some() || params.get("entities").is_some() {
+        let targets = match crate::boot_ops::target_entities(&params, &selection, &authored) {
+            Ok(targets) => targets,
+            Err(refusal) => {
+                commands.queue(move |world: &mut World| {
+                    warn_caller(world, format!("selection.select: {refusal}"));
+                });
+                return OperatorResult::Cancelled;
+            }
+        };
+        selection.select_multiple(&mut commands, &targets);
+        return OperatorResult::Finished;
+    }
     let Some(wanted) = params.as_str("name").filter(|name| !name.is_empty()) else {
         warn!("selection.select: missing 'name' parameter");
         return OperatorResult::Cancelled;

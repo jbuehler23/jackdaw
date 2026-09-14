@@ -495,6 +495,19 @@ pub fn place_entity(
     location: HierarchyLocation,
     transform: WorldTransform,
 ) {
+    // A move recorded before the scene was respawned names entities the
+    // document no longer holds. Undoing it moves nothing rather than taking
+    // the editor down with it.
+    if world.get_entity(entity).is_err() {
+        warn!("{entity} is no longer in the scene, so its move was skipped");
+        return;
+    }
+    if let Some(parent) = location.parent
+        && world.get_entity(parent).is_err()
+    {
+        warn!("{parent} is no longer in the scene, so the move under it was skipped");
+        return;
+    }
     let current_world = (transform == WorldTransform::Keep)
         .then(|| world.get::<GlobalTransform>(entity).copied())
         .flatten();
