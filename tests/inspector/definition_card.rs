@@ -261,3 +261,50 @@ fn the_list_controls_add_a_row_to_the_definitions_list() {
         "and the card rebuilt with a row for it",
     );
 }
+
+/// The card says what the file is used by, so a change to it is a change to
+/// everything named there.
+#[test]
+fn the_card_lists_the_documents_that_reference_the_asset() {
+    let (mut app, tmp) = app_with_open_definition();
+    let scene = tmp.path().join("assets/zone.bsn");
+    std::fs::write(
+        &scene,
+        "bevy_transform::components::transform::Transform\n\
+         my_game::Painted { definition: \"rat.bsn\" }\n",
+    )
+    .expect("the scene is written");
+    jackdaw::asset_index::rescan_asset_index(app.world_mut());
+
+    let result = app
+        .world_mut()
+        .operator("asset.open")
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: false,
+        })
+        .param("path", "rat.bsn")
+        .call()
+        .expect("the operator dispatched");
+    assert_eq!(result, OperatorResult::Finished);
+    for _ in 0..6 {
+        app.update();
+    }
+
+    let mut listed: Vec<std::path::PathBuf> = app
+        .world()
+        .iter_entities()
+        .filter_map(|entity| {
+            entity
+                .get::<jackdaw::inspector::file_card::ReferenceRow>()
+                .map(|row| row.0.clone())
+        })
+        .collect();
+    listed.sort();
+    listed.dedup();
+    assert_eq!(
+        listed,
+        vec![std::path::PathBuf::from("zone.bsn")],
+        "the scene spelling the asset's path is on the card"
+    );
+}
