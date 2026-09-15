@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use bevy::asset::LoadState;
 use bevy::gltf::Gltf;
 use bevy::prelude::*;
+use path_slash::PathExt as _;
 
 /// Deepest directory tree the library walks, matching the asset listing the
 /// remote serves.
@@ -229,7 +230,7 @@ fn walk_one_directory(scan: &mut LibraryScan) {
         let Ok(relative) = path.strip_prefix(&root) else {
             continue;
         };
-        scan.want(&relative.to_string_lossy());
+        scan.want(&relative.to_slash_lossy());
     }
 }
 

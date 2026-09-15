@@ -2667,7 +2667,7 @@ pub(crate) fn on_numeric_value_change_f64(
     let value_str = format!("{value}");
     commands.queue(move |world: &mut World| {
         if is_final {
-            apply_field_json_with_undo(world, target, &tp, &path, serde_json::json!(value));
+            apply_field_json_with_undo(world, target, &tp, &path, parse_to_json_value(&value_str));
         } else {
             apply_field_value_live(world, target, &tp, &path, &value_str);
         }

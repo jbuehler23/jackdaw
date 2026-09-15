@@ -242,7 +242,7 @@ pub fn indexed_path(world: &World, path: &Path) -> Option<PathBuf> {
     if let Ok(relative) = path.strip_prefix(&assets) {
         return Some(relative.to_path_buf());
     }
-    let stays_under = !path.is_absolute()
+    let stays_under = !path.has_root()
         && !path
             .components()
             .any(|part| part == std::path::Component::ParentDir);

@@ -1541,6 +1541,26 @@ fn entity_has_reflected_component(world: &World, entity: Entity, type_path: &str
     reflect_component.reflect(entity_ref).is_some()
 }
 
+/// A JSON number as a signed integer. `as_i64` is `None` for a float even
+/// when it is a whole value, which is what a drag-scrub widget writes.
+fn json_number_as_i64(n: &serde_json::Number) -> i64 {
+    n.as_i64()
+        .or_else(|| n.as_f64().map(|value| value as i64))
+        .unwrap_or_default()
+}
+
+/// A JSON number as an unsigned integer. Same float case as
+/// [`json_number_as_i64`].
+fn json_number_as_u64(n: &serde_json::Number) -> u64 {
+    n.as_u64()
+        .or_else(|| {
+            n.as_f64()
+                .filter(|value| *value >= 0.0)
+                .map(|value| value as u64)
+        })
+        .unwrap_or_default()
+}
+
 /// Convert a `serde_json::Value` into the matching reflect primitive and apply it.
 /// Falls back to Bevy's typed deserialization for complex types (enums, structs)
 /// that can't be handled by simple primitive downcasts.
@@ -1556,23 +1576,23 @@ pub(crate) fn apply_json_to_reflect(
             } else if let Some(f) = field.try_downcast_mut::<f64>() {
                 *f = n.as_f64().unwrap_or_default();
             } else if let Some(i) = field.try_downcast_mut::<i32>() {
-                *i = n.as_i64().unwrap_or_default() as i32;
+                *i = json_number_as_i64(n) as i32;
             } else if let Some(i) = field.try_downcast_mut::<u32>() {
-                *i = n.as_u64().unwrap_or_default() as u32;
+                *i = json_number_as_u64(n) as u32;
             } else if let Some(i) = field.try_downcast_mut::<usize>() {
-                *i = n.as_u64().unwrap_or_default() as usize;
+                *i = json_number_as_u64(n) as usize;
             } else if let Some(i) = field.try_downcast_mut::<i8>() {
-                *i = n.as_i64().unwrap_or_default() as i8;
+                *i = json_number_as_i64(n) as i8;
             } else if let Some(i) = field.try_downcast_mut::<i16>() {
-                *i = n.as_i64().unwrap_or_default() as i16;
+                *i = json_number_as_i64(n) as i16;
             } else if let Some(i) = field.try_downcast_mut::<i64>() {
-                *i = n.as_i64().unwrap_or_default();
+                *i = json_number_as_i64(n);
             } else if let Some(i) = field.try_downcast_mut::<u8>() {
-                *i = n.as_u64().unwrap_or_default() as u8;
+                *i = json_number_as_u64(n) as u8;
             } else if let Some(i) = field.try_downcast_mut::<u16>() {
-                *i = n.as_u64().unwrap_or_default() as u16;
+                *i = json_number_as_u64(n) as u16;
             } else if let Some(i) = field.try_downcast_mut::<u64>() {
-                *i = n.as_u64().unwrap_or_default();
+                *i = json_number_as_u64(n);
             } else {
                 // A number can still be the whole of an `Option<f32>` or a
                 // `NonZero`, which reflect takes through serde's own paths.

@@ -328,6 +328,7 @@ fn add_as_state_appends_to_the_selected_set_and_undoes() {
         .id();
     jackdaw::scene_io::register_entity_in_ast(app.world_mut(), rig);
     jackdaw::selection::select_only(app.world_mut(), rig);
+    place_animated_model(&mut app);
     settle_until(&mut app, "the library indexed the file", |app| {
         library_has_the_animated_file(app)
     });
