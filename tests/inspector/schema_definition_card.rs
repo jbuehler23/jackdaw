@@ -17,6 +17,7 @@ use jackdaw_feathers::tooltip::Tooltip;
 use crate::util;
 
 const ITEM_TYPE: &str = "definition_project::content::ItemDef";
+const QUEST_TYPE: &str = "definition_project::content::QuestDef";
 
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/definition_project")
@@ -25,6 +26,16 @@ fn fixture_dir() -> PathBuf {
 /// An editor showing the inspector, with an item definition of a kind the
 /// project reported open in it.
 fn app_with_open_item() -> (App, tempfile::TempDir) {
+    app_with_open("item", "torch")
+}
+
+/// The same editor with a quest open, whose objectives are an enum whose
+/// variants carry fields.
+fn app_with_open_quest() -> (App, tempfile::TempDir) {
+    app_with_open("quest", "errand")
+}
+
+fn app_with_open(kind: &'static str, name: &'static str) -> (App, tempfile::TempDir) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let fixture = fixture_dir();
     std::fs::copy(
@@ -59,8 +70,8 @@ fn app_with_open_item() -> (App, tempfile::TempDir) {
             execution_context: ExecutionContext::Invoke,
             creates_history_entry: true,
         })
-        .param("type", "item")
-        .param("name", "torch")
+        .param("type", kind)
+        .param("name", name)
         .call()
         .expect("the operator dispatched");
     assert_eq!(result, OperatorResult::Finished);
@@ -71,9 +82,17 @@ fn app_with_open_item() -> (App, tempfile::TempDir) {
 }
 
 fn open_item(app: &App) -> serde_json::Value {
+    open_definition(app, "item")
+}
+
+fn open_quest(app: &App) -> serde_json::Value {
+    open_definition(app, "quest")
+}
+
+fn open_definition(app: &App, kind: &str) -> serde_json::Value {
     let path = jackdaw::definition_assets::open_definition_path(app.world())
         .expect("a definition is open");
-    jackdaw::definition_assets::schema_definition_json(app.world(), "item", &path)
+    jackdaw::definition_assets::schema_definition_json(app.world(), kind, &path)
         .expect("the definition reads back")
 }
 
@@ -85,8 +104,12 @@ fn all_entities(app: &mut App) -> Vec<Entity> {
 }
 
 fn field_widget(app: &mut App, field_path: &str) -> Entity {
+    widget_writing(app, ITEM_TYPE, field_path)
+}
+
+fn widget_writing(app: &mut App, type_path: &'static str, field_path: &str) -> Entity {
     let found = all_entities(app).into_iter().find(|entity| {
-        jackdaw::inspector::field_edited_by(app.world(), *entity) == Some((ITEM_TYPE, field_path))
+        jackdaw::inspector::field_edited_by(app.world(), *entity) == Some((type_path, field_path))
     });
     found.unwrap_or_else(|| {
         let paths: Vec<String> = all_entities(app)
@@ -276,5 +299,165 @@ fn removing_one_row_leaves_the_rest_holding_what_they_held() {
     assert!(
         loot[0] == coin || loot[0] == gem,
         "the row that stayed is the one it was, got {loot:?}"
+    );
+}
+
+/// The menu item on the card carrying this caption.
+fn menu_item(app: &mut App, caption: &str) -> Entity {
+    let items = menu_items(app);
+    items
+        .iter()
+        .find(|(_, shown)| shown == caption)
+        .map(|(entity, _)| *entity)
+        .unwrap_or_else(|| {
+            let shown: Vec<&String> = items.iter().map(|(_, caption)| caption).collect();
+            panic!("no menu item says '{caption}'; the card offers {shown:?}")
+        })
+}
+
+fn settle(app: &mut App) {
+    for _ in 0..10 {
+        app.update();
+    }
+}
+
+/// The control with this tooltip that acts on the named list.
+fn list_control(app: &mut App, title: &str, field_path: &str) -> Entity {
+    all_entities(app)
+        .into_iter()
+        .find(|entity| {
+            app.world()
+                .get::<Tooltip>(*entity)
+                .is_some_and(|tip| tip.title == title)
+                && jackdaw::inspector::list_edited_by(app.world(), *entity)
+                    .is_some_and(|(_, field)| field == field_path)
+        })
+        .unwrap_or_else(|| panic!("no '{title}' control acts on `{field_path}`"))
+}
+
+#[test]
+fn an_objective_added_to_the_list_offers_the_variants_its_type_declares() {
+    let (mut app, _tmp) = app_with_open_quest();
+    let add = list_control(&mut app, "Add an item to the list", "objectives");
+    app.world_mut().trigger(ButtonClickEvent { entity: add });
+    settle(&mut app);
+
+    assert_eq!(
+        open_quest(&app)["objectives"][0],
+        serde_json::json!("Explore"),
+        "the new row holds what the enum defaults to"
+    );
+    let captions: Vec<String> = menu_items(&mut app)
+        .into_iter()
+        .map(|(_, caption)| caption)
+        .collect();
+    for variant in ["Explore", "Kill", "Reach"] {
+        assert!(
+            captions.contains(&variant.to_string()),
+            "the menu offers {variant}, got {captions:?}"
+        );
+    }
+}
+
+#[test]
+fn choosing_a_variant_that_carries_fields_gives_the_row_its_fields() {
+    let (mut app, _tmp) = app_with_open_quest();
+    let add = list_control(&mut app, "Add an item to the list", "objectives");
+    app.world_mut().trigger(ButtonClickEvent { entity: add });
+    settle(&mut app);
+
+    let kill = menu_item(&mut app, "Kill");
+    app.world_mut().trigger(Activate { entity: kill });
+    settle(&mut app);
+
+    assert_eq!(
+        open_quest(&app)["objectives"][0],
+        serde_json::json!({ "Kill": { "mob": "", "count": 0 } }),
+        "the variant is written with what its fields default to"
+    );
+    let count = widget_writing(&mut app, QUEST_TYPE, "objectives[0].Kill.count");
+    app.world_mut().trigger(ValueChange {
+        source: count,
+        value: 3.0_f64,
+        is_final: true,
+    });
+    settle(&mut app);
+
+    assert_eq!(
+        open_quest(&app)["objectives"][0]["Kill"]["count"],
+        3,
+        "and the row it grew writes the field it stands for"
+    );
+}
+
+#[test]
+fn an_objective_taken_off_the_list_leaves_the_rest_holding_what_they_held() {
+    let (mut app, _tmp) = app_with_open_quest();
+    let result = app
+        .world_mut()
+        .operator("asset.set")
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        })
+        .param("field", "objectives")
+        .param(
+            "value",
+            r#"[{"Kill":{"mob":"rat","count":3}},"Explore"]"#.to_string(),
+        )
+        .call()
+        .expect("the operator dispatched");
+    assert_eq!(result, OperatorResult::Finished);
+    settle(&mut app);
+    assert_eq!(
+        open_quest(&app)["objectives"].as_array().map(Vec::len),
+        Some(2)
+    );
+
+    let remove = list_control(&mut app, "Remove", "objectives");
+    app.world_mut().trigger(ButtonClickEvent { entity: remove });
+    settle(&mut app);
+
+    let objectives = open_quest(&app)["objectives"]
+        .as_array()
+        .cloned()
+        .expect("the field is still a list");
+    assert_eq!(objectives.len(), 1, "one row went, got {objectives:?}");
+    assert!(
+        objectives[0] == serde_json::json!({ "Kill": { "mob": "rat", "count": 3 } })
+            || objectives[0] == serde_json::json!("Explore"),
+        "the row that stayed is the one it was, got {objectives:?}"
+    );
+}
+
+#[test]
+fn a_variant_field_the_file_leaves_out_is_still_shown_and_written() {
+    let (mut app, _tmp) = app_with_open_quest();
+    let result = app
+        .world_mut()
+        .operator("asset.set")
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        })
+        .param("field", "objectives")
+        .param("value", r#"[{"Kill":{"mob":"rat"}}]"#.to_string())
+        .call()
+        .expect("the operator dispatched");
+    assert_eq!(result, OperatorResult::Finished);
+    settle(&mut app);
+
+    let count = widget_writing(&mut app, QUEST_TYPE, "objectives[0].Kill.count");
+    app.world_mut().trigger(ValueChange {
+        source: count,
+        value: 2.0_f64,
+        is_final: true,
+    });
+    settle(&mut app);
+
+    assert_eq!(
+        open_quest(&app)["objectives"][0]["Kill"]["count"],
+        2,
+        "the row a spelled-out field never got writes the field it stands for"
     );
 }

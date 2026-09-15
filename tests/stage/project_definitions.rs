@@ -250,6 +250,63 @@ fn a_definition_is_created_edited_and_saved_through_its_operators() {
     );
 }
 
+/// The open quest as JSON, for the kind whose objectives carry fields.
+fn open_quest(app: &App) -> serde_json::Value {
+    let path = jackdaw::definition_assets::open_definition_path(app.world())
+        .expect("a definition is open");
+    jackdaw::definition_assets::schema_definition_json(app.world(), "quest", &path)
+        .expect("the definition reads back")
+}
+
+#[test]
+fn an_objective_carrying_fields_is_written_as_its_type_declares_it_and_read_back() {
+    let (mut app, tmp) = editor_with_items();
+    call(
+        &mut app,
+        "asset.new",
+        &[("type", "quest".into()), ("name", "errand".into())],
+    );
+    call(
+        &mut app,
+        "asset.set",
+        &[
+            ("field", "objectives".into()),
+            (
+                "value",
+                r#"[{"Kill":{"mob":"rat","count":3}},{"Reach":["hollow"]},"Explore"]"#.into(),
+            ),
+        ],
+    );
+
+    let edited = open_quest(&app);
+    assert_eq!(edited["objectives"][0]["Kill"]["mob"], "rat");
+    assert_eq!(edited["objectives"][0]["Kill"]["count"], 3);
+
+    call(&mut app, "asset.save", &[]);
+    let written = std::fs::read_to_string(item_path(&tmp, "errand")).expect("the file reads");
+    assert!(
+        written.contains("Objective::Kill"),
+        "a variant carrying fields is spelled as the type declares it, got:\n{written}"
+    );
+    assert!(
+        written.contains("Objective::Reach"),
+        "and so is one carrying an unnamed field, got:\n{written}"
+    );
+    drop(app);
+
+    let reopened = editor_on(tmp.path());
+    let read_back = jackdaw::definition_assets::schema_definition_json(
+        reopened.world(),
+        "quest",
+        Path::new("errand.bsn"),
+    )
+    .expect("the definition reads back");
+    assert_eq!(
+        read_back["objectives"], edited["objectives"],
+        "the file holds what the card put in it"
+    );
+}
+
 #[test]
 fn a_saved_definition_carries_its_type_in_its_header() {
     let (mut app, tmp) = editor_with_items();
@@ -704,6 +761,7 @@ fn a_colour_field_on_a_project_component_takes_channels() {
                 name: "night_color".to_string(),
                 type_path: "bevy_color::color::Color".to_string(),
                 item_type_path: String::new(),
+                asset_type_path: String::new(),
             }],
             kind: jackdaw_schema::TypeKind::Struct,
             default: None,

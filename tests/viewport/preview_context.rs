@@ -346,6 +346,7 @@ fn a_schema_only_type_previews_as_a_disabled_row() {
                 name: "current".to_string(),
                 type_path: "f32".to_string(),
                 item_type_path: String::new(),
+                asset_type_path: String::new(),
             }],
             kind: TypeKind::Struct,
             default: None,
@@ -1171,6 +1172,7 @@ fn schema_type(type_path: &str, kind: TypeKind, fields: &[(&str, &str)]) -> Type
                 name: (*name).to_string(),
                 type_path: (*type_path).to_string(),
                 item_type_path: String::new(),
+                asset_type_path: String::new(),
             })
             .collect(),
         kind,

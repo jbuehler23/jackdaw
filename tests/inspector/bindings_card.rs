@@ -36,6 +36,7 @@ fn field(name: &str, type_path: &str) -> FieldSchema {
         name: name.to_string(),
         type_path: type_path.to_string(),
         item_type_path: String::new(),
+        asset_type_path: String::new(),
     }
 }
 

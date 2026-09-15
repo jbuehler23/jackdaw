@@ -113,6 +113,29 @@ fn app_with_open_outfit() -> (App, tempfile::TempDir) {
     (app, tmp)
 }
 
+/// The same editor with a quest open, whose reward field its type marks as
+/// naming an item.
+fn app_with_open_quest() -> (App, tempfile::TempDir) {
+    let (mut app, tmp) = app_with_open_outfit();
+    call(
+        &mut app,
+        "asset.new",
+        &[
+            ("type", "quest".into()),
+            ("name", "errand".into()),
+            ("path", "content".into()),
+        ],
+    );
+    (app, tmp)
+}
+
+fn open_quest(app: &App) -> serde_json::Value {
+    let path =
+        jackdaw::definition_assets::open_definition_path(app.world()).expect("an asset is open");
+    jackdaw::definition_assets::schema_definition_json(app.world(), "quest", &path)
+        .expect("the asset reads back")
+}
+
 fn open_outfit(app: &App) -> serde_json::Value {
     let path =
         jackdaw::definition_assets::open_definition_path(app.world()).expect("an asset is open");
@@ -563,7 +586,7 @@ fn a_list_of_material_paths_shows_one_row_per_element() {
 
 /// Build the card again, the way reopening the file does, so a row whose kind
 /// follows the value is decided against what the value now holds.
-fn reopen_outfit(app: &mut App) {
+fn reopen_open_asset(app: &mut App) {
     let path =
         jackdaw::definition_assets::open_definition_path(app.world()).expect("an asset is open");
     let path = path.to_string_lossy().into_owned();
@@ -581,7 +604,7 @@ fn a_material_a_string_field_names_gets_the_row_a_handle_gets() {
             ("value", "materials/slate.bsn".into()),
         ],
     );
-    reopen_outfit(&mut app);
+    reopen_open_asset(&mut app);
 
     let row = asset_row(&mut app, "skin");
     assert!(
@@ -614,7 +637,7 @@ fn a_string_naming_no_file_stays_a_plain_text_row() {
         "asset.set",
         &[("field", "skin".into()), ("value", "ranger".into())],
     );
-    reopen_outfit(&mut app);
+    reopen_open_asset(&mut app);
 
     assert!(
         !asset_rows(&mut app)
@@ -640,7 +663,7 @@ fn an_empty_element_beside_a_path_still_offers_the_picker() {
             ),
         ],
     );
-    reopen_outfit(&mut app);
+    reopen_open_asset(&mut app);
 
     let mut fields: Vec<String> = asset_rows(&mut app)
         .into_iter()
@@ -702,5 +725,88 @@ fn clearing_a_field_no_row_shows_is_refused_rather_than_reported_as_done() {
         result,
         OperatorResult::Cancelled,
         "a caller naming a field the inspector is not showing is told so",
+    );
+}
+
+#[test]
+fn a_field_marked_as_a_reference_offers_its_kind_before_it_names_anything() {
+    let (mut app, _tmp) = app_with_open_quest();
+    assert_eq!(open_quest(&app)["reward"], "", "the field starts empty");
+
+    let row = asset_row(&mut app, "reward");
+    assert!(
+        row_text(&mut app, row).iter().any(|line| line == "None"),
+        "the row is there before the field names a file, got {:?}",
+        row_text(&mut app, row),
+    );
+
+    call(&mut app, "asset.pick", &[("field", "reward".into())]);
+    let listed: Vec<String> = all_entities(&mut app)
+        .into_iter()
+        .filter_map(|entity| app.world().get::<PickerItems<String>>(entity))
+        .flat_map(|items| items.items().to_vec())
+        .collect();
+    assert_eq!(
+        listed,
+        vec!["content/torch.bsn".to_string()],
+        "the picker offers the kind the field's type names and nothing else",
+    );
+
+    call(
+        &mut app,
+        "asset.pick",
+        &[
+            ("field", "reward".into()),
+            ("value", "content/torch.bsn".into()),
+        ],
+    );
+    assert_eq!(open_quest(&app)["reward"], "content/torch.bsn");
+}
+
+#[test]
+fn a_drop_of_another_kind_on_a_marked_field_is_refused() {
+    let (mut app, tmp) = app_with_open_quest();
+    let row = asset_row(&mut app, "reward");
+
+    drop_file_on(&mut app, row, tmp.path().join("assets/materials/moss.bsn"));
+
+    assert_eq!(
+        open_quest(&app)["reward"],
+        "",
+        "a file holding something else leaves the field as it was",
+    );
+    assert!(
+        !app.world()
+            .resource::<jackdaw::status_bar::StatusNotice>()
+            .text()
+            .is_empty(),
+        "and the refusal is said out loud",
+    );
+}
+
+#[test]
+fn every_element_of_a_marked_list_offers_its_kind_while_it_holds_nothing() {
+    let (mut app, _tmp) = app_with_open_quest();
+    call(
+        &mut app,
+        "asset.set",
+        &[
+            ("field", "extras".into()),
+            ("value", serde_json::json!(["", ""]).to_string().into()),
+        ],
+    );
+    reopen_open_asset(&mut app);
+
+    let mut fields: Vec<String> = asset_rows(&mut app)
+        .into_iter()
+        .map(|(_, _, field)| field)
+        .filter(|field| field.starts_with("extras["))
+        .collect();
+    fields.sort();
+    fields.dedup();
+    assert_eq!(
+        fields,
+        vec!["extras[0]".to_string(), "extras[1]".to_string()],
+        "the elements take their kind from what the list's type declares",
     );
 }

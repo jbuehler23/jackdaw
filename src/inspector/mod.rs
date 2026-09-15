@@ -379,6 +379,15 @@ pub fn field_edited_by(world: &World, widget: Entity) -> Option<(&str, &str)> {
         .map(|binding| (binding.type_path.as_str(), binding.field_path.as_str()))
 }
 
+/// The list a control edits, as the type path and field path of that list, or
+/// `None` when the entity is no list control. Addresses Add, Remove and the
+/// move arrows by the list they act on rather than by their position.
+pub fn list_edited_by(world: &World, control: Entity) -> Option<(&str, &str)> {
+    world
+        .get::<reflect_fields::ReflectListControl>(control)
+        .map(reflect_fields::ReflectListControl::list)
+}
+
 /// The asset type a row names, and the field path it writes, or `None` when
 /// the entity is no asset row. Addresses an asset row by the field it writes.
 pub fn asset_field_shown_by(world: &World, row: Entity) -> Option<(&str, &str)> {

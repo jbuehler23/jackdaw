@@ -3317,12 +3317,14 @@ pub(super) fn apply_enum_variant_with_undo(
     // variant-name string only works for *unit* variants; struct/tuple variants
     // need `{"VariantName": {fields}}` / `{"VariantName": [items]}` with the
     // fields populated from each field type's `ReflectDefault`.
-    let new_json = {
+    let registered = {
         let reg = registry.read();
         resolve_enum_info(type_path, field_path, &reg)
             .and_then(|enum_info| build_variant_default_json(enum_info, variant_name, &reg))
-            .unwrap_or_else(|| serde_json::Value::String(variant_name.to_string()))
     };
+    let new_json = registered
+        .or_else(|| schema_variant_json(world, type_path, field_path, variant_name))
+        .unwrap_or_else(|| serde_json::Value::String(variant_name.to_string()));
 
     if try_route_pie_live_field_edit(world, _entity, type_path, field_path, new_json.clone()) {
         return;
@@ -3338,6 +3340,19 @@ pub(super) fn apply_enum_variant_with_undo(
     // No need to flag anything -- `refresh_enum_variants` detects the ECS
     // variant change and rebuilds the affected subtree automatically. Same
     // goes for undo/redo since the command framework mutates the ECS too.
+}
+
+/// The value a variant takes on a type the editor knows only as the project's
+/// schema, so a variant carrying fields is written with them rather than as a
+/// bare name.
+fn schema_variant_json(
+    world: &World,
+    type_path: &str,
+    field_path: &str,
+    variant_name: &str,
+) -> Option<serde_json::Value> {
+    let types = world.get_resource::<crate::project_types::ProjectTypes>()?;
+    crate::schema_values::variant_json(world, types, type_path, field_path, variant_name)
 }
 
 /// Walk from a component type through a dotted field path to find the enum `TypeInfo`
@@ -3500,6 +3515,13 @@ pub(crate) struct ReflectListControl {
     field_path: String,
     index: usize,
     edit: ListEdit,
+}
+
+impl ReflectListControl {
+    /// The type and field path of the list this control edits.
+    pub(crate) fn list(&self) -> (&str, &str) {
+        (&self.type_path, &self.field_path)
+    }
 }
 
 /// The move and remove controls beside one element of a list.

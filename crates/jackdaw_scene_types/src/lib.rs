@@ -244,6 +244,25 @@ impl From<String> for EditorDescription {
     }
 }
 
+/// The asset kind a `String` field, or the elements of a `Vec<String>`
+/// field, names by path. Attach via
+/// `#[reflect(@AssetRef("my_game::content::ItemDef"))]`.
+///
+/// The editor gives such a field the asset row from the start, whether or
+/// not it names a file yet, offers only files of that kind, and refuses a
+/// drop of anything else.
+///
+/// ```ignore
+/// #[derive(Asset, Reflect, Default)]
+/// #[reflect(Default)]
+/// pub struct QuestDef {
+///     #[reflect(@AssetRef("my_game::content::ItemDef"))]
+///     pub reward: String,
+/// }
+/// ```
+#[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AssetRef(pub &'static str);
+
 /// Viewport preview for a marker component. Attach via
 /// `#[reflect(@EditorPreview::gltf("models/rifle.glb"))]`.
 #[derive(Reflect, Clone, Debug, PartialEq)]

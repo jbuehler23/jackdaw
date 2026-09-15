@@ -64,7 +64,26 @@ fn spawn_one_field(
     path: &str,
     depth: usize,
 ) {
-    if let Some(asset_type_path) = asset_type_of_path(ctx, &field.type_path, held) {
+    let declared = declared_asset_type(field);
+    if let Some(item_type) = item_type_path(field) {
+        spawn_list_field(
+            commands,
+            parent,
+            ctx,
+            ListField {
+                name: &field.name,
+                item_type,
+                element_asset: declared,
+            },
+            held,
+            path,
+            depth,
+        );
+        return;
+    }
+    if let Some(asset_type_path) =
+        declared.or_else(|| asset_type_of_path(ctx, &field.type_path, held))
+    {
         spawn_path_row(
             commands,
             parent,
@@ -76,22 +95,9 @@ fn spawn_one_field(
         );
         return;
     }
-    if let Some(item_type) = item_type_path(field) {
-        spawn_list_field(
-            commands,
-            parent,
-            ctx,
-            &field.name,
-            item_type,
-            held,
-            path,
-            depth,
-        );
-        return;
-    }
     if let Some(schema) = ctx.types.type_schema(&field.type_path) {
         match schema.kind {
-            TypeKind::Enum if all_unit_variants(schema) => {
+            TypeKind::Enum => {
                 spawn_enum_field(
                     commands,
                     parent,
@@ -143,24 +149,34 @@ fn spawn_one_field(
     );
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "a list row is a field row: where it goes, what it holds, and the context every control needs"
-)]
+/// The list a row stands for: what it is called, what it holds, and the asset
+/// kind its elements name when the type declares one.
+struct ListField<'a> {
+    name: &'a str,
+    item_type: &'a str,
+    element_asset: Option<String>,
+}
+
 fn spawn_list_field(
     commands: &mut Commands,
     parent: Entity,
     ctx: &SchemaFieldContext,
-    name: &str,
-    item_type: &str,
+    field: ListField,
     held: &Value,
     path: &str,
     depth: usize,
 ) {
+    let ListField {
+        name,
+        item_type,
+        element_asset,
+    } = field;
     let items = held.as_array().cloned().unwrap_or_default();
-    let element_asset = items
-        .iter()
-        .find_map(|item| asset_type_of_path(ctx, item_type, item));
+    let element_asset = element_asset.or_else(|| {
+        items
+            .iter()
+            .find_map(|item| asset_type_of_path(ctx, item_type, item))
+    });
     spawn_text_row(
         commands,
         parent,
@@ -189,6 +205,9 @@ fn spawn_list_field(
                         &format!("{item_path}."),
                         depth + 1,
                     );
+                }
+                Some(schema) if schema.kind == TypeKind::Enum => {
+                    spawn_enum_field(commands, row, ctx, "", schema, item, &item_path, depth + 1);
                 }
                 _ => match element_asset.clone() {
                     Some(asset_type_path) => spawn_path_row(
@@ -225,6 +244,18 @@ fn spawn_list_field(
         }
     }
     spawn_list_add_button(commands, parent, ctx.source, ctx.type_path, path);
+}
+
+/// The asset kind a field's own type declares its strings name, through
+/// `@AssetRef`.
+fn declared_asset_type(field: &FieldSchema) -> Option<String> {
+    use bevy::reflect::TypePath as _;
+
+    if field.asset_type_path.is_empty() {
+        return None;
+    }
+    let names = item_type_path(field).unwrap_or(&field.type_path);
+    (names == String::type_path()).then(|| field.asset_type_path.clone())
 }
 
 /// The asset a string field names, for a schema that spells a reference as the
@@ -342,6 +373,21 @@ fn spawn_enum_field(
         .iter()
         .map(|variant| variant.name.clone())
         .collect();
+    if variants.is_empty() {
+        spawn_read_only(commands, parent, name, held, depth);
+        return;
+    }
+    let column = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(jackdaw_feathers::tokens::SPACING_XS),
+                width: Val::Percent(100.0),
+                ..default()
+            },
+            ChildOf(parent),
+        ))
+        .id();
     let row = commands
         .spawn((
             Node {
@@ -352,27 +398,82 @@ fn spawn_enum_field(
                 width: Val::Percent(100.0),
                 ..default()
             },
-            ChildOf(parent),
+            ChildOf(column),
         ))
         .id();
-    commands.spawn((
-        Text::new(format!("{name}:")),
-        TextFont {
-            font_size: jackdaw_feathers::tokens::TEXT_SIZE_SM,
-            ..default()
-        },
-        TextColor(jackdaw_feathers::tokens::TEXT_SECONDARY),
-        ChildOf(row),
-    ));
+    if !name.is_empty() {
+        commands.spawn((
+            Text::new(format!("{name}:")),
+            TextFont {
+                font_size: jackdaw_feathers::tokens::TEXT_SIZE_SM,
+                ..default()
+            },
+            TextColor(jackdaw_feathers::tokens::TEXT_SECONDARY),
+            ChildOf(row),
+        ));
+    }
+    let chosen = current_variant(held);
     spawn_enum_menu(
         commands,
         row,
         &variants,
-        &current_variant(held),
+        &chosen,
         path,
         ctx.source,
         ctx.type_path,
     );
+    spawn_variant_fields(commands, column, ctx, schema, &chosen, held, path, depth);
+}
+
+/// The rows for the fields the chosen variant carries, under the menu that
+/// chose it. A variant carrying nothing adds none.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a variant's rows are field rows: where they go, what they hold, and the context every control needs"
+)]
+fn spawn_variant_fields(
+    commands: &mut Commands,
+    parent: Entity,
+    ctx: &SchemaFieldContext,
+    schema: &TypeSchema,
+    chosen: &str,
+    held: &Value,
+    path: &str,
+    depth: usize,
+) {
+    if depth + 1 >= super::MAX_REFLECT_DEPTH {
+        return;
+    }
+    let Some(variant) = schema
+        .variants
+        .iter()
+        .find(|variant| variant.name == chosen)
+    else {
+        return;
+    };
+    let body = held.get(chosen);
+    for (index, field) in variant.fields.iter().enumerate() {
+        let (held_field, field_path) = if field.name.parse::<usize>().is_ok() {
+            (
+                body.and_then(|body| body.get(index)),
+                format!("{path}.{chosen}[{index}]"),
+            )
+        } else {
+            (
+                body.and_then(|body| body.get(&field.name)),
+                format!("{path}.{chosen}.{}", field.name),
+            )
+        };
+        spawn_one_field(
+            commands,
+            parent,
+            ctx,
+            field,
+            held_field.unwrap_or(&Value::Null),
+            &field_path,
+            depth + 1,
+        );
+    }
 }
 
 /// The variant a value names: a bare name, or the one key of a variant
@@ -384,14 +485,6 @@ fn current_variant(held: &Value) -> String {
     held.as_object()
         .and_then(|object| object.keys().next().cloned())
         .unwrap_or_default()
-}
-
-fn all_unit_variants(schema: &TypeSchema) -> bool {
-    !schema.variants.is_empty()
-        && schema
-            .variants
-            .iter()
-            .all(|variant| variant.fields.is_empty())
 }
 
 fn spawn_read_only(
@@ -412,4 +505,52 @@ fn spawn_read_only(
         format!("{name}: {shown}")
     };
     spawn_text_row(commands, parent, &label, depth);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::declared_asset_type;
+    use jackdaw_schema::FieldSchema;
+
+    fn marked(type_path: &str, item_type_path: &str) -> FieldSchema {
+        FieldSchema {
+            name: "reward".to_string(),
+            type_path: type_path.to_string(),
+            item_type_path: item_type_path.to_string(),
+            asset_type_path: "my_game::content::ItemDef".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_string_a_type_marks_as_a_reference_names_the_kind_it_declares() {
+        assert_eq!(
+            declared_asset_type(&marked("alloc::string::String", "")).as_deref(),
+            Some("my_game::content::ItemDef"),
+        );
+        assert_eq!(
+            declared_asset_type(&marked(
+                "alloc::vec::Vec<alloc::string::String>",
+                "alloc::string::String",
+            ))
+            .as_deref(),
+            Some("my_game::content::ItemDef"),
+            "a list of strings names the kind its elements hold",
+        );
+    }
+
+    #[test]
+    fn a_field_holding_no_string_names_no_kind_however_it_is_marked() {
+        for (type_path, item_type_path) in [
+            ("u32", ""),
+            ("core::option::Option<alloc::string::String>", ""),
+            ("alloc::vec::Vec<u32>", "u32"),
+            ("my_game::content::ItemDef", ""),
+        ] {
+            assert_eq!(
+                declared_asset_type(&marked(type_path, item_type_path)),
+                None,
+                "{type_path} holds no path to name a file with",
+            );
+        }
+    }
 }
