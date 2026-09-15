@@ -2348,9 +2348,10 @@ fn show_package_picker_card(
 fn package_picker_list_shell() -> impl Scene {
     bsn! {
         Node {
-            flex_direction: FlexDirection::Column,
+            flex_direction: FlexDirection::Row,
             width: percent(100),
             max_height: px(280.0),
+            align_items: AlignItems::Stretch,
             border: UiRect::all(px(1.0)),
             border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
             overflow: Overflow::clip(),
@@ -2367,7 +2368,8 @@ fn package_picker_list() -> impl Scene {
             flex_direction: FlexDirection::Column,
             row_gap: px(4.0),
             padding: UiRect::all(px(6.0)),
-            width: percent(100),
+            flex_grow: 1.0,
+            min_width: px(0.0),
             max_height: px(280.0),
             overflow: Overflow::scroll_y(),
         }
@@ -2659,8 +2661,8 @@ pub fn open_new_project_modal(world: &mut World, kind: TemplateKind) {
     let card_root = world
         .spawn((
             Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(10.0),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Stretch,
                 padding: UiRect::all(Val::Px(18.0)),
                 min_width: Val::Px(560.0),
                 max_width: Val::Px(680.0),
@@ -2682,8 +2684,9 @@ pub fn open_new_project_modal(world: &mut World, kind: TemplateKind) {
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(12.0),
                 padding: UiRect::all(Val::Px(24.0)),
-                min_width: Val::Px(420.0),
-                max_width: Val::Px(520.0),
+                flex_grow: 1.0,
+                min_width: Val::Px(0.0),
+                min_height: Val::Px(0.0),
                 overflow: Overflow::scroll_y(),
                 ..Default::default()
             },

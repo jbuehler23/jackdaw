@@ -140,6 +140,11 @@ fn a_scrollbar_is_the_widget_aimed_at_its_container() {
         app.world().get::<ScrollArea>(container).is_some(),
         "and the wheel over the container is the widget's too",
     );
+    assert_eq!(
+        app.world().get::<Node>(bar).map(|node| node.position_type),
+        Some(PositionType::Relative),
+        "the bar is in-flow, so a row can sit it beside the container",
+    );
 }
 
 /// A wheel over the container moves it, through the scroll area rather

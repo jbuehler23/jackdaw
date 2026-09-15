@@ -5,8 +5,10 @@
 //! thumb from the container's [`ScrollPosition`] and drags it back,
 //! which the hand-rolled bar it replaces could not do.
 //!
-//! The container itself carries [`ScrollArea`], so the wheel over it is
-//! the widget's too. The editor's own wheel handler
+//! Spawn [`scrollbar`] as a sibling of the container in a row. The
+//! bundle is only the bar, so a caller that wants it overlaid can
+//! replace the `Node`. The container itself carries [`ScrollArea`], so
+//! the wheel over it is the widget's too. The editor's own wheel handler
 //! (`jackdaw::on_scroll`) leaves a `ScrollArea` alone for that reason;
 //! it still answers for every other scrolling container, because it
 //! chains a scroll past a container that has reached its limit and turns
@@ -24,22 +26,21 @@ const SCROLLBAR_WIDTH: f32 = 3.0;
 const SCROLLBAR_MARGIN: f32 = 3.0;
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, reveal_scrollbar_on_hover);
+    app.add_systems(Update, reveal_scrollbar_when_scrollable);
 }
 
-/// A vertical scrollbar for `container`, sitting just inside its right
-/// edge.
+/// A vertical scrollbar for `container`.
 ///
-/// The container needs `Overflow::scroll_y()` and [`scroll_area`].
+/// Place it beside the container in a row. The container needs
+/// `Overflow::scroll_y()` and [`scroll_area`].
 pub fn scrollbar(container: Entity) -> impl Bundle {
     (
         Scrollbar::new(container, ControlOrientation::Vertical, SCROLLBAR_MIN_THUMB),
         Node {
-            position_type: PositionType::Absolute,
             width: px(SCROLLBAR_WIDTH),
-            right: px(SCROLLBAR_MARGIN),
-            top: px(SCROLLBAR_MARGIN),
-            bottom: px(SCROLLBAR_MARGIN),
+            min_width: px(SCROLLBAR_WIDTH),
+            flex_shrink: 0.0,
+            margin: px(SCROLLBAR_MARGIN).all(),
             border_radius: BorderRadius::all(px(SCROLLBAR_WIDTH / 2.0)),
             ..default()
         },
@@ -57,23 +58,22 @@ pub fn scrollbar(container: Entity) -> impl Bundle {
 }
 
 /// The container half of a scrolling pair: the wheel over it reaches the
-/// widget, and it reports hover so the bar beside it can show itself.
+/// widget.
 pub fn scroll_area() -> impl Bundle {
     (ScrollArea, Hovered::default(), ScrollPosition::default())
 }
 
-/// Show a bar only while its container is hovered and has somewhere to
-/// scroll, the way the editor's panels have always shown theirs.
-fn reveal_scrollbar_on_hover(
-    containers: Query<(&Hovered, &ComputedNode)>,
+/// Show a bar only while its container has somewhere to scroll.
+fn reveal_scrollbar_when_scrollable(
+    containers: Query<&ComputedNode>,
     mut scrollbars: Query<(&Scrollbar, &mut Visibility)>,
 ) {
     for (scrollbar, mut visibility) in &mut scrollbars {
-        let Ok((hovered, computed)) = containers.get(scrollbar.target) else {
+        let Ok(computed) = containers.get(scrollbar.target) else {
             continue;
         };
         let has_scroll = computed.content_size().y > computed.size().y;
-        let wanted = if hovered.get() && has_scroll {
+        let wanted = if has_scroll {
             Visibility::Inherited
         } else {
             Visibility::Hidden

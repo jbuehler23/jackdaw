@@ -205,7 +205,8 @@ impl<T: Pickable> PickerProps<T> {
             .spawn((
                 Node {
                     flex_direction: FlexDirection::Column,
-                    width: percent(100),
+                    flex_grow: 1.0,
+                    min_width: px(0),
                     max_height: px(400),
                     overflow: Overflow::scroll_y(),
                     ..default()
@@ -317,10 +318,13 @@ impl<T: Pickable> PickerProps<T> {
             ))
             .with_child((
                 Node {
+                    flex_direction: FlexDirection::Row,
                     width: percent(100),
+                    max_height: px(400),
+                    align_items: AlignItems::Stretch,
                     ..default()
                 },
-                Children::spawn(WithRelated::new([scrollbar, list])),
+                Children::spawn(WithRelated::new([list, scrollbar])),
             ))
             .id();
 
