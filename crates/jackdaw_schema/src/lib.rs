@@ -201,6 +201,10 @@ pub struct FieldSchema {
     /// empty for every other field.
     #[serde(default)]
     pub item_type_path: String,
+    /// `@AssetRef`: the reflect type path of the asset this field names by
+    /// path, or whose elements it names. Empty for a field without one.
+    #[serde(default)]
+    pub asset_type_path: String,
 }
 
 /// The reflect kind of a schema'd type.
@@ -227,7 +231,9 @@ mod extract {
     use bevy::reflect::func::args::Ownership;
     use bevy::reflect::serde::ReflectSerializer;
     use bevy::reflect::{NamedField, TypeInfo, TypeRegistration, TypeRegistry, UnnamedField};
-    use jackdaw_scene_types::{EditorCategory, EditorDescription, EditorHidden, EditorPreview};
+    use jackdaw_scene_types::{
+        AssetRef, EditorCategory, EditorDescription, EditorHidden, EditorPreview,
+    };
 
     /// Build the schema for this process's reflected types.
     ///
@@ -432,6 +438,7 @@ mod extract {
             name: field.name().to_string(),
             type_path: field.type_path().to_string(),
             item_type_path: item_type_path(field.type_info(), field.type_id(), registry),
+            asset_type_path: asset_ref_of(field.custom_attributes()),
         }
     }
 
@@ -444,7 +451,16 @@ mod extract {
             name: index.to_string(),
             type_path: field.type_path().to_string(),
             item_type_path: item_type_path(field.type_info(), field.type_id(), registry),
+            asset_type_path: asset_ref_of(field.custom_attributes()),
         }
+    }
+
+    /// The asset type a field's `@AssetRef` names, empty without one.
+    fn asset_ref_of(attributes: &bevy::reflect::attributes::CustomAttributes) -> String {
+        attributes
+            .get::<AssetRef>()
+            .map(|reference| reference.0.to_string())
+            .unwrap_or_default()
     }
 
     /// The element type of a list or array field, empty for anything else.
@@ -1050,6 +1066,85 @@ mod extract_tests {
     #[reflect(Default)]
     struct Unreachable {
         idle: bool,
+    }
+
+    /// An objective that is one of several shapes, which is what a quest's
+    /// steps look like.
+    #[derive(Reflect, Default)]
+    #[type_path = "my_game::content"]
+    #[reflect(Default)]
+    enum Objective {
+        #[default]
+        Explore,
+        Kill {
+            mob: String,
+            count: u32,
+        },
+        Reach(String),
+    }
+
+    /// A quest naming the item it pays out, as the path of that item's file.
+    #[derive(Asset, Reflect, Default)]
+    #[type_path = "my_game::content"]
+    #[reflect(Default)]
+    struct QuestDef {
+        #[reflect(@jackdaw_scene_types::AssetRef("my_game::content::ItemDef"))]
+        reward: String,
+        #[reflect(@jackdaw_scene_types::AssetRef("my_game::content::ItemDef"))]
+        extras: Vec<String>,
+        objectives: Vec<Objective>,
+    }
+
+    #[test]
+    fn a_field_marked_as_a_reference_reports_the_type_it_names() {
+        let assets = assets_of::<QuestDef>();
+        let quest = find(&assets, "QuestDef");
+        let field = |name: &str| {
+            quest
+                .fields
+                .iter()
+                .find(|f| f.name == name)
+                .unwrap_or_else(|| panic!("no {name} field"))
+        };
+
+        assert_eq!(field("reward").asset_type_path, "my_game::content::ItemDef");
+        assert_eq!(
+            field("extras").asset_type_path,
+            "my_game::content::ItemDef",
+            "a list carries the kind its elements name",
+        );
+        assert!(
+            field("objectives").asset_type_path.is_empty(),
+            "a field without the attribute names no kind",
+        );
+    }
+
+    #[test]
+    fn a_variant_carrying_fields_reports_them() {
+        let assets = assets_of::<QuestDef>();
+        let objective = find(&assets, "Objective");
+        assert_eq!(objective.kind, TypeKind::Enum);
+        let variant = |name: &str| {
+            objective
+                .variants
+                .iter()
+                .find(|v| v.name == name)
+                .unwrap_or_else(|| panic!("no {name} variant"))
+        };
+
+        assert!(variant("Explore").fields.is_empty());
+        let kill: Vec<&str> = variant("Kill")
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(kill, ["mob", "count"]);
+        let reach: Vec<&str> = variant("Reach")
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(reach, ["0"], "a tuple variant names its field by index");
     }
 
     #[test]

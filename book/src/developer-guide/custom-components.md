@@ -112,6 +112,70 @@ The header is how the Project window reads what a file is cheaply; the
 document's own root is the truth, so a file written before headers
 existed still opens. A file can live in any folder.
 
+## References and enum payloads in an asset
+
+One asset usually names another: a quest pays out an item, an
+outfit wears a material. Spell the reference as a `String` and
+mark it with `@AssetRef`, naming the asset type by its reflect
+type path:
+
+```rust
+use bevy::prelude::*;
+use jackdaw_scene_types::AssetRef;
+
+#[derive(Asset, Reflect, Default)]
+#[reflect(Default)]
+pub struct QuestDef {
+    #[reflect(@AssetRef("my_game::content::ItemDef"))]
+    pub reward: String,
+    #[reflect(@AssetRef("my_game::content::ItemDef"))]
+    pub extras: Vec<String>,
+    pub objectives: Vec<Objective>,
+}
+```
+
+The card gives `reward` the asset row it gives a `Handle` field:
+the file it names, with Pick, Clear and New beside it, and a drop
+target. Pick offers only the project's items, and a drop of
+anything else is refused and says so. On a `Vec<String>` the
+attribute names what the elements hold, so every element gets the
+same row. The row is there from the start, before the field names
+anything.
+
+Without the attribute a string field still gets the row once it
+names a file the project holds, which is how a field the editor
+knows nothing about still becomes editable; the attribute is what
+makes an empty one offer the right list.
+
+An enum field is a menu of its variants, and a variant carrying
+fields brings its own rows with it:
+
+```rust
+#[derive(Reflect, Default)]
+#[reflect(Default)]
+pub enum Objective {
+    #[default]
+    Explore,
+    Kill { mob: String, count: u32 },
+    Reach(String),
+}
+```
+
+Choosing **Kill** writes the variant with what its fields default
+to and puts a row under the menu for each. In a `Vec` the list's
+add, move and remove controls sit beside each objective. Every
+change is one history entry, and the file spells the variant the
+way the type declares it:
+
+```text
+my_game::content::QuestDef {
+    reward: "content/torch.bsn",
+    objectives: [
+        my_game::content::Objective::Kill { mob: "rat", count: 3 },
+    ],
+}
+```
+
 ## Viewport previews for markers
 
 Tag a type with `@EditorPreview` and a gltf path under `assets/` 

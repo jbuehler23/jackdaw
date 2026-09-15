@@ -18,17 +18,20 @@
         {
           "name": "stack_size",
           "type_path": "u32",
-          "item_type_path": ""
+          "item_type_path": "",
+          "asset_type_path": ""
         },
         {
           "name": "rarity",
           "type_path": "definition_project::content::Rarity",
-          "item_type_path": ""
+          "item_type_path": "",
+          "asset_type_path": ""
         },
         {
           "name": "loot",
           "type_path": "alloc::vec::Vec<definition_project::content::LootRoll>",
-          "item_type_path": "definition_project::content::LootRoll"
+          "item_type_path": "definition_project::content::LootRoll",
+          "asset_type_path": ""
         }
       ],
       "kind": "Struct",
@@ -58,12 +61,14 @@
         {
           "name": "item",
           "type_path": "alloc::string::String",
-          "item_type_path": ""
+          "item_type_path": "",
+          "asset_type_path": ""
         },
         {
           "name": "weight",
           "type_path": "u32",
-          "item_type_path": ""
+          "item_type_path": "",
+          "asset_type_path": ""
         }
       ],
       "kind": "Struct",
@@ -77,6 +82,152 @@
       "entity_fields": [],
       "fills_gaps": true,
       "asset": false
+    },
+    {
+      "type_path": "definition_project::content::Objective",
+      "short_name": "Objective",
+      "module_path": "definition_project::content",
+      "category": "",
+      "description": "",
+      "editor_description": "",
+      "hidden": false,
+      "preview": "",
+      "default_constructible": true,
+      "fields": [],
+      "kind": "Enum",
+      "default": {
+        "definition_project::content::Objective": "Explore"
+      },
+      "variants": [
+        {
+          "name": "Explore",
+          "fields": []
+        },
+        {
+          "name": "Kill",
+          "fields": [
+            {
+              "name": "mob",
+              "type_path": "alloc::string::String",
+              "item_type_path": "",
+              "asset_type_path": ""
+            },
+            {
+              "name": "count",
+              "type_path": "u32",
+              "item_type_path": "",
+              "asset_type_path": ""
+            }
+          ]
+        },
+        {
+          "name": "Reach",
+          "fields": [
+            {
+              "name": "0",
+              "type_path": "alloc::string::String",
+              "item_type_path": "",
+              "asset_type_path": ""
+            }
+          ]
+        }
+      ],
+      "entity_fields": [],
+      "fills_gaps": true,
+      "asset": false
+    },
+    {
+      "type_path": "definition_project::content::OutfitDef",
+      "short_name": "OutfitDef",
+      "module_path": "definition_project::content",
+      "category": "",
+      "description": "",
+      "editor_description": "",
+      "hidden": false,
+      "preview": "",
+      "default_constructible": true,
+      "fields": [
+        {
+          "name": "material",
+          "type_path": "bevy_asset::handle::Handle<bevy_pbr::pbr_material::StandardMaterial>",
+          "item_type_path": "",
+          "asset_type_path": ""
+        },
+        {
+          "name": "materials",
+          "type_path": "alloc::vec::Vec<bevy_asset::handle::Handle<bevy_pbr::pbr_material::StandardMaterial>>",
+          "item_type_path": "bevy_asset::handle::Handle<bevy_pbr::pbr_material::StandardMaterial>",
+          "asset_type_path": ""
+        },
+        {
+          "name": "skin",
+          "type_path": "alloc::string::String",
+          "item_type_path": "",
+          "asset_type_path": ""
+        },
+        {
+          "name": "skins",
+          "type_path": "alloc::vec::Vec<alloc::string::String>",
+          "item_type_path": "alloc::string::String",
+          "asset_type_path": ""
+        }
+      ],
+      "kind": "Struct",
+      "default": {
+        "definition_project::content::OutfitDef": {
+          "material": "",
+          "materials": [],
+          "skin": "",
+          "skins": []
+        }
+      },
+      "variants": [],
+      "entity_fields": [],
+      "fills_gaps": true,
+      "asset": true
+    },
+    {
+      "type_path": "definition_project::content::QuestDef",
+      "short_name": "QuestDef",
+      "module_path": "definition_project::content",
+      "category": "",
+      "description": "",
+      "editor_description": "",
+      "hidden": false,
+      "preview": "",
+      "default_constructible": true,
+      "fields": [
+        {
+          "name": "reward",
+          "type_path": "alloc::string::String",
+          "item_type_path": "",
+          "asset_type_path": "definition_project::content::ItemDef"
+        },
+        {
+          "name": "extras",
+          "type_path": "alloc::vec::Vec<alloc::string::String>",
+          "item_type_path": "alloc::string::String",
+          "asset_type_path": "definition_project::content::ItemDef"
+        },
+        {
+          "name": "objectives",
+          "type_path": "alloc::vec::Vec<definition_project::content::Objective>",
+          "item_type_path": "definition_project::content::Objective",
+          "asset_type_path": ""
+        }
+      ],
+      "kind": "Struct",
+      "default": {
+        "definition_project::content::QuestDef": {
+          "reward": "",
+          "extras": [],
+          "objectives": []
+        }
+      },
+      "variants": [],
+      "entity_fields": [],
+      "fills_gaps": true,
+      "asset": true
     },
     {
       "type_path": "definition_project::content::Rarity",
@@ -110,52 +261,6 @@
       "entity_fields": [],
       "fills_gaps": true,
       "asset": false
-    },
-    {
-      "type_path": "definition_project::content::OutfitDef",
-      "short_name": "OutfitDef",
-      "module_path": "definition_project::content",
-      "category": "",
-      "description": "",
-      "editor_description": "",
-      "hidden": false,
-      "preview": "",
-      "default_constructible": true,
-      "fields": [
-        {
-          "name": "material",
-          "type_path": "bevy_asset::handle::Handle<bevy_pbr::pbr_material::StandardMaterial>",
-          "item_type_path": ""
-        },
-        {
-          "name": "materials",
-          "type_path": "alloc::vec::Vec<bevy_asset::handle::Handle<bevy_pbr::pbr_material::StandardMaterial>>",
-          "item_type_path": "bevy_asset::handle::Handle<bevy_pbr::pbr_material::StandardMaterial>"
-        },
-        {
-          "name": "skin",
-          "type_path": "alloc::string::String",
-          "item_type_path": ""
-        },
-        {
-          "name": "skins",
-          "type_path": "alloc::vec::Vec<alloc::string::String>",
-          "item_type_path": "alloc::string::String"
-        }
-      ],
-      "kind": "Struct",
-      "default": {
-        "definition_project::content::OutfitDef": {
-          "material": "",
-          "materials": [],
-          "skin": "",
-          "skins": []
-        }
-      },
-      "variants": [],
-      "entity_fields": [],
-      "fills_gaps": true,
-      "asset": true
     }
   ]
 }

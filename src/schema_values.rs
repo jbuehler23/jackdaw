@@ -127,19 +127,99 @@ pub fn list_item_type_path(type_path: &str) -> Option<&str> {
 }
 
 /// The type of the value a field path reaches inside a value of `root`.
+///
+/// A step naming a variant of an enum chooses that variant, and the step after
+/// it reaches into what the variant carries.
 pub fn field_type_path(types: &ProjectTypes, root: &str, steps: &[Step]) -> Option<String> {
     let mut current = root.to_string();
+    let mut chosen: Option<&jackdaw_schema::VariantSchema> = None;
     for step in steps {
-        current = match step {
-            Step::Field(name) => {
-                let schema = types.type_schema(&current)?;
-                let field = schema.fields.iter().find(|field| &field.name == name)?;
-                field.type_path.clone()
+        match (step, chosen.take()) {
+            (Step::Field(name), Some(variant)) => {
+                current = field_named(&variant.fields, name)?;
             }
-            Step::Index(_) => list_item_type_path(&current)?.to_string(),
-        };
+            (Step::Field(name), None) => {
+                let schema = types.type_schema(&current)?;
+                if schema.kind == TypeKind::Enum {
+                    chosen = Some(schema.variants.iter().find(|known| &known.name == name)?);
+                    continue;
+                }
+                current = field_named(&schema.fields, name)?;
+            }
+            (Step::Index(index), Some(variant)) => {
+                current = variant.fields.get(*index)?.type_path.clone();
+            }
+            (Step::Index(_), None) => current = list_item_type_path(&current)?.to_string(),
+        }
     }
     Some(current)
+}
+
+fn field_named(fields: &[FieldSchema], name: &str) -> Option<String> {
+    fields
+        .iter()
+        .find(|field| field.name == name)
+        .map(|field| field.type_path.clone())
+}
+
+/// The value a fresh value of `type_path` holds, from the project's schema for
+/// a type it reports and from the editor's own registry otherwise.
+pub fn default_json(world: &World, types: &ProjectTypes, type_path: &str) -> Option<Value> {
+    if let Some(schema) = types.type_schema(type_path) {
+        return type_default_json(schema);
+    }
+    if list_item_type_path(type_path).is_some() {
+        return Some(Value::Array(Vec::new()));
+    }
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let default = registry
+        .get_with_type_path(type_path)?
+        .data::<bevy::reflect::prelude::ReflectDefault>()?
+        .default();
+    crate::inspector::reflect_fields::reflect_to_json(default.as_partial_reflect(), &registry)
+}
+
+/// The value a variant of a schema'd enum takes when it is chosen: its name
+/// alone for a variant carrying nothing, and the name over what its fields
+/// default to otherwise.
+pub fn variant_json(
+    world: &World,
+    types: &ProjectTypes,
+    type_path: &str,
+    field_path: &str,
+    variant_name: &str,
+) -> Option<Value> {
+    let steps = parse_path(field_path);
+    let enum_type = field_type_path(types, type_path, &steps)?;
+    let schema = types.type_schema(&enum_type)?;
+    if schema.kind != TypeKind::Enum {
+        return None;
+    }
+    let variant = schema
+        .variants
+        .iter()
+        .find(|known| known.name == variant_name)?;
+    if variant.fields.is_empty() {
+        return Some(Value::String(variant_name.to_string()));
+    }
+    let defaults = variant
+        .fields
+        .iter()
+        .map(|field| default_json(world, types, &field.type_path).unwrap_or(Value::Null));
+    let body = if variant.fields[0].name.parse::<usize>().is_ok() {
+        Value::Array(defaults.collect())
+    } else {
+        Value::Object(
+            variant
+                .fields
+                .iter()
+                .map(|field| field.name.clone())
+                .zip(defaults)
+                .collect(),
+        )
+    };
+    Some(serde_json::json!({ variant_name: body }))
 }
 
 /// Whether a value of this type decides how many rows the inspector shows for
@@ -318,10 +398,11 @@ fn enum_json_for_bsn(
             let variant = schema.variants.iter().find(|known| known.name == name)?;
             let mut object = serde_json::Map::new();
             for field in &variant.fields {
-                let Some(authored) = authored(data, &field.name) else {
-                    continue;
+                let json = match authored(data, &field.name) {
+                    Some(authored) => json_for_bsn(world, types, &field.type_path, authored),
+                    None => default_json(world, types, &field.type_path),
                 };
-                if let Some(json) = json_for_bsn(world, types, &field.type_path, authored) {
+                if let Some(json) = json {
                     object.insert(field.name.clone(), json);
                 }
             }
@@ -330,11 +411,17 @@ fn enum_json_for_bsn(
         BsnValue::TupleStruct(data) => {
             let name = variant_of(&data.type_path);
             let variant = schema.variants.iter().find(|known| known.name == name)?;
-            let items: Vec<Value> = data
-                .values
+            let items: Vec<Value> = variant
+                .fields
                 .iter()
-                .zip(&variant.fields)
-                .filter_map(|(value, field)| json_for_bsn(world, types, &field.type_path, value))
+                .enumerate()
+                .map(|(index, field)| {
+                    match data.values.get(index) {
+                        Some(value) => json_for_bsn(world, types, &field.type_path, value),
+                        None => default_json(world, types, &field.type_path),
+                    }
+                    .unwrap_or(Value::Null)
+                })
                 .collect();
             Some(serde_json::json!({ name: Value::Array(items) }))
         }

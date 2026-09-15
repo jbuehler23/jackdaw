@@ -329,11 +329,13 @@ fn project_schema() -> jackdaw_schema::ProjectSchema {
                         name: "current".to_string(),
                         type_path: "f32".to_string(),
                         item_type_path: String::new(),
+                        asset_type_path: String::new(),
                     },
                     jackdaw_schema::FieldSchema {
                         name: "tint".to_string(),
                         type_path: "bevy_color::color::Color".to_string(),
                         item_type_path: String::new(),
+                        asset_type_path: String::new(),
                     },
                 ],
             ),

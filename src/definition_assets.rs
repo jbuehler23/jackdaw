@@ -1008,16 +1008,7 @@ pub(crate) fn schema_default_list_item(
     let steps = crate::schema_values::parse_path(field_path);
     let field_type = crate::schema_values::field_type_path(types, type_path, &steps)?;
     let item_type = crate::schema_values::list_item_type_path(&field_type)?;
-    if let Some(schema) = types.type_schema(item_type) {
-        return crate::schema_values::type_default_json(schema);
-    }
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let registry = registry.read();
-    let default = registry
-        .get_with_type_path(item_type)?
-        .data::<ReflectDefault>()?
-        .default();
-    crate::inspector::reflect_fields::reflect_to_json(default.as_partial_reflect(), &registry)
+    crate::schema_values::default_json(world, types, item_type)
 }
 
 /// Whether a schema-backed field decides which rows are shown for it.
