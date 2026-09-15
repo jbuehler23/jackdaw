@@ -146,17 +146,21 @@ pub fn resolve_dialog_choice(
 }
 
 /// Press one of `dialog`'s buttons, as a click on it would: fire the event the
-/// button fires, then take the dialog down. Cancel fires nothing, which is what
-/// makes a dismissal and a cancel the same answer.
+/// button fires, then take the dialog down. Cancel fires
+/// [`DialogDismissEvent`], which is what makes a dismissal and a cancel the
+/// same answer.
 pub fn answer_dialog(commands: &mut Commands, dialog: Entity, choice: DialogChoice) {
     match choice {
-        DialogChoice::Action => commands.trigger(DialogActionEvent { entity: dialog }),
+        DialogChoice::Action => {
+            commands.trigger(DialogActionEvent { entity: dialog });
+            dismiss_dialog(commands, dialog);
+        }
         DialogChoice::Secondary => {
             commands.trigger(DialogSecondaryActionEvent { entity: dialog });
+            dismiss_dialog(commands, dialog);
         }
-        DialogChoice::Cancel => {}
+        DialogChoice::Cancel => cancel_dialog(commands, dialog),
     }
-    dismiss_dialog(commands, dialog);
 }
 
 #[derive(Component)]
@@ -209,6 +213,13 @@ pub struct DialogActionEvent {
 
 #[derive(EntityEvent)]
 pub struct DialogSecondaryActionEvent {
+    pub entity: Entity,
+}
+
+/// A dialog going down unanswered: cancelled, closed, dismissed with Escape or
+/// a click outside, or closed from code.
+#[derive(EntityEvent)]
+pub struct DialogDismissEvent {
     pub entity: Entity,
 }
 
@@ -556,6 +567,12 @@ fn dismiss_dialog(commands: &mut Commands, entity: Entity) {
     commands.entity(entity).try_despawn();
 }
 
+/// Take a dialog down with its question unanswered, telling whoever put it up.
+fn cancel_dialog(commands: &mut Commands, entity: Entity) {
+    commands.trigger(DialogDismissEvent { entity });
+    dismiss_dialog(commands, entity);
+}
+
 fn sync_children_slot_visibility(
     mut slots: Query<(&Children, &mut Node), (With<DialogChildrenSlot>, Changed<Children>)>,
 ) {
@@ -591,7 +608,7 @@ fn handle_backdrop_click(
             continue;
         }
 
-        dismiss_dialog(&mut commands, child_of.parent());
+        cancel_dialog(&mut commands, child_of.parent());
     }
 }
 
@@ -613,7 +630,7 @@ fn handle_esc_key(
 
     for (entity, config) in &dialogs {
         if config.close_on_esc {
-            dismiss_dialog(&mut commands, entity);
+            cancel_dialog(&mut commands, entity);
         }
     }
 }
@@ -624,7 +641,7 @@ fn on_close_dialog(
     mut commands: Commands,
 ) {
     for entity in &dialogs {
-        dismiss_dialog(&mut commands, entity);
+        cancel_dialog(&mut commands, entity);
     }
 }
 
@@ -678,7 +695,7 @@ fn on_cancel_button_click(
     };
 
     if let Some(dialog_entity) = find_dialog_ancestor(button_parent.parent(), &parents, &dialogs) {
-        dismiss_dialog(&mut commands, dialog_entity);
+        cancel_dialog(&mut commands, dialog_entity);
     }
 }
 
@@ -694,7 +711,7 @@ fn on_close_button_click(
     };
 
     if let Some(dialog_entity) = find_dialog_ancestor(button_parent.parent(), &parents, &dialogs) {
-        dismiss_dialog(&mut commands, dialog_entity);
+        cancel_dialog(&mut commands, dialog_entity);
     }
 }
 

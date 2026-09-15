@@ -1184,6 +1184,8 @@ fn update_slider_pos(
     }
 }
 
+/// Colour, cursor and gradient for one slidebar, which a removal observer also
+/// reaches for one already despawned.
 fn set_slidebar_styles(
     slidebar_id: Entity,
     theme: &UiTheme,
@@ -1236,8 +1238,8 @@ fn set_slidebar_styles(
     // Change cursor shape and text color
     commands
         .entity(slidebar_id)
-        .insert(EntityCursor::System(cursor_shape))
-        .insert(ThemeTextColor(font_color_token));
+        .try_insert(EntityCursor::System(cursor_shape))
+        .try_insert(ThemeTextColor(font_color_token));
 }
 
 fn emit_drag_value_change(

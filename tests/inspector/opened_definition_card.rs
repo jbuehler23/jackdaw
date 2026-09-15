@@ -330,3 +330,26 @@ fn no_category_tab_hides_the_card_and_an_entity_selected_after_it_gets_its_own()
         "and the definition's card went with the definition"
     );
 }
+
+#[test]
+fn clearing_the_selection_takes_the_definition_card_down() {
+    let (mut app, _tmp) = editor_with_the_rat_open();
+    assert!(
+        app.world().resource::<OpenDefinition>().0.is_some(),
+        "the card is up to begin with"
+    );
+
+    jackdaw::selection::clear_selection_in_world(app.world_mut());
+    for _ in 0..8 {
+        app.update();
+    }
+
+    assert!(
+        app.world().resource::<OpenDefinition>().0.is_none(),
+        "an empty selection closes the definition"
+    );
+    assert!(
+        field_rows(&mut app).is_empty(),
+        "and the card's rows go with it"
+    );
+}

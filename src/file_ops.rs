@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
-use jackdaw_feathers::dialog::{DialogActionEvent, EditorDialog, OpenConfirmationDialogEvent};
+use jackdaw_feathers::dialog::{
+    DialogActionEvent, DialogDismissEvent, EditorDialog, OpenConfirmationDialogEvent,
+};
 use path_slash::PathExt as _;
 
 use crate::asset_files::AssetFileKind;
@@ -27,7 +29,8 @@ pub struct FileOpsPlugin;
 impl Plugin for FileOpsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PendingFileDelete>()
-            .add_observer(on_file_delete_confirmed);
+            .add_observer(on_file_delete_confirmed)
+            .add_observer(on_dialog_dismissed);
     }
 }
 
@@ -186,13 +189,22 @@ fn what_points_at(display: &str, referrers: &[PathBuf]) -> String {
     }
 }
 
-fn on_file_delete_confirmed(_event: On<DialogActionEvent>, mut commands: Commands) {
-    commands.queue(|world: &mut World| {
-        let Some(path) = world.resource_mut::<PendingFileDelete>().path.take() else {
-            return;
-        };
-        delete_path(world, &path);
-    });
+/// A confirmation dismissed unanswered leaves nothing for the next one to take.
+fn on_dialog_dismissed(_event: On<DialogDismissEvent>, mut pending: ResMut<PendingFileDelete>) {
+    pending.path = None;
+}
+
+/// The path is taken here rather than in the queued delete, so a dismissal
+/// reaching the queue behind the answer cannot clear it first.
+fn on_file_delete_confirmed(
+    _event: On<DialogActionEvent>,
+    mut pending: ResMut<PendingFileDelete>,
+    mut commands: Commands,
+) {
+    let Some(path) = pending.path.take() else {
+        return;
+    };
+    commands.queue(move |world: &mut World| delete_path(world, &path));
 }
 
 /// Remove a path from disk and put the Project window back in step with it.
