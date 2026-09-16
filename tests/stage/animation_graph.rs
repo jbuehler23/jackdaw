@@ -267,3 +267,69 @@ fn a_parameter_written_in_the_window_reaches_the_rig_being_previewed() {
         .expect("the preview target was written");
     assert_eq!(written.float("speed"), 4.0);
 }
+
+#[test]
+fn a_graph_held_in_the_binary_form_is_titled_without_its_extension() {
+    let (mut app, project) = editor_in_a_fresh_project();
+    author_a_locomotion_graph(&mut app);
+    call(&mut app, "animation.graph.save", &[]);
+    jackdaw_bsn::convert_to_binary(
+        &project
+            .path()
+            .join("assets/animation/locomotion.animgraph.bsn"),
+    )
+    .expect("the graph is written as binary");
+    call(
+        &mut app,
+        "animation.graph.open",
+        &[(
+            "path",
+            PropertyValue::String("animation/locomotion.animgraph.bsb".into()),
+        )],
+    );
+
+    let graph = app
+        .world()
+        .resource::<AnimationGraphDoc>()
+        .graph
+        .expect("the canvas holds the open graph");
+    let title = app
+        .world()
+        .get::<jackdaw_node_graph::NodeGraph>(graph)
+        .map(|graph| graph.title.clone())
+        .expect("the graph root is titled");
+    assert_eq!(title, "locomotion");
+}
+
+#[test]
+fn a_graph_opened_from_its_binary_file_is_saved_back_as_binary() {
+    let (mut app, project) = editor_in_a_fresh_project();
+    author_a_locomotion_graph(&mut app);
+    call(&mut app, "animation.graph.save", &[]);
+    let text_file = project
+        .path()
+        .join("assets/animation/locomotion.animgraph.bsn");
+    jackdaw_bsn::convert_to_binary(&text_file).expect("the graph is written as binary");
+    let binary_file = project
+        .path()
+        .join("assets/animation/locomotion.animgraph.bsb");
+    call(
+        &mut app,
+        "animation.graph.open",
+        &[(
+            "path",
+            PropertyValue::String("animation/locomotion.animgraph.bsb".into()),
+        )],
+    );
+
+    call(&mut app, "animation.graph.save", &[]);
+
+    let bytes = std::fs::read(&binary_file).expect("the graph file is there");
+    assert!(
+        jackdaw_bsn::is_binary(&bytes),
+        "the file holds the form its name says"
+    );
+    let registry = app.world().resource::<AppTypeRegistry>().read();
+    let text = jackdaw_bsn::read_document_text(&binary_file).expect("the graph reads back");
+    parse_animation_graph(&text, &registry).expect("the graph reads back as a definition");
+}

@@ -47,11 +47,20 @@ pub fn json_at<'a>(value: &'a Value, steps: &[Step]) -> Option<&'a Value> {
     let mut current = value;
     for step in steps {
         current = match step {
-            Step::Field(name) => current.get(name)?,
+            Step::Field(name) => match current.get(name) {
+                Some(next) => next,
+                None => current.get(index_named(name)?)?,
+            },
             Step::Index(index) => current.get(*index)?,
         };
     }
     Some(current)
+}
+
+/// The element a name reaches, for a caller spelling an index as `items.0`
+/// rather than as `items[0]`.
+fn index_named(name: &str) -> Option<usize> {
+    name.parse().ok()
 }
 
 /// Write `new` where `steps` reaches inside `value`, reporting whether the
@@ -64,10 +73,16 @@ pub fn json_set(value: &mut Value, steps: &[Step], new: Value) -> bool {
     let mut current = value;
     for step in leading {
         current = match step {
-            Step::Field(name) => match current.get_mut(name) {
-                Some(next) => next,
-                None => return false,
-            },
+            Step::Field(name) => {
+                let reached = match current.is_array() {
+                    true => index_named(name).and_then(|index| current.get_mut(index)),
+                    false => current.get_mut(name),
+                };
+                match reached {
+                    Some(next) => next,
+                    None => return false,
+                }
+            }
             Step::Index(index) => match current.get_mut(*index) {
                 Some(next) => next,
                 None => return false,
@@ -80,7 +95,13 @@ pub fn json_set(value: &mut Value, steps: &[Step], new: Value) -> bool {
                 object.insert(name.clone(), new);
                 true
             }
-            None => false,
+            None => match (current.as_array_mut(), index_named(name)) {
+                (Some(array), Some(index)) if index < array.len() => {
+                    array[index] = new;
+                    true
+                }
+                _ => false,
+            },
         },
         Step::Index(index) => match current.as_array_mut() {
             Some(array) if *index < array.len() => {
@@ -131,12 +152,33 @@ pub fn list_item_type_path(type_path: &str) -> Option<&str> {
 /// A step naming a variant of an enum chooses that variant, and the step after
 /// it reaches into what the variant carries.
 pub fn field_type_path(types: &ProjectTypes, root: &str, steps: &[Step]) -> Option<String> {
+    walk_field_path(types, root, steps).map(|(_, reached)| reached)
+}
+
+/// The schema of the field a path names, for a caller that needs more than the
+/// type it holds. A path ending in a list index names the list field itself.
+pub fn field_schema_at<'a>(
+    types: &'a ProjectTypes,
+    root: &str,
+    steps: &[Step],
+) -> Option<&'a FieldSchema> {
+    walk_field_path(types, root, steps)?.0
+}
+
+/// The field a path names and the type of the value it reaches.
+fn walk_field_path<'a>(
+    types: &'a ProjectTypes,
+    root: &str,
+    steps: &[Step],
+) -> Option<(Option<&'a FieldSchema>, String)> {
     let mut current = root.to_string();
+    let mut found: Option<&FieldSchema> = None;
     let mut chosen: Option<&jackdaw_schema::VariantSchema> = None;
     for step in steps {
         match (step, chosen.take()) {
             (Step::Field(name), Some(variant)) => {
-                current = field_named(&variant.fields, name)?;
+                found = variant.fields.iter().find(|field| &field.name == name);
+                current = found?.type_path.clone();
             }
             (Step::Field(name), None) => {
                 let schema = types.type_schema(&current)?;
@@ -144,22 +186,17 @@ pub fn field_type_path(types: &ProjectTypes, root: &str, steps: &[Step]) -> Opti
                     chosen = Some(schema.variants.iter().find(|known| &known.name == name)?);
                     continue;
                 }
-                current = field_named(&schema.fields, name)?;
+                found = schema.fields.iter().find(|field| &field.name == name);
+                current = found?.type_path.clone();
             }
             (Step::Index(index), Some(variant)) => {
-                current = variant.fields.get(*index)?.type_path.clone();
+                found = variant.fields.get(*index);
+                current = found?.type_path.clone();
             }
             (Step::Index(_), None) => current = list_item_type_path(&current)?.to_string(),
         }
     }
-    Some(current)
-}
-
-fn field_named(fields: &[FieldSchema], name: &str) -> Option<String> {
-    fields
-        .iter()
-        .find(|field| field.name == name)
-        .map(|field| field.type_path.clone())
+    Some((found, current))
 }
 
 /// The value a fresh value of `type_path` holds, from the project's schema for
@@ -769,6 +806,55 @@ mod tests {
         set_authored(&mut data, &item_schema(), "stack_size", None);
 
         assert_eq!(field_names(&data), ["weight"]);
+    }
+
+    #[test]
+    fn an_index_spelled_as_a_field_reaches_the_element_and_a_field_of_that_name_wins() {
+        let value = serde_json::json!({ "materials": ["slate.bsn", "moss.bsn"] });
+        assert_eq!(
+            json_at(&value, &parse_path("materials.1")),
+            Some(&serde_json::json!("moss.bsn")),
+            "an element is reached by the number naming it",
+        );
+
+        let value = serde_json::json!({ "0": "named", "list": ["indexed"] });
+        assert_eq!(
+            json_at(&value, &parse_path("0")),
+            Some(&serde_json::json!("named")),
+            "a field really called 0 is that field, not an index",
+        );
+        assert_eq!(
+            json_at(&value, &parse_path("list.0")),
+            Some(&serde_json::json!("indexed")),
+            "and the same spelling inside a list is the element",
+        );
+    }
+
+    #[test]
+    fn writing_through_an_index_spelled_as_a_field_writes_the_element() {
+        let mut value = serde_json::json!({ "materials": ["slate.bsn"], "0": "named" });
+
+        assert!(json_set(
+            &mut value,
+            &parse_path("materials.0"),
+            serde_json::json!("moss.bsn")
+        ));
+        assert!(json_set(
+            &mut value,
+            &parse_path("0"),
+            serde_json::json!("written")
+        ));
+
+        assert_eq!(value["materials"], serde_json::json!(["moss.bsn"]));
+        assert_eq!(value["0"], serde_json::json!("written"));
+        assert!(
+            !json_set(
+                &mut value,
+                &parse_path("materials.4"),
+                serde_json::json!("beyond")
+            ),
+            "and an element the list has not got is refused",
+        );
     }
 
     #[test]

@@ -207,3 +207,52 @@ fn a_name_a_scene_and_an_asset_share_stands_for_neither() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The header is what a file says it holds, and the walk takes it at its word
+/// for a type this app will not load rather than parsing the document to find
+/// out.
+#[test]
+fn a_file_whose_header_names_a_type_this_app_does_not_load_is_never_parsed() {
+    let type_path = <CatalogMaterial as TypePath>::type_path();
+
+    let dir = unique_temp_dir("catalog-loading-header");
+    std::fs::create_dir_all(dir.join("content")).unwrap();
+    std::fs::write(
+        dir.join("content/brick.bsn"),
+        jackdaw_bsn::with_asset_header(
+            "my_game::content::ItemDef",
+            &format!("#brick\n{type_path}\n"),
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("content/slate.bsn"),
+        format!("#slate\n{type_path}\n"),
+    )
+    .unwrap();
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::transform::TransformPlugin);
+    app.add_plugins(bevy::asset::AssetPlugin::default());
+    app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+    app.add_plugins(bevy::image::ImagePlugin::default());
+    app.init_asset::<CatalogMaterial>();
+    app.register_asset_reflect::<CatalogMaterial>();
+    app.insert_resource(JackdawCatalogPath(dir.join("catalog.bsn")));
+    app.add_plugins(JackdawPlugin);
+
+    app.update();
+
+    let catalog = app.world().resource::<JackdawCatalog>();
+    assert!(
+        catalog.get("content/brick.bsn").is_none(),
+        "the header named a type this app does not load, so the document was not read"
+    );
+    assert!(
+        catalog.get("content/slate.bsn").is_some(),
+        "a file with no header is still known by its first root"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

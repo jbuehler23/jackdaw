@@ -266,8 +266,9 @@ pub struct AssetsArgs {
     /// e.g. `*Fence*.gltf`.
     #[serde(default)]
     pub glob: Option<String>,
-    /// Report each path as `{path, kind, clips}` instead of a bare string,
-    /// where `clips` names the animations a glTF file holds.
+    /// Report each path as `{path, kind, clips, binary}` instead of a bare
+    /// string, where `clips` names the animations a glTF file holds and
+    /// `binary` says the document is held in the binary form.
     #[serde(default)]
     pub details: Option<bool>,
 }

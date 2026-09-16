@@ -47,6 +47,19 @@ path, the text file wins when both exist, and a reference to
 form on disk. References are never rewritten by an export; the readers
 that follow them resolve either form instead.
 
+A game reaches the same pair through Bevy's asset server.
+`jackdaw_runtime::JackdawAssetSourcePlugin`, added before
+`DefaultPlugins`, registers the default asset source with a reader that
+retries the twin when the path as written is not on disk, so
+`asset_server.load("zones/zone1.bsn")` and an `AnimationGraphRef` still
+name the text path after an export has rewritten the tree. Its
+`file_path`, `processed_file_path` and `mode` take the values the game's
+`AssetPlugin` carries, because the source registered first is the one
+`AssetPlugin` keeps. A source of the game's own goes through
+`with_document_twins` for the same resolution. The retry costs one extra read only when the first one
+misses, and a path in neither form fails with the ordinary not-found
+error naming the path that was asked for.
+
 ## Legacy JSN import
 
 `.jsn` ("Jackdaw Scene Notation") is the previous scene format:

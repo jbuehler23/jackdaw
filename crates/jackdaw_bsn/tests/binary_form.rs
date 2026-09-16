@@ -455,3 +455,18 @@ fn a_file_that_is_not_a_document_is_refused_by_name() {
     );
     assert!(read_document(Path::new("nowhere/at/all.bsn")).is_err());
 }
+
+#[test]
+fn bytes_after_the_last_root_are_refused_with_the_offset_they_start_at() {
+    let bytes = binary::encode(&parse_bsn_text(SCENE).expect("the document parses"), None);
+    let ended = bytes.len();
+    let mut padded = bytes;
+    padded.extend_from_slice(b"junk");
+
+    let refused = binary::decode(&padded).err();
+
+    assert!(
+        matches!(refused, Some(BinaryError::Trailing { at, left }) if at == ended && left == 4),
+        "got {refused:?}"
+    );
+}

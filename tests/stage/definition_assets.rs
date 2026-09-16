@@ -1119,3 +1119,165 @@ fn a_duplicate_keeps_what_shares_the_line_with_the_root_name() {
         "only the name on the line changed:\n{text}"
     );
 }
+
+/// Dispatch a call that is expected to be refused, returning what the caller
+/// was told.
+#[track_caller]
+fn refusal(
+    app: &mut App,
+    id: &'static str,
+    params: &[(&'static str, PropertyValue)],
+) -> Vec<String> {
+    app.world_mut()
+        .get_resource_or_init::<jackdaw_api_internal::operator::OperatorWarnings>()
+        .0
+        .clear();
+    let mut call = app.world_mut().operator(id).settings(CallOperatorSettings {
+        execution_context: ExecutionContext::Invoke,
+        creates_history_entry: true,
+    });
+    for (key, value) in params {
+        call = call.param(*key, value.clone());
+    }
+    let _ = call.call().expect("the operator dispatched");
+    app.update();
+    app.world_mut()
+        .get_resource_or_init::<jackdaw_api_internal::operator::OperatorWarnings>()
+        .0
+        .clone()
+}
+
+/// What the caller was told the last call did.
+fn reports(app: &mut App) -> Vec<String> {
+    app.world_mut()
+        .get_resource_or_init::<jackdaw_api_internal::operator::OperatorReports>()
+        .0
+        .clone()
+}
+
+#[test]
+fn a_kind_is_named_by_its_id_its_type_path_or_its_label() {
+    let (mut app, tmp) = editor_with_items();
+
+    for (named, name) in [
+        ("item", "one"),
+        (ItemDef::type_path(), "two"),
+        ("Item", "three"),
+    ] {
+        call(
+            &mut app,
+            "asset.new",
+            &[("type", named.into()), ("name", name.into())],
+        );
+        assert!(
+            tmp.path().join(format!("assets/{name}.bsn")).is_file(),
+            "'{named}' names the kind to create",
+        );
+    }
+}
+
+#[test]
+fn a_refused_create_tells_the_caller_and_leaves_no_asset_open() {
+    let (mut app, _tmp) = editor_with_items();
+    call(
+        &mut app,
+        "asset.new",
+        &[("type", "item".into()), ("name", "torch".into())],
+    );
+    assert!(app.world().resource::<OpenDefinition>().0.is_some());
+
+    let told = refusal(
+        &mut app,
+        "asset.new",
+        &[("type", "no_such_kind".into()), ("name", "ghost".into())],
+    );
+
+    assert!(
+        told.iter().any(|line| line.contains("no_such_kind")),
+        "the caller is told what was refused, got {told:?}",
+    );
+    assert!(
+        app.world().resource::<OpenDefinition>().0.is_none(),
+        "and the asset that was open is closed, so a later set cannot reach it",
+    );
+    let told = refusal(
+        &mut app,
+        "asset.set",
+        &[("field", "stack_size".into()), ("value", "5".into())],
+    );
+    assert!(
+        told.iter().any(|line| line.contains("no asset is open")),
+        "a set after the failed create is refused, got {told:?}",
+    );
+}
+
+#[test]
+fn asset_get_reports_the_open_file_and_what_a_field_holds() {
+    let (mut app, _tmp) = editor_with_items();
+    call(
+        &mut app,
+        "asset.new",
+        &[("type", "item".into()), ("name", "torch".into())],
+    );
+    call(
+        &mut app,
+        "asset.set",
+        &[("field", "stack_size".into()), ("value", "12".into())],
+    );
+
+    call(&mut app, "asset.get", &[("field", "stack_size".into())]);
+    let told = reports(&mut app);
+    assert!(
+        told.iter().any(|line| line == "torch.bsn"),
+        "the file it is reading is named, got {told:?}",
+    );
+    assert!(
+        told.iter().any(|line| line == "stack_size: 12"),
+        "and the field reads back, got {told:?}",
+    );
+
+    call(&mut app, "asset.get", &[]);
+    let told = reports(&mut app);
+    assert!(
+        told.iter().any(|line| line.contains("\"stack_size\":12")),
+        "with no field named, the whole value reads back, got {told:?}",
+    );
+
+    let told = refusal(&mut app, "asset.get", &[("field", "no_such_field".into())]);
+    assert!(
+        told.iter().any(|line| line.contains("no_such_field")),
+        "and a field the asset has not got is refused, got {told:?}",
+    );
+}
+
+#[test]
+fn a_refused_create_keeps_a_card_holding_edits_that_are_not_on_disk() {
+    let (mut app, _tmp) = editor_with_items();
+    call(
+        &mut app,
+        "asset.new",
+        &[("type", "item".into()), ("name", "torch".into())],
+    );
+    call(
+        &mut app,
+        "asset.set",
+        &[("field", "stack_size".into()), ("value", "9".into())],
+    );
+    let open = app.world().resource::<OpenDefinition>().0;
+
+    let told = refusal(
+        &mut app,
+        "asset.new",
+        &[("type", "no_such_kind".into()), ("name", "ghost".into())],
+    );
+
+    assert!(
+        told.iter().any(|line| line.contains("torch")),
+        "the caller is told which file is still open, got {told:?}",
+    );
+    assert_eq!(
+        app.world().resource::<OpenDefinition>().0,
+        open,
+        "and the card holding edits that are not on disk is not dropped under it",
+    );
+}

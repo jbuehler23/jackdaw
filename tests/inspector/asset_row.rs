@@ -629,6 +629,42 @@ fn a_material_a_string_field_names_gets_the_row_a_handle_gets() {
     );
 }
 
+/// A path typed into a plain text row makes it an asset row there and then,
+/// without the card having to be closed and opened again.
+#[test]
+fn a_string_that_starts_naming_a_file_becomes_an_asset_row_where_it_stands() {
+    let (mut app, _tmp) = app_with_open_outfit();
+    call(
+        &mut app,
+        "asset.set",
+        &[("field", "skin".into()), ("value", "ranger".into())],
+    );
+    assert!(
+        !asset_rows(&mut app)
+            .iter()
+            .any(|(_, _, field)| field == "skin"),
+        "a string naming nothing the project holds is a plain text row",
+    );
+
+    call(
+        &mut app,
+        "asset.set",
+        &[
+            ("field", "skin".into()),
+            ("value", "materials/slate.bsn".into()),
+        ],
+    );
+
+    let row = asset_row(&mut app, "skin");
+    assert!(
+        row_text(&mut app, row)
+            .iter()
+            .any(|line| line == "slate.bsn"),
+        "the row followed the path into it, got {:?}",
+        row_text(&mut app, row),
+    );
+}
+
 #[test]
 fn a_string_naming_no_file_stays_a_plain_text_row() {
     let (mut app, _tmp) = app_with_open_outfit();
@@ -808,5 +844,192 @@ fn every_element_of_a_marked_list_offers_its_kind_while_it_holds_nothing() {
         fields,
         vec!["extras[0]".to_string(), "extras[1]".to_string()],
         "the elements take their kind from what the list's type declares",
+    );
+}
+
+#[test]
+fn a_marked_reference_row_shows_the_file_its_field_names() {
+    let (mut app, _tmp) = app_with_open_quest();
+    call(
+        &mut app,
+        "asset.set",
+        &[
+            ("field", "reward".into()),
+            ("value", "content/torch.bsn".into()),
+        ],
+    );
+    call(
+        &mut app,
+        "asset.set",
+        &[
+            ("field", "extras".into()),
+            (
+                "value",
+                serde_json::json!(["content/torch.bsn"]).to_string().into(),
+            ),
+        ],
+    );
+    reopen_open_asset(&mut app);
+
+    let row = asset_row(&mut app, "reward");
+    assert!(
+        row_text(&mut app, row)
+            .iter()
+            .any(|line| line == "torch.bsn"),
+        "the scalar row shows the file it names, got {:?}",
+        row_text(&mut app, row),
+    );
+    let row = asset_row(&mut app, "extras[0]");
+    assert!(
+        row_text(&mut app, row)
+            .iter()
+            .any(|line| line == "torch.bsn"),
+        "and so does the element of a marked list, got {:?}",
+        row_text(&mut app, row),
+    );
+}
+
+/// Dispatch a call that is expected to be refused, returning what the caller
+/// was told.
+#[track_caller]
+fn refusal(
+    app: &mut App,
+    id: &'static str,
+    params: &[(&'static str, PropertyValue)],
+) -> Vec<String> {
+    app.world_mut()
+        .get_resource_or_init::<jackdaw_api_internal::operator::OperatorWarnings>()
+        .0
+        .clear();
+    let mut call = app.world_mut().operator(id).settings(CallOperatorSettings {
+        execution_context: ExecutionContext::Invoke,
+        creates_history_entry: true,
+    });
+    for (name, value) in params {
+        call = call.param(*name, value.clone());
+    }
+    let _ = call.call().expect("the operator dispatched");
+    settle(app);
+    app.world_mut()
+        .get_resource_or_init::<jackdaw_api_internal::operator::OperatorWarnings>()
+        .0
+        .clone()
+}
+
+#[test]
+fn a_pick_fills_the_first_row_of_a_list_that_holds_nothing() {
+    let (mut app, _tmp) = app_with_open_outfit();
+    assert_eq!(open_outfit(&app)["materials"], serde_json::json!([]));
+
+    call(
+        &mut app,
+        "asset.pick",
+        &[
+            ("field", "materials[0]".into()),
+            ("value", "materials/slate.bsn".into()),
+        ],
+    );
+
+    assert_eq!(
+        open_outfit(&app)["materials"],
+        serde_json::json!(["materials/slate.bsn"]),
+        "the element the list had not grown to is appended",
+    );
+    let row = asset_row(&mut app, "materials[0]");
+    assert!(
+        row_text(&mut app, row)
+            .iter()
+            .any(|line| line == "slate.bsn"),
+        "and the row it grew shows the file, got {:?}",
+        row_text(&mut app, row),
+    );
+
+    undo(&mut app);
+
+    assert_eq!(
+        open_outfit(&app)["materials"],
+        serde_json::json!([]),
+        "undo takes the row away again",
+    );
+}
+
+#[test]
+fn a_set_one_past_the_end_of_a_list_appends_and_beyond_it_is_refused() {
+    let (mut app, _tmp) = app_with_open_outfit();
+    call(
+        &mut app,
+        "asset.set",
+        &[
+            ("field", "materials[0]".into()),
+            ("value", "materials/slate.bsn".into()),
+        ],
+    );
+    call(
+        &mut app,
+        "asset.set",
+        &[
+            ("field", "materials[1]".into()),
+            ("value", "materials/moss.bsn".into()),
+        ],
+    );
+    assert_eq!(
+        open_outfit(&app)["materials"],
+        serde_json::json!(["materials/slate.bsn", "materials/moss.bsn"]),
+    );
+
+    let told = refusal(
+        &mut app,
+        "asset.set",
+        &[
+            ("field", "materials[5]".into()),
+            ("value", "materials/moss.bsn".into()),
+        ],
+    );
+
+    assert!(
+        told.iter().any(|line| line.contains("materials[5]")),
+        "an index past the end of the list is refused out loud, got {told:?}",
+    );
+    assert_eq!(
+        open_outfit(&app)["materials"],
+        serde_json::json!(["materials/slate.bsn", "materials/moss.bsn"]),
+        "and the list is as it was",
+    );
+}
+
+#[test]
+fn an_operator_edit_shows_on_the_open_card_without_reopening_it() {
+    let (mut app, _tmp) = app_with_open_outfit();
+    call(
+        &mut app,
+        "asset.set",
+        &[
+            ("field", "skin".into()),
+            ("value", "materials/slate.bsn".into()),
+        ],
+    );
+    let row = asset_row(&mut app, "skin");
+    assert!(
+        row_text(&mut app, row)
+            .iter()
+            .any(|line| line == "slate.bsn"),
+    );
+
+    call(
+        &mut app,
+        "asset.set",
+        &[
+            ("field", "skin".into()),
+            ("value", "materials/moss.bsn".into()),
+        ],
+    );
+
+    let row = asset_row(&mut app, "skin");
+    assert!(
+        row_text(&mut app, row)
+            .iter()
+            .any(|line| line == "moss.bsn"),
+        "the card follows the edit rather than waiting to be opened again, got {:?}",
+        row_text(&mut app, row),
     );
 }

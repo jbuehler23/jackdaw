@@ -195,6 +195,24 @@ impl AssetKinds {
         self.kinds.iter().find(|known| known.type_path == type_path)
     }
 
+    /// The kind a caller named: the id the operators take, the type path a
+    /// file's header carries, or the label the menus show.
+    pub fn by_name(&self, named: &str) -> Option<&AssetKind> {
+        self.by_kind(named)
+            .or_else(|| self.by_type_path(named))
+            .or_else(|| self.by_label(named))
+    }
+
+    /// The one kind shown under a label, and nothing when two kinds share it.
+    pub fn by_label(&self, label: &str) -> Option<&AssetKind> {
+        let mut shown = self
+            .kinds
+            .iter()
+            .filter(|known| known.label.eq_ignore_ascii_case(label));
+        let first = shown.next()?;
+        shown.next().is_none().then_some(first)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &AssetKind> {
         self.kinds.iter()
     }
@@ -309,6 +327,42 @@ mod tests {
         assert_eq!(
             kinds.by_kind("animation_graph").map(|kind| kind.source),
             Some(AssetKindSource::Compiled)
+        );
+    }
+
+    #[test]
+    fn a_kind_answers_to_its_id_its_type_path_and_its_label() {
+        let mut kinds = AssetKinds::default();
+        kinds.register(AssetKind::from_schema("my_game::content::ItemDef"));
+
+        for named in ["item", "my_game::content::ItemDef", "Item"] {
+            assert_eq!(
+                kinds.by_name(named).map(|kind| kind.kind.as_str()),
+                Some("item"),
+                "'{named}' names the kind"
+            );
+        }
+        assert!(kinds.by_name("ItemDef").is_none());
+    }
+
+    #[test]
+    fn a_label_two_kinds_share_names_neither_of_them() {
+        let mut kinds = AssetKinds::default();
+        kinds.register(AssetKind::from_schema("my_game::content::ItemDef"));
+        kinds.register(AssetKind::compiled(
+            "trade_item",
+            "Item",
+            "my_game::trade::Ware",
+        ));
+
+        assert!(
+            kinds.by_name("Item").is_none(),
+            "a label standing for two kinds chooses neither",
+        );
+        assert_eq!(
+            kinds.by_name("trade_item").map(|kind| kind.kind.as_str()),
+            Some("trade_item"),
+            "and each is still named by its own id",
         );
     }
 

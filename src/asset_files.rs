@@ -2,11 +2,14 @@
 //!
 //! An asset file carries a header naming the type it holds, written after the
 //! version stamp. The header is a hint a file listing can read without parsing;
-//! the document's own root is the truth, so a header that disagrees with it is
-//! reported and ignored. A file with no header at all is still known by its
-//! root, which is how everything written before headers existed keeps working.
+//! where the editor has something to open that type as, the document's own root
+//! is the truth, so a header that disagrees with it is reported and ignored. A
+//! header naming any other type stands for the file, since the parse could only
+//! confirm a type nothing acts on. A file with no header at all is still known
+//! by its root, which is how everything written before headers existed keeps
+//! working.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -161,7 +164,11 @@ fn spelled_references(text: &str) -> Vec<String> {
 }
 
 /// What one read of a file finds, for the memo below.
-fn read_file_facts(path: &Path) -> FileFacts {
+///
+/// `opened` names the types the editor has something to open a file as. A
+/// header naming any other type is taken at its word, since parsing the
+/// document would only confirm a type nothing acts on.
+fn read_file_facts(path: &Path, opened: Option<&HashSet<String>>) -> FileFacts {
     if !jackdaw_bsn::is_document_path(path) {
         return FileFacts {
             type_path: read_file_type(path),
@@ -171,8 +178,10 @@ fn read_file_facts(path: &Path) -> FileFacts {
     let Ok(text) = jackdaw_bsn::read_document_text(path) else {
         return FileFacts::default();
     };
+    let header = jackdaw_bsn::read_asset_header(&text);
+    let trusted = header.filter(|header| opened.is_some_and(|opened| !opened.contains(header)));
     FileFacts {
-        type_path: jackdaw_bsn::asset_text_type(&text, path),
+        type_path: trusted.or_else(|| jackdaw_bsn::asset_text_type(&text, path)),
         references: spelled_references(&text),
     }
 }
@@ -180,15 +189,33 @@ fn read_file_facts(path: &Path) -> FileFacts {
 /// Per-path memo of what each file says: the type it names and the references
 /// it spells. Keyed by path and invalidated when the file's mtime changes or
 /// the file goes. What that type means is resolved on every call, so a kind
-/// registered later is seen without rereading anything.
+/// registered later is seen without rereading anything, except when the set of
+/// types the editor opens changes, which is what makes a trusted header worth
+/// reading past.
 #[derive(Resource, Default)]
 pub struct AssetKindCache {
     entries: HashMap<PathBuf, (SystemTime, FileFacts)>,
+    opened: Option<HashSet<String>>,
 }
 
 impl AssetKindCache {
     pub fn check(&mut self, path: &Path, kinds: &AssetKinds) -> AssetFileKind {
         kind_of_type(self.type_of(path).as_deref(), kinds)
+    }
+
+    /// Name the types the editor has something to open a file as, so a file
+    /// holding anything else costs a read rather than a read and a parse.
+    pub(crate) fn follow(&mut self, kinds: &AssetKinds) {
+        let opened: HashSet<String> = kinds
+            .iter()
+            .map(|kind| kind.type_path.clone())
+            .chain([PREFAB_TYPE.to_string()])
+            .collect();
+        if self.opened.as_ref() == Some(&opened) {
+            return;
+        }
+        self.opened = Some(opened);
+        self.entries.clear();
     }
 
     /// The type the file at `path` names, from the memo where the file has
@@ -214,7 +241,7 @@ impl AssetKindCache {
         {
             return Some(cached.clone());
         }
-        let facts = read_file_facts(path);
+        let facts = read_file_facts(path, self.opened.as_ref());
         self.entries
             .insert(path.to_path_buf(), (mtime, facts.clone()));
         Some(facts)
@@ -493,6 +520,60 @@ mod tests {
 
         let garbage = write(tmp.path(), "g.jsn", "not json at all");
         assert!(!is_prefab(&garbage, &kinds()));
+    }
+
+    #[test]
+    fn a_header_naming_a_type_the_editor_does_not_open_is_taken_at_its_word() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = write(
+            tmp.path(),
+            "rat.bsn",
+            &asset_file_text(
+                "my_game::content::MobDef",
+                "#rat\nmy_game::content::ItemDef { }\n",
+            ),
+        );
+        let mut cache = AssetKindCache::default();
+        cache.follow(&kinds());
+
+        assert_eq!(
+            cache.type_of(&path).as_deref(),
+            Some("my_game::content::MobDef"),
+            "the header stands for the file, so the document is never parsed"
+        );
+    }
+
+    #[test]
+    fn a_kind_registered_later_makes_a_trusted_header_worth_reading_past() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = write(
+            tmp.path(),
+            "rat.bsn",
+            &asset_file_text(
+                "my_game::content::MobDef",
+                "#rat\nmy_game::content::ItemDef { }\n",
+            ),
+        );
+        let mut cache = AssetKindCache::default();
+        cache.follow(&kinds());
+        assert_eq!(
+            cache.type_of(&path).as_deref(),
+            Some("my_game::content::MobDef")
+        );
+
+        let mut wider = kinds();
+        wider.register(AssetKind::extension(
+            "mob",
+            "Mob",
+            "my_game::content::MobDef",
+        ));
+        cache.follow(&wider);
+
+        assert_eq!(
+            cache.type_of(&path).as_deref(),
+            Some(ITEM_TYPE),
+            "the file is read again, and its root is the truth for a type the editor opens"
+        );
     }
 
     #[test]
