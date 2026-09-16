@@ -469,10 +469,38 @@ pub fn status_handler(In(_): In<Option<Value>>, world: &mut World) -> BrpResult 
         // Non-null means a dialog is up and nothing else will happen
         // until `dialog.answer` presses one of its buttons.
         "dialog": dialog,
+        // Non-null means a list of choices is up, naming which list it is
+        // and holding the editor until an entry is taken or `modal.cancel`
+        // drops it.
+        "picker": open_picker(world),
         // `building`, `running` or `stopped`: what play-in-editor is
         // doing, which `jackdaw/wait` can be held on.
         "pie": crate::pie::play_status(world),
     }))
+}
+
+/// The list of choices on screen: which list it is, and the entries it offers
+/// where they are text a caller can name.
+fn open_picker(world: &mut World) -> Option<Value> {
+    let mut pickers = world.query_filtered::<Entity, With<jackdaw_feathers::picker::Picker>>();
+    let picker = pickers.iter(world).next()?;
+    let list = if world
+        .get::<crate::new_asset::NewAssetList>(picker)
+        .is_some()
+    {
+        Some("new asset")
+    } else if world
+        .get::<crate::inspector::asset_row::AssetFieldPicker>(picker)
+        .is_some()
+    {
+        Some("asset field")
+    } else {
+        None
+    };
+    let items = world
+        .get::<jackdaw_feathers::picker::PickerItems<String>>(picker)
+        .map(|items| items.items().to_vec());
+    Some(json!({ "list": list, "items": items }))
 }
 
 /// The dialog waiting for an answer, and what it will take.

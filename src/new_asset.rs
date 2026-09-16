@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use bevy::reflect::TypeRegistry;
 use bevy::reflect::prelude::ReflectDefault;
 use jackdaw_api::prelude::{AssetKind, AssetKinds};
+use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
 use jackdaw_feathers::picker::{PickerProps, SelectInput, SpawnItemInput, match_text, picker_item};
 
 use crate::prelude::*;
@@ -73,32 +74,75 @@ pub fn kind_line(kind: &AssetKind) -> String {
 #[operator(
     id = "asset.new_picker",
     label = "New Asset...",
-    description = "Open the list of asset kinds and create the one picked.",
+    description = "Open the list of asset kinds and report what it offers, or create \
+                   the kind named outright.",
     allows_undo = false,
-    params(path(
-        String,
-        doc = "Folder to create in. Defaults to the folder the browser is showing."
-    ))
+    params(
+        path(
+            String,
+            doc = "Folder to create in. Defaults to the folder the browser is showing."
+        ),
+        kind(
+            String,
+            doc = "Kind to create without putting the list up, as its id, its \
+                   type path or the label the list shows."
+        )
+    )
 )]
 pub fn asset_new_picker(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     let path = params.as_str("path").map(PathBuf::from);
-    commands.queue(move |world: &mut World| {
-        open_new_asset_list(world, path.as_deref());
+    let kind = params.as_str("kind").map(str::to_owned);
+    commands.queue(move |world: &mut World| match kind {
+        Some(kind) => create_named_kind(world, &kind, path.as_deref()),
+        None => open_new_asset_list(world, path.as_deref()),
     });
     OperatorResult::Finished
 }
 
-/// Put up the list of kinds for a folder, in place of one already open.
+/// Create the kind a caller named, in the folder the list would have used.
+fn create_named_kind(world: &mut World, kind: &str, folder: Option<&Path>) {
+    let Some(folder) = folder_for_new_asset(world, folder) else {
+        warn_caller(world, "asset.new_picker: no project is open");
+        return;
+    };
+    let Some(known) = world
+        .get_resource::<AssetKinds>()
+        .and_then(|kinds| kinds.by_name(kind))
+        .map(|known| known.kind.clone())
+    else {
+        warn_caller(
+            world,
+            format!(
+                "asset.new_picker: nothing registers '{kind}'; name its id, its \
+                 type path or the label the list shows"
+            ),
+        );
+        return;
+    };
+    create_in_folder(world, &known, &folder);
+}
+
+/// Put up the list of kinds for a folder, in place of one already open,
+/// reporting what it offers to whoever cannot see it.
 pub fn open_new_asset_list(world: &mut World, folder: Option<&Path>) {
     let Some(folder) = folder_for_new_asset(world, folder) else {
         crate::status_bar::notify_error(world, "no project is open");
+        warn_caller(world, "asset.new_picker: no project is open");
         return;
     };
     let kinds = creatable_kinds(world);
     if kinds.is_empty() {
         crate::status_bar::notify_warn(world, "this project registers no asset kinds");
+        warn_caller(
+            world,
+            "asset.new_picker: this project registers no asset kinds",
+        );
         return;
     }
+    report_to_caller(
+        world,
+        kinds.iter().map(kind_line).collect::<Vec<_>>().join("; "),
+    );
     close_new_asset_list(world);
     let items: Vec<String> = kinds.iter().map(kind_line).collect();
     let list = NewAssetList {

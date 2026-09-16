@@ -121,6 +121,11 @@ pub(crate) struct AssetFieldReader(pub(crate) Box<dyn Fn(&World) -> Option<Strin
 #[derive(Component)]
 pub(crate) struct AssetFieldPicker(pub(crate) Entity);
 
+/// A row that has not yet drawn what its field names, because the value could
+/// not be read when the row was built.
+#[derive(Component)]
+pub(crate) struct AssetRowUnread;
+
 /// Everything a row needs to know about the field it stands for.
 #[derive(Clone)]
 pub(crate) struct AssetRowProps {
@@ -234,6 +239,7 @@ pub(crate) fn attach_asset_field(
         path_text,
     });
     if let Some(text) = path_text {
+        commands.entity(row).insert(AssetRowUnread);
         commands
             .entity(text)
             .insert((
@@ -352,6 +358,9 @@ pub(crate) fn show_asset_row_path(world: &mut World, row: Entity) {
     let Some(path) = field_path_text(world, row, &field) else {
         return;
     };
+    if let Ok(mut entity) = world.get_entity_mut(row) {
+        entity.remove::<AssetRowUnread>();
+    }
     let shown = if path.is_empty() {
         NOTHING.to_string()
     } else {
@@ -399,9 +408,9 @@ pub(crate) fn shown_name(path: &str) -> String {
 /// reading through a hook of its own, sits outside that entity and is read
 /// every run.
 ///
-/// A row that has just appeared is read whatever else changed: a card built
-/// while the project's types are out of the world cannot read its own value as
-/// it is spawned, so this is where such a row first draws its path.
+/// A row that has never drawn its own value is read every run until it can: a
+/// card built while the project's types are out of the world cannot read its
+/// rows as they are spawned, so this is where such a row first draws its path.
 pub(crate) fn refresh_asset_rows(
     world: &mut World,
     mut last_run: Local<Option<bevy::ecs::change_detection::Tick>>,
@@ -418,27 +427,11 @@ pub(crate) fn refresh_asset_rows(
             || world
                 .get::<AssetFieldRow>(row)
                 .is_some_and(|field| matches!(field.target, AssetFieldTarget::Held(_)));
-        if outside || inspected_changed || row_is_new(world, row, previous, this_run) {
+        let unread = world.get::<AssetRowUnread>(row).is_some();
+        if outside || inspected_changed || unread {
             show_asset_row_path(world, row);
         }
     }
-}
-
-/// Whether a row was spawned since this system last ran.
-fn row_is_new(
-    world: &World,
-    row: Entity,
-    previous: Option<bevy::ecs::change_detection::Tick>,
-    this_run: bevy::ecs::change_detection::Tick,
-) -> bool {
-    let Some(previous) = previous else {
-        return true;
-    };
-    world
-        .get_entity(row)
-        .ok()
-        .and_then(|entity| entity.get_change_ticks::<AssetFieldRow>())
-        .is_some_and(|ticks| ticks.is_added(previous, this_run))
 }
 
 /// Whether the entity the inspector is showing changed since the last run.

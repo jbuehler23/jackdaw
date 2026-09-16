@@ -441,3 +441,78 @@ fn the_same_name_in_two_folders_is_two_assets() {
         "a name is the file's, not the whole project's"
     );
 }
+
+#[test]
+fn the_new_asset_list_reports_what_it_offers_and_takes_a_kind_outright() {
+    let (mut app, tmp) = editor_with_kinds();
+    let dir = folder(&tmp, "content");
+
+    app.world_mut()
+        .get_resource_or_init::<jackdaw_api_internal::operator::OperatorReports>()
+        .0
+        .clear();
+    call(
+        &mut app,
+        "asset.new_picker",
+        &[("path", dir.to_string_lossy().into_owned().into())],
+    );
+    let told = app
+        .world_mut()
+        .get_resource_or_init::<jackdaw_api_internal::operator::OperatorReports>()
+        .0
+        .clone();
+    assert!(
+        told.iter()
+            .any(|line| line.contains("Item") && line.contains(OUTFIT_TYPE)),
+        "a caller with no screen is told what the list offers, got {told:?}",
+    );
+
+    call(
+        &mut app,
+        "asset.new_picker",
+        &[
+            ("path", dir.to_string_lossy().into_owned().into()),
+            ("kind", OUTFIT_TYPE.into()),
+        ],
+    );
+
+    assert!(
+        indexed(&app, "content/outfit_1.bsn"),
+        "naming a kind creates it rather than putting the list up",
+    );
+    assert!(
+        app.world().resource::<OpenDefinition>().0.is_some(),
+        "and its card is open",
+    );
+}
+
+#[test]
+fn the_status_names_the_list_of_kinds_while_it_is_up() {
+    let (mut app, tmp) = editor_with_kinds();
+    let dir = folder(&tmp, "content");
+    call(
+        &mut app,
+        "asset.new_picker",
+        &[("path", dir.to_string_lossy().into_owned().into())],
+    );
+
+    let status = app
+        .world_mut()
+        .run_system_cached_with(jackdaw::remote::server::status_handler, None)
+        .expect("the handler ran")
+        .expect("the status answers");
+
+    assert_eq!(
+        status["picker"]["list"],
+        serde_json::json!("new asset"),
+        "a caller with no screen is told which list is up: {status}",
+    );
+    assert!(
+        status["picker"]["items"]
+            .as_array()
+            .is_some_and(|items| items
+                .iter()
+                .any(|item| item.as_str().is_some_and(|line| line.contains("Item")))),
+        "and what it offers: {status}",
+    );
+}
