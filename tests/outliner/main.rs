@@ -15,6 +15,7 @@ mod new_scene_kinds;
 mod outliner_asset_instances;
 mod outliner_drag_cleanup;
 mod outliner_keyboard_walk;
+mod outliner_missing_prefab;
 mod outliner_range_select;
 mod outliner_rename;
 mod outliner_row_drop;

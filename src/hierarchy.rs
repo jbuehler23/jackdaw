@@ -213,6 +213,36 @@ fn is_asset_part(world: &World, entity: Entity) -> bool {
     false
 }
 
+/// The text a row shows: the entity's name, the prefab file an unnamed
+/// instance points at, or the entity itself.
+fn row_label(world: &World, entity: Entity) -> String {
+    if let Some(name) = world.get::<Name>(entity) {
+        return name.as_str().to_string();
+    }
+    if let Some(isa) = world.get::<crate::prefab::IsA>(entity)
+        && let Some(stem) = isa.source.file_stem().and_then(|stem| stem.to_str())
+    {
+        return stem.to_string();
+    }
+    format!("Entity {entity}")
+}
+
+/// Whether the entity is a prefab instance, named or not.
+fn names_a_prefab(world: &World, entity: Entity) -> bool {
+    world.get::<crate::prefab::IsA>(entity).is_some()
+}
+
+/// Whether a prefab instance points at a file the project does not hold, so
+/// it inherits nothing and its row says so.
+fn prefab_source_is_missing(world: &World, entity: Entity) -> bool {
+    let Some(isa) = world.get::<crate::prefab::IsA>(entity) else {
+        return false;
+    };
+    world
+        .get_resource::<crate::prefab::PrefabAstCache>()
+        .is_some_and(|cache| cache.get(&isa.source).is_none())
+}
+
 /// Classify a scene entity by its primary component for tree display.
 /// Returns the underlying category (Brush mesh, Camera, Light, etc.)
 /// regardless of whether the entity is inherited from a prefab. Inherited
@@ -225,7 +255,10 @@ fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
         return EntityCategory::AssetPart;
     }
     if world.get::<crate::prefab::IsA>(entity).is_some() {
-        return EntityCategory::Prefab;
+        return match prefab_source_is_missing(world, entity) {
+            true => EntityCategory::MissingPrefab,
+            false => EntityCategory::Prefab,
+        };
     }
     if world.get::<Camera>(entity).is_some() {
         return EntityCategory::Camera;
@@ -532,7 +565,10 @@ fn spawn_withheld_row(world: &mut World, children_container: Entity, child: Enti
     }
     // The document node arrived before the authored name did; keep waiting
     // rather than dropping the row for good.
-    if !world.resource::<HierarchyShowAll>().0 && world.get::<Name>(child).is_none() {
+    if !world.resource::<HierarchyShowAll>().0
+        && world.get::<Name>(child).is_none()
+        && !names_a_prefab(world, child)
+    {
         withhold_row_after(world, children_container, child, passes + 1);
         return;
     }
@@ -607,10 +643,7 @@ fn ancestor_hierarchy_root(world: &World, entity: Entity) -> Option<Entity> {
 /// `on_name_changed`) both see an empty index and queue duplicate
 /// rows, which is what produced the doubled Outliner entries.
 fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: Entity) -> Entity {
-    let label = world
-        .get::<Name>(source)
-        .map(|n| n.as_str().to_string())
-        .unwrap_or_else(|| format!("Entity {source}"));
+    let label = row_label(world, source);
     let has_children = has_visible_children(world, source);
     let category = classify_entity(world, source);
     let inherited = is_inherited_descendant(world, source);
@@ -731,7 +764,7 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
             let show_all = world.resource::<HierarchyShowAll>().0;
             roots
                 .into_iter()
-                .filter(|&e| show_all || world.get::<Name>(e).is_some())
+                .filter(|&e| show_all || world.get::<Name>(e).is_some() || names_a_prefab(world, e))
                 .collect()
         };
 
@@ -739,10 +772,7 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
             .into_iter()
             .map(|e| {
                 let category = classify_entity(world, e);
-                let name = world
-                    .get::<Name>(e)
-                    .map(|n| n.as_str().to_string())
-                    .unwrap_or_else(|| format!("Entity {e}"));
+                let name = row_label(world, e);
                 (e, category, name)
             })
             .collect();
@@ -973,8 +1003,12 @@ fn queue_root_row_spawn(
         {
             return;
         }
-        // In named-only mode, skip entities without a Name
-        if !world.resource::<HierarchyShowAll>().0 && world.get::<Name>(entity).is_none() {
+        // In named-only mode, skip entities without a Name. An instance whose
+        // prefab is missing has inherited no name and still has to be seen.
+        if !world.resource::<HierarchyShowAll>().0
+            && world.get::<Name>(entity).is_none()
+            && !names_a_prefab(world, entity)
+        {
             return;
         }
         let containers: Vec<Entity> = world
@@ -1357,7 +1391,10 @@ fn on_entity_reparented(
             // In named-only mode, skip entities without a Name. An authored
             // name can land after the parent link, so the row is remembered
             // rather than dropped.
-            if !world.resource::<HierarchyShowAll>().0 && world.get::<Name>(entity).is_none() {
+            if !world.resource::<HierarchyShowAll>().0
+                && world.get::<Name>(entity).is_none()
+                && !names_a_prefab(world, entity)
+            {
                 withhold_row(world, parent_children_container_for_spawn, entity);
                 return;
             }

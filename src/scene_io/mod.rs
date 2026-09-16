@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 
+pub(crate) mod asset_fields;
 mod legacy;
 mod load;
 mod registration;

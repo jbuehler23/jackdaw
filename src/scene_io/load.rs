@@ -264,9 +264,18 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
             }
         };
 
-        // A saved scene names its prefabs relative to itself; in memory they
-        // are absolute, since the cache is keyed by path.
-        jackdaw_prefab::absolutize_isa_sources(&mut authored, &parent_path);
+        // A saved scene names its prefabs under the assets folder; in memory
+        // they are absolute, since the cache is keyed by path.
+        let assets_root = crate::prefab::save_load::source_root(world, &parent_path);
+        for stray in
+            crate::prefab::save_load::relativize_for_file(world, &mut authored, &parent_path)
+        {
+            warn!(
+                "scene '{path}': the prefab source '{stray}' names a place on this machine \
+                 rather than a file under the project's assets folder"
+            );
+        }
+        jackdaw_prefab::absolutize_isa_sources(&mut authored, &assets_root);
 
         // A legacy scene's prefabs may be legacy too, and the cache reads
         // `.bsn` only. They convert here because the resolve that needs them
@@ -274,7 +283,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
         if let Some(pending) = &pending_conversion {
             crate::jsn_to_bsn::convert_prefab_dependencies(world, pending);
         }
-        crate::prefab::save_load::retarget_isa_sources(&mut authored, &parent_path);
+        crate::prefab::save_load::retarget_isa_sources(&mut authored, &assets_root);
 
         // Populate the prefab cache from the document's IsA references, then
         // resolve instances so the spawn produces complete entities. A
@@ -293,9 +302,14 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
                     crate::prefab::save_load::populate_cache_for_scene_bsn(
                         &authored,
                         &mut cache,
-                        &parent_path,
+                        &assets_root,
                     );
                 }
+                crate::prefab::save_load::warn_for_missing_sources(
+                    &authored,
+                    world.resource::<crate::prefab::PrefabAstCache>(),
+                    &path,
+                );
                 let cache = world.resource::<crate::prefab::PrefabAstCache>();
                 let get_prefab = |p: &Path| cache.get(p);
                 match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {

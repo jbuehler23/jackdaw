@@ -261,6 +261,29 @@ struct ListedComponent {
     chrome: TypeChrome,
 }
 
+/// A file as the project names it: under the assets folder when it is there,
+/// and as it stands when it is not.
+fn named_in_assets(path: &std::path::Path) -> String {
+    crate::project::open_project_assets_dir()
+        .and_then(|assets| {
+            path.strip_prefix(assets)
+                .ok()
+                .map(std::path::Path::to_path_buf)
+        })
+        .unwrap_or_else(|| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+/// What the card says about a prefab source nothing was inherited from.
+fn source_note(path: &std::path::Path) -> String {
+    format!(
+        "Source {}: {}",
+        crate::prefab::save_load::missing_source_reason(path),
+        named_in_assets(path)
+    )
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "inspector rebuild needs the full system param set; bundling into a struct would just push the problem one frame down"
@@ -339,6 +362,27 @@ pub(crate) fn build_inspector_displays(
             prefab_entity_id,
         })
     });
+
+    if let Some(ctx) = prefab_ctx.as_ref().filter(|ctx| !ctx.has_cached_prefab) {
+        commands.spawn((
+            ComponentDisplay,
+            Node {
+                padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_SM)),
+                width: Val::Percent(100.0),
+                ..Default::default()
+            },
+            ChildOf(inspector_entity),
+            children![(
+                Text::new(source_note(&ctx.prefab_path)),
+                TextFont {
+                    font: editor_font.0.clone().into(),
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_ERROR),
+            )],
+        ));
+    }
 
     let mut comp_list: Vec<ListedComponent> = archetype
         .iter_components()
@@ -1371,11 +1415,23 @@ pub(crate) fn filter_inspector_components(
 
 #[cfg(test)]
 mod tests {
-    use super::{ComponentDisplaySpec, hidden_by_namespace, spawn_component_display};
+    use super::{ComponentDisplaySpec, hidden_by_namespace, source_note, spawn_component_display};
     use bevy::feathers::controls::FeathersToolButton;
     use bevy::prelude::*;
     use jackdaw_api_internal::operator::Operator;
     use jackdaw_feathers::button::ButtonOperatorCall;
+
+    #[test]
+    fn a_source_that_is_on_disk_but_did_not_read_says_so_rather_than_reading_as_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let unreadable = dir.path().join("broken.bsn");
+        std::fs::write(&unreadable, "this is not a document").expect("write");
+
+        assert!(source_note(&unreadable).starts_with("Source could not be read"));
+        assert!(
+            source_note(&dir.path().join("absent.bsn")).starts_with("Source is not in the project"),
+        );
+    }
 
     /// The card's remove control is a tool button carrying the remove operator.
     #[test]

@@ -646,3 +646,279 @@ fn an_instance_whose_parent_is_not_in_the_document_stands_where_it_was_placed() 
         "a top-level instance carries the world position it was placed at",
     );
 }
+
+/// The zone at the assets root and a scene in a folder beside it, so the two
+/// spellings of one prefab can be compared.
+fn source_written_from(app: &mut App, tmp: &tempfile::TempDir, scene: &str) -> String {
+    let file = tmp.path().join("assets").join(scene);
+    run_finished(app, &format!("scene.new kind=3d path={}", file.display()));
+    run_finished(
+        app,
+        "prefab.spawn_instance path=prefabs/lamp.bsn pos_x=1.0 pos_y=0.0 pos_z=2.0",
+    );
+    let saved = run_op_clause_as_user(app.world_mut(), "scene.save").expect("the save dispatched");
+    assert_eq!(saved, OperatorResult::Finished);
+    app.update();
+
+    let text = std::fs::read_to_string(&file).expect("the scene was written");
+    text.lines()
+        .find(|line| line.contains("source:"))
+        .unwrap_or_else(|| panic!("the saved scene names a prefab source:\n{text}"))
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn a_scene_in_a_folder_spells_its_prefab_source_as_the_zone_beside_it_does() {
+    let (mut app, tmp, _scene) = project_with_a_lamp();
+    std::fs::create_dir_all(tmp.path().join("assets/scratch")).expect("the folder is made");
+
+    let at_the_root = source_written_from(&mut app, &tmp, "zone_probe.bsn");
+    let in_a_folder = source_written_from(&mut app, &tmp, "scratch/probe.bsn");
+
+    assert_eq!(
+        in_a_folder, at_the_root,
+        "one prefab is one path, whatever folder names it",
+    );
+    assert!(
+        at_the_root.contains("\"prefabs/lamp.bsn\""),
+        "and that path is the one under the assets folder, got {at_the_root}",
+    );
+}
+
+/// A scene authored the way the editor authors one: a group holding an
+/// instance, saved, and then the prefab file taken away underneath it. The
+/// app it comes back in is in the editor state, since that is what gates the
+/// systems judging a freshly spawned entity.
+fn a_group_holding_an_instance_whose_prefab_went_missing()
+-> (App, tempfile::TempDir, std::path::PathBuf) {
+    let (mut app, tmp, _scene) = project_with_a_lamp();
+    let quarter = tmp.path().join("assets/quarter.bsn");
+    run_finished(
+        &mut app,
+        &format!("scene.new kind=3d path={}", quarter.display()),
+    );
+    run_finished(&mut app, "entity.add.group name=Lamps");
+    run_finished(
+        &mut app,
+        "prefab.spawn_instance path=prefabs/lamp.bsn pos_x=1.0 pos_y=0.0 pos_z=2.0 parent=Lamps",
+    );
+    let saved = run_op_clause_as_user(app.world_mut(), "scene.save").expect("the save dispatched");
+    assert_eq!(saved, OperatorResult::Finished);
+    app.update();
+    drop(app);
+
+    std::fs::remove_file(tmp.path().join("assets/prefabs/lamp.bsn"))
+        .expect("the prefab leaves the project");
+
+    let mut app = util::editor_test_app();
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot {
+            root: tmp.path().to_path_buf(),
+            config: default(),
+        });
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    for _ in 0..4 {
+        app.update();
+    }
+    (app, tmp, quarter)
+}
+
+/// The panel every outliner row is indexed under.
+fn outliner_panel(app: &mut App) -> Entity {
+    let panel = app
+        .world_mut()
+        .spawn((
+            jackdaw::hierarchy::HierarchyTreeContainer,
+            Node::default(),
+            Visibility::Inherited,
+        ))
+        .id();
+    app.update();
+    panel
+}
+
+/// Whether a row offers a disclosure to open, which is the only way to reach
+/// what it holds.
+fn row_offers_an_expansion(app: &App, row: Entity) -> bool {
+    let world = app.world();
+    row_part::<jackdaw_widgets::tree_view::TreeRowContent>(world, row)
+        .and_then(|content| {
+            row_part::<jackdaw_widgets::tree_view::TreeNodeExpandToggle>(world, content)
+        })
+        .and_then(|toggle| world.get::<Children>(toggle))
+        .is_some_and(|disclosures| !disclosures.is_empty())
+}
+
+/// The child of `parent` carrying `C`, which is how a row's parts are reached.
+fn row_part<C: Component>(world: &World, parent: Entity) -> Option<Entity> {
+    world
+        .get::<Children>(parent)?
+        .iter()
+        .find(|&child| world.get::<C>(child).is_some())
+}
+
+/// What a tree row's label reads.
+fn row_label_text(app: &App, row: Entity) -> String {
+    let world = app.world();
+    let content = row_part::<jackdaw_widgets::tree_view::TreeRowContent>(world, row)
+        .expect("a row has content");
+    let label = row_part::<jackdaw_widgets::tree_view::TreeRowLabel>(world, content)
+        .expect("a row carries a label");
+    world
+        .get::<Text>(label)
+        .expect("the label carries text")
+        .0
+        .clone()
+}
+
+/// Every node the scene tree reports, parents before children.
+fn tree_nodes(node: &serde_json::Value, into: &mut Vec<serde_json::Value>) {
+    into.push(node.clone());
+    for child in node["children"].as_array().into_iter().flatten() {
+        tree_nodes(child, into);
+    }
+}
+
+#[test]
+fn an_instance_whose_prefab_is_missing_keeps_its_row_and_its_reference() {
+    let (mut app, tmp, quarter) = a_group_holding_an_instance_whose_prefab_went_missing();
+    let panel = outliner_panel(&mut app);
+
+    run_finished(&mut app, &format!("scene.open path={}", quarter.display()));
+    for _ in 0..12 {
+        app.update();
+    }
+
+    let instances = app
+        .world()
+        .resource::<jackdaw_bsn::SceneBsnAst>()
+        .entities_with_component(ISA_TYPE);
+    assert_eq!(instances.len(), 1, "the document still holds the reference");
+
+    let mut query = app
+        .world_mut()
+        .query_filtered::<Entity, With<jackdaw_prefab::components::IsA>>();
+    let instance = query
+        .iter(app.world())
+        .next()
+        .expect("the instance stands in the scene rather than vanishing");
+    assert!(
+        app.world().get::<Name>(instance).is_none(),
+        "it inherited nothing, so its row has to name the file instead",
+    );
+    assert!(
+        app.world()
+            .get::<jackdaw_scene_types::EditorHidden>(instance)
+            .is_none(),
+        "a node an author placed is not an internal to hide, whatever it inherited",
+    );
+
+    let group = app
+        .world()
+        .get::<ChildOf>(instance)
+        .map(ChildOf::parent)
+        .expect("the instance hangs under the group it was placed in");
+    let group_row = app
+        .world()
+        .resource::<jackdaw_widgets::tree_view::TreeIndex>()
+        .get(panel, group)
+        .expect("the group has a row");
+    assert!(
+        row_offers_an_expansion(&app, group_row),
+        "the group says it holds something, or the instance cannot be reached",
+    );
+    app.world_mut()
+        .entity_mut(group_row)
+        .insert(jackdaw_widgets::tree_view::TreeNodeExpanded(true));
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let row = app
+        .world()
+        .resource::<jackdaw_widgets::tree_view::TreeIndex>()
+        .get(panel, instance)
+        .expect("the outliner draws a row for the instance it could not resolve");
+    assert_eq!(
+        row_label_text(&app, row),
+        "lamp",
+        "the row names the file it points at, since it inherited no name",
+    );
+
+    let tree = app
+        .world_mut()
+        .run_system_cached_with(
+            jackdaw::remote::server::scene_tree_handler,
+            Some(serde_json::json!({})),
+        )
+        .expect("the handler ran")
+        .expect("the handler answered");
+    let mut nodes = Vec::new();
+    for root in tree["tree"].as_array().into_iter().flatten() {
+        tree_nodes(root, &mut nodes);
+    }
+    assert!(
+        nodes.iter().any(|node| {
+            node["components"].as_array().is_some_and(|components| {
+                components
+                    .iter()
+                    .any(|component| component == "jackdaw_prefab::components::IsA")
+            })
+        }),
+        "the scene tree reports the instance too, got {nodes:#?}",
+    );
+
+    let outcome =
+        run_op_clause_as_user(app.world_mut(), "scene.save").expect("the save dispatched");
+    assert_eq!(outcome, OperatorResult::Finished);
+    app.update();
+    let saved = std::fs::read_to_string(tmp.path().join("assets/quarter.bsn")).expect("the file");
+    assert!(
+        saved.contains("prefabs/lamp.bsn"),
+        "the save keeps the reference the author wrote:\n{saved}",
+    );
+}
+
+#[test]
+fn a_scene_naming_a_prefab_by_an_absolute_path_is_not_saved_over() {
+    let (mut app, tmp, _scene) = project_with_a_lamp();
+    run_finished(
+        &mut app,
+        &format!(
+            "scene.new kind=3d path={}",
+            tmp.path().join("assets/zone_absolute.bsn").display()
+        ),
+    );
+    run_finished(
+        &mut app,
+        "prefab.spawn_instance path=prefabs/lamp.bsn pos_x=0.0 pos_y=0.0 pos_z=0.0",
+    );
+
+    let elsewhere = tmp.path().join("outside/lamp.bsn");
+    let live = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+    let node = *live
+        .entities_with_component(ISA_TYPE)
+        .first()
+        .expect("an instance");
+    let value = jackdaw_prefab::isa_value(&elsewhere.to_string_lossy(), &[]);
+    jackdaw_prefab::set_whole_component(
+        app.world_mut()
+            .resource_mut::<jackdaw_bsn::SceneBsnAst>()
+            .into_inner(),
+        node,
+        ISA_TYPE,
+        value,
+    );
+
+    let refusal =
+        jackdaw::scene_io::emit_bsn_scene_for_file(app.world_mut(), &tmp.path().join("assets"))
+            .expect_err("a path only this machine holds is refused");
+
+    assert!(
+        refusal.contains("IsA.source"),
+        "the refusal names the field that holds it, got {refusal}",
+    );
+}

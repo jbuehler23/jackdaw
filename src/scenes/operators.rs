@@ -404,16 +404,17 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
         }
     };
 
-    // A saved scene names its prefabs relative to itself; in memory they are
-    // absolute, since the cache is keyed by path. Without this the sources
+    // A saved scene names its prefabs under the assets folder; in memory they
+    // are absolute, since the cache is keyed by path. Without this the sources
     // resolve against whatever directory the editor was launched from, and a
     // scene holding instances opens with none of them.
     let scene_dir = canonical.parent().map_or_else(
         || std::path::PathBuf::from("."),
         std::path::Path::to_path_buf,
     );
-    jackdaw_prefab::absolutize_isa_sources(&mut doc, &scene_dir);
-    crate::prefab::save_load::retarget_isa_sources(&mut doc, &scene_dir);
+    let assets_root = crate::prefab::save_load::source_root(world, &scene_dir);
+    jackdaw_prefab::absolutize_isa_sources(&mut doc, &assets_root);
+    crate::prefab::save_load::retarget_isa_sources(&mut doc, &assets_root);
 
     // A document naming the removed facade UI vocabulary gets no tab at all,
     // rather than opening with its UI silently missing.

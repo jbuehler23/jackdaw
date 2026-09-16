@@ -302,6 +302,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::gizmos::add_to_extension(ctx);
         crate::terrain::sculpt::add_to_extension(ctx);
         crate::pie::add_to_extension(ctx);
+        crate::play_settings::add_to_extension(ctx);
         crate::terrain::ops::add_to_extension(ctx);
         crate::terrain::ground::add_to_extension(ctx);
         crate::terrain::regions::add_to_extension(ctx);

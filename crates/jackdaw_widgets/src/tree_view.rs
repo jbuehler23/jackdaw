@@ -52,6 +52,8 @@ pub enum EntityCategory {
     Mesh,
     Scene,
     Prefab,
+    /// A prefab instance nothing was inherited from, drawn in the error tone.
+    MissingPrefab,
     /// Entity inherited from a prefab (carries `PrefabEntityId` but no
     /// `IsA`). Drawn with a faint tinge to signal it's a materialized
     /// child of an instance rather than authored directly.

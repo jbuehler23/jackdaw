@@ -983,7 +983,8 @@ fn aim_camera(
 /// named any: a prefab that names none keeps its icon rather than being
 /// photographed as an empty frame.
 fn build_prefab_subject(world: &mut World, root: Entity, path: &Path) -> bool {
-    let Ok(document) = crate::prefab::save_load::read_prefab_ast(path) else {
+    let assets_root = crate::prefab::save_load::source_root_of(world, path);
+    let Ok(document) = crate::prefab::save_load::read_prefab_ast(path, &assets_root) else {
         return false;
     };
     let mut walk = PrefabWalk {
@@ -1089,7 +1090,10 @@ fn spawn_inherited_prefab(
             }
         });
     }
-    if !spawned && let Ok(document) = crate::prefab::save_load::read_prefab_ast(source) {
+    let assets_root = crate::prefab::save_load::source_root_of(world, source);
+    if !spawned
+        && let Ok(document) = crate::prefab::save_load::read_prefab_ast(source, &assets_root)
+    {
         for node in document.roots.clone() {
             spawn_prefab_node(world, &document, node, parent, depth, walk);
         }
