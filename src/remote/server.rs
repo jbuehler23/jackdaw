@@ -1056,6 +1056,10 @@ const MAX_ASSET_DEPTH: usize = 12;
 
 /// The project's asset files, as paths relative to its assets directory.
 ///
+/// A document held in both forms is one file to a caller, so the pair is listed
+/// once under its text path; a detailed listing carries `binary`, which says
+/// the document is held in the binary form.
+///
 /// Registered as a watching method: the walk is blocking `std::fs` over a tree
 /// of unknown size, so it runs on the IO pool and the handler is polled each
 /// frame until the answer is there.
@@ -1116,12 +1120,14 @@ pub fn assets_handler(
         return Ok(None);
     };
     waits.requests.remove(&key);
+    let found = collapse_document_twins(found);
     if !params
         .get("details")
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        return Ok(Some(json!({ "assets": found })));
+        let paths: Vec<&String> = found.iter().map(|(path, _)| path).collect();
+        return Ok(Some(json!({ "assets": paths })));
     }
     if let Some(mut demand) = world.get_resource_mut::<crate::animation::LibraryDemand>() {
         demand.requested = true;
@@ -1136,7 +1142,7 @@ pub fn assets_handler(
             let library = world.get_resource::<crate::animation::AnimationLibrary>();
             found
                 .into_iter()
-                .map(|path| {
+                .map(|(path, binary)| {
                     let clips: Vec<&str> = library
                         .and_then(|library| library.file(&path))
                         .map(|file| file.clips.iter().map(|clip| clip.name.as_str()).collect())
@@ -1151,12 +1157,42 @@ pub fn assets_handler(
                                 .map(|known| known.kind.clone())
                         })
                         .unwrap_or_else(|| asset_kind(&path).to_string());
-                    json!({ "path": path, "kind": kind, "clips": clips })
+                    json!({ "path": path, "kind": kind, "clips": clips, "binary": binary })
                 })
                 .collect()
         },
     );
     Ok(Some(json!({ "assets": detailed })))
+}
+
+/// The listing with each document named once, as the path and whether a binary
+/// twin of it is on disk. A pair drops its binary file and answers to the text
+/// path; a document held only as binary keeps the path it sits at.
+fn collapse_document_twins(found: Vec<String>) -> Vec<(String, bool)> {
+    let binary_path = |path: &str| jackdaw_bsn::is_binary_path(Path::new(path));
+    let text_twin = |path: &str| {
+        jackdaw_bsn::text_twin(Path::new(path))
+            .to_slash_lossy()
+            .into_owned()
+    };
+    let text: std::collections::HashSet<&str> = found
+        .iter()
+        .filter(|path| !binary_path(path))
+        .map(String::as_str)
+        .collect();
+    let twinned: std::collections::HashSet<String> = found
+        .iter()
+        .filter(|path| binary_path(path))
+        .map(|path| text_twin(path))
+        .collect();
+    found
+        .iter()
+        .filter(|path| !binary_path(path) || !text.contains(text_twin(path).as_str()))
+        .map(|path| {
+            let held = binary_path(path) || twinned.contains(path);
+            (path.clone(), held)
+        })
+        .collect()
 }
 
 /// What kind of thing an asset path names, from its extension.
@@ -1731,6 +1767,28 @@ mod tests {
         assert!(matches_pattern("kit/Prop_Fence_01.gltf", "kit/"));
         assert!(matches_pattern("kit/Prop_Fence_01.gltf", ".gltf"));
         assert!(!matches_pattern("kit/Prop_Fence_01.gltf", "Wagon"));
+    }
+
+    /// A document held in both forms is one entry, under its text path.
+    #[test]
+    fn a_listing_names_a_document_once_and_says_a_binary_twin_is_there() {
+        let found = vec![
+            "models/town.glb".to_string(),
+            "zones/hedgerow.bsb".to_string(),
+            "zones/hedgerow.bsn".to_string(),
+            "zones/shipped.bsb".to_string(),
+        ];
+
+        let listed = collapse_document_twins(found);
+
+        assert_eq!(
+            listed,
+            vec![
+                ("models/town.glb".to_string(), false),
+                ("zones/hedgerow.bsn".to_string(), true),
+                ("zones/shipped.bsb".to_string(), true),
+            ]
+        );
     }
 
     /// The default port is not the game's, so an editor and the game it

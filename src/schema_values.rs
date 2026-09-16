@@ -131,12 +131,33 @@ pub fn list_item_type_path(type_path: &str) -> Option<&str> {
 /// A step naming a variant of an enum chooses that variant, and the step after
 /// it reaches into what the variant carries.
 pub fn field_type_path(types: &ProjectTypes, root: &str, steps: &[Step]) -> Option<String> {
+    walk_field_path(types, root, steps).map(|(_, reached)| reached)
+}
+
+/// The schema of the field a path names, for a caller that needs more than the
+/// type it holds. A path ending in a list index names the list field itself.
+pub fn field_schema_at<'a>(
+    types: &'a ProjectTypes,
+    root: &str,
+    steps: &[Step],
+) -> Option<&'a FieldSchema> {
+    walk_field_path(types, root, steps)?.0
+}
+
+/// The field a path names and the type of the value it reaches.
+fn walk_field_path<'a>(
+    types: &'a ProjectTypes,
+    root: &str,
+    steps: &[Step],
+) -> Option<(Option<&'a FieldSchema>, String)> {
     let mut current = root.to_string();
+    let mut found: Option<&FieldSchema> = None;
     let mut chosen: Option<&jackdaw_schema::VariantSchema> = None;
     for step in steps {
         match (step, chosen.take()) {
             (Step::Field(name), Some(variant)) => {
-                current = field_named(&variant.fields, name)?;
+                found = variant.fields.iter().find(|field| &field.name == name);
+                current = found?.type_path.clone();
             }
             (Step::Field(name), None) => {
                 let schema = types.type_schema(&current)?;
@@ -144,22 +165,17 @@ pub fn field_type_path(types: &ProjectTypes, root: &str, steps: &[Step]) -> Opti
                     chosen = Some(schema.variants.iter().find(|known| &known.name == name)?);
                     continue;
                 }
-                current = field_named(&schema.fields, name)?;
+                found = schema.fields.iter().find(|field| &field.name == name);
+                current = found?.type_path.clone();
             }
             (Step::Index(index), Some(variant)) => {
-                current = variant.fields.get(*index)?.type_path.clone();
+                found = variant.fields.get(*index);
+                current = found?.type_path.clone();
             }
             (Step::Index(_), None) => current = list_item_type_path(&current)?.to_string(),
         }
     }
-    Some(current)
-}
-
-fn field_named(fields: &[FieldSchema], name: &str) -> Option<String> {
-    fields
-        .iter()
-        .find(|field| field.name == name)
-        .map(|field| field.type_path.clone())
+    Some((found, current))
 }
 
 /// The value a fresh value of `type_path` holds, from the project's schema for

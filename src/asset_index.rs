@@ -322,6 +322,7 @@ struct AssetWalk {
 /// on the IO pool while the editor keeps drawing; [`apply_walk`] takes what it
 /// found.
 fn walk_assets(assets: &Path, cache: &mut AssetKindCache) -> AssetWalk {
+    let began = std::time::Instant::now();
     let documents: Vec<PathBuf> = walk_document_files(assets)
         .into_iter()
         .filter_map(|path| {
@@ -353,6 +354,12 @@ fn walk_assets(assets: &Path, cache: &mut AssetKindCache) -> AssetWalk {
             (!spelled.is_empty()).then(|| (relative.clone(), spelled))
         })
         .collect();
+    debug!(
+        "Walked {} documents under {} in {:?}",
+        documents.len(),
+        assets.display(),
+        began.elapsed()
+    );
     AssetWalk {
         documents,
         named,
@@ -468,8 +475,12 @@ pub fn rescan_asset_index(world: &mut World) -> AssetRescan {
         return AssetRescan::default();
     };
     world.get_resource_or_init::<AssetKindCache>();
-    let walk = world
-        .resource_scope(|_world, mut cache: Mut<AssetKindCache>| walk_assets(&assets, &mut cache));
+    let walk = world.resource_scope(|world, mut cache: Mut<AssetKindCache>| {
+        if let Some(kinds) = world.get_resource::<AssetKinds>() {
+            cache.follow(kinds);
+        }
+        walk_assets(&assets, &mut cache)
+    });
     apply_walk(world, walk)
 }
 
@@ -804,6 +815,9 @@ fn start_asset_walk(world: &mut World) {
         return;
     };
     let mut cache = std::mem::take(&mut *world.get_resource_or_init::<AssetKindCache>());
+    if let Some(kinds) = world.get_resource::<AssetKinds>() {
+        cache.follow(kinds);
+    }
     let task = IoTaskPool::get().spawn(async move {
         let walk = walk_assets(&assets, &mut cache);
         (walk, cache)

@@ -793,7 +793,9 @@ pub(crate) fn commit_definition_field(
         return false;
     };
     let old_json = take_baseline(world, type_path, field_path).unwrap_or(current);
-    let rebuilds_rows = field_rebuilds_rows(world, entity, type_path, field_path);
+    let rebuilds_rows = field_rebuilds_rows(world, entity, type_path, field_path)
+        || (schema_row_follows_its_value(world, entity, field_path)
+            && names_an_indexed_file(world, &old_json) != names_an_indexed_file(world, new_json));
     let command = SetDefinitionField {
         path,
         type_path: type_path.to_string(),
@@ -965,6 +967,44 @@ fn field_rebuilds_rows(world: &World, entity: Entity, type_path: &str, field_pat
             ReflectRef::Enum(_) | ReflectRef::List(_) | ReflectRef::Array(_)
         )
     })
+}
+
+/// Whether a field's row is an asset row only because of the path it holds: a
+/// plain string field whose type declares nothing about what it names.
+fn schema_row_follows_its_value(world: &World, entity: Entity, field_path: &str) -> bool {
+    use bevy::reflect::TypePath as _;
+
+    let Some(kind) = world
+        .get::<DefinitionAssetEdit>(entity)
+        .filter(|edit| is_schema_backed(world, &edit.path))
+        .map(|edit| edit.kind.clone())
+    else {
+        return false;
+    };
+    let Some(definition) = definition_of_kind(world, &kind) else {
+        return false;
+    };
+    let Some(types) = world.get_resource::<crate::project_types::ProjectTypes>() else {
+        return false;
+    };
+    let steps = crate::schema_values::parse_path(field_path);
+    let declares_nothing =
+        crate::schema_values::field_schema_at(types, &definition.type_path, &steps)
+            .is_some_and(|field| field.asset_type_path.is_empty());
+    declares_nothing
+        && crate::schema_values::field_type_path(types, &definition.type_path, &steps).as_deref()
+            == Some(String::type_path())
+}
+
+/// Whether a value is the path of a file the project holds, which is what
+/// turns a plain text row into an asset row and back.
+fn names_an_indexed_file(world: &World, value: &serde_json::Value) -> bool {
+    let Some(named) = value.as_str().filter(|named| !named.is_empty()) else {
+        return false;
+    };
+    world
+        .get_resource::<AssetIndex>()
+        .is_some_and(|index| index.get(Path::new(named)).is_some())
 }
 
 /// Whether the file at this path holds a value the editor knows only as the

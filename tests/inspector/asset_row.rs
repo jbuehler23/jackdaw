@@ -629,6 +629,42 @@ fn a_material_a_string_field_names_gets_the_row_a_handle_gets() {
     );
 }
 
+/// A path typed into a plain text row makes it an asset row there and then,
+/// without the card having to be closed and opened again.
+#[test]
+fn a_string_that_starts_naming_a_file_becomes_an_asset_row_where_it_stands() {
+    let (mut app, _tmp) = app_with_open_outfit();
+    call(
+        &mut app,
+        "asset.set",
+        &[("field", "skin".into()), ("value", "ranger".into())],
+    );
+    assert!(
+        !asset_rows(&mut app)
+            .iter()
+            .any(|(_, _, field)| field == "skin"),
+        "a string naming nothing the project holds is a plain text row",
+    );
+
+    call(
+        &mut app,
+        "asset.set",
+        &[
+            ("field", "skin".into()),
+            ("value", "materials/slate.bsn".into()),
+        ],
+    );
+
+    let row = asset_row(&mut app, "skin");
+    assert!(
+        row_text(&mut app, row)
+            .iter()
+            .any(|line| line == "slate.bsn"),
+        "the row followed the path into it, got {:?}",
+        row_text(&mut app, row),
+    );
+}
+
 #[test]
 fn a_string_naming_no_file_stays_a_plain_text_row() {
     let (mut app, _tmp) = app_with_open_outfit();

@@ -77,6 +77,14 @@ pub enum BinaryError {
     /// The document's `Children` nesting ran past the walk's cap.
     #[error("binary BSN document nests deeper than {MAX_AST_DEPTH}")]
     TooDeep,
+    /// Bytes followed the document's last root.
+    #[error("binary BSN document ends at offset {at}, with {left} bytes after it")]
+    Trailing {
+        /// The offset the document ended at.
+        at: usize,
+        /// How many bytes followed it.
+        left: usize,
+    },
 }
 
 /// Whether these bytes open with [`MAGIC`].
@@ -114,6 +122,12 @@ pub fn decode(bytes: &[u8]) -> Result<DecodedDocument, BinaryError> {
     let mut root_nodes = Vec::new();
     for _ in 0..roots {
         root_nodes.push(read_node(&mut reader, &mut ast, 0)?);
+    }
+    if reader.at < bytes.len() {
+        return Err(BinaryError::Trailing {
+            at: reader.at,
+            left: bytes.len() - reader.at,
+        });
     }
     for root in root_nodes {
         ast.add_to_roots(root);

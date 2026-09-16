@@ -212,7 +212,7 @@ pub fn graph_to_bsn(def: &AnimationGraphDef, registry: &TypeRegistry) -> String 
 /// Read a graph file into a definition.
 pub fn read_graph_file(world: &World, path: &str) -> Option<AnimationGraphDef> {
     let file = graph_file_path(world.get_resource::<ProjectRoot>()?, path)?;
-    let text = match std::fs::read_to_string(&file) {
+    let text = match jackdaw_bsn::read_document_text(&file) {
         Ok(text) => text,
         Err(err) => {
             warn!("could not read {}: {err}", file.display());
@@ -247,7 +247,14 @@ pub fn write_graph_file(world: &mut World) -> Option<PathBuf> {
         warn!("could not make {}: {err}", parent.display());
         return None;
     }
-    if let Err(err) = crate::scene_io::save::write_atomic(&file, text.as_bytes()) {
+    let bytes = match jackdaw_bsn::document_bytes(&file, &text) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!("could not write {}: {err}", file.display());
+            return None;
+        }
+    };
+    if let Err(err) = crate::scene_io::save::write_atomic(&file, &bytes) {
         warn!("could not write {}: {err}", file.display());
         return None;
     }
@@ -297,12 +304,7 @@ pub fn install_graph(world: &mut World, path: &str, mut def: AnimationGraphDef, 
 
 /// The entity the canvas draws one graph's nodes and wires under.
 fn spawn_graph_root(world: &mut World, path: &str) -> Entity {
-    let title = path
-        .rsplit('/')
-        .next()
-        .unwrap_or(path)
-        .trim_end_matches(GRAPH_FILE_SUFFIX)
-        .to_string();
+    let title = jackdaw_bsn::asset_stem(path).to_string();
     world
         .spawn((
             NodeGraph { title },

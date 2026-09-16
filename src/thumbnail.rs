@@ -567,6 +567,7 @@ fn drive_thumbnail_queue(
     index: Option<Res<AssetIndex>>,
     children_query: Query<&Children>,
     mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
+    model_query: Query<&WorldAssetRoot>,
     view_dependent: Query<(), With<crate::ViewDependentBounds>>,
     mut camera_query: Query<(&mut Transform, &Projection), With<ThumbnailCamera>>,
     target: Option<Res<ThumbnailTarget>>,
@@ -596,6 +597,7 @@ fn drive_thumbnail_queue(
                 &materials,
                 &children_query,
                 &mesh_query,
+                &model_query,
                 &view_dependent,
                 &mut camera_query,
                 &target.0,
@@ -776,6 +778,7 @@ fn step_job(
     materials: &Assets<StandardMaterial>,
     children_query: &Query<&Children>,
     mesh_query: &Query<(&Mesh3d, &GlobalTransform)>,
+    model_query: &Query<&WorldAssetRoot>,
     view_dependent: &Query<(), With<crate::ViewDependentBounds>>,
     camera_query: &mut Query<(&mut Transform, &Projection), With<ThumbnailCamera>>,
     target: &Handle<Image>,
@@ -835,6 +838,9 @@ fn step_job(
                 &mut vertices,
             );
             if vertices.is_empty() {
+                if every_model_failed(assets, root, children_query, model_query) {
+                    return Step::Finish(ThumbState::Failed);
+                }
                 return Step::Wait; // scene not spawned, or meshes not loaded
             }
 
@@ -900,6 +906,33 @@ fn step_job(
     }
 }
 
+/// Whether the subject names models and every one of them failed to load, so a
+/// prefab naming a file that has gone is written off rather than waiting out
+/// the job timeout. A subject naming no model at all is not a failure here:
+/// its meshes may still be coming.
+fn every_model_failed(
+    assets: &AssetServer,
+    root: Entity,
+    children_query: &Query<&Children>,
+    model_query: &Query<&WorldAssetRoot>,
+) -> bool {
+    let mut named = 0usize;
+    let mut failed = 0usize;
+    let mut stack = vec![root];
+    while let Some(entity) = stack.pop() {
+        if let Ok(model) = model_query.get(entity) {
+            named += 1;
+            if assets.load_state(model.0.id()).is_failed() {
+                failed += 1;
+            }
+        }
+        if let Ok(children) = children_query.get(entity) {
+            stack.extend(children.iter());
+        }
+    }
+    named > 0 && named == failed
+}
+
 /// Whether every texture the material draws with has settled, so the sphere
 /// is not photographed while it is still untextured.
 fn material_is_dressed(
@@ -953,11 +986,21 @@ fn build_prefab_subject(world: &mut World, root: Entity, path: &Path) -> bool {
     let Ok(document) = crate::prefab::save_load::read_prefab_ast(path) else {
         return false;
     };
-    let mut models = 0usize;
+    let mut walk = PrefabWalk {
+        models: 0,
+        follow: true,
+    };
     for node in document.roots.clone() {
-        spawn_prefab_node(world, &document, node, root, 0, &mut models);
+        spawn_prefab_node(world, &document, node, root, 0, &mut walk);
     }
-    models > 0
+    walk.models > 0
+}
+
+/// What one walk of a prefab document has found, and whether a node naming
+/// another prefab is still read.
+struct PrefabWalk {
+    models: usize,
+    follow: bool,
 }
 
 fn spawn_prefab_node(
@@ -966,7 +1009,7 @@ fn spawn_prefab_node(
     node: Entity,
     parent: Entity,
     depth: usize,
-    models: &mut usize,
+    walk: &mut PrefabWalk,
 ) {
     if depth >= MAX_PREFAB_DEPTH {
         return;
@@ -992,6 +1035,7 @@ fn spawn_prefab_node(
         .id();
 
     let mut children = Vec::new();
+    let mut inherited = None;
     for patch in &patches {
         if let BsnPatch::Children(list) = patch {
             children.extend(list.iter().copied());
@@ -1000,17 +1044,57 @@ fn spawn_prefab_node(
         let Some(type_path) = patch_type_path(patch) else {
             continue;
         };
+        if type_path == jackdaw_prefab::ISA_TYPE {
+            inherited = jackdaw_prefab::read_isa_source(document, node);
+            continue;
+        }
         if type_path == GltfSource::type_path() {
-            *models += 1;
+            walk.models += 1;
         } else if type_path != Transform::type_path() {
             continue;
         }
         apply_component_patch(world, entity, patch);
     }
 
-    for child in children {
-        spawn_prefab_node(world, document, child, entity, depth + 1, models);
+    if let Some(inherited) = inherited.filter(|_| walk.follow) {
+        spawn_inherited_prefab(world, &inherited, entity, depth + 1, walk);
     }
+
+    for child in children {
+        spawn_prefab_node(world, document, child, entity, depth + 1, walk);
+    }
+}
+
+/// Spawn the models of the prefab a node inherits from, so a prefab built out
+/// of other prefabs is photographed with what they bring.
+///
+/// One level deep: the document that names this one is the picture's subject,
+/// and a chain of them is a scene rather than a tile.
+fn spawn_inherited_prefab(
+    world: &mut World,
+    source: &Path,
+    parent: Entity,
+    depth: usize,
+    walk: &mut PrefabWalk,
+) {
+    walk.follow = false;
+    let mut spawned = false;
+    if world.contains_resource::<crate::prefab::PrefabAstCache>() {
+        world.resource_scope(|world, cache: Mut<crate::prefab::PrefabAstCache>| {
+            if let Some(document) = cache.get(source) {
+                for node in document.roots.clone() {
+                    spawn_prefab_node(world, document, node, parent, depth, walk);
+                }
+                spawned = true;
+            }
+        });
+    }
+    if !spawned && let Ok(document) = crate::prefab::save_load::read_prefab_ast(source) {
+        for node in document.roots.clone() {
+            spawn_prefab_node(world, &document, node, parent, depth, walk);
+        }
+    }
+    walk.follow = true;
 }
 
 /// Read the cached PNG for `path` at `mtime` back into an image asset, if
@@ -1250,6 +1334,7 @@ fn update_thumbnail_slots(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce as _;
     use core::time::Duration;
 
     // The render half of this module needs a live wgpu backend, which
@@ -1323,6 +1408,90 @@ mod tests {
             Some((path.to_path_buf(), Subject::Material)),
             "the saved file is photographed again"
         );
+    }
+
+    /// A subject whose models cannot load is written off on the failure rather
+    /// than holding the queue for the whole job timeout.
+    #[test]
+    fn a_subject_whose_models_have_all_failed_is_written_off() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin::default(),
+            bevy::world_serialization::WorldSerializationPlugin,
+        ));
+        let missing: Handle<WorldAsset> = app
+            .world()
+            .resource::<AssetServer>()
+            .load("nowhere/missing.glb#Scene0");
+        let root = app.world_mut().spawn(WorldAssetRoot(missing.clone())).id();
+        let bare = app.world_mut().spawn_empty().id();
+        for _ in 0..200 {
+            app.update();
+            if app
+                .world()
+                .resource::<AssetServer>()
+                .load_state(missing.id())
+                .is_failed()
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let written_off = app
+            .world_mut()
+            .run_system_once(
+                move |assets: Res<AssetServer>,
+                      children: Query<&Children>,
+                      models: Query<&WorldAssetRoot>| {
+                    (
+                        every_model_failed(&assets, root, &children, &models),
+                        every_model_failed(&assets, bare, &children, &models),
+                    )
+                },
+            )
+            .expect("the check ran");
+
+        assert!(written_off.0, "the model it names cannot load");
+        assert!(
+            !written_off.1,
+            "a subject naming no model is still waiting for its meshes"
+        );
+    }
+
+    /// A prefab built out of other prefabs is photographed with the models
+    /// they bring, rather than as an empty frame.
+    #[test]
+    fn a_prefab_takes_the_models_the_prefab_it_names_brings() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let model = GltfSource::type_path();
+        std::fs::create_dir_all(dir.path().join("parts")).expect("a parts folder");
+        std::fs::write(
+            dir.path().join("parts/tree.bsn"),
+            format!(
+                "jackdaw::prefab::components::Prefab\n\
+                 jackdaw::prefab::components::PrefabEntityId(0)\n\
+                 {model} {{ path: \"models/tree.glb\", scene_index: 0 }}\n"
+            ),
+        )
+        .expect("the prefab is written");
+        std::fs::write(
+            dir.path().join("grove.bsn"),
+            "jackdaw::prefab::components::Prefab\n\
+             jackdaw::prefab::components::PrefabEntityId(0)\n\
+             jackdaw::prefab::components::IsA { source: \"parts/tree.bsn\", deleted: [] }\n",
+        )
+        .expect("the prefab is written");
+        let mut world = World::new();
+        let registry = AppTypeRegistry::default();
+        registry.write().register::<GltfSource>();
+        world.insert_resource(registry);
+        let root = world.spawn_empty().id();
+
+        let built = build_prefab_subject(&mut world, root, &dir.path().join("grove.bsn"));
+
+        assert!(built, "the prefab it names brings a model to photograph");
     }
 
     #[test]

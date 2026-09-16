@@ -138,3 +138,58 @@ reads the brush's `GlobalTransform` and writes the face's.
 Where to dig in: the relationship API in Bevy 0.19, and
 whether this can be done without breaking `BrushFaceEntity`
 queries that already work.
+
+## A material override on a part of a model
+
+The Material row on the inspector writes a handle onto the
+entity it is showing. When that entity is a part of a loaded
+glTF, the scene document has no node for it: the model file is
+the whole of what the document says about the instance, and the
+parts under it are spawned by the loader. So the row falls back
+to `wear_until_reloaded`, which swaps the handle on the live
+entity, mints an undo entry, and warns that the pick is kept
+only until the model is loaded again. Reopening the scene brings
+back the material the glTF names.
+
+What the document is missing is a way to address a part. The
+shape that fits the rest of the format is a path of node names
+from the model root -- the `Name` each glTF node is spawned
+with, joined by `/` -- carried by a component on the entity that
+holds `GltfSource`, so one entity's overrides sit in one patch
+under the node the document already has:
+
+```text
+jackdaw_scene_types::types::GltfSource { path: "models/town.glb", scene_index: 0 }
+jackdaw_scene_types::types::ModelPartMaterials {
+    parts: map[("Roof/Tiles", "materials/slate.bsn")],
+}
+```
+
+Four pieces make it work. A component of that shape, registered
+and reflected like the rest of `jackdaw_scene_types`. A walk
+that turns an entity under a model instance into its path of
+names, and the reverse walk that finds the entity a path names.
+An observer on the spawned instance that re-applies every
+override once the model's entities are there, which is the same
+moment `WorldAssetRoot` is derived, and again whenever the file
+changes on disk. And a writer on the Material row that, for an
+entity with no node of its own, walks up to the model root and
+writes the entry rather than wearing the handle.
+
+The parts that need care are the ones that decide whether it is
+worth having. A name is not unique in a glTF, so two nodes
+called `Tiles` under different parents are told apart only by
+the path above them, and a model with two identical siblings is
+not addressable at all -- the override has to refuse that case
+rather than pick one. A model that is re-exported with renamed
+nodes leaves entries naming nothing, which wants the same
+"names nothing the project holds" reporting a missing asset
+path gets rather than a silent drop. Undo has to take the
+document entry and the live handle together. And the row has to
+read the override back, so what it shows after a reload is the
+path the document holds rather than the material the glTF
+names.
+
+Where to dig in: the name-path walk and its refusal on
+ambiguous siblings, which is where the design either holds or
+needs a stable per-node id from the loader instead.

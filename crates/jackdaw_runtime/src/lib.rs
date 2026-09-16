@@ -1372,13 +1372,16 @@ fn load_asset_files(world: &mut World) {
 /// Walk the asset files under `root` into [`JackdawCatalog`], skipping the
 /// catalog file, which is read as a document of its own.
 ///
-/// The walk costs one parse per `.bsn`, which is what telling a file that
-/// holds an asset from one that spawns a scene takes.
+/// A file whose header names a type this app does not load is passed over on
+/// the header alone; one with no header costs the parse that tells a file
+/// holding an asset from one spawning a scene.
 fn load_walked_assets(world: &mut World, root: &Path, catalog_path: Option<&Path>) {
+    let began = std::time::Instant::now();
     let mut stems = jackdaw_bsn::StemIndex::default();
     let mut loaded: Vec<(String, String, UntypedHandle)> = Vec::new();
     let mut skipped = SkippedTypes::default();
     let mut binary_seen = false;
+    let mut walked = 0usize;
 
     for path in jackdaw_bsn::walk_document_files(root) {
         if !jackdaw_bsn::is_document_path(&path) || Some(path.as_path()) == catalog_path {
@@ -1389,6 +1392,7 @@ fn load_walked_assets(world: &mut World, root: &Path, catalog_path: Option<&Path
             continue;
         };
         stems.insert(PathBuf::from(&key));
+        walked += 1;
         let Some(handle) = load_asset_file(world, &path, &mut skipped) else {
             continue;
         };
@@ -1425,6 +1429,11 @@ fn load_walked_assets(world: &mut World, root: &Path, catalog_path: Option<&Path
     }
 
     skipped.report();
+    debug!(
+        "Walked {walked} documents under {} in {:?}",
+        root.display(),
+        began.elapsed()
+    );
     if binary_seen && !world.contains_resource::<twin::DocumentTwins>() {
         warn!(
             "Documents under {} are in the binary form; add JackdawAssetSourcePlugin before DefaultPlugins so a .bsn reference loads its twin through the asset server",
@@ -1442,10 +1451,17 @@ fn load_walked_assets(world: &mut World, root: &Path, catalog_path: Option<&Path
 struct SkippedTypes {
     unregistered: BTreeMap<String, usize>,
     unreflected: BTreeMap<String, usize>,
+    on_header: usize,
 }
 
 impl SkippedTypes {
     fn report(&self) {
+        if self.on_header > 0 {
+            warn!(
+                "Took {} asset files at their header's word: a header naming a type this app does not load keeps the file out of the catalog, whatever its first root says",
+                self.on_header
+            );
+        }
         if !self.unregistered.is_empty() {
             warn!(
                 "Skipped {} asset files holding types this app has not registered: {}",
@@ -1471,8 +1487,20 @@ fn summarize(counts: &BTreeMap<String, usize>) -> String {
         .join(", ")
 }
 
+/// Whether this app registered a type, and whether it registered it as an
+/// asset. `None` for a type it has never heard of.
+fn asset_registration(world: &World, type_path: &str) -> Option<bool> {
+    let registry = world.resource::<AppTypeRegistry>().read();
+    registry
+        .get_with_type_path(type_path)
+        .map(|registration| registration.data::<ReflectAsset>().is_some())
+}
+
 /// Load the asset the file at `path` holds, or nothing when it holds a scene,
 /// a prefab, or a type this app has not registered as an asset.
+///
+/// A file whose header names a type this app will not load is passed over on
+/// the header alone, before it is parsed.
 fn load_asset_file(
     world: &mut World,
     path: &Path,
@@ -1485,6 +1513,22 @@ fn load_asset_file(
             return None;
         }
     };
+    let header = jackdaw_bsn::read_asset_header(&text);
+    if let Some(header) = header.clone() {
+        match asset_registration(world, &header) {
+            None => {
+                *skipped.unregistered.entry(header).or_default() += 1;
+                skipped.on_header += 1;
+                return None;
+            }
+            Some(false) => {
+                *skipped.unreflected.entry(header).or_default() += 1;
+                skipped.on_header += 1;
+                return None;
+            }
+            Some(true) => {}
+        }
+    }
     let ast = match parse_bsn_text(&text) {
         Ok(ast) => ast,
         Err(err) => {
@@ -1500,22 +1544,15 @@ fn load_asset_file(
     {
         return None;
     }
-    let type_path = jackdaw_bsn::root_type_path(&ast, root)
-        .or_else(|| jackdaw_bsn::read_asset_header(&text))?;
+    let type_path = jackdaw_bsn::root_type_path(&ast, root).or(header.clone())?;
 
-    let registered = {
-        let registry = world.resource::<AppTypeRegistry>().read();
-        registry
-            .get_with_type_path(&type_path)
-            .map(|registration| registration.data::<ReflectAsset>().is_some())
-    };
-    match registered {
+    match asset_registration(world, &type_path) {
         None => {
             *skipped.unregistered.entry(type_path).or_default() += 1;
             return None;
         }
         Some(false) => {
-            if jackdaw_bsn::read_asset_header(&text).is_some() {
+            if header.is_some() {
                 *skipped.unreflected.entry(type_path).or_default() += 1;
             }
             return None;

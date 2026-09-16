@@ -398,6 +398,10 @@ pub(crate) fn shown_name(path: &str) -> String {
 /// row reading an asset of its own, such as a material's texture slot, or one
 /// reading through a hook of its own, sits outside that entity and is read
 /// every run.
+///
+/// A row that has just appeared is read whatever else changed: a card built
+/// while the project's types are out of the world cannot read its own value as
+/// it is spawned, so this is where such a row first draws its path.
 pub(crate) fn refresh_asset_rows(
     world: &mut World,
     mut last_run: Local<Option<bevy::ecs::change_detection::Tick>>,
@@ -414,10 +418,27 @@ pub(crate) fn refresh_asset_rows(
             || world
                 .get::<AssetFieldRow>(row)
                 .is_some_and(|field| matches!(field.target, AssetFieldTarget::Held(_)));
-        if outside || inspected_changed {
+        if outside || inspected_changed || row_is_new(world, row, previous, this_run) {
             show_asset_row_path(world, row);
         }
     }
+}
+
+/// Whether a row was spawned since this system last ran.
+fn row_is_new(
+    world: &World,
+    row: Entity,
+    previous: Option<bevy::ecs::change_detection::Tick>,
+    this_run: bevy::ecs::change_detection::Tick,
+) -> bool {
+    let Some(previous) = previous else {
+        return true;
+    };
+    world
+        .get_entity(row)
+        .ok()
+        .and_then(|entity| entity.get_change_ticks::<AssetFieldRow>())
+        .is_some_and(|ticks| ticks.is_added(previous, this_run))
 }
 
 /// Whether the entity the inspector is showing changed since the last run.
