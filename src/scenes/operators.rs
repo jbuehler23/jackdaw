@@ -413,8 +413,8 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
         std::path::Path::to_path_buf,
     );
     let assets_root = crate::prefab::save_load::source_root(world, &scene_dir);
-    jackdaw_prefab::absolutize_isa_sources(&mut doc, &assets_root);
-    crate::prefab::save_load::retarget_isa_sources(&mut doc, &assets_root);
+    jackdaw_prefab::absolutize_isa_sources(&mut doc, &assets_root, &scene_dir);
+    crate::prefab::save_load::retarget_isa_sources(&mut doc, &assets_root, &scene_dir);
 
     // A document naming the removed facade UI vocabulary gets no tab at all,
     // rather than opening with its UI silently missing.

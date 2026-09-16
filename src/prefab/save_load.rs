@@ -65,13 +65,14 @@ pub fn populate_cache_for_scene_bsn(
     ast: &SceneBsnAst,
     cache: &mut PrefabAstCache,
     assets_root: &Path,
+    document_dir: &Path,
 ) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for node in ast.entities_with_component(ISA_TYPE) {
         let Some(source) = crate::prefab::resolver_bsn::read_isa_source(ast, node) else {
             continue;
         };
-        let path = resolve_source_path(&source, assets_root);
+        let path = resolve_source_path(&source, assets_root, document_dir);
         cache_prefab_tree(&path, cache, assets_root);
         paths.push(path);
     }
@@ -142,20 +143,21 @@ fn cache_prefab_tree_inner(
         .into_iter()
         .filter_map(|node| crate::prefab::resolver_bsn::read_isa_source(prefab_ast, node))
         .collect();
+    let nested_dir = path.parent().unwrap_or(Path::new("")).to_path_buf();
     for source in nested {
-        let nested_path = resolve_source_path(&source, assets_root);
+        let nested_path = resolve_source_path(&source, assets_root, &nested_dir);
         cache_prefab_tree_inner(&nested_path, cache, assets_root, depth + 1);
     }
 }
 
 /// Point every `IsA` source at the file the editor is going to read, so the
 /// document, the cache, the resolver and the next save all name the same file.
-pub fn retarget_isa_sources(ast: &mut SceneBsnAst, assets_root: &Path) {
+pub fn retarget_isa_sources(ast: &mut SceneBsnAst, assets_root: &Path, document_dir: &Path) {
     for node in ast.entities_with_component(ISA_TYPE) {
         let Some(source) = jackdaw_prefab::read_isa_source(ast, node) else {
             continue;
         };
-        let resolved = resolve_source_path(&source, assets_root);
+        let resolved = resolve_source_path(&source, assets_root, document_dir);
         if resolved == source {
             continue;
         }
@@ -171,8 +173,12 @@ pub fn retarget_isa_sources(ast: &mut SceneBsnAst, assets_root: &Path) {
 
 /// The prefab file an instance's `source` names, with a fallback for a scene
 /// naming the other scene format.
-pub(crate) fn resolve_source_path(source: &Path, assets_root: &Path) -> PathBuf {
-    let resolved = jackdaw_prefab::source_path(source, assets_root);
+pub(crate) fn resolve_source_path(
+    source: &Path,
+    assets_root: &Path,
+    document_dir: &Path,
+) -> PathBuf {
+    let resolved = jackdaw_prefab::source_path(source, assets_root, document_dir);
     // Scenes written before (or after) their prefab converted formats may
     // reference the other extension; fall back to the sibling.
     if !resolved.exists() {

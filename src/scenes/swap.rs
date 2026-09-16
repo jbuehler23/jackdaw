@@ -198,6 +198,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
                 &new_doc,
                 &mut cache,
                 &assets_root,
+                &parent,
             );
         }
         crate::prefab::save_load::warn_for_missing_sources(

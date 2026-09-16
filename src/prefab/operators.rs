@@ -1349,7 +1349,7 @@ pub fn open_instance_source(world: &mut World, instance_root: Entity) -> bool {
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."));
     let assets_root = crate::prefab::save_load::source_root(world, &scene_dir);
-    let path = crate::prefab::save_load::resolve_source_path(&source, &assets_root);
+    let path = crate::prefab::save_load::resolve_source_path(&source, &assets_root, &scene_dir);
     if !path.exists() {
         warn!(
             "prefab.open_source: instance source {} is not on disk",

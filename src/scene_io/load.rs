@@ -275,7 +275,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
                  rather than a file under the project's assets folder"
             );
         }
-        jackdaw_prefab::absolutize_isa_sources(&mut authored, &assets_root);
+        jackdaw_prefab::absolutize_isa_sources(&mut authored, &assets_root, &parent_path);
 
         // A legacy scene's prefabs may be legacy too, and the cache reads
         // `.bsn` only. They convert here because the resolve that needs them
@@ -283,7 +283,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
         if let Some(pending) = &pending_conversion {
             crate::jsn_to_bsn::convert_prefab_dependencies(world, pending);
         }
-        crate::prefab::save_load::retarget_isa_sources(&mut authored, &assets_root);
+        crate::prefab::save_load::retarget_isa_sources(&mut authored, &assets_root, &parent_path);
 
         // Populate the prefab cache from the document's IsA references, then
         // resolve instances so the spawn produces complete entities. A
@@ -303,6 +303,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
                         &authored,
                         &mut cache,
                         &assets_root,
+                        &parent_path,
                     );
                 }
                 crate::prefab::save_load::warn_for_missing_sources(
