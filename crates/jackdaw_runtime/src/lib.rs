@@ -23,6 +23,11 @@
 //!   server. Add [`JackdawPlugin`] *after* `DefaultPlugins` so it can see how
 //!   `AssetPlugin` was configured. [`JackdawCatalogPath`] overrides the
 //!   location for a game that keeps its project elsewhere.
+//! - **[`JackdawAssetSourcePlugin`], for a project exported to the binary
+//!   form**, added *before* `DefaultPlugins`: it registers the default asset
+//!   source so a `.bsn` path handed to the asset server reads the `.bsb` twin
+//!   when that is the form on disk. An asset source can only be registered
+//!   before `AssetPlugin`, which is why this half is its own plugin.
 //! - **A camera.** Scenes usually carry one. A game that spawns its own can
 //!   mark it `TerrainViewer` so terrain lays its detail around the camera
 //!   the player looks through rather than a UI overlay.
@@ -110,6 +115,9 @@ mod navmesh;
 #[cfg(feature = "navmesh")]
 pub use navmesh::JackdawNavmesh;
 
+mod twin;
+pub use twin::{DocumentTwinReader, JackdawAssetSourcePlugin, with_document_twins};
+
 mod schema_cli;
 pub use schema_cli::{
     SCHEMA_FLAG, extract_schema_and_exit_if_requested, extract_schema_from_world,
@@ -121,8 +129,8 @@ pub mod prelude {
     pub use crate::JackdawNavmesh;
     pub use crate::{
         DetailPresser, EditorCategory, EditorDescription, EditorHidden, EditorPreview,
-        JackdawCatalog, JackdawCatalogPath, JackdawPlugin, JackdawSceneMember, JackdawSceneRoot,
-        SceneRefused, SkipSerialization,
+        JackdawAssetSourcePlugin, JackdawCatalog, JackdawCatalogPath, JackdawPlugin,
+        JackdawSceneMember, JackdawSceneRoot, SceneRefused, SkipSerialization,
     };
     #[cfg(feature = "terrain")]
     pub use crate::{DetailPressers, DetailSettings, TerrainViewer};
@@ -1370,11 +1378,13 @@ fn load_walked_assets(world: &mut World, root: &Path, catalog_path: Option<&Path
     let mut stems = jackdaw_bsn::StemIndex::default();
     let mut loaded: Vec<(String, String, UntypedHandle)> = Vec::new();
     let mut skipped = SkippedTypes::default();
+    let mut binary_seen = false;
 
     for path in jackdaw_bsn::walk_document_files(root) {
         if !jackdaw_bsn::is_document_path(&path) || Some(path.as_path()) == catalog_path {
             continue;
         }
+        binary_seen |= jackdaw_bsn::is_binary_path(&path);
         let Some(key) = assets_relative_key(root, &jackdaw_bsn::text_twin(&path)) else {
             continue;
         };
@@ -1415,6 +1425,12 @@ fn load_walked_assets(world: &mut World, root: &Path, catalog_path: Option<&Path
     }
 
     skipped.report();
+    if binary_seen && !world.contains_resource::<twin::DocumentTwins>() {
+        warn!(
+            "Documents under {} are in the binary form; add JackdawAssetSourcePlugin before DefaultPlugins so a .bsn reference loads its twin through the asset server",
+            root.display()
+        );
+    }
     if count > 0 {
         info!("Loaded {count} asset files from {}", root.display());
     }
