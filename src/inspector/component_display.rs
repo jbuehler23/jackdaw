@@ -72,7 +72,8 @@ pub(crate) struct SceneAsts<'w> {
 /// Keep each inspector's cards pointed at [`Selection::primary`]. Runs
 /// when selection changes, or when a panel has no [`InspectorTarget`]
 /// yet and something is already selected (inspector spawned after the
-/// selection was written).
+/// selection was written). An empty selection takes an open file or
+/// definition card down with it.
 pub(crate) fn sync_inspector_to_selection(
     mut commands: Commands,
     components: &Components,
@@ -91,6 +92,12 @@ pub(crate) fn sync_inspector_to_selection(
     displays: Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
 ) {
     let desired = selection.primary();
+    if desired.is_none() && selection.is_changed() {
+        commands.queue(|world: &mut World| {
+            super::file_card::clear_selected_file(world);
+            crate::definition_assets::close_open_definition(world);
+        });
+    }
     if !selection.is_changed() {
         if desired.is_none() {
             return;

@@ -641,3 +641,90 @@ fn a_delete_asked_for_while_a_confirmation_is_up_leaves_that_one_standing() {
         "and the answer to it would take that file, not the one asked for after"
     );
 }
+
+#[test]
+fn a_cancelled_delete_leaves_nothing_for_the_next_dialog_to_take() {
+    let (mut app, _tmp) = editor_with_outfits();
+    file_material(&mut app, "materials/slate.material.bsn");
+    let slate = outfit_path(&app, "materials/slate.material.bsn");
+
+    call(
+        &mut app,
+        "file.delete",
+        &[("path", slate.to_string_lossy().into_owned().into())],
+    );
+    let dialog = app
+        .world_mut()
+        .query_filtered::<Entity, With<jackdaw_feathers::dialog::EditorDialog>>()
+        .single(app.world())
+        .expect("a confirmation is up");
+    let world = app.world_mut();
+    jackdaw_feathers::dialog::answer_dialog(
+        &mut world.commands(),
+        dialog,
+        jackdaw_feathers::dialog::DialogChoice::Cancel,
+    );
+    world.flush();
+    for _ in 0..4 {
+        app.update();
+    }
+
+    assert!(
+        app.world()
+            .resource::<jackdaw::file_ops::PendingFileDelete>()
+            .path
+            .is_none(),
+        "a cancelled confirmation leaves no file queued for deletion"
+    );
+
+    let other_dialog = app.world_mut().spawn_empty().id();
+    app.world_mut()
+        .trigger(jackdaw_feathers::dialog::DialogActionEvent {
+            entity: other_dialog,
+        });
+    for _ in 0..4 {
+        app.update();
+    }
+
+    assert!(
+        slate.is_file(),
+        "so another dialog's own action cannot delete the file that was spared"
+    );
+}
+
+#[test]
+fn a_delete_answered_and_dismissed_in_one_frame_still_takes_the_file() {
+    let (mut app, _tmp) = editor_with_outfits();
+    file_material(&mut app, "materials/slate.material.bsn");
+    let slate = outfit_path(&app, "materials/slate.material.bsn");
+
+    call(
+        &mut app,
+        "file.delete",
+        &[("path", slate.to_string_lossy().into_owned().into())],
+    );
+    let dialog = app
+        .world_mut()
+        .query_filtered::<Entity, With<jackdaw_feathers::dialog::EditorDialog>>()
+        .single(app.world())
+        .expect("a confirmation is up");
+    let world = app.world_mut();
+    {
+        let mut commands = world.commands();
+        commands.trigger(jackdaw_feathers::dialog::DialogActionEvent { entity: dialog });
+        jackdaw_feathers::dialog::answer_dialog(
+            &mut commands,
+            dialog,
+            jackdaw_feathers::dialog::DialogChoice::Cancel,
+        );
+    }
+    world.flush();
+    for _ in 0..4 {
+        app.update();
+    }
+
+    assert!(
+        !slate.is_file(),
+        "the answer took the file although a dismissal followed it in the same queue"
+    );
+}

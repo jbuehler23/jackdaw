@@ -18,4 +18,5 @@ mod material_row;
 mod new_asset_list;
 mod opened_definition_card;
 mod schema_definition_card;
+mod selection_switch;
 mod widget_cards;
