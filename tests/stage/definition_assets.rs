@@ -848,3 +848,274 @@ fn asset_set_takes_a_colour_as_channels_and_undo_puts_the_old_one_back() {
         "undo puts the colour it had back, got {back:?}"
     );
 }
+
+/// A copy is a file of its own: it keeps the header that says what it holds and
+/// takes the name its own stem gives it, so nothing answers to two files.
+#[test]
+fn a_duplicate_is_written_beside_its_source_under_its_own_name() {
+    let (mut app, tmp) = editor_with_items();
+    call(
+        &mut app,
+        "asset.new",
+        &[
+            ("type", "item".into()),
+            ("name", "torch".into()),
+            (
+                "path",
+                items_dir(&tmp).to_string_lossy().into_owned().into(),
+            ),
+        ],
+    );
+
+    call(
+        &mut app,
+        "asset.duplicate",
+        &[(
+            "path",
+            item_path(&tmp, "torch")
+                .to_string_lossy()
+                .into_owned()
+                .into(),
+        )],
+    );
+
+    let copy = item_path(&tmp, "torch_1");
+    let text = std::fs::read_to_string(&copy).expect("the copy is written");
+    assert_eq!(
+        jackdaw_bsn::read_asset_header(&text).as_deref(),
+        Some(ItemDef::type_path()),
+        "the copy still says what it holds:\n{text}"
+    );
+    assert!(
+        text.contains("#torch_1"),
+        "and answers to its own name:\n{text}"
+    );
+    assert!(
+        indexed(&app, "content/items/torch_1.bsn").is_some(),
+        "the copy is in the index without waiting for a walk"
+    );
+}
+
+/// The copy is written beside the source, so a name another file already holds
+/// is refused rather than written over.
+#[test]
+fn a_duplicate_onto_a_name_already_taken_is_refused() {
+    let (mut app, tmp) = editor_with_items();
+    for name in ["torch", "anvil"] {
+        call(
+            &mut app,
+            "asset.new",
+            &[
+                ("type", "item".into()),
+                ("name", name.into()),
+                (
+                    "path",
+                    items_dir(&tmp).to_string_lossy().into_owned().into(),
+                ),
+            ],
+        );
+    }
+
+    call(
+        &mut app,
+        "asset.duplicate",
+        &[
+            (
+                "path",
+                item_path(&tmp, "torch")
+                    .to_string_lossy()
+                    .into_owned()
+                    .into(),
+            ),
+            ("name", "anvil".into()),
+        ],
+    );
+
+    let text = std::fs::read_to_string(item_path(&tmp, "anvil")).expect("the anvil is still there");
+    assert!(
+        text.contains("#anvil"),
+        "the file that was already there is untouched:\n{text}"
+    );
+}
+
+/// A scene is used by the file it sits in rather than by the name its root
+/// carries, so a copy of one keeps the roots it had.
+#[test]
+fn a_duplicated_scene_keeps_its_roots() {
+    let (mut app, tmp) = editor_with_items();
+    let scene = tmp.path().join("assets/zones/town.bsn");
+    std::fs::create_dir_all(scene.parent().expect("a parent")).expect("the directory is made");
+    std::fs::write(
+        &scene,
+        "#Town\nbevy_transform::components::transform::Transform\n",
+    )
+    .expect("the scene is written");
+
+    call(
+        &mut app,
+        "asset.duplicate",
+        &[("path", scene.to_string_lossy().into_owned().into())],
+    );
+
+    let copy = tmp.path().join("assets/zones/town_1.bsn");
+    let text = std::fs::read_to_string(&copy).expect("the copy is written");
+    assert!(text.contains("#Town"), "got:\n{text}");
+}
+
+/// A copy counts up from the name it shares with the file it came from, so a
+/// copy of a copy is the next number rather than a number of a number.
+#[test]
+fn a_duplicate_of_a_copy_counts_up_from_the_name_they_share() {
+    let (mut app, tmp) = editor_with_items();
+    call(
+        &mut app,
+        "asset.new",
+        &[
+            ("type", "item".into()),
+            ("name", "torch".into()),
+            (
+                "path",
+                items_dir(&tmp).to_string_lossy().into_owned().into(),
+            ),
+        ],
+    );
+    call(
+        &mut app,
+        "asset.duplicate",
+        &[(
+            "path",
+            item_path(&tmp, "torch")
+                .to_string_lossy()
+                .into_owned()
+                .into(),
+        )],
+    );
+
+    call(
+        &mut app,
+        "asset.duplicate",
+        &[(
+            "path",
+            item_path(&tmp, "torch_1")
+                .to_string_lossy()
+                .into_owned()
+                .into(),
+        )],
+    );
+
+    assert!(
+        item_path(&tmp, "torch_2").is_file(),
+        "the second copy takes the next number the name is free at"
+    );
+    assert!(
+        !item_path(&tmp, "torch_1_1").exists(),
+        "and does not stack a number on a number"
+    );
+}
+
+/// A root spelling no name of its own still has to answer to the copy's name,
+/// and nothing deeper in the document is touched to give it one.
+#[test]
+fn a_duplicate_names_a_root_that_carried_no_name() {
+    let (mut app, tmp) = editor_with_items();
+    let path = item_path(&tmp, "torch");
+    std::fs::write(
+        &path,
+        jackdaw::asset_files::asset_file_text(
+            ItemDef::type_path(),
+            &format!("{} {{ stack_size: 7 }}\n", ItemDef::type_path()),
+        ),
+    )
+    .expect("the item is written");
+
+    call(
+        &mut app,
+        "asset.duplicate",
+        &[("path", path.to_string_lossy().into_owned().into())],
+    );
+
+    let text = std::fs::read_to_string(item_path(&tmp, "torch_1")).expect("the copy is written");
+    assert!(
+        text.contains("#torch_1") && text.contains("stack_size: 7"),
+        "the copy answers to its own name and keeps what it held:\n{text}"
+    );
+    assert_eq!(
+        jackdaw_bsn::read_asset_header(&text).as_deref(),
+        Some(ItemDef::type_path()),
+        "under the header it came with:\n{text}"
+    );
+}
+
+/// A name that cannot be spelled bare is quoted, so the copy still parses.
+#[test]
+fn a_duplicate_under_a_name_needing_quotes_is_written_quoted() {
+    let (mut app, tmp) = editor_with_items();
+    call(
+        &mut app,
+        "asset.new",
+        &[
+            ("type", "item".into()),
+            ("name", "torch".into()),
+            (
+                "path",
+                items_dir(&tmp).to_string_lossy().into_owned().into(),
+            ),
+        ],
+    );
+
+    call(
+        &mut app,
+        "asset.duplicate",
+        &[
+            (
+                "path",
+                item_path(&tmp, "torch")
+                    .to_string_lossy()
+                    .into_owned()
+                    .into(),
+            ),
+            ("name", "torch-lit".into()),
+        ],
+    );
+
+    let text = std::fs::read_to_string(item_path(&tmp, "torch-lit")).expect("the copy is written");
+    assert!(
+        text.contains("#\"torch-lit\""),
+        "the name is quoted where it has to be:\n{text}"
+    );
+    assert!(
+        jackdaw_bsn::read_document_text(&item_path(&tmp, "torch-lit")).is_ok(),
+        "and the copy reads back as a document"
+    );
+}
+
+/// A root that puts its first patch on the line its name sits on keeps that
+/// patch when the copy takes a name of its own.
+#[test]
+fn a_duplicate_keeps_what_shares_the_line_with_the_root_name() {
+    let (mut app, tmp) = editor_with_items();
+    let path = item_path(&tmp, "torch");
+    std::fs::write(
+        &path,
+        jackdaw::asset_files::asset_file_text(
+            ItemDef::type_path(),
+            &format!("#torch {} {{ stack_size: 7 }}\n", ItemDef::type_path()),
+        ),
+    )
+    .expect("the item is written");
+
+    call(
+        &mut app,
+        "asset.duplicate",
+        &[("path", path.to_string_lossy().into_owned().into())],
+    );
+
+    let text = std::fs::read_to_string(item_path(&tmp, "torch_1")).expect("the copy is written");
+    assert!(
+        text.contains(&format!(
+            "#torch_1 {} {{ stack_size: 7 }}",
+            ItemDef::type_path()
+        )),
+        "only the name on the line changed:\n{text}"
+    );
+}

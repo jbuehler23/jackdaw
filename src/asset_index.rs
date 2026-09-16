@@ -6,7 +6,9 @@
 //! modification time the load saw, so a file rewritten by another tool reloads
 //! into the handle references already point at. `by_id` turns a loaded handle
 //! back into the path it came from, and `by_stem` resolves the bare names that
-//! older scenes and sidecars still spell.
+//! older scenes and sidecars still spell. The same walk records which documents
+//! spell each file's path, so a card can say what a file is used by and a
+//! delete can say what it would break.
 //!
 //! The index is built by one walk of the project's assets when the project
 //! opens and kept in step by a watcher on the same directory. A kind the
@@ -83,6 +85,8 @@ pub struct AssetIndex {
     entries: BTreeMap<PathBuf, AssetEntry>,
     by_id: HashMap<UntypedAssetId, PathBuf>,
     stems: StemIndex,
+    /// Every document that spells a file's path, keyed by the file referred to.
+    referrers: BTreeMap<PathBuf, Vec<PathBuf>>,
     warned_stems: Mutex<HashSet<String>>,
     /// Counts every write to the index, so a walk that was out while one
     /// landed can tell that what it found is already behind.
@@ -146,6 +150,44 @@ impl AssetIndex {
     pub fn set_documents<I: IntoIterator<Item = PathBuf>>(&mut self, paths: I) {
         self.stems = StemIndex::from_paths(paths);
         self.writes += 1;
+    }
+
+    /// The documents whose patches reference the file at `path`, as the index
+    /// keys them. A document answers to either form it could be held in.
+    pub fn referrers(&self, path: &Path) -> &[PathBuf] {
+        if let Some(found) = self.referrers.get(path) {
+            return found;
+        }
+        if !jackdaw_bsn::is_document_path(path) {
+            return &[];
+        }
+        let twin = match jackdaw_bsn::is_binary_path(path) {
+            true => jackdaw_bsn::text_twin(path),
+            false => jackdaw_bsn::binary_twin(path),
+        };
+        self.referrers.get(&twin).map_or(&[], Vec::as_slice)
+    }
+
+    /// The documents outside `dir` whose patches reference a file it holds.
+    pub fn referrers_under(&self, dir: &Path) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = Vec::new();
+        for (target, holders) in &self.referrers {
+            if !target.starts_with(dir) {
+                continue;
+            }
+            for holder in holders {
+                if !holder.starts_with(dir) && !found.contains(holder) {
+                    found.push(holder.clone());
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    /// Take what a walk read as the documents referring to each file.
+    fn set_referrers(&mut self, referrers: BTreeMap<PathBuf, Vec<PathBuf>>) {
+        self.referrers = referrers;
     }
 
     /// The file a bare name stands for, for the references written before
@@ -265,11 +307,13 @@ fn document_file(assets: &Path, relative: &Path) -> PathBuf {
     jackdaw_bsn::existing_form(&path).unwrap_or(path)
 }
 
-/// What one walk of a project's assets found: every document it saw, and the
-/// type each file names, with the modification time that reading it saw.
+/// What one walk of a project's assets found: every document it saw, the type
+/// each file names with the modification time that reading it saw, and the
+/// references each document spells.
 struct AssetWalk {
     documents: Vec<PathBuf>,
     named: Vec<(PathBuf, String, SystemTime)>,
+    references: Vec<(PathBuf, Vec<String>)>,
 }
 
 /// Walk `assets` and read what every file says it holds.
@@ -302,7 +346,18 @@ fn walk_assets(assets: &Path, cache: &mut AssetKindCache) -> AssetWalk {
             Some((relative.clone(), type_path, mtime))
         })
         .collect();
-    AssetWalk { documents, named }
+    let references = documents
+        .iter()
+        .filter_map(|relative| {
+            let spelled = cache.references_of(&document_file(assets, relative));
+            (!spelled.is_empty()).then(|| (relative.clone(), spelled))
+        })
+        .collect();
+    AssetWalk {
+        documents,
+        named,
+        references,
+    }
 }
 
 /// The kind that claims a type a file names, for the files a walk read.
@@ -516,8 +571,65 @@ fn apply_walk(world: &mut World, walk: AssetWalk) -> AssetRescan {
             mtime,
         });
     }
+    record_referrers(world, walk.references);
     publish_reference_map(world);
     scan
+}
+
+/// Take what each document spells as the documents referring to each file, so
+/// a card can say what a file is used by and a delete can say what it breaks.
+fn record_referrers(world: &mut World, spelled: Vec<(PathBuf, Vec<String>)>) {
+    let Some(assets) = assets_dir(world) else {
+        return;
+    };
+    let index = world.resource::<AssetIndex>();
+    let mut referrers: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+    for (document, references) in spelled {
+        for reference in references {
+            let Some(target) = referenced_path(index, &assets, &reference) else {
+                continue;
+            };
+            if target == document {
+                continue;
+            }
+            let holders = referrers.entry(target).or_default();
+            if !holders.contains(&document) {
+                holders.push(document.clone());
+            }
+        }
+    }
+    for holders in referrers.values_mut() {
+        holders.sort();
+    }
+    if world.resource::<AssetIndex>().referrers == referrers {
+        return;
+    }
+    world.resource_mut::<AssetIndex>().set_referrers(referrers);
+}
+
+/// The file a reference names, as the index keys it: a `@name` through the
+/// names the project's documents carry, and anything else as a path under the
+/// assets, in whichever form that document is held. A name two documents carry
+/// stands for neither, so nothing spelling it counts as referring to either.
+fn referenced_path(index: &AssetIndex, assets: &Path, reference: &str) -> Option<PathBuf> {
+    if let Some(name) = reference.strip_prefix('@') {
+        return index.stems().unique(name).map(Path::to_path_buf);
+    }
+    let spelled = PathBuf::from(reference);
+    if !jackdaw_bsn::is_document_path(&spelled) {
+        if index.get(&spelled).is_some() {
+            return Some(spelled);
+        }
+        return assets.join(&spelled).is_file().then_some(spelled);
+    }
+    let forms = [
+        jackdaw_bsn::text_twin(&spelled),
+        jackdaw_bsn::binary_twin(&spelled),
+    ];
+    forms
+        .iter()
+        .find(|form| index.get(form).is_some() || assets.join(form).is_file())
+        .cloned()
 }
 
 /// Keep the bare name a material file's stem gives it resolving, for the brush

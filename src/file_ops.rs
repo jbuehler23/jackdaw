@@ -1,6 +1,8 @@
 //! Filesystem operators for the Project window.
 //!
 //! `file.delete` confirms via a dialog before removing the path from disk,
+//! naming what would be left pointing at nothing, `asset.duplicate` copies one
+//! file beside itself, `asset.references` reports what points at a file,
 //! `file.convert_to_binary` and `file.convert_to_text` rewrite one document in
 //! the other form, and `project.export_binary` writes a whole tree out as
 //! binary for a shipped game. The Project window reaches these from its
@@ -10,7 +12,15 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_feathers::dialog::{DialogActionEvent, OpenConfirmationDialogEvent};
+use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
+use jackdaw_feathers::dialog::{DialogActionEvent, EditorDialog, OpenConfirmationDialogEvent};
+use path_slash::PathExt as _;
+
+use crate::asset_files::AssetFileKind;
+use crate::asset_index::AssetIndex;
+
+/// How many referrers a confirmation names before it counts the rest.
+const REFERRERS_NAMED: usize = 3;
 
 pub struct FileOpsPlugin;
 
@@ -31,6 +41,8 @@ pub struct PendingFileDelete {
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<FileDeleteOp>();
+    ctx.register_operator::<AssetDuplicateOp>();
+    ctx.register_operator::<AssetReferencesOp>();
     ctx.register_operator::<FileConvertToBinaryOp>();
     ctx.register_operator::<FileConvertToTextOp>();
     ctx.register_operator::<ProjectExportBinaryOp>();
@@ -56,12 +68,17 @@ fn default_export_dir(source: &Path) -> PathBuf {
     label = "Delete File",
     description = "Remove a file or directory from disk after user confirmation.",
     allows_undo = false,
-    params(path(String, doc = "Absolute path to the file or directory."))
+    params(
+        path(String, doc = "Absolute path to the file or directory."),
+        force(
+            bool,
+            doc = "Delete a file other documents reference without asking first."
+        )
+    )
 )]
 pub fn file_delete(
     params: In<OperatorParameters>,
     mut commands: Commands,
-    mut pending: ResMut<PendingFileDelete>,
     project: Option<Res<crate::project_window::ProjectWindowState>>,
 ) -> OperatorResult {
     let path: Option<PathBuf> = params.as_str("path").map(PathBuf::from).or_else(|| {
@@ -78,45 +95,407 @@ pub fn file_delete(
         warn!("file.delete: {} does not exist", path.display());
         return OperatorResult::Cancelled;
     }
-    let display = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string_lossy().into_owned());
-    pending.path = Some(path);
-    commands.trigger(
-        OpenConfirmationDialogEvent::new("Delete file", "Delete")
-            .with_description(format!("Permanently delete {display}?")),
-    );
+    let forced = params.as_bool("force").unwrap_or(false);
+    commands.queue(move |world: &mut World| {
+        ask_to_delete(world, path.clone(), forced);
+    });
     OperatorResult::Finished
 }
 
-fn on_file_delete_confirmed(
-    _event: On<DialogActionEvent>,
-    mut pending: ResMut<PendingFileDelete>,
-    project: Option<ResMut<crate::project_window::ProjectWindowState>>,
-) {
-    let Some(path) = pending.path.take() else {
+/// Put a file up for deletion: straight away when it was forced, and behind a
+/// confirmation otherwise. A file other documents reference says so, and a
+/// caller with no dialog to answer is told to force it. A confirmation already
+/// on screen is the one that stands, so nothing else is queued behind it.
+fn ask_to_delete(world: &mut World, path: PathBuf, forced: bool) {
+    if forced {
+        delete_path(world, &path);
         return;
-    };
-    let result = if path.is_dir() {
-        std::fs::remove_dir_all(&path)
+    }
+    if world
+        .query_filtered::<Entity, With<EditorDialog>>()
+        .iter(world)
+        .next()
+        .is_some()
+    {
+        warn_caller(
+            world,
+            format!(
+                "file.delete: a confirmation is already up, so {} was left alone",
+                path.display()
+            ),
+        );
+        return;
+    }
+    let referrers = referrers_of(world, &path);
+    let display = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+    let description = if referrers.is_empty() {
+        format!("Permanently delete {display}?")
     } else {
-        std::fs::remove_file(&path)
+        let held = match path.is_dir() {
+            true => format!("files in {display}"),
+            false => display.clone(),
+        };
+        let points_at = what_points_at(&held, &referrers);
+        warn_caller(
+            world,
+            format!("file.delete: {points_at}; pass force to delete it anyway"),
+        );
+        format!("{points_at}. Delete it anyway?")
+    };
+    world.resource_mut::<PendingFileDelete>().path = Some(path);
+    world.trigger(
+        OpenConfirmationDialogEvent::new("Delete file", "Delete").with_description(description),
+    );
+}
+
+/// The documents referring to a file, as the index keys them. A directory
+/// answers with what refers to anything it holds, from outside it.
+fn referrers_of(world: &World, path: &Path) -> Vec<PathBuf> {
+    let Some(indexed) = crate::asset_index::indexed_path(world, path) else {
+        return Vec::new();
+    };
+    let Some(index) = world.get_resource::<AssetIndex>() else {
+        return Vec::new();
+    };
+    match path.is_dir() {
+        true => index.referrers_under(&indexed),
+        false => index.referrers(&indexed).to_vec(),
+    }
+}
+
+/// What a file's referrers read as: how many there are and the first few by
+/// name.
+fn what_points_at(display: &str, referrers: &[PathBuf]) -> String {
+    let named: Vec<String> = referrers
+        .iter()
+        .take(REFERRERS_NAMED)
+        .map(|path| path.to_slash_lossy().into_owned())
+        .collect();
+    let rest = referrers.len().saturating_sub(named.len());
+    let listed = match rest {
+        0 => named.join(", "),
+        _ => format!("{} and {rest} more", named.join(", ")),
+    };
+    let count = referrers.len();
+    match count {
+        1 => format!("1 document references {display}: {listed}"),
+        _ => format!("{count} documents reference {display}: {listed}"),
+    }
+}
+
+fn on_file_delete_confirmed(_event: On<DialogActionEvent>, mut commands: Commands) {
+    commands.queue(|world: &mut World| {
+        let Some(path) = world.resource_mut::<PendingFileDelete>().path.take() else {
+            return;
+        };
+        delete_path(world, &path);
+    });
+}
+
+/// Remove a path from disk and put the Project window back in step with it.
+fn delete_path(world: &mut World, path: &Path) {
+    world.resource_mut::<PendingFileDelete>().path = None;
+    let result = if path.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
     };
     match result {
         Ok(()) => info!("file.delete: removed {}", path.display()),
-        Err(err) => warn!("file.delete: failed to remove {}: {err}", path.display()),
+        Err(err) => {
+            warn_caller(
+                world,
+                format!("file.delete: failed to remove {}: {err}", path.display()),
+            );
+            return;
+        }
     }
     // Drop a selection that pointed at the deleted path so the path bar and
     // the highlight do not lag behind the filesystem.
-    if let Some(mut project) = project {
-        let deleted = path.to_string_lossy().to_string();
-        if project.selected_file.as_deref() == Some(deleted.as_str()) {
-            project.selected_file = None;
-        }
-        project.needs_refresh = true;
-        project.needs_tree_refresh = true;
+    let Some(mut project) = world.get_resource_mut::<crate::project_window::ProjectWindowState>()
+    else {
+        return;
+    };
+    let deleted = path.to_string_lossy().to_string();
+    if project.selected_file.as_deref() == Some(deleted.as_str()) {
+        project.selected_file = None;
     }
+    project.needs_refresh = true;
+    project.needs_tree_refresh = true;
+}
+
+/// Copy one file beside itself, under the next free name or the one asked for.
+#[operator(
+    id = "asset.duplicate",
+    label = "Duplicate",
+    description = "Copy an asset, scene or prefab file beside itself under a name of its own.",
+    allows_undo = false,
+    params(
+        path(String, doc = "The file to copy."),
+        name(
+            String,
+            doc = "The name to give the copy. Defaults to the next free one."
+        )
+    )
+)]
+pub fn asset_duplicate(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    let Some(path) = params.as_str("path").map(PathBuf::from) else {
+        warn!("asset.duplicate: no path given");
+        return OperatorResult::Cancelled;
+    };
+    let name = params.as_str("name").map(str::to_owned);
+    commands.queue(move |world: &mut World| {
+        duplicate_file(world, &path, name.as_deref());
+    });
+    OperatorResult::Finished
+}
+
+/// Everything after a file's bare name: the `.material.bsn` of
+/// `slate.material.bsn`.
+fn file_suffix(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match name.find('.') {
+        Some(dot) => name[dot..].to_string(),
+        None => String::new(),
+    }
+}
+
+/// The name a copy counts up from: `slate` for `slate` and for `slate_2`
+/// alike, so a copy of a copy is `slate_3` rather than `slate_2_1`.
+fn counting_base(stem: &str) -> &str {
+    let Some((base, counter)) = stem.rsplit_once('_') else {
+        return stem;
+    };
+    let counted = !base.is_empty()
+        && !counter.is_empty()
+        && counter.chars().all(|digit| digit.is_ascii_digit());
+    match counted {
+        true => base,
+        false => stem,
+    }
+}
+
+/// The first of `name_1`, `name_2` that no file in `parent` answers to.
+fn next_free_stem(parent: &Path, stem: &str, suffix: &str) -> String {
+    let base = counting_base(stem);
+    for counter in 1..1000 {
+        let candidate = format!("{base}_{counter}");
+        let file = parent.join(format!("{candidate}{suffix}"));
+        if !file.exists() && jackdaw_bsn::existing_form(&file).is_none() {
+            return candidate;
+        }
+    }
+    format!("{stem}_copy")
+}
+
+/// A name as a document spells it: bare where every character allows it, and
+/// quoted otherwise.
+fn name_line(name: &str) -> String {
+    let bare = !name.is_empty()
+        && name
+            .chars()
+            .all(|part| part.is_ascii_alphanumeric() || part == '_');
+    match bare {
+        true => format!("#{name}"),
+        false => format!("#\"{name}\""),
+    }
+}
+
+/// The document with its root renamed, so a duplicated asset is not a second
+/// file answering to the same name. Only the name the root carries is touched,
+/// and a root carrying none is given one. A scene or a prefab is used by the
+/// file it sits in rather than by that name, so neither goes through here.
+fn with_root_named(text: &str, name: &str) -> String {
+    let named = name_line(name);
+    let mut renamed = false;
+    let mut lines: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if !renamed && line.starts_with('#') {
+            renamed = true;
+            lines.push(format!("{named}{}", after_name(line)));
+            continue;
+        }
+        lines.push(line.to_string());
+    }
+    if !renamed {
+        lines.insert(body_starts_at(&lines), named);
+    }
+    let mut written = lines.join("\n");
+    written.push('\n');
+    written
+}
+
+/// Whatever a line carrying a name holds after it, for the documents that put
+/// the root's first patch on the same line.
+fn after_name(line: &str) -> &str {
+    let mut rest = line[1..].chars();
+    let mut taken = 1;
+    match rest.next() {
+        Some('"') => {
+            taken += 1;
+            let mut escaped = false;
+            for character in rest {
+                taken += character.len_utf8();
+                match character {
+                    _ if escaped => escaped = false,
+                    '\\' => escaped = true,
+                    '"' => break,
+                    _ => {}
+                }
+            }
+        }
+        _ => {
+            taken += line[1..]
+                .chars()
+                .take_while(|part| part.is_ascii_alphanumeric() || *part == '_')
+                .map(char::len_utf8)
+                .sum::<usize>();
+        }
+    }
+    &line[taken.min(line.len())..]
+}
+
+/// The line the document proper starts on, after the comments that carry its
+/// header and its version stamp.
+fn body_starts_at(lines: &[String]) -> usize {
+    lines
+        .iter()
+        .position(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() && !trimmed.starts_with("//")
+        })
+        .unwrap_or(lines.len())
+}
+
+/// Copy a file beside itself, index what the copy holds and put the inspector
+/// on it. Reports the copy's path, so a caller with no viewport knows where it
+/// landed.
+fn duplicate_file(world: &mut World, path: &Path, name: Option<&str>) -> Option<PathBuf> {
+    let path = crate::definition_assets::resolve_project_path(world, path);
+    let path = jackdaw_bsn::existing_form(&path).unwrap_or(path);
+    if !path.is_file() {
+        warn_caller(
+            world,
+            format!("asset.duplicate: {} is not a file", path.display()),
+        );
+        return None;
+    }
+    let parent = path.parent()?.to_path_buf();
+    let suffix = file_suffix(&path);
+    let stem = match name {
+        Some(name) => crate::definition_assets::sanitize_definition_name(&jackdaw_bsn::path_stem(
+            Path::new(name),
+        )),
+        None => next_free_stem(&parent, &jackdaw_bsn::path_stem(&path), &suffix),
+    };
+    let target = parent.join(format!("{stem}{suffix}"));
+    if target.exists() || jackdaw_bsn::existing_form(&target).is_some() {
+        warn_caller(
+            world,
+            format!("asset.duplicate: {} is already there", target.display()),
+        );
+        return None;
+    }
+    let kind = {
+        let kinds = world.resource::<AssetKinds>();
+        crate::asset_files::read_asset_kind(&path, kinds)
+    };
+    if !jackdaw_bsn::is_document_path(&path) {
+        if let Err(err) = std::fs::copy(&path, &target) {
+            warn_caller(
+                world,
+                format!(
+                    "asset.duplicate: {} could not be written: {err}",
+                    target.display()
+                ),
+            );
+            return None;
+        }
+    } else {
+        let text = match jackdaw_bsn::read_document_text(&path) {
+            Ok(text) => text,
+            Err(err) => {
+                warn_caller(world, format!("asset.duplicate: {err}"));
+                return None;
+            }
+        };
+        let text = match kind {
+            AssetFileKind::Asset { .. } => with_root_named(&text, &stem),
+            _ => text,
+        };
+        let written = jackdaw_bsn::document_bytes(&target, &text)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| crate::scene_io::save::write_atomic(&target, &bytes));
+        if let Err(err) = written {
+            warn_caller(
+                world,
+                format!(
+                    "asset.duplicate: {} could not be written: {err}",
+                    target.display()
+                ),
+            );
+            return None;
+        }
+    }
+    index_duplicate(world, &target);
+    crate::project_window::select_path(world, &target);
+    let shown = crate::asset_index::indexed_path(world, &target).unwrap_or_else(|| target.clone());
+    report_to_caller(world, shown.to_slash_lossy().into_owned());
+    Some(target)
+}
+
+/// Put a freshly written copy in the index, so it answers to its path without
+/// waiting for the watcher.
+fn index_duplicate(world: &mut World, target: &Path) {
+    let Some(kind) = crate::definition_assets::kind_of_file(world, target) else {
+        return;
+    };
+    let Some(value) = crate::asset_index::load_asset_value(world, &kind, target) else {
+        return;
+    };
+    crate::asset_index::index_written(world, target, &kind, value);
+}
+
+/// Report every document whose patches reference a file.
+#[operator(
+    id = "asset.references",
+    label = "List References",
+    description = "Report every document whose patches reference a file.",
+    allows_undo = false,
+    params(path(String, doc = "The file to report on."))
+)]
+pub fn asset_references(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    let Some(path) = params.as_str("path").map(PathBuf::from) else {
+        warn!("asset.references: no path given");
+        return OperatorResult::Cancelled;
+    };
+    commands.queue(move |world: &mut World| {
+        let resolved = crate::definition_assets::resolve_project_path(world, &path);
+        let shown = crate::asset_index::indexed_path(world, &resolved)
+            .unwrap_or_else(|| path.clone())
+            .to_slash_lossy()
+            .into_owned();
+        let referrers = referrers_of(world, &resolved);
+        let message = match referrers.is_empty() {
+            true => format!("nothing references {shown}"),
+            false => format!(
+                "{shown} is referenced by {}",
+                referrers
+                    .iter()
+                    .map(|path| path.to_slash_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        report_to_caller(world, message);
+    });
+    OperatorResult::Finished
 }
 
 /// Rewrite one document as its binary twin, in place.

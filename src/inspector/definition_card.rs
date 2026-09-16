@@ -184,6 +184,10 @@ pub(crate) fn fill_definition_card(world: &mut World, inspector: Entity, source:
         }
     }
 
+    let file = crate::asset_index::absolute_path(world, &path);
+    if let Some(references) = super::file_card::spawn_references(world, inspector, &file) {
+        world.entity_mut(references).insert(DefinitionCard);
+    }
     spawn_save_action(world, card.section, source, dirty);
 }
 

@@ -4,6 +4,9 @@
 //! rest: an image, with what its header says and the action that applies it,
 //! and a scene or a prefab, with the name its root carries and the button that
 //! opens it in a tab.
+//!
+//! The References list every card ends with is built here too, since it says
+//! the same thing about a file whichever card is standing for it.
 
 use std::path::{Path, PathBuf};
 
@@ -281,6 +284,7 @@ fn fill_body(world: &mut World, body: Entity, path: &Path, kind: &AssetFileKind)
 
     if is_image_file_path(path) {
         fill_image_body(world, body, path, &as_string, &shown_path);
+        spawn_references(world, body, path);
         return;
     }
 
@@ -301,6 +305,7 @@ fn fill_body(world: &mut World, body: Entity, path: &Path, kind: &AssetFileKind)
             &as_string,
         );
     }
+    spawn_references(world, body, path);
 }
 
 fn fill_image_body(
@@ -444,6 +449,99 @@ fn spawn_row(world: &mut World, body: Entity, label: &str, value: &str) {
         },
         ChildOf(row),
     ));
+}
+
+/// Marks a row naming a document that references the file a card stands for.
+#[derive(Component)]
+pub struct ReferenceRow(pub PathBuf);
+
+/// How many referrers a card lists before it counts the rest.
+const REFERENCES_SHOWN: usize = 20;
+
+/// List the documents whose patches reference the file at `path`, each a click
+/// away, under `parent`.
+///
+/// A file nothing points at gets no list, and a file too many point at gets
+/// the first of them and a count of the rest. The list says what is on disk,
+/// so a referring document with unsaved edits reads as it was last saved. The
+/// entity the list sits on comes back, so a card can mark it as its own.
+pub(crate) fn spawn_references(world: &mut World, parent: Entity, path: &Path) -> Option<Entity> {
+    let indexed = crate::asset_index::indexed_path(world, path)?;
+    let referrers = world
+        .get_resource::<crate::asset_index::AssetIndex>()
+        .map(|index| index.referrers(&indexed).to_vec())
+        .unwrap_or_default();
+    if referrers.is_empty() {
+        return None;
+    }
+    let list = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                width: Val::Percent(100.0),
+                margin: UiRect::top(Val::Px(tokens::SPACING_XS)),
+                ..default()
+            },
+            ChildOf(parent),
+        ))
+        .id();
+    world.spawn((
+        Text::new("References"),
+        TextFont {
+            font_size: tokens::TEXT_SIZE_SM,
+            ..default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        ChildOf(list),
+    ));
+    for referrer in referrers.iter().take(REFERENCES_SHOWN) {
+        spawn_reference_row(world, list, referrer);
+    }
+    let rest = referrers.len().saturating_sub(REFERENCES_SHOWN);
+    if rest > 0 {
+        world.spawn((
+            Text::new(format!("and {rest} more")),
+            TextFont {
+                font_size: tokens::TEXT_SIZE_SM,
+                ..default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+            ChildOf(list),
+        ));
+    }
+    Some(list)
+}
+
+/// One referrer, as the button that takes the editor to it: a scene opens in a
+/// tab, and anything else is selected into the inspector.
+fn spawn_reference_row(world: &mut World, body: Entity, referrer: &Path) {
+    let file = crate::asset_index::absolute_path(world, referrer);
+    world.get_resource_or_init::<crate::asset_files::AssetKindCache>();
+    let opens_a_tab = world.resource_scope(
+        |world, mut cache: Mut<crate::asset_files::AssetKindCache>| {
+            world
+                .get_resource::<jackdaw_api::prelude::AssetKinds>()
+                .is_some_and(|kinds| cache.check(&file, kinds) == AssetFileKind::Scene)
+        },
+    );
+    let operator = match opens_a_tab {
+        true => crate::project_window::ProjectOpenOp::ID,
+        false => crate::project_window::ProjectSelectOp::ID,
+    };
+    let label = referrer.to_string_lossy().into_owned();
+    let row = world
+        .spawn((
+            button(
+                ButtonProps::new(label)
+                    .with_variant(ButtonVariant::Ghost)
+                    .align_left(),
+            ),
+            ReferenceRow(referrer.to_path_buf()),
+            ButtonOperatorCall::new(operator)
+                .with_param("path", file.to_string_lossy().into_owned()),
+        ))
+        .id();
+    world.entity_mut(row).insert(ChildOf(body));
 }
 
 fn spawn_action(world: &mut World, body: Entity, label: &str, operator: &'static str, path: &str) {

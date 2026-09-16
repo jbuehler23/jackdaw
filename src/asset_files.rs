@@ -94,13 +94,96 @@ pub fn is_prefab(path: &Path, kinds: &AssetKinds) -> bool {
     read_asset_kind(path, kinds) == AssetFileKind::Prefab
 }
 
-/// Per-path memo of the type each file names, keyed by path and invalidated
-/// when the file's mtime changes or the file goes. What that type means is
-/// resolved on every call, so a kind registered later is seen without
-/// rereading anything.
+/// What one read of a file found: the type it names and the references its
+/// values spell.
+#[derive(Clone, Default)]
+struct FileFacts {
+    type_path: Option<String>,
+    references: Vec<String>,
+}
+
+/// Whether a quoted value could name another file: a `@name`, or a path whose
+/// last segment carries a plausible extension.
+fn could_name_a_file(value: &str) -> bool {
+    if value.is_empty() || value.contains(['{', '}', '\n']) {
+        return false;
+    }
+    if value.starts_with('@') {
+        return true;
+    }
+    Path::new(value)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.len() <= 8
+                && extension.starts_with(|first: char| first.is_ascii_alphabetic())
+                && extension.chars().all(|part| part.is_ascii_alphanumeric())
+        })
+}
+
+/// The file a value names, without the label a reference into a model or a
+/// scene carries: `models/town.glb#Scene0` names `models/town.glb`.
+fn without_label(value: &str) -> &str {
+    match value.starts_with('@') {
+        true => value,
+        false => value.split('#').next().unwrap_or(value),
+    }
+}
+
+/// The references a document's values spell, in the order it spells them.
+fn spelled_references(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut characters = text.chars();
+    while let Some(character) = characters.next() {
+        if character != '"' {
+            continue;
+        }
+        let mut value = String::new();
+        let mut escaped = false;
+        for inside in characters.by_ref() {
+            if escaped {
+                value.push(inside);
+                escaped = false;
+                continue;
+            }
+            match inside {
+                '\\' => escaped = true,
+                '"' => break,
+                _ => value.push(inside),
+            }
+        }
+        let named = without_label(&value);
+        if could_name_a_file(named) && !found.iter().any(|held| held == named) {
+            found.push(named.to_string());
+        }
+    }
+    found
+}
+
+/// What one read of a file finds, for the memo below.
+fn read_file_facts(path: &Path) -> FileFacts {
+    if !jackdaw_bsn::is_document_path(path) {
+        return FileFacts {
+            type_path: read_file_type(path),
+            references: Vec::new(),
+        };
+    }
+    let Ok(text) = jackdaw_bsn::read_document_text(path) else {
+        return FileFacts::default();
+    };
+    FileFacts {
+        type_path: jackdaw_bsn::asset_text_type(&text, path),
+        references: spelled_references(&text),
+    }
+}
+
+/// Per-path memo of what each file says: the type it names and the references
+/// it spells. Keyed by path and invalidated when the file's mtime changes or
+/// the file goes. What that type means is resolved on every call, so a kind
+/// registered later is seen without rereading anything.
 #[derive(Resource, Default)]
 pub struct AssetKindCache {
-    entries: HashMap<PathBuf, (SystemTime, Option<String>)>,
+    entries: HashMap<PathBuf, (SystemTime, FileFacts)>,
 }
 
 impl AssetKindCache {
@@ -111,6 +194,17 @@ impl AssetKindCache {
     /// The type the file at `path` names, from the memo where the file has
     /// not changed since it was last read.
     pub(crate) fn type_of(&mut self, path: &Path) -> Option<String> {
+        self.facts(path).and_then(|facts| facts.type_path)
+    }
+
+    /// The references the file at `path` spells, from the same memo.
+    pub(crate) fn references_of(&mut self, path: &Path) -> Vec<String> {
+        self.facts(path)
+            .map(|facts| facts.references)
+            .unwrap_or_default()
+    }
+
+    fn facts(&mut self, path: &Path) -> Option<FileFacts> {
         let Ok(mtime) = std::fs::metadata(path).and_then(|meta| meta.modified()) else {
             self.entries.remove(path);
             return None;
@@ -118,12 +212,12 @@ impl AssetKindCache {
         if let Some((cached_mtime, cached)) = self.entries.get(path)
             && *cached_mtime == mtime
         {
-            return cached.clone();
+            return Some(cached.clone());
         }
-        let named = read_file_type(path);
+        let facts = read_file_facts(path);
         self.entries
-            .insert(path.to_path_buf(), (mtime, named.clone()));
-        named
+            .insert(path.to_path_buf(), (mtime, facts.clone()));
+        Some(facts)
     }
 }
 

@@ -1629,6 +1629,7 @@ fn on_file_double_click(event: On<FileItemDoubleClicked>, mut commands: Commands
 const NEW_FOLDER_ACTION: &str = "project.new_folder";
 const NEW_SCENE_ACTION: &str = "project.new_scene";
 const NEW_ASSET_ACTION: &str = "project.new_asset";
+const DUPLICATE_ACTION: &str = "project.duplicate";
 const RENAME_ACTION: &str = "project.rename";
 const REVEAL_ACTION: &str = "project.reveal";
 const DELETE_ACTION: &str = "project.delete";
@@ -1664,6 +1665,9 @@ fn open_context_menu(
             true => (CONVERT_TO_TEXT_ACTION, "Convert to Text"),
             false => (CONVERT_TO_BINARY_ACTION, "Convert to Binary"),
         });
+    }
+    if !is_directory {
+        items.push((DUPLICATE_ACTION, "Duplicate"));
     }
     items.push((RENAME_ACTION, "Rename"));
     items.push((REVEAL_ACTION, "Reveal in File Manager"));
@@ -1720,6 +1724,7 @@ fn operator_for_action(action: &str) -> Option<&'static str> {
         "new_folder" => Some(ProjectNewFolderOp::ID),
         "new_scene" => Some("scene.new"),
         "new_asset" => Some(crate::new_asset::AssetNewPickerOp::ID),
+        "duplicate" => Some("asset.duplicate"),
         "reveal" => Some(ProjectRevealOp::ID),
         "delete" => Some("file.delete"),
         "convert_to_binary" => Some("file.convert_to_binary"),

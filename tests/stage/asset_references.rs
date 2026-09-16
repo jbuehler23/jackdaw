@@ -428,3 +428,216 @@ fn outfit_path(app: &App, relative: &str) -> PathBuf {
     let root = &app.world().resource::<jackdaw::project::ProjectRoot>().root;
     root.join("assets").join(Path::new(relative))
 }
+
+/// Write an outfit file naming one material by path, and index it.
+fn file_outfit(app: &mut App, relative: &str, material: &str) -> PathBuf {
+    let path = outfit_path(app, relative);
+    std::fs::create_dir_all(path.parent().expect("a parent")).expect("the directory is made");
+    let name = jackdaw_bsn::path_stem(&path);
+    let body = format!(
+        "#{name}\n{} {{ material: \"{material}\" }}\n",
+        OutfitDef::type_path()
+    );
+    std::fs::write(
+        &path,
+        jackdaw::asset_files::asset_file_text(OutfitDef::type_path(), &body),
+    )
+    .expect("the outfit file is written");
+    jackdaw::asset_index::rescan_asset_index(app.world_mut());
+    app.update();
+    path
+}
+
+/// The documents the index says point at a file under the project's assets.
+fn referrers(app: &App, relative: &str) -> Vec<PathBuf> {
+    app.world()
+        .resource::<AssetIndex>()
+        .referrers(Path::new(relative))
+        .to_vec()
+}
+
+#[test]
+fn the_references_of_a_material_name_every_document_that_spells_its_path() {
+    let (mut app, tmp) = editor_with_outfits();
+    file_material(&mut app, "materials/slate.material.bsn");
+    file_outfit(
+        &mut app,
+        "content/outfits/ranger.bsn",
+        "materials/slate.material.bsn",
+    );
+    round_trip_scene(&mut app, &tmp, "materials/slate.material.bsn");
+    jackdaw::asset_index::rescan_asset_index(app.world_mut());
+
+    assert_eq!(
+        referrers(&app, "materials/slate.material.bsn"),
+        vec![
+            PathBuf::from("content/outfits/ranger.bsn"),
+            PathBuf::from("zone.bsn"),
+        ],
+        "the asset and the scene both point at the material"
+    );
+
+    std::fs::remove_file(outfit_path(&app, "content/outfits/ranger.bsn"))
+        .expect("the outfit is removed");
+    jackdaw::asset_index::rescan_asset_index(app.world_mut());
+
+    assert_eq!(
+        referrers(&app, "materials/slate.material.bsn"),
+        vec![PathBuf::from("zone.bsn")],
+        "a document that has gone points at nothing"
+    );
+}
+
+#[test]
+fn deleting_a_referenced_file_is_refused_until_it_is_forced() {
+    let (mut app, _tmp) = editor_with_outfits();
+    file_material(&mut app, "materials/slate.material.bsn");
+    file_outfit(
+        &mut app,
+        "content/outfits/ranger.bsn",
+        "materials/slate.material.bsn",
+    );
+    let material = outfit_path(&app, "materials/slate.material.bsn");
+
+    call(
+        &mut app,
+        "file.delete",
+        &[("path", material.to_string_lossy().into_owned().into())],
+    );
+
+    assert!(
+        material.is_file(),
+        "the file the outfit needs is still there"
+    );
+    let asked = dialog_description(&app);
+    assert!(
+        asked.contains("1 document references") && asked.contains("content/outfits/ranger.bsn"),
+        "the confirmation names what would be left pointing at nothing, got: {asked}"
+    );
+
+    call(
+        &mut app,
+        "file.delete",
+        &[
+            ("path", material.to_string_lossy().into_owned().into()),
+            ("force", true.into()),
+        ],
+    );
+
+    assert!(!material.exists(), "forcing the delete goes through");
+}
+
+/// What the dialog on screen is asking.
+fn dialog_description(app: &App) -> String {
+    app.world()
+        .iter_entities()
+        .find_map(|entity| entity.get::<jackdaw_feathers::dialog::DialogChoices>())
+        .and_then(|choices| choices.description.clone())
+        .expect("a dialog is up")
+}
+
+#[test]
+fn a_reference_resolves_to_the_document_held_as_binary() {
+    let (mut app, _tmp) = editor_with_outfits();
+    file_material(&mut app, "materials/slate.material.bsn");
+    file_outfit(
+        &mut app,
+        "content/outfits/ranger.bsn",
+        "materials/slate.material.bsn",
+    );
+    let material = outfit_path(&app, "materials/slate.material.bsn");
+    let binary = jackdaw_bsn::convert_to_binary(&material).expect("the material converts");
+    jackdaw::asset_index::rescan_asset_index(app.world_mut());
+
+    assert!(
+        binary.is_file(),
+        "the material is held in the binary form alone"
+    );
+    assert_eq!(
+        referrers(&app, "materials/slate.material.bsb"),
+        vec![PathBuf::from("content/outfits/ranger.bsn")],
+        "the outfit still points at the material it spells as text"
+    );
+}
+
+#[test]
+fn deleting_a_folder_names_what_points_into_it() {
+    let (mut app, _tmp) = editor_with_outfits();
+    file_material(&mut app, "materials/slate.material.bsn");
+    file_outfit(
+        &mut app,
+        "content/outfits/ranger.bsn",
+        "materials/slate.material.bsn",
+    );
+    let materials = outfit_path(&app, "materials");
+
+    call(
+        &mut app,
+        "file.delete",
+        &[("path", materials.to_string_lossy().into_owned().into())],
+    );
+
+    assert!(materials.is_dir(), "the folder is still there");
+    let asked = dialog_description(&app);
+    assert!(
+        asked.contains("files in materials") && asked.contains("content/outfits/ranger.bsn"),
+        "the confirmation names what points into the folder, got: {asked}"
+    );
+}
+
+#[test]
+fn a_reference_into_a_model_names_the_file_it_reaches_into() {
+    let (mut app, tmp) = editor_with_outfits();
+    let model = outfit_path(&app, "models/town.glb");
+    std::fs::create_dir_all(model.parent().expect("a parent")).expect("the directory is made");
+    std::fs::write(&model, b"glTF").expect("the model is written");
+    let scene = tmp.path().join("assets/zone.bsn");
+    std::fs::write(
+        &scene,
+        format!(
+            "{} {{ material: \"models/town.glb#Scene0\" }}\n",
+            Painted::type_path()
+        ),
+    )
+    .expect("the scene is written");
+    jackdaw::asset_index::rescan_asset_index(app.world_mut());
+
+    assert_eq!(
+        referrers(&app, "models/town.glb"),
+        vec![PathBuf::from("zone.bsn")],
+        "the label on the reference is not part of the file it names"
+    );
+}
+
+#[test]
+fn a_delete_asked_for_while_a_confirmation_is_up_leaves_that_one_standing() {
+    let (mut app, _tmp) = editor_with_outfits();
+    file_material(&mut app, "materials/slate.material.bsn");
+    file_material(&mut app, "materials/chalk.material.bsn");
+    let slate = outfit_path(&app, "materials/slate.material.bsn");
+    let chalk = outfit_path(&app, "materials/chalk.material.bsn");
+
+    call(
+        &mut app,
+        "file.delete",
+        &[("path", slate.to_string_lossy().into_owned().into())],
+    );
+    call(
+        &mut app,
+        "file.delete",
+        &[("path", chalk.to_string_lossy().into_owned().into())],
+    );
+
+    assert!(
+        dialog_description(&app).contains("slate.material.bsn"),
+        "the confirmation still names the file it went up for"
+    );
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::file_ops::PendingFileDelete>()
+            .path
+            .as_deref(),
+        Some(slate.as_path()),
+        "and the answer to it would take that file, not the one asked for after"
+    );
+}
