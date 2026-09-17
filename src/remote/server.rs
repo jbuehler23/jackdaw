@@ -422,9 +422,12 @@ fn entity_from_params(world: &mut World, params: &Value) -> Result<Entity, BrpEr
             "expected an \"entity\" id or a \"name\"".to_string(),
         ));
     };
-    let mut query = world.query_filtered::<(Entity, &Name), Without<crate::EditorEntity>>();
-    let named: Vec<(Entity, &Name)> = query.iter(world).collect();
-    crate::boot_ops::unique_named_entity(named.into_iter(), name)
+    let mut named = world.query_filtered::<(Entity, &Name), Without<crate::EditorEntity>>();
+    let mut instances = world.query_filtered::<
+        (Entity, &crate::prefab::IsA),
+        (Without<Name>, Without<crate::EditorEntity>),
+    >();
+    crate::boot_ops::unique_labelled_entity(named.iter(world), instances.iter(world), name)
         .ok_or_else(|| invalid_params(format!("`{name}` names no entity in this scene, or two")))
 }
 
@@ -906,7 +909,10 @@ fn is_editor_furniture(world: &World, entity: Entity) -> bool {
 fn node_json(world: &mut World, entity: Entity, depth: u32) -> Value {
     let name = world
         .get::<Name>(entity)
-        .map(|name| name.as_str().to_string());
+        .map(|name| name.as_str().to_string())
+        .or_else(|| crate::hierarchy::prefab_stem_label(world, entity));
+    let missing_source = crate::hierarchy::missing_prefab_source(world, entity)
+        .map(|source| source.display().to_string());
     let component_ids: Vec<bevy::ecs::component::ComponentId> = world
         .get_entity(entity)
         .map(|entity_ref| entity_ref.archetype().components().to_vec())
@@ -937,6 +943,7 @@ fn node_json(world: &mut World, entity: Entity, depth: u32) -> Value {
     json!({
         "entity": entity.to_bits(),
         "name": name,
+        "missing_source": missing_source,
         "components": components,
         "children": children,
     })

@@ -4,6 +4,8 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 
+use jackdaw_api_internal::operator::warn_caller;
+
 use crate::commands::CommandHistory;
 use crate::scene_io::clear_scene_entities;
 use crate::scenes::{Scenes, TabContent, ViewState};
@@ -201,13 +203,16 @@ pub fn activate_tab(world: &mut World, target: usize) {
                 &parent,
             );
         }
-        crate::prefab::save_load::warn_for_missing_sources(
+        let missing = crate::prefab::save_load::missing_source_complaints(
             &new_doc,
             world.resource::<crate::prefab::PrefabAstCache>(),
             &tab_path
                 .as_ref()
                 .map_or_else(|| "this tab".to_string(), |path| path.display().to_string()),
         );
+        for complaint in missing {
+            warn_caller(world, complaint);
+        }
         let cache = world.resource::<crate::prefab::PrefabAstCache>();
         let get_prefab = |p: &std::path::Path| cache.get(p);
         match crate::prefab::resolver_bsn::resolve_scene(&new_doc, &get_prefab) {

@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use jackdaw::boot_ops::{run_op_clause, run_op_clause_as_user};
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::operator::OperatorReports;
+use jackdaw_api_internal::operator::{OperatorReports, OperatorWarnings};
 use jackdaw_commands::CommandHistory;
 
 const ISA_TYPE: &str = "jackdaw::prefab::components::IsA";
@@ -48,6 +48,21 @@ fn reports(app: &mut App) -> Vec<String> {
         .get_resource_or_init::<OperatorReports>()
         .0
         .clone()
+}
+
+/// What the operator that just ran complained about to its caller.
+fn warnings(app: &mut App) -> Vec<String> {
+    app.world_mut()
+        .get_resource_or_init::<OperatorWarnings>()
+        .0
+        .clone()
+}
+
+fn clear_warnings(app: &mut App) {
+    app.world_mut()
+        .get_resource_or_init::<OperatorWarnings>()
+        .0
+        .clear();
 }
 
 fn clear_reports(app: &mut App) {
@@ -920,5 +935,146 @@ fn a_scene_naming_a_prefab_by_an_absolute_path_is_not_saved_over() {
     assert!(
         refusal.contains("IsA.source"),
         "the refusal names the field that holds it, got {refusal}",
+    );
+}
+
+#[test]
+fn opening_a_scene_whose_prefab_is_gone_tells_the_caller_which_file() {
+    let (mut app, _tmp, quarter) = a_group_holding_an_instance_whose_prefab_went_missing();
+
+    clear_warnings(&mut app);
+    run_finished(&mut app, &format!("scene.open path={}", quarter.display()));
+    for _ in 0..12 {
+        app.update();
+    }
+
+    let said: Vec<String> = warnings(&mut app)
+        .into_iter()
+        .filter(|warning| warning.contains("lamp.bsn"))
+        .collect();
+    assert_eq!(
+        said.len(),
+        1,
+        "the open names the file it could not find, once, got {said:?}",
+    );
+    assert!(
+        said[0].contains("is not in the project"),
+        "and says what is wrong with it, got {said:?}",
+    );
+}
+
+#[test]
+fn placing_an_instance_of_a_prefab_that_is_not_there_tells_the_caller() {
+    let (mut app, _tmp, _scene) = project_with_a_lamp();
+
+    clear_warnings(&mut app);
+    let result = run(
+        &mut app,
+        "prefab.spawn_instance path=prefabs/no_such_lamp.bsn pos_x=0.0 pos_y=0.0 pos_z=0.0",
+    );
+    app.update();
+
+    let said = warnings(&mut app);
+    assert!(
+        said.iter()
+            .any(|warning| warning.contains("no_such_lamp.bsn")
+                && warning.contains("is not in the project")),
+        "a caller with no viewport is told nothing was placed, got {said:?} and {result:?}",
+    );
+}
+
+#[test]
+fn the_scene_tree_names_an_instance_that_inherited_nothing_after_its_file() {
+    let (mut app, _tmp, quarter) = a_group_holding_an_instance_whose_prefab_went_missing();
+
+    run_finished(&mut app, &format!("scene.open path={}", quarter.display()));
+    for _ in 0..12 {
+        app.update();
+    }
+
+    let tree = app
+        .world_mut()
+        .run_system_cached_with(
+            jackdaw::remote::server::scene_tree_handler,
+            Some(serde_json::json!({})),
+        )
+        .expect("the handler ran")
+        .expect("the handler answered");
+    let mut nodes = Vec::new();
+    for root in tree["tree"].as_array().into_iter().flatten() {
+        tree_nodes(root, &mut nodes);
+    }
+    let instance = nodes
+        .iter()
+        .find(|node| {
+            node["components"].as_array().is_some_and(|components| {
+                components
+                    .iter()
+                    .any(|component| component == "jackdaw_prefab::components::IsA")
+            })
+        })
+        .unwrap_or_else(|| panic!("the tree reports the instance, got {nodes:#?}"));
+    assert_eq!(
+        instance["name"], "lamp",
+        "the node is named the way its row is, or a caller cannot ask for it",
+    );
+    assert!(
+        instance["missing_source"]
+            .as_str()
+            .is_some_and(|source| source.contains("lamp.bsn")),
+        "and carries the file it could not find, got {instance:#?}",
+    );
+}
+
+#[test]
+fn an_instance_that_inherited_nothing_is_selected_by_the_label_its_row_shows() {
+    let (mut app, _tmp, quarter) = a_group_holding_an_instance_whose_prefab_went_missing();
+
+    run_finished(&mut app, &format!("scene.open path={}", quarter.display()));
+    for _ in 0..12 {
+        app.update();
+    }
+    let mut query = app
+        .world_mut()
+        .query_filtered::<Entity, With<jackdaw_prefab::components::IsA>>();
+    let instance = query
+        .iter(app.world())
+        .next()
+        .expect("the instance stands in the scene");
+
+    run_finished(&mut app, "selection.select name=lamp");
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<Selection>().entities,
+        vec![instance],
+        "the label the outliner shows is the name the caller can use",
+    );
+}
+
+#[test]
+fn an_instance_that_inherited_nothing_leaves_with_the_scene_that_held_it() {
+    let (mut app, tmp, quarter) = a_group_holding_an_instance_whose_prefab_went_missing();
+    run_finished(&mut app, &format!("scene.open path={}", quarter.display()));
+    for _ in 0..12 {
+        app.update();
+    }
+
+    let next = tmp.path().join("assets/next.bsn");
+    run_finished(
+        &mut app,
+        &format!("scene.new kind=3d path={}", next.display()),
+    );
+    for _ in 0..12 {
+        app.update();
+    }
+
+    let mut query = app
+        .world_mut()
+        .query_filtered::<Entity, With<jackdaw_prefab::components::IsA>>();
+    let left: Vec<Entity> = query.iter(app.world()).collect();
+    assert!(
+        left.is_empty(),
+        "an unnamed instance stands in the scene after it, and answers to its label there, got {left:?}",
     );
 }

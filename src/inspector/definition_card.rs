@@ -223,6 +223,42 @@ pub(crate) fn keep_unsaved_marker_in_step(
     }
 }
 
+/// The header's broken-reference marker, which says how many of the card's
+/// rows name a file the project does not hold.
+#[derive(Component)]
+pub(crate) struct BrokenReferencesMarker;
+
+/// Keep the marker naming what the card's rows currently name. A field is
+/// counted once however many rows stand for it.
+pub(crate) fn keep_broken_marker_in_step(
+    mut markers: Query<(&mut Text, &mut Node), With<BrokenReferencesMarker>>,
+    broken: Query<
+        &crate::inspector::asset_row::AssetFieldRow,
+        With<crate::inspector::asset_row::AssetRowBroken>,
+    >,
+) {
+    let fields: std::collections::BTreeSet<&str> =
+        broken.iter().map(|row| row.field_path.as_str()).collect();
+    let broken = fields.len();
+    let wanted = match broken {
+        0 => String::new(),
+        1 => "1 broken reference".to_string(),
+        many => format!("{many} broken references"),
+    };
+    for (mut text, mut node) in &mut markers {
+        let display = match broken {
+            0 => Display::None,
+            _ => Display::Flex,
+        };
+        if node.display != display {
+            node.display = display;
+        }
+        if text.0 != wanted {
+            text.0 = wanted.clone();
+        }
+    }
+}
+
 /// Put Save, and the unsaved-edits marker, in the card's header.
 fn spawn_save_action(world: &mut World, section: Entity, source: Entity, dirty: bool) {
     let Some(header) = world.get::<Children>(section).and_then(|children| {
@@ -255,6 +291,20 @@ fn spawn_save_action(world: &mut World, section: Entity, source: Entity, dirty: 
             ..default()
         },
         UnsavedMarker(source),
+        ChildOf(row),
+    ));
+    world.spawn((
+        Text::default(),
+        TextFont {
+            font_size: tokens::TEXT_SIZE_XS,
+            ..default()
+        },
+        TextColor(tokens::TEXT_ERROR),
+        Node {
+            display: Display::None,
+            ..default()
+        },
+        BrokenReferencesMarker,
         ChildOf(row),
     ));
     let save = world

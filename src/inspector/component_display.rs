@@ -198,6 +198,27 @@ pub(crate) fn sync_inspector_to_selection(
     }
 }
 
+/// Whether the editor has a registration for the type the document names, or
+/// for the type an authored enum variant belongs to.
+fn known_to_the_editor(registry: &bevy::reflect::TypeRegistry, type_path: &str) -> bool {
+    if registry.get_with_type_path(type_path).is_some() {
+        return true;
+    }
+    enclosing_type(type_path).is_some_and(|base| registry.get_with_type_path(base).is_some())
+}
+
+/// The type an authored enum variant belongs to, whose schema is the one that
+/// describes it.
+fn enclosing_type(type_path: &str) -> Option<&str> {
+    type_path.rsplit_once("::").map(|(base, _)| base)
+}
+
+/// The last segment of a type path, for a card naming a type nothing
+/// describes.
+fn short_type_name(type_path: &str) -> &str {
+    type_path.rsplit("::").next().unwrap_or(type_path)
+}
+
 /// Scene-document components that live under `jackdaw_scene_types` and
 /// carry the inspector's dedicated tool surfaces: `Brush` mounts the
 /// mesh card (`brush_display`, and with it the whole Mesh tab), `Terrain`
@@ -761,14 +782,28 @@ pub(crate) fn build_inspector_displays(
         && let Some(node) = ast.ast_for(source_entity)
     {
         for type_path in ast.component_type_paths(node) {
-            let Some(schema) = project_types.component(&type_path) else {
+            let schema = project_types.component(&type_path);
+            if schema.is_none()
+                && (known_to_the_editor(&registry, &type_path)
+                    || project_types.type_schema(&type_path).is_some())
+            {
                 continue;
-            };
+            }
+            let enclosing = enclosing_type(&type_path)
+                .and_then(|base| project_types.type_schema(base))
+                .filter(|_| schema.is_none());
             let chrome = type_metadata.resolve(&type_path, &registry, project_types);
+            let name = match (schema, enclosing) {
+                (Some(schema), _) => schema.short_name.clone(),
+                (None, Some(enclosing)) => {
+                    format!("{}::{}", enclosing.short_name, short_type_name(&type_path))
+                }
+                (None, None) => short_type_name(&type_path).to_string(),
+            };
             let card = spawn_component_display(
                 commands,
                 ComponentDisplaySpec {
-                    name: &schema.short_name,
+                    name: &name,
                     type_path: &type_path,
                     entity: source_entity,
                     component: None,
@@ -789,18 +824,28 @@ pub(crate) fn build_inspector_displays(
                 type_metadata,
             );
             jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, card.section);
-            super::project_component_display::spawn_project_component_fields(
-                commands,
-                card.body,
-                schema,
-                ast,
-                node,
-                source_entity,
-                type_registry,
-                &editor_font.0,
-                &icon_font.0,
-                names,
-            );
+            match schema {
+                Some(schema) => super::project_component_display::spawn_project_component_fields(
+                    commands,
+                    card.body,
+                    schema,
+                    ast,
+                    node,
+                    source_entity,
+                    type_registry,
+                    &editor_font.0,
+                    &icon_font.0,
+                    names,
+                ),
+                None => super::project_component_display::spawn_document_component_fields(
+                    commands,
+                    card.body,
+                    ast,
+                    node,
+                    &type_path,
+                    enclosing.is_some(),
+                ),
+            }
         }
     }
 

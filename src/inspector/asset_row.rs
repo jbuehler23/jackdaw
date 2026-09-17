@@ -126,6 +126,11 @@ pub(crate) struct AssetFieldPicker(pub(crate) Entity);
 #[derive(Component)]
 pub(crate) struct AssetRowUnread;
 
+/// A row naming a file the project does not hold, which is what the card's
+/// header counts and the row's own marker stands for.
+#[derive(Component)]
+pub(crate) struct AssetRowBroken;
+
 /// Everything a row needs to know about the field it stands for.
 #[derive(Clone)]
 pub(crate) struct AssetRowProps {
@@ -358,34 +363,40 @@ pub(crate) fn show_asset_row_path(world: &mut World, row: Entity) {
     let Some(path) = field_path_text(world, row, &field) else {
         return;
     };
+    let broken = !crate::asset_index::project_holds_file(world, &path);
     if let Ok(mut entity) = world.get_entity_mut(row) {
         entity.remove::<AssetRowUnread>();
+        match broken {
+            true => entity.insert(AssetRowBroken),
+            false => entity.remove::<AssetRowBroken>(),
+        };
     }
     let shown = if path.is_empty() {
         NOTHING.to_string()
     } else {
         shown_name(&path)
     };
+    let colour = match (path.is_empty(), broken) {
+        (true, _) => tokens::TEXT_DISABLED,
+        (false, true) => tokens::TEXT_ERROR,
+        (false, false) => tokens::TEXT_TERTIARY,
+    };
     let Ok(mut entity) = world.get_entity_mut(text_entity) else {
         return;
     };
-    if entity.get::<Text>().is_some_and(|text| text.0 == shown) {
+    let drawn = entity.get::<Text>().is_some_and(|text| text.0 == shown)
+        && entity
+            .get::<TextColor>()
+            .is_some_and(|text| text.0 == colour);
+    if drawn {
         return;
     }
-    let told = if path.is_empty() {
-        NOTHING.to_string()
-    } else {
-        path.clone()
+    let told = match (path.is_empty(), broken) {
+        (true, _) => NOTHING.to_string(),
+        (false, true) => format!("{path} is not in the project"),
+        (false, false) => path.clone(),
     };
-    entity.insert((
-        Text::new(shown),
-        Tooltip::title(told),
-        TextColor(if path.is_empty() {
-            tokens::TEXT_DISABLED
-        } else {
-            tokens::TEXT_TERTIARY
-        }),
-    ));
+    entity.insert((Text::new(shown), Tooltip::title(told), TextColor(colour)));
 }
 
 /// The file a path names, shortened to what a row can hold, so the row stays

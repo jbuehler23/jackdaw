@@ -277,6 +277,21 @@ pub fn absolute_path(world: &World, path: &Path) -> PathBuf {
     jackdaw_bsn::existing_form(&path).unwrap_or(path)
 }
 
+/// Whether the project holds the file a reference names, as a path, as one of
+/// the bare names written before paths, or on disk.
+pub fn project_holds_file(world: &World, named: &str) -> bool {
+    if named.is_empty() || assets_dir(world).is_none() {
+        return true;
+    }
+    let path = Path::new(named);
+    if let Some(index) = world.get_resource::<AssetIndex>()
+        && (index.get(path).is_some() || !index.stem_paths(named).is_empty())
+    {
+        return true;
+    }
+    absolute_path(world, path).exists()
+}
+
 /// A file on disk as the path the index keys it by. `None` for a file outside
 /// the project's assets, including one a relative path walks out to.
 pub fn indexed_path(world: &World, path: &Path) -> Option<PathBuf> {

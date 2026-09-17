@@ -1,6 +1,6 @@
 //! Glue between the editor's `scene_io` and the prefab cache / resolver.
 
-use bevy::prelude::{World, warn};
+use bevy::prelude::World;
 
 use crate::prefab::cache::PrefabAstCache;
 use jackdaw_bsn::SceneBsnAst;
@@ -79,21 +79,30 @@ pub fn populate_cache_for_scene_bsn(
     paths
 }
 
-/// Warn for every instance in `ast` whose prefab the cache has not got, naming
-/// the file each one points at.
-pub fn warn_for_missing_sources(ast: &SceneBsnAst, cache: &PrefabAstCache, scene: &str) {
+/// One complaint for every prefab in `ast` the cache has not got, naming the
+/// file the instances point at. A file two instances name is said once.
+pub fn missing_source_complaints(
+    ast: &SceneBsnAst,
+    cache: &PrefabAstCache,
+    scene: &str,
+) -> Vec<String> {
+    let mut said: Vec<PathBuf> = Vec::new();
+    let mut complaints = Vec::new();
     for node in ast.entities_with_component(ISA_TYPE) {
         let Some(source) = crate::prefab::resolver_bsn::read_isa_source(ast, node) else {
             continue;
         };
-        if cache.get(&source).is_none() {
-            warn!(
-                "scene '{scene}': the prefab '{}' {}, so the instance naming it inherits nothing",
-                source.display(),
-                missing_source_reason(&source)
-            );
+        if cache.get(&source).is_some() || said.contains(&source) {
+            continue;
         }
+        complaints.push(format!(
+            "scene '{scene}': the prefab '{}' {}, so the instance naming it inherits nothing",
+            source.display(),
+            missing_source_reason(&source)
+        ));
+        said.push(source);
     }
+    complaints
 }
 
 /// Why an instance inherited nothing: the file its source names is not there,

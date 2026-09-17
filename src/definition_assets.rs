@@ -1654,13 +1654,51 @@ pub fn asset_set(params: In<OperatorParameters>, mut commands: Commands) -> Oper
         params.as_str("field").map(str::to_owned),
         params.as_str("value").map(str::to_owned),
     ) else {
-        warn!("asset.set: both field and value are required");
+        commands.queue(|world: &mut World| {
+            warn_caller(world, "asset.set: both field and value are required");
+        });
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
+        warn_for_absent_file(world, "asset.set", &field, &value);
         set_definition_field(world, &field, &value);
     });
     OperatorResult::Finished
+}
+
+/// Tell the caller when a value names a file no asset of that field's kind
+/// answers to. The write goes ahead: the file may be about to be written.
+fn warn_for_absent_file(world: &mut World, op: &str, field: &str, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    let mut rows = world.query::<&crate::inspector::asset_row::AssetFieldRow>();
+    let Some(row) = rows
+        .iter(world)
+        .find(|row| row.field_path == field)
+        .cloned()
+    else {
+        return;
+    };
+    let held = crate::inspector::asset_row::assets_for_row(world, &row);
+    if held.iter().any(|path| names_the_same_file(path, value)) {
+        return;
+    }
+    warn_caller(
+        world,
+        format!(
+            "{op}: this project holds no '{value}', so '{field}' names a file that is not there"
+        ),
+    );
+}
+
+/// Whether a value a caller gave names the file at `path`, as the path itself
+/// or as the bare name written before paths.
+fn names_the_same_file(path: &str, value: &str) -> bool {
+    path == value
+        || std::path::Path::new(path)
+            .file_stem()
+            .is_some_and(|stem| stem == value)
 }
 
 fn set_definition_field(world: &mut World, field: &str, value: &str) {
@@ -1742,17 +1780,23 @@ pub(crate) fn asset_pick(
     mut commands: Commands,
 ) -> OperatorResult {
     let Some(field) = params.as_str("field").map(str::to_owned) else {
-        warn!("asset.pick: no field given");
+        commands.queue(|world: &mut World| {
+            warn_caller(world, "asset.pick: no field given");
+        });
         return OperatorResult::Cancelled;
     };
     let row = showing_asset_field(&rows, &field);
     let value = params.as_str("value").map(str::to_owned);
     if row.is_none() && value.is_none() {
-        warn!("asset.pick: no asset field is showing for '{field}'");
+        let showing = asset_fields_showing(&rows);
+        commands.queue(move |world: &mut World| {
+            warn_caller(world, no_such_field("asset.pick", &field, &showing));
+        });
         return OperatorResult::Cancelled;
     }
     commands.queue(move |world: &mut World| match (row, value) {
         (Some(row), Some(value)) => {
+            warn_for_absent_file(world, "asset.pick", &field, &value);
             if crate::inspector::asset_row::commit_asset_row(world, row, &value) {
                 report_to_caller(world, format!("Set {field}"));
             } else {
@@ -1764,6 +1808,7 @@ pub(crate) fn asset_pick(
         }
         (Some(row), None) => crate::inspector::asset_row::open_asset_picker(world, row),
         (None, Some(value)) => {
+            warn_for_absent_file(world, "asset.pick", &field, &value);
             let json = serde_json::Value::String(value);
             match write_open_definition_field(world, &field, &json) {
                 Ok(()) => report_to_caller(world, format!("Set {field}")),
@@ -1786,6 +1831,33 @@ fn showing_asset_field(
         .map(|(entity, _)| entity)
 }
 
+/// The asset fields the open card is showing, which is what a caller who
+/// named one that is not there needs to be told.
+fn asset_fields_showing(
+    rows: &Query<(Entity, &crate::inspector::asset_row::AssetFieldRow)>,
+) -> Vec<String> {
+    let mut fields: Vec<String> = rows
+        .iter()
+        .map(|(_, row)| row.field_path.clone())
+        .filter(|field| !field.is_empty())
+        .collect();
+    fields.sort();
+    fields.dedup();
+    fields
+}
+
+/// What an operator says when the field it was given is not one the open card
+/// shows an asset for.
+fn no_such_field(op: &str, field: &str, showing: &[String]) -> String {
+    match showing.is_empty() {
+        true => format!("{op}: '{field}' names no asset field, and this card shows none"),
+        false => format!(
+            "{op}: '{field}' names no asset field; this card shows {}",
+            showing.join(", ")
+        ),
+    }
+}
+
 /// Leave an asset field naming nothing.
 #[operator(
     id = "asset.clear",
@@ -1800,11 +1872,16 @@ pub(crate) fn asset_clear(
     mut commands: Commands,
 ) -> OperatorResult {
     let Some(field) = params.as_str("field").map(str::to_owned) else {
-        warn!("asset.clear: no field given");
+        commands.queue(|world: &mut World| {
+            warn_caller(world, "asset.clear: no field given");
+        });
         return OperatorResult::Cancelled;
     };
     let Some(row) = showing_asset_field(&rows, &field) else {
-        warn!("asset.clear: no asset field is showing for '{field}'");
+        let showing = asset_fields_showing(&rows);
+        commands.queue(move |world: &mut World| {
+            warn_caller(world, no_such_field("asset.clear", &field, &showing));
+        });
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {

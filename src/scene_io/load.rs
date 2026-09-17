@@ -9,6 +9,8 @@ use bevy::{
 use rfd::FileHandle;
 use serde::de::DeserializeSeed;
 
+use jackdaw_api_internal::operator::warn_caller;
+
 use crate::EditorEntity;
 
 use super::registration::{register_entities_in_ast, register_entity_in_ast};
@@ -306,11 +308,14 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
                         &parent_path,
                     );
                 }
-                crate::prefab::save_load::warn_for_missing_sources(
+                let missing = crate::prefab::save_load::missing_source_complaints(
                     &authored,
                     world.resource::<crate::prefab::PrefabAstCache>(),
                     &path,
                 );
+                for complaint in missing {
+                    warn_caller(world, complaint);
+                }
                 let cache = world.resource::<crate::prefab::PrefabAstCache>();
                 let get_prefab = |p: &Path| cache.get(p);
                 match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
@@ -862,13 +867,17 @@ pub(crate) fn clear_scene_entities(world: &mut World) {
 /// alive across an `apply_ast_to_world` pass; without action
 /// entities in `Actions<CoreExtensionInputContext>`, BEI emits no
 /// `Fire` events and every editor keybind goes silent.
+///
+/// An entity the document spawned answers to `AstNodeRef` whether or not it
+/// carries a name, so an instance that inherited nothing leaves with its
+/// scene rather than standing in the next one.
 pub(crate) fn despawn_scene_entities(world: &mut World) -> Result<(), BevyError> {
     forget_dragged_entities(world);
     let editor_set = world.run_system_cached(collect_editor_entities)?;
 
     let roots: Vec<Entity> = world
         .query_filtered::<Entity, (
-            With<Name>,
+            Or<(With<Name>, With<jackdaw_bsn::AstNodeRef>)>,
             Without<bevy_enhanced_input::prelude::ActionSettings>,
         )>()
         .iter(world)

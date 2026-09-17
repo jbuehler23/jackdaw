@@ -82,6 +82,76 @@ pub(crate) fn spawn_project_component_fields(
     }
 }
 
+/// Render a component the document holds that the editor cannot edit: no
+/// registration answers to it, and the schema reports the type it belongs to
+/// at most. Every authored field is shown as the document spells it.
+pub(crate) fn spawn_document_component_fields(
+    commands: &mut Commands,
+    body_entity: Entity,
+    ast: &SceneBsnAst,
+    node: Entity,
+    type_path: &str,
+    variant_of_a_reported_type: bool,
+) {
+    let note = match variant_of_a_reported_type {
+        true => "This variant is shown as the document spells it, read-only.",
+        false => "The project schema does not describe this type, so its fields are read-only.",
+    };
+    commands.spawn((
+        Text::new(note),
+        TextFont {
+            font_size: jackdaw_feathers::tokens::TEXT_SIZE_SM,
+            ..Default::default()
+        },
+        TextColor(jackdaw_feathers::tokens::TEXT_SECONDARY),
+        ChildOf(body_entity),
+    ));
+    for (name, value) in authored_fields(ast, node, type_path) {
+        commands.spawn((
+            Text::new(format!("{name}: {value}")),
+            TextFont {
+                font_size: jackdaw_feathers::tokens::TEXT_SIZE_SM,
+                ..Default::default()
+            },
+            TextColor(jackdaw_feathers::tokens::TEXT_SECONDARY),
+            ChildOf(body_entity),
+        ));
+    }
+}
+
+/// The fields a document patch spells, as the text each one reads.
+fn authored_fields(ast: &SceneBsnAst, node: Entity, type_path: &str) -> Vec<(String, String)> {
+    let Some(patch) = ast
+        .find_patch_by_type_path(node, type_path)
+        .and_then(|patch| ast.get_patch(patch))
+    else {
+        return Vec::new();
+    };
+    match patch {
+        jackdaw_bsn::BsnPatch::Struct(data) => data
+            .fields
+            .0
+            .iter()
+            .map(|field| (field.name.clone(), shown_value(&field.value)))
+            .collect(),
+        jackdaw_bsn::BsnPatch::TupleStruct(data) => data
+            .values
+            .iter()
+            .enumerate()
+            .map(|(at, value)| (at.to_string(), shown_value(value)))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// One document value as a line a person reads.
+fn shown_value(value: &BsnValue) -> String {
+    match bsn_value_to_json(value) {
+        Some(json) => json.to_string(),
+        None => format!("{value:?}"),
+    }
+}
+
 /// The default JSON value for one field, pulled from the schema's whole-type
 /// default. The extractor stores the default in `ReflectSerializer` form,
 /// `{ "full::Type": { field: value, .. } }`, so unwrap the single type key.

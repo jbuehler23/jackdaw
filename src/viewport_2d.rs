@@ -2342,6 +2342,7 @@ fn parse_viewport_2d_mode(mode: &str) -> Option<Viewport2dMode> {
 pub(crate) fn selection_select(
     params: In<OperatorParameters>,
     named: Query<(Entity, &Name), Without<crate::EditorEntity>>,
+    instances: Query<(Entity, &crate::prefab::IsA), (Without<Name>, Without<crate::EditorEntity>)>,
     authored: Query<(), Without<crate::EditorEntity>>,
     mut selection: ResMut<Selection>,
     mut commands: Commands,
@@ -2360,11 +2361,23 @@ pub(crate) fn selection_select(
         return OperatorResult::Finished;
     }
     let Some(wanted) = params.as_str("name").filter(|name| !name.is_empty()) else {
-        warn!("selection.select: missing 'name' parameter");
+        commands.queue(|world: &mut World| {
+            warn_caller(world, "selection.select: no name was given");
+        });
         return OperatorResult::Cancelled;
     };
-    let Some(entity) = crate::boot_ops::unique_named_entity(named.iter(), wanted) else {
-        warn!("selection.select: '{wanted}' names no entity in this scene, or more than one");
+    let Some(entity) =
+        crate::boot_ops::unique_labelled_entity(named.iter(), instances.iter(), wanted)
+    else {
+        let wanted = wanted.to_string();
+        commands.queue(move |world: &mut World| {
+            warn_caller(
+                world,
+                format!(
+                    "selection.select: '{wanted}' names no entity in this scene, or more than one"
+                ),
+            );
+        });
         return OperatorResult::Cancelled;
     };
     selection.select_single(&mut commands, entity);
@@ -2383,15 +2396,28 @@ pub(crate) fn selection_select(
 pub(crate) fn selection_extend(
     params: In<OperatorParameters>,
     named: Query<(Entity, &Name), Without<crate::EditorEntity>>,
+    instances: Query<(Entity, &crate::prefab::IsA), (Without<Name>, Without<crate::EditorEntity>)>,
     mut selection: ResMut<Selection>,
     mut commands: Commands,
 ) -> OperatorResult {
     let Some(wanted) = params.as_str("name").filter(|name| !name.is_empty()) else {
-        warn!("selection.extend: missing 'name' parameter");
+        commands.queue(|world: &mut World| {
+            warn_caller(world, "selection.extend: no name was given");
+        });
         return OperatorResult::Cancelled;
     };
-    let Some(entity) = crate::boot_ops::unique_named_entity(named.iter(), wanted) else {
-        warn!("selection.extend: '{wanted}' names no entity in this scene, or more than one");
+    let Some(entity) =
+        crate::boot_ops::unique_labelled_entity(named.iter(), instances.iter(), wanted)
+    else {
+        let wanted = wanted.to_string();
+        commands.queue(move |world: &mut World| {
+            warn_caller(
+                world,
+                format!(
+                    "selection.extend: '{wanted}' names no entity in this scene, or more than one"
+                ),
+            );
+        });
         return OperatorResult::Cancelled;
     };
     selection.extend(&mut commands, entity);

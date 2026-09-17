@@ -153,6 +153,7 @@ impl Plugin for InspectorPlugin {
                         node_card::refresh_node_optional_numbers,
                         bindings_card::refresh_bindings_card_on_change,
                         definition_card::keep_unsaved_marker_in_step,
+                        definition_card::keep_broken_marker_in_step,
                         asset_row::refresh_asset_rows,
                         asset_row::poll_asset_browse_pick,
                         material_row::follow_the_material_the_entity_wears,
@@ -394,6 +395,45 @@ pub fn asset_field_shown_by(world: &World, row: Entity) -> Option<(&str, &str)> 
     world
         .get::<asset_row::AssetFieldRow>(row)
         .map(|row| (row.asset_type_path.as_str(), row.field_path.as_str()))
+}
+
+/// The components the inspector is showing a card for, as their type paths.
+pub fn component_cards_showing(world: &mut World) -> Vec<String> {
+    let mut cards = world.query::<&ComponentDisplayTypePath>();
+    cards.iter(world).map(|card| card.0.clone()).collect()
+}
+
+/// Every line of text under the card for `type_path`, which is what a person
+/// reading the card sees.
+pub fn component_card_text(world: &mut World, type_path: &str) -> Vec<String> {
+    let mut cards = world.query::<(Entity, &ComponentDisplayTypePath)>();
+    let roots: Vec<Entity> = cards
+        .iter(world)
+        .filter(|(_, card)| card.0 == type_path)
+        .map(|(entity, _)| entity)
+        .collect();
+    let mut lines = Vec::new();
+    let mut stack = roots;
+    while let Some(entity) = stack.pop() {
+        if let Some(text) = world.get::<Text>(entity) {
+            lines.push(text.0.clone());
+        }
+        if let Some(children) = world.get::<Children>(entity) {
+            stack.extend(children.iter());
+        }
+    }
+    lines
+}
+
+/// What the open card's header says about the references it cannot reach, or
+/// `None` while every row names a file the project holds.
+pub fn broken_reference_notice(world: &mut World) -> Option<String> {
+    let mut markers =
+        world.query_filtered::<&Text, With<definition_card::BrokenReferencesMarker>>();
+    markers
+        .iter(world)
+        .map(|text| text.0.clone())
+        .find(|notice| !notice.is_empty())
 }
 
 /// The control an asset row draws the file it names on, or `None` when the

@@ -1221,9 +1221,14 @@ pub fn spawn_instance_under(
         .get(prefab_path)
         .is_none()
     {
-        warn!(
-            "spawn_instance: failed to read prefab {}",
-            prefab_path.display()
+        let reason = crate::prefab::save_load::missing_source_reason(prefab_path);
+        warn_caller(
+            world,
+            format!(
+                "prefab.spawn_instance: the prefab '{}' {}, so nothing was placed",
+                prefab_path.display(),
+                reason
+            ),
         );
         return;
     }

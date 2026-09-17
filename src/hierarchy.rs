@@ -215,16 +215,28 @@ fn is_asset_part(world: &World, entity: Entity) -> bool {
 
 /// The text a row shows: the entity's name, the prefab file an unnamed
 /// instance points at, or the entity itself.
-fn row_label(world: &World, entity: Entity) -> String {
+pub(crate) fn row_label(world: &World, entity: Entity) -> String {
     if let Some(name) = world.get::<Name>(entity) {
         return name.as_str().to_string();
     }
-    if let Some(isa) = world.get::<crate::prefab::IsA>(entity)
-        && let Some(stem) = isa.source.file_stem().and_then(|stem| stem.to_str())
-    {
-        return stem.to_string();
+    if let Some(stem) = prefab_stem_label(world, entity) {
+        return stem;
     }
     format!("Entity {entity}")
+}
+
+/// The file stem an instance that inherited no name is labelled by, which is
+/// all anyone has to go on until the prefab is back.
+pub(crate) fn prefab_stem_label(world: &World, entity: Entity) -> Option<String> {
+    if world.get::<Name>(entity).is_some() {
+        return None;
+    }
+    world
+        .get::<crate::prefab::IsA>(entity)?
+        .source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::to_string)
 }
 
 /// Whether the entity is a prefab instance, named or not.
@@ -232,15 +244,18 @@ fn names_a_prefab(world: &World, entity: Entity) -> bool {
     world.get::<crate::prefab::IsA>(entity).is_some()
 }
 
-/// Whether a prefab instance points at a file the project does not hold, so
+/// The file a prefab instance points at when the project does not hold it, so
 /// it inherits nothing and its row says so.
-fn prefab_source_is_missing(world: &World, entity: Entity) -> bool {
-    let Some(isa) = world.get::<crate::prefab::IsA>(entity) else {
-        return false;
-    };
+pub(crate) fn missing_prefab_source(world: &World, entity: Entity) -> Option<&std::path::Path> {
+    let isa = world.get::<crate::prefab::IsA>(entity)?;
     world
         .get_resource::<crate::prefab::PrefabAstCache>()
-        .is_some_and(|cache| cache.get(&isa.source).is_none())
+        .filter(|cache| cache.get(&isa.source).is_none())
+        .map(|_| isa.source.as_path())
+}
+
+fn prefab_source_is_missing(world: &World, entity: Entity) -> bool {
+    missing_prefab_source(world, entity).is_some()
 }
 
 /// Classify a scene entity by its primary component for tree display.
