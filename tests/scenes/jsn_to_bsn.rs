@@ -762,7 +762,7 @@ fn prefab_cache_reads_bsn_prefabs_with_stale_extension_references() {
             .expect("scene document parses");
 
     let mut cache = PrefabAstCache::default();
-    populate_cache_for_scene_bsn(&ast, &mut cache, dir.path());
+    populate_cache_for_scene_bsn(&ast, &mut cache, dir.path(), dir.path());
 
     let cached = cache
         .get(&dir.path().join("prefabs/crate.bsn"))

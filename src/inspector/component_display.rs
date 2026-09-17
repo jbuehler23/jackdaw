@@ -198,6 +198,27 @@ pub(crate) fn sync_inspector_to_selection(
     }
 }
 
+/// Whether the editor has a registration for the type the document names, or
+/// for the type an authored enum variant belongs to.
+fn known_to_the_editor(registry: &bevy::reflect::TypeRegistry, type_path: &str) -> bool {
+    if registry.get_with_type_path(type_path).is_some() {
+        return true;
+    }
+    enclosing_type(type_path).is_some_and(|base| registry.get_with_type_path(base).is_some())
+}
+
+/// The type an authored enum variant belongs to, whose schema is the one that
+/// describes it.
+fn enclosing_type(type_path: &str) -> Option<&str> {
+    type_path.rsplit_once("::").map(|(base, _)| base)
+}
+
+/// The last segment of a type path, for a card naming a type nothing
+/// describes.
+fn short_type_name(type_path: &str) -> &str {
+    type_path.rsplit("::").next().unwrap_or(type_path)
+}
+
 /// Scene-document components that live under `jackdaw_scene_types` and
 /// carry the inspector's dedicated tool surfaces: `Brush` mounts the
 /// mesh card (`brush_display`, and with it the whole Mesh tab), `Terrain`
@@ -259,6 +280,29 @@ struct ListedComponent {
     component_id: ComponentId,
     type_path: String,
     chrome: TypeChrome,
+}
+
+/// A file as the project names it: under the assets folder when it is there,
+/// and as it stands when it is not.
+fn named_in_assets(path: &std::path::Path) -> String {
+    crate::project::open_project_assets_dir()
+        .and_then(|assets| {
+            path.strip_prefix(assets)
+                .ok()
+                .map(std::path::Path::to_path_buf)
+        })
+        .unwrap_or_else(|| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+/// What the card says about a prefab source nothing was inherited from.
+fn source_note(path: &std::path::Path) -> String {
+    format!(
+        "Source {}: {}",
+        crate::prefab::save_load::missing_source_reason(path),
+        named_in_assets(path)
+    )
 }
 
 #[expect(
@@ -339,6 +383,27 @@ pub(crate) fn build_inspector_displays(
             prefab_entity_id,
         })
     });
+
+    if let Some(ctx) = prefab_ctx.as_ref().filter(|ctx| !ctx.has_cached_prefab) {
+        commands.spawn((
+            ComponentDisplay,
+            Node {
+                padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_SM)),
+                width: Val::Percent(100.0),
+                ..Default::default()
+            },
+            ChildOf(inspector_entity),
+            children![(
+                Text::new(source_note(&ctx.prefab_path)),
+                TextFont {
+                    font: editor_font.0.clone().into(),
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_ERROR),
+            )],
+        ));
+    }
 
     let mut comp_list: Vec<ListedComponent> = archetype
         .iter_components()
@@ -717,14 +782,28 @@ pub(crate) fn build_inspector_displays(
         && let Some(node) = ast.ast_for(source_entity)
     {
         for type_path in ast.component_type_paths(node) {
-            let Some(schema) = project_types.component(&type_path) else {
+            let schema = project_types.component(&type_path);
+            if schema.is_none()
+                && (known_to_the_editor(&registry, &type_path)
+                    || project_types.type_schema(&type_path).is_some())
+            {
                 continue;
-            };
+            }
+            let enclosing = enclosing_type(&type_path)
+                .and_then(|base| project_types.type_schema(base))
+                .filter(|_| schema.is_none());
             let chrome = type_metadata.resolve(&type_path, &registry, project_types);
+            let name = match (schema, enclosing) {
+                (Some(schema), _) => schema.short_name.clone(),
+                (None, Some(enclosing)) => {
+                    format!("{}::{}", enclosing.short_name, short_type_name(&type_path))
+                }
+                (None, None) => short_type_name(&type_path).to_string(),
+            };
             let card = spawn_component_display(
                 commands,
                 ComponentDisplaySpec {
-                    name: &schema.short_name,
+                    name: &name,
                     type_path: &type_path,
                     entity: source_entity,
                     is_overridden: false,
@@ -745,18 +824,28 @@ pub(crate) fn build_inspector_displays(
                 type_metadata,
             );
             jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, card.section);
-            super::project_component_display::spawn_project_component_fields(
-                commands,
-                card.body,
-                schema,
-                ast,
-                node,
-                source_entity,
-                type_registry,
-                &editor_font.0,
-                &icon_font.0,
-                names,
-            );
+            match schema {
+                Some(schema) => super::project_component_display::spawn_project_component_fields(
+                    commands,
+                    card.body,
+                    schema,
+                    ast,
+                    node,
+                    source_entity,
+                    type_registry,
+                    &editor_font.0,
+                    &icon_font.0,
+                    names,
+                ),
+                None => super::project_component_display::spawn_document_component_fields(
+                    commands,
+                    card.body,
+                    ast,
+                    node,
+                    &type_path,
+                    enclosing.is_some(),
+                ),
+            }
         }
     }
 
@@ -1366,11 +1455,23 @@ pub(crate) fn filter_inspector_components(
 
 #[cfg(test)]
 mod tests {
-    use super::{ComponentDisplaySpec, hidden_by_namespace, spawn_component_display};
+    use super::{ComponentDisplaySpec, hidden_by_namespace, source_note, spawn_component_display};
     use bevy::feathers::controls::FeathersToolButton;
     use bevy::prelude::*;
     use jackdaw_api_internal::operator::Operator;
     use jackdaw_feathers::button::ButtonOperatorCall;
+
+    #[test]
+    fn a_source_that_is_on_disk_but_did_not_read_says_so_rather_than_reading_as_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let unreadable = dir.path().join("broken.bsn");
+        std::fs::write(&unreadable, "this is not a document").expect("write");
+
+        assert!(source_note(&unreadable).starts_with("Source could not be read"));
+        assert!(
+            source_note(&dir.path().join("absent.bsn")).starts_with("Source is not in the project"),
+        );
+    }
 
     /// The card's remove control is a tool button carrying the remove operator.
     #[test]

@@ -546,7 +546,7 @@ pub(crate) fn spawn_loaded_scenes(
                 .to_string(),
             None => "a scene built in memory".to_string(),
         };
-        let ast = resolve_prefab_references(world, ast, &parent_path, &scene_name);
+        let ast = resolve_prefab_references(world, ast, &scene_name, &parent_path);
 
         // Spawning is the one place every route meets, including in-memory
         // text through `JackdawScene::new`, and it reads the resolved document
@@ -607,8 +607,8 @@ pub(crate) fn spawn_loaded_scenes(
 fn resolve_prefab_references(
     world: &World,
     mut ast: SceneBsnAst,
-    parent_path: &Path,
     scene_name: &str,
+    scene_dir: &Path,
 ) -> SceneBsnAst {
     if ast
         .entities_with_component(jackdaw_prefab::ISA_TYPE)
@@ -624,7 +624,8 @@ fn resolve_prefab_references(
         return ast;
     };
     let assets_root = jackdaw_prefab::normalize_path(&assets_root);
-    jackdaw_prefab::absolutize_isa_sources(&mut ast, &assets_root.join(parent_path));
+    let document_dir = jackdaw_prefab::normalize_path(&assets_root.join(scene_dir));
+    jackdaw_prefab::absolutize_isa_sources(&mut ast, &assets_root, &document_dir);
 
     let sources = match read_prefab_sources(&ast, &assets_root, scene_name) {
         Ok(sources) => sources,
@@ -672,7 +673,7 @@ fn read_prefab_sources(
             return Err(path);
         }
         let file = jackdaw_bsn::existing_form(&path).unwrap_or_else(|| path.clone());
-        match jackdaw_prefab::read_prefab_document(&file) {
+        match jackdaw_prefab::read_prefab_document(&file, assets_root) {
             Ok(document) => {
                 pending.extend(isa_sources(&document));
                 documents.insert(path, document);

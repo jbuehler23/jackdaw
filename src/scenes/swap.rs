@@ -4,6 +4,8 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 
+use jackdaw_api_internal::operator::warn_caller;
+
 use crate::commands::CommandHistory;
 use crate::scene_io::clear_scene_entities;
 use crate::scenes::{Scenes, TabContent, ViewState};
@@ -186,6 +188,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
     // watches for that respawns the whole scene. The scene below is built from
     // the cache as this fills it, so those bumps are answered here rather than
     // by a respawn of what was just spawned.
+    let assets_root = crate::prefab::save_load::source_root(world, &parent);
     let epoch_before = crate::scene_io::prefab_cache_epoch(world);
     let resolved: Option<jackdaw_bsn::SceneBsnAst> = if world
         .get_resource::<crate::prefab::PrefabAstCache>()
@@ -193,7 +196,22 @@ pub fn activate_tab(world: &mut World, target: usize) {
     {
         {
             let mut cache = world.resource_mut::<crate::prefab::PrefabAstCache>();
-            crate::prefab::save_load::populate_cache_for_scene_bsn(&new_doc, &mut cache, &parent);
+            crate::prefab::save_load::populate_cache_for_scene_bsn(
+                &new_doc,
+                &mut cache,
+                &assets_root,
+                &parent,
+            );
+        }
+        let missing = crate::prefab::save_load::missing_source_complaints(
+            &new_doc,
+            world.resource::<crate::prefab::PrefabAstCache>(),
+            &tab_path
+                .as_ref()
+                .map_or_else(|| "this tab".to_string(), |path| path.display().to_string()),
+        );
+        for complaint in missing {
+            warn_caller(world, complaint);
         }
         let cache = world.resource::<crate::prefab::PrefabAstCache>();
         let get_prefab = |p: &std::path::Path| cache.get(p);

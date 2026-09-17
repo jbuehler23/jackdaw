@@ -1,13 +1,10 @@
 //! The file an instance points at: where it lives, how a saved document spells
 //! it, and what shape it has to be in to be instanced.
 //!
-//! A source is written relative to the directory of the document that names it,
-//! the only spelling both sides can honour. Absolute sources are read, never
-//! written.
-//!
-//! The editor follows a source anywhere on the machine; a game refuses anything
-//! outside its asset root, enforced in
-//! `jackdaw_runtime::resolve_prefab_references`.
+//! A source is written relative to the project's assets folder, one namespace
+//! whatever folder the document itself lives in, so a scene travels between
+//! machines. An absolute source names a place on one machine, so it is read
+//! and reported, never written.
 
 use std::path::{Path, PathBuf};
 
@@ -23,18 +20,37 @@ use crate::resolve::{read_isa_deleted, read_isa_source, set_whole_component};
 const TRANSFORM_TYPE: &str = "bevy_transform::components::transform::Transform";
 const VISIBILITY_INHERITED_TYPE: &str = "bevy_camera::visibility::Visibility::Inherited";
 
-/// The file an `IsA.source` points at, given the directory of the document
-/// that names it.
+/// The file an `IsA.source` points at.
+///
+/// A saved source is spelled under the project's assets folder, so that is
+/// read first. Documents written before that rule spelled theirs relative to
+/// their own folder, so when the assets folder holds no such file the source
+/// is read beside `document_dir` as well, and those still open.
 ///
 /// The result is normalized, so the two documents that reach one prefab by
 /// different routes name it identically. Both the cycle detector and the
 /// prefab cache compare paths, and neither can see through a stray `..`.
-pub fn source_path(source: &Path, document_dir: &Path) -> PathBuf {
+pub fn source_path(source: &Path, assets_root: &Path, document_dir: &Path) -> PathBuf {
     if source.is_absolute() {
-        normalize(source)
-    } else {
-        normalize(&document_dir.join(source))
+        return normalize(source);
     }
+    let under_assets = normalize(&assets_root.join(source));
+    if document_dir.as_os_str().is_empty() || document_dir == assets_root {
+        return under_assets;
+    }
+    if is_a_held_document(&under_assets) {
+        return under_assets;
+    }
+    let beside_document = normalize(&document_dir.join(source));
+    match is_a_held_document(&beside_document) {
+        true => beside_document,
+        false => under_assets,
+    }
+}
+
+/// Whether a document is held at `path`, in either of the two scene formats.
+fn is_a_held_document(path: &Path) -> bool {
+    path.exists() || jackdaw_bsn::existing_form(path).is_some()
 }
 
 /// Fold away `.` and `..` without touching the filesystem. Purely lexical:
@@ -61,15 +77,27 @@ fn normalize(path: &Path) -> PathBuf {
     out
 }
 
-/// Rewrite every absolute `IsA.source` in `ast` to a path relative to
-/// `document_dir`, so the saved document travels.
+/// Rewrite every absolute `IsA.source` in `ast` to a path relative to `dir`, so
+/// a document with no project around it still travels.
 ///
 /// Call it on the copy being emitted, never on the live document: the editor
 /// holds instance sources as absolute paths. A source that cannot be expressed
-/// relative to `document_dir` is left as it stands.
-pub fn relativize_isa_sources(ast: &mut SceneBsnAst, document_dir: &Path) {
-    if !document_dir.is_absolute() {
-        return;
+/// relative to `dir` is left as it stands.
+pub fn relativize_isa_sources(ast: &mut SceneBsnAst, dir: &Path) {
+    rewrite_absolute_sources(ast, dir, false);
+}
+
+/// Rewrite every absolute `IsA.source` in `ast` to its spelling under
+/// `assets_root`, and report the ones naming a file the assets folder does not
+/// hold, which is a place on one machine rather than a file the project has.
+pub fn relativize_isa_sources_under(ast: &mut SceneBsnAst, assets_root: &Path) -> Vec<String> {
+    rewrite_absolute_sources(ast, assets_root, true)
+}
+
+fn rewrite_absolute_sources(ast: &mut SceneBsnAst, root: &Path, within: bool) -> Vec<String> {
+    let mut strays = Vec::new();
+    if !root.is_absolute() {
+        return strays;
     }
     for node in ast.entities_with_component(ISA_TYPE) {
         let Some(source) = read_isa_source(ast, node) else {
@@ -78,29 +106,33 @@ pub fn relativize_isa_sources(ast: &mut SceneBsnAst, document_dir: &Path) {
         if !source.is_absolute() {
             continue;
         }
-        let Some(relative) = pathdiff::diff_paths(&source, document_dir) else {
+        let Some(relative) = pathdiff::diff_paths(&source, root)
+            .filter(|relative| !within || !relative.starts_with(".."))
+        else {
+            strays.push(source.to_slash_lossy().into_owned());
             continue;
         };
         let deleted = read_isa_deleted(ast, node);
         let spelling = relative.to_slash_lossy();
         set_whole_component(ast, node, ISA_TYPE, isa_value(&spelling, &deleted));
     }
+    strays
 }
 
-/// Rewrite every relative `IsA.source` in `ast` to the file it names, given the
-/// directory `ast` was read from.
+/// Rewrite every relative `IsA.source` in `ast` to the file it names under
+/// `assets_root`.
 ///
 /// The read half of the pair [`relativize_isa_sources`] writes, so a cache keyed
-/// by file can look a prefab up without carrying the document's directory.
+/// by file can look a prefab up without carrying the assets folder.
 ///
 /// An already-absolute source is folded rather than left alone, so every source
 /// afterwards is one a caller can compare.
-pub fn absolutize_isa_sources(ast: &mut SceneBsnAst, document_dir: &Path) {
+pub fn absolutize_isa_sources(ast: &mut SceneBsnAst, assets_root: &Path, document_dir: &Path) {
     for node in ast.entities_with_component(ISA_TYPE) {
         let Some(source) = read_isa_source(ast, node) else {
             continue;
         };
-        let full = source_path(&source, document_dir);
+        let full = source_path(&source, assets_root, document_dir);
         if full == source {
             continue;
         }
@@ -187,17 +219,24 @@ pub fn normalize_as_prefab_source(ast: &mut SceneBsnAst, display_name: &str) {
 /// Read a prefab source document from disk, ready to instance.
 ///
 /// The file is parsed as `.bsn` and normalized, so a plain scene comes back
-/// instanceable, and its own prefab references are resolved against the
-/// directory it came from. The file stem names a synthetic root when the
+/// instanceable, and its own prefab references are resolved against
+/// `assets_root`. The file stem names a synthetic root when the
 /// document needs one.
-pub fn read_prefab_document(path: &Path) -> Result<SceneBsnAst, std::io::Error> {
+pub fn read_prefab_document(
+    path: &Path,
+    assets_root: &Path,
+) -> Result<SceneBsnAst, std::io::Error> {
     let text = jackdaw_bsn::read_document_text(path)
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
     let mut ast = jackdaw_bsn::parse_bsn_text(&text)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     let display_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("scene");
     normalize_as_prefab_source(&mut ast, display_name);
-    absolutize_isa_sources(&mut ast, path.parent().unwrap_or(Path::new("")));
+    absolutize_isa_sources(
+        &mut ast,
+        assets_root,
+        path.parent().unwrap_or(Path::new("")),
+    );
     Ok(ast)
 }
 
@@ -285,11 +324,49 @@ mod tests {
     }
 
     #[test]
-    fn a_relative_source_resolves_against_the_documents_own_directory() {
-        let dir = std::path::absolute("/game/assets/zones").expect("cwd");
+    fn a_relative_source_resolves_against_the_assets_folder() {
+        let assets = std::path::absolute("/game/assets").expect("cwd");
         assert_eq!(
-            source_path(Path::new("props/crate.bsn"), &dir),
-            std::path::absolute("/game/assets/zones/props/crate.bsn").expect("cwd")
+            source_path(Path::new("props/crate.bsn"), &assets, &assets),
+            std::path::absolute("/game/assets/props/crate.bsn").expect("cwd")
+        );
+    }
+
+    #[test]
+    fn a_source_spelled_beside_its_own_document_still_opens() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("base")).expect("the base folder");
+        std::fs::create_dir_all(dir.path().join("zones")).expect("the zone folder");
+        let base = dir.path().join("base/panel.bsn");
+        std::fs::write(&base, "#Panel\n").expect("the base file");
+
+        assert_eq!(
+            source_path(
+                Path::new("../base/panel.bsn"),
+                dir.path(),
+                &dir.path().join("zones"),
+            ),
+            normalize(&base),
+            "a document written before the assets folder was the namespace still reads",
+        );
+    }
+
+    #[test]
+    fn a_source_the_assets_folder_holds_is_read_there_rather_than_beside_the_document() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("props")).expect("the assets folder");
+        std::fs::create_dir_all(dir.path().join("zones/props")).expect("the zone folder");
+        std::fs::write(dir.path().join("props/crate.bsn"), "#Crate\n").expect("the asset");
+        std::fs::write(dir.path().join("zones/props/crate.bsn"), "#Other\n").expect("the twin");
+
+        assert_eq!(
+            source_path(
+                Path::new("props/crate.bsn"),
+                dir.path(),
+                &dir.path().join("zones"),
+            ),
+            normalize(&dir.path().join("props/crate.bsn")),
+            "the one namespace wins wherever else a file of that name sits",
         );
     }
 
@@ -297,23 +374,45 @@ mod tests {
     fn an_absolute_source_is_taken_as_written() {
         let source = std::path::absolute("/elsewhere/crate.bsn").expect("cwd");
         assert_eq!(
-            source_path(&source, &std::path::absolute("/game/assets").expect("cwd")),
+            source_path(
+                &source,
+                &std::path::absolute("/game/assets").expect("cwd"),
+                Path::new(""),
+            ),
             source
         );
     }
 
     #[test]
-    fn saving_spells_an_absolute_source_relative_to_the_scene() {
+    fn saving_spells_a_source_under_the_assets_folder() {
         let source = std::path::absolute("/game/assets/props/crate.bsn")
             .expect("cwd")
             .to_slash_lossy()
             .into_owned();
         let mut ast = scene_with_source(&source);
-        relativize_isa_sources(
+
+        let strays = relativize_isa_sources_under(
             &mut ast,
-            &std::path::absolute("/game/assets/zones").expect("cwd"),
+            &std::path::absolute("/game/assets").expect("cwd"),
         );
-        assert_eq!(source_of(&ast), "../props/crate.bsn");
+
+        assert!(strays.is_empty());
+        assert_eq!(source_of(&ast), "props/crate.bsn");
+    }
+
+    #[test]
+    fn a_source_the_assets_folder_does_not_hold_is_reported_rather_than_spelled() {
+        let source = std::path::absolute("/elsewhere/crate.bsn")
+            .expect("cwd")
+            .to_slash_lossy()
+            .into_owned();
+        let mut ast = scene_with_source(&source);
+        let strays = relativize_isa_sources_under(
+            &mut ast,
+            &std::path::absolute("/game/assets").expect("cwd"),
+        );
+        assert_eq!(strays, vec![source.clone()]);
+        assert_eq!(source_of(&ast), source, "and it is left as it was written");
     }
 
     #[test]
@@ -332,10 +431,7 @@ mod tests {
     #[test]
     fn a_source_that_is_already_relative_is_left_alone() {
         let mut ast = scene_with_source("props/crate.bsn");
-        relativize_isa_sources(
-            &mut ast,
-            &std::path::absolute("/game/assets/zones").expect("cwd"),
-        );
+        relativize_isa_sources_under(&mut ast, &std::path::absolute("/game/assets").expect("cwd"));
         assert_eq!(source_of(&ast), "props/crate.bsn");
     }
 
@@ -349,7 +445,8 @@ mod tests {
             .to_slash_lossy()
             .into_owned();
         let mut ast = scene_with_source(&source);
-        absolutize_isa_sources(&mut ast, &std::path::absolute("/game/assets").expect("cwd"));
+        let assets = std::path::absolute("/game/assets").expect("cwd");
+        absolutize_isa_sources(&mut ast, &assets, &assets);
         assert_eq!(
             PathBuf::from(source_of(&ast)),
             std::path::absolute("/etc/passwd.bsn").expect("cwd")
@@ -358,11 +455,9 @@ mod tests {
 
     #[test]
     fn loading_names_the_file_a_relative_source_meant() {
-        let mut ast = scene_with_source("../props/crate.bsn");
-        absolutize_isa_sources(
-            &mut ast,
-            &std::path::absolute("/game/assets/zones").expect("cwd"),
-        );
+        let mut ast = scene_with_source("props/crate.bsn");
+        let assets = std::path::absolute("/game/assets").expect("cwd");
+        absolutize_isa_sources(&mut ast, &assets, &assets);
         assert_eq!(
             PathBuf::from(source_of(&ast)),
             std::path::absolute("/game/assets/props/crate.bsn").expect("cwd")
@@ -371,18 +466,18 @@ mod tests {
 
     #[test]
     fn a_saved_source_survives_the_round_trip_it_was_written_for() {
-        let scene_dir = std::path::absolute("/game/assets/zones").expect("cwd");
+        let assets = std::path::absolute("/game/assets").expect("cwd");
         let source = std::path::absolute("/game/assets/props/crate.bsn")
             .expect("cwd")
             .to_slash_lossy()
             .into_owned();
         let mut ast = scene_with_source(&source);
-        relativize_isa_sources(&mut ast, &scene_dir);
-        absolutize_isa_sources(&mut ast, &scene_dir);
-        relativize_isa_sources(&mut ast, &scene_dir);
+        relativize_isa_sources_under(&mut ast, &assets);
+        absolutize_isa_sources(&mut ast, &assets, &assets);
+        relativize_isa_sources_under(&mut ast, &assets);
         assert_eq!(
             source_of(&ast),
-            "../props/crate.bsn",
+            "props/crate.bsn",
             "a second save writes what the first one did"
         );
     }

@@ -1,5 +1,35 @@
 {
-  "components": [],
+  "components": [
+    {
+      "type_path": "definition_project::markers::SpawnRegion",
+      "short_name": "SpawnRegion",
+      "module_path": "definition_project::markers",
+      "category": "",
+      "description": "",
+      "editor_description": "",
+      "hidden": false,
+      "preview": "",
+      "default_constructible": true,
+      "fields": [
+        {
+          "name": "radius",
+          "type_path": "f32",
+          "item_type_path": "",
+          "asset_type_path": ""
+        }
+      ],
+      "kind": "Struct",
+      "default": {
+        "definition_project::markers::SpawnRegion": {
+          "radius": 1.0
+        }
+      },
+      "variants": [],
+      "entity_fields": [],
+      "fills_gaps": true,
+      "asset": false
+    }
+  ],
   "resources": [],
   "events": [],
   "functions": [],

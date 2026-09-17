@@ -217,7 +217,8 @@ fn drain_changes(world: &mut World) {
         // changed inherited value as an authored override.
         let sparse_text = capture_sparse_scene_text(world);
 
-        match crate::prefab::save_load::read_prefab_ast(&path) {
+        let assets_root = crate::prefab::save_load::source_root_of(world, &path);
+        match crate::prefab::save_load::read_prefab_ast(&path, &assets_root) {
             Ok(new_ast) => {
                 let mut cache = world.resource_mut::<PrefabAstCache>();
                 cache.insert(cache_key.clone(), new_ast);

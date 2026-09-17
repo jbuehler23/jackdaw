@@ -1033,3 +1033,188 @@ fn an_operator_edit_shows_on_the_open_card_without_reopening_it() {
         row_text(&mut app, row),
     );
 }
+
+/// The colours the lines under a row are drawn in.
+fn row_colours(app: &mut App, row: Entity) -> Vec<Color> {
+    let mut found = Vec::new();
+    let mut stack = vec![row];
+    while let Some(entity) = stack.pop() {
+        if app.world().get::<Text>(entity).is_some()
+            && let Some(colour) = app.world().get::<TextColor>(entity)
+        {
+            found.push(colour.0);
+        }
+        if let Some(children) = app.world().get::<Children>(entity) {
+            stack.extend(children.iter());
+        }
+    }
+    found
+}
+
+#[test]
+fn a_row_naming_a_file_the_project_does_not_hold_is_drawn_as_broken() {
+    let (mut app, _tmp) = app_with_open_quest();
+
+    call(
+        &mut app,
+        "asset.pick",
+        &[
+            ("field", "reward".into()),
+            ("value", "content/no_such_item.bsn".into()),
+        ],
+    );
+
+    let row = asset_row(&mut app, "reward");
+    assert!(
+        row_colours(&mut app, row).contains(&jackdaw_feathers::tokens::TEXT_ERROR),
+        "the row is drawn in the tone the outliner marks a missing prefab with",
+    );
+    assert!(
+        row_tooltips(&mut app, row)
+            .iter()
+            .any(|tip| tip.contains("content/no_such_item.bsn")
+                && tip.contains("not in the project")),
+        "and its tooltip says why, got {:?}",
+        row_tooltips(&mut app, row),
+    );
+}
+
+#[test]
+fn a_row_naming_a_file_the_project_holds_is_drawn_as_any_other() {
+    let (mut app, _tmp) = app_with_open_quest();
+
+    call(
+        &mut app,
+        "asset.pick",
+        &[
+            ("field", "reward".into()),
+            ("value", "content/torch.bsn".into()),
+        ],
+    );
+
+    let row = asset_row(&mut app, "reward");
+    assert!(
+        !row_colours(&mut app, row).contains(&jackdaw_feathers::tokens::TEXT_ERROR),
+        "a file that is there is no complaint",
+    );
+}
+
+#[test]
+fn picking_a_file_the_project_does_not_hold_warns_the_caller_and_still_writes_it() {
+    let (mut app, _tmp) = app_with_open_quest();
+
+    let said = refusal(
+        &mut app,
+        "asset.pick",
+        &[
+            ("field", "reward".into()),
+            ("value", "content/no_such_item.bsn".into()),
+        ],
+    );
+
+    assert!(
+        said.iter()
+            .any(|warning| warning.contains("content/no_such_item.bsn")),
+        "the caller is told the file is not there, got {said:?}",
+    );
+    assert_eq!(
+        open_quest(&app)["reward"],
+        "content/no_such_item.bsn",
+        "and the value is written anyway, since the file may be about to be",
+    );
+}
+
+#[test]
+fn setting_a_field_to_a_file_the_project_does_not_hold_warns_the_caller() {
+    let (mut app, _tmp) = app_with_open_quest();
+
+    let said = refusal(
+        &mut app,
+        "asset.set",
+        &[
+            ("field", "reward".into()),
+            ("value", "content/no_such_item.bsn".into()),
+        ],
+    );
+
+    assert!(
+        said.iter()
+            .any(|warning| warning.contains("content/no_such_item.bsn")),
+        "asset.set says the same as asset.pick, got {said:?}",
+    );
+}
+
+#[test]
+fn the_card_header_counts_the_rows_naming_files_that_are_not_there() {
+    let (mut app, _tmp) = app_with_open_quest();
+    call(
+        &mut app,
+        "asset.pick",
+        &[
+            ("field", "reward".into()),
+            ("value", "content/no_such_item.bsn".into()),
+        ],
+    );
+
+    assert_eq!(
+        jackdaw::inspector::broken_reference_notice(app.world_mut()).as_deref(),
+        Some("1 broken reference"),
+        "the header says how many references the card cannot reach",
+    );
+}
+
+#[test]
+fn clearing_a_field_the_card_does_not_show_names_the_fields_it_has() {
+    let (mut app, _tmp) = app_with_open_quest();
+
+    let said = refusal(
+        &mut app,
+        "asset.clear",
+        &[("field", "nothing_shows_this".into())],
+    );
+
+    assert!(
+        said.iter()
+            .any(|warning| warning.contains("nothing_shows_this") && warning.contains("reward")),
+        "the caller is told what it asked for and what the card holds, got {said:?}",
+    );
+}
+
+#[test]
+fn a_row_naming_a_bare_name_two_files_share_is_not_drawn_as_broken() {
+    let (mut app, _tmp) = app_with_open_outfit();
+    call(
+        &mut app,
+        "asset.new",
+        &[
+            ("type", "item".into()),
+            ("name", "torch".into()),
+            ("path", "materials".into()),
+        ],
+    );
+    call(
+        &mut app,
+        "asset.new",
+        &[
+            ("type", "quest".into()),
+            ("name", "errand".into()),
+            ("path", "content".into()),
+        ],
+    );
+    let said = refusal(
+        &mut app,
+        "asset.pick",
+        &[("field", "reward".into()), ("value", "torch".into())],
+    );
+
+    let row = asset_row(&mut app, "reward");
+    assert!(
+        !row_colours(&mut app, row).contains(&jackdaw_feathers::tokens::TEXT_ERROR),
+        "a name the project answers to twice is no missing file, got {:?}",
+        row_text(&mut app, row),
+    );
+    assert!(
+        said.is_empty(),
+        "and the caller is told nothing is missing, got {said:?}",
+    );
+}

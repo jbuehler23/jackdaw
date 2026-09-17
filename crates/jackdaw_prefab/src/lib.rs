@@ -24,7 +24,7 @@ pub use resolve::{
 };
 pub use source::{
     absolutize_isa_sources, isa_value, normalize_as_prefab_source, normalize_path,
-    read_prefab_document, relativize_isa_sources, source_path,
+    read_prefab_document, relativize_isa_sources, relativize_isa_sources_under, source_path,
 };
 
 use bevy::prelude::*;

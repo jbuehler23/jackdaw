@@ -221,12 +221,13 @@ fn back_up_legacy_prefab(original: &Path) {
 /// `.bsn` sibling, backing up the legacy file. Returns the path actually
 /// written, or `None` on write failure.
 ///
-/// A prefab's own `IsA` reference is rewritten relative to the file being
-/// written, on a clone so the caller's document keeps absolute paths.
+/// A prefab's own `IsA` reference is rewritten the way the project names files,
+/// on a clone so the caller's document keeps absolute paths.
 ///
 /// `replace` says whether a file already at the path may be written over;
 /// the refusal is the open itself rather than a prior `exists()`.
 fn write_prefab_doc(
+    world: &World,
     target_path: &Path,
     prefab: &SceneBsnAst,
     op_id: &str,
@@ -240,7 +241,11 @@ fn write_prefab_doc(
         let _ = std::fs::create_dir_all(parent);
     }
     let mut out = crate::prefab::resolver_bsn::clone_scene(prefab);
-    jackdaw_prefab::relativize_isa_sources(&mut out, path.parent().unwrap_or(Path::new("")));
+    crate::prefab::save_load::relativize_for_file(
+        world,
+        &mut out,
+        path.parent().unwrap_or(Path::new(".")),
+    );
     let text = crate::asset_files::asset_file_text(
         crate::prefab::resolver_bsn::PREFAB_TYPE,
         &emit_scene(&out),
@@ -497,6 +502,7 @@ fn write_prefab_from_roots(
     }
 
     let path = write_prefab_doc(
+        world,
         target_path,
         &prefab,
         "save_as_prefab_from_selection",
@@ -810,9 +816,11 @@ pub(crate) fn pack_matching_groups(
     // The instances go in as document nodes rather than through
     // `spawn_instance`, so the file has to be cached before the respawn at
     // the end resolves them.
+    let assets_root = crate::prefab::save_load::source_root_of(world, &written.path);
     crate::prefab::save_load::cache_prefab_tree(
         &written.path,
         &mut world.resource_mut::<PrefabAstCache>(),
+        &assets_root,
     );
     // Nothing comes out of the document until the file it would inherit
     // from is known to read back.
@@ -884,9 +892,13 @@ fn propagate_instance_to_prefab(world: &mut World, instance_node: Entity, target
         }
     }
 
-    let Some(target_path) =
-        write_prefab_doc(target_path, &prefab, "propagate_instance_to_prefab", true)
-    else {
+    let Some(target_path) = write_prefab_doc(
+        world,
+        target_path,
+        &prefab,
+        "propagate_instance_to_prefab",
+        true,
+    ) else {
         return;
     };
 
@@ -1198,18 +1210,25 @@ pub fn spawn_instance_under(
 ) {
     // Caches the prefab's own `IsA` ancestry alongside it, without which a
     // two-level prefab resolves to nothing.
+    let assets_root = crate::prefab::save_load::source_root_of(world, prefab_path);
     crate::prefab::save_load::cache_prefab_tree(
         prefab_path,
         &mut world.resource_mut::<PrefabAstCache>(),
+        &assets_root,
     );
     if world
         .resource::<PrefabAstCache>()
         .get(prefab_path)
         .is_none()
     {
-        warn!(
-            "spawn_instance: failed to read prefab {}",
-            prefab_path.display()
+        let reason = crate::prefab::save_load::missing_source_reason(prefab_path);
+        warn_caller(
+            world,
+            format!(
+                "prefab.spawn_instance: the prefab '{}' {}, so nothing was placed",
+                prefab_path.display(),
+                reason
+            ),
         );
         return;
     }
@@ -1334,7 +1353,8 @@ pub fn open_instance_source(world: &mut World, instance_root: Entity) -> bool {
         .map(PathBuf::from)
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."));
-    let path = crate::prefab::save_load::resolve_source_path(&source, &scene_dir);
+    let assets_root = crate::prefab::save_load::source_root(world, &scene_dir);
+    let path = crate::prefab::save_load::resolve_source_path(&source, &assets_root, &scene_dir);
     if !path.exists() {
         warn!(
             "prefab.open_source: instance source {} is not on disk",
@@ -1376,9 +1396,11 @@ fn instance_source_of(world: &World, node: Entity) -> Option<PathBuf> {
 /// against it. The resolver refuses a document whose chain it cannot follow,
 /// so a nested instance would otherwise read as unresolvable.
 fn prime_source_ancestry(world: &mut World, source: &Path) {
+    let assets_root = crate::prefab::save_load::source_root_of(world, source);
     crate::prefab::save_load::cache_prefab_tree(
         source,
         &mut world.resource_mut::<PrefabAstCache>(),
+        &assets_root,
     );
 }
 
@@ -1640,7 +1662,8 @@ pub fn save_as_variant(world: &mut World, instance_root: Entity, target_path: &P
         variant.add_child_to_ast(variant_root, child);
     }
 
-    let Some(target_path) = write_prefab_doc(target_path, &variant, "save_as_variant", true) else {
+    let Some(target_path) = write_prefab_doc(world, target_path, &variant, "save_as_variant", true)
+    else {
         return;
     };
 
@@ -1899,13 +1922,14 @@ pub fn save_prefab_to_disk(world: &mut World, prefab_path: &Path) -> std::io::Re
                 format!("prefab not cached: {}", prefab_path.display()),
             ));
         };
-        // A prefab that instances another names it relative to itself, as a
-        // scene does. Rewritten on the copy being written, so the cached
+        // A prefab that instances another names it under the assets folder, as
+        // a scene does. Rewritten on the copy being written, so the cached
         // document keeps absolute paths.
         let mut out = crate::prefab::resolver_bsn::clone_scene(ast);
-        jackdaw_prefab::relativize_isa_sources(
+        crate::prefab::save_load::relativize_for_file(
+            world,
             &mut out,
-            write_path.parent().unwrap_or(Path::new("")),
+            write_path.parent().unwrap_or(Path::new(".")),
         );
         crate::asset_files::asset_file_text(
             crate::prefab::resolver_bsn::PREFAB_TYPE,

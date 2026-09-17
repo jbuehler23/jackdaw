@@ -60,8 +60,6 @@ pub fn would_cycle(chain: &[PathBuf], next: &Path) -> Option<CycleError> {
 pub enum ResolveError {
     /// A prefab inherits from itself.
     Cycle(CycleError),
-    /// The lookup had no document for this source.
-    PrefabNotCached(PathBuf),
     /// An `IsA` node the document carries is missing its `source` field.
     BadIsA(String),
     /// The reference chain ran past [`MAX_PREFAB_DEPTH`].
@@ -72,7 +70,6 @@ impl fmt::Display for ResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Cycle(c) => write!(f, "{c}"),
-            Self::PrefabNotCached(p) => write!(f, "prefab not cached: {}", p.display()),
             Self::BadIsA(s) => write!(f, "bad IsA: {s}"),
             Self::TooDeep(p) => write!(
                 f,
@@ -105,6 +102,10 @@ pub fn resolve_scene(
 /// Expand every `IsA` node in `ast` in place. For each instance the prefab
 /// is looked up, deep-cloned, recursively expanded (so nested prefabs
 /// materialize first), then merged under the instance node.
+///
+/// An instance whose source the lookup has not got stands unexpanded, keeping
+/// its `IsA` node, so one missing file costs that instance its inherited
+/// subtree rather than costing the document its resolve.
 fn expand_instances(
     ast: &mut SceneBsnAst,
     get_prefab: &PrefabLookup,
@@ -123,11 +124,10 @@ fn expand_instances(
             return Err(ResolveError::TooDeep(isa_source));
         }
 
-        let mut prefab_clone = {
-            let prefab = get_prefab(&isa_source)
-                .ok_or_else(|| ResolveError::PrefabNotCached(isa_source.clone()))?;
-            clone_scene(prefab)
+        let Some(prefab) = get_prefab(&isa_source) else {
+            continue;
         };
+        let mut prefab_clone = clone_scene(prefab);
 
         let mut next_chain = chain.to_vec();
         next_chain.push(isa_source.clone());

@@ -221,7 +221,8 @@ fn a_save_writes_the_instance_and_none_of_its_internals() {
     // where that would show: the file names the model, not the spawned tree.
     let (mut app, _panel, instances) = panel_over_models(1);
     let directory = std::env::temp_dir();
-    let saved = jackdaw::scene_io::emit_bsn_scene_for_file(app.world_mut(), &directory);
+    let saved = jackdaw::scene_io::emit_bsn_scene_for_file(app.world_mut(), &directory)
+        .expect("the document names no absolute path");
     assert!(
         saved.contains("GltfSource"),
         "the instance is what the document holds:\n{saved}"

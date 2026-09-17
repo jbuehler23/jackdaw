@@ -1789,6 +1789,10 @@ fn spawn_instance(
         .args(&run.args)
         .stderr(Stdio::piped());
 
+    if let Some(settings) = world.get_resource::<crate::play_settings::PlaySettings>() {
+        command.envs(&settings.env).args(&settings.args);
+    }
+
     if world
         .get_resource::<PieWindowMode>()
         .copied()

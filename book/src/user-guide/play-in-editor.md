@@ -17,6 +17,14 @@ Nothing compiles at play time once the project is built. The editor
 builds your game as an ordinary cargo binary when the project opens;
 Play launches that same executable and connects to it over IPC.
 
+That build goes to `.jackdaw/target/game` inside your project, never to
+the project's own `target/`. The editor builds the plain package, while
+the build you run from your terminal usually carries features of your
+own; keeping them apart means neither overwrites the other's binary, at
+the cost of compiling the dependencies once more. `.jackdaw/` is
+gitignored, so none of it is committed; a project that does not ignore it
+should.
+
 The Play dropdown is filled from the **run configurations** in your
 project's `jackdaw.toml` (`[[run]]` entries carrying a name, environment
 variables, arguments, an instance count, and a working directory). A
@@ -28,6 +36,27 @@ How many configs you define is up to your game. Some games run a single
 process; others split into several that you launch together. Configs
 differ only in launch environment, never in what gets built. PIE treats
 each launched process as an instance and streams the focused one.
+
+## Your own launch environment
+
+A run config is committed, so it can only say what is true for everyone
+working on the game. The variables that point a launch at a particular
+server, or carry a sign-in token, or ask for an offline mode, are yours
+alone. Those go in **Play Settings**, which the `play.settings` operator
+opens:
+
+- **Environment** is a line of `NAME=value` words, added to every game
+  the editor launches and overriding a run config's own.
+- **Arguments** is a line of words, appended to the ones the run config
+  names.
+
+Both are kept with the project's other editor preferences, under
+`.jackdaw/`, which a project does not commit, and the editor never writes
+or logs their values anywhere else. To set them without the dialog:
+
+    play.settings env="REALM=dev TOKEN=..." args="--offline"
+
+Either parameter replaces what is held; naming neither opens the dialog.
 
 Open the **Game** panel before you start. It docks in the bottom dock area
 next to Assets.

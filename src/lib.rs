@@ -103,6 +103,7 @@ pub mod pie;
 pub mod pie_menu;
 pub mod pie_mirror;
 pub mod pie_projection;
+pub mod play_settings;
 pub mod prefab;
 pub mod preflight;
 pub mod preview_context;
@@ -432,6 +433,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(file_ops::FileOpsPlugin)
         .add_plugins(keybinds::KeybindsPlugin)
         .add_plugins(keybind_settings::KeybindSettingsPlugin)
+        .add_plugins(play_settings::PlaySettingsPlugin)
         .add_plugins(panel_focus::PanelFocusPlugin)
         .add_plugins((
             (
@@ -745,7 +747,9 @@ fn flag_menu_dirty_on_menu_entry_remove(
 }
 
 /// Auto-hide unnamed child entities (likely Bevy internals like shadow cascades).
-/// Skips GLTF descendants so they appear in the hierarchy panel.
+/// Skips GLTF descendants so they appear in the hierarchy panel, and prefab
+/// instances: one whose prefab the project has not got inherits no name, and
+/// hiding it takes the only sign a reference is dangling out of the scene.
 fn auto_hide_internal_entities(
     mut commands: Commands,
     new_entities: Query<
@@ -755,6 +759,7 @@ fn auto_hide_internal_entities(
             Without<EditorEntity>,
             Without<EditorHidden>,
             Without<brush::BrushMeshChunk>,
+            Without<prefab::IsA>,
         ),
     >,
     parent_query: Query<&ChildOf>,

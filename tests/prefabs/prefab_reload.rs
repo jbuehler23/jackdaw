@@ -70,7 +70,9 @@ fn reload(
     let sparse = jackdaw::prefab::watcher::capture_sparse_scene_text(app.world_mut())
         .expect("the scene has a live document");
     std::fs::write(path, text).expect("write the new prefab");
-    let ast = jackdaw::prefab::save_load::read_prefab_ast(path).expect("the new prefab parses");
+    let assets_root = jackdaw::prefab::save_load::source_root_of(app.world(), path);
+    let ast = jackdaw::prefab::save_load::read_prefab_ast(path, &assets_root)
+        .expect("the new prefab parses");
     app.world_mut()
         .resource_mut::<jackdaw::prefab::PrefabAstCache>()
         .insert(path, ast);

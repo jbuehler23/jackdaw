@@ -159,6 +159,17 @@ fn field_rows(app: &mut App) -> Vec<(Entity, String)> {
         .collect()
 }
 
+/// Tick until the definition's rows have gone, so a slow frame budget cannot
+/// read as a card that stayed up.
+fn settle_until_the_field_rows_are_gone(app: &mut App) {
+    for _ in 0..120 {
+        if field_rows(app).is_empty() {
+            return;
+        }
+        app.update();
+    }
+}
+
 #[track_caller]
 fn call(
     app: &mut App,
@@ -317,9 +328,7 @@ fn no_category_tab_hides_the_card_and_an_entity_selected_after_it_gets_its_own()
         .id();
     jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
     app.world_mut().resource_mut::<Selection>().entities = vec![entity];
-    for _ in 0..8 {
-        app.update();
-    }
+    settle_until_the_field_rows_are_gone(&mut app);
 
     assert!(
         !rows_of(&mut app, NODE).is_empty(),
@@ -340,9 +349,7 @@ fn clearing_the_selection_takes_the_definition_card_down() {
     );
 
     jackdaw::selection::clear_selection_in_world(app.world_mut());
-    for _ in 0..8 {
-        app.update();
-    }
+    settle_until_the_field_rows_are_gone(&mut app);
 
     assert!(
         app.world().resource::<OpenDefinition>().0.is_none(),

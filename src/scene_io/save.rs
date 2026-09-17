@@ -5,6 +5,7 @@ use bevy::asset::{ReflectAsset, ReflectHandle, UntypedAssetId};
 use bevy::reflect::{TypeInfo, TypeRegistry};
 use bevy::{ecs::reflect::AppTypeRegistry, prelude::*, tasks::AsyncComputeTaskPool};
 
+use super::asset_fields::AbsoluteAssetField;
 use super::load::SceneDialogTask;
 use super::{SceneDirtyState, SceneFilePath, doc_skip_type_ids, should_skip_component};
 
@@ -116,6 +117,7 @@ pub fn save_scene_with_outcome(world: &mut World) -> SaveOutcome {
         Ok(()) => SaveOutcome::Saved,
         Err(err) => {
             error!("scene save failed: {err}");
+            crate::status_bar::notify_error(world, format!("Not saved: {err}"));
             SaveOutcome::Failed
         }
     }
@@ -302,7 +304,8 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_default();
-        let body = emit_bsn_scene_for_file(world, &parent_path);
+        let body = emit_bsn_scene_for_file(world, &parent_path)
+            .map_err(|refusal| BevyError::from(format!("cannot save {path}: {refusal}")))?;
         // Record the jackdaw + Bevy version at the disk boundary only, so
         // the in-memory undo / tab-swap snapshots from the same emitter stay
         // stamp-free.
@@ -929,13 +932,21 @@ fn replace_patch(
 /// All of that happens on a deep clone of the document, so emission never
 /// mutates the live state.
 pub fn emit_bsn_scene_with_inline_assets(world: &mut World, parent_path: &Path) -> String {
-    emit_bsn_scene(world, parent_path, SourceSpelling::AsHeld)
+    emit_bsn_scene(world, parent_path, SourceSpelling::AsHeld).0
 }
 
 /// [`emit_bsn_scene_with_inline_assets`] for text that becomes a file at
-/// `parent_path`, with prefab sources written relative to it.
-pub fn emit_bsn_scene_for_file(world: &mut World, parent_path: &Path) -> String {
-    emit_bsn_scene(world, parent_path, SourceSpelling::RelativeToFile)
+/// `parent_path`, with every asset named under the project's assets folder.
+///
+/// Refuses, naming the field, when a field that names an asset still holds an
+/// absolute path once the assets-relative spelling has been written: such a
+/// path holds only on the machine that saved it.
+pub fn emit_bsn_scene_for_file(world: &mut World, parent_path: &Path) -> Result<String, String> {
+    let (text, named) = emit_bsn_scene(world, parent_path, SourceSpelling::RelativeToFile);
+    match named.is_empty() {
+        true => Ok(text),
+        false => Err(crate::scene_io::asset_fields::refusal(&named)),
+    }
 }
 
 /// How the emitted document spells the prefabs its instances point at.
@@ -949,20 +960,24 @@ enum SourceSpelling {
 
 /// Every emission of the live document passes through here, with preview
 /// writes suspended so it captures authored values.
-fn emit_bsn_scene(world: &mut World, parent_path: &Path, spelling: SourceSpelling) -> String {
+fn emit_bsn_scene(
+    world: &mut World,
+    parent_path: &Path,
+    spelling: SourceSpelling,
+) -> (String, Vec<AbsoluteAssetField>) {
     let held = crate::preview_context::suspend_preview_writes(world);
-    let text = emit_bsn_scene_authored(world, parent_path, spelling);
+    let emitted = emit_bsn_scene_authored(world, parent_path, spelling);
     crate::preview_context::resume_preview_writes(world, held);
-    text
+    emitted
 }
 
 fn emit_bsn_scene_authored(
     world: &mut World,
     parent_path: &Path,
     spelling: SourceSpelling,
-) -> String {
+) -> (String, Vec<AbsoluteAssetField>) {
     let Some(live) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
-        return String::new();
+        return (String::new(), Vec::new());
     };
     let mut ast = live.deep_clone();
 
@@ -991,14 +1006,14 @@ fn emit_bsn_scene_authored(
 
     // After sparsifying, which reads sources as the cache keys them.
     if spelling == SourceSpelling::RelativeToFile {
-        jackdaw_prefab::relativize_isa_sources(&mut ast, parent_path);
+        crate::prefab::save_load::relativize_for_file(world, &mut ast, parent_path);
     }
 
     // No kept component references an asset handle: the document already emits
     // faithfully once sparsified.
     if pass.touched.is_empty() {
         normalize_runtime_derived_values(world, &mut ast);
-        return jackdaw_bsn::emit_scene(&ast);
+        return emitted(world, &ast, spelling, &registry);
     }
 
     if !pass.refs.is_empty() {
@@ -1010,7 +1025,26 @@ fn emit_bsn_scene_authored(
     rederive_handle_patches(world, &mut ast, &registry, parent_path, &pass);
     normalize_runtime_derived_values(world, &mut ast);
 
-    jackdaw_bsn::emit_scene(&ast)
+    emitted(world, &ast, spelling, &registry)
+}
+
+/// The emitted text, paired with the fields that still name a file by an
+/// absolute path when the text is bound for one.
+fn emitted(
+    world: &World,
+    ast: &jackdaw_bsn::SceneBsnAst,
+    spelling: SourceSpelling,
+    registry: &AppTypeRegistry,
+) -> (String, Vec<AbsoluteAssetField>) {
+    let named = match spelling {
+        SourceSpelling::RelativeToFile => crate::scene_io::asset_fields::absolute_asset_fields(
+            ast,
+            &registry.read(),
+            world.get_resource::<crate::project_types::ProjectTypes>(),
+        ),
+        SourceSpelling::AsHeld => Vec::new(),
+    };
+    (jackdaw_bsn::emit_scene(ast), named)
 }
 
 /// Re-derive every component patch listed in `pass.touched` from its live ECS

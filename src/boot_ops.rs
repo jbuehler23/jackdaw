@@ -186,6 +186,26 @@ pub(crate) fn unique_named_entity<'a>(
     }
 }
 
+/// The one entity a label picks out: one carrying `wanted` as its name, or,
+/// failing that, the instance labelled by the file stem of the prefab it
+/// points at, which is the only label an instance that inherited nothing has.
+pub(crate) fn unique_labelled_entity<'a>(
+    named: impl Iterator<Item = (Entity, &'a Name)>,
+    unnamed_instances: impl Iterator<Item = (Entity, &'a crate::prefab::IsA)>,
+    wanted: &str,
+) -> Option<Entity> {
+    if let Some(entity) = unique_named_entity(named, wanted) {
+        return Some(entity);
+    }
+    let mut matches = unnamed_instances
+        .filter(|(_, isa)| isa.source.file_stem().and_then(|stem| stem.to_str()) == Some(wanted))
+        .map(|(entity, _)| entity);
+    match (matches.next(), matches.next()) {
+        (Some(entity), None) => Some(entity),
+        _ => None,
+    }
+}
+
 /// The entity an id names, or `None` when the authored scene no longer holds
 /// it. Editor chrome answers to no id, the way it answers to no name.
 fn entity_with_id(world: &World, id: i64) -> Option<Entity> {
@@ -197,8 +217,12 @@ fn entity_with_id(world: &World, id: i64) -> Option<Entity> {
 }
 
 fn entity_named(world: &mut World, wanted: &str) -> Option<Entity> {
-    let mut state = world.query_filtered::<(Entity, &Name), Without<crate::EditorEntity>>();
-    unique_named_entity(state.iter(world), wanted)
+    let mut named = world.query_filtered::<(Entity, &Name), Without<crate::EditorEntity>>();
+    let mut instances = world.query_filtered::<
+        (Entity, &crate::prefab::IsA),
+        (Without<Name>, Without<crate::EditorEntity>),
+    >();
+    unique_labelled_entity(named.iter(world), instances.iter(world), wanted)
 }
 
 /// The parameter schemas declared for `id`, across every registration that

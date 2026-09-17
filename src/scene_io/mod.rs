@@ -9,6 +9,7 @@ use bevy::ecs::component::ComponentId;
 use bevy::ecs::reflect::AppTypeRegistry;
 use bevy::prelude::*;
 
+pub(crate) mod asset_fields;
 mod legacy;
 mod load;
 mod registration;

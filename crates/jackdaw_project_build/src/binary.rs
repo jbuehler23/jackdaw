@@ -80,12 +80,22 @@ fn apply_load(command: &mut Command, load: BuildLoad) {
     }
 }
 
+/// Where the editor builds a project's game binary, which is never the
+/// project's own `target/`.
+pub fn game_target_dir(jackdaw_dir: &Path) -> PathBuf {
+    jackdaw_dir.join("target/game")
+}
+
 /// Build a project's game binary and extract its type schema.
 ///
 /// `jackdaw_dir` is the project's `.jackdaw/`, where the schema is persisted for
-/// the editor's watcher. The build runs in the project root against the user's
-/// own manifest, lockfile, `target/` and toolchain, so it shares a cache with
-/// whatever they run from their terminal.
+/// the editor's watcher and where the build's own artifacts land. It builds
+/// against the user's own manifest, lockfile and toolchain, but into
+/// [`game_target_dir`] rather than the project's `target/`: the editor builds
+/// the plain package while a developer's own build carries the features their
+/// game needs, and the two must not overwrite each other's binary. It travels
+/// as a flag rather than as `CARGO_TARGET_DIR`, which `detach_from_host_build`
+/// strips along with the rest of the editor's own build environment.
 pub fn build_project_binary(
     spec: &ShimSpec,
     jackdaw_dir: &Path,
@@ -102,16 +112,20 @@ pub fn build_project_binary_with_load(
     load: BuildLoad,
     report: &mut dyn FnMut(BuildEvent),
 ) -> Result<ProjectBinaryBuild, ProjectBuildError> {
+    let target_dir = game_target_dir(jackdaw_dir);
     report(BuildEvent::Log(format!(
-        "building {} as a cargo binary in {}",
+        "building {} as a cargo binary in {}, into {}",
         spec.package_name,
-        spec.project_root.display()
+        spec.project_root.display(),
+        target_dir.display()
     )));
 
     let mut command = rust_env_command("cargo");
     command
         .arg("build")
         .args(["-p", &spec.package_name])
+        .arg("--target-dir")
+        .arg(&target_dir)
         // Plain `json`, not `json-render-diagnostics`: that variant renders
         // diagnostics to cargo's own stderr and emits no `compiler-message`
         // records, leaving the parser below with nothing to report.
@@ -460,6 +474,19 @@ fn no_binary_message(spec: &ShimSpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_editor_builds_the_game_away_from_the_one_a_developer_builds() {
+        let project = Path::new("/game");
+
+        let editor = game_target_dir(&project.join(".jackdaw"));
+
+        assert!(
+            !editor.starts_with(project.join("target")),
+            "an editor build must not land where a developer's own build does, got {}",
+            editor.display()
+        );
+    }
 
     /// A background build leaves the user half the machine, and never
     /// asks for zero jobs on a single-core box.
