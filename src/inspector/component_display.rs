@@ -219,20 +219,23 @@ fn short_type_name(type_path: &str) -> &str {
 }
 
 /// Scene-document components that live under `jackdaw_scene_types` and
-/// carry the inspector's dedicated tool surfaces: `Brush` mounts the
-/// mesh card (`brush_display`, and with it the whole Mesh tab), `Terrain`
-/// mounts the scatter / quantization / channel / generation sections;
-/// `CanvasGuides` is where a canvas guide's exact position is typed.
+/// belong in the inspector: `Brush` mounts the mesh card (`brush_display`,
+/// and with it the whole Mesh tab), `Terrain` mounts the scatter /
+/// quantization / channel / generation sections; `CanvasGuides` is where
+/// a canvas guide's exact position is typed. `HiddenInGame` and
+/// `NavmeshExclude` are marker tags an author adds by hand, so they need
+/// a card even though they have no fields.
 ///
 /// [`hidden_by_namespace`] exists to keep jackdaw's own bookkeeping
-/// components out of the generic list. These two are not bookkeeping --
-/// they are the scene data the user selected the entity to edit -- so
-/// culling them takes their entire tool surface with them and leaves a
-/// cube or a terrain showing nothing but `Transform`.
-const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 3] = [
+/// components out of the generic list. These are not bookkeeping -- they
+/// are the scene data the user selected the entity to edit -- so culling
+/// them takes their inspector surface with them.
+const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 5] = [
     "jackdaw_scene_types::types::Brush",
     "jackdaw_scene_types::types::Terrain",
     "jackdaw_scene_types::CanvasGuides",
+    jackdaw_scene_types::HIDDEN_IN_GAME_TYPE_PATH,
+    jackdaw_scene_types::NAVMESH_EXCLUDE_TYPE_PATH,
 ];
 
 /// Whether a `jackdaw*` type is editor bookkeeping rather than something
@@ -1625,6 +1628,14 @@ mod tests {
         assert!(
             !hidden_by_namespace(std::any::type_name::<jackdaw_scene_types::CanvasGuides>()),
             "the UI root's guides show as a card, so their positions are typeable",
+        );
+        assert!(
+            !hidden_by_namespace(jackdaw_scene_types::HIDDEN_IN_GAME_TYPE_PATH),
+            "HiddenInGame is a tag an author adds by hand, so it needs a card",
+        );
+        assert!(
+            !hidden_by_namespace(jackdaw_scene_types::NAVMESH_EXCLUDE_TYPE_PATH),
+            "NavmeshExclude is a tag an author adds by hand, so it needs a card",
         );
     }
 

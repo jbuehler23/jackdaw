@@ -35,10 +35,11 @@ pub use mesh_rebuild::evaluate_brush_geometry;
 pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
 pub use types::{
     Brush, BrushFaceData, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
-    DetailLayer, DetailMesh, DetailPresser, GltfSource, InstanceMaterialOverrides,
-    MaterialOverrides, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude, PrefabBaseline, PropertyValue,
-    ScatterGroup, ScatterInstance, SceneRootTag, SceneWind, Terrain, TerrainChannel,
-    TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry, TerrainQuantization, Wind,
+    DetailLayer, DetailMesh, DetailPresser, GltfSource, HIDDEN_IN_GAME_TYPE_PATH, HiddenInGame,
+    InstanceMaterialOverrides, MaterialOverrides, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude,
+    PrefabBaseline, PropertyValue, ScatterGroup, ScatterInstance, SceneRootTag, SceneWind, Terrain,
+    TerrainChannel, TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry, TerrainQuantization,
+    Wind,
 };
 
 use bevy::prelude::*;
@@ -102,6 +103,7 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<PostProcess>()
             .register_type::<Tonemapper>()
             .register_type::<NavmeshExclude>()
+            .register_type::<HiddenInGame>()
             .register_type::<ScatterGroup>()
             .register_type::<ScatterInstance>()
             .register_type::<TerrainPaletteEntry>()

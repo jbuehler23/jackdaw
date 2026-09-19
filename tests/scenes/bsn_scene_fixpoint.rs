@@ -239,6 +239,54 @@ fn navmesh_exclude_survives_a_save_and_load() {
     );
 }
 
+/// `HiddenInGame` lives in `jackdaw_scene_types` so the save filter, which
+/// drops every `jackdaw::` path, keeps it. Without the round trip, reopening
+/// a scene would lose the tag and the volume would draw in the game.
+#[test]
+fn hidden_in_game_survives_a_save_and_load() {
+    let mut app = make_app();
+
+    let tagged = app
+        .world_mut()
+        .spawn((
+            Name::new("EndBox"),
+            Transform::default(),
+            Visibility::Inherited,
+            jackdaw_scene_types::HiddenInGame,
+        ))
+        .id();
+    let plain = app
+        .world_mut()
+        .spawn((
+            Name::new("Wall"),
+            Transform::default(),
+            Visibility::Inherited,
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), tagged);
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), plain);
+
+    let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
+    assert!(
+        text.contains(jackdaw_scene_types::HIDDEN_IN_GAME_TYPE_PATH),
+        "the tag has to reach the document:\n{text}"
+    );
+
+    jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &text);
+
+    let world = app.world_mut();
+    let mut query = world.query_filtered::<&Name, With<jackdaw_scene_types::HiddenInGame>>();
+    let names: Vec<String> = query.iter(world).map(ToString::to_string).collect();
+    assert_eq!(
+        names,
+        vec!["EndBox".to_string()],
+        "the tag comes back on the node it was authored on, and only that one"
+    );
+}
+
 /// A value equal to its default is elided from the document, so the
 /// default is what every scene that never touched the bake settings reads
 /// back as. `min_obstacle_size` has to come back filtering nothing and

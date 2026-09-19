@@ -67,10 +67,11 @@ pub fn setup_default_materials(
         uv_transform: uv_tile,
         ..default()
     });
-    palette.default_selected_material = materials.add(StandardMaterial {
-        base_color: default_style::DEFAULT_MATERIAL_SELECTED_COLOR,
+    palette.hidden_in_game_material = materials.add(StandardMaterial {
+        base_color: default_style::DEFAULT_MATERIAL_COLOR
+            .with_alpha(default_style::HIDDEN_IN_GAME_ALPHA),
         base_color_texture: Some(grid_handle.clone()),
-        alpha_mode: AlphaMode::Opaque,
+        alpha_mode: AlphaMode::Blend,
         uv_transform: uv_tile,
         ..default()
     });
@@ -236,8 +237,6 @@ pub fn regenerate_brush_meshes(
             &super::Brush,
             Option<&jackdaw_geometry::ModifierStack>,
             Option<&Children>,
-            Option<&super::BrushPreview>,
-            Has<Selected>,
         ),
         Or<(
             Changed<super::Brush>,
@@ -248,15 +247,9 @@ pub fn regenerate_brush_meshes(
     mesh3d_query: Query<(), With<Mesh3d>>,
     mut meshes: ResMut<Assets<Mesh>>,
     palette: Res<BrushMaterialPalette>,
-    parents: Query<&ChildOf>,
-    selected_query: Query<(), With<Selected>>,
     halfedge_q: Query<&crate::brush::BrushHalfedge>,
 ) {
-    for (entity, brush, stack, children, preview, is_selected) in &changed_brushes {
-        let parent_selected = parents
-            .get(entity)
-            .is_ok_and(|child_of| selected_query.contains(child_of.0));
-        let effectively_selected = is_selected || parent_selected;
+    for (entity, brush, stack, children) in &changed_brushes {
         // Despawn all Mesh3d children from previous regen cycles.
         if let Some(children) = children {
             for child in children.iter() {
@@ -383,12 +376,10 @@ pub fn regenerate_brush_meshes(
             mesh.insert_indices(Indices::U32(chunk.indices));
             let mesh_handle = meshes.add(mesh);
 
-            // Explicit face material, or the palette default with the
-            // selection/preview variant applied at build time.
+            // Explicit face material, or the palette default. Selection and
+            // x-ray variants are applied by `ensure_brush_chunk_materials`.
             let material = if !uses_default {
                 chunk.material.clone()
-            } else if effectively_selected || preview.is_some() {
-                palette.default_selected_material.clone()
             } else {
                 palette.default_material.clone()
             };
@@ -461,28 +452,43 @@ pub(super) fn sync_brush_preview(
 }
 
 /// Every frame, ensure each brush mesh chunk has the correct material
-/// based on preview / selected state and the x-ray view mode. Uses
-/// direct mutation (no deferred commands) so swaps are visible
-/// immediately. X-ray overrides every chunk; otherwise default-palette
-/// chunks follow selection state and explicit-material chunks are
-/// restored to their rebuild-time material.
+/// based on preview / selected state, `HiddenInGame`, and the x-ray view
+/// mode. Uses direct mutation (no deferred commands) so swaps are visible
+/// immediately. X-ray overrides every chunk; otherwise a tagged brush
+/// wears the translucent palette material, default-palette chunks use the
+/// grid default, and explicit-material chunks are restored to their
+/// rebuild-time material.
 pub fn ensure_brush_chunk_materials(
     palette: Res<BrushMaterialPalette>,
     view_modes: Res<crate::view_modes::ViewModeSettings>,
-    brushes: Query<(Entity, &BrushMeshCache, Has<BrushPreview>, Has<Selected>), With<super::Brush>>,
+    brushes: Query<
+        (
+            Entity,
+            &BrushMeshCache,
+            Has<BrushPreview>,
+            Has<Selected>,
+            Has<jackdaw_scene_types::HiddenInGame>,
+        ),
+        With<super::Brush>,
+    >,
     mut chunk_mats: Query<(
         &super::BrushMeshChunk,
         &mut MeshMaterial3d<StandardMaterial>,
     )>,
     parents: Query<&ChildOf>,
     selected_query: Query<(), With<Selected>>,
+    hidden_in_game: Query<(), With<jackdaw_scene_types::HiddenInGame>>,
 ) {
-    for (entity, cache, has_preview, is_selected) in &brushes {
+    for (entity, cache, has_preview, is_selected, is_hidden) in &brushes {
         let parent_selected = parents
             .get(entity)
             .is_ok_and(|child_of| selected_query.contains(child_of.0));
+        let parent_hidden = parents
+            .get(entity)
+            .is_ok_and(|child_of| hidden_in_game.contains(child_of.0));
         let effectively_selected = is_selected || parent_selected;
         let highlighted = effectively_selected || has_preview;
+        let hidden = is_hidden || parent_hidden;
         for &chunk_entity in &cache.chunk_entities {
             let Ok((chunk, mut mat)) = chunk_mats.get_mut(chunk_entity) else {
                 continue;
@@ -493,10 +499,10 @@ pub fn ensure_brush_chunk_materials(
                 } else {
                     &palette.x_ray_material
                 }
+            } else if hidden {
+                &palette.hidden_in_game_material
             } else if !chunk.uses_default_material {
                 &chunk.material
-            } else if highlighted {
-                &palette.default_selected_material
             } else {
                 &palette.default_material
             };

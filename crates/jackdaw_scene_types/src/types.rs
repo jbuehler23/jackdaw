@@ -1232,6 +1232,17 @@ pub struct NavmeshExclude;
 /// component by its path rather than by its type.
 pub const NAVMESH_EXCLUDE_TYPE_PATH: &str = "jackdaw_scene_types::types::NavmeshExclude";
 
+/// Drawn in the editor, but hidden when the scene runs as a standalone game.
+///
+/// Useful for volumes you need to place  and edit without them showing up in a shipped game.
+#[derive(Component, Reflect, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Rendering"))]
+pub struct HiddenInGame;
+
+/// Reflect type path for [`HiddenInGame`], for the paths that name a
+/// component by its path rather than by its type.
+pub const HIDDEN_IN_GAME_TYPE_PATH: &str = "jackdaw_scene_types::types::HiddenInGame";
+
 /// Marks the group entity a scatter run stamps its instances under.
 ///
 /// `key` is what a re-run matches on, so two scatter runs over the same
@@ -1494,6 +1505,11 @@ mod tests {
     #[test]
     fn navmesh_exclude_type_path_const_matches_the_reflected_path() {
         assert_eq!(NavmeshExclude::type_path(), NAVMESH_EXCLUDE_TYPE_PATH);
+    }
+
+    #[test]
+    fn hidden_in_game_type_path_const_matches_the_reflected_path() {
+        assert_eq!(HiddenInGame::type_path(), HIDDEN_IN_GAME_TYPE_PATH);
     }
 
     /// The defaults are a persisted contract: BSN elides a field equal to

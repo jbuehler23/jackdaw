@@ -308,10 +308,10 @@ pub struct BrushFaceHover {
 pub struct BrushMaterialPalette {
     pub materials: Vec<Handle<StandardMaterial>>,
     pub preview_materials: Vec<Handle<StandardMaterial>>,
-    /// Grid-textured default material at low alpha.
+    /// Grid-textured default material.
     pub default_material: Handle<StandardMaterial>,
-    /// Grid-textured default material at high alpha.
-    pub default_selected_material: Handle<StandardMaterial>,
+    /// Translucent grid default worn by a brush tagged `HiddenInGame`.
+    pub hidden_in_game_material: Handle<StandardMaterial>,
     /// Translucent unlit material applied to every chunk in x-ray view.
     pub x_ray_material: Handle<StandardMaterial>,
     /// X-ray variant for selected / preview brushes.
