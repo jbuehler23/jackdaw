@@ -3,7 +3,7 @@ use crate::draw_brush::{
     DrawBrushState, DrawMode, DrawPhase, cut_brush_from_active, drawn_brush_from_active,
     topology_aabbs_overlap,
 };
-use crate::{EditorEntity, brush::BrushMaterialPalette, selection::Selected};
+use crate::{EditorEntity, brush::BrushMaterialPalette};
 use bevy::{
     light::{NotShadowCaster, NotShadowReceiver},
     mesh::{Indices, PrimitiveTopology},
@@ -60,7 +60,7 @@ pub(crate) fn manage_draw_preview_mesh(
     mut materials: ResMut<Assets<StandardMaterial>>,
     preview_query: Query<Entity, With<DrawPreviewMesh>>,
     result_preview_query: Query<Entity, With<CutResultPreviewMesh>>,
-    brushes: Query<(Entity, &Brush, &GlobalTransform, Has<Selected>)>,
+    brushes: Query<(Entity, &Brush, &GlobalTransform)>,
     hidden_query: Query<Entity, (With<CutPreviewHidden>, With<Brush>)>,
     mut visibility_query: Query<&mut Visibility>,
     palette: Res<BrushMaterialPalette>,
@@ -237,7 +237,7 @@ pub(crate) fn manage_draw_preview_mesh(
     if active.mode == DrawMode::Cut {
         let cutter_input = jackdaw_csg::CsgInput::new(&world_cutter_faces, &world_cutter_topo);
 
-        for (brush_entity, brush, brush_tf, is_selected) in brushes.iter() {
+        for (brush_entity, brush, brush_tf) in brushes.iter() {
             let (world_target_faces, world_target_topo) =
                 jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, brush_tf.affine());
 
@@ -333,8 +333,6 @@ pub(crate) fn manage_draw_preview_mesh(
 
                     let material = if face_data.material != Handle::default() {
                         face_data.material.clone()
-                    } else if is_selected {
-                        palette.default_selected_material.clone()
                     } else {
                         palette.default_material.clone()
                     };

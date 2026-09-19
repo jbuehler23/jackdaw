@@ -44,11 +44,12 @@ pub use mesh_rebuild::evaluate_brush_geometry;
 pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
 pub use types::{
     Brush, BrushFaceData, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
-    DetailLayer, DetailMesh, DetailPresser, DetailVariety, GltfSource, InstanceMaterialOverrides,
-    LodFade, LodGroup, LodLevel, LodOverride, MaterialOverrides, NAVMESH_EXCLUDE_TYPE_PATH,
-    NavmeshExclude, NavmeshIgnored, PrefabBaseline, PropertyValue, ReflectionProbe, ScatterGroup,
-    ScatterInstance, SceneRootTag, SceneWind, Terrain, TerrainChannel, TerrainChannelElement,
-    TerrainNavmesh, TerrainPaletteEntry, TerrainQuantization, Wind,
+    DetailLayer, DetailMesh, DetailPresser, DetailVariety, GltfSource, HIDDEN_IN_GAME_TYPE_PATH,
+    HiddenInGame, InstanceMaterialOverrides, LodFade, LodGroup, LodLevel, LodOverride,
+    MaterialOverrides, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude, NavmeshIgnored, PrefabBaseline,
+    PropertyValue, ReflectionProbe, ScatterGroup, ScatterInstance, SceneRootTag, SceneWind, Terrain,
+    TerrainChannel, TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry, TerrainQuantization,
+    Wind,
 };
 
 use bevy::prelude::*;
@@ -121,6 +122,7 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<Multisampling>()
             .register_type::<ShadowFiltering>()
             .register_type::<NavmeshExclude>()
+            .register_type::<HiddenInGame>()
             .register_type::<ReflectionProbe>()
             .register_type::<ScatterGroup>()
             .register_type::<ScatterInstance>()
