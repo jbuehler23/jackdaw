@@ -300,7 +300,7 @@ fn navmesh_exclude_is_offered_under_navigation() {
     );
 }
 
-/// HiddenInGame is a component an author reaches for by hand, so it has
+/// `HiddenInGame` is a component an author reaches for by hand, so it has
 /// to be in Add Component with the other rendering tags.
 #[test]
 fn hidden_in_game_is_offered_under_rendering() {
