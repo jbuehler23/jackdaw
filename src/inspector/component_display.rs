@@ -829,18 +829,17 @@ pub(crate) fn build_inspector_displays(
             );
             jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, card.section);
             match schema {
-                Some(schema) => super::project_component_display::spawn_project_component_fields(
-                    commands,
-                    card.body,
-                    schema,
-                    ast,
-                    node,
-                    source_entity,
-                    type_registry,
-                    &editor_font.0,
-                    &icon_font.0,
-                    names,
-                ),
+                Some(_) => {
+                    commands.queue(move |world: &mut World| {
+                        super::project_component_display::fill_project_component_fields(
+                            world,
+                            card.body,
+                            source_entity,
+                            node,
+                            &type_path.clone(),
+                        );
+                    });
+                }
                 None => super::project_component_display::spawn_document_component_fields(
                     commands,
                     card.body,

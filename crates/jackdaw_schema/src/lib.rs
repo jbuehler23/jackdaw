@@ -82,6 +82,10 @@ pub struct ProjectSchema {
     /// type their fields reach. Empty in a schema that does not carry them.
     #[serde(default)]
     pub assets: Vec<TypeSchema>,
+    /// Project types a component field holds that are not themselves
+    /// components, so the inspector can edit an enum or nested struct.
+    #[serde(default)]
+    pub field_types: Vec<TypeSchema>,
 }
 
 /// The shape and editor metadata of one reflected type.
@@ -273,6 +277,16 @@ mod extract {
                 schema.components.push(type_schema);
             }
         }
+        schema.field_types = describe_types_reached_by(
+            registry,
+            schema
+                .components
+                .iter()
+                .filter(|component| is_project_crate(crate_segment(&component.type_path)))
+                .map(|component| component.type_path.as_str()),
+            false,
+            |path| is_project_crate(crate_segment(path)),
+        );
         schema
     }
 
@@ -477,6 +491,64 @@ mod extract {
         }
     }
 
+    /// Types reached from `roots`. When `include_roots` is set the roots
+    /// themselves are described and marked as assets; otherwise only what
+    /// their fields reach is kept. `belongs` decides which reached types
+    /// are described and walked into.
+    fn describe_types_reached_by<'a>(
+        registry: &TypeRegistry,
+        roots: impl IntoIterator<Item = &'a str>,
+        include_roots: bool,
+        belongs: impl Fn(&str) -> bool,
+    ) -> Vec<TypeSchema> {
+        let roots: Vec<&str> = roots.into_iter().collect();
+        let root_set: HashSet<&str> = roots.iter().copied().collect();
+        let mut queue = VecDeque::new();
+        if include_roots {
+            for path in &roots {
+                queue.push_back((*path).to_string());
+            }
+        } else {
+            for path in &roots {
+                let Some(registration) = registry.get_with_type_path(path) else {
+                    continue;
+                };
+                for reached in types_reached_by(registration.type_info()) {
+                    queue.push_back(reached);
+                }
+            }
+        }
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut described: Vec<TypeSchema> = Vec::new();
+        while let Some(path) = queue.pop_front() {
+            if !include_roots && root_set.contains(path.as_str()) {
+                continue;
+            }
+            if !visited.insert(path.clone()) {
+                continue;
+            }
+            let Some(registration) = registry.get_with_type_path(&path) else {
+                continue;
+            };
+            let info = registration.type_info();
+            let describable = matches!(
+                info,
+                TypeInfo::Struct(_) | TypeInfo::TupleStruct(_) | TypeInfo::Enum(_)
+            );
+            if !describable || !belongs(path.as_str()) {
+                continue;
+            }
+            let mut described_type = type_schema_for(registration, registry);
+            described_type.asset = include_roots && root_set.contains(path.as_str());
+            described.push(described_type);
+            for reached in types_reached_by(info) {
+                queue.push_back(reached);
+            }
+        }
+        described.sort_by(|a, b| a.type_path.cmp(&b.type_path));
+        described
+    }
+
     /// Describes every type the game registers as a reflected asset, plus the
     /// project types their fields reach.
     ///
@@ -492,36 +564,9 @@ mod extract {
             .collect();
         let crates: HashSet<&str> = resolved.iter().map(|path| crate_segment(path)).collect();
         let root_paths: HashSet<&str> = resolved.iter().copied().collect();
-
-        let mut queue: VecDeque<String> = resolved.iter().map(|p| (*p).to_string()).collect();
-        let mut visited: HashSet<String> = HashSet::new();
-        let mut described: Vec<TypeSchema> = Vec::new();
-        while let Some(path) = queue.pop_front() {
-            if !visited.insert(path.clone()) {
-                continue;
-            }
-            let Some(registration) = registry.get_with_type_path(&path) else {
-                continue;
-            };
-            let info = registration.type_info();
-            let describable = matches!(
-                info,
-                TypeInfo::Struct(_) | TypeInfo::TupleStruct(_) | TypeInfo::Enum(_)
-            );
-            let belongs =
-                root_paths.contains(path.as_str()) || crates.contains(crate_segment(path.as_str()));
-            if !describable || !belongs {
-                continue;
-            }
-            let mut described_type = type_schema_for(registration, registry);
-            described_type.asset = root_paths.contains(path.as_str());
-            described.push(described_type);
-            for reached in types_reached_by(info) {
-                queue.push_back(reached);
-            }
-        }
-        described.sort_by(|a, b| a.type_path.cmp(&b.type_path));
-        described
+        describe_types_reached_by(registry, resolved.iter().copied(), true, |path| {
+            root_paths.contains(path) || crates.contains(crate_segment(path))
+        })
     }
 
     /// The part of a reflect type path before its first `::`.
@@ -679,6 +724,7 @@ mod tests {
         assert!(schema.events.is_empty());
         assert!(schema.functions.is_empty());
         assert!(schema.assets.is_empty());
+        assert!(schema.field_types.is_empty());
         assert!(!schema.components[0].asset);
         assert!(schema.components[0].variants.is_empty());
         assert!(schema.components[0].entity_fields.is_empty());
@@ -802,6 +848,21 @@ mod extract_tests {
         },
     }
 
+    /// An enum a component holds, which is not itself a component.
+    #[derive(Reflect, Default)]
+    #[reflect(Default)]
+    enum Latch {
+        #[default]
+        Open,
+        Shut,
+    }
+
+    #[derive(Component, Reflect, Default)]
+    #[reflect(Component, Default)]
+    struct Door {
+        latch: Latch,
+    }
+
     fn schema_of<T: GetTypeRegistration>() -> ProjectSchema {
         let mut registry = TypeRegistry::default();
         registry.register::<T>();
@@ -841,6 +902,22 @@ mod extract_tests {
         let event = find(&schema.events, "Bare");
         assert!(event.entity_fields.is_empty());
         assert!(!event.fills_gaps);
+    }
+
+    #[test]
+    fn a_component_enum_field_reports_the_enum_it_holds() {
+        let mut registry = TypeRegistry::default();
+        registry.register::<Door>();
+        registry.register::<Latch>();
+        let schema = extract_from_registry(&registry);
+        let latch = find(&schema.field_types, "Latch");
+        assert_eq!(latch.kind, TypeKind::Enum);
+        let names: Vec<&str> = latch.variants.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["Open", "Shut"]);
+        assert!(
+            schema.field_types.iter().all(|t| t.short_name != "Door"),
+            "the component itself stays in the components bucket"
+        );
     }
 
     #[test]
