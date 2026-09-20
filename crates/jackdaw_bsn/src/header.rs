@@ -353,6 +353,19 @@ mod tests {
     }
 
     #[test]
+    fn a_header_and_a_root_naming_a_generic_type_agree() {
+        const HELD: &str =
+            "my_game::Layered<bevy_pbr::pbr_material::StandardMaterial, my_game::Moss>";
+        let text = with_asset_header(HELD, &format!("#mossy\n{HELD} {{}}\n"));
+        assert_eq!(read_asset_header(&text).as_deref(), Some(HELD));
+        assert_eq!(
+            asset_text_type(&text, Path::new("materials/mossy.bsn")).as_deref(),
+            Some(HELD),
+            "the sniff reads the generic type off the root it parses",
+        );
+    }
+
+    #[test]
     fn a_file_without_a_header_names_no_type() {
         assert!(read_asset_header("my_game::content::ItemDef {}").is_none());
         assert!(read_asset_header(&format!("{STAMP}\nmy_game::content::ItemDef {{}}")).is_none());

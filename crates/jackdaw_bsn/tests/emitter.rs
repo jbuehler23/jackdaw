@@ -466,27 +466,60 @@ fn handle_without_path_emits_catalog_name() {
     }
 }
 
-/// A patch whose type path is generic cannot round-trip (the grammar has no
-/// angle brackets); the emitter skips it instead of writing unparseable text.
-#[test]
-fn generic_type_paths_are_skipped_on_emit() {
+/// Emit a node carrying `paths` as type patches, read it back, and report the
+/// type paths that survived, sorted so the walk order does not decide.
+fn round_tripped_type_paths(paths: &[&str]) -> Vec<String> {
     use jackdaw_bsn::{BsnPatch, SceneBsnAst, parse_bsn_text};
 
     let mut ast = SceneBsnAst::default();
-    let node = ast.create_entity_node(vec![
-        BsnPatch::Name("thing".to_string()),
-        BsnPatch::Type("bevy_pbr::MeshMaterial3d<StandardMaterial>".to_string()),
-        BsnPatch::Type("bevy_transform::components::transform::Transform".to_string()),
-    ]);
+    let node = ast.create_entity_node(
+        std::iter::once(BsnPatch::Name("thing".to_string()))
+            .chain(paths.iter().map(|path| BsnPatch::Type((*path).to_string())))
+            .collect(),
+    );
     ast.add_to_roots(node);
 
     let text = jackdaw_bsn::emit_scene(&ast);
-    assert!(
-        !text.contains('<'),
-        "generic path must not be emitted:\n{text}"
+    let read = parse_bsn_text(&text).expect("emitted text stays parseable");
+    let mut found: Vec<String> = read.all_patch_type_paths().map(str::to_string).collect();
+    found.sort();
+    found
+}
+
+/// Sorted, for comparison against what came back.
+fn sorted(paths: &[&str]) -> Vec<String> {
+    let mut sorted: Vec<String> = paths.iter().copied().map(str::to_string).collect();
+    sorted.sort();
+    sorted
+}
+
+#[test]
+fn a_generic_type_path_round_trips_through_emit_and_parse() {
+    let paths = [
+        "bevy_pbr::mesh_material::MeshMaterial3d<bevy_pbr::pbr_material::StandardMaterial>",
+        "bevy_transform::components::transform::Transform",
+    ];
+    assert_eq!(round_tripped_type_paths(&paths), sorted(&paths));
+}
+
+#[test]
+fn a_nested_generic_and_one_with_two_arguments_round_trip() {
+    let paths = [
+        "my_game::Holder<alloc::vec::Vec<core::primitive::f32>>",
+        "bevy_pbr::extended_material::ExtendedMaterial<bevy_pbr::pbr_material::StandardMaterial, my_game::Layer>",
+    ];
+    assert_eq!(round_tripped_type_paths(&paths), sorted(&paths));
+}
+
+#[test]
+fn a_document_without_generics_reads_the_same_as_before() {
+    let text = "#thing\nbevy_transform::components::transform::Transform\n";
+    let read = jackdaw_bsn::parse_bsn_text(text).expect("an old document still parses");
+    assert_eq!(read.roots.len(), 1);
+    assert_eq!(
+        read.all_patch_type_paths().collect::<Vec<_>>(),
+        vec!["bevy_transform::components::transform::Transform"],
     );
-    assert!(text.contains("Transform"), "non-generic patches still emit");
-    parse_bsn_text(&text).expect("emitted text stays parseable");
 }
 
 /// String values with non-ASCII characters and control characters must
@@ -605,7 +638,7 @@ fn a_generic_enums_variant_emits_without_its_type_arguments() {
     );
     assert!(
         !text.contains('<'),
-        "nothing the lexer rejects reaches the file:\n{text}"
+        "the variant carries no type arguments of its own:\n{text}"
     );
     parse_bsn_text(&text).expect("what the writer emits is what the reader takes");
 }

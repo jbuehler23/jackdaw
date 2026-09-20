@@ -708,12 +708,6 @@ fn collect_bsn_handles_from_reflect(
             .type_path_table()
             .path()
             .to_string();
-        // Generic asset type paths cannot round-trip through the parser, so the
-        // embed would be dropped; leave the handle unresolved as before.
-        if asset_type_path.contains('<') {
-            return true;
-        }
-
         let counter = counters.entry(asset_type_path.clone()).or_insert(0);
         let short_name = asset_type_path
             .rsplit("::")

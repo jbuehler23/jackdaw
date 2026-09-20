@@ -18,6 +18,11 @@ pub enum Token {
     LBrace,
     RBrace,
     Comma,
+    /// `<`, opening a type path's generic arguments.
+    Less,
+    /// `>`, closing them. Lexed one character at a time, so the `>>` that ends
+    /// a nested generic is two closers rather than a shift operator.
+    Greater,
     DoubleColon,
     Colon,
     Hash,
@@ -117,6 +122,12 @@ fn lex_colon(input: &str) -> IResult<&str, Token> {
 }
 fn lex_comma(input: &str) -> IResult<&str, Token> {
     nom::combinator::value(Token::Comma, nom::character::complete::char(',')).parse(input)
+}
+fn lex_less(input: &str) -> IResult<&str, Token> {
+    nom::combinator::value(Token::Less, nom::character::complete::char('<')).parse(input)
+}
+fn lex_greater(input: &str) -> IResult<&str, Token> {
+    nom::combinator::value(Token::Greater, nom::character::complete::char('>')).parse(input)
 }
 fn lex_at(input: &str) -> IResult<&str, Token> {
     nom::combinator::value(Token::At, nom::character::complete::char('@')).parse(input)
@@ -358,6 +369,8 @@ fn lex_token(input: &str) -> IResult<&str, Token> {
         lex_l_brace,
         lex_r_brace,
         lex_comma,
+        lex_less,
+        lex_greater,
         lex_double_colon, // Must come before `lex_colon`.
         lex_colon,
         lex_hash,
@@ -426,6 +439,22 @@ mod tests {
                 "{word} must lex as a single identifier",
             );
         }
+    }
+
+    #[test]
+    fn a_nested_generic_closes_with_two_separate_tokens() {
+        assert_eq!(
+            tokens("Vec<Vec<f32>>"),
+            vec![
+                Token::Ident("Vec".into()),
+                Token::Less,
+                Token::Ident("Vec".into()),
+                Token::Less,
+                Token::Ident("f32".into()),
+                Token::Greater,
+                Token::Greater,
+            ],
+        );
     }
 
     #[test]

@@ -246,3 +246,73 @@ fn a_brush_takes_the_material_the_apply_operator_names_by_path() {
         "every face wears the material the path named",
     );
 }
+
+/// A mesh the scene authors keeps the material picked on it, which the
+/// document records on the component the mesh wears it on.
+#[test]
+fn a_material_picked_on_an_authored_mesh_survives_a_save_and_a_reopen() {
+    let (mut app, tmp) = editor_with_a_material();
+    let scene = tmp.path().join("assets/hall.bsn");
+    std::fs::write(
+        &scene,
+        "#lamp\nbevy_transform::components::transform::Transform\n",
+    )
+    .expect("the scene is written");
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &scene);
+    settle(&mut app);
+
+    let mesh = last_named(&mut app, "lamp").expect("the scene spawned the mesh");
+    let empty = app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial::default());
+    app.world_mut()
+        .entity_mut(mesh)
+        .insert((Mesh3d::default(), MeshMaterial3d(empty)));
+    app.world_mut().resource_mut::<Selection>().entities = vec![mesh];
+    settle(&mut app);
+
+    call(
+        &mut app,
+        "asset.pick",
+        &[
+            ("field", MATERIAL_FIELD.into()),
+            ("value", "materials/slate.bsn".into()),
+        ],
+    );
+    assert!(
+        jackdaw::scene_io::save_scene(app.world_mut()),
+        "the scene saves",
+    );
+
+    let text = std::fs::read_to_string(&scene).expect("the scene is on disk");
+    assert!(
+        text.contains("materials/slate.bsn"),
+        "the document names the material the mesh wears, got\n{text}",
+    );
+
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &scene);
+    settle(&mut app);
+    let reopened = last_named(&mut app, "lamp").expect("the scene spawned the mesh again");
+    let chosen = filed_material(&app);
+    assert_eq!(
+        app.world()
+            .get::<MeshMaterial3d<StandardMaterial>>(reopened)
+            .map(|worn| worn.0.id().untyped()),
+        Some(chosen.id()),
+        "and it comes back wearing it",
+    );
+}
+
+/// The most recently spawned entity under a name, so a reopen is read rather
+/// than the run before it.
+fn last_named(app: &mut App, name: &str) -> Option<Entity> {
+    let found: Vec<Entity> = app
+        .world_mut()
+        .query::<(Entity, &Name)>()
+        .iter(app.world())
+        .filter(|(_, spawned)| spawned.as_str() == name)
+        .map(|(entity, _)| entity)
+        .collect();
+    found.into_iter().next_back()
+}

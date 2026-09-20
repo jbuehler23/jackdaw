@@ -80,9 +80,28 @@ Base: String = {
     ":" <s:"string_lit"> => s,
 };
 
+// A type path, with the generic arguments one carries when it has them. The
+// arguments are written back exactly as `TypePath` spells them, comma and
+// space, so a path that came out of the registry goes back in unchanged.
 Symbol: String = {
-    <s:Symbol> "::" <n:"ident"> => { let mut s = s; s.push_str("::"); s.push_str(&n); s },
+    <s:SymbolPath> => s,
+    <s:SymbolPath> "<" <a:SymbolArgs> ">" => {
+        let mut s = s;
+        s.push('<');
+        s.push_str(&a);
+        s.push('>');
+        s
+    },
+};
+
+SymbolPath: String = {
+    <s:SymbolPath> "::" <n:"ident"> => { let mut s = s; s.push_str("::"); s.push_str(&n); s },
     <n:"ident"> => n,
+};
+
+SymbolArgs: String = {
+    <s:Symbol> => s,
+    <h:SymbolArgs> "," <t:Symbol> => { let mut h = h; h.push_str(", "); h.push_str(&t); h },
 };
 
 Fields: Vec<BsnField> = {
@@ -173,6 +192,8 @@ extern {
         "{" => lexer::Token::LBrace,
         "}" => lexer::Token::RBrace,
         "," => lexer::Token::Comma,
+        "<" => lexer::Token::Less,
+        ">" => lexer::Token::Greater,
         ":" => lexer::Token::Colon,
         "#" => lexer::Token::Hash,
         "@" => lexer::Token::At,

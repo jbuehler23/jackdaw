@@ -356,10 +356,10 @@ pub fn serialize_assets_to_bsn(world: &World, assets: &[CatalogAssetRef]) -> Str
 
 /// [`serialize_assets_to_bsn`] plus the names it could not emit.
 ///
-/// Emission drops an entry silently when its type is unregistered, generic,
-/// carries no `ReflectAsset`, or the asset is gone from its store. The text
-/// alone does not distinguish "nothing to write" from "everything skipped", so
-/// a caller deciding a file's fate gets the skipped names here.
+/// Emission drops an entry silently when its type is unregistered, carries no
+/// `ReflectAsset`, or the asset is gone from its store. The text alone does not
+/// distinguish "nothing to write" from "everything skipped", so a caller
+/// deciding a file's fate gets the skipped names here.
 pub fn serialize_assets_to_bsn_reporting(
     world: &World,
     assets: &[CatalogAssetRef],
@@ -393,13 +393,6 @@ pub fn append_assets_to_ast(
             skipped.push(asset_ref.name.clone());
             continue;
         };
-
-        // Generic asset types cannot round-trip through the parser (their type
-        // path is not a valid path token), so skip them.
-        if registration.type_info().type_path().contains('<') {
-            skipped.push(asset_ref.name.clone());
-            continue;
-        }
 
         let Some(reflect_asset) = registration.data::<ReflectAsset>() else {
             skipped.push(asset_ref.name.clone());
