@@ -1,0 +1,20 @@
+[package]
+name = "jackdaw_surface"
+version.workspace = true
+edition = "2024"
+description = "Internal crate for the jackdaw editor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = [
+    "std",
+    "bevy_asset",
+    "bevy_pbr",
+    "bevy_render",
+    "bevy_image",
+    "bevy_log",
+] }
+
+[lints]
+workspace = true

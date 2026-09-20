@@ -37,6 +37,10 @@ jackdaw_schema ={ version = "0.19.0", path = "../jackdaw_schema", features = [
     "reflect",
 ] }
 jackdaw_geometry = { version = "0.19.0", path = "../jackdaw_geometry", default-features = false }
+# The layered surface material and its shader, so a game renders a scene that
+# names one with no registration of its own. Optional: a headless build links
+# no GPU crate.
+jackdaw_surface = { version = "0.19.0", path = "../jackdaw_surface", optional = true }
 jackdaw_scene_types = { version = "0.19.0", path = "../jackdaw_scene_types", default-features = false }
 jackdaw_pie_protocol = { version = "0.19.0", path = "../jackdaw_pie_protocol", optional = true }
 jackdaw_camera_rig = { version = "0.19.0", path = "../jackdaw_camera_rig", optional = true }
@@ -64,6 +68,7 @@ thiserror = "2"
 [features]
 default = ["render"]
 render = [
+    "dep:jackdaw_surface",
     "bevy/bevy_pbr",
     "bevy/bevy_render",
     "bevy/bevy_image",

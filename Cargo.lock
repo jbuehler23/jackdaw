@@ -4874,6 +4874,7 @@ dependencies = [
  "jackdaw_sdk",
  "jackdaw_select",
  "jackdaw_snap",
+ "jackdaw_surface",
  "jackdaw_terrain",
  "jackdaw_uv",
  "jackdaw_widgets",
@@ -5323,6 +5324,7 @@ dependencies = [
  "jackdaw_prefab",
  "jackdaw_scene_types",
  "jackdaw_schema",
+ "jackdaw_surface",
  "jackdaw_terrain",
  "jackdaw_widgets_runtime",
  "serde",
@@ -5388,6 +5390,13 @@ dependencies = [
  "glam 0.32.1",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "jackdaw_surface"
+version = "0.19.0"
+dependencies = [
+ "bevy",
 ]
 
 [[package]]

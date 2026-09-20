@@ -162,6 +162,7 @@ pub mod viewport_select;
 pub mod viewport_util;
 pub mod windowing;
 pub mod workspace_dropdown;
+pub mod worn_material;
 
 use bevy::{
     app::PluginGroupBuilder,

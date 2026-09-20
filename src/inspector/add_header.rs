@@ -317,7 +317,7 @@ fn spawn_material_header(world: &mut World, host: Entity) {
                 let idx = event.selected;
                 if let Some((_, handle)) = handles_for_observe.get(idx) {
                     commands.trigger(ApplyMaterialDefToFaces {
-                        material: handle.clone(),
+                        material: crate::worn_material::WornMaterial::Standard(handle.clone()),
                     });
                 }
             },
@@ -376,7 +376,9 @@ pub(crate) fn on_material_new_click(
             .get_resource::<crate::material_preview::MaterialPreviewState>()
             .and_then(|s| s.active_material.clone());
         if let Some(handle) = handle {
-            world.trigger(ApplyMaterialDefToFaces { material: handle });
+            world.trigger(ApplyMaterialDefToFaces {
+                material: crate::worn_material::WornMaterial::Standard(handle),
+            });
         }
     });
 }

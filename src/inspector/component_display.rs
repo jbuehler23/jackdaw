@@ -40,8 +40,7 @@ use super::{
     ComponentPicker, Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch,
     InspectorTarget, ReflectDisplayable, animation_graph_card, bindings_card, brush_display,
     category_strip::ActiveInspectorCategory, component_tooltip::ReflectedTypeTooltip,
-    custom_props_display, material_display, material_row, modifier_display, node_card,
-    reflect_fields,
+    custom_props_display, material_display, modifier_display, node_card, reflect_fields,
 };
 use crate::inspector::prefab_field_dots::{PrefabInstanceCtx, inspector_type_paths_for};
 use crate::prefab::PrefabAstCache;
@@ -439,7 +438,7 @@ pub(crate) fn build_inspector_displays(
                         || full_path.starts_with("jackdaw_avian_integration")
                         || full_path.starts_with("jackdaw_multiplayer"));
                 if !is_user_type
-                    && full_path != material_row::MESH_MATERIAL_TYPE_PATH
+                    && !crate::worn_material::material_component_paths().contains(&full_path)
                     && !authored_type_paths.is_empty()
                     && !jackdaw_bsn::type_paths_include(
                         authored_type_paths.iter().map(String::as_str),
@@ -591,10 +590,11 @@ pub(crate) fn build_inspector_displays(
             continue;
         }
 
-        // MeshMaterial3d<StandardMaterial> gets four dedicated material cards
-        // (Preview, Surface, Textures, Settings) rather than a single generic
-        // wrapper. Skip the generic card and inject the four cards directly.
-        if *type_path == material_row::MESH_MATERIAL_TYPE_PATH {
+        // The component a mesh wears its material on gets four dedicated
+        // material cards (Preview, Surface, Textures, Settings) rather than a
+        // single generic wrapper. Skip the generic card and inject the four
+        // cards directly.
+        if crate::worn_material::material_component_paths().contains(&type_path.as_str()) {
             material_display::inject_material_cards(
                 commands,
                 source_entity,

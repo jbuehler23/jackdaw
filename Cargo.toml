@@ -102,6 +102,7 @@ jackdaw_uv.workspace = true
 jackdaw_pick.workspace = true
 jackdaw_hull.workspace = true
 jackdaw_material.workspace = true
+jackdaw_surface.workspace = true
 jackdaw_node_graph.workspace = true
 jackdaw_animation.workspace = true
 jackdaw_animation_runtime.workspace = true
@@ -249,6 +250,7 @@ jackdaw_uv = { version = "0.19.0", path = "crates/jackdaw_uv" }
 jackdaw_pick = { version = "0.19.0", path = "crates/jackdaw_pick" }
 jackdaw_hull = { version = "0.19.0", path = "crates/jackdaw_hull" }
 jackdaw_material = { version = "0.19.0", path = "crates/jackdaw_material" }
+jackdaw_surface = { version = "0.19.0", path = "crates/jackdaw_surface" }
 jackdaw_node_graph = { version = "0.19.0", path = "crates/jackdaw_node_graph" }
 jackdaw_animation = { version = "0.19.0", path = "crates/jackdaw_animation" }
 jackdaw_animation_runtime = { version = "0.19.0", path = "crates/jackdaw_animation_runtime" }

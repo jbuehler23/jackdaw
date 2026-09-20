@@ -208,7 +208,10 @@ impl Plugin for JackdawPlugin {
         );
 
         #[cfg(feature = "render")]
-        app.add_plugins(MaterialTextureFormatPlugin);
+        app.add_plugins((
+            MaterialTextureFormatPlugin,
+            jackdaw_surface::LayeredSurfacePlugin,
+        ));
 
         // Game code may add a model to an entity long after the scene it lives
         // in was loaded, and such a source resolves exactly as an authored one.
@@ -1107,9 +1110,9 @@ fn load_embedded_assets(
     map
 }
 
-/// The asset-relative paths of every linear-space texture referenced by a
-/// `StandardMaterial` patch in the document. These slots hold non-color data
-/// (normals, ORM, height) and must be loaded without sRGB decoding.
+/// The asset-relative paths of every linear-space texture the document binds
+/// to a material slot holding non-color data (normals, ORM, height). These
+/// must be loaded without sRGB decoding.
 #[cfg(feature = "render")]
 fn collect_linear_texture_paths(ast: &SceneBsnAst) -> Vec<String> {
     const LINEAR_SLOTS: &[&str] = &[
@@ -1117,8 +1120,38 @@ fn collect_linear_texture_paths(ast: &SceneBsnAst) -> Vec<String> {
         "metallic_roughness_texture",
         "occlusion_texture",
         "depth_map",
+        "layer_normal_map_texture",
+        "layer_orm_texture",
+        "detail_normal_map_texture",
+        "detail_orm_texture",
     ];
-    const STANDARD_MATERIAL: &str = "bevy_pbr::pbr_material::StandardMaterial";
+
+    fn collect(data: &jackdaw_bsn::BsnStructData, paths: &mut Vec<String>) {
+        for field in &data.fields.0 {
+            match &field.value {
+                BsnValue::String(path)
+                    if LINEAR_SLOTS.contains(&field.name.as_str()) && !path.is_empty() =>
+                {
+                    if path.starts_with('@') || path.starts_with('#') {
+                        // A catalog / embedded reference, not a file path.
+                        // Its underlying image is loaded elsewhere without
+                        // `is_srgb = false`, so the linear-slot decode is
+                        // still wrong; loading the ref string as a file
+                        // would only add a bogus asset. Skip and flag it.
+                        warn!(
+                            "linear-space texture '{path}' in field '{}' is a \
+                             catalog/embedded reference; it will decode as sRGB",
+                            field.name
+                        );
+                    } else {
+                        paths.push(path.clone());
+                    }
+                }
+                BsnValue::Struct(nested) => collect(nested, paths),
+                _ => {}
+            }
+        }
+    }
 
     let mut paths = Vec::new();
     let mut stack: Vec<Entity> = ast.roots.clone();
@@ -1128,29 +1161,7 @@ fn collect_linear_texture_paths(ast: &SceneBsnAst) -> Vec<String> {
         };
         for &pe in &patches.0 {
             match ast.get_patch(pe) {
-                Some(BsnPatch::Struct(data)) if data.type_path == STANDARD_MATERIAL => {
-                    for field in &data.fields.0 {
-                        if LINEAR_SLOTS.contains(&field.name.as_str())
-                            && let BsnValue::String(path) = &field.value
-                            && !path.is_empty()
-                        {
-                            if path.starts_with('@') || path.starts_with('#') {
-                                // A catalog / embedded reference, not a file path.
-                                // Its underlying image is loaded elsewhere without
-                                // `is_srgb = false`, so the linear-slot decode is
-                                // still wrong; loading the ref string as a file
-                                // would only add a bogus asset. Skip and flag it.
-                                warn!(
-                                    "linear-space texture '{path}' in field '{}' is a \
-                                     catalog/embedded reference; it will decode as sRGB",
-                                    field.name
-                                );
-                            } else {
-                                paths.push(path.clone());
-                            }
-                        }
-                    }
-                }
+                Some(BsnPatch::Struct(data)) => collect(data, &mut paths),
                 Some(BsnPatch::Children(kids)) => stack.extend(kids.iter().copied()),
                 _ => {}
             }

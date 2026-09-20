@@ -314,7 +314,7 @@ pub fn default_asset_value(world: &mut World, kind: &AssetKind) -> Option<AssetV
     ))
 }
 
-fn registered_type_id(world: &World, type_path: &str) -> Option<std::any::TypeId> {
+pub(crate) fn registered_type_id(world: &World, type_path: &str) -> Option<std::any::TypeId> {
     let registry = world.resource::<AppTypeRegistry>().read();
     Some(registry.get_with_type_path(type_path)?.type_id())
 }
@@ -1315,8 +1315,11 @@ pub const ANIMATION_GRAPH_KIND: &str = "animation_graph";
 /// The kind a packed prefab holds.
 pub const PREFAB_KIND: &str = "prefab";
 
+/// The kind a material carrying a second surface on its upward faces holds.
+pub const LAYERED_SURFACE_KIND: &str = "layered_surface";
+
 /// The types the editor has compiled in.
-fn compiled_kinds() -> [AssetKind; 3] {
+fn compiled_kinds() -> [AssetKind; 4] {
     use jackdaw_api_internal::lucide_icons::Icon;
     [
         AssetKind::compiled(
@@ -1333,6 +1336,12 @@ fn compiled_kinds() -> [AssetKind; 3] {
         .with_icon(Icon::Workflow),
         AssetKind::compiled(PREFAB_KIND, "Prefab", jackdaw_prefab::components::PREFAB_TYPE)
             .with_icon(Icon::Package),
+        AssetKind::compiled(
+            LAYERED_SURFACE_KIND,
+            "Layered Surface",
+            <jackdaw_surface::LayeredSurfaceMaterial as bevy::reflect::TypePath>::type_path(),
+        )
+        .with_icon(Icon::Layers),
     ]
 }
 

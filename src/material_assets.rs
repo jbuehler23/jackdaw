@@ -40,15 +40,19 @@ pub const MATERIALS_DIR: &str = "materials";
 
 const STANDARD_MATERIAL: &str = "bevy_pbr::pbr_material::StandardMaterial";
 
-/// `StandardMaterial` texture slots holding linear (non-color) data. These
-/// must be loaded with `is_srgb = false` before anything else resolves their
-/// paths, since the asset server keys images by path and hands out whichever
-/// decode was requested first.
-const LINEAR_SLOTS: [&str; 4] = [
+/// Material texture slots holding linear (non-color) data. These must be
+/// loaded with `is_srgb = false` before anything else resolves their paths,
+/// since the asset server keys images by path and hands out whichever decode
+/// was requested first.
+const LINEAR_SLOTS: [&str; 8] = [
     "normal_map_texture",
     "metallic_roughness_texture",
     "occlusion_texture",
     "depth_map",
+    "layer_normal_map_texture",
+    "layer_orm_texture",
+    "detail_normal_map_texture",
+    "detail_orm_texture",
 ];
 
 /// The materials editor surfaces browse, in display order.
@@ -174,6 +178,23 @@ pub fn material_of_reference(
     registry
         .get_by_name(jackdaw_bsn::asset_stem(reference))
         .map(|entry| entry.handle.clone())
+}
+
+/// The material a reference names, whichever kind of material holds it.
+pub fn worn_of_reference(
+    index: Option<&crate::asset_index::AssetIndex>,
+    registry: &MaterialRegistry,
+    reference: &str,
+) -> Option<crate::worn_material::WornMaterial> {
+    if let Some(handle) = index
+        .and_then(|index| index.get(&<PathBuf as path_slash::PathBufExt>::from_slash(reference)))
+        .and_then(|entry| entry.value.handle().cloned())
+        .and_then(crate::worn_material::WornMaterial::of_handle)
+    {
+        return Some(handle);
+    }
+    material_of_reference(index, registry, reference)
+        .map(crate::worn_material::WornMaterial::Standard)
 }
 
 /// Strip path separators and other characters that cannot appear in a file
@@ -306,6 +327,11 @@ pub fn remove_material_file(world: &World, name: &str) {
 /// skipped; a missing texture path still produces a handle (the asset server
 /// surfaces the missing file), so one dead texture never drops the material.
 pub fn load_material_file(world: &mut World, path: &Path) -> Option<UntypedHandle> {
+    load_surface_file(world, path, STANDARD_MATERIAL)
+}
+
+/// Load one file holding a single material value of `type_path`.
+pub fn load_surface_file(world: &mut World, path: &Path, type_path: &str) -> Option<UntypedHandle> {
     let text = match jackdaw_bsn::read_document_text(path) {
         Ok(text) => text,
         Err(err) => {
@@ -313,22 +339,29 @@ pub fn load_material_file(world: &mut World, path: &Path) -> Option<UntypedHandl
             return None;
         }
     };
-    let handle = load_material_bsn(world, &text);
+    let handle = load_surface_bsn(world, &text, type_path);
     if handle.is_none() {
         warn!("No material found in {}", path.display());
     }
     handle
 }
 
-/// Build a material from `.bsn` text, rehydrating its texture slots through
-/// the asset server.
-///
-/// A material file holds exactly one `StandardMaterial`; anything else in the
-/// document is reported and ignored.
+/// Build a `StandardMaterial` from `.bsn` text, rehydrating its texture slots
+/// through the asset server.
 pub fn load_material_bsn(world: &mut World, text: &str) -> Option<UntypedHandle> {
+    load_surface_bsn(world, text, STANDARD_MATERIAL)
+}
+
+/// Build a material of `type_path` from `.bsn` text, rehydrating its texture
+/// slots through the asset server.
+///
+/// A material file holds exactly one value; anything else in the document is
+/// reported and ignored.
+pub fn load_surface_bsn(world: &mut World, text: &str, type_path: &str) -> Option<UntypedHandle> {
     if text.trim().is_empty() {
         return None;
     }
+    let expected = crate::definition_assets::registered_type_id(world, type_path)?;
     // Claim the linear slots' images as non-sRGB first; the generic applier below resolves
     // the same paths and gets these handles.
     let _linear = preload_linear_textures(world, text);
@@ -346,9 +379,9 @@ pub fn load_material_bsn(world: &mut World, text: &str) -> Option<UntypedHandle>
         );
     }
     let entry = entries.into_iter().next()?;
-    if entry.handle.type_id() != std::any::TypeId::of::<StandardMaterial>() {
+    if entry.handle.type_id() != expected {
         warn!(
-            "material document '{}' is not a StandardMaterial",
+            "material document '{}' does not hold a {type_path}",
             entry.name
         );
         return None;
@@ -380,8 +413,8 @@ pub(crate) fn preload_linear_textures(world: &mut World, text: &str) -> Vec<Unty
         .collect()
 }
 
-/// Asset paths bound to a `StandardMaterial`'s linear texture slots anywhere
-/// in the document.
+/// Asset paths bound to a linear texture slot anywhere in the document,
+/// whatever material type holds it.
 fn linear_texture_paths(ast: &SceneBsnAst) -> Vec<String> {
     let mut paths = Vec::new();
     for &root in &ast.roots {
@@ -389,25 +422,29 @@ fn linear_texture_paths(ast: &SceneBsnAst) -> Vec<String> {
             continue;
         };
         for &pe in &patches.0 {
-            let Some(BsnPatch::Struct(data)) = ast.get_patch(pe) else {
-                continue;
-            };
-            if data.type_path != STANDARD_MATERIAL {
-                continue;
-            }
-            for field in &data.fields.0 {
-                if LINEAR_SLOTS.contains(&field.name.as_str())
-                    && let BsnValue::String(path) = &field.value
-                    && !path.is_empty()
-                    && !path.starts_with('@')
-                    && !path.starts_with('#')
-                {
-                    paths.push(path.clone());
-                }
+            if let Some(BsnPatch::Struct(data)) = ast.get_patch(pe) {
+                collect_linear_paths(data, &mut paths);
             }
         }
     }
     paths
+}
+
+fn collect_linear_paths(data: &jackdaw_bsn::BsnStructData, paths: &mut Vec<String>) {
+    for field in &data.fields.0 {
+        match &field.value {
+            BsnValue::String(path)
+                if LINEAR_SLOTS.contains(&field.name.as_str())
+                    && !path.is_empty()
+                    && !path.starts_with('@')
+                    && !path.starts_with('#') =>
+            {
+                paths.push(path.clone());
+            }
+            BsnValue::Struct(nested) => collect_linear_paths(nested, paths),
+            _ => {}
+        }
+    }
 }
 
 /// The materials a panel has edited since the last frame wrote them back.
@@ -617,16 +654,19 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 pub(crate) fn plugin(app: &mut App) {
     // The retag that makes 16-bit maps bindable comes from the runtime, so the editor and
     // the built game agree on it.
-    app.add_plugins(jackdaw_runtime::MaterialTextureFormatPlugin)
-        .init_resource::<PendingMaterialDelete>()
-        .init_resource::<EditedMaterials>()
-        .add_systems(
-            Update,
-            write_edited_materials.run_if(in_state(crate::AppState::Editor)),
-        )
-        .add_observer(on_delete_dialog_opened)
-        .add_observer(on_delete_dialog_closed)
-        .add_observer(on_material_delete_confirmed);
+    app.add_plugins((
+        jackdaw_runtime::MaterialTextureFormatPlugin,
+        jackdaw_surface::LayeredSurfacePlugin,
+    ))
+    .init_resource::<PendingMaterialDelete>()
+    .init_resource::<EditedMaterials>()
+    .add_systems(
+        Update,
+        write_edited_materials.run_if(in_state(crate::AppState::Editor)),
+    )
+    .add_observer(on_delete_dialog_opened)
+    .add_observer(on_delete_dialog_closed)
+    .add_observer(on_material_delete_confirmed);
 }
 
 fn a_material_is_selected(

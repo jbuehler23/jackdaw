@@ -161,7 +161,9 @@ pub fn should_skip_component(type_path: &str) -> bool {
             return true;
         }
     }
-    SKIP_COMPONENT_PATHS.contains(&type_path) || computed_ui_component_paths().contains(&type_path)
+    SKIP_COMPONENT_PATHS.contains(&type_path)
+        || computed_ui_component_paths().contains(&type_path)
+        || type_path == crate::worn_material::layered_material_component()
 }
 
 /// The editor's component skip policy as a [`jackdaw_bsn::BsnWriterConfig`]
@@ -183,6 +185,9 @@ pub fn editor_writer_config() -> jackdaw_bsn::BsnWriterConfig {
     for path in computed_ui_component_paths() {
         config.skip_paths.push(path.to_string());
     }
+    config
+        .skip_paths
+        .push(crate::worn_material::layered_material_component().to_string());
     for path in ALWAYS_SAVE_PATHS {
         config.always_save_paths.push((*path).to_string());
     }

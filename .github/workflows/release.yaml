@@ -180,6 +180,7 @@ jobs:
           -p jackdaw_runtime
           -p jackdaw_scene_types
           -p jackdaw_schema
+          -p jackdaw_surface
           -p jackdaw_terrain
           -p jackdaw_widgets
           -p jackdaw_widgets_runtime

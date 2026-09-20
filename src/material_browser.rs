@@ -5,6 +5,7 @@ use crate::material_ui::{
     ActionHeaderProps, HeaderAction, MaterialSection, TextureSlot, fill_surface_rows,
     fill_texture_rows, library_actions, spawn_action_header, spawn_preview, spawn_section,
 };
+use crate::worn_material::WornMaterial;
 use crate::{
     EditorEntity,
     brush::{Brush, BrushEditMode, BrushSelection, EditMode, SetBrush},
@@ -81,7 +82,7 @@ pub struct MaterialBrowserState {
 
 #[derive(Event, Clone)]
 pub struct ApplyMaterialDefToFaces {
-    pub material: Handle<StandardMaterial>,
+    pub material: WornMaterial,
 }
 
 #[derive(Event, Clone)]
@@ -427,20 +428,26 @@ fn handle_apply_material(
     mut last_material: ResMut<LastUsedMaterial>,
     mut commands: Commands,
 ) {
-    last_material.material = Some(event.material.clone());
+    if let Some(standard) = event.material.standard() {
+        last_material.material = Some(standard.clone());
+    }
 
     let active_faces: Vec<usize> = brush_selection
         .active_sub()
         .map(|s| s.faces.clone())
         .unwrap_or_default();
     if *edit_mode == EditMode::BrushEdit(BrushEditMode::Face) && !active_faces.is_empty() {
+        let Some(standard) = event.material.standard().cloned() else {
+            warn!("material.apply: a brush face takes a standard material only");
+            return;
+        };
         if let Some(entity) = brush_selection.active_brush
             && let Ok(mut brush) = brushes.get_mut(entity)
         {
             let old = brush.clone();
             for &face_idx in &active_faces {
                 if face_idx < brush.faces.len() {
-                    brush.faces[face_idx].material = event.material.clone();
+                    brush.faces[face_idx].material = standard.clone();
                 }
             }
             let new_brush = brush.clone();
@@ -457,6 +464,7 @@ fn handle_apply_material(
             });
         }
     } else {
+        let selected = selection.entities.to_vec();
         let targets: Vec<Entity> = crate::brush::shown_edit_brushes(
             &selection.entities,
             |e| brushes.contains(e),
@@ -470,9 +478,13 @@ fn handle_apply_material(
         let mut group_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
         for entity in targets {
             if let Ok(mut brush) = brushes.get_mut(entity) {
+                let Some(standard) = event.material.standard().cloned() else {
+                    warn!("material.apply: a brush face takes a standard material only");
+                    continue;
+                };
                 let old = brush.clone();
                 for face in brush.faces.iter_mut() {
-                    face.material = event.material.clone();
+                    face.material = standard.clone();
                 }
                 let new_brush = brush.clone();
                 let cmd = SetBrush {
@@ -494,6 +506,10 @@ fn handle_apply_material(
                 label: "Apply material".into(),
             }));
         }
+        let chosen = event.material.clone();
+        commands.queue(move |world: &mut World| {
+            wear_on_meshes(world, &selected, chosen);
+        });
     }
 
     // The inspector only ever shows the primary selection, and applying a
@@ -510,6 +526,45 @@ fn handle_apply_material(
             },
         );
     }
+}
+
+/// Put a material on every selected mesh that is not a brush, as one undo
+/// entry. A mesh wearing another kind of material has its component swapped
+/// for the one the chosen material is worn on.
+fn wear_on_meshes(world: &mut World, selected: &[Entity], chosen: WornMaterial) {
+    let named = world
+        .get_resource::<crate::asset_index::AssetIndex>()
+        .and_then(|index| index.by_handle(&chosen.untyped()))
+        .map(|entry| entry.path.to_slash_lossy().into_owned());
+    let targets: Vec<Entity> = selected
+        .iter()
+        .copied()
+        .filter(|entity| world.get::<Brush>(*entity).is_none())
+        .filter(|entity| WornMaterial::of(world, *entity).is_some_and(|worn| worn != chosen))
+        .collect();
+    let mut group: Vec<Box<dyn EditorCommand>> = Vec::new();
+    for entity in targets {
+        let Some(command) = crate::inspector::material_row::WearMaterial::new(
+            world,
+            entity,
+            chosen.clone(),
+            named.clone(),
+        ) else {
+            continue;
+        };
+        let mut command: Box<dyn EditorCommand> = Box::new(command);
+        command.execute(world);
+        group.push(command);
+    }
+    if group.is_empty() {
+        return;
+    }
+    world
+        .resource_mut::<CommandHistory>()
+        .push_executed(Box::new(CommandGroup {
+            commands: group,
+            label: "Apply material".into(),
+        }));
 }
 
 fn handle_select_material_preview(
@@ -1034,13 +1089,16 @@ pub(crate) fn material_apply(
     preview_state: Res<MaterialPreviewState>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let handle = match params.as_str("material") {
+    let material = match params.as_str("material") {
         Some(reference) => {
-            crate::material_assets::material_of_reference(index.as_deref(), &registry, reference)
+            crate::material_assets::worn_of_reference(index.as_deref(), &registry, reference)
         }
-        None => preview_state.active_material.clone(),
+        None => preview_state
+            .active_material
+            .clone()
+            .map(WornMaterial::Standard),
     };
-    let Some(material) = handle.filter(|h| *h != Handle::default()) else {
+    let Some(material) = material.filter(|worn| !worn.is_default()) else {
         warn!("material.apply: no material to apply");
         return OperatorResult::Cancelled;
     };
