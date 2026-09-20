@@ -850,6 +850,7 @@ mod extract_tests {
 
     /// An enum a component holds, which is not itself a component.
     #[derive(Reflect, Default)]
+    #[type_path = "my_game::content"]
     #[reflect(Default)]
     enum Latch {
         #[default]
@@ -858,6 +859,7 @@ mod extract_tests {
     }
 
     #[derive(Component, Reflect, Default)]
+    #[type_path = "my_game::content"]
     #[reflect(Component, Default)]
     struct Door {
         latch: Latch,
