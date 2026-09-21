@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_commands::CommandHistory;
 use jackdaw_scene_types::{
-    DetailLayer, DetailMesh, Terrain, TerrainChannel, TerrainChannelElement,
+    DetailLayer, DetailMesh, Terrain, TerrainChannel, TerrainChannelElement, TerrainPaletteEntry,
 };
 
 use super::detail::mark_detail_dirty;
@@ -159,7 +159,14 @@ pub(crate) fn terrain_detail_add(
             world,
         );
         if let Some(name) = missing_channel {
-            history.execute(Box::new(AddTerrainChannel { entity, name }), world);
+            history.execute(
+                Box::new(AddTerrainChannel {
+                    entity,
+                    name,
+                    palette: Vec::new(),
+                }),
+                world,
+            );
         }
     });
     world
@@ -703,11 +710,14 @@ impl EditorCommand for SetTerrainDetail {
     }
 }
 
-/// One undo entry for the density channel `terrain.detail.add` mints. Undo
-/// drops the descriptor; the store's reconcile drops the zeroed plane.
-struct AddTerrainChannel {
-    entity: Entity,
-    name: String,
+/// One undo entry for a channel an operator mints. Undo drops the
+/// descriptor; the store's reconcile drops the zeroed plane.
+pub(super) struct AddTerrainChannel {
+    pub(super) entity: Entity,
+    pub(super) name: String,
+    /// Values the channel offers a brush. Empty is continuous coverage,
+    /// which is what a detail layer's density carries.
+    pub(super) palette: Vec<TerrainPaletteEntry>,
 }
 
 impl EditorCommand for AddTerrainChannel {
@@ -722,11 +732,10 @@ impl EditorCommand for AddTerrainChannel {
         {
             return;
         }
-        let continuous_coverage = Vec::new();
         terrain.channels.push(TerrainChannel {
             name: self.name.clone(),
             element: TerrainChannelElement::U8,
-            palette: continuous_coverage,
+            palette: self.palette.clone(),
         });
         super::channel_ops::commit_channels(world, self.entity);
     }
@@ -747,7 +756,7 @@ impl EditorCommand for AddTerrainChannel {
     }
 
     fn description(&self) -> &str {
-        "Add Detail Density"
+        "Add Terrain Channel"
     }
 }
 

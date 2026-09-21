@@ -5,7 +5,8 @@
 //! exists somewhere else -- a painted heightmap, a scan, a terrain exported
 //! from another tool -- and lays it over the selected terrain's grid, with
 //! one greyscale image per material slot optionally painting what draws
-//! where.
+//! where, one per scatter mask saying where things stand, and one per
+//! detail layer saying where its grass grows.
 
 use std::path::{Path, PathBuf};
 
@@ -13,12 +14,16 @@ use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use jackdaw_api::prelude::*;
 use jackdaw_commands::{CommandGroup, EditorCommand};
-use jackdaw_terrain::import::{GreyImage, HeightRange, SlotWeights, heights_from_image};
+use jackdaw_scene_types::{TerrainChannel, TerrainChannelElement};
+use jackdaw_terrain::import::{
+    ChannelPaint, GreyImage, HeightRange, SlotWeights, heights_from_image,
+};
 use path_slash::PathExt as _;
 
 use super::TerrainDataStore;
+use super::detail_ops::AddTerrainChannel;
 use super::ops::{FRESH_TERRAIN_REGIONS, has_selected_terrain};
-use super::paint::SetTerrainControl;
+use super::paint::{SetTerrainChannel, SetTerrainControl};
 use super::sculpt::SetTerrainHeights;
 use super::shape_ops::{SetTerrainShape, clamp_cell_size};
 use crate::commands::CommandHistory;
@@ -131,11 +136,12 @@ fn poll_heightmap_pick(world: &mut World) {
 }
 
 /// Replace the selected terrain's heights from a greyscale image, and
-/// optionally its paint from one image per material slot.
+/// optionally its paint, its scatter masks and its detail masks from one
+/// image each.
 ///
-/// Leaves one undo entry for the whole import, heights, paint and shape
-/// together: a half-undone import is a terrain whose ground and paint
-/// disagree.
+/// Leaves one undo entry for the whole import, heights, paint, masks and
+/// shape together: a half-undone import is a terrain whose ground and
+/// paint disagree.
 ///
 /// `allows_undo = false` because the entry is pushed here. A `size` writes
 /// the cell size onto the component, which the framework's snapshot diff
@@ -143,7 +149,8 @@ fn poll_heightmap_pick(world: &mut World) {
 #[operator(
     id = "terrain.import",
     label = "Import Terrain",
-    description = "Replace the selected terrain's heights, and optionally its paint, from images.",
+    description = "Replace the selected terrain's heights, and optionally its paint and masks, \
+                   from images.",
     is_available = has_selected_terrain,
     allows_undo = false,
     params(
@@ -165,6 +172,18 @@ fn poll_heightmap_pick(world: &mut World) {
             String,
             doc = "Greyscale weight image per material slot, as \
                    \"0:ground/grass.png,1:ground/gravel.png\"."
+        ),
+        channels(
+            String,
+            doc = "Greyscale image per scatter mask, as \"rocks:masks/rocks.png\". \
+                   Black is unpainted; anywhere else takes the mask's value, ready \
+                   for terrain.scatter. A mask this terrain does not declare is added."
+        ),
+        details(
+            String,
+            doc = "Greyscale image per detail layer, as \"0:masks/grass.png\", naming \
+                   the layer by index or by name. The image is the layer's whole \
+                   mask: black is bare ground and white is full cover."
         ),
     )
 )]
@@ -208,6 +227,39 @@ struct DecodedImport {
     range: HeightRange,
     size: Option<f32>,
     weights: Vec<(u8, GreyImage)>,
+    /// Scatter masks by name, whether or not the terrain declares them yet.
+    channels: Vec<(String, GreyImage)>,
+    /// Detail masks by the index of the channel their layer grows from.
+    masks: Vec<(usize, GreyImage)>,
+}
+
+/// One channel's values before and after an import paints them.
+struct ChannelWrite {
+    index: usize,
+    old: Vec<u16>,
+    new: Vec<u16>,
+}
+
+/// The value a scatter mask's image writes: the first value its palette
+/// offers that is not the unset zero, or full cover on a channel carrying
+/// no palette at all, which is what a detail layer's density is.
+fn paint_value(channel: &TerrainChannel) -> u16 {
+    channel
+        .palette
+        .iter()
+        .map(|entry| entry.value)
+        .find(|value| *value != 0)
+        .unwrap_or_else(|| channel.element.max_value())
+}
+
+/// The channel an import mints for a name the terrain does not declare:
+/// what `terrain.channel.add` would have made.
+fn fresh_channel(name: &str) -> TerrainChannel {
+    TerrainChannel {
+        name: name.to_string(),
+        element: TerrainChannelElement::U8,
+        palette: super::channel_ops::seeded_palette(),
+    }
 }
 
 /// Lay the decoded images over the terrain and leave one undo entry.
@@ -246,6 +298,56 @@ fn apply(
         jackdaw_terrain::quantize_heights(&mut new_heights, step);
     }
     let old_heights = data.heights().to_vec();
+
+    // Read before anything writes, so a channel this import is about to
+    // add reads as the zeros it is about to be given.
+    let mut minted: Vec<String> = Vec::new();
+    let mut writes: Vec<ChannelWrite> = Vec::new();
+    for (name, image) in &import.channels {
+        let declared = terrain.channels.iter().position(|c| &c.name == name);
+        let (index, value) = match declared {
+            Some(index) => (index, paint_value(&terrain.channels[index])),
+            None => {
+                let at = minted
+                    .iter()
+                    .position(|already| already == name)
+                    .unwrap_or_else(|| {
+                        minted.push(name.clone());
+                        minted.len() - 1
+                    });
+                (
+                    terrain.channels.len() + at,
+                    paint_value(&fresh_channel(name)),
+                )
+            }
+        };
+        let old = data.channel_values(index);
+        let mut new = old.clone();
+        // Whole texels, so the edge of a drawn shape stays where it was
+        // drawn rather than fading a blend of two values outward.
+        jackdaw_terrain::import::paint_channel(
+            &mut new,
+            &ChannelPaint {
+                value,
+                samples: image.resample_nearest(resolution),
+            },
+        );
+        writes.push(ChannelWrite { index, old, new });
+    }
+    for (index, image) in &import.masks {
+        let ceiling = terrain
+            .channels
+            .get(*index)
+            .map_or(u16::from(u8::MAX), |channel| channel.element.max_value());
+        let old = data.channel_values(*index);
+        let mut new = old.clone();
+        jackdaw_terrain::import::paint_mask(&mut new, &image.resample(resolution), ceiling);
+        writes.push(ChannelWrite {
+            index: *index,
+            old,
+            new,
+        });
+    }
 
     let control = (!import.weights.is_empty()).then(|| {
         let old = store.control(&terrain.data_path).to_vec();
@@ -289,6 +391,25 @@ fn apply(
             LABEL.to_string(),
         )));
     }
+    // The descriptors first: a channel's values have nowhere to land until
+    // the terrain declares it. Undo runs the group backwards, so the values
+    // go back before the descriptor they belong to leaves.
+    for name in minted {
+        steps.push(Box::new(AddTerrainChannel {
+            entity,
+            name,
+            palette: super::channel_ops::seeded_palette(),
+        }));
+    }
+    for write in writes {
+        steps.push(Box::new(SetTerrainChannel {
+            entity,
+            channel: write.index,
+            old_values: write.old,
+            new_values: write.new,
+            label: LABEL.to_string(),
+        }));
+    }
     world.resource_scope(|world, mut history: Mut<CommandHistory>| {
         history.execute(
             Box::new(CommandGroup {
@@ -330,11 +451,33 @@ fn read_images(
         weights.push((*slot, decode_grey(&file, named)?));
     }
 
+    let named_channels = match params.as_str("channels") {
+        Some(text) => parse_pairs(text, "channels", "mask:path", "rocks:masks/rocks.png")?,
+        None => Vec::new(),
+    };
+    let mut channels = Vec::with_capacity(named_channels.len());
+    for (mask, named) in &named_channels {
+        let file = project_file(assets.as_deref(), named)?;
+        channels.push((mask.clone(), decode_grey(&file, named)?));
+    }
+
+    let named_masks = match params.as_str("details") {
+        Some(text) => parse_details(text, terrain)?,
+        None => Vec::new(),
+    };
+    let mut masks = Vec::with_capacity(named_masks.len());
+    for (index, named) in &named_masks {
+        let file = project_file(assets.as_deref(), named)?;
+        masks.push((*index, decode_grey(&file, named)?));
+    }
+
     Ok(DecodedImport {
         heightmap,
         range,
         size: number(params, "size").map(|size| size as f32),
         weights,
+        channels,
+        masks,
     })
 }
 
@@ -357,6 +500,30 @@ fn parse_height_range(text: &str) -> Result<HeightRange, String> {
     Ok(HeightRange::new(min, max))
 }
 
+/// `"a:one.png,b:two.png"` as the pairs it names, each side trimmed.
+///
+/// `shape` and `example` are how the refusal describes the pair the
+/// argument wanted, since each argument pairs a different thing with a
+/// path.
+fn parse_pairs(
+    text: &str,
+    key: &str,
+    shape: &str,
+    example: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let mut pairs = Vec::new();
+    for field in text.split(',').map(str::trim).filter(|f| !f.is_empty()) {
+        let bad = || format!("{key} wants {shape} pairs, as \"{example}\", not \"{field}\"");
+        let (left, path) = field.split_once(':').ok_or_else(bad)?;
+        let (left, path) = (left.trim(), path.trim());
+        if left.is_empty() || path.is_empty() {
+            return Err(bad());
+        }
+        pairs.push((left.to_string(), path.to_string()));
+    }
+    Ok(pairs)
+}
+
 /// `"0:a.png,1:b.png"` as the slot and path pairs it names, refusing a slot
 /// with no material behind it.
 fn parse_weights(
@@ -364,19 +531,49 @@ fn parse_weights(
     slots: &[jackdaw_terrain::sidecar::TerrainMaterialSlot],
 ) -> Result<Vec<(u8, String)>, String> {
     let mut pairs = Vec::new();
-    for field in text.split(',').map(str::trim).filter(|f| !f.is_empty()) {
-        let (slot, path) = field.split_once(':').ok_or_else(|| {
-            format!("weights wants slot:path pairs, as \"0:ground/grass.png\", not \"{field}\"")
-        })?;
-        let slot: u8 = slot
-            .trim()
+    for (slot, path) in parse_pairs(text, "weights", "slot:path", "0:ground/grass.png")? {
+        let index: u8 = slot
             .parse()
             .map_err(|_| format!("\"{slot}\" is not a texture slot"))?;
-        match slots.get(slot as usize) {
+        match slots.get(index as usize) {
             Some(entry) if !entry.is_tombstone() => {}
-            _ => return Err(format!("this terrain has no material in slot {slot}")),
+            _ => return Err(format!("this terrain has no material in slot {index}")),
         }
-        pairs.push((slot, path.trim().to_string()));
+        pairs.push((index, path));
+    }
+    Ok(pairs)
+}
+
+/// `"0:a.png,grass:b.png"` as the channel each named detail layer grows
+/// from and the image painting its mask, refusing a layer this terrain does
+/// not have.
+///
+/// A layer is named by index or by the name it carries, an index first so
+/// that one still reaches a layer whose name is a number.
+fn parse_details(
+    text: &str,
+    terrain: &jackdaw_scene_types::Terrain,
+) -> Result<Vec<(usize, String)>, String> {
+    let mut pairs = Vec::new();
+    for (named, path) in parse_pairs(text, "details", "layer:path", "0:ground/grass.png")? {
+        let layer = named
+            .parse::<usize>()
+            .ok()
+            .filter(|index| *index < terrain.detail.len())
+            .or_else(|| terrain.detail.iter().position(|layer| layer.name == named))
+            .and_then(|index| terrain.detail.get(index))
+            .ok_or_else(|| format!("this terrain has no detail layer {named}"))?;
+        let index = terrain
+            .channels
+            .iter()
+            .position(|channel| channel.name == layer.density_channel)
+            .ok_or_else(|| {
+                format!(
+                    "the {} detail layer grows from no mask this terrain declares",
+                    layer.name
+                )
+            })?;
+        pairs.push((index, path));
     }
     Ok(pairs)
 }
@@ -482,6 +679,7 @@ mod tests {
         /// a project whose assets the images are written into.
         fn world(root: &Path) -> World {
             let mut world = World::new();
+            world.init_resource::<bevy::ecs::reflect::AppTypeRegistry>();
             world.init_resource::<Selection>();
             world.init_resource::<TerrainDataStore>();
             world.init_resource::<CommandHistory>();
@@ -539,6 +737,71 @@ mod tests {
 
         fn control(world: &World) -> Vec<Control> {
             world.resource::<TerrainDataStore>().control(PATH).to_vec()
+        }
+
+        /// One channel's values as the grid holds them, by the name the
+        /// terrain declares it under.
+        fn channel(world: &World, name: &str) -> Vec<u16> {
+            let terrain = world
+                .resource::<TerrainDataStore>()
+                .get(PATH)
+                .expect("a document");
+            let index = world
+                .iter_entities()
+                .find_map(|entity| entity.get::<jackdaw_scene_types::Terrain>())
+                .expect("a terrain")
+                .channels
+                .iter()
+                .position(|channel| channel.name == name)
+                .expect("a channel by that name");
+            terrain
+                .regions
+                .read_grid_channel(index, terrain.grid_resolution())
+        }
+
+        /// Give the terrain a channel, and the store the zeroed plane that
+        /// goes with it.
+        fn declare_channel(world: &mut World, channel: TerrainChannel) {
+            let entity = world.resource::<Selection>().entities[0];
+            world
+                .get_mut::<jackdaw_scene_types::Terrain>(entity)
+                .expect("a terrain")
+                .channels
+                .push(channel);
+            let terrain = world
+                .get::<jackdaw_scene_types::Terrain>(entity)
+                .expect("a terrain")
+                .clone();
+            world.resource_mut::<TerrainDataStore>().entry_for(&terrain);
+        }
+
+        /// A layer growing from a channel of continuous cover, as
+        /// `terrain.detail.add` leaves one.
+        fn declare_detail(world: &mut World, name: &str) {
+            declare_channel(
+                world,
+                TerrainChannel {
+                    palette: Vec::new(),
+                    ..fresh_channel(name)
+                },
+            );
+            let entity = world.resource::<Selection>().entities[0];
+            world
+                .get_mut::<jackdaw_scene_types::Terrain>(entity)
+                .expect("a terrain")
+                .detail
+                .push(jackdaw_scene_types::DetailLayer {
+                    name: name.to_string(),
+                    density_channel: name.to_string(),
+                    ..default()
+                });
+        }
+
+        /// White down the right half of the grid and black down the left.
+        fn right_half() -> Vec<f32> {
+            (0..RESOLUTION * RESOLUTION)
+                .map(|i| f32::from(i % RESOLUTION >= RESOLUTION / 2))
+                .collect()
         }
 
         /// A ramp across the grid, black on the left and white on the right.
@@ -754,6 +1017,130 @@ mod tests {
             assert!(control(&world).iter().all(|word| !word.manual()));
         }
 
+        /// A mask says where things stand, so an import lays a shape into
+        /// it that `terrain.scatter` can place a group over.
+        #[test]
+        fn a_channel_image_paints_its_value_where_it_is_not_black() {
+            let (dir, assets) = project();
+            write_grey(&assets, "flat.png", RESOLUTION, &[0.5; 16], false);
+            write_grey(&assets, "rocks.png", RESOLUTION, &right_half(), false);
+
+            let mut world = world(dir.path());
+            declare_channel(&mut world, fresh_channel("rocks"));
+
+            assert_eq!(
+                import(
+                    &mut world,
+                    &[
+                        ("heightmap", text("flat.png")),
+                        ("height_range", text("0,10")),
+                        ("channels", text("rocks:rocks.png")),
+                    ],
+                ),
+                OperatorResult::Finished
+            );
+
+            let painted = channel(&world, "rocks");
+            assert_eq!(painted[0], 0, "black left the cell unpainted");
+            assert_eq!(
+                painted[RESOLUTION as usize - 1],
+                1,
+                "white wrote the mask's one paintable value",
+            );
+        }
+
+        /// A terrain arriving from elsewhere brings masks this one has never
+        /// been told about, and naming one is how it is told.
+        #[test]
+        fn a_channel_the_terrain_does_not_declare_is_added_by_the_import() {
+            let (dir, assets) = project();
+            write_grey(&assets, "flat.png", RESOLUTION, &[0.5; 16], false);
+            write_grey(&assets, "rocks.png", RESOLUTION, &right_half(), false);
+
+            let mut world = world(dir.path());
+            assert_eq!(
+                import(
+                    &mut world,
+                    &[
+                        ("heightmap", text("flat.png")),
+                        ("height_range", text("0,10")),
+                        ("channels", text("rocks:rocks.png")),
+                    ],
+                ),
+                OperatorResult::Finished
+            );
+
+            let entity = world.resource::<Selection>().entities[0];
+            let declared = world
+                .get::<jackdaw_scene_types::Terrain>(entity)
+                .expect("a terrain")
+                .channels
+                .clone();
+            assert_eq!(declared.len(), 1);
+            assert_eq!(declared[0].name, "rocks");
+            assert_eq!(
+                channel(&world, "rocks")[RESOLUTION as usize - 1],
+                1,
+                "the mask it just minted is painted too",
+            );
+        }
+
+        /// The image is the layer's whole mask: white is full cover and
+        /// black is ground nothing grows on.
+        #[test]
+        fn a_detail_image_lays_the_layers_mask_down() {
+            let (dir, assets) = project();
+            write_grey(&assets, "flat.png", RESOLUTION, &[0.5; 16], false);
+            write_grey(&assets, "grass.png", RESOLUTION, &right_half(), false);
+
+            let mut world = world(dir.path());
+            declare_detail(&mut world, "grass");
+
+            assert_eq!(
+                import(
+                    &mut world,
+                    &[
+                        ("heightmap", text("flat.png")),
+                        ("height_range", text("0,10")),
+                        ("details", text("0:grass.png")),
+                    ],
+                ),
+                OperatorResult::Finished
+            );
+
+            let mask = channel(&world, "grass");
+            assert_eq!(mask[0], 0, "bare ground");
+            assert_eq!(
+                mask[RESOLUTION as usize - 1],
+                u16::from(u8::MAX),
+                "full cover at the channel's ceiling",
+            );
+        }
+
+        /// A mask has nowhere to go without a layer to grow it, so the
+        /// import refuses before it writes anything.
+        #[test]
+        fn a_detail_image_naming_no_layer_is_refused_and_the_terrain_is_unchanged() {
+            let (dir, assets) = project();
+            write_grey(&assets, "flat.png", RESOLUTION, &[0.5; 16], false);
+            write_grey(&assets, "grass.png", RESOLUTION, &right_half(), false);
+
+            let mut world = world(dir.path());
+            let before = heights(&world);
+            assert_eq!(
+                import(
+                    &mut world,
+                    &[
+                        ("heightmap", text("flat.png")),
+                        ("height_range", text("0,10")),
+                        ("details", text("2:grass.png")),
+                    ],
+                ),
+                OperatorResult::Cancelled
+            );
+            assert_eq!(heights(&world), before);
+        }
+
         /// One entry covers the whole import, so a terrain whose ground and
         /// paint arrived together goes back together.
         #[test]
@@ -791,6 +1178,104 @@ mod tests {
             assert_eq!(heights(&world), heights_before);
             assert_eq!(control(&world), control_before);
         }
+
+        /// Masks go back with the rest: a mask minted by the import leaves
+        /// again, and one that was already painted keeps what it had.
+        #[test]
+        fn undo_restores_the_masks_and_drops_the_one_the_import_minted() {
+            let (dir, assets) = project();
+            write_grey(&assets, "flat.png", RESOLUTION, &[0.5; 16], false);
+            write_grey(&assets, "shape.png", RESOLUTION, &right_half(), false);
+
+            let mut world = world(dir.path());
+            declare_detail(&mut world, "grass");
+
+            assert_eq!(
+                import(
+                    &mut world,
+                    &[
+                        ("heightmap", text("flat.png")),
+                        ("height_range", text("0,10")),
+                        ("channels", text("rocks:shape.png")),
+                        ("details", text("grass:shape.png")),
+                    ],
+                ),
+                OperatorResult::Finished
+            );
+            assert_ne!(channel(&world, "grass"), vec![0; 16]);
+
+            world.resource_scope(|world, mut history: Mut<CommandHistory>| {
+                history.undo(world);
+            });
+
+            let entity = world.resource::<Selection>().entities[0];
+            let declared = world
+                .get::<jackdaw_scene_types::Terrain>(entity)
+                .expect("a terrain")
+                .channels
+                .clone();
+            assert_eq!(
+                declared.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+                vec!["grass"],
+                "the minted mask is gone again",
+            );
+            assert_eq!(
+                channel(&world, "grass"),
+                vec![0; 16],
+                "and the layer's mask is back to bare ground",
+            );
+        }
+
+        /// Heights, paint, masks and detail arrive as one terrain, so one
+        /// press of undo is what puts them all back.
+        #[test]
+        fn heights_weights_channels_and_details_are_one_undo_step() {
+            let (dir, assets) = project();
+            write_grey(&assets, "ramp8.png", RESOLUTION, &ramp(), false);
+            write_grey(&assets, "grass.png", RESOLUTION, &[1.0; 16], false);
+            write_grey(&assets, "shape.png", RESOLUTION, &right_half(), false);
+
+            let mut world = world(dir.path());
+            world
+                .resource_mut::<TerrainDataStore>()
+                .set_materials(PATH, vec![TerrainMaterialSlot::new("grass")])
+                .expect("a plain name is accepted");
+            declare_detail(&mut world, "meadow");
+            let heights_before = heights(&world);
+            let control_before = control(&world);
+
+            assert_eq!(
+                import(
+                    &mut world,
+                    &[
+                        ("heightmap", text("ramp8.png")),
+                        ("height_range", text("0,60")),
+                        ("weights", text("0:grass.png")),
+                        ("channels", text("rocks:shape.png")),
+                        ("details", text("meadow:shape.png")),
+                    ],
+                ),
+                OperatorResult::Finished
+            );
+
+            world.resource_scope(|world, mut history: Mut<CommandHistory>| {
+                history.undo(world);
+            });
+
+            assert_eq!(heights(&world), heights_before);
+            assert_eq!(control(&world), control_before);
+            assert_eq!(channel(&world, "meadow"), vec![0; 16]);
+            let entity = world.resource::<Selection>().entities[0];
+            assert_eq!(
+                world
+                    .get::<jackdaw_scene_types::Terrain>(entity)
+                    .expect("a terrain")
+                    .channels
+                    .len(),
+                1,
+                "one press put every part of the import back",
+            );
+        }
     }
 
     fn slots() -> Vec<TerrainMaterialSlot> {
@@ -821,6 +1306,48 @@ mod tests {
         );
         assert!(parse_weights("4:ground/gravel.png", &slots()).is_err());
         assert!(parse_weights("ground/grass.png", &slots()).is_err());
+    }
+
+    #[test]
+    fn a_pair_missing_one_of_its_sides_is_refused() {
+        assert!(parse_pairs(":rocks.png", "channels", "mask:path", "a:b.png").is_err());
+        assert!(parse_pairs("rocks:", "channels", "mask:path", "a:b.png").is_err());
+        assert_eq!(
+            parse_pairs(
+                " rocks : masks/rocks.png ",
+                "channels",
+                "mask:path",
+                "a:b.png"
+            )
+            .expect("a whole pair"),
+            vec![("rocks".to_string(), "masks/rocks.png".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_detail_image_naming_a_layer_this_terrain_has_not_got_is_refused() {
+        let terrain = jackdaw_scene_types::Terrain {
+            channels: vec![TerrainChannel {
+                name: "grass".to_string(),
+                element: TerrainChannelElement::U8,
+                palette: Vec::new(),
+            }],
+            detail: vec![jackdaw_scene_types::DetailLayer {
+                name: "meadow".to_string(),
+                density_channel: "grass".to_string(),
+                ..default()
+            }],
+            ..default()
+        };
+        let by_index = parse_details("0:masks/grass.png", &terrain).expect("the only layer");
+        assert_eq!(by_index, vec![(0, "masks/grass.png".to_string())]);
+        assert_eq!(
+            parse_details("meadow:masks/grass.png", &terrain).expect("named"),
+            by_index,
+            "a name reaches the same layer as its index",
+        );
+        assert!(parse_details("1:masks/grass.png", &terrain).is_err());
+        assert!(parse_details("heather:masks/grass.png", &terrain).is_err());
     }
 
     #[test]

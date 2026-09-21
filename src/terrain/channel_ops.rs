@@ -41,6 +41,24 @@ fn seed_color(index: usize) -> Color {
     SEED_COLORS[index % SEED_COLORS.len()].into()
 }
 
+/// The palette a channel is born with: an "unset" entry plus one paintable
+/// value, so a brush has something to write before the user has built a
+/// palette of their own.
+pub(super) fn seeded_palette() -> Vec<TerrainPaletteEntry> {
+    vec![
+        TerrainPaletteEntry {
+            value: 0,
+            label: "unset".to_string(),
+            color: Color::srgb(0.5, 0.5, 0.5),
+        },
+        TerrainPaletteEntry {
+            value: 1,
+            label: "value-1".to_string(),
+            color: seed_color(0),
+        },
+    ]
+}
+
 /// How a caller picked a row: the position a tile in the options bar sends, or
 /// the text a remote caller sends.
 pub(crate) enum Picked {
@@ -273,21 +291,7 @@ pub(crate) fn terrain_channel_add(
     terrain.channels.push(TerrainChannel {
         name,
         element: TerrainChannelElement::U8,
-        // A new channel carries an "unset" entry plus one paintable value,
-        // so the brush has something to write without the user building a
-        // palette first.
-        palette: vec![
-            TerrainPaletteEntry {
-                value: 0,
-                label: "unset".to_string(),
-                color: Color::srgb(0.5, 0.5, 0.5),
-            },
-            TerrainPaletteEntry {
-                value: 1,
-                label: "value-1".to_string(),
-                color: seed_color(0),
-            },
-        ],
+        palette: seeded_palette(),
     });
     paint.active_channel = index;
     paint.active_entry = 1;

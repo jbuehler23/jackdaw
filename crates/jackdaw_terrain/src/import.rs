@@ -1,5 +1,6 @@
-//! Turning images into terrain: heights from a greyscale heightmap, and
-//! control words from one greyscale weight image per material slot.
+//! Turning images into terrain: heights from a greyscale heightmap,
+//! control words from one greyscale weight image per material slot, and
+//! per-cell channel values from one image per paint channel or mask.
 //!
 //! Plain data with no engine types in it: a host decodes the file and hands
 //! the samples here, so the mapping from pixels to ground is testable
@@ -107,6 +108,13 @@ impl GreyImage {
         top * (1.0 - fy) + bottom * fy
     }
 
+    /// The whole texel nearest normalised coordinates, both `0..1`.
+    fn nearest(&self, u: f32, v: f32) -> f32 {
+        let x = (u.clamp(0.0, 1.0) * (self.width - 1) as f32).round();
+        let y = (v.clamp(0.0, 1.0) * (self.height - 1) as f32).round();
+        self.texel(x as i64, y as i64)
+    }
+
     /// The image stretched across a square grid of `resolution` points a
     /// side, row-major along +X then +Z.
     ///
@@ -114,18 +122,35 @@ impl GreyImage {
     /// sample: the corners land on the corners and every step between is a
     /// whole texel.
     pub fn resample(&self, resolution: u32) -> Vec<f32> {
+        self.grid(resolution, Self::sample)
+    }
+
+    /// The image stretched across the same grid taking whole texels rather
+    /// than blending between them.
+    ///
+    /// What a mask of discrete values wants: a blend between two of them
+    /// means a third value nothing drew, and a drawn edge walks a cell or
+    /// so outward as the blend fades. The nearest texel keeps the shape
+    /// that was drawn.
+    pub fn resample_nearest(&self, resolution: u32) -> Vec<f32> {
+        self.grid(resolution, Self::nearest)
+    }
+
+    /// Walk the grid, reading the image at each point however `read` reads
+    /// it.
+    fn grid(&self, resolution: u32, read: impl Fn(&Self, f32, f32) -> f32) -> Vec<f32> {
         if resolution == 0 {
             return Vec::new();
         }
         if resolution == 1 {
-            return vec![self.sample(0.0, 0.0)];
+            return vec![read(self, 0.0, 0.0)];
         }
         let last = (resolution - 1) as f32;
         let mut out = Vec::with_capacity(resolution as usize * resolution as usize);
         for z in 0..resolution {
             let v = z as f32 / last;
             for x in 0..resolution {
-                out.push(self.sample(x as f32 / last, v));
+                out.push(read(self, x as f32 / last, v));
             }
         }
         out
@@ -222,6 +247,47 @@ pub fn paint_weights(control: &mut [Control], layers: &[SlotWeights]) {
     }
 }
 
+/// One paint channel's image: the value it writes and its samples already
+/// stretched across the grid.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChannelPaint {
+    /// Value written wherever the image is not black.
+    pub value: u16,
+    /// Sample per grid point, row-major, `0..1`.
+    pub samples: Vec<f32>,
+}
+
+/// Write a channel's value into every cell its image is not black on.
+///
+/// Black is unpainted and leaves the cell the value it already carried, so
+/// one image lays a shape into a channel without erasing what was painted
+/// around it, and two images can arrive one after the other.
+pub fn paint_channel(values: &mut [u16], paint: &ChannelPaint) {
+    for (cell, value) in values.iter_mut().enumerate() {
+        let Some(sample) = paint.samples.get(cell).copied() else {
+            continue;
+        };
+        if sample > 0.0 {
+            *value = paint.value;
+        }
+    }
+}
+
+/// Lay a mask over a channel of continuous cover: every cell takes its
+/// sample scaled to `ceiling`.
+///
+/// Black included, unlike [`paint_channel`]: an image of where something
+/// grows is the whole mask, and the ground it leaves black is ground it
+/// says nothing grows on.
+pub fn paint_mask(values: &mut [u16], samples: &[f32], ceiling: u16) {
+    for (cell, value) in values.iter_mut().enumerate() {
+        let Some(sample) = samples.get(cell).copied() else {
+            continue;
+        };
+        *value = (sample.clamp(0.0, 1.0) * ceiling as f32).round() as u16;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,6 +316,22 @@ mod tests {
         assert_eq!(resampled.len(), 4);
         assert_eq!(resampled[0], 0.0);
         assert_eq!(resampled[1], 1.0);
+    }
+
+    /// A blend between two drawn values is a third value nothing drew, and
+    /// it walks the edge outward. Whole texels keep the shape.
+    #[test]
+    fn a_nearest_resample_keeps_an_edge_where_it_was_drawn() {
+        let drawn = image(2, 1, &[0.0, 1.0]);
+        let row = [0.0, 0.0, 1.0, 1.0];
+        assert_eq!(
+            drawn.resample_nearest(4),
+            row.iter().cycle().take(16).copied().collect::<Vec<f32>>(),
+        );
+        assert!(
+            drawn.resample(4).iter().any(|s| *s > 0.0 && *s < 1.0),
+            "the blend is what this avoids",
+        );
     }
 
     #[test]
@@ -329,5 +411,29 @@ mod tests {
         assert_eq!(over[0].base_id(), 3);
         assert_eq!(over[0].overlay_id(), 4);
         assert_eq!(over[0].blend(), (0.5 * MAX_BLEND as f32).round() as u8);
+    }
+
+    #[test]
+    fn a_channel_image_writes_its_value_where_it_is_not_black() {
+        let mut values = vec![0, 0, 9, 0];
+        paint_channel(
+            &mut values,
+            &ChannelPaint {
+                value: 3,
+                samples: vec![0.0, 1.0, 0.0, 0.4],
+            },
+        );
+        assert_eq!(values, vec![0, 3, 9, 3], "black kept what the cell had");
+    }
+
+    #[test]
+    fn a_mask_image_scales_its_samples_across_the_channels_ceiling() {
+        let mut values = vec![255, 255, 255];
+        paint_mask(&mut values, &[0.0, 0.5, 1.0], 255);
+        assert_eq!(
+            values,
+            vec![0, 128, 255],
+            "black is bare ground rather than ground left alone",
+        );
     }
 }
