@@ -32,9 +32,9 @@ pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
 pub use types::{
     Brush, BrushFaceData, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
     DetailLayer, DetailMesh, DetailPresser, GltfSource, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude,
-    PrefabBaseline, PropertyValue, ScatterGroup, ScatterInstance, SceneRootTag, Terrain,
+    PrefabBaseline, PropertyValue, ScatterGroup, ScatterInstance, SceneRootTag, SceneWind, Terrain,
     TerrainChannel, TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry,
-    TerrainQuantization,
+    TerrainQuantization, Wind,
 };
 
 use bevy::prelude::*;
@@ -86,6 +86,7 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<DetailLayer>()
             .register_type::<DetailMesh>()
             .register_type::<DetailPresser>()
+            .register_type::<Wind>()
             .register_type::<NavmeshExclude>()
             .register_type::<ScatterGroup>()
             .register_type::<ScatterInstance>()
@@ -99,6 +100,9 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<Scene2dRoot>()
             .register_type::<CanvasGuides>()
             .register_type::<Locked>();
+
+        app.init_resource::<SceneWind>()
+            .add_systems(First, follow_the_scene_wind);
 
         #[cfg(feature = "render")]
         {
@@ -124,6 +128,15 @@ impl Plugin for SceneTypesPlugin {
                 app.add_plugins(mesh_rebuild::MeshRebuildPlugin);
             }
         }
+    }
+}
+
+/// Hand the render side the wind the scene is blowing by: the first [`Wind`]
+/// in it, or still air while it holds none.
+fn follow_the_scene_wind(mut blowing: ResMut<SceneWind>, winds: Query<&Wind>) {
+    let scene_wind = SceneWind(winds.iter().next().copied().unwrap_or(Wind::STILL));
+    if *blowing != scene_wind {
+        *blowing = scene_wind;
     }
 }
 

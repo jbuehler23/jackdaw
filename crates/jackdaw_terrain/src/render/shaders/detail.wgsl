@@ -18,23 +18,34 @@ const FADE_BAND: f32 = 0.25;
 /// Alpha a textured instance has to clear to draw.
 const ALPHA_CUTOFF: f32 = 0.5;
 const TAU: f32 = 6.2831855;
+/// How far a breeze of strength 1 leans a tip responding at 1, in world units.
+/// `DetailLayer::BREEZE_LEAN` on the Rust side is the same number.
+const BREEZE_LEAN: f32 = 0.12;
+/// How far a tip bobs up and down against how far it leans sideways.
+const VERTICAL_SHARE: f32 = 0.333;
+/// How much wider than the sway the gust swell is read, and how much slower it
+/// travels.
+const GUST_SPAN: f32 = 0.25;
+const GUST_DRIFT: f32 = 0.5;
 
 struct DetailUniform {
     /// Linear colour at the foot and at the top of an instance. `w` is unused.
     color_base: vec4<f32>,
     color_tip: vec4<f32>,
-    /// Direction the wind pattern travels across the terrain, on XZ.
+    /// Which way the scene's wind blows, on the XZ plane.
     wind_direction: vec2<f32>,
-    wind_speed: f32,
     wind_strength: f32,
-    wind_vertical_strength: f32,
-    wind_tile_size: f32,
+    wind_gust: f32,
+    wind_gust_speed: f32,
+    wind_turbulence_scale: f32,
+    /// How far this layer goes with that wind, over a blade of grass.
+    wind_response: f32,
     bend: f32,
-    push_strength: f32,
     /// Shortest and tallest an instance stands, in world units.
     height_range: vec2<f32>,
     /// Narrowest and widest it is drawn, over its mesh's own width.
     width_range: vec2<f32>,
+    push_strength: f32,
     cull_distance: f32,
     presser_count: u32,
     /// Whether the mesh is the built-in card, a straight strip whose taper the
@@ -93,10 +104,16 @@ fn tilt_toward(v: vec3<f32>, up: vec3<f32>) -> vec3<f32> {
 
 /// The wind pattern where an instance stands, in `-1..1`. Sampled at the
 /// instance's foot, not per vertex.
+///
+/// The gust dial mixes in a second, wider reading of the same field travelling
+/// the other way, which swells and drops the sway rather than speeding it up.
 fn wind_at(world_xz: vec2<f32>) -> f32 {
-    let travel = detail.wind_direction * globals.time * detail.wind_speed;
-    let uv = world_xz / max(detail.wind_tile_size, 0.001) + travel;
-    return textureSampleLevel(wind_noise, wind_sampler, uv, 0.0).r * 2.0 - 1.0;
+    let travel = detail.wind_direction * globals.time * detail.wind_gust_speed;
+    let uv = world_xz / max(detail.wind_turbulence_scale, 0.001) + travel;
+    let sway = textureSampleLevel(wind_noise, wind_sampler, uv, 0.0).r * 2.0 - 1.0;
+    let swell = textureSampleLevel(
+        wind_noise, wind_sampler, uv * GUST_SPAN - travel * GUST_DRIFT, 0.0).r;
+    return sway * mix(1.0, swell, detail.wind_gust);
 }
 
 @vertex
@@ -135,10 +152,11 @@ fn vertex(in: Vertex) -> DetailOutput {
 
     let wind = wind_at(base.xz);
     let along = normalize(detail.wind_direction + vec2<f32>(1e-6, 0.0));
+    let leaned = wind * detail.wind_strength * detail.wind_response * BREEZE_LEAN * up_the_mesh;
     offset += vec3<f32>(
-        along.x * wind * detail.wind_strength * up_the_mesh,
-        abs(wind) * detail.wind_vertical_strength * up_the_mesh,
-        along.y * wind * detail.wind_strength * up_the_mesh,
+        along.x * leaned,
+        abs(leaned) * VERTICAL_SHARE,
+        along.y * leaned,
     );
 
     for (var i = 0u; i < min(detail.presser_count, MAX_PRESSERS); i += 1u) {

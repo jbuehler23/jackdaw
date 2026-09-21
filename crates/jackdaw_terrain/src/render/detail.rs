@@ -44,7 +44,9 @@ use bevy::render::texture::{FallbackImage, GpuImage};
 use bevy::render::view::ExtractedView;
 use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
-use jackdaw_scene_types::{DetailLayer, DetailMesh, DetailPresser, NavmeshExclude, Terrain};
+use jackdaw_scene_types::{
+    DetailLayer, DetailMesh, DetailPresser, NavmeshExclude, SceneWind, Terrain, Wind,
+};
 
 use crate::channel::ChannelElement;
 use crate::detail::{
@@ -327,26 +329,30 @@ pub struct DetailBindings {
     /// Linear colour at the top of an instance. `w` is unused.
     #[uniform(0)]
     pub color_tip: Vec4,
+    /// Which way the scene's wind blows, on the XZ plane.
     #[uniform(0)]
     pub wind_direction: Vec2,
     #[uniform(0)]
-    pub wind_speed: f32,
-    #[uniform(0)]
     pub wind_strength: f32,
     #[uniform(0)]
-    pub wind_vertical_strength: f32,
+    pub wind_gust: f32,
     #[uniform(0)]
-    pub wind_tile_size: f32,
+    pub wind_gust_speed: f32,
+    #[uniform(0)]
+    pub wind_turbulence_scale: f32,
+    /// How far this layer goes with that wind, over a blade of grass.
+    #[uniform(0)]
+    pub wind_response: f32,
     #[uniform(0)]
     pub bend: f32,
-    #[uniform(0)]
-    pub push_strength: f32,
     /// Shortest and tallest an instance stands, in world units.
     #[uniform(0)]
     pub height_range: Vec2,
     /// Narrowest and widest an instance is drawn, over the mesh's own width.
     #[uniform(0)]
     pub width_range: Vec2,
+    #[uniform(0)]
+    pub push_strength: f32,
     #[uniform(0)]
     pub cull_distance: f32,
     #[uniform(0)]
@@ -370,6 +376,7 @@ impl DetailBindings {
     /// The bindings one layer's look and the pressers around it come to.
     pub fn new(
         layer: &DetailLayer,
+        wind: &Wind,
         settings: &DetailSettings,
         pressers: &DetailPressers,
         wind_noise: Handle<Image>,
@@ -382,11 +389,12 @@ impl DetailBindings {
         Self {
             color_base: linear_of(layer.color_base),
             color_tip: linear_of(layer.color_tip),
-            wind_direction: Vec2::from(layer.wind_direction).normalize_or(Vec2::X),
-            wind_speed: layer.wind_speed,
-            wind_strength: layer.wind_strength,
-            wind_vertical_strength: layer.wind_vertical_strength,
-            wind_tile_size: layer.wind_tile_size,
+            wind_direction: wind.heading(),
+            wind_strength: wind.strength,
+            wind_gust: wind.gust,
+            wind_gust_speed: wind.gust_speed,
+            wind_turbulence_scale: wind.turbulence_scale,
+            wind_response: layer.wind_response,
             bend: layer.bend,
             push_strength: layer.push_strength,
             height_range: Vec2::new(layer.height[0], layer.height[1]),
@@ -515,6 +523,7 @@ impl Plugin for DetailRenderPlugin {
             app.init_asset::<Mesh>();
         }
         app.init_resource::<DetailSettings>()
+            .init_resource::<SceneWind>()
             .init_resource::<DetailPressers>()
             .init_resource::<DetailLooks>()
             .init_resource::<DetailMeshes>()
@@ -786,6 +795,7 @@ fn rebuild_detail_tiles(
     assets: Res<DetailAssets>,
     built: Res<DetailMeshes>,
     settings: Res<DetailSettings>,
+    wind: Res<SceneWind>,
     viewers: DetailViewers,
     mut terrains: Query<(
         Entity,
@@ -861,7 +871,7 @@ fn rebuild_detail_tiles(
                 let instances = seed_tile(source, &settings, index, coord, lod, world_from_local);
                 let bounds = match instances.is_empty() {
                     true => footprint(source, coord, world_from_local),
-                    false => tile_bounds(&instances, &entry.layer),
+                    false => tile_bounds(&instances, &entry.layer, &wind.0),
                 };
                 commands.spawn((
                     DetailTile {
@@ -935,8 +945,9 @@ fn footprint(source: &TerrainDetailSource, tile: IVec2, world_from_local: Affine
     Aabb::from_min_max(corner(min), corner(max))
 }
 
-/// What a tile's instances occupy, widened for wind, bend and presser lean.
-fn tile_bounds(instances: &[DetailInstance], layer: &DetailLayer) -> Aabb {
+/// What a tile's instances occupy, widened for the strongest wind a scene is
+/// likely to blow, bend and presser lean.
+fn tile_bounds(instances: &[DetailInstance], layer: &DetailLayer, wind: &Wind) -> Aabb {
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     for instance in instances {
@@ -944,7 +955,8 @@ fn tile_bounds(instances: &[DetailInstance], layer: &DetailLayer) -> Aabb {
         max = max.max(instance.position);
     }
     let tall = layer.height[0].max(layer.height[1]);
-    let lean = layer.bend + layer.wind_strength + layer.push_strength;
+    let leaned_by_the_wind = layer.wind_response * wind.strength * DetailLayer::BREEZE_LEAN;
+    let lean = layer.bend + leaned_by_the_wind.abs() + layer.push_strength;
     Aabb::from_min_max(
         min - Vec3::new(lean, tall, lean),
         max + Vec3::new(lean, tall, lean),
@@ -958,6 +970,7 @@ fn build_detail_looks(
     built: Res<DetailMeshes>,
     settings: Res<DetailSettings>,
     pressers: Res<DetailPressers>,
+    wind: Res<SceneWind>,
     terrains: Query<(Entity, &TerrainDetailSource)>,
 ) {
     looks.0.clear();
@@ -971,6 +984,7 @@ fn build_detail_looks(
                 (entity, index),
                 DetailBindings::new(
                     &entry.layer,
+                    &wind.0,
                     &settings,
                     &pressers,
                     assets.wind_noise.clone(),
@@ -1396,6 +1410,7 @@ mod tests {
             .init_asset::<Mesh>()
             .init_asset::<Image>()
             .init_resource::<DetailSettings>()
+            .init_resource::<SceneWind>()
             .init_resource::<DetailPressers>()
             .init_resource::<DetailMeshes>()
             .add_systems(Startup, init_detail_assets)
@@ -1981,6 +1996,60 @@ mod tests {
         assert_eq!(rect.height, 24);
     }
 
+    /// Wind is the scene's, not the layer's: two layers in one scene lean the
+    /// same way and at the same pace, and differ only by their response.
+    #[test]
+    fn two_layers_lean_on_the_one_scene_wind() {
+        let blowing = Wind {
+            direction: 90.0,
+            strength: 0.75,
+            gust: 0.4,
+            gust_speed: 0.3,
+            turbulence_scale: 9.0,
+        };
+        let settings = DetailSettings::default();
+        let pressers = DetailPressers::default();
+        let bindings = |response: f32| {
+            DetailBindings::new(
+                &DetailLayer {
+                    wind_response: response,
+                    ..DetailLayer::default()
+                },
+                &blowing,
+                &settings,
+                &pressers,
+                Handle::default(),
+                Handle::default(),
+            )
+        };
+
+        let grass = bindings(1.0);
+        let reeds = bindings(2.5);
+
+        assert_eq!(grass.wind_direction, reeds.wind_direction);
+        assert_eq!(grass.wind_strength, reeds.wind_strength);
+        assert_eq!(grass.wind_gust, reeds.wind_gust);
+        assert_eq!(grass.wind_gust_speed, reeds.wind_gust_speed);
+        assert_eq!(grass.wind_turbulence_scale, reeds.wind_turbulence_scale);
+        assert_eq!(grass.wind_strength, 0.75);
+        assert_eq!((grass.wind_response, reeds.wind_response), (1.0, 2.5));
+    }
+
+    /// A scene with no wind hands the shader a strength of zero, so every
+    /// blade in it stands where it was planted.
+    #[test]
+    fn a_still_scene_leans_nothing() {
+        let bindings = DetailBindings::new(
+            &DetailLayer::default(),
+            &SceneWind::default().0,
+            &DetailSettings::default(),
+            &DetailPressers::default(),
+            Handle::default(),
+            Handle::default(),
+        );
+        assert_eq!(bindings.wind_strength, 0.0);
+    }
+
     /// The shader source, for the binding checks below. naga-oil input rather
     /// than plain WGSL, so the checks are textual.
     const SHADER_SOURCE: &str = include_str!("shaders/detail.wgsl");
@@ -2015,14 +2084,15 @@ mod tests {
                 "color_base",
                 "color_tip",
                 "wind_direction",
-                "wind_speed",
                 "wind_strength",
-                "wind_vertical_strength",
-                "wind_tile_size",
+                "wind_gust",
+                "wind_gust_speed",
+                "wind_turbulence_scale",
+                "wind_response",
                 "bend",
-                "push_strength",
                 "height_range",
                 "width_range",
+                "push_strength",
                 "cull_distance",
                 "presser_count",
                 "is_card",
@@ -2042,14 +2112,15 @@ mod tests {
             color_base: Vec4,
             color_tip: Vec4,
             wind_direction: Vec2,
-            wind_speed: f32,
             wind_strength: f32,
-            wind_vertical_strength: f32,
-            wind_tile_size: f32,
+            wind_gust: f32,
+            wind_gust_speed: f32,
+            wind_turbulence_scale: f32,
+            wind_response: f32,
             bend: f32,
-            push_strength: f32,
             height_range: Vec2,
             width_range: Vec2,
+            push_strength: f32,
             cull_distance: f32,
             presser_count: u32,
             is_card: u32,
@@ -2078,17 +2149,18 @@ mod tests {
                 ("color_base".to_string(), 0),
                 ("color_tip".to_string(), 16),
                 ("wind_direction".to_string(), 32),
-                ("wind_speed".to_string(), 40),
-                ("wind_strength".to_string(), 44),
-                ("wind_vertical_strength".to_string(), 48),
-                ("wind_tile_size".to_string(), 52),
-                ("bend".to_string(), 56),
-                ("push_strength".to_string(), 60),
+                ("wind_strength".to_string(), 40),
+                ("wind_gust".to_string(), 44),
+                ("wind_gust_speed".to_string(), 48),
+                ("wind_turbulence_scale".to_string(), 52),
+                ("wind_response".to_string(), 56),
+                ("bend".to_string(), 60),
                 ("height_range".to_string(), 64),
                 ("width_range".to_string(), 72),
-                ("cull_distance".to_string(), 80),
-                ("presser_count".to_string(), 84),
-                ("is_card".to_string(), 88),
+                ("push_strength".to_string(), 80),
+                ("cull_distance".to_string(), 84),
+                ("presser_count".to_string(), 88),
+                ("is_card".to_string(), 92),
                 ("pressers".to_string(), 96),
             ]
         );

@@ -961,17 +961,20 @@ pub struct DetailLayer {
     pub color_base: [f32; 3],
     /// Linear colour at the top of an instance.
     pub color_tip: [f32; 3],
-    /// How fast the wind pattern travels across the terrain, in tiles per
-    /// second.
+    /// How far this layer goes with the scene's [`Wind`], as a multiple of
+    /// what a blade of grass does. 0 stands still in any wind.
+    pub wind_response: f32,
+    /// Legacy per-layer wind, read from scenes written before a scene carried
+    /// one [`Wind`] of its own.
+    ///
+    /// A migration inlet rather than storage: a scene holding no [`Wind`] has
+    /// these folded into [`Self::wind_response`] and into a [`Wind`] on load
+    /// and left at their defaults, which BSN elides. Read the wind from the
+    /// scene's [`Wind`], never from here.
     pub wind_speed: f32,
-    /// How far the wind leans a tip sideways, in world units.
     pub wind_strength: f32,
-    /// How far the wind bobs a tip vertically, in world units. Weaker than
-    /// [`Self::wind_strength`].
     pub wind_vertical_strength: f32,
-    /// Direction the wind pattern travels in, on the XZ plane.
     pub wind_direction: [f32; 2],
-    /// World units one tile of the wind pattern spans.
     pub wind_tile_size: f32,
     /// How far a tip leans from its own facing, in world units, before any
     /// wind. The foot stays where it is planted.
@@ -988,6 +991,75 @@ pub struct DetailLayer {
     /// Whether an instance stands along the ground normal rather than
     /// straight up.
     pub align_to_normal: bool,
+}
+
+/// How the air moves through a scene: the one setting every layer of ground
+/// detail and every foliage material takes its motion from.
+///
+/// Carried by a scene root or by any node in it. The first one a scene holds
+/// is what the whole scene blows by, and a scene holding none is still air.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Environment"))]
+pub struct Wind {
+    /// Which way the wind blows, as a yaw in degrees about +Y from +X.
+    pub direction: f32,
+    /// How hard it blows, as a multiple of a lively breeze. 0 is still air.
+    pub strength: f32,
+    /// How much of the strength arrives in gusts rather than steadily, 0..1.
+    pub gust: f32,
+    /// How fast the pattern travels over the ground, in tiles per second.
+    pub gust_speed: f32,
+    /// How many world units one tile of the pattern spans. Large is a slow
+    /// swell crossing the whole scene, small a busy ripple.
+    pub turbulence_scale: f32,
+}
+
+/// These values are a persisted contract, as [`Terrain`]'s are: they are also
+/// the per-layer wind every scene written before this component carried, so a
+/// scene migrated onto a defaulted [`Wind`] blows exactly as it did.
+impl Default for Wind {
+    fn default() -> Self {
+        Self {
+            direction: Self::direction_of(Vec2::new(1.0, 0.35)),
+            strength: 1.0,
+            gust: 0.0,
+            gust_speed: 0.15,
+            turbulence_scale: 12.0,
+        }
+    }
+}
+
+impl Wind {
+    /// Still air, which is what a scene holding no [`Wind`] blows by.
+    pub const STILL: Self = Self {
+        direction: 0.0,
+        strength: 0.0,
+        gust: 0.0,
+        gust_speed: 0.0,
+        turbulence_scale: 12.0,
+    };
+
+    /// Which way the wind blows on the XZ plane, as a unit vector.
+    pub fn heading(&self) -> Vec2 {
+        let radians = self.direction.to_radians();
+        Vec2::new(radians.cos(), radians.sin())
+    }
+
+    /// The yaw in degrees that blows along `heading`.
+    pub fn direction_of(heading: Vec2) -> f32 {
+        heading.y.atan2(heading.x).to_degrees()
+    }
+}
+
+/// The wind the scene is blowing by this frame, for the render side to read.
+/// Filled from the first [`Wind`] in the scene, and still while there is none.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct SceneWind(pub Wind);
+
+impl Default for SceneWind {
+    fn default() -> Self {
+        Self(Wind::STILL)
+    }
 }
 
 /// What one instance of a detail layer draws.
@@ -1011,6 +1083,7 @@ impl Default for DetailLayer {
             width: [0.03, 0.05],
             color_base: [0.05, 0.14, 0.04],
             color_tip: [0.36, 0.56, 0.16],
+            wind_response: 1.0,
             wind_speed: 0.15,
             wind_strength: 0.12,
             wind_vertical_strength: 0.04,
@@ -1023,6 +1096,36 @@ impl Default for DetailLayer {
             cull_distance: 45.0,
             align_to_normal: false,
         }
+    }
+}
+
+impl DetailLayer {
+    /// How far a breeze of strength 1 leans a blade responding at 1, in world
+    /// units. The per-layer strength this replaced was authored in the same
+    /// units, so an old layer's response is its strength over this.
+    pub const BREEZE_LEAN: f32 = 0.12;
+
+    /// Fold the per-layer wind this layer was authored with into its response,
+    /// and report the scene [`Wind`] that blows it the same way.
+    ///
+    /// The legacy fields are left at their defaults, so a scene saved after
+    /// this carries only the response.
+    pub fn take_legacy_wind(&mut self) -> Wind {
+        let defaults = Self::default();
+        let wind = Wind {
+            direction: Wind::direction_of(Vec2::from(self.wind_direction)),
+            strength: 1.0,
+            gust: Wind::default().gust,
+            gust_speed: self.wind_speed,
+            turbulence_scale: self.wind_tile_size,
+        };
+        self.wind_response = self.wind_strength / Self::BREEZE_LEAN;
+        self.wind_speed = defaults.wind_speed;
+        self.wind_strength = defaults.wind_strength;
+        self.wind_vertical_strength = defaults.wind_vertical_strength;
+        self.wind_direction = defaults.wind_direction;
+        self.wind_tile_size = defaults.wind_tile_size;
+        wind
     }
 }
 
@@ -1300,6 +1403,74 @@ impl TerrainChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A layer authored before the scene carried one wind keeps blowing the
+    /// same way: its own settings become the scene's wind and its strength
+    /// becomes its response to it.
+    #[test]
+    fn an_old_layers_wind_folds_into_a_scene_wind_that_reproduces_it() {
+        let mut layer = DetailLayer {
+            wind_strength: 0.24,
+            wind_speed: 0.4,
+            wind_tile_size: 7.0,
+            wind_direction: [0.0, 1.0],
+            ..DetailLayer::default()
+        };
+
+        let folded = layer.take_legacy_wind();
+
+        assert_eq!(folded.direction, 90.0);
+        assert_eq!(folded.strength, 1.0);
+        assert_eq!(folded.gust_speed, 0.4);
+        assert_eq!(folded.turbulence_scale, 7.0);
+        assert_eq!(layer.wind_response, 2.0);
+        assert_eq!(
+            (
+                layer.wind_strength,
+                layer.wind_speed,
+                layer.wind_tile_size,
+                layer.wind_direction,
+            ),
+            (
+                DetailLayer::default().wind_strength,
+                DetailLayer::default().wind_speed,
+                DetailLayer::default().wind_tile_size,
+                DetailLayer::default().wind_direction,
+            ),
+            "and the legacy fields go back to the defaults BSN elides",
+        );
+    }
+
+    /// The defaults are a persisted contract on both sides: a layer that
+    /// authored no wind reads back as the wind a defaulted `Wind` blows.
+    #[test]
+    fn a_layer_that_authored_no_wind_folds_onto_the_default_wind() {
+        assert_eq!(
+            DetailLayer::default().take_legacy_wind(),
+            Wind::default(),
+            "a scene that never touched the wind has to blow as it did",
+        );
+        assert_eq!(
+            DetailLayer::default().wind_strength,
+            DetailLayer::BREEZE_LEAN
+        );
+    }
+
+    #[test]
+    fn a_heading_survives_the_trip_through_a_yaw() {
+        let wind = Wind {
+            direction: Wind::direction_of(Vec2::new(-1.0, 1.0)),
+            ..Wind::default()
+        };
+        let heading = wind.heading();
+        assert!((heading - Vec2::new(-1.0, 1.0).normalize()).length() < 1e-5);
+    }
+
+    #[test]
+    fn a_scene_that_holds_no_wind_is_still() {
+        assert_eq!(SceneWind::default().0, Wind::STILL);
+        assert_eq!(Wind::STILL.strength, 0.0);
+    }
 
     /// The const is how the editor's save filter, the component picker and
     /// any script naming the tag reach it; drift here breaks all three

@@ -753,8 +753,6 @@ fn spawn_ground_section(
 
 const DETAIL_SECTION: MaterialSection =
     MaterialSection::new("Detail", Icon::Sprout, "terrain.detail.layers", false);
-const DETAIL_WIND_SECTION: MaterialSection =
-    MaterialSection::new("Wind", Icon::Wind, "terrain.detail.wind", false);
 const DETAIL_PUSH_SECTION: MaterialSection =
     MaterialSection::new("Bend", Icon::Waves, "terrain.detail.push", true);
 
@@ -802,12 +800,7 @@ enum DetailField {
     WidthMax,
     DensityPerM2,
     CullDistance,
-    WindSpeed,
-    WindStrength,
-    WindVerticalStrength,
-    WindDirectionX,
-    WindDirectionZ,
-    WindTileSize,
+    WindResponse,
     Bend,
     PushStrength,
     PushRadius,
@@ -821,11 +814,7 @@ impl DetailField {
             Self::WidthMin | Self::WidthMax => "width",
             Self::DensityPerM2 => "density_per_m2",
             Self::CullDistance => "cull_distance",
-            Self::WindSpeed => "wind_speed",
-            Self::WindStrength => "wind_strength",
-            Self::WindVerticalStrength => "wind_vertical_strength",
-            Self::WindDirectionX | Self::WindDirectionZ => "wind_direction",
-            Self::WindTileSize => "wind_tile_size",
+            Self::WindResponse => "wind_response",
             Self::Bend => "bend",
             Self::PushStrength => "push_strength",
             Self::PushRadius => "push_radius",
@@ -840,8 +829,6 @@ impl DetailField {
             Self::HeightMax => format!("{},{dragged}", layer.height[0]),
             Self::WidthMin => format!("{dragged},{}", layer.width[1]),
             Self::WidthMax => format!("{},{dragged}", layer.width[0]),
-            Self::WindDirectionX => format!("{dragged},{}", layer.wind_direction[1]),
-            Self::WindDirectionZ => format!("{},{dragged}", layer.wind_direction[0]),
             _ => dragged.to_string(),
         }
     }
@@ -1004,75 +991,22 @@ fn spawn_detail_sections(
         "color_tip",
     );
 
-    let wind = spawn_section(
-        commands,
-        parent,
-        DETAIL_WIND_SECTION,
-        &icon_font,
-        &refs.collapse,
-    );
-    spawn_detail_row(
-        commands,
-        wind.body,
-        "Speed",
-        "How fast the wind pattern travels across the terrain, in tiles per second",
-        layer.wind_speed,
-        0.0..2.0,
-        DetailField::WindSpeed,
-    );
-    spawn_detail_row(
-        commands,
-        wind.body,
-        "Strength",
-        "How far the wind leans a tip sideways, in metres",
-        layer.wind_strength,
-        0.0..1.0,
-        DetailField::WindStrength,
-    );
-    spawn_detail_row(
-        commands,
-        wind.body,
-        "Vertical strength",
-        "How far the wind bobs a tip up and down, in metres",
-        layer.wind_vertical_strength,
-        0.0..0.5,
-        DetailField::WindVerticalStrength,
-    );
-    spawn_detail_row(
-        commands,
-        wind.body,
-        "Direction X",
-        "Which way the wind pattern travels, along X",
-        layer.wind_direction[0],
-        -1.0..1.0,
-        DetailField::WindDirectionX,
-    );
-    spawn_detail_row(
-        commands,
-        wind.body,
-        "Direction Z",
-        "Which way the wind pattern travels, along Z",
-        layer.wind_direction[1],
-        -1.0..1.0,
-        DetailField::WindDirectionZ,
-    );
-    spawn_detail_row(
-        commands,
-        wind.body,
-        "Tile size",
-        "How many metres one tile of the wind pattern spans: large is a slow swell \
-         across the field, small a busy ripple",
-        layer.wind_tile_size,
-        1.0..60.0,
-        DetailField::WindTileSize,
-    );
-
     let push = spawn_section(
         commands,
         parent,
         DETAIL_PUSH_SECTION,
         &icon_font,
         &refs.collapse,
+    );
+    spawn_detail_row(
+        commands,
+        push.body,
+        "Wind response",
+        "How far this layer goes with the scene's wind, over a blade of grass. \
+         The wind itself is the scene's Wind component",
+        layer.wind_response,
+        0.0..4.0,
+        DetailField::WindResponse,
     );
     spawn_detail_row(
         commands,

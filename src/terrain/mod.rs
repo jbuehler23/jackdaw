@@ -53,6 +53,7 @@ impl Plugin for TerrainPlugin {
                 (
                     ensure_terrain_dirty_chunks,
                     ensure_terrain_data_path,
+                    fold_per_layer_wind_into_the_scenes_wind,
                     sync_terrain_bounds,
                     prune_terrain_heightmaps,
                     scatter_data::sync_terrain_scatter,
@@ -180,6 +181,63 @@ pub fn ensure_terrain_data_path(world: &mut World) {
             dirty.rebuild_all = true;
         }
     }
+}
+
+/// Folds the per-layer wind a scene was authored with into one scene `Wind`.
+///
+/// Ground detail used to carry a wind per layer, so a scene with two layers
+/// blew two ways at once. A scene holding no `Wind` is read as one of those:
+/// the first layer's settings become the scene's wind, each layer's strength
+/// becomes its response to it, and the legacy fields go back to their
+/// defaults, which BSN elides. Once the scene carries a `Wind` this leaves it
+/// alone, so still air is a `Wind` at strength 0 rather than no `Wind` at all.
+fn fold_per_layer_wind_into_the_scenes_wind(world: &mut World) {
+    if world
+        .query::<&jackdaw_scene_types::Wind>()
+        .iter(world)
+        .next()
+        .is_some()
+    {
+        return;
+    }
+    let mut terrains = world.query::<(Entity, &jackdaw_scene_types::Terrain)>();
+    let carrying_detail: Vec<Entity> = terrains
+        .iter(world)
+        .filter(|(_, terrain)| !terrain.detail.is_empty())
+        .map(|(entity, _)| entity)
+        .collect();
+
+    let mut blowing = None;
+    for entity in &carrying_detail {
+        let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(*entity) else {
+            continue;
+        };
+        for layer in &mut terrain.detail {
+            let folded = layer.take_legacy_wind();
+            blowing.get_or_insert(folded);
+        }
+        let terrain = terrain.clone();
+        crate::commands::sync_component_to_ast(
+            world,
+            *entity,
+            "jackdaw_scene_types::types::Terrain",
+            &terrain,
+        );
+        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(*entity) {
+            dirty.rebuild_all = true;
+        }
+    }
+
+    let (Some(blowing), Some(first)) = (blowing, carrying_detail.first().copied()) else {
+        return;
+    };
+    world.entity_mut(first).insert(blowing);
+    crate::commands::sync_component_to_ast(
+        world,
+        first,
+        "jackdaw_scene_types::types::Wind",
+        &blowing,
+    );
 }
 
 /// Keeps an `Aabb` on every terrain describing the ground it authors.

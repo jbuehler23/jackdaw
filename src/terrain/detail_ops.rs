@@ -287,15 +287,13 @@ pub(crate) fn terrain_detail_select(
         field(
             String,
             doc = "Which field: name, density_channel, mesh, height, width, color_base, \
-                   color_tip, wind_speed, wind_strength, wind_vertical_strength, \
-                   wind_direction, wind_tile_size, bend, push_strength, push_radius, \
+                   color_tip, wind_response, bend, push_strength, push_radius, \
                    density_per_m2, cull_distance or align_to_normal."
         ),
         value(
             String,
             doc = "The value: a number, a name, \"card\" or an assets-relative model path \
-                   for mesh, \"min,max\" for a range, \"x,z\" for wind_direction, or \
-                   \"r,g,b\" for a colour."
+                   for mesh, \"min,max\" for a range, or \"r,g,b\" for a colour."
         ),
     )
 )]
@@ -634,10 +632,6 @@ fn write_field(layer: &mut DetailLayer, field: &str, value: &str) -> bool {
             }
             _ => return false,
         },
-        "wind_direction" => match numbers::<2>(value) {
-            Some(pair) => layer.wind_direction = pair,
-            None => return false,
-        },
         "color_base" | "color_tip" => match numbers::<3>(value) {
             Some(rgb) => {
                 let rgb = rgb.map(|channel| channel.clamp(0.0, 1.0));
@@ -654,10 +648,7 @@ fn write_field(layer: &mut DetailLayer, field: &str, value: &str) -> bool {
                 return false;
             };
             match field {
-                "wind_speed" => layer.wind_speed = scalar,
-                "wind_strength" => layer.wind_strength = scalar,
-                "wind_vertical_strength" => layer.wind_vertical_strength = scalar,
-                "wind_tile_size" => layer.wind_tile_size = scalar.max(0.01),
+                "wind_response" => layer.wind_response = scalar.max(0.0),
                 "bend" => layer.bend = scalar,
                 "push_strength" => layer.push_strength = scalar,
                 "push_radius" => layer.push_radius = scalar.max(0.0),
