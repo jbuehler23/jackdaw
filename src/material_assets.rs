@@ -44,8 +44,9 @@ const STANDARD_MATERIAL: &str = "bevy_pbr::pbr_material::StandardMaterial";
 /// loaded with `is_srgb = false` before anything else resolves their paths,
 /// since the asset server keys images by path and hands out whichever decode
 /// was requested first.
-const LINEAR_SLOTS: [&str; 8] = [
+const LINEAR_SLOTS: [&str; 9] = [
     "normal_map_texture",
+    "foam_mask",
     "metallic_roughness_texture",
     "occlusion_texture",
     "depth_map",
@@ -658,6 +659,7 @@ pub(crate) fn plugin(app: &mut App) {
         jackdaw_runtime::MaterialTextureFormatPlugin,
         jackdaw_surface::LayeredSurfacePlugin,
         jackdaw_surface::FoliagePlugin,
+        jackdaw_surface::WaterPlugin,
     ))
     .init_resource::<PendingMaterialDelete>()
     .init_resource::<EditedMaterials>()

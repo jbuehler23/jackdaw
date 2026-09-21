@@ -2,7 +2,7 @@
 //!
 //! [`LayeredSurface`] carries a second surface on a mesh's upward faces;
 //! [`foliage::Foliage`] blows with the scene's wind and passes light through
-//! its leaves.
+//! its leaves; [`water::Water`] draws a lake, a river or a sea.
 //!
 //! # A second surface on the upward faces
 //!
@@ -23,8 +23,10 @@
 //! the shader, which computes the same expression.
 
 pub mod foliage;
+pub mod water;
 
 pub use foliage::{Foliage, FoliageMaterial, FoliagePlugin};
+pub use water::{Water, WaterMaterial, WaterPlugin};
 
 use bevy::asset::embedded_asset;
 use bevy::color::ColorToComponents;

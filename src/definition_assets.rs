@@ -1321,8 +1321,11 @@ pub const LAYERED_SURFACE_KIND: &str = "layered_surface";
 /// The kind a material that blows with the wind and passes light holds.
 pub const FOLIAGE_KIND: &str = "foliage";
 
+/// The kind a material that draws a lake, a river or a sea holds.
+pub const WATER_KIND: &str = "water";
+
 /// The types the editor has compiled in.
-fn compiled_kinds() -> [AssetKind; 5] {
+fn compiled_kinds() -> [AssetKind; 6] {
     use jackdaw_api_internal::lucide_icons::Icon;
     [
         AssetKind::compiled(
@@ -1351,6 +1354,12 @@ fn compiled_kinds() -> [AssetKind; 5] {
             <jackdaw_surface::FoliageMaterial as bevy::reflect::TypePath>::type_path(),
         )
         .with_icon(Icon::Leaf),
+        AssetKind::compiled(
+            WATER_KIND,
+            "Water",
+            <jackdaw_surface::WaterMaterial as bevy::reflect::TypePath>::type_path(),
+        )
+        .with_icon(Icon::Waves),
     ]
 }
 

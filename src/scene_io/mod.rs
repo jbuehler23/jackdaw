@@ -165,6 +165,7 @@ pub fn should_skip_component(type_path: &str) -> bool {
         || computed_ui_component_paths().contains(&type_path)
         || type_path == crate::worn_material::layered_material_component()
         || type_path == crate::worn_material::foliage_material_component()
+        || type_path == crate::worn_material::water_material_component()
 }
 
 /// The editor's component skip policy as a [`jackdaw_bsn::BsnWriterConfig`]
@@ -192,6 +193,9 @@ pub fn editor_writer_config() -> jackdaw_bsn::BsnWriterConfig {
     config
         .skip_paths
         .push(crate::worn_material::foliage_material_component().to_string());
+    config
+        .skip_paths
+        .push(crate::worn_material::water_material_component().to_string());
     for path in ALWAYS_SAVE_PATHS {
         config.always_save_paths.push((*path).to_string());
     }
