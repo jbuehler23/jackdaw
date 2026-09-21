@@ -406,7 +406,9 @@ pub fn load_asset_value(world: &mut World, kind: &AssetKind, path: &Path) -> Opt
             None => Some(AssetValue::Handle(handle)),
         };
     }
-    if kind.kind == crate::definition_assets::LAYERED_SURFACE_KIND {
+    if kind.kind == crate::definition_assets::LAYERED_SURFACE_KIND
+        || kind.kind == crate::definition_assets::FOLIAGE_KIND
+    {
         return crate::material_assets::load_surface_file(world, path, &kind.type_path)
             .map(AssetValue::Handle);
     }

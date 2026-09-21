@@ -657,6 +657,7 @@ pub(crate) fn plugin(app: &mut App) {
     app.add_plugins((
         jackdaw_runtime::MaterialTextureFormatPlugin,
         jackdaw_surface::LayeredSurfacePlugin,
+        jackdaw_surface::FoliagePlugin,
     ))
     .init_resource::<PendingMaterialDelete>()
     .init_resource::<EditedMaterials>()

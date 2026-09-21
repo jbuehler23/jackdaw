@@ -1318,8 +1318,11 @@ pub const PREFAB_KIND: &str = "prefab";
 /// The kind a material carrying a second surface on its upward faces holds.
 pub const LAYERED_SURFACE_KIND: &str = "layered_surface";
 
+/// The kind a material that blows with the wind and passes light holds.
+pub const FOLIAGE_KIND: &str = "foliage";
+
 /// The types the editor has compiled in.
-fn compiled_kinds() -> [AssetKind; 4] {
+fn compiled_kinds() -> [AssetKind; 5] {
     use jackdaw_api_internal::lucide_icons::Icon;
     [
         AssetKind::compiled(
@@ -1342,6 +1345,12 @@ fn compiled_kinds() -> [AssetKind; 4] {
             <jackdaw_surface::LayeredSurfaceMaterial as bevy::reflect::TypePath>::type_path(),
         )
         .with_icon(Icon::Layers),
+        AssetKind::compiled(
+            FOLIAGE_KIND,
+            "Foliage",
+            <jackdaw_surface::FoliageMaterial as bevy::reflect::TypePath>::type_path(),
+        )
+        .with_icon(Icon::Leaf),
     ]
 }
 

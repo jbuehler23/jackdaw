@@ -1,4 +1,10 @@
-//! A standard material carrying a second surface on its upward faces.
+//! The materials the editor ships beside Bevy's standard one.
+//!
+//! [`LayeredSurface`] carries a second surface on a mesh's upward faces;
+//! [`foliage::Foliage`] blows with the scene's wind and passes light through
+//! its leaves.
+//!
+//! # A second surface on the upward faces
 //!
 //! A cliff is one mesh with one rock texture set, and the grass, moss or snow
 //! that gathers on its ledges is a second set blended over it. [`LayeredSurface`]
@@ -15,6 +21,10 @@
 //!
 //! [`LayerBlend::weight`] is the whole of the blend decision and is shared with
 //! the shader, which computes the same expression.
+
+pub mod foliage;
+
+pub use foliage::{Foliage, FoliageMaterial, FoliagePlugin};
 
 use bevy::asset::embedded_asset;
 use bevy::color::ColorToComponents;

@@ -5397,6 +5397,7 @@ name = "jackdaw_surface"
 version = "0.19.0"
 dependencies = [
  "bevy",
+ "jackdaw_scene_types",
 ]
 
 [[package]]

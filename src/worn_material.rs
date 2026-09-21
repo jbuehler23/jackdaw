@@ -9,7 +9,7 @@
 
 use bevy::asset::UntypedHandle;
 use bevy::prelude::*;
-use jackdaw_surface::LayeredSurfaceMaterial;
+use jackdaw_surface::{FoliageMaterial, LayeredSurfaceMaterial};
 
 /// Reflect type path of the component a mesh wears a standard material on.
 pub const STANDARD_MATERIAL_COMPONENT: &str =
@@ -20,6 +20,7 @@ pub const STANDARD_MATERIAL_COMPONENT: &str =
 pub enum WornMaterial {
     Standard(Handle<StandardMaterial>),
     Layered(Handle<LayeredSurfaceMaterial>),
+    Foliage(Handle<FoliageMaterial>),
 }
 
 impl WornMaterial {
@@ -28,9 +29,12 @@ impl WornMaterial {
         if let Some(standard) = world.get::<MeshMaterial3d<StandardMaterial>>(entity) {
             return Some(Self::Standard(standard.0.clone()));
         }
+        if let Some(layered) = world.get::<MeshMaterial3d<LayeredSurfaceMaterial>>(entity) {
+            return Some(Self::Layered(layered.0.clone()));
+        }
         world
-            .get::<MeshMaterial3d<LayeredSurfaceMaterial>>(entity)
-            .map(|layered| Self::Layered(layered.0.clone()))
+            .get::<MeshMaterial3d<FoliageMaterial>>(entity)
+            .map(|foliage| Self::Foliage(foliage.0.clone()))
     }
 
     /// The material a handle holds, if it holds one of a kind a mesh can wear.
@@ -38,10 +42,13 @@ impl WornMaterial {
         if let Ok(standard) = handle.clone().try_typed::<StandardMaterial>() {
             return Some(Self::Standard(standard));
         }
+        if let Ok(layered) = handle.clone().try_typed::<LayeredSurfaceMaterial>() {
+            return Some(Self::Layered(layered));
+        }
         handle
-            .try_typed::<LayeredSurfaceMaterial>()
+            .try_typed::<FoliageMaterial>()
             .ok()
-            .map(Self::Layered)
+            .map(Self::Foliage)
     }
 
     /// Put this material on an entity, taking off the one it wore.
@@ -49,16 +56,14 @@ impl WornMaterial {
         let Ok(mut node) = world.get_entity_mut(entity) else {
             return;
         };
+        node.remove::<MeshMaterial3d<StandardMaterial>>();
+        node.remove::<MeshMaterial3d<LayeredSurfaceMaterial>>();
+        node.remove::<MeshMaterial3d<FoliageMaterial>>();
         match self {
-            Self::Standard(handle) => {
-                node.remove::<MeshMaterial3d<LayeredSurfaceMaterial>>();
-                node.insert(MeshMaterial3d(handle.clone()));
-            }
-            Self::Layered(handle) => {
-                node.remove::<MeshMaterial3d<StandardMaterial>>();
-                node.insert(MeshMaterial3d(handle.clone()));
-            }
-        }
+            Self::Standard(handle) => node.insert(MeshMaterial3d(handle.clone())),
+            Self::Layered(handle) => node.insert(MeshMaterial3d(handle.clone())),
+            Self::Foliage(handle) => node.insert(MeshMaterial3d(handle.clone())),
+        };
         mark_for_respecialization(world, entity);
     }
 
@@ -67,6 +72,7 @@ impl WornMaterial {
         match self {
             Self::Standard(_) => STANDARD_MATERIAL_COMPONENT,
             Self::Layered(_) => layered_material_component(),
+            Self::Foliage(_) => foliage_material_component(),
         }
     }
 
@@ -74,6 +80,7 @@ impl WornMaterial {
         match self {
             Self::Standard(handle) => handle.clone().untyped(),
             Self::Layered(handle) => handle.clone().untyped(),
+            Self::Foliage(handle) => handle.clone().untyped(),
         }
     }
 
@@ -82,7 +89,7 @@ impl WornMaterial {
     pub fn standard(&self) -> Option<&Handle<StandardMaterial>> {
         match self {
             Self::Standard(handle) => Some(handle),
-            Self::Layered(_) => None,
+            Self::Layered(_) | Self::Foliage(_) => None,
         }
     }
 
@@ -91,6 +98,7 @@ impl WornMaterial {
         match self {
             Self::Standard(handle) => *handle == Handle::default(),
             Self::Layered(handle) => *handle == Handle::default(),
+            Self::Foliage(handle) => *handle == Handle::default(),
         }
     }
 }
@@ -126,7 +134,17 @@ pub fn layered_material_component() -> &'static str {
     <MeshMaterial3d<LayeredSurfaceMaterial> as TypePath>::type_path()
 }
 
+/// Reflect type path of the component a mesh wears a foliage material on.
+pub fn foliage_material_component() -> &'static str {
+    use bevy::reflect::TypePath;
+    <MeshMaterial3d<FoliageMaterial> as TypePath>::type_path()
+}
+
 /// The component type paths a mesh can wear a material on.
-pub fn material_component_paths() -> [&'static str; 2] {
-    [STANDARD_MATERIAL_COMPONENT, layered_material_component()]
+pub fn material_component_paths() -> [&'static str; 3] {
+    [
+        STANDARD_MATERIAL_COMPONENT,
+        layered_material_component(),
+        foliage_material_component(),
+    ]
 }

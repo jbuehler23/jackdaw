@@ -211,6 +211,7 @@ impl Plugin for JackdawPlugin {
         app.add_plugins((
             MaterialTextureFormatPlugin,
             jackdaw_surface::LayeredSurfacePlugin,
+            jackdaw_surface::FoliagePlugin,
         ));
 
         // Game code may add a model to an entity long after the scene it lives
