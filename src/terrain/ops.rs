@@ -17,7 +17,7 @@ use crate::selection::Selection;
 ///
 /// Four is a kilometre a side at the default cell size. Nothing caps a
 /// terrain at it.
-const FRESH_TERRAIN_REGIONS: u32 = 4;
+pub(super) const FRESH_TERRAIN_REGIONS: u32 = 4;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TerrainToolRaiseOp>()

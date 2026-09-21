@@ -2394,6 +2394,8 @@ mod tests {
                     material: "grass".to_string(),
                     uv_scale: 0.25,
                     detile: 0.0,
+                    occlusion: String::new(),
+                    roughness: String::new(),
                 }],
             )
             .expect("accepted");

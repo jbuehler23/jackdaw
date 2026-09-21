@@ -4,6 +4,7 @@ pub mod detail;
 pub mod detail_ops;
 pub mod export;
 pub mod ground;
+pub mod import;
 pub mod inspector;
 pub mod mesh;
 pub mod navmesh_bake;
@@ -75,11 +76,14 @@ impl Plugin for TerrainPlugin {
                 regions::plugin,
                 navmesh_bake::plugin,
                 splat::plugin,
-                options_bar::plugin,
-                panel::plugin,
-                inspector::plugin,
-                ui_fields::plugin,
-                texture_ops::plugin,
+                (
+                    import::plugin,
+                    options_bar::plugin,
+                    panel::plugin,
+                    inspector::plugin,
+                    ui_fields::plugin,
+                    texture_ops::plugin,
+                ),
             ));
     }
 }

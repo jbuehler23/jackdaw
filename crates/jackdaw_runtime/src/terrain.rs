@@ -365,6 +365,8 @@ fn build_ready_materials(
             albedo: images.add(built.albedo),
             normal: images.add(built.normal),
             height: images.add(built.height),
+            occlusion: images.add(built.occlusion),
+            roughness: images.add(built.roughness),
         };
         splat.material = Some(splat_materials.add(TerrainSplatMaterial::new(
             &splat.set,
@@ -932,6 +934,8 @@ mod tests {
                 albedo: Handle::default(),
                 normal: Handle::default(),
                 height: Handle::default(),
+                occlusion: Handle::default(),
+                roughness: Handle::default(),
             },
             Handle::default(),
             Handle::default(),
@@ -958,6 +962,8 @@ mod tests {
                 albedo: Handle::default(),
                 normal: Handle::default(),
                 height: Handle::default(),
+                occlusion: Handle::default(),
+                roughness: Handle::default(),
             },
             Handle::default(),
             Handle::default(),

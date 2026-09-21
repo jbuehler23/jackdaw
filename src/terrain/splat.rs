@@ -347,6 +347,8 @@ fn build_ready_materials(
             albedo: images.add(built.albedo),
             normal: images.add(built.normal),
             height: images.add(built.height),
+            occlusion: images.add(built.occlusion),
+            roughness: images.add(built.roughness),
         };
         let autoterrain = store.autoterrain(&terrain.data_path);
         let surface = store.surface(&terrain.data_path);

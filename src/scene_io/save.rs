@@ -1893,7 +1893,7 @@ mod terrain_sidecar_tests {
         let sidecar_path = tmp.join("zone.terrain-0.jdterrain");
 
         let mut original = sidecar::save(&document(&sculpted())).expect("encodes");
-        original[8..10].copy_from_slice(&(sidecar::VERSION_8 + 1).to_le_bytes());
+        original[8..10].copy_from_slice(&(sidecar::VERSION_9 + 1).to_le_bytes());
         std::fs::write(&sidecar_path, &original).expect("write sidecar");
 
         let mut world = World::new();
@@ -1981,6 +1981,8 @@ mod terrain_sidecar_tests {
                             material: "rock_05".to_string(),
                             uv_scale: 0.25,
                             detile: 0.5,
+                            occlusion: String::new(),
+                            roughness: String::new(),
                         },
                     ],
                 )
@@ -2125,7 +2127,7 @@ mod terrain_sidecar_tests {
         let rewritten = std::fs::read(&sidecar_path).expect("read back");
         assert_eq!(
             u16::from_le_bytes([rewritten[8], rewritten[9]]),
-            sidecar::VERSION_8,
+            sidecar::VERSION_9,
         );
         // The load settled this terrain onto the geometry its declared rectangle drew with
         // (four vertices across the default 100 metres, cornered at -size/2) and the rewrite

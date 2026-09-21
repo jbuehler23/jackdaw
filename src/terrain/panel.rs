@@ -28,6 +28,9 @@ use super::autoterrain_ops::{
 use super::detail_ops::{
     TerrainDetailAddOp, TerrainDetailRemoveOp, TerrainDetailSelectOp, TerrainDetailSetOp,
 };
+use super::import::{
+    MAX_IMPORT_HEIGHT, MIN_IMPORT_HEIGHT, TerrainImportOp, TerrainImportPickOp, TerrainImportState,
+};
 use super::ops::{TerrainErodeOp, TerrainGenerateOp};
 use super::shape_ops::{MAX_CELL_SIZE, MIN_CELL_SIZE, clamp_cell_size, commit_shape};
 use super::splat::TerrainSplatMaterials;
@@ -66,6 +69,7 @@ pub(super) fn plugin(app: &mut App) {
                 .run_if(in_state(crate::AppState::Editor)),
         )
         .add_observer(on_shape_scrub_change)
+        .add_observer(on_import_scrub_change)
         .add_observer(on_gen_value_change)
         .add_observer(on_material_uv_change)
         .add_observer(on_material_detile_change)
@@ -205,6 +209,13 @@ enum GenField {
     Offset,
 }
 
+/// The two ends of the height range an imported heightmap is read at.
+#[derive(Component, Clone, Copy)]
+enum ImportField {
+    Min,
+    Max,
+}
+
 #[derive(Component, Clone, Copy)]
 enum ErosionField {
     Iterations,
@@ -230,6 +241,10 @@ struct PanelState {
     /// beside it is absent, arriving from a scrub drag that a rebuild would
     /// despawn under the pointer; `sync_shape_fields` keeps that one current.
     resolution: Option<u32>,
+    /// The heightmap the Generation tab has picked, so choosing one brings
+    /// up the range it is read at. A discrete pick, like the grid above;
+    /// the range itself is absent for the reason the extent is.
+    heightmap: Option<String>,
 }
 
 /// What the Textures tab rebuilds on: the material list, the quarantine and
@@ -323,6 +338,7 @@ fn update_terrain_panel_content(
     scatter: super::scatter::ScatterTabRefs,
     textures: TexturesTabRefs,
     store: Res<TerrainDataStore>,
+    import_state: Res<TerrainImportState>,
 ) {
     let terrain_entity = selection.primary().filter(|&e| terrains.contains(e));
 
@@ -353,6 +369,7 @@ fn update_terrain_panel_content(
         resolution: terrain_entity
             .and_then(|e| terrain_data.get(e).ok())
             .map(|terrain| store.grid_shape(terrain).resolution),
+        heightmap: (*tab == TerrainPanelTab::Generation).then(|| import_state.heightmap.clone()),
     };
     if *local_state == state || body_query.is_empty() {
         return;
@@ -438,7 +455,7 @@ fn update_terrain_panel_content(
                 );
             }
             TerrainPanelTab::Generation => {
-                spawn_generation_section(&mut commands, body, &gen_state);
+                spawn_generation_section(&mut commands, body, &gen_state, &import_state);
             }
         }
     }
@@ -1794,6 +1811,7 @@ fn spawn_generation_section(
     commands: &mut Commands,
     parent: Entity,
     gen_state: &TerrainGenerateState,
+    import_state: &TerrainImportState,
 ) {
     let noise_options: Vec<String> = jackdaw_terrain::NoiseType::ALL
         .iter()
@@ -1917,6 +1935,8 @@ fn spawn_generation_section(
         ChildOf(parent),
     ));
 
+    spawn_import_action(commands, parent, import_state);
+
     commands.spawn((
         Text::new("Hydraulic Erosion"),
         TextFont {
@@ -2006,6 +2026,93 @@ fn spawn_generation_section(
         ),
         ChildOf(parent),
     ));
+}
+
+/// The Import action, and, once a heightmap is picked, the world heights
+/// its black and white ends stand at.
+///
+/// The range is a pair of chips rather than the sliders above it: two world
+/// heights with no track worth drawing, read as one question.
+fn spawn_import_action(commands: &mut Commands, parent: Entity, import_state: &TerrainImportState) {
+    commands.spawn((
+        button::button(ButtonProps::new("Import...").call_operator(TerrainImportPickOp::ID)),
+        ChildOf(parent),
+    ));
+    if import_state.heightmap.is_empty() {
+        return;
+    }
+    spawn_hint(commands, parent, &import_state.heightmap);
+
+    let row = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: px(tokens::SPACING_SM),
+                row_gap: px(tokens::SPACING_XS),
+                width: percent(100),
+                ..default()
+            },
+            ChildOf(parent),
+        ))
+        .id();
+    spawn_scrub_chip(
+        commands,
+        row,
+        "Min Height",
+        "World height the heightmap's black end stands at.",
+        import_state.min,
+        MIN_IMPORT_HEIGHT..MAX_IMPORT_HEIGHT,
+        FieldKind::Continuous,
+        ImportField::Min,
+    );
+    spawn_scrub_chip(
+        commands,
+        row,
+        "Max Height",
+        "World height the heightmap's white end stands at.",
+        import_state.max,
+        MIN_IMPORT_HEIGHT..MAX_IMPORT_HEIGHT,
+        FieldKind::Continuous,
+        ImportField::Max,
+    );
+
+    commands.spawn((
+        button::button(
+            ButtonProps::new("Import")
+                .with_variant(ButtonVariant::Primary)
+                .call_operator(TerrainImportOp::ID),
+        ),
+        ChildOf(parent),
+    ));
+}
+
+/// Write path for the height-range chips. The widget does not self-update,
+/// so the chip is re-inserted on every tick; nothing else happens until the
+/// Import button dispatches the operator.
+fn on_import_scrub_change(
+    event: On<ValueChange<f32>>,
+    bindings: Query<&ImportField>,
+    mut import_state: ResMut<TerrainImportState>,
+    mut commands: Commands,
+) {
+    let source = event.event_target();
+    let Ok(&field) = bindings.get(source) else {
+        return;
+    };
+    let value = if event.value.is_finite() {
+        event.value.clamp(MIN_IMPORT_HEIGHT, MAX_IMPORT_HEIGHT)
+    } else {
+        0.0
+    };
+    commands
+        .entity(source)
+        .insert(ScrubNumberInputValue::F32(value));
+    match field {
+        ImportField::Min => import_state.min = value,
+        ImportField::Max => import_state.max = value,
+    }
 }
 
 fn on_gen_value_change(

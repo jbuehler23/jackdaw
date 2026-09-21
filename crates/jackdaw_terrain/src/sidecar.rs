@@ -52,6 +52,12 @@
 //!         4             uv_scale, f32
 //!         4             detile, f32 (version 3 only; version 2 files
 //!                        have no such field and read as 0 = off)
+//!         4             occlusion path length in bytes, u32 (version 9
+//!                        only; 0 = none)
+//!         n             occlusion path, UTF-8
+//!         4             roughness path length in bytes, u32 (version 9
+//!                        only; 0 = none)
+//!         n             roughness path, UTF-8
 //! then, per region (region_count times), each present regardless of
 //! content:
 //!         4             region coord x, i32
@@ -167,6 +173,13 @@
 //! corner, so it moves with the ground it stands on. A version-6 or older file
 //! loads with an empty palette and no placements.
 //!
+//! # Format version 9
+//!
+//! Version 8 with two more length-prefixed paths per material slot: the
+//! occlusion and roughness maps that slot shades with, each empty where the
+//! slot takes what its material carries. A version-8 or older file reads back
+//! with both empty.
+//!
 //! [`load`] and [`save`] are the entry points: `load` upgrades older files
 //! forward and `save` always writes the current version, refusing anything
 //! newer than this build. The bare `encode`/`decode` and
@@ -224,6 +237,11 @@ pub const VERSION_7: u16 = 7;
 /// file's name becomes `materials/<name>.material.bsn` where that file is
 /// there, and stays a name where it is not. What [`save`] writes.
 pub const VERSION_8: u16 = 8;
+
+/// Region documents whose material slots may name an occlusion and a
+/// roughness map of their own, overriding what the slot's material carries.
+/// A version-8 or older file loads with both empty. What [`save`] writes.
+pub const VERSION_9: u16 = 9;
 
 /// Conventional file extension for a terrain sidecar.
 pub const EXTENSION: &str = "jdterrain";
@@ -415,6 +433,17 @@ pub struct TerrainMaterialSlot {
     /// How hard the shader breaks up this slot's repetition, `0..1`. 0 is
     /// off, and every version-2 sidecar reads back as 0.
     pub detile: f32,
+    /// Ambient occlusion map for this slot, as a path under the project's
+    /// assets. Empty takes whatever the slot's material carries.
+    ///
+    /// On the slot rather than on the material for the reason the tiling is:
+    /// one material is shared across surfaces, and a terrain may want a map
+    /// of its own without editing what every other surface draws.
+    pub occlusion: String,
+    /// Roughness map for this slot, as a path under the project's assets,
+    /// read from its green channel the way a metallic-roughness texture is.
+    /// Empty takes whatever the slot's material carries.
+    pub roughness: String,
 }
 
 impl TerrainMaterialSlot {
@@ -424,6 +453,8 @@ impl TerrainMaterialSlot {
             material: material.into(),
             uv_scale: crate::texture_set::DEFAULT_UV_SCALE,
             detile: crate::texture_set::DEFAULT_DETILE,
+            occlusion: String::new(),
+            roughness: String::new(),
         }
     }
 
@@ -436,6 +467,8 @@ impl TerrainMaterialSlot {
             material: String::new(),
             uv_scale: 0.0,
             detile: 0.0,
+            occlusion: String::new(),
+            roughness: String::new(),
         }
     }
 
@@ -1472,7 +1505,11 @@ impl RegionTerrainData {
                 .checked_add(4)?
                 .checked_add(slot.material.len())?
                 .checked_add(4)? // uv_scale
-                .checked_add(4)?; // detile
+                .checked_add(4)? // detile
+                .checked_add(4)?
+                .checked_add(slot.occlusion.len())?
+                .checked_add(4)?
+                .checked_add(slot.roughness.len())?;
         }
 
         for (_, region) in self.regions.iter_sorted() {
@@ -1532,6 +1569,8 @@ fn compact_table(tombstones: impl Iterator<Item = bool>) -> Vec<Option<u16>> {
 pub fn encode_regions(data: &RegionTerrainData) -> Result<Vec<u8>, SidecarError> {
     for slot in &data.materials {
         validate_material_name(&slot.material).map_err(SidecarError::InvalidMaterialName)?;
+        validate_material_name(&slot.occlusion).map_err(SidecarError::InvalidMaterialName)?;
+        validate_material_name(&slot.roughness).map_err(SidecarError::InvalidMaterialName)?;
     }
     for entry in &data.scatter.assets {
         if !entry.is_tombstone() {
@@ -1571,7 +1610,7 @@ pub fn encode_regions(data: &RegionTerrainData) -> Result<Vec<u8>, SidecarError>
     let mut out = Vec::with_capacity(data.encoded_len().ok_or(SidecarError::TooLarge)?);
 
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&VERSION_8.to_le_bytes());
+    out.extend_from_slice(&VERSION_9.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     out.extend_from_slice(&(data.channels.len() as u32).to_le_bytes());
     encode_channel_directory(&mut out, &data.channels);
@@ -1585,6 +1624,10 @@ pub fn encode_regions(data: &RegionTerrainData) -> Result<Vec<u8>, SidecarError>
         out.extend_from_slice(slot.material.as_bytes());
         out.extend_from_slice(&slot.uv_scale.to_le_bytes());
         out.extend_from_slice(&slot.detile.to_le_bytes());
+        for path in [&slot.occlusion, &slot.roughness] {
+            out.extend_from_slice(&(path.len() as u32).to_le_bytes());
+            out.extend_from_slice(path.as_bytes());
+        }
     }
 
     let mut autoterrain = data.autoterrain;
@@ -1695,7 +1738,7 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
         return Err(SidecarError::BadMagic);
     }
     let version = r.u16()?;
-    if !(VERSION_2..=VERSION_8).contains(&version) {
+    if !(VERSION_2..=VERSION_9).contains(&version) {
         return Err(SidecarError::UnsupportedVersion(version));
     }
     if r.u16()? != 0 {
@@ -1745,10 +1788,27 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
         } else {
             0.0
         };
+        // Versions 8 and older name no maps of their own and load with
+        // both empty, taking whatever the slot's material carries.
+        let mut map = || -> Result<String, SidecarError> {
+            if version < VERSION_9 {
+                return Ok(String::new());
+            }
+            let len = r.u32()? as usize;
+            let path = core::str::from_utf8(r.take(len)?)
+                .map_err(|_| SidecarError::BadName)?
+                .to_string();
+            validate_material_name(&path).map_err(SidecarError::InvalidMaterialName)?;
+            Ok(path)
+        };
+        let occlusion = map()?;
+        let roughness = map()?;
         let mut slot = TerrainMaterialSlot {
             material,
             uv_scale,
             detile,
+            occlusion,
+            roughness,
         };
         slot.sanitize();
         materials.push(slot);
@@ -2025,7 +2085,7 @@ pub fn load_from(bytes: &[u8], assets: Option<&Path>) -> Result<LoadedSidecar, S
     let mut data = match version {
         0 => Err(SidecarError::UnsupportedVersion(0)),
         VERSION => decode(bytes).and_then(|legacy| RegionTerrainData::from_legacy_v1(&legacy)),
-        VERSION_2..=VERSION_8 => decode_regions(bytes),
+        VERSION_2..=VERSION_9 => decode_regions(bytes),
         other => Err(SidecarError::UnsupportedVersion(other)),
     }?;
     data.normalize();
@@ -2341,6 +2401,8 @@ mod tests {
                     material: "rock_05".to_string(),
                     uv_scale: 0.25,
                     detile: 0.7,
+                    occlusion: String::new(),
+                    roughness: String::new(),
                 },
             ],
             autoterrain: AutoTerrainSettings::default(),
@@ -2621,7 +2683,7 @@ mod tests {
         migrated.grid = Some(GridGeometry::DEFAULT);
 
         let v2_bytes = save(&migrated).expect("encodes");
-        assert_eq!(u16::from_le_bytes([v2_bytes[8], v2_bytes[9]]), VERSION_8);
+        assert_eq!(u16::from_le_bytes([v2_bytes[8], v2_bytes[9]]), VERSION_9);
         assert_ne!(v2_bytes[8..10], v1_bytes[8..10]);
 
         let reloaded = load(&v2_bytes).expect("loads");
@@ -2728,22 +2790,31 @@ mod tests {
     fn rejects_a_v2_file_written_by_a_newer_build() {
         let bytes = encode_regions(&sample_regions()).expect("encodes");
         let mut newer = bytes.clone();
-        newer[8..10].copy_from_slice(&(VERSION_8 + 1).to_le_bytes());
+        newer[8..10].copy_from_slice(&(VERSION_9 + 1).to_le_bytes());
         assert_eq!(
             decode_regions(&newer),
-            Err(SidecarError::UnsupportedVersion(VERSION_8 + 1))
+            Err(SidecarError::UnsupportedVersion(VERSION_9 + 1))
         );
         assert_eq!(
             load(&newer),
-            Err(SidecarError::UnsupportedVersion(VERSION_8 + 1))
+            Err(SidecarError::UnsupportedVersion(VERSION_9 + 1))
         );
     }
 
-    /// Version 7 and version 8 lay the same bytes out; only what a slot's
-    /// string means changed, so a version-7 file is this build's bytes under
-    /// the older version word.
+    /// Version 7 lays the same bytes out but for the occlusion and roughness
+    /// paths a slot ends with now, so a version-7 file is this build's bytes
+    /// with those dropped and under the older version word.
+    ///
+    /// Walks the slot block from a header with no channel directory in it,
+    /// which is every document these tests build.
     fn version_7_bytes(data: &RegionTerrainData) -> Vec<u8> {
+        assert!(data.channels.is_empty(), "the walk below assumes none");
         let mut bytes = encode_regions(data).expect("encodes");
+        let mut at = MAGIC.len() + 2 + 2 + 4 + 4 + 4 + 4;
+        for slot in &data.materials {
+            at += 4 + slot.material.len() + 4 + 4;
+            bytes.drain(at..at + 8);
+        }
         bytes[8..10].copy_from_slice(&VERSION_7.to_le_bytes());
         bytes
     }
@@ -2774,7 +2845,7 @@ mod tests {
     }
 
     #[test]
-    fn a_version_7_file_saves_forward_as_version_8() {
+    fn a_version_7_file_saves_forward_at_the_current_version() {
         let assets = assets_holding_material("grass");
         let bytes = version_7_bytes(&RegionTerrainData {
             materials: vec![TerrainMaterialSlot::new("grass")],
@@ -2784,7 +2855,7 @@ mod tests {
         let loaded = load_from(&bytes, Some(assets.path())).expect("loads");
         let forward = save(&loaded.data).expect("encodes");
 
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_8);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_9);
         assert_eq!(
             load(&forward).expect("reloads").materials[0].material,
             "materials/grass.material.bsn",
@@ -2822,7 +2893,7 @@ mod tests {
         );
         assert_eq!(
             decode(&regions_bytes),
-            Err(SidecarError::UnsupportedVersion(VERSION_8))
+            Err(SidecarError::UnsupportedVersion(VERSION_9))
         );
     }
 
@@ -3212,6 +3283,52 @@ mod tests {
         assert_eq!(forward.materials, decoded.materials);
     }
 
+    /// A file written before a slot could name maps of its own loads with
+    /// none, so every such slot takes whatever its material carries.
+    #[test]
+    fn a_version_8_file_loads_with_no_slot_maps() {
+        let data = RegionTerrainData {
+            materials: vec![TerrainMaterialSlot::new("grass")],
+            ..RegionTerrainData::default()
+        };
+        let current = encode_regions(&data).expect("encodes");
+
+        // Version 8 lays out the same bytes without the two path fields a
+        // slot now ends with, so dropping those from the one slot here and
+        // stamping the older version back produces a version-8 file.
+        let header = MAGIC.len() + 2 + 2 + 4 + 4 + 4 + 4;
+        let slot_head = 4 + "grass".len() + 4 + 4;
+        let mut older = current;
+        older.drain(header + slot_head..header + slot_head + 8);
+        older[MAGIC.len()..MAGIC.len() + 2].copy_from_slice(&VERSION_8.to_le_bytes());
+
+        let decoded = decode_regions(&older).expect("a version-8 file still decodes");
+        assert_eq!(decoded.materials.len(), 1);
+        assert_eq!(decoded.materials[0].material, "grass");
+        assert_eq!(decoded.materials[0].occlusion, "");
+        assert_eq!(decoded.materials[0].roughness, "");
+    }
+
+    /// A slot's own occlusion and roughness maps survive the round trip
+    /// beside the material it draws.
+    #[test]
+    fn slot_maps_round_trip() {
+        let data = RegionTerrainData {
+            materials: vec![
+                TerrainMaterialSlot {
+                    occlusion: "ground/grass_ao.png".to_string(),
+                    roughness: "ground/grass_rough.png".to_string(),
+                    ..TerrainMaterialSlot::new("materials/grass.material.bsn")
+                },
+                TerrainMaterialSlot::new("materials/rock.material.bsn"),
+            ],
+            ..RegionTerrainData::default()
+        };
+
+        let back = decode_regions(&encode_regions(&data).expect("encodes")).expect("decodes");
+        assert_eq!(back.materials, data.materials);
+    }
+
     /// A version-3 file has no autoterrain block and loads with
     /// autoterrain off. Saving it forward writes the block at its
     /// defaults.
@@ -3237,7 +3354,7 @@ mod tests {
         assert_eq!(decoded.materials[0].detile, 0.5);
 
         let forward = save(&decoded).expect("encodes");
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_8);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_9);
         assert_eq!(
             load(&forward).expect("reloads").autoterrain,
             decoded.autoterrain
@@ -3326,7 +3443,7 @@ mod tests {
         });
 
         let bytes = encode_regions(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_8);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_9);
         assert_eq!(decode_regions(&bytes).expect("decodes"), data);
         assert_eq!(load(&bytes).expect("loads"), data);
     }
@@ -3417,7 +3534,7 @@ mod tests {
     fn a_scatter_palette_and_its_placements_round_trip() {
         let data = scattered_document();
         let bytes = save(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_8);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_9);
         assert_eq!(bytes.len(), data.encoded_len().expect("fits"));
         assert_eq!(load(&bytes).expect("loads"), data);
     }
@@ -3432,7 +3549,7 @@ mod tests {
         // Saving it forward writes the empty palette and one zero
         // placement count per region, and reads back the same document.
         let forward = save(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_8);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_9);
         assert_eq!(load(&forward).expect("loads"), data);
     }
 
@@ -3614,7 +3731,7 @@ mod tests {
         let data = load(VERSION_5_FILE).expect("loads");
         let forward = save(&data).expect("encodes");
 
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_8);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_9);
         assert_eq!(load(&forward).expect("reloads"), data);
     }
 
@@ -3629,7 +3746,7 @@ mod tests {
         };
 
         let bytes = save(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_8);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_9);
         let back = load(&bytes).expect("decodes");
         assert_eq!(back.surface, data.surface);
         assert_eq!(back, data);
@@ -3898,11 +4015,15 @@ mod tests {
                     material: "grass".to_string(),
                     uv_scale: 0.1,
                     detile: 0.0,
+                    occlusion: String::new(),
+                    roughness: String::new(),
                 },
                 TerrainMaterialSlot {
                     material: "rock".to_string(),
                     uv_scale: 0.1,
                     detile: 0.375,
+                    occlusion: String::new(),
+                    roughness: String::new(),
                 },
                 TerrainMaterialSlot::tombstone(),
             ],
@@ -3923,6 +4044,8 @@ mod tests {
             material: "g".to_string(),
             uv_scale,
             detile,
+            occlusion: String::new(),
+            roughness: String::new(),
         };
         let data = RegionTerrainData {
             materials: vec![slot(0.25, 0.5), TerrainMaterialSlot::tombstone()],
@@ -4031,11 +4154,16 @@ mod tests {
         let name_end = name_len_end + 1; // "t"
         let uv_scale_end = name_end + 4;
         let detile_end = uv_scale_end + 4;
+        // Each map path writes a zero length and no path bytes at all.
+        let occlusion_end = detile_end + 4;
+        let roughness_end = occlusion_end + 4;
         // The tombstone writes a zero length and no name bytes at all.
-        let tomb_name_len_end = detile_end + 4;
+        let tomb_name_len_end = roughness_end + 4;
         let tomb_uv_scale_end = tomb_name_len_end + 4;
         let tomb_detile_end = tomb_uv_scale_end + 4;
-        let auto_flags_end = tomb_detile_end + 1;
+        let tomb_occlusion_end = tomb_detile_end + 4;
+        let tomb_roughness_end = tomb_occlusion_end + 4;
+        let auto_flags_end = tomb_roughness_end + 1;
         let auto_base_end = auto_flags_end + 1;
         let auto_slope_end = auto_base_end + 1;
         let auto_pad_end = auto_slope_end + 1;
@@ -4082,9 +4210,13 @@ mod tests {
             name_end,
             uv_scale_end,
             detile_end,
+            occlusion_end,
+            roughness_end,
             tomb_name_len_end,
             tomb_uv_scale_end,
             tomb_detile_end,
+            tomb_occlusion_end,
+            tomb_roughness_end,
             auto_flags_end,
             auto_base_end,
             auto_slope_end,

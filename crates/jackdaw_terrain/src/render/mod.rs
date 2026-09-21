@@ -59,6 +59,13 @@ const FLAT_NORMAL_TEXEL: [u8; 4] = [128, 128, 255, 255];
 /// map beat every material that has one at any paint weight, and the bottom
 /// would lose them all; the middle leaves the paint deciding.
 const FLAT_HEIGHT_TEXEL: [u8; 4] = [128, 128, 128, 255];
+/// What fills an occlusion or roughness layer for a slot that has no such
+/// map.
+///
+/// The shader's per-slot flag keeps it from reading these layers at all, so
+/// the value only has to be something the array can hold; white is the
+/// identity for occlusion either way.
+const UNMAPPED_LAYER_TEXEL: [u8; 4] = [255, 255, 255, 255];
 /// Albedo of a slot whose material has no base colour texture, or none
 /// this project can resolve. Neutral grey rather than a missing layer, so
 /// the slot keeps its texture id and the ids painted after it do not
@@ -79,6 +86,10 @@ pub struct TextureSetImages {
     pub normal: Vec<Option<Handle<Image>>>,
     /// Height handle per entry, `None` where the entry has none.
     pub height: Vec<Option<Handle<Image>>>,
+    /// Occlusion handle per entry, `None` where the entry has none.
+    pub occlusion: Vec<Option<Handle<Image>>>,
+    /// Roughness handle per entry, `None` where the entry has none.
+    pub roughness: Vec<Option<Handle<Image>>>,
 }
 
 impl TextureSetImages {
@@ -90,6 +101,8 @@ impl TextureSetImages {
             .flatten()
             .chain(self.normal.iter().flatten())
             .chain(self.height.iter().flatten())
+            .chain(self.occlusion.iter().flatten())
+            .chain(self.roughness.iter().flatten())
     }
 }
 
@@ -115,8 +128,14 @@ pub struct ResolvedSlots {
 /// dropped one.
 ///
 /// The slot mapping is fixed: albedo is `base_color_texture`, normal is
-/// `normal_map_texture`, height is `depth_map`. A material flagged
-/// `flip_normal_map_y` carries that flag through to the array builder.
+/// `normal_map_texture`, height is `depth_map`, occlusion is
+/// `occlusion_texture` and roughness is `metallic_roughness_texture`. A
+/// material flagged `flip_normal_map_y` carries that flag through to the
+/// array builder.
+///
+/// A slot naming an occlusion or roughness map of its own takes that image
+/// instead of the material's, so a terrain can shade a shared material's
+/// ground without editing what every other surface draws.
 ///
 /// Tiling and detiling come from the slot, never from the material: one material
 /// is shared across surfaces and tiles differently on each.
@@ -132,11 +151,17 @@ pub fn resolve_with<'m>(
             .map(|path| path.path().to_slash_lossy().into_owned())
     };
 
+    // A map the slot names of its own, loaded here so it reaches the array
+    // builder the way a material's own texture does.
+    let slot_map = |named: &str| -> Option<Handle<Image>> {
+        (!named.is_empty()).then(|| assets.load(named.to_string()))
+    };
+
     let mut resolved = ResolvedSlots::default();
     for slot in slots {
         // A vacated id draws the fallback and is not reported as missing.
         if slot.is_tombstone() {
-            resolved.push(TextureSetEntry::vacant(), None, None, None);
+            resolved.push(TextureSetEntry::vacant(), SlotHandles::default());
             continue;
         }
         let Some(material) = lookup(&slot.material) else {
@@ -146,13 +171,14 @@ pub fn resolve_with<'m>(
                     detile: slot.detile,
                     ..TextureSetEntry::unresolved(&slot.material, slot.uv_scale)
                 },
-                None,
-                None,
-                None,
+                SlotHandles::default(),
             );
             continue;
         };
 
+        let occlusion = slot_map(&slot.occlusion).or_else(|| material.occlusion_texture.clone());
+        let roughness =
+            slot_map(&slot.roughness).or_else(|| material.metallic_roughness_texture.clone());
         resolved.push(
             TextureSetEntry {
                 material: slot.material.clone(),
@@ -160,40 +186,55 @@ pub fn resolve_with<'m>(
                 normal: path_of(&material.normal_map_texture),
                 flip_normal_y: material.flip_normal_map_y,
                 height: path_of(&material.depth_map),
+                occlusion: path_of(&occlusion),
+                roughness: path_of(&roughness),
                 uv_scale: slot.uv_scale,
                 detile: slot.detile,
             },
-            material.base_color_texture.clone(),
-            material.normal_map_texture.clone(),
-            material.depth_map.clone(),
+            SlotHandles {
+                albedo: material.base_color_texture.clone(),
+                normal: material.normal_map_texture.clone(),
+                height: material.depth_map.clone(),
+                occlusion,
+                roughness,
+            },
         );
     }
     resolved
 }
 
+/// One slot's image handles, so the parallel lists in [`TextureSetImages`]
+/// can only be appended to together.
+#[derive(Default)]
+struct SlotHandles {
+    albedo: Option<Handle<Image>>,
+    normal: Option<Handle<Image>>,
+    height: Option<Handle<Image>>,
+    occlusion: Option<Handle<Image>>,
+    roughness: Option<Handle<Image>>,
+}
+
 impl ResolvedSlots {
-    /// Append one slot's entry and its three handles together, so the
-    /// entries and the handle lists cannot fall out of step.
-    fn push(
-        &mut self,
-        entry: TextureSetEntry,
-        albedo: Option<Handle<Image>>,
-        normal: Option<Handle<Image>>,
-        height: Option<Handle<Image>>,
-    ) {
+    /// Append one slot's entry and its handles together, so the entries and
+    /// the handle lists cannot fall out of step.
+    fn push(&mut self, entry: TextureSetEntry, handles: SlotHandles) {
         self.set.entries.push(entry);
-        self.images.albedo.push(albedo);
-        self.images.normal.push(normal);
-        self.images.height.push(height);
+        self.images.albedo.push(handles.albedo);
+        self.images.normal.push(handles.normal);
+        self.images.height.push(handles.height);
+        self.images.occlusion.push(handles.occlusion);
+        self.images.roughness.push(handles.roughness);
     }
 }
 
-/// The three texture arrays a splat material binds.
+/// The per-slot texture arrays a splat material binds.
 #[derive(Clone, Debug)]
 pub struct SplatImages {
     pub albedo: Image,
     pub normal: Image,
     pub height: Image,
+    pub occlusion: Image,
+    pub roughness: Image,
 }
 
 /// Why a texture set could not be stacked into arrays yet, or at all.
@@ -228,13 +269,13 @@ impl core::fmt::Display for SplatBuildError {
 
 impl core::error::Error for SplatBuildError {}
 
-/// Stack a resolved texture set into albedo, normal and height arrays.
+/// Stack a resolved texture set into its per-slot arrays.
 ///
 /// Returns [`SplatBuildError::NotReady`] until every image the set names has
 /// decoded, and [`SplatBuildError::Invalid`], naming the material and path, when
 /// the layers disagree on size.
 ///
-/// Entries with no albedo, normal or height map get a filled layer rather than a
+/// An entry with no map for one of the arrays gets a filled layer rather than a
 /// missing one, so a slot never loses its texture id. When no entry has a given
 /// map, that array is built 1x1: sampling a one-texel layer returns the constant
 /// anywhere, so the shader needs no flag to tell the two cases apart.
@@ -298,11 +339,33 @@ pub fn splat_images(
         MipFilter::Linear,
         |entry| entry.height.as_deref().unwrap_or_default(),
     )?;
+    let occlusion = stack_optional(
+        &handles.occlusion,
+        set,
+        images,
+        (width, height),
+        UNMAPPED_LAYER_TEXEL,
+        &[],
+        MipFilter::Linear,
+        |entry| entry.occlusion.as_deref().unwrap_or_default(),
+    )?;
+    let roughness = stack_optional(
+        &handles.roughness,
+        set,
+        images,
+        (width, height),
+        UNMAPPED_LAYER_TEXEL,
+        &[],
+        MipFilter::Linear,
+        |entry| entry.roughness.as_deref().unwrap_or_default(),
+    )?;
 
     Ok(SplatImages {
         albedo,
         normal,
         height: height_array,
+        occlusion,
+        roughness,
     })
 }
 
@@ -869,6 +932,14 @@ pub struct TerrainSplatMaterial {
     /// the textures untinted.
     #[uniform(0)]
     pub tint_strength: f32,
+    /// Bit `i` is set where texture id `i` has an occlusion map. An id
+    /// without one shades unoccluded.
+    #[uniform(0)]
+    pub occlusion_slots: u32,
+    /// Bit `i` is set where texture id `i` has a roughness map. An id
+    /// without one takes [`Self::perceptual_roughness`].
+    #[uniform(0)]
+    pub roughness_slots: u32,
     #[texture(1, dimension = "2d_array")]
     #[sampler(2)]
     pub albedo: Handle<Image>,
@@ -887,6 +958,13 @@ pub struct TerrainSplatMaterial {
     #[texture(7)]
     #[sampler(8)]
     pub tint: Handle<Image>,
+    /// Ambient occlusion per slot, read from the red channel.
+    #[texture(9, dimension = "2d_array")]
+    pub occlusion: Handle<Image>,
+    /// Roughness per slot, read from the green channel the way a
+    /// metallic-roughness texture stores it.
+    #[texture(10, dimension = "2d_array")]
+    pub roughness: Handle<Image>,
 }
 
 impl Material for TerrainSplatMaterial {
@@ -932,12 +1010,16 @@ impl TerrainSplatMaterial {
             autoterrain_slope_start: 0.0,
             autoterrain_slope_end: 0.0,
             tint_strength: crate::sidecar::DEFAULT_TINT_STRENGTH,
+            occlusion_slots: slot_mask(set, |entry| entry.occlusion.is_some()),
+            roughness_slots: slot_mask(set, |entry| entry.roughness.is_some()),
             albedo: arrays.albedo,
             normal: arrays.normal,
             height: arrays.height,
             control,
             slope,
             tint,
+            occlusion: arrays.occlusion,
+            roughness: arrays.roughness,
         };
         material.set_autoterrain(autoterrain);
         material.set_surface(surface);
@@ -972,12 +1054,28 @@ impl TerrainSplatMaterial {
     }
 }
 
-/// The three array images once they are in `Assets<Image>`.
+/// Which texture ids answer `has_map`, as the bit per id the shader tests.
+///
+/// Ids past [`MAX_TEXTURES`] cannot be addressed by a control word, so a set
+/// longer than the id space contributes nothing past it.
+fn slot_mask(set: &TextureSet, has_map: impl Fn(&TextureSetEntry) -> bool) -> u32 {
+    let mut mask = 0u32;
+    for (id, entry) in set.entries.iter().take(MAX_TEXTURES).enumerate() {
+        if has_map(entry) {
+            mask |= 1 << id;
+        }
+    }
+    mask
+}
+
+/// The array images once they are in `Assets<Image>`.
 #[derive(Clone, Debug)]
 pub struct SplatArrayHandles {
     pub albedo: Handle<Image>,
     pub normal: Handle<Image>,
     pub height: Handle<Image>,
+    pub occlusion: Handle<Image>,
+    pub roughness: Handle<Image>,
 }
 
 /// Registers the texture-set asset, its loader, the splat material and its
@@ -1039,6 +1137,26 @@ mod resolve_tests {
             .insert(name.to_string(), handle);
     }
 
+    /// Save a material under `name` carrying the two maps a slot shades
+    /// its occlusion and roughness from.
+    fn saved_shaded_material(app: &mut App, name: &str) {
+        let server = app.world().resource::<AssetServer>().clone();
+        let occlusion = server.load::<Image>(format!("t/{name}_ao.png"));
+        let roughness = server.load::<Image>(format!("t/{name}_orm.png"));
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial {
+                occlusion_texture: Some(occlusion),
+                metallic_roughness_texture: Some(roughness),
+                ..default()
+            });
+        app.world_mut()
+            .resource_mut::<Saved>()
+            .0
+            .insert(name.to_string(), handle);
+    }
+
     fn resolve_slots(app: &App, slots: &[TerrainMaterialSlot]) -> ResolvedSlots {
         let saved = app.world().resource::<Saved>();
         let materials = app.world().resource::<Assets<StandardMaterial>>();
@@ -1062,6 +1180,8 @@ mod resolve_tests {
                 material: "grass".to_string(),
                 uv_scale: 0.3,
                 detile: 0.6,
+                occlusion: String::new(),
+                roughness: String::new(),
             }],
         );
 
@@ -1179,6 +1299,65 @@ mod resolve_tests {
         assert_eq!(resolved.images.albedo.len(), slots.len());
         assert_eq!(resolved.images.normal.len(), slots.len());
         assert_eq!(resolved.images.height.len(), slots.len());
+        assert_eq!(resolved.images.occlusion.len(), slots.len());
+        assert_eq!(resolved.images.roughness.len(), slots.len());
+    }
+
+    /// Occlusion is the material's occlusion map and roughness is its
+    /// metallic-roughness map, so a ground texture set that ships both
+    /// shades with them without anything new to author.
+    #[test]
+    fn a_slot_whose_material_has_an_occlusion_map_binds_it() {
+        let mut app = resolve_app();
+        saved_shaded_material(&mut app, "gravel");
+
+        let resolved = resolve_slots(&app, &[TerrainMaterialSlot::new("gravel")]);
+
+        let entry = &resolved.set.entries[0];
+        assert_eq!(entry.occlusion.as_deref(), Some("t/gravel_ao.png"));
+        assert_eq!(entry.roughness.as_deref(), Some("t/gravel_orm.png"));
+        assert!(resolved.images.occlusion[0].is_some());
+        assert!(resolved.images.roughness[0].is_some());
+    }
+
+    /// A material with neither map leaves the slot with none, so the
+    /// shader shades it unoccluded at the terrain's own roughness.
+    #[test]
+    fn a_slot_whose_material_has_no_maps_binds_none() {
+        let mut app = resolve_app();
+        saved_material(&mut app, "grass", false);
+
+        let resolved = resolve_slots(&app, &[TerrainMaterialSlot::new("grass")]);
+
+        assert_eq!(resolved.set.entries[0].occlusion, None);
+        assert_eq!(resolved.set.entries[0].roughness, None);
+        assert_eq!(resolved.images.occlusion[0], None);
+        assert_eq!(resolved.images.roughness[0], None);
+    }
+
+    /// A map named on the slot wins over the one its material carries: one
+    /// material is shared across surfaces, and a terrain may shade its own
+    /// ground without editing what the others draw.
+    #[test]
+    fn a_map_named_on_the_slot_wins_over_the_materials() {
+        let mut app = resolve_app();
+        saved_shaded_material(&mut app, "gravel");
+
+        let resolved = resolve_slots(
+            &app,
+            &[TerrainMaterialSlot {
+                occlusion: "ground/path_ao.png".to_string(),
+                ..TerrainMaterialSlot::new("gravel")
+            }],
+        );
+
+        let entry = &resolved.set.entries[0];
+        assert_eq!(entry.occlusion.as_deref(), Some("ground/path_ao.png"));
+        assert_eq!(
+            entry.roughness.as_deref(),
+            Some("t/gravel_orm.png"),
+            "the slot named no roughness, so the material's still stands"
+        );
     }
 }
 
@@ -1252,6 +1431,8 @@ mod tests {
                 albedo,
                 normal: vec![None; count],
                 height: vec![None; count],
+                occlusion: vec![None; count],
+                roughness: vec![None; count],
             },
         )
     }
@@ -1358,6 +1539,8 @@ mod tests {
                 albedo: vec![albedo],
                 normal: vec![normal],
                 height: vec![None],
+                occlusion: vec![None; 1],
+                roughness: vec![None; 1],
             },
         )
     }
@@ -1396,6 +1579,8 @@ mod tests {
             albedo: layers.iter().cloned().map(Some).collect(),
             normal: vec![None, None],
             height: vec![None, None],
+            occlusion: vec![None; 2],
+            roughness: vec![None; 2],
         };
         let built = splat_images(&set, &handles, &images).expect("stacks");
         let levels = built.albedo.texture_descriptor.mip_level_count;
@@ -1600,6 +1785,8 @@ mod tests {
             albedo: vec![Some(a), Some(b)],
             normal: vec![None, None],
             height: vec![Some(h), None],
+            occlusion: vec![None; 2],
+            roughness: vec![None; 2],
         };
 
         let built = splat_images(&set, &handles, &images).expect("stacks");
@@ -1635,6 +1822,8 @@ mod tests {
             albedo: vec![Some(a)],
             normal: vec![None],
             height: vec![Some(h)],
+            occlusion: vec![None; 1],
+            roughness: vec![None; 1],
         };
         let err = splat_images(&set, &handles, &images).expect_err("mismatched height map");
         let SplatBuildError::Invalid(reason) = err else {
@@ -1662,6 +1851,8 @@ mod tests {
             albedo: vec![Some(a), None, Some(c)],
             normal: vec![None, None, None],
             height: vec![None, None, None],
+            occlusion: vec![None; 3],
+            roughness: vec![None; 3],
         };
 
         let built = splat_images(&set, &handles, &images).expect("stacks");
@@ -1702,6 +1893,8 @@ mod tests {
             albedo: vec![None, None],
             normal: vec![None, None],
             height: vec![None, None],
+            occlusion: vec![None; 2],
+            roughness: vec![None; 2],
         };
         let built = splat_images(&set, &handles, &images).expect("stacks");
         assert_eq!(built.albedo.texture_descriptor.size.width, 1);
@@ -1742,6 +1935,8 @@ mod tests {
             albedo: vec![Some(a), Some(b)],
             normal: vec![Some(dx), Some(gl)],
             height: vec![None, None],
+            occlusion: vec![None; 2],
+            roughness: vec![None; 2],
         };
 
         let built = splat_images(&set, &handles, &images).expect("stacks");
@@ -1789,6 +1984,8 @@ mod tests {
             albedo: vec![Some(albedo)],
             normal: vec![Some(normal)],
             height: vec![Some(height)],
+            occlusion: vec![None; 1],
+            roughness: vec![None; 1],
         };
 
         let built = splat_images(&set, &handles, &images).expect("stacks");
@@ -1831,6 +2028,8 @@ mod tests {
             albedo: vec![Some(albedo)],
             normal: vec![Some(normal)],
             height: vec![None],
+            occlusion: vec![None; 1],
+            roughness: vec![None; 1],
         };
 
         let built = splat_images(&set, &handles, &images).expect("stacks");
@@ -1859,6 +2058,8 @@ mod tests {
             albedo: vec![Some(albedo)],
             normal: vec![None],
             height: vec![Some(height)],
+            occlusion: vec![None; 1],
+            roughness: vec![None; 1],
         };
 
         let built = splat_images(&set, &handles, &images).expect("stacks");
@@ -1882,6 +2083,8 @@ mod tests {
             albedo: vec![Some(albedo)],
             normal: vec![Some(normal)],
             height: vec![None],
+            occlusion: vec![None; 1],
+            roughness: vec![None; 1],
         };
 
         let err = splat_images(&set, &handles, &images).expect_err("no narrowing path");
@@ -1961,6 +2164,8 @@ mod tests {
                 albedo: Handle::default(),
                 normal: Handle::default(),
                 height: Handle::default(),
+                occlusion: Handle::default(),
+                roughness: Handle::default(),
             },
             Handle::default(),
             Handle::default(),
@@ -2062,6 +2267,8 @@ mod tests {
             albedo: Handle::default(),
             normal: Handle::default(),
             height: Handle::default(),
+            occlusion: Handle::default(),
+            roughness: Handle::default(),
         };
         let material = TerrainSplatMaterial::new(
             &set,
@@ -2081,6 +2288,46 @@ mod tests {
         assert_eq!(material.terrain_size, Vec2::splat(100.0));
     }
 
+    /// The shader reads a slot's maps only where the uniform's bit for
+    /// that id says it has them, so an id with no map shades unoccluded at
+    /// the terrain's own roughness rather than sampling a filled layer.
+    #[test]
+    fn only_the_slots_with_maps_are_flagged_in_the_uniform() {
+        let set = TextureSet {
+            entries: vec![
+                TextureSetEntry::new("grass", "a.png"),
+                TextureSetEntry {
+                    occlusion: Some("b_ao.png".to_string()),
+                    ..TextureSetEntry::new("rock", "b.png")
+                },
+                TextureSetEntry {
+                    roughness: Some("c_orm.png".to_string()),
+                    ..TextureSetEntry::new("sand", "c.png")
+                },
+            ],
+        };
+        let material = TerrainSplatMaterial::new(
+            &set,
+            SplatArrayHandles {
+                albedo: Handle::default(),
+                normal: Handle::default(),
+                height: Handle::default(),
+                occlusion: Handle::default(),
+                roughness: Handle::default(),
+            },
+            Handle::default(),
+            Handle::default(),
+            Handle::default(),
+            Vec2::splat(100.0),
+            256,
+            AutoTerrainSettings::default(),
+            SurfaceSettings::default(),
+        );
+
+        assert_eq!(material.occlusion_slots, 0b010);
+        assert_eq!(material.roughness_slots, 0b100);
+    }
+
     /// The shader source, for the binding checks below.
     ///
     /// It cannot be compiled here: it is naga-oil input, not WGSL. The checks
@@ -2098,6 +2345,8 @@ mod tests {
             (4, "var height_array: texture_2d_array<f32>"),
             (5, "var control_map: texture_2d<u32>"),
             (7, "var tint_map: texture_2d<f32>"),
+            (9, "var occlusion_array: texture_2d_array<f32>"),
+            (10, "var roughness_array: texture_2d_array<f32>"),
         ] {
             let expected =
                 format!("@group(#{{MATERIAL_BIND_GROUP}}) @binding({binding}) {declaration};");
@@ -2136,6 +2385,8 @@ mod tests {
             "autoterrain_slope_start: f32",
             "autoterrain_slope_end: f32",
             "tint_strength: f32",
+            "occlusion_slots: u32",
+            "roughness_slots: u32",
         ] {
             let found = body[at..]
                 .find(field)
@@ -2239,6 +2490,8 @@ mod tests {
                 albedo: Handle::default(),
                 normal: Handle::default(),
                 height: Handle::default(),
+                occlusion: Handle::default(),
+                roughness: Handle::default(),
             },
             Handle::default(),
             Handle::default(),
@@ -2305,6 +2558,8 @@ mod tests {
                 albedo: Handle::default(),
                 normal: Handle::default(),
                 height: Handle::default(),
+                occlusion: Handle::default(),
+                roughness: Handle::default(),
             },
             Handle::default(),
             Handle::default(),

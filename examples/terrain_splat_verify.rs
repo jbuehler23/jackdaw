@@ -368,6 +368,8 @@ fn attach_material(
         albedo: images.add(built.albedo),
         normal: images.add(built.normal),
         height: images.add(built.height),
+        occlusion: images.add(built.occlusion),
+        roughness: images.add(built.roughness),
     };
     let tint = images.add(jackdaw_terrain::render::tint_image(&[], RESOLUTION));
     let material = materials.add(TerrainSplatMaterial::new(

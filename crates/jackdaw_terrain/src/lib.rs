@@ -9,6 +9,7 @@ pub mod erosion;
 #[cfg(feature = "procgen")]
 pub mod generate;
 pub mod heightmap;
+pub mod import;
 pub mod navmesh;
 pub mod placement;
 pub mod quantize;
@@ -43,6 +44,9 @@ pub use erosion::{ErosionParams, hydraulic_erosion};
 #[cfg(feature = "procgen")]
 pub use generate::{GenerateSettings, NoiseType, generate_heightmap};
 pub use heightmap::{Heightmap, SurfaceHit};
+pub use import::{
+    GreyImage, HeightRange, ImportError, SlotWeights, heights_from_image, paint_weights,
+};
 pub use navmesh::{BakeParams, NavPolygon, NavmeshArtifact, NavmeshError, SurfaceMesh};
 pub use placement::{
     MAX_SCATTER_GROUP_LEN, MAX_SCATTER_TABLE, ScatterAssetError, ScatterGroupError, ScatterPalette,

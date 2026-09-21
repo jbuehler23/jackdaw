@@ -67,6 +67,12 @@ struct SplatUniform {
     // The layer's own white is the identity, so a terrain that has never
     // been tinted draws the same at every strength.
     tint_strength: f32,
+    // Bit i is set where texture id i has an occlusion map. An id without
+    // one shades unoccluded instead of reading its filled array layer.
+    occlusion_slots: u32,
+    // Bit i is set where texture id i has a roughness map. An id without
+    // one takes `perceptual_roughness`.
+    roughness_slots: u32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> splat: SplatUniform;
@@ -78,6 +84,8 @@ struct SplatUniform {
 @group(#{MATERIAL_BIND_GROUP}) @binding(6) var slope_map: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(7) var tint_map: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(8) var tint_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(9) var occlusion_array: texture_2d_array<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(10) var roughness_array: texture_2d_array<f32>;
 
 // The last id this material can address: one short of the bound set's
 // layer count, and never past the UV-scale array. Every id is clamped
@@ -227,6 +235,8 @@ fn slope_at(corner: vec2<i32>, f: vec2<f32>) -> f32 {
 struct Accum {
     albedo: vec3<f32>,
     normal: vec3<f32>,
+    occlusion: f32,
+    roughness: f32,
     total: f32,
 }
 
@@ -267,7 +277,11 @@ fn accumulate(
     var albedo_sum = vec3<f32>(0.0);
     var height_sum = 0.0;
     var normal_sum = vec3<f32>(0.0);
+    var occlusion_sum = 0.0;
+    var roughness_sum = 0.0;
     var taken = 0.0;
+    let has_occlusion = ((splat.occlusion_slots >> layer_id) & 1u) != 0u;
+    let has_roughness = ((splat.roughness_slots >> layer_id) & 1u) != 0u;
     for (var t = 0u; t < tiled.count; t++) {
         let tap = tiled.taps[t];
         // A tile whose share has fallen to nothing is three samples that
@@ -290,12 +304,29 @@ fn accumulate(
         // `flip_normal_y` is applied on the way into the array.
         let back = turned_by(unpacked.xy, vec2<f32>(tap.turn.x, -tap.turn.y));
         normal_sum += tap.weight * vec3<f32>(back, unpacked.z);
+        // A layer with no map of its own holds a filled array layer, so
+        // it is not sampled: it contributes the identity instead,
+        // unoccluded and at the terrain's own roughness.
+        if has_occlusion {
+            occlusion_sum += tap.weight * textureSampleGrad(
+                occlusion_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).r;
+        } else {
+            occlusion_sum += tap.weight;
+        }
+        if has_roughness {
+            roughness_sum += tap.weight * textureSampleGrad(
+                roughness_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).g;
+        } else {
+            roughness_sum += tap.weight * splat.perceptual_roughness;
+        }
         taken += tap.weight;
     }
     let inv_taps = 1.0 / max(taken, 1e-8);
     let albedo = albedo_sum * inv_taps;
     let height = height_sum * inv_taps;
     let normal = normal_sum * inv_taps;
+    let occlusion = occlusion_sum * inv_taps;
+    let roughness = roughness_sum * inv_taps;
 
     let sharpness = SHARPNESS_MIN + SHARPNESS_RANGE * splat.blend_sharpness;
     let contested = vec4<f32>(layer_weight + height);
@@ -304,6 +335,8 @@ fn accumulate(
     var out = accum;
     out.albedo += albedo * weight;
     out.normal += normal * weight;
+    out.occlusion += occlusion * weight;
+    out.roughness += roughness * weight;
     out.total += weight;
     return out;
 }
@@ -406,6 +439,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var accum: Accum;
     accum.albedo = vec3<f32>(0.0);
     accum.normal = vec3<f32>(0.0);
+    accum.occlusion = 0.0;
+    accum.roughness = 0.0;
     accum.total = 0.0;
 
     if c00 == c10 && c00 == c01 && c00 == c11 {
@@ -428,6 +463,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let inv_total = 1.0 / max(accum.total, 1e-8);
     let albedo = accum.albedo * inv_total * mix(vec3<f32>(1.0), tint, splat.tint_strength);
     let tangent_normal = accum.normal * inv_total;
+    let occlusion = accum.occlusion * inv_total;
+    let roughness = accum.roughness * inv_total;
 
     // The mesher emits no tangents: UV0 runs along world X and Z, so the tangent
     // is world +X projected onto the surface normal. That projection collapses
@@ -449,8 +486,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // bits. Leaving them zero renders terrain that no shadow ever falls on.
     pbr_input.flags = mesh[in.instance_index].flags;
     pbr_input.material.base_color = vec4<f32>(albedo, 1.0);
-    pbr_input.material.perceptual_roughness = splat.perceptual_roughness;
+    pbr_input.material.perceptual_roughness = roughness;
     pbr_input.material.metallic = 0.0;
+    pbr_input.diffuse_occlusion = vec3<f32>(occlusion);
     // `standard_material_new` leaves fog off; `StandardMaterial`'s Rust
     // default has it on, and terrain that ignores the scene's fog while
     // everything beside it obeys reads as a hole in the distance.

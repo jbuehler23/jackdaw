@@ -67,6 +67,13 @@ pub struct TextureSetEntry {
     /// is what sharpens a blend into an interlocking transition rather
     /// than a cross-fade; an entry without one blends on even terms.
     pub height: Option<String>,
+    /// Ambient occlusion read from the red channel, or `None` to shade
+    /// this entry unoccluded.
+    pub occlusion: Option<String>,
+    /// Roughness read from the green channel, the way a metallic-roughness
+    /// texture stores it, or `None` to shade this entry at the terrain's
+    /// own roughness.
+    pub roughness: Option<String>,
     /// Texture repeats per world unit. Lives on the terrain slot, not on
     /// the material: one material tiles differently per surface.
     pub uv_scale: f32,
@@ -100,6 +107,8 @@ impl TextureSetEntry {
             normal: None,
             flip_normal_y: false,
             height: None,
+            occlusion: None,
+            roughness: None,
             uv_scale: DEFAULT_UV_SCALE,
             detile: DEFAULT_DETILE,
         }
@@ -114,18 +123,22 @@ impl TextureSetEntry {
             normal: None,
             flip_normal_y: false,
             height: None,
+            occlusion: None,
+            roughness: None,
             uv_scale,
             detile: DEFAULT_DETILE,
         }
     }
 
-    /// Albedo, normal and height paths, skipping the ones this entry does
-    /// not have.
+    /// Every texture path this entry names, skipping the ones it does not
+    /// have.
     pub fn paths(&self) -> impl Iterator<Item = &str> {
         [
             self.albedo.as_ref(),
             self.normal.as_ref(),
             self.height.as_ref(),
+            self.occlusion.as_ref(),
+            self.roughness.as_ref(),
         ]
         .into_iter()
         .flatten()
@@ -423,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn traversal_in_any_of_an_entrys_three_paths_is_rejected() {
+    fn traversal_in_any_of_an_entrys_paths_is_rejected() {
         for build in [
             |p: &str| TextureSetEntry::new("bad", p),
             |p: &str| TextureSetEntry {
@@ -432,6 +445,14 @@ mod tests {
             },
             |p: &str| TextureSetEntry {
                 height: Some(p.to_string()),
+                ..TextureSetEntry::new("bad", "ok.png")
+            },
+            |p: &str| TextureSetEntry {
+                occlusion: Some(p.to_string()),
+                ..TextureSetEntry::new("bad", "ok.png")
+            },
+            |p: &str| TextureSetEntry {
+                roughness: Some(p.to_string()),
                 ..TextureSetEntry::new("bad", "ok.png")
             },
         ] {

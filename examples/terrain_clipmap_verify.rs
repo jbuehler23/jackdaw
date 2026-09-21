@@ -334,6 +334,16 @@ fn setup(
         albedo: set.entries.iter().map(|e| load(&e.albedo, true)).collect(),
         normal: set.entries.iter().map(|e| load(&e.normal, false)).collect(),
         height: set.entries.iter().map(|e| load(&e.height, false)).collect(),
+        occlusion: set
+            .entries
+            .iter()
+            .map(|e| load(&e.occlusion, false))
+            .collect(),
+        roughness: set
+            .entries
+            .iter()
+            .map(|e| load(&e.roughness, false))
+            .collect(),
     };
 
     commands.insert_resource(Verify {
@@ -387,6 +397,8 @@ fn attach_material(
         albedo: images.add(built.albedo),
         normal: images.add(built.normal),
         height: images.add(built.height),
+        occlusion: images.add(built.occlusion),
+        roughness: images.add(built.roughness),
     };
     let tint = images.add(jackdaw_terrain::render::tint_image(&[], PLATE_RESOLUTION));
     let material = materials.add(TerrainSplatMaterial::new(
