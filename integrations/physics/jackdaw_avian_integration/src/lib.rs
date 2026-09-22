@@ -8,8 +8,10 @@
 //! simulate.
 
 use avian3d::prelude::*;
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use jackdaw_geometry::{ModifierStack, is_convex_topology, triangulate_polygons};
+use jackdaw_geometry::{ModifierStack, triangulate_polygons};
 use jackdaw_scene_types::{Brush, evaluate_brush_geometry};
 
 mod model_colliders;
@@ -88,19 +90,16 @@ fn remove_collider_with_avian_collider(trigger: On<Remove<AvianCollider>>, mut c
     }
 }
 
-/// Build a collider from a brush's evaluated geometry. Non-convex brushes are
-/// forced to a trimesh (a convex hull or primitive would mis-simulate); convex
-/// brushes honor a requested primitive or convex hull and otherwise fall back to
-/// a trimesh.
+/// Build a collider from a brush's evaluated geometry.
+///
+/// Primitives are built directly. Mesh constructors are applied to a temporary
+/// mesh of the brush faces through [`Collider::try_from_constructor`].
 pub fn brush_collider(
     brush: &Brush,
     stack: Option<&ModifierStack>,
     cfg: &AvianCollider,
 ) -> Option<Collider> {
-    let force_trimesh = !is_convex_topology(&brush.topology);
-
-    // A primitive shape (cuboid, sphere, ...) needs no geometry.
-    if !force_trimesh && !cfg.0.requires_mesh() {
+    if !cfg.0.requires_mesh() {
         return Collider::try_from_constructor(cfg.0.clone(), None);
     }
 
@@ -108,20 +107,28 @@ pub fn brush_collider(
     if vertices.is_empty() {
         return None;
     }
-
-    if !force_trimesh && matches!(cfg.0, ColliderConstructor::ConvexHullFromMesh) {
-        return Collider::convex_hull(&vertices);
-    }
-
     let indices = triangulate_polygons(
         &vertices,
         &face_polygons,
-        faces.iter().map(|f| f.plane.normal),
+        faces.iter().map(|face| face.plane.normal),
     );
     if indices.is_empty() {
         return None;
     }
-    Some(Collider::trimesh(vertices, indices))
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        vertices
+            .iter()
+            .map(|vertex| vertex.to_array())
+            .collect::<Vec<_>>(),
+    );
+    mesh.insert_indices(Indices::U32(indices.into_iter().flatten().collect()));
+    Collider::try_from_constructor(cfg.0.clone(), Some(&mesh))
 }
 
 /// Register avian3d types that have both `reflect(Component)` and `reflect(Default)`,
@@ -175,6 +182,7 @@ pub fn register_avian_types(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use avian3d::parry::shape::ShapeType;
     use bevy::ecs::reflect::AppTypeRegistry;
     use jackdaw_scene_types::Brush;
 
@@ -192,10 +200,20 @@ mod tests {
     fn convex_brush_honors_convex_hull_request() {
         let brush = Brush::cuboid(0.5, 0.5, 0.5);
         let cfg = AvianCollider(ColliderConstructor::ConvexHullFromMesh);
-        assert!(
-            brush_collider(&brush, None, &cfg).is_some(),
-            "a convex-hull request on a cuboid yields a collider"
-        );
+        let Some(collider) = brush_collider(&brush, None, &cfg) else {
+            panic!("a convex-hull request on a cuboid yields a collider");
+        };
+        assert_eq!(collider.shape().shape_type(), ShapeType::ConvexPolyhedron);
+    }
+
+    #[test]
+    fn cuboid_honors_convex_decomposition_request() {
+        let brush = Brush::cuboid(1.0, 1.0, 1.0);
+        let cfg = AvianCollider(ColliderConstructor::ConvexDecompositionFromMesh);
+        let Some(collider) = brush_collider(&brush, None, &cfg) else {
+            panic!("a convex-decomposition request on a cuboid yields a collider");
+        };
+        assert_eq!(collider.shape().shape_type(), ShapeType::Compound);
     }
 
     #[test]
