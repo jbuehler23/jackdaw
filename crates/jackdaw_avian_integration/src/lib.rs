@@ -116,10 +116,7 @@ pub fn brush_collider(
     );
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_POSITION,
-        vertices
-            .iter()
-            .map(Vec3::to_array)
-            .collect::<Vec<_>>(),
+        vertices.iter().map(Vec3::to_array).collect::<Vec<_>>(),
     );
     mesh.insert_indices(Indices::U32(indices.into_iter().flatten().collect()));
     Collider::try_from_constructor(cfg.0.clone(), Some(&mesh))
