@@ -118,7 +118,7 @@ pub fn brush_collider(
         Mesh::ATTRIBUTE_POSITION,
         vertices
             .iter()
-            .map(|vertex| vertex.to_array())
+            .map(Vec3::to_array)
             .collect::<Vec<_>>(),
     );
     mesh.insert_indices(Indices::U32(indices.into_iter().flatten().collect()));
