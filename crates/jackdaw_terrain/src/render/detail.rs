@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use bevy::asset::{RenderAssetUsages, embedded_asset};
+use bevy::camera::RenderTarget;
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::NoAutoAabb;
 use bevy::core_pipeline::core_3d::{Opaque3d, Opaque3dBatchSetKey, Opaque3dBinKey};
@@ -743,16 +744,33 @@ fn merge_primitives(
 }
 
 /// Cameras the field is laid out around, as both detail systems ask for them.
-type DetailViewers<'w, 's> =
-    Query<'w, 's, (Entity, &'static Camera, &'static GlobalTransform), With<Camera3d>>;
+/// Marks the camera a terrain's detail layers are seeded around.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct DetailViewer;
 
-/// Where the field is centred: the active 3D camera with the highest order.
+type DetailViewers<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static Camera,
+        &'static GlobalTransform,
+        Has<DetailViewer>,
+        Option<&'static RenderTarget>,
+    ),
+    With<Camera3d>,
+>;
+
+/// Where the field is centred: an active [`DetailViewer`], else the highest-order active camera, window before image.
 fn viewer_position(cameras: &DetailViewers<'_, '_>) -> Option<Vec3> {
     cameras
         .iter()
-        .filter(|(_, camera, _)| camera.is_active)
-        .max_by_key(|(entity, camera, _)| (camera.order, *entity))
-        .map(|(_, _, transform)| transform.translation())
+        .filter(|(_, camera, ..)| camera.is_active)
+        .max_by_key(|(entity, camera, _, marked, target)| {
+            let draws_to_image = matches!(target, Some(RenderTarget::Image(_)));
+            (*marked, !draws_to_image, camera.order, *entity)
+        })
+        .map(|(_, _, transform, ..)| transform.translation())
 }
 
 /// Gather the pressers nearest the viewer.
@@ -1524,6 +1542,44 @@ mod tests {
             seen += 1;
         }
         assert!(seen > 0, "the field is seeded");
+    }
+
+    #[test]
+    fn tiles_are_seeded_around_the_marked_viewer_when_another_camera_ties_on_order() {
+        let mut app = detail_app();
+        spawn_terrain(
+            &mut app,
+            &terrain(vec![layer("grass", "grass")]),
+            &document(128, &["grass"]),
+        );
+        let marked = Vec2::new(100.0, 100.0);
+        let first = spawn_viewer(&mut app, Vec3::ZERO);
+        let second = spawn_viewer(&mut app, Vec3::ZERO);
+        let (viewer, decoy) = (first.min(second), first.max(second));
+        let at = Vec3::new(marked.x, 5.0, marked.y);
+        app.world_mut().entity_mut(viewer).insert((
+            DetailViewer,
+            Transform::from_translation(at),
+            GlobalTransform::from_translation(at),
+        ));
+        assert!(
+            decoy > viewer,
+            "the unmarked camera wins a tie on order by entity"
+        );
+        settle(&mut app);
+
+        let placed = tiles(&mut app);
+        assert!(!placed.is_empty(), "the field is seeded");
+        let cull = layer("grass", "grass").cull_distance;
+        for tile in &placed {
+            let min = tile.tile.as_vec2() * DETAIL_TILE_CELLS as f32;
+            let nearest = marked.clamp(min, min + Vec2::splat(DETAIL_TILE_CELLS as f32));
+            assert!(
+                marked.distance(nearest) <= cull + 1.0,
+                "tile {} stands around the marked viewer",
+                tile.tile
+            );
+        }
     }
 
     #[test]

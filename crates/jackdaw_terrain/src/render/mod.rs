@@ -30,8 +30,8 @@ pub use detail::{
     ATTRIBUTE_HEIGHT_FRACTION, BuiltDetailMesh, DETAIL_TILE_BUDGET, DETAIL_TILE_CELLS,
     DetailAssets, DetailBindings, DetailDirty, DetailInstanceBuffer, DetailKey, DetailLayerSource,
     DetailLooks, DetailMeshes, DetailPipeline, DetailPressers, DetailRenderPlugin, DetailSettings,
-    DetailSource, DetailSystems, DetailTile, MAX_DETAIL_PRESSERS, TerrainDetailSource, card_mesh,
-    detail_instance_layout, white_image, wind_noise_image,
+    DetailSource, DetailSystems, DetailTile, DetailViewer, MAX_DETAIL_PRESSERS,
+    TerrainDetailSource, card_mesh, detail_instance_layout, white_image, wind_noise_image,
 };
 pub use scatter::{
     GROUND_COVER_CULL_DISTANCE, GROUND_COVER_HEIGHT, ScatterAssetPlugin, ScatterAssets,

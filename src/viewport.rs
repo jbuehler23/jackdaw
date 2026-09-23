@@ -479,6 +479,7 @@ pub(crate) fn build_3d_presentation(world: &mut World, parent: Entity) -> Entity
         .spawn((
             MainViewportCamera,
             crate::EditorEntity,
+            jackdaw_terrain::render::DetailViewer,
             Camera3d::default(),
             EnvironmentMapLight {
                 diffuse_map: env_diffuse,

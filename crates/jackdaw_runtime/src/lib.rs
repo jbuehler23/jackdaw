@@ -106,7 +106,7 @@ pub use pie_windowless::{maybe_windowless, windowless_requested};
 #[cfg(feature = "terrain")]
 mod terrain;
 #[cfg(feature = "terrain")]
-pub use jackdaw_terrain::render::{DetailPressers, DetailSettings};
+pub use jackdaw_terrain::render::{DetailPressers, DetailSettings, DetailViewer};
 #[cfg(feature = "terrain")]
 pub use terrain::TerrainViewer;
 
@@ -133,7 +133,7 @@ pub mod prelude {
         JackdawSceneMember, JackdawSceneRoot, SceneRefused, SkipSerialization,
     };
     #[cfg(feature = "terrain")]
-    pub use crate::{DetailPressers, DetailSettings, TerrainViewer};
+    pub use crate::{DetailPressers, DetailSettings, DetailViewer, TerrainViewer};
 }
 
 pub struct JackdawPlugin;
