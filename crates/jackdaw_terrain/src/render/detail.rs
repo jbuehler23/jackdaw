@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::camera::primitives::Aabb;
+use bevy::camera::visibility::NoAutoAabb;
 use bevy::core_pipeline::core_3d::{Opaque3d, Opaque3dBatchSetKey, Opaque3dBinKey};
 use bevy::ecs::query::QueryItem;
 use bevy::ecs::system::SystemParamItem;
@@ -886,6 +887,7 @@ fn rebuild_detail_tiles(
                     Transform::IDENTITY,
                     Visibility::default(),
                     bounds,
+                    NoAutoAabb,
                     NavmeshExclude,
                 ));
             }
@@ -1505,6 +1507,23 @@ mod tests {
             );
             assert!(!tile.instances.is_empty(), "a seeded tile has instances");
         }
+    }
+
+    #[test]
+    fn a_seeded_tile_keeps_its_own_bounds_after_the_mesh_bounds_pass() {
+        let mut app = detail_app();
+        app.add_systems(PostUpdate, bevy::camera::visibility::calculate_bounds);
+        spawn_grassy_terrain(&mut app);
+        spawn_viewer(&mut app, Vec3::new(32.0, 5.0, 32.0));
+        settle(&mut app);
+
+        let mut placed = app.world_mut().query::<(&DetailTile, &Aabb)>();
+        let mut seen = 0;
+        for (tile, bounds) in placed.iter(app.world()) {
+            assert_eq!(*bounds, tile.bounds, "tile {} keeps its bounds", tile.tile);
+            seen += 1;
+        }
+        assert!(seen > 0, "the field is seeded");
     }
 
     #[test]
