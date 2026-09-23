@@ -420,3 +420,73 @@ fn looking_through_something_that_is_not_a_camera_is_refused() {
         .expect("viewport.look_through dispatches");
     assert_eq!(result, OperatorResult::Cancelled);
 }
+
+#[test]
+fn a_camera_capture_renders_offscreen_at_the_size_asked_for_from_the_viewports_view() {
+    let (mut app, viewport) = app_with_a_camera();
+    let project = tempfile::tempdir().expect("tempdir");
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot::new(
+            project.path().to_path_buf(),
+            jackdaw::project::ProjectConfig::default(),
+        ));
+    app.world_mut()
+        .entity_mut(viewport)
+        .insert((Camera3d::default(), Transform::from_xyz(4.0, 5.0, 6.0)));
+    app.update();
+
+    app.world_mut()
+        .operator("viewport.capture")
+        .param("width", 1920)
+        .param("height", 1080)
+        .param("path", "target/captures/frame.png")
+        .call()
+        .expect("viewport.capture dispatches")
+        .assert_finished();
+
+    let mut pending = app.world_mut().query::<(
+        &jackdaw::camera_capture::PendingCapture,
+        &bevy::camera::RenderTarget,
+        &Transform,
+        &bevy::camera::visibility::RenderLayers,
+    )>();
+    let (capture, target, transform, layers) = pending
+        .iter(app.world())
+        .next()
+        .expect("an offscreen camera waits to be read back");
+    assert!(capture.path.ends_with("target/captures/frame.png"));
+    assert_eq!(transform.translation, Vec3::new(4.0, 5.0, 6.0));
+    assert_eq!(
+        layers,
+        &bevy::camera::visibility::RenderLayers::layer(0),
+        "scene content only"
+    );
+    let image = target.as_image().expect("an image target").clone();
+    let size = app
+        .world()
+        .resource::<Assets<Image>>()
+        .get(&image)
+        .expect("the target image exists")
+        .size();
+    assert_eq!(size, UVec2::new(1920, 1080));
+}
+
+#[test]
+fn a_camera_capture_outside_the_project_is_refused() {
+    let (mut app, _viewport) = app_with_a_camera();
+    let project = tempfile::tempdir().expect("tempdir");
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot::new(
+            project.path().to_path_buf(),
+            jackdaw::project::ProjectConfig::default(),
+        ));
+    let result = app
+        .world_mut()
+        .operator("viewport.capture")
+        .param("width", 64)
+        .param("height", 64)
+        .param("path", "../escape.png")
+        .call()
+        .expect("viewport.capture dispatches");
+    assert_eq!(result, OperatorResult::Cancelled);
+}
