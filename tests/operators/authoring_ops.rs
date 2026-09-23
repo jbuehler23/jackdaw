@@ -570,6 +570,7 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
     ),
     ("selection.select", &["entity"], false),
     ("terrain.scatter.adopt", &["entity"], true),
+    ("viewport.look_through", &["entity"], true),
     ("widget.add", &["parent"], false),
 ];
 

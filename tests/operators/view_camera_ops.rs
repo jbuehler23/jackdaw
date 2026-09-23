@@ -295,3 +295,128 @@ fn frame_selected_leaves_the_orbit_focus_on_what_it_framed() {
         focus.0
     );
 }
+
+fn perspective_of(app: &App, camera: Entity) -> PerspectiveProjection {
+    match app.world().get::<Projection>(camera) {
+        Some(Projection::Perspective(lens)) => lens.clone(),
+        other => panic!("the viewport is not in perspective: {other:?}"),
+    }
+}
+
+#[test]
+fn the_viewport_lens_survives_a_view_move_and_is_kept_with_the_project() {
+    let (mut app, camera) = app_with_a_camera();
+    let project = tempfile::tempdir().expect("tempdir");
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot::new(
+            project.path().to_path_buf(),
+            jackdaw::project::ProjectConfig::default(),
+        ));
+    app.update();
+
+    app.world_mut()
+        .operator("viewport.camera")
+        .param("fov", 60.0)
+        .param("far", 10000.0)
+        .call()
+        .expect("viewport.camera dispatches")
+        .assert_finished();
+    app.world_mut()
+        .operator("view.look_at")
+        .param("eye_x", 10.0)
+        .param("eye_y", 10.0)
+        .param("eye_z", 10.0)
+        .call()
+        .expect("view.look_at dispatches")
+        .assert_finished();
+    app.world_mut()
+        .operator("view.orbit")
+        .param("yaw", 90.0)
+        .call()
+        .expect("view.orbit dispatches")
+        .assert_finished();
+    app.update();
+
+    let lens = perspective_of(&app, camera);
+    assert!(
+        (lens.fov.to_degrees() - 60.0).abs() < 1e-3,
+        "fov {}",
+        lens.fov.to_degrees()
+    );
+    assert_eq!(lens.far, 10000.0);
+
+    let settings = std::fs::read_to_string(project.path().join(".jackdaw/settings.json"))
+        .expect("the project settings were written");
+    let settings: serde_json::Value = serde_json::from_str(&settings).expect("settings are JSON");
+    assert_eq!(settings["camera"]["fov_degrees"], 60.0);
+    assert_eq!(settings["camera"]["far"], 10000.0);
+}
+
+#[test]
+fn a_lens_with_its_far_plane_before_its_near_one_is_refused() {
+    let (mut app, _camera) = app_with_a_camera();
+    let result = app
+        .world_mut()
+        .operator("viewport.camera")
+        .param("near", 50.0)
+        .param("far", 10.0)
+        .call()
+        .expect("viewport.camera dispatches");
+    assert_eq!(result, OperatorResult::Cancelled);
+}
+
+#[test]
+fn looking_through_a_scene_camera_takes_its_place_and_its_lens() {
+    let (mut app, viewport) = app_with_a_camera();
+    let placed = Transform::from_xyz(5.0, 6.0, 7.0).looking_at(Vec3::ZERO, Vec3::Y);
+    let scene_camera = app
+        .world_mut()
+        .spawn((
+            Name::new("Main Camera"),
+            Camera3d::default(),
+            Camera {
+                is_active: false,
+                ..default()
+            },
+            placed,
+            GlobalTransform::from(placed),
+            Projection::Perspective(PerspectiveProjection {
+                fov: 60.0_f32.to_radians(),
+                far: 5000.0,
+                ..default()
+            }),
+        ))
+        .id();
+    app.update();
+
+    app.world_mut()
+        .operator("viewport.look_through")
+        .param("entity", scene_camera)
+        .call()
+        .expect("viewport.look_through dispatches")
+        .assert_finished();
+    app.update();
+
+    let transform = camera_transform(&app, viewport);
+    assert!(transform.translation.distance(placed.translation) < 1e-3);
+    assert!(transform.rotation.angle_between(placed.rotation) < 1e-3);
+    let lens = perspective_of(&app, viewport);
+    assert!((lens.fov.to_degrees() - 60.0).abs() < 1e-3);
+    assert_eq!(lens.far, 5000.0);
+}
+
+#[test]
+fn looking_through_something_that_is_not_a_camera_is_refused() {
+    let (mut app, _viewport) = app_with_a_camera();
+    let rock = app
+        .world_mut()
+        .spawn((Name::new("Rock"), Transform::default()))
+        .id();
+    let result = app
+        .world_mut()
+        .operator("viewport.look_through")
+        .param("entity", rock)
+        .call()
+        .expect("viewport.look_through dispatches");
+    assert_eq!(result, OperatorResult::Cancelled);
+}

@@ -260,6 +260,7 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "prefab.pack",
     "prefab.pack_matching",
     "terrain.scatter.adopt",
+    "viewport.look_through",
 ];
 
 /// `(operator, parameter)` pairs whose `Entity` parameter means something by

@@ -641,6 +641,7 @@ pub(crate) fn build_inspector_displays(
         // (`camera_preview`), above the reflected fields.
         if type_id == Some(TypeId::of::<Camera3d>()) {
             crate::camera_preview::spawn_camera_preview_strip(commands, body_entity);
+            crate::camera_preview::spawn_look_through_button(commands, body_entity, source_entity);
         }
 
         // A graph reference leads with the graphs the project holds, and a set

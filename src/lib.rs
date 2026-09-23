@@ -2084,6 +2084,33 @@ fn drop_imported_clip_entities(
     }
 }
 
+/// The View menu's viewport camera rows: field of view and far clip presets, and looking through a scene camera.
+fn viewport_lens_rows(lens: &camera_settings::CameraPreferences) -> Vec<(String, String)> {
+    let id = camera_settings::ViewportCameraOp::ID;
+    let fov = [30.0_f32, 45.0, 60.0, 75.0, 90.0].map(|degrees| {
+        jackdaw_feathers::menu_bar::checked_row(
+            (lens.fov_degrees - degrees).abs() < 0.01,
+            format!("{OP_PREFIX}{id}?fov={degrees}"),
+            format!("{degrees} degrees"),
+        )
+    });
+    let far = [1000.0_f32, 5000.0, 10000.0, 50000.0].map(|metres| {
+        jackdaw_feathers::menu_bar::checked_row(
+            (lens.far - metres).abs() < 0.01,
+            format!("{OP_PREFIX}{id}?far={metres}"),
+            format!("{metres} m"),
+        )
+    });
+    [
+        jackdaw_feathers::menu_bar::submenu_row("Field of View", fov),
+        jackdaw_feathers::menu_bar::submenu_row("Far Clip", far),
+        vec![op_entry::<camera_settings::ViewportLookThroughOp>(
+            "Look Through Selected Camera",
+        )],
+    ]
+    .concat()
+}
+
 /// One View-menu row for a canvas view toggle.
 fn canvas_view_row<O: jackdaw_api::op::Operator>(on: bool, label: &str) -> (String, String) {
     jackdaw_feathers::menu_bar::checked_row(
@@ -2204,6 +2231,10 @@ fn populate_menu(
         .get_resource::<canvas_snap::CanvasSnap>()
         .copied()
         .unwrap_or_default();
+    let lens = world
+        .get_resource::<camera_settings::CameraPreferences>()
+        .copied()
+        .unwrap_or_default();
 
     // Current hot-reload state ->reflect in the menu label.
     let hot_reload_on = world
@@ -2250,30 +2281,45 @@ fn populate_menu(
         ),
         (
             TopLevelMenu::View,
-            vec![
-                op_entry::<view_ops::ViewToggleWireframeOp>("Toggle Wireframe"),
-                op_entry::<view_ops::ViewToggleXrayOp>("Toggle X-Ray"),
-                op_entry::<view_ops::ViewToggleBoundingBoxesOp>("Toggle Bounding Boxes"),
-                op_entry::<view_ops::ViewCycleBoundingBoxModeOp>("Cycle Bounding Box Mode"),
-                op_entry::<view_ops::ViewToggleFaceGridOp>("Toggle Face Grid"),
-                op_entry::<view_ops::ViewToggleBrushWireframeOp>("Toggle Brush Wireframe"),
-                op_entry::<view_ops::ViewToggleBrushOutlineOp>("Toggle Brush Outline"),
-                op_entry::<view_ops::ViewToggleAlignmentGuidesOp>("Toggle Alignment Guides"),
-                op_entry::<view_ops::ViewToggleColliderGizmosOp>("Toggle Collider Gizmos"),
-                op_entry::<view_ops::ViewToggleHierarchyArrowsOp>("Toggle Hierarchy Arrows"),
-                op_entry::<view_ops::ViewTogglePerspOrthoOp>("Toggle Perspective / Orthographic"),
-                op_entry::<view_ops::ViewFrameSelectedOp>("Frame Selected"),
-                op_entry::<view_ops::ViewFrameAllOp>("Frame All"),
-                separator(),
-                op_entry::<fps_overlay::ViewToggleFpsOverlayOp>("Toggle FPS Overlay"),
-                separator(),
-                op_entry::<view_ops::ViewUiZoomInOp>("Zoom UI In"),
-                op_entry::<view_ops::ViewUiZoomOutOp>("Zoom UI Out"),
-                op_entry::<view_ops::ViewUiZoomResetOp>("Reset UI Zoom"),
-                separator(),
-                canvas_view_row::<canvas_snap::CanvasRulersOp>(canvas.show_rulers, "Canvas Rulers"),
-                canvas_view_row::<canvas_snap::CanvasGuidesOp>(canvas.show_guides, "Canvas Guides"),
-            ],
+            [
+                vec![
+                    op_entry::<view_ops::ViewToggleWireframeOp>("Toggle Wireframe"),
+                    op_entry::<view_ops::ViewToggleXrayOp>("Toggle X-Ray"),
+                    op_entry::<view_ops::ViewToggleBoundingBoxesOp>("Toggle Bounding Boxes"),
+                    op_entry::<view_ops::ViewCycleBoundingBoxModeOp>("Cycle Bounding Box Mode"),
+                    op_entry::<view_ops::ViewToggleFaceGridOp>("Toggle Face Grid"),
+                    op_entry::<view_ops::ViewToggleBrushWireframeOp>("Toggle Brush Wireframe"),
+                    op_entry::<view_ops::ViewToggleBrushOutlineOp>("Toggle Brush Outline"),
+                    op_entry::<view_ops::ViewToggleAlignmentGuidesOp>("Toggle Alignment Guides"),
+                    op_entry::<view_ops::ViewToggleColliderGizmosOp>("Toggle Collider Gizmos"),
+                    op_entry::<view_ops::ViewToggleHierarchyArrowsOp>("Toggle Hierarchy Arrows"),
+                    op_entry::<view_ops::ViewTogglePerspOrthoOp>(
+                        "Toggle Perspective / Orthographic",
+                    ),
+                    op_entry::<view_ops::ViewFrameSelectedOp>("Frame Selected"),
+                    op_entry::<view_ops::ViewFrameAllOp>("Frame All"),
+                    separator(),
+                ],
+                viewport_lens_rows(&lens),
+                vec![
+                    separator(),
+                    op_entry::<fps_overlay::ViewToggleFpsOverlayOp>("Toggle FPS Overlay"),
+                    separator(),
+                    op_entry::<view_ops::ViewUiZoomInOp>("Zoom UI In"),
+                    op_entry::<view_ops::ViewUiZoomOutOp>("Zoom UI Out"),
+                    op_entry::<view_ops::ViewUiZoomResetOp>("Reset UI Zoom"),
+                    separator(),
+                    canvas_view_row::<canvas_snap::CanvasRulersOp>(
+                        canvas.show_rulers,
+                        "Canvas Rulers",
+                    ),
+                    canvas_view_row::<canvas_snap::CanvasGuidesOp>(
+                        canvas.show_guides,
+                        "Canvas Guides",
+                    ),
+                ],
+            ]
+            .concat(),
         ),
         (TopLevelMenu::Add, add_menu),
         (TopLevelMenu::Window, window_entries),

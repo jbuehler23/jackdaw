@@ -15,6 +15,7 @@ use bevy::{dev_tools::infinite_grid::InfiniteGrid, prelude::*};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 
+use crate::camera_settings::CameraPreferences;
 use crate::core_extension::CoreExtensionInputContext;
 use crate::selection::{Selected, Selection};
 use crate::viewport::{ActiveViewport, MainViewportCamera, ViewportGrid};
@@ -279,8 +280,8 @@ const FRAME_SELECTED_MIN_DIST: f32 = 5.0;
 /// has room around it rather than filling the frame edge to edge.
 const FRAME_MARGIN: f32 = 2.5;
 
-fn perspective_default() -> Projection {
-    Projection::Perspective(PerspectiveProjection::default())
+fn perspective(lens: &CameraPreferences) -> Projection {
+    Projection::Perspective(lens.perspective())
 }
 
 fn orthographic_default() -> Projection {
@@ -389,6 +390,7 @@ fn grid_rotation_for_axis(axis: i64) -> Quat {
 pub(crate) fn view_toggle_persp_ortho(
     _: In<OperatorParameters>,
     active: Res<ActiveViewport>,
+    lens: Res<CameraPreferences>,
     mut cameras: Query<(&mut Projection, Option<&ViewportGrid>), With<MainViewportCamera>>,
     mut grids: Query<&mut Transform, (With<InfiniteGrid>, Without<MainViewportCamera>)>,
 ) -> OperatorResult {
@@ -396,7 +398,7 @@ pub(crate) fn view_toggle_persp_ortho(
     let (mut projection, grid_link) = cameras.get_mut(camera_entity)?;
     let now_persp = matches!(projection.as_ref(), Projection::Orthographic(_));
     *projection = if now_persp {
-        perspective_default()
+        perspective(&lens)
     } else {
         orthographic_default()
     };
@@ -534,6 +536,7 @@ fn orbit_focus(transform: &Transform, focus: Option<&ViewportFocus>, distance: f
 pub(crate) fn view_look_at(
     params: In<OperatorParameters>,
     active: Res<ActiveViewport>,
+    lens: Res<CameraPreferences>,
     camera_entities: Query<Entity, With<MainViewportCamera>>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<MainViewportCamera>>,
     mut commands: Commands,
@@ -557,7 +560,7 @@ pub(crate) fn view_look_at(
         Vec3::Y
     };
     *transform = transform.looking_at(target, up);
-    *projection = perspective_default();
+    *projection = perspective(&lens);
     commands.entity(camera_entity).insert(ViewportFocus(target));
     OperatorResult::Finished
 }
@@ -583,6 +586,7 @@ pub(crate) fn view_look_at(
 pub(crate) fn view_orbit(
     params: In<OperatorParameters>,
     active: Res<ActiveViewport>,
+    lens: Res<CameraPreferences>,
     camera_entities: Query<Entity, With<MainViewportCamera>>,
     mut cameras: Query<
         (&mut Transform, &mut Projection, Option<&ViewportFocus>),
@@ -617,7 +621,7 @@ pub(crate) fn view_orbit(
     ) * distance;
     transform.translation = focus_point + offset;
     *transform = transform.looking_at(focus_point, Vec3::Y);
-    *projection = perspective_default();
+    *projection = perspective(&lens);
     commands
         .entity(camera_entity)
         .insert(ViewportFocus(focus_point));

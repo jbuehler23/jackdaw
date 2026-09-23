@@ -59,6 +59,24 @@ pub(crate) fn spawn_camera_preview_strip(commands: &mut Commands, parent: Entity
     ));
 }
 
+/// Spawns the button under the preview strip that puts the viewport where `camera` stands.
+pub(crate) fn spawn_look_through_button(commands: &mut Commands, parent: Entity, camera: Entity) {
+    use jackdaw_api::prelude::Operator as _;
+    use jackdaw_feathers::button::{
+        ButtonOperatorCall, ButtonProps, ButtonSize, ButtonVariant, button,
+    };
+    commands.spawn((
+        button(
+            ButtonProps::new("Look Through")
+                .with_variant(ButtonVariant::Default)
+                .with_size(ButtonSize::MD),
+        ),
+        ButtonOperatorCall::new(crate::camera_settings::ViewportLookThroughOp::ID)
+            .with_param("entity", camera),
+        ChildOf(parent),
+    ));
+}
+
 fn on_preview_strip_added(
     trigger: On<Add, CameraPreviewStrip>,
     state: Res<CameraPreviewState>,
