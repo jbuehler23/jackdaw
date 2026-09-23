@@ -2020,6 +2020,7 @@ mod tests {
                         asset: "models/grass.glb".to_string(),
                         obstacle: false,
                         cull_distance: 0.0,
+                        materials: Default::default(),
                     },
                     ScatterPaletteEntry::new("models/pebble.gltf"),
                 ],

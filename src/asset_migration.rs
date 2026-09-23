@@ -493,7 +493,8 @@ fn reencode_sidecars(world: &mut World, assets: &Path, report: &mut MigrationRep
             .unwrap_or(&file)
             .to_slash_lossy()
             .into_owned();
-        if version_of(&bytes) == Some(jackdaw_terrain::sidecar::VERSION_9) {
+        if version_of(&bytes).is_some_and(|version| version >= jackdaw_terrain::sidecar::VERSION_9)
+        {
             continue;
         }
         let loaded = match jackdaw_terrain::sidecar::load_from(&bytes, Some(assets)) {
@@ -793,7 +794,7 @@ mod tests {
         assert_eq!(
             sidecar_slot(&tmp, "zones/hedgerow.terrain-0.jdterrain"),
             (
-                jackdaw_terrain::sidecar::VERSION_9,
+                jackdaw_terrain::sidecar::VERSION_10,
                 "materials/slate.material.bsn".to_string()
             )
         );

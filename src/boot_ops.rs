@@ -255,6 +255,7 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "entity.set_transform",
     "field.set",
     "hierarchy.rename_begin",
+    "material.override",
     "physics.disable",
     "physics.enable",
     "prefab.pack",

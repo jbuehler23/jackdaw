@@ -20,11 +20,13 @@
 use bevy::asset::LoadState;
 use bevy::camera::primitives::{Aabb, Frustum, MeshAabb};
 use bevy::camera::visibility::VisibilityRange;
-use bevy::gltf::{Gltf, GltfMesh, GltfNode};
+use bevy::gltf::{Gltf, GltfMaterialName, GltfMesh, GltfNode};
 use bevy::log::warn;
 use bevy::math::Affine3A;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
+
+use jackdaw_scene_types::MaterialOverrides;
 
 use crate::placement::{ScatterPalette, ScatterPlacement};
 use crate::region::RegionCoord;
@@ -177,6 +179,8 @@ pub struct ScatterRendered {
 pub struct ScatterPrimitive {
     pub mesh: Handle<Mesh>,
     pub material: Handle<StandardMaterial>,
+    /// The glTF's name for the material, which a palette entry's overrides are keyed by.
+    pub material_name: Option<String>,
     /// Where this part sat inside the glTF, flattened through the node
     /// graph above it.
     pub local: Transform,
@@ -405,6 +409,11 @@ fn flatten(
         }
     }
 
+    let material_names: HashMap<AssetId<bevy::gltf::GltfMaterial>, String> = gltf
+        .named_materials
+        .iter()
+        .map(|(name, handle)| (handle.id(), name.to_string()))
+        .collect();
     let mut primitives = Vec::new();
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
@@ -449,9 +458,14 @@ fn flatten(
                 .mul_vec3(Vec3::from(bounds.half_extents));
             min = min.min(centre - radius);
             max = max.max(centre + radius);
+            let material_name = primitive
+                .material
+                .as_ref()
+                .and_then(|handle| material_names.get(&handle.id()).cloned());
             primitives.push(ScatterPrimitive {
                 mesh: primitive.mesh.clone(),
                 material,
+                material_name,
                 local,
             });
         }
@@ -561,6 +575,18 @@ fn spawn_chunk(
         };
         let range = cull_range(entry.cull_distance, ready.height() * placement.scale);
         for primitive in &ready.primitives {
+            let dressed = primitive
+                .material_name
+                .as_ref()
+                .filter(|name| entry.materials.contains_key(*name))
+                .map(|name| {
+                    (
+                        GltfMaterialName(name.clone()),
+                        MaterialOverrides {
+                            materials: entry.materials.clone(),
+                        },
+                    )
+                });
             instances.push((
                 (
                     Mesh3d(primitive.mesh.clone()),
@@ -572,6 +598,7 @@ fn spawn_chunk(
                     },
                 ),
                 range.clone(),
+                dressed,
             ));
         }
         let affine = stand.compute_affine();
@@ -600,10 +627,13 @@ fn spawn_chunk(
             ChildOf(terrain),
         ))
         .with_children(|chunk| {
-            for (instance, range) in instances {
+            for (instance, range, dressed) in instances {
                 let mut drawn = chunk.spawn(instance);
                 if let Some(range) = range {
                     drawn.insert(range);
+                }
+                if let Some(dressed) = dressed {
+                    drawn.insert(dressed);
                 }
             }
         });
@@ -741,11 +771,13 @@ mod tests {
                     ScatterPrimitive {
                         mesh: bark,
                         material: material.clone(),
+                        material_name: Some("Bark".to_string()),
                         local: Transform::IDENTITY,
                     },
                     ScatterPrimitive {
                         mesh: leaves,
                         material,
+                        material_name: Some("Leaves".to_string()),
                         local: Transform::from_xyz(0.0, 2.0, 0.0),
                     },
                 ],
@@ -791,6 +823,77 @@ mod tests {
             assert!(
                 app.world().get::<Name>(entity).is_none(),
                 "a drawn placement is not a named scene node"
+            );
+        }
+    }
+
+    #[test]
+    fn a_palette_entrys_overrides_ride_on_every_placement_of_the_parts_they_name() {
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<Mesh>()
+            .init_asset::<StandardMaterial>();
+        let (bark, leaves) = {
+            let meshes = app.world_mut().resource_mut::<Assets<Mesh>>();
+            (meshes.reserve_handle(), meshes.reserve_handle())
+        };
+        let material = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .reserve_handle();
+        let mut assets = ScatterAssets::default();
+        assets.entries.insert(
+            "models/tree.gltf".to_string(),
+            ScatterAsset::Ready(ReadyAsset {
+                primitives: vec![
+                    ScatterPrimitive {
+                        mesh: bark,
+                        material: material.clone(),
+                        material_name: Some("Bark".to_string()),
+                        local: Transform::IDENTITY,
+                    },
+                    ScatterPrimitive {
+                        mesh: leaves.clone(),
+                        material,
+                        material_name: Some("Leaves".to_string()),
+                        local: Transform::from_xyz(0.0, 2.0, 0.0),
+                    },
+                ],
+                bounds: Aabb::from_min_max(Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 4.0, 1.0)),
+            }),
+        );
+        app.insert_resource(assets);
+
+        let mut data = document();
+        data.scatter.assets[0]
+            .materials
+            .insert("Leaves".to_string(), "materials/pine.bsn".to_string());
+        let scatter = TerrainScatter::from_document(&data);
+        let placements = scatter.placement_count();
+        app.world_mut().spawn((
+            Transform::IDENTITY,
+            Visibility::default(),
+            scatter,
+            ScatterDirty::all(),
+        ));
+        app.add_systems(Update, rebuild_chunks);
+        app.update();
+
+        let mut dressed = app
+            .world_mut()
+            .query::<(&Mesh3d, &GltfMaterialName, &MaterialOverrides)>();
+        let dressed: Vec<_> = dressed.iter(app.world()).collect();
+        assert_eq!(
+            dressed.len(),
+            placements,
+            "every placement's leaves carry the override"
+        );
+        for (mesh, name, overrides) in dressed {
+            assert_eq!(mesh.0, leaves);
+            assert_eq!(name.0, "Leaves");
+            assert_eq!(
+                overrides.materials.get("Leaves").map(String::as_str),
+                Some("materials/pine.bsn")
             );
         }
     }

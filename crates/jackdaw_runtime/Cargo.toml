@@ -70,6 +70,7 @@ default = ["render"]
 render = [
     "dep:jackdaw_surface",
     "bevy/bevy_pbr",
+    "bevy/bevy_gltf",
     "bevy/bevy_render",
     "bevy/bevy_image",
     "jackdaw_geometry/render",

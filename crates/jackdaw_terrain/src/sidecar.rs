@@ -185,7 +185,7 @@
 //! newer than this build. The bare `encode`/`decode` and
 //! `encode_regions`/`decode_regions` pairs address one format directly.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use crate::channel::{ChannelData, ChannelDescriptor, ChannelElement};
@@ -242,6 +242,11 @@ pub const VERSION_8: u16 = 8;
 /// roughness map of their own, overriding what the slot's material carries.
 /// A version-8 or older file loads with both empty. What [`save`] writes.
 pub const VERSION_9: u16 = 9;
+
+/// Scatter palette entries that may name a material each placement's parts
+/// wear in place of their own, by glTF material name. A version-9 or older
+/// file loads with none. What [`save`] writes.
+pub const VERSION_10: u16 = 10;
 
 /// Conventional file extension for a terrain sidecar.
 pub const EXTENSION: &str = "jdterrain";
@@ -1539,7 +1544,15 @@ impl RegionTerrainData {
                 .checked_add(4)?
                 .checked_add(entry.asset.len())?
                 .checked_add(4)? // flags + padding
-                .checked_add(4)?; // cull distance
+                .checked_add(4)? // cull distance
+                .checked_add(4)?; // material override count
+            for (name, path) in &entry.materials {
+                len = len
+                    .checked_add(4)?
+                    .checked_add(name.len())?
+                    .checked_add(4)?
+                    .checked_add(path.len())?;
+            }
         }
         for key in self.scatter.groups.iter().filter(|k| !k.is_empty()) {
             len = len.checked_add(4)?.checked_add(key.len())?;
@@ -1610,7 +1623,7 @@ pub fn encode_regions(data: &RegionTerrainData) -> Result<Vec<u8>, SidecarError>
     let mut out = Vec::with_capacity(data.encoded_len().ok_or(SidecarError::TooLarge)?);
 
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&VERSION_9.to_le_bytes());
+    out.extend_from_slice(&VERSION_10.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     out.extend_from_slice(&(data.channels.len() as u32).to_le_bytes());
     encode_channel_directory(&mut out, &data.channels);
@@ -1666,6 +1679,13 @@ pub fn encode_regions(data: &RegionTerrainData) -> Result<Vec<u8>, SidecarError>
         });
         out.extend_from_slice(&[0u8; 3]);
         out.extend_from_slice(&entry.cull_distance.to_le_bytes());
+        out.extend_from_slice(&(entry.materials.len() as u32).to_le_bytes());
+        for (name, path) in &entry.materials {
+            for text in [name, path] {
+                out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+                out.extend_from_slice(text.as_bytes());
+            }
+        }
     }
     out.extend_from_slice(&(groups.iter().flatten().count() as u32).to_le_bytes());
     for key in data.scatter.groups.iter().filter(|k| !k.is_empty()) {
@@ -1738,7 +1758,7 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
         return Err(SidecarError::BadMagic);
     }
     let version = r.u16()?;
-    if !(VERSION_2..=VERSION_9).contains(&version) {
+    if !(VERSION_2..=VERSION_10).contains(&version) {
         return Err(SidecarError::UnsupportedVersion(version));
     }
     if r.u16()? != 0 {
@@ -1882,10 +1902,27 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
                 return Err(SidecarError::ReservedFieldSet);
             }
             let bytes = r.take(4)?;
+            let cull_distance = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+            let mut materials = BTreeMap::new();
+            if version >= VERSION_10 {
+                let count = r.u32()?;
+                for _ in 0..count {
+                    let mut text = || -> Result<String, SidecarError> {
+                        let len = r.u32()? as usize;
+                        Ok(core::str::from_utf8(r.take(len)?)
+                            .map_err(|_| SidecarError::BadName)?
+                            .to_string())
+                    };
+                    let name = text()?;
+                    let path = text()?;
+                    materials.insert(name, path);
+                }
+            }
             let mut entry = ScatterPaletteEntry {
                 asset,
                 obstacle: flags & SCATTER_FLAG_OBSTACLE != 0,
-                cull_distance: f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+                cull_distance,
+                materials,
             };
             entry.sanitize();
             scatter.assets.push(entry);
@@ -2085,7 +2122,7 @@ pub fn load_from(bytes: &[u8], assets: Option<&Path>) -> Result<LoadedSidecar, S
     let mut data = match version {
         0 => Err(SidecarError::UnsupportedVersion(0)),
         VERSION => decode(bytes).and_then(|legacy| RegionTerrainData::from_legacy_v1(&legacy)),
-        VERSION_2..=VERSION_9 => decode_regions(bytes),
+        VERSION_2..=VERSION_10 => decode_regions(bytes),
         other => Err(SidecarError::UnsupportedVersion(other)),
     }?;
     data.normalize();
@@ -2683,7 +2720,7 @@ mod tests {
         migrated.grid = Some(GridGeometry::DEFAULT);
 
         let v2_bytes = save(&migrated).expect("encodes");
-        assert_eq!(u16::from_le_bytes([v2_bytes[8], v2_bytes[9]]), VERSION_9);
+        assert_eq!(u16::from_le_bytes([v2_bytes[8], v2_bytes[9]]), VERSION_10);
         assert_ne!(v2_bytes[8..10], v1_bytes[8..10]);
 
         let reloaded = load(&v2_bytes).expect("loads");
@@ -2790,14 +2827,14 @@ mod tests {
     fn rejects_a_v2_file_written_by_a_newer_build() {
         let bytes = encode_regions(&sample_regions()).expect("encodes");
         let mut newer = bytes.clone();
-        newer[8..10].copy_from_slice(&(VERSION_9 + 1).to_le_bytes());
+        newer[8..10].copy_from_slice(&(VERSION_10 + 1).to_le_bytes());
         assert_eq!(
             decode_regions(&newer),
-            Err(SidecarError::UnsupportedVersion(VERSION_9 + 1))
+            Err(SidecarError::UnsupportedVersion(VERSION_10 + 1))
         );
         assert_eq!(
             load(&newer),
-            Err(SidecarError::UnsupportedVersion(VERSION_9 + 1))
+            Err(SidecarError::UnsupportedVersion(VERSION_10 + 1))
         );
     }
 
@@ -2855,7 +2892,7 @@ mod tests {
         let loaded = load_from(&bytes, Some(assets.path())).expect("loads");
         let forward = save(&loaded.data).expect("encodes");
 
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_9);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_10);
         assert_eq!(
             load(&forward).expect("reloads").materials[0].material,
             "materials/grass.material.bsn",
@@ -2893,7 +2930,7 @@ mod tests {
         );
         assert_eq!(
             decode(&regions_bytes),
-            Err(SidecarError::UnsupportedVersion(VERSION_9))
+            Err(SidecarError::UnsupportedVersion(VERSION_10))
         );
     }
 
@@ -3354,7 +3391,7 @@ mod tests {
         assert_eq!(decoded.materials[0].detile, 0.5);
 
         let forward = save(&decoded).expect("encodes");
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_9);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_10);
         assert_eq!(
             load(&forward).expect("reloads").autoterrain,
             decoded.autoterrain
@@ -3443,7 +3480,7 @@ mod tests {
         });
 
         let bytes = encode_regions(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_9);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_10);
         assert_eq!(decode_regions(&bytes).expect("decodes"), data);
         assert_eq!(load(&bytes).expect("loads"), data);
     }
@@ -3510,11 +3547,18 @@ mod tests {
                         asset: "models/tree.gltf".to_string(),
                         obstacle: true,
                         cull_distance: 0.0,
+                        materials: [(
+                            "Leaves".to_string(),
+                            "materials/pine_leaves.bsn".to_string(),
+                        )]
+                        .into_iter()
+                        .collect(),
                     },
                     ScatterPaletteEntry {
                         asset: "models/grass.glb".to_string(),
                         obstacle: false,
                         cull_distance: 60.0,
+                        materials: Default::default(),
                     },
                 ],
                 groups: vec!["woods".to_string(), "meadow".to_string()],
@@ -3534,7 +3578,7 @@ mod tests {
     fn a_scatter_palette_and_its_placements_round_trip() {
         let data = scattered_document();
         let bytes = save(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_9);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_10);
         assert_eq!(bytes.len(), data.encoded_len().expect("fits"));
         assert_eq!(load(&bytes).expect("loads"), data);
     }
@@ -3549,7 +3593,7 @@ mod tests {
         // Saving it forward writes the empty palette and one zero
         // placement count per region, and reads back the same document.
         let forward = save(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_9);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_10);
         assert_eq!(load(&forward).expect("loads"), data);
     }
 
@@ -3731,7 +3775,7 @@ mod tests {
         let data = load(VERSION_5_FILE).expect("loads");
         let forward = save(&data).expect("encodes");
 
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_9);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_10);
         assert_eq!(load(&forward).expect("reloads"), data);
     }
 
@@ -3746,7 +3790,7 @@ mod tests {
         };
 
         let bytes = save(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_9);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_10);
         let back = load(&bytes).expect("decodes");
         assert_eq!(back.surface, data.surface);
         assert_eq!(back, data);
@@ -4125,7 +4169,10 @@ mod tests {
             // One palette entry, one group key and one placement below,
             // so the version-7 boundaries are walked too.
             scatter: ScatterPalette {
-                assets: vec![ScatterPaletteEntry::new("a.glb")],
+                assets: vec![ScatterPaletteEntry {
+                    materials: [("m".to_string(), "p".to_string())].into_iter().collect(),
+                    ..ScatterPaletteEntry::new("a.glb")
+                }],
                 groups: vec!["g".to_string()],
             },
         };
@@ -4180,7 +4227,12 @@ mod tests {
         let asset_flags_end = asset_name_end + 1;
         let asset_pad_end = asset_flags_end + 3;
         let asset_cull_end = asset_pad_end + 4;
-        let group_count_end = asset_cull_end + 4;
+        let override_count_end = asset_cull_end + 4;
+        let override_name_len_end = override_count_end + 4;
+        let override_name_end = override_name_len_end + 1; // "m"
+        let override_path_len_end = override_name_end + 4;
+        let override_path_end = override_path_len_end + 1; // "p"
+        let group_count_end = override_path_end + 4;
         let group_len_end = group_count_end + 4;
         let group_name_end = group_len_end + 1; // "g"
         let coord_end = group_name_end + 8;
@@ -4234,6 +4286,11 @@ mod tests {
             asset_flags_end,
             asset_pad_end,
             asset_cull_end,
+            override_count_end,
+            override_name_len_end,
+            override_name_end,
+            override_path_len_end,
+            override_path_end,
             group_count_end,
             group_len_end,
             group_name_end,

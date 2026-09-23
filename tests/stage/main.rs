@@ -19,6 +19,7 @@ mod definition_assets;
 mod foliage;
 mod gltf_authoring;
 mod layered_surface;
+mod material_overrides;
 mod material_row;
 mod mesh_quick_menu;
 mod modeling_essentials;

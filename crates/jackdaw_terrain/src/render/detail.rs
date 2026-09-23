@@ -1694,6 +1694,7 @@ mod tests {
             ScatterPrimitive {
                 mesh: meshes.add(mesh),
                 material: Handle::default(),
+                material_name: None,
                 local: Transform::from_xyz(0.0, offset, 0.0),
             }
         };
@@ -1743,6 +1744,7 @@ mod tests {
         let primitives = vec![ScatterPrimitive {
             mesh: meshes.add(bare),
             material: Handle::default(),
+            material_name: None,
             local: Transform::from_scale(Vec3::new(3.0, 1.0, 1.0)),
         }];
 
@@ -1804,6 +1806,7 @@ mod tests {
         let primitives = vec![ScatterPrimitive {
             mesh: meshes.add(leaning),
             material: Handle::default(),
+            material_name: None,
             local: stretched_fourfold_up,
         }];
 
@@ -1838,6 +1841,7 @@ mod tests {
         let primitives = vec![ScatterPrimitive {
             mesh: meshes.add(flat),
             material: Handle::default(),
+            material_name: None,
             local: Transform::IDENTITY,
         }];
 

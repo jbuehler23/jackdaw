@@ -9,6 +9,8 @@
 //! An older scene whose scatter is entities keeps working: nothing here
 //! touches those groups until `adopt` converts one.
 
+use std::collections::BTreeMap;
+
 use bevy::prelude::*;
 use jackdaw_terrain::region::RegionCoord;
 use jackdaw_terrain::render::{ScatterChunk, ScatterDirty, TerrainScatter};
@@ -155,6 +157,8 @@ pub enum ScatterStoreError {
     /// The asset palette already names every index a placement could
     /// carry.
     PaletteFull,
+    /// The terrain's stored scatter draws no such model.
+    NoSuchAsset,
 }
 
 impl ScatterStoreError {
@@ -170,6 +174,7 @@ impl ScatterStoreError {
                 "this terrain's scatter palette already holds as many assets as a placement \
                  can name"
             }
+            Self::NoSuchAsset => "this terrain's stored scatter draws no such model",
         }
     }
 }
@@ -182,6 +187,7 @@ pub fn stamp(
     data_path: &str,
     key: &str,
     assets: &[String],
+    materials: &BTreeMap<String, BTreeMap<String, String>>,
     placements: Vec<PendingPlacement>,
 ) -> Result<usize, ScatterStoreError> {
     let (before, after, stored) = {
@@ -203,6 +209,13 @@ pub fn stamp(
             .map(|asset| data.scatter.intern_asset(asset))
             .collect::<Result<Vec<u16>, _>>()
             .map_err(|_| ScatterStoreError::PaletteFull)?;
+        for (asset, index) in assets.iter().zip(&palette) {
+            if let Some(materials) = materials.get(asset)
+                && let Some(entry) = data.scatter.assets.get_mut(*index as usize)
+            {
+                entry.materials = materials.clone();
+            }
+        }
 
         let mut stored = 0;
         for placement in placements {
@@ -235,6 +248,55 @@ pub fn stamp(
         },
     );
     Ok(stored)
+}
+
+/// Set or clear the material a stored model's parts named `name` wear, as one undo entry.
+///
+/// Returns whether anything changed.
+pub fn set_palette_material(
+    world: &mut World,
+    data_path: &str,
+    asset: &str,
+    name: &str,
+    material: Option<&str>,
+) -> Result<bool, ScatterStoreError> {
+    let (before, after) = {
+        let mut store = world.resource_mut::<TerrainDataStore>();
+        let data = store
+            .document_mut(data_path)
+            .ok_or(ScatterStoreError::NoDocument)?;
+        let before = ScatterSnapshot::capture(data);
+        let entry = data
+            .scatter
+            .assets
+            .iter_mut()
+            .find(|entry| entry.asset == asset)
+            .ok_or(ScatterStoreError::NoSuchAsset)?;
+        let changed = match material {
+            Some(path) => {
+                entry
+                    .materials
+                    .insert(name.to_string(), path.to_string())
+                    .as_deref()
+                    != Some(path)
+            }
+            None => entry.materials.remove(name).is_some(),
+        };
+        if !changed {
+            return Ok(false);
+        }
+        (before, ScatterSnapshot::capture(data))
+    };
+    push(
+        world,
+        SetScatterData {
+            data_path: data_path.to_string(),
+            before,
+            after,
+            label: format!("Scatter material {name}"),
+        },
+    );
+    Ok(true)
 }
 
 /// Drop one group's stored placements, as one undo entry. Returns how many
@@ -286,6 +348,8 @@ pub fn group_counts(store: &TerrainDataStore, data_path: &str) -> Vec<(String, u
 /// spawn an entity in its place.
 pub struct PromotedPlacement {
     pub asset: String,
+    /// The material overrides its palette entry carries.
+    pub materials: BTreeMap<String, String>,
     pub region: RegionCoord,
     pub index: usize,
     pub transform: Transform,
@@ -301,9 +365,11 @@ pub fn nth_in_group(
     let data = store.get(data_path)?;
     let group = data.scatter.group_index(key)?;
     let (region, at, placement) = data.group_placements(group).nth(index)?;
-    let asset = data.scatter.asset(placement.asset)?.asset.clone();
+    let entry = data.scatter.asset(placement.asset)?;
+    let (asset, materials) = (entry.asset.clone(), entry.materials.clone());
     Some(PromotedPlacement {
         asset,
+        materials,
         region,
         index: at,
         transform: Transform {
@@ -349,6 +415,7 @@ pub fn adopt(
     key: &str,
     group_entity: Entity,
     models: Vec<(String, Transform)>,
+    materials: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> Result<usize, ScatterStoreError> {
     let (before, after, stored) = {
         let mut store = world.resource_mut::<TerrainDataStore>();
@@ -375,6 +442,16 @@ pub fn adopt(
                 .is_some()
             {
                 stored += 1;
+            }
+        }
+        for (asset, materials) in materials {
+            if let Some(entry) = data
+                .scatter
+                .assets
+                .iter_mut()
+                .find(|entry| entry.asset == *asset)
+            {
+                entry.materials = materials.clone();
             }
         }
         (before, ScatterSnapshot::capture(data), stored)
@@ -501,6 +578,7 @@ mod tests {
             "t.jdterrain",
             "woods",
             &["models/tree.gltf".to_string()],
+            &BTreeMap::new(),
             placements(3),
         );
         assert_eq!(stored, Ok(3));
@@ -530,8 +608,24 @@ mod tests {
     fn re_running_a_group_replaces_its_placements_rather_than_adding_to_them() {
         let mut world = store_with(document());
         let assets = vec!["models/tree.gltf".to_string()];
-        stamp(&mut world, "t.jdterrain", "woods", &assets, placements(3)).expect("stores");
-        stamp(&mut world, "t.jdterrain", "woods", &assets, placements(2)).expect("stores");
+        stamp(
+            &mut world,
+            "t.jdterrain",
+            "woods",
+            &assets,
+            &BTreeMap::new(),
+            placements(3),
+        )
+        .expect("stores");
+        stamp(
+            &mut world,
+            "t.jdterrain",
+            "woods",
+            &assets,
+            &BTreeMap::new(),
+            placements(2),
+        )
+        .expect("stores");
         let store = world.resource::<TerrainDataStore>();
         assert_eq!(store.get("t.jdterrain").unwrap().placement_count(), 2);
         assert_eq!(
@@ -544,8 +638,24 @@ mod tests {
     fn clearing_a_group_leaves_the_others_alone() {
         let mut world = store_with(document());
         let assets = vec!["models/tree.gltf".to_string()];
-        stamp(&mut world, "t.jdterrain", "woods", &assets, placements(3)).expect("stores");
-        stamp(&mut world, "t.jdterrain", "meadow", &assets, placements(2)).expect("stores");
+        stamp(
+            &mut world,
+            "t.jdterrain",
+            "woods",
+            &assets,
+            &BTreeMap::new(),
+            placements(3),
+        )
+        .expect("stores");
+        stamp(
+            &mut world,
+            "t.jdterrain",
+            "meadow",
+            &assets,
+            &BTreeMap::new(),
+            placements(2),
+        )
+        .expect("stores");
         assert_eq!(clear(&mut world, "t.jdterrain", "woods"), Some(3));
         assert_eq!(
             group_counts(world.resource::<TerrainDataStore>(), "t.jdterrain"),
@@ -561,6 +671,7 @@ mod tests {
             "t.jdterrain",
             "woods",
             &["models/tree.gltf".to_string()],
+            &BTreeMap::new(),
             placements(3),
         )
         .expect("stores");
@@ -603,6 +714,7 @@ mod tests {
             "t.jdterrain",
             "woods",
             &["models/tree.gltf".to_string()],
+            &BTreeMap::new(),
             vec![PendingPlacement {
                 position: Vec3::new(20.0, 0.0, 20.0),
                 yaw: 0.0,
@@ -652,6 +764,7 @@ mod tests {
             "t.jdterrain",
             "woods",
             &["models/tree.gltf".to_string()],
+            &BTreeMap::new(),
             placements(64),
         )
         .expect("the terrain has a document");
@@ -674,8 +787,15 @@ mod tests {
         let mut world = store_with(document());
         let assets = vec!["models/tree.gltf".to_string()];
         for _ in 0..8 {
-            stamp(&mut world, "t.jdterrain", "woods", &assets, placements(2))
-                .expect("the terrain has a document");
+            stamp(
+                &mut world,
+                "t.jdterrain",
+                "woods",
+                &assets,
+                &BTreeMap::new(),
+                placements(2),
+            )
+            .expect("the terrain has a document");
         }
         let store = world.resource::<TerrainDataStore>();
         let data = store.get("t.jdterrain").unwrap();
@@ -693,6 +813,7 @@ mod tests {
                 "missing.jdterrain",
                 "woods",
                 &["models/tree.gltf".to_string()],
+                &BTreeMap::new(),
                 placements(1),
             ),
             Err(ScatterStoreError::NoDocument)

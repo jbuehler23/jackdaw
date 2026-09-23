@@ -9,6 +9,8 @@
 //! append-only within a document, because an index is what every placement
 //! refers to, so an entry is emptied rather than removed.
 
+use std::collections::BTreeMap;
+
 use bevy_math::Vec3;
 
 /// Extensions a palette entry may name.
@@ -146,6 +148,8 @@ pub struct ScatterPaletteEntry {
     /// Distance in world units past which placements of this asset stop
     /// drawing. Zero draws at every distance.
     pub cull_distance: f32,
+    /// Material asset path each placement's parts wear in place of their own, by glTF material name.
+    pub materials: BTreeMap<String, String>,
 }
 
 impl ScatterPaletteEntry {
@@ -155,6 +159,7 @@ impl ScatterPaletteEntry {
             asset: asset.into(),
             obstacle: true,
             cull_distance: 0.0,
+            materials: BTreeMap::new(),
         }
     }
 
@@ -165,6 +170,7 @@ impl ScatterPaletteEntry {
             asset: String::new(),
             obstacle: false,
             cull_distance: 0.0,
+            materials: BTreeMap::new(),
         }
     }
 

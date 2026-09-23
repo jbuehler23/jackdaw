@@ -824,6 +824,22 @@ pub struct GltfSource {
     pub scene_index: usize,
 }
 
+/// Materials a placed model's parts wear in place of their own, by the model's material name.
+#[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Rendering"))]
+pub struct MaterialOverrides {
+    /// Material asset path for each overridden material name.
+    pub materials: BTreeMap<String, String>,
+}
+
+/// A prefab instance's own material overrides, laid over the [`MaterialOverrides`] of the models it holds.
+#[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Rendering"))]
+pub struct InstanceMaterialOverrides {
+    /// Material asset path for each material name this instance overrides.
+    pub materials: BTreeMap<String, String>,
+}
+
 /// Stores the original serialized component values from a prefab at instantiation time.
 /// Used to detect overrides and support per-component revert.
 #[derive(Component, Clone, Debug, Default)]

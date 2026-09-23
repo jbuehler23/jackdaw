@@ -103,6 +103,14 @@ mod pie_windowless;
 #[cfg(feature = "pie")]
 pub use pie_windowless::{maybe_windowless, windowless_requested};
 
+#[cfg(feature = "render")]
+mod material_overrides;
+#[cfg(feature = "render")]
+pub use material_overrides::{
+    MaterialOverridesPlugin, ModelMaterial, dress_model, dress_part, material_of_reference,
+    overrides_reaching,
+};
+
 #[cfg(feature = "terrain")]
 mod terrain;
 #[cfg(feature = "terrain")]
@@ -214,6 +222,7 @@ impl Plugin for JackdawPlugin {
             jackdaw_surface::FoliagePlugin,
             jackdaw_surface::WaterPlugin,
             jackdaw_surface::EnvironmentPlugin,
+            MaterialOverridesPlugin,
         ));
 
         // Game code may add a model to an entity long after the scene it lives

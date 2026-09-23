@@ -27,10 +27,12 @@
 pub mod environment;
 pub mod foliage;
 pub mod water;
+pub mod worn;
 
 pub use environment::{EnvironmentPlugin, SkyMaterial};
 pub use foliage::{Foliage, FoliageMaterial, FoliagePlugin};
 pub use water::{Water, WaterMaterial, WaterPlugin};
+pub use worn::WornMaterial;
 
 use bevy::asset::embedded_asset;
 use bevy::color::ColorToComponents;

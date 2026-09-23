@@ -85,6 +85,7 @@ pub mod live_highlight;
 pub mod live_input;
 pub mod material_assets;
 pub mod material_browser;
+pub mod material_overrides;
 pub mod material_preview;
 pub mod material_ui;
 pub mod measure_tool;
@@ -433,6 +434,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(prefab::PrefabPlugin)
         .add_plugins(prefab::watcher::PrefabWatcherPlugin)
         .add_plugins(jackdaw_surface::EnvironmentPlugin)
+        .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(file_ops::FileOpsPlugin)
         .add_plugins(keybinds::KeybindsPlugin)
         .add_plugins(keybind_settings::KeybindSettingsPlugin)

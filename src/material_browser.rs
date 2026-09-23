@@ -536,13 +536,45 @@ fn wear_on_meshes(world: &mut World, selected: &[Entity], chosen: WornMaterial) 
         .get_resource::<crate::asset_index::AssetIndex>()
         .and_then(|index| index.by_handle(&chosen.untyped()))
         .map(|entry| entry.path.to_slash_lossy().into_owned());
-    let targets: Vec<Entity> = selected
-        .iter()
-        .copied()
-        .filter(|entity| world.get::<Brush>(*entity).is_none())
-        .filter(|entity| WornMaterial::of(world, *entity).is_some_and(|worn| worn != chosen))
-        .collect();
     let mut group: Vec<Box<dyn EditorCommand>> = Vec::new();
+    let mut models = Vec::new();
+    let mut targets = Vec::new();
+    for &entity in selected {
+        if world.get::<Brush>(entity).is_some() {
+            continue;
+        }
+        let authored = world
+            .get_resource::<jackdaw_bsn::SceneBsnAst>()
+            .is_some_and(|doc| doc.ast_for(entity).is_some());
+        let model = crate::material_overrides::model_root(world, entity)
+            .filter(|root| *root == entity || !authored);
+        match model {
+            Some(root) => models.push((root, entity)),
+            None => {
+                if WornMaterial::of(world, entity).is_some_and(|worn| worn != chosen) {
+                    targets.push(entity);
+                }
+            }
+        }
+    }
+    for (root, picked) in models {
+        let Some(path) = named.as_deref() else {
+            warn!("material.apply: a placed model keeps only a material saved as an asset file");
+            continue;
+        };
+        let names = match world.get::<bevy::gltf::GltfMaterialName>(picked) {
+            Some(name) if picked != root => vec![name.0.clone()],
+            _ => crate::material_overrides::model_material_names(world, root),
+        };
+        let command =
+            crate::material_overrides::SetMaterialOverrides::new(world, root, &names, Some(path));
+        if command.is_noop() {
+            continue;
+        }
+        let mut command: Box<dyn EditorCommand> = Box::new(command);
+        command.execute(world);
+        group.push(command);
+    }
     for entity in targets {
         let Some(command) = crate::inspector::material_row::WearMaterial::new(
             world,

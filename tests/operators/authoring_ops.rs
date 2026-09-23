@@ -552,6 +552,7 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
     ("entity.snap_to_ground", &["entity"], false),
     ("field.set", &["entity"], true),
     ("hierarchy.rename_begin", &["entity"], true),
+    ("material.override", &["entity"], true),
     ("physics.disable", &["entity"], true),
     ("physics.enable", &["entity"], true),
     ("prefab.apply_to_source", &["instance_entity"], false),
