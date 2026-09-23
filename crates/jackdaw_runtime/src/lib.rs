@@ -213,6 +213,7 @@ impl Plugin for JackdawPlugin {
             jackdaw_surface::LayeredSurfacePlugin,
             jackdaw_surface::FoliagePlugin,
             jackdaw_surface::WaterPlugin,
+            jackdaw_surface::EnvironmentPlugin,
         ));
 
         // Game code may add a model to an entity long after the scene it lives

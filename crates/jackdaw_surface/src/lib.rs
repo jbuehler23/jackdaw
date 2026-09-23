@@ -3,6 +3,8 @@
 //! [`LayeredSurface`] carries a second surface on a mesh's upward faces;
 //! [`foliage::Foliage`] blows with the scene's wind and passes light through
 //! its leaves; [`water::Water`] draws a lake, a river or a sea.
+//! [`environment::EnvironmentPlugin`] dresses the cameras in the scene's sky,
+//! fog, ambient light and grading.
 //!
 //! # A second surface on the upward faces
 //!
@@ -22,9 +24,11 @@
 //! [`LayerBlend::weight`] is the whole of the blend decision and is shared with
 //! the shader, which computes the same expression.
 
+pub mod environment;
 pub mod foliage;
 pub mod water;
 
+pub use environment::{EnvironmentPlugin, SkyMaterial};
 pub use foliage::{Foliage, FoliageMaterial, FoliagePlugin};
 pub use water::{Water, WaterMaterial, WaterPlugin};
 

@@ -432,6 +432,7 @@ impl Plugin for EditorCorePlugin {
         ))
         .add_plugins(prefab::PrefabPlugin)
         .add_plugins(prefab::watcher::PrefabWatcherPlugin)
+        .add_plugins(jackdaw_surface::EnvironmentPlugin)
         .add_plugins(file_ops::FileOpsPlugin)
         .add_plugins(keybinds::KeybindsPlugin)
         .add_plugins(keybind_settings::KeybindSettingsPlugin)

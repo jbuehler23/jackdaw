@@ -15,6 +15,7 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_image",
     "bevy_log",
     "bevy_core_pipeline",
+    "bevy_post_process",
 ] }
 jackdaw_scene_types = { version = "0.19.0", path = "../jackdaw_scene_types", default-features = false }
 

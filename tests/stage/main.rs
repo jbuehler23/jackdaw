@@ -28,6 +28,7 @@ mod project_definitions;
 mod project_startup;
 mod project_window;
 mod remote_placement;
+mod scene_environment;
 mod scene_wind;
 mod selection_undo;
 mod synthetic_input;
