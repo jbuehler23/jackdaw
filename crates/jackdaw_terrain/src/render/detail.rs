@@ -63,6 +63,18 @@ use super::scatter::{ScatterAssets, ScatterPrimitive, ScatterSystems};
 
 const SHADER_PATH: &str = "embedded://jackdaw_terrain/render/shaders/detail.wgsl";
 
+/// How far a blade's shading normal is bent onto the ground's normal; the shader's `NORMAL_BEND`.
+pub const DETAIL_NORMAL_BEND: f32 = 0.8;
+
+/// The normal a blade is lit by: its own, turned to face the viewer, bent onto the ground's.
+pub fn blade_shading_normal(blade: Vec3, ground: Vec3, front_facing: bool) -> Vec3 {
+    let facing = if front_facing { blade } else { -blade };
+    facing
+        .normalize()
+        .lerp(ground.normalize(), DETAIL_NORMAL_BEND)
+        .normalize()
+}
+
 /// Pressers the shader reads. Past this the nearest to the viewer win.
 pub const MAX_DETAIL_PRESSERS: usize = 16;
 
@@ -2347,6 +2359,42 @@ mod tests {
             .collect();
         assert_eq!(placed.len(), 1, "the tile is left in its old bin as well");
         assert!(placed[0] == bin(1), "the tile is not in its new bin");
+    }
+
+    #[test]
+    fn the_shader_bends_blade_normals_as_far_as_the_rust_mirror() {
+        assert!(SHADER_SOURCE.contains(&format!("const NORMAL_BEND: f32 = {DETAIL_NORMAL_BEND};")));
+    }
+
+    #[test]
+    fn a_shadowed_blade_under_trilight_ambient_takes_the_grounds_shadowed_colour() {
+        use jackdaw_scene_types::{Ambient, AmbientMode};
+        let ambient = Ambient {
+            mode: AmbientMode::Trilight,
+            sky: Color::srgb(0.622, 0.639, 0.657),
+            equator: Color::srgb(0.114, 0.125, 0.133),
+            ground: Color::srgb(0.047, 0.043, 0.035),
+            ..Ambient::default()
+        };
+        let albedo = Vec3::new(0.1, 0.35, 0.05);
+        let lit_by = |normal: Vec3| {
+            let light = ambient.color_facing(normal.y);
+            albedo * Vec3::new(light.red, light.green, light.blue)
+        };
+        for ground in [Vec3::Y, Vec3::new(0.3, 0.95, 0.0).normalize()] {
+            let ground_shade = lit_by(ground);
+            for yaw in [0.0_f32, 1.1, 2.4, 4.0] {
+                let blade = Vec3::new(yaw.cos(), 0.0, yaw.sin());
+                for front in [true, false] {
+                    let blade_shade = lit_by(blade_shading_normal(blade, ground, front));
+                    let off = (blade_shade - ground_shade).abs().max_element();
+                    assert!(
+                        off <= ground_shade.max_element() * 0.1,
+                        "a blade at yaw {yaw} facing {front} is lit {blade_shade} against the ground's {ground_shade}",
+                    );
+                }
+            }
+        }
     }
 
     #[test]

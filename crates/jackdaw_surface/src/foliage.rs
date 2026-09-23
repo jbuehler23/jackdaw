@@ -23,10 +23,11 @@ use bevy::prelude::*;
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::{AsBindGroup, AsBindGroupShaderType, ShaderType};
 use bevy::render::texture::GpuImage;
-use bevy::shader::ShaderRef;
+use bevy::shader::{Shader, ShaderRef};
 use jackdaw_scene_types::{SceneWind, Wind};
 
 const SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/foliage.wgsl";
+const PREPASS_SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/foliage_prepass.wgsl";
 
 /// The material an entity wears to blow with the wind and pass light.
 pub type FoliageMaterial = ExtendedMaterial<StandardMaterial, Foliage>;
@@ -76,6 +77,8 @@ pub struct Foliage {
     pub translucency_ambient: f32,
     /// How much of the glow survives in shadow, `0..1`.
     pub translucency_shadow: f32,
+    /// How far the lit normal leans toward world up, `0..1`, so a leaf facing away from the sky is not lit as the ground.
+    pub shading_normal_up: f32,
     /// How far this material goes with the scene's wind, as a multiple of a
     /// blade of grass. 0 stands still in any wind.
     pub wind_response: f32,
@@ -111,6 +114,7 @@ impl Default for Foliage {
             translucency_direct: 1.0,
             translucency_ambient: 0.2,
             translucency_shadow: 0.5,
+            shading_normal_up: 0.0,
             wind_response: 0.0,
             micro_wind_response: 0.0,
             bend_position: 1.0,
@@ -147,6 +151,13 @@ impl Foliage {
         let field = (scaled.x * TAU * 0.13 + 1.7).sin() * (scaled.z * TAU * 0.11 - 0.4).cos()
             + (scaled.z * TAU * 0.07 + 2.3).sin() * 0.5;
         (0.5 + 0.25 * field).clamp(0.0, 1.0) * self.variation_strength.clamp(0.0, 1.0)
+    }
+
+    /// The normal a leaf is lit by: its own, leaned toward world up by [`Self::shading_normal_up`]. The shader computes this same expression.
+    pub fn shaded_normal(&self, normal: Vec3) -> Vec3 {
+        normal
+            .lerp(Vec3::Y, self.shading_normal_up.clamp(0.0, 1.0))
+            .normalize_or(Vec3::Y)
     }
 
     /// How far the wind carries a vertex, in world units.
@@ -201,6 +212,7 @@ pub struct FoliageUniform {
     pub translucency_direct: f32,
     pub translucency_ambient: f32,
     pub translucency_shadow: f32,
+    pub shading_normal_up: f32,
     pub wind_response: f32,
     pub micro_wind_response: f32,
     pub bend_position: f32,
@@ -229,6 +241,7 @@ impl AsBindGroupShaderType<FoliageUniform> for Foliage {
             translucency_direct: self.translucency_direct,
             translucency_ambient: self.translucency_ambient,
             translucency_shadow: self.translucency_shadow,
+            shading_normal_up: self.shading_normal_up.clamp(0.0, 1.0),
             wind_response: self.wind_response,
             micro_wind_response: self.micro_wind_response,
             bend_position: self.bend_position,
@@ -242,10 +255,20 @@ impl MaterialExtension for Foliage {
         SHADER_PATH.into()
     }
 
+    fn prepass_vertex_shader() -> ShaderRef {
+        PREPASS_SHADER_PATH.into()
+    }
+
     fn fragment_shader() -> ShaderRef {
         SHADER_PATH.into()
     }
 }
+
+/// Keeps the shader the foliage stages import loaded for as long as the app runs.
+#[derive(Resource)]
+struct FoliageShaderLibrary(
+    #[expect(dead_code, reason = "held only to keep the shader loaded")] Handle<Shader>,
+);
 
 /// Registers the foliage material, its shader and its reflected type, so a
 /// scene naming one renders it.
@@ -254,6 +277,12 @@ pub struct FoliagePlugin;
 impl Plugin for FoliagePlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/foliage.wgsl");
+        embedded_asset!(app, "shaders/foliage_prepass.wgsl");
+        embedded_asset!(app, "shaders/foliage_wind.wgsl");
+        if app.world().contains_resource::<Assets<Shader>>() {
+            let library = bevy::asset::load_embedded_asset!(app, "shaders/foliage_wind.wgsl");
+            app.insert_resource(FoliageShaderLibrary(library));
+        }
         app.add_plugins(MaterialPlugin::<FoliageMaterial>::default())
             .init_resource::<SceneWind>()
             .register_type::<Foliage>()
@@ -290,7 +319,16 @@ mod tests {
     /// It cannot be compiled here: it is naga-oil input, not WGSL. The checks
     /// are textual, and catch binding numbers drifting between the
     /// `AsBindGroup` derive and the shader that reads them.
-    const SHADER_SOURCE: &str = include_str!("shaders/foliage.wgsl");
+    const SHADER_SOURCE: &str = include_str!("shaders/foliage_wind.wgsl");
+    const PREPASS_SOURCE: &str = include_str!("shaders/foliage_prepass.wgsl");
+
+    #[test]
+    fn the_prepass_leans_the_leaves_the_way_the_main_pass_does() {
+        assert!(
+            PREPASS_SOURCE.contains("wind_offset(up_the_mesh, planted.xyz, globals.time)"),
+            "a prepass that left the leaves where the model put them would cut holes where they sway"
+        );
+    }
 
     fn blowing(material: &mut Foliage) {
         material.wind = Wind {
@@ -346,6 +384,7 @@ mod tests {
             "translucency_direct: f32",
             "translucency_ambient: f32",
             "translucency_shadow: f32",
+            "shading_normal_up: f32",
             "wind_response: f32",
             "micro_wind_response: f32",
             "bend_position: f32",
@@ -480,6 +519,29 @@ mod tests {
         assert!(
             lean(6.0) > lean(3.0) * 2.0,
             "and the crown carries the bend"
+        );
+    }
+
+    #[test]
+    fn an_unleaned_leaf_is_lit_by_its_own_normal() {
+        let leaf = Vec3::new(0.3, -0.9, 0.2).normalize();
+        assert!(
+            Foliage::default()
+                .shaded_normal(leaf)
+                .abs_diff_eq(leaf, 1e-6)
+        );
+    }
+
+    #[test]
+    fn a_leaned_leaf_facing_the_ground_is_lit_from_above_the_horizon() {
+        let foliage = Foliage {
+            shading_normal_up: 0.6,
+            ..Foliage::default()
+        };
+        let facing_down = Vec3::new(0.2, -0.95, 0.1).normalize();
+        assert!(
+            foliage.shaded_normal(facing_down).y > 0.0,
+            "a leaf turned away from the sky still takes light from above"
         );
     }
 }

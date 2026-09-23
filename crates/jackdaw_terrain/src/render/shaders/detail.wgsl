@@ -11,8 +11,9 @@
 const MAX_PRESSERS: u32 = 16u;
 /// Darkest the tint byte takes an instance, as a fraction of its own colour.
 const DIMMEST: f32 = 0.7;
-/// How dark the foot of an instance sits under its top, as a fraction.
-const AMBIENT_FLOOR: f32 = 0.45;
+/// How far a blade's shading normal is bent onto the ground's, so it takes the light the ground under it takes.
+/// `DETAIL_NORMAL_BEND` on the Rust side is the same number.
+const NORMAL_BEND: f32 = 0.8;
 /// Fraction of the cull distance the instances spend shrinking into the ground.
 const FADE_BAND: f32 = 0.25;
 /// Alpha a textured instance has to clear to draw.
@@ -81,6 +82,7 @@ struct DetailOutput {
     @location(1) world_normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) color: vec3<f32>,
+    @location(4) ground_normal: vec3<f32>,
 }
 
 fn rotate_y(v: vec3<f32>, yaw: f32) -> vec3<f32> {
@@ -176,14 +178,14 @@ fn vertex(in: Vertex) -> DetailOutput {
 
     let world = base + offset;
     let tint = mix(DIMMEST, 1.0, variation.w);
-    let shade = mix(AMBIENT_FLOOR, 1.0, up_the_mesh);
 
     var out: DetailOutput;
     out.world_position = vec4<f32>(world, 1.0);
     out.position = view.clip_from_world * out.world_position;
     out.world_normal = normalize(world_normal);
     out.uv = in.uv;
-    out.color = mix(detail.color_base.rgb, detail.color_tip.rgb, up_the_mesh) * tint * shade;
+    out.color = mix(detail.color_base.rgb, detail.color_tip.rgb, up_the_mesh) * tint;
+    out.ground_normal = ground_normal;
     return out;
 }
 
@@ -201,7 +203,8 @@ fn fragment(in: DetailOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
 
     let double_sided = true;
-    let n = normalize(pbr_functions::prepare_world_normal(in.world_normal, double_sided, is_front));
+    let facing = pbr_functions::prepare_world_normal(in.world_normal, double_sided, is_front);
+    let n = normalize(mix(normalize(facing), normalize(in.ground_normal), NORMAL_BEND));
 
     var pbr_input = pbr_types::pbr_input_new();
     pbr_input.flags = mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT;
