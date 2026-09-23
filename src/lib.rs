@@ -62,6 +62,7 @@ pub use inspector::{
     EditorCategory, EditorDescription, EditorHidden, EditorPreview, SkipSerialization,
 };
 
+pub mod camera_capture;
 pub mod camera_preview;
 pub mod camera_settings;
 pub mod canvas_snap;
