@@ -38,8 +38,8 @@ pub use types::{
     DetailLayer, DetailMesh, DetailPresser, GltfSource, HIDDEN_IN_GAME_TYPE_PATH, HiddenInGame,
     InstanceMaterialOverrides, MaterialOverrides, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude,
     PrefabBaseline, PropertyValue, ScatterGroup, ScatterInstance, SceneRootTag, SceneWind, Terrain,
-    TerrainChannel, TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry, TerrainQuantization,
-    Wind,
+    TerrainChannel, TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry,
+    TerrainQuantization, Wind,
 };
 
 use bevy::prelude::*;
