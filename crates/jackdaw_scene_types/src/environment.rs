@@ -61,6 +61,25 @@ impl Default for Sky {
     }
 }
 
+impl Sky {
+    /// Gradient colour, before brightness, in a direction whose vertical component is `up`.
+    /// The sky shader draws the same blend.
+    pub fn color_facing(&self, up: f32) -> LinearRgba {
+        let up = up.clamp(-1.0, 1.0);
+        let reach = 1.0 / self.horizon_softness.max(0.01);
+        let horizon = self.horizon.to_linear();
+        if up >= 0.0 {
+            self.zenith
+                .to_linear()
+                .mix(&horizon, (1.0 - up).powf(reach))
+        } else {
+            self.ground
+                .to_linear()
+                .mix(&horizon, (1.0 + up).powf(reach))
+        }
+    }
+}
+
 /// How fog thickens with distance from the camera.
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[reflect(Default)]
@@ -121,6 +140,17 @@ pub enum AmbientMode {
     Trilight,
 }
 
+/// Where glossy and glancing surfaces take their reflections from.
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[reflect(Default)]
+pub enum Reflections {
+    /// The same colours that light the ambient term.
+    #[default]
+    Trilight,
+    /// The drawn sky, its gradient and its sun, blurred by roughness.
+    Sky,
+}
+
 /// Light every surface receives from all around, by which way it faces.
 #[derive(Reflect, Clone, Debug, PartialEq)]
 #[reflect(Default)]
@@ -136,6 +166,8 @@ pub struct Ambient {
     pub ground: Color,
     /// Ambient luminance in candela per square metre.
     pub brightness: f32,
+    /// Where reflections come from. [`Reflections::Sky`] needs the sky enabled.
+    pub reflections: Reflections,
 }
 
 impl Default for Ambient {
@@ -147,6 +179,7 @@ impl Default for Ambient {
             equator: Color::srgb(0.3, 0.32, 0.34),
             ground: Color::srgb(0.1, 0.09, 0.08),
             brightness: 500.0,
+            reflections: Reflections::Trilight,
         }
     }
 }
@@ -329,5 +362,18 @@ mod tests {
             ..Ambient::default()
         };
         assert_eq!(ambient.color_facing(1.0), ambient.color_facing(-1.0));
+    }
+
+    #[test]
+    fn the_sky_gradient_runs_from_the_ground_through_the_horizon_to_the_zenith() {
+        let sky = Sky::default();
+        assert_eq!(sky.color_facing(1.0), sky.zenith.to_linear());
+        assert_eq!(sky.color_facing(0.0), sky.horizon.to_linear());
+        assert_eq!(sky.color_facing(-1.0), sky.ground.to_linear());
+    }
+
+    #[test]
+    fn old_scenes_keep_reflecting_the_trilight() {
+        assert_eq!(Ambient::default().reflections, Reflections::Trilight);
     }
 }
