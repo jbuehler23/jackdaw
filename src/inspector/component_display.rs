@@ -253,6 +253,16 @@ fn hidden_by_namespace(full_path: &str) -> bool {
         && !authored_widget_components().contains(&full_path)
 }
 
+/// Whether a reflected component gets a card.
+///
+/// Everything the namespace cull passes does, and inside it so does any type
+/// that names an editor category without hiding itself: that is how scene
+/// data such as `Wind` or `MaterialOverrides` says it is authored rather than
+/// bookkeeping.
+fn offered_as_card(full_path: &str, chrome: &TypeChrome) -> bool {
+    !hidden_by_namespace(full_path) || (!chrome.category.is_empty() && !chrome.hidden)
+}
+
 /// The reflected components a widget's author edits, exempted from the
 /// `jackdaw_widgets_runtime` cull that hides the crate's chrome bookkeeping.
 fn authored_widget_components() -> [&'static str; 10] {
@@ -415,7 +425,8 @@ pub(crate) fn build_inspector_displays(
             {
                 let table = registration.type_info().type_path_table();
                 let full_path = table.path();
-                if hidden_by_namespace(full_path) {
+                let chrome = type_metadata.resolve(full_path, &registry, project_types);
+                if !offered_as_card(full_path, &chrome) {
                     return None;
                 }
                 // AST filter: hide Bevy-internal components that
@@ -446,7 +457,6 @@ pub(crate) fn build_inspector_displays(
                 {
                     return None;
                 }
-                let chrome = type_metadata.resolve(full_path, &registry, project_types);
                 let group = chrome.group(full_path);
                 return Some(ListedComponent {
                     name: table.short_path().to_string(),
@@ -1627,6 +1637,35 @@ mod tests {
             !hidden_by_namespace(std::any::type_name::<jackdaw_scene_types::CanvasGuides>()),
             "the UI root's guides show as a card, so their positions are typeable",
         );
+    }
+
+    #[test]
+    fn scene_data_naming_an_editor_category_gets_a_card_and_bookkeeping_does_not() {
+        let chrome = |category: &str, hidden: bool| super::TypeChrome {
+            category: category.to_string(),
+            hidden,
+            ..Default::default()
+        };
+        assert!(super::offered_as_card(
+            "jackdaw_scene_types::types::Wind",
+            &chrome("Environment", false)
+        ));
+        assert!(super::offered_as_card(
+            "jackdaw_scene_types::types::MaterialOverrides",
+            &chrome("Rendering", false)
+        ));
+        assert!(!super::offered_as_card(
+            "jackdaw_scene_types::types::ScatterInstance",
+            &chrome("Terrain", true)
+        ));
+        assert!(!super::offered_as_card(
+            "jackdaw_scene_types::node_id::SceneNodeId",
+            &chrome("", true)
+        ));
+        assert!(super::offered_as_card(
+            "jackdaw_scene_types::types::Terrain",
+            &chrome("Terrain", true)
+        ));
     }
 
     #[test]
