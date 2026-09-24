@@ -523,3 +523,97 @@ fn a_stored_material_override_naming_no_material_is_refused() {
     assert_eq!(result, OperatorResult::Cancelled);
     assert!(stored_materials(&app, terrain).is_empty());
 }
+
+fn stored_placements(app: &App, terrain: Entity) -> Vec<(String, Vec3, f32, f32)> {
+    let data_path = app
+        .world()
+        .get::<jackdaw_scene_types::Terrain>(terrain)
+        .expect("a terrain")
+        .data_path
+        .clone();
+    let store = app.world().resource::<jackdaw::terrain::TerrainDataStore>();
+    let data = store.get(&data_path).expect("a document");
+    data.placements()
+        .map(|(coord, _, placement)| {
+            (
+                data.scatter
+                    .asset(placement.asset)
+                    .map(|entry| entry.asset.clone())
+                    .unwrap_or_default(),
+                data.placement_position(coord, placement),
+                placement.yaw,
+                placement.scale,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn an_imported_layout_lands_exactly_where_it_says_as_one_undo_entry() {
+    let (mut app, terrain) = scene_with_a_terrain();
+    let project = tempfile::tempdir().expect("tempdir");
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot::new(
+            project.path().to_path_buf(),
+            jackdaw::project::ProjectConfig::default(),
+        ));
+    std::fs::write(
+        project.path().join("layout.json"),
+        r#"[
+            {"asset": "kit/Tree.gltf", "x": 1.5, "y": 0.5, "z": 2.5, "yaw": 90.0, "scale": 1.2,
+             "materials": {"Leaves": "materials/pine.bsn"}},
+            {"asset": "kit/Bush.gltf", "x": 3.0, "y": 0.25, "z": 1.0},
+            {"asset": "kit/Tree.gltf", "x": 2.0, "y": 0.5, "z": 3.0, "yaw": -45.0, "scale": 0.8}
+        ]"#,
+    )
+    .expect("the layout is written");
+
+    let before = app.world().resource::<CommandHistory>().undo_stack.len();
+    run(
+        &mut app,
+        "terrain.scatter.import path=layout.json group=woods",
+    );
+
+    let placed = stored_placements(&app, terrain);
+    assert_eq!(placed.len(), 3);
+    let tree = placed
+        .iter()
+        .find(|(asset, at, ..)| {
+            asset == "kit/Tree.gltf" && at.abs_diff_eq(Vec3::new(1.5, 0.5, 2.5), 1e-3)
+        })
+        .expect("the first tree stands where the file put it");
+    assert!((tree.2 - 90.0_f32.to_radians()).abs() < 1e-4);
+    assert!((tree.3 - 1.2).abs() < 1e-4);
+    assert_eq!(stored_groups(&app, terrain), vec![("woods".to_string(), 3)]);
+    assert_eq!(
+        stored_materials(&app, terrain)
+            .get("Leaves")
+            .map(String::as_str),
+        Some("materials/pine.bsn"),
+        "the file's overrides reach the palette entry"
+    );
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        before + 1
+    );
+
+    run(&mut app, "history.undo");
+    assert!(stored_placements(&app, terrain).is_empty());
+}
+
+#[test]
+fn a_layout_file_outside_the_project_is_refused() {
+    let (mut app, _terrain) = scene_with_a_terrain();
+    let project = tempfile::tempdir().expect("tempdir");
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot::new(
+            project.path().to_path_buf(),
+            jackdaw::project::ProjectConfig::default(),
+        ));
+    let result = run_op_clause(
+        app.world_mut(),
+        "terrain.scatter.import path=../layout.json",
+    )
+    .expect("the clause dispatches");
+    assert_eq!(result, OperatorResult::Cancelled);
+}

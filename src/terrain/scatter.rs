@@ -61,6 +61,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<TerrainScatterAssetToggleOp>()
         .register_operator::<TerrainScatterAssetMaterialOp>()
         .register_operator::<TerrainScatterPaletteMaterialOp>()
+        .register_operator::<TerrainScatterImportOp>()
         .register_operator::<TerrainScatterValueToggleOp>()
         .register_operator::<TerrainScatterToggleYawOp>()
         .register_operator::<TerrainScatterToggleAlignOp>();
@@ -525,6 +526,164 @@ pub(crate) fn terrain_scatter_palette_material(
     }
     match scatter_data::set_palette_material(world, &data_path, asset, name, material) {
         Ok(_) => OperatorResult::Finished,
+        Err(reason) => {
+            warn_caller(world, format!("{id}: {}", reason.message()));
+            OperatorResult::Cancelled
+        }
+    }
+}
+
+/// One placement a layout file names, in world space.
+#[derive(serde::Deserialize)]
+struct ImportedPlacement {
+    asset: String,
+    x: f32,
+    y: f32,
+    z: f32,
+    /// Turn about world up, in degrees.
+    #[serde(default)]
+    yaw: f32,
+    #[serde(default = "unit_scale")]
+    scale: f32,
+    /// Material overrides for this placement's model, by glTF material name.
+    #[serde(default)]
+    materials: BTreeMap<String, String>,
+}
+
+fn unit_scale() -> f32 {
+    1.0
+}
+
+/// Store placements listed in a JSON file into one of a terrain's scatter groups, exactly where the file puts them.
+#[operator(
+    id = "terrain.scatter.import",
+    label = "Import Scatter Placements",
+    description = "Store placements listed in a JSON file into a stored scatter group, exactly \
+                   where the file puts them, as one undo entry.",
+    allows_undo = false,
+    params(
+        path(
+            String,
+            doc = "JSON file of [{asset, x, y, z, yaw, scale, materials}], world space, yaw in \
+                   degrees; relative to the project or absolute inside it."
+        ),
+        terrain(String, doc = "Terrain name. Defaults to the selected terrain."),
+        group(
+            String,
+            doc = "Group to store into, replacing what it held. Defaults to `imported`."
+        ),
+    )
+)]
+pub(crate) fn terrain_scatter_import(
+    params: In<OperatorParameters>,
+    world: &mut World,
+) -> OperatorResult {
+    let id = "terrain.scatter.import";
+    let Some(asked) = params
+        .as_str("path")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    else {
+        warn_caller(world, format!("{id}: name the layout file with path="));
+        return OperatorResult::Cancelled;
+    };
+    let Some(root) = world
+        .get_resource::<crate::project::ProjectRoot>()
+        .map(|project| project.root.clone())
+    else {
+        warn_caller(world, format!("{id}: no project is open"));
+        return OperatorResult::Cancelled;
+    };
+    let asked = std::path::Path::new(asked);
+    let relative = asked.strip_prefix(&root).unwrap_or(asked);
+    let file = match crate::project::path_within(&root, relative) {
+        Ok(file) => file,
+        Err(refusal) => {
+            warn_caller(world, format!("{id}: {refusal}"));
+            return OperatorResult::Cancelled;
+        }
+    };
+    let listed: Vec<ImportedPlacement> = match std::fs::read_to_string(&file)
+        .map_err(|err| err.to_string())
+        .and_then(|text| serde_json::from_str(&text).map_err(|err| err.to_string()))
+    {
+        Ok(listed) => listed,
+        Err(err) => {
+            warn_caller(
+                world,
+                format!("{id}: cannot read {}: {err}", file.display()),
+            );
+            return OperatorResult::Cancelled;
+        }
+    };
+    let Some(terrain) = resolve_terrain(world, params.as_str("terrain")) else {
+        warn_caller(world, format!("{id}: no terrain resolved"));
+        return OperatorResult::Cancelled;
+    };
+    let Some(data_path) = world
+        .get::<jackdaw_scene_types::Terrain>(terrain)
+        .map(|terrain| terrain.data_path.clone())
+    else {
+        return OperatorResult::Cancelled;
+    };
+    let key = params
+        .as_str("group")
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .unwrap_or("imported")
+        .to_string();
+
+    let terrain_inverse = composed_global(world, terrain).inverse();
+    let (_, terrain_yaw, _) = GlobalTransform::from(composed_global(world, terrain))
+        .compute_transform()
+        .rotation
+        .to_euler(EulerRot::YXZ);
+    let mut assets: Vec<String> = Vec::new();
+    let mut materials: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    let mut pending = Vec::with_capacity(listed.len());
+    for placement in listed {
+        let asset = match assets.iter().position(|known| *known == placement.asset) {
+            Some(at) => at,
+            None => {
+                assets.push(placement.asset.clone());
+                assets.len() - 1
+            }
+        };
+        if !placement.materials.is_empty() {
+            materials
+                .entry(placement.asset.clone())
+                .or_insert(placement.materials);
+        }
+        pending.push(scatter_data::PendingPlacement {
+            position: terrain_inverse.transform_point3(Vec3::new(
+                placement.x,
+                placement.y,
+                placement.z,
+            )),
+            yaw: placement.yaw.to_radians() - terrain_yaw,
+            scale: placement.scale,
+            asset,
+        });
+    }
+    let asked_for = pending.len();
+    match scatter_data::stamp(world, &data_path, &key, &assets, &materials, pending) {
+        Ok(stored) => {
+            let skipped = asked_for - stored;
+            let note = if skipped > 0 {
+                format!(" ({skipped} fell outside the terrain)")
+            } else {
+                String::new()
+            };
+            set_report(
+                world,
+                TerrainScatterReport {
+                    placed: stored,
+                    message: format!("imported {stored} into '{key}'{note}"),
+                    ..default()
+                },
+            );
+            OperatorResult::Finished
+        }
         Err(reason) => {
             warn_caller(world, format!("{id}: {}", reason.message()));
             OperatorResult::Cancelled
