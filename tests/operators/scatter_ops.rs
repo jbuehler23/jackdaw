@@ -618,6 +618,64 @@ fn a_layout_file_outside_the_project_is_refused() {
     assert_eq!(result, OperatorResult::Cancelled);
 }
 
+/// The Scatter panel's Import Placements presses the operator with no
+/// arguments, reading the file and group the panel holds; that has to be the
+/// same import, and the same undo entry, as a script naming both.
+#[test]
+fn the_panels_import_placements_is_the_same_undo_entry_as_the_arguments() {
+    let layout = r#"[
+        {"asset": "kit/Tree.gltf", "x": 1.5, "y": 0.5, "z": 2.5, "yaw": 90.0, "scale": 1.2},
+        {"asset": "kit/Bush.gltf", "x": 3.0, "y": 0.25, "z": 1.0}
+    ]"#;
+    let import = |panel: bool| {
+        let (mut app, terrain) = scene_with_a_terrain();
+        let project = tempfile::tempdir().expect("tempdir");
+        app.world_mut()
+            .insert_resource(jackdaw::project::ProjectRoot::new(
+                project.path().to_path_buf(),
+                jackdaw::project::ProjectConfig::default(),
+            ));
+        std::fs::create_dir_all(project.path().join("layouts")).expect("a layouts folder");
+        std::fs::write(project.path().join("layouts/woods.json"), layout)
+            .expect("the layout is written");
+        let before = app.world().resource::<CommandHistory>().undo_stack.len();
+        if panel {
+            run(
+                &mut app,
+                "terrain.scatter.import.pick path=layouts/woods.json",
+            );
+            app.world_mut()
+                .resource_mut::<jackdaw::terrain::scatter::TerrainScatterState>()
+                .import_group = "woods".to_string();
+            run(&mut app, "terrain.scatter.import");
+        } else {
+            run(
+                &mut app,
+                "terrain.scatter.import path=layouts/woods.json group=woods",
+            );
+        }
+        let history = app.world().resource::<CommandHistory>();
+        assert_eq!(history.undo_stack.len(), before + 1, "one undo entry");
+        let entry = history
+            .undo_stack
+            .last()
+            .map(|entry| (entry.description().to_string(), entry.heap_bytes()))
+            .expect("an entry");
+        (
+            entry,
+            stored_placements(&app, terrain),
+            stored_groups(&app, terrain),
+        )
+    };
+
+    let (panel_entry, panel_placed, panel_groups) = import(true);
+    let (script_entry, script_placed, script_groups) = import(false);
+    assert_eq!(panel_entry, script_entry);
+    assert_eq!(panel_placed, script_placed);
+    assert_eq!(panel_groups, vec![("woods".to_string(), 2)]);
+    assert_eq!(panel_groups, script_groups);
+}
+
 /// A prefab drawing `kit/Tree.gltf` with its leaves in `leaves`.
 fn tree_prefab(leaves: &str) -> String {
     format!(

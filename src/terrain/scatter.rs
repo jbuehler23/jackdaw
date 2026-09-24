@@ -43,7 +43,10 @@ pub(super) fn plugin(app: &mut App) {
         .init_resource::<TerrainScatterReport>()
         .add_systems(
             Update,
-            sync_scatter_fields.run_if(in_state(crate::AppState::Editor)),
+            (
+                sync_scatter_fields.run_if(in_state(crate::AppState::Editor)),
+                poll_layout_pick.run_if(resource_exists::<LayoutPick>),
+            ),
         )
         .add_observer(on_scatter_asset_draft_commit)
         .add_observer(on_scatter_value_change)
@@ -63,6 +66,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<TerrainScatterPaletteMaterialOp>()
         .register_operator::<TerrainScatterPaletteAssetOp>()
         .register_operator::<TerrainScatterImportOp>()
+        .register_operator::<TerrainScatterImportPickOp>()
         .register_operator::<TerrainScatterValueToggleOp>()
         .register_operator::<TerrainScatterToggleYawOp>()
         .register_operator::<TerrainScatterToggleAlignOp>();
@@ -116,6 +120,11 @@ pub struct TerrainScatterState {
     pub assets: Vec<ScatterAsset>,
     /// Path typed into the panel's asset field, waiting on `+`.
     pub asset_draft: String,
+    /// Layout file the panel's Import Placements reads, relative to the
+    /// project. Empty until one is picked.
+    pub import_path: String,
+    /// Group the panel's Import Placements stores into.
+    pub import_group: String,
 }
 
 impl Default for TerrainScatterState {
@@ -133,6 +142,8 @@ impl Default for TerrainScatterState {
             align_to_normal: false,
             assets: Vec::new(),
             asset_draft: String::new(),
+            import_path: String::new(),
+            import_group: "imported".to_string(),
         }
     }
 }
@@ -188,6 +199,7 @@ pub struct TerrainScatterReport {
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScatterField {
     AssetDraft,
+    ImportGroup,
     Seed,
     Density,
     Spacing,
@@ -629,12 +641,14 @@ fn unit_scale() -> f32 {
         path(
             String,
             doc = "JSON file of [{asset, x, y, z, yaw, scale, materials}], world space, yaw in \
-                   degrees; relative to the project or absolute inside it."
+                   degrees; relative to the project or absolute inside it. Defaults to the \
+                   one the Scatter panel has picked."
         ),
         terrain(String, doc = "Terrain name. Defaults to the selected terrain."),
         group(
             String,
-            doc = "Group to store into, replacing what it held. Defaults to `imported`."
+            doc = "Group to store into, replacing what it held. Defaults to the Scatter \
+                   panel's, which starts as `imported`."
         ),
     )
 )]
@@ -643,14 +657,24 @@ pub(crate) fn terrain_scatter_import(
     world: &mut World,
 ) -> OperatorResult {
     let id = "terrain.scatter.import";
-    let Some(asked) = params
+    let state = world.resource::<TerrainScatterState>();
+    let asked = params
         .as_str("path")
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-    else {
-        warn_caller(world, format!("{id}: name the layout file with path="));
+        .unwrap_or(&state.import_path)
+        .trim()
+        .to_string();
+    let key = params
+        .as_str("group")
+        .unwrap_or(&state.import_group)
+        .trim()
+        .to_string();
+    if asked.is_empty() {
+        warn_caller(
+            world,
+            format!("{id}: pick a layout file, or name one with path="),
+        );
         return OperatorResult::Cancelled;
-    };
+    }
     let Some(root) = world
         .get_resource::<crate::project::ProjectRoot>()
         .map(|project| project.root.clone())
@@ -658,7 +682,7 @@ pub(crate) fn terrain_scatter_import(
         warn_caller(world, format!("{id}: no project is open"));
         return OperatorResult::Cancelled;
     };
-    let asked = std::path::Path::new(asked);
+    let asked = std::path::Path::new(&asked);
     let relative = asked.strip_prefix(&root).unwrap_or(asked);
     let file = match crate::project::path_within(&root, relative) {
         Ok(file) => file,
@@ -690,12 +714,11 @@ pub(crate) fn terrain_scatter_import(
     else {
         return OperatorResult::Cancelled;
     };
-    let key = params
-        .as_str("group")
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .unwrap_or("imported")
-        .to_string();
+    let key = if key.is_empty() {
+        "imported".to_string()
+    } else {
+        key
+    };
 
     let terrain_inverse = composed_global(world, terrain).inverse();
     let (_, terrain_yaw, _) = GlobalTransform::from(composed_global(world, terrain))
@@ -753,6 +776,77 @@ pub(crate) fn terrain_scatter_import(
             OperatorResult::Cancelled
         }
     }
+}
+
+/// The running layout file dialog, so a second press does not open a second one.
+#[derive(Resource)]
+struct LayoutPick(bevy::tasks::Task<Option<rfd::FileHandle>>);
+
+/// Choose the layout file the Scatter panel's Import Placements reads.
+#[operator(
+    id = "terrain.scatter.import.pick",
+    label = "Pick Placements File",
+    description = "Choose the JSON layout file the Scatter panel imports placements from.",
+    allows_undo = false,
+    params(path(
+        String,
+        doc = "The layout file, relative to the project, taken without opening the file dialog."
+    ))
+)]
+pub(crate) fn terrain_scatter_import_pick(
+    params: In<OperatorParameters>,
+    mut state: ResMut<TerrainScatterState>,
+    mut commands: Commands,
+) -> OperatorResult {
+    if let Some(path) = params.as_str("path") {
+        state.import_path = path.trim().to_string();
+        return OperatorResult::Finished;
+    }
+    commands.queue(|world: &mut World| {
+        if world.contains_resource::<LayoutPick>() {
+            return;
+        }
+        let dialog =
+            crate::native_dialog::file_dialog(world, crate::native_dialog::DialogPurpose::Layout)
+                .set_title("Select placements file")
+                .add_filter("Placement layouts", &["json"]);
+        let task =
+            bevy::tasks::AsyncComputeTaskPool::get().spawn(async move { dialog.pick_file().await });
+        world.insert_resource(LayoutPick(task));
+    });
+    OperatorResult::Finished
+}
+
+fn poll_layout_pick(world: &mut World) {
+    let Some(mut pick) = world.get_resource_mut::<LayoutPick>() else {
+        return;
+    };
+    let Some(result) = bevy::tasks::futures_lite::future::block_on(
+        bevy::tasks::futures_lite::future::poll_once(&mut pick.0),
+    ) else {
+        return;
+    };
+    world.remove_resource::<LayoutPick>();
+    let Some(chosen) = result else {
+        return;
+    };
+    let file = chosen.path().to_path_buf();
+    crate::native_dialog::remember_pick(world, crate::native_dialog::DialogPurpose::Layout, &file);
+    let Some(root) = world
+        .get_resource::<crate::project::ProjectRoot>()
+        .map(|project| project.root.clone())
+    else {
+        return;
+    };
+    let Ok(relative) = file.strip_prefix(&root) else {
+        crate::status_bar::notify_error(
+            world,
+            "that placements file is outside this project".to_string(),
+        );
+        return;
+    };
+    world.resource_mut::<TerrainScatterState>().import_path =
+        path_slash::PathExt::to_slash_lossy(relative).into_owned();
 }
 
 /// Include or exclude one palette entry from the next run.
@@ -1978,6 +2072,8 @@ pub(super) struct ScatterSignature {
     message: String,
     groups: Vec<ScatterGroupRow>,
     adopt_candidate: Option<(Entity, String)>,
+    import_path: String,
+    import_group: String,
 }
 
 /// One row of the Groups section: a scatter group living under the
@@ -2098,6 +2194,8 @@ pub(super) fn signature(refs: &ScatterTabRefs, view: &ScatterGroupsView) -> Scat
         message: refs.report.message.clone(),
         groups: view.groups.clone(),
         adopt_candidate: view.adopt_candidate.clone(),
+        import_path: state.import_path.clone(),
+        import_group: state.import_group.clone(),
     }
 }
 
@@ -2319,6 +2417,66 @@ pub(super) fn spawn_scatter_ui(
     }
 
     spawn_groups_section(commands, parent, view);
+    spawn_import_section(commands, parent, state);
+}
+
+/// Import Placements: a layout file, the group it lands in, and the button
+/// that stores it.
+fn spawn_import_section(commands: &mut Commands, parent: Entity, state: &TerrainScatterState) {
+    spawn_hint(commands, parent, "Import placements from a layout file");
+    let row = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: px(tokens::SPACING_SM),
+                row_gap: px(tokens::SPACING_XS),
+                width: Val::Percent(100.0),
+                ..Default::default()
+            },
+            ChildOf(parent),
+        ))
+        .id();
+    spawn_hint(
+        commands,
+        row,
+        if state.import_path.is_empty() {
+            "No file picked"
+        } else {
+            &state.import_path
+        },
+    );
+    commands.spawn((
+        button::button(ButtonProps::new("Pick...").call_operator(TerrainScatterImportPickOp::ID)),
+        ChildOf(row),
+    ));
+    let group = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(tokens::SPACING_SM),
+                width: Val::Percent(100.0),
+                ..Default::default()
+            },
+            ChildOf(parent),
+        ))
+        .id();
+    spawn_hint(commands, group, "Group");
+    commands.spawn((
+        text_edit::text_edit(
+            TextEditProps::default().with_default_value(state.import_group.clone()),
+        ),
+        ScatterField::ImportGroup,
+        ChildOf(group),
+    ));
+    commands.spawn((
+        button::button(
+            ButtonProps::new("Import Placements").call_operator(TerrainScatterImportOp::ID),
+        ),
+        ChildOf(parent),
+    ));
 }
 
 /// The stamps already living under this terrain, with the actions
@@ -2511,11 +2669,16 @@ fn on_scatter_asset_draft_commit(
             return;
         };
         let parent = child_of.parent();
-        if let Ok(&field) = bindings.get(parent)
-            && field == ScatterField::AssetDraft
-        {
-            state.asset_draft = event.text.trim().to_string();
-            return;
+        match bindings.get(parent) {
+            Ok(ScatterField::AssetDraft) => {
+                state.asset_draft = event.text.trim().to_string();
+                return;
+            }
+            Ok(ScatterField::ImportGroup) => {
+                state.import_group = event.text.trim().to_string();
+                return;
+            }
+            _ => {}
         }
         current = parent;
     }
@@ -2535,7 +2698,7 @@ fn on_scatter_value_change(
 
 fn apply_scatter_numeric_field(state: &mut TerrainScatterState, field: ScatterField, value: f32) {
     match field {
-        ScatterField::AssetDraft => {}
+        ScatterField::AssetDraft | ScatterField::ImportGroup => {}
         ScatterField::Seed => state.seed = value.max(0.0) as u64,
         ScatterField::Density => state.density = value.max(0.0),
         ScatterField::Spacing => state.min_spacing = value.max(0.0),
@@ -2562,7 +2725,7 @@ fn sync_scatter_fields(
     }
     for (entity, field) in &fields {
         let value = match field {
-            ScatterField::AssetDraft => continue,
+            ScatterField::AssetDraft | ScatterField::ImportGroup => continue,
             ScatterField::Seed => state.seed as f32,
             ScatterField::Density => state.density,
             ScatterField::Spacing => state.min_spacing,
