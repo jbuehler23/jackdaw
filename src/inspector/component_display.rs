@@ -76,7 +76,7 @@ pub(crate) fn sync_inspector_to_selection(
     type_registry: Res<AppTypeRegistry>,
     selection: Res<Selection>,
     entity_query: Query<(&Archetype, EntityRef), Without<EditorEntity>>,
-    inspectors: Query<(Entity, Option<&InspectorTarget>, Option<&Children>), With<Inspector>>,
+    inspectors: Query<(Entity, Option<&InspectorTarget>), With<Inspector>>,
     names: Query<&Name>,
     icon_font: Res<IconFont>,
     editor_font: Res<EditorFont>,
@@ -85,7 +85,6 @@ pub(crate) fn sync_inspector_to_selection(
     prefab_cache: Res<PrefabAstCache>,
     lineage: InspectorLineage,
     collapse_state: Res<super::InspectorCollapseState>,
-    displays: Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
 ) {
     let desired = selection.primary();
     if desired.is_none() && selection.is_changed() {
@@ -98,14 +97,14 @@ pub(crate) fn sync_inspector_to_selection(
         if desired.is_none() {
             return;
         }
-        if !inspectors.iter().any(|(_, target, _)| target.is_none()) {
+        if !inspectors.iter().any(|(_, target)| target.is_none()) {
             return;
         }
     }
 
     let sel_count = selection.entities.len();
 
-    for (inspector, target, children) in &inspectors {
+    for (inspector, target) in &inspectors {
         let current = target.map(|t| t.0);
         if current == desired && !selection.is_changed() {
             continue;
@@ -123,7 +122,7 @@ pub(crate) fn sync_inspector_to_selection(
         commands
             .entity(inspector)
             .remove::<(InspectorTarget, Monitor, NotifyAdded<InspectorDirty>)>();
-        despawn_inspector_display_children(&mut commands, children, &displays);
+        despawn_inspector_display_children(&mut commands, inspector);
 
         let Some(primary) = desired else {
             continue;
@@ -847,17 +846,20 @@ pub(crate) fn build_inspector_displays(
 }
 
 /// Despawn inspector card and picker children as one queued world step so
-/// lazy combobox/button setup cannot interleave and orphan UI.
-fn despawn_inspector_display_children(
-    commands: &mut Commands,
-    children: Option<&Children>,
-    displays: &Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
-) {
-    let Some(children) = children else {
-        return;
-    };
-    let old_children: Vec<Entity> = displays.iter_many(children.collection()).collect();
+/// lazy combobox/button setup cannot interleave and orphan UI. The children are
+/// read when the step runs, so a card another queued step put up since goes too.
+fn despawn_inspector_display_children(commands: &mut Commands, inspector: Entity) {
     commands.queue(move |world: &mut World| {
+        let Some(children) = world.get::<Children>(inspector) else {
+            return;
+        };
+        let old_children: Vec<Entity> = children
+            .iter()
+            .filter(|&child| {
+                world.get::<ComponentDisplay>(child).is_some()
+                    || world.get::<ComponentPicker>(child).is_some()
+            })
+            .collect();
         for child in old_children {
             if let Ok(ec) = world.get_entity_mut(child) {
                 ec.despawn();
@@ -873,13 +875,12 @@ pub(crate) fn on_inspector_dirty(
     mut commands: Commands,
     components: &Components,
     type_registry: Res<AppTypeRegistry>,
-    inspectors: Query<(Entity, &InspectorTarget, Option<&Children>), With<Inspector>>,
+    inspectors: Query<(Entity, &InspectorTarget), With<Inspector>>,
     entity_query: Query<(&Archetype, EntityRef), Without<EditorEntity>>,
     selection: Res<Selection>,
     names: Query<&Name>,
     icon_font: Res<IconFont>,
     editor_font: Res<EditorFont>,
-    displays: Query<Entity, Or<(With<ComponentDisplay>, With<ComponentPicker>)>>,
     materials: Res<Assets<StandardMaterial>>,
     asts: SceneAsts,
     prefab_cache: Res<PrefabAstCache>,
@@ -891,10 +892,10 @@ pub(crate) fn on_inspector_dirty(
     // signal originates from `InspectorDirty` on the source entity
     // and applies to every inspector watching that source.
     let mut clear_dirty_for: Option<Entity> = None;
-    for (inspector_entity, target, children) in &inspectors {
+    for (inspector_entity, target) in &inspectors {
         let mut source_entity = target.0;
 
-        despawn_inspector_display_children(&mut commands, children, &displays);
+        despawn_inspector_display_children(&mut commands, inspector_entity);
 
         if lineage.files.contains(source_entity) {
             let source = source_entity;

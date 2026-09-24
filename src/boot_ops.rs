@@ -275,6 +275,7 @@ pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] = &[
     ("entity.snap_to_ground", "entity"),
     ("prefab.spawn_instance", "parent"),
     ("selection.select", "entity"),
+    ("viewport.capture", "camera"),
     ("widget.add", "parent"),
 ];
 

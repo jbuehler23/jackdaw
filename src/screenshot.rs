@@ -38,6 +38,7 @@ pub(crate) fn plugin(app: &mut App) {
         Update,
         drive_shot_probe.run_if(in_state(crate::AppState::Editor)),
     );
+    crate::camera_capture::plugin(app);
 }
 
 /// Captures that have reached the disk, by the path they were written to.
