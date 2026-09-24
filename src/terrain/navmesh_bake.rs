@@ -298,6 +298,7 @@ pub(crate) fn terrain_navmesh_bake(
     geometry: SceneGeometry,
     store: Res<TerrainDataStore>,
     scatter_assets: Option<Res<jackdaw_terrain::render::ScatterAssets>>,
+    scatter_prefabs: Option<Res<jackdaw_terrain::render::ScatterPrefabs>>,
     scene_path: Res<SceneFilePath>,
     running: Option<Res<RunningBake>>,
     mut state: ResMut<TerrainNavmeshState>,
@@ -345,7 +346,11 @@ pub(crate) fn terrain_navmesh_bake(
     // Built whether or not the renderer is there to measure the assets: a
     // bake that quietly left the trees out because a resource was missing
     // would report success over a navmesh with no forest in it.
-    let bounds_of = |asset: &str| scatter_assets.as_deref().and_then(|a| a.bounds(asset));
+    let bounds_of = |entry: &jackdaw_terrain::ScatterPaletteEntry| {
+        scatter_assets.as_deref().and_then(|assets| {
+            jackdaw_terrain::render::palette_entry_bounds(assets, scatter_prefabs.as_deref(), entry)
+        })
+    };
     let (obstacles, skipped, unresolved) = scatter_obstacles(
         document,
         bounds_of,
@@ -793,7 +798,7 @@ const UNRESOLVED_OBSTACLE: Vec3 = Vec3::new(0.5, 2.0, 0.5);
 /// many were skipped as too small, and how many were guessed at.
 fn scatter_obstacles(
     document: &jackdaw_terrain::RegionTerrainData,
-    bounds_of: impl Fn(&str) -> Option<Aabb>,
+    bounds_of: impl Fn(&jackdaw_terrain::ScatterPaletteEntry) -> Option<Aabb>,
     placement: Affine3A,
     min_size: f32,
 ) -> (Vec<TriMesh>, usize, usize) {
@@ -807,7 +812,7 @@ fn scatter_obstacles(
         if !entry.obstacle {
             continue;
         }
-        let bounds = match bounds_of(&entry.asset) {
+        let bounds = match bounds_of(entry) {
             Some(bounds) => bounds,
             None => {
                 unresolved += 1;
@@ -2034,7 +2039,7 @@ mod tests {
                 .expect("the region allocates");
         }
 
-        let bounds_of = |asset: &str| match asset {
+        let bounds_of = |entry: &jackdaw_terrain::ScatterPaletteEntry| match entry.asset.as_str() {
             "models/tree.gltf" => Some(Aabb::from_min_max(
                 Vec3::new(-0.5, 0.0, -0.5),
                 Vec3::new(0.5, 6.0, 0.5),

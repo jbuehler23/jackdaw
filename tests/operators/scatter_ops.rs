@@ -617,3 +617,122 @@ fn a_layout_file_outside_the_project_is_refused() {
     .expect("the clause dispatches");
     assert_eq!(result, OperatorResult::Cancelled);
 }
+
+/// A prefab drawing `kit/Tree.gltf` with its leaves in `leaves`.
+fn tree_prefab(leaves: &str) -> String {
+    format!(
+        r#"jackdaw::prefab::components::Prefab
+jackdaw::prefab::components::PrefabEntityId(0)
+#Tree
+bevy_transform::components::transform::Transform
+bevy_ecs::hierarchy::Children [
+    #Tree
+    bevy_transform::components::transform::Transform
+    jackdaw_scene_types::types::GltfSource {{ path: "kit/Tree.gltf", scene_index: 0 }}
+    jackdaw_scene_types::types::MaterialOverrides {{ materials: map[("Leaves", "{leaves}")] }}
+    jackdaw::prefab::components::PrefabEntityId(1)
+]
+"#
+    )
+}
+
+/// What the terrain's document draws, read from the store by its path since a
+/// prefab reaching the cache respawns the scene around it.
+fn stored_assets(app: &App) -> Vec<String> {
+    let data_path = "scene.terrain-0.jdterrain";
+    let store = app.world().resource::<jackdaw::terrain::TerrainDataStore>();
+    let data = store.get(data_path).expect("a document");
+    data.scatter
+        .assets
+        .iter()
+        .map(|entry| entry.asset.clone())
+        .collect()
+}
+
+/// Hand the stored scatter to the renderer and let it ask for what it draws,
+/// as the editor's own sync does once a project is open.
+fn draw_stored_scatter(app: &mut App) {
+    app.world_mut()
+        .run_system_cached(jackdaw::terrain::scatter_data::sync_terrain_scatter)
+        .expect("the sync runs");
+    for _ in 0..4 {
+        app.update();
+    }
+}
+
+fn prefab_leaves(app: &App) -> Option<String> {
+    app.world()
+        .resource::<jackdaw_terrain::render::ScatterPrefabs>()
+        .get("prefabs/tree.bsn")
+        .and_then(|prefab| prefab.materials.get("Leaves").cloned())
+}
+
+#[test]
+fn stored_placements_pointed_at_a_prefab_wear_what_it_wears_and_follow_its_changes() {
+    let (mut app, _) = scene_with_a_terrain();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let prefab = dir.path().join("assets/prefabs/tree.bsn");
+    std::fs::create_dir_all(prefab.parent().expect("parent")).expect("a prefabs folder");
+    std::fs::write(&prefab, tree_prefab("materials/pine.bsn")).expect("write the prefab");
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot::new(
+            dir.path().to_path_buf(),
+            jackdaw::project::ProjectConfig::default(),
+        ));
+    let (group, _) = hand_authored_group(&mut app);
+    app.world_mut().resource_mut::<Selection>().entities = vec![group];
+    run(&mut app, "terrain.scatter.adopt");
+
+    let before = app.world().resource::<CommandHistory>().undo_stack.len();
+    run(
+        &mut app,
+        "terrain.scatter.palette.asset asset=kit/Tree.gltf to=prefabs/tree.bsn",
+    );
+    assert_eq!(stored_assets(&app), vec!["prefabs/tree.bsn"]);
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        before + 1,
+        "pointing an entry elsewhere is one undo entry"
+    );
+    draw_stored_scatter(&mut app);
+    assert_eq!(
+        prefab_leaves(&app).as_deref(),
+        Some("materials/pine.bsn"),
+        "the entry wears the prefab's leaves"
+    );
+
+    std::fs::write(&prefab, tree_prefab("materials/larch.bsn")).expect("rewrite the prefab");
+    let assets_root = jackdaw::prefab::save_load::source_root_of(app.world(), &prefab);
+    let ast = jackdaw::prefab::save_load::read_prefab_ast(&prefab, &assets_root)
+        .expect("the new prefab parses");
+    app.world_mut()
+        .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+        .insert(&prefab, ast);
+    for _ in 0..4 {
+        app.update();
+    }
+    assert_eq!(
+        prefab_leaves(&app).as_deref(),
+        Some("materials/larch.bsn"),
+        "a prefab dressed anew redresses every placement drawing it"
+    );
+
+    run(&mut app, "history.undo");
+    assert_eq!(stored_assets(&app), vec!["kit/Tree.gltf"]);
+}
+
+#[test]
+fn an_entry_is_not_pointed_at_a_file_that_draws_nothing() {
+    let (mut app, _) = scene_with_a_terrain();
+    let (group, _) = hand_authored_group(&mut app);
+    app.world_mut().resource_mut::<Selection>().entities = vec![group];
+    run(&mut app, "terrain.scatter.adopt");
+
+    let result = run_op_clause(
+        app.world_mut(),
+        "terrain.scatter.palette.asset asset=kit/Tree.gltf to=kit/Tree.png",
+    )
+    .expect("the clause dispatches");
+    assert_eq!(result, OperatorResult::Cancelled, "a texture draws nothing");
+    assert_eq!(stored_assets(&app), vec!["kit/Tree.gltf"]);
+}

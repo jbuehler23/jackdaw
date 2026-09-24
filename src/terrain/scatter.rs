@@ -61,6 +61,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<TerrainScatterAssetToggleOp>()
         .register_operator::<TerrainScatterAssetMaterialOp>()
         .register_operator::<TerrainScatterPaletteMaterialOp>()
+        .register_operator::<TerrainScatterPaletteAssetOp>()
         .register_operator::<TerrainScatterImportOp>()
         .register_operator::<TerrainScatterValueToggleOp>()
         .register_operator::<TerrainScatterToggleYawOp>()
@@ -525,6 +526,69 @@ pub(crate) fn terrain_scatter_palette_material(
         return OperatorResult::Cancelled;
     }
     match scatter_data::set_palette_material(world, &data_path, asset, name, material) {
+        Ok(_) => OperatorResult::Finished,
+        Err(reason) => {
+            warn_caller(world, format!("{id}: {}", reason.message()));
+            OperatorResult::Cancelled
+        }
+    }
+}
+
+/// Point a model a terrain's stored scatter draws at another model or a prefab.
+#[operator(
+    id = "terrain.scatter.palette.asset",
+    label = "Set Stored Scatter Asset",
+    description = "Make every stored placement of one model on a terrain draw another model or a \
+                   prefab instead, as one undo entry.",
+    allows_undo = false,
+    params(
+        terrain(String, doc = "Terrain name. Defaults to the selected terrain."),
+        asset(
+            String,
+            doc = "Model or prefab path as the terrain's stored scatter names it."
+        ),
+        to(
+            String,
+            doc = "Model or prefab path to draw instead, relative to the assets directory."
+        ),
+        keep_materials(
+            bool,
+            doc = "Keep the entry's own material overrides, laid over what the new asset wears. \
+                   Defaults to false, so a prefab dresses its placements itself."
+        ),
+    )
+)]
+pub(crate) fn terrain_scatter_palette_asset(
+    params: In<OperatorParameters>,
+    world: &mut World,
+) -> OperatorResult {
+    let id = "terrain.scatter.palette.asset";
+    let Some(terrain) = resolve_terrain(world, params.as_str("terrain")) else {
+        warn_caller(world, format!("{id}: no terrain resolved"));
+        return OperatorResult::Cancelled;
+    };
+    let Some(data_path) = world
+        .get::<jackdaw_scene_types::Terrain>(terrain)
+        .map(|terrain| terrain.data_path.clone())
+    else {
+        return OperatorResult::Cancelled;
+    };
+    let named = |key: &str| {
+        params
+            .as_str(key)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let (Some(asset), Some(to)) = (named("asset"), named("to")) else {
+        warn_caller(
+            world,
+            format!("{id}: name the asset and what it draws instead"),
+        );
+        return OperatorResult::Cancelled;
+    };
+    let keep = params.as_bool("keep_materials").unwrap_or(false);
+    match scatter_data::set_palette_asset(world, &data_path, &asset, &to, keep) {
         Ok(_) => OperatorResult::Finished,
         Err(reason) => {
             warn_caller(world, format!("{id}: {}", reason.message()));
@@ -1184,6 +1248,24 @@ fn run_scatter(world: &mut World, params: &OperatorParameters) {
     // A group that is still entities is replaced as entities: a run that
     // wrote both forms would draw everything twice.
     if find_group(world, terrain_entity, &key).is_some() {
+        if assets
+            .iter()
+            .any(|asset| jackdaw_terrain::is_prefab_asset(asset))
+        {
+            let message = format!(
+                "scatter: '{key}' is a group of entities, which a prefab cannot be placed into; \
+                 adopt it onto the terrain first"
+            );
+            jackdaw_api_internal::operator::warn_caller(world, message.clone());
+            set_report(
+                world,
+                TerrainScatterReport {
+                    message,
+                    ..default()
+                },
+            );
+            return;
+        }
         stamp(
             world,
             StampRequest {
@@ -1438,6 +1520,22 @@ fn promote_placement(
         );
         return;
     };
+    if jackdaw_terrain::is_prefab_asset(&promoted.asset) {
+        let message = format!(
+            "promote: placement {index} of '{key}' draws the prefab {}, which promote does not \
+             turn into an instance; place the prefab by hand where it stands",
+            promoted.asset
+        );
+        jackdaw_api_internal::operator::warn_caller(world, message.clone());
+        set_report(
+            world,
+            TerrainScatterReport {
+                message,
+                ..default()
+            },
+        );
+        return;
+    }
 
     let name = format!(
         "{}-{index}",
