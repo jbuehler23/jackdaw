@@ -29,7 +29,9 @@ use super::detail_ops::{
     TerrainDetailAddOp, TerrainDetailRemoveOp, TerrainDetailSelectOp, TerrainDetailSetOp,
 };
 use super::import::{
-    MAX_IMPORT_HEIGHT, MIN_IMPORT_HEIGHT, TerrainImportOp, TerrainImportPickOp, TerrainImportState,
+    ImportImageKind, MAX_IMPORT_HEIGHT, MIN_IMPORT_HEIGHT, TerrainImportImageAddOp,
+    TerrainImportImageRemoveOp, TerrainImportImageTargetOp, TerrainImportOp, TerrainImportPickOp,
+    TerrainImportState, import_targets,
 };
 use super::ops::{TerrainErodeOp, TerrainGenerateOp};
 use super::shape_ops::{MAX_CELL_SIZE, MIN_CELL_SIZE, clamp_cell_size, commit_shape};
@@ -70,6 +72,7 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_observer(on_shape_scrub_change)
         .add_observer(on_import_scrub_change)
+        .add_observer(on_import_mask_commit)
         .add_observer(on_gen_value_change)
         .add_observer(on_material_uv_change)
         .add_observer(on_material_detile_change)
@@ -241,10 +244,52 @@ struct PanelState {
     /// beside it is absent, arriving from a scrub drag that a rebuild would
     /// despawn under the pointer; `sync_shape_fields` keeps that one current.
     resolution: Option<u32>,
-    /// The heightmap the Generation tab has picked, so choosing one brings
-    /// up the range it is read at. A discrete pick, like the grid above;
-    /// the range itself is absent for the reason the extent is.
-    heightmap: Option<String>,
+    /// The heightmap the Generation tab has picked and the images queued
+    /// beside it, so choosing one brings up the range it is read at. Discrete
+    /// picks, like the grid above; the range itself is absent for the reason
+    /// the extent is.
+    import: Option<ImportSignature>,
+}
+
+/// What the Import section rebuilds on: the picked files, each row's target,
+/// and what each kind of row may be aimed at.
+#[derive(Default, PartialEq, Clone)]
+struct ImportSignature {
+    heightmap: String,
+    rows: Vec<(ImportImageKind, String, String)>,
+    targets: Vec<(ImportImageKind, Vec<(String, String)>)>,
+}
+
+fn import_signature(
+    state: &TerrainImportState,
+    terrain: Option<&jackdaw_scene_types::Terrain>,
+    store: &TerrainDataStore,
+) -> ImportSignature {
+    ImportSignature {
+        heightmap: state.heightmap.clone(),
+        rows: ImportImageKind::ALL
+            .into_iter()
+            .flat_map(|kind| {
+                state
+                    .images(kind)
+                    .iter()
+                    .map(move |image| (kind, image.target.clone(), image.path.clone()))
+            })
+            .collect(),
+        targets: terrain
+            .map(|terrain| {
+                ImportImageKind::ALL
+                    .into_iter()
+                    .map(|kind| {
+                        (
+                            kind,
+                            import_targets(kind, terrain, store.materials(&terrain.data_path)),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
 }
 
 /// What the Textures tab rebuilds on: the material list, the quarantine and
@@ -369,7 +414,13 @@ fn update_terrain_panel_content(
         resolution: terrain_entity
             .and_then(|e| terrain_data.get(e).ok())
             .map(|terrain| store.grid_shape(terrain).resolution),
-        heightmap: (*tab == TerrainPanelTab::Generation).then(|| import_state.heightmap.clone()),
+        import: (*tab == TerrainPanelTab::Generation).then(|| {
+            import_signature(
+                &import_state,
+                terrain_entity.and_then(|e| terrain_data.get(e).ok()),
+                &store,
+            )
+        }),
     };
     if *local_state == state || body_query.is_empty() {
         return;
@@ -455,7 +506,8 @@ fn update_terrain_panel_content(
                 );
             }
             TerrainPanelTab::Generation => {
-                spawn_generation_section(&mut commands, body, &gen_state, &import_state);
+                let import = local_state.import.clone().unwrap_or_default();
+                spawn_generation_section(&mut commands, body, &gen_state, &import_state, &import);
             }
         }
     }
@@ -1746,6 +1798,7 @@ fn spawn_generation_section(
     parent: Entity,
     gen_state: &TerrainGenerateState,
     import_state: &TerrainImportState,
+    import: &ImportSignature,
 ) {
     let noise_options: Vec<String> = jackdaw_terrain::NoiseType::ALL
         .iter()
@@ -1869,7 +1922,7 @@ fn spawn_generation_section(
         ChildOf(parent),
     ));
 
-    spawn_import_action(commands, parent, import_state);
+    spawn_import_action(commands, parent, import_state, import);
 
     commands.spawn((
         Text::new("Hydraulic Erosion"),
@@ -1963,11 +2016,16 @@ fn spawn_generation_section(
 }
 
 /// The Import action, and, once a heightmap is picked, the world heights
-/// its black and white ends stand at.
+/// its black and white ends stand at and the images read beside it.
 ///
 /// The range is a pair of chips rather than the sliders above it: two world
 /// heights with no track worth drawing, read as one question.
-fn spawn_import_action(commands: &mut Commands, parent: Entity, import_state: &TerrainImportState) {
+fn spawn_import_action(
+    commands: &mut Commands,
+    parent: Entity,
+    import_state: &TerrainImportState,
+    import: &ImportSignature,
+) {
     commands.spawn((
         button::button(ButtonProps::new("Import...").call_operator(TerrainImportPickOp::ID)),
         ChildOf(parent),
@@ -2012,6 +2070,16 @@ fn spawn_import_action(commands: &mut Commands, parent: Entity, import_state: &T
         ImportField::Max,
     );
 
+    for kind in ImportImageKind::ALL {
+        let targets = import
+            .targets
+            .iter()
+            .find(|(of, _)| *of == kind)
+            .map(|(_, targets)| targets.as_slice())
+            .unwrap_or_default();
+        spawn_import_images(commands, parent, kind, import_state.images(kind), targets);
+    }
+
     commands.spawn((
         button::button(
             ButtonProps::new("Import")
@@ -2020,6 +2088,178 @@ fn spawn_import_action(commands: &mut Commands, parent: Entity, import_state: &T
         ),
         ChildOf(parent),
     ));
+}
+
+/// One kind of image the import reads beside the heightmap: a heading, a
+/// row per queued image, and the button that queues another.
+fn spawn_import_images(
+    commands: &mut Commands,
+    parent: Entity,
+    kind: ImportImageKind,
+    images: &[super::import::ImportImage],
+    targets: &[(String, String)],
+) {
+    let (heading, add, tooltip) = match kind {
+        ImportImageKind::Weight => (
+            "Material Weights",
+            "Add Weight Image",
+            "A greyscale image of where one material slot draws.",
+        ),
+        ImportImageKind::Channel => (
+            "Scatter Masks",
+            "Add Mask Image",
+            "A greyscale image painting a scatter mask wherever it is not black. \
+             A mask this terrain does not declare is added.",
+        ),
+        ImportImageKind::Detail => (
+            "Detail Cover",
+            "Add Detail Image",
+            "A greyscale image of a detail layer's whole mask: black is bare ground \
+             and white is full cover.",
+        ),
+    };
+    commands.spawn((
+        Text::new(heading),
+        TextFont {
+            font_size: tokens::TEXT_SIZE_SM,
+            ..default()
+        },
+        TextColor(tokens::TEXT_BODY_COLOR.into()),
+        ChildOf(parent),
+    ));
+    for (row, image) in images.iter().enumerate() {
+        spawn_import_image_row(commands, parent, kind, row, image, targets);
+    }
+    commands.spawn((
+        button::button(ButtonProps::new(add).with_left_icon(Icon::Plus)),
+        ButtonOperatorCall::new(TerrainImportImageAddOp::ID).with_param("kind", kind.key()),
+        Tooltip::title(add).with_description(tooltip),
+        ChildOf(parent),
+    ));
+}
+
+/// One queued image: what it paints, the picked file, and its Pick and
+/// Remove buttons.
+///
+/// Slots and layers are chosen from what the terrain has; a mask is typed,
+/// since the import adds one the terrain does not declare yet.
+fn spawn_import_image_row(
+    commands: &mut Commands,
+    parent: Entity,
+    kind: ImportImageKind,
+    row: usize,
+    image: &super::import::ImportImage,
+    targets: &[(String, String)],
+) {
+    let line = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: px(tokens::SPACING_SM),
+                row_gap: px(tokens::SPACING_XS),
+                width: percent(100),
+                ..default()
+            },
+            ChildOf(parent),
+        ))
+        .id();
+    if kind == ImportImageKind::Channel {
+        commands.spawn((
+            text_edit(TextEditProps::default().with_default_value(image.target.clone())),
+            ImportMaskField(row),
+            ChildOf(line),
+        ));
+    } else {
+        let mut options: Vec<combobox::ComboBoxOptionData> = targets
+            .iter()
+            .map(|(target, caption)| {
+                combobox::ComboBoxOptionData::new(caption.clone()).with_value(target.clone())
+            })
+            .collect();
+        let selected = match targets
+            .iter()
+            .position(|(target, _)| *target == image.target)
+        {
+            Some(at) => at,
+            None => {
+                options.push(
+                    combobox::ComboBoxOptionData::new(format!("{} (missing)", image.target))
+                        .with_value(image.target.clone()),
+                );
+                options.len() - 1
+            }
+        };
+        commands
+            .spawn((
+                combobox::combobox_with_selected(options, selected),
+                ChildOf(line),
+            ))
+            .observe(
+                move |event: On<ComboBoxChangeEvent>, mut commands: Commands| {
+                    if let Some(target) = event.value.clone() {
+                        aim_import_image(&mut commands, kind, row, target);
+                    }
+                },
+            );
+    }
+    let file = if image.path.is_empty() {
+        "No image picked"
+    } else {
+        image.path.as_str()
+    };
+    spawn_hint(commands, line, file);
+    commands.spawn((
+        button::button(ButtonProps::new("Pick...")),
+        ButtonOperatorCall::new(TerrainImportPickOp::ID)
+            .with_param("kind", kind.key())
+            .with_param("row", row as i64),
+        ChildOf(line),
+    ));
+    commands.spawn((
+        button::button(ButtonProps::new("Remove").with_variant(ButtonVariant::Ghost)),
+        ButtonOperatorCall::new(TerrainImportImageRemoveOp::ID)
+            .with_param("kind", kind.key())
+            .with_param("row", row as i64),
+        ChildOf(line),
+    ));
+}
+
+/// Which scatter mask row of the import a name field aims.
+#[derive(Component, Clone, Copy)]
+struct ImportMaskField(usize);
+
+fn aim_import_image(commands: &mut Commands, kind: ImportImageKind, row: usize, target: String) {
+    commands
+        .operator(TerrainImportImageTargetOp::ID)
+        .param("kind", kind.key())
+        .param("row", row as i64)
+        .param("target", target)
+        .call();
+}
+
+/// The commit may name the focused input inside the field, so the row is
+/// read off the nearest ancestor carrying one.
+fn on_import_mask_commit(
+    event: On<TextEditCommitEvent>,
+    fields: Query<&ImportMaskField>,
+    parents: Query<&ChildOf>,
+    mut commands: Commands,
+) {
+    let Some(field) = std::iter::once(event.entity)
+        .chain(parents.iter_ancestors(event.entity))
+        .take(5)
+        .find_map(|entity| fields.get(entity).ok())
+    else {
+        return;
+    };
+    aim_import_image(
+        &mut commands,
+        ImportImageKind::Channel,
+        field.0,
+        event.text.clone(),
+    );
 }
 
 /// Write path for the height-range chips. The widget does not self-update,

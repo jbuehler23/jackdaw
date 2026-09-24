@@ -42,11 +42,14 @@ pub(super) fn plugin(app: &mut App) {
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TerrainImportPickOp>()
+        .register_operator::<TerrainImportImageAddOp>()
+        .register_operator::<TerrainImportImageRemoveOp>()
+        .register_operator::<TerrainImportImageTargetOp>()
         .register_operator::<TerrainImportOp>();
 }
 
-/// The heightmap the Terrain panel has picked and the world heights its
-/// black and white ends stand for.
+/// The heightmap the Terrain panel has picked, the world heights its black
+/// and white ends stand for, and the images read beside it.
 ///
 /// Persistent like [`super::panel::TerrainGenerateState`] beside it, so the
 /// range survives a panel rebuild and a second import of the same file
@@ -60,6 +63,12 @@ pub struct TerrainImportState {
     pub min: f32,
     /// World height its white end stands at.
     pub max: f32,
+    /// Weight images by material slot, the panel's `weights` argument.
+    pub weights: Vec<ImportImage>,
+    /// Images by scatter mask, the panel's `channels` argument.
+    pub channels: Vec<ImportImage>,
+    /// Images by detail layer, the panel's `details` argument.
+    pub details: Vec<ImportImage>,
 }
 
 impl Default for TerrainImportState {
@@ -68,7 +77,65 @@ impl Default for TerrainImportState {
             heightmap: String::new(),
             min: 0.0,
             max: 100.0,
+            weights: Vec::new(),
+            channels: Vec::new(),
+            details: Vec::new(),
         }
+    }
+}
+
+impl TerrainImportState {
+    /// The rows of one kind of image.
+    pub fn images(&self, kind: ImportImageKind) -> &[ImportImage] {
+        match kind {
+            ImportImageKind::Weight => &self.weights,
+            ImportImageKind::Channel => &self.channels,
+            ImportImageKind::Detail => &self.details,
+        }
+    }
+
+    fn images_mut(&mut self, kind: ImportImageKind) -> &mut Vec<ImportImage> {
+        match kind {
+            ImportImageKind::Weight => &mut self.weights,
+            ImportImageKind::Channel => &mut self.channels,
+            ImportImageKind::Detail => &mut self.details,
+        }
+    }
+}
+
+/// One image the Terrain panel imports beside the heightmap.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ImportImage {
+    /// What it paints, spelled as the operator's argument names it: a slot
+    /// index, a mask name, or a detail layer's index or name.
+    pub target: String,
+    /// The picked image, as a path under the project's assets. Empty until
+    /// something is picked.
+    pub path: String,
+}
+
+/// Which of the import's image lists a row belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImportImageKind {
+    Weight,
+    Channel,
+    Detail,
+}
+
+impl ImportImageKind {
+    pub const ALL: [Self; 3] = [Self::Weight, Self::Channel, Self::Detail];
+
+    /// The name an operator argument spells this kind with.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Weight => "weight",
+            Self::Channel => "channel",
+            Self::Detail => "detail",
+        }
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.key() == text)
     }
 }
 
@@ -77,48 +144,81 @@ impl Default for TerrainImportState {
 pub const MIN_IMPORT_HEIGHT: f32 = -500.0;
 pub const MAX_IMPORT_HEIGHT: f32 = 500.0;
 
+/// Where a picked image goes: the heightmap, or one row of one image list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PickInto {
+    Heightmap,
+    Row(ImportImageKind, usize),
+}
+
 /// The running file dialog, so a second press does not open a second one.
 #[derive(Resource)]
-struct HeightmapPick(Task<Option<rfd::FileHandle>>);
+struct HeightmapPick {
+    task: Task<Option<rfd::FileHandle>>,
+    into: PickInto,
+}
 
-/// Choose the heightmap the next import reads.
+/// Choose the heightmap the next import reads, or the image one of its rows
+/// reads.
 ///
 /// Opens the project's file dialog. A file outside the project's assets is
 /// refused: the import reads it through the asset path a scene can name.
 #[operator(
     id = "terrain.import.pick",
-    label = "Pick Heightmap",
-    description = "Choose the image the next terrain import reads its heights from.",
+    label = "Pick Import Image",
+    description = "Choose the image the next terrain import reads its heights, or one row's \
+                   paint, from.",
     is_available = has_selected_terrain,
-    allows_undo = false
+    allows_undo = false,
+    params(
+        kind(
+            String,
+            doc = "\"weight\", \"channel\" or \"detail\" to pick a row's image. Left out, \
+                   picks the heightmap."
+        ),
+        row(i64, doc = "Which row of that kind the image goes to."),
+    )
 )]
 pub(crate) fn terrain_import_pick(
-    _: In<OperatorParameters>,
+    params: In<OperatorParameters>,
+    state: Res<TerrainImportState>,
     mut commands: Commands,
 ) -> OperatorResult {
-    commands.queue(open_heightmap_picker);
+    let into = match params.as_str("kind") {
+        None => PickInto::Heightmap,
+        Some(kind) => match row_of(&params, &state, kind) {
+            Ok((kind, row)) => PickInto::Row(kind, row),
+            Err(message) => return refuse(&mut commands, message),
+        },
+    };
+    commands.queue(move |world: &mut World| open_heightmap_picker(world, into));
     OperatorResult::Finished
 }
 
-fn open_heightmap_picker(world: &mut World) {
+fn open_heightmap_picker(world: &mut World, into: PickInto) {
     if world.contains_resource::<HeightmapPick>() {
         return;
     }
+    let title = match into {
+        PickInto::Heightmap => "Select heightmap",
+        PickInto::Row(..) => "Select greyscale image",
+    };
     let dialog =
         crate::native_dialog::file_dialog(world, crate::native_dialog::DialogPurpose::Image)
-            .set_title("Select heightmap")
+            .set_title(title)
             .add_filter("Greyscale images", &["png"]);
     let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_file().await });
-    world.insert_resource(HeightmapPick(task));
+    world.insert_resource(HeightmapPick { task, into });
 }
 
 fn poll_heightmap_pick(world: &mut World) {
     let Some(mut pick) = world.get_resource_mut::<HeightmapPick>() else {
         return;
     };
-    let Some(result) = future::block_on(future::poll_once(&mut pick.0)) else {
+    let Some(result) = future::block_on(future::poll_once(&mut pick.task)) else {
         return;
     };
+    let into = pick.into;
     world.remove_resource::<HeightmapPick>();
     let Some(chosen) = result else {
         return;
@@ -128,11 +228,218 @@ fn poll_heightmap_pick(world: &mut World) {
     let Some(relative) = crate::asset_index::indexed_path(world, &file) else {
         crate::status_bar::notify_error(
             world,
-            "that heightmap is outside this project's assets".to_string(),
+            "that image is outside this project's assets".to_string(),
         );
         return;
     };
-    world.resource_mut::<TerrainImportState>().heightmap = relative.to_slash_lossy().into_owned();
+    let path = relative.to_slash_lossy().into_owned();
+    let mut state = world.resource_mut::<TerrainImportState>();
+    match into {
+        PickInto::Heightmap => state.heightmap = path,
+        PickInto::Row(kind, row) => {
+            if let Some(image) = state.images_mut(kind).get_mut(row) {
+                image.path = path;
+            }
+        }
+    }
+}
+
+/// Toast a refusal and cancel.
+fn refuse(commands: &mut Commands, message: String) -> OperatorResult {
+    warn!("{message}");
+    commands.queue(move |world: &mut World| {
+        crate::terrain::toast_terrain_notice(world, &message);
+    });
+    OperatorResult::Cancelled
+}
+
+/// The kind and row an image operator names, refusing a row that is not
+/// there.
+fn row_of(
+    params: &OperatorParameters,
+    state: &TerrainImportState,
+    kind: &str,
+) -> Result<(ImportImageKind, usize), String> {
+    let kind = ImportImageKind::parse(kind).ok_or_else(|| {
+        format!("\"{kind}\" is not an image kind; name weight, channel or detail")
+    })?;
+    let row = params
+        .as_int("row")
+        .and_then(|row| usize::try_from(row).ok())
+        .filter(|row| *row < state.images(kind).len())
+        .ok_or_else(|| format!("there is no such {} image row", kind.key()))?;
+    Ok((kind, row))
+}
+
+/// Add a row to one of the import's image lists, aimed at the first slot,
+/// mask or layer no other row of that list already reads into.
+#[operator(
+    id = "terrain.import.image.add",
+    label = "Add Import Image",
+    description = "Add a greyscale image to the next terrain import: a material slot's \
+                   weights, a scatter mask, or a detail layer's cover.",
+    is_available = has_selected_terrain,
+    allows_undo = false,
+    params(kind(String, doc = "\"weight\", \"channel\" or \"detail\".")),
+)]
+pub(crate) fn terrain_import_image_add(
+    params: In<OperatorParameters>,
+    selection: Res<Selection>,
+    terrains: Query<&jackdaw_scene_types::Terrain>,
+    store: Res<TerrainDataStore>,
+    mut state: ResMut<TerrainImportState>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let terrain = terrains.get(selection.primary()?)?;
+    let asked = params.as_str("kind").unwrap_or_default();
+    let Some(kind) = ImportImageKind::parse(asked) else {
+        return refuse(
+            &mut commands,
+            format!("\"{asked}\" is not an image kind; name weight, channel or detail"),
+        );
+    };
+    let offered = import_targets(kind, terrain, store.materials(&terrain.data_path));
+    let taken: Vec<&str> = state
+        .images(kind)
+        .iter()
+        .map(|image| image.target.as_str())
+        .collect();
+    let target = offered
+        .iter()
+        .map(|(target, _)| target.clone())
+        .find(|target| !taken.contains(&target.as_str()))
+        .or_else(|| offered.first().map(|(target, _)| target.clone()));
+    let target = match (kind, target) {
+        (_, Some(target)) => target,
+        (ImportImageKind::Channel, None) => "mask".to_string(),
+        (ImportImageKind::Weight, None) => {
+            return refuse(
+                &mut commands,
+                "add a material to this terrain before importing its weights".to_string(),
+            );
+        }
+        (ImportImageKind::Detail, None) => {
+            return refuse(
+                &mut commands,
+                "add a detail layer to this terrain before importing its cover".to_string(),
+            );
+        }
+    };
+    state.images_mut(kind).push(ImportImage {
+        target,
+        path: String::new(),
+    });
+    OperatorResult::Finished
+}
+
+/// Take a row out of one of the import's image lists.
+#[operator(
+    id = "terrain.import.image.remove",
+    label = "Remove Import Image",
+    description = "Take a greyscale image back out of the next terrain import.",
+    allows_undo = false,
+    params(
+        kind(String, doc = "\"weight\", \"channel\" or \"detail\"."),
+        row(i64, doc = "Which row of that kind to remove."),
+    )
+)]
+pub(crate) fn terrain_import_image_remove(
+    params: In<OperatorParameters>,
+    mut state: ResMut<TerrainImportState>,
+    mut commands: Commands,
+) -> OperatorResult {
+    match row_of(&params, &state, params.as_str("kind").unwrap_or_default()) {
+        Ok((kind, row)) => {
+            state.images_mut(kind).remove(row);
+            OperatorResult::Finished
+        }
+        Err(message) => refuse(&mut commands, message),
+    }
+}
+
+/// Aim a row of the import's image lists at another slot, mask or layer.
+#[operator(
+    id = "terrain.import.image.target",
+    label = "Set Import Image Target",
+    description = "Choose the material slot, scatter mask or detail layer one of the next \
+                   terrain import's images paints.",
+    allows_undo = false,
+    params(
+        kind(String, doc = "\"weight\", \"channel\" or \"detail\"."),
+        row(i64, doc = "Which row of that kind to aim."),
+        target(
+            String,
+            doc = "A slot index, a mask name, or a detail layer's index or name."
+        ),
+    )
+)]
+pub(crate) fn terrain_import_image_target(
+    params: In<OperatorParameters>,
+    mut state: ResMut<TerrainImportState>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let (kind, row) = match row_of(&params, &state, params.as_str("kind").unwrap_or_default()) {
+        Ok(found) => found,
+        Err(message) => return refuse(&mut commands, message),
+    };
+    let target = params.as_str("target").map(str::trim).unwrap_or_default();
+    if target.is_empty() || target.contains([',', ':']) {
+        return refuse(
+            &mut commands,
+            format!("\"{target}\" cannot name a {} image's target", kind.key()),
+        );
+    }
+    state.images_mut(kind)[row].target = target.to_string();
+    OperatorResult::Finished
+}
+
+/// What a row of one kind can paint on this terrain, as the target the
+/// operator reads and the caption the panel shows for it.
+pub fn import_targets(
+    kind: ImportImageKind,
+    terrain: &jackdaw_scene_types::Terrain,
+    slots: &[jackdaw_terrain::sidecar::TerrainMaterialSlot],
+) -> Vec<(String, String)> {
+    match kind {
+        ImportImageKind::Weight => slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| !slot.is_tombstone())
+            .map(|(index, slot)| {
+                (
+                    index.to_string(),
+                    format!("{index}: {}", slot_caption(slot)),
+                )
+            })
+            .collect(),
+        ImportImageKind::Channel => {
+            let grown: Vec<&str> = terrain
+                .detail
+                .iter()
+                .map(|layer| layer.density_channel.as_str())
+                .collect();
+            terrain
+                .channels
+                .iter()
+                .filter(|channel| !grown.contains(&channel.name.as_str()))
+                .map(|channel| (channel.name.clone(), channel.name.clone()))
+                .collect()
+        }
+        ImportImageKind::Detail => terrain
+            .detail
+            .iter()
+            .map(|layer| (layer.name.clone(), layer.name.clone()))
+            .collect(),
+    }
+}
+
+/// A slot's material as its file stem, the way the Textures tab names it.
+fn slot_caption(slot: &jackdaw_terrain::sidecar::TerrainMaterialSlot) -> String {
+    Path::new(&slot.material)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(&slot.material)
+        .to_string()
 }
 
 /// Replace the selected terrain's heights from a greyscale image, and
@@ -441,30 +748,27 @@ fn read_images(
     let heightmap = decode_grey(&project_file(assets.as_deref(), named)?, named)?;
 
     let slots = store.materials(&terrain.data_path);
-    let named_weights = match params.as_str("weights") {
-        Some(text) => parse_weights(text, slots)?,
-        None => Vec::new(),
-    };
+    let named_weights = resolve_weights(
+        pairs_or_rows(params, state, ImportImageKind::Weight)?,
+        slots,
+    )?;
     let mut weights = Vec::with_capacity(named_weights.len());
     for (slot, named) in &named_weights {
         let file = project_file(assets.as_deref(), named)?;
         weights.push((*slot, decode_grey(&file, named)?));
     }
 
-    let named_channels = match params.as_str("channels") {
-        Some(text) => parse_pairs(text, "channels", "mask:path", "rocks:masks/rocks.png")?,
-        None => Vec::new(),
-    };
+    let named_channels = pairs_or_rows(params, state, ImportImageKind::Channel)?;
     let mut channels = Vec::with_capacity(named_channels.len());
     for (mask, named) in &named_channels {
         let file = project_file(assets.as_deref(), named)?;
         channels.push((mask.clone(), decode_grey(&file, named)?));
     }
 
-    let named_masks = match params.as_str("details") {
-        Some(text) => parse_details(text, terrain)?,
-        None => Vec::new(),
-    };
+    let named_masks = resolve_details(
+        pairs_or_rows(params, state, ImportImageKind::Detail)?,
+        terrain,
+    )?;
     let mut masks = Vec::with_capacity(named_masks.len());
     for (index, named) in &named_masks {
         let file = project_file(assets.as_deref(), named)?;
@@ -524,14 +828,49 @@ fn parse_pairs(
     Ok(pairs)
 }
 
-/// `"0:a.png,1:b.png"` as the slot and path pairs it names, refusing a slot
-/// with no material behind it.
-fn parse_weights(
-    text: &str,
+/// The pairs one kind of image argument names, or the panel's rows of that
+/// kind when the argument is left out.
+///
+/// A row still waiting on its image is refused rather than skipped, so the
+/// import never quietly leaves out paint the panel shows as queued.
+fn pairs_or_rows(
+    params: &OperatorParameters,
+    state: &TerrainImportState,
+    kind: ImportImageKind,
+) -> Result<Vec<(String, String)>, String> {
+    let (key, shape, example) = match kind {
+        ImportImageKind::Weight => ("weights", "slot:path", "0:ground/grass.png"),
+        ImportImageKind::Channel => ("channels", "mask:path", "rocks:masks/rocks.png"),
+        ImportImageKind::Detail => ("details", "layer:path", "0:ground/grass.png"),
+    };
+    if let Some(text) = params.as_str(key) {
+        return parse_pairs(text, key, shape, example);
+    }
+    state
+        .images(kind)
+        .iter()
+        .map(|image| {
+            if image.path.is_empty() {
+                Err(format!(
+                    "choose the image the {} row for {} reads",
+                    kind.key(),
+                    image.target
+                ))
+            } else {
+                Ok((image.target.clone(), image.path.clone()))
+            }
+        })
+        .collect()
+}
+
+/// Slot and path pairs as the slots they name, refusing a slot with no
+/// material behind it.
+fn resolve_weights(
+    named: Vec<(String, String)>,
     slots: &[jackdaw_terrain::sidecar::TerrainMaterialSlot],
 ) -> Result<Vec<(u8, String)>, String> {
     let mut pairs = Vec::new();
-    for (slot, path) in parse_pairs(text, "weights", "slot:path", "0:ground/grass.png")? {
+    for (slot, path) in named {
         let index: u8 = slot
             .parse()
             .map_err(|_| format!("\"{slot}\" is not a texture slot"))?;
@@ -544,18 +883,18 @@ fn parse_weights(
     Ok(pairs)
 }
 
-/// `"0:a.png,grass:b.png"` as the channel each named detail layer grows
-/// from and the image painting its mask, refusing a layer this terrain does
-/// not have.
+/// Layer and path pairs as the channel each named detail layer grows from
+/// and the image painting its mask, refusing a layer this terrain does not
+/// have.
 ///
 /// A layer is named by index or by the name it carries, an index first so
 /// that one still reaches a layer whose name is a number.
-fn parse_details(
-    text: &str,
+fn resolve_details(
+    named: Vec<(String, String)>,
     terrain: &jackdaw_scene_types::Terrain,
 ) -> Result<Vec<(usize, String)>, String> {
     let mut pairs = Vec::new();
-    for (named, path) in parse_pairs(text, "details", "layer:path", "0:ground/grass.png")? {
+    for (named, path) in named {
         let layer = named
             .parse::<usize>()
             .ok()
@@ -1276,6 +1615,121 @@ mod tests {
                 "one press put every part of the import back",
             );
         }
+        /// The Terrain panel queues its images as rows and presses Import
+        /// with no arguments; that has to be the same import, and the same
+        /// undo entry, as a script naming every image.
+        #[test]
+        fn the_panels_rows_import_as_the_same_undo_entry_as_the_arguments() {
+            let (dir, assets) = project();
+            write_grey(&assets, "ramp8.png", RESOLUTION, &ramp(), false);
+            write_grey(&assets, "grass.png", RESOLUTION, &right_half(), false);
+            write_grey(&assets, "shape.png", RESOLUTION, &right_half(), false);
+            let prepare = |world: &mut World| {
+                world
+                    .resource_mut::<TerrainDataStore>()
+                    .set_materials(
+                        PATH,
+                        vec![
+                            TerrainMaterialSlot::new("grass"),
+                            TerrainMaterialSlot::new("gravel"),
+                        ],
+                    )
+                    .expect("plain names are accepted");
+                declare_detail(world, "meadow");
+            };
+
+            let mut scripted = world(dir.path());
+            prepare(&mut scripted);
+            assert_eq!(
+                import(
+                    &mut scripted,
+                    &[
+                        ("heightmap", text("ramp8.png")),
+                        ("height_range", text("0,60")),
+                        ("weights", text("1:grass.png")),
+                        ("channels", text("rocks:shape.png")),
+                        ("details", text("meadow:shape.png")),
+                    ],
+                ),
+                OperatorResult::Finished
+            );
+
+            let mut panel = world(dir.path());
+            prepare(&mut panel);
+            {
+                let mut state = panel.resource_mut::<TerrainImportState>();
+                state.heightmap = "ramp8.png".to_string();
+                state.min = 0.0;
+                state.max = 60.0;
+            }
+            for (kind, target, path) in [
+                ("weight", "1", "grass.png"),
+                ("channel", "rocks", "shape.png"),
+                ("detail", "meadow", "shape.png"),
+            ] {
+                let added = panel
+                    .run_system_cached_with(
+                        terrain_import_image_add,
+                        params(&[("kind", text(kind))]),
+                    )
+                    .expect("system runs");
+                assert_eq!(added, OperatorResult::Finished, "a {kind} row is added");
+                let aimed = panel
+                    .run_system_cached_with(
+                        terrain_import_image_target,
+                        params(&[
+                            ("kind", text(kind)),
+                            ("row", PropertyValue::Int(0)),
+                            ("target", text(target)),
+                        ]),
+                    )
+                    .expect("system runs");
+                assert_eq!(aimed, OperatorResult::Finished, "the {kind} row is aimed");
+                let kind = ImportImageKind::parse(kind).expect("a kind");
+                panel.resource_mut::<TerrainImportState>().images_mut(kind)[0].path =
+                    path.to_string();
+            }
+            assert_eq!(import(&mut panel, &[]), OperatorResult::Finished);
+
+            let entry = |world: &World| {
+                let history = world.resource::<CommandHistory>();
+                assert_eq!(
+                    history.undo_stack.len(),
+                    1,
+                    "one entry for the whole import"
+                );
+                let entry = &history.undo_stack[0];
+                (entry.description().to_string(), entry.heap_bytes())
+            };
+            assert_eq!(entry(&panel), entry(&scripted));
+            assert_eq!(heights(&panel), heights(&scripted));
+            assert_eq!(control(&panel), control(&scripted));
+            assert_eq!(channel(&panel, "rocks"), channel(&scripted, "rocks"));
+            assert_eq!(channel(&panel, "meadow"), channel(&scripted, "meadow"));
+            assert_ne!(channel(&panel, "meadow"), vec![0; 16], "the rows painted");
+        }
+
+        /// Pressing Import with a row still waiting on its image refuses
+        /// rather than importing without the paint the panel shows queued.
+        #[test]
+        fn a_panel_row_with_no_image_is_refused_and_the_terrain_is_unchanged() {
+            let (dir, assets) = project();
+            write_grey(&assets, "ramp8.png", RESOLUTION, &ramp(), false);
+            let mut world = world(dir.path());
+            world.resource_mut::<TerrainImportState>().heightmap = "ramp8.png".to_string();
+            let added = world
+                .run_system_cached_with(
+                    terrain_import_image_add,
+                    params(&[("kind", text("channel"))]),
+                )
+                .expect("system runs");
+            assert_eq!(added, OperatorResult::Finished);
+            let before = heights(&world);
+
+            assert_eq!(import(&mut world, &[]), OperatorResult::Cancelled);
+            assert_eq!(heights(&world), before);
+            assert!(world.resource::<CommandHistory>().undo_stack.is_empty());
+        }
     }
 
     fn slots() -> Vec<TerrainMaterialSlot> {
@@ -1283,6 +1737,23 @@ mod tests {
             TerrainMaterialSlot::new("grass"),
             TerrainMaterialSlot::tombstone(),
         ]
+    }
+
+    fn parse_weights(
+        text: &str,
+        slots: &[TerrainMaterialSlot],
+    ) -> Result<Vec<(u8, String)>, String> {
+        resolve_weights(parse_pairs(text, "weights", "slot:path", "0:a.png")?, slots)
+    }
+
+    fn parse_details(
+        text: &str,
+        terrain: &jackdaw_scene_types::Terrain,
+    ) -> Result<Vec<(usize, String)>, String> {
+        resolve_details(
+            parse_pairs(text, "details", "layer:path", "0:a.png")?,
+            terrain,
+        )
     }
 
     #[test]
