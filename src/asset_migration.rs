@@ -83,7 +83,7 @@ pub fn project_migrate_asset_references(
 }
 
 /// The edit that would be written over by a migration, if there is one.
-fn open_edit(world: &World) -> Option<&'static str> {
+pub(crate) fn open_edit(world: &World) -> Option<&'static str> {
     if crate::scene_io::is_scene_dirty(world) {
         return Some("the open scene has edits that are not saved");
     }
@@ -218,7 +218,7 @@ fn write_catalog_out(world: &mut World, assets: &Path, report: &mut MigrationRep
 
 /// Record a file the migration itself wrote, so neither the asset index nor
 /// the open document reads it back as a change made behind the editor's back.
-fn note_written(world: &mut World, file: &Path) {
+pub(crate) fn note_written(world: &mut World, file: &Path) {
     crate::asset_index::note_written(world, file);
     if let Ok(bytes) = std::fs::read(file) {
         crate::scenes::external_watch::note_known_content(world, file, &bytes);

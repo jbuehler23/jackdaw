@@ -39,6 +39,11 @@ fn call(
 
 /// An editor with a project of its own and one scene open.
 fn editor_on_a_scene() -> (App, tempfile::TempDir, PathBuf) {
+    editor_on("#valley\nbevy_transform::components::transform::Transform\n")
+}
+
+/// An editor with a project of its own and a scene of `document` open.
+fn editor_on(document: &str) -> (App, tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     std::fs::copy(
         fixture_dir().join("jackdaw.toml"),
@@ -60,11 +65,7 @@ fn editor_on_a_scene() -> (App, tempfile::TempDir, PathBuf) {
     settle(&mut app);
 
     let scene = tmp.path().join("assets/valley.bsn");
-    std::fs::write(
-        &scene,
-        "#valley\nbevy_transform::components::transform::Transform\n",
-    )
-    .expect("the scene is written");
+    std::fs::write(&scene, document).expect("the scene is written");
     jackdaw::scenes::operators::scene_open_system(app.world_mut(), &scene);
     settle(&mut app);
     (app, tmp, scene)
@@ -178,6 +179,7 @@ fn a_scene_saved_with_an_environment_reloads_with_it() {
             ("fog.end", 800.0.into()),
             ("ambient.mode", "Trilight".into()),
             ("ambient.sky", "0.62,0.64,0.66".into()),
+            ("ambient.reflections", "Sky".into()),
             ("post.enabled", true.into()),
             ("post.bloom_intensity", 0.2.into()),
         ],
@@ -202,4 +204,63 @@ fn a_scene_saved_with_an_environment_reloads_with_it() {
     settle(&mut app);
     let reopened = named(&mut app, "valley").expect("the scene spawned its root again");
     assert_eq!(environment(&app, reopened), authored);
+}
+
+fn camera_block(text: &str) -> String {
+    let start = text
+        .find("#lookout")
+        .unwrap_or_else(|| panic!("the camera is in the document, got\n{text}"));
+    let rest = &text[start..];
+    let end = rest.find("\n]").unwrap_or(rest.len());
+    rest[..end].to_string()
+}
+
+#[test]
+fn a_camera_the_environment_dresses_saves_as_it_was_authored() {
+    let (mut app, _tmp, scene) = editor_on(
+        "#valley\n\
+         bevy_transform::components::transform::Transform\n\
+         bevy_ecs::hierarchy::Children [\n    \
+         #lookout\n    \
+         bevy_transform::components::transform::Transform\n    \
+         bevy_camera::components::Camera3d\n\
+         ]\n",
+    );
+    an_environment(&mut app);
+    assert!(
+        jackdaw::scene_io::save_scene(app.world_mut()),
+        "the scene saves"
+    );
+    let authored = camera_block(&std::fs::read_to_string(&scene).expect("the scene is on disk"));
+
+    let result = call(
+        &mut app,
+        "environment.set",
+        &[
+            ("sky.enabled", true.into()),
+            ("fog.mode", "Linear".into()),
+            ("ambient.mode", "Trilight".into()),
+            ("ambient.reflections", "Sky".into()),
+            ("post.enabled", true.into()),
+            ("post.bloom_intensity", 0.2.into()),
+            ("post.antialiasing", "Smaa".into()),
+            ("post.shadow_filtering", "Gaussian".into()),
+        ],
+    );
+    assert_eq!(result, OperatorResult::Finished);
+    let lookout = named(&mut app, "lookout").expect("the scene spawned its camera");
+    let dressed = app.world().entity(lookout);
+    assert!(dressed.contains::<bevy::pbr::DistanceFog>());
+    assert!(dressed.contains::<bevy::light::EnvironmentMapLight>());
+
+    assert!(
+        jackdaw::scene_io::save_scene(app.world_mut()),
+        "the scene saves"
+    );
+    let saved = std::fs::read_to_string(&scene).expect("the scene is on disk");
+    assert_eq!(camera_block(&saved), authored);
+    assert!(
+        !saved.contains("bevy_image::image::Image"),
+        "no generated map is embedded, got\n{saved}"
+    );
 }

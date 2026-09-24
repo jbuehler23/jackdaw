@@ -50,7 +50,8 @@ pub use import::{
 pub use navmesh::{BakeParams, NavPolygon, NavmeshArtifact, NavmeshError, SurfaceMesh};
 pub use placement::{
     MAX_SCATTER_GROUP_LEN, MAX_SCATTER_TABLE, ScatterAssetError, ScatterGroupError, ScatterPalette,
-    ScatterPaletteEntry, ScatterPlacement, validate_scatter_asset, validate_scatter_group,
+    ScatterPaletteEntry, ScatterPlacement, is_prefab_asset, validate_scatter_asset,
+    validate_scatter_group,
 };
 pub use quantize::{quantize_height, quantize_heights, quantize_region};
 pub use rect::GridRect;
