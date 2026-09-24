@@ -23,7 +23,8 @@ use bevy::{
     input::{
         ButtonState,
         keyboard::{Key, KeyboardInput, NativeKey},
-        mouse::MouseButtonInput,
+        mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel},
+        touch::TouchPhase,
     },
     math::DVec2,
     picking::PickingSystems,
@@ -89,6 +90,8 @@ enum Emit {
         button: MouseButton,
         state: ButtonState,
     },
+    /// Turn the wheel by this many lines, `y` positive toward the top.
+    Wheel(Vec2),
     Key {
         key: KeyCode,
         logical: Key,
@@ -187,6 +190,17 @@ fn emit(world: &mut World, window: Entity, event: Emit) {
             };
             world.write_message(input);
             world.write_message(WindowEvent::MouseButtonInput(input));
+        }
+        Emit::Wheel(lines) => {
+            let wheel = MouseWheel {
+                unit: MouseScrollUnit::Line,
+                x: lines.x,
+                y: lines.y,
+                window,
+                phase: TouchPhase::Moved,
+            };
+            world.write_message(wheel);
+            world.write_message(WindowEvent::MouseWheel(wheel));
         }
         Emit::Key {
             key,
@@ -511,7 +525,8 @@ fn pointer_button(world: &mut World, name: &str) -> Option<MouseButton> {
 #[operator(
     id = "input.pointer",
     label = "Synthetic Pointer",
-    description = "Drive the mouse: move, press, release, click, double click or drag.",
+    description = "Drive the mouse: move, press, release, click, double click, drag or \
+                   scroll.",
     allows_undo = false,
     params(
         x(f64, doc = "Horizontal position, in the space `space` names."),
@@ -524,8 +539,13 @@ fn pointer_button(world: &mut World, name: &str) -> Option<MouseButton> {
         ),
         action(
             String,
-            doc = "move, press, release, click, dblclick, drag_to or rest. \
+            doc = "move, press, release, click, dblclick, drag_to, scroll or rest. \
                    Defaults to move; anything else is refused with a warning."
+        ),
+        lines(
+            f64,
+            doc = "Wheel lines a scroll turns at x, y. Positive moves down the \
+                   content, as turning the wheel toward you does."
         ),
         button(
             String,
@@ -622,6 +642,20 @@ pub(crate) fn input_pointer(
                 "release" => vec![move_to, release],
                 "click" => vec![move_to, press, release],
                 "dblclick" => vec![move_to, press.clone(), release.clone(), press, release],
+                "scroll" => {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "a wheel turn is a handful of lines"
+                    )]
+                    let lines = params.as_float("lines").unwrap_or(1.0) as f32;
+                    vec![
+                        move_to,
+                        Beat {
+                            events: vec![Emit::Wheel(Vec2::new(0.0, -lines))],
+                            frames,
+                        },
+                    ]
+                }
                 other => {
                     warn!("input.pointer: unknown action {other:?}");
                     return;
@@ -856,6 +890,30 @@ mod tests {
             }]
         ));
         assert_eq!(with_mods(&[], 1, gesture).len(), 1);
+    }
+
+    #[test]
+    fn a_wheel_turn_reaches_the_window_as_lines() {
+        let mut world = World::new();
+        world.init_resource::<Messages<MouseWheel>>();
+        world.init_resource::<Messages<WindowEvent>>();
+        let window = world.spawn_empty().id();
+        emit(&mut world, window, Emit::Wheel(Vec2::new(0.0, -3.0)));
+
+        let wheel = world.resource::<Messages<MouseWheel>>();
+        let turned: Vec<&MouseWheel> = wheel.iter_current_update_messages().collect();
+        assert_eq!(turned.len(), 1);
+        assert_eq!(turned[0].unit, MouseScrollUnit::Line);
+        assert_eq!((turned[0].x, turned[0].y), (0.0, -3.0));
+        assert_eq!(turned[0].window, window);
+        assert_eq!(
+            world
+                .resource::<Messages<WindowEvent>>()
+                .iter_current_update_messages()
+                .count(),
+            1,
+            "the combined window stream carries it too"
+        );
     }
 
     #[test]
