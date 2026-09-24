@@ -64,6 +64,11 @@ impl Plugin for TerrainPlugin {
                     .before(jackdaw_terrain::render::DetailSystems::Rebuild)
                     .run_if(in_state(crate::AppState::Editor)),
             )
+            .add_systems(
+                Update,
+                scatter_data::resolve_scatter_prefabs
+                    .before(jackdaw_terrain::render::ScatterSystems::Rebuild),
+            )
             .add_observer(scatter_data::hide_drawn_scatter)
             .add_observer(detail::hide_drawn_detail)
             .add_plugins((

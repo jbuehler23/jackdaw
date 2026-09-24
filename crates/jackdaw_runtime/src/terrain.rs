@@ -21,10 +21,10 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use jackdaw_scene_types::Terrain;
 use jackdaw_terrain::render::{
-    DetailDirty, DetailRenderPlugin, DetailSystems, ScatterDirty, ScatterRenderPlugin,
-    ScatterSystems, SplatArrayHandles, SplatBuildError, TerrainDetailSource, TerrainRenderPlugin,
-    TerrainScatter, TerrainSplatMaterial, TextureSetImages, control_image_from_bytes, resolve_with,
-    slope_image, splat_images, tint_image,
+    DetailDirty, DetailRenderPlugin, DetailSystems, ScatterDirty, ScatterPrefab, ScatterPrefabs,
+    ScatterRenderPlugin, ScatterSystems, SplatArrayHandles, SplatBuildError, TerrainDetailSource,
+    TerrainRenderPlugin, TerrainScatter, TerrainSplatMaterial, TextureSetImages,
+    control_image_from_bytes, resolve_with, slope_image, splat_images, tint_image,
 };
 use jackdaw_terrain::sidecar::{self, TerrainMaterialSlot};
 use jackdaw_terrain::splat::ControlTexels;
@@ -55,6 +55,7 @@ pub(crate) fn plugin(app: &mut App) {
                 resolve_material_slots,
                 build_ready_materials,
                 sync_surfaces,
+                resolve_scatter_prefabs,
             )
                 .chain()
                 .after(crate::spawn_loaded_scenes)
@@ -63,6 +64,40 @@ pub(crate) fn plugin(app: &mut App) {
         );
     #[cfg(feature = "physics")]
     app.add_systems(Update, build_ground_colliders.after(refresh_heightmaps));
+}
+
+/// Answer the prefabs stored scatter names with the models they draw, read
+/// from the game's assets.
+fn resolve_scatter_prefabs(
+    mut prefabs: ResMut<ScatterPrefabs>,
+    catalog_path: Option<Res<crate::JackdawCatalogPath>>,
+    asset_folder: Option<Res<crate::AssetFolder>>,
+) {
+    let wanted: Vec<String> = prefabs.wanted().map(str::to_string).collect();
+    if wanted.is_empty() {
+        return;
+    }
+    let Some(assets) = crate::resolve_assets_root(catalog_path.as_deref(), asset_folder.as_deref())
+    else {
+        return;
+    };
+    for name in wanted {
+        let path = assets.join(&name);
+        let file = jackdaw_bsn::existing_form(&path).unwrap_or(path);
+        let model = match jackdaw_prefab::read_prefab_document(&file, &assets) {
+            Ok(document) => jackdaw_prefab::prefab_model(&document),
+            Err(err) => {
+                warn!("terrain scatter: cannot read the prefab {name}: {err}");
+                None
+            }
+        };
+        let model = model.map(|model| ScatterPrefab {
+            model: model.source,
+            local: Transform::from_matrix(Mat4::from(model.local)),
+            materials: model.materials,
+        });
+        prefabs.resolve(&name, model);
+    }
 }
 
 /// The sidecar file one terrain draws, resolved beneath the directory of the

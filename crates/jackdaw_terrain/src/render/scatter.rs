@@ -16,6 +16,10 @@
 //! Both hosts -- an editor holding its documents in a store, a game holding one
 //! per terrain -- write [`TerrainScatter`] onto the terrain entity and mark what
 //! changed in [`ScatterDirty`].
+//!
+//! A palette entry may name a prefab rather than a glTF. The renderer reads no
+//! prefab documents: it lists the ones it meets in [`ScatterPrefabs`], and the
+//! host answers each with the model the prefab draws.
 
 use bevy::asset::LoadState;
 use bevy::camera::primitives::{Aabb, Frustum, MeshAabb};
@@ -25,10 +29,11 @@ use bevy::log::warn;
 use bevy::math::Affine3A;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
+use std::collections::BTreeMap;
 
 use jackdaw_scene_types::MaterialOverrides;
 
-use crate::placement::{ScatterPalette, ScatterPlacement};
+use crate::placement::{ScatterPalette, ScatterPaletteEntry, ScatterPlacement, is_prefab_asset};
 use crate::region::RegionCoord;
 use crate::sidecar::RegionTerrainData;
 
@@ -256,6 +261,123 @@ impl ScatterAssets {
     }
 }
 
+/// A prefab a palette entry names, as the model it draws.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScatterPrefab {
+    /// The glTF drawn, relative to the assets directory.
+    pub model: String,
+    /// Where the model stands under the prefab's root.
+    pub local: Transform,
+    /// Material asset path the prefab dresses each glTF material name in.
+    pub materials: BTreeMap<String, String>,
+}
+
+/// The prefabs palette entries name, and the models they resolved to.
+///
+/// Filled by the host, which is what can read a prefab document: it answers
+/// each name in [`Self::wanted`] through [`Self::resolve`], and resolves a
+/// name again when the prefab changes.
+#[derive(Resource, Default)]
+pub struct ScatterPrefabs {
+    resolved: HashMap<String, Option<ScatterPrefab>>,
+    wanted: HashSet<String>,
+    /// Prefabs whose model changed since the last rebuild.
+    changed: Vec<String>,
+}
+
+impl ScatterPrefabs {
+    /// Prefabs a palette names that have not been resolved yet.
+    pub fn wanted(&self) -> impl Iterator<Item = &str> {
+        self.wanted.iter().map(String::as_str)
+    }
+
+    /// Every prefab resolved so far, drawing or not.
+    pub fn known(&self) -> impl Iterator<Item = &str> {
+        self.resolved.keys().map(String::as_str)
+    }
+
+    /// The model `prefab` draws, or `None` while it is unresolved or when it
+    /// draws nothing.
+    pub fn get(&self, prefab: &str) -> Option<&ScatterPrefab> {
+        self.resolved.get(prefab).and_then(Option::as_ref)
+    }
+
+    /// Record what `prefab` draws, `None` for a prefab that draws no single
+    /// model. Placements of it redraw only when this differs from before.
+    pub fn resolve(&mut self, prefab: &str, model: Option<ScatterPrefab>) {
+        self.wanted.remove(prefab);
+        if self.resolved.get(prefab) == Some(&model) {
+            return;
+        }
+        if model.is_none() {
+            warn!(
+                "terrain scatter: the prefab {prefab} draws no single model; its placements draw nothing"
+            );
+        }
+        self.resolved.insert(prefab.to_string(), model);
+        self.changed.push(prefab.to_string());
+    }
+
+    fn want(&mut self, prefab: &str) {
+        if !self.resolved.contains_key(prefab) {
+            self.wanted.insert(prefab.to_string());
+        }
+    }
+}
+
+/// What one palette entry draws: the glTF, where it stands under the
+/// placement, and the materials it wears.
+struct EntryModel<'a> {
+    model: &'a str,
+    local: Transform,
+    materials: BTreeMap<String, String>,
+}
+
+impl<'a> EntryModel<'a> {
+    /// `None` for a prefab entry that is unresolved or draws nothing.
+    fn of(entry: &'a ScatterPaletteEntry, prefabs: Option<&'a ScatterPrefabs>) -> Option<Self> {
+        if !is_prefab_asset(&entry.asset) {
+            return Some(Self {
+                model: &entry.asset,
+                local: Transform::IDENTITY,
+                materials: entry.materials.clone(),
+            });
+        }
+        let prefab = prefabs?.get(&entry.asset)?;
+        let mut materials = prefab.materials.clone();
+        materials.extend(
+            entry
+                .materials
+                .iter()
+                .map(|(name, path)| (name.clone(), path.clone())),
+        );
+        Some(Self {
+            model: &prefab.model,
+            local: prefab.local,
+            materials,
+        })
+    }
+}
+
+/// The bounding box a palette entry's placement stands in at scale 1, or
+/// `None` while what it draws is unresolved. What a navmesh bake stands an
+/// obstacle in.
+pub fn palette_entry_bounds(
+    assets: &ScatterAssets,
+    prefabs: Option<&ScatterPrefabs>,
+    entry: &ScatterPaletteEntry,
+) -> Option<Aabb> {
+    let drawn = EntryModel::of(entry, prefabs)?;
+    let bounds = assets.bounds(drawn.model)?;
+    let affine = drawn.local.compute_affine();
+    let centre = affine.transform_point3(Vec3::from(bounds.center));
+    let radius = affine
+        .matrix3
+        .abs()
+        .mul_vec3(Vec3::from(bounds.half_extents));
+    Some(Aabb::from_min_max(centre - radius, centre + radius))
+}
+
 /// Resolves palette assets, draws stored scatter, and culls it by chunk.
 ///
 /// Independent of [`super::TerrainRenderPlugin`]: a host that draws the ground
@@ -296,6 +418,7 @@ impl Plugin for ScatterAssetPlugin {
         init_asset_if_absent::<Mesh>(app);
         init_asset_if_absent::<StandardMaterial>(app);
         app.init_resource::<ScatterAssets>()
+            .init_resource::<ScatterPrefabs>()
             .configure_sets(
                 Update,
                 ScatterSystems::Resolve.in_set(ScatterSystems::Rebuild),
@@ -337,19 +460,36 @@ impl Plugin for ScatterRenderPlugin {
     }
 }
 
-/// Start loading every palette asset no terrain has asked for yet.
+/// Start loading every palette asset no terrain has asked for yet, and list
+/// the prefabs no host has resolved.
 fn request_palette_assets(
     assets: ResMut<ScatterAssets>,
+    prefabs: Option<ResMut<ScatterPrefabs>>,
     server: Res<AssetServer>,
-    terrains: Query<&TerrainScatter, Changed<TerrainScatter>>,
+    terrains: Query<Ref<TerrainScatter>>,
 ) {
     let assets = assets.into_inner();
+    let mut prefabs = prefabs;
+    let resolved = prefabs.as_ref().is_some_and(DetectChanges::is_changed);
     for scatter in &terrains {
+        if !resolved && !scatter.is_changed() {
+            continue;
+        }
         for entry in &scatter.palette.assets {
             if entry.is_tombstone() {
                 continue;
             }
-            assets.request(&server, &entry.asset);
+            if !is_prefab_asset(&entry.asset) {
+                assets.request(&server, &entry.asset);
+                continue;
+            }
+            let Some(prefabs) = prefabs.as_mut() else {
+                continue;
+            };
+            match prefabs.get(&entry.asset) {
+                Some(prefab) => assets.request(&server, &prefab.model),
+                None => prefabs.bypass_change_detection().want(&entry.asset),
+            }
         }
     }
 }
@@ -499,6 +639,7 @@ fn standard_material(
 fn rebuild_chunks(
     mut commands: Commands,
     mut assets: ResMut<ScatterAssets>,
+    prefabs: Option<ResMut<ScatterPrefabs>>,
     mut terrains: Query<(
         Entity,
         &TerrainScatter,
@@ -508,16 +649,24 @@ fn rebuild_chunks(
     chunks: Query<&ScatterChunk>,
 ) {
     let settled = std::mem::take(&mut assets.settled);
+    let mut prefabs = prefabs;
+    let changed = prefabs
+        .as_mut()
+        .map(|prefabs| std::mem::take(&mut prefabs.bypass_change_detection().changed))
+        .unwrap_or_default();
+    let prefabs = prefabs.as_deref();
     for (terrain, scatter, mut dirty, children) in &mut terrains {
         // An asset that has just resolved makes every chunk drawing it
         // stale, and a chunk that drew nothing is exactly the one waiting
-        // for it.
-        if !settled.is_empty()
-            && scatter
-                .palette
-                .assets
-                .iter()
-                .any(|entry| settled.contains(&entry.asset))
+        // for it. A prefab that resolved again may draw something else.
+        if (!settled.is_empty() || !changed.is_empty())
+            && scatter.palette.assets.iter().any(|entry| {
+                changed.contains(&entry.asset)
+                    || settled.contains(&entry.asset)
+                    || prefabs
+                        .and_then(|prefabs| prefabs.get(&entry.asset))
+                        .is_some_and(|prefab| settled.contains(&prefab.model))
+            })
         {
             dirty.all = true;
         }
@@ -543,7 +692,7 @@ fn rebuild_chunks(
             if !dirty.all && !dirty.regions.contains(&region.coord) {
                 continue;
             }
-            spawn_chunk(&mut commands, &assets, terrain, scatter, region);
+            spawn_chunk(&mut commands, &assets, prefabs, terrain, scatter, region);
         }
 
         *dirty = ScatterDirty::default();
@@ -553,6 +702,7 @@ fn rebuild_chunks(
 fn spawn_chunk(
     commands: &mut Commands,
     assets: &ScatterAssets,
+    prefabs: Option<&ScatterPrefabs>,
     terrain: Entity,
     scatter: &TerrainScatter,
     region: &ScatterRegion,
@@ -560,30 +710,42 @@ fn spawn_chunk(
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     let mut instances = Vec::new();
+    let drawn_by_entry: Vec<Option<EntryModel>> = scatter
+        .palette
+        .assets
+        .iter()
+        .map(|entry| EntryModel::of(entry, prefabs))
+        .collect();
 
     for (index, placement) in region.placements.iter().enumerate() {
         let Some(entry) = scatter.palette.asset(placement.asset) else {
             continue;
         };
-        let Some(ScatterAsset::Ready(ready)) = assets.entries.get(&entry.asset) else {
+        let Some(drawn) = drawn_by_entry
+            .get(usize::from(placement.asset))
+            .and_then(Option::as_ref)
+        else {
+            continue;
+        };
+        let Some(ScatterAsset::Ready(ready)) = assets.entries.get(drawn.model) else {
             continue;
         };
         let stand = Transform {
             translation: region.origin + placement.offset(),
             rotation: Quat::from_rotation_y(placement.yaw),
             scale: Vec3::splat(placement.scale),
-        };
-        let range = cull_range(entry.cull_distance, ready.height() * placement.scale);
+        } * drawn.local;
+        let range = cull_range(entry.cull_distance, ready.height() * stand.scale.y);
         for primitive in &ready.primitives {
             let dressed = primitive
                 .material_name
                 .as_ref()
-                .filter(|name| entry.materials.contains_key(*name))
+                .filter(|name| drawn.materials.contains_key(*name))
                 .map(|name| {
                     (
                         GltfMaterialName(name.clone()),
                         MaterialOverrides {
-                            materials: entry.materials.clone(),
+                            materials: drawn.materials.clone(),
                         },
                     )
                 });
@@ -896,6 +1058,132 @@ mod tests {
                 Some("materials/pine.bsn")
             );
         }
+    }
+
+    /// The leaves every drawn placement wears, as its overrides name them.
+    fn worn_leaves(app: &mut App) -> Vec<String> {
+        let mut dressed = app
+            .world_mut()
+            .query::<(&GltfMaterialName, &MaterialOverrides)>();
+        dressed
+            .iter(app.world())
+            .filter(|(name, _)| name.0 == "Leaves")
+            .filter_map(|(_, overrides)| overrides.materials.get("Leaves").cloned())
+            .collect()
+    }
+
+    #[test]
+    fn a_prefab_entry_draws_the_prefabs_model_and_redresses_when_the_prefab_changes() {
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<Mesh>()
+            .init_asset::<StandardMaterial>();
+        let leaves = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .reserve_handle();
+        let material = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .reserve_handle();
+        let mut assets = ScatterAssets::default();
+        assets.entries.insert(
+            "models/tree.gltf".to_string(),
+            ScatterAsset::Ready(ReadyAsset {
+                primitives: vec![ScatterPrimitive {
+                    mesh: leaves,
+                    material,
+                    material_name: Some("Leaves".to_string()),
+                    local: Transform::IDENTITY,
+                }],
+                bounds: Aabb::from_min_max(Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 4.0, 1.0)),
+            }),
+        );
+        app.insert_resource(assets);
+        let prefab = |leaves: &str| ScatterPrefab {
+            model: "models/tree.gltf".to_string(),
+            local: Transform::from_scale(Vec3::splat(2.0)),
+            materials: BTreeMap::from([("Leaves".to_string(), leaves.to_string())]),
+        };
+        let mut prefabs = ScatterPrefabs::default();
+        prefabs.resolve("prefabs/tree.bsn", Some(prefab("materials/pine.bsn")));
+        app.insert_resource(prefabs);
+
+        let mut data = document();
+        data.scatter.assets[0] = ScatterPaletteEntry::new("prefabs/tree.bsn");
+        let scatter = TerrainScatter::from_document(&data);
+        let placements = scatter.placement_count();
+        app.world_mut().spawn((
+            Transform::IDENTITY,
+            Visibility::default(),
+            scatter,
+            ScatterDirty::default(),
+        ));
+        app.add_systems(Update, rebuild_chunks);
+        app.update();
+
+        assert_eq!(
+            worn_leaves(&mut app),
+            vec!["materials/pine.bsn".to_string(); placements],
+            "every placement wears the prefab's leaves"
+        );
+        let mut drawn = app
+            .world_mut()
+            .query_filtered::<&Transform, With<ScatterRendered>>();
+        let scales: Vec<f32> = drawn.iter(app.world()).map(|at| at.scale.y).collect();
+        assert_eq!(
+            scales,
+            vec![2.0, 4.0],
+            "the prefab's own scale rides under each placement's"
+        );
+
+        app.world_mut()
+            .resource_mut::<ScatterPrefabs>()
+            .resolve("prefabs/tree.bsn", Some(prefab("materials/larch.bsn")));
+        app.update();
+        assert_eq!(
+            worn_leaves(&mut app),
+            vec!["materials/larch.bsn".to_string(); placements],
+            "a prefab dressed anew redresses every placement of it"
+        );
+    }
+
+    #[test]
+    fn an_entrys_own_override_lies_over_its_prefabs() {
+        let mut prefabs = ScatterPrefabs::default();
+        prefabs.resolve(
+            "prefabs/tree.bsn",
+            Some(ScatterPrefab {
+                model: "models/tree.gltf".to_string(),
+                local: Transform::IDENTITY,
+                materials: BTreeMap::from([
+                    ("Leaves".to_string(), "materials/pine.bsn".to_string()),
+                    ("Bark".to_string(), "materials/bark.bsn".to_string()),
+                ]),
+            }),
+        );
+        let mut entry = ScatterPaletteEntry::new("prefabs/tree.bsn");
+        entry
+            .materials
+            .insert("Leaves".to_string(), "materials/autumn.bsn".to_string());
+        let drawn = EntryModel::of(&entry, Some(&prefabs)).expect("the prefab is resolved");
+        assert_eq!(drawn.model, "models/tree.gltf");
+        assert_eq!(
+            drawn.materials.get("Leaves").map(String::as_str),
+            Some("materials/autumn.bsn")
+        );
+        assert_eq!(
+            drawn.materials.get("Bark").map(String::as_str),
+            Some("materials/bark.bsn")
+        );
+        assert!(
+            EntryModel::of(
+                &ScatterPaletteEntry::new("prefabs/unknown.bsn"),
+                Some(&prefabs)
+            )
+            .is_none(),
+            "an unresolved prefab draws nothing yet"
+        );
     }
 
     /// A region marked dirty is the only one respawned, so a stroke costs

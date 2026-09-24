@@ -35,8 +35,8 @@ pub use detail::{
 };
 pub use scatter::{
     GROUND_COVER_CULL_DISTANCE, GROUND_COVER_HEIGHT, ScatterAssetPlugin, ScatterAssets,
-    ScatterChunk, ScatterDirty, ScatterPrimitive, ScatterRegion, ScatterRenderPlugin,
-    ScatterRendered, ScatterSystems, TerrainScatter,
+    ScatterChunk, ScatterDirty, ScatterPrefab, ScatterPrefabs, ScatterPrimitive, ScatterRegion,
+    ScatterRenderPlugin, ScatterRendered, ScatterSystems, TerrainScatter, palette_entry_bounds,
 };
 
 use crate::heightmap::Heightmap;

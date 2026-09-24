@@ -16,6 +16,16 @@ use bevy_math::Vec3;
 /// Extensions a palette entry may name.
 const MODEL_EXTENSIONS: [&str; 2] = [".gltf", ".glb"];
 
+/// Extensions of a prefab document, which a palette entry may name in place
+/// of a model.
+const PREFAB_EXTENSIONS: [&str; 2] = [".bsn", ".bsb"];
+
+/// Whether a palette entry names a prefab rather than a glTF.
+pub fn is_prefab_asset(path: &str) -> bool {
+    let lowered = path.to_ascii_lowercase();
+    PREFAB_EXTENSIONS.iter().any(|ext| lowered.ends_with(ext))
+}
+
 /// Most rows either side table may hold: a placement names a row by `u16`,
 /// so an index past this one could not be stored.
 pub const MAX_SCATTER_TABLE: usize = u16::MAX as usize + 1;
@@ -33,7 +43,7 @@ pub enum ScatterAssetError {
     /// component that is not a plain name, so it does not address a file
     /// beneath the assets directory.
     NotAssetsRelative,
-    /// The path does not end in `.gltf` or `.glb`.
+    /// The path names neither a glTF nor a prefab document.
     NotAModel,
     /// The palette already holds every index a placement could name.
     TableFull,
@@ -47,7 +57,10 @@ impl core::fmt::Display for ScatterAssetError {
                 f,
                 "scatter palette entry must be a forward-slash path relative to the assets directory"
             ),
-            Self::NotAModel => write!(f, "scatter palette entry must end in .gltf or .glb"),
+            Self::NotAModel => write!(
+                f,
+                "scatter palette entry must end in .gltf or .glb, or name a prefab ending in .bsn or .bsb"
+            ),
             Self::TableFull => write!(
                 f,
                 "scatter palette already holds {} assets, which is every index a placement can name",
@@ -99,7 +112,8 @@ impl core::error::Error for ScatterGroupError {}
 /// backslash, a drive prefix and a `..` component are rejected everywhere.
 ///
 /// The extension is required because the renderer resolves an entry through the
-/// glTF loader and has nothing to fall back on.
+/// glTF loader, or through the host for a prefab, and has nothing to fall back
+/// on.
 pub fn validate_scatter_asset(path: &str) -> Result<(), ScatterAssetError> {
     if path.is_empty() {
         return Err(ScatterAssetError::Empty);
@@ -114,7 +128,7 @@ pub fn validate_scatter_asset(path: &str) -> Result<(), ScatterAssetError> {
         return Err(ScatterAssetError::NotAssetsRelative);
     }
     let lowered = path.to_ascii_lowercase();
-    if !MODEL_EXTENSIONS.iter().any(|ext| lowered.ends_with(ext)) {
+    if !MODEL_EXTENSIONS.iter().any(|ext| lowered.ends_with(ext)) && !is_prefab_asset(path) {
         return Err(ScatterAssetError::NotAModel);
     }
     Ok(())
@@ -325,6 +339,14 @@ mod tests {
     }
 
     #[test]
+    fn a_palette_entry_may_name_a_prefab_in_place_of_a_model() {
+        assert!(validate_scatter_asset("prefabs/fir.bsn").is_ok());
+        assert!(validate_scatter_asset("prefabs/fir.bsb").is_ok());
+        assert!(is_prefab_asset("prefabs/Fir.BSN"));
+        assert!(!is_prefab_asset("models/fir.gltf"));
+    }
+
+    #[test]
     fn a_palette_entry_refuses_a_path_that_leaves_the_assets_directory() {
         for path in [
             "/abs/tree.gltf",
@@ -343,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn a_palette_entry_refuses_a_file_the_gltf_loader_would_not_take() {
+    fn a_palette_entry_refuses_a_file_that_is_neither_a_model_nor_a_prefab() {
         assert_eq!(validate_scatter_asset(""), Err(ScatterAssetError::Empty));
         assert_eq!(
             validate_scatter_asset("models/tree.obj"),
