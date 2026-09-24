@@ -94,6 +94,17 @@ impl TerrainImportState {
         }
     }
 
+    fn take_pick(&mut self, into: PickInto, path: String) {
+        match into {
+            PickInto::Heightmap => self.heightmap = path,
+            PickInto::Row(kind, row) => {
+                if let Some(image) = self.images_mut(kind).get_mut(row) {
+                    image.path = path;
+                }
+            }
+        }
+    }
+
     fn images_mut(&mut self, kind: ImportImageKind) -> &mut Vec<ImportImage> {
         match kind {
             ImportImageKind::Weight => &mut self.weights,
@@ -177,11 +188,16 @@ struct HeightmapPick {
                    picks the heightmap."
         ),
         row(i64, doc = "Which row of that kind the image goes to."),
+        path(
+            String,
+            doc = "The image, as a path under the project's assets, taken without opening \
+                   the file dialog."
+        ),
     )
 )]
 pub(crate) fn terrain_import_pick(
     params: In<OperatorParameters>,
-    state: Res<TerrainImportState>,
+    mut state: ResMut<TerrainImportState>,
     mut commands: Commands,
 ) -> OperatorResult {
     let into = match params.as_str("kind") {
@@ -191,7 +207,21 @@ pub(crate) fn terrain_import_pick(
             Err(message) => return refuse(&mut commands, message),
         },
     };
-    commands.queue(move |world: &mut World| open_heightmap_picker(world, into));
+    let Some(path) = params.as_str("path").map(str::trim) else {
+        commands.queue(move |world: &mut World| open_heightmap_picker(world, into));
+        return OperatorResult::Finished;
+    };
+    let named = Path::new(path);
+    if path.is_empty()
+        || named.is_absolute()
+        || named.components().any(|part| part.as_os_str() == "..")
+    {
+        return refuse(
+            &mut commands,
+            format!("\"{path}\" is outside this project's assets"),
+        );
+    }
+    state.take_pick(into, path.to_string());
     OperatorResult::Finished
 }
 
@@ -233,15 +263,9 @@ fn poll_heightmap_pick(world: &mut World) {
         return;
     };
     let path = relative.to_slash_lossy().into_owned();
-    let mut state = world.resource_mut::<TerrainImportState>();
-    match into {
-        PickInto::Heightmap => state.heightmap = path,
-        PickInto::Row(kind, row) => {
-            if let Some(image) = state.images_mut(kind).get_mut(row) {
-                image.path = path;
-            }
-        }
-    }
+    world
+        .resource_mut::<TerrainImportState>()
+        .take_pick(into, path);
 }
 
 /// Toast a refusal and cancel.
@@ -1658,10 +1682,13 @@ mod tests {
             prepare(&mut panel);
             {
                 let mut state = panel.resource_mut::<TerrainImportState>();
-                state.heightmap = "ramp8.png".to_string();
                 state.min = 0.0;
                 state.max = 60.0;
             }
+            let picked = panel
+                .run_system_cached_with(terrain_import_pick, params(&[("path", text("ramp8.png"))]))
+                .expect("system runs");
+            assert_eq!(picked, OperatorResult::Finished, "the heightmap is picked");
             for (kind, target, path) in [
                 ("weight", "1", "grass.png"),
                 ("channel", "rocks", "shape.png"),
@@ -1685,9 +1712,21 @@ mod tests {
                     )
                     .expect("system runs");
                 assert_eq!(aimed, OperatorResult::Finished, "the {kind} row is aimed");
-                let kind = ImportImageKind::parse(kind).expect("a kind");
-                panel.resource_mut::<TerrainImportState>().images_mut(kind)[0].path =
-                    path.to_string();
+                let picked = panel
+                    .run_system_cached_with(
+                        terrain_import_pick,
+                        params(&[
+                            ("kind", text(kind)),
+                            ("row", PropertyValue::Int(0)),
+                            ("path", text(path)),
+                        ]),
+                    )
+                    .expect("system runs");
+                assert_eq!(
+                    picked,
+                    OperatorResult::Finished,
+                    "the {kind} image is picked"
+                );
             }
             assert_eq!(import(&mut panel, &[]), OperatorResult::Finished);
 

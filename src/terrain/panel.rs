@@ -245,9 +245,8 @@ struct PanelState {
     /// despawn under the pointer; `sync_shape_fields` keeps that one current.
     resolution: Option<u32>,
     /// The heightmap the Generation tab has picked and the images queued
-    /// beside it, so choosing one brings up the range it is read at. Discrete
-    /// picks, like the grid above; the range itself is absent for the reason
-    /// the extent is.
+    /// beside it. Discrete picks, like the grid above; the height range is
+    /// absent for the reason the extent is.
     import: Option<ImportSignature>,
 }
 
@@ -507,7 +506,14 @@ fn update_terrain_panel_content(
             }
             TerrainPanelTab::Generation => {
                 let import = local_state.import.clone().unwrap_or_default();
-                spawn_generation_section(&mut commands, body, &gen_state, &import_state, &import);
+                spawn_generation_section(
+                    &mut commands,
+                    body,
+                    &gen_state,
+                    &import_state,
+                    &import,
+                    &textures,
+                );
             }
         }
     }
@@ -1799,6 +1805,7 @@ fn spawn_generation_section(
     gen_state: &TerrainGenerateState,
     import_state: &TerrainImportState,
     import: &ImportSignature,
+    refs: &TexturesTabRefs,
 ) {
     let noise_options: Vec<String> = jackdaw_terrain::NoiseType::ALL
         .iter()
@@ -1922,7 +1929,14 @@ fn spawn_generation_section(
         ChildOf(parent),
     ));
 
-    spawn_import_action(commands, parent, import_state, import);
+    let section = spawn_section(
+        commands,
+        parent,
+        IMPORT_SECTION,
+        &refs.icon_font.0,
+        &refs.collapse,
+    );
+    spawn_import_section(commands, section.body, import_state, import);
 
     commands.spawn((
         Text::new("Hydraulic Erosion"),
@@ -2015,25 +2029,37 @@ fn spawn_generation_section(
     ));
 }
 
-/// The Import action, and, once a heightmap is picked, the world heights
-/// its black and white ends stand at and the images read beside it.
+const IMPORT_SECTION: MaterialSection =
+    MaterialSection::new("Import from Images", Icon::Import, "terrain.import", false);
+
+/// The heightmap and the world heights its black and white ends stand at,
+/// the images read beside it, and the one button that imports them all.
 ///
-/// The range is a pair of chips rather than the sliders above it: two world
-/// heights with no track worth drawing, read as one question.
-fn spawn_import_action(
+/// The range is a pair of chips rather than sliders: two world heights with
+/// no track worth drawing, read as one question.
+fn spawn_import_section(
     commands: &mut Commands,
     parent: Entity,
     import_state: &TerrainImportState,
     import: &ImportSignature,
 ) {
+    let top = import_line(commands, parent);
+    let label = import_grow(commands, top);
     commands.spawn((
-        button::button(ButtonProps::new("Import...").call_operator(TerrainImportPickOp::ID)),
-        ChildOf(parent),
+        Text::new("Heightmap"),
+        TextFont {
+            font_size: tokens::TEXT_SIZE_SM,
+            ..default()
+        },
+        TextColor(tokens::TEXT_BODY_COLOR.into()),
+        ChildOf(label),
     ));
-    if import_state.heightmap.is_empty() {
-        return;
-    }
-    spawn_hint(commands, parent, &import_state.heightmap);
+    spawn_import_file_line(
+        commands,
+        parent,
+        &import_state.heightmap,
+        ButtonOperatorCall::new(TerrainImportPickOp::ID),
+    );
 
     let row = commands
         .spawn((
@@ -2087,6 +2113,63 @@ fn spawn_import_action(
                 .call_operator(TerrainImportOp::ID),
         ),
         ChildOf(parent),
+    ));
+}
+
+/// A full-width row of the Import section.
+fn import_line(commands: &mut Commands, parent: Entity) -> Entity {
+    commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(tokens::SPACING_SM),
+                width: percent(100),
+                ..default()
+            },
+            ChildOf(parent),
+        ))
+        .id()
+}
+
+/// The part of an Import row that takes whatever width its buttons leave.
+fn import_grow(commands: &mut Commands, line: Entity) -> Entity {
+    commands
+        .spawn((
+            Node {
+                flex_grow: 1.0,
+                flex_shrink: 1.0,
+                min_width: px(0.0),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            ChildOf(line),
+        ))
+        .id()
+}
+
+/// A picked file, or that none is, beside the Pick button that chooses it.
+fn spawn_import_file_line(
+    commands: &mut Commands,
+    parent: Entity,
+    path: &str,
+    pick: ButtonOperatorCall,
+) {
+    let line = import_line(commands, parent);
+    let file = import_grow(commands, line);
+    spawn_hint(
+        commands,
+        file,
+        if path.is_empty() {
+            "No image picked"
+        } else {
+            path
+        },
+    );
+    commands.spawn((
+        button::button(ButtonProps::new("Pick...")),
+        pick,
+        ChildOf(line),
     ));
 }
 
@@ -2151,25 +2234,13 @@ fn spawn_import_image_row(
     image: &super::import::ImportImage,
     targets: &[(String, String)],
 ) {
-    let line = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                flex_wrap: FlexWrap::Wrap,
-                column_gap: px(tokens::SPACING_SM),
-                row_gap: px(tokens::SPACING_XS),
-                width: percent(100),
-                ..default()
-            },
-            ChildOf(parent),
-        ))
-        .id();
+    let top = import_line(commands, parent);
+    let target = import_grow(commands, top);
     if kind == ImportImageKind::Channel {
         commands.spawn((
             text_edit(TextEditProps::default().with_default_value(image.target.clone())),
             ImportMaskField(row),
-            ChildOf(line),
+            ChildOf(target),
         ));
     } else {
         let mut options: Vec<combobox::ComboBoxOptionData> = targets
@@ -2194,7 +2265,7 @@ fn spawn_import_image_row(
         commands
             .spawn((
                 combobox::combobox_with_selected(options, selected),
-                ChildOf(line),
+                ChildOf(target),
             ))
             .observe(
                 move |event: On<ComboBoxChangeEvent>, mut commands: Commands| {
@@ -2204,26 +2275,22 @@ fn spawn_import_image_row(
                 },
             );
     }
-    let file = if image.path.is_empty() {
-        "No image picked"
-    } else {
-        image.path.as_str()
-    };
-    spawn_hint(commands, line, file);
-    commands.spawn((
-        button::button(ButtonProps::new("Pick...")),
-        ButtonOperatorCall::new(TerrainImportPickOp::ID)
-            .with_param("kind", kind.key())
-            .with_param("row", row as i64),
-        ChildOf(line),
-    ));
     commands.spawn((
         button::button(ButtonProps::new("Remove").with_variant(ButtonVariant::Ghost)),
         ButtonOperatorCall::new(TerrainImportImageRemoveOp::ID)
             .with_param("kind", kind.key())
             .with_param("row", row as i64),
-        ChildOf(line),
+        ChildOf(top),
     ));
+
+    spawn_import_file_line(
+        commands,
+        parent,
+        &image.path,
+        ButtonOperatorCall::new(TerrainImportPickOp::ID)
+            .with_param("kind", kind.key())
+            .with_param("row", row as i64),
+    );
 }
 
 /// Which scatter mask row of the import a name field aims.

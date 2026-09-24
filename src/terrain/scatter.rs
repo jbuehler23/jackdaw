@@ -787,12 +787,21 @@ struct LayoutPick(bevy::tasks::Task<Option<rfd::FileHandle>>);
     id = "terrain.scatter.import.pick",
     label = "Pick Placements File",
     description = "Choose the JSON layout file the Scatter panel imports placements from.",
-    allows_undo = false
+    allows_undo = false,
+    params(path(
+        String,
+        doc = "The layout file, relative to the project, taken without opening the file dialog."
+    ))
 )]
 pub(crate) fn terrain_scatter_import_pick(
-    _: In<OperatorParameters>,
+    params: In<OperatorParameters>,
+    mut state: ResMut<TerrainScatterState>,
     mut commands: Commands,
 ) -> OperatorResult {
+    if let Some(path) = params.as_str("path") {
+        state.import_path = path.trim().to_string();
+        return OperatorResult::Finished;
+    }
     commands.queue(|world: &mut World| {
         if world.contains_resource::<LayoutPick>() {
             return;

@@ -640,11 +640,13 @@ fn the_panels_import_placements_is_the_same_undo_entry_as_the_arguments() {
             .expect("the layout is written");
         let before = app.world().resource::<CommandHistory>().undo_stack.len();
         if panel {
-            let mut state = app
-                .world_mut()
-                .resource_mut::<jackdaw::terrain::scatter::TerrainScatterState>();
-            state.import_path = "layouts/woods.json".to_string();
-            state.import_group = "woods".to_string();
+            run(
+                &mut app,
+                "terrain.scatter.import.pick path=layouts/woods.json",
+            );
+            app.world_mut()
+                .resource_mut::<jackdaw::terrain::scatter::TerrainScatterState>()
+                .import_group = "woods".to_string();
             run(&mut app, "terrain.scatter.import");
         } else {
             run(
