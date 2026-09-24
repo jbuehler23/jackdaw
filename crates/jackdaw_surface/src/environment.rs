@@ -16,7 +16,7 @@ use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
     AsBindGroup, Extent3d, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
-    TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
+    TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor, TextureViewDimension,
 };
 use bevy::render::view::Msaa;
 use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection};
@@ -44,6 +44,17 @@ const SUN_SAMPLES: u32 = 4;
 /// The sky cubemap's fixed id, so a save never embeds the generated image.
 const SKY_REFLECTION_SOURCE: Handle<Image> =
     bevy::asset::uuid_handle!("466eae24-bd77-4c51-ad8a-070bc913f6af");
+
+/// The filtered sky's diffuse map, with a fixed id so a save never embeds it.
+const SKY_REFLECTION_DIFFUSE: Handle<Image> =
+    bevy::asset::uuid_handle!("0b6f3e2a-8c41-4d7e-9f15-3a2d6c8e1b74");
+
+/// The filtered sky's roughness mips, with a fixed id so a save never embeds them.
+const SKY_REFLECTION_SPECULAR: Handle<Image> =
+    bevy::asset::uuid_handle!("c7d2a9e4-5b18-4f63-8e0a-9d4b7f2c6e31");
+
+/// Texels along one face of the filtered diffuse map.
+const SKY_DIFFUSE_FACE_SIZE: u32 = 32;
 
 /// Applies the first [`Environment`] in the scene to every 3D camera that draws the scene.
 pub struct EnvironmentPlugin;
@@ -104,7 +115,7 @@ pub struct SceneSky;
 #[derive(Component)]
 pub struct SkyReflection;
 
-/// The roughness-filtered sky map the cameras reflect, once the renderer has made it.
+/// The roughness-filtered sky map the cameras reflect while the environment asks for it.
 #[derive(Resource, Default, PartialEq)]
 struct SkyReflectionMap(Option<Handle<Image>>);
 
@@ -297,6 +308,29 @@ fn smoothstep(low: f32, high: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// An empty cubemap the renderer filters the sky into, `mips` levels deep.
+fn filter_target(face_size: u32, mips: u32) -> Image {
+    let mut image = Image::new_uninit(
+        Extent3d {
+            width: face_size,
+            height: face_size,
+            depth_or_array_layers: 6,
+        },
+        TextureDimension::D2,
+        TextureFormat::Rgba16Float,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    image.texture_descriptor.usage =
+        TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING;
+    image.texture_descriptor.mip_level_count = mips;
+    image.texture_view_descriptor = Some(TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::Cube),
+        mip_level_count: Some(mips),
+        ..default()
+    });
+    image
+}
+
 /// Keeps the sky cubemap and the entity it is filtered on while the environment reflects its sky.
 fn keep_the_sky_reflection(
     mut commands: Commands,
@@ -305,7 +339,7 @@ fn keep_the_sky_reflection(
     mut map: ResMut<SkyReflectionMap>,
     mut built: Local<Option<(Sky, Option<SkySun>, f32)>>,
     suns: Query<(&DirectionalLight, &GlobalTransform)>,
-    reflections: Query<(Entity, Option<&EnvironmentMapLight>), With<SkyReflection>>,
+    reflections: Query<Entity, With<SkyReflection>>,
 ) {
     let wanted = scene.0.as_ref().filter(|env| {
         env.dresses_cameras()
@@ -314,7 +348,7 @@ fn keep_the_sky_reflection(
             && env.ambient.reflections == Reflections::Sky
     });
     let Some(env) = wanted else {
-        for (entity, _) in &reflections {
+        for entity in &reflections {
             commands.entity(entity).despawn();
         }
         map.set_if_neq(SkyReflectionMap(None));
@@ -337,7 +371,21 @@ fn keep_the_sky_reflection(
         *built = Some(bake);
     }
 
-    let Some((_, filtered)) = reflections.iter().next() else {
+    if reflections.is_empty() {
+        if !images.contains(&SKY_REFLECTION_SPECULAR) {
+            images
+                .insert(
+                    &SKY_REFLECTION_SPECULAR,
+                    filter_target(SKY_FACE_SIZE, SKY_FACE_SIZE.ilog2() + 1),
+                )
+                .expect("a fixed id is always valid");
+            images
+                .insert(
+                    &SKY_REFLECTION_DIFFUSE,
+                    filter_target(SKY_DIFFUSE_FACE_SIZE, 1),
+                )
+                .expect("a fixed id is always valid");
+        }
         commands.spawn((
             SkyReflection,
             GeneratedEnvironmentMapLight {
@@ -345,13 +393,16 @@ fn keep_the_sky_reflection(
                 intensity: 1.0,
                 ..default()
             },
+            EnvironmentMapLight {
+                diffuse_map: SKY_REFLECTION_DIFFUSE,
+                specular_map: SKY_REFLECTION_SPECULAR,
+                intensity: 1.0,
+                ..default()
+            },
             EditorHidden,
         ));
-        return;
-    };
-    map.set_if_neq(SkyReflectionMap(
-        filtered.map(|light| light.specular_map.clone()),
-    ));
+    }
+    map.set_if_neq(SkyReflectionMap(Some(SKY_REFLECTION_SPECULAR)));
 }
 
 fn follow_the_scene_environment(
@@ -1190,29 +1241,48 @@ mod tests {
         let camera = spawn_camera(&mut app);
         let root = hold(&mut app, reflecting(Reflections::Sky));
 
-        let mut probes = app
-            .world_mut()
-            .query_filtered::<(Entity, &GeneratedEnvironmentMapLight), With<SkyReflection>>();
-        let (probe, source) = probes
+        let mut probes = app.world_mut().query_filtered::<(
+            Entity,
+            &GeneratedEnvironmentMapLight,
+            &EnvironmentMapLight,
+        ), With<SkyReflection>>();
+        let (probe, source, diffuse, specular) = probes
             .single(app.world())
-            .map(|(entity, light)| (entity, light.environment_map.clone()))
+            .map(|(entity, generated, filtered)| {
+                (
+                    entity,
+                    generated.environment_map.clone(),
+                    filtered.diffuse_map.clone(),
+                    filtered.specular_map.clone(),
+                )
+            })
             .expect("one entity filters the sky");
-        assert_eq!(source, SKY_REFLECTION_SOURCE);
-        assert!(app.world().resource::<Assets<Image>>().contains(&source));
-        assert_eq!(camera_maps(&app, camera), (AMBIENT_MAP, AMBIENT_MAP));
-
-        let filtered = app
-            .world_mut()
-            .resource_mut::<Assets<Image>>()
-            .add(Image::default());
-        app.world_mut()
-            .entity_mut(probe)
-            .insert(EnvironmentMapLight {
-                specular_map: filtered.clone(),
-                ..default()
-            });
-        app.update();
-        assert_eq!(camera_maps(&app, camera), (AMBIENT_MAP, filtered));
+        assert_eq!(
+            (source, diffuse, specular),
+            (
+                SKY_REFLECTION_SOURCE,
+                SKY_REFLECTION_DIFFUSE,
+                SKY_REFLECTION_SPECULAR
+            )
+        );
+        let images = app.world().resource::<Assets<Image>>();
+        for map in [
+            &SKY_REFLECTION_SOURCE,
+            &SKY_REFLECTION_DIFFUSE,
+            &SKY_REFLECTION_SPECULAR,
+        ] {
+            assert!(images.contains(map));
+        }
+        assert_eq!(
+            images
+                .get(&SKY_REFLECTION_SPECULAR)
+                .map(|map| map.texture_descriptor.mip_level_count),
+            Some(SKY_FACE_SIZE.ilog2() + 1)
+        );
+        assert_eq!(
+            camera_maps(&app, camera),
+            (AMBIENT_MAP, SKY_REFLECTION_SPECULAR)
+        );
 
         app.world_mut()
             .get_mut::<Environment>(root)
