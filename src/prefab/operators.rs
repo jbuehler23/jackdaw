@@ -116,10 +116,10 @@ fn quat_value(x: f32, y: f32, z: f32, w: f32) -> BsnValue {
     })
 }
 
-/// A whole `Transform` struct patch: translation, rotation and scale.
-fn transform_patch(transform: Transform) -> BsnPatch {
+/// A whole `Transform` struct value: translation, rotation and scale.
+pub(super) fn transform_value(transform: Transform) -> BsnValue {
     let (t, r, s) = (transform.translation, transform.rotation, transform.scale);
-    BsnPatch::Struct(BsnStructData {
+    BsnValue::Struct(BsnStructData {
         type_path: TRANSFORM_TYPE.to_string(),
         fields: BsnStructFields(vec![
             field("translation", vec3_value(t.x, t.y, t.z)),
@@ -127,6 +127,21 @@ fn transform_patch(transform: Transform) -> BsnPatch {
             field("scale", vec3_value(s.x, s.y, s.z)),
         ]),
     })
+}
+
+/// A whole `Transform` struct patch: translation, rotation and scale.
+fn transform_patch(transform: Transform) -> BsnPatch {
+    value_to_patch(transform_value(transform)).expect("Transform is a struct")
+}
+
+/// Where `entity` stands in the world, as the transform an instance at the
+/// top level carries to stand there too.
+fn world_placement(world: &World, entity: Entity) -> Transform {
+    world
+        .get::<GlobalTransform>(entity)
+        .map(GlobalTransform::compute_transform)
+        .or_else(|| world.get::<Transform>(entity).copied())
+        .unwrap_or_default()
 }
 
 /// Deep-clone a live-document node's component patches into a fresh vector.
@@ -407,18 +422,19 @@ fn save_selection_as_new_prefab(
         return;
     };
     remove_packed_from_document(world, &packed.entities);
-    // spawn_instance adds the instance node and triggers a reload that
+    // The spawn adds the instance node and triggers a reload that
     // materializes the inherited children from the prefab we just wrote.
-    spawn_instance(world, &packed.path, packed.centroid);
+    spawn_instance_placed(world, &packed.path, packed.placement, None);
 }
 
 /// A prefab file that was just written, and what went into it.
 struct PackedPrefab {
     /// The file written, which is where an instance inherits from.
     path: PathBuf,
-    /// The centroid the packaged roots were shifted around, which is where
-    /// an instance of the file stands for the scene to look as it did.
-    centroid: Vec3,
+    /// Where an instance of the file stands for the scene to look as it did:
+    /// a lone root's whole placement, or the centroid several roots were
+    /// shifted around.
+    placement: Transform,
     /// The live-document entities that went into the file. Still in the
     /// document; dropping them is `remove_packed_from_document`.
     entities: Vec<Entity>,
@@ -450,6 +466,10 @@ fn write_prefab_from_roots(
     }
 
     let top_root_set: std::collections::HashSet<Entity> = normalized.iter().copied().collect();
+    let lone_root = match normalized {
+        [root] => Some(world_placement(world, *root)),
+        _ => None,
+    };
     let centroid = selection_centroid(world, normalized);
     let display_name = target_path
         .file_stem()
@@ -479,7 +499,8 @@ fn write_prefab_from_roots(
 
     // Parent each packaged entity. Entities whose parent is also packaged nest
     // under it; top roots (parent not in the set) parent under the synthetic
-    // root and have their translation shifted into its local frame.
+    // root. A lone root stands at identity there, its placement going to the
+    // instance; several keep their layout around the centroid.
     for &entity in &entities {
         let Some(&prefab_node) = ecs_to_prefab.get(&entity) else {
             continue;
@@ -489,10 +510,12 @@ fn write_prefab_from_roots(
             Some(parent) if ecs_to_prefab.contains_key(&parent) => ecs_to_prefab[&parent],
             _ => {
                 if top_root_set.contains(&entity)
-                    && let Some(value) = get_bsn_field(&prefab, prefab_node, TRANSFORM_TYPE, "")
+                    && let Some(mut value) = get_bsn_field(&prefab, prefab_node, TRANSFORM_TYPE, "")
                 {
-                    let mut value = value;
-                    shift_bsn_translation(&mut value, -centroid);
+                    match lone_root {
+                        Some(_) => value = transform_value(Transform::IDENTITY),
+                        None => shift_bsn_translation(&mut value, -centroid),
+                    }
                     set_whole_component(&mut prefab, prefab_node, TRANSFORM_TYPE, value);
                 }
                 synth
@@ -511,7 +534,7 @@ fn write_prefab_from_roots(
 
     Some(PackedPrefab {
         path,
-        centroid,
+        placement: lone_root.unwrap_or_else(|| Transform::from_translation(centroid)),
         entities,
     })
 }
@@ -717,39 +740,6 @@ fn add_instance_node(world: &mut World, source: &Path, transform: Transform) {
     live.add_to_roots(node);
 }
 
-/// The scale an instance carries to stand at `target`'s size, given that
-/// the prefab already holds `packed`'s own scale.
-///
-/// `None` when the ratio is not the same on every axis: the instance applies
-/// its scale under its rotation, so an uneven ratio would shear it.
-fn instance_scale(packed: Vec3, target: Vec3) -> Option<Vec3> {
-    let ratio = |target: f32, packed: f32| {
-        if packed.abs() > f32::EPSILON {
-            target / packed
-        } else {
-            target
-        }
-    };
-    let scale = Vec3::new(
-        ratio(target.x, packed.x),
-        ratio(target.y, packed.y),
-        ratio(target.z, packed.z),
-    );
-    let even = (scale.max_element() - scale.min_element()).abs()
-        <= MATCH_TOLERANCE * scale.abs().max_element().max(1.0);
-    even.then_some(scale)
-}
-
-/// The transform an instance carries to stand where `target` stood, given that
-/// the prefab already holds `packed`'s own rotation and scale.
-fn instance_delta(packed: Transform, target: Transform) -> Option<Transform> {
-    Some(Transform {
-        translation: target.translation,
-        rotation: target.rotation * packed.rotation.inverse(),
-        scale: instance_scale(packed.scale, target.scale)?,
-    })
-}
-
 /// Pack `root` and its subtree into a prefab file, replacing it in the scene
 /// with an instance standing where the group stood.
 pub(crate) fn pack_group(
@@ -781,7 +771,6 @@ pub(crate) fn pack_matching_groups(
     if !target_is_writable(world, target_path, overwrite, op) {
         return None;
     }
-    let packed = world.get::<Transform>(root).copied().unwrap_or_default();
     let signature = group_signature(world, root);
     let mut matched: Vec<(Entity, Transform)> = Vec::new();
     for entity in top_level_entities(world) {
@@ -797,18 +786,7 @@ pub(crate) fn pack_matching_groups(
         if !accepted {
             continue;
         }
-        let at = world.get::<Transform>(entity).copied().unwrap_or_default();
-        let Some(delta) = instance_delta(packed, at) else {
-            let name = world
-                .get::<Name>(entity)
-                .map_or_else(|| format!("{entity}"), |name| name.as_str().to_string());
-            warn_caller(
-                world,
-                format!("{op}: {name} is scaled unevenly against the packed group; left alone"),
-            );
-            continue;
-        };
-        matched.push((entity, delta));
+        matched.push((entity, world_placement(world, entity)));
     }
 
     forget_cached_prefab(world, target_path);
@@ -837,14 +815,10 @@ pub(crate) fn pack_matching_groups(
     }
 
     remove_packed_from_document(world, &written.entities);
-    add_instance_node(
-        world,
-        &written.path,
-        Transform::from_translation(written.centroid),
-    );
-    for (entity, delta) in &matched {
+    add_instance_node(world, &written.path, written.placement);
+    for (entity, placement) in &matched {
         remove_subtree_from_document(world, *entity);
-        add_instance_node(world, &written.path, *delta);
+        add_instance_node(world, &written.path, *placement);
     }
     crate::prefab::watcher::reload_all_instances(world);
     record_spawned_roots(world, matched.len() + 1);
@@ -1208,6 +1182,22 @@ pub fn spawn_instance_under(
     world_pos: Vec3,
     parent: Option<Entity>,
 ) {
+    spawn_instance_placed(
+        world,
+        prefab_path,
+        Transform::from_translation(world_pos),
+        parent,
+    );
+}
+
+/// [`spawn_instance_under`] standing the instance at a whole world placement,
+/// rotation and scale included.
+pub fn spawn_instance_placed(
+    world: &mut World,
+    prefab_path: &Path,
+    placement: Transform,
+    parent: Option<Entity>,
+) {
     // Caches the prefab's own `IsA` ancestry alongside it, without which a
     // two-level prefab resolves to nothing.
     let assets_root = crate::prefab::save_load::source_root_of(world, prefab_path);
@@ -1247,20 +1237,25 @@ pub fn spawn_instance_under(
     }
     // The patch is the instance's own transform, so a parented instance
     // carries where it sits inside the parent rather than where it sits in
-    // the world; one that ends up at the top level carries the world position
-    // it was placed at.
-    let local_pos = parent_node
+    // the world; one that ends up at the top level carries the world placement
+    // it was given. A placement that only moves writes only the translation.
+    let local = parent_node
         .and(parent)
         .and_then(|parent| world.get::<GlobalTransform>(parent))
-        .map_or(world_pos, |parent| {
-            parent.affine().inverse().transform_point3(world_pos)
+        .map_or(placement, |parent| {
+            GlobalTransform::from(placement).reparented_to(parent)
         });
     let node = {
         let mut live = world.resource_mut::<SceneBsnAst>();
         let source = prefab_path.to_string_lossy().into_owned();
         let mut patches = vec![isa_patch(&source, &[]), peid_patch(0)];
         if !ui_scene {
-            patches.push(transform_translation_patch(local_pos));
+            let moved_only = placement.rotation == Quat::IDENTITY && placement.scale == Vec3::ONE;
+            patches.push(if moved_only {
+                transform_translation_patch(local.translation)
+            } else {
+                transform_patch(local)
+            });
         }
         let node = live.create_entity_node(patches);
         match parent_node {

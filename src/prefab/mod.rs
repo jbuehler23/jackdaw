@@ -9,6 +9,7 @@ pub mod canonical_path;
 pub mod components;
 pub mod operators;
 pub mod overrides_bsn;
+pub(crate) mod placement_migration;
 pub mod resolver_bsn;
 pub mod save_load;
 pub mod sync;
