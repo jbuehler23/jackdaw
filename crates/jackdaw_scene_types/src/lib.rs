@@ -28,8 +28,8 @@ pub mod types;
 pub use asset_path::to_asset_path;
 pub use brush_chunks::{MeshChunk, build_brush_chunks};
 pub use environment::{
-    Ambient, AmbientMode, Antialiasing, Environment, Fog, FogMode, PostProcess, ShadowFiltering,
-    Sky, Tonemapper,
+    Ambient, AmbientMode, Antialiasing, Environment, Fog, FogMode, PostProcess, Reflections,
+    ShadowFiltering, Sky, Tonemapper,
 };
 #[cfg(feature = "render")]
 pub use mesh_rebuild::evaluate_brush_geometry;
@@ -100,6 +100,7 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<FogMode>()
             .register_type::<Ambient>()
             .register_type::<AmbientMode>()
+            .register_type::<Reflections>()
             .register_type::<PostProcess>()
             .register_type::<Tonemapper>()
             .register_type::<Antialiasing>()

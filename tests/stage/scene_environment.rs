@@ -178,6 +178,7 @@ fn a_scene_saved_with_an_environment_reloads_with_it() {
             ("fog.end", 800.0.into()),
             ("ambient.mode", "Trilight".into()),
             ("ambient.sky", "0.62,0.64,0.66".into()),
+            ("ambient.reflections", "Sky".into()),
             ("post.enabled", true.into()),
             ("post.bloom_intensity", 0.2.into()),
         ],
