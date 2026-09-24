@@ -1,9 +1,13 @@
 //! Dresses a scene's 3D cameras in its [`Environment`].
 
+use bevy::anti_alias::fxaa::Fxaa;
+use bevy::anti_alias::smaa::Smaa;
+use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::camera::{Exposure, Hdr};
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::light::ShadowFilteringMethod;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::{MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{DistanceFog, FogFalloff, MaterialPipeline, MaterialPipelineKey};
@@ -14,11 +18,12 @@ use bevy::render::render_resource::{
     AsBindGroup, Extent3d, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
     TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
 };
+use bevy::render::view::Msaa;
 use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection};
 use bevy::shader::ShaderRef;
 use jackdaw_scene_types::{
-    Ambient, EditorHidden, Environment, Fog, FogMode, NavmeshExclude, PostProcess, SceneWind, Sky,
-    Tonemapper,
+    Ambient, Antialiasing, EditorHidden, Environment, Fog, FogMode, NavmeshExclude, PostProcess,
+    SceneWind, ShadowFiltering, Sky, Tonemapper,
 };
 
 const SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/sky.wgsl";
@@ -72,6 +77,11 @@ pub struct UndressedCamera {
     fog: Option<DistanceFog>,
     ambient: Option<EnvironmentMapLight>,
     hdr: bool,
+    fxaa: Option<Fxaa>,
+    smaa: Option<Smaa>,
+    taa: Option<TemporalAntiAliasing>,
+    msaa: Option<Msaa>,
+    shadow_filtering: Option<ShadowFilteringMethod>,
 }
 
 /// The entity that draws the sky.
@@ -220,6 +230,13 @@ type CameraParts = (
     Option<&'static DistanceFog>,
     Option<&'static EnvironmentMapLight>,
     Has<Hdr>,
+    (
+        Option<&'static Fxaa>,
+        Option<&'static Smaa>,
+        Option<&'static TemporalAntiAliasing>,
+        Option<&'static Msaa>,
+        Option<&'static ShadowFilteringMethod>,
+    ),
 );
 
 fn dress_the_cameras(
@@ -254,6 +271,7 @@ fn dress_the_cameras(
         fog,
         light,
         hdr,
+        (fxaa, smaa, taa, msaa, filtering),
     ) in &cameras
     {
         if !layers.is_none_or(|layers| layers.intersects(&RenderLayers::default())) {
@@ -279,6 +297,11 @@ fn dress_the_cameras(
             fog: fog.cloned(),
             ambient: light.cloned(),
             hdr,
+            fxaa: fxaa.cloned(),
+            smaa: smaa.copied(),
+            taa: taa.cloned(),
+            msaa: msaa.copied(),
+            shadow_filtering: filtering.copied(),
         });
         dress_fog(&mut camera, &env.fog, &undressed);
         match &ambient {
@@ -316,11 +339,20 @@ impl UndressedCamera {
     }
 
     fn restore_post(&self, camera: &mut EntityCommands) {
+        self.restore_antialiasing(camera);
+        restore(camera, self.shadow_filtering);
         restore(camera, self.tonemapping);
         restore(camera, self.exposure);
         restore(camera, self.grading.clone());
         restore(camera, self.vignette.clone());
         self.restore_bloom(camera);
+    }
+
+    fn restore_antialiasing(&self, camera: &mut EntityCommands) {
+        restore(camera, self.fxaa.clone());
+        restore(camera, self.smaa);
+        restore(camera, self.taa.clone());
+        restore(camera, self.msaa);
     }
 
     fn restore_bloom(&self, camera: &mut EntityCommands) {
@@ -427,6 +459,51 @@ fn dress_post(camera: &mut EntityCommands, post: &PostProcess, undressed: &Undre
         });
     } else {
         restore(camera, undressed.vignette.clone());
+    }
+    dress_antialiasing(camera, post.antialiasing, undressed);
+    match shadow_filtering(post.shadow_filtering) {
+        Some(method) => {
+            camera.insert(method);
+        }
+        None => restore(camera, undressed.shadow_filtering),
+    }
+}
+
+/// Bevy's shadow filter for an environment's choice, or `None` to keep the camera's own.
+pub fn shadow_filtering(choice: ShadowFiltering) -> Option<ShadowFilteringMethod> {
+    match choice {
+        ShadowFiltering::Keep => None,
+        ShadowFiltering::Hardware2x2 => Some(ShadowFilteringMethod::Hardware2x2),
+        ShadowFiltering::Gaussian => Some(ShadowFilteringMethod::Gaussian),
+        ShadowFiltering::Temporal => Some(ShadowFilteringMethod::Temporal),
+    }
+}
+
+fn dress_antialiasing(
+    camera: &mut EntityCommands,
+    choice: Antialiasing,
+    undressed: &UndressedCamera,
+) {
+    match choice {
+        Antialiasing::Keep => undressed.restore_antialiasing(camera),
+        Antialiasing::Off => {
+            camera.remove::<(Fxaa, Smaa, TemporalAntiAliasing)>();
+            restore(camera, undressed.msaa);
+        }
+        Antialiasing::Fxaa => {
+            camera.remove::<(Smaa, TemporalAntiAliasing)>();
+            camera.insert(Fxaa::default());
+            restore(camera, undressed.msaa);
+        }
+        Antialiasing::Smaa => {
+            camera.remove::<(Fxaa, TemporalAntiAliasing)>();
+            camera.insert(Smaa::default());
+            restore(camera, undressed.msaa);
+        }
+        Antialiasing::Taa => {
+            camera.remove::<(Fxaa, Smaa)>();
+            camera.insert((TemporalAntiAliasing::default(), Msaa::Off));
+        }
     }
 }
 
@@ -686,6 +763,52 @@ mod tests {
         assert_eq!((bloom.intensity, bloom.prefilter.threshold), (0.2, 0.9));
         let vignette = world.get::<Vignette>(camera).expect("vignetted");
         assert_eq!((vignette.intensity, vignette.smoothness), (0.25, 2.0));
+    }
+
+    #[test]
+    fn the_chosen_antialiasing_and_shadow_filter_replace_the_cameras_own_until_the_environment_goes()
+     {
+        let mut app = environment_app();
+        let camera = app
+            .world_mut()
+            .spawn((Camera3d::default(), Fxaa::default(), Msaa::Sample4))
+            .id();
+        let root = hold(
+            &mut app,
+            Environment {
+                post: PostProcess {
+                    enabled: true,
+                    antialiasing: Antialiasing::Taa,
+                    shadow_filtering: ShadowFiltering::Temporal,
+                    ..PostProcess::default()
+                },
+                ..Environment::default()
+            },
+        );
+        {
+            let dressed = app.world().entity(camera);
+            assert!(dressed.contains::<TemporalAntiAliasing>());
+            assert!(!dressed.contains::<Fxaa>());
+            assert_eq!(
+                dressed.get::<Msaa>(),
+                Some(&Msaa::Off),
+                "temporal needs one sample"
+            );
+            assert_eq!(
+                dressed.get::<ShadowFilteringMethod>(),
+                Some(&ShadowFilteringMethod::Temporal)
+            );
+        }
+
+        app.world_mut().entity_mut(root).remove::<Environment>();
+        app.update();
+        let undressed = app.world().entity(camera);
+        assert!(
+            undressed.contains::<Fxaa>(),
+            "the camera's own antialiasing is back"
+        );
+        assert!(!undressed.contains::<TemporalAntiAliasing>());
+        assert_eq!(undressed.get::<Msaa>(), Some(&Msaa::Sample4));
     }
 
     #[test]

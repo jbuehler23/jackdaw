@@ -186,6 +186,38 @@ pub enum Tonemapper {
     KhronosPbrNeutral,
 }
 
+/// How the cameras smooth jagged edges.
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[reflect(Default)]
+pub enum Antialiasing {
+    /// The cameras keep what they have.
+    #[default]
+    Keep,
+    /// No smoothing.
+    Off,
+    /// Fast approximate antialiasing, a single screen pass.
+    Fxaa,
+    /// Subpixel morphological antialiasing, sharper than FXAA.
+    Smaa,
+    /// Temporal antialiasing, which also settles noisy shadows and foliage over frames.
+    Taa,
+}
+
+/// How shadow edges are filtered.
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[reflect(Default)]
+pub enum ShadowFiltering {
+    /// The cameras keep what they have.
+    #[default]
+    Keep,
+    /// Hardware 2x2: hard edges.
+    Hardware2x2,
+    /// A Gaussian-like filter: soft edges.
+    Gaussian,
+    /// A jittered filter meant to be resolved by temporal antialiasing.
+    Temporal,
+}
+
 /// Exposure, tone curve, bloom, grading and vignette.
 #[derive(Reflect, Clone, Debug, PartialEq)]
 #[reflect(Default)]
@@ -215,6 +247,8 @@ pub struct PostProcess {
     pub vignette_intensity: f32,
     /// How gradually the vignette fades in from the centre.
     pub vignette_smoothness: f32,
+    pub antialiasing: Antialiasing,
+    pub shadow_filtering: ShadowFiltering,
 }
 
 impl Default for PostProcess {
@@ -233,6 +267,8 @@ impl Default for PostProcess {
             bloom_threshold: 0.0,
             vignette_intensity: 0.0,
             vignette_smoothness: 5.0,
+            antialiasing: Antialiasing::Keep,
+            shadow_filtering: ShadowFiltering::Keep,
         }
     }
 }
