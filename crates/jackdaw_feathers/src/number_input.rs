@@ -30,7 +30,7 @@ use bevy::ecs::{
     world::World,
 };
 use bevy::input::{
-    ButtonInput,
+    ButtonInput, ButtonState,
     keyboard::{Key, KeyCode, KeyboardInput},
 };
 use bevy::input_focus::{
@@ -787,6 +787,14 @@ fn number_input_hovered(
     }
 }
 
+/// Marks a field whose edit Enter or Escape has just settled, so the focus
+/// release that follows commits nothing more.
+#[derive(Component)]
+struct EditSettled;
+
+/// Enter commits what was typed and Escape puts back the value the field was
+/// showing; either way the field lets go of focus, as an inspector field does
+/// in other editors, so one Enter is one commit.
 fn number_input_on_enter_key(
     key_input: On<FocusedInput<KeyboardInput>>,
     q_parent: Query<&ChildOf>,
@@ -798,26 +806,46 @@ fn number_input_on_enter_key(
         ),
         With<ScrubNumberInput>,
     >,
-    q_text_input: Query<&EditableText>,
+    mut q_text_input: Query<&mut EditableText>,
+    mut focus: ResMut<InputFocus>,
     mut commands: Commands,
 ) {
-    if key_input.input.key_code != KeyCode::Enter {
+    let key = key_input.input.key_code;
+    if key_input.input.state != ButtonState::Pressed
+        || (key != KeyCode::Enter && key != KeyCode::Escape)
+    {
         return;
     }
-
-    if let Ok(&ChildOf(root)) = q_parent.get(key_input.event_target())
-        && let Ok((input_value, hard_limit, precision)) = q_number_input.get(root)
-        && let Ok(editable_text) = q_text_input.get(key_input.event_target())
-        && let Some(text_value) = typed_text(editable_text, input_value, precision)
-    {
-        emit_value_change(
-            text_value,
-            input_value.format(),
-            root,
-            hard_limit,
-            &mut commands,
-            true,
-        );
+    let text_id = key_input.event_target();
+    let Ok(&ChildOf(root)) = q_parent.get(text_id) else {
+        return;
+    };
+    let Ok((input_value, hard_limit, precision)) = q_number_input.get(root) else {
+        return;
+    };
+    let Ok(mut editable_text) = q_text_input.get_mut(text_id) else {
+        return;
+    };
+    if key == KeyCode::Enter {
+        if let Some(text_value) = typed_text(&editable_text, input_value, precision) {
+            emit_value_change(
+                text_value,
+                input_value.format(),
+                root,
+                hard_limit,
+                &mut commands,
+                true,
+            );
+        }
+    } else {
+        editable_text.queue_edit(TextEdit::SelectAll);
+        editable_text.queue_edit(TextEdit::Insert(
+            display_digits(input_value, precision).into(),
+        ));
+    }
+    commands.entity(text_id).insert(EditSettled);
+    if focus.get() == Some(text_id) {
+        focus.clear();
     }
 }
 
@@ -857,15 +885,20 @@ fn number_input_on_focus_lost(
         With<ScrubNumberInput>,
     >,
     mut q_text_input: Query<&mut EditableText>,
+    q_settled: Query<(), With<EditSettled>>,
     mut commands: Commands,
 ) {
     let editable_text_id = focus_lost.event_target();
+    let settled = q_settled.contains(editable_text_id);
+    if settled {
+        commands.entity(editable_text_id).remove::<EditSettled>();
+    }
 
     if let Ok(&ChildOf(root)) = q_parent.get(editable_text_id)
         && let Ok((input_value, hard_limit, precision)) = q_number_input.get(root)
         && let Ok(editable_text) = q_text_input.get_mut(editable_text_id)
     {
-        if let Some(text_value) = typed_text(&editable_text, input_value, precision) {
+        if !settled && let Some(text_value) = typed_text(&editable_text, input_value, precision) {
             emit_value_change(
                 text_value,
                 input_value.format(),
