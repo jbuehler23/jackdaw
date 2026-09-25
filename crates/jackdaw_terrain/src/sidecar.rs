@@ -58,6 +58,13 @@
 //!         4             roughness path length in bytes, u32 (version 9
 //!                        only; 0 = none)
 //!         n             roughness path, UTF-8
+//!         1             surface flags, u8 (version 11 only):
+//!                          bit 0 = roughness set
+//!                          bit 1 = reflectance set
+//!                          bits 2-7 = reserved, must be 0
+//!         3             padding, must be 0
+//!         4             perceptual roughness, f32 (0 where unset)
+//!         4             reflectance, f32 (0 where unset)
 //! then, per region (region_count times), each present regardless of
 //! content:
 //!         4             region coord x, i32
@@ -180,6 +187,13 @@
 //! slot takes what its material carries. A version-8 or older file reads back
 //! with both empty.
 //!
+//! # Format version 11
+//!
+//! Version 10 with a surface block closing each material slot: a flags byte,
+//! three bytes of padding, then a perceptual roughness and a reflectance,
+//! each read only where its flag is set. A version-10 or older file reads
+//! back with both unset, which shades exactly as those files did.
+//!
 //! [`load`] and [`save`] are the entry points: `load` upgrades older files
 //! forward and `save` always writes the current version, refusing anything
 //! newer than this build. The bare `encode`/`decode` and
@@ -247,6 +261,14 @@ pub const VERSION_9: u16 = 9;
 /// wear in place of their own, by glTF material name. A version-9 or older
 /// file loads with none. What [`save`] writes.
 pub const VERSION_10: u16 = 10;
+
+/// Material slots that may set a perceptual roughness and a reflectance of
+/// their own. A version-10 or older file loads with both unset. What
+/// [`save`] writes.
+pub const VERSION_11: u16 = 11;
+
+const SLOT_FLAG_ROUGHNESS: u8 = 1 << 0;
+const SLOT_FLAG_REFLECTANCE: u8 = 1 << 1;
 
 /// Conventional file extension for a terrain sidecar.
 pub const EXTENSION: &str = "jdterrain";
@@ -449,6 +471,16 @@ pub struct TerrainMaterialSlot {
     /// read from its green channel the way a metallic-roughness texture is.
     /// Empty takes whatever the slot's material carries.
     pub roughness: String,
+    /// Perceptual roughness. Scales the roughness map where the slot draws
+    /// one, up to [`crate::texture_set::MAX_SLOT_ROUGHNESS`], and is the
+    /// roughness itself where it does not. `None`
+    /// shades as a slot always has: the map as it is, or
+    /// [`crate::texture_set::DEFAULT_PERCEPTUAL_ROUGHNESS`] without one.
+    pub perceptual_roughness: Option<f32>,
+    /// Specular reflectance at normal incidence, `0..1`, as on a
+    /// `StandardMaterial`. `None` shades at
+    /// [`crate::texture_set::DEFAULT_REFLECTANCE`].
+    pub reflectance: Option<f32>,
 }
 
 impl TerrainMaterialSlot {
@@ -460,6 +492,8 @@ impl TerrainMaterialSlot {
             detile: crate::texture_set::DEFAULT_DETILE,
             occlusion: String::new(),
             roughness: String::new(),
+            perceptual_roughness: None,
+            reflectance: None,
         }
     }
 
@@ -474,6 +508,8 @@ impl TerrainMaterialSlot {
             detile: 0.0,
             occlusion: String::new(),
             roughness: String::new(),
+            perceptual_roughness: None,
+            reflectance: None,
         }
     }
 
@@ -505,6 +541,14 @@ impl TerrainMaterialSlot {
         } else {
             crate::texture_set::DEFAULT_DETILE
         };
+        let bounded = |value: Option<f32>, max: f32| {
+            value.filter(|v| v.is_finite()).map(|v| v.clamp(0.0, max))
+        };
+        self.perceptual_roughness = bounded(
+            self.perceptual_roughness,
+            crate::texture_set::MAX_SLOT_ROUGHNESS,
+        );
+        self.reflectance = bounded(self.reflectance, 1.0);
     }
 }
 
@@ -1514,7 +1558,9 @@ impl RegionTerrainData {
                 .checked_add(4)?
                 .checked_add(slot.occlusion.len())?
                 .checked_add(4)?
-                .checked_add(slot.roughness.len())?;
+                .checked_add(slot.roughness.len())?
+                .checked_add(4)? // surface flags + padding
+                .checked_add(8)?; // roughness + reflectance
         }
 
         for (_, region) in self.regions.iter_sorted() {
@@ -1623,7 +1669,7 @@ pub fn encode_regions(data: &RegionTerrainData) -> Result<Vec<u8>, SidecarError>
     let mut out = Vec::with_capacity(data.encoded_len().ok_or(SidecarError::TooLarge)?);
 
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&VERSION_10.to_le_bytes());
+    out.extend_from_slice(&VERSION_11.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     out.extend_from_slice(&(data.channels.len() as u32).to_le_bytes());
     encode_channel_directory(&mut out, &data.channels);
@@ -1641,6 +1687,17 @@ pub fn encode_regions(data: &RegionTerrainData) -> Result<Vec<u8>, SidecarError>
             out.extend_from_slice(&(path.len() as u32).to_le_bytes());
             out.extend_from_slice(path.as_bytes());
         }
+        let mut flags = 0;
+        if slot.perceptual_roughness.is_some() {
+            flags |= SLOT_FLAG_ROUGHNESS;
+        }
+        if slot.reflectance.is_some() {
+            flags |= SLOT_FLAG_REFLECTANCE;
+        }
+        out.push(flags);
+        out.extend_from_slice(&[0u8; 3]);
+        out.extend_from_slice(&slot.perceptual_roughness.unwrap_or(0.0).to_le_bytes());
+        out.extend_from_slice(&slot.reflectance.unwrap_or(0.0).to_le_bytes());
     }
 
     let mut autoterrain = data.autoterrain;
@@ -1758,7 +1815,7 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
         return Err(SidecarError::BadMagic);
     }
     let version = r.u16()?;
-    if !(VERSION_2..=VERSION_10).contains(&version) {
+    if !(VERSION_2..=VERSION_11).contains(&version) {
         return Err(SidecarError::UnsupportedVersion(version));
     }
     if r.u16()? != 0 {
@@ -1823,12 +1880,29 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
         };
         let occlusion = map()?;
         let roughness = map()?;
+        let (mut perceptual_roughness, mut reflectance) = (None, None);
+        if version >= VERSION_11 {
+            let flags = r.u8()?;
+            if flags & !(SLOT_FLAG_ROUGHNESS | SLOT_FLAG_REFLECTANCE) != 0 || r.take(3)? != [0u8; 3]
+            {
+                return Err(SidecarError::ReservedFieldSet);
+            }
+            let mut value = || -> Result<f32, SidecarError> {
+                let bytes = r.take(4)?;
+                Ok(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+            };
+            let (rough, refl) = (value()?, value()?);
+            perceptual_roughness = (flags & SLOT_FLAG_ROUGHNESS != 0).then_some(rough);
+            reflectance = (flags & SLOT_FLAG_REFLECTANCE != 0).then_some(refl);
+        }
         let mut slot = TerrainMaterialSlot {
             material,
             uv_scale,
             detile,
             occlusion,
             roughness,
+            perceptual_roughness,
+            reflectance,
         };
         slot.sanitize();
         materials.push(slot);
@@ -2122,7 +2196,7 @@ pub fn load_from(bytes: &[u8], assets: Option<&Path>) -> Result<LoadedSidecar, S
     let mut data = match version {
         0 => Err(SidecarError::UnsupportedVersion(0)),
         VERSION => decode(bytes).and_then(|legacy| RegionTerrainData::from_legacy_v1(&legacy)),
-        VERSION_2..=VERSION_10 => decode_regions(bytes),
+        VERSION_2..=VERSION_11 => decode_regions(bytes),
         other => Err(SidecarError::UnsupportedVersion(other)),
     }?;
     data.normalize();
@@ -2440,6 +2514,8 @@ mod tests {
                     detile: 0.7,
                     occlusion: String::new(),
                     roughness: String::new(),
+                    perceptual_roughness: None,
+                    reflectance: None,
                 },
             ],
             autoterrain: AutoTerrainSettings::default(),
@@ -2720,7 +2796,7 @@ mod tests {
         migrated.grid = Some(GridGeometry::DEFAULT);
 
         let v2_bytes = save(&migrated).expect("encodes");
-        assert_eq!(u16::from_le_bytes([v2_bytes[8], v2_bytes[9]]), VERSION_10);
+        assert_eq!(u16::from_le_bytes([v2_bytes[8], v2_bytes[9]]), VERSION_11);
         assert_ne!(v2_bytes[8..10], v1_bytes[8..10]);
 
         let reloaded = load(&v2_bytes).expect("loads");
@@ -2827,20 +2903,21 @@ mod tests {
     fn rejects_a_v2_file_written_by_a_newer_build() {
         let bytes = encode_regions(&sample_regions()).expect("encodes");
         let mut newer = bytes.clone();
-        newer[8..10].copy_from_slice(&(VERSION_10 + 1).to_le_bytes());
+        newer[8..10].copy_from_slice(&(VERSION_11 + 1).to_le_bytes());
         assert_eq!(
             decode_regions(&newer),
-            Err(SidecarError::UnsupportedVersion(VERSION_10 + 1))
+            Err(SidecarError::UnsupportedVersion(VERSION_11 + 1))
         );
         assert_eq!(
             load(&newer),
-            Err(SidecarError::UnsupportedVersion(VERSION_10 + 1))
+            Err(SidecarError::UnsupportedVersion(VERSION_11 + 1))
         );
     }
 
     /// Version 7 lays the same bytes out but for the occlusion and roughness
-    /// paths a slot ends with now, so a version-7 file is this build's bytes
-    /// with those dropped and under the older version word.
+    /// paths and the surface block a slot ends with now, so a version-7 file
+    /// is this build's bytes with those dropped and under the older version
+    /// word.
     ///
     /// Walks the slot block from a header with no channel directory in it,
     /// which is every document these tests build.
@@ -2850,7 +2927,7 @@ mod tests {
         let mut at = MAGIC.len() + 2 + 2 + 4 + 4 + 4 + 4;
         for slot in &data.materials {
             at += 4 + slot.material.len() + 4 + 4;
-            bytes.drain(at..at + 8);
+            bytes.drain(at..at + 8 + 12);
         }
         bytes[8..10].copy_from_slice(&VERSION_7.to_le_bytes());
         bytes
@@ -2892,7 +2969,7 @@ mod tests {
         let loaded = load_from(&bytes, Some(assets.path())).expect("loads");
         let forward = save(&loaded.data).expect("encodes");
 
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_10);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_11);
         assert_eq!(
             load(&forward).expect("reloads").materials[0].material,
             "materials/grass.material.bsn",
@@ -2930,7 +3007,7 @@ mod tests {
         );
         assert_eq!(
             decode(&regions_bytes),
-            Err(SidecarError::UnsupportedVersion(VERSION_10))
+            Err(SidecarError::UnsupportedVersion(VERSION_11))
         );
     }
 
@@ -3330,13 +3407,14 @@ mod tests {
         };
         let current = encode_regions(&data).expect("encodes");
 
-        // Version 8 lays out the same bytes without the two path fields a
-        // slot now ends with, so dropping those from the one slot here and
-        // stamping the older version back produces a version-8 file.
+        // Version 8 lays out the same bytes without the two path fields and
+        // the surface block a slot now ends with, so dropping those from the
+        // one slot here and stamping the older version back produces a
+        // version-8 file.
         let header = MAGIC.len() + 2 + 2 + 4 + 4 + 4 + 4;
         let slot_head = 4 + "grass".len() + 4 + 4;
         let mut older = current;
-        older.drain(header + slot_head..header + slot_head + 8);
+        older.drain(header + slot_head..header + slot_head + 8 + 12);
         older[MAGIC.len()..MAGIC.len() + 2].copy_from_slice(&VERSION_8.to_le_bytes());
 
         let decoded = decode_regions(&older).expect("a version-8 file still decodes");
@@ -3344,6 +3422,75 @@ mod tests {
         assert_eq!(decoded.materials[0].material, "grass");
         assert_eq!(decoded.materials[0].occlusion, "");
         assert_eq!(decoded.materials[0].roughness, "");
+    }
+
+    /// A file written before a slot could set its own roughness and
+    /// reflectance loads with both unset, so it shades as it did, and keeps
+    /// the palette material overrides version 10 introduced.
+    #[test]
+    fn a_version_10_file_loads_with_slot_surface_unset() {
+        let data = RegionTerrainData {
+            materials: vec![TerrainMaterialSlot::new("grass")],
+            scatter: ScatterPalette {
+                assets: vec![ScatterPaletteEntry {
+                    materials: [("Bark".to_string(), "materials/bark.bsn".to_string())]
+                        .into_iter()
+                        .collect(),
+                    ..ScatterPaletteEntry::new("models/tree.gltf")
+                }],
+                groups: vec!["woods".to_string()],
+            },
+            ..RegionTerrainData::default()
+        };
+        let current = encode_regions(&data).expect("encodes");
+
+        let header = MAGIC.len() + 2 + 2 + 4 + 4 + 4 + 4;
+        let surface = header + 4 + "grass".len() + 4 + 4 + 4 + 4;
+        let mut older = current;
+        older.drain(surface..surface + 12);
+        older[MAGIC.len()..MAGIC.len() + 2].copy_from_slice(&VERSION_10.to_le_bytes());
+
+        let decoded = decode_regions(&older).expect("a version-10 file still decodes");
+        assert_eq!(decoded.materials, data.materials);
+        assert_eq!(decoded.scatter, data.scatter);
+        assert_eq!(decoded.materials[0].perceptual_roughness, None);
+        assert_eq!(decoded.materials[0].reflectance, None);
+    }
+
+    /// A set roughness and reflectance survive the round trip, an unset one
+    /// stays unset rather than reading back as the zero written for it, and
+    /// an out-of-range value clamps into its range on the way back in.
+    #[test]
+    fn slot_roughness_and_reflectance_round_trip_set_or_unset() {
+        let data = RegionTerrainData {
+            materials: vec![
+                TerrainMaterialSlot {
+                    perceptual_roughness: Some(0.35),
+                    ..TerrainMaterialSlot::new("wet_rock")
+                },
+                TerrainMaterialSlot {
+                    reflectance: Some(0.8),
+                    ..TerrainMaterialSlot::new("snow")
+                },
+                TerrainMaterialSlot::new("grass"),
+            ],
+            ..RegionTerrainData::default()
+        };
+        let bytes = save(&data).expect("encodes");
+        assert_eq!(bytes.len(), data.encoded_len().expect("fits"));
+        assert_eq!(load(&bytes).expect("loads").materials, data.materials);
+
+        let mut loud = data.clone();
+        loud.materials[0].perceptual_roughness = Some(3.0);
+        loud.materials[2].reflectance = Some(3.0);
+        loud.materials[1].reflectance = Some(f32::NAN);
+        let back = load(&save(&loud).expect("encodes")).expect("loads");
+        assert_eq!(
+            back.materials[0].perceptual_roughness,
+            Some(crate::texture_set::MAX_SLOT_ROUGHNESS)
+        );
+        assert_eq!(back.materials[1].reflectance, None);
+        assert_eq!(back.materials[2].reflectance, Some(1.0));
     }
 
     /// A slot's own occlusion and roughness maps survive the round trip
@@ -3391,7 +3538,7 @@ mod tests {
         assert_eq!(decoded.materials[0].detile, 0.5);
 
         let forward = save(&decoded).expect("encodes");
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_10);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_11);
         assert_eq!(
             load(&forward).expect("reloads").autoterrain,
             decoded.autoterrain
@@ -3480,7 +3627,7 @@ mod tests {
         });
 
         let bytes = encode_regions(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_10);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_11);
         assert_eq!(decode_regions(&bytes).expect("decodes"), data);
         assert_eq!(load(&bytes).expect("loads"), data);
     }
@@ -3578,7 +3725,7 @@ mod tests {
     fn a_scatter_palette_and_its_placements_round_trip() {
         let data = scattered_document();
         let bytes = save(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_10);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_11);
         assert_eq!(bytes.len(), data.encoded_len().expect("fits"));
         assert_eq!(load(&bytes).expect("loads"), data);
     }
@@ -3593,7 +3740,7 @@ mod tests {
         // Saving it forward writes the empty palette and one zero
         // placement count per region, and reads back the same document.
         let forward = save(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_10);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_11);
         assert_eq!(load(&forward).expect("loads"), data);
     }
 
@@ -3775,7 +3922,7 @@ mod tests {
         let data = load(VERSION_5_FILE).expect("loads");
         let forward = save(&data).expect("encodes");
 
-        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_10);
+        assert_eq!(u16::from_le_bytes([forward[8], forward[9]]), VERSION_11);
         assert_eq!(load(&forward).expect("reloads"), data);
     }
 
@@ -3790,7 +3937,7 @@ mod tests {
         };
 
         let bytes = save(&data).expect("encodes");
-        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_10);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), VERSION_11);
         let back = load(&bytes).expect("decodes");
         assert_eq!(back.surface, data.surface);
         assert_eq!(back, data);
@@ -4061,6 +4208,8 @@ mod tests {
                     detile: 0.0,
                     occlusion: String::new(),
                     roughness: String::new(),
+                    perceptual_roughness: None,
+                    reflectance: None,
                 },
                 TerrainMaterialSlot {
                     material: "rock".to_string(),
@@ -4068,6 +4217,8 @@ mod tests {
                     detile: 0.375,
                     occlusion: String::new(),
                     roughness: String::new(),
+                    perceptual_roughness: None,
+                    reflectance: None,
                 },
                 TerrainMaterialSlot::tombstone(),
             ],
@@ -4090,6 +4241,8 @@ mod tests {
             detile,
             occlusion: String::new(),
             roughness: String::new(),
+            perceptual_roughness: None,
+            reflectance: None,
         };
         let data = RegionTerrainData {
             materials: vec![slot(0.25, 0.5), TerrainMaterialSlot::tombstone()],
@@ -4204,13 +4357,18 @@ mod tests {
         // Each map path writes a zero length and no path bytes at all.
         let occlusion_end = detile_end + 4;
         let roughness_end = occlusion_end + 4;
+        let slot_flags_end = roughness_end + 1;
+        let slot_pad_end = slot_flags_end + 3;
+        let slot_roughness_end = slot_pad_end + 4;
+        let slot_reflectance_end = slot_roughness_end + 4;
         // The tombstone writes a zero length and no name bytes at all.
-        let tomb_name_len_end = roughness_end + 4;
+        let tomb_name_len_end = slot_reflectance_end + 4;
         let tomb_uv_scale_end = tomb_name_len_end + 4;
         let tomb_detile_end = tomb_uv_scale_end + 4;
         let tomb_occlusion_end = tomb_detile_end + 4;
         let tomb_roughness_end = tomb_occlusion_end + 4;
-        let auto_flags_end = tomb_roughness_end + 1;
+        let tomb_surface_end = tomb_roughness_end + 12;
+        let auto_flags_end = tomb_surface_end + 1;
         let auto_base_end = auto_flags_end + 1;
         let auto_slope_end = auto_base_end + 1;
         let auto_pad_end = auto_slope_end + 1;
@@ -4264,11 +4422,16 @@ mod tests {
             detile_end,
             occlusion_end,
             roughness_end,
+            slot_flags_end,
+            slot_pad_end,
+            slot_roughness_end,
+            slot_reflectance_end,
             tomb_name_len_end,
             tomb_uv_scale_end,
             tomb_detile_end,
             tomb_occlusion_end,
             tomb_roughness_end,
+            tomb_surface_end,
             auto_flags_end,
             auto_base_end,
             auto_slope_end,

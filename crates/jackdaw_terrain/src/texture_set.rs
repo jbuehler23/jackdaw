@@ -39,6 +39,19 @@ pub const MAX_UV_SCALE: f32 = 100.0;
 /// At 0 the shader samples the UVs the slot's scale alone puts it at.
 pub const DEFAULT_DETILE: f32 = 0.0;
 
+/// Perceptual roughness a slot without a roughness map shades at when it
+/// sets none of its own.
+pub const DEFAULT_PERCEPTUAL_ROUGHNESS: f32 = 0.9;
+
+/// Largest perceptual roughness a slot may set. Past 1 it only means
+/// something as a scale on a roughness map, which it can then make rougher
+/// than the map itself; the shaded roughness never passes 1.
+pub const MAX_SLOT_ROUGHNESS: f32 = 2.0;
+
+/// Reflectance a slot shades at when it sets none of its own: a
+/// `StandardMaterial`'s default, 4% at normal incidence.
+pub const DEFAULT_REFLECTANCE: f32 = 0.5;
+
 /// Strongest detiling a slot may declare. Past a full turn of rotation
 /// and a whole tile of offset there is nothing further to break up.
 pub const MAX_DETILE: f32 = 1.0;
@@ -79,6 +92,12 @@ pub struct TextureSetEntry {
     pub uv_scale: f32,
     /// How hard to break up this entry's repetition, `0..1`. 0 is off.
     pub detile: f32,
+    /// The slot's own perceptual roughness: a scale on the roughness map, or
+    /// the roughness where there is no map. `None` takes the map as it is,
+    /// or [`DEFAULT_PERCEPTUAL_ROUGHNESS`].
+    pub perceptual_roughness: Option<f32>,
+    /// The slot's own reflectance, or `None` for [`DEFAULT_REFLECTANCE`].
+    pub reflectance: Option<f32>,
 }
 
 impl TextureSetEntry {
@@ -111,6 +130,8 @@ impl TextureSetEntry {
             roughness: None,
             uv_scale: DEFAULT_UV_SCALE,
             detile: DEFAULT_DETILE,
+            perceptual_roughness: None,
+            reflectance: None,
         }
     }
 
@@ -127,6 +148,8 @@ impl TextureSetEntry {
             roughness: None,
             uv_scale,
             detile: DEFAULT_DETILE,
+            perceptual_roughness: None,
+            reflectance: None,
         }
     }
 
@@ -354,6 +377,25 @@ impl TextureSet {
             *slot = entry.detile;
         }
         strengths
+    }
+
+    /// Per-id perceptual roughness each entry sets of its own, `None` past
+    /// the end of the set and wherever an entry sets none.
+    pub fn perceptual_roughness(&self) -> [Option<f32>; MAX_TEXTURES] {
+        let mut values = [None; MAX_TEXTURES];
+        for (slot, entry) in values.iter_mut().zip(&self.entries) {
+            *slot = entry.perceptual_roughness;
+        }
+        values
+    }
+
+    /// Per-id reflectance each entry sets of its own, padded the same way.
+    pub fn reflectances(&self) -> [Option<f32>; MAX_TEXTURES] {
+        let mut values = [None; MAX_TEXTURES];
+        for (slot, entry) in values.iter_mut().zip(&self.entries) {
+            *slot = entry.reflectance;
+        }
+        values
     }
 }
 
