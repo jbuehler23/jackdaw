@@ -258,6 +258,39 @@ fn an_outside_edit_after_the_editors_own_save_still_raises_a_prompt() {
     );
 }
 
+/// The same, with the outside edit arriving well after the save has been
+/// noticed and set aside, which is when a slow machine gets to it: the watch
+/// has to still be on the file the save put in place.
+#[test]
+fn an_outside_edit_long_after_the_editors_own_save_still_raises_a_prompt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scene = tmp.path().join("zone.bsn");
+    std::fs::write(&scene, ALPHA).unwrap();
+
+    let mut app = make_app();
+    open_and_settle(&mut app, &scene);
+    assert!(
+        jackdaw::scene_io::save_scene(app.world_mut()),
+        "the scene saves",
+    );
+    let settle = Instant::now() + Duration::from_millis(600);
+    while Instant::now() < settle {
+        app.update();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !prompt_names(&app, &scene),
+        "the save itself raised nothing"
+    );
+
+    external_write(&scene, BETA);
+
+    assert!(
+        pump_until(&mut app, |app| prompt_names(app, &scene)),
+        "an outside edit long after a save still has to be seen",
+    );
+}
+
 #[test]
 fn a_refused_reload_keeps_the_open_scene_and_says_so() {
     let tmp = tempfile::tempdir().unwrap();
