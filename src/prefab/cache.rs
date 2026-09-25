@@ -24,6 +24,9 @@ pub struct SavedFingerprint {
 pub struct PrefabAstCache {
     entries: HashMap<CanonicalPrefabPath, SceneBsnAst>,
     epoch: u64,
+    /// Every prefab changed since the changes were last answered, with the
+    /// epoch its change moved the cache to.
+    changes: Vec<(u64, CanonicalPrefabPath)>,
     last_saved_fingerprints: HashMap<CanonicalPrefabPath, SavedFingerprint>,
 }
 
@@ -38,8 +41,8 @@ impl PrefabAstCache {
 
     pub fn insert(&mut self, path: impl AsRef<Path>, ast: SceneBsnAst) {
         let key = canonical_prefab_path(path);
-        self.entries.insert(key, ast);
-        self.epoch = self.epoch.wrapping_add(1);
+        self.entries.insert(key.clone(), ast);
+        self.note_change(key);
     }
 
     /// In-place mutation. Bumps the epoch. Returns `false` if no entry
@@ -50,15 +53,36 @@ impl PrefabAstCache {
             return false;
         };
         mutator(entry);
-        self.epoch = self.epoch.wrapping_add(1);
+        self.note_change(key);
         true
     }
 
     pub fn invalidate(&mut self, path: &Path) {
         let key = canonical_prefab_path(path);
         if self.entries.remove(&key).is_some() {
-            self.epoch = self.epoch.wrapping_add(1);
+            self.note_change(key);
         }
+    }
+
+    fn note_change(&mut self, key: CanonicalPrefabPath) {
+        self.epoch = self.epoch.wrapping_add(1);
+        self.changes.push((self.epoch, key));
+    }
+
+    /// The prefabs changed since the changes were last answered.
+    pub fn unanswered_changes(&self) -> impl Iterator<Item = &CanonicalPrefabPath> {
+        self.changes.iter().map(|(_, path)| path)
+    }
+
+    /// Take every change so far as answered.
+    pub fn answer_changes(&mut self) {
+        self.changes.clear();
+    }
+
+    /// Take the changes past `epoch` as answered, leaving any from before it
+    /// still to answer: a load that read those prefabs has already used them.
+    pub fn answer_changes_after(&mut self, epoch: u64) {
+        self.changes.retain(|(at, _)| *at <= epoch);
     }
 
     pub fn paths(&self) -> impl Iterator<Item = &Path> {

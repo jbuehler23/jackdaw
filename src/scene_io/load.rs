@@ -35,6 +35,9 @@ pub(crate) fn forget_prefab_cache_bump(world: &mut World, before: Option<u64>) {
     if ours == 0 {
         return;
     }
+    if let Some(mut cache) = world.get_resource_mut::<crate::prefab::PrefabAstCache>() {
+        cache.answer_changes_after(before);
+    }
     if let Some(mut last) = world.get_resource_mut::<crate::prefab::sync::LastResolvedEpoch>() {
         last.0 = last.0.wrapping_add(ours);
         debug!(
