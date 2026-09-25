@@ -809,6 +809,8 @@ pub fn unescape_spaces(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::system::RunSystemOnce;
+
     use super::*;
 
     #[test]
@@ -900,20 +902,19 @@ mod tests {
         let window = world.spawn_empty().id();
         emit(&mut world, window, Emit::Wheel(Vec2::new(0.0, -3.0)));
 
-        let wheel = world.resource::<Messages<MouseWheel>>();
-        let turned: Vec<&MouseWheel> = wheel.iter_current_update_messages().collect();
+        let turned = world
+            .run_system_once(|mut wheel: MessageReader<MouseWheel>| {
+                wheel.read().copied().collect::<Vec<_>>()
+            })
+            .expect("the reader runs");
         assert_eq!(turned.len(), 1);
         assert_eq!(turned[0].unit, MouseScrollUnit::Line);
         assert_eq!((turned[0].x, turned[0].y), (0.0, -3.0));
         assert_eq!(turned[0].window, window);
-        assert_eq!(
-            world
-                .resource::<Messages<WindowEvent>>()
-                .iter_current_update_messages()
-                .count(),
-            1,
-            "the combined window stream carries it too"
-        );
+        let combined = world
+            .run_system_once(|mut events: MessageReader<WindowEvent>| events.read().count())
+            .expect("the reader runs");
+        assert_eq!(combined, 1, "the combined window stream carries it too");
     }
 
     #[test]
