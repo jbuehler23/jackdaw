@@ -2428,43 +2428,79 @@ fn seed_string_field(
     {
         editable.queue_edit(TextEdit::SelectAll);
         editable.queue_edit(TextEdit::Insert(pending.0.clone().into()));
+        commands
+            .entity(text_id)
+            .insert(ShownFieldText(pending.0.clone()));
     }
     commands.entity(container).remove::<PendingFieldText>();
 }
 
-/// Emit a final `ValueChange<String>` when Enter is pressed in a string field.
+/// What a string field's text entry showed when its value last came from the
+/// component, which Escape puts back.
+#[derive(Component)]
+struct ShownFieldText(String);
+
+/// Marks a string field whose edit Enter or Escape has just settled, so the
+/// focus release that follows commits nothing more.
+#[derive(Component)]
+struct FieldEditSettled;
+
+/// Enter commits the typed text and Escape puts back what the field showed;
+/// either way the field lets go of focus, so one Enter is one commit.
 fn string_field_on_enter_key(
     key_input: On<FocusedInput<KeyboardInput>>,
-    q_text: Query<&EditableText>,
+    mut q_text: Query<(&mut EditableText, Option<&ShownFieldText>)>,
+    mut focus: ResMut<InputFocus>,
     mut commands: Commands,
 ) {
-    if key_input.input.key_code != KeyCode::Enter {
+    let key = key_input.input.key_code;
+    if key_input.input.state != bevy::input::ButtonState::Pressed
+        || (key != KeyCode::Enter && key != KeyCode::Escape)
+    {
         return;
     }
     let text_id = key_input.event_target();
-    if let Ok(editable) = q_text.get(text_id) {
+    let Ok((mut editable, shown)) = q_text.get_mut(text_id) else {
+        return;
+    };
+    if key == KeyCode::Enter {
+        let value = editable.value().to_string();
         commands.trigger(ValueChange {
             source: text_id,
-            value: editable.value().to_string(),
+            value: value.clone(),
             is_final: true,
         });
+        commands.entity(text_id).insert(ShownFieldText(value));
+    } else if let Some(shown) = shown {
+        editable.queue_edit(TextEdit::SelectAll);
+        editable.queue_edit(TextEdit::Insert(shown.0.clone().into()));
+    }
+    commands.entity(text_id).insert(FieldEditSettled);
+    if focus.get() == Some(text_id) {
+        focus.clear();
     }
 }
 
-/// Emit a final `ValueChange<String>` when a string field loses focus.
+/// Emit a final `ValueChange<String>` when a string field loses focus, unless
+/// Enter or Escape already settled the edit.
 fn string_field_on_focus_lost(
     focus_lost: On<FocusLost>,
-    q_text: Query<&EditableText>,
+    q_text: Query<(&EditableText, Has<FieldEditSettled>)>,
     mut commands: Commands,
 ) {
     let text_id = focus_lost.event_target();
-    if let Ok(editable) = q_text.get(text_id) {
-        commands.trigger(ValueChange {
-            source: text_id,
-            value: editable.value().to_string(),
-            is_final: true,
-        });
+    let Ok((editable, settled)) = q_text.get(text_id) else {
+        return;
+    };
+    if settled {
+        commands.entity(text_id).remove::<FieldEditSettled>();
+        return;
     }
+    commands.trigger(ValueChange {
+        source: text_id,
+        value: editable.value().to_string(),
+        is_final: true,
+    });
 }
 
 pub(super) fn spawn_text_row(commands: &mut Commands, parent: Entity, text: &str, depth: usize) {
@@ -2979,8 +3015,9 @@ pub(crate) fn refresh_inspector_fields(
         }
         if let Some(mut editable) = world.get_mut::<EditableText>(entity) {
             editable.queue_edit(TextEdit::SelectAll);
-            editable.queue_edit(TextEdit::Insert(text.into()));
+            editable.queue_edit(TextEdit::Insert(text.clone().into()));
         }
+        world.entity_mut(entity).insert(ShownFieldText(text));
     }
 
     // Apply drag-scrub updates by re-inserting `ScrubNumberInputValue`; the

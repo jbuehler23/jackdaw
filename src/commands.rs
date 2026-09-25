@@ -207,6 +207,11 @@ pub(crate) fn field_edit_commit(
             continue;
         };
         let old_value = resolve_field_edit_old_value(world, target, type_path, &path);
+        // A commit that leaves the field as it was must not bury the edit
+        // before it under an entry that undoes to the same value.
+        if old_value.as_ref() == Some(&new_value) {
+            continue;
+        }
         sub_commands.push(Box::new(SetBsnField {
             entity: target,
             type_path: type_path.to_string(),
