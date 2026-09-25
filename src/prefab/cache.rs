@@ -104,11 +104,41 @@ impl PrefabAstCache {
         self.last_saved_fingerprints.insert(key, fingerprint);
     }
 
+    /// Drop the fingerprint recorded for `path`, so the next event for it
+    /// reads as an external edit.
+    pub fn forget_saved_fingerprint(&mut self, path: &Path) {
+        self.last_saved_fingerprints
+            .remove(&canonical_prefab_path(path));
+    }
+
+    /// Record `fingerprint` for `path`, or forget the one it had when there
+    /// is none to vouch for what the cache holds.
+    pub fn settle_fingerprint(&mut self, path: &Path, fingerprint: Option<SavedFingerprint>) {
+        match fingerprint {
+            Some(fingerprint) => self.record_saved_fingerprint(path, fingerprint),
+            None => self.forget_saved_fingerprint(path),
+        }
+    }
+
     /// Last fingerprint the editor recorded for `path`, if any.
     pub fn last_saved_fingerprint(&self, path: &Path) -> Option<&SavedFingerprint> {
         self.last_saved_fingerprints
             .get(&canonical_prefab_path(path))
     }
+}
+
+/// Run `read` over `path` and fingerprint the file it read. The fingerprint is
+/// `None` when the file changed during the read: what `read` returned may be
+/// either version, so no fingerprint describes it.
+pub fn read_fingerprinted<T>(
+    path: &Path,
+    read: impl FnOnce() -> T,
+) -> (T, Option<SavedFingerprint>) {
+    let before = compute_file_fingerprint(path).ok();
+    let value = read();
+    let after = compute_file_fingerprint(path).ok();
+    let fingerprint = before.filter(|before| after.as_ref() == Some(before));
+    (value, fingerprint)
 }
 
 pub fn compute_file_fingerprint(path: &Path) -> std::io::Result<SavedFingerprint> {

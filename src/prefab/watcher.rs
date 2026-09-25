@@ -24,6 +24,9 @@ impl Plugin for PrefabWatcherPlugin {
 struct PrefabWatchState {
     watcher: Option<RecommendedWatcher>,
     watched: Vec<PathBuf>,
+    /// [`Self::watched`] canonicalized, the form [`drain_changes`] compares
+    /// an event's path in.
+    watched_canonical: Vec<PathBuf>,
     pending: Arc<Mutex<Vec<PathBuf>>>,
     debounced: Vec<(PathBuf, Instant)>,
 }
@@ -78,6 +81,11 @@ fn open_prefab_tab_paths(world: &World) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Watch the folder of every prefab file rather than the file: a save by
+/// rename puts a new file where the watched one stood, and a watch on the file
+/// stays with the one replaced. [`drain_changes`] keeps the events for watched
+/// files. A path new to the list is also queued for a check, since a watch
+/// reports nothing written before it started.
 fn refresh_watch_list(
     mut state: ResMut<PrefabWatchState>,
     cache: Res<PrefabAstCache>,
@@ -118,26 +126,36 @@ fn refresh_watch_list(
                 return;
             }
         };
-    let mut to_queue: Vec<PathBuf> = Vec::new();
-    for p in &current_paths {
-        if let Err(e) = new_watcher.watch(p, RecursiveMode::NonRecursive) {
-            warn!("watch failed for {}: {}", p.display(), e);
-        }
-        // Queue a synthetic check for any path newly added to the watch
-        // list. notify only reports events that happen after `watch()`
-        // returns, so a file modified between cache insert and watcher
-        // install would never trigger a reload otherwise.
-        if !state.watched.contains(p) {
-            to_queue.push(p.clone());
+    let mut folders: Vec<&Path> = Vec::new();
+    for path in &current_paths {
+        if let Some(folder) = path.parent()
+            && !folders.contains(&folder)
+        {
+            folders.push(folder);
         }
     }
+    for folder in folders {
+        if let Err(e) = new_watcher.watch(folder, RecursiveMode::NonRecursive) {
+            warn!("watch failed for {}: {}", folder.display(), e);
+        }
+    }
+    let to_queue: Vec<PathBuf> = current_paths
+        .iter()
+        .filter(|path| !state.watched.contains(path))
+        .cloned()
+        .collect();
     if !to_queue.is_empty()
         && let Ok(mut lock) = state.pending.lock()
     {
         lock.extend(to_queue);
     }
     state.watcher = Some(new_watcher);
+    state.watched_canonical = current_paths.iter().map(|path| canonical(path)).collect();
     state.watched = current_paths;
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn drain_changes(world: &mut World) {
@@ -151,9 +169,14 @@ fn drain_changes(world: &mut World) {
         (pending, debounced_now)
     };
     let now = Instant::now();
-    for path in pending_paths {
-        let canonical = dunce::canonicalize(&path).unwrap_or(path);
-        debounced.push((canonical, now));
+    {
+        let watched = &world.resource::<PrefabWatchState>().watched_canonical;
+        for path in pending_paths {
+            let path = canonical(&path);
+            if watched.contains(&path) && !debounced.iter().any(|(seen, _)| *seen == path) {
+                debounced.push((path, now));
+            }
+        }
     }
     let mut to_reload: Vec<PathBuf> = Vec::new();
     debounced.retain(|(p, t)| {
@@ -218,13 +241,14 @@ fn drain_changes(world: &mut World) {
         let sparse_text = capture_sparse_scene_text(world);
 
         let assets_root = crate::prefab::save_load::source_root_of(world, &path);
-        match crate::prefab::save_load::read_prefab_ast(&path, &assets_root) {
+        let (read, fingerprint) = crate::prefab::cache::read_fingerprinted(&path, || {
+            crate::prefab::save_load::read_prefab_ast(&path, &assets_root)
+        });
+        match read {
             Ok(new_ast) => {
                 let mut cache = world.resource_mut::<PrefabAstCache>();
                 cache.insert(cache_key.clone(), new_ast);
-                if let Ok(fingerprint) = crate::prefab::cache::compute_file_fingerprint(&path) {
-                    cache.record_saved_fingerprint(&path, fingerprint);
-                }
+                cache.settle_fingerprint(&path, fingerprint);
             }
             Err(e) => {
                 // Keep the last copy that parsed: without a baseline to

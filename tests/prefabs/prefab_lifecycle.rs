@@ -4046,6 +4046,94 @@ fn revert_all_reports_targets_with_no_baseline() {
     assert_eq!(report.reverted, 1, "the instance root itself still reverts");
 }
 
+/// Write a prefab the way most editors save: a new file renamed over the old.
+fn write_bsn_prefab_by_rename(app: &mut App, path: &std::path::Path, jsn: &str) {
+    let staged = path.with_extension("bsn.tmp");
+    write_bsn_prefab(app, &staged, jsn);
+    std::fs::rename(&staged, path).expect("rename over the prefab");
+}
+
+fn wait_for_name(app: &mut App, name: &str) -> Vec<String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        app.update();
+        if current_names(app).iter().any(|n| n == name) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    current_names(app)
+}
+
+/// A save by rename replaces the file the watch was placed on; the edits
+/// after it are still picked up.
+#[test]
+fn a_prefab_saved_by_rename_stays_watched() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.bsn");
+    let scene_path = tmp.path().join("s.jsn");
+
+    let mut app = make_app_for_prefab_tests();
+    app.add_plugins(jackdaw::prefab::watcher::PrefabWatcherPlugin);
+    write_bsn_prefab(&mut app, &prefab_path, &prefab_with_name("v1"));
+    std::fs::write(&scene_path, scene_referencing(&prefab_path)).unwrap();
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
+    app.update();
+
+    for name in ["v2", "v3"] {
+        write_bsn_prefab_by_rename(&mut app, &prefab_path, &prefab_with_name(name));
+        let names = wait_for_name(&mut app, name);
+        assert!(
+            names.iter().any(|n| n == name),
+            "{name} is picked up after a save by rename; got {names:?}"
+        );
+    }
+}
+
+/// Putting a prefab back as it was, modification time included, reloads the
+/// first version rather than reading as a file the editor already holds.
+#[test]
+fn a_prefab_restored_to_its_first_contents_reloads_them() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.bsn");
+    let scene_path = tmp.path().join("s.jsn");
+    let backup = tmp.path().join("p.bsn.orig");
+
+    let mut app = make_app_for_prefab_tests();
+    app.add_plugins(jackdaw::prefab::watcher::PrefabWatcherPlugin);
+    write_bsn_prefab(&mut app, &prefab_path, &prefab_with_name("v1"));
+    std::fs::copy(&prefab_path, &backup).unwrap();
+    let first_written = std::fs::metadata(&prefab_path).unwrap().modified().unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&backup)
+        .unwrap()
+        .set_modified(first_written)
+        .unwrap();
+    std::fs::write(&scene_path, scene_referencing(&prefab_path)).unwrap();
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
+    app.update();
+
+    std::fs::write(&prefab_path, {
+        let staged = tmp.path().join("v2.bsn");
+        write_bsn_prefab(&mut app, &staged, &prefab_with_name("v2"));
+        std::fs::read(&staged).unwrap()
+    })
+    .unwrap();
+    let names = wait_for_name(&mut app, "v2");
+    assert!(
+        names.iter().any(|n| n == "v2"),
+        "the edit lands; got {names:?}"
+    );
+
+    std::fs::rename(&backup, &prefab_path).unwrap();
+    let names = wait_for_name(&mut app, "v1");
+    assert!(
+        names.iter().any(|n| n == "v1"),
+        "the restored first version is reloaded; got {names:?}"
+    );
+}
+
 /// A prefab that stops parsing stays watched and keeps its last good cached
 /// copy, so the repairing edit is picked up like any other.
 #[test]
