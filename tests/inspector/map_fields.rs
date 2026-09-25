@@ -24,6 +24,10 @@ fn app_with_worn() -> (App, Entity) {
     app.register_type::<Worn>();
     app.world_mut()
         .spawn(jackdaw::layout::inspector_components_content(default()));
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    app.update();
     let entity = app
         .world_mut()
         .spawn((
