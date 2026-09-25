@@ -422,11 +422,24 @@ fn refresh_watch_list(mut state: ResMut<ExternalWatchState>, scenes: Res<Scenes>
             }
         };
 
+    // The folder, not the file: a save lands by rename, which puts a new file
+    // where the watched one stood, and a watch on the file itself stays with
+    // the one that was replaced. `drain_changes` keeps only the open paths.
+    let mut folders: Vec<&Path> = Vec::new();
+    for path in &current {
+        if let Some(folder) = path.parent()
+            && !folders.contains(&folder)
+        {
+            folders.push(folder);
+        }
+    }
+    for folder in folders {
+        if let Err(err) = watcher.watch(folder, RecursiveMode::NonRecursive) {
+            warn!("watch failed for {}: {}", folder.display(), err);
+        }
+    }
     let mut newly_watched: Vec<PathBuf> = Vec::new();
     for path in &current {
-        if let Err(err) = watcher.watch(path, RecursiveMode::NonRecursive) {
-            warn!("watch failed for {}: {}", path.display(), err);
-        }
         if !state.watched.contains(path) {
             newly_watched.push(path.clone());
         }
