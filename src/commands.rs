@@ -1709,6 +1709,36 @@ fn map_entry_path<'a>(
     })
 }
 
+/// The value `field_path` names under `root`, reading a `[key]` step into a
+/// map as the entry the inspector spells with that key.
+pub(crate) fn read_field_path<'a>(
+    root: &'a dyn bevy::reflect::PartialReflect,
+    field_path: &str,
+) -> Option<&'a dyn bevy::reflect::PartialReflect> {
+    use bevy::reflect::{ReflectPath, ReflectRef};
+
+    if let Ok(field) = field_path.reflect_element(root) {
+        return Some(field);
+    }
+    let entry = map_entry_path(root, field_path)?;
+    let holder = if entry.map.is_empty() {
+        root
+    } else {
+        entry.map.reflect_element(root).ok()?
+    };
+    let ReflectRef::Map(map) = holder.reflect_ref() else {
+        return None;
+    };
+    let (_, value) = map.iter().find(|(key, _)| {
+        crate::inspector::reflect_fields::format_partial_reflect_value(*key) == entry.key
+    })?;
+    if entry.rest.is_empty() {
+        Some(value)
+    } else {
+        read_field_path(value, entry.rest)
+    }
+}
+
 /// Write `value` into the map entry `field_path` names, on a copy of the
 /// entity's component, and return the map's own path with the whole map as
 /// it then stands. `None` when the path steps into no map entry, or names a

@@ -65,6 +65,20 @@ fn leaves_row(app: &mut App) -> Entity {
         .expect("the Leaves entry has a row")
 }
 
+/// What the row's text entry shows.
+fn shown(app: &mut App, row: Entity) -> String {
+    let mut stack = vec![row];
+    while let Some(entity) = stack.pop() {
+        if let Some(text) = app.world().get::<bevy::text::EditableText>(entity) {
+            return text.value().to_string();
+        }
+        if let Some(children) = app.world().get::<Children>(entity) {
+            stack.extend(children.iter());
+        }
+    }
+    panic!("the row has a text entry")
+}
+
 fn leaves(app: &App, entity: Entity) -> String {
     app.world().get::<Worn>(entity).expect("worn").materials["Leaves"].clone()
 }
@@ -95,4 +109,10 @@ fn text_committed_in_a_map_entry_row_lands_and_one_undo_takes_it_back() {
         app.update();
     }
     assert_eq!(leaves(&app, entity), "materials/leaves.bsn");
+    let row = leaves_row(&mut app);
+    assert_eq!(
+        shown(&mut app, row),
+        "materials/leaves.bsn",
+        "the row shows the value undo put back"
+    );
 }
