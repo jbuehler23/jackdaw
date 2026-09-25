@@ -1720,6 +1720,76 @@ fn a_refused_open_leaves_a_change_it_did_not_cause_still_to_answer() {
     );
 }
 
+/// A prefab the open scene does not draw from, cached for something else such
+/// as a scatter palette entry, does not tear the scene down and rebuild it;
+/// a change to one it does draw from still does.
+#[test]
+fn only_a_change_to_a_prefab_the_scene_draws_from_respawns_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().join("base.bsn");
+    std::fs::write(
+        &base,
+        "jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         #Base\n\
+         bevy_transform::components::transform::Transform\n",
+    )
+    .unwrap();
+    let scene = tmp.path().join("scene.bsn");
+    std::fs::write(
+        &scene,
+        format!(
+            "#Keeper\nbevy_transform::components::transform::Transform\n\n{}",
+            isa_scene_text(&base)
+        ),
+    )
+    .unwrap();
+
+    let mut app = make_app_with_n_tabs(1);
+    app.add_plugins(jackdaw::prefab::PrefabPlugin);
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene);
+    app.world_mut()
+        .run_system_cached(jackdaw::prefab::sync::drive_respawn_on_prefab_cache_change)
+        .expect("the cache-change driver runs");
+    let kept = entity_named(&mut app, "Keeper").expect("the scene spawned");
+
+    app.world_mut()
+        .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+        .insert(
+            tmp.path().join("elsewhere.bsn"),
+            jackdaw_bsn::parse_bsn_text("#Elsewhere\njackdaw::prefab::components::Prefab\n")
+                .expect("the fixture parses"),
+        );
+    app.world_mut()
+        .run_system_cached(jackdaw::prefab::sync::drive_respawn_on_prefab_cache_change)
+        .expect("the cache-change driver runs");
+    assert!(
+        app.world().get_entity(kept).is_ok(),
+        "a prefab the scene does not use rebuilt the whole scene",
+    );
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::prefab::sync::LastResolvedEpoch>()
+            .0,
+        app.world()
+            .resource::<jackdaw::prefab::PrefabAstCache>()
+            .epoch(),
+        "the change is answered all the same",
+    );
+
+    app.world_mut()
+        .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+        .mutate(&base, |_| {});
+    app.world_mut()
+        .run_system_cached(jackdaw::prefab::sync::drive_respawn_on_prefab_cache_change)
+        .expect("the cache-change driver runs");
+    assert!(
+        app.world().get_entity(kept).is_err(),
+        "a change to the prefab the scene draws from respawns it",
+    );
+    assert!(entity_named(&mut app, "Keeper").is_some());
+}
+
 /// A legacy scene is converted in memory and the file written only once the
 /// document is accepted, so a refusal leaves the directory as it found it.
 #[test]
