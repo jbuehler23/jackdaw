@@ -164,7 +164,9 @@ pub(crate) fn field_edit_preview(
     field_edit_begin(world, type_path, field_path);
     let targets = field_edit_session_targets(world);
     for target in targets {
-        apply_json_field_to_ecs(world, target, type_path, field_path, value);
+        if !apply_json_map_entry_to_ecs(world, target, type_path, field_path, value) {
+            apply_json_field_to_ecs(world, target, type_path, field_path, value);
+        }
     }
 }
 
@@ -199,16 +201,16 @@ pub(crate) fn field_edit_commit(
 
     let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
     for &target in &targets {
-        let old_value = resolve_field_edit_old_value(world, target, type_path, field_path);
-        let Some(new_value) =
-            json_field_edit_to_bsn_value(world, target, type_path, field_path, new_json)
+        let Some((path, new_value)) =
+            field_edit_to_bsn_value(world, target, type_path, field_path, new_json)
         else {
             continue;
         };
+        let old_value = resolve_field_edit_old_value(world, target, type_path, &path);
         sub_commands.push(Box::new(SetBsnField {
             entity: target,
             type_path: type_path.to_string(),
-            field_path: field_path.to_string(),
+            field_path: path,
             old_value,
             new_value,
             was_derived: false,
@@ -252,16 +254,16 @@ pub(crate) fn field_edit_commit_on(
         );
         return false;
     }
-    let old_value = resolve_field_edit_old_value(world, entity, type_path, field_path);
-    let Some(new_value) =
-        json_field_edit_to_bsn_value(world, entity, type_path, field_path, new_json)
+    let Some((path, new_value)) =
+        field_edit_to_bsn_value(world, entity, type_path, field_path, new_json)
     else {
         return false;
     };
+    let old_value = resolve_field_edit_old_value(world, entity, type_path, &path);
     let mut cmd: Box<dyn EditorCommand> = Box::new(SetBsnField {
         entity,
         type_path: type_path.to_string(),
-        field_path: field_path.to_string(),
+        field_path: path,
         old_value,
         new_value,
         was_derived: false,
@@ -1654,6 +1656,180 @@ pub(crate) fn authored_bsn_field(
     jackdaw_bsn::get_bsn_field(ast, node, type_path, field_path)
 }
 
+/// The path to author a field edit at and the value to author there.
+///
+/// An edit reaching into a map entry authors the whole map at the map's own
+/// path: a reflect path cannot name a map key, so the entry is written on a
+/// copy of the map and the map is what the document records.
+fn field_edit_to_bsn_value(
+    world: &World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+    value: &serde_json::Value,
+) -> Option<(String, jackdaw_bsn::BsnValue)> {
+    if let Some(edit) = map_entry_edit(world, entity, type_path, field_path, value) {
+        return Some(edit);
+    }
+    json_field_edit_to_bsn_value(world, entity, type_path, field_path, value)
+        .map(|new_value| (field_path.to_string(), new_value))
+}
+
+/// Where a field path steps into a map entry: the map's own path, the entry's
+/// key as the inspector spells it (`"Leaves"` for a string key), and the path
+/// that runs on inside the entry's value.
+struct MapEntryPath<'a> {
+    map: &'a str,
+    key: &'a str,
+    rest: &'a str,
+}
+
+/// The last `[key]` step of `field_path` that reads into a map held by
+/// `component`, or `None` when no step does. A `[n]` into a list is left to
+/// the reflect path, which reads one already.
+fn map_entry_path<'a>(
+    component: &dyn bevy::reflect::PartialReflect,
+    field_path: &'a str,
+) -> Option<MapEntryPath<'a>> {
+    use bevy::reflect::{ReflectPath, ReflectRef};
+
+    field_path.match_indices('[').rev().find_map(|(open, _)| {
+        let close = open + field_path[open..].find(']')?;
+        let map = &field_path[..open];
+        let holder = if map.is_empty() {
+            component
+        } else {
+            map.reflect_element(component).ok()?
+        };
+        matches!(holder.reflect_ref(), ReflectRef::Map(_)).then(|| MapEntryPath {
+            map,
+            key: &field_path[open + 1..close],
+            rest: field_path[close + 1..].trim_start_matches('.'),
+        })
+    })
+}
+
+/// Write `value` into the map entry `field_path` names, on a copy of the
+/// entity's component, and return the map's own path with the whole map as
+/// it then stands. `None` when the path steps into no map entry, or names a
+/// key the map does not hold.
+fn map_entry_edit(
+    world: &World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+    value: &serde_json::Value,
+) -> Option<(String, jackdaw_bsn::BsnValue)> {
+    use bevy::reflect::GetPath;
+
+    if !field_path.contains('[') {
+        return None;
+    }
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let registration = registry.get_with_type_path(type_path)?;
+    let component = registration
+        .data::<ReflectComponent>()?
+        .reflect(world.get_entity(entity).ok()?)?;
+    let mut merged: Box<dyn Reflect> = registration
+        .data::<bevy::reflect::ReflectFromReflect>()?
+        .from_reflect(component.as_partial_reflect())?;
+    let map_path = write_map_entry(
+        merged.as_partial_reflect_mut(),
+        field_path,
+        value,
+        &registry,
+    )?;
+    let map = if map_path.is_empty() {
+        merged.as_partial_reflect()
+    } else {
+        merged.reflect_path(map_path.as_str()).ok()?
+    };
+    Some((
+        map_path.clone(),
+        jackdaw_bsn::BsnValue::from_reflect(map, &registry),
+    ))
+}
+
+/// Write `value` into the live map entry `field_path` names. Whether the path
+/// named one the component holds.
+fn apply_json_map_entry_to_ecs(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+    value: &serde_json::Value,
+) -> bool {
+    if !field_path.contains('[') {
+        return false;
+    }
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let Some(reflect_component) = registry
+        .get_with_type_path(type_path)
+        .and_then(|registration| registration.data::<ReflectComponent>())
+    else {
+        return false;
+    };
+    let Some(live) = reflect_component.reflect_mut(world.entity_mut(entity)) else {
+        return false;
+    };
+    write_map_entry(
+        live.into_inner().as_partial_reflect_mut(),
+        field_path,
+        value,
+        &registry,
+    )
+    .is_some()
+}
+
+/// Write `value` into the map entry `field_path` names under `root`, returning
+/// the map's own path, or `None` when the path steps into no entry `root`
+/// holds.
+fn write_map_entry(
+    root: &mut dyn bevy::reflect::PartialReflect,
+    field_path: &str,
+    value: &serde_json::Value,
+    registry: &bevy::reflect::TypeRegistry,
+) -> Option<String> {
+    use bevy::reflect::{ReflectMut, ReflectPath};
+
+    let (map_path, key, rest) = {
+        let entry = map_entry_path(root, field_path)?;
+        (
+            entry.map.to_string(),
+            entry.key.to_string(),
+            entry.rest.to_string(),
+        )
+    };
+    let holder: &mut dyn bevy::reflect::PartialReflect = if map_path.is_empty() {
+        root
+    } else {
+        map_path.as_str().reflect_element_mut(root).ok()?
+    };
+    let ReflectMut::Map(map) = holder.reflect_mut() else {
+        return None;
+    };
+    let mut written = false;
+    map.retain(&mut |entry_key, entry_value| {
+        if !written
+            && crate::inspector::reflect_fields::format_partial_reflect_value(entry_key) == key
+        {
+            let target = if rest.is_empty() {
+                Some(entry_value)
+            } else {
+                rest.as_str().reflect_element_mut(entry_value).ok()
+            };
+            if let Some(target) = target {
+                apply_json_to_reflect(target, value, registry);
+                written = true;
+            }
+        }
+        true
+    });
+    written.then_some(map_path)
+}
+
 /// Convert one field edit given as reflect-format JSON into the
 /// [`jackdaw_bsn::BsnValue`] to author. Field-level edits merge the JSON into
 /// a copy of the entity's current component so nested values convert with
@@ -2082,6 +2258,109 @@ mod set_bsn_field_tests {
         app.init_resource::<Selection>();
         app.init_resource::<CommandHistory>();
         app
+    }
+
+    /// A model's material overrides, by the model's material name.
+    #[derive(Component, Reflect, Default, Clone)]
+    #[reflect(Component, Default)]
+    struct Worn {
+        materials: std::collections::BTreeMap<String, String>,
+        tints: std::collections::BTreeMap<String, Vec3>,
+    }
+
+    fn worn_app() -> (App, Entity, String) {
+        let mut app = field_app();
+        app.init_resource::<AppTypeRegistry>();
+        app.register_type::<Worn>();
+        let entity = app
+            .world_mut()
+            .spawn(Worn {
+                materials: [
+                    ("Bark".to_string(), "bark.bsn".to_string()),
+                    ("Leaves".to_string(), "leaves.bsn".to_string()),
+                ]
+                .into(),
+                tints: [("Leaves".to_string(), Vec3::ONE)].into(),
+            })
+            .id();
+        create_entity_in_ast(app.world_mut(), entity, None);
+        jackdaw_bsn::sync_to_ast(app.world_mut(), entity, std::any::TypeId::of::<Worn>());
+        app.world_mut().resource_mut::<Selection>().entities = vec![entity];
+        let type_path = <Worn as bevy::reflect::TypePath>::type_path().to_string();
+        (app, entity, type_path)
+    }
+
+    #[test]
+    fn an_edit_to_one_map_entry_authors_the_map_and_undoes() {
+        let (mut app, entity, type_path) = worn_app();
+        field_edit_commit(
+            app.world_mut(),
+            &type_path,
+            r#"materials["Leaves"]"#,
+            &serde_json::json!("pine.bsn"),
+            "Set field on multiple entities",
+        );
+
+        let worn = app.world().get::<Worn>(entity).expect("worn");
+        assert_eq!(worn.materials["Leaves"], "pine.bsn");
+        assert_eq!(
+            worn.materials["Bark"], "bark.bsn",
+            "the other entry is untouched"
+        );
+        {
+            let ast = app.world().resource::<SceneBsnAst>();
+            let node = ast.ast_for(entity).expect("linked");
+            let authored = get_bsn_field(ast, node, &type_path, "materials");
+            assert!(
+                format!("{authored:?}").contains("pine.bsn"),
+                "the document holds the new entry: {authored:?}"
+            );
+        }
+        assert_eq!(
+            app.world().resource::<CommandHistory>().undo_stack.len(),
+            1,
+            "one undo entry"
+        );
+
+        app.world_mut()
+            .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
+        let worn = app.world().get::<Worn>(entity).expect("worn");
+        assert_eq!(worn.materials["Leaves"], "leaves.bsn", "undo puts it back");
+        assert_eq!(worn.materials["Bark"], "bark.bsn");
+    }
+
+    #[test]
+    fn a_path_running_on_inside_a_map_entry_writes_that_part_of_it() {
+        let (mut app, entity, type_path) = worn_app();
+        field_edit_commit(
+            app.world_mut(),
+            &type_path,
+            r#"tints["Leaves"].y"#,
+            &serde_json::json!(0.5),
+            "Set field on multiple entities",
+        );
+        let worn = app.world().get::<Worn>(entity).expect("worn");
+        assert_eq!(worn.tints["Leaves"], Vec3::new(1.0, 0.5, 1.0));
+    }
+
+    #[test]
+    fn a_key_the_map_does_not_hold_writes_nothing() {
+        let (mut app, entity, type_path) = worn_app();
+        field_edit_commit(
+            app.world_mut(),
+            &type_path,
+            r#"materials["Moss"]"#,
+            &serde_json::json!("moss.bsn"),
+            "Set field on multiple entities",
+        );
+        let worn = app.world().get::<Worn>(entity).expect("worn");
+        assert_eq!(worn.materials.len(), 2);
+        assert!(
+            app.world()
+                .resource::<CommandHistory>()
+                .undo_stack
+                .is_empty()
+        );
     }
 
     #[test]

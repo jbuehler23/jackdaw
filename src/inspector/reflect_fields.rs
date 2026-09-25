@@ -2484,7 +2484,9 @@ pub(super) fn spawn_text_row(commands: &mut Commands, parent: Entity, text: &str
     ));
 }
 
-fn format_partial_reflect_value(value: &dyn PartialReflect) -> String {
+/// A value as one line of inspector text, which is also how a map entry's key
+/// is spelled in the field path of the row that edits it.
+pub(crate) fn format_partial_reflect_value(value: &dyn PartialReflect) -> String {
     if let Some(v) = value.try_downcast_ref::<f32>() {
         return format!("{v:.3}");
     }
