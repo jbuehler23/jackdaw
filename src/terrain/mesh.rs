@@ -11,6 +11,7 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
+            retire_orphaned_surfaces,
             rebuild_on_channel_view_change,
             rebuild_on_region_view_change,
             sync_terrain_surface,
@@ -18,6 +19,24 @@ pub(super) fn plugin(app: &mut App) {
             .chain()
             .run_if(in_state(crate::AppState::Editor)),
     );
+}
+
+/// Despawn every surface level whose terrain is gone.
+///
+/// A level normally goes with its terrain as a child. A terrain despawned in
+/// the frame its levels were spawned, as when a scene is replaced while it is
+/// still loading, leaves them with no parent to go with, drawing the plain
+/// material over the ground for the rest of the session.
+fn retire_orphaned_surfaces(
+    mut commands: Commands,
+    surfaces: Query<(Entity, &TerrainSurface)>,
+    terrains: Query<(), With<jackdaw_scene_types::Terrain>>,
+) {
+    for (entity, surface) in &surfaces {
+        if !terrains.contains(surface.terrain_entity) {
+            commands.entity(entity).despawn();
+        }
+    }
 }
 
 /// Shared material for terrain with no texture set. `base_color` is white;
@@ -489,6 +508,36 @@ mod tests {
         let mut levels: Vec<u32> = query.iter(world).map(|surface| surface.level).collect();
         levels.sort_unstable();
         levels
+    }
+
+    /// A level left behind by a terrain that is gone does not outlive it, and
+    /// the living terrain's levels stay.
+    #[test]
+    fn a_level_whose_terrain_is_gone_is_retired() {
+        let (mut world, entity) = world_with_terrain(65, vec![0.0; 65 * 65]);
+        run(&mut world);
+        let gone = world.spawn_empty().id();
+        world.despawn(gone);
+        let orphan = world
+            .spawn(TerrainSurface {
+                terrain_entity: gone,
+                level: 0,
+            })
+            .id();
+
+        world
+            .run_system_cached(retire_orphaned_surfaces)
+            .expect("system runs");
+        world.flush();
+
+        assert!(world.get_entity(orphan).is_err(), "the orphan is retired");
+        let mut living = world.query::<&TerrainSurface>();
+        assert!(
+            living
+                .iter(&world)
+                .any(|surface| surface.terrain_entity == entity),
+            "the living terrain keeps its levels"
+        );
     }
 
     /// A level that only moves its hole still has to be handed the terrain's
