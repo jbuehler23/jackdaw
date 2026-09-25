@@ -54,6 +54,7 @@ impl Plugin for TerrainPlugin {
                     ensure_terrain_dirty_chunks,
                     ensure_terrain_data_path,
                     fold_per_layer_wind_into_the_scenes_wind,
+                    fold_single_meshes_into_varieties,
                     sync_terrain_bounds,
                     prune_terrain_heightmaps,
                     scatter_data::sync_terrain_scatter,
@@ -185,6 +186,38 @@ pub fn ensure_terrain_data_path(world: &mut World) {
         if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(entity) {
             dirty.rebuild_all = true;
         }
+    }
+}
+
+/// Folds the single mesh a layer was authored with, before layers carried
+/// varieties, into one variety of that mesh, and writes the result back to
+/// the document so a save carries only the varieties.
+pub fn fold_single_meshes_into_varieties(world: &mut World) {
+    let mut terrains = world.query::<(Entity, &jackdaw_scene_types::Terrain)>();
+    let authored_single: Vec<Entity> = terrains
+        .iter(world)
+        .filter(|(_, terrain)| {
+            terrain
+                .detail
+                .iter()
+                .any(|layer| layer.mesh != jackdaw_scene_types::DetailMesh::Card)
+        })
+        .map(|(entity, _)| entity)
+        .collect();
+    for entity in authored_single {
+        let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(entity) else {
+            continue;
+        };
+        for layer in &mut terrain.detail {
+            layer.take_legacy_mesh();
+        }
+        let terrain = terrain.clone();
+        crate::commands::sync_component_to_ast(
+            world,
+            entity,
+            "jackdaw_scene_types::types::Terrain",
+            &terrain,
+        );
     }
 }
 

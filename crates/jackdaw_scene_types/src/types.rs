@@ -965,8 +965,17 @@ pub struct DetailLayer {
     /// Name of the [`TerrainChannel`] holding per-cell density. A cell reading
     /// zero grows nothing; the channel's ceiling is full density.
     pub density_channel: String,
-    /// What one instance draws.
+    /// Legacy single mesh, read from scenes written before a layer carried
+    /// [`Self::varieties`].
+    ///
+    /// A migration inlet rather than storage: a layer naming a model here is
+    /// read as one variety of that model, and the field goes back to its
+    /// default, which BSN elides. Read what a layer draws from
+    /// [`Self::varieties`], never from here.
     pub mesh: DetailMesh,
+    /// The meshes the layer draws, each instance taking one by a stable draw
+    /// against their weights.
+    pub varieties: Vec<DetailVariety>,
     /// Shortest and tallest an instance stands, in world units. Each takes a
     /// height between the two from the placement noise.
     pub height: [f32; 2],
@@ -1078,6 +1087,45 @@ impl Default for SceneWind {
     }
 }
 
+/// One mesh a detail layer draws, how often against the layer's others, and
+/// how it differs from the layer's look.
+#[derive(Reflect, Clone, Debug, PartialEq)]
+#[reflect(Default)]
+pub struct DetailVariety {
+    /// What an instance of this variety draws.
+    pub mesh: DetailMesh,
+    /// Its share of the layer's instances, against the other varieties'
+    /// weights. Zero draws none.
+    pub weight: f32,
+    /// Linear colour multiplied into the layer's foot and tip colours.
+    pub tint: [f32; 3],
+    /// Multiplies the layer's height range for this variety.
+    pub height_scale: f32,
+}
+
+/// A persisted contract: BSN elides it, so a layer holding one default variety
+/// draws the blade card as layers always have.
+impl Default for DetailVariety {
+    fn default() -> Self {
+        Self {
+            mesh: DetailMesh::Card,
+            weight: 1.0,
+            tint: [1.0, 1.0, 1.0],
+            height_scale: 1.0,
+        }
+    }
+}
+
+impl DetailVariety {
+    /// A variety of `mesh` at the layer's own look.
+    pub fn of(mesh: DetailMesh) -> Self {
+        Self {
+            mesh,
+            ..Self::default()
+        }
+    }
+}
+
 /// What one instance of a detail layer draws.
 #[derive(Reflect, Clone, Debug, PartialEq, Default)]
 #[reflect(Default)]
@@ -1095,6 +1143,7 @@ impl Default for DetailLayer {
             name: "grass".to_string(),
             density_channel: "grass".to_string(),
             mesh: DetailMesh::Card,
+            varieties: vec![DetailVariety::default()],
             height: [0.35, 0.7],
             width: [0.03, 0.05],
             color_base: [0.05, 0.14, 0.04],
@@ -1120,6 +1169,21 @@ impl DetailLayer {
     /// units. The per-layer strength this replaced was authored in the same
     /// units, so an old layer's response is its strength over this.
     pub const BREEZE_LEAN: f32 = 0.12;
+
+    /// Fold a single mesh this layer was authored with into its varieties.
+    ///
+    /// Whether there was one to fold: a layer written before varieties that
+    /// named a model draws that model, as one variety, and its legacy field
+    /// goes back to the default so a scene saved after this carries only the
+    /// varieties.
+    pub fn take_legacy_mesh(&mut self) -> bool {
+        if self.mesh == DetailMesh::Card {
+            return false;
+        }
+        let mesh = std::mem::take(&mut self.mesh);
+        self.varieties = vec![DetailVariety::of(mesh)];
+        true
+    }
 
     /// Fold the per-layer wind this layer was authored with into its response,
     /// and report the scene [`Wind`] that blows it the same way.
@@ -1459,6 +1523,35 @@ mod tests {
 
     /// The defaults are a persisted contract on both sides: a layer that
     /// authored no wind reads back as the wind a defaulted `Wind` blows.
+    #[test]
+    fn a_layer_that_named_one_model_draws_it_as_its_only_variety() {
+        let mut layer = DetailLayer {
+            mesh: DetailMesh::Asset("models/fern.gltf".to_string()),
+            ..DetailLayer::default()
+        };
+        assert!(layer.take_legacy_mesh());
+        assert_eq!(
+            layer.varieties,
+            vec![DetailVariety::of(DetailMesh::Asset(
+                "models/fern.gltf".to_string()
+            ))]
+        );
+        assert_eq!(
+            layer.mesh,
+            DetailMesh::Card,
+            "the legacy field goes back to what BSN elides"
+        );
+        assert!(!layer.take_legacy_mesh(), "a second fold finds nothing");
+    }
+
+    #[test]
+    fn a_default_layer_draws_one_card_and_folds_nothing() {
+        let mut layer = DetailLayer::default();
+        assert_eq!(layer.varieties, vec![DetailVariety::default()]);
+        assert_eq!(layer.varieties[0].mesh, DetailMesh::Card);
+        assert!(!layer.take_legacy_mesh());
+    }
+
     #[test]
     fn a_layer_that_authored_no_wind_folds_onto_the_default_wind() {
         assert_eq!(

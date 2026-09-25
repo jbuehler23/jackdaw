@@ -2,7 +2,7 @@
 //! The store holds the density and the heights; `Terrain` holds the layers.
 
 use bevy::prelude::*;
-use jackdaw_scene_types::DetailLayer;
+use jackdaw_scene_types::{DetailLayer, DetailMesh};
 use jackdaw_terrain::GridRect;
 use jackdaw_terrain::render::{DetailDirty, DetailSource, DetailTile, TerrainDetailSource};
 
@@ -105,13 +105,28 @@ fn reseeds_field(before: &DetailSource, after: &DetailSource) -> bool {
 }
 
 /// Whether two versions of one layer stand instances in different places, or
-/// draw them with a different mesh. Every other field costs no reseed.
+/// divide them between meshes differently. Every other field, a variety's
+/// tint among them, costs no reseed.
 fn places_differently(before: &DetailLayer, after: &DetailLayer) -> bool {
+    let divides = |layer: &DetailLayer| -> Vec<(DetailMesh, u32, u32)> {
+        layer
+            .varieties
+            .iter()
+            .map(|variety| {
+                (
+                    variety.mesh.clone(),
+                    variety.weight.to_bits(),
+                    variety.height_scale.to_bits(),
+                )
+            })
+            .collect()
+    };
     before.density_channel != after.density_channel
         || before.density_per_m2 != after.density_per_m2
         || before.height != after.height
         || before.align_to_normal != after.align_to_normal
         || before.mesh != after.mesh
+        || divides(before) != divides(after)
 }
 
 #[cfg(test)]
@@ -227,6 +242,19 @@ mod tests {
                     ..default()
                 },
             ),
+            (
+                "a variety's weight",
+                DetailLayer {
+                    varieties: vec![
+                        jackdaw_scene_types::DetailVariety::default(),
+                        jackdaw_scene_types::DetailVariety {
+                            weight: 2.0,
+                            ..jackdaw_scene_types::DetailVariety::default()
+                        },
+                    ],
+                    ..default()
+                },
+            ),
         ] {
             assert!(reseeded_by(layer), "{name} moves instances and must reseed");
         }
@@ -250,6 +278,16 @@ mod tests {
                 "color_base",
                 DetailLayer {
                     color_base: [1.0, 0.0, 0.0],
+                    ..default()
+                },
+            ),
+            (
+                "a variety's tint",
+                DetailLayer {
+                    varieties: vec![jackdaw_scene_types::DetailVariety {
+                        tint: [0.5, 0.5, 0.5],
+                        ..jackdaw_scene_types::DetailVariety::default()
+                    }],
                     ..default()
                 },
             ),

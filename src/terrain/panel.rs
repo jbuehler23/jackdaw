@@ -27,6 +27,7 @@ use super::autoterrain_ops::{
 };
 use super::detail_ops::{
     TerrainDetailAddOp, TerrainDetailRemoveOp, TerrainDetailSelectOp, TerrainDetailSetOp,
+    TerrainDetailVarietyAddOp, TerrainDetailVarietyRemoveOp,
 };
 use super::import::{
     ImportImageKind, MAX_IMPORT_HEIGHT, MIN_IMPORT_HEIGHT, TerrainImportImageAddOp,
@@ -81,7 +82,9 @@ pub(super) fn plugin(app: &mut App) {
         .add_observer(on_ground_slider_change)
         .add_observer(on_detail_slider_change)
         .add_observer(on_detail_checkbox_change)
-        .add_observer(on_detail_text_commit);
+        .add_observer(on_detail_text_commit)
+        .add_observer(on_variety_chip_change)
+        .add_observer(on_variety_mesh_commit);
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -815,12 +818,13 @@ const DETAIL_PUSH_SECTION: MaterialSection =
     MaterialSection::new("Bend", Icon::Waves, "terrain.detail.push", true);
 
 /// What the Detail tab rebuilds for: the layer list, which one is selected,
-/// and the two of its fields that are not dragged.
+/// and the fields of it that are not dragged, among them the meshes its
+/// varieties draw.
 #[derive(PartialEq, Clone, Debug)]
 struct DetailSignature {
     layers: Vec<String>,
     selected: usize,
-    mesh: String,
+    meshes: Vec<String>,
     align_to_normal: bool,
 }
 
@@ -834,15 +838,25 @@ fn detail_signature(terrain: &jackdaw_scene_types::Terrain, selected: usize) -> 
             .map(|layer| layer.name.clone())
             .collect(),
         selected,
-        mesh: layer.map(mesh_text).unwrap_or_default(),
+        meshes: layer
+            .map(|layer| {
+                let mut layer = layer.clone();
+                layer.take_legacy_mesh();
+                layer
+                    .varieties
+                    .iter()
+                    .map(|variety| mesh_text(&variety.mesh))
+                    .collect()
+            })
+            .unwrap_or_default(),
         align_to_normal: layer.is_some_and(|layer| layer.align_to_normal),
     }
 }
 
-/// How a layer's mesh reads in the panel, and what `terrain.detail.set` takes
-/// back.
-fn mesh_text(layer: &jackdaw_scene_types::DetailLayer) -> String {
-    match &layer.mesh {
+/// How a variety's mesh reads in the panel, and what `terrain.detail.set`
+/// takes back.
+fn mesh_text(mesh: &jackdaw_scene_types::DetailMesh) -> String {
+    match mesh {
         jackdaw_scene_types::DetailMesh::Card => "card".to_string(),
         jackdaw_scene_types::DetailMesh::Asset(path) => path.clone(),
     }
@@ -956,19 +970,7 @@ fn spawn_detail_sections(
         &layer.name,
         DetailTextField("name"),
     );
-    spawn_detail_text_row(
-        commands,
-        section.body,
-        "Mesh",
-        &mesh_text(layer),
-        DetailTextField("mesh"),
-    );
-    spawn_hint(
-        commands,
-        section.body,
-        "\"card\" is the built-in blade; anything else is a model below the assets \
-         directory.",
-    );
+    spawn_varieties(commands, section.body, layer);
     spawn_checkbox(
         commands,
         section.body,
@@ -1197,6 +1199,201 @@ fn spawn_detail_row(
         FieldKind::Continuous,
         field,
     );
+}
+
+/// The meshes the selected layer draws: one entry per variety with its mesh,
+/// its share of the instances, its height and its tint, and a button that
+/// adds another.
+fn spawn_varieties(
+    commands: &mut Commands,
+    parent: Entity,
+    layer: &jackdaw_scene_types::DetailLayer,
+) {
+    let mut layer = layer.clone();
+    layer.take_legacy_mesh();
+    commands.spawn((
+        Text::new("Meshes"),
+        TextFont {
+            font_size: tokens::TEXT_SIZE_SM,
+            ..default()
+        },
+        TextColor(tokens::TEXT_BODY_COLOR.into()),
+        ChildOf(parent),
+    ));
+    spawn_hint(
+        commands,
+        parent,
+        "Each instance draws one of these, picked by weight. \"card\" is the built-in \
+         blade; anything else is a model below the assets directory.",
+    );
+    for (index, variety) in layer.varieties.iter().enumerate() {
+        let top = commands
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: px(tokens::SPACING_SM),
+                    width: Val::Percent(100.0),
+                    ..default()
+                },
+                ChildOf(parent),
+            ))
+            .id();
+        let mesh = commands
+            .spawn((
+                Node {
+                    flex_grow: 1.0,
+                    flex_shrink: 1.0,
+                    min_width: px(0.0),
+                    ..default()
+                },
+                ChildOf(top),
+            ))
+            .id();
+        commands.spawn((
+            text_edit(TextEditProps::default().with_default_value(mesh_text(&variety.mesh))),
+            VarietyMeshField(index),
+            ChildOf(mesh),
+        ));
+        commands.spawn((
+            button::button(ButtonProps::new("Remove").with_variant(ButtonVariant::Ghost)),
+            ButtonOperatorCall::new(TerrainDetailVarietyRemoveOp::ID)
+                .with_param("variety", index as i64),
+            Tooltip::title("Remove Mesh")
+                .with_description("Take this mesh out of the layer. A layer keeps one."),
+            ChildOf(top),
+        ));
+
+        let dials = commands
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    flex_wrap: FlexWrap::Wrap,
+                    column_gap: px(tokens::SPACING_SM),
+                    row_gap: px(tokens::SPACING_XS),
+                    width: Val::Percent(100.0),
+                    ..default()
+                },
+                ChildOf(parent),
+            ))
+            .id();
+        spawn_scrub_chip(
+            commands,
+            dials,
+            "Weight",
+            "This mesh's share of the layer's instances, against the others' weights",
+            variety.weight,
+            0.0..10.0,
+            FieldKind::Continuous,
+            VarietyChip {
+                variety: index,
+                field: "weight",
+            },
+        );
+        spawn_scrub_chip(
+            commands,
+            dials,
+            "Height",
+            "Multiplies the layer's height range for this mesh",
+            variety.height_scale,
+            0.1..4.0,
+            FieldKind::Continuous,
+            VarietyChip {
+                variety: index,
+                field: "height_scale",
+            },
+        );
+        let tint = variety.tint;
+        commands
+            .spawn((
+                jackdaw_feathers::color_picker::color_picker(
+                    jackdaw_feathers::color_picker::ColorPickerProps::new()
+                        .with_color([tint[0], tint[1], tint[2], 1.0]),
+                ),
+                Tooltip::title("Tint")
+                    .with_description("Multiplied into the layer's foot and tip colours"),
+                Hovered::default(),
+                ChildOf(dials),
+            ))
+            .observe(
+                move |event: On<jackdaw_feathers::color_picker::ColorPickerChangeEvent>,
+                      mut commands: Commands| {
+                    let [r, g, b, _] = event.color;
+                    set_variety_field(&mut commands, index, "tint", format!("{r},{g},{b}"));
+                },
+            );
+    }
+    commands.spawn((
+        button::button(ButtonProps::new("Add Mesh").with_left_icon(Icon::Plus)),
+        ButtonOperatorCall::new(TerrainDetailVarietyAddOp::ID),
+        Tooltip::title("Add Mesh").with_description(
+            "Add a mesh to the layer. It takes a share of the instances by its weight.",
+        ),
+        ChildOf(parent),
+    ));
+}
+
+/// Which variety's mesh a text field names.
+#[derive(Component, Clone, Copy)]
+struct VarietyMeshField(usize);
+
+/// Which field of which variety a chip drags.
+#[derive(Component, Clone, Copy)]
+struct VarietyChip {
+    variety: usize,
+    field: &'static str,
+}
+
+fn set_variety_field(commands: &mut Commands, variety: usize, field: &str, value: String) {
+    commands
+        .operator(TerrainDetailSetOp::ID)
+        .param("field", field.to_string())
+        .param("value", value)
+        .param("variety", variety as i64)
+        .settings(CallOperatorSettings {
+            creates_history_entry: false,
+            execution_context: ExecutionContext::Invoke,
+        })
+        .call();
+}
+
+fn on_variety_chip_change(
+    event: On<ValueChange<f32>>,
+    chips: Query<&VarietyChip>,
+    mut commands: Commands,
+) {
+    let source = event.event_target();
+    let Ok(&chip) = chips.get(source) else {
+        return;
+    };
+    commands
+        .entity(source)
+        .insert(ScrubNumberInputValue::F32(event.value));
+    set_variety_field(
+        &mut commands,
+        chip.variety,
+        chip.field,
+        event.value.to_string(),
+    );
+}
+
+/// The commit may name the focused input inside the field, so the variety is
+/// read off the nearest ancestor carrying one.
+fn on_variety_mesh_commit(
+    event: On<TextEditCommitEvent>,
+    fields: Query<&VarietyMeshField>,
+    parents: Query<&ChildOf>,
+    mut commands: Commands,
+) {
+    let Some(field) = std::iter::once(event.entity)
+        .chain(parents.iter_ancestors(event.entity))
+        .take(5)
+        .find_map(|entity| fields.get(entity).ok())
+    else {
+        return;
+    };
+    set_variety_field(&mut commands, field.0, "mesh", event.text.clone());
 }
 
 /// One text field of the selected layer, beside its name.

@@ -10,6 +10,7 @@ use jackdaw::terrain::{
     PaintDomain, TerrainBrushSettings, TerrainDataStore, TerrainEditMode, TerrainPaintState,
 };
 use jackdaw_api::prelude::*;
+use jackdaw_scene_types::PropertyValue;
 
 use crate::util;
 
@@ -604,7 +605,7 @@ fn the_mesh_field_takes_the_card_or_a_model_and_refuses_a_missing_file() {
     assert_eq!(set_field(&mut app, "mesh", model), OperatorResult::Finished);
     let (_, terrain) = the_terrain(&mut app);
     assert_eq!(
-        terrain.detail[0].mesh,
+        terrain.detail[0].varieties[0].mesh,
         jackdaw_scene_types::DetailMesh::Asset(model.to_string())
     );
 
@@ -614,7 +615,7 @@ fn the_mesh_field_takes_the_card_or_a_model_and_refuses_a_missing_file() {
     );
     let (_, terrain) = the_terrain(&mut app);
     assert_eq!(
-        terrain.detail[0].mesh,
+        terrain.detail[0].varieties[0].mesh,
         jackdaw_scene_types::DetailMesh::Asset(model.to_string()),
         "a refusal writes nothing"
     );
@@ -625,8 +626,135 @@ fn the_mesh_field_takes_the_card_or_a_model_and_refuses_a_missing_file() {
     );
     let (_, terrain) = the_terrain(&mut app);
     assert_eq!(
+        terrain.detail[0].varieties[0].mesh,
+        jackdaw_scene_types::DetailMesh::Card
+    );
+}
+
+#[track_caller]
+fn call(
+    app: &mut App,
+    id: &'static str,
+    params: &[(&'static str, PropertyValue)],
+) -> OperatorResult {
+    let mut call = app.world_mut().operator(id);
+    for (key, value) in params {
+        call = call.param(*key, value.clone());
+    }
+    let result = call.call().expect("the operator dispatches");
+    app.update();
+    result
+}
+
+/// A layer grows several meshes: adding one takes a share of the instances,
+/// each keeps its own weight and tint, the last one stays, and one undo takes
+/// an add back.
+#[test]
+fn a_layer_gains_and_loses_meshes_as_single_undo_entries() {
+    let mut app = layered_app();
+    let model = "models/dungeon.glb";
+
+    assert_eq!(
+        call(
+            &mut app,
+            "terrain.detail.variety.add",
+            &[("mesh", model.into()), ("weight", 3.0.into())],
+        ),
+        OperatorResult::Finished
+    );
+    let (_, terrain) = the_terrain(&mut app);
+    let varieties = &terrain.detail[0].varieties;
+    assert_eq!(varieties.len(), 2);
+    assert_eq!(
+        varieties[1].mesh,
+        jackdaw_scene_types::DetailMesh::Asset(model.to_string())
+    );
+    assert_eq!(varieties[1].weight, 3.0);
+
+    assert_eq!(
+        call(
+            &mut app,
+            "terrain.detail.set",
+            &[
+                ("field", "tint".into()),
+                ("value", "0.5,0.9,0.5".into()),
+                ("variety", 1_i64.into()),
+            ],
+        ),
+        OperatorResult::Finished
+    );
+    let (_, terrain) = the_terrain(&mut app);
+    assert_eq!(terrain.detail[0].varieties[1].tint, [0.5, 0.9, 0.5]);
+    assert_eq!(
+        terrain.detail[0].varieties[0].tint,
+        [1.0, 1.0, 1.0],
+        "the other variety keeps its own look"
+    );
+
+    assert_eq!(
+        call(
+            &mut app,
+            "terrain.detail.variety.remove",
+            &[("variety", 0_i64.into())],
+        ),
+        OperatorResult::Finished
+    );
+    assert_eq!(
+        call(
+            &mut app,
+            "terrain.detail.variety.remove",
+            &[("variety", 0_i64.into())],
+        ),
+        OperatorResult::Cancelled,
+        "the last mesh stays"
+    );
+    let (_, terrain) = the_terrain(&mut app);
+    assert_eq!(terrain.detail[0].varieties.len(), 1);
+
+    dispatch(&mut app, "history.undo");
+    app.update();
+    let (_, terrain) = the_terrain(&mut app);
+    assert_eq!(
+        terrain.detail[0].varieties.len(),
+        2,
+        "one undo puts the removed mesh back"
+    );
+}
+
+/// A layer from a scene written before layers carried meshes of their own
+/// names one model; the editor reads it as one variety of that model and
+/// writes the document back without the old field.
+#[test]
+fn a_layer_naming_one_model_is_folded_into_a_variety_of_it() {
+    let mut app = layered_app();
+    let model = "models/dungeon.glb";
+    let (entity, _) = the_terrain(&mut app);
+    app.world_mut()
+        .get_mut::<jackdaw_scene_types::Terrain>(entity)
+        .expect("a terrain")
+        .detail[0]
+        .mesh = jackdaw_scene_types::DetailMesh::Asset(model.to_string());
+    app.world_mut()
+        .run_system_cached(jackdaw::terrain::fold_single_meshes_into_varieties)
+        .expect("the fold is installed");
+    app.update();
+
+    let (_, terrain) = the_terrain(&mut app);
+    assert_eq!(
+        terrain.detail[0].varieties,
+        vec![jackdaw_scene_types::DetailVariety::of(
+            jackdaw_scene_types::DetailMesh::Asset(model.to_string())
+        )]
+    );
+    assert_eq!(
         terrain.detail[0].mesh,
         jackdaw_scene_types::DetailMesh::Card
+    );
+    let bsn = jackdaw_remote::bsn_methods::entity_bsn(app.world_mut(), entity)
+        .expect("the terrain reports as BSN");
+    assert!(
+        bsn.contains("DetailVariety") && bsn.contains(model),
+        "the document carries the variety:\n{bsn}"
     );
 }
 

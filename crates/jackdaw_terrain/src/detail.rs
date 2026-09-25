@@ -140,6 +140,37 @@ pub fn detail_tiles_around(
         .collect()
 }
 
+/// Which of a layer's varieties an instance draws, by a draw against their
+/// weights that depends only on the instance itself: every reseed of a tile
+/// gives each instance the same variety, and changing the varieties moves no
+/// instance. `None` when no variety has weight.
+pub fn detail_variety(instance: &DetailInstance, weights: &[f32]) -> Option<usize> {
+    let total: f32 = weights.iter().map(|weight| weight.max(0.0)).sum();
+    if !total.is_finite() || total <= 0.0 {
+        return None;
+    }
+    let position = instance.position;
+    let key = mix64(
+        u64::from(position.x.to_bits())
+            ^ mix64(u64::from(position.z.to_bits()).rotate_left(32))
+            ^ mix64(u64::from(instance.packed).wrapping_add(0x5851_f42d)),
+    );
+    let mut roll = unit(key) * total;
+    let mut last = None;
+    for (index, weight) in weights.iter().enumerate() {
+        let weight = weight.max(0.0);
+        if weight <= 0.0 {
+            continue;
+        }
+        last = Some(index);
+        if roll < weight {
+            return Some(index);
+        }
+        roll -= weight;
+    }
+    last
+}
+
 /// Seed one tile of ground with a layer's instances, in terrain-local space.
 /// `density` is row-major at the heightmap's resolution, with `max` its ceiling.
 #[expect(
@@ -358,6 +389,48 @@ mod tests {
             lod_scale,
             seed,
         )
+    }
+
+    #[test]
+    fn an_instance_draws_the_same_variety_every_time_and_the_mix_follows_the_weights() {
+        let heightmap = flat(64);
+        let density = full(64);
+        let placed = place(
+            &density,
+            &heightmap,
+            &layer(24.0),
+            0,
+            IVec2::ZERO,
+            32,
+            1.0,
+            9,
+        );
+        assert!(placed.len() > 2000, "enough instances to count shares");
+        let weights = [3.0, 1.0, 0.0];
+        let mut counts = [0usize; 3];
+        for instance in &placed {
+            let picked = detail_variety(instance, &weights).expect("a variety has weight");
+            assert_eq!(detail_variety(instance, &weights), Some(picked), "stable");
+            counts[picked] += 1;
+        }
+        assert_eq!(counts[2], 0, "a variety of weight zero draws nothing");
+        let share = counts[0] as f32 / placed.len() as f32;
+        assert!(
+            (share - 0.75).abs() < 0.05,
+            "three to one comes out near three quarters, not {share}"
+        );
+    }
+
+    #[test]
+    fn no_variety_with_weight_draws_nothing() {
+        let instance = DetailInstance {
+            position: Vec3::ONE,
+            packed: 7,
+            tilt: Vec2::ZERO,
+        };
+        assert_eq!(detail_variety(&instance, &[]), None);
+        assert_eq!(detail_variety(&instance, &[0.0, -1.0]), None);
+        assert_eq!(detail_variety(&instance, &[0.0, 2.0]), Some(1));
     }
 
     #[test]
