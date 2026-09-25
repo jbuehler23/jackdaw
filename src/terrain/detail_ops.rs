@@ -7,7 +7,8 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_commands::CommandHistory;
 use jackdaw_scene_types::{
-    DetailLayer, DetailMesh, Terrain, TerrainChannel, TerrainChannelElement, TerrainPaletteEntry,
+    DetailLayer, DetailMesh, DetailVariety, Terrain, TerrainChannel, TerrainChannelElement,
+    TerrainPaletteEntry,
 };
 
 use super::detail::mark_detail_dirty;
@@ -22,6 +23,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<TerrainDetailRemoveOp>()
         .register_operator::<TerrainDetailSelectOp>()
         .register_operator::<TerrainDetailSetOp>()
+        .register_operator::<TerrainDetailVarietyAddOp>()
+        .register_operator::<TerrainDetailVarietyRemoveOp>()
         .register_operator::<TerrainDetailPaintOp>()
         .register_operator::<TerrainDetailStampOp>();
 }
@@ -293,14 +296,20 @@ pub(crate) fn terrain_detail_select(
         ),
         field(
             String,
-            doc = "Which field: name, density_channel, mesh, height, width, color_base, \
+            doc = "Which field: name, density_channel, height, width, color_base, \
                    color_tip, wind_response, bend, push_strength, push_radius, \
-                   density_per_m2, cull_distance or align_to_normal."
+                   density_per_m2, cull_distance or align_to_normal on the layer; mesh, \
+                   weight, tint or height_scale on one of its varieties."
         ),
         value(
             String,
             doc = "The value: a number, a name, \"card\" or an assets-relative model path \
                    for mesh, \"min,max\" for a range, or \"r,g,b\" for a colour."
+        ),
+        variety(
+            i64,
+            doc = "Which variety a mesh, weight, tint or height_scale is for. Defaults to \
+                   the first."
         ),
     )
 )]
@@ -326,7 +335,11 @@ pub(crate) fn terrain_detail_set(
     };
 
     let mut after_layer = before_layer.clone();
-    if !write_field(&mut after_layer, &field, &value) {
+    let variety = params
+        .as_int("variety")
+        .and_then(|variety| usize::try_from(variety).ok())
+        .unwrap_or(0);
+    if !write_field(&mut after_layer, variety, &field, &value) {
         warn_caller(
             world,
             format!("{id}: {field}= cannot take {value:?}; see the operator's field list"),
@@ -368,6 +381,146 @@ pub(crate) fn terrain_detail_set(
             world,
         );
     });
+    OperatorResult::Finished
+}
+
+/// Store `after` as the terrain's layers in one undo entry.
+fn commit_layers(
+    world: &mut World,
+    entity: Entity,
+    before: Vec<DetailLayer>,
+    after: Vec<DetailLayer>,
+) {
+    world.resource_scope(|world, mut history: Mut<CommandHistory>| {
+        history.execute(
+            Box::new(SetTerrainDetail {
+                entity,
+                before,
+                after,
+            }),
+            world,
+        );
+    });
+}
+
+/// Add a mesh to a detail layer's varieties, drawn at the layer's own look and
+/// taking a share of its instances.
+#[operator(
+    id = "terrain.detail.variety.add",
+    label = "Add Detail Variety",
+    description = "Add a mesh to a ground detail layer, sharing its instances with the \
+                   layer's other meshes.",
+    allows_undo = false,
+    params(
+        terrain(String, doc = "Name of the terrain entity. Defaults to the selection."),
+        layer(
+            String,
+            doc = "Which layer: its index, or its name when it is not an index. \
+                   Defaults to the selected layer."
+        ),
+        mesh(
+            String,
+            doc = "\"card\" or an assets-relative model path. Defaults to the card."
+        ),
+        weight(
+            f64,
+            doc = "Its share against the layer's other varieties. Defaults to 1."
+        ),
+    )
+)]
+pub(crate) fn terrain_detail_variety_add(
+    params: In<OperatorParameters>,
+    world: &mut World,
+) -> OperatorResult {
+    let params = params.0;
+    let id = "terrain.detail.variety.add";
+    let Some(entity) = detail_terrain(world, &params, id) else {
+        return OperatorResult::Cancelled;
+    };
+    let Some((index, _)) = resolve_layer(world, entity, &params, id) else {
+        return OperatorResult::Cancelled;
+    };
+    let named = params.as_str("mesh").unwrap_or("card");
+    let Some(mesh) = resolve_detail_mesh(named) else {
+        warn_caller(
+            world,
+            format!("{id}: {named:?} is neither the card nor a model below the assets"),
+        );
+        return OperatorResult::Cancelled;
+    };
+    let weight = params
+        .as_float("weight")
+        .or_else(|| params.as_int("weight").map(|weight| weight as f64))
+        .unwrap_or(1.0) as f32;
+    let Some(before) = world.get::<Terrain>(entity).map(|t| t.detail.clone()) else {
+        return OperatorResult::Cancelled;
+    };
+    let mut after = before.clone();
+    after[index].take_legacy_mesh();
+    after[index].varieties.push(DetailVariety {
+        weight: weight.max(0.0),
+        ..DetailVariety::of(mesh)
+    });
+    commit_layers(world, entity, before, after);
+    OperatorResult::Finished
+}
+
+/// Take one mesh out of a detail layer's varieties. The last one stays: a
+/// layer draws something or is removed.
+#[operator(
+    id = "terrain.detail.variety.remove",
+    label = "Remove Detail Variety",
+    description = "Take a mesh out of a ground detail layer.",
+    allows_undo = false,
+    params(
+        terrain(String, doc = "Name of the terrain entity. Defaults to the selection."),
+        layer(
+            String,
+            doc = "Which layer: its index, or its name when it is not an index. \
+                   Defaults to the selected layer."
+        ),
+        variety(i64, doc = "Which variety to take out."),
+    )
+)]
+pub(crate) fn terrain_detail_variety_remove(
+    params: In<OperatorParameters>,
+    world: &mut World,
+) -> OperatorResult {
+    let params = params.0;
+    let id = "terrain.detail.variety.remove";
+    let Some(entity) = detail_terrain(world, &params, id) else {
+        return OperatorResult::Cancelled;
+    };
+    let Some((index, layer)) = resolve_layer(world, entity, &params, id) else {
+        return OperatorResult::Cancelled;
+    };
+    let mut layer = layer;
+    layer.take_legacy_mesh();
+    let Some(variety) = params
+        .as_int("variety")
+        .and_then(|variety| usize::try_from(variety).ok())
+        .filter(|variety| *variety < layer.varieties.len())
+    else {
+        warn_caller(
+            world,
+            format!("{id}: name one of the layer's varieties with variety="),
+        );
+        return OperatorResult::Cancelled;
+    };
+    if layer.varieties.len() == 1 {
+        warn_caller(
+            world,
+            format!("{id}: a layer keeps one mesh; remove the layer to draw nothing"),
+        );
+        return OperatorResult::Cancelled;
+    }
+    let Some(before) = world.get::<Terrain>(entity).map(|t| t.detail.clone()) else {
+        return OperatorResult::Cancelled;
+    };
+    layer.varieties.remove(variety);
+    let mut after = before.clone();
+    after[index] = layer;
+    commit_layers(world, entity, before, after);
     OperatorResult::Finished
 }
 
@@ -585,6 +738,9 @@ const MAX_DENSITY_PER_M2: f32 = 512.0;
 /// Furthest detail may be asked to draw, in world units.
 const MAX_CULL_DISTANCE: f32 = 1000.0;
 
+/// Tallest a variety may be stretched over its layer's height range.
+const MAX_HEIGHT_SCALE: f32 = 20.0;
+
 /// Where an assets-relative path resolves on disk: the open project's assets
 /// directory, or `assets` beside the process.
 fn assets_dir() -> PathBuf {
@@ -604,9 +760,17 @@ fn resolve_detail_mesh(value: &str) -> Option<DetailMesh> {
         .then(|| DetailMesh::Asset(value.to_string()))
 }
 
-/// Write one named field of a layer, reporting whether the name and the value
-/// were both understood.
-fn write_field(layer: &mut DetailLayer, field: &str, value: &str) -> bool {
+/// Write one named field of a layer, or of its variety `variety` for the
+/// fields a variety carries, reporting whether the name and the value were
+/// both understood.
+fn write_field(layer: &mut DetailLayer, variety: usize, field: &str, value: &str) -> bool {
+    layer.take_legacy_mesh();
+    if matches!(field, "mesh" | "weight" | "tint" | "height_scale") {
+        let Some(variety) = layer.varieties.get_mut(variety) else {
+            return false;
+        };
+        return write_variety_field(variety, field, value);
+    }
     match field {
         "name" | "density_channel" => {
             let trimmed = value.trim();
@@ -619,10 +783,6 @@ fn write_field(layer: &mut DetailLayer, field: &str, value: &str) -> bool {
                 layer.density_channel = trimmed.to_string();
             }
         }
-        "mesh" => match resolve_detail_mesh(value) {
-            Some(mesh) => layer.mesh = mesh,
-            None => return false,
-        },
         "align_to_normal" => match value.trim() {
             "true" => layer.align_to_normal = true,
             "false" => layer.align_to_normal = false,
@@ -666,6 +826,33 @@ fn write_field(layer: &mut DetailLayer, field: &str, value: &str) -> bool {
                 _ => return false,
             }
         }
+    }
+    true
+}
+
+/// Write one named field of a variety, reporting whether the value was
+/// understood.
+fn write_variety_field(variety: &mut DetailVariety, field: &str, value: &str) -> bool {
+    match field {
+        "mesh" => match resolve_detail_mesh(value) {
+            Some(mesh) => variety.mesh = mesh,
+            None => return false,
+        },
+        "tint" => match numbers::<3>(value) {
+            Some(rgb) => variety.tint = rgb.map(|channel| channel.clamp(0.0, 1.0)),
+            None => return false,
+        },
+        "weight" | "height_scale" => {
+            let Some([scalar]) = numbers::<1>(value) else {
+                return false;
+            };
+            if field == "weight" {
+                variety.weight = scalar.max(0.0);
+            } else {
+                variety.height_scale = scalar.clamp(0.0, MAX_HEIGHT_SCALE);
+            }
+        }
+        _ => return false,
     }
     true
 }
@@ -767,76 +954,97 @@ mod tests {
     #[test]
     fn a_scalar_field_takes_a_number_and_refuses_anything_else() {
         let mut layer = DetailLayer::default();
-        assert!(write_field(&mut layer, "cull_distance", "80"));
+        assert!(write_field(&mut layer, 0, "cull_distance", "80"));
         assert_eq!(layer.cull_distance, 80.0);
-        assert!(!write_field(&mut layer, "cull_distance", "far"));
-        assert!(!write_field(&mut layer, "cull_distance", "1,2"));
+        assert!(!write_field(&mut layer, 0, "cull_distance", "far"));
+        assert!(!write_field(&mut layer, 0, "cull_distance", "1,2"));
         assert_eq!(layer.cull_distance, 80.0, "a refusal writes nothing");
     }
 
     #[test]
     fn the_fields_a_frame_pays_for_are_capped() {
         let mut layer = DetailLayer::default();
-        assert!(write_field(&mut layer, "density_per_m2", "1e9"));
+        assert!(write_field(&mut layer, 0, "density_per_m2", "1e9"));
         assert_eq!(layer.density_per_m2, MAX_DENSITY_PER_M2);
-        assert!(write_field(&mut layer, "cull_distance", "1e9"));
+        assert!(write_field(&mut layer, 0, "cull_distance", "1e9"));
         assert_eq!(layer.cull_distance, MAX_CULL_DISTANCE);
-        assert!(!write_field(&mut layer, "density_per_m2", "inf"));
+        assert!(!write_field(&mut layer, 0, "density_per_m2", "inf"));
     }
 
     #[test]
     fn an_unknown_field_is_refused() {
         let mut layer = DetailLayer::default();
-        assert!(!write_field(&mut layer, "colour", "1,0,0"));
-        assert!(!write_field(&mut layer, "", "1"));
+        assert!(!write_field(&mut layer, 0, "colour", "1,0,0"));
+        assert!(!write_field(&mut layer, 0, "", "1"));
     }
 
     #[test]
     fn a_range_is_stored_low_end_first() {
         let mut layer = DetailLayer::default();
-        assert!(write_field(&mut layer, "height", "0.9, 0.2"));
+        assert!(write_field(&mut layer, 0, "height", "0.9, 0.2"));
         assert_eq!(layer.height, [0.2, 0.9]);
-        assert!(write_field(&mut layer, "width", "0.4,0.1"));
+        assert!(write_field(&mut layer, 0, "width", "0.4,0.1"));
         assert_eq!(layer.width, [0.1, 0.4]);
-        assert!(!write_field(&mut layer, "height", "0.2"));
-        assert!(!write_field(&mut layer, "height", "-1,2"));
+        assert!(!write_field(&mut layer, 0, "height", "0.2"));
+        assert!(!write_field(&mut layer, 0, "height", "-1,2"));
     }
 
     #[test]
     fn a_colour_takes_three_channels_and_clamps_them() {
         let mut layer = DetailLayer::default();
-        assert!(write_field(&mut layer, "color_tip", "0.5,2.0,-1"));
+        assert!(write_field(&mut layer, 0, "color_tip", "0.5,2.0,-1"));
         assert_eq!(layer.color_tip, [0.5, 1.0, 0.0]);
-        assert!(!write_field(&mut layer, "color_base", "0.5,0.5"));
+        assert!(!write_field(&mut layer, 0, "color_base", "0.5,0.5"));
     }
 
     #[test]
     fn the_name_and_the_density_channel_take_a_name_but_not_an_empty_one() {
         let mut layer = DetailLayer::default();
-        assert!(write_field(&mut layer, "name", " Meadow "));
+        assert!(write_field(&mut layer, 0, "name", " Meadow "));
         assert_eq!(layer.name, "Meadow");
-        assert!(write_field(&mut layer, "density_channel", " meadow "));
+        assert!(write_field(&mut layer, 0, "density_channel", " meadow "));
         assert_eq!(layer.density_channel, "meadow");
-        assert!(!write_field(&mut layer, "name", "  "));
+        assert!(!write_field(&mut layer, 0, "name", "  "));
     }
 
     #[test]
     fn the_mesh_takes_the_card_and_refuses_a_file_that_is_not_there() {
         let mut layer = DetailLayer::default();
-        assert!(write_field(&mut layer, "mesh", "card"));
-        assert_eq!(layer.mesh, DetailMesh::Card);
-        assert!(!write_field(&mut layer, "mesh", "models/absent.gltf"));
-        assert!(!write_field(&mut layer, "mesh", "../outside.gltf"));
-        assert!(!write_field(&mut layer, "mesh", "models/notamodel.txt"));
-        assert_eq!(layer.mesh, DetailMesh::Card, "a refusal writes nothing");
+        assert!(write_field(&mut layer, 0, "mesh", "card"));
+        assert_eq!(layer.varieties[0].mesh, DetailMesh::Card);
+        assert!(!write_field(&mut layer, 0, "mesh", "models/absent.gltf"));
+        assert!(!write_field(&mut layer, 0, "mesh", "../outside.gltf"));
+        assert!(!write_field(&mut layer, 0, "mesh", "models/notamodel.txt"));
+        assert_eq!(
+            layer.varieties[0].mesh,
+            DetailMesh::Card,
+            "a refusal writes nothing"
+        );
+    }
+
+    #[test]
+    fn a_varietys_weight_tint_and_height_scale_are_written_and_bounded() {
+        let mut layer = DetailLayer::default();
+        assert!(write_field(&mut layer, 0, "weight", "3"));
+        assert!(write_field(&mut layer, 0, "tint", "0.5,1.5,-1"));
+        assert!(write_field(&mut layer, 0, "height_scale", "1e9"));
+        assert_eq!(layer.varieties[0].weight, 3.0);
+        assert_eq!(layer.varieties[0].tint, [0.5, 1.0, 0.0]);
+        assert_eq!(layer.varieties[0].height_scale, MAX_HEIGHT_SCALE);
+        assert!(write_field(&mut layer, 0, "weight", "-2"));
+        assert_eq!(layer.varieties[0].weight, 0.0, "a weight is never negative");
+        assert!(
+            !write_field(&mut layer, 1, "weight", "1"),
+            "a variety the layer does not have is refused"
+        );
     }
 
     #[test]
     fn aligning_to_the_normal_takes_only_a_bool() {
         let mut layer = DetailLayer::default();
-        assert!(write_field(&mut layer, "align_to_normal", "true"));
+        assert!(write_field(&mut layer, 0, "align_to_normal", "true"));
         assert!(layer.align_to_normal);
-        assert!(!write_field(&mut layer, "align_to_normal", "yes"));
+        assert!(!write_field(&mut layer, 0, "align_to_normal", "yes"));
         assert!(layer.align_to_normal);
     }
 }

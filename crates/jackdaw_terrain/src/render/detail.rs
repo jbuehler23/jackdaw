@@ -47,12 +47,12 @@ use bevy::render::view::ExtractedView;
 use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::Shader;
 use jackdaw_scene_types::{
-    DetailLayer, DetailMesh, DetailPresser, NavmeshExclude, SceneWind, Terrain, Wind,
+    DetailLayer, DetailMesh, DetailPresser, DetailVariety, NavmeshExclude, SceneWind, Terrain, Wind,
 };
 
 use crate::channel::ChannelElement;
 use crate::detail::{
-    DetailInstance, DetailLod, detail_lod_at, detail_tiles_around, place_detail,
+    DetailInstance, DetailLod, detail_lod_at, detail_tiles_around, detail_variety, place_detail,
     tile_centre_distance, tileable_value_noise,
 };
 use crate::heightmap::Heightmap;
@@ -152,11 +152,13 @@ impl TerrainDetailSource {
                     ),
                     None => (vec![0; cells], ChannelElement::U8.max_value()),
                 };
+                let mut layer = layer.clone();
+                layer.take_legacy_mesh();
                 DetailLayerSource {
                     density,
                     max,
                     seed: seed_of(&grid, &layer.density_channel),
-                    layer: layer.clone(),
+                    layer,
                 }
             })
             .collect();
@@ -245,6 +247,10 @@ pub struct DetailTile {
     pub terrain: Entity,
     /// Which of that terrain's layers this tile belongs to.
     pub layer: usize,
+    /// Which of that layer's varieties the instances draw. Every variety
+    /// holds a tile at a seeded coordinate, empty or not, so the coordinate
+    /// is not seeded again.
+    pub variety: usize,
     /// Which tile of that terrain's grid this is.
     pub tile: IVec2,
     pub lod: DetailLod,
@@ -390,6 +396,7 @@ impl DetailBindings {
     /// The bindings one layer's look and the pressers around it come to.
     pub fn new(
         layer: &DetailLayer,
+        variety: &DetailVariety,
         wind: &Wind,
         settings: &DetailSettings,
         pressers: &DetailPressers,
@@ -401,8 +408,8 @@ impl DetailBindings {
             *slot = position.extend(radius * layer.push_radius);
         }
         Self {
-            color_base: linear_of(layer.color_base),
-            color_tip: linear_of(layer.color_tip),
+            color_base: linear_of(layer.color_base) * linear_of(variety.tint),
+            color_tip: linear_of(layer.color_tip) * linear_of(variety.tint),
             wind_direction: wind.heading(),
             wind_strength: wind.strength,
             wind_gust: wind.gust,
@@ -411,11 +418,11 @@ impl DetailBindings {
             wind_response: layer.wind_response,
             bend: layer.bend,
             push_strength: layer.push_strength,
-            height_range: Vec2::new(layer.height[0], layer.height[1]),
+            height_range: Vec2::new(layer.height[0], layer.height[1]) * variety.height_scale,
             width_range: Vec2::new(layer.width[0], layer.width[1]),
             cull_distance: layer.cull_distance * settings.cull_scale,
             presser_count: pressers.pressers.len().min(MAX_DETAIL_PRESSERS) as u32,
-            is_card: u32::from(layer.mesh == DetailMesh::Card),
+            is_card: u32::from(variety.mesh == DetailMesh::Card),
             pressers: packed,
             wind_noise,
             color_texture,
@@ -423,8 +430,8 @@ impl DetailBindings {
     }
 }
 
-/// Which terrain's layer a bind group belongs to.
-pub type DetailKey = (Entity, usize);
+/// Which variety of which terrain's layer a bind group belongs to.
+pub type DetailKey = (Entity, usize, usize);
 
 /// The bindings every layer currently drawing is asking for.
 #[derive(Resource, Clone, Debug, Default, ExtractResource)]
@@ -608,8 +615,10 @@ fn request_detail_assets(
 ) {
     for source in &terrains {
         for entry in &source.source().layers {
-            if let DetailMesh::Asset(path) = &entry.layer.mesh {
-                assets.request(&server, path);
+            for variety in &entry.layer.varieties {
+                if let DetailMesh::Asset(path) = &variety.mesh {
+                    assets.request(&server, path);
+                }
             }
         }
     }
@@ -626,11 +635,13 @@ fn build_detail_meshes(
     let mut wanted: Vec<&String> = Vec::new();
     for source in &terrains {
         for entry in &source.source().layers {
-            if let DetailMesh::Asset(path) = &entry.layer.mesh
-                && !built.0.contains_key(path)
-                && !wanted.contains(&path)
-            {
-                wanted.push(path);
+            for variety in &entry.layer.varieties {
+                if let DetailMesh::Asset(path) = &variety.mesh
+                    && !built.0.contains_key(path)
+                    && !wanted.contains(&path)
+                {
+                    wanted.push(path);
+                }
             }
         }
     }
@@ -806,14 +817,15 @@ fn collect_detail_pressers(
     }
 }
 
-/// The mesh one layer instances, or `None` while its asset is still resolving.
-fn layer_mesh(
+/// The mesh one variety instances, or `None` while its asset is still
+/// resolving.
+fn variety_mesh(
     assets: &DetailAssets,
     built: &DetailMeshes,
-    layer: &DetailLayer,
+    variety: &DetailVariety,
     lod: DetailLod,
 ) -> Option<Handle<Mesh>> {
-    match &layer.mesh {
+    match &variety.mesh {
         DetailMesh::Card => Some(assets.card(lod)),
         DetailMesh::Asset(path) => built.get(path).map(|built| built.mesh.clone()),
     }
@@ -837,11 +849,12 @@ fn rebuild_detail_tiles(
     tiles: Query<(Entity, &DetailTile)>,
 ) {
     for (tile_entity, tile) in &tiles {
-        let layers = terrains
+        let varieties = terrains
             .get(tile.terrain)
-            .map(|(_, source, _, _)| source.source().layers.len())
-            .unwrap_or(0);
-        if tile.layer >= layers {
+            .ok()
+            .and_then(|(_, source, _, _)| source.source().layers.get(tile.layer))
+            .map_or(0, |entry| entry.layer.varieties.len());
+        if tile.variety >= varieties {
             commands.entity(tile_entity).despawn();
         }
     }
@@ -895,31 +908,57 @@ fn rebuild_detail_tiles(
                 if standing.contains(&coord) {
                     continue;
                 }
-                let Some(mesh) = layer_mesh(&assets, &built, &entry.layer, lod) else {
+                let meshes: Option<Vec<Handle<Mesh>>> = entry
+                    .layer
+                    .varieties
+                    .iter()
+                    .map(|variety| variety_mesh(&assets, &built, variety, lod))
+                    .collect();
+                let Some(meshes) = meshes else {
                     break;
                 };
                 spent += 1;
                 let instances = seed_tile(source, &settings, index, coord, lod, world_from_local);
-                let bounds = match instances.is_empty() {
-                    true => footprint(source, coord, world_from_local),
-                    false => tile_bounds(&instances, &entry.layer, &wind.0),
-                };
-                commands.spawn((
-                    DetailTile {
-                        terrain: entity,
-                        layer: index,
-                        tile: coord,
-                        lod,
-                        instances: Arc::new(instances),
+                let weights: Vec<f32> = entry
+                    .layer
+                    .varieties
+                    .iter()
+                    .map(|variety| variety.weight)
+                    .collect();
+                let mut sorted: Vec<Vec<DetailInstance>> = vec![Vec::new(); meshes.len()];
+                for instance in instances {
+                    if let Some(variety) = detail_variety(&instance, &weights) {
+                        sorted[variety].push(instance);
+                    }
+                }
+                for (variety, (instances, mesh)) in sorted.into_iter().zip(meshes).enumerate() {
+                    let bounds = match instances.is_empty() {
+                        true => footprint(source, coord, world_from_local),
+                        false => tile_bounds(
+                            &instances,
+                            &entry.layer,
+                            &entry.layer.varieties[variety],
+                            &wind.0,
+                        ),
+                    };
+                    commands.spawn((
+                        DetailTile {
+                            terrain: entity,
+                            layer: index,
+                            variety,
+                            tile: coord,
+                            lod,
+                            instances: Arc::new(instances),
+                            bounds,
+                        },
+                        Mesh3d(mesh),
+                        Transform::IDENTITY,
+                        Visibility::default(),
                         bounds,
-                    },
-                    Mesh3d(mesh),
-                    Transform::IDENTITY,
-                    Visibility::default(),
-                    bounds,
-                    NoAutoAabb,
-                    NavmeshExclude,
-                ));
+                        NoAutoAabb,
+                        NavmeshExclude,
+                    ));
+                }
             }
         }
     }
@@ -979,14 +1018,19 @@ fn footprint(source: &TerrainDetailSource, tile: IVec2, world_from_local: Affine
 
 /// What a tile's instances occupy, widened for the strongest wind a scene is
 /// likely to blow, bend and presser lean.
-fn tile_bounds(instances: &[DetailInstance], layer: &DetailLayer, wind: &Wind) -> Aabb {
+fn tile_bounds(
+    instances: &[DetailInstance],
+    layer: &DetailLayer,
+    variety: &DetailVariety,
+    wind: &Wind,
+) -> Aabb {
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     for instance in instances {
         min = min.min(instance.position);
         max = max.max(instance.position);
     }
-    let tall = layer.height[0].max(layer.height[1]);
+    let tall = layer.height[0].max(layer.height[1]) * variety.height_scale.max(0.0);
     let leaned_by_the_wind = layer.wind_response * wind.strength * DetailLayer::BREEZE_LEAN;
     let lean = layer.bend + leaned_by_the_wind.abs() + layer.push_strength;
     Aabb::from_min_max(
@@ -1008,21 +1052,26 @@ fn build_detail_looks(
     looks.0.clear();
     for (entity, source) in &terrains {
         for (index, entry) in source.source().layers.iter().enumerate() {
-            let color = match &entry.layer.mesh {
-                DetailMesh::Card => None,
-                DetailMesh::Asset(path) => built.get(path).and_then(|built| built.color.clone()),
-            };
-            looks.0.push((
-                (entity, index),
-                DetailBindings::new(
-                    &entry.layer,
-                    &wind.0,
-                    &settings,
-                    &pressers,
-                    assets.wind_noise.clone(),
-                    color.unwrap_or_else(|| assets.white.clone()),
-                ),
-            ));
+            for (at, variety) in entry.layer.varieties.iter().enumerate() {
+                let color = match &variety.mesh {
+                    DetailMesh::Card => None,
+                    DetailMesh::Asset(path) => {
+                        built.get(path).and_then(|built| built.color.clone())
+                    }
+                };
+                looks.0.push((
+                    (entity, index, at),
+                    DetailBindings::new(
+                        &entry.layer,
+                        variety,
+                        &wind.0,
+                        &settings,
+                        &pressers,
+                        assets.wind_noise.clone(),
+                        color.unwrap_or_else(|| assets.white.clone()),
+                    ),
+                ));
+            }
         }
     }
 }
@@ -1312,7 +1361,11 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetDetailBindGroup<I> {
         let Some(tile) = tile else {
             return RenderCommandResult::Skip;
         };
-        let Some(group) = groups.into_inner().0.get(&(tile.terrain, tile.layer)) else {
+        let Some(group) = groups
+            .into_inner()
+            .0
+            .get(&(tile.terrain, tile.layer, tile.variety))
+        else {
             return RenderCommandResult::Skip;
         };
         pass.set_bind_group(I, group, &[]);
@@ -1631,6 +1684,114 @@ mod tests {
             grown(1),
             grown(0)
         );
+    }
+
+    /// Two varieties of one layer stand a tile each at every coordinate, split
+    /// the same field between them by weight, and move none of its instances.
+    #[test]
+    fn a_layers_varieties_share_one_field_by_weight() {
+        let data = document(64, &["grass"]);
+        let field = |varieties: Vec<DetailVariety>| {
+            let mut app = detail_app();
+            let mut grown = layer("grass", "grass");
+            grown.varieties = varieties;
+            spawn_terrain(&mut app, &terrain(vec![grown]), &data);
+            spawn_viewer(&mut app, Vec3::new(32.0, 5.0, 32.0));
+            settle(&mut app);
+            tiles(&mut app)
+        };
+        let one = field(vec![DetailVariety::default()]);
+        let two = field(vec![
+            DetailVariety {
+                weight: 3.0,
+                ..DetailVariety::default()
+            },
+            DetailVariety {
+                weight: 1.0,
+                tint: [0.5, 0.8, 0.5],
+                ..DetailVariety::default()
+            },
+        ]);
+
+        let coords = |placed: &[DetailTile], variety: usize| -> Vec<(IVec2, DetailLod)> {
+            let mut coords: Vec<_> = placed
+                .iter()
+                .filter(|tile| tile.variety == variety)
+                .map(|tile| (tile.tile, tile.lod))
+                .collect();
+            coords.sort_by_key(|(tile, lod)| (tile.x, tile.y, *lod as u8));
+            coords
+        };
+        assert_eq!(
+            coords(&two, 0),
+            coords(&two, 1),
+            "a tile per variety at each coordinate"
+        );
+        assert_eq!(coords(&two, 0), coords(&one, 0));
+
+        let positions = |placed: &[DetailTile]| -> Vec<[u32; 3]> {
+            let mut all: Vec<[u32; 3]> = placed
+                .iter()
+                .flat_map(|tile| tile.instances.iter())
+                .map(|instance| instance.position.to_array().map(f32::to_bits))
+                .collect();
+            all.sort_unstable();
+            all
+        };
+        assert_eq!(
+            positions(&two),
+            positions(&one),
+            "varieties move no instance"
+        );
+
+        let count = |variety: usize| -> usize {
+            two.iter()
+                .filter(|tile| tile.variety == variety)
+                .map(|tile| tile.instances.len())
+                .sum()
+        };
+        let share = count(0) as f32 / (count(0) + count(1)) as f32;
+        assert!(
+            (share - 0.75).abs() < 0.05,
+            "three to one comes out near three quarters, not {share}"
+        );
+    }
+
+    /// A variety's tint colours both ends of the layer's gradient, and its
+    /// height scale stretches the layer's range.
+    #[test]
+    fn a_varietys_look_tints_and_stretches_the_layers() {
+        let grown = DetailLayer {
+            color_base: [0.2, 0.4, 0.2],
+            color_tip: [0.4, 0.8, 0.4],
+            height: [0.5, 1.0],
+            ..DetailLayer::default()
+        };
+        let looks = |variety: DetailVariety| {
+            DetailBindings::new(
+                &grown,
+                &variety,
+                &SceneWind::default().0,
+                &DetailSettings::default(),
+                &DetailPressers::default(),
+                Handle::default(),
+                Handle::default(),
+            )
+        };
+        let plain = looks(DetailVariety::default());
+        let tall_and_dry = looks(DetailVariety {
+            tint: [1.0, 0.5, 1.0],
+            height_scale: 2.0,
+            ..DetailVariety::default()
+        });
+        assert_eq!(tall_and_dry.height_range, plain.height_range * 2.0);
+        assert!(tall_and_dry.color_tip.y < plain.color_tip.y);
+        assert_eq!(tall_and_dry.color_tip.x, plain.color_tip.x);
+        assert_eq!(plain.is_card, 1);
+        let fern = looks(DetailVariety::of(DetailMesh::Asset(
+            "models/fern.gltf".to_string(),
+        )));
+        assert_eq!(fern.is_card, 0, "a model variety is not carved as a card");
     }
 
     #[test]
@@ -2106,6 +2267,7 @@ mod tests {
                     wind_response: response,
                     ..DetailLayer::default()
                 },
+                &DetailVariety::default(),
                 &blowing,
                 &settings,
                 &pressers,
@@ -2132,6 +2294,7 @@ mod tests {
     fn a_still_scene_leans_nothing() {
         let bindings = DetailBindings::new(
             &DetailLayer::default(),
+            &DetailVariety::default(),
             &SceneWind::default().0,
             &DetailSettings::default(),
             &DetailPressers::default(),
