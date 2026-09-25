@@ -7,9 +7,11 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
+use bevy::ui_widgets::{Activate, MenuItem};
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
+use jackdaw_bsn::BsnValue;
 use jackdaw_scene_types::PropertyValue;
 
 use crate::util;
@@ -319,5 +321,171 @@ fn an_authored_variant_of_a_reported_enum_is_named_by_its_type() {
             .iter()
             .any(|line| line.contains("does not describe this type")),
         "and not called a type nothing describes, got {lines:?}",
+    );
+}
+
+const TRIGGER: &str = "definition_project::markers::ActionTrigger";
+const WHEN: &str = "definition_project::markers::ActionWhen";
+
+/// A struct component holding a unit enum, the shape an action timer trigger
+/// uses: a string plus when/action enums the editor has no registration for.
+fn schema_with_a_trigger() -> jackdaw_schema::ProjectSchema {
+    serde_json::from_value(serde_json::json!({
+        "components": [{
+            "type_path": TRIGGER,
+            "short_name": "ActionTrigger",
+            "module_path": "definition_project::markers",
+            "category": "",
+            "description": "",
+            "editor_description": "",
+            "hidden": false,
+            "preview": "",
+            "default_constructible": true,
+            "fields": [
+                { "name": "timer_key", "type_path": "alloc::string::String" },
+                { "name": "when", "type_path": WHEN }
+            ],
+            "kind": "Struct",
+            "default": {
+                "definition_project::markers::ActionTrigger": {
+                    "timer_key": "",
+                    "when": "Interact"
+                }
+            },
+            "variants": [],
+            "entity_fields": [],
+            "fills_gaps": true,
+            "asset": false
+        }],
+        "field_types": [{
+            "type_path": WHEN,
+            "short_name": "ActionWhen",
+            "module_path": "definition_project::markers",
+            "category": "",
+            "description": "",
+            "editor_description": "",
+            "hidden": false,
+            "preview": "",
+            "default_constructible": true,
+            "fields": [],
+            "kind": "Enum",
+            "default": {
+                "definition_project::markers::ActionWhen": "Interact"
+            },
+            "variants": [
+                { "name": "Interact", "fields": [] },
+                { "name": "PlayerEnter", "fields": [] },
+                { "name": "PlayerLeave", "fields": [] }
+            ],
+            "entity_fields": [],
+            "fills_gaps": true,
+            "asset": false
+        }],
+        "resources": [],
+        "events": [],
+        "functions": [],
+        "assets": []
+    }))
+    .expect("the schema reads")
+}
+
+fn scene_with_a_trigger(app: &mut App, tmp: &tempfile::TempDir) -> Entity {
+    let scene = tmp.path().join("assets/timed.bsn");
+    let path = scene.display().to_string();
+    call(
+        app,
+        "scene.new",
+        &[("kind", "3d".into()), ("path", PropertyValue::from(path))],
+    );
+    call(app, "entity.add.group", &[("name", "Gate".into())]);
+    let group = named_entity(app, "Gate");
+    call(
+        app,
+        "component.add",
+        &[
+            ("entity", PropertyValue::Entity(group)),
+            ("type_path", TRIGGER.into()),
+        ],
+    );
+    group
+}
+
+fn menu_items(app: &mut App) -> Vec<(Entity, String)> {
+    let mut items = Vec::new();
+    for entity in app
+        .world_mut()
+        .query::<Entity>()
+        .iter(app.world())
+        .collect::<Vec<_>>()
+    {
+        if app.world().get::<MenuItem>(entity).is_none() {
+            continue;
+        }
+        let mut stack = vec![entity];
+        let mut caption = String::new();
+        while let Some(next) = stack.pop() {
+            if let Some(text) = app.world().get::<Text>(next) {
+                caption = text.0.clone();
+                break;
+            }
+            if let Some(children) = app.world().get::<Children>(next) {
+                stack.extend(children.iter());
+            }
+        }
+        items.push((entity, caption));
+    }
+    items
+}
+
+fn authored_when(app: &App, entity: Entity) -> Option<String> {
+    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    let node = ast.ast_for(entity)?;
+    match jackdaw_bsn::get_bsn_field(ast, node, TRIGGER, "when")? {
+        BsnValue::Type(path) => Some(path),
+        BsnValue::String(name) => Some(name),
+        _ => None,
+    }
+}
+
+#[test]
+fn an_enum_field_on_a_project_component_is_editable() {
+    let (mut app, tmp) = app_with_project_schema();
+    let native = jackdaw::project_types::native_type_paths(
+        &app.world().resource::<AppTypeRegistry>().read(),
+    );
+    app.world_mut()
+        .resource_mut::<jackdaw::project_types::ProjectTypes>()
+        .update(&schema_with_a_trigger(), &native);
+    jackdaw::project_types::publish_document_only_types(app.world_mut());
+    let group = scene_with_a_trigger(&mut app, &tmp);
+    app.world_mut()
+        .resource_scope(|world, mut selection: Mut<Selection>| {
+            let mut commands = world.commands();
+            selection.select_single(&mut commands, group);
+        });
+    app.world_mut().flush();
+    settle(&mut app);
+
+    let items = menu_items(&mut app);
+    let captions: Vec<&str> = items.iter().map(|(_, caption)| caption.as_str()).collect();
+    assert!(
+        captions.contains(&"Interact")
+            && captions.contains(&"PlayerEnter")
+            && captions.contains(&"PlayerLeave"),
+        "the menu offers the reported variants, got {captions:?}"
+    );
+
+    let enter = items
+        .iter()
+        .find(|(_, caption)| caption == "PlayerEnter")
+        .map(|(entity, _)| *entity)
+        .expect("the menu offers PlayerEnter");
+    app.world_mut().trigger(Activate { entity: enter });
+    settle(&mut app);
+
+    assert_eq!(
+        authored_when(&app, group).as_deref(),
+        Some("definition_project::markers::ActionWhen::PlayerEnter"),
+        "picking a variant authors it on the document"
     );
 }

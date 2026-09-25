@@ -32,9 +32,6 @@ use std::collections::HashSet;
 
 use bevy_monitors::prelude::{Addition, Monitor, NotifyAdded};
 
-use jackdaw_avian_integration::AvianCollider;
-use jackdaw_geometry::is_convex_topology;
-
 use super::{
     ComponentDisplay, ComponentDisplayBody, ComponentDisplayTypePath, ComponentName,
     ComponentPicker, Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch,
@@ -218,20 +215,23 @@ fn short_type_name(type_path: &str) -> &str {
 }
 
 /// Scene-document components that live under `jackdaw_scene_types` and
-/// carry the inspector's dedicated tool surfaces: `Brush` mounts the
-/// mesh card (`brush_display`, and with it the whole Mesh tab), `Terrain`
-/// mounts the scatter / quantization / channel / generation sections;
-/// `CanvasGuides` is where a canvas guide's exact position is typed.
+/// belong in the inspector: `Brush` mounts the mesh card (`brush_display`,
+/// and with it the whole Mesh tab), `Terrain` mounts the scatter /
+/// quantization / channel / generation sections; `CanvasGuides` is where
+/// a canvas guide's exact position is typed. `HiddenInGame` and
+/// `NavmeshExclude` are marker tags an author adds by hand, so they need
+/// a card even though they have no fields.
 ///
 /// [`hidden_by_namespace`] exists to keep jackdaw's own bookkeeping
-/// components out of the generic list. These two are not bookkeeping --
-/// they are the scene data the user selected the entity to edit -- so
-/// culling them takes their entire tool surface with them and leaves a
-/// cube or a terrain showing nothing but `Transform`.
-const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 3] = [
+/// components out of the generic list. These are not bookkeeping -- they
+/// are the scene data the user selected the entity to edit -- so culling
+/// them takes their inspector surface with them.
+const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 5] = [
     "jackdaw_scene_types::types::Brush",
     "jackdaw_scene_types::types::Terrain",
     "jackdaw_scene_types::CanvasGuides",
+    jackdaw_scene_types::HIDDEN_IN_GAME_TYPE_PATH,
+    jackdaw_scene_types::NAVMESH_EXCLUDE_TYPE_PATH,
 ];
 
 /// Whether a `jackdaw*` type is editor bookkeeping rather than something
@@ -702,28 +702,6 @@ pub(crate) fn build_inspector_displays(
             if type_id == TypeId::of::<crate::brush::Brush>() {
                 if let Some(brush) = reflected.downcast_ref::<crate::brush::Brush>() {
                     brush_display::spawn_brush_display(commands, body_entity, brush, materials);
-                    // When this brush is non-convex and has a physics collider, the bridge
-                    // forces TriMesh regardless of the user's AvianCollider setting. Show a
-                    // read-only note so the change is visible in the inspector.
-                    // CONVEX_FUNCTIONAL: different behavior is intentional (mirrors collider-type choice in physics_brush_bridge)
-                    if entity_ref.contains::<AvianCollider>()
-                        && let Some(brush) = entity_ref.get::<crate::brush::Brush>()
-                        && !is_convex_topology(&brush.topology)
-                    {
-                        commands.spawn((
-                            Text::new("Status: non-convex (collider forced to TriMesh)"),
-                            TextFont {
-                                font_size: tokens::TEXT_SIZE_SM,
-                                ..Default::default()
-                            },
-                            TextColor(tokens::TEXT_DISABLED),
-                            Node {
-                                margin: UiRect::top(Val::Px(tokens::SPACING_XS)),
-                                ..Default::default()
-                            },
-                            ChildOf(body_entity),
-                        ));
-                    }
                 }
                 continue;
             }
@@ -835,18 +813,17 @@ pub(crate) fn build_inspector_displays(
             );
             jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, card.section);
             match schema {
-                Some(schema) => super::project_component_display::spawn_project_component_fields(
-                    commands,
-                    card.body,
-                    schema,
-                    ast,
-                    node,
-                    source_entity,
-                    type_registry,
-                    &editor_font.0,
-                    &icon_font.0,
-                    names,
-                ),
+                Some(_) => {
+                    commands.queue(move |world: &mut World| {
+                        super::project_component_display::fill_project_component_fields(
+                            world,
+                            card.body,
+                            source_entity,
+                            node,
+                            &type_path.clone(),
+                        );
+                    });
+                }
                 None => super::project_component_display::spawn_document_component_fields(
                     commands,
                     card.body,
@@ -1636,6 +1613,14 @@ mod tests {
         assert!(
             !hidden_by_namespace(std::any::type_name::<jackdaw_scene_types::CanvasGuides>()),
             "the UI root's guides show as a card, so their positions are typeable",
+        );
+        assert!(
+            !hidden_by_namespace(jackdaw_scene_types::HIDDEN_IN_GAME_TYPE_PATH),
+            "HiddenInGame is a tag an author adds by hand, so it needs a card",
+        );
+        assert!(
+            !hidden_by_namespace(jackdaw_scene_types::NAVMESH_EXCLUDE_TYPE_PATH),
+            "NavmeshExclude is a tag an author adds by hand, so it needs a card",
         );
     }
 

@@ -11,7 +11,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use jackdaw_avian_integration::AvianCollider;
-use jackdaw_geometry::{is_convex_topology, triangulate_polygons};
+use jackdaw_geometry::triangulate_polygons;
 
 use crate::brush::{Brush, BrushMeshCache};
 
@@ -77,7 +77,7 @@ fn remove_collider_when_avian_collider_removed(
 /// `ColliderConstructor` and insert it directly. Watching
 /// `Changed<BrushMeshCache>` is what makes the collider track face
 /// drags / vertex edits: extending a brush updates `BrushMeshCache`,
-/// which fires this system, which rebuilds the trimesh collider so
+/// which fires this system, which rebuilds the collider so
 /// the green wireframe matches the new geometry. Handles both
 /// mesh-backed entities (reads from `Mesh3d`) and brushes (reads
 /// from `BrushMeshCache`).
@@ -92,39 +92,26 @@ pub(crate) fn sync_editor_collider_config(
         ),
         Or<(Changed<AvianCollider>, Changed<BrushMeshCache>)>,
     >,
-    brushes: Query<&Brush>,
     meshes: Res<Assets<Mesh>>,
 ) {
     for (entity, config, brush_cache, mesh3d) in &changed {
-        let constructor = if let Ok(brush) = brushes.get(entity) {
-            // CONVEX_FUNCTIONAL: different behavior is intentional (collider type)
-            if !is_convex_topology(&brush.topology) {
-                // Force TriMesh for non-convex brushes; ConvexHull/AABB would mis-simulate.
-                ColliderConstructor::TrimeshFromMesh
-            } else {
-                config.0.clone()
-            }
-        } else {
-            config.0.clone()
-        };
-
-        let collider = if constructor.requires_mesh() {
+        let collider = if config.0.requires_mesh() {
             // Try brush geometry first, then mesh asset
             if let Some(brush_cache) = brush_cache {
                 let Some(mesh) = brush_mesh_from_cache(brush_cache) else {
                     continue;
                 };
-                Collider::try_from_constructor(constructor.clone(), Some(&mesh))
+                Collider::try_from_constructor(config.0.clone(), Some(&mesh))
             } else if let Some(mesh3d) = mesh3d {
                 let Some(mesh) = meshes.get(&mesh3d.0) else {
                     continue;
                 };
-                Collider::try_from_constructor(constructor.clone(), Some(mesh))
+                Collider::try_from_constructor(config.0.clone(), Some(mesh))
             } else {
                 continue;
             }
         } else {
-            Collider::try_from_constructor(constructor.clone(), None)
+            Collider::try_from_constructor(config.0.clone(), None)
         };
 
         if let Some(collider) = collider {

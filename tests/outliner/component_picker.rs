@@ -61,6 +61,7 @@ fn registry_with_test_types() -> TypeRegistry {
     registry.register::<NotAComponent>();
     registry.register::<HiddenByMarker>();
     registry.register::<jackdaw_runtime::NavmeshExclude>();
+    registry.register::<jackdaw_runtime::HiddenInGame>();
     registry
 }
 
@@ -296,6 +297,20 @@ fn navmesh_exclude_is_offered_under_navigation() {
     assert_eq!(
         entry.type_path_full,
         jackdaw_runtime::NAVMESH_EXCLUDE_TYPE_PATH
+    );
+}
+
+/// `HiddenInGame` is a component an author reaches for by hand, so it has
+/// to be in Add Component with the other rendering tags.
+#[test]
+fn hidden_in_game_is_offered_under_rendering() {
+    let registry = registry_with_test_types();
+    let pickables = enumerate(&registry, &HashSet::new(), &PickerDenylist::default());
+    let entry = find(&pickables, "HiddenInGame").expect("the tag is pickable");
+    assert_eq!(entry.category, "Rendering");
+    assert_eq!(
+        entry.type_path_full,
+        jackdaw_runtime::HIDDEN_IN_GAME_TYPE_PATH
     );
 }
 

@@ -358,6 +358,7 @@ fn a_schema_only_type_previews_as_a_disabled_row() {
         events: Vec::new(),
         functions: Vec::new(),
         assets: Vec::new(),
+        field_types: Vec::new(),
     };
     {
         let native = jackdaw::project_types::native_type_paths(

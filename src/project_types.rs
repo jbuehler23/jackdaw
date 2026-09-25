@@ -30,6 +30,7 @@ pub struct ProjectTypes {
     resources: HashMap<String, TypeSchema>,
     events: HashMap<String, TypeSchema>,
     assets: HashMap<String, TypeSchema>,
+    field_types: HashMap<String, TypeSchema>,
     functions: Vec<FunctionSchema>,
 }
 
@@ -94,6 +95,7 @@ impl ProjectTypes {
         self.assets
             .get(type_path)
             .or_else(|| self.components.get(type_path))
+            .or_else(|| self.field_types.get(type_path))
     }
 
     /// Whether the editor has learned anything about this project's types yet.
@@ -131,6 +133,13 @@ impl ProjectTypes {
             .assets
             .iter()
             .map(|asset| (asset.type_path.clone(), asset.clone()))
+            .collect();
+        self.field_types = schema
+            .field_types
+            .iter()
+            .filter(|reached| !native.contains(&reached.type_path))
+            .filter(|reached| !self.components.contains_key(&reached.type_path))
+            .map(|reached| (reached.type_path.clone(), reached.clone()))
             .collect();
         self.functions = schema.functions.clone();
     }
@@ -218,6 +227,7 @@ mod tests {
                 docs: None,
             }],
             assets: Vec::new(),
+            field_types: Vec::new(),
         };
         let native: HashSet<String> = [
             "bevy_transform::components::Transform".to_string(),

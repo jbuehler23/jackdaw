@@ -229,7 +229,7 @@ pub fn read_prefab_ast(path: &Path, assets_root: &Path) -> Result<SceneBsnAst, s
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use jackdaw_bsn::{BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnValue};
@@ -248,7 +248,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn a_project_opened_through_a_symlink_still_spells_its_sources_under_its_assets_folder() {
         let dir = tempfile::tempdir().expect("tempdir");
         let real = dir.path().join("real");

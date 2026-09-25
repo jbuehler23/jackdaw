@@ -146,6 +146,7 @@ fn fixture_schema() -> ProjectSchema {
             },
         ],
         assets: Vec::new(),
+        field_types: Vec::new(),
     }
 }
 

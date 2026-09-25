@@ -36,9 +36,6 @@ pub use triangulate::{
     triangulate_polygons,
 };
 
-pub mod topology_convexity;
-pub use topology_convexity::is_convex_topology;
-
 mod face_mesh;
 pub use face_mesh::{FaceRenderBuffers, build_face_render_buffers, resolve_evaluated_faces};
 

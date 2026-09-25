@@ -90,8 +90,9 @@ use jackdaw_bsn::{
 
 pub use jackdaw_scene_types::{
     Brush, BrushFaceData, CustomProperties, DetailPresser, EditorCategory, EditorDescription,
-    EditorHidden, EditorPreview, GltfSource, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude,
-    PropertyValue, ScatterGroup, ScatterInstance, SkipSerialization,
+    EditorHidden, EditorPreview, GltfSource, HIDDEN_IN_GAME_TYPE_PATH, HiddenInGame,
+    NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude, PropertyValue, ScatterGroup, ScatterInstance,
+    SkipSerialization,
 };
 
 #[cfg(feature = "pie")]
@@ -123,6 +124,7 @@ mod navmesh;
 #[cfg(feature = "navmesh")]
 pub use navmesh::JackdawNavmesh;
 
+mod hidden_in_game;
 mod twin;
 pub use twin::{DocumentTwinReader, JackdawAssetSourcePlugin, with_document_twins};
 
@@ -214,6 +216,7 @@ impl Plugin for JackdawPlugin {
             )
                 .chain(),
         );
+        app.add_observer(hidden_in_game::hide_on_add);
 
         #[cfg(feature = "render")]
         app.add_plugins((

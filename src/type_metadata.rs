@@ -400,6 +400,7 @@ mod tests {
                 events: Vec::new(),
                 functions: Vec::new(),
                 assets: Vec::new(),
+                field_types: Vec::new(),
             },
             &std::collections::HashSet::new(),
         );
