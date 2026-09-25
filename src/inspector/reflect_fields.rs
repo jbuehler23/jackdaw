@@ -2484,7 +2484,9 @@ pub(super) fn spawn_text_row(commands: &mut Commands, parent: Entity, text: &str
     ));
 }
 
-fn format_partial_reflect_value(value: &dyn PartialReflect) -> String {
+/// A value as one line of inspector text, which is also how a map entry's key
+/// is spelled in the field path of the row that edits it.
+pub(crate) fn format_partial_reflect_value(value: &dyn PartialReflect) -> String {
     if let Some(v) = value.try_downcast_ref::<f32>() {
         return format!("{v:.3}");
     }
@@ -2842,7 +2844,46 @@ pub(crate) fn refresh_inspector_fields(
         }
     }
 
-    if scrub_lookups.is_empty() && bool_lookups.is_empty() {
+    // Collect string field bindings: the container carries the binding and
+    // the text entry below it holds what the field shows.
+    let mut text_lookups: Vec<(Entity, String, String, String)> = Vec::new();
+    let mut text_query =
+        world.query_filtered::<(Entity, &FieldBinding), With<FeathersTextInputContainer>>();
+    let containers: Vec<(Entity, String, String)> = text_query
+        .iter(world)
+        .filter(|(_, binding)| binding.source_entity == primary)
+        .map(|(entity, binding)| {
+            (
+                entity,
+                binding.type_path.clone(),
+                binding.field_path.clone(),
+            )
+        })
+        .collect();
+    let mut editables = world.query::<&EditableText>();
+    for (container, type_path, field_path) in containers {
+        let mut stack = vec![container];
+        let mut text_entity = None;
+        while let Some(entity) = stack.pop() {
+            if entity != container && editables.get(world, entity).is_ok() {
+                text_entity = Some(entity);
+                break;
+            }
+            if let Some(children) = world.get::<Children>(entity) {
+                stack.extend(children.iter());
+            }
+        }
+        let Some(text_entity) = text_entity else {
+            continue;
+        };
+        let shown = editables
+            .get(world, text_entity)
+            .map(|editable| editable.value().to_string())
+            .unwrap_or_default();
+        text_lookups.push((text_entity, type_path, field_path, shown));
+    }
+
+    if scrub_lookups.is_empty() && bool_lookups.is_empty() && text_lookups.is_empty() {
         return;
     }
 
@@ -2859,7 +2900,9 @@ pub(crate) fn refresh_inspector_fields(
         let Some(reflected) = inspected_value(world, entity_ref, registration, &registry) else {
             continue;
         };
-        let Ok(field) = reflected.reflect_path(field_path.as_str()) else {
+        let Some(field) =
+            crate::commands::read_field_path(reflected.as_partial_reflect(), field_path)
+        else {
             continue;
         };
         let Some(value) = reflect_field_to_f64(field) else {
@@ -2892,7 +2935,9 @@ pub(crate) fn refresh_inspector_fields(
         let Some(reflected) = inspected_value(world, entity_ref, registration, &registry) else {
             continue;
         };
-        let Ok(field) = reflected.reflect_path(field_path.as_str()) else {
+        let Some(field) =
+            crate::commands::read_field_path(reflected.as_partial_reflect(), field_path)
+        else {
             continue;
         };
         if let Some(&val) = field.try_downcast_ref::<bool>()
@@ -2902,9 +2947,41 @@ pub(crate) fn refresh_inspector_fields(
         }
     }
 
+    let mut text_updates: Vec<(Entity, String)> = Vec::new();
+    for (text_entity, comp_type_path, field_path, shown) in &text_lookups {
+        let Some(registration) = registry.get_with_type_path(comp_type_path) else {
+            continue;
+        };
+        let Some(reflected) = inspected_value(world, entity_ref, registration, &registry) else {
+            continue;
+        };
+        let Some(field) =
+            crate::commands::read_field_path(reflected.as_partial_reflect(), field_path)
+        else {
+            continue;
+        };
+        if let Some(text) = field.try_downcast_ref::<String>()
+            && text != shown
+        {
+            text_updates.push((*text_entity, text.clone()));
+        }
+    }
+
     drop(registry);
 
     let input_focus = world.resource::<InputFocus>().get();
+
+    // A string field shows what the component now holds, as after an undo,
+    // unless someone is typing in it.
+    for (entity, text) in text_updates {
+        if input_focus == Some(entity) {
+            continue;
+        }
+        if let Some(mut editable) = world.get_mut::<EditableText>(entity) {
+            editable.queue_edit(TextEdit::SelectAll);
+            editable.queue_edit(TextEdit::Insert(text.into()));
+        }
+    }
 
     // Apply drag-scrub updates by re-inserting `ScrubNumberInputValue`; the
     // widget's own insert observer repaints the text. Skip while the user is
