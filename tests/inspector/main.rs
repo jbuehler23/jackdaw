@@ -18,6 +18,7 @@ mod material_row;
 mod new_asset_list;
 mod opened_definition_card;
 mod project_component_card;
+mod scene_data_cards;
 mod schema_definition_card;
 mod selection_switch;
 mod widget_cards;
