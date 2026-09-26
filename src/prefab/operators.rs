@@ -497,6 +497,18 @@ fn write_prefab_from_roots(
         }
     }
 
+    // The copied patches hold what the live document holds, and for a handle
+    // (a brush face's material) that is the asset-blind placeholder its ECS
+    // mirror stored. Name the assets from the live values, as a save does.
+    for (&entity, &node) in &ecs_to_prefab {
+        prefab.link(entity, node);
+    }
+    let prefab_dir = target_path.parent().unwrap_or(Path::new(""));
+    crate::scene_io::save::name_handles_in(world, &mut prefab, &entities, prefab_dir);
+    for &entity in ecs_to_prefab.keys() {
+        prefab.unlink(entity);
+    }
+
     // Parent each packaged entity. Entities whose parent is also packaged nest
     // under it; top roots (parent not in the set) parent under the synthetic
     // root. A lone root stands at identity there, its placement going to the
