@@ -7,6 +7,7 @@
 mod util;
 
 mod prefab_lifecycle;
+mod prefab_material_save;
 mod prefab_reload;
 mod prefab_source_paths;
 mod prefab_ui_import;
