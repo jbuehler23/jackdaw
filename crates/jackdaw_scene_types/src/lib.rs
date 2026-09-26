@@ -38,8 +38,9 @@ pub use types::{
     Brush, BrushFaceData, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
     DetailLayer, DetailMesh, DetailPresser, DetailVariety, GltfSource, InstanceMaterialOverrides,
     MaterialOverrides, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude, PrefabBaseline, PropertyValue,
-    ScatterGroup, ScatterInstance, SceneRootTag, SceneWind, Terrain, TerrainChannel,
-    TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry, TerrainQuantization, Wind,
+    ReflectionProbe, ScatterGroup, ScatterInstance, SceneRootTag, SceneWind, Terrain,
+    TerrainChannel, TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry,
+    TerrainQuantization, Wind,
 };
 
 use bevy::prelude::*;
@@ -108,6 +109,7 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<Multisampling>()
             .register_type::<ShadowFiltering>()
             .register_type::<NavmeshExclude>()
+            .register_type::<ReflectionProbe>()
             .register_type::<ScatterGroup>()
             .register_type::<ScatterInstance>()
             .register_type::<TerrainPaletteEntry>()

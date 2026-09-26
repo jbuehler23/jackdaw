@@ -325,7 +325,8 @@ pub struct SceneFogVolume;
 
 /// Marks a reflection-probe entity (`Add > Reflection Probe`), so
 /// viewport overlays draw a box gizmo at the probe's influence region.
-/// The box is the unit cube scaled by the entity's `Transform.scale`.
+/// The box is the unit cube scaled by the entity's `Transform.scale`. A new
+/// probe reflects nothing until `environment.bake_probe` bakes it.
 #[derive(Component, Default, Reflect)]
 #[reflect(Component, @crate::EditorHidden)]
 pub struct SceneReflectionProbe;
@@ -2549,35 +2550,17 @@ pub(crate) fn entity_add_reflection_probe(
 ) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::spawn_undoable(world, "Add Reflection Probe", |world| {
-            let mut system_state: SystemState<(Commands, Res<AssetServer>, ResMut<Selection>)> =
+            let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
                 SystemState::new(world);
-            let Ok((mut commands, asset_server, mut selection)) = system_state.get_mut(world)
-            else {
+            let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
                 return Entity::PLACEHOLDER;
             };
-            // Reuse the editor's shipped environment-map cubemaps as the
-            // probe's reflection source, the same embedded asset the
-            // viewport and material preview load.
-            let diffuse_map = bevy::asset::load_embedded_asset!(
-                &*asset_server,
-                "../assets/environment_maps/voortrekker_interior_1k_diffuse.ktx2"
-            );
-            let specular_map = bevy::asset::load_embedded_asset!(
-                &*asset_server,
-                "../assets/environment_maps/voortrekker_interior_1k_specular.ktx2"
-            );
             let entity = commands
                 .spawn((
                     Name::new("Reflection Probe"),
-                    LightProbe::default(),
-                    EnvironmentMapLight {
-                        diffuse_map,
-                        specular_map,
-                        intensity: 1000.0,
-                        ..default()
-                    },
+                    jackdaw_scene_types::ReflectionProbe::default(),
                     SceneReflectionProbe,
-                    Transform::from_scale(Vec3::splat(2.0)),
+                    Transform::from_scale(Vec3::splat(10.0)),
                     Visibility::default(),
                 ))
                 .id();

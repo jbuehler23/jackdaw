@@ -112,6 +112,12 @@ pub struct UndressedCamera {
 #[derive(Component)]
 pub struct SceneSky;
 
+/// A camera recording the scene's light for a bake: the environment gives it
+/// the scene's fog and ambient light but leaves its exposure, tone mapping and
+/// post-processing alone, so what it records is the light itself.
+#[derive(Component, Default)]
+pub struct LightBakeCamera;
+
 /// The entity whose sky cubemap is filtered by roughness for the cameras to reflect.
 #[derive(Component)]
 pub struct SkyReflection;
@@ -237,11 +243,12 @@ pub fn ambient_cubemap(ambient: &Ambient) -> Image {
 /// The world direction through a texel of a cubemap face, in the +X, -X, +Y, -Y, +Z, -Z order.
 pub fn cubemap_direction(face: u32, column: u32, row: u32) -> Vec3 {
     let at = |index: u32| (index as f32 + 0.5) / AMBIENT_FACE_SIZE as f32 * 2.0 - 1.0;
-    face_direction(face, at(column), at(row))
+    cube_face_direction(face, at(column), at(row))
 }
 
-/// The world direction through a point of a cubemap face, `u` and `v` running -1..1.
-fn face_direction(face: u32, u: f32, v: f32) -> Vec3 {
+/// The world direction through a point of a cubemap face, `u` and `v` running
+/// -1..1 across its columns and down its rows.
+pub fn cube_face_direction(face: u32, u: f32, v: f32) -> Vec3 {
     let direction = match face {
         0 => Vec3::new(1.0, -v, -u),
         1 => Vec3::new(-1.0, -v, u),
@@ -281,7 +288,8 @@ pub fn sky_cubemap(sky: &Sky, sun: Option<SkySun>, per_unit: f32) -> Image {
             for column in 0..SKY_FACE_SIZE {
                 let corner_u = column as f32 * texel - 1.0;
                 let corner_v = row as f32 * texel - 1.0;
-                let centre = face_direction(face, corner_u + texel * 0.5, corner_v + texel * 0.5);
+                let centre =
+                    cube_face_direction(face, corner_u + texel * 0.5, corner_v + texel * 0.5);
                 let mut color = sky.color_facing(centre.y) * scale;
                 if let Some(sun) = sun {
                     let mut disc = 0.0;
@@ -289,7 +297,7 @@ pub fn sky_cubemap(sky: &Sky, sun: Option<SkySun>, per_unit: f32) -> Image {
                         let step = texel / SUN_SAMPLES as f32;
                         let u = corner_u + ((sample % SUN_SAMPLES) as f32 + 0.5) * step;
                         let v = corner_v + ((sample / SUN_SAMPLES) as f32 + 0.5) * step;
-                        let facing = face_direction(face, u, v).dot(sun.toward);
+                        let facing = cube_face_direction(face, u, v).dot(sun.toward);
                         disc += smoothstep(sun_cos - edge, sun_cos + edge, facing);
                     }
                     let disc = disc / (SUN_SAMPLES * SUN_SAMPLES) as f32;
@@ -435,6 +443,7 @@ type CameraParts = (
         Option<&'static Msaa>,
         Option<&'static ShadowFilteringMethod>,
         Has<OrderIndependentTransparencySettings>,
+        Has<LightBakeCamera>,
     ),
 );
 
@@ -471,7 +480,7 @@ fn dress_the_cameras(
         fog,
         light,
         hdr,
-        (fxaa, smaa, taa, msaa, filtering, draws_oit),
+        (fxaa, smaa, taa, msaa, filtering, draws_oit, bakes_light),
     ) in &cameras
     {
         if !layers.is_none_or(|layers| layers.intersects(&RenderLayers::default())) {
@@ -519,7 +528,9 @@ fn dress_the_cameras(
             }
             None => restore(&mut camera, undressed.ambient.clone()),
         }
-        dress_post(&mut camera, &env.post, &undressed, draws_oit);
+        if !bakes_light {
+            dress_post(&mut camera, &env.post, &undressed, draws_oit);
+        }
         camera.insert(undressed);
     }
 }

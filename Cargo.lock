@@ -4836,6 +4836,7 @@ dependencies = [
  "dunce",
  "ehttp",
  "fontique",
+ "half",
  "image",
  "include_dir",
  "jackdaw_animation",
@@ -5397,6 +5398,7 @@ name = "jackdaw_surface"
 version = "0.19.0"
 dependencies = [
  "bevy",
+ "half",
  "jackdaw_scene_types",
 ]
 

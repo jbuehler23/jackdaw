@@ -171,6 +171,7 @@ impl Plugin for HierarchyPlugin {
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::SceneRootTag>)
             .add_observer(refresh_icon_on_add::<crate::entity_ops::SceneFogVolume>)
             .add_observer(refresh_icon_on_add::<crate::entity_ops::SceneReflectionProbe>)
+            .add_observer(refresh_icon_on_add::<jackdaw_scene_types::ReflectionProbe>)
             .add_observer(refresh_icon_on_add::<crate::entity_ops::SceneAnimationPlayer>)
             .add_observer(refresh_icon_on_add::<crate::entity_ops::SceneAudioSource>)
             .add_observer(refresh_icon_on_add::<crate::reference_image::ReferenceImage>)

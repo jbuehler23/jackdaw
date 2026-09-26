@@ -789,7 +789,8 @@ fn draw_fog_volume_gizmo(
 
 /// Reflection probe: small constant-size marker so it stays findable,
 /// plus the influence-region box (unit cube scaled by `Transform.scale`)
-/// when selected or the bounding-box override is on. Filtered by the
+/// and the inner box its blend distance leaves at full strength, when
+/// selected or the bounding-box override is on. Filtered by the
 /// [`SceneReflectionProbe`](crate::entity_ops::SceneReflectionProbe)
 /// marker.
 fn draw_reflection_probe_gizmo(
@@ -797,11 +798,19 @@ fn draw_reflection_probe_gizmo(
     settings: Res<OverlaySettings>,
     camera_query: Query<(&GlobalTransform, &Projection), With<MainViewportCamera>>,
     query: Query<
-        (&GlobalTransform, &InheritedVisibility, Has<Selected>),
-        With<crate::entity_ops::SceneReflectionProbe>,
+        (
+            &GlobalTransform,
+            &InheritedVisibility,
+            Has<Selected>,
+            Option<&jackdaw_scene_types::ReflectionProbe>,
+        ),
+        Or<(
+            With<crate::entity_ops::SceneReflectionProbe>,
+            With<jackdaw_scene_types::ReflectionProbe>,
+        )>,
     >,
 ) {
-    for (global, inherited_vis, selected) in &query {
+    for (global, inherited_vis, selected, probe) in &query {
         if !inherited_vis.get() {
             continue;
         }
@@ -817,7 +826,13 @@ fn draw_reflection_probe_gizmo(
         if !(selected || settings.show_bounding_boxes) {
             continue;
         }
-        gizmos.cube(global.compute_transform(), color);
+        let placed = global.compute_transform();
+        gizmos.cube(placed, color);
+        if let Some(probe) = probe {
+            let inner = (placed.scale.abs() - Vec3::splat(probe.blend_distance.max(0.0) * 2.0))
+                .max(Vec3::ZERO);
+            gizmos.cube(placed.with_scale(inner), color.with_alpha(0.35));
+        }
     }
 }
 

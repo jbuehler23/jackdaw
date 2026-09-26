@@ -28,6 +28,7 @@ mod positionable_mirror_plane;
 mod project_definitions;
 mod project_startup;
 mod project_window;
+mod reflection_probe;
 mod remote_placement;
 mod scene_environment;
 mod scene_wind;

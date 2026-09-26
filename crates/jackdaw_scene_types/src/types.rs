@@ -840,6 +840,58 @@ pub struct InstanceMaterialOverrides {
     pub materials: BTreeMap<String, String>,
 }
 
+/// A box of the scene that reflects a cubemap baked from the entity's position
+/// instead of the sky: what glossy surfaces inside it mirror, and the light
+/// they gather from around them.
+///
+/// The box is the unit cube scaled by the entity's `Transform`, as for Bevy's
+/// `LightProbe`. Baked by the editor's `environment.bake_probe`, which renders
+/// the six faces and writes them to [`Self::baked`]; until then the probe
+/// reflects nothing of its own.
+#[derive(Component, Reflect, Clone, Debug, PartialEq)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Rendering"))]
+pub struct ReflectionProbe {
+    /// How far in from the box's faces its reflection fades to full, in world units.
+    pub blend_distance: f32,
+    /// Scales the baked light; 1 gives back what the bake saw.
+    pub intensity: f32,
+    /// Edge of each baked face in pixels, a power of two.
+    pub resolution: u32,
+    /// Asset path of the baked cubemap: six faces stacked top to bottom in one
+    /// Radiance HDR image. Empty until the probe is baked.
+    pub baked: String,
+}
+
+impl Default for ReflectionProbe {
+    fn default() -> Self {
+        Self {
+            blend_distance: 1.0,
+            intensity: 1.0,
+            resolution: 256,
+            baked: String::new(),
+        }
+    }
+}
+
+impl ReflectionProbe {
+    /// The resolution rounded to a power of two between 16 and 2048, as the
+    /// bake renders and the filter reads it.
+    pub fn face_size(&self) -> u32 {
+        self.resolution
+            .clamp(16, 2048)
+            .next_power_of_two()
+            .min(2048)
+    }
+
+    /// Bevy's light probe falloff for a box of `size`: the blend distance as a
+    /// share of each half-extent, so the reflection is full inside and fades
+    /// toward the faces.
+    pub fn falloff(&self, size: Vec3) -> Vec3 {
+        let half = (size.abs() * 0.5).max(Vec3::splat(f32::EPSILON));
+        (Vec3::splat(self.blend_distance.max(0.0)) / half).min(Vec3::ONE)
+    }
+}
+
 /// Stores the original serialized component values from a prefab at instantiation time.
 /// Used to detect overrides and support per-component revert.
 #[derive(Component, Clone, Debug, Default)]

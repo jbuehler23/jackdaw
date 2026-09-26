@@ -550,6 +550,7 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
     ("entity.reparent", &["child", "parent"], false),
     ("entity.set_transform", &["entity"], true),
     ("entity.snap_to_ground", &["entity"], false),
+    ("environment.bake_probe", &["entity"], true),
     ("field.set", &["entity"], true),
     ("hierarchy.rename_begin", &["entity"], true),
     ("material.override", &["entity"], true),

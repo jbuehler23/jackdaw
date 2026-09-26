@@ -253,6 +253,7 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "component.revert_baseline",
     "component.set",
     "entity.set_transform",
+    "environment.bake_probe",
     "field.set",
     "hierarchy.rename_begin",
     "material.override",
