@@ -986,6 +986,18 @@ fn emit_bsn_scene_authored(
         collect_bsn_inline_assets(world, &reg, &entities, seed)
     };
 
+    // Re-derive each handle-bearing component patch with the asset context so
+    // its handle fields emit reference names or asset paths. This runs before
+    // sparsifying: the live document holds the asset-blind placeholder (`""`)
+    // an ECS mirror stored, and compared against a prefab baseline that names
+    // the asset, an unchanged inherited component would read as an override.
+    if !pass.touched.is_empty() {
+        if !pass.refs.is_empty() {
+            jackdaw_bsn::append_assets_to_ast(&mut ast, world, &pass.refs);
+        }
+        rederive_handle_patches(world, &mut ast, &registry, parent_path, &pass);
+    }
+
     // Reduce inherited prefab-instance content to sparse override entries
     // (`PrefabEntityId` plus only diverged fields). No-op when there is no
     // prefab cache or no prefab instances.
@@ -1003,22 +1015,7 @@ fn emit_bsn_scene_authored(
         crate::prefab::save_load::relativize_for_file(world, &mut ast, parent_path);
     }
 
-    // No kept component references an asset handle: the document already emits
-    // faithfully once sparsified.
-    if pass.touched.is_empty() {
-        normalize_runtime_derived_values(world, &mut ast);
-        return emitted(world, &ast, spelling, &registry);
-    }
-
-    if !pass.refs.is_empty() {
-        jackdaw_bsn::append_assets_to_ast(&mut ast, world, &pass.refs);
-    }
-
-    // Re-derive each handle-bearing component patch with the asset context so
-    // its handle fields emit reference names or asset paths.
-    rederive_handle_patches(world, &mut ast, &registry, parent_path, &pass);
     normalize_runtime_derived_values(world, &mut ast);
-
     emitted(world, &ast, spelling, &registry)
 }
 
