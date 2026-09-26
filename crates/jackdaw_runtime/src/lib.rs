@@ -144,6 +144,12 @@ pub mod prelude {
     pub use crate::{DetailPressers, DetailSettings, DetailViewer, TerrainViewer};
 }
 
+/// Turns off Bevy's static transform optimization, which can leave a child spawned into a reused
+/// entity index with a stale `GlobalTransform` when a frame despawns more than about a thousand entities.
+pub fn keep_transforms_propagating(app: &mut App) {
+    app.insert_resource(bevy::transform::StaticTransformOptimizations::Disabled);
+}
+
 pub struct JackdawPlugin;
 
 impl Plugin for JackdawPlugin {
@@ -159,6 +165,8 @@ impl Plugin for JackdawPlugin {
         // recovered from the `AssetPlugin` this app added. It is only
         // readable while the app is being built, so it is captured here.
         app.insert_resource(AssetFolder(asset_folder(app)));
+
+        keep_transforms_propagating(app);
 
         // Registers every scene type for reflection and installs
         // `MeshRebuildPlugin` (which embeds the bundled grid texture

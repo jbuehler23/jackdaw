@@ -350,6 +350,7 @@ impl Plugin for EditorCorePlugin {
              add `EnhancedInputPlugin` in main.rs before JackdawEditorPlugins."
         );
         app.init_state::<AppState>();
+        jackdaw_runtime::keep_transforms_propagating(app);
         // A game whose own UI is built on feathers adds the group itself,
         // and the editor loads that game's plugin into this app. Adding a
         // plugin twice is a panic, so the editor takes each of these only
