@@ -41,11 +41,22 @@ const MANUAL_BIT: u32 = 0x40000u;
 // Entries in `uv_scales`, which is four `vec4`s wide.
 const MAX_LAYERS: u32 = 16u;
 
+// What a slot that sets no reflectance shades at: a StandardMaterial's
+// default, 4% at normal incidence.
+const DEFAULT_REFLECTANCE: f32 = 0.5;
+
 struct SplatUniform {
     // 16 per-id UV scales, packed four to a vec4 for uniform alignment.
     uv_scales: array<vec4<f32>, 4>,
     // 16 per-id detiling strengths, packed the same way. 0 is off.
     detile_strengths: array<vec4<f32>, 4>,
+    // 16 per-id perceptual roughness values a slot sets of its own, packed
+    // the same way: a scale on the slot's roughness map, or the roughness
+    // where it has none. Negative where it sets none, which leaves the map
+    // as it is, or the terrain's own roughness.
+    slot_roughness: array<vec4<f32>, 4>,
+    // 16 per-id reflectance values, packed and unset the same way.
+    slot_reflectance: array<vec4<f32>, 4>,
     // Terrain XZ extent in world units, for turning UV0 back into a
     // terrain-local position. Local, not world, so a terrain that moves
     // carries its texturing with it.
@@ -101,6 +112,11 @@ fn uv_scale_for(id: u32) -> f32 {
 }
 
 // `id` must already be clamped by `last_layer`.
+// A slot's own roughness or reflectance, negative where it sets none.
+fn slot_value(values: array<vec4<f32>, 4>, id: u32) -> f32 {
+    return values[id / 4u][id % 4u];
+}
+
 fn detile_for(id: u32) -> f32 {
     return splat.detile_strengths[id / 4u][id % 4u];
 }
@@ -237,6 +253,7 @@ struct Accum {
     normal: vec3<f32>,
     occlusion: f32,
     roughness: f32,
+    reflectance: f32,
     total: f32,
 }
 
@@ -306,7 +323,7 @@ fn accumulate(
         normal_sum += tap.weight * vec3<f32>(back, unpacked.z);
         // A layer with no map of its own holds a filled array layer, so
         // it is not sampled: it contributes the identity instead,
-        // unoccluded and at the terrain's own roughness.
+        // unoccluded and at full roughness before the slot's own value.
         if has_occlusion {
             occlusion_sum += tap.weight * textureSampleGrad(
                 occlusion_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).r;
@@ -317,16 +334,25 @@ fn accumulate(
             roughness_sum += tap.weight * textureSampleGrad(
                 roughness_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).g;
         } else {
-            roughness_sum += tap.weight * splat.perceptual_roughness;
+            roughness_sum += tap.weight;
         }
         taken += tap.weight;
     }
+    let own_roughness = slot_value(splat.slot_roughness, layer_id);
+    var roughness_scale = 1.0;
+    if own_roughness >= 0.0 {
+        roughness_scale = own_roughness;
+    } else if !has_roughness {
+        roughness_scale = splat.perceptual_roughness;
+    }
+    let own_reflectance = slot_value(splat.slot_reflectance, layer_id);
+    let reflectance = select(DEFAULT_REFLECTANCE, own_reflectance, own_reflectance >= 0.0);
     let inv_taps = 1.0 / max(taken, 1e-8);
     let albedo = albedo_sum * inv_taps;
     let height = height_sum * inv_taps;
     let normal = normal_sum * inv_taps;
     let occlusion = occlusion_sum * inv_taps;
-    let roughness = roughness_sum * inv_taps;
+    let roughness = min(roughness_sum * inv_taps * roughness_scale, 1.0);
 
     let sharpness = SHARPNESS_MIN + SHARPNESS_RANGE * splat.blend_sharpness;
     let contested = vec4<f32>(layer_weight + height);
@@ -337,6 +363,7 @@ fn accumulate(
     out.normal += normal * weight;
     out.occlusion += occlusion * weight;
     out.roughness += roughness * weight;
+    out.reflectance += reflectance * weight;
     out.total += weight;
     return out;
 }
@@ -441,6 +468,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     accum.normal = vec3<f32>(0.0);
     accum.occlusion = 0.0;
     accum.roughness = 0.0;
+    accum.reflectance = 0.0;
     accum.total = 0.0;
 
     if c00 == c10 && c00 == c01 && c00 == c11 {
@@ -465,6 +493,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let tangent_normal = accum.normal * inv_total;
     let occlusion = accum.occlusion * inv_total;
     let roughness = accum.roughness * inv_total;
+    let reflectance = accum.reflectance * inv_total;
 
     // The mesher emits no tangents: UV0 runs along world X and Z, so the tangent
     // is world +X projected onto the surface normal. That projection collapses
@@ -487,6 +516,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.flags = mesh[in.instance_index].flags;
     pbr_input.material.base_color = vec4<f32>(albedo, 1.0);
     pbr_input.material.perceptual_roughness = roughness;
+    pbr_input.material.reflectance = vec3<f32>(reflectance);
     pbr_input.material.metallic = 0.0;
     pbr_input.diffuse_occlusion = vec3<f32>(occlusion);
     // `standard_material_new` leaves fog off; `StandardMaterial`'s Rust

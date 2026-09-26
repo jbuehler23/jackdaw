@@ -757,8 +757,8 @@ mod tests {
     }
 
     /// Version 7 lays the same bytes out but for the occlusion and roughness
-    /// paths a slot ends with now, so a version-7 file is this build's bytes
-    /// without those and under the older version word.
+    /// paths and the surface block a slot ends with now, so a version-7 file
+    /// is this build's bytes without those and under the older version word.
     fn write_version_7_sidecar(tmp: &tempfile::TempDir, relative: &str, slot: &str) {
         let data = jackdaw_terrain::sidecar::RegionTerrainData {
             materials: vec![jackdaw_terrain::sidecar::TerrainMaterialSlot::new(slot)],
@@ -767,7 +767,7 @@ mod tests {
         let mut bytes = jackdaw_terrain::sidecar::encode_regions(&data).expect("it encodes");
         let header = jackdaw_terrain::sidecar::MAGIC.len() + 2 + 2 + 4 + 4 + 4 + 4;
         let slot_head = 4 + slot.len() + 4 + 4;
-        bytes.drain(header + slot_head..header + slot_head + 8);
+        bytes.drain(header + slot_head..header + slot_head + 8 + 12);
         bytes[8..10].copy_from_slice(&jackdaw_terrain::sidecar::VERSION_7.to_le_bytes());
         let path = tmp.path().join("assets").join(relative);
         std::fs::create_dir_all(path.parent().expect("a parent")).expect("the folder is made");
@@ -794,7 +794,7 @@ mod tests {
         assert_eq!(
             sidecar_slot(&tmp, "zones/hedgerow.terrain-0.jdterrain"),
             (
-                jackdaw_terrain::sidecar::VERSION_10,
+                jackdaw_terrain::sidecar::VERSION_11,
                 "materials/slate.material.bsn".to_string()
             )
         );

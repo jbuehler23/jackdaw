@@ -43,7 +43,8 @@ use crate::heightmap::Heightmap;
 use crate::sidecar::{AutoTerrainSettings, SurfaceSettings, TerrainMaterialSlot};
 use crate::splat::ControlTexels;
 use crate::texture_set::{
-    MAX_TEXTURES, TextureSet, TextureSetEntry, TextureSetError, check_layer_sizes,
+    DEFAULT_PERCEPTUAL_ROUGHNESS, MAX_TEXTURES, TextureSet, TextureSetEntry, TextureSetError,
+    check_layer_sizes,
 };
 
 const SHADER_PATH: &str = "embedded://jackdaw_terrain/render/shaders/terrain_splat.wgsl";
@@ -169,6 +170,8 @@ pub fn resolve_with<'m>(
             resolved.push(
                 TextureSetEntry {
                     detile: slot.detile,
+                    perceptual_roughness: slot.perceptual_roughness,
+                    reflectance: slot.reflectance,
                     ..TextureSetEntry::unresolved(&slot.material, slot.uv_scale)
                 },
                 SlotHandles::default(),
@@ -190,6 +193,8 @@ pub fn resolve_with<'m>(
                 roughness: path_of(&roughness),
                 uv_scale: slot.uv_scale,
                 detile: slot.detile,
+                perceptual_roughness: slot.perceptual_roughness,
+                reflectance: slot.reflectance,
             },
             SlotHandles {
                 albedo: material.base_color_texture.clone(),
@@ -895,6 +900,16 @@ pub struct TerrainSplatMaterial {
     /// sampled exactly where its UV scale puts it.
     #[uniform(0)]
     pub detile_strengths: [Vec4; MAX_TEXTURES / 4],
+    /// Per-id perceptual roughness each slot sets of its own, packed the
+    /// same way. Negative where a slot sets none: its map as it is, or
+    /// [`Self::perceptual_roughness`] without one.
+    #[uniform(0)]
+    pub slot_roughness: [Vec4; MAX_TEXTURES / 4],
+    /// Per-id reflectance each slot sets of its own, packed the same way.
+    /// Negative where a slot sets none, which shades at
+    /// [`crate::texture_set::DEFAULT_REFLECTANCE`].
+    #[uniform(0)]
+    pub slot_reflectance: [Vec4; MAX_TEXTURES / 4],
     /// Terrain XZ extent in world units.
     #[uniform(0)]
     pub terrain_size: Vec2,
@@ -996,12 +1011,23 @@ impl TerrainSplatMaterial {
         for (i, strength) in set.detile_strengths().iter().enumerate() {
             detile_strengths[i / 4][i % 4] = *strength;
         }
+        let packed = |values: [Option<f32>; MAX_TEXTURES]| {
+            let mut out = [Vec4::splat(-1.0); MAX_TEXTURES / 4];
+            for (i, value) in values.iter().enumerate() {
+                if let Some(value) = value {
+                    out[i / 4][i % 4] = *value;
+                }
+            }
+            out
+        };
         let mut material = Self {
             uv_scales,
             detile_strengths,
+            slot_roughness: packed(set.perceptual_roughness()),
+            slot_reflectance: packed(set.reflectances()),
             terrain_size,
             blend_sharpness: DEFAULT_BLEND_SHARPNESS,
-            perceptual_roughness: 0.9,
+            perceptual_roughness: DEFAULT_PERCEPTUAL_ROUGHNESS,
             control_resolution,
             layer_count: set.len().max(1) as u32,
             autoterrain_enabled: 0,
@@ -1182,6 +1208,8 @@ mod resolve_tests {
                 detile: 0.6,
                 occlusion: String::new(),
                 roughness: String::new(),
+                perceptual_roughness: None,
+                reflectance: None,
             }],
         );
 
@@ -2288,6 +2316,46 @@ mod tests {
         assert_eq!(material.terrain_size, Vec2::splat(100.0));
     }
 
+    /// A slot's own roughness and reflectance reach the uniform at its id,
+    /// and every id that sets none, including those past the set, reads
+    /// as unset so it shades as it always has.
+    #[test]
+    fn slot_roughness_and_reflectance_reach_the_uniform_unset_where_not_given() {
+        let set = TextureSet {
+            entries: vec![
+                TextureSetEntry::new("grass", "a.png"),
+                TextureSetEntry {
+                    perceptual_roughness: Some(0.4),
+                    reflectance: Some(0.2),
+                    ..TextureSetEntry::new("wet_rock", "b.png")
+                },
+            ],
+        };
+        let material = TerrainSplatMaterial::new(
+            &set,
+            SplatArrayHandles {
+                albedo: Handle::default(),
+                normal: Handle::default(),
+                height: Handle::default(),
+                occlusion: Handle::default(),
+                roughness: Handle::default(),
+            },
+            Handle::default(),
+            Handle::default(),
+            Handle::default(),
+            Vec2::splat(100.0),
+            256,
+            AutoTerrainSettings::default(),
+            SurfaceSettings::default(),
+        );
+        assert_eq!(material.slot_roughness[0].y, 0.4);
+        assert_eq!(material.slot_reflectance[0].y, 0.2);
+        assert!(material.slot_roughness[0].x < 0.0);
+        assert!(material.slot_reflectance[0].x < 0.0);
+        assert!(material.slot_roughness[3].w < 0.0);
+        assert_eq!(material.perceptual_roughness, DEFAULT_PERCEPTUAL_ROUGHNESS);
+    }
+
     /// The shader reads a slot's maps only where the uniform's bit for
     /// that id says it has them, so an id with no map shades unoccluded at
     /// the terrain's own roughness rather than sampling a filled layer.
@@ -2374,6 +2442,8 @@ mod tests {
         for field in [
             "uv_scales: array<vec4<f32>, 4>",
             "detile_strengths: array<vec4<f32>, 4>",
+            "slot_roughness: array<vec4<f32>, 4>",
+            "slot_reflectance: array<vec4<f32>, 4>",
             "terrain_size: vec2<f32>",
             "blend_sharpness: f32",
             "perceptual_roughness: f32",

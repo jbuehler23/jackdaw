@@ -2396,6 +2396,8 @@ mod tests {
                     detile: 0.0,
                     occlusion: String::new(),
                     roughness: String::new(),
+                    perceptual_roughness: None,
+                    reflectance: None,
                 }],
             )
             .expect("accepted");

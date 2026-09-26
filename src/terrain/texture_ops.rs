@@ -16,7 +16,9 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_terrain::sidecar::{AutoTerrainSettings, TerrainMaterialSlot};
-use jackdaw_terrain::texture_set::{DEFAULT_UV_SCALE, MAX_DETILE, MAX_UV_SCALE, MIN_UV_SCALE};
+use jackdaw_terrain::texture_set::{
+    DEFAULT_UV_SCALE, MAX_DETILE, MAX_SLOT_ROUGHNESS, MAX_UV_SCALE, MIN_UV_SCALE,
+};
 use path_slash::PathExt as _;
 
 use super::TerrainDataStore;
@@ -37,6 +39,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<TerrainMaterialMoveOp>()
         .register_operator::<TerrainMaterialUvScaleOp>()
         .register_operator::<TerrainMaterialDetileOp>()
+        .register_operator::<TerrainMaterialRoughnessOp>()
+        .register_operator::<TerrainMaterialReflectanceOp>()
         .register_operator::<TerrainMaterialPickerOp>()
         .register_operator::<TerrainPaintTargetOp>()
         .register_operator::<TerrainPaintRestoreOp>()
@@ -425,6 +429,134 @@ pub(crate) fn terrain_material_detile(
         None,
         "Terrain Material Detiling",
     )
+}
+
+/// Set or clear one slot's own perceptual roughness.
+///
+/// Where the slot draws a roughness map the value scales it; where it does
+/// not, the value is the roughness. Cleared, the slot shades the map as it
+/// is, or [`jackdaw_terrain::texture_set::DEFAULT_PERCEPTUAL_ROUGHNESS`].
+#[operator(
+    id = "terrain.material.roughness",
+    label = "Terrain Material Roughness",
+    description = "Set or clear how rough one of the selected terrain's materials shades.",
+    is_available = has_selected_terrain,
+    allows_undo = false,
+    params(
+        index(i64, doc = "Texture id to shade."),
+        value(f64, doc = "Perceptual roughness, 0 to 1, or a scale of up to 2 on the slot's roughness map where it has one."),
+        clear(bool, default = false, doc = "Go back to the map as it is, or the terrain's own roughness without one."),
+    ),
+)]
+pub(crate) fn terrain_material_roughness(
+    params: In<OperatorParameters>,
+    selection: Res<Selection>,
+    terrains: Query<&jackdaw_scene_types::Terrain>,
+    mut store: ResMut<TerrainDataStore>,
+    mut picker: ResMut<TerrainMaterialPicker>,
+    mut history: ResMut<CommandHistory>,
+) -> OperatorResult {
+    let edit = slot_surface_edit(
+        &params,
+        &selection,
+        &terrains,
+        &store,
+        &mut picker,
+        MAX_SLOT_ROUGHNESS,
+    )?;
+    let mut materials = edit.materials;
+    materials[edit.index].perceptual_roughness = edit.value;
+    commit(
+        &mut store,
+        &mut history,
+        &mut picker,
+        edit.data_path,
+        materials,
+        None,
+        "Terrain Material Roughness",
+    )
+}
+
+/// Set or clear one slot's own specular reflectance.
+#[operator(
+    id = "terrain.material.reflectance",
+    label = "Terrain Material Reflectance",
+    description = "Set or clear how much light one of the selected terrain's materials reflects head on.",
+    is_available = has_selected_terrain,
+    allows_undo = false,
+    params(
+        index(i64, doc = "Texture id to shade."),
+        value(f64, doc = "Reflectance, 0 to 1, as on a StandardMaterial."),
+        clear(bool, default = false, doc = "Go back to the default reflectance of 0.5."),
+    ),
+)]
+pub(crate) fn terrain_material_reflectance(
+    params: In<OperatorParameters>,
+    selection: Res<Selection>,
+    terrains: Query<&jackdaw_scene_types::Terrain>,
+    mut store: ResMut<TerrainDataStore>,
+    mut picker: ResMut<TerrainMaterialPicker>,
+    mut history: ResMut<CommandHistory>,
+) -> OperatorResult {
+    let edit = slot_surface_edit(&params, &selection, &terrains, &store, &mut picker, 1.0)?;
+    let mut materials = edit.materials;
+    materials[edit.index].reflectance = edit.value;
+    commit(
+        &mut store,
+        &mut history,
+        &mut picker,
+        edit.data_path,
+        materials,
+        None,
+        "Terrain Material Reflectance",
+    )
+}
+
+/// One slot's roughness or reflectance edit, checked and ready to write.
+struct SlotSurfaceEdit {
+    data_path: String,
+    materials: Vec<TerrainMaterialSlot>,
+    index: usize,
+    /// Clamped into the field's range, or `None` to clear.
+    value: Option<f32>,
+}
+
+/// Read `index`, `value` (clamped to `0..=max`) and `clear`, and refuse a
+/// slot that is missing or vacated the way the tiling operators do.
+fn slot_surface_edit(
+    params: &OperatorParameters,
+    selection: &Selection,
+    terrains: &Query<&jackdaw_scene_types::Terrain>,
+    store: &TerrainDataStore,
+    picker: &mut TerrainMaterialPicker,
+    max: f32,
+) -> Option<SlotSurfaceEdit> {
+    let data_path = selected_data_path(selection, terrains)?;
+    let index = params.as_int("index")? as usize;
+    let value = if params.as_bool("clear").unwrap_or(false) {
+        None
+    } else {
+        let value = params.as_float("value")? as f32;
+        value.is_finite().then(|| value.clamp(0.0, max))
+    };
+    let materials = store.materials(&data_path).to_vec();
+    match materials.get(index) {
+        None => {
+            picker.error = Some(TerrainMaterialError::NoSuchSlot(index).to_string());
+            return None;
+        }
+        Some(slot) if slot.is_tombstone() => {
+            picker.error = Some(TerrainMaterialError::EmptySlot(index).to_string());
+            return None;
+        }
+        Some(_) => {}
+    }
+    Some(SlotSurfaceEdit {
+        data_path,
+        materials,
+        index,
+        value,
+    })
 }
 
 /// Show or hide the Textures tab's saved-material picker.
@@ -1261,6 +1393,45 @@ mod tests {
         assert_eq!(detile(&world), 0.0, "off is the floor");
         let _ = set(&mut world, 4.0);
         assert_eq!(detile(&world), MAX_DETILE);
+    }
+
+    /// A slot's own roughness and reflectance start unset, take a clamped
+    /// value, and clear back to unset, which is what an older file loads as.
+    #[test]
+    fn slot_roughness_and_reflectance_set_clamp_and_clear() {
+        let mut world = world_with_terrain("zone.jdterrain");
+        let _ = add(&mut world, "grass");
+        let run = |world: &mut World, reflectance: bool, value: Option<f64>| {
+            let mut given = vec![("index", PropertyValue::Int(0))];
+            match value {
+                Some(value) => given.push(("value", PropertyValue::Float(value))),
+                None => given.push(("clear", PropertyValue::Bool(true))),
+            }
+            if reflectance {
+                world.run_system_cached_with(terrain_material_reflectance, params(&given))
+            } else {
+                world.run_system_cached_with(terrain_material_roughness, params(&given))
+            }
+            .expect("system runs")
+        };
+        let slot = |world: &World| {
+            world
+                .resource::<TerrainDataStore>()
+                .materials("zone.jdterrain")[0]
+                .clone()
+        };
+
+        assert_eq!(slot(&world).perceptual_roughness, None);
+        assert_eq!(slot(&world).reflectance, None);
+
+        assert_eq!(run(&mut world, false, Some(0.4)), OperatorResult::Finished);
+        assert_eq!(run(&mut world, true, Some(3.0)), OperatorResult::Finished);
+        assert_eq!(slot(&world).perceptual_roughness, Some(0.4));
+        assert_eq!(slot(&world).reflectance, Some(1.0));
+
+        let _ = run(&mut world, false, None);
+        assert_eq!(slot(&world).perceptual_roughness, None);
+        assert_eq!(slot(&world).reflectance, Some(1.0));
     }
 
     /// Detiling a vacated id is refused the same way retiling one is:

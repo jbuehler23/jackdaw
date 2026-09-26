@@ -4,14 +4,16 @@
 //! Separate from the Components inspector so PCG and authoring parameters live
 //! with the feature they configure rather than the object they act on.
 
+use bevy::feathers::controls::{FeathersCheckbox, FeathersSlider};
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::ui::Checked;
-use bevy::ui_widgets::{SliderValue, ValueChange};
+use bevy::ui::{Checked, InteractionDisabled};
+use bevy::ui_widgets::{SliderPrecision, SliderValue, ValueChange};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{self, ButtonOperatorCall, ButtonProps, ButtonVariant},
     combobox::{self, ComboBoxChangeEvent},
+    field_row::{FieldRow, FieldRowProps, spawn_field_row},
     icons::{EditorFontItalic, Icon, IconFont},
     number_input::ScrubNumberInputValue,
     panel_card::PanelCardCollapseState,
@@ -39,8 +41,8 @@ use super::shape_ops::{MAX_CELL_SIZE, MIN_CELL_SIZE, clamp_cell_size, commit_sha
 use super::splat::TerrainSplatMaterials;
 use super::texture_ops::{
     TerrainMaterialAddOp, TerrainMaterialDetileOp, TerrainMaterialMoveOp, TerrainMaterialPicker,
-    TerrainMaterialPickerOp, TerrainMaterialRemoveOp, TerrainMaterialUvScaleOp,
-    TerrainTextureSelectOp,
+    TerrainMaterialPickerOp, TerrainMaterialReflectanceOp, TerrainMaterialRemoveOp,
+    TerrainMaterialRoughnessOp, TerrainMaterialUvScaleOp, TerrainTextureSelectOp,
 };
 use super::ui_fields::{
     FieldKind, TerrainDefaultFontRoot, spawn_checkbox, spawn_error_hint, spawn_hint,
@@ -54,6 +56,9 @@ use crate::material_ui::{
     spawn_action_header, spawn_preview, spawn_section,
 };
 use crate::selection::Selection;
+use jackdaw_terrain::texture_set::{
+    DEFAULT_PERCEPTUAL_ROUGHNESS, DEFAULT_REFLECTANCE, MAX_SLOT_ROUGHNESS,
+};
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<TerrainGenerateState>()
@@ -66,6 +71,7 @@ pub(super) fn plugin(app: &mut App) {
                 sync_gen_fields,
                 sync_material_uv_fields,
                 sync_material_detile_fields,
+                sync_slot_surface_fields,
                 sync_autoterrain_fields,
             )
                 .chain()
@@ -77,6 +83,8 @@ pub(super) fn plugin(app: &mut App) {
         .add_observer(on_gen_value_change)
         .add_observer(on_material_uv_change)
         .add_observer(on_material_detile_change)
+        .add_observer(on_slot_surface_slider_change)
+        .add_observer(on_slot_surface_toggle_change)
         .add_observer(on_autoterrain_slider_change)
         .add_observer(on_autoterrain_checkbox_change)
         .add_observer(on_ground_slider_change)
@@ -1684,6 +1692,55 @@ fn spawn_slot_editor(
         FieldKind::Continuous,
         MaterialDetileField(index),
     );
+    let has_roughness_map = !slot.roughness.is_empty()
+        || refs
+            .materials
+            .get(&handle)
+            .is_some_and(|material| material.metallic_roughness_texture.is_some());
+    let (roughness_label, roughness_tip, roughness_unset, roughness_max) = if has_roughness_map {
+        (
+            "Roughness Scale",
+            "Scales this material's roughness map on this terrain: below 1 smoother, above \
+             1 rougher, 1 the map as it is. Unchecked, the map shades as it is",
+            1.0,
+            MAX_SLOT_ROUGHNESS,
+        )
+    } else {
+        (
+            "Roughness",
+            "How rough this material shades on this terrain: 0 is mirror smooth, 1 fully \
+             matte. Unchecked, it takes the terrain's own roughness",
+            DEFAULT_PERCEPTUAL_ROUGHNESS,
+            1.0,
+        )
+    };
+    spawn_slot_surface_row(
+        commands,
+        slot_section.body,
+        roughness_label,
+        roughness_tip,
+        SlotSurfaceSlider {
+            index,
+            kind: SlotSurfaceKind::Roughness,
+            unset: roughness_unset,
+            max: roughness_max,
+        },
+        slot.perceptual_roughness,
+    );
+    spawn_slot_surface_row(
+        commands,
+        slot_section.body,
+        "Reflectance",
+        "How much light this material reflects head on, as on a standard material: 0.5 \
+         is 4 percent, right for most ground. Unchecked, it takes 0.5",
+        SlotSurfaceSlider {
+            index,
+            kind: SlotSurfaceKind::Reflectance,
+            unset: DEFAULT_REFLECTANCE,
+            max: 1.0,
+        },
+        slot.reflectance,
+    );
 
     let Some(material) = refs.materials.get(&handle) else {
         return;
@@ -1911,6 +1968,178 @@ struct MaterialUvField(usize);
 /// Which slot's detiling a slider row drives.
 #[derive(Component, Clone, Copy)]
 struct MaterialDetileField(usize);
+
+/// One of the shading values a slot may set of its own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SlotSurfaceKind {
+    Roughness,
+    Reflectance,
+}
+
+impl SlotSurfaceKind {
+    fn of(self, slot: &jackdaw_terrain::sidecar::TerrainMaterialSlot) -> Option<f32> {
+        match self {
+            Self::Roughness => slot.perceptual_roughness,
+            Self::Reflectance => slot.reflectance,
+        }
+    }
+
+    fn operator(self) -> &'static str {
+        match self {
+            Self::Roughness => TerrainMaterialRoughnessOp::ID,
+            Self::Reflectance => TerrainMaterialReflectanceOp::ID,
+        }
+    }
+}
+
+/// A slot shading row's slider. Shows `unset`, disabled, while the slot sets
+/// no value of its own.
+#[derive(Component, Clone, Copy, Debug)]
+struct SlotSurfaceSlider {
+    index: usize,
+    kind: SlotSurfaceKind,
+    /// What the slot shades at while it sets nothing.
+    unset: f32,
+    max: f32,
+}
+
+/// The checkbox that sets a slot shading value, or clears it back to unset.
+#[derive(Component, Clone, Copy, Debug)]
+struct SlotSurfaceToggle(SlotSurfaceSlider);
+
+/// A slot shading row: a checkbox saying whether the slot sets the value of
+/// its own, and a slider holding it, greyed at what the slot shades at while
+/// it does not.
+fn spawn_slot_surface_row(
+    commands: &mut Commands,
+    parent: Entity,
+    label: &str,
+    tooltip: &str,
+    field: SlotSurfaceSlider,
+    value: Option<f32>,
+) {
+    let FieldRow { row, control } = spawn_field_row(
+        commands,
+        parent,
+        FieldRowProps::new(label).with_control_min_width(tokens::SLIDER_MIN_WIDTH),
+    );
+    commands.entity(row).insert((
+        Tooltip::title(label).with_description(tooltip),
+        Hovered::default(),
+    ));
+    let mut toggle = commands.spawn_scene(bsn! { @FeathersCheckbox {} });
+    toggle.insert((SlotSurfaceToggle(field), ChildOf(control)));
+    if value.is_some() {
+        toggle.insert(Checked);
+    }
+    let shown = value.unwrap_or(field.unset).min(field.max);
+    let max = field.max;
+    let mut slider = commands.spawn_scene(bsn! {
+        @FeathersSlider { @value: {shown}, @min: 0.0, @max: {max} }
+        Node {
+            flex_grow: 1.0,
+            flex_shrink: 1.0,
+            min_width: px(tokens::SLIDER_MIN_WIDTH),
+        }
+    });
+    slider.insert((
+        SliderPrecision(FieldKind::Continuous.precision()),
+        field,
+        ChildOf(control),
+    ));
+    if value.is_none() {
+        slider.insert(InteractionDisabled);
+    }
+}
+
+fn on_slot_surface_slider_change(
+    event: On<ValueChange<f32>>,
+    sliders: Query<&SlotSurfaceSlider>,
+    mut commands: Commands,
+) {
+    let Ok(field) = sliders.get(event.event_target()) else {
+        return;
+    };
+    commands
+        .operator(field.kind.operator())
+        .param("index", field.index as i64)
+        .param("value", event.value as f64)
+        .settings(CallOperatorSettings {
+            creates_history_entry: true,
+            execution_context: ExecutionContext::Invoke,
+        })
+        .call();
+}
+
+/// Checking the box sets the value the slot was already shading at, so
+/// nothing on screen moves until the slider does; unchecking clears it.
+fn on_slot_surface_toggle_change(
+    event: On<ValueChange<bool>>,
+    toggles: Query<&SlotSurfaceToggle>,
+    mut commands: Commands,
+) {
+    let target = event.event_target();
+    let Ok(SlotSurfaceToggle(field)) = toggles.get(target) else {
+        return;
+    };
+    jackdaw_feathers::utils::set_marker_if_alive::<Checked>(&mut commands, target, event.value);
+    let call = commands
+        .operator(field.kind.operator())
+        .param("index", field.index as i64);
+    let call = if event.value {
+        call.param("value", field.unset as f64)
+    } else {
+        call.param("clear", true)
+    };
+    call.settings(CallOperatorSettings {
+        creates_history_entry: true,
+        execution_context: ExecutionContext::Invoke,
+    })
+    .call();
+}
+
+/// [`sync_material_uv_fields`] for the slot shading rows: the value, whether
+/// the slider is live, and the checkbox all follow the store, so an undo or a
+/// scripted call lands on the row the same as a click.
+fn sync_slot_surface_fields(
+    store: Res<TerrainDataStore>,
+    selection: Res<Selection>,
+    terrains: Query<&jackdaw_scene_types::Terrain>,
+    sliders: Query<(Entity, &SlotSurfaceSlider)>,
+    toggles: Query<(Entity, &SlotSurfaceToggle)>,
+    mut commands: Commands,
+) {
+    if !store.is_changed() || sliders.is_empty() {
+        return;
+    }
+    let Some(terrain) = selection.primary().and_then(|e| terrains.get(e).ok()) else {
+        return;
+    };
+    let slots = store.materials(&terrain.data_path);
+    for (entity, field) in &sliders {
+        let Some(slot) = slots.get(field.index) else {
+            continue;
+        };
+        let value = field.kind.of(slot);
+        commands
+            .entity(entity)
+            .insert(SliderValue(value.unwrap_or(field.unset)));
+        jackdaw_feathers::utils::set_marker_if_alive::<InteractionDisabled>(
+            &mut commands,
+            entity,
+            value.is_none(),
+        );
+    }
+    for (entity, SlotSurfaceToggle(field)) in &toggles {
+        if let Some(slot) = slots.get(field.index) {
+            jackdaw_feathers::utils::set_marker_if_alive::<Checked>(
+                &mut commands,
+                entity,
+                field.kind.of(slot).is_some(),
+            );
+        }
+    }
+}
 
 fn on_material_uv_change(
     event: On<ValueChange<f32>>,
