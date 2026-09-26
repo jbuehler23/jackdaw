@@ -36,6 +36,10 @@ pub(crate) const WORLD_ENTITY_ICONS: &[(&str, Icon)] = &[
     ("jackdaw_scene_types::types::GltfSource", Icon::Boxes),
     ("jackdaw::entity_ops::SceneFogVolume", Icon::CloudFog),
     ("jackdaw::entity_ops::SceneReflectionProbe", Icon::Sparkles),
+    (
+        "jackdaw_scene_types::types::ReflectionProbe",
+        Icon::Sparkles,
+    ),
     ("jackdaw::entity_ops::SceneAnimationPlayer", Icon::Play),
     ("jackdaw::entity_ops::SceneAudioSource", Icon::Volume2),
     (
@@ -1252,6 +1256,7 @@ mod tests {
             registry.register::<jackdaw_scene_types::Terrain>();
             registry.register::<crate::entity_ops::SceneFogVolume>();
             registry.register::<crate::entity_ops::SceneReflectionProbe>();
+            registry.register::<jackdaw_scene_types::ReflectionProbe>();
             registry.register::<crate::entity_ops::SceneAnimationPlayer>();
             registry.register::<crate::entity_ops::SceneAudioSource>();
             registry.register::<crate::reference_image::ReferenceImage>();
@@ -1282,6 +1287,12 @@ mod tests {
             ),
             (
                 world.spawn(crate::entity_ops::SceneReflectionProbe).id(),
+                Icon::Sparkles,
+            ),
+            (
+                world
+                    .spawn(jackdaw_scene_types::ReflectionProbe::default())
+                    .id(),
                 Icon::Sparkles,
             ),
             (

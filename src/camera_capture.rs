@@ -20,7 +20,40 @@ const SETTLE_FRAMES: u32 = 12;
 const MAX_EDGE: u32 = 8192;
 
 pub(crate) fn plugin(app: &mut App) {
-    app.add_systems(Update, settle_captures);
+    app.add_systems(Update, (settle_captures, keep_gizmos_out_of_recordings));
+}
+
+/// A camera recording the scene to a file. While one exists the editor's
+/// gizmos are switched off, so their lines and markers stay out of the image.
+#[derive(Component, Default)]
+pub struct KeepsGizmosOut;
+
+fn keep_gizmos_out_of_recordings(
+    recording: Query<(), With<KeepsGizmosOut>>,
+    store: Option<ResMut<GizmoConfigStore>>,
+    mut held: Local<Vec<std::any::TypeId>>,
+) {
+    let Some(mut store) = store else {
+        return;
+    };
+    if recording.is_empty() {
+        if held.is_empty() {
+            return;
+        }
+        for (group, config, _) in store.iter_mut() {
+            if held.contains(group) {
+                config.enabled = true;
+            }
+        }
+        held.clear();
+        return;
+    }
+    for (group, config, _) in store.iter_mut() {
+        if config.enabled {
+            config.enabled = false;
+            held.push(*group);
+        }
+    }
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -79,6 +112,7 @@ pub fn spawn_capture_camera(
         transform,
         projection,
         RenderLayers::layer(0),
+        KeepsGizmosOut,
         PendingCapture {
             path,
             frames_left: SETTLE_FRAMES,
@@ -212,6 +246,33 @@ pub(crate) fn viewport_capture(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gizmos_are_off_while_a_recording_camera_exists_and_back_after() {
+        let mut world = World::new();
+        let mut store = GizmoConfigStore::default();
+        store.insert(GizmoConfig::default(), DefaultGizmoConfigGroup);
+        world.insert_resource(store);
+        let enabled = |world: &World| {
+            world
+                .resource::<GizmoConfigStore>()
+                .config::<DefaultGizmoConfigGroup>()
+                .0
+                .enabled
+        };
+
+        let recording = world.spawn(KeepsGizmosOut).id();
+        world
+            .run_system_cached(keep_gizmos_out_of_recordings)
+            .expect("runs");
+        assert!(!enabled(&world));
+
+        world.despawn(recording);
+        world
+            .run_system_cached(keep_gizmos_out_of_recordings)
+            .expect("runs");
+        assert!(enabled(&world));
+    }
 
     #[test]
     fn a_capture_path_stays_inside_the_project() {

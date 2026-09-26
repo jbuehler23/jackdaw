@@ -191,6 +191,7 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 prettyplease = "0.2"
 winit.workspace = true
 image.workspace = true
+half = "2"
 time.workspace = true
 jackdaw_localization = { version = "0.19.0", path = "crates/jackdaw_localization" }
 jackdaw_env.workspace = true
@@ -304,7 +305,7 @@ path-slash = "0.2.1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 winit = "0.30.13"
-image = { version = "0.25.10", default-features = false, features = ["png"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "hdr"] }
 time = { version = "0.3.47", default-features = false, features = [
     "std",
     "local-offset",

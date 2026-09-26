@@ -26,11 +26,13 @@
 
 pub mod environment;
 pub mod foliage;
+pub mod probe;
 pub mod water;
 pub mod worn;
 
 pub use environment::{EnvironmentPlugin, SkyMaterial};
 pub use foliage::{Foliage, FoliageMaterial, FoliagePlugin};
+pub use probe::ReflectionProbePlugin;
 pub use water::{Water, WaterMaterial, WaterPlugin};
 pub use worn::WornMaterial;
 

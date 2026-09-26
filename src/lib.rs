@@ -111,6 +111,7 @@ pub mod prefab;
 pub mod preflight;
 pub mod preview_context;
 pub(crate) mod preview_model;
+pub mod probe_bake;
 pub mod project;
 pub mod project_build;
 pub mod project_definitions;
@@ -435,6 +436,8 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(prefab::PrefabPlugin)
         .add_plugins(prefab::watcher::PrefabWatcherPlugin)
         .add_plugins(jackdaw_surface::EnvironmentPlugin)
+        .add_plugins(jackdaw_surface::ReflectionProbePlugin)
+        .add_plugins(probe_bake::plugin)
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(file_ops::FileOpsPlugin)
         .add_plugins(keybinds::KeybindsPlugin)
