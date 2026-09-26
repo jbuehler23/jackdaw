@@ -10,7 +10,9 @@
 //!
 //! Every dial defaults to the value that does nothing, so an unedited
 //! [`Foliage`] draws exactly what its [`StandardMaterial`] half draws, cut out
-//! at [`Foliage::alpha_cutoff`].
+//! at [`Foliage::alpha_cutoff`]. In a multisampled view a cutout foliage
+//! material draws that edge by alpha to coverage, so leaves are smoothed along
+//! their outline rather than stepped.
 //!
 //! The vertex offset, the gradient and the variation are computed here as well
 //! as in the shader, which is what the tests check: the two have to agree or a
@@ -18,10 +20,17 @@
 
 use bevy::asset::embedded_asset;
 use bevy::color::ColorToComponents;
-use bevy::pbr::{ExtendedMaterial, MaterialExtension};
+use bevy::mesh::MeshVertexBufferLayoutRef;
+use bevy::pbr::{
+    ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
+    MeshPipelineKey,
+};
 use bevy::prelude::*;
 use bevy::render::render_asset::RenderAssets;
-use bevy::render::render_resource::{AsBindGroup, AsBindGroupShaderType, ShaderType};
+use bevy::render::render_resource::{
+    AsBindGroup, AsBindGroupShaderType, RenderPipelineDescriptor, ShaderType,
+    SpecializedMeshPipelineError,
+};
 use bevy::render::texture::GpuImage;
 use bevy::shader::{Shader, ShaderRef};
 use jackdaw_scene_types::{SceneWind, Wind};
@@ -262,6 +271,33 @@ impl MaterialExtension for Foliage {
     fn fragment_shader() -> ShaderRef {
         SHADER_PATH.into()
     }
+
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        let prepass = descriptor
+            .vertex
+            .shader_defs
+            .contains(&"PREPASS_PIPELINE".into());
+        if !prepass && covers_cutout_edges(key.mesh_key) {
+            descriptor.multisample.alpha_to_coverage_enabled = true;
+            if let Some(fragment) = descriptor.fragment.as_mut() {
+                fragment
+                    .shader_defs
+                    .push("FOLIAGE_ALPHA_TO_COVERAGE".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Whether a pipeline for `key` draws a cutout edge by alpha to coverage: the
+/// material cuts out and the view takes more than one sample.
+fn covers_cutout_edges(key: MeshPipelineKey) -> bool {
+    key.contains(MeshPipelineKey::MAY_DISCARD) && key.msaa_samples() > 1
 }
 
 /// Keeps the shader the foliage stages import loaded for as long as the app runs.
@@ -321,6 +357,16 @@ mod tests {
     /// `AsBindGroup` derive and the shader that reads them.
     const SHADER_SOURCE: &str = include_str!("shaders/foliage_wind.wgsl");
     const PREPASS_SOURCE: &str = include_str!("shaders/foliage_prepass.wgsl");
+
+    #[test]
+    fn only_a_cutout_in_a_multisampled_view_covers_its_edges() {
+        let cutout = MeshPipelineKey::MAY_DISCARD;
+        let four = MeshPipelineKey::from_msaa_samples(4);
+        let one = MeshPipelineKey::from_msaa_samples(1);
+        assert!(covers_cutout_edges(cutout | four));
+        assert!(!covers_cutout_edges(cutout | one));
+        assert!(!covers_cutout_edges(four));
+    }
 
     #[test]
     fn the_prepass_leans_the_leaves_the_way_the_main_pass_does() {

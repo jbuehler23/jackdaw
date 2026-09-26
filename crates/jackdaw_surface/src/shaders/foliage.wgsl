@@ -120,9 +120,17 @@ fn light_reaching(in: VertexOutput, world_normal: vec3<f32>) -> f32 {
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
+#ifdef FOLIAGE_ALPHA_TO_COVERAGE
+    let alpha = pbr_input.material.base_color.a;
+    pbr_input.material.base_color.a =
+        (alpha - foliage.alpha_cutoff) / max(fwidth(alpha), 0.0001) + 0.5;
+#else
+#ifndef ALPHA_TO_COVERAGE
     if pbr_input.material.base_color.a < foliage.alpha_cutoff {
         discard;
     }
+#endif
+#endif
 
     let world_position = in.world_position.xyz;
     var up_the_mesh = world_position.y;

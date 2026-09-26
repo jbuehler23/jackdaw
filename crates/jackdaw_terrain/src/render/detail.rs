@@ -1249,8 +1249,18 @@ fn prepare_detail_bind_groups(
     }
 }
 
+/// How a blade's cutout edge is drawn in a view: by alpha to coverage where
+/// the view takes more than one sample, and by discarding otherwise.
+fn edge_key(view_key: MeshPipelineKey) -> MeshPipelineKey {
+    match view_key.msaa_samples() > 1 {
+        true => MeshPipelineKey::BLEND_ALPHA_TO_COVERAGE,
+        false => MeshPipelineKey::NONE,
+    }
+}
+
 /// Put every tile in view into the opaque phase. An instance writes depth and
-/// discards the pixels outside its own silhouette.
+/// discards the pixels outside its own silhouette, or covers only the samples
+/// inside it where the view is multisampled.
 #[expect(
     clippy::too_many_arguments,
     reason = "the queue reads the whole render world's mesh bookkeeping"
@@ -1295,6 +1305,7 @@ fn queue_detail_tiles(
                 continue;
             };
             let key = view_key
+                | edge_key(view_key)
                 | MeshPipelineKey::from_primitive_topology_and_strip_index(
                     mesh.primitive_topology(),
                     mesh.index_format(),
@@ -1547,6 +1558,14 @@ mod tests {
         for _ in 0..400 {
             app.update();
         }
+    }
+
+    #[test]
+    fn blades_cover_their_edges_only_in_a_multisampled_view() {
+        let single = MeshPipelineKey::from_msaa_samples(1);
+        let four = MeshPipelineKey::from_msaa_samples(4);
+        assert_eq!(edge_key(single), MeshPipelineKey::NONE);
+        assert_eq!(edge_key(four), MeshPipelineKey::BLEND_ALPHA_TO_COVERAGE);
     }
 
     #[test]

@@ -191,16 +191,20 @@ fn vertex(in: Vertex) -> DetailOutput {
 
 @fragment
 fn fragment(in: DetailOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+    let sampled = textureSample(color_texture, color_sampler, in.uv);
+    var inside = sampled.a - ALPHA_CUTOFF;
     if detail.is_card != 0u {
         let half_span = 1.0 - in.uv.y * in.uv.y;
-        if abs(in.uv.x - 0.5) * 2.0 > half_span {
-            discard;
-        }
+        inside = min(inside, half_span - abs(in.uv.x - 0.5) * 2.0);
     }
-    let sampled = textureSample(color_texture, color_sampler, in.uv);
-    if sampled.a < ALPHA_CUTOFF {
+#ifdef ALPHA_TO_COVERAGE
+    let coverage = inside / max(fwidth(inside), 0.0001) + 0.5;
+#else
+    if inside < 0.0 {
         discard;
     }
+    let coverage = 1.0;
+#endif
 
     let double_sided = true;
     let facing = pbr_functions::prepare_world_normal(in.world_normal, double_sided, is_front);
@@ -222,5 +226,6 @@ fn fragment(in: DetailOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var out: FragmentOutput;
     out.color = pbr_functions::apply_pbr_lighting(pbr_input);
     out.color = pbr_functions::main_pass_post_lighting_processing(pbr_input, out.color);
+    out.color.a = coverage;
     return out;
 }

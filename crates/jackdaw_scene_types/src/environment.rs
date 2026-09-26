@@ -236,6 +236,23 @@ pub enum Antialiasing {
     Taa,
 }
 
+/// How many samples the cameras take per pixel.
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[reflect(Default)]
+pub enum Multisampling {
+    /// The cameras keep what they have.
+    #[default]
+    Keep,
+    /// One sample per pixel.
+    Off,
+    /// Two samples per pixel.
+    Sample2,
+    /// Four samples per pixel.
+    Sample4,
+    /// Eight samples per pixel, where the GPU supports it.
+    Sample8,
+}
+
 /// How shadow edges are filtered.
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[reflect(Default)]
@@ -281,6 +298,10 @@ pub struct PostProcess {
     /// How gradually the vignette fades in from the centre.
     pub vignette_smoothness: f32,
     pub antialiasing: Antialiasing,
+    /// Multisample antialiasing, which also smooths the edges of cutout leaves
+    /// and blades drawn with alpha to coverage. Temporal antialiasing turns it
+    /// off, and a camera drawing order-independent transparency keeps it off.
+    pub msaa: Multisampling,
     pub shadow_filtering: ShadowFiltering,
 }
 
@@ -301,6 +322,7 @@ impl Default for PostProcess {
             vignette_intensity: 0.0,
             vignette_smoothness: 5.0,
             antialiasing: Antialiasing::Keep,
+            msaa: Multisampling::Keep,
             shadow_filtering: ShadowFiltering::Keep,
         }
     }

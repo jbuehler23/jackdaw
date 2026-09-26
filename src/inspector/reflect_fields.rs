@@ -3542,6 +3542,10 @@ fn build_variant_default_json(
 
     let variant = enum_info.variant(variant_name)?;
 
+    if enum_info.type_path().starts_with("core::option::Option<") {
+        return option_variant_default_json(variant, registry);
+    }
+
     match variant {
         VariantInfo::Unit(_) => Some(serde_json::Value::String(variant_name.to_string())),
         VariantInfo::Struct(struct_info) => {
@@ -3576,10 +3580,60 @@ fn build_variant_default_json(
     }
 }
 
+/// An `Option` in Bevy's reflect-serialization format: `null` for `None`, and
+/// the payload's default itself for `Some`, not wrapped in the variant's name.
+fn option_variant_default_json(
+    variant: &bevy::reflect::enums::VariantInfo,
+    registry: &bevy::reflect::TypeRegistry,
+) -> Option<serde_json::Value> {
+    use bevy::reflect::enums::VariantInfo;
+    use bevy::reflect::{prelude::ReflectDefault, serde::TypedReflectSerializer};
+
+    match variant {
+        VariantInfo::Tuple(tuple_info) => {
+            let payload = tuple_info.field_at(0)?;
+            let default = registry
+                .get(payload.type_id())?
+                .data::<ReflectDefault>()?
+                .default();
+            let serializer =
+                TypedReflectSerializer::new(default.as_ref().as_partial_reflect(), registry);
+            serde_json::to_value(&serializer).ok()
+        }
+        _ => Some(serde_json::Value::Null),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_to_json_value;
     use serde_json::Value;
+
+    #[test]
+    fn an_option_switches_to_a_value_its_deserializer_reads() {
+        use bevy::reflect::serde::TypedReflectDeserializer;
+        use bevy::reflect::{FromReflect, TypeInfo, TypeRegistry, Typed};
+        use serde::de::DeserializeSeed;
+
+        let mut registry = TypeRegistry::default();
+        registry.register::<Option<f32>>();
+        registry.register::<f32>();
+        let TypeInfo::Enum(info) = Option::<f32>::type_info() else {
+            panic!("an option is an enum");
+        };
+        let read = |json: serde_json::Value| {
+            let registration = registry.get(std::any::TypeId::of::<Option<f32>>()).unwrap();
+            let value = TypedReflectDeserializer::new(registration, &registry)
+                .deserialize(json)
+                .expect("the deserializer reads it");
+            Option::<f32>::from_reflect(value.as_ref()).expect("an option")
+        };
+
+        let some = super::build_variant_default_json(info, "Some", &registry).expect("some");
+        assert_eq!(read(some), Some(0.0));
+        let none = super::build_variant_default_json(info, "None", &registry).expect("none");
+        assert_eq!(read(none), None);
+    }
 
     #[test]
     fn integer_input_parses_to_json_integer() {
