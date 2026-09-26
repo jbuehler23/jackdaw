@@ -66,7 +66,7 @@ serde_json.workspace = true
 thiserror = "2"
 
 [features]
-default = ["render"]
+default = ["render", "soft_shadows"]
 render = [
     "dep:jackdaw_surface",
     "bevy/bevy_pbr",
@@ -79,6 +79,11 @@ render = [
     # an authored widget carries can only be registered in a rendering build.
     "jackdaw_widgets_runtime/feathers",
 ]
+# Percentage-closer soft shadows: a light's soft shadow size widens its shadows'
+# penumbras with distance from the caster. On by default; off for GPUs whose
+# per-shader sampler limit the extra shadow samplers would pass. A scene that
+# sets a soft shadow size needs it on to load.
+soft_shadows = ["render", "bevy/experimental_pbr_pcss"]
 # Play-in-editor: connect to the editor over ipc-channel, stream the
 # scene's ECS state, and apply control commands. Off by default so the
 # protocol and ipc-channel stay out of the standalone runtime build.

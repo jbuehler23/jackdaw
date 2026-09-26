@@ -6,6 +6,7 @@ use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::camera::{Exposure, Hdr};
+use bevy::core_pipeline::oit::OrderIndependentTransparencySettings;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::light::{GeneratedEnvironmentMapLight, ShadowFilteringMethod};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -22,8 +23,8 @@ use bevy::render::view::Msaa;
 use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection};
 use bevy::shader::ShaderRef;
 use jackdaw_scene_types::{
-    Ambient, AmbientMode, Antialiasing, EditorHidden, Environment, Fog, FogMode, NavmeshExclude,
-    PostProcess, Reflections, SceneWind, ShadowFiltering, Sky, Tonemapper,
+    Ambient, AmbientMode, Antialiasing, EditorHidden, Environment, Fog, FogMode, Multisampling,
+    NavmeshExclude, PostProcess, Reflections, SceneWind, ShadowFiltering, Sky, Tonemapper,
 };
 
 const SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/sky.wgsl";
@@ -433,6 +434,7 @@ type CameraParts = (
         Option<&'static TemporalAntiAliasing>,
         Option<&'static Msaa>,
         Option<&'static ShadowFilteringMethod>,
+        Has<OrderIndependentTransparencySettings>,
     ),
 );
 
@@ -469,7 +471,7 @@ fn dress_the_cameras(
         fog,
         light,
         hdr,
-        (fxaa, smaa, taa, msaa, filtering),
+        (fxaa, smaa, taa, msaa, filtering, draws_oit),
     ) in &cameras
     {
         if !layers.is_none_or(|layers| layers.intersects(&RenderLayers::default())) {
@@ -517,7 +519,7 @@ fn dress_the_cameras(
             }
             None => restore(&mut camera, undressed.ambient.clone()),
         }
-        dress_post(&mut camera, &env.post, &undressed);
+        dress_post(&mut camera, &env.post, &undressed, draws_oit);
         camera.insert(undressed);
     }
 }
@@ -633,7 +635,12 @@ pub fn color_grading(post: &PostProcess) -> ColorGrading {
     }
 }
 
-fn dress_post(camera: &mut EntityCommands, post: &PostProcess, undressed: &UndressedCamera) {
+fn dress_post(
+    camera: &mut EntityCommands,
+    post: &PostProcess,
+    undressed: &UndressedCamera,
+    draws_oit: bool,
+) {
     if !post.enabled {
         undressed.restore_post(camera);
         return;
@@ -663,11 +670,30 @@ fn dress_post(camera: &mut EntityCommands, post: &PostProcess, undressed: &Undre
         restore(camera, undressed.vignette.clone());
     }
     dress_antialiasing(camera, post.antialiasing, undressed);
+    if post.antialiasing != Antialiasing::Taa {
+        match msaa(post.msaa).filter(|_| !draws_oit) {
+            Some(samples) => {
+                camera.insert(samples);
+            }
+            None => restore(camera, undressed.msaa),
+        }
+    }
     match shadow_filtering(post.shadow_filtering) {
         Some(method) => {
             camera.insert(method);
         }
         None => restore(camera, undressed.shadow_filtering),
+    }
+}
+
+/// Bevy's multisampling for an environment's choice, or `None` to keep the camera's own.
+pub fn msaa(choice: Multisampling) -> Option<Msaa> {
+    match choice {
+        Multisampling::Keep => None,
+        Multisampling::Off => Some(Msaa::Off),
+        Multisampling::Sample2 => Some(Msaa::Sample2),
+        Multisampling::Sample4 => Some(Msaa::Sample4),
+        Multisampling::Sample8 => Some(Msaa::Sample8),
     }
 }
 
@@ -1010,6 +1036,53 @@ mod tests {
         );
         assert!(!undressed.contains::<TemporalAntiAliasing>());
         assert_eq!(undressed.get::<Msaa>(), Some(&Msaa::Sample4));
+    }
+
+    #[test]
+    fn the_chosen_multisampling_reaches_every_camera_that_can_take_it() {
+        let mut app = environment_app();
+        let plain = app
+            .world_mut()
+            .spawn((Camera3d::default(), Msaa::Sample4))
+            .id();
+        let transparent = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                Msaa::Off,
+                OrderIndependentTransparencySettings::default(),
+            ))
+            .id();
+        let with = |msaa, antialiasing| Environment {
+            post: PostProcess {
+                enabled: true,
+                antialiasing,
+                msaa,
+                ..PostProcess::default()
+            },
+            ..Environment::default()
+        };
+        let root = hold(&mut app, with(Multisampling::Sample8, Antialiasing::Keep));
+        assert_eq!(app.world().get::<Msaa>(plain), Some(&Msaa::Sample8));
+        assert_eq!(
+            app.world().get::<Msaa>(transparent),
+            Some(&Msaa::Off),
+            "order-independent transparency cannot take more than one sample"
+        );
+
+        app.world_mut()
+            .entity_mut(root)
+            .insert(with(Multisampling::Sample8, Antialiasing::Taa));
+        app.update();
+        assert_eq!(
+            app.world().get::<Msaa>(plain),
+            Some(&Msaa::Off),
+            "temporal antialiasing needs one sample"
+        );
+
+        app.world_mut().entity_mut(root).remove::<Environment>();
+        app.update();
+        assert_eq!(app.world().get::<Msaa>(plain), Some(&Msaa::Sample4));
     }
 
     #[test]
