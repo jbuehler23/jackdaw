@@ -61,7 +61,7 @@ fn fast() -> bool {
 /// `heavy()` or the onboarding workflow instead.
 const SDK_BINARIES: &str = "binary(bsn_game_run) | binary(editor_journey) | binary(bundle_smoke) \
     | binary(stress_reload) | binary(scaffold_e2e) \
-    | binary(schema_extract) | binary(reflect_auto_register) \
+    | binary(reflect_auto_register) \
     | binary(component_shape_refresh) | binary(dylib_linkage_identity) \
     | binary(extern_redirect_ecosystem) | binary(mcp_smoke)";
 

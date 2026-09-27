@@ -2,18 +2,24 @@ name: Onboarding pipeline
 
 # These probes are the regression suite for the SDK build pipeline
 # (extern redirect plan, linkage identity, auto-registration across
-# dlopen, and game binary Play over PIE IPC). They build the whole
-# editor with the dylib feature per platform, so they are kept off the
-# per-PR path: they run on pushes to main (which also warms the per-OS
-# cache), on release tags, nightly, and on demand.
+# dlopen, and a scaffolded game's schema). Game binary Play runs in the
+# heavy tier and on pull requests that touch it. They build the whole
+# editor with the dylib feature, so they are kept off the per-PR and
+# post-merge paths: Linux runs nightly and on release tags, and every
+# platform runs on demand.
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   schedule:
     - cron: "0 6 * * *"
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Which platforms to probe"
+        type: choice
+        default: linux
+        options: [linux, all]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -30,15 +36,14 @@ jobs:
   sdk-pipeline:
     name: SDK pipeline - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    # Nine probes, each building or loading a project against the SDK.
-    # On a cold cache 120 minutes ran out partway through the second one
-    # and the job reported `cancelled`, which reads as an infrastructure
-    # hiccup rather than the missing result it is.
-    timeout-minutes: 180
+    # Linux runs every probe in about two hours and ten minutes with no cache.
+    timeout-minutes: 160
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Windows and macOS run on demand only: a cold build of their probes
+        # outlasts a scheduled run.
+        os: ${{ fromJSON(inputs.platforms == 'all' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest"]') }}
     defaults:
       run:
         shell: bash
@@ -51,9 +56,31 @@ jobs:
         with:
           toolchain: ${{ env.toolchain }}
 
+      # The SDK, every probe's fixture build and a scaffolded game do not fit
+      # beside the runner image's preinstalled toolchains.
+      - name: Remove unused software (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      # The scaffolded game answers the schema request from inside its App
+      # build, which needs a Vulkan adapter; the runner has no GPU, so
+      # lavapipe provides one.
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev mesa-vulkan-drivers
+
+      # The tracked cargo config links Linux builds through clang and wild.
+      - name: Install cargo binstall
+        if: runner.os == 'Linux'
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild
+        if: runner.os == 'Linux'
+        run: cargo binstall wild-linker --locked --force
 
       - name: Resolve host triple
         run: |
@@ -62,7 +89,7 @@ jobs:
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           # Keyed on the cargo config because it carries rustflags: a
           # cache built under different flags mixes crate generations
           # with a fresh build's, which fails links (or dlopen) on
@@ -93,31 +120,27 @@ jobs:
       - name: Linkage identity
         run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test dylib_linkage_identity -- --nocapture
 
+      # macOS runs only the SDK build and the two probes above, and Windows
+      # skips scaffold_e2e: each platform runs its platform-specific probes,
+      # and Linux runs every probe.
       - name: Ecosystem extern redirect
+        if: runner.os != 'macOS'
         run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test extern_redirect_ecosystem -- --nocapture
 
-      - name: Schema extraction
-        run: cargo test -j 4 --test schema_extract -- --nocapture
-
       - name: Component shape refresh
+        if: runner.os != 'macOS'
         run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test component_shape_refresh -- --nocapture
 
       - name: Dylib reload memory
+        if: runner.os != 'macOS'
         run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test stress_reload -- --nocapture
 
       - name: Extension loading
-        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test dylib_loading -- --nocapture
+        if: runner.os != 'macOS'
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test sdk_layout -- dylib_loading --nocapture
 
       - name: Scaffold end-to-end (scaffold -> build -> schema)
         # The user's first-run loop headlessly: scaffold a game, build its
         # binary, and confirm the template component reaches the schema.
-        run: cargo test -j 4 --test scaffold_e2e -- --nocapture
-
-      - name: Game binary over PIE IPC
-        # Headless runners have no GPU on every platform; the Play
-        # test needs a working wgpu adapter for the Frames lane, so it
-        # runs only where lavapipe provides one.
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get install --no-install-recommends -y mesa-vulkan-drivers
-          cargo test -j 4 --test bsn_game_run -- --nocapture
+        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test scaffold_e2e -- --nocapture

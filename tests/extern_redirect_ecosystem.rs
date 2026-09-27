@@ -80,7 +80,14 @@ fn ecosystem_dependency_compiles_and_registers_across_the_boundary() {
     // dylib keeps the .rustc metadata section (linkage identity) that
     // a cdylib would strip.
     let status = Command::new("cargo")
-        .args(["rustc", "--crate-type", "dylib", "--target", &triple])
+        .args([
+            "rustc",
+            "--lib",
+            "--crate-type",
+            "dylib",
+            "--target",
+            &triple,
+        ])
         .current_dir(&fixture_dir)
         .env("CARGO_TARGET_DIR", &fixture_target)
         .env("RUSTC_WRAPPER", &sdk.wrapper)

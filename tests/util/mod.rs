@@ -168,20 +168,26 @@ pub fn iter_operator_ids(app: &mut App) -> Vec<Cow<'static, str>> {
 /// The path carries the test binary's name, so two binaries staging the same
 /// fixture at once do not write over each other.
 ///
-/// Staging preserves the layout, so a fixture depending on `../sibling` works
-/// as long as the caller stages that sibling too.
+/// The staged crate sits as deep below the workspace as `tests/fixtures/<name>`,
+/// so a fixture's `../../../crates/...` path dependencies still resolve.
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
 #[allow(dead_code, reason = "the SDK-pipeline tests use this")]
 pub fn stage_fixture(name: &str) -> std::path::PathBuf {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let src = root.join("tests/fixtures").join(name);
     assert!(src.is_dir(), "no fixture crate at {}", src.display());
-    let dst = root
-        .join("target/fixture-stage")
-        .join(env!("CARGO_CRATE_NAME"))
-        .join(name);
+    let dst = staged_fixture(env!("CARGO_CRATE_NAME"), name);
     copy_dir(&src, &dst);
     dst
+}
+
+/// Where [`stage_fixture`] puts fixture `name` for test binary `binary`.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "the SDK-pipeline tests use this")]
+pub fn staged_fixture(binary: &str, name: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target/fixture-stage")
+        .join(format!("{binary}-{name}"))
 }
 
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]

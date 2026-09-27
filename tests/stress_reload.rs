@@ -63,7 +63,14 @@ fn measure_reload_memory_growth() {
     let fixture_target = fixture_dir.join("target-fixture");
     let _ = std::fs::remove_dir_all(&fixture_target);
     let status = std::process::Command::new("cargo")
-        .args(["rustc", "--crate-type", "dylib", "--target", &triple])
+        .args([
+            "rustc",
+            "--lib",
+            "--crate-type",
+            "dylib",
+            "--target",
+            &triple,
+        ])
         .current_dir(&fixture_dir)
         .env("CARGO_INCREMENTAL", "0")
         .env("CARGO_TARGET_DIR", &fixture_target)

@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use bevy::reflect::TypeRegistry;
+use jackdaw::project_build::plan::{SdkManifest, write_plan};
 use jackdaw::sdk_paths::SdkPaths;
 
 mod util;
@@ -46,8 +47,16 @@ fn auto_registered_types_cross_the_dlopen_boundary() {
         sdk.wrapper.display()
     );
 
+    util::ensure_sdk_metadata(&sdk);
     let fixture_dir = util::stage_fixture("reflect_game");
     let fixture_target = fixture_dir.join("target-fixture");
+    let map_path = fixture_dir.join("extern_map.txt");
+
+    std::fs::copy(&sdk.lockfile, fixture_dir.join("Cargo.lock")).expect("seed the fixture lock");
+    let manifest =
+        SdkManifest::generate_dev(&workspace_root(), &sdk).expect("generate the SDK manifest");
+    write_plan(&fixture_dir, &manifest, &sdk.deps, &map_path).expect("write the redirect plan");
+
     // Wrapper behavior is not part of cargo's fingerprint; build from
     // clean so stale units cannot poison the probe.
     let _ = std::fs::remove_dir_all(&fixture_target);
@@ -57,13 +66,21 @@ fn auto_registered_types_cross_the_dlopen_boundary() {
     // Rust dylib keeps the .rustc metadata section carrying the linkage
     // identity, which a cdylib would strip.
     let status = Command::new("cargo")
-        .args(["rustc", "--crate-type", "dylib", "--target", &triple])
+        .args([
+            "rustc",
+            "--lib",
+            "--crate-type",
+            "dylib",
+            "--target",
+            &triple,
+        ])
         .current_dir(&fixture_dir)
         .env("CARGO_TARGET_DIR", &fixture_target)
         .env("RUSTC_WRAPPER", &sdk.wrapper)
         .env("JACKDAW_SDK_DYLIB", &sdk.dylib)
         .env("JACKDAW_SDK_DEPS", &sdk.deps)
         .env("JACKDAW_SDK_HOST_DEPS", &sdk.host_deps)
+        .env("JACKDAW_SDK_EXTERN_MAP", &map_path)
         .env("JACKDAW_WRAPPER_LOG", "1")
         .status()
         .expect("spawn cargo for the fixture project");

@@ -50,10 +50,15 @@ pub(crate) fn windowless_active(app: &App) -> bool {
 
 /// Wrap the game's plugin group for play-in-editor. When the editor asked
 /// for a windowless launch this disables winit, drops the primary window,
-/// and adds a schedule-runner loop at about 60 updates per second; otherwise
-/// the group is returned unchanged.
+/// and adds a schedule-runner loop at about 60 updates per second. When it
+/// asked for the schema, which is answered before the app runs, it only
+/// disables winit, so the answer does not need a display. Otherwise the group
+/// is returned unchanged.
 pub fn maybe_windowless(plugins: impl PluginGroup) -> PluginGroupBuilder {
     let builder = plugins.build();
+    if crate::schema_extraction_requested() {
+        return builder.disable::<bevy::winit::WinitPlugin>();
+    }
     if !windowless_requested() {
         return builder;
     }

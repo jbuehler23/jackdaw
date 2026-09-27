@@ -66,7 +66,14 @@ fn build_variant(sdk: &SdkPaths, source: &str, tag: &str) -> PathBuf {
     std::fs::write(dir.join("src/lib.rs"), source).expect("write variant source");
     let target = dir.join("target-fixture");
     let status = Command::new("cargo")
-        .args(["rustc", "--crate-type", "dylib", "--target", &sdk.triple])
+        .args([
+            "rustc",
+            "--lib",
+            "--crate-type",
+            "dylib",
+            "--target",
+            &sdk.triple,
+        ])
         .current_dir(&dir)
         .env("CARGO_INCREMENTAL", "0")
         .env("CARGO_TARGET_DIR", &target)

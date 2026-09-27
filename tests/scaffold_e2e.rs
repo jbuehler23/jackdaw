@@ -22,25 +22,57 @@ fn scaffold_game_builds_and_exposes_component() {
 
     let spec = shim_spec_for_project(&dest).expect("scaffolded project is a jackdaw project");
     let jackdaw_dir = dest.join(".jackdaw");
-    let mut ignore_progress = |_: BuildEvent| {};
-    let build = build_project_binary(&spec, &jackdaw_dir, &mut ignore_progress)
+    let mut log = Vec::new();
+    let mut collect_log = |event: BuildEvent| {
+        if let BuildEvent::Log(line) = event {
+            log.push(line);
+        }
+    };
+    let build = build_project_binary(&spec, &jackdaw_dir, &mut collect_log)
         .expect("build the scaffolded project binary");
 
-    let schema = build
-        .schema
-        .expect("schema extracted from the built binary");
-    let has_spinning_cube = schema
+    let schema = build.schema.unwrap_or_else(|| {
+        panic!(
+            "no schema extracted from the built binary; the build said:\n{}",
+            log.join("\n")
+        )
+    });
+    let spinning_cube = schema
         .components
         .iter()
-        .any(|c| c.type_path.contains("SpinningCube"));
+        .find(|c| c.type_path.ends_with("::SpinningCube"))
+        .unwrap_or_else(|| {
+            panic!(
+                "template component `SpinningCube` missing from schema; got: {:?}",
+                schema
+                    .components
+                    .iter()
+                    .map(|c| c.type_path.as_str())
+                    .collect::<Vec<_>>()
+            )
+        });
+    let field_names: Vec<&str> = spinning_cube
+        .fields
+        .iter()
+        .map(|f| f.name.as_str())
+        .collect();
+    assert_eq!(
+        field_names,
+        ["speed"],
+        "the fields match the Reflect derive"
+    );
     assert!(
-        has_spinning_cube,
-        "template component `SpinningCube` missing from schema; got: {:?}",
-        schema
+        spinning_cube.default.is_some(),
+        "ReflectDefault gives the component picker a default value"
+    );
+
+    let on_disk = jackdaw_schema::read_schema(&jackdaw_dir).expect("the schema is written");
+    assert!(
+        on_disk
             .components
             .iter()
-            .map(|c| c.type_path.as_str())
-            .collect::<Vec<_>>()
+            .any(|c| c.type_path == spinning_cube.type_path),
+        "the schema the editor watches on disk holds the component"
     );
 }
 

@@ -180,6 +180,9 @@ pub fn build_project_binary_with_load(
         Ok(schema) => Some(schema),
         Err(err) => {
             tracing::warn!("project schema extraction skipped: {err}");
+            report(BuildEvent::Log(format!(
+                "project schema extraction skipped: {err}"
+            )));
             None
         }
     };
