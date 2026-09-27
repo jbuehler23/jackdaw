@@ -37,7 +37,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustc-codegen-cranelift-preview, rustfmt, clippy
+          components: rustfmt, clippy
           toolchain: ${{ env.toolchain }}
 
       - name: Set LD_LIBRARY_PATH
@@ -48,7 +48,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
-          cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: heavy
 
       - name: Install dependencies

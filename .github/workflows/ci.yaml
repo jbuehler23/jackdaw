@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Pull requests only restore caches. This daily run on main saves them again
+  # after the nightly workflows' caches push them out.
+  schedule:
+    - cron: "30 9 * * *"
 
 # A new push to a pull request replaces its run; runs on main each finish, so
 # the post-merge checks report on every merge.
@@ -16,6 +20,7 @@ env:
   # Use the same Rust toolchain across jobs so they can share a cache.
   # Keep this in sync with https://github.com/TheBevyFlock/bevy_cli/blob/main/rust-toolchain.toml
   toolchain: nightly-2026-03-05
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   # The checks that build the editor without the SDK dylib, the way a
@@ -36,7 +41,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustc-codegen-cranelift-preview, rustfmt, clippy
+          components: rustfmt, clippy
           toolchain: ${{ env.toolchain }}
       - name: Set LD_LIBRARY_PATH
         run: |
@@ -46,7 +51,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: tests
 
       - name: Install dependencies
@@ -101,7 +105,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustc-codegen-cranelift-preview, rustfmt, clippy
+          components: rustfmt, clippy
           toolchain: ${{ env.toolchain }}
       - name: Set LD_LIBRARY_PATH
         run: |
@@ -111,7 +115,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: build-tests
 
       - name: Install dependencies
@@ -173,7 +176,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustc-codegen-cranelift-preview, rustfmt, clippy
+          components: rustfmt, clippy
           toolchain: ${{ env.toolchain }}
       - name: Set LD_LIBRARY_PATH
         run: |
@@ -220,7 +223,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustc-codegen-cranelift-preview, rustfmt, clippy
+          components: rustfmt, clippy
           toolchain: ${{ env.toolchain }}
 
       - name: Set LD_LIBRARY_PATH
@@ -245,7 +248,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-directories: ${{ env.LD_LIBRARY_PATH }}
           shared-key: template
 
       - name: Scaffold ${{ matrix.template }}
@@ -319,7 +321,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: clippy, rustc-codegen-cranelift-preview
+          components: clippy
           toolchain: ${{ env.toolchain }}
 
       - name: Set LD_LIBRARY_PATH
@@ -340,9 +342,8 @@ jobs:
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: false
-          cache-directories: ${{ env.LD_LIBRARY_PATH }}
-          shared-key: lints
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: clippy
 
       - name: Run clippy lints
         run: cargo clippy --locked --workspace --all-targets --features dylib -- --deny warnings
@@ -383,7 +384,6 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustc-codegen-cranelift-preview
           toolchain: ${{ env.toolchain }}
 
       - name: Set LD_LIBRARY_PATH
@@ -404,9 +404,8 @@ jobs:
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: false
-          cache-directories: ${{ env.LD_LIBRARY_PATH }}
-          shared-key: lints
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: docs
 
       - name: Check documentation
         run: cargo doc --locked --workspace --document-private-items --no-deps
@@ -423,7 +422,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustc-codegen-cranelift-preview, rustc-dev, llvm-tools-preview
+          components: rustc-dev, llvm-tools-preview
           toolchain: ${{ env.toolchain }}
 
       - name: Install dependencies
@@ -433,17 +432,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-directories: ${{ env.LD_LIBRARY_PATH }}
-          shared-key: lints
+          shared-key: bevy-lint
 
       - name: Install Bevy linter
         # Pinned to a known-good commit: installing from a release tag requires that
         # release's exact nightly, while unpinned HEAD lets upstream regressions
         # break CI without any code change in this repo.
         run: cargo install --git https://github.com/TheBevyFlock/bevy_cli --rev 6e65200ca13b89c212499324513248db46d0edc7 --locked bevy_lint
-
-      - name: Add cranelift to rustc
-        run: rustup component add rustc-codegen-cranelift-preview --toolchain ${{ env.toolchain }}
 
       - name: Active CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
