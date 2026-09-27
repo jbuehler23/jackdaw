@@ -14,7 +14,10 @@ use bevy::prelude::*;
 use jackdaw_geometry::{ModifierStack, is_convex_topology, triangulate_polygons};
 use jackdaw_scene_types::{Brush, evaluate_brush_geometry};
 
+mod model_colliders;
 pub mod simulation;
+
+pub use model_colliders::ModelCollidersPlugin;
 
 /// Editor-facing collider shape selector. Wraps avian's [`ColliderConstructor`]
 /// as a newtype so it lives outside avian's auto-processing pipeline (which
@@ -46,7 +49,8 @@ pub struct AvianColliderBridgePlugin;
 impl Plugin for AvianColliderBridgePlugin {
     fn build(&self, app: &mut App) {
         register_avian_types(app);
-        app.add_systems(PreUpdate, build_brush_colliders)
+        app.add_plugins(ModelCollidersPlugin)
+            .add_systems(PreUpdate, build_brush_colliders)
             .add_observer(remove_collider_with_avian_collider);
     }
 }

@@ -19,7 +19,8 @@ pub struct PhysicsBrushBridgePlugin;
 
 impl Plugin for PhysicsBrushBridgePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(remove_collider_when_avian_collider_removed);
+        app.add_plugins(jackdaw_avian_integration::ModelCollidersPlugin)
+            .add_observer(remove_collider_when_avian_collider_removed);
     }
 }
 
