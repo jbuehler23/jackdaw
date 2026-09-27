@@ -84,6 +84,7 @@ pub mod live_frame;
 pub mod live_frame_view;
 pub mod live_highlight;
 pub mod live_input;
+pub mod lod_group;
 pub mod material_assets;
 pub mod material_browser;
 pub mod material_overrides;
@@ -440,6 +441,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(jackdaw_surface::ReflectionProbePlugin)
         .add_plugins(probe_bake::plugin)
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
+        .add_plugins(jackdaw_runtime::LodPlugin)
         .add_plugins(file_ops::FileOpsPlugin)
         .add_plugins(keybinds::KeybindsPlugin)
         .add_plugins(keybind_settings::KeybindSettingsPlugin)

@@ -104,6 +104,10 @@ mod pie_windowless;
 pub use pie_windowless::{maybe_windowless, windowless_requested};
 
 #[cfg(feature = "render")]
+mod lod;
+#[cfg(feature = "render")]
+pub use lod::{LodPlugin, LodView, lod_distance, lod_ranges};
+#[cfg(feature = "render")]
 mod material_overrides;
 #[cfg(feature = "render")]
 pub use material_overrides::{
@@ -232,6 +236,7 @@ impl Plugin for JackdawPlugin {
             jackdaw_surface::EnvironmentPlugin,
             jackdaw_surface::ReflectionProbePlugin,
             MaterialOverridesPlugin,
+            LodPlugin,
         ));
 
         // Game code may add a model to an entity long after the scene it lives

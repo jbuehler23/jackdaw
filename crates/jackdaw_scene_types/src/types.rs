@@ -824,6 +824,31 @@ pub struct GltfSource {
     pub scene_index: usize,
 }
 
+/// A model drawn at a level of detail chosen by how much of the screen it
+/// covers, like Unity's LOD Group. Each of the entity's children, in order, is
+/// one level; a child past the last level is left alone.
+#[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Rendering"))]
+pub struct LodGroup {
+    /// One entry per level, from the most detailed down.
+    pub levels: Vec<LodLevel>,
+    /// The object's size along its largest side, in its own units; 0 measures
+    /// it from the first level's bounds.
+    pub size: f32,
+    /// How much of each switch cross-fades, as a share of its distance; 0 snaps.
+    pub fade: f32,
+}
+
+/// One level of a [`LodGroup`].
+#[derive(Reflect, Clone, Debug, Default, PartialEq)]
+#[reflect(Default)]
+pub struct LodLevel {
+    /// The share of the screen's height the object has to cover for this
+    /// level or a more detailed one to show; below it the next level takes
+    /// over, and below the last one the object is not drawn.
+    pub screen_height: f32,
+}
+
 /// Materials a placed model's parts wear in place of their own, by the model's material name.
 #[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
 #[reflect(Component, Default, @crate::EditorCategory::new("Rendering"))]

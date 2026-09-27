@@ -37,9 +37,9 @@ pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
 pub use types::{
     Brush, BrushFaceData, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
     DetailLayer, DetailMesh, DetailPresser, DetailVariety, GltfSource, InstanceMaterialOverrides,
-    MaterialOverrides, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude, PrefabBaseline, PropertyValue,
-    ReflectionProbe, ScatterGroup, ScatterInstance, SceneRootTag, SceneWind, Terrain,
-    TerrainChannel, TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry,
+    LodGroup, LodLevel, MaterialOverrides, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude,
+    PrefabBaseline, PropertyValue, ReflectionProbe, ScatterGroup, ScatterInstance, SceneRootTag,
+    SceneWind, Terrain, TerrainChannel, TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry,
     TerrainQuantization, Wind,
 };
 
@@ -86,6 +86,8 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<SceneNodeId>()
             .register_type::<GltfSource>()
             .register_type::<MaterialOverrides>()
+            .register_type::<LodGroup>()
+            .register_type::<LodLevel>()
             .register_type::<InstanceMaterialOverrides>()
             .register_type::<Terrain>()
             .register_type::<TerrainChannel>()

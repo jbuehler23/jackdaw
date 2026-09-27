@@ -547,6 +547,7 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
     ("component.set", &["entity"], true),
     ("entity.add.group", &["parent"], false),
     ("entity.delete", &["entity"], false),
+    ("entity.lod_group", &["entity"], true),
     ("entity.reparent", &["child", "parent"], false),
     ("entity.set_transform", &["entity"], true),
     ("entity.snap_to_ground", &["entity"], false),

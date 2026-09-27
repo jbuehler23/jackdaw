@@ -252,6 +252,7 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "component.remove",
     "component.revert_baseline",
     "component.set",
+    "entity.lod_group",
     "entity.set_transform",
     "environment.bake_probe",
     "field.set",
