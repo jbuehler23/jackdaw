@@ -23,6 +23,10 @@ jobs:
     if: github.event_name != 'push'
     uses: ./.github/workflows/heavy-tier.yaml
 
+  install:
+    if: github.event_name != 'push'
+    uses: ./.github/workflows/install-contract.yaml
+
   # The tiers that do not need the SDK, on the platforms we ship bundles for.
   # This is where platform-specific path handling gets covered. Nightly and
   # tag-only, so tuning it never blocks a pull request.

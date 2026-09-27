@@ -67,8 +67,9 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Fast tier (fmt, clippy, lib tests)
-        run: cargo xtask fast
+      # Format and Clippy run as their own jobs.
+      - name: Library tests
+        run: cargo nextest run --locked --profile ci --workspace --lib --features dylib
 
       # The create/import flows as a user meets them: the `jd` binary
       # run from outside any checkout, with only its embedded templates.
@@ -336,46 +337,11 @@ jobs:
       - name: Run cargo fmt
         run: cargo fmt --all -- --check
 
-  # The command shown in the installation guide must keep selecting one
-  # package and producing every public executable. Use a local path here so
-  # pull requests test their own commit without a network race against main.
+  # A release build with thin LTO, too slow and memory-hungry for every pull
+  # request. It runs after merge here and nightly in regression.yaml.
   cargo-install:
-    name: Cargo install contract
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.toolchain }}
-
-      - name: Install dependencies
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
-
-      - name: Activate CI cargo config
-        run: mv .cargo/config_ci.toml .cargo/config.toml
-
-      - name: Install cargo binstall
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: Install Wild
-        run: cargo binstall wild-linker --locked --force
-
-      - name: Install the public package
-        run: cargo install --path . --locked --root "$RUNNER_TEMP/jackdaw-install"
-
-      - name: Verify installed commands
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/jackdaw-install/bin"
-          for command in jackdaw jd jackdaw-rustc-wrapper; do
-            test -x "$root/$command"
-          done
-          "$root/jd" --version
-          "$root/jackdaw" --version
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/install-contract.yaml
 
   # Check documentation.
   doc:
