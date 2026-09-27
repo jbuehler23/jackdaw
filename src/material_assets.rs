@@ -817,6 +817,7 @@ fn write_and_promote(
         return;
     }
 
+    crate::material_browser::bind_texture_set(world, handle.id());
     let file = match write_material_file_at(world, name, handle, chosen) {
         Ok(file) => file,
         Err(err) => {

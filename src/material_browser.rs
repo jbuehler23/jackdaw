@@ -17,6 +17,7 @@ use crate::{
 use bevy::{
     feathers::theme::ThemedText,
     image::ImageLoaderSettings,
+    platform::collections::HashMap,
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
 };
@@ -39,6 +40,7 @@ impl Plugin for MaterialBrowserPlugin {
             .init_resource::<MaterialPreviewState>()
             .init_resource::<MaterialRegistry>()
             .init_resource::<DetectedTextureSets>()
+            .init_resource::<UnboundTextureSets>()
             .add_systems(
                 OnEnter(crate::AppState::Editor),
                 (
@@ -64,6 +66,9 @@ impl Plugin for MaterialBrowserPlugin {
                     update_material_browser_ui.after(rescan_material_definitions),
                     update_preview_area,
                     poll_material_save_folder,
+                    bind_texture_sets_in_use
+                        .run_if(|unbound: Res<UnboundTextureSets>| !unbound.0.is_empty())
+                        .after(rescan_material_definitions),
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             )
@@ -143,6 +148,15 @@ fn load_role_image(
 #[derive(Resource, Default)]
 struct DetectedTextureSets(Vec<jackdaw_material::MaterialSet>);
 
+/// The detected texture sets whose materials have not bound their textures
+/// yet, by the material each one is offered as.
+///
+/// A set's textures are read when something first uses its material, so a
+/// project with many sets does not hold every one of their images from the
+/// moment it opens.
+#[derive(Resource, Default)]
+struct UnboundTextureSets(HashMap<AssetId<StandardMaterial>, jackdaw_material::MaterialSet>);
+
 /// A walk for texture sets running on the IO pool.
 #[derive(Resource)]
 struct TextureSetScan(Task<Vec<jackdaw_material::MaterialSet>>);
@@ -216,56 +230,86 @@ fn is_non_2d_ktx2(path: &Path) -> bool {
         && crate::texture_files::is_ktx2_non_2d(path)
 }
 
-/// Bind a detected set's files to a fresh `StandardMaterial`.
-fn material_from_set(
-    set: &jackdaw_material::MaterialSet,
-    asset_server: &AssetServer,
-    materials: &mut Assets<StandardMaterial>,
-) -> Handle<StandardMaterial> {
-    use jackdaw_material::TextureRole;
-
-    let base_color_texture = set
-        .base_color
-        .as_deref()
-        .map(|p| load_role_image(TextureRole::BaseColor, p, asset_server));
-    let normal_map_texture = set
-        .normal
-        .as_deref()
-        .map(|p| load_role_image(TextureRole::Normal, p, asset_server));
-    let metallic_roughness_texture = set
-        .metallic_roughness
-        .as_deref()
-        .map(|p| load_role_image(TextureRole::MetallicRoughness, p, asset_server));
-    let emissive_texture = set
-        .emissive
-        .as_deref()
-        .map(|p| load_role_image(TextureRole::Emissive, p, asset_server));
-    let occlusion_texture = set
-        .occlusion
-        .as_deref()
-        .map(|p| load_role_image(TextureRole::Occlusion, p, asset_server));
-    // A 16-bit height map binds like any other: the material asset layer retags the `Uint`
-    // decode as its filterable `Unorm` twin before anything reaches a bind group.
-    let depth_map = set
-        .depth
-        .as_deref()
-        .map(|p| load_role_image(TextureRole::Depth, p, asset_server));
-
+/// A detected set's material before its textures are bound: the scalars its
+/// maps imply.
+fn unbound_set_material(set: &jackdaw_material::MaterialSet) -> StandardMaterial {
     let scalars = set.recommended_scalars();
-    materials.add(StandardMaterial {
-        base_color_texture,
-        normal_map_texture,
-        metallic_roughness_texture,
-        emissive_texture,
-        occlusion_texture,
-        depth_map,
+    StandardMaterial {
         metallic: scalars.metallic,
         perceptual_roughness: scalars.perceptual_roughness,
         parallax_depth_scale: scalars.parallax_depth_scale,
         parallax_mapping_method: bevy::pbr::ParallaxMappingMethod::Occlusion,
         max_parallax_layer_count: scalars.max_parallax_layer_count,
         ..default()
-    })
+    }
+}
+
+/// Bind a detected set's files to its material's texture slots.
+fn bind_set_textures(
+    material: &mut StandardMaterial,
+    set: &jackdaw_material::MaterialSet,
+    asset_server: &AssetServer,
+) {
+    use jackdaw_material::TextureRole;
+
+    let load = |role: TextureRole, path: &Option<String>| {
+        path.as_deref()
+            .map(|path| load_role_image(role, path, asset_server))
+    };
+    material.base_color_texture = load(TextureRole::BaseColor, &set.base_color);
+    material.normal_map_texture = load(TextureRole::Normal, &set.normal);
+    material.metallic_roughness_texture =
+        load(TextureRole::MetallicRoughness, &set.metallic_roughness);
+    material.emissive_texture = load(TextureRole::Emissive, &set.emissive);
+    material.occlusion_texture = load(TextureRole::Occlusion, &set.occlusion);
+    // A 16-bit height map binds like any other: the material asset layer retags the `Uint`
+    // decode as its filterable `Unorm` twin before anything reaches a bind group.
+    material.depth_map = load(TextureRole::Depth, &set.depth);
+}
+
+/// Bind the textures of a detected set's material, if they are not bound yet.
+pub(crate) fn bind_texture_set(world: &mut World, material: AssetId<StandardMaterial>) {
+    let Some(set) = world
+        .get_resource_mut::<UnboundTextureSets>()
+        .and_then(|mut unbound| unbound.0.remove(&material))
+    else {
+        return;
+    };
+    let asset_server = world.resource::<AssetServer>().clone();
+    if let Some(mut standard) = world
+        .resource_mut::<Assets<StandardMaterial>>()
+        .get_mut(material)
+    {
+        bind_set_textures(&mut standard, &set, &asset_server);
+    }
+}
+
+/// Bind the textures of every detected set something has started using: the
+/// previewed material, and any worn by a mesh.
+fn bind_texture_sets_in_use(
+    world: &mut World,
+    worn: &mut QueryState<
+        &MeshMaterial3d<StandardMaterial>,
+        Changed<MeshMaterial3d<StandardMaterial>>,
+    >,
+) {
+    let unbound = world.resource::<UnboundTextureSets>();
+    let mut wanted: Vec<AssetId<StandardMaterial>> = worn
+        .iter(world)
+        .map(|material| material.id())
+        .filter(|id| unbound.0.contains_key(id))
+        .collect();
+    if let Some(previewed) = world
+        .get_resource::<MaterialPreviewState>()
+        .and_then(|preview| preview.active_material.as_ref())
+        .map(Handle::id)
+        .filter(|id| unbound.0.contains_key(id))
+    {
+        wanted.push(previewed);
+    }
+    for material in wanted {
+        bind_texture_set(world, material);
+    }
 }
 
 /// Rebuild [`MaterialRegistry`] from the asset index plus the materials that
@@ -377,11 +421,13 @@ fn add_detected_sets(world: &mut World) {
         let handle = match existing {
             Some(handle) => handle,
             None => {
-                let handle = {
-                    let asset_server = world.resource::<AssetServer>().clone();
-                    let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-                    material_from_set(&set, &asset_server, &mut materials)
-                };
+                let handle = world
+                    .resource_mut::<Assets<StandardMaterial>>()
+                    .add(unbound_set_material(&set));
+                world
+                    .resource_mut::<UnboundTextureSets>()
+                    .0
+                    .insert(handle.id(), set.clone());
                 world
                     .resource_mut::<crate::asset_catalog::AssetCatalog>()
                     .insert(catalog_name, handle.clone().untyped());
@@ -1202,15 +1248,9 @@ mod tests {
 
     fn built(app: &mut App, set: &jackdaw_material::MaterialSet) -> StandardMaterial {
         let asset_server = app.world().resource::<AssetServer>().clone();
-        let handle = {
-            let mut materials = app.world_mut().resource_mut::<Assets<StandardMaterial>>();
-            material_from_set(set, &asset_server, &mut materials)
-        };
-        app.world()
-            .resource::<Assets<StandardMaterial>>()
-            .get(&handle)
-            .expect("built material")
-            .clone()
+        let mut material = unbound_set_material(set);
+        bind_set_textures(&mut material, set, &asset_server);
+        material
     }
 
     /// The parallax scalars apply only with a height map bound, so a detected height map has
@@ -1336,6 +1376,7 @@ mod tests {
         app.init_resource::<crate::asset_catalog::AssetCatalog>();
         app.init_resource::<MaterialBrowserState>();
         app.init_resource::<DetectedTextureSets>();
+        app.init_resource::<UnboundTextureSets>();
         app.init_resource::<crate::asset_index::AssetIndex>();
         app.init_resource::<crate::asset_files::AssetKindCache>();
         app.init_resource::<jackdaw_api::prelude::AssetKinds>();
@@ -1357,6 +1398,69 @@ mod tests {
             .resource::<crate::project::ProjectRoot>()
             .assets_dir();
         app.world_mut().resource_mut::<DetectedTextureSets>().0 = detect_material_sets(&assets);
+    }
+
+    fn offered_moss(app: &mut App, tmp: &tempfile::TempDir) -> Handle<StandardMaterial> {
+        let textures = tmp.path().join("assets/textures");
+        std::fs::create_dir_all(&textures).expect("the folder is made");
+        for file in ["moss_albedo.png", "moss_normal.png"] {
+            std::fs::write(textures.join(file), [0xffu8; 64]).expect("the texture is written");
+        }
+        scan_textures(app);
+        rebuild_material_registry(app.world_mut());
+        app.world()
+            .resource::<MaterialRegistry>()
+            .get_by_name("moss")
+            .expect("the set is offered")
+            .handle
+            .clone()
+    }
+
+    fn base_color_bound(app: &App, handle: &Handle<StandardMaterial>) -> bool {
+        app.world()
+            .resource::<Assets<StandardMaterial>>()
+            .get(handle)
+            .expect("the set has a material")
+            .base_color_texture
+            .is_some()
+    }
+
+    #[test]
+    fn an_offered_texture_set_reads_no_texture_until_it_is_used() {
+        let (mut app, tmp) = project_browser_app();
+        let moss = offered_moss(&mut app, &tmp);
+
+        assert!(!base_color_bound(&app, &moss));
+        assert_eq!(app.world().resource::<Assets<Image>>().len(), 0);
+    }
+
+    #[test]
+    fn a_texture_set_worn_by_a_mesh_binds_its_textures() {
+        let (mut app, tmp) = project_browser_app();
+        app.init_resource::<MaterialPreviewState>();
+        app.add_systems(Update, bind_texture_sets_in_use);
+        let moss = offered_moss(&mut app, &tmp);
+
+        app.world_mut().spawn(MeshMaterial3d(moss.clone()));
+        app.update();
+
+        assert!(base_color_bound(&app, &moss));
+        assert!(app.world().resource::<UnboundTextureSets>().0.is_empty());
+    }
+
+    #[test]
+    fn a_previewed_texture_set_binds_its_textures() {
+        let (mut app, tmp) = project_browser_app();
+        app.init_resource::<MaterialPreviewState>();
+        app.add_systems(Update, bind_texture_sets_in_use);
+        let moss = offered_moss(&mut app, &tmp);
+
+        app.world_mut()
+            .resource_mut::<MaterialPreviewState>()
+            .active_material = Some(moss.clone());
+        app.update();
+
+        assert!(base_color_bound(&app, &moss));
     }
 
     /// A PNG's bytes are not a KTX2 header, and the fields that say a KTX2
