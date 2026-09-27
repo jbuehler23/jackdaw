@@ -1383,6 +1383,16 @@ fn laid_out_length_row(
     row
 }
 
+/// Remove the column a laid-out row sits in, so the next case lays out alone.
+fn despawn_column(app: &mut App, row: Entity) {
+    let column = app
+        .world()
+        .get::<ChildOf>(row)
+        .expect("a laid-out row sits in its column")
+        .parent();
+    app.world_mut().entity_mut(column).despawn();
+}
+
 /// How far short of the row's right edge its rightmost control stops. A rect
 /// row has four cells; the last one is the one a mark would land on.
 fn control_clearance(app: &mut App, row: Entity) -> f32 {
@@ -1428,9 +1438,9 @@ fn right_edge(app: &App, entity: Entity) -> f32 {
 /// to shrink overflows the reduced box and ends where it always did.
 #[test]
 fn a_marked_row_keeps_its_control_clear_of_the_mark() {
+    let (mut app, entity) = app_with_node(Node::default());
     for kind in [LengthRow::One, LengthRow::Rect] {
         for width in PANEL_WIDTHS {
-            let (mut app, entity) = app_with_node(Node::default());
             let row = laid_out_length_row(&mut app, entity, kind, width, true);
             let clearance = control_clearance(&mut app, row);
             assert!(
@@ -1438,6 +1448,7 @@ fn a_marked_row_keeps_its_control_clear_of_the_mark() {
                 "a marked row's control ends clear of the strip the mark sits in; \
                  only {clearance} px of clearance in a {width} px panel",
             );
+            despawn_column(&mut app, row);
         }
     }
 }
@@ -1450,10 +1461,10 @@ fn a_marked_row_keeps_its_control_clear_of_the_mark() {
 /// at a short value and at the ~87 px a full one measures.
 #[test]
 fn both_halves_of_a_length_keep_a_width_they_read_at() {
+    let (mut app, entity) = app_with_node(Node::default());
     for kind in [LengthRow::One, LengthRow::Rect] {
         for content in NUMBER_CONTENT_WIDTHS {
             for width in PANEL_WIDTHS {
-                let (mut app, entity) = app_with_node(Node::default());
                 let row = laid_out_length_row(&mut app, entity, kind, width, false);
                 crowd_number_fields(&mut app, row, content);
                 let panel = format!("a {width} px panel, {content} px of digits");
@@ -1487,6 +1498,7 @@ fn both_halves_of_a_length_keep_a_width_they_read_at() {
                      they overhang by {} px in {panel}",
                     -clearance,
                 );
+                despawn_column(&mut app, row);
             }
         }
     }
@@ -1531,9 +1543,9 @@ fn number_widths(app: &mut App, row: Entity) -> Vec<f32> {
 /// using: the diamond is `Transform`-only and the prefab dot needs an instance.
 #[test]
 fn an_unmarked_row_spends_the_gutter_on_its_control() {
+    let (mut app, entity) = app_with_node(Node::default());
     for kind in [LengthRow::One, LengthRow::Rect] {
         for width in PANEL_WIDTHS {
-            let (mut app, entity) = app_with_node(Node::default());
             let marked = laid_out_length_row(&mut app, entity, kind, width, true);
             let plain = laid_out_length_row(&mut app, entity, kind, width, false);
 
@@ -1544,6 +1556,8 @@ fn an_unmarked_row_spends_the_gutter_on_its_control() {
                 "an unmarked row gives its control the strip back: {plain_clearance} px clear \
                  against the marked row's {marked_clearance} px, in a {width} px panel",
             );
+            despawn_column(&mut app, marked);
+            despawn_column(&mut app, plain);
         }
     }
 }

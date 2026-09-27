@@ -7,17 +7,14 @@ xtask = "run --quiet --package xtask --manifest-path xtask/Cargo.toml --"
 [unstable]
 codegen-backend = true
 
+# Cranelift compiles the workspace quickly. Dependencies keep LLVM at the
+# workspace's opt-level: they are cached, and the editor tests spend most of
+# their time in Bevy, which runs an order of magnitude slower from Cranelift.
 [profile.dev]
-codegen-backend = "cranelift"
-
-[profile.dev.package."*"]
 codegen-backend = "cranelift"
 
 [profile.release]
 codegen-backend = "llvm"
-
-[profile.test.package."*"]
-opt-level = 1
 
 # Mirrors the workspace config. The MSVC linker has a hard 65,535 PE export
 # cap that jackdaw_sdk exceeds, so a Windows job adopting this file without

@@ -2,12 +2,26 @@
 # Local runs: no retries, show output on failure.
 failure-output = "immediate-final"
 
+# Every test in these binaries builds a whole editor app. Unbounded, one
+# process per core runs a many-core machine out of memory.
+[test-groups]
+editor-apps = { max-threads = 4 }
+
+[[profile.default.overrides]]
+filter = """
+binary_id(jackdaw::stage) | binary_id(jackdaw::inspector) | binary_id(jackdaw::outliner)
+| binary_id(jackdaw::operators) | binary_id(jackdaw::viewport) | binary_id(jackdaw::guards)
+| binary_id(jackdaw::terrain) | binary_id(jackdaw::keymap) | binary_id(jackdaw::controls)
+"""
+test-group = "editor-apps"
+
 [profile.ci]
 # CI: retry the environment-flaky heavy/e2e tests, keep going to report all.
 retries = 2
 fail-fast = false
 failure-output = "immediate-final"
 final-status-level = "flaky"
+slow-timeout = { period = "60s", terminate-after = 3 }
 
 [profile.heavy]
 # The end-to-end tests each build a game and launch it. Run them one at a
