@@ -8,6 +8,7 @@ on:
 
 env:
   toolchain: nightly-2026-03-05
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   heavy:

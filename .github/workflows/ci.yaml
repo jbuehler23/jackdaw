@@ -206,6 +206,81 @@ jobs:
       - name: Integration tier
         run: cargo xtask integration ${{ matrix.shard }}/6 --archive "$RUNNER_TEMP/tests.tar.zst"
 
+  # Play builds a game with cargo and runs it, which is the heavy tier's cost,
+  # so pull requests run it only when they touch the Play pipeline. It reads
+  # the heavy tier's cache and saves nothing.
+  play-paths:
+    name: Play pipeline changed
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        run: |
+          pattern='^(src/pie|crates/jackdaw_project_build/|crates/jackdaw_pie_protocol/|crates/jackdaw_runtime/|crates/jackdaw_rustc_wrapper/|tests/bsn_game_run\.rs|tests/fixtures/bsn_game/|\.github/workflows/ci\.yaml)'
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qE "$pattern"; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  play:
+    name: Play
+    needs: play-paths
+    if: needs.play-paths.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Remove unused software
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          components: rustfmt, clippy
+          toolchain: ${{ env.toolchain }}
+
+      - name: Set LD_LIBRARY_PATH
+        run: |
+          echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
+
+      - name: Populate target directory from cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+          shared-key: heavy
+
+      - name: Install dependencies
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev mesa-vulkan-drivers
+
+      - name: Activate CI cargo config
+        run: mv .cargo/config_ci.toml .cargo/config.toml
+
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild
+        run: cargo binstall wild-linker --locked --force
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: A built game loads and plays its scene
+        run: cargo nextest run --profile heavy --cargo-profile dev -p jackdaw --features dylib --target x86_64-unknown-linux-gnu --test bsn_game_run
+
   templates:
     name: Template - ${{ matrix.template }}
     runs-on: ubuntu-latest
