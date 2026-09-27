@@ -760,13 +760,21 @@ fn on_folder_toggled(
 
 // -- The tile grid ----------------------------------------------------------
 
+/// Whether a file is the `.meta` Bevy reads beside an asset, which the tiles
+/// leave out the way Unity and Godot hide their import files.
+fn is_asset_meta(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension == "meta")
+        && path.with_extension("").is_file()
+}
+
 /// One listing row for `path`, or `None` for a file the tiles never show.
 ///
 /// `current` is the folder the tiles are showing, which a result found
 /// further down is captioned with its distance from.
 fn dir_entry(path: PathBuf, current: &Path, selected: Option<&str>) -> Option<DirEntry> {
     let file_name = path.file_name()?.to_string_lossy().into_owned();
-    if file_name.starts_with('.') {
+    if file_name.starts_with('.') || is_asset_meta(&path) {
         return None;
     }
     let is_selected = selected == Some(path.to_string_lossy().as_ref());

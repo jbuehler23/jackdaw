@@ -127,6 +127,8 @@ mod navmesh;
 #[cfg(feature = "navmesh")]
 pub use navmesh::JackdawNavmesh;
 
+#[cfg(feature = "render")]
+pub mod texture_import;
 mod twin;
 pub use twin::{DocumentTwinReader, JackdawAssetSourcePlugin, with_document_twins};
 
@@ -171,6 +173,9 @@ impl Plugin for JackdawPlugin {
         app.insert_resource(AssetFolder(asset_folder(app)));
 
         keep_transforms_propagating(app);
+
+        #[cfg(feature = "render")]
+        texture_import::register_texture_import_processor(app);
 
         // Registers every scene type for reflection and installs
         // `MeshRebuildPlugin` (which embeds the bundled grid texture

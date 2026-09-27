@@ -21,7 +21,8 @@ use bevy::prelude::*;
 pub(crate) struct DocumentTwins;
 
 /// Registers the default asset source so a document reference resolves to
-/// whichever of its two forms is on disk.
+/// whichever of its two forms is on disk, and, without Bevy's asset processor,
+/// so a texture whose `.meta` asks for an import loads as its processed form.
 ///
 /// Add it before `DefaultPlugins`: an asset source is only read while
 /// `AssetPlugin` is being built. Its three fields shadow the `AssetPlugin`
@@ -53,9 +54,28 @@ impl Plugin for JackdawAssetSourcePlugin {
         let processed = (!matches!(self.mode, AssetMode::Unprocessed))
             .then_some(self.processed_file_path.as_str());
         let source = AssetSourceBuilder::platform_default(&self.file_path, processed);
-        app.register_asset_source(AssetSourceId::Default, with_document_twins(source));
+        let source = with_document_twins(source);
+        #[cfg(feature = "render")]
+        let source = if matches!(self.mode, AssetMode::Unprocessed) {
+            crate::texture_import::with_texture_imports(source, texture_cache(&self.file_path))
+        } else {
+            source
+        };
+        app.register_asset_source(AssetSourceId::Default, source);
         app.insert_resource(DocumentTwins);
     }
+}
+
+/// Where textures an unprocessed game imports on load are kept: `.jackdaw/imported`
+/// beside the asset folder, the same place the editor keeps them.
+#[cfg(feature = "render")]
+fn texture_cache(file_path: &str) -> PathBuf {
+    let assets = bevy::asset::io::file::FileAssetReader::get_base_path().join(file_path);
+    assets
+        .parent()
+        .unwrap_or(Path::new(""))
+        .join(".jackdaw")
+        .join("imported")
 }
 
 /// Wrap one asset source's readers so a document reference resolves to

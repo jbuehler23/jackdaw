@@ -143,6 +143,7 @@ pub mod status_bar;
 pub mod terrain;
 pub mod test_input;
 pub mod texture_files;
+pub mod texture_import;
 pub mod thumbnail;
 pub(crate) mod timestamps;
 pub mod tool_ops;

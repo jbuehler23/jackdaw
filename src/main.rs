@@ -50,6 +50,7 @@ fn main() -> AppExit {
     let project_root = jackdaw::project::requested_project()
         .or_else(jackdaw::project::read_last_project)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let assets_dir = project_root.join("assets");
 
     // Picker is the default landing screen on every launch. The
     // user clicks the project they want from recents (or scaffolds
@@ -101,7 +102,7 @@ fn main() -> AppExit {
 
     let mut default_plugins = DefaultPlugins
         .set(AssetPlugin {
-            file_path: project_root.join("assets").to_string_lossy().to_string(),
+            file_path: assets_dir.to_string_lossy().to_string(),
             ..default()
         })
         .set(ImagePlugin {
@@ -127,6 +128,16 @@ fn main() -> AppExit {
     }
 
     let mut app = App::new();
+    app.register_asset_source(
+        bevy::asset::io::AssetSourceId::Default,
+        jackdaw_runtime::texture_import::with_texture_imports(
+            bevy::asset::io::AssetSourceBuilder::platform_default(
+                &assets_dir.to_string_lossy(),
+                None,
+            ),
+            jackdaw::texture_import::cache_dir(&project_root),
+        ),
+    );
     app
         // The default error handler panics, which we never *ever*
         // want to happen to the editor. Log an error instead.

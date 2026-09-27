@@ -741,6 +741,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "basis-universal"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "555fb05709f4e12fa2f6b93a480facf167eb0ecb2558ba41f610f588e77cbd14"
+dependencies = [
+ "basis-universal-sys",
+ "bitflags 1.3.2",
+ "lazy_static",
+]
+
+[[package]]
+name = "basis-universal-sys"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd9bde5e9547958fb0e77d79fc7879edcf91d5e0c8e372ef8959916cf35e8506"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "bevy"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1348,6 +1368,7 @@ version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca63218585b83f98831214431449e9344b363349dd5cab98dae0b8129f0a0e2f"
 dependencies = [
+ "basis-universal",
  "bevy_app",
  "bevy_asset",
  "bevy_color",
@@ -5315,6 +5336,7 @@ version = "0.19.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "image",
  "jackdaw_animation_runtime",
  "jackdaw_avian_integration",
  "jackdaw_bind",

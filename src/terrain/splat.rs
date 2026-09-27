@@ -148,6 +148,24 @@ impl TerrainSplatMaterials {
             .unwrap_or(&[])
     }
 
+    /// Every texture file a terrain stacks into its arrays, as the material
+    /// slots name them.
+    pub(crate) fn texture_paths(&self) -> impl Iterator<Item = &str> {
+        self.entries
+            .values()
+            .flat_map(|entry| entry.set.entries.iter())
+            .flat_map(|slot| {
+                [
+                    slot.albedo.as_deref(),
+                    slot.normal.as_deref(),
+                    slot.height.as_deref(),
+                    slot.occlusion.as_deref(),
+                    slot.roughness.as_deref(),
+                ]
+            })
+            .flatten()
+    }
+
     /// Albedo image handles, index-aligned with the terrain's material
     /// list: texture id `i` is slot `i`'s thumbnail. `None` where the
     /// material has no base colour texture or is missing.

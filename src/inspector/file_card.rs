@@ -383,9 +383,64 @@ fn fill_image_body(
         spawn_layer_step(world, row, &icon_font, Icon::ChevronRight, 1);
     }
 
+    if crate::texture_import::is_importable(path) {
+        spawn_import_rows(world, body, path, as_string);
+    }
+
     if info.is_plain_2d() {
         spawn_action(world, body, "Apply", "material.apply_texture", as_string);
     }
+}
+
+/// How the texture is imported, a button for each way it can be, and what an
+/// import asks of the app that loads it.
+fn spawn_import_rows(world: &mut World, body: Entity, path: &Path, as_string: &str) {
+    let summary = if crate::texture_import::is_imported(path) {
+        "Compressed, mipmaps"
+    } else {
+        "Original file"
+    };
+    spawn_row(world, body, "Import", summary);
+    let row = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_self: AlignSelf::Center,
+                column_gap: Val::Px(tokens::SPACING_SM),
+                margin: UiRect::top(Val::Px(tokens::SPACING_XS)),
+                ..default()
+            },
+            ChildOf(body),
+        ))
+        .id();
+    for (label, compression) in [("Compress", "vram_compressed"), ("Original", "none")] {
+        let action = world
+            .spawn((
+                button(ButtonProps::new(label.to_string())),
+                ButtonOperatorCall::new(crate::texture_import::TextureImportOp::ID)
+                    .with_param("path", as_string.to_string())
+                    .with_param("compression", compression.to_string()),
+            ))
+            .id();
+        world.entity_mut(action).insert(ChildOf(row));
+    }
+    world.spawn((
+        Text::new(
+            "Compressing writes a Bevy .meta beside the texture. Only apps built on \
+             jackdaw_runtime, or running Bevy's asset processor, can load it then. \
+             Textures a terrain uses stay as they are.",
+        ),
+        TextFont {
+            font_size: tokens::TEXT_SIZE_SM,
+            ..default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        Node {
+            margin: UiRect::top(Val::Px(tokens::SPACING_XS)),
+            ..default()
+        },
+        ChildOf(body),
+    ));
 }
 
 fn spawn_layer_step(

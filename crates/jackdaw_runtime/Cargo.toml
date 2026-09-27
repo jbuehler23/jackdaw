@@ -69,6 +69,10 @@ thiserror = "2"
 default = ["render", "soft_shadows"]
 render = [
     "dep:jackdaw_surface",
+    # Textures imported with Bevy's `CompressedImageSaver` are Basis files,
+    # written and read back with Bevy's basis-universal support.
+    "bevy/basis-universal",
+    "bevy/compressed_image_saver",
     "bevy/bevy_pbr",
     "bevy/bevy_gltf",
     "bevy/bevy_render",
@@ -130,6 +134,9 @@ workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# The texture import tests write PNGs and decode them.
+bevy = { version = "0.19", default-features = false, features = ["png"] }
+image.workspace = true
 # The cap the resolution tests drive the chain past.
 jackdaw_prefab = { version = "0.19.0", path = "../jackdaw_prefab" }
 # Ground-collider tests query the built collider through avian's spatial
