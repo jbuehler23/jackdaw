@@ -24,6 +24,8 @@ mod material_row;
 mod mesh_quick_menu;
 mod modeling_essentials;
 mod new_asset;
+mod new_project;
+mod play_controls;
 mod positionable_mirror_plane;
 mod project_definitions;
 mod project_startup;

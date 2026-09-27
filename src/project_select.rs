@@ -158,8 +158,9 @@ struct NewProjectCancelButton;
 #[derive(Component)]
 struct NewProjectCancelButtonLabel;
 
+/// The New Project dialog's Create button.
 #[derive(Component)]
-struct NewProjectCreateButton;
+pub struct NewProjectCreateButton;
 
 /// Live feedback under the name field: the directory the entered name
 /// resolves to, or why it cannot be used.
@@ -3132,45 +3133,47 @@ fn on_create_new_project(
         .map(|v| v.0.trim().to_string())
         .unwrap_or_default();
 
-    commands.queue(move |world: &mut World| {
-        let (location, kind) = {
-            let state = world.resource::<NewProjectState>();
-            let Some(kind) = state.kind else {
-                return;
-            };
-            if state.scaffold_task.is_some() {
-                return; // already running
-            }
-            (state.location.clone(), kind)
-        };
+    commands.queue(move |world: &mut World| create_new_project(world, &raw_name));
+}
 
-        // The same validation the CLI applies. Accepting a name here
-        // that `jd new` would reject produces a project whose crate
-        // name is not a valid Rust identifier, which fails at the
-        // user's first build with nothing pointing back here.
-        let name = if raw_name.trim().is_empty() {
-            world.resource_mut::<NewProjectState>().status =
-                Some("Please enter a project name.".into());
+/// Create a project named `raw_name` from the open New Project modal: the
+/// modal's Create button. The name is validated the way `jd new` validates
+/// it, the template is scaffolded under the modal's location in the
+/// background, and the editor opens the result once it exists. Does nothing
+/// while the modal is closed or a create is already running.
+pub fn create_new_project(world: &mut World, raw_name: &str) {
+    let (location, kind) = {
+        let state = world.resource::<NewProjectState>();
+        let Some(kind) = state.kind else {
             return;
-        } else {
-            match crate::scaffold::validated_project_name(&raw_name) {
-                Ok(name) => name,
-                Err(error) => {
-                    world.resource_mut::<NewProjectState>().status = Some(error.to_string());
-                    return;
-                }
-            }
         };
-
-        {
-            let mut state = world.resource_mut::<NewProjectState>();
-            state.status = Some(format!("Creating `{name}`..."));
+        if state.scaffold_task.is_some() {
+            return;
         }
+        (state.location.clone(), kind)
+    };
 
-        let task = AsyncComputeTaskPool::get()
-            .spawn(async move { scaffold_project(&name, &location, kind) });
-        world.resource_mut::<NewProjectState>().scaffold_task = Some(task);
-    });
+    // A name `jd new` would reject produces a project whose crate name is
+    // not a valid Rust identifier, which fails at the user's first build
+    // with nothing pointing back here.
+    let name = if raw_name.trim().is_empty() {
+        world.resource_mut::<NewProjectState>().status =
+            Some("Please enter a project name.".into());
+        return;
+    } else {
+        match crate::scaffold::validated_project_name(raw_name.trim()) {
+            Ok(name) => name,
+            Err(error) => {
+                world.resource_mut::<NewProjectState>().status = Some(error.to_string());
+                return;
+            }
+        }
+    };
+
+    world.resource_mut::<NewProjectState>().status = Some(format!("Creating `{name}`..."));
+    let task =
+        AsyncComputeTaskPool::get().spawn(async move { scaffold_project(&name, &location, kind) });
+    world.resource_mut::<NewProjectState>().scaffold_task = Some(task);
 }
 
 fn poll_new_project_tasks(

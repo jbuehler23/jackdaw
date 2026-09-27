@@ -287,3 +287,41 @@ fn a_despawned_parent_takes_the_models_its_children_queued_with_it() {
         "a child despawned with its parent left its model queued"
     );
 }
+
+/// The textured material a placed model's meshes wear, once it and its base
+/// colour image have loaded.
+fn loaded_base_colour(app: &App) -> Option<Handle<Image>> {
+    let materials = app.world().resource::<Assets<StandardMaterial>>();
+    let server = app.world().resource::<AssetServer>();
+    let mut worn = app
+        .world()
+        .try_query::<&MeshMaterial3d<StandardMaterial>>()?;
+    worn.iter(app.world()).find_map(|material| {
+        let texture = materials.get(&material.0)?.base_color_texture.clone()?;
+        server
+            .is_loaded_with_dependencies(&texture)
+            .then_some(texture)
+    })
+}
+
+#[test]
+fn a_placed_model_loads_its_meshes_with_the_textures_its_materials_name() {
+    let mut app = util::editor_test_app();
+    place(&mut app, "jan/jan.gltf");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while loaded_base_colour(&app).is_none() && std::time::Instant::now() < deadline {
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    let texture = loaded_base_colour(&app)
+        .expect("the model's meshes wear a material whose base colour image loaded");
+    assert!(
+        app.world()
+            .resource::<Assets<Image>>()
+            .get(&texture)
+            .is_some(),
+        "the image the material names is in the image assets"
+    );
+}

@@ -280,3 +280,65 @@ fn a_scene_taken_down_takes_the_models_it_had_queued_with_it() {
         "a scene that has gone left models queued against its entities"
     );
 }
+
+/// A project whose remembered scene holds an instance of one of its prefabs.
+fn prefab_project() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    write(
+        &root.join("assets/prefabs/lantern.bsn"),
+        "#Lantern\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         bevy_transform::components::transform::Transform\n",
+    );
+    write(
+        &root.join("assets/scene.bsn"),
+        "#Square\n\
+         bevy_transform::components::transform::Transform\n\
+         Children [\n\
+             jackdaw::prefab::components::IsA { source: \"prefabs/lantern.bsn\" }\n\
+             jackdaw::prefab::components::PrefabEntityId(0)\n\
+         ]\n",
+    );
+    write(&root.join("assets/materials/slate.bsn"), MATERIAL);
+    write(
+        &root.join(".jackdaw/project.json"),
+        r#"{"name":"fixture","last_open_tabs":["assets/scene.bsn"],"last_active_tab":0}"#,
+    );
+    tmp
+}
+
+#[test]
+fn opening_a_project_spawns_the_prefab_instances_its_scene_holds_and_indexes_its_materials() {
+    let tmp = prefab_project();
+    let mut app = editor_opening(tmp.path());
+    for _ in 0..48 {
+        app.update();
+    }
+
+    let names: Vec<String> = app
+        .world_mut()
+        .query_filtered::<&Name, Without<jackdaw::EditorEntity>>()
+        .iter(app.world())
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        names.iter().any(|name| name == "Square") && names.iter().any(|name| name == "Lantern"),
+        "the scene and the prefab instance under it were spawned, out of {names:?}"
+    );
+    assert!(
+        app.world()
+            .resource::<jackdaw::prefab::PrefabAstCache>()
+            .get(&tmp.path().join("assets/prefabs/lantern.bsn"))
+            .is_some(),
+        "the prefab was read from the file its instance names"
+    );
+    assert!(
+        app.world()
+            .resource::<AssetIndex>()
+            .get(Path::new("materials/slate.bsn"))
+            .is_some(),
+        "the project's material was indexed"
+    );
+}
