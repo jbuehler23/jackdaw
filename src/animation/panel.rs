@@ -76,15 +76,33 @@ struct PreviewTargetLabel;
 #[derive(Component)]
 struct LibraryFileList;
 
-/// The project walk is worth its loads only while the file list is on screen.
+/// The project walk is worth its reads only while the file list is on screen,
+/// which a list in a dock tab behind another is not.
 fn demand_project_walk(
-    lists: Query<(), With<LibraryFileList>>,
+    lists: Query<Entity, With<LibraryFileList>>,
+    nodes: Query<(&Node, Option<&ChildOf>)>,
     mut demand: ResMut<super::library::LibraryDemand>,
 ) {
-    let showing = !lists.is_empty();
+    let showing = lists.iter().any(|list| is_displayed(list, &nodes));
     if demand.panel != showing {
         demand.panel = showing;
     }
+}
+
+/// Whether a UI node and every node above it are laid out rather than set to
+/// `Display::None`.
+fn is_displayed(entity: Entity, nodes: &Query<(&Node, Option<&ChildOf>)>) -> bool {
+    let mut at = Some(entity);
+    while let Some(entity) = at {
+        let Ok((node, parent)) = nodes.get(entity) else {
+            return true;
+        };
+        if node.display == Display::None {
+            return false;
+        }
+        at = parent.map(ChildOf::parent);
+    }
+    true
 }
 
 /// Marker on the scrolling column of clips.
@@ -945,6 +963,35 @@ pub(super) fn plugin(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn walk_demanded(tab_display: Display) -> bool {
+        let mut app = App::new();
+        app.init_resource::<super::super::library::LibraryDemand>()
+            .add_systems(Update, demand_project_walk);
+        let tab = app
+            .world_mut()
+            .spawn(Node {
+                display: tab_display,
+                ..default()
+            })
+            .id();
+        app.world_mut()
+            .spawn((LibraryFileList, Node::default(), ChildOf(tab)));
+        app.update();
+        app.world()
+            .resource::<super::super::library::LibraryDemand>()
+            .panel
+    }
+
+    #[test]
+    fn a_library_list_on_screen_asks_for_the_project_walk() {
+        assert!(walk_demanded(Display::Flex));
+    }
+
+    #[test]
+    fn a_library_list_in_a_tab_behind_another_leaves_the_project_unread() {
+        assert!(!walk_demanded(Display::None));
+    }
 
     #[test]
     fn a_second_state_for_the_same_clip_takes_another_name() {

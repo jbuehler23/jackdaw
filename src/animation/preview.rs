@@ -56,6 +56,8 @@ struct Active {
     owner: Option<Entity>,
     mannequin: Option<Entity>,
     file: String,
+    /// The file the clip came from, held so its clips stay loaded while it plays.
+    gltf: Handle<Gltf>,
     clip: String,
     node: AnimationNodeIndex,
     duration_secs: f32,
@@ -76,6 +78,11 @@ impl AnimationPreview {
         self.active
             .as_ref()
             .map(|active| (active.file.as_str(), active.clip.as_str()))
+    }
+
+    /// The glTF file the previewed clip came from.
+    pub fn gltf(&self) -> Option<&Handle<Gltf>> {
+        self.active.as_ref().map(|active| &active.gltf)
     }
 
     /// The entity whose player is borrowed.
@@ -308,6 +315,7 @@ fn start_requested_preview(world: &mut World) {
         owner,
         mannequin: request.mannequin,
         file: request.file,
+        gltf: handle,
         clip: request.clip,
         node,
         duration_secs,

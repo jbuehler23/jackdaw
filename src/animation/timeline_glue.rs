@@ -378,7 +378,6 @@ pub(super) fn describe_previewed_clip(
     mut view: ResMut<ImportedClipView>,
     mut dirty: ResMut<TimelineDirty>,
     gltfs: Res<Assets<bevy::gltf::Gltf>>,
-    asset_server: Res<AssetServer>,
     clips: Res<Assets<AnimationClip>>,
     targets: Query<(&AnimationTargetId, &Name)>,
     children: Query<&Children>,
@@ -408,9 +407,9 @@ pub(super) fn describe_previewed_clip(
         return;
     }
 
-    let handle = asset_server.get_handle(crate::entity_ops::to_asset_path(&file));
-    let clip = handle
-        .and_then(|handle: Handle<bevy::gltf::Gltf>| gltfs.get(&handle))
+    let clip = preview
+        .gltf()
+        .and_then(|handle| gltfs.get(handle))
         .and_then(|gltf| gltf.named_animations.get(name.as_str()).cloned())
         .and_then(|clip| clips.get(&clip));
     let Some(clip) = clip else {
