@@ -1,6 +1,6 @@
 # Active workspace cargo config. For local-build alternatives see
 # `.cargo/config_fast_builds.toml` (Mold/LLD speed-ups) and
-# `.cargo/config_ci.toml` (cranelift backend for CI).
+# `.cargo/config_ci.toml` (the CI flags).
 #
 # Windows builds link through `rust-lld`, which is faster than
 # link.exe on a graph this size and is the linker CI measures against.
@@ -29,9 +29,8 @@ rustflags = ["-Zshare-generics=no"]
 # Linux links through wild, the linker CI measures against
 # (`.cargo/config_ci.toml`). clang drives the link because `--ld-path` is a
 # clang flag that `cc` rejects. The rest of the CI file stays out on purpose:
-# `-Dwarnings` turns every local warning into a build failure, the cranelift
-# backend changes codegen, and `-Cdebuginfo=line-tables-only` drops the debug
-# info a local debugger reads.
+# `-Dwarnings` turns every local warning into a build failure, and
+# `-Cdebuginfo=line-tables-only` drops the debug info a local debugger reads.
 #
 # Opting out takes two variables, because the linker and the flag pointing it
 # at wild are set separately and each is overridden on its own:
