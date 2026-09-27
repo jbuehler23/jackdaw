@@ -1,7 +1,6 @@
 //! Test-harness orchestrator. `cargo xtask <tier>` runs a tier through nextest.
 use std::process::{Command, ExitCode};
 
-
 /// Target triple for the heavy tier's SDK build. Reads the host from
 /// `rustc -vV` so the tier runs on any host; `JACKDAW_TRIPLE` overrides it.
 fn triple() -> String {
@@ -58,28 +57,54 @@ fn fast() -> bool {
         )
 }
 
+/// Integration binaries that need a built SDK or a game build; they run in
+/// `heavy()` or the onboarding workflow instead.
+const SDK_BINARIES: &str = "binary(bsn_game_run) | binary(editor_journey) | binary(bundle_smoke) \
+    | binary(stress_reload) | binary(scaffold_e2e) \
+    | binary(schema_extract) | binary(reflect_auto_register) \
+    | binary(component_shape_refresh) | binary(dylib_linkage_identity) \
+    | binary(extern_redirect_ecosystem) | binary(mcp_smoke)";
+
+/// Build every test binary the integration tier runs, including library unit
+/// tests, into one nextest archive at `file`.
+fn archive(file: &str) -> bool {
+    sh(
+        "cargo",
+        &[
+            "nextest",
+            "archive",
+            "--locked",
+            "--workspace",
+            "--features",
+            "dylib",
+            "--tests",
+            "--archive-file",
+            file,
+        ],
+    )
+}
+
+/// Every crate's library and integration tests that are not SDK/dylib-gated.
 /// `shard` is an `N/M` slice of the run for CI to spread over `M` runners.
-fn integration(shard: Option<&str>) -> bool {
-    // Every crate's integration tests that are not SDK/dylib-gated. Matches the
-    // pre-harness `--workspace ... --tests` coverage; the excluded binaries need
-    // a built SDK and run in `heavy()` or the onboarding workflow instead.
-    let mut args = vec![
-        "nextest",
-        "run",
-        "--profile",
-        "ci",
-        "--workspace",
-        "--features",
-        "dylib",
-        "--tests",
-        "-E",
-        "not (binary(bsn_game_run) | binary(editor_journey) | binary(bundle_smoke) \
-           | binary(stress_reload) | binary(scaffold_e2e) \
-           | binary(schema_extract) | binary(reflect_auto_register) \
-           | binary(component_shape_refresh) | binary(dylib_linkage_identity) \
-           | binary(extern_redirect_ecosystem) | binary(mcp_smoke))",
-    ];
-    let partition = shard.map(|shard| format!("hash:{shard}"));
+/// With `archive`, the binaries come from [`archive`] and are unpacked into
+/// the workspace's `target/`, where the tests expect them.
+fn integration(shard: Option<&str>, archive: Option<&str>) -> bool {
+    let filter = format!("not ({SDK_BINARIES})");
+    let mut args = vec!["nextest", "run", "--profile", "ci"];
+    match archive {
+        Some(file) => args.extend([
+            "--archive-file",
+            file,
+            "--workspace-remap",
+            ".",
+            "--extract-to",
+            ".",
+            "--extract-overwrite",
+        ]),
+        None => args.extend(["--workspace", "--features", "dylib", "--tests"]),
+    }
+    args.extend(["-E", filter.as_str()]);
+    let partition = shard.map(|shard| format!("slice:{shard}"));
     if let Some(partition) = &partition {
         args.extend(["--partition", partition.as_str()]);
     }
@@ -164,9 +189,21 @@ fn main() -> ExitCode {
     let tier = args.first().map(String::as_str).unwrap_or_default();
     let ok = match tier {
         "fast" => fast(),
-        "integration" => integration(args.get(1).map(String::as_str)),
+        "archive" => archive(args.get(1).map_or("target/tests.tar.zst", String::as_str)),
+        "integration" => {
+            let mut shard = None;
+            let mut archive = None;
+            let mut rest = args[1..].iter().map(String::as_str);
+            while let Some(arg) = rest.next() {
+                match arg {
+                    "--archive" => archive = rest.next(),
+                    _ => shard = Some(arg),
+                }
+            }
+            integration(shard, archive)
+        }
         "heavy" => heavy(),
-        "release-gate" => fast() && integration(None) && heavy(),
+        "release-gate" => fast() && integration(None, None) && heavy(),
         "package-sdk" => {
             return jackdaw_cli_internal::package::cmd_package_sdk(&args[1..]);
         }
@@ -175,7 +212,8 @@ fn main() -> ExitCode {
         }
         other => {
             eprintln!(
-                "usage: cargo xtask <fast|integration [N/M]|heavy|release-gate|package-sdk|bundle> \
+                "usage: cargo xtask <fast|archive [FILE]|integration [N/M] [--archive FILE]|heavy|\
+                 release-gate|package-sdk|bundle> \
                  (got {other:?})"
             );
             false

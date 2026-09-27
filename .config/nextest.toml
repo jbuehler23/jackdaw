@@ -1,6 +1,11 @@
 [profile.default]
 # Local runs: no retries, show output on failure.
 failure-output = "immediate-final"
+# The extension `sdk_layout` loads with dlopen; no test binary links it, so
+# the archive would otherwise leave it out.
+archive.include = [
+    { path = "debug/deps/libtest_fixture_extension.so", relative-to = "target", on-missing = "error" },
+]
 
 # Every test in these binaries builds a whole editor app. Unbounded, one
 # process per core runs a many-core machine out of memory.
