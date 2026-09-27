@@ -400,7 +400,11 @@ fn rewrite_prefab(app: &mut App, path: &Path, text: &str) {
         .resource_mut::<jackdaw::prefab::PrefabAstCache>()
         .insert(path, ast);
     jackdaw::prefab::watcher::reload_instances_of(app.world_mut(), &sparse, path);
-    std::thread::sleep(std::time::Duration::from_millis(400));
+    let watcher_done = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while std::time::Instant::now() < watcher_done {
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
     settle(app);
 }
 
