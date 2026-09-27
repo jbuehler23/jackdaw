@@ -100,6 +100,12 @@ pub struct Foliage {
     /// The exponent the height takes before it leans, which is how sharply the
     /// bend gathers toward the top.
     pub bend_contrast: f32,
+    /// Whether a card seen edge on dithers away, so a cross of flat cards
+    /// standing in for a whole plant never shows as a line.
+    pub hide_sides: bool,
+    /// How quickly a card comes back as it turns to face the view; higher
+    /// keeps more of it.
+    pub hide_power: f32,
     /// The wind the scene is blowing by, written by [`FoliagePlugin`] from
     /// [`SceneWind`] rather than authored, so it never reaches the file.
     #[reflect(ignore)]
@@ -128,6 +134,8 @@ impl Default for Foliage {
             micro_wind_response: 0.0,
             bend_position: 1.0,
             bend_contrast: 2.0,
+            hide_sides: false,
+            hide_power: 2.5,
             wind: Wind::STILL,
         }
     }
@@ -160,6 +168,14 @@ impl Foliage {
         let field = (scaled.x * TAU * 0.13 + 1.7).sin() * (scaled.z * TAU * 0.11 - 0.4).cos()
             + (scaled.z * TAU * 0.07 + 2.3).sin() * 0.5;
         (0.5 + 0.25 * field).clamp(0.0, 1.0) * self.variation_strength.clamp(0.0, 1.0)
+    }
+
+    /// How much of a card facing the view by `facing`, the cosine between its
+    /// face and the view, is drawn when [`Self::hide_sides`] is on: 0 edge on,
+    /// rising to 1 as it turns toward the view. The shader computes this same
+    /// expression.
+    pub fn side_visibility(&self, facing: f32) -> f32 {
+        ((1.0 - (1.0 - facing.abs()) * 2.0) * self.hide_power).clamp(0.0, 1.0)
     }
 
     /// The normal a leaf is lit by: its own, leaned toward world up by [`Self::shading_normal_up`]. The shader computes this same expression.
@@ -226,6 +242,8 @@ pub struct FoliageUniform {
     pub micro_wind_response: f32,
     pub bend_position: f32,
     pub bend_contrast: f32,
+    pub hide_sides: u32,
+    pub hide_power: f32,
 }
 
 impl AsBindGroupShaderType<FoliageUniform> for Foliage {
@@ -255,6 +273,8 @@ impl AsBindGroupShaderType<FoliageUniform> for Foliage {
             micro_wind_response: self.micro_wind_response,
             bend_position: self.bend_position,
             bend_contrast: self.bend_contrast,
+            hide_sides: u32::from(self.hide_sides),
+            hide_power: self.hide_power,
         }
     }
 }
@@ -265,6 +285,10 @@ impl MaterialExtension for Foliage {
     }
 
     fn prepass_vertex_shader() -> ShaderRef {
+        PREPASS_SHADER_PATH.into()
+    }
+
+    fn prepass_fragment_shader() -> ShaderRef {
         PREPASS_SHADER_PATH.into()
     }
 
@@ -357,6 +381,7 @@ mod tests {
     /// `AsBindGroup` derive and the shader that reads them.
     const SHADER_SOURCE: &str = include_str!("shaders/foliage_wind.wgsl");
     const PREPASS_SOURCE: &str = include_str!("shaders/foliage_prepass.wgsl");
+    const MAIN_SOURCE: &str = include_str!("shaders/foliage.wgsl");
 
     #[test]
     fn only_a_cutout_in_a_multisampled_view_covers_its_edges() {
@@ -374,6 +399,27 @@ mod tests {
             PREPASS_SOURCE.contains("wind_offset(up_the_mesh, planted.xyz, globals.time)"),
             "a prepass that left the leaves where the model put them would cut holes where they sway"
         );
+    }
+
+    #[test]
+    fn the_prepass_hides_the_cards_the_main_pass_hides() {
+        assert!(
+            PREPASS_SOURCE.contains("side_hidden(") && MAIN_SOURCE.contains("side_hidden("),
+            "a card hidden in the main pass but not the prepass would leave its depth and its \
+             shadow behind"
+        );
+    }
+
+    #[test]
+    fn a_card_turned_edge_on_hides_and_one_facing_the_view_stays() {
+        let material = Foliage {
+            hide_sides: true,
+            ..default()
+        };
+        assert_eq!(material.side_visibility(0.0), 0.0);
+        assert_eq!(material.side_visibility(0.5), 0.0);
+        assert_eq!(material.side_visibility(-1.0), 1.0);
+        assert!(material.side_visibility(0.6) > 0.0 && material.side_visibility(0.6) < 1.0);
     }
 
     fn blowing(material: &mut Foliage) {
@@ -435,6 +481,8 @@ mod tests {
             "micro_wind_response: f32",
             "bend_position: f32",
             "bend_contrast: f32",
+            "hide_sides: u32",
+            "hide_power: f32",
         ] {
             let found = body[at..].find(field).unwrap_or_else(|| {
                 panic!("the shader declares `{field}` after the field above it")

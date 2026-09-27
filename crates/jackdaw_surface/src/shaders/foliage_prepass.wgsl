@@ -1,12 +1,15 @@
-// The foliage material's prepass and shadow vertex stage: the stock one with
-// the same lean the main pass gives, so depth, normals and shadows sit where
-// the drawn leaves are. The prepass and shadow view layouts hold the frame's
-// globals at binding 1.
+// The foliage material's prepass and shadow stages: the stock vertex stage with
+// the same lean the main pass gives, and the stock cutout with the same edge-on
+// hiding, so depth, normals and shadows sit where the drawn leaves are. The
+// prepass and shadow view layouts hold the frame's globals at binding 1.
 
-#import jackdaw_surface::foliage_wind::wind_offset
+#import jackdaw_surface::foliage_wind::{side_hidden, wind_offset}
 #import bevy_pbr::{
     mesh_functions,
-    prepass_io::{Vertex, VertexOutput},
+    mesh_view_bindings::view,
+    pbr_functions,
+    pbr_prepass_functions,
+    prepass_io::{FragmentOutput, Vertex, VertexOutput},
     view_transformations::position_world_to_clip,
 }
 #import bevy_render::globals::Globals
@@ -71,3 +74,42 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 
     return out;
 }
+
+// Hide a card turned edge on to the view the pass is drawn from, then cut the
+// mesh out as the stock prepass does.
+fn cut_out(in: VertexOutput) {
+    let orthographic = view.clip_from_view[3].w == 1.0;
+    let view_direction = pbr_functions::calculate_view(in.world_position, orthographic);
+    if side_hidden(in.world_position.xyz, view_direction, in.position.xy) {
+        discard;
+    }
+#ifdef VISIBILITY_RANGE_DITHER
+    pbr_functions::visibility_range_dither(in.position, in.visibility_range_dither);
+#endif
+    pbr_prepass_functions::prepass_alpha_discard(in);
+}
+
+#ifdef PREPASS_FRAGMENT
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+    cut_out(in);
+    var out: FragmentOutput;
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+    out.frag_depth = in.unclipped_depth;
+#endif
+#ifdef NORMAL_PREPASS
+    let normal = pbr_functions::prepare_world_normal(in.world_normal, true, is_front);
+    out.normal = vec4(normal * 0.5 + vec3(0.5), 1.0);
+#endif
+#ifdef MOTION_VECTOR_PREPASS
+    out.motion_vector = pbr_prepass_functions::calculate_motion_vector(
+        in.world_position, in.previous_world_position);
+#endif
+    return out;
+}
+#else
+@fragment
+fn fragment(in: VertexOutput) {
+    cut_out(in);
+}
+#endif

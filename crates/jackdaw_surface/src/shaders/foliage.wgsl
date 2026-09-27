@@ -3,14 +3,15 @@
 //
 // The vertex stage is the stock mesh one with the lean added, gathered toward
 // the top of the mesh so a trunk bends at its crown while a leaf card flutters
-// whole. The fragment stage cuts the mesh out, tints it up its own height,
-// varies it by where it stands and adds the light that comes through it.
+// whole. The fragment stage hides a card turned edge on, cuts the mesh out,
+// tints it up its own height, varies it by where it stands and adds the light
+// that comes through it.
 //
 // `Foliage` on the Rust side computes the same lean, gradient and variation,
 // and its tests hold the two together.
 
 #import jackdaw_surface::foliage_wind::{
-    foliage, gradient_weight, variation_weight, wind_offset, MIN_EXPONENT, PI,
+    foliage, gradient_weight, side_hidden, variation_weight, wind_offset, MIN_EXPONENT, PI,
 }
 #import bevy_pbr::{
     forward_io::{Vertex, VertexOutput, FragmentOutput},
@@ -118,6 +119,11 @@ fn light_reaching(in: VertexOutput, world_normal: vec3<f32>) -> f32 {
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+    let orthographic = view.clip_from_view[3].w == 1.0;
+    let view_direction = pbr_functions::calculate_view(in.world_position, orthographic);
+    if side_hidden(in.world_position.xyz, view_direction, in.position.xy) {
+        discard;
+    }
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
 #ifdef FOLIAGE_ALPHA_TO_COVERAGE
