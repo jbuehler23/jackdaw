@@ -717,3 +717,78 @@ fn migrating_leaves_a_prefab_alone_when_an_instance_cannot_take_its_transform() 
         "nor are its instances"
     );
 }
+
+/// A material the project holds as the file at `path`: in the store with no
+/// asset-server path (the way the editor's asset index loads one) and
+/// published under that path for documents to resolve and emit.
+fn material_file(app: &mut App, path: &str) -> Handle<StandardMaterial> {
+    let handle = app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial::default());
+    let untyped = handle.clone().untyped();
+    let world = app.world_mut();
+    world
+        .get_resource_or_init::<jackdaw_bsn::BsnProjectAssets>()
+        .0
+        .insert(path.to_string(), untyped.clone());
+    world
+        .get_resource_or_init::<jackdaw_bsn::BsnSceneAssets>()
+        .0
+        .insert(path.to_string(), untyped.clone());
+    world
+        .get_resource_or_init::<jackdaw_bsn::BsnAssetPaths>()
+        .0
+        .insert(untyped.id(), path.to_string());
+    handle
+}
+
+/// Packing copies the live document, where a brush face's material is the
+/// asset-blind placeholder its ECS mirror stored, so the prefab has to name
+/// the material from the live value or the brush loses it.
+#[test]
+fn pack_keeps_a_brush_face_material_that_names_a_file() {
+    let (mut app, dir) = app_in_project();
+    let red = material_file(&mut app, "materials/red.bsn");
+
+    let group = app
+        .world_mut()
+        .spawn((Name::new("Crate"), Transform::default()))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), group);
+    let mut brush = jackdaw_scene_types::types::Brush::cuboid(0.5, 0.5, 0.5);
+    for face in &mut brush.faces {
+        face.material = red.clone();
+    }
+    let body = app
+        .world_mut()
+        .spawn((
+            Name::new("CrateBody"),
+            Transform::default(),
+            brush.clone(),
+            ChildOf(group),
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), body);
+    // What the editor's `Changed<Brush>` mirror stores for every brush.
+    jackdaw::brush::sync_brush_to_ast(app.world_mut(), body, &brush);
+    app.update();
+    app.world_mut().resource_mut::<Selection>().entities = vec![group];
+
+    call(
+        &mut app,
+        "prefab.pack",
+        &[("path", PropertyValue::from("prefabs/crate.bsn"))],
+    );
+
+    let written = std::fs::read_to_string(dir.path().join("assets/prefabs/crate.bsn"))
+        .expect("prefab.pack wrote the prefab");
+    assert!(
+        written.contains("material: \"materials/red.bsn\""),
+        "the packed brush names its material file:\n{written}"
+    );
+    assert!(
+        !written.contains("material: \"\""),
+        "no face lost its material to the placeholder:\n{written}"
+    );
+}
