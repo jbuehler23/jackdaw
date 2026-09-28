@@ -407,8 +407,9 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
     let mut shipped_manifest = String::new();
     let mut rlibs = 0usize;
     for line in manifest_text.lines() {
-        let mut parts = line.splitn(3, ' ');
-        let (Some(name), Some(version), Some(abspath)) = (parts.next(), parts.next(), parts.next())
+        let mut parts = line.splitn(4, ' ');
+        let (Some(name), Some(version), Some(enabled), Some(abspath)) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
         else {
             return Err(format!("malformed SDK manifest line: {line}"));
         };
@@ -417,7 +418,10 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
             .file_name()
             .ok_or_else(|| format!("manifest artifact has no filename: {abspath}"))?;
         copy(src, &deps_out.join(base))?;
-        shipped_manifest.push_str(&format!("{name} {version} {}\n", base.to_string_lossy()));
+        shipped_manifest.push_str(&format!(
+            "{name} {version} {enabled} {}\n",
+            base.to_string_lossy()
+        ));
         rlibs += 1;
     }
     write(&sdk_out.join("manifest.txt"), &shipped_manifest)?;
