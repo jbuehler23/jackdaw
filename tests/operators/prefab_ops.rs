@@ -717,3 +717,98 @@ fn migrating_leaves_a_prefab_alone_when_an_instance_cannot_take_its_transform() 
         "nor are its instances"
     );
 }
+
+/// A steading packed into `prefabs/steading.bsn` beside a second top-level
+/// group, so an instance spawned without a parent lands at the top level.
+fn packed_steading(app: &mut App) {
+    spawn_group(app, "Ground", Vec3::ZERO, &[]);
+    let group = spawn_group(app, "Steading", Vec3::new(5.0, 0.0, -2.0), PIECES);
+    app.world_mut().resource_mut::<Selection>().entities = vec![group];
+    call(
+        app,
+        "prefab.pack",
+        &[("path", PropertyValue::from("prefabs/steading.bsn"))],
+    );
+}
+
+fn spawn_steading(app: &mut App, x: f32) -> Entity {
+    call(
+        app,
+        "prefab.spawn_instance",
+        &[
+            ("path", PropertyValue::from("prefabs/steading.bsn")),
+            ("pos_x", PropertyValue::Float(f64::from(x))),
+            ("pos_y", PropertyValue::Float(0.0)),
+            ("pos_z", PropertyValue::Float(0.0)),
+        ],
+    );
+    instance_roots(app)
+        .into_iter()
+        .find(|&instance| {
+            app.world()
+                .get::<Transform>(instance)
+                .is_some_and(|at| at.translation == Vec3::new(x, 0.0, 0.0))
+        })
+        .expect("an instance stands where it was spawned")
+}
+
+#[test]
+fn spawn_instance_selects_the_instance_it_spawns() {
+    let (mut app, _dir) = app_in_project();
+    packed_steading(&mut app);
+
+    let spawned = spawn_steading(&mut app, 20.0);
+
+    assert_eq!(
+        app.world().resource::<Selection>().entities,
+        vec![spawned],
+        "the new instance is the whole selection"
+    );
+    assert!(
+        app.world()
+            .get::<jackdaw::selection::Selected>(spawned)
+            .is_some(),
+        "the new instance carries the selection marker"
+    );
+}
+
+#[test]
+fn a_run_of_spawns_loads_each_instance_once() {
+    let (mut app, _dir) = app_in_project();
+    packed_steading(&mut app);
+    let packed = instance_roots(&mut app);
+
+    let mut spawned = Vec::new();
+    for index in 0..100 {
+        spawned.push(spawn_steading(&mut app, 20.0 + index as f32 * 3.0));
+    }
+
+    let instances = instance_roots(&mut app);
+    assert_eq!(instances.len(), 101, "every spawn added one instance");
+    for instance in packed.iter().chain(&spawned) {
+        assert!(
+            instances.contains(instance),
+            "an instance keeps its entity while later ones spawn"
+        );
+    }
+    let under_first = |world: &World, mut entity: Entity| {
+        while let Some(parent) = world.get::<ChildOf>(entity).map(ChildOf::parent) {
+            if parent == spawned[0] {
+                return true;
+            }
+            entity = parent;
+        }
+        false
+    };
+    let pieces = app
+        .world_mut()
+        .query_filtered::<Entity, With<GltfSource>>()
+        .iter(app.world())
+        .filter(|&piece| under_first(app.world(), piece))
+        .count();
+    assert_eq!(
+        pieces,
+        PIECES.len(),
+        "the instance carries the prefab's pieces"
+    );
+}

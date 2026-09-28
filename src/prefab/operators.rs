@@ -3,8 +3,8 @@
 
 use crate::prefab::cache::PrefabAstCache;
 use crate::prefab::resolver_bsn::{
-    isa_value, read_isa_deleted, read_isa_source, read_prefab_entity_id, set_whole_component,
-    value_to_patch,
+    isa_value, read_isa_deleted, read_isa_source, read_prefab_entity_id, resolve_scene,
+    set_whole_component, value_to_patch,
 };
 use bevy::ecs::hierarchy::{ChildOf, Children};
 use bevy::ecs::reflect::AppTypeRegistry;
@@ -422,9 +422,7 @@ fn save_selection_as_new_prefab(
         return;
     };
     remove_packed_from_document(world, &packed.entities);
-    // The spawn adds the instance node and triggers a reload that
-    // materializes the inherited children from the prefab we just wrote.
-    spawn_instance_placed(world, &packed.path, packed.placement, None);
+    respawn_with_instance(world, &packed.path, packed.placement);
 }
 
 /// A prefab file that was just written, and what went into it.
@@ -726,9 +724,8 @@ fn record_spawned_roots(world: &mut World, count: usize) {
     }
 }
 
-/// Add an instance root for `source` carrying `transform`, without the respawn
-/// [`spawn_instance`] does; a caller adding several reloads once for all of
-/// them.
+/// Add an instance root for `source` carrying `transform` without spawning
+/// it; a caller adding several reloads once for all of them.
 fn add_instance_node(world: &mut World, source: &Path, transform: Transform) {
     let patches = vec![
         isa_patch(&source.to_string_lossy(), &[]),
@@ -1152,7 +1149,7 @@ pub fn poll_prefab_pick(world: &mut World) {
 /// Add a new prefab instance to the live scene at `world_pos`. Caches the
 /// prefab document if missing, adds an instance root carrying
 /// `IsA + PrefabEntityId + Transform` (a translation-only sparse delta), then
-/// resolves + respawns the scene preview.
+/// resolves and spawns that instance.
 ///
 /// Importing a UI scene goes through this same call: a UI scene is an
 /// ordinary `.bsn`, and only the placement differs; see
@@ -1191,13 +1188,98 @@ pub fn spawn_instance_under(
 }
 
 /// [`spawn_instance_under`] standing the instance at a whole world placement,
-/// rotation and scale included.
+/// rotation and scale included. The new instance becomes the selection.
+///
+/// Only the new instance is resolved and spawned; every other entity keeps its
+/// id, so a run of spawns costs each instance one load.
 pub fn spawn_instance_placed(
     world: &mut World,
     prefab_path: &Path,
     placement: Transform,
     parent: Option<Entity>,
 ) {
+    let Some(instance) = instance_node_patches(world, prefab_path, placement, parent) else {
+        return;
+    };
+    let resolved = {
+        let mut authored = SceneBsnAst::default();
+        let node = authored.create_entity_node(instance.patches);
+        authored.add_to_roots(node);
+        let cache = world.resource::<PrefabAstCache>();
+        resolve_scene(&authored, &|path| cache.get(path))
+    };
+    let resolved = match resolved {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            warn_caller(
+                world,
+                format!(
+                    "prefab.spawn_instance: the prefab '{}' did not resolve ({err}), so nothing \
+                     was placed",
+                    prefab_path.display()
+                ),
+            );
+            return;
+        }
+    };
+    let Some(&resolved_root) = resolved.roots.first() else {
+        return;
+    };
+    let node = jackdaw_bsn::clone_subtree_into(
+        &mut world.resource_mut::<SceneBsnAst>(),
+        &resolved,
+        resolved_root,
+        instance.parent_node,
+    );
+    let parent_entity = instance.parent_node.and(parent);
+    let mut spawned = Vec::new();
+    jackdaw_bsn::spawn_ast_node(world, node, parent_entity, &mut spawned);
+    jackdaw_bsn::apply_dirty_ast_patches(world);
+    if let Some(&instance) = spawned.first() {
+        crate::commands::SpawnedEntities::record(world, instance);
+        crate::selection::select_only(world, instance);
+    }
+}
+
+/// Add an instance of `prefab_path` at the top level of the document, then
+/// respawn the whole scene, for a caller that has taken entities out of the
+/// document and needs them gone from the world too. The respawn mints new ids,
+/// so the instance is found again by its place in the document.
+fn respawn_with_instance(world: &mut World, prefab_path: &Path, placement: Transform) {
+    let Some(instance) = instance_node_patches(world, prefab_path, placement, None) else {
+        return;
+    };
+    let path = {
+        let mut live = world.resource_mut::<SceneBsnAst>();
+        let node = live.create_entity_node(instance.patches);
+        live.add_to_roots(node);
+        document_path(&live, node)
+    };
+
+    crate::prefab::watcher::reload_all_instances(world);
+    if let Some(spawned) = node_at_path(world.resource::<SceneBsnAst>(), &path)
+        .and_then(|node| world.resource::<SceneBsnAst>().ecs_for_ast(node))
+    {
+        crate::commands::SpawnedEntities::record(world, spawned);
+    }
+}
+
+/// The authored patches of a new instance root, and the document node it
+/// goes under.
+struct InstanceNode {
+    patches: Vec<BsnPatch>,
+    parent_node: Option<Entity>,
+}
+
+/// Cache `prefab_path` and build the patches of an instance of it standing at
+/// `placement` under `parent`. `None`, with a warning, when the prefab cannot
+/// be read.
+fn instance_node_patches(
+    world: &mut World,
+    prefab_path: &Path,
+    placement: Transform,
+    parent: Option<Entity>,
+) -> Option<InstanceNode> {
     // Caches the prefab's own `IsA` ancestry alongside it, without which a
     // two-level prefab resolves to nothing.
     let assets_root = crate::prefab::save_load::source_root_of(world, prefab_path);
@@ -1220,7 +1302,7 @@ pub fn spawn_instance_placed(
                 reason
             ),
         );
-        return;
+        return None;
     }
 
     let ui_scene = world
@@ -1245,37 +1327,20 @@ pub fn spawn_instance_placed(
         .map_or(placement, |parent| {
             GlobalTransform::from(placement).reparented_to(parent)
         });
-    let node = {
-        let mut live = world.resource_mut::<SceneBsnAst>();
-        let source = prefab_path.to_string_lossy().into_owned();
-        let mut patches = vec![isa_patch(&source, &[]), peid_patch(0)];
-        if !ui_scene {
-            let moved_only = placement.rotation == Quat::IDENTITY && placement.scale == Vec3::ONE;
-            patches.push(if moved_only {
-                transform_translation_patch(local.translation)
-            } else {
-                transform_patch(local)
-            });
-        }
-        let node = live.create_entity_node(patches);
-        match parent_node {
-            Some(parent_node) => live.add_child_to_ast(parent_node, node),
-            None => live.add_to_roots(node),
-        }
-        node
-    };
-
-    let path = document_path(world.resource::<SceneBsnAst>(), node);
-
-    crate::prefab::watcher::reload_all_instances(world);
-    // The respawn reads the document back and mints new ids for every node,
-    // so the instance is found again by where it sits rather than by the node
-    // it was, and the caller is told which entity it became.
-    if let Some(spawned) = node_at_path(world.resource::<SceneBsnAst>(), &path)
-        .and_then(|node| world.resource::<SceneBsnAst>().ecs_for_ast(node))
-    {
-        crate::commands::SpawnedEntities::record(world, spawned);
+    let source = prefab_path.to_string_lossy().into_owned();
+    let mut patches = vec![isa_patch(&source, &[]), peid_patch(0)];
+    if !ui_scene {
+        let moved_only = placement.rotation == Quat::IDENTITY && placement.scale == Vec3::ONE;
+        patches.push(if moved_only {
+            transform_translation_patch(local.translation)
+        } else {
+            transform_patch(local)
+        });
     }
+    Some(InstanceNode {
+        patches,
+        parent_node,
+    })
 }
 
 /// Where a node sits in the document, as the child indices leading from the
