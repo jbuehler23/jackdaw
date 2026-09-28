@@ -50,15 +50,6 @@ jobs:
         if: runner.os == 'macOS'
         run: printf '\n[profile.dev.package."*"]\nopt-level = 1\n' >> .cargo/config.toml
 
-      - name: Populate target directory from cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          shared-key: cross-${{ matrix.os }}
-          # A timeout or platform failure is exactly when retaining the cold
-          # compile makes the next diagnostic run useful instead of identical.
-          cache-on-failure: true
-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 

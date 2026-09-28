@@ -31,12 +31,6 @@ jobs:
         with:
           toolchain: ${{ env.toolchain }}
 
-      - name: Populate target directory from cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          shared-key: install
-
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 

@@ -5,8 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # Pull requests only restore caches. This daily run on main saves them again
-  # after the nightly workflows' caches push them out.
+  # Pull requests only restore caches. This daily run on main saves any that
+  # were pushed out. Only the jobs on a pull request's longest path keep a
+  # cache, so the saved keys fit the repository's 10 GB together.
   schedule:
     - cron: "30 9 * * *"
 
@@ -207,8 +208,7 @@ jobs:
         run: cargo xtask integration ${{ matrix.shard }}/6 --archive "$RUNNER_TEMP/tests.tar.zst"
 
   # Play builds a game with cargo and runs it, which is the heavy tier's cost,
-  # so pull requests run it only when they touch the Play pipeline. It reads
-  # the heavy tier's cache and saves nothing.
+  # so pull requests run it only when they touch the Play pipeline.
   play-paths:
     name: Play pipeline changed
     if: github.event_name == 'pull_request'
@@ -256,12 +256,6 @@ jobs:
       - name: Set LD_LIBRARY_PATH
         run: |
           echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
-
-      - name: Populate target directory from cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: false
-          shared-key: heavy
 
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev mesa-vulkan-drivers
@@ -414,12 +408,6 @@ jobs:
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
-      - name: Populate target directory from cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          shared-key: clippy
-
       - name: Run clippy lints
         run: cargo clippy --locked --workspace --all-targets --features dylib -- --deny warnings
 
@@ -476,12 +464,6 @@ jobs:
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
-      - name: Populate target directory from cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          shared-key: docs
-
       - name: Check documentation
         run: cargo doc --locked --workspace --document-private-items --no-deps
 
@@ -502,12 +484,6 @@ jobs:
 
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
-
-      - name: Populate target directory from cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          shared-key: bevy-lint
 
       - name: Install Bevy linter
         # Pinned to a known-good commit: installing from a release tag requires that

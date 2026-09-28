@@ -143,6 +143,8 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
 
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
@@ -241,6 +243,7 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
+          save-if: false
           # The cargo config is in the key because it carries rustflags
           # (-Zshare-generics and the linker choice): a cache built under
           # different flags restores artifacts whose crate disambiguators
