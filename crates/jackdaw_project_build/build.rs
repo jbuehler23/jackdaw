@@ -67,10 +67,8 @@ fn emit_build_source(manifest_dir: &Path, workspace: Option<&Path>) {
     let source = if env::var_os("JACKDAW_RELEASE_BUILD").is_some_and(|flag| flag == "1") {
         "release".to_string()
     } else if let Some(rev) = git_head(manifest_dir) {
-        if let Some(ws) = workspace {
-            // So a commit moves the embedded revision. `git rev-parse` is
-            // not a file read, so nothing else tells cargo it went stale.
-            println!("cargo:rerun-if-changed={}", ws.join(".git/HEAD").display());
+        for file in head_files(manifest_dir) {
+            println!("cargo:rerun-if-changed={}", file.display());
         }
         format!("git:{rev}")
     } else {
@@ -93,6 +91,49 @@ fn git_head(dir: &Path) -> Option<String> {
     let rev = String::from_utf8(output.stdout).ok()?.trim().to_string();
     let full = rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit());
     full.then_some(rev)
+}
+
+/// The files that change when `dir`'s checkout moves: `HEAD`, and the branch
+/// file it names, for cargo to watch so a checkout or a commit moves the
+/// embedded revision.
+///
+/// In a linked worktree these live in the main repository's git directory, not
+/// under a `.git` folder in the worktree. Only files that exist are returned:
+/// cargo reruns a script on every build while a file it watches is missing.
+fn head_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let Some(head) = git_path(dir, "HEAD") else {
+        return files;
+    };
+    let branch = fs::read_to_string(&head).ok().and_then(|text| {
+        text.strip_prefix("ref: ")
+            .map(|name| name.trim().to_string())
+    });
+    files.push(head);
+    if let Some(branch) = branch.and_then(|name| git_path(dir, &name)) {
+        files.push(branch);
+    }
+    files.retain(|file| file.is_file());
+    files
+}
+
+/// Where git keeps `name` for the checkout at `dir`, as `git rev-parse
+/// --git-path` reports it.
+fn git_path(dir: &Path, name: &str) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--git-path", name])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
+    Some(if path.is_absolute() {
+        path
+    } else {
+        dir.join(path)
+    })
 }
 
 /// True only for the jackdaw editor workspace with the crates present. False in
