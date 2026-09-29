@@ -15,6 +15,7 @@ pub mod palette;
 pub mod panel;
 pub mod quantize_ops;
 pub mod regions;
+mod retired;
 pub mod scatter;
 pub mod scatter_data;
 pub mod sculpt;
@@ -29,6 +30,8 @@ pub(crate) mod ui_fields;
 use std::collections::HashSet;
 
 use bevy::prelude::*;
+
+pub(crate) use retired::live_terrain;
 
 pub use options_bar::TerrainOptionsBar;
 pub use paint::{PaintDomain, TerrainPaintState};
@@ -81,6 +84,7 @@ impl Plugin for TerrainPlugin {
                 scatter::plugin,
                 palette::plugin,
                 regions::plugin,
+                retired::plugin,
                 navmesh_bake::plugin,
                 splat::plugin,
                 (
@@ -653,6 +657,7 @@ mod new_terrain_tests {
 pub(crate) mod pointer_harness {
     use bevy::picking::{backend::HitData, hover::HoverMap, pointer::PointerId};
     use bevy::prelude::*;
+
     use bevy::ui::widget::ViewportNode;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
 

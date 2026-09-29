@@ -866,7 +866,10 @@ pub struct SetTerrainDetail {
 
 impl SetTerrainDetail {
     fn apply(&self, world: &mut World, detail: Vec<DetailLayer>) {
-        let Some(mut terrain) = world.get_mut::<Terrain>(self.entity) else {
+        let Some(entity) = super::live_terrain(world, self.entity) else {
+            return;
+        };
+        let Some(mut terrain) = world.get_mut::<Terrain>(entity) else {
             return;
         };
         let layers_left = detail.len();
@@ -876,7 +879,7 @@ impl SetTerrainDetail {
         paint.detail_layer = paint.detail_layer.min(layers_left.saturating_sub(1));
         crate::commands::sync_component_to_ast(
             world,
-            self.entity,
+            entity,
             "jackdaw_scene_types::types::Terrain",
             &terrain,
         );
@@ -909,7 +912,10 @@ pub(super) struct AddTerrainChannel {
 
 impl EditorCommand for AddTerrainChannel {
     fn execute(&mut self, world: &mut World) {
-        let Some(mut terrain) = world.get_mut::<Terrain>(self.entity) else {
+        let Some(entity) = super::live_terrain(world, self.entity) else {
+            return;
+        };
+        let Some(mut terrain) = world.get_mut::<Terrain>(entity) else {
             return;
         };
         if terrain
@@ -924,11 +930,14 @@ impl EditorCommand for AddTerrainChannel {
             element: TerrainChannelElement::U8,
             palette: self.palette.clone(),
         });
-        super::channel_ops::commit_channels(world, self.entity);
+        super::channel_ops::commit_channels(world, entity);
     }
 
     fn undo(&mut self, world: &mut World) {
-        let Some(mut terrain) = world.get_mut::<Terrain>(self.entity) else {
+        let Some(entity) = super::live_terrain(world, self.entity) else {
+            return;
+        };
+        let Some(mut terrain) = world.get_mut::<Terrain>(entity) else {
             return;
         };
         let Some(at) = terrain
@@ -939,7 +948,7 @@ impl EditorCommand for AddTerrainChannel {
             return;
         };
         terrain.channels.remove(at);
-        super::channel_ops::commit_channels(world, self.entity);
+        super::channel_ops::commit_channels(world, entity);
     }
 
     fn description(&self) -> &str {

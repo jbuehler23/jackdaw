@@ -73,7 +73,10 @@ impl SetTerrainShape {
 
     fn restore(&self, world: &mut World, old: bool) {
         let cell_size = if old { self.old } else { self.new };
-        let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(self.entity) else {
+        let Some(entity) = super::live_terrain(world, self.entity) else {
+            return;
+        };
+        let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(entity) else {
             return;
         };
         terrain.cell_size = cell_size;
@@ -83,11 +86,11 @@ impl SetTerrainShape {
         }
         crate::commands::sync_component_to_ast(
             world,
-            self.entity,
+            entity,
             "jackdaw_scene_types::types::Terrain",
             &terrain,
         );
-        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(self.entity) {
+        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(entity) {
             dirty.rebuild_all = true;
         }
     }

@@ -102,7 +102,10 @@ impl SetTerrainHeights {
     }
 
     fn restore(&self, world: &mut World, old: bool) {
-        let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(self.entity) else {
+        let Some(entity) = super::live_terrain(world, self.entity) else {
+            return;
+        };
+        let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(entity) else {
             return;
         };
         let terrain = terrain.clone();
@@ -123,7 +126,7 @@ impl SetTerrainHeights {
                 }
             }
         }
-        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(self.entity) {
+        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(entity) {
             dirty.rebuild_all = true;
         }
         let rect = match &self.patch {
@@ -136,7 +139,7 @@ impl SetTerrainHeights {
             }
             HeightPatch::Rect { rect, .. } => *rect,
         };
-        super::detail::mark_detail_dirty(world, self.entity, rect);
+        super::detail::mark_detail_dirty(world, entity, rect);
     }
 }
 

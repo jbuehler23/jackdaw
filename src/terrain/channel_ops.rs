@@ -378,18 +378,24 @@ pub struct RemoveTerrainChannel {
 
 impl RemoveTerrainChannel {
     fn apply_removed(&self, world: &mut World) {
-        let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(self.entity) else {
+        let Some(entity) = super::live_terrain(world, self.entity) else {
+            return;
+        };
+        let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(entity) else {
             return;
         };
         if self.index >= terrain.channels.len() {
             return;
         }
         terrain.channels.remove(self.index);
-        commit_channels(world, self.entity);
+        commit_channels(world, entity);
     }
 
     fn apply_restored(&self, world: &mut World) {
-        let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(self.entity) else {
+        let Some(entity) = super::live_terrain(world, self.entity) else {
+            return;
+        };
+        let Some(mut terrain) = world.get_mut::<jackdaw_scene_types::Terrain>(entity) else {
             return;
         };
         let at = self.index.min(terrain.channels.len());
@@ -407,11 +413,11 @@ impl RemoveTerrainChannel {
         }
         crate::commands::sync_component_to_ast(
             world,
-            self.entity,
+            entity,
             "jackdaw_scene_types::types::Terrain",
             &terrain,
         );
-        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(self.entity) {
+        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(entity) {
             dirty.rebuild_all = true;
         }
     }

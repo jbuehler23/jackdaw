@@ -205,7 +205,10 @@ pub struct SetTerrainChannel {
 
 impl SetTerrainChannel {
     fn apply(&self, world: &mut World, values: &[u16]) {
-        let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(self.entity) else {
+        let Some(entity) = super::live_terrain(world, self.entity) else {
+            return;
+        };
+        let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(entity) else {
             return;
         };
         let terrain = terrain.clone();
@@ -214,7 +217,7 @@ impl SetTerrainChannel {
         {
             data.set_channel_values(self.channel, values);
         }
-        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(self.entity) {
+        if let Some(mut dirty) = world.get_mut::<TerrainDirtyChunks>(entity) {
             dirty.rebuild_all = true;
         }
         let channel_grows_detail = terrain.detail.iter().any(|layer| {
@@ -230,7 +233,7 @@ impl SetTerrainChannel {
                 .grid_shape(&terrain)
                 .resolution;
             if let Some(rect) = changed_rect(&self.old_values, &self.new_values, resolution) {
-                super::detail::mark_detail_dirty(world, self.entity, rect);
+                super::detail::mark_detail_dirty(world, entity, rect);
             }
         }
     }
@@ -376,7 +379,10 @@ impl SetTerrainControl {
     }
 
     fn apply(&self, world: &mut World, old: bool) {
-        let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(self.entity) else {
+        let Some(entity) = super::live_terrain(world, self.entity) else {
+            return;
+        };
+        let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(entity) else {
             return;
         };
         let terrain = terrain.clone();
@@ -476,7 +482,10 @@ impl SetTerrainColor {
     }
 
     fn apply(&self, world: &mut World, old: bool) {
-        let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(self.entity) else {
+        let Some(entity) = super::live_terrain(world, self.entity) else {
+            return;
+        };
+        let Some(terrain) = world.get::<jackdaw_scene_types::Terrain>(entity) else {
             return;
         };
         let terrain = terrain.clone();

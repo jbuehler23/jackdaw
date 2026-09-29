@@ -395,3 +395,148 @@ mod tint {
         );
     }
 }
+
+/// Undo entries for terrain edits outlive a whole-scene respawn, which mints a
+/// new entity for the terrain: an edit that snapshots the scene respawns it on
+/// undo and redo, and the terrain entries around it still land.
+mod across_a_respawn {
+    use super::*;
+    use jackdaw::remote::server::batch_handler;
+    use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
+    use serde_json::json;
+
+    fn heights(app: &App, data_path: &str) -> Vec<f32> {
+        app.world()
+            .resource::<TerrainDataStore>()
+            .heights(data_path)
+            .into_owned()
+    }
+
+    fn centre(app: &mut App) -> (f64, f64) {
+        let (_, terrain) = the_terrain(app);
+        metres_at(app, &terrain, 512, 512)
+    }
+
+    fn stamp_call(x: f64, z: f64) -> serde_json::Value {
+        json!({
+            "id": "terrain.sculpt.stamp",
+            "params": { "x": x, "z": z, "radius": 40.0, "strength": 5.0 },
+        })
+    }
+
+    fn with_history(app: &mut App, id: &'static str) {
+        let result = app
+            .world_mut()
+            .operator(id)
+            .settings(CallOperatorSettings {
+                execution_context: ExecutionContext::Invoke,
+                creates_history_entry: true,
+            })
+            .call()
+            .unwrap_or_else(|err| panic!("{id}: {err}"));
+        assert_eq!(result, OperatorResult::Finished, "{id} did not finish");
+        app.update();
+    }
+
+    fn batch(app: &mut App, calls: Vec<serde_json::Value>) {
+        app.world_mut()
+            .run_system_cached_with(batch_handler, Some(json!({ "calls": calls })))
+            .expect("the handler ran")
+            .unwrap_or_else(|err| panic!("the batch refused: {}", err.message));
+        app.update();
+    }
+
+    fn history(app: &mut App, id: &'static str) {
+        dispatch(app, id);
+        app.update();
+    }
+
+    #[test]
+    fn a_sculpt_undoes_and_redoes_around_an_edit_that_respawns_the_scene() {
+        let mut app = terrain_app();
+        let (_, terrain) = the_terrain(&mut app);
+        let ground = heights(&app, &terrain.data_path);
+        let (x, z) = centre(&mut app);
+        let depth = |app: &App| {
+            app.world()
+                .resource::<jackdaw_commands::CommandHistory>()
+                .undo_stack
+                .len()
+        };
+        let before = depth(&app);
+
+        batch(&mut app, vec![stamp_call(x, z)]);
+        let raised = heights(&app, &terrain.data_path);
+        assert_ne!(raised, ground, "the stamp did not raise the ground");
+        with_history(&mut app, "entity.add.cube");
+        let entries = depth(&app) - before;
+
+        for _ in 0..entries {
+            history(&mut app, "history.undo");
+        }
+        assert!(
+            heights(&app, &terrain.data_path) == ground,
+            "undo left the stamp in"
+        );
+
+        for _ in 0..entries {
+            history(&mut app, "history.redo");
+        }
+        assert!(
+            heights(&app, &terrain.data_path) == raised,
+            "redo lost the stamp"
+        );
+    }
+
+    #[test]
+    fn a_batch_that_sculpts_before_a_respawning_edit_undoes_the_sculpt() {
+        let mut app = terrain_app();
+        let (_, terrain) = the_terrain(&mut app);
+        let ground = heights(&app, &terrain.data_path);
+        let (x, z) = centre(&mut app);
+
+        batch(
+            &mut app,
+            vec![stamp_call(x, z), json!({ "id": "entity.add.cube" })],
+        );
+        let raised = heights(&app, &terrain.data_path);
+        assert_ne!(raised, ground);
+
+        history(&mut app, "history.undo");
+        assert!(
+            heights(&app, &terrain.data_path) == ground,
+            "undo left the stamp in"
+        );
+        history(&mut app, "history.redo");
+        assert!(
+            heights(&app, &terrain.data_path) == raised,
+            "redo lost the stamp"
+        );
+    }
+
+    #[test]
+    fn a_batch_that_sculpts_after_a_respawning_edit_redoes_the_sculpt() {
+        let mut app = terrain_app();
+        let (_, terrain) = the_terrain(&mut app);
+        let ground = heights(&app, &terrain.data_path);
+        let (x, z) = centre(&mut app);
+
+        batch(
+            &mut app,
+            vec![json!({ "id": "entity.add.cube" }), stamp_call(x, z)],
+        );
+        let raised = heights(&app, &terrain.data_path);
+        assert_ne!(raised, ground);
+
+        history(&mut app, "history.undo");
+        assert!(
+            heights(&app, &terrain.data_path) == ground,
+            "undo left the stamp in"
+        );
+        history(&mut app, "history.redo");
+        assert!(
+            heights(&app, &terrain.data_path) == raised,
+            "redo lost the stamp"
+        );
+    }
+}
