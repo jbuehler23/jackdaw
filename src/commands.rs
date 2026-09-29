@@ -573,6 +573,8 @@ pub struct AddComponent {
     pub type_id: TypeId,
     pub component_id: ComponentId,
     pub type_path: String,
+    /// The value to add. The type's default when `None`.
+    pub value: Option<Box<dyn Reflect>>,
 }
 
 impl AddComponent {
@@ -587,7 +589,14 @@ impl AddComponent {
             type_id,
             component_id,
             type_path,
+            value: None,
         }
+    }
+
+    /// Add `value` rather than the type's default.
+    pub fn with_value(mut self, value: Box<dyn Reflect>) -> Self {
+        self.value = Some(value);
+        self
     }
 }
 
@@ -625,9 +634,11 @@ impl EditorCommand for AddComponent {
         // the editor without `#[derive(Default)]` by walking
         // their fields recursively. Falls back to
         // `ReflectDefault` when the type opted in.
-        let Some(default_value) =
-            crate::reflect_default::build_reflective_default(self.type_id, &registry)
-        else {
+        let initial = match &self.value {
+            Some(value) => value.reflect_clone().ok(),
+            None => crate::reflect_default::build_reflective_default(self.type_id, &registry),
+        };
+        let Some(default_value) = initial else {
             warn!(
                 "AddComponent::execute: type {} has no `ReflectDefault` and a field is an \
                  opaque type, list, map, or set with no default. Add `Default` to derives \

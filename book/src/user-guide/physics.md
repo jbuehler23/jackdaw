@@ -24,8 +24,10 @@ Workflow:
 2. Inspector panel: click `+ Add Component`.
 3. Search "AvianCollider" and pick it (it lives under the
    **Avian3d** category).
-4. Picking `AvianCollider` auto-adds `RigidBody` via the
-   require chain. Default body is `Dynamic`.
+4. A collider with no `RigidBody` on its entity or above it
+   stands as a static body, in the editor and in the game. Add a
+   `RigidBody` and pick `Dynamic` or `Kinematic` for a body that
+   moves. **Enable Physics** adds both, with a `Static` body.
 
 The collider builds from the entity's geometry on the next
 tick. For brushes, jackdaw triangulates the brush faces and
@@ -57,13 +59,11 @@ a primitive or convex decomposition.
 
 ### Static level geometry
 
-For platforms, walls, and floors: set `RigidBody` to `Static`
-in the inspector. Static bodies don't fall, can't be moved by
-forces, and serve as the collision surface other bodies land
-on.
-
-Default is `Dynamic`; switch to `Static` after adding the
-bundle if the brush is meant to be level geometry.
+Platforms, walls, and floors need only a collider: without a
+`RigidBody` they stand as static bodies. Static bodies don't
+fall, can't be moved by forces, and serve as the collision
+surface other bodies land on. New brushes and **Enable Physics**
+author `RigidBody::Static` explicitly.
 
 ## Physics Tool: dropping props into place
 
@@ -110,9 +110,9 @@ place that one without disturbing the first.
 ## Common gotchas
 
 - **Dynamic body falls through the floor.** The floor
-  isn't a static body, or the floor entity has no collider.
-  Add `AvianCollider` to the floor and set its `RigidBody`
-  to `Static`.
+  entity has no collider, or its `RigidBody` is not `Static`.
+  Add `AvianCollider` to the floor, and remove its `RigidBody`
+  or set it to `Static`.
 - **Collider wireframe is the wrong shape after rescaling.**
   The wireframe tracks scale gizmo edits. If you still see drift, file an issue
   with the collider type and the resize gesture.

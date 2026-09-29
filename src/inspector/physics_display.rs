@@ -170,16 +170,15 @@ pub(crate) fn enable_physics(world: &mut World, entity: Entity) {
     }
 
     if let Some(rb_cid) = rb_component_id
-        && !world
-            .get_entity(entity)
-            .is_ok_and(|e| e.contains::<RigidBody>())
+        && !world.get_entity(entity).is_ok_and(|e| {
+            e.contains::<RigidBody>()
+                && !e.contains::<jackdaw_avian_integration::ImpliedStaticBody>()
+        })
     {
-        pending.push(AddComponent::new(
-            entity,
-            rb_type_id,
-            rb_cid,
-            RIGID_BODY_TYPE_PATH.to_string(),
-        ));
+        pending.push(
+            AddComponent::new(entity, rb_type_id, rb_cid, RIGID_BODY_TYPE_PATH.to_string())
+                .with_value(Box::new(RigidBody::Static)),
+        );
     }
 
     let mut commands: Vec<Box<dyn EditorCommand>> = Vec::new();

@@ -440,6 +440,7 @@ fn component_remove_drops_authored_physics_from_the_document() {
 #[test]
 fn component_remove_keeps_entity_identity_and_undo_restores_requires() {
     use avian3d::prelude::{Position, RigidBody};
+    use jackdaw_avian_integration::ImpliedStaticBody;
     use jackdaw_scene_types::Brush;
 
     let mut app = util::editor_test_app();
@@ -481,12 +482,8 @@ fn component_remove_keeps_entity_identity_and_undo_restores_requires() {
 
     let entity_ref = app.world().entity(entity);
     assert!(
-        !entity_ref.contains::<RigidBody>(),
-        "RigidBody should leave ECS"
-    );
-    assert!(
-        !entity_ref.contains::<Position>(),
-        "Position should leave with its RigidBody invoker"
+        entity_ref.contains::<ImpliedStaticBody>(),
+        "the authored RigidBody should leave ECS, leaving the collider an implied static body"
     );
     assert!(
         entity_ref.contains::<AvianCollider>(),
@@ -514,6 +511,10 @@ fn component_remove_keeps_entity_identity_and_undo_restores_requires() {
     assert!(
         entity_ref.contains::<Position>(),
         "undo resync should restore RigidBody's require companions"
+    );
+    assert!(
+        !entity_ref.contains::<ImpliedStaticBody>(),
+        "undo puts back the authored body in place of the implied one"
     );
     assert!(
         entity_ref.contains::<Selected>(),

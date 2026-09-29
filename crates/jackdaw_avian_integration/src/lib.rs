@@ -16,8 +16,10 @@ use jackdaw_scene_types::{Brush, evaluate_brush_geometry};
 
 mod model_colliders;
 pub mod simulation;
+mod static_bodies;
 
 pub use model_colliders::ModelCollidersPlugin;
+pub use static_bodies::{ImpliedStaticBody, StaticCollidersPlugin};
 
 /// Editor-facing collider shape selector. Wraps avian's [`ColliderConstructor`]
 /// as a newtype so it lives outside avian's auto-processing pipeline (which
@@ -30,7 +32,8 @@ pub use model_colliders::ModelCollidersPlugin;
 ///
 /// No `#[require(RigidBody)]`: avian supports collider-on-child patterns
 /// where the rigid body lives on a parent entity, and forcing both onto
-/// the same entity would disable that.
+/// the same entity would disable that. A collider with no body on it or
+/// above it gets a static one from [`StaticCollidersPlugin`].
 #[derive(Component, Clone, Debug, Default, PartialEq, Reflect)]
 #[reflect(Component, Default)]
 pub struct AvianCollider(pub ColliderConstructor);
@@ -49,7 +52,7 @@ pub struct AvianColliderBridgePlugin;
 impl Plugin for AvianColliderBridgePlugin {
     fn build(&self, app: &mut App) {
         register_avian_types(app);
-        app.add_plugins(ModelCollidersPlugin)
+        app.add_plugins((ModelCollidersPlugin, StaticCollidersPlugin))
             .add_systems(PreUpdate, build_brush_colliders)
             .add_observer(remove_collider_with_avian_collider);
     }

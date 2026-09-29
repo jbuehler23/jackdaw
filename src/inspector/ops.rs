@@ -436,9 +436,9 @@ pub(crate) fn component_revert_baseline(
     OperatorResult::Finished
 }
 
-/// Add `RigidBody` and `AvianCollider` to the entity so it participates
-/// in the physics simulation. No-op if those components are already
-/// present.
+/// Add a static `RigidBody` and an `AvianCollider` to the entity so it
+/// participates in the physics simulation. No-op if those components are
+/// already present.
 #[operator(
     id = "physics.enable",
     label = "Enable Physics",

@@ -149,3 +149,66 @@ fn a_model_saved_with_a_primitive_collides_as_that_primitive() {
     assert!(app.world().get::<Mesh3d>(built[0].0).is_none());
     assert!(built[0].1.shape().as_cuboid().is_some());
 }
+
+const SLAB: &str = "Cuboid { x_length: 4.0, y_length: 1.0, z_length: 4.0 }";
+
+/// Step the game's physics by `seconds` of fixed time.
+fn run_for(app: &mut App, seconds: f32) {
+    let step = std::time::Duration::from_secs_f32(1.0 / 60.0);
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(step));
+    for _ in 0..(seconds * 60.0) as u32 {
+        app.update();
+    }
+}
+
+fn height(app: &App, entity: Entity) -> f32 {
+    app.world()
+        .get::<Transform>(entity)
+        .map(|at| at.translation.y)
+        .expect("the entity has a transform")
+}
+
+/// The rock saved with only a slab collider, and a dynamic crate dropped onto
+/// it from above.
+fn crate_over_a_slab() -> (App, Entity, Entity) {
+    let (mut app, built) = load_rock(&format!("{CONSTRUCTOR}::{SLAB}"));
+    let rock = built[0].0;
+    let dropped = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 3.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::cuboid(0.5, 0.5, 0.5),
+        ))
+        .id();
+    (app, rock, dropped)
+}
+
+#[test]
+fn a_model_saved_with_only_a_collider_stops_a_falling_body() {
+    let (mut app, rock, dropped) = crate_over_a_slab();
+
+    run_for(&mut app, 2.0);
+
+    let rest = height(&app, dropped);
+    assert!(
+        (0.5..1.5).contains(&rest),
+        "the crate rests on the slab rather than falling through it, at {rest}"
+    );
+    assert_eq!(app.world().get::<RigidBody>(rock), Some(&RigidBody::Static));
+}
+
+#[test]
+fn a_model_switched_to_dynamic_falls() {
+    let (mut app, rock, _) = crate_over_a_slab();
+    run_for(&mut app, 0.1);
+
+    app.world_mut().entity_mut(rock).insert(RigidBody::Dynamic);
+    run_for(&mut app, 1.0);
+
+    assert!(
+        height(&app, rock) < -1.0,
+        "a dynamic model falls under gravity, and is at {}",
+        height(&app, rock)
+    );
+}
