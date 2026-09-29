@@ -7,6 +7,7 @@
 #[path = "../util/mod.rs"]
 mod util;
 
+mod batch_undo;
 mod editor_remote;
 mod feathers_composition;
 mod remote_debug_smoke;

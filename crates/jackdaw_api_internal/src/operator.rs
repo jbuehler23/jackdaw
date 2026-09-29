@@ -746,6 +746,11 @@ fn save_history(
     world: &mut World,
 ) {
     let Some(before) = before else { return };
+    push_snapshot_diff(world, label.to_string(), before);
+}
+
+/// Push the change from `before` to the scene as it stands now, unless there is none.
+fn push_snapshot_diff(world: &mut World, label: String, before: Box<dyn SceneSnapshot>) {
     let after = world
         .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));
     if before.equals(&*after) {
@@ -756,7 +761,7 @@ fn save_history(
         .push_executed(Box::new(SnapshotDiff {
             before,
             after,
-            label: label.to_string(),
+            label,
         }));
 }
 
@@ -818,6 +823,25 @@ pub fn with_history_span<R>(
     world
         .resource_mut::<CommandHistory>()
         .end_span(span, label.into());
+    out
+}
+
+/// Run `body` as one undo entry holding one scene snapshot pair, for a caller
+/// that dispatches its operators without history of their own. The entry has
+/// the shape a single history dispatch leaves: the commands the operators
+/// pushed, then the change from before `body` to after it.
+pub fn with_batch_snapshot<R>(
+    world: &mut World,
+    label: impl Into<String>,
+    body: impl FnOnce(&mut World) -> R,
+) -> R {
+    let label = label.into();
+    let span = world.resource_mut::<CommandHistory>().begin_span();
+    let before = world
+        .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));
+    let out = body(world);
+    push_snapshot_diff(world, label.clone(), before);
+    world.resource_mut::<CommandHistory>().end_span(span, label);
     out
 }
 

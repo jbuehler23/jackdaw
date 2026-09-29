@@ -17,7 +17,8 @@ use bevy::tasks::{IoTaskPool, Task, futures_lite::future};
 use jackdaw_api_internal::lifecycle::{ActiveModalOperator, OperatorEntity};
 use jackdaw_api_internal::operator::{
     CallOperatorError, CallOperatorSettings, ExecutionContext, OperatorParameters, OperatorReports,
-    OperatorResult, OperatorWarnings, OperatorWorldExt, ParamSpec, with_history_span,
+    OperatorResult, OperatorWarnings, OperatorWorldExt, ParamSpec, with_batch_snapshot,
+    with_history_span,
 };
 use jackdaw_commands::{CommandHistory, EditorCommand};
 use jackdaw_env::editor_endpoint::{
@@ -601,10 +602,10 @@ pub fn batch_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpRes
         );
     }
 
-    let results = with_history_span(world, label, move |world| {
+    let results = with_batch_snapshot(world, label, move |world| {
         let mut results = Vec::with_capacity(prepared.len());
         for (index, call) in prepared.into_iter().enumerate() {
-            match dispatch(world, call, true) {
+            match dispatch(world, call, false) {
                 Ok(outcome) => {
                     let stop = outcome.result != "finished";
                     let entered_modal = outcome.result == "running";
