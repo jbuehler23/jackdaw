@@ -16,7 +16,6 @@ use crate::{
 };
 use bevy::{
     feathers::theme::ThemedText,
-    image::ImageLoaderSettings,
     platform::collections::HashMap,
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
@@ -131,14 +130,12 @@ fn load_role_image(
     // derive the asset-relative path for AssetServer loads so we stay inside
     // Bevy's approved-path set.
     let asset_path = crate::entity_ops::to_asset_path(fs_path);
-    if role.is_srgb() {
-        asset_server.load::<Image>(asset_path)
-    } else {
-        asset_server
-            .load_builder()
-            .with_settings(|s: &mut ImageLoaderSettings| s.is_srgb = false)
-            .load::<Image>(asset_path)
-    }
+    asset_server
+        .load_builder()
+        .with_settings(jackdaw_scene_types::render_assets::drawn_texture_settings(
+            !role.is_srgb(),
+        ))
+        .load::<Image>(asset_path)
 }
 
 /// The texture sets the project's assets hold, as the last walk found them.

@@ -111,9 +111,7 @@ pub fn load_catalog(world: &mut World) {
             info!("Asset catalog holds no entries");
             return;
         }
-        // Claim the inline materials' linear-space textures before the generic
-        // applier resolves the same paths as sRGB.
-        let _linear = crate::material_assets::preload_linear_textures(world, &json);
+        let _textures = crate::material_assets::preload_textures(world, &json);
         match jackdaw_bsn::load_bsn_assets(world, &json) {
             Ok(entries) => {
                 let count = entries.len();

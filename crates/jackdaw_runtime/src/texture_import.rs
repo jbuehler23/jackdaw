@@ -48,6 +48,7 @@ pub fn texture_import_meta(srgb: bool) -> Vec<u8> {
         settings: LoadTransformAndSaveSettings {
             loader_settings: ImageLoaderSettings {
                 is_srgb: srgb,
+                asset_usage: jackdaw_scene_types::render_assets::DRAWN_TEXTURE_USAGE,
                 ..default()
             },
             transformer_settings: (),

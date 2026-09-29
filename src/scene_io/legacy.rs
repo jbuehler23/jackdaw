@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::result::Result;
 
 use bevy::asset::{ReflectAsset, ReflectHandle};
-use bevy::image::ImageLoaderSettings;
 use bevy::reflect::serde::ReflectDeserializerProcessor;
 use bevy::reflect::{TypeInfo, TypeRegistration, TypeRegistry};
 use bevy::{
@@ -377,15 +376,13 @@ pub fn load_inline_assets(
             let asset_path = crate::entity_ops::to_asset_path(&path_str);
 
             let handle = if type_path == "bevy_image::image::Image" {
-                if linear_image_names.contains(name) {
-                    asset_server
-                        .load_builder()
-                        .with_settings(|s: &mut ImageLoaderSettings| s.is_srgb = false)
-                        .load::<Image>(&asset_path)
-                        .untyped()
-                } else {
-                    asset_server.load::<Image>(&asset_path).untyped()
-                }
+                asset_server
+                    .load_builder()
+                    .with_settings(jackdaw_scene_types::render_assets::drawn_texture_settings(
+                        linear_image_names.contains(name),
+                    ))
+                    .load::<Image>(&asset_path)
+                    .untyped()
             } else {
                 warn!(
                     "External asset entry '{name}' has unknown type '{type_path}'  -- loading untyped"
@@ -581,7 +578,10 @@ pub fn load_scene_from_jsn(
     for (entity, gltf_path, scene_index) in gltf_entities {
         let asset_server = world.resource::<AssetServer>();
         let asset_path: AssetPath<'static> = crate::entity_ops::to_asset_path(&gltf_path).into();
-        let scene = asset_server.load(GltfAssetLabel::Scene(scene_index).from_asset(asset_path));
+        let scene = asset_server
+            .load_builder()
+            .with_settings(jackdaw_scene_types::render_assets::model_settings)
+            .load(GltfAssetLabel::Scene(scene_index).from_asset(asset_path));
         world.entity_mut(entity).insert(WorldAssetRoot(scene));
     }
 

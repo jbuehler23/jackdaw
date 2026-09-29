@@ -294,17 +294,13 @@ fn bind_texture_slot(
     path: &str,
 ) -> bool {
     let image = (!path.is_empty()).then(|| {
-        let server = world.resource::<AssetServer>();
-        if slot.is_srgb() {
-            server.load::<Image>(path.to_string())
-        } else {
-            server
-                .load_builder()
-                .with_settings(|settings: &mut bevy::image::ImageLoaderSettings| {
-                    settings.is_srgb = false;
-                })
-                .load::<Image>(path.to_string())
-        }
+        world
+            .resource::<AssetServer>()
+            .load_builder()
+            .with_settings(jackdaw_scene_types::render_assets::drawn_texture_settings(
+                !slot.is_srgb(),
+            ))
+            .load::<Image>(path.to_string())
     });
     {
         let mut materials = world.resource_mut::<Assets<StandardMaterial>>();

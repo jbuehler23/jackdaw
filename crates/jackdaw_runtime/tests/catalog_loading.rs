@@ -256,3 +256,87 @@ fn a_file_whose_header_names_a_type_this_app_does_not_load_is_never_parsed() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+const TWO_BY_TWO_PNG: [u8; 74] = [
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0,
+    0, 0, 114, 182, 13, 36, 0, 0, 0, 17, 73, 68, 65, 84, 120, 156, 99, 224, 18, 145, 251, 15, 194,
+    12, 48, 6, 0, 38, 140, 4, 237, 162, 200, 71, 131, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+
+/// A material's textures are drawn, not read back, so they keep no copy on
+/// the CPU, and each slot still decodes in its own colour space.
+#[test]
+fn a_material_file_loads_its_textures_for_drawing_only() {
+    let dir = unique_temp_dir("catalog-loading-drawn-textures");
+    std::fs::create_dir_all(dir.join("ground")).unwrap();
+    std::fs::write(dir.join("ground/grass_a.png"), TWO_BY_TWO_PNG).unwrap();
+    std::fs::write(dir.join("ground/grass_n.png"), TWO_BY_TWO_PNG).unwrap();
+    std::fs::write(
+        dir.join("ground/grass.bsn"),
+        "#grass\nbevy_pbr::pbr_material::StandardMaterial {\n    \
+         base_color_texture: \"ground/grass_a.png\",\n    \
+         normal_map_texture: \"ground/grass_n.png\",\n}\n",
+    )
+    .unwrap();
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::transform::TransformPlugin);
+    app.add_plugins(bevy::asset::AssetPlugin {
+        file_path: dir.to_string_lossy().into_owned(),
+        ..Default::default()
+    });
+    app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+    app.add_plugins(bevy::image::ImagePlugin::default());
+    app.register_asset_loader(bevy::image::ImageLoader::new(
+        bevy::image::CompressedImageFormats::NONE,
+    ));
+    app.init_asset::<StandardMaterial>();
+    app.register_asset_reflect::<StandardMaterial>();
+    app.add_plugins(JackdawPlugin);
+    app.update();
+
+    let material = app
+        .world()
+        .resource::<JackdawCatalog>()
+        .get("ground/grass.bsn")
+        .expect("the catalog loaded the material file")
+        .clone()
+        .typed::<StandardMaterial>();
+    let (albedo, normal) = {
+        let materials = app.world().resource::<Assets<StandardMaterial>>();
+        let material = materials.get(&material).expect("material asset");
+        (
+            material.base_color_texture.clone().expect("albedo"),
+            material.normal_map_texture.clone().expect("normal map"),
+        )
+    };
+
+    let mut loaded = false;
+    for _ in 0..200 {
+        app.update();
+        let images = app.world().resource::<Assets<Image>>();
+        if images.contains(&albedo) && images.contains(&normal) {
+            loaded = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(loaded, "both textures loaded");
+
+    let images = app.world().resource::<Assets<Image>>();
+    let albedo = images.get(&albedo).unwrap();
+    let normal = images.get(&normal).unwrap();
+    assert_eq!(
+        albedo.asset_usage,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD
+    );
+    assert_eq!(
+        normal.asset_usage,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD
+    );
+    assert!(albedo.texture_descriptor.format.is_srgb());
+    assert!(!normal.texture_descriptor.format.is_srgb());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

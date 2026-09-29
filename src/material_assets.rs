@@ -27,9 +27,9 @@
 use std::path::{Path, PathBuf};
 
 use bevy::asset::{UntypedAssetId, UntypedHandle};
-use bevy::image::ImageLoaderSettings;
 use bevy::prelude::*;
 use jackdaw_bsn::{BsnPatch, BsnValue, CatalogAssetRef, SceneBsnAst};
+use jackdaw_scene_types::render_assets::{drawn_texture_settings, is_file_reference, texture_slot};
 
 use crate::asset_catalog::AssetCatalog;
 use crate::prelude::*;
@@ -39,22 +39,6 @@ use crate::project::ProjectRoot;
 pub const MATERIALS_DIR: &str = "materials";
 
 const STANDARD_MATERIAL: &str = "bevy_pbr::pbr_material::StandardMaterial";
-
-/// Material texture slots holding linear (non-color) data. These must be
-/// loaded with `is_srgb = false` before anything else resolves their paths,
-/// since the asset server keys images by path and hands out whichever decode
-/// was requested first.
-const LINEAR_SLOTS: [&str; 9] = [
-    "normal_map_texture",
-    "foam_mask",
-    "metallic_roughness_texture",
-    "occlusion_texture",
-    "depth_map",
-    "layer_normal_map_texture",
-    "layer_orm_texture",
-    "detail_normal_map_texture",
-    "detail_orm_texture",
-];
 
 /// The materials editor surfaces browse, in display order.
 ///
@@ -363,9 +347,7 @@ pub fn load_surface_bsn(world: &mut World, text: &str, type_path: &str) -> Optio
         return None;
     }
     let expected = crate::definition_assets::registered_type_id(world, type_path)?;
-    // Claim the linear slots' images as non-sRGB first; the generic applier below resolves
-    // the same paths and gets these handles.
-    let _linear = preload_linear_textures(world, text);
+    let _textures = preload_textures(world, text);
     let entries = match jackdaw_bsn::load_bsn_assets(world, text) {
         Ok(entries) => entries,
         Err(err) => {
@@ -390,59 +372,50 @@ pub fn load_surface_bsn(world: &mut World, text: &str, type_path: &str) -> Optio
     Some(entry.handle)
 }
 
-/// Pre-load the linear-space textures a material's `.bsn` text references with
-/// `is_srgb = false`. The returned handles keep the images alive until the
-/// material takes its own strong references.
-pub(crate) fn preload_linear_textures(world: &mut World, text: &str) -> Vec<UntypedHandle> {
+/// Load the textures a material's `.bsn` text binds, with each slot's colour
+/// space, before the generic applier resolves the same paths.
+pub(crate) fn preload_textures(world: &mut World, text: &str) -> Vec<UntypedHandle> {
     let Ok(ast) = jackdaw_bsn::parse_bsn_text(text) else {
         return Vec::new();
     };
-    let paths = linear_texture_paths(&ast);
-    if paths.is_empty() {
-        return Vec::new();
-    }
     let asset_server = world.resource::<AssetServer>().clone();
-    paths
+    texture_slots(&ast)
         .into_iter()
-        .map(|path| {
+        .map(|(path, linear)| {
             asset_server
                 .load_builder()
-                .with_settings(|s: &mut ImageLoaderSettings| s.is_srgb = false)
+                .with_settings(drawn_texture_settings(linear))
                 .load::<Image>(&path)
                 .untyped()
         })
         .collect()
 }
 
-/// Asset paths bound to a linear texture slot anywhere in the document,
-/// whatever material type holds it.
-fn linear_texture_paths(ast: &SceneBsnAst) -> Vec<String> {
-    let mut paths = Vec::new();
+/// Every texture path the document binds, and whether its slot holds linear data.
+fn texture_slots(ast: &SceneBsnAst) -> Vec<(String, bool)> {
+    let mut slots = Vec::new();
     for &root in &ast.roots {
         let Some(patches) = ast.get_patches(root) else {
             continue;
         };
         for &pe in &patches.0 {
             if let Some(BsnPatch::Struct(data)) = ast.get_patch(pe) {
-                collect_linear_paths(data, &mut paths);
+                collect_texture_slots(data, &mut slots);
             }
         }
     }
-    paths
+    slots
 }
 
-fn collect_linear_paths(data: &jackdaw_bsn::BsnStructData, paths: &mut Vec<String>) {
+fn collect_texture_slots(data: &jackdaw_bsn::BsnStructData, slots: &mut Vec<(String, bool)>) {
     for field in &data.fields.0 {
         match &field.value {
-            BsnValue::String(path)
-                if LINEAR_SLOTS.contains(&field.name.as_str())
-                    && !path.is_empty()
-                    && !path.starts_with('@')
-                    && !path.starts_with('#') =>
-            {
-                paths.push(path.clone());
+            BsnValue::String(path) if is_file_reference(path) => {
+                if let Some(linear) = texture_slot(&field.name) {
+                    slots.push((path.clone(), linear));
+                }
             }
-            BsnValue::Struct(nested) => collect_linear_paths(nested, paths),
+            BsnValue::Struct(nested) => collect_texture_slots(nested, slots),
             _ => {}
         }
     }
@@ -1052,6 +1025,7 @@ fn delete_material(world: &mut World, name: &str) {
 mod tests {
     use super::*;
     use bevy::asset::AssetPlugin;
+    use bevy::image::ImageLoaderSettings;
     use path_slash::PathExt as _;
 
     fn material_app() -> App {
@@ -1097,6 +1071,73 @@ mod tests {
             .get(&loaded.typed::<StandardMaterial>())
             .expect("loaded material")
             .clone()
+    }
+
+    const TWO_BY_TWO_PNG: [u8; 74] = [
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 2, 8, 6,
+        0, 0, 0, 114, 182, 13, 36, 0, 0, 0, 17, 73, 68, 65, 84, 120, 156, 99, 224, 18, 145, 251,
+        15, 194, 12, 48, 6, 0, 38, 140, 4, 237, 162, 200, 71, 131, 0, 0, 0, 0, 73, 69, 78, 68, 174,
+        66, 96, 130,
+    ];
+
+    #[test]
+    fn a_material_loads_its_textures_for_drawing_only_in_their_own_colour_space() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("rock_a.png"), TWO_BY_TWO_PNG).unwrap();
+        std::fs::write(tmp.path().join("rock_n.png"), TWO_BY_TWO_PNG).unwrap();
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            AssetPlugin {
+                file_path: tmp.path().to_string_lossy().into_owned(),
+                ..default()
+            },
+            bevy::image::ImagePlugin::default(),
+        ));
+        app.register_asset_loader(bevy::image::ImageLoader::new(
+            bevy::image::CompressedImageFormats::NONE,
+        ));
+        app.init_asset::<StandardMaterial>();
+        app.register_asset_reflect::<Image>();
+        app.register_asset_reflect::<StandardMaterial>();
+        app.register_type::<StandardMaterial>();
+
+        let text = "#rock\nbevy_pbr::pbr_material::StandardMaterial {\n    \
+                    base_color_texture: \"rock_a.png\",\n    \
+                    normal_map_texture: \"rock_n.png\",\n}\n";
+        let loaded = load_material_bsn(app.world_mut(), text).expect("material loads");
+        let (albedo, normal) = {
+            let materials = app.world().resource::<Assets<StandardMaterial>>();
+            let material = materials
+                .get(&loaded.typed::<StandardMaterial>())
+                .expect("material asset");
+            (
+                material.base_color_texture.clone().expect("albedo"),
+                material.normal_map_texture.clone().expect("normal map"),
+            )
+        };
+        for _ in 0..200 {
+            app.update();
+            let images = app.world().resource::<Assets<Image>>();
+            if images.contains(&albedo) && images.contains(&normal) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let images = app.world().resource::<Assets<Image>>();
+        let albedo = images.get(&albedo).expect("albedo loaded");
+        let normal = images.get(&normal).expect("normal map loaded");
+        assert_eq!(
+            albedo.asset_usage,
+            bevy::asset::RenderAssetUsages::RENDER_WORLD
+        );
+        assert_eq!(
+            normal.asset_usage,
+            bevy::asset::RenderAssetUsages::RENDER_WORLD
+        );
+        assert!(albedo.texture_descriptor.format.is_srgb());
+        assert!(!normal.texture_descriptor.format.is_srgb());
     }
 
     #[test]

@@ -368,7 +368,7 @@ fn attach_material(
     if verify.attached {
         return;
     }
-    let built = match splat_images(&verify.set, &verify.images, &images) {
+    let built = match splat_images(&verify.set, &verify.images, &*images) {
         Ok(built) => built,
         Err(SplatBuildError::NotReady) => {
             verify.waited += 1;

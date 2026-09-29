@@ -25,6 +25,7 @@ use path_slash::PathExt as _;
 
 pub mod detail;
 pub mod scatter;
+pub mod texels;
 
 pub use detail::{
     ATTRIBUTE_HEIGHT_FRACTION, BuiltDetailMesh, DETAIL_TILE_BUDGET, DETAIL_TILE_CELLS,
@@ -38,6 +39,7 @@ pub use scatter::{
     ScatterChunk, ScatterDirty, ScatterPrefab, ScatterPrefabs, ScatterPrimitive, ScatterRegion,
     ScatterRenderPlugin, ScatterRendered, ScatterSystems, TerrainScatter, palette_entry_bounds,
 };
+pub use texels::{LayerImages, LayerPixels, LayerTexels};
 
 use crate::heightmap::Heightmap;
 use crate::sidecar::{AutoTerrainSettings, SurfaceSettings, TerrainMaterialSlot};
@@ -290,7 +292,7 @@ impl core::error::Error for SplatBuildError {}
 pub fn splat_images(
     set: &TextureSet,
     handles: &TextureSetImages,
-    images: &Assets<Image>,
+    images: &impl LayerPixels,
 ) -> Result<SplatImages, SplatBuildError> {
     if let Err(reason) = set.validate() {
         return Err(SplatBuildError::Invalid(reason));
@@ -384,7 +386,7 @@ struct DecodedLayers<'a> {
 fn decode_layers<'a>(
     handles: &[Option<Handle<Image>>],
     set: &'a TextureSet,
-    images: &'a Assets<Image>,
+    images: &'a impl LayerPixels,
     path_of: impl Fn(&TextureSetEntry) -> &str,
 ) -> Result<DecodedLayers<'a>, SplatBuildError> {
     let mut decoded = Vec::with_capacity(handles.len());
@@ -394,7 +396,7 @@ fn decode_layers<'a>(
             decoded.push(None);
             continue;
         };
-        let image = images.get(handle).ok_or(SplatBuildError::NotReady)?;
+        let image = images.layer(handle).ok_or(SplatBuildError::NotReady)?;
         let size = image.size();
         if let Some(entry) = set.entries.get(index) {
             sizes.push((
@@ -415,7 +417,7 @@ fn decode_layers<'a>(
 fn stack_optional(
     handles: &[Option<Handle<Image>>],
     set: &TextureSet,
-    images: &Assets<Image>,
+    images: &impl LayerPixels,
     size: (u32, u32),
     fill: [u8; 4],
     flip_green: &[bool],
@@ -1111,7 +1113,9 @@ pub struct TerrainRenderPlugin;
 impl Plugin for TerrainRenderPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/terrain_splat.wgsl");
-        app.add_plugins(MaterialPlugin::<TerrainSplatMaterial>::default());
+        app.add_plugins(MaterialPlugin::<TerrainSplatMaterial>::default())
+            .init_resource::<LayerTexels>()
+            .add_systems(PreUpdate, texels::follow_layer_reads);
     }
 }
 

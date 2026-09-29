@@ -33,6 +33,7 @@ render = [
     "bevy/bevy_render",
     "bevy/bevy_image",
     "bevy/bevy_asset",
+    "bevy/bevy_gltf",
     "jackdaw_geometry/render",
 ]
 

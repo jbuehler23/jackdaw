@@ -77,8 +77,6 @@ use std::path::{Path, PathBuf};
 
 use bevy::asset::{AssetLoader, LoadContext, ReflectAsset, UntypedHandle, io::Reader};
 use bevy::ecs::reflect::AppTypeRegistry;
-#[cfg(feature = "render")]
-use bevy::image::ImageLoaderSettings;
 use bevy::prelude::*;
 use bevy::reflect::TypeRegistry;
 #[cfg(feature = "render")]
@@ -743,12 +741,8 @@ fn spawn_scene_entities(
 ) -> Vec<Entity> {
     let registry = world.resource::<AppTypeRegistry>().clone();
 
-    // Load the linear-space textures a `StandardMaterial` references with
-    // `is_srgb = false` before anything resolves their handles, so the
-    // asset-server cache hands out the correctly-decoded image. Hold the
-    // handles until the materials below take their own strong references.
     #[cfg(feature = "render")]
-    let _preloaded_textures = preload_linear_textures(world, ast);
+    let _preloaded_textures = preload_textures(world, ast);
 
     // Embedded assets keyed as both `#Name` (scene-inline) and `@Name`
     // (catalog spelling), merged with the project catalog under every
@@ -840,8 +834,10 @@ fn world_asset_root(
     assets_dir: Option<&Path>,
 ) -> WorldAssetRoot {
     let path = jackdaw_scene_types::to_asset_path(&source.path, assets_dir);
-    let scene: Handle<WorldAsset> =
-        asset_server.load(format!("{path}#Scene{}", source.scene_index));
+    let scene: Handle<WorldAsset> = asset_server
+        .load_builder()
+        .with_settings(jackdaw_scene_types::render_assets::model_settings)
+        .load(format!("{path}#Scene{}", source.scene_index));
     WorldAssetRoot(scene)
 }
 
@@ -1141,50 +1137,27 @@ fn load_embedded_assets(
     map
 }
 
-/// The asset-relative paths of every linear-space texture the document binds
-/// to a material slot holding non-color data (normals, ORM, height). These
-/// must be loaded without sRGB decoding.
+/// Every texture path the document binds to a material slot, and whether that
+/// slot holds linear data.
 #[cfg(feature = "render")]
-fn collect_linear_texture_paths(ast: &SceneBsnAst) -> Vec<String> {
-    const LINEAR_SLOTS: &[&str] = &[
-        "normal_map_texture",
-        "metallic_roughness_texture",
-        "occlusion_texture",
-        "depth_map",
-        "layer_normal_map_texture",
-        "layer_orm_texture",
-        "detail_normal_map_texture",
-        "detail_orm_texture",
-    ];
+fn collect_texture_slots(ast: &SceneBsnAst) -> Vec<(String, bool)> {
+    use jackdaw_scene_types::render_assets::{is_file_reference, texture_slot};
 
-    fn collect(data: &jackdaw_bsn::BsnStructData, paths: &mut Vec<String>) {
+    fn collect(data: &jackdaw_bsn::BsnStructData, slots: &mut Vec<(String, bool)>) {
         for field in &data.fields.0 {
             match &field.value {
-                BsnValue::String(path)
-                    if LINEAR_SLOTS.contains(&field.name.as_str()) && !path.is_empty() =>
-                {
-                    if path.starts_with('@') || path.starts_with('#') {
-                        // A catalog / embedded reference, not a file path.
-                        // Its underlying image is loaded elsewhere without
-                        // `is_srgb = false`, so the linear-slot decode is
-                        // still wrong; loading the ref string as a file
-                        // would only add a bogus asset. Skip and flag it.
-                        warn!(
-                            "linear-space texture '{path}' in field '{}' is a \
-                             catalog/embedded reference; it will decode as sRGB",
-                            field.name
-                        );
-                    } else {
-                        paths.push(path.clone());
+                BsnValue::String(path) if is_file_reference(path) => {
+                    if let Some(linear) = texture_slot(&field.name) {
+                        slots.push((path.clone(), linear));
                     }
                 }
-                BsnValue::Struct(nested) => collect(nested, paths),
+                BsnValue::Struct(nested) => collect(nested, slots),
                 _ => {}
             }
         }
     }
 
-    let mut paths = Vec::new();
+    let mut slots = Vec::new();
     let mut stack: Vec<Entity> = ast.roots.clone();
     while let Some(node) = stack.pop() {
         let Some(patches) = ast.get_patches(node) else {
@@ -1192,35 +1165,33 @@ fn collect_linear_texture_paths(ast: &SceneBsnAst) -> Vec<String> {
         };
         for &pe in &patches.0 {
             match ast.get_patch(pe) {
-                Some(BsnPatch::Struct(data)) => collect(data, &mut paths),
+                Some(BsnPatch::Struct(data)) => collect(data, &mut slots),
                 Some(BsnPatch::Children(kids)) => stack.extend(kids.iter().copied()),
                 _ => {}
             }
         }
     }
-    paths
+    slots
 }
 
-/// Pre-load the document's linear-space material textures with `is_srgb =
-/// false`. The asset server keys handles by path, so a later resolve of the
-/// same path returns this correctly-decoded image. The returned handles keep
-/// the assets alive until the materials take their own strong references.
+/// Load the document's material textures with each slot's colour space before
+/// the generic resolve reaches the same paths. The returned handles keep the
+/// images alive until the materials hold their own.
 #[cfg(feature = "render")]
-fn preload_linear_textures(world: &mut World, ast: &SceneBsnAst) -> Vec<UntypedHandle> {
-    let paths = collect_linear_texture_paths(ast);
-    let mut handles = Vec::new();
-    if paths.is_empty() {
-        return handles;
-    }
+fn preload_textures(world: &mut World, ast: &SceneBsnAst) -> Vec<UntypedHandle> {
     let asset_server = world.resource::<AssetServer>().clone();
-    for path in paths {
-        let handle = asset_server
-            .load_builder()
-            .with_settings(|s: &mut ImageLoaderSettings| s.is_srgb = false)
-            .load::<Image>(&path);
-        handles.push(handle.untyped());
-    }
-    handles
+    collect_texture_slots(ast)
+        .into_iter()
+        .map(|(path, linear)| {
+            asset_server
+                .load_builder()
+                .with_settings(jackdaw_scene_types::render_assets::drawn_texture_settings(
+                    linear,
+                ))
+                .load::<Image>(&path)
+                .untyped()
+        })
+        .collect()
 }
 
 /// The `Unorm` twin of a 16-bit `Uint` texture format: same bytes per texel,
@@ -1290,6 +1261,7 @@ fn promote_material_texture_formats(
     mut material_events: MessageReader<AssetEvent<StandardMaterial>>,
     materials: Res<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    asset_server: Res<AssetServer>,
 ) {
     use bevy::asset::AssetId;
 
@@ -1326,12 +1298,18 @@ fn promote_material_texture_formats(
     };
 
     for id in candidates {
-        let Some(twin) = images
-            .get(id)
-            .and_then(|image| filterable_twin(image.texture_descriptor.format))
-        else {
+        let Some(image) = images.get(id) else {
             continue;
         };
+        let Some(twin) = filterable_twin(image.texture_descriptor.format) else {
+            continue;
+        };
+        if image.data.is_none() {
+            if let Some(path) = asset_server.get_path(id) {
+                asset_server.reload(path.into_owned());
+            }
+            continue;
+        }
         if let Some(mut image) = images.get_mut(id) {
             image.texture_descriptor.format = twin;
         }
@@ -1383,13 +1361,10 @@ fn load_asset_files(world: &mut World) {
         }
     };
 
-    // Preload linear-space textures the catalog materials reference before
-    // their handles resolve (see `preload_linear_textures`). The handles stay
-    // alive until `load_bsn_assets` builds the materials that hold them.
     #[cfg(feature = "render")]
     let _preloaded_textures = parse_bsn_text(&text)
         .ok()
-        .map(|ast| preload_linear_textures(world, &ast))
+        .map(|ast| preload_textures(world, &ast))
         .unwrap_or_default();
 
     match load_bsn_assets(world, &text) {
@@ -1610,10 +1585,8 @@ fn load_asset_file(
         );
     }
 
-    // Held until the asset below takes its own strong references, so the
-    // textures it names are decoded in linear space.
     #[cfg(feature = "render")]
-    let _preloaded_textures = preload_linear_textures(world, &ast);
+    let _preloaded_textures = preload_textures(world, &ast);
 
     jackdaw_bsn::load_asset_root(world, &ast, root)
 }

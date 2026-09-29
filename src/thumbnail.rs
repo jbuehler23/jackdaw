@@ -702,7 +702,10 @@ fn start_job(
     match subject {
         Subject::Scene => None,
         Subject::Model => {
-            let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(to_asset_path(path)));
+            let scene = assets
+                .load_builder()
+                .with_settings(jackdaw_scene_types::render_assets::model_settings)
+                .load(GltfAssetLabel::Scene(0).from_asset(to_asset_path(path)));
             Some(job(None, Stage::Loading(scene)))
         }
         Subject::Material => {

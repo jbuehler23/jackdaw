@@ -23,6 +23,8 @@ pub mod environment;
 #[cfg(feature = "render")]
 pub mod mesh_rebuild;
 pub mod node_id;
+#[cfg(feature = "render")]
+pub mod render_assets;
 pub mod types;
 
 pub use asset_path::to_asset_path;

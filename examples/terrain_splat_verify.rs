@@ -333,7 +333,7 @@ fn attach_material(
     }
     let set = verify.set.clone();
     let handles = verify.images.clone();
-    let built = match splat_images(&set, &handles, &images) {
+    let built = match splat_images(&set, &handles, &*images) {
         Ok(built) => built,
         Err(SplatBuildError::NotReady) => {
             // Name the texture holding things up rather than spinning

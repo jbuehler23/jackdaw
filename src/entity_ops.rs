@@ -216,8 +216,10 @@ fn derive_world_asset_root(
     // Scenes authored before paths were normalised still hold an absolute
     // path; `to_asset_path` reduces those and passes a relative one through.
     let asset_path = to_asset_path(&source.path);
-    let scene: Handle<WorldAsset> =
-        asset_server.load(GltfAssetLabel::Scene(source.scene_index).from_asset(asset_path));
+    let scene: Handle<WorldAsset> = asset_server
+        .load_builder()
+        .with_settings(jackdaw_scene_types::render_assets::model_settings)
+        .load(GltfAssetLabel::Scene(source.scene_index).from_asset(asset_path));
     // Re-inserting an equal handle still trips `Changed`, and the world-asset
     // spawner despawns and respawns the whole instance on every change.
     // Applying the document re-inserts `GltfSource` wholesale, so without this

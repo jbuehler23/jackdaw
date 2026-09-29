@@ -21,10 +21,11 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use jackdaw_scene_types::Terrain;
 use jackdaw_terrain::render::{
-    DetailDirty, DetailRenderPlugin, DetailSystems, ScatterDirty, ScatterPrefab, ScatterPrefabs,
-    ScatterRenderPlugin, ScatterSystems, SplatArrayHandles, SplatBuildError, TerrainDetailSource,
-    TerrainRenderPlugin, TerrainScatter, TerrainSplatMaterial, TextureSetImages,
-    control_image_from_bytes, resolve_with, slope_image, splat_images, tint_image,
+    DetailDirty, DetailRenderPlugin, DetailSystems, LayerImages, LayerTexels, ScatterDirty,
+    ScatterPrefab, ScatterPrefabs, ScatterRenderPlugin, ScatterSystems, SplatArrayHandles,
+    SplatBuildError, TerrainDetailSource, TerrainRenderPlugin, TerrainScatter,
+    TerrainSplatMaterial, TextureSetImages, control_image_from_bytes, resolve_with, slope_image,
+    splat_images, tint_image,
 };
 use jackdaw_terrain::sidecar::{self, TerrainMaterialSlot};
 use jackdaw_terrain::splat::ControlTexels;
@@ -349,6 +350,7 @@ fn resolve_material_slots(
 fn build_ready_materials(
     mut splat_materials: ResMut<Assets<TerrainSplatMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut layer_texels: ResMut<LayerTexels>,
     assets: Res<AssetServer>,
     mut terrains: Query<(&TerrainDocument, &mut TerrainSplat)>,
 ) {
@@ -363,7 +365,12 @@ fn build_ready_materials(
             continue;
         }
 
-        let built = match splat_images(&splat.set, &splat.images, &images) {
+        layer_texels.request(&splat.images, &images, &assets);
+        let layers = LayerImages {
+            images: &images,
+            texels: &layer_texels,
+        };
+        let built = match splat_images(&splat.set, &splat.images, &layers) {
             Ok(built) => built,
             Err(SplatBuildError::NotReady) => {
                 // Still loading, or permanently failed. Only the asset
@@ -374,6 +381,11 @@ fn build_ready_materials(
                 {
                     splat.reported = true;
                     error!("terrain texture {failed:?} could not be loaded; check the material");
+                } else if let Some(reason) = layer_texels.failed(&splat.images)
+                    && !splat.reported
+                {
+                    splat.reported = true;
+                    error!("terrain texture could not be read: {reason}");
                 }
                 continue;
             }
@@ -419,6 +431,12 @@ fn build_ready_materials(
         splat.reported = false;
         splat.resurface = true;
     }
+    layer_texels.keep_only(
+        terrains
+            .iter()
+            .filter(|(_, splat)| splat.material.is_none())
+            .map(|(_, splat)| &splat.images),
+    );
 }
 
 /// The path of the first texture the asset server has given up on.

@@ -232,7 +232,10 @@ impl ScatterAssets {
             return;
         }
         let asset = asset.to_string();
-        let handle = server.load(asset.clone());
+        let handle = server
+            .load_builder()
+            .with_settings(jackdaw_scene_types::render_assets::model_settings)
+            .load(asset.clone());
         self.entries.insert(asset, ScatterAsset::Loading(handle));
     }
 

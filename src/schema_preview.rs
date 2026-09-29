@@ -116,7 +116,10 @@ fn preview_for_node(
 
 fn spawn_preview(commands: &mut Commands, asset_server: &AssetServer, host: Entity, path: &str) {
     let path = path.to_string();
-    let handle = asset_server.load(GltfAssetLabel::Scene(0).from_asset(path.clone()));
+    let handle = asset_server
+        .load_builder()
+        .with_settings(jackdaw_scene_types::render_assets::model_settings)
+        .load(GltfAssetLabel::Scene(0).from_asset(path.clone()));
     commands.spawn((
         SchemaPreview(path),
         EditorHidden,
