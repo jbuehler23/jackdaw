@@ -46,7 +46,8 @@ jobs:
           echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
 
       - name: Install dependencies
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        timeout-minutes: 10
       # This tier launches real games (`bsn_game_run`, `editor_journey`),
       # and a CI runner has no GPU. Without a software Vulkan driver the
       # game aborts inside `bevy_render` with `Unable to find a GPU!`
@@ -54,7 +55,8 @@ jobs:
       # timeout. The onboarding workflow already installs this for the
       # same reason.
       - name: Install a software Vulkan driver
-        run: sudo apt-get install --no-install-recommends -y mesa-vulkan-drivers
+        run: sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends -y mesa-vulkan-drivers
+        timeout-minutes: 10
 
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml

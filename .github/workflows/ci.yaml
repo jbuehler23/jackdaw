@@ -55,7 +55,8 @@ jobs:
           shared-key: tests
 
       - name: Install dependencies
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        timeout-minutes: 10
 
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
@@ -119,7 +120,8 @@ jobs:
           shared-key: build-tests
 
       - name: Install dependencies
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        timeout-minutes: 10
 
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
@@ -184,7 +186,8 @@ jobs:
           echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
 
       - name: Install dependencies
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        timeout-minutes: 10
 
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
@@ -199,6 +202,22 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Download the archive
+        uses: actions/download-artifact@v4
+        with:
+          name: tests
+          path: ${{ runner.temp }}
+
+      - name: Check the archive
+        id: archive
+        continue-on-error: true
+        run: zstd -t "$RUNNER_TEMP/tests.tar.zst"
+
+      - name: Remove the damaged archive
+        if: steps.archive.outcome == 'failure'
+        run: rm -f "$RUNNER_TEMP/tests.tar.zst"
+
+      - name: Download the archive again
+        if: steps.archive.outcome == 'failure'
         uses: actions/download-artifact@v4
         with:
           name: tests
@@ -258,7 +277,8 @@ jobs:
           echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
 
       - name: Install dependencies
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev mesa-vulkan-drivers
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev mesa-vulkan-drivers
+        timeout-minutes: 10
 
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
@@ -311,7 +331,8 @@ jobs:
         run: cargo binstall cargo-nextest --locked --force
 
       - name: Install dependencies
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        timeout-minutes: 10
 
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
@@ -406,7 +427,8 @@ jobs:
         run: cargo binstall wild-linker --locked --force
 
       - name: Install dependencies
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        timeout-minutes: 10
 
       - name: Run clippy lints
         run: cargo clippy --locked --workspace --all-targets --features dylib -- --deny warnings
@@ -462,7 +484,8 @@ jobs:
         run: cargo binstall wild-linker --locked --force
 
       - name: Install dependencies
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        timeout-minutes: 10
 
       - name: Check documentation
         run: cargo doc --locked --workspace --document-private-items --no-deps
@@ -483,7 +506,8 @@ jobs:
           toolchain: ${{ env.toolchain }}
 
       - name: Install dependencies
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        timeout-minutes: 10
 
       - name: Install Bevy linter
         # Pinned to a known-good commit: installing from a release tag requires that

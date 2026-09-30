@@ -71,7 +71,8 @@ jobs:
       # lavapipe provides one.
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev mesa-vulkan-drivers
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev mesa-vulkan-drivers
+        timeout-minutes: 10
 
       # The tracked cargo config links Linux builds through clang and wild.
       - name: Install cargo binstall
