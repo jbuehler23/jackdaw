@@ -88,6 +88,9 @@ fn parse_window_size(raw: &str) -> Option<bevy::window::WindowResolution> {
 /// show the unsaved-changes dialog before quitting.
 pub fn editor_window_plugin() -> WindowPlugin {
     let mut window = primary_window_attributes();
+    // Wayland app_id / X11 WM_CLASS. Desktop environments match this against
+    // `jackdaw.desktop` to show the right icon and allow pinning.
+    window.name = Some("jackdaw".into());
     if let Some(resolution) = window_size_override() {
         window.resolution = resolution;
     }
