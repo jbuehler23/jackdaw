@@ -379,11 +379,15 @@ workspace = true
 
 [profile.dev]
 opt-level = 1
+lto = "off"
 
 [profile.dev.package."*"]
 opt-level = 3
 
 [profile.dev.package.wgpu-types]
+debug-assertions = false
+
+[profile.dev.package.bevy_ptr]
 debug-assertions = false
 
 # Keep the SDK facade compact. Bevy and Jackdaw's runtime closure live in
