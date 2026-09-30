@@ -1,5 +1,6 @@
 //! Children spawned into reused entity indices take their parents'
-//! transforms even when a frame despawns thousands of entities.
+//! transforms even when a frame despawns thousands of entities, with
+//! static transform optimizations on.
 
 use bevy::prelude::*;
 use jackdaw_runtime::JackdawPlugin;
@@ -36,6 +37,11 @@ fn stale_children(world: &mut World) -> usize {
 #[test]
 fn children_spawned_into_reused_indices_follow_their_parents() {
     let mut app = app();
+    assert!(
+        app.world()
+            .resource::<bevy::transform::StaticTransformOptimizations>()
+            .is_enabled()
+    );
     for i in 0..PARENTS {
         app.world_mut().spawn((
             Holder,

@@ -148,10 +148,54 @@ pub mod prelude {
     pub use crate::{DetailPressers, DetailSettings, DetailViewer, TerrainViewer};
 }
 
-/// Turns off Bevy's static transform optimization, which can leave a child spawned into a reused
-/// entity index with a stale `GlobalTransform` when a frame despawns more than about a thousand entities.
-pub fn keep_transforms_propagating(app: &mut App) {
-    app.insert_resource(bevy::transform::StaticTransformOptimizations::Disabled);
+/// Marks the transform trees of entities spawned into a freed entity index as changed, which
+/// Bevy's static transform optimization can miss, leaving the entity with a stale `GlobalTransform`.
+pub fn propagate_into_reused_indices(app: &mut App) {
+    if app.world().contains_resource::<ReusedIndexTracking>() {
+        return;
+    }
+    app.init_resource::<ReusedIndexTracking>().add_systems(
+        PostUpdate,
+        mark_reused_index_trees
+            .in_set(bevy::transform::TransformSystems::Propagate)
+            .before(bevy::transform::systems::mark_dirty_trees),
+    );
+}
+
+/// Entities whose parent link was removed in the previous frame, checked again for reuse in case
+/// their index was taken after that frame's check.
+#[derive(Resource, Default)]
+struct ReusedIndexTracking {
+    previous: Vec<Entity>,
+}
+
+fn mark_reused_index_trees(
+    mut removed: RemovedComponents<ChildOf>,
+    mut tracking: ResMut<ReusedIndexTracking>,
+    mut marked: Local<bevy::ecs::entity::EntityHashSet>,
+    entities: &bevy::ecs::entity::Entities,
+    parents: Query<&ChildOf>,
+    mut trees: Query<&mut bevy::transform::components::TransformTreeChanged>,
+) {
+    let current: Vec<Entity> = removed.read().collect();
+    marked.clear();
+    for freed in tracking.previous.iter().chain(&current) {
+        let mut next = entities.resolve_from_index(freed.index());
+        if next == *freed {
+            continue;
+        }
+        while marked.insert(next) {
+            let Ok(mut tree) = trees.get_mut(next) else {
+                break;
+            };
+            tree.set_changed();
+            let Ok(child_of) = parents.get(next) else {
+                break;
+            };
+            next = child_of.parent();
+        }
+    }
+    tracking.previous = current;
 }
 
 pub struct JackdawPlugin;
@@ -170,7 +214,7 @@ impl Plugin for JackdawPlugin {
         // readable while the app is being built, so it is captured here.
         app.insert_resource(AssetFolder(asset_folder(app)));
 
-        keep_transforms_propagating(app);
+        propagate_into_reused_indices(app);
 
         #[cfg(feature = "render")]
         texture_import::register_texture_import_processor(app);
