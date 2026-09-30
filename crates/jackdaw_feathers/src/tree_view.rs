@@ -5,7 +5,7 @@ use bevy::{
     ui::Checked,
     ui_widgets::{ValueChange, observe},
 };
-use bevy_monitors::prelude::{MonitorSelf, Mutation, NotifyChanged};
+use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeDragCancelled, TreeDropLine, TreeFocused, TreeNode,
     TreeNodeExpandToggle, TreeNodeExpanded, TreeRoot, TreeRowChildren, TreeRowClicked,
@@ -94,26 +94,17 @@ pub fn tree_row(
     style: &TreeRowStyle,
 ) -> impl Bundle {
     (
+        TreeViewRowPart,
         TreeNode(source),
         TreeNodeExpanded(false),
         TreeChildrenPopulated(false),
-        MonitorSelf,
-        NotifyChanged::<TreeNodeExpanded>::default(),
         Node {
             flex_direction: FlexDirection::Column,
             width: percent(100),
             ..default()
         },
         children![
-            tree_row_content(
-                label,
-                selected,
-                source,
-                category,
-                inherited,
-                icon_override,
-                style
-            ),
+            tree_row_content(label, selected, category, inherited, icon_override, style),
             (
                 TreeRowChildren,
                 Node {
@@ -134,50 +125,6 @@ pub fn tree_row(
             insertion_zone(false),
             insertion_zone(true)
         ],
-        observe(
-            |mutation: On<Mutation<TreeNodeExpanded>>,
-             expanded_query: Query<(&TreeNodeExpanded, &Children)>,
-             children_container: Query<Entity, With<TreeRowChildren>>,
-             content_query: Query<&Children, With<TreeRowContent>>,
-             toggle_query: Query<&Children, With<TreeNodeExpandToggle>>,
-             mut node_query: Query<&mut Node>,
-             mut commands: Commands| {
-                let entity = mutation.event_target();
-                let Ok((expanded, children)) = expanded_query.get(entity) else {
-                    return;
-                };
-
-                for child in children.iter() {
-                    if children_container.contains(child)
-                        && let Ok(mut node) = node_query.get_mut(child)
-                    {
-                        node.display = if expanded.0 {
-                            Display::Flex
-                        } else {
-                            Display::None
-                        };
-                    }
-
-                    // A childless leaf carries no disclosure at all, so it
-                    // keeps its blank toggle even when marked expanded.
-                    let Ok(content_children) = content_query.get(child) else {
-                        continue;
-                    };
-                    for cc in content_children.iter() {
-                        let Ok(toggle_children) = toggle_query.get(cc) else {
-                            continue;
-                        };
-                        for disclosure in toggle_children.iter() {
-                            crate::utils::set_marker_if_alive::<Checked>(
-                                &mut commands,
-                                disclosure,
-                                expanded.0,
-                            );
-                        }
-                    }
-                }
-            },
-        ),
     )
 }
 
@@ -186,6 +133,7 @@ pub fn tree_row(
 /// the row's siblings instead of making it the row's child.
 fn insertion_zone(after: bool) -> impl Bundle {
     (
+        TreeViewRowPart,
         TreeRowInsertZone { after },
         Node {
             position_type: PositionType::Absolute,
@@ -197,125 +145,6 @@ fn insertion_zone(after: bool) -> impl Bundle {
             ..default()
         },
         BackgroundColor(Color::NONE),
-        // Two thirds of every row is gap, so a click there has to be handled
-        // as a click on the row; otherwise it bubbles past the row to the
-        // container and selects nothing.
-        observe(
-            |mut click: On<Pointer<Click>>,
-             mut commands: Commands,
-             parents: Query<&ChildOf>,
-             children: Query<&Children>,
-             tree_nodes: Query<&TreeNode>,
-             contents: Query<(), With<TreeRowContent>>| {
-                if click.event.button != PointerButton::Primary {
-                    return;
-                }
-                click.propagate(false);
-                let Ok(&ChildOf(row)) = parents.get(click.event_target()) else {
-                    return;
-                };
-                let Ok(node) = tree_nodes.get(row) else {
-                    return;
-                };
-                let Some(content) = children
-                    .get(row)
-                    .ok()
-                    .and_then(|children| children.iter().find(|child| contents.contains(*child)))
-                else {
-                    return;
-                };
-                commands.trigger(TreeRowClicked {
-                    entity: content,
-                    source_entity: node.0,
-                });
-            },
-        ),
-        // Every move, not only the first: the level a release would
-        // land at changes with the pointer's x without it leaving the
-        // zone.
-        observe(
-            |mut over: On<Pointer<DragOver>>,
-             zones: Query<&TreeRowInsertZone>,
-             parents: Query<&ChildOf>,
-             children: Query<&Children>,
-             tree_nodes: Query<&TreeNode>,
-             expanded: Query<&TreeNodeExpanded>,
-             row_children: Query<(), With<TreeRowChildren>>,
-             transforms: Query<(&ComputedNode, &UiGlobalTransform)>,
-             mut line: ResMut<TreeDropLine>| {
-                over.propagate(false);
-                let zone = over.event_target();
-                let cursor = over.pointer_location.position;
-                let depth = resolve_drop_depth(
-                    zone,
-                    cursor,
-                    &zones,
-                    &parents,
-                    &children,
-                    &tree_nodes,
-                    &expanded,
-                    &row_children,
-                    &transforms,
-                )
-                .map_or(0, |(_, depth)| depth);
-                line.zone = Some(zone);
-                line.indent = depth as f32 * (INDENT_WIDTH + tokens::SPACING_SM);
-            },
-        ),
-        observe(
-            |mut leave: On<Pointer<DragLeave>>, mut line: ResMut<TreeDropLine>| {
-                leave.propagate(false);
-                if line.zone == Some(leave.event_target()) {
-                    line.zone = None;
-                }
-            },
-        ),
-        observe(
-            |mut drop: On<Pointer<DragDrop>>,
-             mut commands: Commands,
-             parents: Query<&ChildOf>,
-             children: Query<&Children>,
-             tree_nodes: Query<&TreeNode>,
-             expanded: Query<&TreeNodeExpanded>,
-             zones: Query<&TreeRowInsertZone>,
-             row_children: Query<(), With<TreeRowChildren>>,
-             transforms: Query<(&ComputedNode, &UiGlobalTransform)>,
-             mut line: ResMut<TreeDropLine>| {
-                drop.propagate(false);
-                let zone = drop.event_target();
-                line.zone = None;
-                let Ok(side) = zones.get(zone) else {
-                    return;
-                };
-                let cursor = drop.pointer_location.position;
-                let Some((row, _)) = resolve_drop_depth(
-                    zone,
-                    cursor,
-                    &zones,
-                    &parents,
-                    &children,
-                    &tree_nodes,
-                    &expanded,
-                    &row_children,
-                    &transforms,
-                ) else {
-                    return;
-                };
-                let Ok(target) = tree_nodes.get(row) else {
-                    return;
-                };
-                let Some(dragged_source) = find_source_entity(drop.dropped, &parents, &tree_nodes)
-                else {
-                    return;
-                };
-                commands.trigger(TreeRowInserted {
-                    entity: zone,
-                    dragged_source,
-                    target: target.0,
-                    index: usize::from(side.after),
-                });
-            },
-        ),
     )
 }
 
@@ -542,26 +371,6 @@ pub fn set_row_expand_toggle(world: &mut World, row: Entity, has_children: bool)
     if expanded {
         disclosure.insert(Checked);
     }
-    disclosure.observe(
-        |change: On<ValueChange<bool>>,
-         mut commands: Commands,
-         parent_query: Query<&ChildOf>,
-         tree_node_query: Query<(), With<TreeNodeExpanded>>| {
-            let mut current = change.event_target();
-            for _ in 0..4 {
-                if tree_node_query.contains(current) {
-                    commands
-                        .entity(current)
-                        .insert(TreeNodeExpanded(change.event().value));
-                    return;
-                }
-                let Ok(&ChildOf(parent)) = parent_query.get(current) else {
-                    return;
-                };
-                current = parent;
-            }
-        },
-    );
 }
 
 fn set_checked(world: &mut World, entity: Entity, checked: bool) {
@@ -578,7 +387,6 @@ fn set_checked(world: &mut World, entity: Entity, checked: bool) {
 fn tree_row_content(
     label: &str,
     selected: bool,
-    source: Entity,
     category: EntityCategory,
     inherited: bool,
     icon_override: Option<Icon>,
@@ -596,6 +404,7 @@ fn tree_row_content(
     };
 
     (
+        TreeViewRowPart,
         TreeRowContent,
         Node {
             flex_direction: FlexDirection::Row,
@@ -640,140 +449,15 @@ fn tree_row_content(
                 bevy::picking::hover::Hovered::default(),
                 ThemedText,
             ),
-            lock_toggle(source, &style.icon_font),
-            visibility_toggle(source, &style.icon_font)
+            lock_toggle(&style.icon_font),
+            visibility_toggle(&style.icon_font)
         ],
-        observe(
-            move |mut click: On<Pointer<Click>>, mut commands: Commands| {
-                if click.event.button != PointerButton::Primary {
-                    return;
-                }
-                click.propagate(false);
-                commands.trigger(TreeRowClicked {
-                    entity: click.event_target(),
-                    source_entity: source,
-                });
-            },
-        ),
-        observe(
-            |hover: On<Pointer<Over>>,
-             mut bg_query: Query<
-                &mut BackgroundColor,
-                (With<TreeRowContent>, Without<TreeRowSelected>),
-            >| {
-                if let Ok(mut bg) = bg_query.get_mut(hover.event_target()) {
-                    bg.0 = tokens::HOVER_BG;
-                }
-            },
-        ),
-        observe(
-            |out: On<Pointer<Out>>,
-             mut bg_query: Query<
-                &mut BackgroundColor,
-                (With<TreeRowContent>, Without<TreeRowSelected>),
-            >| {
-                if let Ok(mut bg) = bg_query.get_mut(out.event_target()) {
-                    bg.0 = ROW_BG;
-                }
-            },
-        ),
-        // Drag-and-drop: highlight the drop target, and start the clock that
-        // opens a closed row rested on.
-        observe(
-            |mut drag_enter: On<Pointer<DragEnter>>,
-             mut query: Query<(&mut BackgroundColor, &mut Node), With<TreeRowContent>>,
-             parents: Query<&ChildOf>,
-             mut spring: ResMut<TreeSpringLoad>,
-             mut commands: Commands| {
-                drag_enter.propagate(false);
-                let content = drag_enter.event_target();
-                if let Ok((mut bg, mut node)) = query.get_mut(content) {
-                    bg.0 = tokens::DROP_TARGET_BG;
-                    node.border = UiRect::left(px(3.0));
-                    commands.entity(content).insert(TreeDropPainted);
-                }
-                if let Ok(&ChildOf(row)) = parents.get(content) {
-                    spring.row = Some(row);
-                    spring.waited = 0.0;
-                }
-            },
-        ),
-        observe(
-            |mut drag_leave: On<Pointer<DragLeave>>,
-             mut query: Query<(&mut BackgroundColor, &mut Node), With<TreeRowContent>>,
-             selected: Query<(), With<TreeRowSelected>>,
-             parents: Query<&ChildOf>,
-             mut spring: ResMut<TreeSpringLoad>,
-             mut commands: Commands| {
-                drag_leave.propagate(false);
-                if let Ok((mut bg, mut node)) = query.get_mut(drag_leave.event_target()) {
-                    bg.0 = if selected.contains(drag_leave.event_target()) {
-                        tokens::SELECTED_BG
-                    } else {
-                        ROW_BG
-                    };
-                    node.border = UiRect::all(px(1.0));
-                    commands
-                        .entity(drag_leave.event_target())
-                        .remove::<TreeDropPainted>();
-                }
-                if let Ok(&ChildOf(row)) = parents.get(drag_leave.event_target())
-                    && spring.row == Some(row)
-                {
-                    spring.row = None;
-                }
-            },
-        ),
-        observe(
-            |mut drag_drop: On<Pointer<DragDrop>>,
-             mut commands: Commands,
-             parent_query: Query<&ChildOf>,
-             tree_nodes: Query<&TreeNode>,
-             mut query: Query<(&mut BackgroundColor, &mut Node), With<TreeRowContent>>,
-             selected_query: Query<(), With<TreeRowSelected>>,
-             mut cancelled: ResMut<TreeDragCancelled>| {
-                drag_drop.propagate(false);
-                let target_content = drag_drop.event_target();
-
-                if let Ok((mut bg, mut node)) = query.get_mut(target_content) {
-                    bg.0 = if selected_query.contains(target_content) {
-                        tokens::SELECTED_BG
-                    } else {
-                        ROW_BG
-                    };
-                    node.border = UiRect::all(px(1.0));
-                    commands.entity(target_content).remove::<TreeDropPainted>();
-                }
-                // The drag was called off; the release is only the pointer
-                // catching up with a gesture that is already over.
-                if std::mem::take(&mut cancelled.0) {
-                    return;
-                }
-
-                let Ok(&ChildOf(target_tree_row)) = parent_query.get(target_content) else {
-                    return;
-                };
-                let Ok(target_node) = tree_nodes.get(target_tree_row) else {
-                    return;
-                };
-                let Some(dragged_source) =
-                    find_source_entity(drag_drop.dropped, &parent_query, &tree_nodes)
-                else {
-                    return;
-                };
-
-                commands.trigger(TreeRowDropped {
-                    entity: target_content,
-                    dragged_source,
-                    target_source: target_node.0,
-                });
-            },
-        ),
     )
 }
 
 fn expand_toggle() -> impl Bundle {
     (
+        TreeViewRowPart,
         TreeNodeExpandToggle,
         Node {
             width: px(TOGGLE_WIDTH),
@@ -781,30 +465,6 @@ fn expand_toggle() -> impl Bundle {
             align_items: AlignItems::Center,
             ..default()
         },
-        observe(
-            |mut click: On<Pointer<Click>>,
-             mut commands: Commands,
-             parent_query: Query<&ChildOf>,
-             tree_node_query: Query<(Entity, &TreeNodeExpanded)>| {
-                if click.event.button != PointerButton::Primary {
-                    return;
-                }
-                click.propagate(false);
-                let mut current = click.event_target();
-                for _ in 0..4 {
-                    if let Ok((entity, expanded)) = tree_node_query.get(current) {
-                        commands
-                            .entity(entity)
-                            .insert(TreeNodeExpanded(!expanded.0));
-                        return;
-                    }
-                    let Ok(&ChildOf(parent)) = parent_query.get(current) else {
-                        return;
-                    };
-                    current = parent;
-                }
-            },
-        ),
     )
 }
 
@@ -813,8 +473,9 @@ fn expand_toggle() -> impl Bundle {
 ///
 /// The consumer refreshes the glyph by writing the button's own caption text;
 /// see the editor's `refresh_row_lock_glyph`.
-fn lock_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle + use<> {
+fn lock_toggle(icon_font: &Handle<Font>) -> impl Bundle + use<> {
     (
+        TreeViewRowPart,
         TreeRowLockToggle,
         crate::button::icon_button(
             crate::button::IconButtonProps::new(Icon::LockOpen).with_alpha(LOCK_IDLE_ALPHA),
@@ -826,14 +487,6 @@ fn lock_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle + use<> 
             "Locked nodes let the pointer through - lock a background to marquee over it.",
         ),
         bevy::picking::hover::Hovered::default(),
-        observe(
-            move |click: On<crate::button::ButtonClickEvent>, mut commands: Commands| {
-                commands.trigger(TreeRowLockToggled {
-                    entity: click.entity,
-                    source_entity: source,
-                });
-            },
-        ),
     )
 }
 
@@ -842,8 +495,9 @@ fn lock_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle + use<> 
 pub const LOCK_IDLE_ALPHA: f32 = 0.4;
 
 /// Eye icon for toggling entity visibility.
-fn visibility_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle {
+fn visibility_toggle(icon_font: &Handle<Font>) -> impl Bundle {
     (
+        TreeViewRowPart,
         TreeRowVisibilityToggle,
         Node {
             width: px(18.0),
@@ -861,46 +515,6 @@ fn visibility_toggle(source: Entity, icon_font: &Handle<Font>) -> impl Bundle {
             },
             TextColor(tokens::TEXT_SECONDARY.with_alpha(0.4)),
         )],
-        observe(
-            move |mut click: On<Pointer<Click>>, mut commands: Commands| {
-                if click.event.button != PointerButton::Primary {
-                    return;
-                }
-                click.propagate(false);
-                commands.trigger(TreeRowVisibilityToggled {
-                    entity: click.event_target(),
-                    source_entity: source,
-                });
-            },
-        ),
-        observe(
-            |hover: On<Pointer<Over>>,
-             children_query: Query<&Children>,
-             mut text_color: Query<&mut TextColor>| {
-                let entity = hover.event_target();
-                if let Ok(children) = children_query.get(entity) {
-                    for child in children.iter() {
-                        if let Ok(mut color) = text_color.get_mut(child) {
-                            color.0 = tokens::TEXT_SECONDARY;
-                        }
-                    }
-                }
-            },
-        ),
-        observe(
-            |out: On<Pointer<Out>>,
-             children_query: Query<&Children>,
-             mut text_color: Query<&mut TextColor>| {
-                let entity = out.event_target();
-                if let Ok(children) = children_query.get(entity) {
-                    for child in children.iter() {
-                        if let Ok(mut color) = text_color.get_mut(child) {
-                            color.0 = tokens::TEXT_SECONDARY.with_alpha(0.4);
-                        }
-                    }
-                }
-            },
-        ),
     )
 }
 
@@ -935,6 +549,526 @@ fn category_dot(
             TextColor(color),
         )],
     )
+}
+
+/// The pointer and value handlers every tree row shares.
+///
+/// Registered once for the app rather than on each row: an observer is an
+/// entity of its own, so a handler per row per event multiplies the entities a
+/// large tree carries. Each handler acts only when the event's current target
+/// is the part of a row it is written for, which is what an observer on that
+/// part saw.
+pub(crate) fn plugin(app: &mut App) {
+    app.add_systems(Startup, watch_row_expansion)
+        .add_observer(show_expanded_children)
+        .add_observer(click_gap)
+        .add_observer(drag_over_gap)
+        .add_observer(drag_leave_gap)
+        .add_observer(drop_on_gap)
+        .add_observer(toggle_from_disclosure)
+        .add_observer(click_row)
+        .add_observer(hover_row)
+        .add_observer(unhover_row)
+        .add_observer(drag_enter_row)
+        .add_observer(drag_leave_row)
+        .add_observer(drop_on_row)
+        .add_observer(click_expand_toggle)
+        .add_observer(click_lock_toggle)
+        .add_observer(click_visibility_toggle)
+        .add_observer(hover_visibility_toggle)
+        .add_observer(unhover_visibility_toggle);
+}
+
+/// Marks the parts of a row [`tree_row`] built, which the shared handlers act
+/// on; other trees that reuse the row markers keep their own handlers.
+#[derive(Component, Clone, Copy, Default)]
+pub struct TreeViewRowPart;
+
+/// One watch over every row's open state, rather than one per row: a watch per
+/// row costs a count of every watch each time a row goes.
+///
+/// Spawned in `Startup` because the first watch of a type adds its system to
+/// `Update`, which panics when that first spawn happens while `Update` runs.
+fn watch_row_expansion(mut commands: Commands) {
+    commands.spawn(NotifyChanged::<TreeNodeExpanded>::default());
+}
+
+/// The row a part of it sits in, and the scene entity the row stands for.
+fn row_source(
+    part: Entity,
+    parents: &Query<&ChildOf>,
+    tree_nodes: &Query<&TreeNode>,
+) -> Option<Entity> {
+    find_source_entity(part, parents, tree_nodes)
+}
+
+/// Show or hide a row's children as it opens or closes, and keep its
+/// disclosure in step.
+fn show_expanded_children(
+    mutation: On<Mutation<TreeNodeExpanded>>,
+    expanded_query: Query<(&TreeNodeExpanded, &Children), With<TreeViewRowPart>>,
+    children_container: Query<Entity, With<TreeRowChildren>>,
+    content_query: Query<&Children, With<TreeRowContent>>,
+    toggle_query: Query<&Children, With<TreeNodeExpandToggle>>,
+    mut node_query: Query<&mut Node>,
+    mut commands: Commands,
+) {
+    let entity = mutation.mutated;
+    let Ok((expanded, children)) = expanded_query.get(entity) else {
+        return;
+    };
+
+    for child in children.iter() {
+        if children_container.contains(child)
+            && let Ok(mut node) = node_query.get_mut(child)
+        {
+            node.display = if expanded.0 {
+                Display::Flex
+            } else {
+                Display::None
+            };
+        }
+
+        let Ok(content_children) = content_query.get(child) else {
+            continue;
+        };
+        for cc in content_children.iter() {
+            let Ok(toggle_children) = toggle_query.get(cc) else {
+                continue;
+            };
+            for disclosure in toggle_children.iter() {
+                crate::utils::set_marker_if_alive::<Checked>(&mut commands, disclosure, expanded.0);
+            }
+        }
+    }
+}
+
+/// Two thirds of every row is gap, so a click there has to be handled as a
+/// click on the row; otherwise it bubbles past the row to the container and
+/// selects nothing.
+fn click_gap(
+    mut click: On<Pointer<Click>>,
+    mut commands: Commands,
+    gaps: Query<(), (With<TreeRowInsertZone>, With<TreeViewRowPart>)>,
+    parents: Query<&ChildOf>,
+    children: Query<&Children>,
+    tree_nodes: Query<&TreeNode>,
+    contents: Query<(), With<TreeRowContent>>,
+) {
+    if !gaps.contains(click.event_target()) || click.event.button != PointerButton::Primary {
+        return;
+    }
+    click.propagate(false);
+    let Ok(&ChildOf(row)) = parents.get(click.event_target()) else {
+        return;
+    };
+    let Ok(node) = tree_nodes.get(row) else {
+        return;
+    };
+    let Some(content) = children
+        .get(row)
+        .ok()
+        .and_then(|children| children.iter().find(|child| contents.contains(*child)))
+    else {
+        return;
+    };
+    commands.trigger(TreeRowClicked {
+        entity: content,
+        source_entity: node.0,
+    });
+}
+
+/// Every move, not only the first: the level a release would land at changes
+/// with the pointer's x without it leaving the gap.
+fn drag_over_gap(
+    mut over: On<Pointer<DragOver>>,
+    zones: Query<&TreeRowInsertZone>,
+    parents: Query<&ChildOf>,
+    children: Query<&Children>,
+    tree_nodes: Query<&TreeNode>,
+    expanded: Query<&TreeNodeExpanded>,
+    row_children: Query<(), With<TreeRowChildren>>,
+    transforms: Query<(&ComputedNode, &UiGlobalTransform)>,
+    parts: Query<(), With<TreeViewRowPart>>,
+    mut line: ResMut<TreeDropLine>,
+) {
+    let zone = over.event_target();
+    if !zones.contains(zone) || !parts.contains(zone) {
+        return;
+    }
+    over.propagate(false);
+    let cursor = over.pointer_location.position;
+    let depth = resolve_drop_depth(
+        zone,
+        cursor,
+        &zones,
+        &parents,
+        &children,
+        &tree_nodes,
+        &expanded,
+        &row_children,
+        &transforms,
+    )
+    .map_or(0, |(_, depth)| depth);
+    line.zone = Some(zone);
+    line.indent = depth as f32 * (INDENT_WIDTH + tokens::SPACING_SM);
+}
+
+fn drag_leave_gap(
+    mut leave: On<Pointer<DragLeave>>,
+    zones: Query<(), (With<TreeRowInsertZone>, With<TreeViewRowPart>)>,
+    mut line: ResMut<TreeDropLine>,
+) {
+    if !zones.contains(leave.event_target()) {
+        return;
+    }
+    leave.propagate(false);
+    if line.zone == Some(leave.event_target()) {
+        line.zone = None;
+    }
+}
+
+fn drop_on_gap(
+    mut drop: On<Pointer<DragDrop>>,
+    mut commands: Commands,
+    parents: Query<&ChildOf>,
+    children: Query<&Children>,
+    tree_nodes: Query<&TreeNode>,
+    expanded: Query<&TreeNodeExpanded>,
+    zones: Query<&TreeRowInsertZone>,
+    row_children: Query<(), With<TreeRowChildren>>,
+    transforms: Query<(&ComputedNode, &UiGlobalTransform)>,
+    parts: Query<(), With<TreeViewRowPart>>,
+    mut line: ResMut<TreeDropLine>,
+) {
+    let zone = drop.event_target();
+    let Ok(side) = zones.get(zone) else {
+        return;
+    };
+    if !parts.contains(zone) {
+        return;
+    }
+    drop.propagate(false);
+    line.zone = None;
+    let cursor = drop.pointer_location.position;
+    let Some((row, _)) = resolve_drop_depth(
+        zone,
+        cursor,
+        &zones,
+        &parents,
+        &children,
+        &tree_nodes,
+        &expanded,
+        &row_children,
+        &transforms,
+    ) else {
+        return;
+    };
+    let Ok(target) = tree_nodes.get(row) else {
+        return;
+    };
+    let Some(dragged_source) = find_source_entity(drop.dropped, &parents, &tree_nodes) else {
+        return;
+    };
+    commands.trigger(TreeRowInserted {
+        entity: zone,
+        dragged_source,
+        target: target.0,
+        index: usize::from(side.after),
+    });
+}
+
+/// A row's disclosure opens or closes the row it sits in.
+fn toggle_from_disclosure(
+    change: On<ValueChange<bool>>,
+    mut commands: Commands,
+    parent_query: Query<&ChildOf>,
+    toggles: Query<(), (With<TreeNodeExpandToggle>, With<TreeViewRowPart>)>,
+    tree_node_query: Query<(), With<TreeNodeExpanded>>,
+) {
+    let disclosure = change.event_target();
+    let Ok(&ChildOf(toggle)) = parent_query.get(disclosure) else {
+        return;
+    };
+    if !toggles.contains(toggle) {
+        return;
+    }
+    let mut current = disclosure;
+    for _ in 0..4 {
+        if tree_node_query.contains(current) {
+            commands
+                .entity(current)
+                .insert(TreeNodeExpanded(change.event().value));
+            return;
+        }
+        let Ok(&ChildOf(parent)) = parent_query.get(current) else {
+            return;
+        };
+        current = parent;
+    }
+}
+
+fn click_row(
+    mut click: On<Pointer<Click>>,
+    contents: Query<(), (With<TreeRowContent>, With<TreeViewRowPart>)>,
+    parents: Query<&ChildOf>,
+    tree_nodes: Query<&TreeNode>,
+    mut commands: Commands,
+) {
+    let content = click.event_target();
+    if !contents.contains(content) || click.event.button != PointerButton::Primary {
+        return;
+    }
+    click.propagate(false);
+    let Some(source) = row_source(content, &parents, &tree_nodes) else {
+        return;
+    };
+    commands.trigger(TreeRowClicked {
+        entity: content,
+        source_entity: source,
+    });
+}
+
+fn hover_row(
+    hover: On<Pointer<Over>>,
+    mut bg_query: Query<
+        &mut BackgroundColor,
+        (
+            With<TreeRowContent>,
+            With<TreeViewRowPart>,
+            Without<TreeRowSelected>,
+        ),
+    >,
+) {
+    if let Ok(mut bg) = bg_query.get_mut(hover.event_target()) {
+        bg.0 = tokens::HOVER_BG;
+    }
+}
+
+fn unhover_row(
+    out: On<Pointer<Out>>,
+    mut bg_query: Query<
+        &mut BackgroundColor,
+        (
+            With<TreeRowContent>,
+            With<TreeViewRowPart>,
+            Without<TreeRowSelected>,
+        ),
+    >,
+) {
+    if let Ok(mut bg) = bg_query.get_mut(out.event_target()) {
+        bg.0 = ROW_BG;
+    }
+}
+
+/// Highlight the row a drag is over, and start the clock that opens a closed
+/// row rested on.
+fn drag_enter_row(
+    mut drag_enter: On<Pointer<DragEnter>>,
+    mut query: Query<
+        (&mut BackgroundColor, &mut Node),
+        (With<TreeRowContent>, With<TreeViewRowPart>),
+    >,
+    parents: Query<&ChildOf>,
+    mut spring: ResMut<TreeSpringLoad>,
+    mut commands: Commands,
+) {
+    let content = drag_enter.event_target();
+    let Ok((mut bg, mut node)) = query.get_mut(content) else {
+        return;
+    };
+    drag_enter.propagate(false);
+    bg.0 = tokens::DROP_TARGET_BG;
+    node.border = UiRect::left(px(3.0));
+    commands.entity(content).insert(TreeDropPainted);
+    if let Ok(&ChildOf(row)) = parents.get(content) {
+        spring.row = Some(row);
+        spring.waited = 0.0;
+    }
+}
+
+fn drag_leave_row(
+    mut drag_leave: On<Pointer<DragLeave>>,
+    mut query: Query<
+        (&mut BackgroundColor, &mut Node),
+        (With<TreeRowContent>, With<TreeViewRowPart>),
+    >,
+    selected: Query<(), With<TreeRowSelected>>,
+    parents: Query<&ChildOf>,
+    mut spring: ResMut<TreeSpringLoad>,
+    mut commands: Commands,
+) {
+    let content = drag_leave.event_target();
+    let Ok((mut bg, mut node)) = query.get_mut(content) else {
+        return;
+    };
+    drag_leave.propagate(false);
+    bg.0 = if selected.contains(content) {
+        tokens::SELECTED_BG
+    } else {
+        ROW_BG
+    };
+    node.border = UiRect::all(px(1.0));
+    commands.entity(content).remove::<TreeDropPainted>();
+    if let Ok(&ChildOf(row)) = parents.get(content)
+        && spring.row == Some(row)
+    {
+        spring.row = None;
+    }
+}
+
+fn drop_on_row(
+    mut drag_drop: On<Pointer<DragDrop>>,
+    mut commands: Commands,
+    parent_query: Query<&ChildOf>,
+    tree_nodes: Query<&TreeNode>,
+    mut query: Query<
+        (&mut BackgroundColor, &mut Node),
+        (With<TreeRowContent>, With<TreeViewRowPart>),
+    >,
+    selected_query: Query<(), With<TreeRowSelected>>,
+    mut cancelled: ResMut<TreeDragCancelled>,
+) {
+    let target_content = drag_drop.event_target();
+    let Ok((mut bg, mut node)) = query.get_mut(target_content) else {
+        return;
+    };
+    drag_drop.propagate(false);
+    bg.0 = if selected_query.contains(target_content) {
+        tokens::SELECTED_BG
+    } else {
+        ROW_BG
+    };
+    node.border = UiRect::all(px(1.0));
+    commands.entity(target_content).remove::<TreeDropPainted>();
+    if std::mem::take(&mut cancelled.0) {
+        return;
+    }
+
+    let Ok(&ChildOf(target_tree_row)) = parent_query.get(target_content) else {
+        return;
+    };
+    let Ok(target_node) = tree_nodes.get(target_tree_row) else {
+        return;
+    };
+    let Some(dragged_source) = find_source_entity(drag_drop.dropped, &parent_query, &tree_nodes)
+    else {
+        return;
+    };
+
+    commands.trigger(TreeRowDropped {
+        entity: target_content,
+        dragged_source,
+        target_source: target_node.0,
+    });
+}
+
+fn click_expand_toggle(
+    mut click: On<Pointer<Click>>,
+    mut commands: Commands,
+    toggles: Query<(), (With<TreeNodeExpandToggle>, With<TreeViewRowPart>)>,
+    parent_query: Query<&ChildOf>,
+    tree_node_query: Query<(Entity, &TreeNodeExpanded)>,
+) {
+    if !toggles.contains(click.event_target()) || click.event.button != PointerButton::Primary {
+        return;
+    }
+    click.propagate(false);
+    let mut current = click.event_target();
+    for _ in 0..4 {
+        if let Ok((entity, expanded)) = tree_node_query.get(current) {
+            commands
+                .entity(entity)
+                .insert(TreeNodeExpanded(!expanded.0));
+            return;
+        }
+        let Ok(&ChildOf(parent)) = parent_query.get(current) else {
+            return;
+        };
+        current = parent;
+    }
+}
+
+fn click_lock_toggle(
+    click: On<crate::button::ButtonClickEvent>,
+    locks: Query<(), (With<TreeRowLockToggle>, With<TreeViewRowPart>)>,
+    parents: Query<&ChildOf>,
+    tree_nodes: Query<&TreeNode>,
+    mut commands: Commands,
+) {
+    if !locks.contains(click.entity) {
+        return;
+    }
+    let Some(source) = row_source(click.entity, &parents, &tree_nodes) else {
+        return;
+    };
+    commands.trigger(TreeRowLockToggled {
+        entity: click.entity,
+        source_entity: source,
+    });
+}
+
+fn click_visibility_toggle(
+    mut click: On<Pointer<Click>>,
+    toggles: Query<(), (With<TreeRowVisibilityToggle>, With<TreeViewRowPart>)>,
+    parents: Query<&ChildOf>,
+    tree_nodes: Query<&TreeNode>,
+    mut commands: Commands,
+) {
+    let toggle = click.event_target();
+    if !toggles.contains(toggle) || click.event.button != PointerButton::Primary {
+        return;
+    }
+    click.propagate(false);
+    let Some(source) = row_source(toggle, &parents, &tree_nodes) else {
+        return;
+    };
+    commands.trigger(TreeRowVisibilityToggled {
+        entity: toggle,
+        source_entity: source,
+    });
+}
+
+fn hover_visibility_toggle(
+    hover: On<Pointer<Over>>,
+    toggles: Query<&Children, (With<TreeRowVisibilityToggle>, With<TreeViewRowPart>)>,
+    mut text_color: Query<&mut TextColor>,
+) {
+    set_visibility_glyph(
+        hover.event_target(),
+        &toggles,
+        &mut text_color,
+        tokens::TEXT_SECONDARY,
+    );
+}
+
+fn unhover_visibility_toggle(
+    out: On<Pointer<Out>>,
+    toggles: Query<&Children, (With<TreeRowVisibilityToggle>, With<TreeViewRowPart>)>,
+    mut text_color: Query<&mut TextColor>,
+) {
+    set_visibility_glyph(
+        out.event_target(),
+        &toggles,
+        &mut text_color,
+        tokens::TEXT_SECONDARY.with_alpha(0.4),
+    );
+}
+
+fn set_visibility_glyph(
+    toggle: Entity,
+    toggles: &Query<&Children, (With<TreeRowVisibilityToggle>, With<TreeViewRowPart>)>,
+    text_color: &mut Query<&mut TextColor>,
+    color: Color,
+) {
+    let Ok(children) = toggles.get(toggle) else {
+        return;
+    };
+    for child in children.iter() {
+        if let Ok(mut glyph) = text_color.get_mut(child) {
+            glyph.0 = color;
+        }
+    }
 }
 
 /// Walk up the [`ChildOf`] chain from any deeply-nested UI entity until we find

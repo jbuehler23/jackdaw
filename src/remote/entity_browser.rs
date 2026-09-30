@@ -628,7 +628,7 @@ pub fn on_remote_tree_node_expanded(
     tree_row_children_marker: Query<Entity, With<TreeRowChildren>>,
     proxies: Query<&RemoteEntityProxy>,
 ) {
-    let entity = trigger.event_target();
+    let entity = trigger.mutated;
     let Ok((expanded, populated, tree_node, children)) = tree_query.get(entity) else {
         return;
     };

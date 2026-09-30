@@ -66,6 +66,7 @@ impl Plugin for EditorFeathersPlugin {
             context_menu::plugin,
             picker::plugin,
             panel_card::plugin,
+            tree_view::plugin,
         ));
     }
 }

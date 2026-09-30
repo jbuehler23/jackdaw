@@ -107,7 +107,6 @@ impl Plugin for HierarchyPlugin {
             .init_resource::<EntityIconRegistry>()
             .init_resource::<RowsAwaitingRegistration>()
             .init_resource::<OutlinerRangeAnchor>()
-            .add_systems(Startup, setup_tree_node_expanded_watcher)
             .add_systems(OnEnter(crate::AppState::Editor), setup_name_watcher)
             .add_systems(
                 Update,
@@ -1122,19 +1121,6 @@ fn setup_name_watcher(mut commands: Commands) {
         .observe(on_name_mutated);
 }
 
-/// Pre-register the `NotifyChanged<TreeNodeExpanded>` hook during
-/// Startup. `bevy_monitors`'s add-hook queues a command that calls
-/// `world.schedule_scope(Update, ...)` the first time any entity with
-/// `NotifyChanged<C>` spawns. If that first spawn happens while `Update`
-/// is already executing (e.g. `reconcile_tree` spawning scene tree rows
-/// on workspace switch), the queued command panics with "Schedule
-/// Update not found". Registering a watcher entity here in Startup
-/// flushes the hook before any `Update` tick runs, so subsequent spawns
-/// take the `DetectingChanges<TreeNodeExpanded>` early-return branch.
-fn setup_tree_node_expanded_watcher(mut commands: Commands) {
-    commands.spawn(NotifyChanged::<TreeNodeExpanded>::default());
-}
-
 /// When an entity's Name is mutated in-place (e.g. via inspector),
 /// update the row label in every Outliner panel that has a row for it.
 fn on_name_mutated(
@@ -1498,7 +1484,7 @@ fn on_tree_node_expanded(
     tree_row_children_marker: Query<Entity, With<TreeRowChildren>>,
     remote_check: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
 ) {
-    let entity = trigger.event_target();
+    let entity = trigger.mutated;
     let Ok((expanded, populated, tree_node, children, built_on_expand)) = tree_query.get(entity)
     else {
         return;
