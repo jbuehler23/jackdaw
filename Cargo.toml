@@ -56,9 +56,6 @@ camera_rig = ["dep:jackdaw_camera_rig"]
 # `dlopen`. Games do not use this path; they build as ordinary cargo
 # binaries with their own Bevy. Off by default only because building the
 # SDK slows plain dev builds; release editor builds enable it.
-#
-# Build with CARGO_INCREMENTAL=0: incremental codegen leaves undefined
-# hidden anon constants across the dylib boundary at link time.
 dylib = ["dep:jackdaw_sdk", "jackdaw_api/dynamic_linking", "jackdaw_project_build/reflect"]
 # Bake the SDK-builder recipe into the editor binary so a self-contained
 # Cargo install can build its SDK on first launch (the first-run setup
@@ -380,6 +377,11 @@ workspace = true
 [profile.dev]
 opt-level = 1
 lto = "off"
+incremental = false
+
+# Only the editor crate builds incrementally; the crates in the SDK dylib do not.
+[profile.dev.package.jackdaw]
+incremental = true
 
 [profile.dev.package."*"]
 opt-level = 3

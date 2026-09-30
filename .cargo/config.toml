@@ -48,13 +48,5 @@ rustflags = ["-Zshare-generics=no"]
 linker = "clang"
 rustflags = ["-Clink-arg=--ld-path=wild"]
 
-[build]
-# The default `dylib` feature links the editor against the SDK dylib.
-# Incremental codegen and dylib linking do not mix: incremental reuse
-# leaves references to hidden anon constants inside the SDK dylib and
-# the link fails with undefined hidden symbols. Off for every build so
-# the default `dylib` feature links without a per-command env var.
-incremental = false
-
 [alias]
 xtask = "run --quiet --package xtask --manifest-path xtask/Cargo.toml --"

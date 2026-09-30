@@ -71,7 +71,7 @@ bevy = { version = "0.19", features = [
 
 #### `.cargo/config.toml`
 
-Under `[build]`, you can enable `incremental = true` to improve compile times after the first compile. You can also comment out the lines specifying `-Zshare-generics=no` to allow the compiler to do less work.
+You can comment out the lines specifying `-Zshare-generics=no` to allow the compiler to do less work.
 
 ## Checks
 
