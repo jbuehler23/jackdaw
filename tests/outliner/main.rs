@@ -21,5 +21,6 @@ mod outliner_rename;
 mod outliner_row_drop;
 mod outliner_row_icons;
 mod outliner_row_lifecycle;
+mod outliner_rows_in_view;
 mod tree_row_labels;
 mod ui_palette;

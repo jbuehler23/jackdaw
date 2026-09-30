@@ -13,10 +13,9 @@ use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_feathers::{
     button::ButtonClickEvent,
     context_menu::spawn_context_menu,
-    icons::IconFont,
     text_edit::{self, EditorTextEdit, TextEditCommitEvent, TextEditProps, TextEditValue},
     tokens,
-    tree_view::{ROW_BG, TreeRowStyle, set_row_expand_toggle, tree_row},
+    tree_view::{ROW_BG, set_row_expand_toggle, tree_row_frame},
 };
 use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuState};
 use jackdaw_widgets::tree_view::{
@@ -107,6 +106,7 @@ impl Plugin for HierarchyPlugin {
             .init_resource::<EntityIconRegistry>()
             .init_resource::<RowsAwaitingRegistration>()
             .init_resource::<OutlinerRangeAnchor>()
+            .add_plugins(crate::outliner_rows::plugin)
             .add_systems(OnEnter(crate::AppState::Editor), setup_name_watcher)
             .add_systems(
                 Update,
@@ -263,7 +263,7 @@ fn prefab_source_is_missing(world: &World, entity: Entity) -> bool {
 /// regardless of whether the entity is inherited from a prefab. Inherited
 /// status is conveyed separately via [`is_inherited_descendant`] so the
 /// outliner can pair the right icon with a muted color.
-fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
+pub(crate) fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
     // Checked before the component-based arms below: a glTF leaf carries
     // `Mesh3d` and would otherwise read as an ordinary authored mesh.
     if is_asset_part(world, entity) {
@@ -319,7 +319,7 @@ fn classify_entity(world: &World, entity: Entity) -> EntityCategory {
 /// True when this entity is an inherited descendant of a prefab instance
 /// (`PrefabEntityId` present, `IsA` absent). The outliner mutes such
 /// rows so they're visually distinguishable from authored entities.
-fn is_inherited_descendant(world: &World, entity: Entity) -> bool {
+pub(crate) fn is_inherited_descendant(world: &World, entity: Entity) -> bool {
     world.get::<crate::prefab::IsA>(entity).is_none()
         && world.get::<crate::prefab::PrefabEntityId>(entity).is_some()
 }
@@ -328,7 +328,7 @@ fn is_inherited_descendant(world: &World, entity: Entity) -> bool {
 /// outliner row. This mirrors the expansion filter exactly, including the
 /// active view mode, so the expand chevron only appears when expanding the
 /// row would spawn something.
-fn has_visible_children(world: &World, entity: Entity) -> bool {
+pub(crate) fn has_visible_children(world: &World, entity: Entity) -> bool {
     let live = outliner_in_live_mode(world);
     let live_set = if live {
         live_preview_set(world)
@@ -658,45 +658,23 @@ fn ancestor_hierarchy_root(world: &World, entity: Entity) -> Option<Entity> {
 /// `on_name_changed`) both see an empty index and queue duplicate
 /// rows, which is what produced the doubled Outliner entries.
 fn spawn_single_tree_row(world: &mut World, source: Entity, parent_container: Entity) -> Entity {
-    let label = row_label(world, source);
-    let has_children = has_visible_children(world, source);
-    let category = classify_entity(world, source);
-    let inherited = is_inherited_descendant(world, source);
-    let icon_font = world.resource::<IconFont>().0.clone();
-    let style = TreeRowStyle { icon_font };
-    let icon_override = registered_icon(world, source);
-    // Read rather than assumed false: a branch can be opened long after the
-    // entity was selected from the canvas.
-    let selected = world.get::<Selected>(source).is_some();
-
     let tree_row_entity = world
-        .spawn((
-            tree_row(
-                &label,
-                selected,
-                source,
-                category,
-                inherited,
-                icon_override,
-                &style,
-            ),
-            ChildOf(parent_container),
-        ))
+        .spawn((tree_row_frame(source), ChildOf(parent_container)))
         .id();
-    set_row_expand_toggle(world, tree_row_entity, has_children);
-    if selected && let Some(content) = first_child_with::<TreeRowContent>(world, tree_row_entity) {
-        // The colours came with the bundle, but the marker the rest of the
-        // code reads is inserted by an observer that has already fired.
-        world.entity_mut(content).insert(TreeRowSelected);
-    }
 
     // Register immediately under the owning Outliner panel so the
     // next caller in the same `commands.queue` flush sees the row
     // and skips it.
-    if let Some(root) = ancestor_hierarchy_root(world, parent_container) {
+    let root = ancestor_hierarchy_root(world, parent_container);
+    if let Some(root) = root {
         world
             .resource_mut::<TreeIndex>()
             .insert(root, source, tree_row_entity);
+    }
+    if root.is_some_and(|root| crate::outliner_rows::builds_rows_in_view(world, root)) {
+        crate::outliner_rows::reserve_row_room(world, tree_row_entity);
+    } else {
+        crate::outliner_rows::build_row(world, tree_row_entity);
     }
     tree_row_entity
 }
@@ -1483,10 +1461,19 @@ fn on_tree_node_expanded(
     )>,
     tree_row_children_marker: Query<Entity, With<TreeRowChildren>>,
     remote_check: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+    unbuilt_rows: Query<&TreeNodeExpanded, (With<TreeNode>, Without<Children>)>,
 ) {
     let entity = trigger.mutated;
     let Ok((expanded, populated, tree_node, children, built_on_expand)) = tree_query.get(entity)
     else {
+        if unbuilt_rows.get(entity).is_ok_and(|expanded| expanded.0) {
+            commands.queue(move |world: &mut World| {
+                crate::outliner_rows::build_row(world, entity);
+                if let Ok(mut row) = world.get_entity_mut(entity) {
+                    row.insert(TreeNodeExpanded(true));
+                }
+            });
+        }
         return;
     };
 
@@ -2721,13 +2708,13 @@ pub fn set_locked(world: &mut World, entity: Entity, locked: bool) {
 /// What a row's padlock is currently drawn as, so the sync only writes a
 /// glyph that has actually changed.
 #[derive(Component)]
-struct RowLockGlyph(bool);
+pub(crate) struct RowLockGlyph(pub(crate) bool);
 
 /// Whether anything could have changed a padlock since the last pass: a lock
 /// arrived, a lock went, or a row has not been written yet. Nothing else moves
 /// a padlock, so every other frame skips the walk over every row.
 fn row_lock_glyphs_are_stale(
-    pending: Query<(), (With<TreeNode>, Without<RowLockGlyph>)>,
+    pending: Query<(), (With<TreeNode>, With<Children>, Without<RowLockGlyph>)>,
     locked_arrived: Query<(), Added<jackdaw_scene_types::Locked>>,
     mut locked_left: RemovedComponents<jackdaw_scene_types::Locked>,
 ) -> bool {
@@ -2785,7 +2772,7 @@ fn sync_row_lock_glyphs(
 
 /// Sync the eye toggle glyph for every Outliner row of `entity` to its
 /// visibility state, dimming when hidden so the state always reads correctly.
-fn refresh_row_visibility_glyph(world: &mut World, entity: Entity, hidden: bool) {
+pub(crate) fn refresh_row_visibility_glyph(world: &mut World, entity: Entity, hidden: bool) {
     use jackdaw_feathers::icons::Icon;
     let glyph = String::from(if hidden { Icon::EyeOff } else { Icon::Eye }.unicode());
     let alpha = if hidden { 0.7 } else { 0.4 };
@@ -2904,7 +2891,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
 /// Marker for inline rename `text_edit` entity, linking back to the label entity and source entity.
 #[derive(Component)]
-struct InlineRenameInput {
+pub(crate) struct InlineRenameInput {
     label_entity: Entity,
     source_entity: Entity,
 }

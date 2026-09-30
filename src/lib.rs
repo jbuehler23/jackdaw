@@ -54,6 +54,7 @@ pub mod keybind_settings;
 pub mod keybinds;
 pub mod migrate_dialog;
 pub mod new_asset;
+mod outliner_rows;
 pub mod panel_focus;
 
 use std::{collections::BTreeMap, marker::PhantomData};

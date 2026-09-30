@@ -94,6 +94,16 @@ pub fn tree_row(
     style: &TreeRowStyle,
 ) -> impl Bundle {
     (
+        tree_row_frame(source),
+        tree_row_parts(label, selected, category, inherited, icon_override, style),
+    )
+}
+
+/// A row with nothing drawn in it yet, standing in the list for `source` until
+/// [`tree_row_parts`] builds what it shows. A long list keeps the rows out of
+/// view as frames alone.
+pub fn tree_row_frame(source: Entity) -> impl Bundle {
+    (
         TreeViewRowPart,
         TreeNode(source),
         TreeNodeExpanded(false),
@@ -103,29 +113,51 @@ pub fn tree_row(
             width: percent(100),
             ..default()
         },
-        children![
-            tree_row_content(label, selected, category, inherited, icon_override, style),
-            (
-                TreeRowChildren,
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    // Indent via padding, not margin: a left margin on a
-                    // full-width box is clamped to `parent_width - margin`, so
-                    // each level would pull the row's right edge inward.
-                    padding: UiRect::left(px(INDENT_WIDTH + tokens::SPACING_SM)),
-                    border: UiRect::left(px(1.0)),
-                    width: percent(100),
-                    display: Display::None,
-                    ..default()
-                },
-                BorderColor::all(tokens::CONNECTION_LINE),
-            ),
-            // Last, so the gaps sit over the row's own drop target where the
-            // two meet.
-            insertion_zone(false),
-            insertion_zone(true)
-        ],
     )
+}
+
+/// What a row shows, inserted into its [`tree_row_frame`]: the label line, the
+/// container its children go in, and the gaps a drag can drop into.
+pub fn tree_row_parts(
+    label: &str,
+    selected: bool,
+    category: EntityCategory,
+    inherited: bool,
+    icon_override: Option<Icon>,
+    style: &TreeRowStyle,
+) -> impl Bundle {
+    children![
+        tree_row_content(label, selected, category, inherited, icon_override, style),
+        (
+            TreeRowChildren,
+            Node {
+                flex_direction: FlexDirection::Column,
+                // Indent via padding, not margin: a left margin on a full-width
+                // box is clamped to `parent_width - margin`, so each level would
+                // pull the row's right edge inward.
+                padding: UiRect::left(px(INDENT_WIDTH + tokens::SPACING_SM)),
+                border: UiRect::left(px(1.0)),
+                width: percent(100),
+                display: Display::None,
+                ..default()
+            },
+            BorderColor::all(tokens::CONNECTION_LINE),
+        ),
+        // Last, so the gaps sit over the row's own drop target where the two
+        // meet.
+        insertion_zone(false),
+        insertion_zone(true)
+    ]
+}
+
+/// How tall a built row is, in logical pixels: its padlock button plus the
+/// padding and border around the label line.
+pub fn tree_row_height() -> f32 {
+    let button = match crate::button::ButtonSize::Icon.height() {
+        Val::Px(height) => height,
+        _ => 0.0,
+    };
+    button.max(tokens::TEXT_SIZE_PX) + 2.0 * tokens::SPACING_XS + 2.0
 }
 
 /// The strip standing for the gap above (`after == false`) or below
@@ -1537,7 +1569,7 @@ pub fn tree_keyboard_navigation(
     capture: Option<Res<jackdaw_commands::KeymapCapture>>,
     mut focused: ResMut<TreeFocused>,
     tree_roots: Query<&Children, With<TreeRoot>>,
-    tree_nodes: Query<(Entity, &TreeNodeExpanded, &Children), With<TreeNode>>,
+    tree_nodes: Query<(Entity, &TreeNodeExpanded, Option<&Children>), With<TreeNode>>,
     tree_row_children: Query<&Children, With<TreeRowChildren>>,
     tree_row_contents: Query<Entity, With<TreeRowContent>>,
     node_query: Query<&Node>,
@@ -1608,7 +1640,10 @@ pub fn tree_keyboard_navigation(
         // The marker, not its children: a branch that has not been opened
         // yet holds an empty container, which a `&Children` query does not
         // match.
-        let has_children = children.iter().any(|c| row_children.contains(c));
+        let has_children = children
+            .into_iter()
+            .flatten()
+            .any(|c| row_children.contains(*c));
         if has_children && !expanded.0 {
             commands.entity(entity).insert(TreeNodeExpanded(true));
         }
@@ -1619,7 +1654,7 @@ pub fn tree_keyboard_navigation(
         && let Ok(tree_node) = tree_node_query.get(focused_entity)
         && let Ok((_, _, children)) = tree_nodes.get(focused_entity)
     {
-        for child in children.iter() {
+        for child in children.into_iter().flatten().copied() {
             if tree_row_contents.contains(child) {
                 commands.trigger(TreeRowClicked {
                     entity: child,
@@ -1656,7 +1691,7 @@ fn enclosing_row(
 /// Collect all visible tree row entities in depth-first order
 fn collect_visible_rows(
     tree_roots: &Query<&Children, With<TreeRoot>>,
-    tree_nodes: &Query<(Entity, &TreeNodeExpanded, &Children), With<TreeNode>>,
+    tree_nodes: &Query<(Entity, &TreeNodeExpanded, Option<&Children>), With<TreeNode>>,
     tree_row_children: &Query<&Children, With<TreeRowChildren>>,
     node_query: &Query<&Node>,
 ) -> Vec<Entity> {
@@ -1679,7 +1714,7 @@ fn collect_visible_rows(
 
 fn collect_visible_rows_recursive(
     entity: Entity,
-    tree_nodes: &Query<(Entity, &TreeNodeExpanded, &Children), With<TreeNode>>,
+    tree_nodes: &Query<(Entity, &TreeNodeExpanded, Option<&Children>), With<TreeNode>>,
     tree_row_children: &Query<&Children, With<TreeRowChildren>>,
     node_query: &Query<&Node>,
     result: &mut Vec<Entity>,
@@ -1697,7 +1732,7 @@ fn collect_visible_rows_recursive(
     result.push(entity);
 
     if expanded.0 {
-        for child in children.iter() {
+        for child in children.into_iter().flatten().copied() {
             if let Ok(row_children) = tree_row_children.get(child) {
                 for grandchild in row_children.iter() {
                     collect_visible_rows_recursive(
