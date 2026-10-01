@@ -20,6 +20,7 @@ use crate::{
         CommandHistory, EditorCommand, HierarchyLocation, despawn_scene_entity,
         filtered_scene_builder, set_hierarchy_location, snapshot_rebuild, sync_component_to_ast,
     },
+    scene_nodes::live_entity,
     selection::Selection,
     ui_stage::{global_node_rect, parent_offset_box},
 };
@@ -199,8 +200,27 @@ struct GroupIntoContainer {
     label: String,
 }
 
+impl GroupIntoContainer {
+    fn relive(&mut self, world: &World) {
+        let live = |entity: Entity| live_entity(world, entity);
+        self.members
+            .iter_mut()
+            .for_each(|member| *member = live(*member));
+        self.parent = self.parent.map(live);
+        for (member, location, _) in &mut self.before {
+            *member = live(*member);
+            *location = location.live(world);
+        }
+        self.after
+            .iter_mut()
+            .for_each(|(member, _)| *member = live(*member));
+        self.container = self.container.map(live);
+    }
+}
+
 impl EditorCommand for GroupIntoContainer {
     fn execute(&mut self, world: &mut World) {
+        self.relive(world);
         let mut container = world.spawn((Name::new(self.name.clone()), self.node.clone()));
         if let Some(parent) = self.parent {
             container.insert(ChildOf(parent));
@@ -240,6 +260,7 @@ impl EditorCommand for GroupIntoContainer {
     /// as it was, so the container has to be gone and every lower member
     /// back before the next one is placed.
     fn undo(&mut self, world: &mut World) {
+        self.relive(world);
         for (member, location, node) in self.before.clone() {
             write_node(world, member, &node);
             let end = list_len(world, location.parent);
@@ -292,8 +313,20 @@ struct UngroupContainer {
     label: String,
 }
 
+impl UngroupContainer {
+    fn relive(&mut self, world: &World) {
+        let live = |entity: Entity| live_entity(world, entity);
+        self.container = live(self.container);
+        self.parent = self.parent.map(live);
+        self.children
+            .iter_mut()
+            .for_each(|child| child.entity = live(child.entity));
+    }
+}
+
 impl EditorCommand for UngroupContainer {
     fn execute(&mut self, world: &mut World) {
+        self.relive(world);
         for (offset, child) in self.children.clone().into_iter().enumerate() {
             set_hierarchy_location(
                 world,
@@ -316,6 +349,7 @@ impl EditorCommand for UngroupContainer {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.relive(world);
         let Some(snapshot) = self.snapshot.take() else {
             return;
         };

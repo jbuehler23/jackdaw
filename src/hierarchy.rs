@@ -2675,10 +2675,12 @@ struct SetLocked {
 
 impl EditorCommand for SetLocked {
     fn execute(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         set_locked(world, self.entity, self.locked);
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         set_locked(world, self.entity, !self.locked);
     }
 

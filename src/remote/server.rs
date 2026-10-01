@@ -1045,6 +1045,9 @@ struct ApplyBsn {
 
 impl EditorCommand for ApplyBsn {
     fn execute(&mut self, world: &mut World) {
+        self.parent = self
+            .parent
+            .map(|parent| crate::scene_nodes::live_entity(world, parent));
         let spawned = match jackdaw_remote::bsn_methods::jackdaw_apply_bsn_handler(
             bevy::ecs::system::In(Some(self.source.clone())),
             world,
@@ -1089,6 +1092,7 @@ impl EditorCommand for ApplyBsn {
 
     fn undo(&mut self, world: &mut World) {
         for entity in self.spawned.drain(..) {
+            let entity = crate::scene_nodes::live_entity(world, entity);
             if world.get_entity(entity).is_ok() {
                 crate::commands::despawn_scene_entity(world, entity);
             }

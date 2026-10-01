@@ -15,6 +15,7 @@ use jackdaw_bsn::{
     get_bsn_field, patch_type_path, set_bsn_field,
 };
 use jackdaw_prefab::source::{peid_value, synthetic_root_patches};
+use jackdaw_scene_types::SceneNodeId;
 use std::path::{Path, PathBuf};
 
 const PREFAB_TYPE: &str = "jackdaw::prefab::components::Prefab";
@@ -730,6 +731,7 @@ fn add_instance_node(world: &mut World, source: &Path, transform: Transform) {
     let patches = vec![
         isa_patch(&source.to_string_lossy(), &[]),
         peid_patch(0),
+        crate::scene_nodes::node_id_patch(SceneNodeId::next()),
         transform_patch(transform),
     ];
     let mut live = world.resource_mut::<SceneBsnAst>();
@@ -1328,7 +1330,11 @@ fn instance_node_patches(
             GlobalTransform::from(placement).reparented_to(parent)
         });
     let source = prefab_path.to_string_lossy().into_owned();
-    let mut patches = vec![isa_patch(&source, &[]), peid_patch(0)];
+    let mut patches = vec![
+        isa_patch(&source, &[]),
+        peid_patch(0),
+        crate::scene_nodes::node_id_patch(SceneNodeId::next()),
+    ];
     if !ui_scene {
         let moved_only = placement.rotation == Quat::IDENTITY && placement.scale == Vec3::ONE;
         patches.push(if moved_only {

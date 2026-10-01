@@ -547,8 +547,21 @@ impl ClipEventEdit {
     }
 }
 
+impl ClipEventEdit {
+    fn relive(&mut self, world: &World) {
+        let live = |entity: Entity| crate::scene_nodes::live_entity(world, entity);
+        match &mut self.row {
+            EventRow::Authored(clip) => *clip = live(*clip),
+            EventRow::Named { owner, .. } => *owner = live(*owner),
+        }
+        self.on = self.on.map(live);
+        self.event = self.event.map(live);
+    }
+}
+
 impl EditorCommand for ClipEventEdit {
     fn execute(&mut self, world: &mut World) {
+        self.relive(world);
         if self.adding {
             self.spawn(world);
         } else {
@@ -557,6 +570,7 @@ impl EditorCommand for ClipEventEdit {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.relive(world);
         if self.adding {
             self.despawn(world);
         } else {

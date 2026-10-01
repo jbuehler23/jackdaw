@@ -458,6 +458,7 @@ struct InstantiateWidgetCommand {
 
 impl EditorCommand for InstantiateWidgetCommand {
     fn execute(&mut self, world: &mut World) {
+        self.slot.parent = crate::scene_nodes::live_entity(world, self.slot.parent);
         self.spawned = None;
         self.error = None;
         let mut taken = crate::entity_ops::scene_entity_names(world);
@@ -495,9 +496,11 @@ impl EditorCommand for InstantiateWidgetCommand {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.slot.parent = crate::scene_nodes::live_entity(world, self.slot.parent);
         let Some(entity) = self.spawned.take() else {
             return;
         };
+        let entity = crate::scene_nodes::live_entity(world, entity);
         crate::commands::deselect_entities(world, &[entity]);
         world
             .resource_mut::<jackdaw_bsn::SceneBsnAst>()

@@ -20,6 +20,7 @@ pub struct SetCustomProperties {
 
 impl crate::commands::EditorCommand for SetCustomProperties {
     fn execute(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         if let Some(mut cp) = world.get_mut::<CustomProperties>(self.entity) {
             *cp = self.new_properties.clone();
         }
@@ -27,6 +28,7 @@ impl crate::commands::EditorCommand for SetCustomProperties {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         if let Some(mut cp) = world.get_mut::<CustomProperties>(self.entity) {
             *cp = self.old_properties.clone();
         }

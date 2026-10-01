@@ -86,13 +86,10 @@ pub(crate) fn entity_add_group(
     commands.queue(move |world: &mut World| {
         // Spawn through the same command `entity.add.empty` pushes, so undo
         // despawns the node rather than only taking back its rename.
-        let mut spawn = SpawnEntity {
-            spawned: None,
-            spawn_fn: Box::new(|world: &mut World| {
-                spawn_template_in_document(world, EntityTemplate::Empty)
-            }),
-            label: "Add Group".to_string(),
-        };
+        let mut spawn = SpawnEntity::new(
+            |world: &mut World| spawn_template_in_document(world, EntityTemplate::Empty),
+            "Add Group".to_string(),
+        );
         spawn.execute(world);
         let Some(entity) = spawn
             .spawned

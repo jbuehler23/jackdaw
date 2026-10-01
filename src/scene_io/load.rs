@@ -281,6 +281,9 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
             );
         }
         jackdaw_prefab::absolutize_isa_sources(&mut authored, &assets_root, &parent_path);
+        if !crate::scenes::operators::document_is_prefab(&authored) {
+            crate::scene_nodes::name_instance_roots(&mut authored);
+        }
 
         // A legacy scene's prefabs may be legacy too, and the cache reads
         // `.bsn` only. They convert here because the resolve that needs them

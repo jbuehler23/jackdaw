@@ -10,12 +10,14 @@ use bevy::{
     reflect::PartialReflect,
     world_serialization::{WorldInstance, WorldInstanceSpawner},
 };
+use jackdaw_scene_types::SceneNodeId;
 use serde::de::DeserializeSeed;
 
 // Re-export the core command framework from the jackdaw_commands crate
 pub use jackdaw_commands::{CommandGroup, CommandHistory, EditorCommand};
 
 use crate::EditorEntity;
+use crate::scene_nodes::live_entity;
 use crate::selection::{Selected, Selection};
 
 pub struct CommandHistoryPlugin;
@@ -23,7 +25,8 @@ pub struct CommandHistoryPlugin;
 impl Plugin for CommandHistoryPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(CommandHistory::default())
-            .init_resource::<FieldEditSessions>();
+            .init_resource::<FieldEditSessions>()
+            .add_plugins(crate::scene_nodes::plugin);
     }
 }
 
@@ -319,6 +322,7 @@ pub struct SetTransform {
 
 impl EditorCommand for SetTransform {
     fn execute(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         if let Some(mut transform) = world.get_mut::<Transform>(self.entity) {
             *transform = self.new_transform;
         }
@@ -331,6 +335,7 @@ impl EditorCommand for SetTransform {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         if let Some(mut transform) = world.get_mut::<Transform>(self.entity) {
             *transform = self.old_transform;
         }
@@ -366,8 +371,17 @@ pub struct ReparentEntity {
     pub new_parent: Option<Entity>,
 }
 
+impl ReparentEntity {
+    fn relive(&mut self, world: &World) {
+        self.entity = live_entity(world, self.entity);
+        self.old_parent = self.old_parent.map(|parent| live_entity(world, parent));
+        self.new_parent = self.new_parent.map(|parent| live_entity(world, parent));
+    }
+}
+
 impl EditorCommand for ReparentEntity {
     fn execute(&mut self, world: &mut World) {
+        self.relive(world);
         set_hierarchy_location(
             world,
             self.entity,
@@ -379,6 +393,7 @@ impl EditorCommand for ReparentEntity {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.relive(world);
         set_hierarchy_location(
             world,
             self.entity,
@@ -402,6 +417,14 @@ pub struct HierarchyLocation {
 }
 
 impl HierarchyLocation {
+    /// The same place, its parent named by the entity holding that parent now.
+    pub fn live(self, world: &World) -> Self {
+        Self {
+            parent: self.parent.map(|parent| live_entity(world, parent)),
+            index: self.index,
+        }
+    }
+
     /// Read an entity's current parent and sibling index.
     pub fn from_world(world: &World, entity: Entity) -> Self {
         let parent = world.get::<ChildOf>(entity).map(ChildOf::parent);
@@ -442,12 +465,22 @@ impl MoveEntity {
     }
 }
 
+impl MoveEntity {
+    fn relive(&mut self, world: &World) {
+        self.entity = live_entity(world, self.entity);
+        self.old = self.old.live(world);
+        self.new = self.new.live(world);
+    }
+}
+
 impl EditorCommand for MoveEntity {
     fn execute(&mut self, world: &mut World) {
+        self.relive(world);
         set_hierarchy_location(world, self.entity, self.new);
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.relive(world);
         set_hierarchy_location(world, self.entity, self.old);
     }
 
@@ -604,6 +637,7 @@ impl AddComponent {
 
 impl EditorCommand for AddComponent {
     fn execute(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         info!(
             "AddComponent::execute entered: type_path={}, type_id={:?}, component_id={:?}, entity={:?}",
             self.type_path, self.type_id, self.component_id, self.entity
@@ -696,6 +730,7 @@ impl EditorCommand for AddComponent {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         {
             let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
             if let Some(node) = ast.ast_for(self.entity) {
@@ -732,6 +767,7 @@ impl AddProjectComponent {
 
 impl EditorCommand for AddProjectComponent {
     fn execute(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
         let Some(node) = ast.ast_for(self.entity) else {
             warn!(
@@ -762,6 +798,7 @@ impl EditorCommand for AddProjectComponent {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         {
             let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
             if let Some(node) = ast.ast_for(self.entity) {
@@ -804,6 +841,7 @@ impl RemoveProjectComponent {
 
 impl EditorCommand for RemoveProjectComponent {
     fn execute(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         {
             let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
             let Some(node) = ast.ast_for(self.entity) else {
@@ -820,6 +858,7 @@ impl EditorCommand for RemoveProjectComponent {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         restore_ast_component_patch(
             world,
             self.entity,
@@ -889,6 +928,7 @@ impl RemoveComponent {
 
 impl EditorCommand for RemoveComponent {
     fn execute(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         let tracked = world
             .resource::<jackdaw_bsn::SceneBsnAst>()
             .ast_for(self.entity)
@@ -910,6 +950,7 @@ impl EditorCommand for RemoveComponent {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         if let Some(patch) = self.ast_snapshot.clone() {
             restore_ast_component_patch(world, self.entity, &self.type_path, patch);
             crate::scene_io::resync_entity_from_ast(world, self.entity);
@@ -980,17 +1021,39 @@ pub struct SpawnEntity {
     /// Builder function that spawns the entity and returns its Entity id.
     pub spawn_fn: Box<dyn Fn(&mut World) -> Entity + Send + Sync>,
     pub label: String,
+    /// The document node the first execute spawned, which every redo spawns
+    /// again so the entries above this one still find it.
+    node: Option<SceneNodeId>,
+}
+
+impl SpawnEntity {
+    pub fn new(
+        spawn_fn: impl Fn(&mut World) -> Entity + Send + Sync + 'static,
+        label: impl Into<String>,
+    ) -> Self {
+        Self {
+            spawned: None,
+            spawn_fn: Box::new(spawn_fn),
+            label: label.into(),
+            node: None,
+        }
+    }
 }
 
 impl EditorCommand for SpawnEntity {
     fn execute(&mut self, world: &mut World) {
         let entity = (self.spawn_fn)(world);
+        match self.node {
+            Some(node) => crate::scene_nodes::rename_node(world, entity, node),
+            None => self.node = world.get::<SceneNodeId>(entity).copied(),
+        }
         self.spawned = Some(entity);
         SpawnedEntities::record(world, entity);
     }
 
     fn undo(&mut self, world: &mut World) {
         if let Some(entity) = self.spawned.take() {
+            let entity = live_entity(world, entity);
             SpawnedEntities::forget(world, entity);
             deselect_entities(world, &[entity]);
             despawn_scene_entity(world, entity);
@@ -1040,6 +1103,7 @@ impl DespawnEntity {
 
 impl EditorCommand for DespawnEntity {
     fn execute(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         deselect_entities(world, &[self.entity]);
         despawn_scene_entity(world, self.entity);
     }
@@ -1054,6 +1118,7 @@ impl EditorCommand for DespawnEntity {
             self.entity = new_id;
         }
         crate::scene_io::register_entity_in_ast(world, self.entity);
+        self.location = self.location.live(world);
         // A parent that has gone since leaves the entity at the top.
         let location = HierarchyLocation {
             parent: self
@@ -1308,6 +1373,7 @@ impl SetBsnField {
 
 impl EditorCommand for SetBsnField {
     fn execute(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         // Names live in the document as `#name` reference patches, not
         // component patches, so route them through the name path.
         if self.type_path == NAME_TYPE_PATH {
@@ -1378,6 +1444,7 @@ impl EditorCommand for SetBsnField {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         if self.type_path == NAME_TYPE_PATH {
             let old_name = self
                 .old_value
@@ -2185,11 +2252,13 @@ impl SetUiNode {
 
 impl EditorCommand for SetUiNode {
     fn execute(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         let after = self.after.clone();
         self.apply(world, &after);
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = live_entity(world, self.entity);
         let before = self.before.clone();
         self.apply(world, &before);
     }
@@ -2247,11 +2316,13 @@ impl SetCanvasGuides {
 
 impl EditorCommand for SetCanvasGuides {
     fn execute(&mut self, world: &mut World) {
+        self.root = live_entity(world, self.root);
         let after = self.after.clone();
         self.apply(world, &after);
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.root = live_entity(world, self.root);
         let before = self.before.clone();
         self.apply(world, &before);
     }

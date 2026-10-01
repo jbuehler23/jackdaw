@@ -109,10 +109,12 @@ impl SetWind {
 
 impl EditorCommand for SetWind {
     fn execute(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         self.apply(world, self.after);
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         self.apply(world, self.before);
     }
 
@@ -254,11 +256,13 @@ impl SetEnvironment {
 
 impl EditorCommand for SetEnvironment {
     fn execute(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         let after = self.after.clone();
         self.apply(world, &after);
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         let before = self.before.clone();
         self.apply(world, &before);
     }

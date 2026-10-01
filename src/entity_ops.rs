@@ -711,15 +711,11 @@ pub fn seed_2d_scene_root(world: &mut World) -> Entity {
 /// Pushes a `SpawnEntity` command so the addition can be undone.
 pub fn create_entity_in_world(world: &mut World, template: EntityTemplate) {
     let label = format!("Add {}", template.label());
-    let spawn_fn = Box::new(move |world: &mut World| -> Entity {
-        spawn_template_in_document(world, template)
-    });
+    let spawn_fn =
+        move |world: &mut World| -> Entity { spawn_template_in_document(world, template) };
 
-    let mut cmd: Box<dyn EditorCommand> = Box::new(crate::commands::SpawnEntity {
-        spawned: None,
-        spawn_fn,
-        label,
-    });
+    let mut cmd: Box<dyn EditorCommand> =
+        Box::new(crate::commands::SpawnEntity::new(spawn_fn, label));
     cmd.execute(world);
     world.resource_mut::<CommandHistory>().push_executed(cmd);
 }

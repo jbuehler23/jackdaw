@@ -95,7 +95,6 @@ fn a_snapshot_entry_above_a_move_puts_back_the_scene_as_the_move_left_it() {
 }
 
 #[test]
-#[ignore = "a snapshot undo respawns every entity, and the move entry below it still names the entity it moved"]
 fn a_move_below_a_snapshot_entry_undoes_after_the_snapshot_is_undone() {
     let (mut app, _dir) = editor();
     let rock = cube(&mut app);
@@ -117,7 +116,6 @@ fn a_move_below_a_snapshot_entry_undoes_after_the_snapshot_is_undone() {
 }
 
 #[test]
-#[ignore = "switching tabs respawns the scene, and the move entry still names the entity it moved"]
 fn a_move_undoes_after_switching_away_from_the_tab_and_back() {
     let (mut app, _dir) = editor();
     let rock = cube(&mut app);
@@ -380,7 +378,6 @@ fn every_undo_and_redo_of_snapshot_entries_puts_back_the_exact_scene_text() {
 }
 
 #[test]
-#[ignore = "a snapshot undo respawns every entity, and the move entry below it still names the entity it moved"]
 fn every_undo_and_redo_of_mixed_entries_puts_back_the_exact_scene_text() {
     let (mut app, _dir) = editor();
     let steps = mixed_edits(&mut app, true);
@@ -573,7 +570,6 @@ fn an_edit_on_a_prefab_instance_undoes_and_redoes() {
 }
 
 #[test]
-#[ignore = "a snapshot redo respawns every entity, and the field entry above it still names the entity it edited"]
 fn an_edit_on_a_prefab_instance_redoes_after_the_spawn_is_undone_and_redone() {
     let (mut app, _dir) = editor();
     let steps = edit_a_rock(&mut app, true);
@@ -614,7 +610,6 @@ fn a_trimmed_history_still_undoes_every_entry_it_kept() {
 }
 
 #[test]
-#[ignore = "a snapshot undo respawns every entity, and the reparent entry below it still names the entities it moved"]
 fn a_reparent_below_a_snapshot_entry_undoes_after_the_snapshot_is_undone() {
     let (mut app, _dir) = editor();
     let parent = cube(&mut app);
@@ -635,7 +630,6 @@ fn a_reparent_below_a_snapshot_entry_undoes_after_the_snapshot_is_undone() {
 }
 
 #[test]
-#[ignore = "a snapshot undo respawns every entity, and the field entry below it still names the entity it edited"]
 fn a_field_edit_below_a_snapshot_entry_undoes_after_the_snapshot_is_undone() {
     let (mut app, _dir) = editor();
     let rock = cube(&mut app);
@@ -648,4 +642,123 @@ fn a_field_edit_below_a_snapshot_entry_undoes_after_the_snapshot_is_undone() {
     steps.record(&mut app);
 
     steps.assert_round_trip(&mut app, Check::Outline);
+}
+
+#[test]
+fn a_move_above_a_snapshot_entry_redoes_after_the_snapshot_is_undone_and_redone() {
+    let (mut app, _dir) = editor();
+    let start = depth(&app);
+    let rock = cube(&mut app);
+    move_to(&mut app, rock, 5.0);
+
+    while depth(&app) > start {
+        history(&mut app, "history.undo");
+    }
+    assert!(entity_of(&mut app, rock).is_none());
+    while redo_depth(&app) > 0 {
+        history(&mut app, "history.redo");
+    }
+    assert_eq!(x_of(&mut app, rock), Some(5.0));
+}
+
+#[test]
+fn a_placed_prefab_instance_keeps_its_node_through_undo_and_redo() {
+    let (mut app, _dir) = editor();
+    let start = depth(&app);
+    let rock = spawn_rock(&mut app, 2.0);
+    let node = *app
+        .world()
+        .get::<SceneNodeId>(rock)
+        .expect("a placed instance names its node");
+    let placed = depth(&app);
+    cube(&mut app);
+
+    while depth(&app) > placed {
+        history(&mut app, "history.undo");
+    }
+    let rock = spawn_rock_found(&mut app);
+    assert_eq!(entity_of(&mut app, node), Some(rock));
+    while depth(&app) > start {
+        history(&mut app, "history.undo");
+    }
+    assert!(entity_of(&mut app, node).is_none());
+    while redo_depth(&app) > 0 {
+        history(&mut app, "history.redo");
+    }
+    let rock = spawn_rock_found(&mut app);
+    assert_eq!(entity_of(&mut app, node), Some(rock));
+}
+
+const SCENE_WITH_AN_UNNAMED_INSTANCE: &str = "jackdaw::prefab::components::IsA {
+    source: \"prefabs/rock.bsn\",
+    deleted: [],
+}
+jackdaw::prefab::components::PrefabEntityId(0)
+bevy_transform::components::transform::Transform {
+    translation: glam::Vec3 {
+        x: 2.0,
+        y: 0.0,
+        z: 0.0,
+    },
+}
+";
+
+#[test]
+fn opening_a_scene_names_its_prefab_instances_without_dirtying_the_tab() {
+    let (mut app, dir) = editor();
+    let path = dir.path().join("assets/scenes/placed.bsn");
+    std::fs::create_dir_all(path.parent().expect("a parent")).expect("a scenes dir");
+    std::fs::write(&path, SCENE_WITH_AN_UNNAMED_INSTANCE).expect("the scene");
+    app.world_mut()
+        .operator("scene.open")
+        .param("path", path.to_string_lossy().into_owned())
+        .call()
+        .expect("scene.open dispatches")
+        .assert_finished();
+    app.update();
+    app.update();
+
+    let rock = spawn_rock_found(&mut app);
+    let node = *app
+        .world()
+        .get::<SceneNodeId>(rock)
+        .expect("the opened instance names its node");
+    assert!(!active_tab_dirty(&app));
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("the scene"),
+        SCENE_WITH_AN_UNNAMED_INSTANCE
+    );
+
+    let before = depth(&app);
+    cube(&mut app);
+    while depth(&app) > before {
+        history(&mut app, "history.undo");
+    }
+    let rock = spawn_rock_found(&mut app);
+    assert_eq!(entity_of(&mut app, node), Some(rock));
+}
+
+#[test]
+fn a_move_above_a_spawn_redoes_on_the_node_the_redo_spawns() {
+    let (mut app, _dir) = editor();
+    let start = depth(&app);
+    let before = nodes(&mut app);
+    jackdaw::entity_ops::create_entity_in_world(
+        app.world_mut(),
+        jackdaw::entity_ops::EntityTemplate::Cube,
+    );
+    app.update();
+    let rock = nodes(&mut app)
+        .into_iter()
+        .find(|node| !before.contains(node))
+        .expect("the spawn added a node");
+    move_to(&mut app, rock, 5.0);
+
+    while depth(&app) > start {
+        history(&mut app, "history.undo");
+    }
+    while redo_depth(&app) > 0 {
+        history(&mut app, "history.redo");
+    }
+    assert_eq!(x_of(&mut app, rock), Some(5.0));
 }

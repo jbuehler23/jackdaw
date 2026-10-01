@@ -131,6 +131,7 @@ pub mod restart;
 pub mod run_config;
 pub mod scaffold;
 pub mod scene_io;
+pub mod scene_nodes;
 pub mod scene_ops;
 pub mod scenes;
 pub mod schema_preview;
@@ -1166,8 +1167,28 @@ enum DespawnKeyframeCmd {
     },
 }
 
+impl DespawnKeyframeCmd {
+    fn relive(&mut self, world: &World) {
+        match self {
+            Self::Vec3 {
+                keyframe, track, ..
+            }
+            | Self::Quat {
+                keyframe, track, ..
+            }
+            | Self::F32 {
+                keyframe, track, ..
+            } => {
+                *keyframe = scene_nodes::live_entity(world, *keyframe);
+                *track = scene_nodes::live_entity(world, *track);
+            }
+        }
+    }
+}
+
 impl jackdaw_commands::EditorCommand for DespawnKeyframeCmd {
     fn execute(&mut self, world: &mut World) {
+        self.relive(world);
         let entity = match self {
             Self::Vec3 { keyframe, .. }
             | Self::Quat { keyframe, .. }
@@ -1179,6 +1200,7 @@ impl jackdaw_commands::EditorCommand for DespawnKeyframeCmd {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.relive(world);
         let new_id = match self {
             Self::Vec3 {
                 track, time, value, ..
@@ -1871,8 +1893,28 @@ enum SpawnKeyframeCmd {
     },
 }
 
+impl SpawnKeyframeCmd {
+    fn relive(&mut self, world: &World) {
+        match self {
+            Self::Vec3 {
+                keyframe, track, ..
+            }
+            | Self::Quat {
+                keyframe, track, ..
+            }
+            | Self::F32 {
+                keyframe, track, ..
+            } => {
+                *keyframe = keyframe.map(|keyframe| scene_nodes::live_entity(world, keyframe));
+                *track = scene_nodes::live_entity(world, *track);
+            }
+        }
+    }
+}
+
 impl jackdaw_commands::EditorCommand for SpawnKeyframeCmd {
     fn execute(&mut self, world: &mut World) {
+        self.relive(world);
         let new_id = match self {
             Self::Vec3 {
                 track, time, value, ..
@@ -1916,6 +1958,7 @@ impl jackdaw_commands::EditorCommand for SpawnKeyframeCmd {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.relive(world);
         let entity = match self {
             Self::Vec3 { keyframe, .. }
             | Self::Quat { keyframe, .. }
@@ -2796,11 +2839,8 @@ pub(crate) fn spawn_undoable<F>(world: &mut World, label: &str, spawn: F)
 where
     F: Fn(&mut World) -> Entity + Send + Sync + 'static,
 {
-    let mut cmd: Box<dyn jackdaw_commands::EditorCommand> = Box::new(commands::SpawnEntity {
-        spawned: None,
-        spawn_fn: Box::new(spawn),
-        label: label.to_string(),
-    });
+    let mut cmd: Box<dyn jackdaw_commands::EditorCommand> =
+        Box::new(commands::SpawnEntity::new(spawn, label.to_string()));
     cmd.execute(world);
     world
         .resource_mut::<commands::CommandHistory>()

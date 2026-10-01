@@ -1493,15 +1493,14 @@ fn stamp(world: &mut World, request: StampRequest) {
     if existing_group.is_none() {
         let slot = slot.clone();
         let key = key.clone();
-        cmds.push(Box::new(SpawnEntity {
-            spawned: None,
-            spawn_fn: Box::new(move |world: &mut World| {
+        cmds.push(Box::new(SpawnEntity::new(
+            move |world: &mut World| {
                 let entity = spawn_group(world, &key, terrain);
                 *slot.lock().expect("scatter group slot") = Some(entity);
                 entity
-            }),
-            label: "Scatter".to_string(),
-        }));
+            },
+            "Scatter".to_string(),
+        )));
     }
 
     for entity in &stale {
@@ -1532,9 +1531,8 @@ fn stamp(world: &mut World, request: StampRequest) {
                 .map(|materials| jackdaw_scene_types::MaterialOverrides {
                     materials: materials.clone(),
                 });
-        cmds.push(Box::new(SpawnEntity {
-            spawned: None,
-            spawn_fn: Box::new(move |world: &mut World| {
+        cmds.push(Box::new(SpawnEntity::new(
+            move |world: &mut World| {
                 let Some(parent) = *slot.lock().expect("scatter group slot") else {
                     return Entity::PLACEHOLDER;
                 };
@@ -1547,9 +1545,9 @@ fn stamp(world: &mut World, request: StampRequest) {
                     provenance.clone(),
                     overrides.clone(),
                 )
-            }),
-            label: "Scatter instance".to_string(),
-        }));
+            },
+            "Scatter instance".to_string(),
+        )));
     }
 
     let replaced = stale.len();
@@ -1644,9 +1642,8 @@ fn promote_placement(
             materials: promoted.materials.clone(),
         });
     let transform = promoted.transform;
-    let mut commands: Vec<Box<dyn EditorCommand>> = vec![Box::new(SpawnEntity {
-        spawned: None,
-        spawn_fn: Box::new(move |world: &mut World| {
+    let mut commands: Vec<Box<dyn EditorCommand>> = vec![Box::new(SpawnEntity::new(
+        move |world: &mut World| {
             spawn_instance(
                 world,
                 terrain,
@@ -1661,9 +1658,9 @@ fn promote_placement(
                 },
                 overrides.clone(),
             )
-        }),
-        label: "Promote Placement".to_string(),
-    })];
+        },
+        "Promote Placement".to_string(),
+    ))];
     commands.push(Box::new(RemovePlacement {
         data_path: data_path.clone(),
         region: promoted.region,

@@ -15,7 +15,6 @@ pub mod palette;
 pub mod panel;
 pub mod quantize_ops;
 pub mod regions;
-mod retired;
 pub mod scatter;
 pub mod scatter_data;
 pub mod sculpt;
@@ -31,9 +30,17 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 
-pub(crate) use retired::live_terrain;
-
 pub use options_bar::TerrainOptionsBar;
+
+/// The terrain an undo entry recorded as `entity`: the entity holding its
+/// document node now, if that is still a terrain.
+pub(crate) fn live_terrain(world: &World, entity: Entity) -> Option<Entity> {
+    let entity = crate::scene_nodes::live_entity(world, entity);
+    world
+        .get::<jackdaw_scene_types::Terrain>(entity)
+        .is_some()
+        .then_some(entity)
+}
 pub use paint::{PaintDomain, TerrainPaintState};
 pub use palette::TerrainPalette;
 pub use regions::{RegionVisibility, TerrainRegionView};
@@ -84,7 +91,6 @@ impl Plugin for TerrainPlugin {
                 scatter::plugin,
                 palette::plugin,
                 regions::plugin,
-                retired::plugin,
                 navmesh_bake::plugin,
                 splat::plugin,
                 (

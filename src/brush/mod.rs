@@ -333,10 +333,12 @@ pub struct SetBrush {
 
 impl EditorCommand for SetBrush {
     fn execute(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         apply_brush(world, self.entity, &self.new);
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         apply_brush(world, self.entity, &self.old);
     }
 

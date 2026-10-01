@@ -38,10 +38,12 @@ impl SetImageTexture {
 
 impl EditorCommand for SetImageTexture {
     fn execute(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         self.write(world, self.after.clone());
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         self.write(world, self.before.clone());
     }
 
@@ -112,6 +114,9 @@ struct DropImage {
 
 impl EditorCommand for DropImage {
     fn execute(&mut self, world: &mut World) {
+        self.parent = self
+            .parent
+            .map(|parent| crate::scene_nodes::live_entity(world, parent));
         self.spawned = None;
         let Ok((spawned, made)) =
             crate::ui_palette::instantiate_widget_command_under(world, IMAGE_WIDGET, self.parent)
@@ -143,6 +148,9 @@ impl EditorCommand for DropImage {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.parent = self
+            .parent
+            .map(|parent| crate::scene_nodes::live_entity(world, parent));
         if let Some(mut made) = self.made.take() {
             made.undo(world);
         }

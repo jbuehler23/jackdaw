@@ -189,11 +189,13 @@ impl SetMaterialOverrides {
 
 impl EditorCommand for SetMaterialOverrides {
     fn execute(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         let after = self.after.clone();
         self.apply(world, after.as_ref());
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         let before = self.before.clone();
         self.apply(world, before.as_ref());
     }

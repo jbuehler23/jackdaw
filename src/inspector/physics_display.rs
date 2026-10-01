@@ -82,6 +82,7 @@ impl DisablePhysics {
 
 impl EditorCommand for DisablePhysics {
     fn execute(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         let tracked = world.get::<jackdaw_bsn::AstNodeRef>(self.entity).is_some();
         if tracked {
             {
@@ -106,6 +107,7 @@ impl EditorCommand for DisablePhysics {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         {
             let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
             if let Some(node) = ast.ast_for(self.entity) {

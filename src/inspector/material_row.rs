@@ -250,6 +250,7 @@ fn authored_material(
 
 impl EditorCommand for WearMaterial {
     fn execute(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         self.chosen.wear(world, self.entity);
         let chosen = self.chosen.clone();
         let taken_off = self.previous.component_type_path();
@@ -258,6 +259,7 @@ impl EditorCommand for WearMaterial {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         self.previous.wear(world, self.entity);
         let previous = self.previous.clone();
         let taken_off = self.chosen.component_type_path();
@@ -310,6 +312,7 @@ struct ClearEntityMaterial {
 
 impl EditorCommand for ClearEntityMaterial {
     fn execute(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         if let Some(mut ast) = world.get_resource_mut::<jackdaw_bsn::SceneBsnAst>()
             && let Some(node) = ast.ast_for(self.entity)
         {
@@ -319,6 +322,7 @@ impl EditorCommand for ClearEntityMaterial {
     }
 
     fn undo(&mut self, world: &mut World) {
+        self.entity = crate::scene_nodes::live_entity(world, self.entity);
         if let Some(authored) = self.authored.clone() {
             let registry = world.resource::<AppTypeRegistry>().clone();
             let registry = registry.read();
