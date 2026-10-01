@@ -195,3 +195,97 @@ fn the_overlay_shows_a_running_task_and_closes_when_it_finishes() {
     app.update();
     assert_eq!(overlays(&mut app), 0, "the overlay closes with the task");
 }
+
+fn footer(app: &mut App) -> (String, String) {
+    use jackdaw_feathers::status_bar::{StatusBarLeft, StatusBarRight};
+    let left = app
+        .world_mut()
+        .query_filtered::<&Text, With<StatusBarLeft>>()
+        .single(app.world())
+        .expect("the footer's left slot")
+        .0
+        .clone();
+    let right = app
+        .world_mut()
+        .query_filtered::<&Text, With<StatusBarRight>>()
+        .single(app.world())
+        .expect("the footer's right slot")
+        .0
+        .clone();
+    (left, right)
+}
+
+#[test]
+fn the_footer_words_a_running_task_as_its_overlay_does() {
+    const OWNER: &str = "bake";
+    let mut app = util::editor_test_app();
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    app.update();
+    app.update();
+    let (idle_left, _) = footer(&mut app);
+
+    begin_progress(app.world_mut(), OWNER, "Baking lighting", true);
+    progress_stage(app.world_mut(), OWNER, "Rendering probes", Some(10));
+    progress_count(app.world_mut(), OWNER, 3, Some(10));
+    app.update();
+    assert_eq!(
+        footer(&mut app),
+        (
+            "Baking lighting".to_string(),
+            "Rendering probes 3 / 10".to_string()
+        ),
+        "the footer names the task and counts it the way the card does"
+    );
+
+    finish_progress(app.world_mut(), OWNER);
+    app.update();
+    app.update();
+    assert_eq!(
+        footer(&mut app).0,
+        idle_left,
+        "the left slot goes back to its own wording"
+    );
+}
+
+#[test]
+fn an_open_dialog_keeps_the_pointer_and_the_card_moves_beside_it() {
+    use jackdaw_feathers::dialog::OpenDialogEvent;
+    const OWNER: &str = "bake";
+    let mut app = util::editor_test_app();
+    begin_progress(app.world_mut(), OWNER, "Baking lighting", true);
+    progress_stage(app.world_mut(), OWNER, "Rendering probes", Some(10));
+    app.update();
+
+    app.world_mut()
+        .commands()
+        .trigger(OpenDialogEvent::new("Legacy Scene Format", "Convert"));
+    app.world_mut().flush();
+    app.update();
+    app.update();
+
+    let (z, backdrop, pickable) = app
+        .world_mut()
+        .query_filtered::<(&GlobalZIndex, &BackgroundColor, Option<&Pickable>), With<ProgressOverlay>>()
+        .single(app.world())
+        .map(|(z, color, pickable)| (z.0, color.0, pickable.copied()))
+        .expect("the overlay stays up");
+    assert!(z > 200, "the card draws above the dialog's backdrop: z {z}");
+    assert_eq!(
+        backdrop.alpha(),
+        0.0,
+        "the overlay leaves the dimming to the dialog"
+    );
+    assert_eq!(
+        pickable,
+        Some(Pickable::IGNORE),
+        "the pointer reaches the dialog"
+    );
+    assert!(
+        texts(&mut app)
+            .iter()
+            .any(|text| text == "Rendering probes"),
+        "the stage is still shown"
+    );
+}

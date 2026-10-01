@@ -302,9 +302,12 @@ pub struct StatusBarRightBox;
 fn align_status_right(
     notice: Res<StatusNotice>,
     phase: Res<EditorPhase>,
+    progress: Option<Res<crate::progress::EditorProgress>>,
     mut boxes: Query<&mut Node, With<StatusBarRightBox>>,
 ) {
-    let wanted = if notice.is_active() || phase.current().is_some() {
+    let busy =
+        phase.current().is_some() || progress.is_some_and(|progress| progress.current().is_some());
+    let wanted = if notice.is_active() || busy {
         JustifyContent::FlexStart
     } else {
         JustifyContent::FlexEnd
@@ -326,19 +329,26 @@ fn update_status_right(
     numeric: Res<NumericTransformState>,
     notice: Res<StatusNotice>,
     phase: Res<EditorPhase>,
+    progress: Option<Res<crate::progress::EditorProgress>>,
     mut text_query: Query<(&mut Text, &mut TextColor), With<StatusBarRight>>,
 ) {
     // A phase says what the editor is doing right now, so it outranks the tool
     // and the build line; a notice is a refusal the user still has to read, so
-    // it outranks the phase.
+    // it outranks the phase. A task reporting progress words its stage the way
+    // its overlay does, so it outranks the other phases.
+    let current = progress
+        .as_ref()
+        .and_then(|progress| progress.current())
+        .map(crate::progress::TaskProgress::label)
+        .or_else(|| phase.current().map(str::to_string));
     if !notice.is_active()
-        && let Some(current) = phase.current()
+        && let Some(current) = current
         && let Ok((mut text, mut color)) = text_query.single_mut()
     {
         // A phase names a count that ticks down, so this runs every frame of a
         // load; only a line that actually changed is worth relaying out.
         if text.0 != current {
-            text.0 = current.to_string();
+            text.0 = current;
         }
         color.0 = jackdaw_feathers::tokens::TEXT_SECONDARY;
         return;

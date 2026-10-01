@@ -9,11 +9,13 @@
 use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
+use jackdaw_feathers::status_bar::StatusBarLeft;
 use jackdaw_feathers::tokens;
+use jackdaw_localization::LocalizedText;
 
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<EditorProgress>()
-        .add_systems(PostUpdate, sync_progress_overlay);
+        .add_systems(PostUpdate, (sync_progress_overlay, sync_status_left));
 }
 
 /// Where one long task has got to.
@@ -225,9 +227,15 @@ struct ProgressFill;
 /// Dims the editor behind the overlay.
 const BACKDROP: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
 
-/// Above the editor's panels, so nothing under it can be clicked, and below
-/// its dialogs, so a question asked while a task runs can still be answered.
+/// Above the editor's panels, so nothing under it can be clicked.
 const OVERLAY_Z: i32 = 190;
+
+/// Above an open dialog, where the card moves aside to the bottom of the window
+/// and lets the pointer through, so the dialog can still be answered.
+const BESIDE_DIALOG_Z: i32 = 300;
+
+/// Gap between the card and the bottom of the window while a dialog is open.
+const BESIDE_DIALOG_MARGIN: f32 = 48.0;
 
 /// Width of the moving block an indeterminate bar draws, as a share of the track.
 const INDETERMINATE_SHARE: f32 = 0.3;
@@ -327,6 +335,13 @@ fn sync_progress_overlay(world: &mut World) {
         error!("progress overlay failed to spawn: {err}");
     }
 
+    let dialog_open = world
+        .query_filtered::<(), With<jackdaw_feathers::dialog::EditorDialog>>()
+        .iter(world)
+        .next()
+        .is_some();
+    place_overlay(world, dialog_open);
+
     let font = world
         .get_resource::<jackdaw_feathers::icons::EditorFont>()
         .map(|font| font.0.clone());
@@ -353,6 +368,73 @@ fn sync_progress_overlay(world: &mut World) {
     for mut node in fills.iter_mut(world) {
         node.left = percent(left * 100.0);
         node.width = percent(width * 100.0);
+    }
+}
+
+/// Name the running task where the footer otherwise says the editor is ready,
+/// and hand the slot back to its own wording once the task is over.
+fn sync_status_left(
+    progress: Res<EditorProgress>,
+    mut labels: Query<(&mut Text, &mut LocalizedText), With<StatusBarLeft>>,
+    mut naming: Local<bool>,
+) {
+    match progress.current() {
+        Some(task) => {
+            for (mut text, _) in &mut labels {
+                if text.0 != task.title {
+                    text.0.clone_from(&task.title);
+                }
+            }
+            *naming = true;
+        }
+        None if *naming => {
+            for (_, mut localized) in &mut labels {
+                localized.set_changed();
+            }
+            *naming = false;
+        }
+        None => {}
+    }
+}
+
+/// Cover the editor with the card in the middle, or, while a dialog is open,
+/// leave the dialog the middle of the window and the pointer, and show the card
+/// at the bottom above the dialog's own backdrop.
+fn place_overlay(world: &mut World, dialog_open: bool) {
+    let (z, backdrop, align, padding) = if dialog_open {
+        (
+            BESIDE_DIALOG_Z,
+            Color::NONE,
+            AlignItems::FlexEnd,
+            UiRect::bottom(px(BESIDE_DIALOG_MARGIN)),
+        )
+    } else {
+        (OVERLAY_Z, BACKDROP, AlignItems::Center, UiRect::ZERO)
+    };
+    let mut overlays = world.query_filtered::<(
+        Entity,
+        &mut Node,
+        &mut BackgroundColor,
+        &mut GlobalZIndex,
+    ), With<ProgressOverlay>>();
+    let mut moved = Vec::new();
+    for (entity, mut node, mut color, mut global_z) in overlays.iter_mut(world) {
+        if global_z.0 == z {
+            continue;
+        }
+        global_z.0 = z;
+        color.0 = backdrop;
+        node.align_items = align;
+        node.padding = padding;
+        moved.push(entity);
+    }
+    for entity in moved {
+        let mut overlay = world.entity_mut(entity);
+        if dialog_open {
+            overlay.insert(Pickable::IGNORE);
+        } else {
+            overlay.remove::<Pickable>();
+        }
     }
 }
 
