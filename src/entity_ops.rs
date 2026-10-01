@@ -82,6 +82,10 @@ impl Plugin for EntityOpsPlugin {
 /// The least a frame will spend bringing models on, whatever else it is doing.
 const MODEL_FLOOR_BUDGET: Duration = Duration::from_millis(16);
 
+/// How far an added point or spot light reaches, in metres. Shadows stay off
+/// until asked for: each shadowed point light renders six shadow maps.
+const NEW_LIGHT_RANGE: f32 = 10.0;
+
 /// The fewest and the most models one frame hands over.
 const MODEL_BATCH_FLOOR: usize = 1;
 const MODEL_BATCH_CEILING: usize = 256;
@@ -442,7 +446,7 @@ pub fn create_entity(
                 Name::new("Point Light"),
                 SceneLight,
                 PointLight {
-                    shadow_maps_enabled: true,
+                    range: NEW_LIGHT_RANGE,
                     ..default()
                 },
                 Transform::from_xyz(0.0, 3.0, 0.0),
@@ -469,7 +473,7 @@ pub fn create_entity(
                 Name::new("Spot Light"),
                 SceneLight,
                 SpotLight {
-                    shadow_maps_enabled: true,
+                    range: NEW_LIGHT_RANGE,
                     ..default()
                 },
                 Transform::from_xyz(0.0, 3.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
