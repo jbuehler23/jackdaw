@@ -19,7 +19,7 @@ use crate::util;
 use crate::util::OperatorResultExt as _;
 
 #[track_caller]
-fn call<M>(
+pub(super) fn call<M>(
     app: &mut App,
     handler: impl bevy::ecs::system::IntoSystem<In<Option<Value>>, bevy::remote::BrpResult, M> + 'static,
     params: Value,
@@ -34,7 +34,7 @@ fn call<M>(
 }
 
 /// An open scene in a project whose assets hold `prefabs/rock.bsn`.
-fn editor() -> (App, tempfile::TempDir) {
+pub(super) fn editor() -> (App, tempfile::TempDir) {
     let dir = tempfile::Builder::new()
         .prefix("jackdaw-batch-undo-")
         .tempdir()
@@ -60,16 +60,16 @@ fn editor() -> (App, tempfile::TempDir) {
     (app, dir)
 }
 
-fn depth(app: &App) -> usize {
+pub(super) fn depth(app: &App) -> usize {
     app.world().resource::<CommandHistory>().undo_stack.len()
 }
 
-fn scene_text(app: &mut App) -> String {
+pub(super) fn scene_text(app: &mut App) -> String {
     let answer = call(app, scene_bsn_handler, json!({}));
     answer["bsn"].as_str().expect("scene text").to_string()
 }
 
-fn history(app: &mut App, id: &'static str) {
+pub(super) fn history(app: &mut App, id: &'static str) {
     app.world_mut()
         .operator(id)
         .call()
@@ -90,7 +90,7 @@ fn batch(app: &mut App, calls: Vec<Value>) -> Value {
 }
 
 /// Dispatch `id` the way a menu item or keybind does.
-fn menu(app: &mut App, id: &'static str, history: bool) {
+pub(super) fn menu(app: &mut App, id: &'static str, history: bool) {
     app.world_mut()
         .operator(id)
         .settings(CallOperatorSettings {
