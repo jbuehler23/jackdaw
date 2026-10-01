@@ -12,6 +12,7 @@ use bevy::world_serialization::WorldAssetRoot;
 use jackdaw_runtime::{
     JackdawCatalogPath, JackdawPlugin, JackdawScene, JackdawSceneRoot, LodPlugin, level_shows,
 };
+use jackdaw_scene_types::model_parts::{FlatModel, ModelParts};
 use jackdaw_scene_types::{GltfSource, LodGroup, LodLevel};
 
 fn app() -> App {
@@ -173,6 +174,44 @@ fn fading_widens_each_switch_into_a_shared_margin() {
     assert!((first.end_margin.start - switch * 0.9).abs() < 1e-3);
     assert!((first.end_margin.end - switch * 1.1).abs() < 1e-3);
     assert_eq!(second.start_margin, first.end_margin);
+}
+
+#[test]
+fn a_group_with_no_size_is_measured_from_its_first_levels_model_before_anything_spawns() {
+    let mut app = app();
+    camera(&mut app, 60.0);
+    app.world_mut().resource_mut::<ModelParts>().insert(
+        "models/tree.gltf",
+        FlatModel {
+            parts: Vec::new(),
+            bounds: Aabb::from_min_max(Vec3::new(-1.0, 0.0, -0.5), Vec3::new(1.0, 1.0, 0.5)),
+        },
+    );
+    let root = app
+        .world_mut()
+        .spawn((group(0.0), Transform::default()))
+        .id();
+    app.world_mut().spawn((
+        GltfSource {
+            path: "models/tree.gltf".into(),
+            scene_index: 0,
+        },
+        Transform::default(),
+        ChildOf(root),
+    ));
+    let second = app
+        .world_mut()
+        .spawn((Transform::default(), ChildOf(root)))
+        .id();
+    let mesh = app
+        .world_mut()
+        .spawn((Mesh3d::default(), ChildOf(second)))
+        .id();
+    app.update();
+    app.update();
+
+    let range = range(&app, mesh);
+    assert!((range.start_margin.start - distance(2.0, 0.5, 60.0)).abs() < 1e-3);
 }
 
 #[test]

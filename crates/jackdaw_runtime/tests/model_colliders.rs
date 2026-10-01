@@ -80,17 +80,23 @@ fn game(assets: &Path) -> App {
 /// Load a scene placing the rock with `shape`, and return the colliders it
 /// ends up with, and on which entities.
 fn load_rock(shape: &str) -> (App, Vec<(Entity, Collider)>) {
-    let project = tempfile::tempdir().expect("tempdir");
-    let assets = project.path().to_path_buf();
-    let (gltf, buffer) = tetrahedron_gltf();
-    std::fs::write(assets.join("rock.gltf"), gltf).expect("gltf");
-    std::fs::write(assets.join("rock.bin"), buffer).expect("buffer");
-    let mut app = game(&assets);
-    let scene = format!(
+    load(format!(
         "#Rock\n\
          jackdaw_scene_types::types::GltfSource {{ path: \"rock.gltf\", scene_index: 0 }}\n\
          jackdaw_avian_integration::AvianCollider({shape})\n"
-    );
+    ))
+}
+
+/// Load `scene` beside the rock's glTF and a copy of it as the rock's second
+/// level, and return the colliders it ends up with, and on which entities.
+fn load(scene: String) -> (App, Vec<(Entity, Collider)>) {
+    let project = tempfile::tempdir().expect("tempdir");
+    let assets = project.path().to_path_buf();
+    let (gltf, buffer) = tetrahedron_gltf();
+    std::fs::write(assets.join("rock.gltf"), &gltf).expect("gltf");
+    std::fs::write(assets.join("rock_LOD1.gltf"), &gltf).expect("gltf");
+    std::fs::write(assets.join("rock.bin"), buffer).expect("buffer");
+    let mut app = game(&assets);
     let scene = app
         .world_mut()
         .resource_mut::<Assets<JackdawScene>>()
@@ -211,4 +217,35 @@ fn a_model_switched_to_dynamic_falls() {
         "a dynamic model falls under gravity, and is at {}",
         height(&app, rock)
     );
+}
+
+#[test]
+fn a_collider_on_a_lod_group_sits_on_its_first_levels_meshes() {
+    let (app, built) = load(format!(
+        "#Rock\n\
+         jackdaw_scene_types::types::LodGroup {{ levels: [\
+         jackdaw_scene_types::types::LodLevel {{ screen_height: 0.5 }},\
+         jackdaw_scene_types::types::LodLevel {{ screen_height: 0.1 }},\
+         ] }}\n\
+         jackdaw_avian_integration::AvianCollider({CONSTRUCTOR}::TrimeshFromMesh)\n\
+         bevy_ecs::hierarchy::Children [\n\
+         #LOD0\n\
+         jackdaw_scene_types::types::GltfSource {{ path: \"rock.gltf\", scene_index: 0 }}\n\
+         ,\n\
+         #LOD1\n\
+         jackdaw_scene_types::types::GltfSource {{ path: \"rock_LOD1.gltf\", scene_index: 0 }}\n\
+         ]\n"
+    ));
+    assert_eq!(
+        built.len(),
+        1,
+        "one collider for the group, not one per level"
+    );
+    let group = built[0].0;
+    assert!(
+        app.world()
+            .get::<jackdaw_scene_types::LodGroup>(group)
+            .is_some()
+    );
+    assert!(built[0].1.shape().as_trimesh().is_some());
 }

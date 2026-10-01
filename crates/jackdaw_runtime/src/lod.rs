@@ -4,9 +4,10 @@
 
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::{VisibilityRange, VisibilitySystems};
-use bevy::platform::collections::HashSet;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
-use jackdaw_scene_types::LodGroup;
+use jackdaw_scene_types::model_parts::{ModelParts, add_model_parts, source_path};
+use jackdaw_scene_types::{GltfSource, LodGroup};
 
 /// Keeps every [`LodGroup`]'s levels showing at the distances their screen
 /// heights stand for.
@@ -14,7 +15,9 @@ pub struct LodPlugin;
 
 impl Plugin for LodPlugin {
     fn build(&self, app: &mut App) {
+        add_model_parts(app);
         app.init_resource::<LodView>()
+            .add_systems(Update, request_first_levels)
             .add_systems(
                 PostUpdate,
                 (follow_lod_view, place_lod_ranges)
@@ -88,6 +91,21 @@ pub fn lod_ranges(group: &LodGroup, size: f32, half_fov_tan: f32) -> Vec<Visibil
             range
         })
         .collect()
+}
+
+/// Ask for the first level's model of every group that gained or changed
+/// levels, which is what a group is measured, baked and collided by without
+/// waiting for it to be spawned.
+fn request_first_levels(
+    groups: Query<&Children, (With<LodGroup>, Or<(Changed<LodGroup>, Changed<Children>)>)>,
+    sources: Query<&GltfSource>,
+    mut parts: ResMut<ModelParts>,
+) {
+    for children in &groups {
+        if let Some(source) = children.first().and_then(|first| sources.get(*first).ok()) {
+            parts.request(&source_path(source));
+        }
+    }
 }
 
 /// Whether level `index` of `group` shows at any distance. A level whose
@@ -178,6 +196,9 @@ fn place_lod_ranges(
     added: Query<Entity, Added<Mesh3d>>,
     parents: Query<&ChildOf>,
     descendants: Query<&Children>,
+    sources: Query<(&GltfSource, &GlobalTransform)>,
+    parts: Res<ModelParts>,
+    mut unmeasured: Local<HashMap<String, Vec<Entity>>>,
     mut meshes: Meshes,
     mut commands: Commands,
 ) {
@@ -200,6 +221,11 @@ fn place_lod_ranges(
                 .find(|ancestor| groups.contains(*ancestor)),
         );
     }
+    for path in parts.settled() {
+        if let Some(waiting) = unmeasured.remove(path) {
+            due.extend(waiting);
+        }
+    }
 
     for entity in due {
         let Ok((_, group, transform, children)) = groups.get(entity) else {
@@ -211,10 +237,24 @@ fn place_lod_ranges(
         let size = if group.size > 0.0 {
             group.size * transform.compute_transform().scale.abs().max_element()
         } else {
-            children
-                .first()
-                .and_then(|first| world_extent(*first, &descendants, &meshes))
-                .unwrap_or(0.0)
+            let Some(first) = children.first().copied() else {
+                continue;
+            };
+            match sources.get(first) {
+                Ok((source, placed)) => {
+                    let path = source_path(source);
+                    match parts.get(&path) {
+                        Some(model) => placed_extent(&model.bounds, placed),
+                        None => {
+                            if !parts.failed(&path) {
+                                unmeasured.entry(path).or_default().push(entity);
+                            }
+                            continue;
+                        }
+                    }
+                }
+                Err(_) => world_extent(first, &descendants, &meshes).unwrap_or(0.0),
+            }
         };
         if size <= 0.0 {
             continue;
@@ -247,17 +287,34 @@ fn world_extent(root: Entity, descendants: &Query<&Children>, meshes: &Meshes) -
         let Ok((transform, Some(aabb), _)) = meshes.get(part) else {
             continue;
         };
-        let (center, half) = (Vec3::from(aabb.center), Vec3::from(aabb.half_extents));
-        for corner in 0..8 {
-            let sign = Vec3::new(
-                if corner & 1 == 0 { -1.0 } else { 1.0 },
-                if corner & 2 == 0 { -1.0 } else { 1.0 },
-                if corner & 4 == 0 { -1.0 } else { 1.0 },
-            );
-            let point = transform.transform_point(center + half * sign);
+        for point in corners(aabb).map(|corner| transform.transform_point(corner)) {
             low = low.min(point);
             high = high.max(point);
         }
     }
     low.cmple(high).all().then(|| (high - low).max_element())
+}
+
+/// The largest side of `bounds` once placed by `transform`, in world space.
+fn placed_extent(bounds: &Aabb, transform: &GlobalTransform) -> f32 {
+    let mut low = Vec3::splat(f32::INFINITY);
+    let mut high = Vec3::splat(f32::NEG_INFINITY);
+    for point in corners(bounds).map(|corner| transform.transform_point(corner)) {
+        low = low.min(point);
+        high = high.max(point);
+    }
+    (high - low).max_element()
+}
+
+fn corners(aabb: &Aabb) -> [Vec3; 8] {
+    let (center, half) = (Vec3::from(aabb.center), Vec3::from(aabb.half_extents));
+    std::array::from_fn(|corner| {
+        center
+            + half
+                * Vec3::new(
+                    if corner & 1 == 0 { -1.0 } else { 1.0 },
+                    if corner & 2 == 0 { -1.0 } else { 1.0 },
+                    if corner & 4 == 0 { -1.0 } else { 1.0 },
+                )
+    })
 }

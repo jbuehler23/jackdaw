@@ -23,6 +23,8 @@ use bevy_rerecast::rerecast::{
     Aabb3d, AreaType, ConfigBuilder, DetailNavmesh, HeightfieldBuilder, PolygonNavmesh, TriMesh,
 };
 use jackdaw_api::prelude::*;
+use jackdaw_scene_types::model_parts::{FlatModel, ModelParts, source_path};
+use jackdaw_scene_types::{GltfSource, LodGroup};
 use jackdaw_terrain::navmesh::{self, BakeParams, NavPolygon, NavmeshArtifact};
 
 use super::{TerrainDataStore, TerrainSurface};
@@ -473,26 +475,98 @@ pub(crate) struct SceneGeometry<'w, 's> {
     >,
     names: Query<'w, 's, &'static Name>,
     assets: Res<'w, Assets<Mesh>>,
+    /// LOD groups, which a bake reads by their first level whatever the
+    /// camera has spawned.
+    lod_groups: Query<'w, 's, (&'static LodGroup, &'static Children)>,
+    level_models: Query<'w, 's, (&'static GltfSource, &'static GlobalTransform)>,
+    models: Option<Res<'w, ModelParts>>,
 }
 
 impl SceneGeometry<'_, '_> {
     /// Every mesh a bake could rasterize, before anything the author has
     /// excluded is dropped.
-    fn candidates(&self) -> impl Iterator<Item = (Entity, Affine3A, &Mesh3d)> + '_ {
-        self.meshes
+    fn candidates(&self) -> impl Iterator<Item = (Entity, Affine3A, &Handle<Mesh>)> + '_ {
+        let spawned = self
+            .meshes
             .iter()
             .filter(|(entity, _, handle, body, sensor)| {
                 // A body that moves is not ground, and nothing stands on a
                 // trigger volume. A collider with no body is static, like an
                 // unsimulated scene mesh.
-                !moves(*body) && sensor.is_none() && !self.hidden(*entity) && self.readable(handle)
+                !moves(*body)
+                    && sensor.is_none()
+                    && !self.hidden(*entity)
+                    && self.readable(handle)
+                    && !self.in_lod_level(*entity)
             })
-            .map(|(entity, transform, handle, _, _)| (entity, transform.affine(), handle))
+            .map(|(entity, transform, handle, _, _)| (entity, transform.affine(), &handle.0));
+        let first_levels = self
+            .first_level_models()
+            .filter(|(level, ..)| !self.hidden(*level))
+            .flat_map(|(level, placed, model)| {
+                model.parts.iter().map(move |part| {
+                    (
+                        level,
+                        placed.affine() * part.local.compute_affine(),
+                        &part.mesh,
+                    )
+                })
+            })
+            .filter(|(_, _, handle)| self.readable(handle));
+        spawned.chain(first_levels)
+    }
+
+    /// The model each LOD group's first level names, where the level is a
+    /// model rather than meshes of its own, with where the level stands.
+    fn first_level_models(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &GlobalTransform, &std::sync::Arc<FlatModel>)> + '_ {
+        self.lod_groups.iter().filter_map(|(group, children)| {
+            let level = *children.first().filter(|_| !group.levels.is_empty())?;
+            let (source, placed) = self.level_models.get(level).ok()?;
+            let model = self.models.as_ref()?.get(&source_path(source))?;
+            Some((level, placed, model))
+        })
+    }
+
+    /// Whether `entity` sits in a level of a LOD group that the bake reads
+    /// from the group's first model instead: every level past the first, and
+    /// a first level that names a model.
+    fn in_lod_level(&self, entity: Entity) -> bool {
+        let mut at = entity;
+        while let Ok((_, Some(parent))) = self.visibility.get(at) {
+            let parent = parent.parent();
+            if let Ok((group, children)) = self.lod_groups.get(parent)
+                && let Some(index) = children.iter().position(|child| child == at)
+                && index < group.levels.len()
+            {
+                return index > 0 || self.level_models.contains(at);
+            }
+            at = parent;
+        }
+        false
+    }
+
+    /// Whether a LOD group's first level names a model that has not loaded.
+    fn first_levels_loading(&self) -> bool {
+        let Some(models) = self.models.as_ref() else {
+            return false;
+        };
+        self.lod_groups.iter().any(|(group, children)| {
+            children
+                .first()
+                .filter(|_| !group.levels.is_empty())
+                .and_then(|level| self.level_models.get(*level).ok())
+                .is_some_and(|(source, _)| {
+                    let path = source_path(source);
+                    models.get(&path).is_none() && !models.failed(&path)
+                })
+        })
     }
 
     /// Whether this mesh can be read here: one extracted to the render world
     /// panics on its attributes, and an unloaded handle counts as readable.
-    fn readable(&self, handle: &Mesh3d) -> bool {
+    fn readable(&self, handle: &Handle<Mesh>) -> bool {
         self.assets.get(handle).is_none_or(|mesh| {
             mesh.asset_usage
                 .contains(bevy::asset::RenderAssetUsages::MAIN_WORLD)
@@ -500,7 +574,7 @@ impl SceneGeometry<'_, '_> {
     }
 
     /// Every mesh that belongs in the bake, with where it stands.
-    fn baked(&self) -> impl Iterator<Item = (Entity, Affine3A, &Mesh3d)> + '_ {
+    fn baked(&self) -> impl Iterator<Item = (Entity, Affine3A, &Handle<Mesh>)> + '_ {
         self.candidates()
             .filter(|(entity, _, _)| !self.excluded(*entity))
     }
@@ -510,8 +584,10 @@ impl SceneGeometry<'_, '_> {
     /// A bake over half a scene decodes and draws, with the missing building as
     /// walkable ground.
     fn still_loading(&self) -> bool {
-        self.baked()
-            .any(|(_, _, handle)| self.assets.get(handle).is_none())
+        self.first_levels_loading()
+            || self
+                .baked()
+                .any(|(_, _, handle)| self.assets.get(handle).is_none())
     }
 
     /// Where each piece stands and how much of it there is.
@@ -2727,6 +2803,84 @@ mod tests {
         let after = tally(&mut world, 0.0);
         assert_eq!(after.included, 0, "a tagged mesh is not rasterized");
         assert_eq!(after.excluded, 1, "and the bake can say how many it left");
+    }
+
+    /// A LOD group stands in a bake as its first level's model, whichever of
+    /// its levels the camera has spawned.
+    #[test]
+    fn a_bake_over_a_lod_group_reads_only_its_first_level_wherever_the_camera_stands() {
+        let dir = std::env::temp_dir().join("jd_lod_group_bake");
+        let mut world = world_with_terrain(&dir);
+        let first_level = world
+            .resource_mut::<Assets<Mesh>>()
+            .add(Mesh::from(Cuboid::from_length(3.0)));
+        let mut models = ModelParts::default();
+        models.insert(
+            "models/tree.gltf",
+            FlatModel {
+                parts: vec![jackdaw_scene_types::model_parts::ModelPart {
+                    mesh: first_level,
+                    material: Handle::default(),
+                    material_name: None,
+                    local: Transform::from_xyz(0.0, 1.5, 0.0),
+                }],
+                bounds: Aabb::from_min_max(Vec3::new(-1.5, 0.0, -1.5), Vec3::splat(1.5)),
+            },
+        );
+        world.insert_resource(models);
+        let group = world
+            .spawn((
+                LodGroup {
+                    levels: vec![
+                        jackdaw_scene_types::LodLevel { screen_height: 0.5 },
+                        jackdaw_scene_types::LodLevel { screen_height: 0.1 },
+                    ],
+                    ..default()
+                },
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let levels: Vec<Entity> = ["models/tree.gltf", "models/tree_LOD1.gltf"]
+            .into_iter()
+            .map(|path| {
+                world
+                    .spawn((
+                        GltfSource {
+                            path: path.to_string(),
+                            scene_index: 0,
+                        },
+                        Transform::default(),
+                        GlobalTransform::default(),
+                        ChildOf(group),
+                    ))
+                    .id()
+            })
+            .collect();
+
+        let near = spawn_cube(&mut world, 1.0);
+        world.entity_mut(near).insert(ChildOf(levels[0]));
+        assert_eq!(tally(&mut world, 0.0).included, 1, "the camera is near");
+        assert_eq!(bake_extents(&mut world), [Vec3::splat(3.0)]);
+
+        world.entity_mut(near).despawn();
+        let far = spawn_cube(&mut world, 1.0);
+        world.entity_mut(far).insert(ChildOf(levels[1]));
+        assert_eq!(tally(&mut world, 0.0).included, 1, "the camera is far");
+        assert_eq!(bake_extents(&mut world), [Vec3::splat(3.0)]);
+    }
+
+    fn bake_extents(world: &mut World) -> Vec<Vec3> {
+        world
+            .run_system_cached(|geometry: SceneGeometry| {
+                geometry
+                    .baked()
+                    .filter_map(|(_, placement, handle)| {
+                        placed_extent(geometry.assets.get(handle)?, placement)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .expect("the extents are read")
     }
 
     /// The tag is what an author puts on a scatter group rather than on a

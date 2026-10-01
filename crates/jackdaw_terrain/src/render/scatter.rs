@@ -22,7 +22,7 @@
 //! host answers each with the model the prefab draws.
 
 use bevy::asset::LoadState;
-use bevy::camera::primitives::{Aabb, Frustum, MeshAabb};
+use bevy::camera::primitives::{Aabb, Frustum};
 use bevy::camera::visibility::VisibilityRange;
 use bevy::gltf::{Gltf, GltfMaterialName, GltfMesh, GltfNode};
 use bevy::log::warn;
@@ -32,6 +32,7 @@ use bevy::prelude::*;
 use std::collections::BTreeMap;
 
 use jackdaw_scene_types::MaterialOverrides;
+use jackdaw_scene_types::model_parts::{ModelPart, flatten_gltf};
 
 use crate::placement::{ScatterPalette, ScatterPaletteEntry, ScatterPlacement, is_prefab_asset};
 use crate::region::RegionCoord;
@@ -180,16 +181,7 @@ pub struct ScatterRendered {
 }
 
 /// One drawable part of a palette asset: the smallest thing a batch can be.
-#[derive(Clone, Debug)]
-pub struct ScatterPrimitive {
-    pub mesh: Handle<Mesh>,
-    pub material: Handle<StandardMaterial>,
-    /// The glTF's name for the material, which a palette entry's overrides are keyed by.
-    pub material_name: Option<String>,
-    /// Where this part sat inside the glTF, flattened through the node
-    /// graph above it.
-    pub local: Transform,
-}
+pub type ScatterPrimitive = ModelPart;
 
 /// What one palette asset resolved to.
 #[derive(Clone, Debug)]
@@ -521,121 +513,16 @@ fn resolve_palette_assets(
         let Some(gltf) = gltfs.get(handle) else {
             continue;
         };
-        let Some(ready) = flatten(gltf, &nodes, &meshes, &mesh_assets, &server) else {
+        let Some(model) = flatten_gltf(gltf, &nodes, &meshes, &mesh_assets, &server) else {
             continue;
         };
-        *entry = ScatterAsset::Ready(ready);
+        *entry = ScatterAsset::Ready(ReadyAsset {
+            primitives: model.parts,
+            bounds: model.bounds,
+        });
         settled.push(path.clone());
     }
     assets.settled = settled;
-}
-
-/// Every drawable part of a glTF, with the transform of the node it hung under
-/// folded in.
-///
-/// `None` while any part is still loading: a half-resolved asset would have to
-/// be rebuilt when the rest arrived, moving the placements under the camera.
-fn flatten(
-    gltf: &Gltf,
-    nodes: &Assets<GltfNode>,
-    meshes: &Assets<GltfMesh>,
-    mesh_assets: &Assets<Mesh>,
-    server: &AssetServer,
-) -> Option<ReadyAsset> {
-    // The roots are the nodes nothing lists as a child; glTF holds the node
-    // table flat.
-    let mut child_ids = HashSet::new();
-    for handle in &gltf.nodes {
-        let node = nodes.get(handle)?;
-        for child in &node.children {
-            child_ids.insert(child.id());
-        }
-    }
-
-    let material_names: HashMap<AssetId<bevy::gltf::GltfMaterial>, String> = gltf
-        .named_materials
-        .iter()
-        .map(|(name, handle)| (handle.id(), name.to_string()))
-        .collect();
-    let mut primitives = Vec::new();
-    let mut min = Vec3::splat(f32::INFINITY);
-    let mut max = Vec3::splat(f32::NEG_INFINITY);
-    let mut pending: Vec<(Handle<GltfNode>, Transform)> = gltf
-        .nodes
-        .iter()
-        .filter(|handle| !child_ids.contains(&handle.id()))
-        .map(|handle| (handle.clone(), Transform::IDENTITY))
-        .collect();
-
-    while let Some((handle, parent)) = pending.pop() {
-        let node = nodes.get(&handle)?;
-        let local = parent * node.transform;
-        for child in &node.children {
-            pending.push((child.clone(), local));
-        }
-        let Some(mesh_handle) = &node.mesh else {
-            continue;
-        };
-        let mesh = meshes.get(mesh_handle)?;
-        for primitive in &mesh.primitives {
-            let material = primitive
-                .material
-                .as_ref()
-                .and_then(|handle| standard_material(server, handle))
-                .unwrap_or_default();
-            // A mesh with no positions has no size to stand a placement in, so
-            // it is left out rather than waited for: waiting would re-walk the
-            // graph every frame for a bound that never arrives.
-            let Some(bounds) = mesh_assets.get(&primitive.mesh)?.compute_aabb() else {
-                warn!(
-                    "terrain scatter: a primitive of {:?} has no positions and draws nothing",
-                    gltf.default_scene
-                );
-                continue;
-            };
-            let affine = local.compute_affine();
-            let centre = affine.transform_point3(Vec3::from(bounds.center));
-            let radius = affine
-                .matrix3
-                .abs()
-                .mul_vec3(Vec3::from(bounds.half_extents));
-            min = min.min(centre - radius);
-            max = max.max(centre + radius);
-            let material_name = primitive
-                .material
-                .as_ref()
-                .and_then(|handle| material_names.get(&handle.id()).cloned());
-            primitives.push(ScatterPrimitive {
-                mesh: primitive.mesh.clone(),
-                material,
-                material_name,
-                local,
-            });
-        }
-    }
-
-    if primitives.is_empty() {
-        min = Vec3::ZERO;
-        max = Vec3::ZERO;
-    }
-    Some(ReadyAsset {
-        primitives,
-        bounds: Aabb::from_min_max(min, max),
-    })
-}
-
-/// The `StandardMaterial` the glTF loader wrote beside a primitive's
-/// `GltfMaterial`, under the same asset path with a `/std` label.
-///
-/// `None` for a primitive whose material has no path to hang that label on,
-/// which the caller draws with the default material.
-fn standard_material(
-    server: &AssetServer,
-    material: &Handle<bevy::gltf::GltfMaterial>,
-) -> Option<Handle<StandardMaterial>> {
-    let path = material.path()?;
-    let label = path.label()?;
-    Some(server.load(path.clone_owned().with_label(format!("{label}/std"))))
 }
 
 /// Respawn the chunks a terrain's dirty regions name.

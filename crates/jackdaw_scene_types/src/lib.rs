@@ -22,6 +22,8 @@ pub mod brush_chunks;
 pub mod environment;
 #[cfg(feature = "render")]
 pub mod mesh_rebuild;
+#[cfg(feature = "render")]
+pub mod model_parts;
 pub mod node_id;
 #[cfg(feature = "render")]
 pub mod render_assets;
