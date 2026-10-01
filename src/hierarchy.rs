@@ -105,6 +105,7 @@ impl Plugin for HierarchyPlugin {
             .init_resource::<RevealTarget>()
             .init_resource::<EntityIconRegistry>()
             .init_resource::<RowsAwaitingRegistration>()
+            .init_resource::<NewRootRows>()
             .init_resource::<OutlinerRangeAnchor>()
             .add_plugins(crate::outliner_rows::plugin)
             .add_systems(OnEnter(crate::AppState::Editor), setup_name_watcher)
@@ -125,6 +126,7 @@ impl Plugin for HierarchyPlugin {
                 PostUpdate,
                 (
                     rebuild_hierarchy_on_container_added,
+                    spawn_rows_for_new_roots,
                     spawn_rows_for_late_registrations,
                     refresh_chevrons_on_document_change,
                     refresh_icons_on_node_change,
@@ -938,14 +940,14 @@ fn drive_reveal_target(world: &mut World) {
 /// keys keep them independent.
 fn on_root_entity_added(
     trigger: On<Add, Transform>,
-    mut commands: Commands,
+    mut new_roots: ResMut<NewRootRows>,
     tree_index: Res<TreeIndex>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
     child_of_check: Query<(), With<ChildOf>>,
 ) {
-    queue_root_row_spawn(
+    note_new_root(
         trigger.event_target(),
-        &mut commands,
+        &mut new_roots,
         &tree_index,
         &editor_check,
         &child_of_check,
@@ -956,25 +958,34 @@ fn on_root_entity_added(
 /// `on_root_entity_added` cannot fire for it. This mirrors it on `UiSceneRoot`.
 fn on_ui_root_added(
     trigger: On<Add, UiSceneRoot>,
-    mut commands: Commands,
+    mut new_roots: ResMut<NewRootRows>,
     tree_index: Res<TreeIndex>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
     child_of_check: Query<(), With<ChildOf>>,
 ) {
-    queue_root_row_spawn(
+    note_new_root(
         trigger.event_target(),
-        &mut commands,
+        &mut new_roots,
         &tree_index,
         &editor_check,
         &child_of_check,
     );
 }
 
-/// Queue a row spawn for `entity` in every Outliner panel, if it is
-/// still an unparented, non-editor root when the command flushes.
-fn queue_root_row_spawn(
+/// Entities that arrived unparented and may need a row at the top of every
+/// Outliner panel.
+///
+/// Decided once a frame rather than when each one arrives: a model's instance
+/// is spawned before it is parented under the entity that names it, and a row
+/// built in between would only be taken down again.
+#[derive(Resource, Default)]
+pub(crate) struct NewRootRows(Vec<Entity>);
+
+/// Note `entity` as a possible new root row, unless it already has a row or
+/// cannot be one.
+fn note_new_root(
     entity: Entity,
-    commands: &mut Commands,
+    new_roots: &mut NewRootRows,
     tree_index: &TreeIndex,
     editor_check: &Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
     child_of_check: &Query<(), With<ChildOf>>,
@@ -985,16 +996,26 @@ fn queue_root_row_spawn(
     if tree_index.contains_anywhere(entity) {
         return;
     }
+    new_roots.0.push(entity);
+}
 
-    commands.queue(move |world: &mut World| {
-        // Re-check: ChildOf may have been added between observer and command flush
-        if world.get::<ChildOf>(entity).is_some() {
-            return;
-        }
-        if world.get::<EditorEntity>(entity).is_some()
+/// Build a row in every Outliner panel for each noted entity that is still an
+/// unparented, non-editor root.
+fn spawn_rows_for_new_roots(world: &mut World) {
+    let entities = std::mem::take(&mut world.resource_mut::<NewRootRows>().0);
+    if entities.is_empty() {
+        return;
+    }
+    let containers: Vec<Entity> = world
+        .run_system_cached(collect_hierarchy_containers)
+        .unwrap_or_default();
+    for entity in entities {
+        if world.get_entity(entity).is_err()
+            || world.get::<ChildOf>(entity).is_some()
+            || world.get::<EditorEntity>(entity).is_some()
             || world.get::<EditorHidden>(entity).is_some()
         {
-            return;
+            continue;
         }
         // In named-only mode, skip entities without a Name. An instance whose
         // prefab is missing has inherited no name and still has to be seen.
@@ -1002,18 +1023,17 @@ fn queue_root_row_spawn(
             && world.get::<Name>(entity).is_none()
             && !names_a_prefab(world, entity)
         {
-            return;
+            continue;
         }
-        let containers: Vec<Entity> = world
-            .run_system_cached(collect_hierarchy_containers)
-            .unwrap_or_default();
-        for container in containers {
-            if world.resource::<TreeIndex>().contains(container, entity) {
+        for &container in &containers {
+            if world.get_entity(container).is_err()
+                || world.resource::<TreeIndex>().contains(container, entity)
+            {
                 continue;
             }
             spawn_single_tree_row(world, entity, container);
         }
-    });
+    }
 }
 
 /// When an entity's Name is added/changed, update its row label in
@@ -1022,6 +1042,7 @@ fn queue_root_row_spawn(
 fn on_name_changed(
     trigger: On<Add, Name>,
     mut commands: Commands,
+    mut new_roots: ResMut<NewRootRows>,
     name_query: Query<&Name>,
     tree_index: Res<TreeIndex>,
     tree_nodes: Query<&Children, With<TreeNode>>,
@@ -1066,29 +1087,13 @@ fn on_name_changed(
     } else {
         // No row exists anywhere yet. Spawn one per container if this
         // is a visible root.
-        if editor_check.contains(entity) || child_of_check.contains(entity) {
-            return;
-        }
-
-        commands.queue(move |world: &mut World| {
-            // Re-check: ChildOf may have been added between observer and command flush
-            if world.get::<ChildOf>(entity).is_some() {
-                return;
-            }
-            if world.get::<EditorEntity>(entity).is_some()
-                || world.get::<EditorHidden>(entity).is_some()
-            {
-                return;
-            }
-            let mut q = world.query_filtered::<Entity, With<HierarchyTreeContainer>>();
-            let containers: Vec<Entity> = q.iter(world).collect();
-            for container in containers {
-                if world.resource::<TreeIndex>().contains(container, entity) {
-                    continue;
-                }
-                spawn_single_tree_row(world, entity, container);
-            }
-        });
+        note_new_root(
+            entity,
+            &mut new_roots,
+            &tree_index,
+            &editor_check,
+            &child_of_check,
+        );
     }
 }
 

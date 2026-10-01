@@ -233,3 +233,58 @@ fn the_keyboard_walk_resumes_on_the_row_that_was_closed() {
         "the walk resumes on the row that was closed"
     );
 }
+
+/// Every scene entity a row was built for, in the order they were built.
+#[derive(Resource, Default)]
+struct RowsBuilt(Vec<Entity>);
+
+fn note_row_built(add: On<Add, TreeNode>, nodes: Query<&TreeNode>, mut built: ResMut<RowsBuilt>) {
+    if let Ok(node) = nodes.get(add.entity) {
+        built.0.push(node.0);
+    }
+}
+
+#[test]
+fn an_entity_parented_in_the_frame_it_arrives_never_gets_a_top_level_row() {
+    let mut app = util::editor_test_app();
+    let (panel, branch, _, _) = panel_over_a_branch(&mut app);
+    app.init_resource::<RowsBuilt>()
+        .add_observer(note_row_built);
+
+    let world = app.world_mut();
+    let part = world.spawn((Name::new("Part"), Transform::default())).id();
+    world.flush();
+    world.entity_mut(part).insert(ChildOf(branch));
+    app.update();
+    app.update();
+
+    assert!(
+        !app.world().resource::<RowsBuilt>().0.contains(&part),
+        "no row was built for an entity that had a parent by the end of its frame"
+    );
+    assert!(
+        app.world()
+            .resource::<TreeIndex>()
+            .get(panel, part)
+            .is_none()
+    );
+}
+
+#[test]
+fn an_entity_left_unparented_gets_a_top_level_row_that_frame() {
+    let mut app = util::editor_test_app();
+    let (panel, _, _, _) = panel_over_a_branch(&mut app);
+
+    let root = app
+        .world_mut()
+        .spawn((Name::new("Loose"), Transform::default()))
+        .id();
+    app.update();
+
+    let row = row_for(&app, panel, root);
+    assert_eq!(
+        app.world().get::<ChildOf>(row).map(ChildOf::parent),
+        Some(panel),
+        "the row sits at the top of the panel"
+    );
+}
