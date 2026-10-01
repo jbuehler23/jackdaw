@@ -437,7 +437,6 @@ fn undoing_a_delete_of_several_selected_nodes_puts_them_back_in_order() {
 }
 
 #[test]
-#[ignore = "undoing a delete of a brush writes its computed physics components into the document and drops its sibling's collider"]
 fn undoing_a_delete_of_several_selected_nodes_puts_back_the_exact_scene_text() {
     let (mut app, _dir) = editor();
     let steps = delete_two_of_four(&mut app);

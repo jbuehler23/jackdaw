@@ -1069,36 +1069,66 @@ pub struct DespawnEntity {
     /// The entity as it stands in the world now, rewritten by every undo to
     /// whatever id the restore minted.
     pub entity: Entity,
-    /// The id the snapshot was taken under, and so the only id a restore's
-    /// entity map answers to. Parts company with `entity` after a redo.
-    snapshot_root: Entity,
-    pub scene_snapshot: DynamicWorld,
-    /// The snapshot's entities parents first, each list of siblings in order.
-    hierarchy_order: Vec<Entity>,
+    restore: Restore,
     /// Where the entity sat before the despawn, so undo can put it back.
     pub location: HierarchyLocation,
     pub label: String,
 }
 
+/// What undoing a despawn spawns again.
+enum Restore {
+    /// The entity's document subtree, spawned the way a scene load spawns it.
+    Document(Box<jackdaw_bsn::SceneBsnAst>),
+    /// A world snapshot, for an entity the document does not hold.
+    World {
+        /// The id the snapshot was taken under, and so the only id a
+        /// restore's entity map answers to.
+        snapshot_root: Entity,
+        scene: DynamicWorld,
+        /// The snapshot's entities parents first, each list of siblings in
+        /// order.
+        hierarchy_order: Vec<Entity>,
+    },
+}
+
 impl DespawnEntity {
-    /// Snapshot `entity` as it was authored. Preview writes are suspended
-    /// around the read, so a running preview's values are not captured.
+    /// Record `entity` as it was authored: its document subtree, or a world
+    /// snapshot when the document does not hold it. Preview writes are
+    /// suspended around a world snapshot, so a running preview's values are
+    /// not captured.
     pub fn from_world(world: &mut World, entity: Entity) -> Self {
         let location = HierarchyLocation::from_world(world, entity);
-        let held = crate::preview_context::suspend_preview_writes(world);
-        let mut hierarchy_order = Vec::new();
-        collect_entity_ids(world, entity, &mut hierarchy_order);
-        let scene = snapshot_entities(world, &hierarchy_order);
-        crate::preview_context::resume_preview_writes(world, held);
+        let restore = match document_subtree(world, entity) {
+            Some(document) => Restore::Document(Box::new(document)),
+            None => {
+                let held = crate::preview_context::suspend_preview_writes(world);
+                let mut hierarchy_order = Vec::new();
+                collect_entity_ids(world, entity, &mut hierarchy_order);
+                let scene = snapshot_entities(world, &hierarchy_order);
+                crate::preview_context::resume_preview_writes(world, held);
+                Restore::World {
+                    snapshot_root: entity,
+                    scene,
+                    hierarchy_order,
+                }
+            }
+        };
         Self {
             entity,
-            snapshot_root: entity,
-            scene_snapshot: scene,
-            hierarchy_order,
+            restore,
             location,
             label: format!("Despawn entity {entity}"),
         }
     }
+}
+
+/// A document holding a copy of `entity`'s node and everything under it.
+fn document_subtree(world: &World, entity: Entity) -> Option<jackdaw_bsn::SceneBsnAst> {
+    let live = world.get_resource::<jackdaw_bsn::SceneBsnAst>()?;
+    let node = live.ast_for(entity)?;
+    let mut copy = jackdaw_bsn::SceneBsnAst::default();
+    jackdaw_bsn::clone_subtree_into(&mut copy, live, node, None);
+    Some(copy)
 }
 
 impl EditorCommand for DespawnEntity {
@@ -1109,15 +1139,6 @@ impl EditorCommand for DespawnEntity {
     }
 
     fn undo(&mut self, world: &mut World) {
-        // Re-build the scene from scratch and write it back
-        let scene = snapshot_rebuild(&self.scene_snapshot);
-        let mut entity_map = EntityHashMap::default();
-        let _ = scene.write_to_world(world, &mut entity_map);
-        relink_restored_children(world, &self.hierarchy_order, &entity_map);
-        if let Some(&new_id) = entity_map.get(&self.snapshot_root) {
-            self.entity = new_id;
-        }
-        crate::scene_io::register_entity_in_ast(world, self.entity);
         self.location = self.location.live(world);
         // A parent that has gone since leaves the entity at the top.
         let location = HierarchyLocation {
@@ -1127,6 +1148,27 @@ impl EditorCommand for DespawnEntity {
                 .filter(|parent| world.get_entity(*parent).is_ok()),
             index: self.location.index,
         };
+        let restored = match &self.restore {
+            Restore::Document(document) => spawn_document_subtree(world, document, location.parent),
+            Restore::World {
+                snapshot_root,
+                scene,
+                hierarchy_order,
+            } => {
+                let scene = snapshot_rebuild(scene);
+                let mut entity_map = EntityHashMap::default();
+                let _ = scene.write_to_world(world, &mut entity_map);
+                relink_restored_children(world, hierarchy_order, &entity_map);
+                let restored = entity_map.get(snapshot_root).copied();
+                if let Some(entity) = restored {
+                    crate::scene_io::register_entity_in_ast(world, entity);
+                }
+                restored
+            }
+        };
+        if let Some(entity) = restored {
+            self.entity = entity;
+        }
         place_entity(world, self.entity, location, WorldTransform::Unplaced);
         crate::hierarchy::sync_outliner_row_order(world, location.parent);
     }
@@ -1134,6 +1176,26 @@ impl EditorCommand for DespawnEntity {
     fn description(&self) -> &str {
         &self.label
     }
+}
+
+/// Graft `document`'s root under `parent` in the live document and spawn it,
+/// returning the entity spawned for the root.
+fn spawn_document_subtree(
+    world: &mut World,
+    document: &jackdaw_bsn::SceneBsnAst,
+    parent: Option<Entity>,
+) -> Option<Entity> {
+    let &root = document.roots.first()?;
+    let (node, parent) = {
+        let mut live = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        let parent_node = parent.and_then(|parent| live.ast_for(parent));
+        let node = jackdaw_bsn::clone_subtree_into(&mut live, document, root, parent_node);
+        (node, parent_node.and(parent))
+    };
+    let mut spawned = Vec::new();
+    jackdaw_bsn::spawn_ast_node(world, node, parent, &mut spawned);
+    jackdaw_bsn::apply_dirty_ast_patches(world);
+    spawned.first().copied()
 }
 
 /// Create a `DynamicWorldBuilder` that excludes computed components which become
