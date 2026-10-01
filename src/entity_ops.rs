@@ -3,7 +3,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use bevy::{
-    ecs::system::{SystemParam, SystemState},
+    ecs::{
+        entity::EntityHashSet,
+        system::{SystemParam, SystemState},
+    },
     gltf::GltfAssetLabel,
     prelude::*,
     world_serialization::WorldAsset,
@@ -728,7 +731,8 @@ pub fn delete_entities(world: &mut World, entities: &[Entity]) {
         return;
     }
 
-    let mut cmds: Vec<Box<dyn EditorCommand>> = Vec::new();
+    let targets: EntityHashSet = entities.iter().copied().collect();
+    let mut despawns = Vec::new();
     for &entity in entities {
         if world.get_entity(entity).is_err() {
             continue;
@@ -736,7 +740,10 @@ pub fn delete_entities(world: &mut World, entities: &[Entity]) {
         if world.get::<EditorEntity>(entity).is_some() {
             continue;
         }
-        cmds.push(Box::new(DespawnEntity::from_world(world, entity)));
+        if has_ancestor_among(world, entity, &targets) {
+            continue;
+        }
+        despawns.push(DespawnEntity::from_world(world, entity));
     }
 
     // Drop Selected and Selection before despawn so neither holds ids
@@ -749,19 +756,57 @@ pub fn delete_entities(world: &mut World, entities: &[Entity]) {
     let mut selection = world.resource_mut::<Selection>();
     selection.entities.retain(|held| !entities.contains(held));
 
-    // Execute all despawn commands
-    for cmd in &mut cmds {
-        cmd.execute(world);
+    if despawns.is_empty() {
+        return;
+    }
+    let mut delete = DeleteEntities { despawns };
+    delete.execute(world);
+    world
+        .resource_mut::<CommandHistory>()
+        .push_executed(Box::new(delete));
+}
+
+/// Whether one of `entity`'s ancestors is in `among`, and so takes `entity`
+/// down and brings it back with its own subtree.
+fn has_ancestor_among(world: &World, entity: Entity, among: &EntityHashSet) -> bool {
+    let mut current = entity;
+    while let Some(parent) = world.get::<ChildOf>(current).map(ChildOf::parent) {
+        if among.contains(&parent) {
+            return true;
+        }
+        current = parent;
+    }
+    false
+}
+
+/// A delete of several entities as one history entry. Undo puts them back
+/// and selects them again.
+struct DeleteEntities {
+    despawns: Vec<DespawnEntity>,
+}
+
+impl EditorCommand for DeleteEntities {
+    fn execute(&mut self, world: &mut World) {
+        for despawn in &mut self.despawns {
+            despawn.execute(world);
+        }
     }
 
-    // Push as a single group command
-    if !cmds.is_empty() {
-        let group = crate::commands::CommandGroup {
-            commands: cmds,
-            label: "Delete entities".to_string(),
-        };
-        let mut history = world.resource_mut::<CommandHistory>();
-        history.push_executed(Box::new(group));
+    fn undo(&mut self, world: &mut World) {
+        for despawn in self.despawns.iter_mut().rev() {
+            despawn.undo(world);
+        }
+        let restored: Vec<Entity> = self
+            .despawns
+            .iter()
+            .map(|despawn| despawn.entity)
+            .filter(|&entity| world.get_entity(entity).is_ok())
+            .collect();
+        crate::selection::select_many(world, &restored);
+    }
+
+    fn description(&self) -> &str {
+        "Delete entities"
     }
 }
 
@@ -2185,6 +2230,7 @@ pub(crate) fn entity_place_gltf(
 #[operator(
     id = "entity.delete",
     label = "Delete",
+    allows_undo = false,
     is_available = can_act_on_entities,
     params(
         entity(Entity, doc = "Entity to delete. Defaults to the selection."),

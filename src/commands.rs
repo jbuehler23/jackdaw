@@ -3,10 +3,12 @@ use std::any::TypeId;
 use bevy::{
     ecs::{
         component::ComponentId,
+        entity::{EntityHashMap, EntityHashSet},
         reflect::{AppTypeRegistry, ReflectComponent},
     },
     prelude::*,
     reflect::PartialReflect,
+    world_serialization::{WorldInstance, WorldInstanceSpawner},
 };
 use serde::de::DeserializeSeed;
 
@@ -1008,6 +1010,8 @@ pub struct DespawnEntity {
     /// entity map answers to. Parts company with `entity` after a redo.
     snapshot_root: Entity,
     pub scene_snapshot: DynamicWorld,
+    /// The snapshot's entities parents first, each list of siblings in order.
+    hierarchy_order: Vec<Entity>,
     /// Where the entity sat before the despawn, so undo can put it back.
     pub location: HierarchyLocation,
     pub label: String,
@@ -1019,12 +1023,15 @@ impl DespawnEntity {
     pub fn from_world(world: &mut World, entity: Entity) -> Self {
         let location = HierarchyLocation::from_world(world, entity);
         let held = crate::preview_context::suspend_preview_writes(world);
-        let scene = snapshot_entity(world, entity);
+        let mut hierarchy_order = Vec::new();
+        collect_entity_ids(world, entity, &mut hierarchy_order);
+        let scene = snapshot_entities(world, &hierarchy_order);
         crate::preview_context::resume_preview_writes(world, held);
         Self {
             entity,
             snapshot_root: entity,
             scene_snapshot: scene,
+            hierarchy_order,
             location,
             label: format!("Despawn entity {entity}"),
         }
@@ -1040,8 +1047,9 @@ impl EditorCommand for DespawnEntity {
     fn undo(&mut self, world: &mut World) {
         // Re-build the scene from scratch and write it back
         let scene = snapshot_rebuild(&self.scene_snapshot);
-        let mut entity_map = bevy::ecs::entity::hash_map::EntityHashMap::default();
+        let mut entity_map = EntityHashMap::default();
         let _ = scene.write_to_world(world, &mut entity_map);
+        relink_restored_children(world, &self.hierarchy_order, &entity_map);
         if let Some(&new_id) = entity_map.get(&self.snapshot_root) {
             self.entity = new_id;
         }
@@ -1054,7 +1062,7 @@ impl EditorCommand for DespawnEntity {
                 .filter(|parent| world.get_entity(*parent).is_ok()),
             index: self.location.index,
         };
-        set_hierarchy_location(world, self.entity, location);
+        place_entity(world, self.entity, location, WorldTransform::Unplaced);
         crate::hierarchy::sync_outliner_row_order(world, location.parent);
     }
 
@@ -1098,20 +1106,56 @@ pub(crate) fn despawn_scene_entity(world: &mut World, entity: Entity) {
     }
 }
 
-/// Create a `DynamicWorld` snapshot of a single entity and all its descendants.
-pub(crate) fn snapshot_entity(world: &World, entity: Entity) -> DynamicWorld {
+/// A `DynamicWorld` snapshot of `entities`.
+fn snapshot_entities(world: &World, entities: &[Entity]) -> DynamicWorld {
     let type_registry = world.resource::<AppTypeRegistry>().read();
-    let mut entities = Vec::new();
-    collect_entity_ids(world, entity, &mut entities);
     filtered_scene_builder(world, &type_registry)
-        .extract_entities(entities.into_iter())
+        .extract_entities(entities.iter().copied())
         .build()
+}
+
+/// Put each restored entity back on its parent's `Children`, in
+/// `hierarchy_order`. Writing a snapshot skips relationship hooks and the
+/// snapshot holds no `Children`, so a restored `ChildOf` alone leaves the
+/// parent unaware of the child.
+fn relink_restored_children(
+    world: &mut World,
+    hierarchy_order: &[Entity],
+    entity_map: &EntityHashMap<Entity>,
+) {
+    for restored in hierarchy_order
+        .iter()
+        .filter_map(|entity| entity_map.get(entity).copied())
+    {
+        let Some(parent) = world.get::<ChildOf>(restored).map(ChildOf::parent) else {
+            continue;
+        };
+        if world.get_entity(parent).is_ok() {
+            world.entity_mut(restored).insert(ChildOf(parent));
+        }
+    }
+}
+
+/// The entities the world-asset spawner built under `entity` from its model.
+/// The model's source builds them again, so a snapshot leaves them out.
+fn model_instance_entities(world: &World, entity: Entity) -> EntityHashSet {
+    let (Some(instance), Some(spawner)) = (
+        world.get::<WorldInstance>(entity),
+        world.get_resource::<WorldInstanceSpawner>(),
+    ) else {
+        return EntityHashSet::default();
+    };
+    spawner.iter_instance_entities(**instance).collect()
 }
 
 pub(crate) fn collect_entity_ids(world: &World, entity: Entity, out: &mut Vec<Entity>) {
     out.push(entity);
     if let Some(children) = world.get::<Children>(entity) {
+        let model_instance = model_instance_entities(world, entity);
         for child in children.iter() {
+            if model_instance.contains(&child) {
+                continue;
+            }
             // A dangling child reference (e.g. left by an older duplicate) points at a
             // despawned entity; skip it so callers never feed it to DynamicSceneBuilder.
             if world.get_entity(child).is_err() {

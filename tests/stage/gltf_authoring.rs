@@ -6,9 +6,11 @@ use crate::util;
 use bevy::prelude::*;
 use bevy::reflect::TypePath;
 use bevy::world_serialization::WorldAssetRoot;
+use jackdaw::remote::server::call_operator_handler;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
 use jackdaw_commands::CommandHistory;
+use serde_json::json;
 
 trait Finished {
     fn assert_finished(self);
@@ -324,4 +326,233 @@ fn a_placed_model_loads_its_meshes_with_the_textures_its_materials_name() {
             .is_some(),
         "the image the material names is in the image assets"
     );
+}
+
+/// Entities whose `ChildOf` names a parent that does not list them among its
+/// `Children`, so transforms and visibility never reach them.
+fn unlisted_children(app: &mut App) -> Vec<Entity> {
+    let mut children = app.world_mut().query::<(Entity, &ChildOf)>();
+    children
+        .iter(app.world())
+        .filter(|(child, child_of)| {
+            app.world()
+                .get::<Children>(child_of.parent())
+                .is_none_or(|listed| !listed.contains(child))
+        })
+        .map(|(child, _)| child)
+        .collect()
+}
+
+fn mesh_count(app: &mut App) -> usize {
+    app.world_mut().query::<&Mesh3d>().iter(app.world()).count()
+}
+
+/// Run frames until the scene holds `expected` meshes, or a deadline passes.
+fn settle_meshes(app: &mut App, expected: usize) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while mesh_count(app) < expected && std::time::Instant::now() < deadline {
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    for _ in 0..4 {
+        app.update();
+    }
+}
+
+fn translations(app: &mut App) -> Vec<[f32; 3]> {
+    let mut placed: Vec<[f32; 3]> = app
+        .world_mut()
+        .query_filtered::<&Transform, With<jackdaw_scene_types::GltfSource>>()
+        .iter(app.world())
+        .map(|transform| transform.translation.to_array())
+        .collect();
+    placed.sort_by(|a, b| a.partial_cmp(b).expect("finite translations"));
+    placed
+}
+
+fn models(app: &mut App) -> Vec<Entity> {
+    app.world_mut()
+        .query_filtered::<Entity, With<jackdaw_scene_types::GltfSource>>()
+        .iter(app.world())
+        .collect()
+}
+
+fn delete_then_undo(app: &mut App, targets: &[Entity]) {
+    let ids = targets
+        .iter()
+        .map(|entity| entity.to_bits().to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    app.world_mut()
+        .run_system_cached_with(
+            call_operator_handler,
+            Some(json!({ "id": "entity.delete", "params": { "entities": ids } })),
+        )
+        .expect("the handler ran")
+        .unwrap_or_else(|err| panic!("entity.delete refused: {}", err.message));
+    app.update();
+    assert!(models(app).is_empty(), "the delete takes every model down");
+    app.world_mut()
+        .operator("history.undo")
+        .call()
+        .expect("dispatch")
+        .assert_finished();
+    app.update();
+}
+
+fn assert_undo_restores_models_whole(count: usize) {
+    let mut app = util::editor_test_app();
+    let mut meshes_per_model = 0;
+    for _ in 0..count {
+        place(&mut app, "models/dungeon.glb");
+        if meshes_per_model == 0 {
+            settle_meshes(&mut app, 1);
+            meshes_per_model = mesh_count(&mut app);
+        }
+    }
+    let placed = meshes_per_model * count;
+    settle_meshes(&mut app, placed);
+    assert!(meshes_per_model > 0, "the model spawned meshes");
+    assert_eq!(mesh_count(&mut app), placed, "every model came on");
+    assert!(unlisted_children(&mut app).is_empty());
+
+    let targets = models(&mut app);
+    let placed_at = translations(&mut app);
+    delete_then_undo(&mut app, &targets);
+    settle_meshes(&mut app, placed);
+    assert_eq!(
+        translations(&mut app),
+        placed_at,
+        "each model comes back where it was"
+    );
+
+    assert_eq!(
+        models(&mut app).len(),
+        count,
+        "undo brings every model back"
+    );
+    assert_eq!(
+        mesh_count(&mut app),
+        placed,
+        "undo brings each model's meshes back once"
+    );
+    let unlisted = unlisted_children(&mut app);
+    assert!(
+        unlisted.is_empty(),
+        "{} restored entities are missing from their parent's children",
+        unlisted.len()
+    );
+}
+
+#[test]
+fn undoing_a_model_delete_restores_its_hierarchy() {
+    assert_undo_restores_models_whole(1);
+}
+
+#[test]
+fn undoing_a_bulk_model_delete_restores_every_hierarchy() {
+    assert_undo_restores_models_whole(12);
+}
+
+#[test]
+fn a_delete_is_one_history_entry() {
+    let mut app = util::editor_test_app();
+    place(&mut app, "models/dungeon.glb");
+    let targets = models(&mut app);
+    let before = app.world().resource::<CommandHistory>().undo_stack.len();
+
+    app.world_mut()
+        .operator("entity.delete")
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        })
+        .param("entity", targets[0])
+        .call()
+        .expect("dispatch")
+        .assert_finished();
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        before + 1,
+        "one undo takes the delete back"
+    );
+}
+
+fn assert_group_delete_restores_its_models(with_a_model: bool) {
+    let mut app = util::editor_test_app();
+    let group = app
+        .world_mut()
+        .spawn((Name::new("Grove"), Transform::default()))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), group);
+    let mut models_in_group = Vec::new();
+    for (index, x) in [0.0, 1.0, 2.0].into_iter().enumerate() {
+        let model = app
+            .world_mut()
+            .spawn((
+                Name::new(format!("Tree{index}")),
+                Transform::from_xyz(x, 0.0, 0.0),
+                jackdaw_scene_types::GltfSource {
+                    path: "models/dungeon.glb".into(),
+                    scene_index: 0,
+                },
+                ChildOf(group),
+            ))
+            .id();
+        jackdaw::scene_io::register_entity_in_ast(app.world_mut(), model);
+        models_in_group.push(model);
+    }
+    settle_meshes(&mut app, 3);
+    let placed = mesh_count(&mut app);
+    assert!(placed > 0, "the models spawned meshes");
+
+    let targets = if with_a_model {
+        vec![group, models_in_group[1]]
+    } else {
+        vec![group]
+    };
+    delete_then_undo(&mut app, &targets);
+    settle_meshes(&mut app, placed);
+
+    let mut groves = app
+        .world_mut()
+        .query_filtered::<Entity, Without<jackdaw_scene_types::GltfSource>>();
+    let restored = groves
+        .iter(app.world())
+        .find(|&entity| {
+            app.world()
+                .get::<Name>(entity)
+                .is_some_and(|name| name.as_str() == "Grove")
+        })
+        .expect("undo brings the group back");
+    let names: Vec<String> = app
+        .world()
+        .get::<Children>(restored)
+        .expect("the group lists its children")
+        .iter()
+        .filter_map(|child| app.world().get::<Name>(child).map(ToString::to_string))
+        .collect();
+    assert_eq!(
+        names,
+        ["Tree0", "Tree1", "Tree2"],
+        "in their authored order"
+    );
+    assert_eq!(
+        mesh_count(&mut app),
+        placed,
+        "each model's meshes come back once"
+    );
+    assert!(unlisted_children(&mut app).is_empty());
+}
+
+#[test]
+fn undoing_a_group_delete_puts_its_models_back_under_it() {
+    assert_group_delete_restores_its_models(false);
+}
+
+#[test]
+fn undoing_a_delete_of_a_group_and_one_of_its_models_restores_that_model_once() {
+    assert_group_delete_restores_its_models(true);
 }
