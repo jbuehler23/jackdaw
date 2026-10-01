@@ -502,7 +502,6 @@ fn a_reparent_undoes_and_redoes_under_the_same_parent() {
 }
 
 #[test]
-#[ignore = "undoing a reparent puts the child at the end of its old sibling list, not in the slot it left"]
 fn a_reparent_undoes_into_the_sibling_slot_it_left() {
     let (mut app, _dir) = editor();
     let (steps, ..) = reparent_the_third_of_four(&mut app);

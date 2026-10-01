@@ -1951,6 +1951,7 @@ fn on_tree_row_dropped(
                         entity: dragged,
                         old_parent,
                         new_parent: Some(target),
+                        old_index: None,
                     };
                     cmd.execute(world);
                     world
@@ -1966,6 +1967,7 @@ fn on_tree_row_dropped(
             entity: dragged,
             old_parent,
             new_parent: Some(target),
+            old_index: None,
         };
         cmd.execute(world);
         world
@@ -2194,6 +2196,7 @@ fn on_tree_row_dropped_on_root(
         entity: dragged,
         old_parent,
         new_parent: None,
+        old_index: None,
     };
 
     commands.queue(move |world: &mut World| {
@@ -2841,6 +2844,7 @@ pub(crate) fn entity_reparent(
             entity: child,
             old_parent,
             new_parent: Some(parent),
+            old_index: None,
         };
         cmd.execute(world);
         world

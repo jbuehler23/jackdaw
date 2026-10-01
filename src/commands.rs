@@ -369,6 +369,9 @@ pub struct ReparentEntity {
     pub entity: Entity,
     pub old_parent: Option<Entity>,
     pub new_parent: Option<Entity>,
+    /// The sibling slot the entity left, read by every execute so undo puts
+    /// it back there.
+    pub old_index: Option<usize>,
 }
 
 impl ReparentEntity {
@@ -382,6 +385,7 @@ impl ReparentEntity {
 impl EditorCommand for ReparentEntity {
     fn execute(&mut self, world: &mut World) {
         self.relive(world);
+        self.old_index = Some(HierarchyLocation::from_world(world, self.entity).index);
         set_hierarchy_location(
             world,
             self.entity,
@@ -399,7 +403,7 @@ impl EditorCommand for ReparentEntity {
             self.entity,
             HierarchyLocation {
                 parent: self.old_parent,
-                index: usize::MAX,
+                index: self.old_index.unwrap_or(usize::MAX),
             },
         );
     }

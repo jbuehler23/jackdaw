@@ -1069,6 +1069,7 @@ fn reparent_group_onto_terrain(world: &mut World, group: Entity, terrain: Entity
             entity: group,
             old_parent: world.get::<ChildOf>(group).map(ChildOf::parent),
             new_parent: Some(terrain),
+            old_index: None,
         }),
         Box::new(crate::commands::SetTransform {
             entity: group,

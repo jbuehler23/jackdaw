@@ -120,6 +120,7 @@ pub(crate) fn entity_add_group(
                 entity,
                 old_parent: None,
                 new_parent: Some(parent),
+                old_index: None,
             }));
         }
 
