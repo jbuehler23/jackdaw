@@ -114,6 +114,7 @@ pub mod preflight;
 pub mod preview_context;
 pub(crate) mod preview_model;
 pub mod probe_bake;
+pub mod progress;
 pub mod project;
 pub mod project_build;
 pub mod project_definitions;
@@ -495,6 +496,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(thumbnail::plugin)
         .add_plugins(boot_ops::plugin)
         .add_plugins(fps_overlay::plugin)
+        .add_plugins(progress::plugin)
         .add_plugins(render_diagnostics::plugin)
         .add_plugins(perf_probe::plugin)
         .add_systems(Update, view_ops::drive_dolly)

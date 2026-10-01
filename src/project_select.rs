@@ -1253,49 +1253,58 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
     world.insert_resource(PendingSceneOpens {
         paths: paths.into(),
         active: last_active,
-        named: false,
+        step: SceneOpenStep::Next,
         root,
     });
 }
 
-/// What the footer calls the scenes a project opens with.
-const SCENE_OPEN_PHASE: &str = "scene open";
-
 /// The scenes an opening project still has to put in front of the user.
 ///
-/// Spawning one costs a whole frame on a scene of any size, so they open one a
-/// frame with the footer naming the one coming next: the window draws, says
-/// what it is about to do, and only then does it.
+/// Each scene takes three frames: one to put up the progress overlay, one to
+/// read and parse the file, and one to spawn it. The overlay draws between
+/// them, so the user sees which step a long open is on.
 #[derive(Resource)]
 struct PendingSceneOpens {
     paths: std::collections::VecDeque<PathBuf>,
     /// The tab the project was last left on.
     active: usize,
-    /// Whether the footer has already had a frame to name the next scene.
-    named: bool,
+    step: SceneOpenStep,
     root: PathBuf,
 }
 
+/// Where the scene at the front of [`PendingSceneOpens`] has got to.
+enum SceneOpenStep {
+    Next,
+    Read(PathBuf),
+    Spawn(Box<crate::scenes::operators::ReadScene>),
+}
+
 fn open_pending_scenes(world: &mut World) {
-    let Some(next) = world.resource::<PendingSceneOpens>().paths.front().cloned() else {
-        finish_pending_scene_opens(world);
-        return;
-    };
-    if !world.resource::<PendingSceneOpens>().named {
-        world.resource_mut::<PendingSceneOpens>().named = true;
-        let name = next
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .unwrap_or_else(|| next.display().to_string());
-        crate::status_bar::begin_phase(world, SCENE_OPEN_PHASE, format!("Opening {name}"));
-        return;
+    let step = std::mem::replace(
+        &mut world.resource_mut::<PendingSceneOpens>().step,
+        SceneOpenStep::Next,
+    );
+    match step {
+        SceneOpenStep::Next => {
+            let Some(next) = world.resource_mut::<PendingSceneOpens>().paths.pop_front() else {
+                finish_pending_scene_opens(world);
+                return;
+            };
+            let canonical = dunce::canonicalize(&next).unwrap_or(next);
+            if crate::scenes::operators::switch_to_open_tab(world, &canonical) {
+                return;
+            }
+            crate::scenes::load_progress::begin_scene_load(world, &canonical, true);
+            world.resource_mut::<PendingSceneOpens>().step = SceneOpenStep::Read(canonical);
+        }
+        SceneOpenStep::Read(path) => {
+            if let Some(read) = crate::scenes::operators::read_scene_for_load(world, &path) {
+                world.resource_mut::<PendingSceneOpens>().step =
+                    SceneOpenStep::Spawn(Box::new(read));
+            }
+        }
+        SceneOpenStep::Spawn(read) => crate::scenes::operators::open_read_scene(world, *read),
     }
-    {
-        let mut pending = world.resource_mut::<PendingSceneOpens>();
-        pending.paths.pop_front();
-        pending.named = false;
-    }
-    crate::scenes::operators::scene_open_system(world, &next);
 }
 
 /// Bring the tab the project was last left on forward, and fall back to a
@@ -1328,7 +1337,6 @@ fn finish_pending_scene_opens(world: &mut World) {
             None => crate::scenes::operators::scene_new_system(world),
         }
     }
-    crate::status_bar::finish_phase(world, SCENE_OPEN_PHASE);
 }
 
 /// Hand `root` to a process rooted at it, without letting this one shut down

@@ -351,58 +351,84 @@ fn reselect_by_name(world: &mut World, names: &[String]) {
 /// without going through the file-dialog path.
 pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
     let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-
-    // De-dupe: if a tab with this path is already open, switch to it.
-    if let Some(idx) = tab_holding(world, &canonical) {
-        // The swap also refreshes any sidecar the file has moved on from.
-        swap_active_tab(world, idx);
+    if switch_to_open_tab(world, &canonical) {
         return;
     }
-
-    // Read the file.
-    let file_text = match jackdaw_bsn::read_document_text(&canonical) {
-        Ok(t) => t,
-        Err(err) => {
-            warn!("scene.open: failed to read {canonical:?}: {err}");
-            return;
-        }
+    crate::scenes::load_progress::begin_scene_load(world, &canonical, false);
+    let Some(read) = read_scene_for_load(world, &canonical) else {
+        return;
     };
+    open_read_scene(world, read);
+}
+
+/// Bring forward the tab already holding `canonical`, if one does.
+pub(crate) fn switch_to_open_tab(world: &mut World, canonical: &std::path::Path) -> bool {
+    let Some(idx) = tab_holding(world, canonical) else {
+        return false;
+    };
+    // The swap also refreshes any sidecar the file has moved on from.
+    swap_active_tab(world, idx);
+    true
+}
+
+/// A scene file read and parsed, waiting for [`open_read_scene`] to give it a
+/// tab.
+pub(crate) struct ReadScene {
+    canonical: std::path::PathBuf,
+    file_text: String,
+    doc: jackdaw_bsn::SceneBsnAst,
+    saved_camera: Option<Transform>,
+    pending_conversion: Option<crate::jsn_to_bsn::PendingConversion>,
+}
+
+/// [`read_scene`], reporting a failure as the end of the scene load.
+pub(crate) fn read_scene_for_load(
+    world: &mut World,
+    canonical: &std::path::Path,
+) -> Option<ReadScene> {
+    match read_scene(world, canonical) {
+        Ok(read) => {
+            crate::scenes::load_progress::scene_read(world);
+            Some(read)
+        }
+        Err(err) => {
+            warn!("scene.open: {err}");
+            crate::scenes::load_progress::fail_scene_load(world, err);
+            None
+        }
+    }
+}
+
+/// Read and parse the scene at `canonical`, converting a legacy `.jsn` in
+/// memory.
+fn read_scene(world: &mut World, canonical: &std::path::Path) -> Result<ReadScene, String> {
+    let file_text = jackdaw_bsn::read_document_text(canonical)
+        .map_err(|err| format!("failed to read {}: {err}", canonical.display()))?;
 
     // A BSN document parses directly. Legacy `.jsn` converts to a `.bsn`
     // document held in memory until it is accepted below.
     let mut saved_camera: Option<Transform> = None;
     // The path the user picked; `canonical` becomes the conversion's target,
     // which does not exist until the commit below.
-    let opened = canonical.clone();
-    let (canonical, file_text, pending_conversion) = if jackdaw_bsn::is_document_path(&canonical) {
-        (canonical, file_text, None)
+    let opened = canonical.to_path_buf();
+    let (canonical, file_text, pending_conversion) = if jackdaw_bsn::is_document_path(canonical) {
+        (canonical.to_path_buf(), file_text, None)
     } else {
         // Read the camera framing sidecar before the source is renamed.
         saved_camera = serde_json::from_str::<jackdaw_jsn::format::JsnScene>(&file_text)
             .ok()
             .and_then(|jsn| jsn.editor.as_ref().and_then(|e| e.camera.clone()))
             .map(std::convert::Into::into);
-        let pending = match crate::jsn_to_bsn::convert_scene_file_pending(world, &canonical) {
-            Ok(pending) => pending,
-            Err(err) => {
-                warn!("scene.open: legacy conversion of {canonical:?} failed: {err}");
-                return;
-            }
-        };
+        let pending = crate::jsn_to_bsn::convert_scene_file_pending(world, canonical)
+            .map_err(|err| format!("legacy conversion of {} failed: {err}", canonical.display()))?;
         (
             pending.bsn_path.clone(),
             pending.scene_bsn.clone(),
             Some(pending),
         )
     };
-    let dirty = false;
-    let mut doc = match jackdaw_bsn::parse_bsn_text(&file_text) {
-        Ok(doc) => doc,
-        Err(err) => {
-            warn!("scene.open: failed to parse {opened:?}: {err}");
-            return;
-        }
-    };
+    let mut doc = jackdaw_bsn::parse_bsn_text(&file_text)
+        .map_err(|err| format!("failed to parse {}: {err}", opened.display()))?;
 
     // A saved scene names its prefabs under the assets folder; in memory they
     // are absolute, since the cache is keyed by path. Without this the sources
@@ -418,18 +444,33 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
 
     // A document naming the removed facade UI vocabulary gets no tab at all,
     // rather than opening with its UI silently missing.
-    if let Err(err) = jackdaw_bsn::reject_retired_ui_components(&doc) {
-        warn!("scene.open: cannot open {opened:?}: {err}");
-        return;
-    }
+    jackdaw_bsn::reject_retired_ui_components(&doc)
+        .map_err(|err| format!("cannot open {}: {err}", opened.display()))?;
 
+    Ok(ReadScene {
+        canonical,
+        file_text,
+        doc,
+        saved_camera,
+        pending_conversion,
+    })
+}
+
+/// Give a read scene its tab and spawn it.
+pub(crate) fn open_read_scene(world: &mut World, read: ReadScene) {
+    let ReadScene {
+        canonical,
+        file_text,
+        doc,
+        saved_camera,
+        pending_conversion,
+    } = read;
     if let Some(pending) = pending_conversion {
         let bsn_path = pending.bsn_path.clone();
         if let Err(err) = crate::jsn_to_bsn::commit_conversion(world, pending) {
-            warn!(
-                "scene.open: failed to write converted {}: {err}",
-                bsn_path.display()
-            );
+            let err = format!("failed to write converted {}: {err}", bsn_path.display());
+            warn!("scene.open: {err}");
+            crate::scenes::load_progress::fail_scene_load(world, err);
             return;
         }
         info!(
@@ -437,6 +478,7 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
             bsn_path.display()
         );
     }
+    let dirty = false;
     // Record the bytes before the tab exists: the watcher starts with the tab,
     // and an edit landing in that gap still has to be reported.
     let known = std::fs::read(&canonical).unwrap_or_else(|_| file_text.clone().into_bytes());
@@ -484,6 +526,7 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
 
     let target = world.resource_mut::<Scenes>().push_tab(tab);
     activate_pushed_tab(world, target);
+    crate::scenes::load_progress::scene_spawned(world, target);
 }
 
 #[operator(id = "scene.close", label = "Close Tab", allows_undo = false)]

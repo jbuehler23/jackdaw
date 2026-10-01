@@ -135,6 +135,11 @@ impl PendingModelRoots {
         self.wanted.is_empty()
     }
 
+    /// The models still waiting their turn.
+    pub fn handles(&self) -> impl Iterator<Item = &Handle<WorldAsset>> {
+        self.wanted.values()
+    }
+
     fn push(&mut self, entity: Entity, scene: Handle<WorldAsset>) {
         if self.wanted.insert(entity, scene).is_none() {
             self.order.push_back(entity);

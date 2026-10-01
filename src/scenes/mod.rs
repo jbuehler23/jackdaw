@@ -4,6 +4,7 @@
 
 pub mod confirm_dialog;
 pub mod external_watch;
+pub mod load_progress;
 pub mod operators;
 pub mod swap;
 pub mod ui;
@@ -22,6 +23,7 @@ pub struct ScenesPlugin;
 impl Plugin for ScenesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Scenes>();
+        load_progress::plugin(app);
         app.init_resource::<confirm_dialog::PendingTabClose>();
         app.init_resource::<confirm_dialog::PendingQuit>();
         app.add_systems(

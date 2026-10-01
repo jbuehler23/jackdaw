@@ -460,9 +460,22 @@ pub fn status_handler(In(_): In<Option<Value>>, world: &mut World) -> BrpResult 
         })
         .collect();
 
+    let progress = world
+        .get_resource::<crate::progress::EditorProgress>()
+        .and_then(crate::progress::EditorProgress::current)
+        .map(|task| {
+            json!({
+                "title": task.title,
+                "stage": task.stage,
+                "done": task.done,
+                "total": task.total,
+            })
+        });
+
     Ok(json!({
         "pid": std::process::id(),
         "port": configured_port(),
+        "progress": progress,
         "project": project,
         "scene": scene,
         "dirty": dirty,

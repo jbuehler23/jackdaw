@@ -14,6 +14,7 @@ mod headless;
 mod integration;
 mod jsn_conversion_commit;
 mod jsn_to_bsn;
+mod load_progress;
 mod native_dialogs;
 mod scene_reopen;
 mod scenes_swap;
