@@ -125,6 +125,9 @@ pub struct TreeIndex {
     /// entity, and answering it by walking every key makes a filter
     /// keystroke - which dirties every row - cost the square of the tree.
     by_source: HashMap<Entity, Vec<Entity>>,
+    /// Tree row entity -> the `(container, source)` pairs it is filed under,
+    /// so a row that goes away is found without walking every key.
+    by_row: HashMap<Entity, Vec<(Entity, Entity)>>,
 }
 
 impl TreeIndex {
@@ -135,15 +138,43 @@ impl TreeIndex {
 
     /// Insert / overwrite the mapping for the `(container, source)` pair.
     pub fn insert(&mut self, container: Entity, source: Entity, tree_row: Entity) {
-        if self.map.insert((container, source), tree_row).is_none() {
-            self.by_source.entry(source).or_default().push(container);
+        let key = (container, source);
+        match self.map.insert(key, tree_row) {
+            None => self.by_source.entry(source).or_default().push(container),
+            Some(replaced) if replaced != tree_row => self.drop_row_entry(replaced, key),
+            Some(_) => return,
         }
+        self.by_row.entry(tree_row).or_default().push(key);
     }
 
     /// Drop the mapping for the `(container, source)` pair.
     pub fn remove(&mut self, container: Entity, source: Entity) {
-        if self.map.remove(&(container, source)).is_some() {
+        if let Some(row) = self.map.remove(&(container, source)) {
+            self.drop_row_entry(row, (container, source));
             self.drop_source_entry(container, source);
+        }
+    }
+
+    /// Drop every mapping `tree_row` is filed under.
+    pub fn remove_row(&mut self, tree_row: Entity) {
+        for (container, source) in self.by_row.remove(&tree_row).unwrap_or_default() {
+            if self.map.remove(&(container, source)).is_some() {
+                self.drop_source_entry(container, source);
+            }
+        }
+    }
+
+    /// Forget one key from `tree_row`'s list, and the list itself once it is
+    /// empty.
+    fn drop_row_entry(&mut self, tree_row: Entity, key: (Entity, Entity)) {
+        let Some(keys) = self.by_row.get_mut(&tree_row) else {
+            return;
+        };
+        if let Some(at) = keys.iter().position(|held| *held == key) {
+            keys.swap_remove(at);
+        }
+        if keys.is_empty() {
+            self.by_row.remove(&tree_row);
         }
     }
 
@@ -152,7 +183,9 @@ impl TreeIndex {
     /// should be forgotten.
     pub fn remove_source(&mut self, source: Entity) {
         for container in self.by_source.remove(&source).unwrap_or_default() {
-            self.map.remove(&(container, source));
+            if let Some(row) = self.map.remove(&(container, source)) {
+                self.drop_row_entry(row, (container, source));
+            }
         }
     }
 
@@ -206,6 +239,10 @@ impl TreeIndex {
     /// a tree is torn down.
     pub fn clear_container(&mut self, container: Entity) {
         self.map.retain(|(c, _), _| *c != container);
+        self.by_row.retain(|_, keys| {
+            keys.retain(|(c, _)| *c != container);
+            !keys.is_empty()
+        });
         self.by_source.retain(|_, containers| {
             containers.retain(|held| *held != container);
             !containers.is_empty()
@@ -216,6 +253,7 @@ impl TreeIndex {
     pub fn clear(&mut self) {
         self.map.clear();
         self.by_source.clear();
+        self.by_row.clear();
     }
 }
 
@@ -392,17 +430,7 @@ pub fn maintain_tree_index(
     }
 
     for removed_entity in removed.read() {
-        // Scan the map to find which (container, source) maps to this
-        // removed tree row. Quadratic in worst case; only runs on
-        // removal frames, not every frame.
-        let key = index
-            .map
-            .iter()
-            .find(|(_, tree_row)| **tree_row == removed_entity)
-            .map(|(k, _)| *k);
-        if let Some((container, source)) = key {
-            index.remove(container, source);
-        }
+        index.remove_row(removed_entity);
     }
 }
 
@@ -451,5 +479,58 @@ mod tests {
         index.insert(one, source, row_one);
         index.clear();
         assert!(!index.contains_anywhere(source));
+    }
+
+    #[test]
+    fn a_row_filed_again_or_replaced_is_found_by_its_row() {
+        let mut world = World::new();
+        let panel = world.spawn_empty().id();
+        let source = world.spawn_empty().id();
+        let old_row = world.spawn_empty().id();
+        let new_row = world.spawn_empty().id();
+
+        let mut index = TreeIndex::default();
+        index.insert(panel, source, old_row);
+        index.insert(panel, source, new_row);
+        index.remove_row(old_row);
+        assert_eq!(
+            index.get(panel, source),
+            Some(new_row),
+            "the replaced row no longer speaks for the source"
+        );
+
+        index.remove_row(new_row);
+        assert!(index.get(panel, source).is_none());
+        assert!(!index.contains_anywhere(source));
+    }
+
+    #[test]
+    fn a_despawned_row_leaves_the_index_and_its_siblings_stay() {
+        let mut app = App::new();
+        app.add_plugins(TreeViewPlugin);
+        let panel = app.world_mut().spawn(TreeRoot).id();
+        let sources: Vec<Entity> = (0..3).map(|_| app.world_mut().spawn_empty().id()).collect();
+        let rows: Vec<Entity> = sources
+            .iter()
+            .map(|&source| {
+                app.world_mut()
+                    .spawn((TreeNode(source), ChildOf(panel)))
+                    .id()
+            })
+            .collect();
+        app.update();
+        for (&source, &row) in sources.iter().zip(&rows) {
+            assert_eq!(
+                app.world().resource::<TreeIndex>().get(panel, source),
+                Some(row)
+            );
+        }
+
+        app.world_mut().entity_mut(rows[1]).despawn();
+        app.update();
+        let index = app.world().resource::<TreeIndex>();
+        assert!(index.get(panel, sources[1]).is_none());
+        assert_eq!(index.get(panel, sources[0]), Some(rows[0]));
+        assert_eq!(index.get(panel, sources[2]), Some(rows[2]));
     }
 }
