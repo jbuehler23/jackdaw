@@ -1,6 +1,7 @@
 //! Making a placed model into a LOD group from the level files beside it.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -10,6 +11,61 @@ use crate::selection::Selection;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityLodGroupOp>();
+}
+
+/// What placing live LOD levels may cost a frame while a scene opens. The load
+/// overlay is up and nothing is being edited.
+const OPENING_BUDGET: Duration = Duration::from_millis(150);
+
+/// What placing live LOD levels may cost a frame while the scene is being
+/// edited.
+const EDITING_BUDGET: Duration = Duration::from_millis(8);
+
+/// What the footer calls refining detail.
+const REFINING_PHASE: &str = "refining detail";
+
+pub(crate) fn plugin(app: &mut App) {
+    app.insert_resource(jackdaw_runtime::LiveLevelSettings {
+        budget: EDITING_BUDGET,
+        opening_budget: OPENING_BUDGET,
+        stand_ins: true,
+    })
+    .add_systems(
+        Update,
+        name_refinement.run_if(resource_changed::<jackdaw_runtime::LiveLevelProgress>),
+    );
+}
+
+/// Name the refinement in the footer while levels the cameras want are still
+/// coming in.
+fn name_refinement(
+    progress: Res<jackdaw_runtime::LiveLevelProgress>,
+    mut phase: Option<ResMut<crate::status_bar::EditorPhase>>,
+) {
+    let Some(phase) = phase.as_mut() else {
+        return;
+    };
+    if progress.groups == 0 || progress.is_refined() {
+        phase.finish(REFINING_PHASE);
+    } else {
+        phase.begin(
+            REFINING_PHASE,
+            format!(
+                "Refining detail {} / {}",
+                compact_count(progress.refined),
+                compact_count(progress.groups)
+            ),
+        );
+    }
+}
+
+/// A count as the footer words it: thousands with one decimal.
+fn compact_count(count: usize) -> String {
+    if count < 1000 {
+        count.to_string()
+    } else {
+        format!("{:.1}k", count as f32 / 1000.0)
+    }
 }
 
 /// The level files beside a model: `<stem>_LOD1`, `<stem>_LOD2` and on, with

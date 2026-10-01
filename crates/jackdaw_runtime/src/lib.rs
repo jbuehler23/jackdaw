@@ -101,13 +101,18 @@ mod pie_windowless;
 #[cfg(feature = "pie")]
 pub use pie_windowless::{maybe_windowless, windowless_requested};
 
+pub mod frame_work;
+#[cfg(feature = "render")]
+mod live_levels;
 #[cfg(feature = "render")]
 mod lod;
 #[cfg(feature = "render")]
-pub use lod::{
-    LodPlugin, LodView, is_child_never_shown, is_level_never_shown, level_shows, lod_distance,
-    lod_ranges,
+pub use live_levels::{
+    LiveLevelProgress, LiveLevelSettings, LiveLevels, LiveLevelsPlugin, LodPart, drawn_ranges,
+    is_level_of, is_lod_level,
 };
+#[cfg(feature = "render")]
+pub use lod::{LodPlugin, LodSwitches, LodView, level_shows, lod_distance, lod_ranges};
 #[cfg(feature = "render")]
 mod material_overrides;
 #[cfg(feature = "render")]
@@ -294,7 +299,10 @@ impl Plugin for JackdawPlugin {
         #[cfg(feature = "render")]
         app.add_systems(
             Update,
-            (attach_inserted_gltf_sources, attach_levels_that_now_show)
+            (
+                attach_inserted_gltf_sources,
+                attach_models_left_by_lod_groups,
+            )
                 .chain()
                 .after(spawn_loaded_scenes),
         );
@@ -853,7 +861,7 @@ fn spawn_scene_entities(
             })
             .collect();
         for (entity, source) in gltf_entities {
-            if lod::is_level_never_shown(world, entity) {
+            if live_levels::is_lod_level(world, entity) {
                 continue;
             }
             let root = world_asset_root(&asset_server, &source, assets_dir.as_deref());
@@ -921,11 +929,11 @@ fn attach_inserted_gltf_sources(
     }
     let assets_dir = resolve_assets_root(catalog_path.as_deref(), asset_folder.as_deref());
     for (entity, source) in &added {
-        let never_shown = parents
+        let lod_level = parents
             .get(entity)
             .and_then(|parent| groups.get(parent.parent()))
-            .is_ok_and(|(group, children)| lod::is_child_never_shown(group, children, entity));
-        if never_shown {
+            .is_ok_and(|(group, children)| live_levels::is_level_of(group, children, entity));
+        if lod_level {
             continue;
         }
         let root = world_asset_root(&asset_server, source, assets_dir.as_deref());
@@ -939,42 +947,49 @@ fn attach_inserted_gltf_sources(
     }
 }
 
-/// Bring on the models of LOD levels that a change to their group's screen
-/// heights has made show, having been passed over while they never showed.
+/// Bring on the models of children a LOD group no longer keeps as levels:
+/// those past its last level after a change, and all of them once the group is
+/// gone.
 #[cfg(feature = "render")]
-fn attach_levels_that_now_show(
+fn attach_models_left_by_lod_groups(
     groups: Query<
         (&jackdaw_scene_types::LodGroup, &Children),
         Changed<jackdaw_scene_types::LodGroup>,
     >,
+    mut removed: RemovedComponents<jackdaw_scene_types::LodGroup>,
+    children_of: Query<&Children>,
     unplaced: Query<&jackdaw_scene_types::GltfSource, Without<WorldAssetRoot>>,
     catalog_path: Option<Res<JackdawCatalogPath>>,
     asset_folder: Option<Res<AssetFolder>>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
+    let past_last_level = groups
+        .iter()
+        .flat_map(|(group, children)| children.iter().skip(group.levels.len()));
+    let ungrouped: Vec<Entity> = removed
+        .read()
+        .filter_map(|group| children_of.get(group).ok())
+        .flat_map(RelationshipTarget::iter)
+        .collect();
     let mut assets_dir = None;
-    for (group, children) in &groups {
-        for (index, level) in children.iter().enumerate() {
-            if !lod::level_shows(group, index) {
-                continue;
-            }
-            let Ok(source) = unplaced.get(level) else {
-                continue;
-            };
-            let assets_dir = assets_dir.get_or_insert_with(|| {
-                resolve_assets_root(catalog_path.as_deref(), asset_folder.as_deref())
-            });
-            let root = world_asset_root(&asset_server, source, assets_dir.as_deref());
-            commands.queue(move |world: &mut World| attach_shown_model(world, level, root));
-        }
+    for model in past_last_level.chain(ungrouped) {
+        let Ok(source) = unplaced.get(model) else {
+            continue;
+        };
+        let assets_dir = assets_dir.get_or_insert_with(|| {
+            resolve_assets_root(catalog_path.as_deref(), asset_folder.as_deref())
+        });
+        let root = world_asset_root(&asset_server, source, assets_dir.as_deref());
+        commands.queue(move |world: &mut World| attach_shown_model(world, model, root));
     }
 }
 
-/// Give `entity` its model unless it is a LOD level that never shows.
+/// Give `entity` its model unless it is a LOD level, which the group keeps
+/// live itself.
 #[cfg(feature = "render")]
 fn attach_shown_model(world: &mut World, entity: Entity, root: WorldAssetRoot) {
-    if lod::is_level_never_shown(world, entity) {
+    if live_levels::is_lod_level(world, entity) {
         return;
     }
     if let Ok(mut entity) = world.get_entity_mut(entity) {

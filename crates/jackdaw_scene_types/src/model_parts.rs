@@ -31,6 +31,9 @@ pub struct FlatModel {
     pub parts: Vec<ModelPart>,
     /// Bounds of every part together, in the model's own space.
     pub bounds: Aabb,
+    /// Whether the model moves or holds more than one scene: skins,
+    /// animations and morph targets play only on a spawned instance.
+    pub needs_instance: bool,
 }
 
 /// Every drawable part of a glTF, with the transform of the node it hung under
@@ -46,8 +49,10 @@ pub fn flatten_gltf(
     server: &AssetServer,
 ) -> Option<FlatModel> {
     let mut child_ids = HashSet::new();
+    let mut needs_instance = !gltf.skins.is_empty() || gltf.scenes.len() > 1;
     for handle in &gltf.nodes {
         let node = nodes.get(handle)?;
+        needs_instance |= node.skin.is_some() || node.is_animation_root;
         for child in &node.children {
             child_ids.insert(child.id());
         }
@@ -84,7 +89,9 @@ pub fn flatten_gltf(
                 .as_ref()
                 .and_then(|handle| standard_material(server, handle))
                 .unwrap_or_default();
-            let Some(bounds) = mesh_assets.get(&primitive.mesh)?.compute_aabb() else {
+            let mesh_asset = mesh_assets.get(&primitive.mesh)?;
+            needs_instance |= mesh_asset.has_morph_targets();
+            let Some(bounds) = mesh_asset.compute_aabb() else {
                 warn!(
                     "a primitive of {:?} has no positions and draws nothing",
                     gltf.default_scene
@@ -119,6 +126,7 @@ pub fn flatten_gltf(
     Some(FlatModel {
         parts,
         bounds: Aabb::from_min_max(min, max),
+        needs_instance,
     })
 }
 
@@ -213,6 +221,15 @@ impl ModelParts {
     /// How many requested models are still loading.
     pub fn loading_count(&self) -> usize {
         self.loading.len()
+    }
+
+    /// How many models have been asked for.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     /// The paths that finished loading, or failed, on the last resolve.

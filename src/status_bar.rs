@@ -579,25 +579,35 @@ fn spawn_build_bar(mut commands: Commands) {
 
 /// Show the build bar while a build runs: fill from the left when a total
 /// is known, or slide a segment back and forth otherwise (the redirected
-/// project build has no reliable unit total). Hide it when idle.
+/// project build has no reliable unit total). Between builds it fills with the
+/// share of LOD groups whose detail is in while that is still coming. Hide it
+/// when idle.
 fn update_build_bar(
     time: Res<Time>,
     build_status: Res<BuildStatus>,
+    refining: Option<Res<jackdaw_runtime::LiveLevelProgress>>,
     mut track: Query<&mut Visibility, With<BuildBarTrack>>,
     mut fill: Query<&mut Node, With<BuildBarFill>>,
 ) {
     let Ok(mut visibility) = track.single_mut() else {
         return;
     };
-    let BuildState::Building { progress, .. } = &build_status.state else {
-        if *visibility != Visibility::Hidden {
-            *visibility = Visibility::Hidden;
-        }
-        return;
+    let fraction = match &build_status.state {
+        BuildState::Building { progress, .. } => progress.lock().ok().and_then(|g| g.fraction()),
+        _ => match refining.as_deref() {
+            Some(refining) if refining.groups > 0 && !refining.is_refined() => {
+                Some(refining.refined as f32 / refining.groups as f32)
+            }
+            _ => {
+                if *visibility != Visibility::Hidden {
+                    *visibility = Visibility::Hidden;
+                }
+                return;
+            }
+        },
     };
     *visibility = Visibility::Visible;
 
-    let fraction = progress.lock().ok().and_then(|g| g.fraction());
     let Ok(mut node) = fill.single_mut() else {
         return;
     };

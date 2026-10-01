@@ -567,13 +567,14 @@ fn lod_heights(screen_heights: &[f32]) -> jackdaw_scene_types::LodGroup {
     }
 }
 
-/// A LOD level as high as the one before it never shows at any distance, so
-/// its model is left out until the group's heights give it room.
+/// A LOD group keeps its levels live itself, so they get no model instance;
+/// a child past its last level is an ordinary model, and so are the levels
+/// once the group goes.
 #[test]
-fn a_lod_level_that_never_shows_gets_no_model_until_its_heights_give_it_room() {
+fn a_lod_groups_levels_get_no_model_instance_until_the_group_goes() {
     let mut app = util::editor_test_app();
-    let group = app.world_mut().spawn(lod_heights(&[0.5, 0.25, 0.25])).id();
-    let levels: Vec<Entity> = (0..3)
+    let group = app.world_mut().spawn(lod_heights(&[0.5, 0.1])).id();
+    let children: Vec<Entity> = (0..3)
         .map(|_| {
             app.world_mut()
                 .spawn((
@@ -590,16 +591,16 @@ fn a_lod_level_that_never_shows_gets_no_model_until_its_heights_give_it_room() {
     app.update();
 
     let placed = |app: &App| -> Vec<bool> {
-        levels
+        children
             .iter()
-            .map(|level| app.world().get::<WorldAssetRoot>(*level).is_some())
+            .map(|child| app.world().get::<WorldAssetRoot>(*child).is_some())
             .collect()
     };
-    assert_eq!(placed(&app), [true, true, false]);
+    assert_eq!(placed(&app), [false, false, true]);
 
     app.world_mut()
         .entity_mut(group)
-        .insert(lod_heights(&[0.5, 0.25, 0.1]));
+        .remove::<jackdaw_scene_types::LodGroup>();
     app.update();
     app.update();
 

@@ -38,7 +38,7 @@ pub mod edit_mode_ops;
 pub mod entity_ops;
 pub mod environment_ops;
 pub mod face_grid;
-pub mod frame_work;
+pub use jackdaw_runtime::frame_work;
 pub mod game_panel;
 pub mod gizmo_ops;
 pub mod gizmos;
@@ -446,6 +446,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(probe_bake::plugin)
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(jackdaw_runtime::LodPlugin)
+        .add_plugins(lod_group::plugin)
         .add_plugins(file_ops::FileOpsPlugin)
         .add_plugins(keybinds::KeybindsPlugin)
         .add_plugins(keybind_settings::KeybindSettingsPlugin)

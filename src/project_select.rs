@@ -17,7 +17,7 @@ use jackdaw_project_build::project_manifest;
 use rfd::FileHandle;
 
 use crate::{
-    AppState,
+    AppState, EditorEntity,
     new_project::scaffold_project,
     project::{self, ProjectRoot},
     scaffold::{ImportChange, ScaffoldError, TemplateKind},
@@ -78,8 +78,10 @@ impl Plugin for ProjectSelectPlugin {
     }
 }
 
-/// Marker for the project selector root UI node.
+/// Marker for the project selector root UI node and its camera, which belong
+/// to the editor rather than to any scene.
 #[derive(Component, Copy, Clone)]
+#[require(EditorEntity)]
 struct ProjectSelectorRoot;
 
 /// The project a launcher row points at, so an action taken elsewhere

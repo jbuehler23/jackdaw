@@ -920,6 +920,37 @@ fn waiting_for_idle_holds_while_a_model_is_still_coming_in() {
     );
 }
 
+/// LOD levels the cameras want and that are not in yet hold the wait for
+/// idle, and it answers once they are.
+#[test]
+fn waiting_for_idle_holds_while_lod_levels_are_still_coming_in() {
+    let (mut app, _project) = editor_with_a_project();
+    for _ in 0..8 {
+        app.update();
+    }
+    let wait = |app: &mut App, refined: usize| {
+        app.world_mut()
+            .insert_resource(jackdaw_runtime::LiveLevelProgress {
+                groups: 2,
+                drawn: 2,
+                refined,
+                loading: 0,
+            });
+        app.world_mut()
+            .run_system_cached_with(wait_handler, Some(json!({ "until": "idle" })))
+            .expect("the handler ran")
+            .expect("the handler did not refuse")
+            .map(|value| value["idle"].clone())
+    };
+
+    assert_eq!(
+        wait(&mut app, 1),
+        None,
+        "idle answered with a level still queued"
+    );
+    assert_eq!(wait(&mut app, 2), Some(json!(true)));
+}
+
 /// Models are handed to the scene spawner a batch a frame, so for the first
 /// frames of a scene the entity that names one has no handle to ask the asset
 /// server about. Idle has to hold over those frames too.

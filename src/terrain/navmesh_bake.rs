@@ -2825,6 +2825,7 @@ mod tests {
                     local: Transform::from_xyz(0.0, 1.5, 0.0),
                 }],
                 bounds: Aabb::from_min_max(Vec3::new(-1.5, 0.0, -1.5), Vec3::splat(1.5)),
+                needs_instance: false,
             },
         );
         world.insert_resource(models);

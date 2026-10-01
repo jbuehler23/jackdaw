@@ -9,6 +9,8 @@ use bevy::prelude::*;
 use jackdaw_scene_types::model_parts::{ModelParts, add_model_parts, source_path};
 use jackdaw_scene_types::{GltfSource, LodGroup};
 
+use crate::live_levels::{LiveLevels, LiveLevelsPlugin, drawn_ranges};
+
 /// Keeps every [`LodGroup`]'s levels showing at the distances their screen
 /// heights stand for.
 pub struct LodPlugin;
@@ -16,8 +18,8 @@ pub struct LodPlugin;
 impl Plugin for LodPlugin {
     fn build(&self, app: &mut App) {
         add_model_parts(app);
-        app.init_resource::<LodView>()
-            .add_systems(Update, request_first_levels)
+        app.add_plugins(LiveLevelsPlugin)
+            .init_resource::<LodView>()
             .add_systems(
                 PostUpdate,
                 (follow_lod_view, place_lod_ranges)
@@ -93,19 +95,23 @@ pub fn lod_ranges(group: &LodGroup, size: f32, half_fov_tan: f32) -> Vec<Visibil
         .collect()
 }
 
-/// Ask for the first level's model of every group that gained or changed
-/// levels, which is what a group is measured, baked and collided by without
-/// waiting for it to be spawned.
-fn request_first_levels(
-    groups: Query<&Children, (With<LodGroup>, Or<(Changed<LodGroup>, Changed<Children>)>)>,
-    sources: Query<&GltfSource>,
-    mut parts: ResMut<ModelParts>,
-) {
-    for children in &groups {
-        if let Some(source) = children.first().and_then(|first| sources.get(*first).ok()) {
-            parts.request(&source_path(source));
-        }
-    }
+/// The distances a group's levels switch at, before any stretching to cover a
+/// level that is not in yet, and the size they were measured for. Derived,
+/// never saved.
+#[derive(Component, Clone, PartialEq)]
+pub struct LodSwitches {
+    pub ranges: Vec<VisibilityRange>,
+    pub size: f32,
+}
+
+/// How finely a measured size is kept, in steps a doubling. Each distinct
+/// range takes a slot in Bevy's range table, which never frees one and holds
+/// at most 65,536, so sizes that differ by less than about one percent share
+/// their ranges.
+const SIZE_STEPS_PER_DOUBLING: f32 = 70.0;
+
+fn quantized(size: f32) -> f32 {
+    2f32.powf((size.log2() * SIZE_STEPS_PER_DOUBLING).round() / SIZE_STEPS_PER_DOUBLING)
 }
 
 /// Whether level `index` of `group` shows at any distance. A level whose
@@ -122,28 +128,6 @@ pub fn level_shows(group: &LodGroup, index: usize) -> bool {
         return true;
     };
     lod_distance(1.0, level.screen_height, 1.0) > lod_distance(1.0, before.screen_height, 1.0)
-}
-
-/// Whether `entity` is a level of a [`LodGroup`] that never shows at any
-/// distance, and so is not worth bringing a model on for.
-pub fn is_level_never_shown(world: &World, entity: Entity) -> bool {
-    let Some(group) = world.get::<ChildOf>(entity).map(ChildOf::parent) else {
-        return false;
-    };
-    let (Some(lod), Some(children)) = (world.get::<LodGroup>(group), world.get::<Children>(group))
-    else {
-        return false;
-    };
-    is_child_never_shown(lod, children, entity)
-}
-
-/// Whether `child`, one of a [`LodGroup`]'s `children`, is a level that never
-/// shows at any distance.
-pub fn is_child_never_shown(group: &LodGroup, children: &Children, child: Entity) -> bool {
-    children
-        .iter()
-        .position(|level| level == child)
-        .is_some_and(|index| !level_shows(group, index))
 }
 
 fn report_levels_that_never_show(
@@ -176,6 +160,8 @@ type Groups<'w, 's> = Query<
         Ref<'static, LodGroup>,
         &'static GlobalTransform,
         Option<&'static Children>,
+        Option<Ref<'static, LiveLevels>>,
+        Option<&'static mut LodSwitches>,
     ),
 >;
 
@@ -192,13 +178,13 @@ type Meshes<'w, 's> = Query<
 
 fn place_lod_ranges(
     view: Res<LodView>,
-    groups: Groups,
+    mut groups: Groups,
     added: Query<Entity, Added<Mesh3d>>,
     parents: Query<&ChildOf>,
     descendants: Query<&Children>,
     sources: Query<(&GltfSource, &GlobalTransform)>,
     parts: Res<ModelParts>,
-    mut unmeasured: Local<HashMap<String, Vec<Entity>>>,
+    mut unmeasured: Local<HashMap<String, HashSet<Entity>>>,
     mut meshes: Meshes,
     mut commands: Commands,
 ) {
@@ -210,7 +196,9 @@ fn place_lod_ranges(
     } else {
         groups
             .iter()
-            .filter(|(_, group, ..)| group.is_changed())
+            .filter(|(_, group, _, _, live, _)| {
+                group.is_changed() || live.as_ref().is_some_and(DetectChanges::is_changed)
+            })
             .map(|(entity, ..)| entity)
             .collect()
     };
@@ -228,41 +216,78 @@ fn place_lod_ranges(
     }
 
     for entity in due {
-        let Ok((_, group, transform, children)) = groups.get(entity) else {
+        let Ok((_, group, transform, children, live, held_switches)) = groups.get_mut(entity)
+        else {
             continue;
         };
         let Some(children) = children else {
             continue;
         };
-        let size = if group.size > 0.0 {
-            group.size * transform.compute_transform().scale.abs().max_element()
-        } else {
-            let Some(first) = children.first().copied() else {
-                continue;
-            };
-            match sources.get(first) {
-                Ok((source, placed)) => {
-                    let path = source_path(source);
-                    match parts.get(&path) {
-                        Some(model) => placed_extent(&model.bounds, placed),
-                        None => {
-                            if !parts.failed(&path) {
-                                unmeasured.entry(path).or_default().push(entity);
+        let size =
+            if group.size > 0.0 {
+                group.size * transform.compute_transform().scale.abs().max_element()
+            } else {
+                let Some(first) = children.first().copied() else {
+                    continue;
+                };
+                match sources.get(first) {
+                    Ok((source, placed)) => {
+                        let path = source_path(source);
+                        match parts.get(&path) {
+                            Some(model) => placed_extent(&model.bounds, placed),
+                            None => {
+                                for level in children.iter().take(group.levels.len()) {
+                                    let Ok((source, _)) = sources.get(level) else {
+                                        continue;
+                                    };
+                                    let path = source_path(source);
+                                    if !parts.failed(&path) {
+                                        unmeasured.entry(path).or_default().insert(entity);
+                                    }
+                                }
+                                let coarsest =
+                                    children.iter().take(group.levels.len()).rev().find_map(
+                                        |level| {
+                                            let (source, placed) = sources.get(level).ok()?;
+                                            let model = parts.get(&source_path(source))?;
+                                            Some(placed_extent(&model.bounds, placed))
+                                        },
+                                    );
+                                let Some(size) = coarsest else {
+                                    continue;
+                                };
+                                size
                             }
-                            continue;
                         }
                     }
+                    Err(_) => world_extent(first, &descendants, &meshes).unwrap_or(0.0),
                 }
-                Err(_) => world_extent(first, &descendants, &meshes).unwrap_or(0.0),
-            }
-        };
+            };
         if size <= 0.0 {
             continue;
         }
-        for (level, range) in children
-            .iter()
-            .zip(lod_ranges(&group, size, view.half_fov_tan))
-        {
+        let size = quantized(size);
+        let ranges = lod_ranges(&group, size, view.half_fov_tan);
+        let switches = LodSwitches {
+            ranges: ranges.clone(),
+            size,
+        };
+        let drawn: Vec<VisibilityRange> = match live {
+            Some(live) => drawn_ranges(&ranges, live.wanted(), live.ready())
+                .into_iter()
+                .zip(ranges)
+                .map(|(drawn, own)| drawn.unwrap_or(own))
+                .collect(),
+            None => ranges,
+        };
+        match held_switches {
+            Some(mut held) if *held != switches => *held = switches,
+            Some(_) => {}
+            None => {
+                commands.entity(entity).try_insert(switches);
+            }
+        }
+        for (level, range) in children.iter().zip(drawn) {
             for part in std::iter::once(level).chain(descendants.iter_descendants(level)) {
                 let Ok((_, _, held)) = meshes.get_mut(part) else {
                     continue;

@@ -1581,8 +1581,15 @@ fn editor_is_busy(world: &mut World) -> bool {
     let placing = world
         .get_resource::<crate::entity_ops::PendingModelRoots>()
         .is_some_and(|pending| !pending.is_empty());
+    let refining = world
+        .get_resource::<jackdaw_runtime::LiveLevelProgress>()
+        .is_some_and(|progress| !progress.is_refined())
+        || world
+            .get_resource::<jackdaw_scene_types::model_parts::ModelParts>()
+            .is_some_and(|parts| parts.loading_count() > 0);
     building
         || placing
+        || refining
         || crate::terrain::navmesh_bake::bake_in_flight(world)
         || scene_is_loading(world)
 }

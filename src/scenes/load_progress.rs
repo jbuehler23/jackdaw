@@ -108,7 +108,7 @@ fn model_counts(world: &mut World) -> ModelCounts {
     let rows: Vec<(Option<AssetId<WorldAsset>>, Option<_>)> = models
         .iter(world)
         .filter(|(entity, root, _)| {
-            root.is_some() || !jackdaw_runtime::is_level_never_shown(world, *entity)
+            root.is_some() || !jackdaw_runtime::is_lod_level(world, *entity)
         })
         .map(|(_, root, instance)| {
             (
@@ -145,11 +145,23 @@ fn model_counts(world: &mut World) -> ModelCounts {
             failed || instance.is_some_and(|instance| spawner.instance_is_ready(instance))
         })
         .count();
+    let (level_files, level_files_done) = world
+        .get_resource::<jackdaw_scene_types::model_parts::ModelParts>()
+        .map_or((0, 0), |parts| {
+            (parts.len(), parts.len() - parts.loading_count())
+        });
+    let groups = world
+        .query_filtered::<(), With<jackdaw_scene_types::LodGroup>>()
+        .iter(world)
+        .count();
+    let drawn = world
+        .get_resource::<jackdaw_runtime::LiveLevelProgress>()
+        .map_or(0, |progress| progress.drawn);
     ModelCounts {
-        files: ids.len(),
-        files_done,
-        models: rows.len(),
-        models_done,
+        files: ids.len() + level_files,
+        files_done: files_done + level_files_done,
+        models: rows.len() + groups,
+        models_done: models_done + drawn.min(groups),
     }
 }
 
