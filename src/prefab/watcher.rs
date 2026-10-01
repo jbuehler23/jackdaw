@@ -94,7 +94,7 @@ fn refresh_watch_list(
 ) {
     // Walking the live document's `IsA` nodes costs a query, and the result can
     // only differ when one of the three inputs changed.
-    let stale = state.watcher.is_none()
+    let stale = state.is_added()
         || cache.is_changed()
         || live.as_ref().is_some_and(DetectChanges::is_changed)
         || scenes.as_ref().is_some_and(DetectChanges::is_changed);
@@ -520,5 +520,68 @@ fn respawn_scene(world: &mut World, sparse_text: &str) {
     // `SceneBsnAst`, re-adds inline assets, and applies patches.
     if let Err(err) = jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
         bevy::log::error!("reload_all_instances: load_bsn_scene failed: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jackdaw_bsn::{BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnValue, SceneBsnAst};
+
+    fn watch_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<PrefabAstCache>()
+            .init_resource::<SceneBsnAst>()
+            .init_resource::<PrefabWatchState>()
+            .add_systems(Update, refresh_watch_list);
+        app
+    }
+
+    fn place_instance_of(app: &mut App, source: &Path) {
+        let patch = BsnPatch::Struct(BsnStructData {
+            type_path: ISA_TYPE.to_string(),
+            fields: BsnStructFields(vec![BsnField {
+                name: "source".to_string(),
+                value: BsnValue::String(source.to_string_lossy().into_owned()),
+            }]),
+        });
+        let mut live = app.world_mut().resource_mut::<SceneBsnAst>();
+        let node = live.create_entity_node(vec![patch]);
+        live.add_to_roots(node);
+    }
+
+    fn watched(app: &App) -> Vec<PathBuf> {
+        app.world().resource::<PrefabWatchState>().watched.clone()
+    }
+
+    #[test]
+    fn a_prefab_placed_into_a_scene_with_none_is_watched() {
+        let folder = tempfile::tempdir().unwrap();
+        let prefab = folder.path().join("crate.jsn");
+        let mut app = watch_app();
+        app.update();
+        app.update();
+        assert!(watched(&app).is_empty());
+
+        place_instance_of(&mut app, &prefab);
+        app.update();
+        assert_eq!(watched(&app), vec![prefab]);
+    }
+
+    #[test]
+    fn a_prefab_placed_after_the_first_is_added_to_the_watch() {
+        let folder = tempfile::tempdir().unwrap();
+        let first = folder.path().join("crate.jsn");
+        let second = folder.path().join("barrel.jsn");
+        let mut app = watch_app();
+        place_instance_of(&mut app, &first);
+        app.update();
+        assert_eq!(watched(&app), vec![first.clone()]);
+
+        app.update();
+        place_instance_of(&mut app, &second);
+        app.update();
+        assert_eq!(watched(&app), vec![first, second]);
     }
 }
