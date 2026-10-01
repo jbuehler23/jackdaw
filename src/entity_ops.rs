@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use bevy::{
+    app::SceneSpawnerSystems,
     ecs::{
         entity::EntityHashSet,
         system::{SystemParam, SystemState},
@@ -66,7 +67,13 @@ impl Plugin for EntityOpsPlugin {
         app.init_resource::<EntityClipboard>()
             .init_resource::<PendingModelRoots>()
             .add_systems(Update, hand_out_model_roots)
-            .add_systems(PostUpdate, measure_model_cost)
+            .add_systems(
+                SpawnScene,
+                (
+                    start_model_cost.before(SceneSpawnerSystems::WorldInstanceSpawn),
+                    measure_model_cost.after(SceneSpawnerSystems::WorldInstanceSpawn),
+                ),
+            )
             .add_observer(derive_world_asset_root)
             .add_observer(forget_model_root)
             .register_type::<EmptyEntity>()
@@ -90,6 +97,14 @@ const NEW_LIGHT_RANGE: f32 = 10.0;
 const MODEL_BATCH_FLOOR: usize = 1;
 const MODEL_BATCH_CEILING: usize = 256;
 
+/// What bringing models on may cost a frame while a scene is opening. The
+/// load overlay is up and nothing is being edited, so the scene comes in at a
+/// few frames a second rather than at the editing frame rate.
+const MODEL_LOAD_BUDGET: Duration = Duration::from_millis(150);
+
+/// The most models one frame hands over while a scene is opening.
+const MODEL_LOAD_BATCH_CEILING: usize = 4096;
+
 /// Models whose render root has been derived but not yet handed to the
 /// world-asset spawner.
 ///
@@ -106,10 +121,13 @@ pub struct PendingModelRoots {
     /// model, so nothing comes on twice.
     wanted: HashMap<Entity, Handle<WorldAsset>>,
     pace: FramePace,
-    /// When this frame's batch went out, so what bringing it on cost can be
-    /// read once the spawner has run.
+    /// The pace while a scene is opening, kept apart so a load does not leave
+    /// editing with a batch sized for a load.
+    load_pace: FramePace,
+    /// When the spawner started on this frame's batch, so what bringing it on
+    /// cost can be read once the spawner has run.
     handed: Option<Instant>,
-    /// What the last batch cost, from handing it over to the spawner finishing.
+    /// What the last batch cost the world-asset spawner.
     /// The frame time as a whole says nothing useful here: a heavy scene
     /// renders slowly whether or not anything is still coming on.
     cost: Duration,
@@ -121,6 +139,7 @@ impl Default for PendingModelRoots {
             order: VecDeque::new(),
             wanted: HashMap::new(),
             pace: FramePace::new(MODEL_BATCH_FLOOR, MODEL_BATCH_CEILING),
+            load_pace: FramePace::new(MODEL_BATCH_FLOOR, MODEL_LOAD_BATCH_CEILING),
             handed: None,
             cost: Duration::ZERO,
         }
@@ -158,12 +177,18 @@ impl PendingModelRoots {
 
     /// The models this frame takes on.
     ///
-    /// Bringing them on may cost the frame about as much as everything else in
-    /// it already does, so a scene that is slow to draw still fills in at a
-    /// useful rate and a frame never much more than doubles.
-    fn take(&mut self, frame: Duration) -> Vec<(Entity, Handle<WorldAsset>)> {
-        let budget = frame.saturating_sub(self.cost).max(MODEL_FLOOR_BUDGET);
-        let count = self.pace.take(self.cost, budget, self.wanted.len());
+    /// While editing, bringing them on may cost the frame about as much as
+    /// everything else in it already does, so a scene that is slow to draw
+    /// still fills in at a useful rate and a frame never much more than
+    /// doubles. While a scene is opening they get a fixed share of the frame.
+    fn take(&mut self, frame: Duration, opening: bool) -> Vec<(Entity, Handle<WorldAsset>)> {
+        let count = if opening {
+            self.load_pace
+                .take(self.cost, MODEL_LOAD_BUDGET, self.wanted.len())
+        } else {
+            let budget = frame.saturating_sub(self.cost).max(MODEL_FLOOR_BUDGET);
+            self.pace.take(self.cost, budget, self.wanted.len())
+        };
         let mut taking = Vec::with_capacity(count);
         while taking.len() < count {
             let Some(entity) = self.order.pop_front() else {
@@ -249,6 +274,7 @@ const MODEL_PHASE: &str = "models";
 /// so what it inserts is spawned in the same frame's `SpawnScene`.
 fn hand_out_model_roots(
     time: Res<Time<Real>>,
+    progress: Option<Res<crate::progress::EditorProgress>>,
     mut pending: ResMut<PendingModelRoots>,
     // Worlds without a footer -- the launcher, and the test harnesses -- still
     // bring models on.
@@ -268,7 +294,9 @@ fn hand_out_model_roots(
         phase.begin(MODEL_PHASE, format!("Placing {} models", pending.len()));
         *named = true;
     }
-    let batch = pending.take(time.delta());
+    let opening = progress
+        .is_some_and(|progress| progress.is_running(crate::scenes::load_progress::SCENE_LOAD));
+    let batch = pending.take(time.delta(), opening);
     commands.queue(move |world: &mut World| {
         for (entity, scene) in batch {
             // Between deriving the root and this frame the entity may have
@@ -291,6 +319,13 @@ fn hand_out_model_roots(
             entity.insert(WorldAssetRoot(scene));
         }
     });
+}
+
+/// Start the clock on this frame's batch as the world-asset spawner reaches it.
+fn start_model_cost(mut pending: ResMut<PendingModelRoots>) {
+    if pending.handed.is_some() {
+        pending.bypass_change_detection().handed = Some(Instant::now());
+    }
 }
 
 /// Read what the batch this frame handed over cost, once the scene spawner
@@ -2997,6 +3032,27 @@ mod clipboard_tests {
         for name in taken {
             assert!(!name.contains(' '), "{name} cannot be written in a clause");
         }
+    }
+
+    #[test]
+    fn an_opening_scene_hands_over_larger_batches_than_editing() {
+        let mut world = World::new();
+        let mut pending = PendingModelRoots::default();
+        for _ in 0..40_000 {
+            pending.push(world.spawn_empty().id(), Handle::default());
+        }
+        let frame = Duration::from_millis(16);
+        let editing = (0..16).map(|_| pending.take(frame, false).len()).max();
+        let opening = (0..16).map(|_| pending.take(frame, true).len()).max();
+        assert_eq!(editing, Some(MODEL_BATCH_CEILING));
+        assert_eq!(opening, Some(MODEL_LOAD_BATCH_CEILING));
+
+        let after_opening = (0..4).map(|_| pending.take(frame, false).len()).max();
+        assert_eq!(
+            after_opening,
+            Some(MODEL_BATCH_CEILING),
+            "editing goes back to its own pace once the scene is open"
+        );
     }
 
     #[test]
