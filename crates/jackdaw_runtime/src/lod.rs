@@ -14,13 +14,15 @@ pub struct LodPlugin;
 
 impl Plugin for LodPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<LodView>().add_systems(
-            PostUpdate,
-            (follow_lod_view, place_lod_ranges)
-                .chain()
-                .after(VisibilitySystems::CalculateBounds)
-                .before(VisibilitySystems::CheckVisibility),
-        );
+        app.init_resource::<LodView>()
+            .add_systems(
+                PostUpdate,
+                (follow_lod_view, place_lod_ranges)
+                    .chain()
+                    .after(VisibilitySystems::CalculateBounds)
+                    .before(VisibilitySystems::CheckVisibility),
+            )
+            .add_systems(Update, report_levels_that_never_show);
     }
 }
 
@@ -86,6 +88,66 @@ pub fn lod_ranges(group: &LodGroup, size: f32, half_fov_tan: f32) -> Vec<Visibil
             range
         })
         .collect()
+}
+
+/// Whether level `index` of `group` shows at any distance. A level whose
+/// screen height is no smaller than the one before it has nothing left to
+/// show over, so it never draws. An index past the last level is not a level
+/// and counts as shown.
+pub fn level_shows(group: &LodGroup, index: usize) -> bool {
+    let (Some(level), Some(before)) = (
+        group.levels.get(index),
+        index
+            .checked_sub(1)
+            .and_then(|before| group.levels.get(before)),
+    ) else {
+        return true;
+    };
+    lod_distance(1.0, level.screen_height, 1.0) > lod_distance(1.0, before.screen_height, 1.0)
+}
+
+/// Whether `entity` is a level of a [`LodGroup`] that never shows at any
+/// distance, and so is not worth bringing a model on for.
+pub fn is_level_never_shown(world: &World, entity: Entity) -> bool {
+    let Some(group) = world.get::<ChildOf>(entity).map(ChildOf::parent) else {
+        return false;
+    };
+    let (Some(lod), Some(children)) = (world.get::<LodGroup>(group), world.get::<Children>(group))
+    else {
+        return false;
+    };
+    is_child_never_shown(lod, children, entity)
+}
+
+/// Whether `child`, one of a [`LodGroup`]'s `children`, is a level that never
+/// shows at any distance.
+pub fn is_child_never_shown(group: &LodGroup, children: &Children, child: Entity) -> bool {
+    children
+        .iter()
+        .position(|level| level == child)
+        .is_some_and(|index| !level_shows(group, index))
+}
+
+fn report_levels_that_never_show(
+    groups: Query<(Entity, &LodGroup, Option<&Name>), Changed<LodGroup>>,
+) {
+    let mut hidden = groups
+        .iter()
+        .filter(|(_, group, _)| (0..group.levels.len()).any(|index| !level_shows(group, index)));
+    let Some((entity, _, name)) = hidden.next() else {
+        return;
+    };
+    let others = hidden.count();
+    let name = name.map_or_else(|| entity.to_string(), ToString::to_string);
+    if others == 0 {
+        warn!(
+            "LOD group {name} has a level with a screen height no smaller than the level before it; that level never shows and is not placed"
+        );
+    } else {
+        warn!(
+            "LOD group {name} and {others} more have a level with a screen height no smaller than the level before it; those levels never show and are not placed"
+        );
+    }
 }
 
 type Groups<'w, 's> = Query<

@@ -47,6 +47,7 @@ pub struct EntityClipboard {
 }
 
 pub use jackdaw_scene_types::GltfSource;
+use jackdaw_scene_types::LodGroup;
 
 pub struct EntityOpsPlugin;
 
@@ -76,6 +77,7 @@ impl Plugin for EntityOpsPlugin {
             )
             .add_observer(derive_world_asset_root)
             .add_observer(forget_model_root)
+            .add_observer(queue_levels_that_now_show)
             .register_type::<EmptyEntity>()
             .register_type::<SceneCamera>()
             .register_type::<SceneLight>()
@@ -243,6 +245,8 @@ fn derive_world_asset_root(
     insert: On<Insert, GltfSource>,
     sources: Query<&GltfSource>,
     existing: Query<&WorldAssetRoot>,
+    parents: Query<&ChildOf>,
+    groups: Query<(&LodGroup, &Children)>,
     asset_server: Res<AssetServer>,
     mut pending: ResMut<PendingModelRoots>,
 ) {
@@ -250,13 +254,17 @@ fn derive_world_asset_root(
     let Ok(source) = sources.get(entity) else {
         return;
     };
-    // Scenes authored before paths were normalised still hold an absolute
-    // path; `to_asset_path` reduces those and passes a relative one through.
-    let asset_path = to_asset_path(&source.path);
-    let scene: Handle<WorldAsset> = asset_server
-        .load_builder()
-        .with_settings(jackdaw_scene_types::render_assets::model_settings)
-        .load(GltfAssetLabel::Scene(source.scene_index).from_asset(asset_path));
+    let never_shown = parents
+        .get(entity)
+        .and_then(|parent| groups.get(parent.parent()))
+        .is_ok_and(|(group, children)| {
+            jackdaw_runtime::is_child_never_shown(group, children, entity)
+        });
+    if never_shown {
+        pending.forget(entity);
+        return;
+    }
+    let scene = model_scene(&asset_server, source);
     // Re-inserting an equal handle still trips `Changed`, and the world-asset
     // spawner despawns and respawns the whole instance on every change.
     // Applying the document re-inserts `GltfSource` wholesale, so without this
@@ -265,6 +273,40 @@ fn derive_world_asset_root(
         return;
     }
     pending.push(entity, scene);
+}
+
+/// The glTF scene `source` names, as the handle the world-asset spawner
+/// instantiates.
+fn model_scene(asset_server: &AssetServer, source: &GltfSource) -> Handle<WorldAsset> {
+    // Scenes authored before paths were normalised still hold an absolute
+    // path; `to_asset_path` reduces those and passes a relative one through.
+    let asset_path = to_asset_path(&source.path);
+    asset_server
+        .load_builder()
+        .with_settings(jackdaw_scene_types::render_assets::model_settings)
+        .load(GltfAssetLabel::Scene(source.scene_index).from_asset(asset_path))
+}
+
+/// Queue the models of LOD levels that a change to their group's screen
+/// heights has made show, having been passed over while they never showed.
+fn queue_levels_that_now_show(
+    insert: On<Insert, LodGroup>,
+    groups: Query<(&LodGroup, &Children)>,
+    unplaced: Query<&GltfSource, Without<WorldAssetRoot>>,
+    asset_server: Res<AssetServer>,
+    mut pending: ResMut<PendingModelRoots>,
+) {
+    let Ok((group, children)) = groups.get(insert.entity) else {
+        return;
+    };
+    for (index, level) in children.iter().enumerate() {
+        if !jackdaw_runtime::level_shows(group, index) || pending.wanted.contains_key(&level) {
+            continue;
+        }
+        if let Ok(source) = unplaced.get(level) {
+            pending.push(level, model_scene(&asset_server, source));
+        }
+    }
 }
 
 /// What the footer calls the models still coming on.
@@ -299,6 +341,9 @@ fn hand_out_model_roots(
     let batch = pending.take(time.delta(), opening);
     commands.queue(move |world: &mut World| {
         for (entity, scene) in batch {
+            if jackdaw_runtime::is_level_never_shown(world, entity) {
+                continue;
+            }
             // Between deriving the root and this frame the entity may have
             // been despawned, or already given this very handle.
             let Ok(mut entity) = world.get_entity_mut(entity) else {

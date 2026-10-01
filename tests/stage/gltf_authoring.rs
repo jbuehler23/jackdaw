@@ -556,3 +556,52 @@ fn undoing_a_group_delete_puts_its_models_back_under_it() {
 fn undoing_a_delete_of_a_group_and_one_of_its_models_restores_that_model_once() {
     assert_group_delete_restores_its_models(true);
 }
+
+fn lod_heights(screen_heights: &[f32]) -> jackdaw_scene_types::LodGroup {
+    jackdaw_scene_types::LodGroup {
+        levels: screen_heights
+            .iter()
+            .map(|&screen_height| jackdaw_scene_types::LodLevel { screen_height })
+            .collect(),
+        ..default()
+    }
+}
+
+/// A LOD level as high as the one before it never shows at any distance, so
+/// its model is left out until the group's heights give it room.
+#[test]
+fn a_lod_level_that_never_shows_gets_no_model_until_its_heights_give_it_room() {
+    let mut app = util::editor_test_app();
+    let group = app.world_mut().spawn(lod_heights(&[0.5, 0.25, 0.25])).id();
+    let levels: Vec<Entity> = (0..3)
+        .map(|_| {
+            app.world_mut()
+                .spawn((
+                    jackdaw_scene_types::GltfSource {
+                        path: "models/cube.gltf".into(),
+                        scene_index: 0,
+                    },
+                    ChildOf(group),
+                ))
+                .id()
+        })
+        .collect();
+    app.update();
+    app.update();
+
+    let placed = |app: &App| -> Vec<bool> {
+        levels
+            .iter()
+            .map(|level| app.world().get::<WorldAssetRoot>(*level).is_some())
+            .collect()
+    };
+    assert_eq!(placed(&app), [true, true, false]);
+
+    app.world_mut()
+        .entity_mut(group)
+        .insert(lod_heights(&[0.5, 0.25, 0.1]));
+    app.update();
+    app.update();
+
+    assert_eq!(placed(&app), [true, true, true]);
+}

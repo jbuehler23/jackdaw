@@ -104,7 +104,10 @@ pub use pie_windowless::{maybe_windowless, windowless_requested};
 #[cfg(feature = "render")]
 mod lod;
 #[cfg(feature = "render")]
-pub use lod::{LodPlugin, LodView, lod_distance, lod_ranges};
+pub use lod::{
+    LodPlugin, LodView, is_child_never_shown, is_level_never_shown, level_shows, lod_distance,
+    lod_ranges,
+};
 #[cfg(feature = "render")]
 mod material_overrides;
 #[cfg(feature = "render")]
@@ -291,7 +294,9 @@ impl Plugin for JackdawPlugin {
         #[cfg(feature = "render")]
         app.add_systems(
             Update,
-            attach_inserted_gltf_sources.after(spawn_loaded_scenes),
+            (attach_inserted_gltf_sources, attach_levels_that_now_show)
+                .chain()
+                .after(spawn_loaded_scenes),
         );
 
         #[cfg(feature = "terrain")]
@@ -848,6 +853,9 @@ fn spawn_scene_entities(
             })
             .collect();
         for (entity, source) in gltf_entities {
+            if lod::is_level_never_shown(world, entity) {
+                continue;
+            }
             let root = world_asset_root(&asset_server, &source, assets_dir.as_deref());
             world.entity_mut(entity).insert(root);
         }
@@ -901,6 +909,8 @@ fn attach_inserted_gltf_sources(
         Added<jackdaw_scene_types::GltfSource>,
     >,
     existing: Query<&WorldAssetRoot>,
+    parents: Query<&ChildOf>,
+    groups: Query<(&jackdaw_scene_types::LodGroup, &Children)>,
     catalog_path: Option<Res<JackdawCatalogPath>>,
     asset_folder: Option<Res<AssetFolder>>,
     asset_server: Res<AssetServer>,
@@ -911,6 +921,13 @@ fn attach_inserted_gltf_sources(
     }
     let assets_dir = resolve_assets_root(catalog_path.as_deref(), asset_folder.as_deref());
     for (entity, source) in &added {
+        let never_shown = parents
+            .get(entity)
+            .and_then(|parent| groups.get(parent.parent()))
+            .is_ok_and(|(group, children)| lod::is_child_never_shown(group, children, entity));
+        if never_shown {
+            continue;
+        }
         let root = world_asset_root(&asset_server, source, assets_dir.as_deref());
         if existing
             .get(entity)
@@ -918,7 +935,50 @@ fn attach_inserted_gltf_sources(
         {
             continue;
         }
-        commands.entity(entity).insert(root);
+        commands.queue(move |world: &mut World| attach_shown_model(world, entity, root));
+    }
+}
+
+/// Bring on the models of LOD levels that a change to their group's screen
+/// heights has made show, having been passed over while they never showed.
+#[cfg(feature = "render")]
+fn attach_levels_that_now_show(
+    groups: Query<
+        (&jackdaw_scene_types::LodGroup, &Children),
+        Changed<jackdaw_scene_types::LodGroup>,
+    >,
+    unplaced: Query<&jackdaw_scene_types::GltfSource, Without<WorldAssetRoot>>,
+    catalog_path: Option<Res<JackdawCatalogPath>>,
+    asset_folder: Option<Res<AssetFolder>>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+) {
+    let mut assets_dir = None;
+    for (group, children) in &groups {
+        for (index, level) in children.iter().enumerate() {
+            if !lod::level_shows(group, index) {
+                continue;
+            }
+            let Ok(source) = unplaced.get(level) else {
+                continue;
+            };
+            let assets_dir = assets_dir.get_or_insert_with(|| {
+                resolve_assets_root(catalog_path.as_deref(), asset_folder.as_deref())
+            });
+            let root = world_asset_root(&asset_server, source, assets_dir.as_deref());
+            commands.queue(move |world: &mut World| attach_shown_model(world, level, root));
+        }
+    }
+}
+
+/// Give `entity` its model unless it is a LOD level that never shows.
+#[cfg(feature = "render")]
+fn attach_shown_model(world: &mut World, entity: Entity, root: WorldAssetRoot) {
+    if lod::is_level_never_shown(world, entity) {
+        return;
+    }
+    if let Ok(mut entity) = world.get_entity_mut(entity) {
+        entity.insert(root);
     }
 }
 

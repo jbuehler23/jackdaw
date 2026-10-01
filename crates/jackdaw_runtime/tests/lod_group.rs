@@ -3,11 +3,16 @@
 
 #![cfg(feature = "render")]
 
+use std::path::PathBuf;
+
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::VisibilityRange;
 use bevy::prelude::*;
-use jackdaw_runtime::LodPlugin;
-use jackdaw_scene_types::{LodGroup, LodLevel};
+use bevy::world_serialization::WorldAssetRoot;
+use jackdaw_runtime::{
+    JackdawCatalogPath, JackdawPlugin, JackdawScene, JackdawSceneRoot, LodPlugin, level_shows,
+};
+use jackdaw_scene_types::{GltfSource, LodGroup, LodLevel};
 
 fn app() -> App {
     let mut app = App::new();
@@ -28,20 +33,25 @@ fn camera(app: &mut App, fov_degrees: f32) -> Entity {
 }
 
 fn group(size: f32) -> LodGroup {
+    heights(&[0.5, 0.25, 0.1], size)
+}
+
+fn heights(screen_heights: &[f32], size: f32) -> LodGroup {
     LodGroup {
-        levels: [0.5, 0.25, 0.1]
-            .into_iter()
-            .map(|screen_height| LodLevel { screen_height })
+        levels: screen_heights
+            .iter()
+            .map(|&screen_height| LodLevel { screen_height })
             .collect(),
         size,
         fade: 0.0,
     }
 }
 
-/// A group with one mesh under each of its three levels, returned in level order.
+/// A group with one mesh under each of its levels, returned in level order.
 fn spawn_group(app: &mut App, group: LodGroup) -> (Entity, Vec<Entity>) {
+    let count = group.levels.len();
     let root = app.world_mut().spawn((group, Transform::default())).id();
-    let meshes = (0..3)
+    let meshes = (0..count)
         .map(|_| {
             let level = app
                 .world_mut()
@@ -163,4 +173,116 @@ fn fading_widens_each_switch_into_a_shared_margin() {
     assert!((first.end_margin.start - switch * 0.9).abs() < 1e-3);
     assert!((first.end_margin.end - switch * 1.1).abs() < 1e-3);
     assert_eq!(second.start_margin, first.end_margin);
+}
+
+#[test]
+fn a_level_as_high_as_the_one_before_it_never_shows_and_the_next_takes_over_where_that_one_ends() {
+    let group = heights(&[0.5, 0.25, 0.25, 0.1], 2.0);
+    assert!(level_shows(&group, 0));
+    assert!(level_shows(&group, 1));
+    assert!(!level_shows(&group, 2));
+    assert!(level_shows(&group, 3));
+
+    let mut app = app();
+    camera(&mut app, 60.0);
+    let (_, meshes) = spawn_group(&mut app, group);
+    app.update();
+    app.update();
+
+    let second = range(&app, meshes[1]);
+    let last = range(&app, meshes[3]);
+    assert!((second.end_margin.start - distance(2.0, 0.25, 60.0)).abs() < 1e-3);
+    assert_eq!(last.start_margin, second.end_margin);
+    assert!((last.end_margin.start - distance(2.0, 0.1, 60.0)).abs() < 1e-3);
+}
+
+const GROUP_WITH_A_LEVEL_THAT_NEVER_SHOWS: &str = "#Tree\n\
+     jackdaw_scene_types::types::LodGroup { levels: [\
+     jackdaw_scene_types::types::LodLevel { screen_height: 0.5 },\
+     jackdaw_scene_types::types::LodLevel { screen_height: 0.25 },\
+     jackdaw_scene_types::types::LodLevel { screen_height: 0.25 },\
+     ] }\n\
+     bevy_ecs::hierarchy::Children [\n\
+     #LOD0\n\
+     jackdaw_scene_types::types::GltfSource { path: \"tree.gltf\", scene_index: 0 }\n\
+     ,\n\
+     #LOD1\n\
+     jackdaw_scene_types::types::GltfSource { path: \"tree_LOD1.gltf\", scene_index: 0 }\n\
+     ,\n\
+     #LOD2\n\
+     jackdaw_scene_types::types::GltfSource { path: \"tree_LOD2.gltf\", scene_index: 0 }\n\
+     ]\n";
+
+#[test]
+fn a_level_that_never_shows_is_never_given_a_model_when_its_scene_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = runtime_app(dir.path());
+    let scene = app
+        .world_mut()
+        .resource_mut::<Assets<JackdawScene>>()
+        .add(JackdawScene::new(
+            GROUP_WITH_A_LEVEL_THAT_NEVER_SHOWS.to_owned(),
+            PathBuf::new(),
+        ));
+    app.world_mut().spawn(JackdawSceneRoot(scene));
+    app.update();
+    app.update();
+
+    assert_eq!(
+        placed_models(app.world_mut()),
+        ["tree.gltf", "tree_LOD1.gltf"]
+    );
+}
+
+#[test]
+fn a_level_that_comes_to_show_is_given_its_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = runtime_app(dir.path());
+    let root = app.world_mut().spawn(heights(&[0.5, 0.25, 0.25], 0.0)).id();
+    for path in ["tree.gltf", "tree_LOD1.gltf", "tree_LOD2.gltf"] {
+        app.world_mut().spawn((
+            GltfSource {
+                path: path.to_owned(),
+                scene_index: 0,
+            },
+            ChildOf(root),
+        ));
+    }
+    app.update();
+    assert_eq!(
+        placed_models(app.world_mut()),
+        ["tree.gltf", "tree_LOD1.gltf"]
+    );
+
+    app.world_mut()
+        .entity_mut(root)
+        .insert(heights(&[0.5, 0.25, 0.1], 0.0));
+    app.update();
+
+    assert_eq!(
+        placed_models(app.world_mut()),
+        ["tree.gltf", "tree_LOD1.gltf", "tree_LOD2.gltf"]
+    );
+}
+
+/// The glTF files given to the world-asset spawner, in path order.
+fn placed_models(world: &mut World) -> Vec<String> {
+    let mut placed = world.query::<(&GltfSource, &WorldAssetRoot)>();
+    let mut paths: Vec<String> = placed
+        .iter(world)
+        .map(|(source, _)| source.path.clone())
+        .collect();
+    paths.sort();
+    paths
+}
+
+fn runtime_app(assets_root: &std::path::Path) -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::transform::TransformPlugin);
+    app.add_plugins(AssetPlugin::default());
+    app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+    app.insert_resource(JackdawCatalogPath(assets_root.join("catalog.bsn")));
+    app.add_plugins(JackdawPlugin);
+    app
 }
