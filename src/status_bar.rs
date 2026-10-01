@@ -334,8 +334,7 @@ fn update_status_right(
 ) {
     // A phase says what the editor is doing right now, so it outranks the tool
     // and the build line; a notice is a refusal the user still has to read, so
-    // it outranks the phase. A task reporting progress words its stage the way
-    // its overlay does, so it outranks the other phases.
+    // it outranks the phase.
     let current = progress
         .as_ref()
         .and_then(|progress| progress.current())
