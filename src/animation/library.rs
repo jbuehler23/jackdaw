@@ -208,32 +208,39 @@ impl LibraryDemand {
 /// Ask one more file, and walk one more directory, per frame.
 ///
 /// Spread over frames rather than done at once: a project's assets directory
-/// is of unknown size, and every answer costs a file read.
+/// is of unknown size, and every answer costs a file read. The open scene's
+/// sources are read when they change, and all of them again after a reseed.
 fn index_animation_library(
     project: Option<Res<crate::project::ProjectRoot>>,
-    sources: Query<&jackdaw_scene_types::GltfSource>,
-    sets: Query<&jackdaw_animation_runtime::AnimationSet>,
+    sources: Query<Ref<jackdaw_scene_types::GltfSource>>,
+    sets: Query<Ref<jackdaw_animation_runtime::AnimationSet>>,
     demand: Res<LibraryDemand>,
     mut scan: ResMut<LibraryScan>,
     mut library: ResMut<AnimationLibrary>,
 ) {
+    let mut reseeded = false;
     if let Some(project) = project.as_deref() {
         let assets_dir = project.assets_dir();
         if scan.walking.as_deref() != Some(assets_dir.as_path()) {
             scan.reseed(assets_dir);
             *library = AnimationLibrary::default();
+            reseeded = true;
         }
     }
 
     // What the open scene points at comes first: those files are the ones an
     // author is looking at.
-    let wanted: Vec<String> = sources
-        .iter()
-        .map(|source| source.path.clone())
-        .chain(sets.iter().flat_map(|set| set.sources.iter().cloned()))
-        .collect();
-    for path in wanted {
-        scan.want(&path);
+    for source in &sources {
+        if reseeded || source.is_changed() {
+            scan.want(&source.path);
+        }
+    }
+    for set in &sets {
+        if reseeded || set.is_changed() {
+            for path in &set.sources {
+                scan.want(path);
+            }
+        }
     }
 
     if demand.project_walk() {
@@ -394,5 +401,71 @@ mod tests {
         let mut library = AnimationLibrary::default();
         library.insert("models/rock.glb".into(), Vec::new());
         assert!(library.is_empty());
+    }
+
+    fn library_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<LibraryDemand>()
+            .init_resource::<AnimationLibrary>()
+            .init_resource::<LibraryScan>()
+            .add_systems(Update, index_animation_library);
+        app.update();
+        app
+    }
+
+    fn asked(app: &App, path: &str) -> bool {
+        app.world().resource::<LibraryScan>().asked.contains(path)
+    }
+
+    fn source(path: &str) -> jackdaw_scene_types::GltfSource {
+        jackdaw_scene_types::GltfSource {
+            path: path.into(),
+            scene_index: 0,
+        }
+    }
+
+    #[test]
+    fn sources_placed_or_repointed_after_the_first_pass_are_asked_about() {
+        let mut app = library_app();
+        let model = app.world_mut().spawn(source("models/crate.glb")).id();
+        app.update();
+        assert!(asked(&app, "models/crate.glb"));
+
+        app.world_mut()
+            .get_mut::<jackdaw_scene_types::GltfSource>(model)
+            .unwrap()
+            .path = "models/barrel.glb".into();
+        app.update();
+        assert!(asked(&app, "models/barrel.glb"));
+
+        app.world_mut()
+            .spawn(jackdaw_animation_runtime::AnimationSet {
+                sources: vec!["models/rig.glb".into()],
+                ..default()
+            });
+        app.update();
+        assert!(asked(&app, "models/rig.glb"));
+    }
+
+    #[test]
+    fn another_project_asks_about_the_open_scenes_sources_again() {
+        let mut app = library_app();
+        app.world_mut().spawn(source("models/crate.glb"));
+        app.update();
+        assert!(asked(&app, "models/crate.glb"));
+
+        for root in ["first", "second"] {
+            app.world_mut()
+                .insert_resource(crate::project::ProjectRoot {
+                    root: std::path::PathBuf::from(root),
+                    config: default(),
+                });
+            app.update();
+            assert!(
+                asked(&app, "models/crate.glb"),
+                "the {root} project starts over and still asks"
+            );
+        }
     }
 }
