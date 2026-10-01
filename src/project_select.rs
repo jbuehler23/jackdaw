@@ -1260,9 +1260,9 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
 
 /// The scenes an opening project still has to put in front of the user.
 ///
-/// Each scene takes three frames: one to put up the progress overlay, one to
-/// read and parse the file, and one to spawn it. The overlay draws between
-/// them, so the user sees which step a long open is on.
+/// Each scene takes two frames: one to name it and put up the progress overlay,
+/// and one to read and spawn it. The window draws in between, so the user sees
+/// what the long frame is doing.
 #[derive(Resource)]
 struct PendingSceneOpens {
     paths: std::collections::VecDeque<PathBuf>,
@@ -1275,8 +1275,7 @@ struct PendingSceneOpens {
 /// Where the scene at the front of [`PendingSceneOpens`] has got to.
 enum SceneOpenStep {
     Next,
-    Read(PathBuf),
-    Spawn(Box<crate::scenes::operators::ReadScene>),
+    Open(PathBuf),
 }
 
 fn open_pending_scenes(world: &mut World) {
@@ -1295,15 +1294,13 @@ fn open_pending_scenes(world: &mut World) {
                 return;
             }
             crate::scenes::load_progress::begin_scene_load(world, &canonical, true);
-            world.resource_mut::<PendingSceneOpens>().step = SceneOpenStep::Read(canonical);
+            world.resource_mut::<PendingSceneOpens>().step = SceneOpenStep::Open(canonical);
         }
-        SceneOpenStep::Read(path) => {
+        SceneOpenStep::Open(path) => {
             if let Some(read) = crate::scenes::operators::read_scene_for_load(world, &path) {
-                world.resource_mut::<PendingSceneOpens>().step =
-                    SceneOpenStep::Spawn(Box::new(read));
+                crate::scenes::operators::open_read_scene(world, read);
             }
         }
-        SceneOpenStep::Spawn(read) => crate::scenes::operators::open_read_scene(world, *read),
     }
 }
 

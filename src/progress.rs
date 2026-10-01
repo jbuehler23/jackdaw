@@ -2,9 +2,10 @@
 //! its total, how far through that stage it is.
 //!
 //! Any task reports through [`begin_progress`], [`progress_stage`],
-//! [`progress_count`] and [`finish_progress`] or [`fail_progress`]. The footer
-//! names the most recent task, the remote reports it, and a modal overlay draws
-//! its stage and a bar while it runs.
+//! [`progress_count`] and [`finish_progress`] or [`fail_progress`]. The task's
+//! title is its editor phase; the footer shows the title and the stage with its
+//! count, the remote reports both, and a modal overlay draws them with a bar
+//! while the task runs.
 
 use std::time::{Duration, Instant};
 
@@ -122,12 +123,14 @@ pub fn begin_progress(
     title: impl Into<String>,
     immediate: bool,
 ) {
+    let title = title.into();
+    crate::status_bar::begin_phase(world, owner, title.clone());
     let mut progress = world.get_resource_or_init::<EditorProgress>();
     progress.running.retain(|task| task.owner != owner);
     progress.running.push(RunningTask {
         owner,
         progress: TaskProgress {
-            title: title.into(),
+            title,
             stage: String::new(),
             done: 0,
             total: None,
@@ -155,8 +158,6 @@ pub fn progress_stage(
     task.progress.stage = stage.clone();
     task.progress.done = 0;
     task.progress.total = total;
-    let label = task.progress.label();
-    crate::status_bar::begin_phase(world, owner, label);
     if moved_on {
         world.trigger(ProgressStageBegan { owner, stage });
     }
@@ -175,8 +176,6 @@ pub fn progress_count(world: &mut World, owner: &'static str, done: usize, total
     }
     task.progress.done = done;
     task.progress.total = total;
-    let label = task.progress.label();
-    crate::status_bar::begin_phase(world, owner, label);
 }
 
 /// End `owner`'s task.
