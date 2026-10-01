@@ -16,6 +16,8 @@ fn app() -> App {
     ));
     app.init_asset::<Mesh>();
     app.add_plugins((PhysicsPlugins::default(), ModelCollidersPlugin));
+    app.finish();
+    app.cleanup();
     app
 }
 
