@@ -1676,22 +1676,29 @@ pub fn remove_bsn_field(
     };
 
     let segments: Vec<&str> = field_path.split('.').filter(|s| !s.is_empty()).collect();
-    let Some((leaf, parents)) = segments.split_last() else {
+    remove_nested_field(&mut data.fields, &segments);
+}
+
+/// Remove the field at `segments` from `fields`, and every struct on the way
+/// down that the removal leaves without fields.
+fn remove_nested_field(fields: &mut BsnStructFields, segments: &[&str]) {
+    let Some((segment, rest)) = segments.split_first() else {
         return;
     };
-
-    // Walk to the struct that holds the leaf field.
-    let mut fields = &mut data.fields;
-    for segment in parents {
-        let Some(next) = fields.0.iter_mut().find(|f| f.name == *segment) else {
-            return;
-        };
-        let BsnValue::Struct(inner) = &mut next.value else {
-            return;
-        };
-        fields = &mut inner.fields;
+    if rest.is_empty() {
+        fields.0.retain(|f| f.name != *segment);
+        return;
     }
-    fields.0.retain(|f| f.name != *leaf);
+    let Some(index) = fields.0.iter().position(|f| f.name == *segment) else {
+        return;
+    };
+    let BsnValue::Struct(inner) = &mut fields.0[index].value else {
+        return;
+    };
+    remove_nested_field(&mut inner.fields, rest);
+    if inner.fields.0.is_empty() {
+        fields.0.remove(index);
+    }
 }
 
 fn set_nested_value(
@@ -2186,6 +2193,60 @@ mod tests {
 
         let val = get_bsn_field(&ast, patches_entity, &type_path, "x");
         assert!(matches!(val, Some(BsnValue::Float(f)) if (f - 5.0).abs() < f64::EPSILON));
+    }
+
+    fn struct_value(type_path: &str, fields: Vec<(&str, BsnValue)>) -> BsnStructData {
+        BsnStructData {
+            type_path: type_path.to_string(),
+            fields: BsnStructFields(
+                fields
+                    .into_iter()
+                    .map(|(name, value)| BsnField {
+                        name: name.to_string(),
+                        value,
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    fn nested_patch(ast: &mut SceneBsnAst, axis: Vec<(&str, BsnValue)>) -> Entity {
+        let patch = ast
+            .world
+            .spawn(BsnPatch::Struct(struct_value(
+                "Spin",
+                vec![
+                    ("axis", BsnValue::Struct(struct_value("Axis", axis))),
+                    ("speed", BsnValue::Float(1.0)),
+                ],
+            )))
+            .id();
+        ast.world.spawn(BsnPatches(vec![patch])).id()
+    }
+
+    #[test]
+    fn removing_the_last_field_of_a_nested_struct_removes_the_struct() {
+        let mut ast = SceneBsnAst::default();
+        let node = nested_patch(&mut ast, vec![("y", BsnValue::Float(4.0))]);
+
+        remove_bsn_field(&mut ast, node, "Spin", "axis.y");
+
+        assert!(get_bsn_field(&ast, node, "Spin", "axis").is_none());
+        assert!(get_bsn_field(&ast, node, "Spin", "speed").is_some());
+    }
+
+    #[test]
+    fn removing_one_field_of_a_nested_struct_keeps_its_siblings() {
+        let mut ast = SceneBsnAst::default();
+        let node = nested_patch(
+            &mut ast,
+            vec![("x", BsnValue::Float(2.0)), ("y", BsnValue::Float(4.0))],
+        );
+
+        remove_bsn_field(&mut ast, node, "Spin", "axis.y");
+
+        assert!(get_bsn_field(&ast, node, "Spin", "axis.x").is_some());
+        assert!(get_bsn_field(&ast, node, "Spin", "axis.y").is_none());
     }
 
     #[test]

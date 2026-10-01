@@ -469,7 +469,6 @@ fn a_field_edit_on_a_multi_selection_is_one_entry_that_undoes_on_every_member() 
 }
 
 #[test]
-#[ignore = "undoing the first edit of a field leaves an empty struct patch where the component had none"]
 fn a_field_edit_on_a_multi_selection_undoes_to_the_exact_scene_text() {
     let (mut app, _dir) = editor();
     let steps = edit_three_selected(&mut app);
