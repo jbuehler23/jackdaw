@@ -1769,9 +1769,10 @@ pub fn visible_row_sources(world: &World, container: Entity) -> Vec<Entity> {
 fn collect_visible_rows(world: &World, entity: Entity, sources: &mut Vec<Entity>) {
     let row = world.get::<TreeNode>(entity);
     if row.is_some()
-        && world
-            .get::<Node>(entity)
-            .is_some_and(|node| node.display == Display::None)
+        && jackdaw_widgets::tree_view::row_is_hidden(
+            world.get::<Node>(entity),
+            world.get::<jackdaw_widgets::tree_view::TreeRowParked>(entity),
+        )
     {
         return;
     }
@@ -3475,6 +3476,7 @@ fn apply_hierarchy_filter(
     parent_query: Query<&ChildOf>,
     tree_row_children_query: Query<(), With<TreeRowChildren>>,
     mut display_query: Query<&mut Node>,
+    mut parked_query: Query<&mut jackdaw_widgets::tree_view::TreeRowParked>,
 ) {
     let Ok(text_edit_value) = filter_input.single() else {
         return;
@@ -3484,9 +3486,12 @@ fn apply_hierarchy_filter(
 
     if filter.is_empty() {
         for (tree_entity, _) in &tree_nodes {
-            if let Ok(mut node) = display_query.get_mut(tree_entity) {
-                set_display(&mut node, Display::Flex);
-            }
+            set_row_display(
+                tree_entity,
+                Display::Flex,
+                &mut display_query,
+                &mut parked_query,
+            );
         }
         return;
     }
@@ -3523,14 +3528,28 @@ fn apply_hierarchy_filter(
 
     // Second pass: set display on all tree rows
     for (tree_entity, _) in &tree_nodes {
-        if let Ok(mut node) = display_query.get_mut(tree_entity) {
-            let wanted = if visible_tree_entities.contains(&tree_entity) {
-                Display::Flex
-            } else {
-                Display::None
-            };
-            set_display(&mut node, wanted);
-        }
+        let wanted = if visible_tree_entities.contains(&tree_entity) {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        set_row_display(tree_entity, wanted, &mut display_query, &mut parked_query);
+    }
+}
+
+/// Show or hide a row, laid out or parked.
+fn set_row_display(
+    row: Entity,
+    display: Display,
+    nodes: &mut Query<&mut Node>,
+    parked: &mut Query<&mut jackdaw_widgets::tree_view::TreeRowParked>,
+) {
+    if let Ok(mut node) = nodes.get_mut(row) {
+        set_display(&mut node, display);
+    } else if let Ok(mut parked) = parked.get_mut(row)
+        && parked.0.display != display
+    {
+        parked.0.display = display;
     }
 }
 

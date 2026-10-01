@@ -39,6 +39,18 @@ pub struct TreeRowLabel;
 #[derive(Component)]
 pub struct TreeRowChildren;
 
+/// A row kept out of UI layout while it is far from its list's view, holding
+/// the `Node` it is laid out with when it comes back. The room it takes in the
+/// list is kept as a margin on the next row still laid out.
+#[derive(Component)]
+pub struct TreeRowParked(pub Node);
+
+/// Whether a row is hidden from its list, laid out or parked.
+pub fn row_is_hidden(node: Option<&Node>, parked: Option<&TreeRowParked>) -> bool {
+    node.or(parked.map(|parked| &parked.0))
+        .is_some_and(|node| node.display == Display::None)
+}
+
 /// Tracks whether a tree node's children have been lazily populated.
 /// Set to `true` after first expansion spawns children; prevents re-population on re-expand.
 #[derive(Component, Default)]

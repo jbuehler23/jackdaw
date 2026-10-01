@@ -5,6 +5,11 @@
 //! thousands of top-level nodes then costs a frame per node rather than a
 //! label, toggles and drop gaps per node.
 //!
+//! A frame further still is parked: it leaves UI layout altogether, and the
+//! room it takes is kept as a margin on the next row still laid out, so the
+//! list scrolls the same distance. Each pass works out where every row would
+//! sit from the rows laid out and the height of a frame.
+//!
 //! A row stays built while anything is working with it: an open branch, a
 //! selected or focused row, a rename, or a drag. Focus and selection also scroll
 //! their row into view, which is what builds it.
@@ -16,7 +21,7 @@ use jackdaw_feathers::tree_view::{
 };
 use jackdaw_widgets::tree_view::{
     TreeFocused, TreeIndex, TreeNode, TreeNodeExpanded, TreeRowChildren, TreeRowContent,
-    TreeRowSelected,
+    TreeRowParked, TreeRowSelected, row_is_hidden,
 };
 
 use crate::hierarchy::HierarchyTreeContainer;
@@ -46,6 +51,11 @@ const BUILD_MARGIN_ROWS: f32 = 20.0;
 /// back to a frame. Further than [`BUILD_MARGIN_ROWS`], so a small scroll back
 /// and forth does not build and take down the same rows.
 const KEEP_MARGIN_ROWS: f32 = 60.0;
+
+/// How far beyond the view, in rows, a frame has to be before it leaves
+/// layout. Further than [`KEEP_MARGIN_ROWS`], so a frame is laid out again
+/// before it is built.
+const PARK_MARGIN_ROWS: f32 = 80.0;
 
 /// How many frames a row to show may take to appear, while its branch opens.
 const SHOW_FRAMES: u32 = 16;
@@ -236,8 +246,166 @@ fn rows_may_have_moved(
         || !moved_rows.is_empty()
 }
 
-/// Build the rows near each scrolling Outliner's view, and take far ones back
-/// to frames.
+/// What one pass decides for the rows of a list.
+#[derive(Default)]
+struct RowPass {
+    to_build: Vec<Entity>,
+    to_unbuild: Vec<Entity>,
+    to_park: Vec<Entity>,
+    to_unpark: Vec<Entity>,
+    /// The margin above each row that stays laid out.
+    margins: Vec<(Entity, f32)>,
+}
+
+/// The view a pass places rows against, in logical pixels.
+struct View {
+    top: f32,
+    bottom: f32,
+    row_height: f32,
+    focused: Option<Entity>,
+    may_unbuild: bool,
+}
+
+impl View {
+    fn near(&self, top: f32, bottom: f32, margin_rows: f32) -> bool {
+        let margin = margin_rows * self.row_height;
+        bottom >= self.top - margin && top <= self.bottom + margin
+    }
+}
+
+/// The rows of `list`, a panel or a branch's child container, in the order
+/// they are drawn.
+fn rows_of(world: &World, list: Entity) -> Vec<Entity> {
+    world
+        .get::<Children>(list)
+        .map(|children| {
+            children
+                .iter()
+                .filter(|&child| world.get::<TreeNode>(child).is_some())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The container under `row` its child rows go in, while the branch is open.
+fn open_child_list(world: &World, row: Entity) -> Option<Entity> {
+    if !world
+        .get::<TreeNodeExpanded>(row)
+        .is_some_and(|expanded| expanded.0)
+    {
+        return None;
+    }
+    world.get::<Children>(row)?.iter().find(|&child| {
+        world.get::<TreeRowChildren>(child).is_some()
+            && world
+                .get::<Node>(child)
+                .is_some_and(|node| node.display != Display::None)
+    })
+}
+
+/// Decide, for each row of `list` and of the open branches under it, whether
+/// it is built and whether it stays laid out, from where it would sit. The
+/// first row the list shows always stays laid out, and the rest are placed
+/// from it; so does the last, which holds the room of the rows parked above it
+/// and so keeps the full length of the list scrollable.
+fn plan_list(world: &World, list: Entity, view: &View, pass: &mut RowPass) {
+    let rows: Vec<Entity> = rows_of(world, list)
+        .into_iter()
+        .filter(|&row| !row_is_hidden(world.get::<Node>(row), world.get::<TreeRowParked>(row)))
+        .collect();
+    let Some(&first) = rows.first() else {
+        return;
+    };
+    if world.get::<TreeRowParked>(first).is_some() {
+        pass.to_unpark.push(first);
+        return;
+    }
+    let Some((mut top, _)) = span(world, first) else {
+        return;
+    };
+    let last = rows.len() - 1;
+    let mut room_above = 0.0;
+    for (position, row) in rows.into_iter().enumerate() {
+        let parked = world.get::<TreeRowParked>(row).is_some();
+        let height = if parked {
+            view.row_height
+        } else {
+            span(world, row).map_or(view.row_height, |(top, bottom)| bottom - top)
+        };
+        let bottom = top + height;
+        let held = is_held(world, row, view.focused);
+        let built = is_built(world, row);
+        let keep_margin = if parked {
+            KEEP_MARGIN_ROWS
+        } else {
+            PARK_MARGIN_ROWS
+        };
+        let laid_out = position == 0
+            || position == last
+            || held
+            || built
+            || view.near(top, bottom, keep_margin);
+        if laid_out {
+            if parked {
+                pass.to_unpark.push(row);
+            }
+            pass.margins.push((row, room_above));
+            room_above = 0.0;
+            if !built && (held || view.near(top, bottom, BUILD_MARGIN_ROWS)) {
+                pass.to_build.push(row);
+            } else if built
+                && view.may_unbuild
+                && !held
+                && !view.near(top, bottom, KEEP_MARGIN_ROWS)
+            {
+                pass.to_unbuild.push(row);
+            }
+            if built && let Some(children) = open_child_list(world, row) {
+                plan_list(world, children, view, pass);
+            }
+        } else {
+            if !parked {
+                pass.to_park.push(row);
+            }
+            room_above += height;
+        }
+        top = bottom;
+    }
+}
+
+/// Take `row` out of layout, keeping its `Node` for when it comes back.
+fn park_row(world: &mut World, row: Entity) {
+    let Ok(mut entity) = world.get_entity_mut(row) else {
+        return;
+    };
+    let Some(mut node) = entity.take::<Node>() else {
+        return;
+    };
+    node.margin.top = Val::ZERO;
+    entity.insert(TreeRowParked(node));
+}
+
+/// Put a parked `row` back into layout.
+fn unpark_row(world: &mut World, row: Entity) {
+    let Ok(mut entity) = world.get_entity_mut(row) else {
+        return;
+    };
+    if let Some(TreeRowParked(node)) = entity.take::<TreeRowParked>() {
+        entity.insert(node);
+    }
+}
+
+fn set_room_above(world: &mut World, row: Entity, room: f32) {
+    let room = px(room);
+    if let Some(mut node) = world.get_mut::<Node>(row)
+        && node.margin.top != room
+    {
+        node.margin.top = room;
+    }
+}
+
+/// Build the rows near each scrolling Outliner's view, take far ones back to
+/// frames, and park the frames further out.
 fn build_rows_in_view(world: &mut World) {
     let containers: Vec<Entity> = world
         .query_filtered::<Entity, With<HierarchyTreeContainer>>()
@@ -248,7 +416,6 @@ fn build_rows_in_view(world: &mut World) {
         return;
     }
     let focused = world.resource::<TreeFocused>().0;
-    let row_height = tree_row_height();
     let may_unbuild = !world.resource::<RowDragActive>().0
         && world
             .query_filtered::<(), With<crate::hierarchy::InlineRenameInput>>()
@@ -257,38 +424,45 @@ fn build_rows_in_view(world: &mut World) {
             .is_none();
 
     for container in containers {
-        let Some((view_top, view_bottom)) = span(world, container) else {
+        let Some((top, bottom)) = span(world, container) else {
             continue;
         };
-        let rows: Vec<Entity> = world
+        let view = View {
+            top,
+            bottom,
+            row_height: tree_row_height(),
+            focused,
+            may_unbuild,
+        };
+        let mut pass = RowPass::default();
+        plan_list(world, container, &view, &mut pass);
+
+        let held_frames: Vec<Entity> = world
             .resource::<TreeIndex>()
             .rows_in(container)
             .map(|(_source, row)| row)
+            .filter(|&row| is_held(world, row, focused) && !is_built(world, row))
             .collect();
-        let mut to_build = Vec::new();
-        let mut to_unbuild = Vec::new();
-        for row in rows {
-            let held = is_held(world, row, focused);
-            let built = is_built(world, row);
-            let Some((top, bottom)) = span(world, row) else {
-                if held && !built {
-                    to_build.push(row);
-                }
-                continue;
-            };
-            let near = |margin: f32| {
-                bottom >= view_top - margin * row_height && top <= view_bottom + margin * row_height
-            };
-            if !built && (held || near(BUILD_MARGIN_ROWS)) {
-                to_build.push(row);
-            } else if built && may_unbuild && !held && !near(KEEP_MARGIN_ROWS) {
-                to_unbuild.push(row);
+        for row in held_frames {
+            if world.get::<TreeRowParked>(row).is_some() {
+                pass.to_unpark.push(row);
             }
+            pass.to_build.push(row);
         }
-        for row in to_build {
+
+        for row in pass.to_unpark {
+            unpark_row(world, row);
+        }
+        for (row, room) in pass.margins {
+            set_room_above(world, row, room);
+        }
+        for row in pass.to_park {
+            park_row(world, row);
+        }
+        for row in pass.to_build {
             build_row(world, row);
         }
-        for row in to_unbuild {
+        for row in pass.to_unbuild {
             unbuild_row(world, row);
         }
     }

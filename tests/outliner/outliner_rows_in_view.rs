@@ -192,15 +192,6 @@ fn only_the_rows_near_the_view_are_built() {
 #[test]
 fn a_row_out_of_view_takes_the_room_of_a_built_row() {
     let (app, panel, roots) = long_outliner();
-    let height = |source: Entity| {
-        let row = row(&app, panel, source).expect("every node has a row");
-        let computed = app
-            .world()
-            .get::<ComputedNode>(row)
-            .expect("the row is laid out");
-        computed.size.y * computed.inverse_scale_factor()
-    };
-
     let first = row(&app, panel, roots[0]).expect("the first node has a row");
     let line = app
         .world()
@@ -216,14 +207,39 @@ fn a_row_out_of_view_takes_the_room_of_a_built_row() {
         .get::<ComputedNode>(line)
         .map(|computed| computed.size.y * computed.inverse_scale_factor())
         .expect("the label line is laid out");
+    let first_height = app
+        .world()
+        .get::<ComputedNode>(first)
+        .map(|computed| computed.size.y * computed.inverse_scale_factor())
+        .expect("the first row is laid out");
+    assert_eq!(first_height, line_height, "a built row fits its label line");
 
+    let far = row(&app, panel, roots[ROOTS - 2]).expect("every node has a row");
     assert!(!built(&app, panel, roots[ROOTS - 2]));
-    assert_eq!(
-        height(roots[0]),
-        line_height,
-        "a built row fits its label line"
+    assert!(
+        app.world().get::<Node>(far).is_none(),
+        "a row far out of view is not laid out"
     );
-    assert_eq!(height(roots[ROOTS - 2]), line_height);
+    let content = app
+        .world()
+        .get::<ComputedNode>(panel)
+        .map(|computed| computed.content_size.y * computed.inverse_scale_factor())
+        .expect("the panel is laid out");
+    let rows = app
+        .world()
+        .get::<Children>(panel)
+        .map(|children| {
+            children
+                .iter()
+                .filter(|&child| app.world().get::<TreeNode>(child).is_some())
+                .count()
+        })
+        .expect("the panel holds rows");
+    let every_row = rows as f32 * line_height;
+    assert!(
+        (content - every_row).abs() < 1.0,
+        "the list is {content} tall where {rows} rows take {every_row}"
+    );
 }
 
 #[test]
@@ -244,6 +260,54 @@ fn scrolling_builds_the_rows_that_come_into_view() {
         !built(&app, panel, roots[0]),
         "a row scrolled far out of view goes back to a frame"
     );
+}
+
+#[test]
+fn rows_far_from_the_view_leave_layout_and_return_when_scrolled_to() {
+    let (mut app, panel, roots) = long_outliner();
+    let laid_out = |app: &App, source: Entity| {
+        let row = row(app, panel, source).expect("every node has a row");
+        app.world().get::<Node>(row).is_some()
+    };
+    let scroll_to = |app: &mut App, y: f32| {
+        app.world_mut()
+            .get_mut::<ScrollPosition>(panel)
+            .expect("the panel scrolls")
+            .y = y;
+        settle(app);
+    };
+    let row_height = jackdaw_feathers::tree_view::tree_row_height();
+    assert!(
+        !laid_out(&app, roots[300]),
+        "a row far below is out of layout"
+    );
+
+    scroll_to(&mut app, 300.0 * row_height);
+    assert!(
+        built(&app, panel, roots[305]),
+        "the rows scrolled to are built"
+    );
+    assert!(
+        !laid_out(&app, roots[5]),
+        "a row far above is out of layout"
+    );
+    let scrolled = app
+        .world()
+        .get::<ComputedNode>(panel)
+        .map(|computed| computed.scroll_position.y * computed.inverse_scale_factor())
+        .expect("the panel is laid out");
+    assert!(
+        (scrolled - 300.0 * row_height).abs() < 1.0,
+        "the list scrolled to {scrolled} where every row laid out would let it reach {}",
+        300.0 * row_height
+    );
+
+    scroll_to(&mut app, 0.0);
+    assert!(
+        built(&app, panel, roots[5]),
+        "the rows scrolled back to are built"
+    );
+    assert!(!laid_out(&app, roots[300]));
 }
 
 #[test]

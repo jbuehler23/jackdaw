@@ -11,8 +11,8 @@ use jackdaw_widgets::tree_view::{
     TreeNodeExpandToggle, TreeNodeExpanded, TreeRoot, TreeRowChildren, TreeRowClicked,
     TreeRowContent, TreeRowDot, TreeRowDropped, TreeRowDroppedOnRoot, TreeRowInlineRename,
     TreeRowInsertZone, TreeRowInserted, TreeRowLabel, TreeRowLockToggle, TreeRowLockToggled,
-    TreeRowSelected, TreeRowStartRename, TreeRowVisibilityToggle, TreeRowVisibilityToggled,
-    TreeSpringLoad,
+    TreeRowParked, TreeRowSelected, TreeRowStartRename, TreeRowVisibilityToggle,
+    TreeRowVisibilityToggled, TreeSpringLoad, row_is_hidden,
 };
 
 use lucide_icons::Icon;
@@ -1572,7 +1572,7 @@ pub fn tree_keyboard_navigation(
     tree_nodes: Query<(Entity, &TreeNodeExpanded, Option<&Children>), With<TreeNode>>,
     tree_row_children: Query<&Children, With<TreeRowChildren>>,
     tree_row_contents: Query<Entity, With<TreeRowContent>>,
-    node_query: Query<&Node>,
+    node_query: Query<(Option<&Node>, Option<&TreeRowParked>)>,
     mut commands: Commands,
     tree_node_query: Query<&TreeNode>,
     parents: Query<&ChildOf>,
@@ -1693,7 +1693,7 @@ fn collect_visible_rows(
     tree_roots: &Query<&Children, With<TreeRoot>>,
     tree_nodes: &Query<(Entity, &TreeNodeExpanded, Option<&Children>), With<TreeNode>>,
     tree_row_children: &Query<&Children, With<TreeRowChildren>>,
-    node_query: &Query<&Node>,
+    node_query: &Query<(Option<&Node>, Option<&TreeRowParked>)>,
 ) -> Vec<Entity> {
     let mut result = Vec::new();
 
@@ -1716,15 +1716,15 @@ fn collect_visible_rows_recursive(
     entity: Entity,
     tree_nodes: &Query<(Entity, &TreeNodeExpanded, Option<&Children>), With<TreeNode>>,
     tree_row_children: &Query<&Children, With<TreeRowChildren>>,
-    node_query: &Query<&Node>,
+    node_query: &Query<(Option<&Node>, Option<&TreeRowParked>)>,
     result: &mut Vec<Entity>,
 ) {
     let Ok((_, expanded, children)) = tree_nodes.get(entity) else {
         return;
     };
 
-    if let Ok(node) = node_query.get(entity)
-        && node.display == Display::None
+    if let Ok((node, parked)) = node_query.get(entity)
+        && row_is_hidden(node, parked)
     {
         return;
     }
