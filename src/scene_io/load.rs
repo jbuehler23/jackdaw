@@ -158,6 +158,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
         chosen.parent().map(std::path::Path::to_path_buf);
 
     let mut loaded_hash: Option<u64> = None;
+    let mut pending_upgrade = None;
 
     if path.ends_with(".scene.json") {
         // Legacy format: raw DynamicWorld JSON
@@ -303,37 +304,42 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
         // cleared: merged-in components face that gate too, and a refusal must
         // leave the open scene standing.
         let epoch_before = prefab_cache_epoch(world);
-        let resolved: Option<jackdaw_bsn::SceneBsnAst> =
-            if world.contains_resource::<crate::prefab::PrefabAstCache>() {
-                {
-                    let mut cache = world.resource_mut::<crate::prefab::PrefabAstCache>();
-                    crate::prefab::save_load::populate_cache_for_scene_bsn(
-                        &authored,
-                        &mut cache,
-                        &assets_root,
-                        &parent_path,
-                    );
-                }
-                let missing = crate::prefab::save_load::missing_source_complaints(
+        let mut upgrade = None;
+        let resolved: Option<jackdaw_bsn::SceneBsnAst> = if world
+            .contains_resource::<crate::prefab::PrefabAstCache>()
+        {
+            {
+                let mut cache = world.resource_mut::<crate::prefab::PrefabAstCache>();
+                crate::prefab::save_load::populate_cache_for_scene_bsn(
                     &authored,
-                    world.resource::<crate::prefab::PrefabAstCache>(),
-                    &path,
+                    &mut cache,
+                    &assets_root,
+                    &parent_path,
                 );
-                for complaint in missing {
-                    warn_caller(world, complaint);
+            }
+            if !crate::scenes::operators::document_is_prefab(&authored) {
+                upgrade = crate::lod_upgrade::upgrade_on_open(world, &mut authored, &assets_root);
+            }
+            let missing = crate::prefab::save_load::missing_source_complaints(
+                &authored,
+                world.resource::<crate::prefab::PrefabAstCache>(),
+                &path,
+            );
+            for complaint in missing {
+                warn_caller(world, complaint);
+            }
+            let cache = world.resource::<crate::prefab::PrefabAstCache>();
+            let get_prefab = |p: &Path| cache.get(p);
+            match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
+                Ok(resolved) => Some(resolved),
+                Err(e) => {
+                    warn!("prefab resolution failed: {e}; spawning unresolved scene");
+                    None
                 }
-                let cache = world.resource::<crate::prefab::PrefabAstCache>();
-                let get_prefab = |p: &Path| cache.get(p);
-                match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
-                    Ok(resolved) => Some(resolved),
-                    Err(e) => {
-                        warn!("prefab resolution failed: {e}; spawning unresolved scene");
-                        None
-                    }
-                }
-            } else {
-                None
-            };
+            }
+        } else {
+            None
+        };
 
         if let Err(err) =
             jackdaw_bsn::reject_retired_ui_components(resolved.as_ref().unwrap_or(&authored))
@@ -345,6 +351,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
             );
         }
         let scene_kind = declared_scene_kind(&authored);
+        pending_upgrade = upgrade;
         let resolved_text = match &resolved {
             Some(resolved) => jackdaw_bsn::emit_scene(resolved),
             None => bsn_text.clone(),
@@ -443,6 +450,9 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
 
     // Stacks were cleared by clear_scene_entities, so dirty baseline is 0
     world.resource_mut::<SceneDirtyState>().undo_len_at_save = 0;
+    if let Some(upgrade) = pending_upgrade {
+        crate::lod_upgrade::finish_upgrade(world, upgrade);
+    }
 
     LoadOutcome::Loaded
 }

@@ -294,6 +294,17 @@ fn respawn(
     selection: &[jackdaw_scene_types::SceneNodeId],
     editor_state: &EditorStateSnapshot,
 ) {
+    reload_document_text(world, text);
+
+    restore_selection(world, selection);
+
+    editor_state.apply(world);
+}
+
+/// Respawn the open scene from a document's text: resolve its prefab
+/// instances, despawn the scene and load the text in its place. Undo history
+/// is kept.
+pub(crate) fn reload_document_text(world: &mut World, text: &str) {
     crate::selection::clear_selection_in_world(world);
     if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
         error!("Failed to clear tree rows: {err}");
@@ -327,10 +338,6 @@ fn respawn(
     if let Err(err) = jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
         error!("undo snapshot failed to reload: {err}");
     }
-
-    restore_selection(world, selection);
-
-    editor_state.apply(world);
 }
 
 /// A history entry holding two whole snapshots, for a document that could not

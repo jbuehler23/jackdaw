@@ -10,7 +10,6 @@ use jackdaw::progress::EditorProgress;
 use jackdaw::scenes::load_progress::SCENE_LOAD;
 use jackdaw::viewport::MainViewportCamera;
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
 use jackdaw_commands::CommandHistory;
 use jackdaw_runtime::{LiveLevelProgress, LiveLevels, LodPart};
 use jackdaw_scene_types::model_parts::{FlatModel, ModelPart, ModelParts};
@@ -208,13 +207,6 @@ fn opening_a_scene_finishes_once_every_group_draws_something() {
     );
 }
 
-fn implied_group(name: &str) -> String {
-    format!(
-        "    #{name}\n    bevy_transform::components::transform::Transform\n    jackdaw_scene_types::types::LodGroup {{\n        levels: [\n            jackdaw_scene_types::types::LodLevel {{ screen_height: 0.5 }},\n            jackdaw_scene_types::types::LodLevel {{ screen_height: 0.25 }},\n            jackdaw_scene_types::types::LodLevel {{ screen_height: 0.1 }},\n        ],\n        size: 2.0,\n    }}\n    jackdaw_scene_types::types::GltfSource {{\n        path: \"{}\",\n        scene_index: 0,\n    }}\n",
-        TREE_LEVELS[0]
-    )
-}
-
 fn named(app: &mut App, name: &str) -> Entity {
     app.world_mut()
         .query::<(Entity, &Name)>()
@@ -222,171 +214,6 @@ fn named(app: &mut App, name: &str) -> Entity {
         .find(|(_, held)| held.as_str() == name)
         .map(|(entity, _)| entity)
         .unwrap_or_else(|| panic!("no entity named {name}"))
-}
-
-#[test]
-fn saving_keeps_each_group_in_the_form_it_was_written_in() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let scene = dir.path().join("forest.bsn");
-    std::fs::write(
-        &scene,
-        format!(
-            "bevy_ecs::hierarchy::Children [\n{}    ,\n{}]\n",
-            group_at("Oak", 0.0),
-            implied_group("Elm")
-        ),
-    )
-    .expect("write the scene");
-    let mut app = editor_with_trees();
-    open(&mut app, &scene);
-    settle(&mut app);
-    assert!(jackdaw::scene_io::save_scene(app.world_mut()));
-    let first = std::fs::read_to_string(&scene).expect("read the save");
-
-    place_camera(&mut app, Vec3::new(0.0, 0.0, 12.0));
-    settle(&mut app);
-    assert!(jackdaw::scene_io::save_scene(app.world_mut()));
-
-    assert_eq!(
-        std::fs::read_to_string(&scene).expect("read the save"),
-        first
-    );
-    assert_eq!(
-        first.matches("#LOD").count(),
-        3,
-        "the explicit group keeps its level children"
-    );
-    let elm = named(&mut app, "Elm");
-    assert!(app.world().get::<Children>(elm).is_none_or(|children| {
-        children
-            .iter()
-            .all(|child| app.world().get::<LodPart>(child).is_some())
-    }));
-}
-
-#[test]
-fn a_scene_written_with_level_children_loads_and_saves_unchanged() {
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lod_levels_as_children.bsn");
-    let dir = tempfile::tempdir().expect("tempdir");
-    let scene = dir.path().join("forest.bsn");
-    std::fs::copy(&fixture, &scene).expect("copy the fixture");
-    let mut app = editor_with_trees();
-    open(&mut app, &scene);
-    settle(&mut app);
-    let oak = named(&mut app, "Oak");
-    assert_eq!(
-        app.world()
-            .get::<Children>(oak)
-            .map(RelationshipTarget::len),
-        Some(3)
-    );
-
-    assert!(jackdaw::scene_io::save_scene(app.world_mut()));
-    assert_eq!(
-        std::fs::read(&scene).expect("read the save"),
-        std::fs::read(&fixture).expect("read the fixture")
-    );
-}
-
-#[test]
-fn making_a_model_a_lod_group_keeps_it_one_entity() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let scene = dir.path().join("forest.bsn");
-    std::fs::write(
-        &scene,
-        format!(
-            "bevy_ecs::hierarchy::Children [\n    #Elm\n    bevy_transform::components::transform::Transform\n    jackdaw_scene_types::types::GltfSource {{\n        path: \"{}\",\n        scene_index: 0,\n    }}\n]\n",
-            TREE_LEVELS[0]
-        ),
-    )
-    .expect("write the scene");
-    let mut app = editor_with_trees();
-    open(&mut app, &scene);
-    let elm = named(&mut app, "Elm");
-
-    app.world_mut()
-        .operator("entity.lod_group")
-        .param("entity", elm)
-        .param("screen_heights", "0.5, 0.25, 0.1".to_string())
-        .call()
-        .expect("entity.lod_group dispatches")
-        .assert_finished();
-    settle(&mut app);
-
-    assert!(
-        app.world()
-            .get::<jackdaw_scene_types::LodGroup>(elm)
-            .is_some()
-    );
-    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
-    let node = ast.ast_for(elm).expect("the model is in the document");
-    assert!(
-        ast.get_children_ast(node).is_empty(),
-        "no level children were written"
-    );
-}
-
-#[test]
-fn implying_levels_converts_only_groups_that_follow_the_file_names_and_one_undo_restores_them() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let scene = dir.path().join("forest.bsn");
-    let odd = group_at("Ash", 40.0).replace("tree_LOD2", "bush_LOD2");
-    std::fs::write(
-        &scene,
-        format!(
-            "bevy_ecs::hierarchy::Children [\n{}    ,\n{}]\n",
-            group_at("Oak", 0.0),
-            odd
-        ),
-    )
-    .expect("write the scene");
-    let mut app = editor_with_trees();
-    open(&mut app, &scene);
-    settle(&mut app);
-    assert!(jackdaw::scene_io::save_scene(app.world_mut()));
-    let before = std::fs::read_to_string(&scene).expect("read the save");
-
-    app.world_mut()
-        .operator("scene.lod.imply_levels")
-        .settings(CallOperatorSettings {
-            execution_context: ExecutionContext::Invoke,
-            creates_history_entry: true,
-        })
-        .call()
-        .expect("scene.lod.imply_levels dispatches")
-        .assert_finished();
-    settle(&mut app);
-
-    let oak = named(&mut app, "Oak");
-    let ash = named(&mut app, "Ash");
-    assert_eq!(
-        app.world()
-            .get::<jackdaw_scene_types::GltfSource>(oak)
-            .map(|source| source.path.as_str()),
-        Some(TREE_LEVELS[0])
-    );
-    assert!(
-        app.world()
-            .get::<jackdaw_scene_types::GltfSource>(ash)
-            .is_none()
-    );
-    assert!(jackdaw::scene_io::save_scene(app.world_mut()));
-    let converted = std::fs::read_to_string(&scene).expect("read the save");
-    assert_eq!(
-        converted.matches("#LOD").count(),
-        3,
-        "only the odd group keeps level children"
-    );
-
-    app.world_mut()
-        .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
-    settle(&mut app);
-    assert!(jackdaw::scene_io::save_scene(app.world_mut()));
-    assert_eq!(
-        std::fs::read_to_string(&scene).expect("read the save"),
-        before
-    );
 }
 
 #[test]

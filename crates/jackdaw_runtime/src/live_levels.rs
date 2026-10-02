@@ -378,10 +378,18 @@ fn track_groups(
     instances: Query<&WorldInstance>,
     mut models: ResMut<ModelParts>,
     mut queue: ResMut<LevelQueue>,
+    mut warned: Local<bool>,
 ) {
     for (group, lod, children, own, live) in &mut groups {
         let levels: Vec<LiveLevel> = match own {
             Some(own) => {
+                if !std::mem::replace(&mut *warned, true) {
+                    warn!(
+                        "a LOD group names its model and takes its levels from the file names \
+                         beside it; this form is going away, so open the scene in jackdaw and \
+                         save it to move the levels into the model's import settings"
+                    );
+                }
                 if let Ok(instance) = instances.get(group) {
                     let instance = **instance;
                     commands.queue(move |world: &mut World| {

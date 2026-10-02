@@ -42,6 +42,48 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> 
     Ok(())
 }
 
+/// Write the model settings and prefabs edited along with the scene, and say
+/// which files the save wrote.
+fn write_alongside(world: &mut World, scene: &str) -> Result<(), BevyError> {
+    let metas = crate::model_lod::write_unsaved_model_settings(world)
+        .map_err(|err| BevyError::from(format!("failed to write model settings: {err}")))?;
+    let prefabs = crate::lod_upgrade::write_upgraded_prefabs(world)
+        .map_err(|err| BevyError::from(format!("failed to write upgraded prefabs: {err}")))?;
+    if metas.is_empty() && prefabs.is_empty() {
+        return Ok(());
+    }
+    let name = |path: &Path| {
+        path.file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+    };
+    let mut written = vec![name(Path::new(scene))];
+    written.extend(prefabs.iter().map(|path| name(path)));
+    written.extend(metas.iter().map(|path| name(path)));
+    for file in &written {
+        info!("saved {file}");
+    }
+    crate::status_bar::notify_info(
+        world,
+        format!("Saved {} files: {}", written.len(), summarize(&written)),
+    );
+    Ok(())
+}
+
+/// The first few names of a list, and how many more there are.
+fn summarize(names: &[String]) -> String {
+    const SHOWN: usize = 4;
+    let mut text = names
+        .iter()
+        .take(SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if names.len() > SHOWN {
+        text.push_str(&format!(" and {} more", names.len() - SHOWN));
+    }
+    text
+}
+
 fn spawn_save_dialog(world: &mut World) {
     let dialog = crate::native_dialog::save_dialog(
         world,
@@ -251,8 +293,7 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         }
         crate::prefab::operators::save_prefab_to_disk(world, &path)
             .map_err(|err| BevyError::from(format!("prefab save failed: {err}")))?;
-        crate::model_lod::write_unsaved_model_settings(world)
-            .map_err(|err| BevyError::from(format!("failed to write model settings: {err}")))?;
+        write_alongside(world, &path.to_string_lossy())?;
         // Clear dirty bit + sync history depth so the tab stops showing
         // as unsaved.
         let history_len = world
@@ -350,8 +391,7 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     // moved since, keeping the two files named after each other.
     crate::terrain::navmesh_bake::export_beside_scene(world, &path);
 
-    crate::model_lod::write_unsaved_model_settings(world)
-        .map_err(|err| BevyError::from(format!("failed to write model settings: {err}")))?;
+    write_alongside(world, &path)?;
 
     // The authoritative scene and sidecars are now on disk. Only now clear
     // dirty state and retarget a redirected tab at its new `.bsn` path.

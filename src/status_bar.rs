@@ -117,6 +117,11 @@ pub fn notify_error(world: &mut World, text: impl Into<String>) {
     notify(world, text.into(), true);
 }
 
+/// Put a note about something the editor did in front of the user.
+pub fn notify_info(world: &mut World, text: impl Into<String>) {
+    notify(world, text.into(), false);
+}
+
 /// Put a partial result in front of the user: it did some of what was asked.
 pub fn notify_warn(world: &mut World, text: impl Into<String>) {
     notify(world, text.into(), false);

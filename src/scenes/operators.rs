@@ -464,7 +464,7 @@ pub(crate) fn open_read_scene(world: &mut World, read: ReadScene) {
     let ReadScene {
         canonical,
         file_text,
-        doc,
+        mut doc,
         saved_camera,
         pending_conversion,
     } = read;
@@ -488,6 +488,11 @@ pub(crate) fn open_read_scene(world: &mut World, read: ReadScene) {
     crate::scenes::external_watch::note_known_content(world, &canonical, &known);
 
     let is_prefab = document_is_prefab(&doc);
+    let upgrade = if is_prefab {
+        None
+    } else {
+        crate::lod_upgrade::upgrade_scene_being_opened(world, &mut doc, &canonical)
+    };
 
     // Build the new tab.
     let display_name = canonical
@@ -529,6 +534,9 @@ pub(crate) fn open_read_scene(world: &mut World, read: ReadScene) {
 
     let target = world.resource_mut::<Scenes>().push_tab(tab);
     activate_pushed_tab(world, target);
+    if let Some(upgrade) = upgrade {
+        crate::lod_upgrade::finish_upgrade(world, upgrade);
+    }
     crate::scenes::load_progress::scene_spawned(world, target);
 }
 

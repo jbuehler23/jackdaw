@@ -87,6 +87,16 @@ pub fn find_levels(assets: &Path, model: &str) -> Result<Option<ModelLod>, Strin
     }))
 }
 
+/// The largest side of the model at `file`, measured from the bounds its
+/// file declares, or 0 when it cannot be read.
+pub fn measured_size(file: &Path) -> f32 {
+    std::fs::read(file)
+        .ok()
+        .and_then(|bytes| gltf_json(&bytes))
+        .and_then(|json| json_bounds(&json, None))
+        .unwrap_or(0.0)
+}
+
 /// `found` with the screen heights and fade of `current` kept, when both have
 /// the same number of levels, as a reimport keeps them. The second value says
 /// whether the heights were spread afresh because the count changed.
@@ -510,7 +520,7 @@ pub(crate) fn model_lod_import(
     OperatorResult::Finished
 }
 
-fn import_model_levels(world: &mut World, given: &str) {
+pub(crate) fn import_model_levels(world: &mut World, given: &str) {
     let Some(assets) = world
         .get_resource::<crate::project::ProjectRoot>()
         .map(crate::project::ProjectRoot::assets_dir)
