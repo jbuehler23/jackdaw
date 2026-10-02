@@ -751,18 +751,13 @@ fn save_history(
 
 /// Push the change from `before` to the scene as it stands now, unless there is none.
 fn push_snapshot_diff(world: &mut World, label: String, before: Box<dyn SceneSnapshot>) {
-    let after = world
-        .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));
-    if before.equals(&*after) {
-        return;
+    let entry = world.resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| {
+        let after = snapshotter.0.capture(world);
+        snapshotter.0.history_entry(before, after, label)
+    });
+    if let Some(entry) = entry {
+        world.resource_mut::<CommandHistory>().push_executed(entry);
     }
-    world
-        .resource_mut::<CommandHistory>()
-        .push_executed(Box::new(SnapshotDiff {
-            before,
-            after,
-            label,
-        }));
 }
 
 /// What the operator that just ran wants its caller told.
@@ -846,10 +841,10 @@ pub fn with_batch_snapshot<R>(
 }
 
 /// One undo entry. Swaps the active scene snapshot on execute / undo.
-struct SnapshotDiff {
-    before: Box<dyn SceneSnapshot>,
-    after: Box<dyn SceneSnapshot>,
-    label: String,
+pub(crate) struct SnapshotDiff {
+    pub(crate) before: Box<dyn SceneSnapshot>,
+    pub(crate) after: Box<dyn SceneSnapshot>,
+    pub(crate) label: String,
 }
 
 impl EditorCommand for SnapshotDiff {

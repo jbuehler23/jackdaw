@@ -103,72 +103,89 @@ fn emit_patches(ast: &SceneBsnAst, patches_entity: Entity, indent: usize, out: &
     let Some(patches) = ast.get_patches(patches_entity) else {
         return;
     };
-
     for &patch_entity in &patches.0 {
-        let Some(patch) = ast.get_patch(patch_entity) else {
-            continue;
-        };
+        if let Some(patch) = ast.get_patch(patch_entity) {
+            emit_patch(ast, patch, indent, out);
+        }
+    }
+}
 
-        match patch {
-            BsnPatch::Name(name) => {
-                write_indent(indent, out);
-                if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.is_empty() {
-                    writeln!(out, "#{name}").unwrap();
-                } else {
-                    writeln!(out, "#\"{}\"", escape_string(name)).unwrap();
-                }
+/// Emits a single entity's own patches without its `Children` relation, so
+/// the text describes the node alone.
+pub fn emit_entity_without_children(ast: &SceneBsnAst, patches_entity: Entity) -> String {
+    let mut out = String::new();
+    let Some(patches) = ast.get_patches(patches_entity) else {
+        return out;
+    };
+    for &patch_entity in &patches.0 {
+        match ast.get_patch(patch_entity) {
+            Some(BsnPatch::Children(_)) | None => {}
+            Some(patch) => emit_patch(ast, patch, 0, &mut out),
+        }
+    }
+    out
+}
+
+fn emit_patch(ast: &SceneBsnAst, patch: &BsnPatch, indent: usize, out: &mut String) {
+    match patch {
+        BsnPatch::Name(name) => {
+            write_indent(indent, out);
+            if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.is_empty() {
+                writeln!(out, "#{name}").unwrap();
+            } else {
+                writeln!(out, "#\"{}\"", escape_string(name)).unwrap();
             }
+        }
 
-            BsnPatch::Base(path) => {
-                write_indent(indent, out);
-                writeln!(out, ":\"{}\"", escape_string(path)).unwrap();
-            }
+        BsnPatch::Base(path) => {
+            write_indent(indent, out);
+            writeln!(out, ":\"{}\"", escape_string(path)).unwrap();
+        }
 
-            BsnPatch::Type(type_path) => {
-                write_indent(indent, out);
-                writeln!(out, "{type_path}").unwrap();
-            }
+        BsnPatch::Type(type_path) => {
+            write_indent(indent, out);
+            writeln!(out, "{type_path}").unwrap();
+        }
 
-            BsnPatch::Struct(data) => {
-                emit_struct_patch(data, indent, out);
-            }
+        BsnPatch::Struct(data) => {
+            emit_struct_patch(data, indent, out);
+        }
 
-            BsnPatch::TupleStruct(data) => {
-                emit_tuple_struct_patch(data, indent, out);
-            }
+        BsnPatch::TupleStruct(data) => {
+            emit_tuple_struct_patch(data, indent, out);
+        }
 
-            BsnPatch::Template(type_path, fields) => {
-                write_indent(indent, out);
-                if let Some(fields) = fields {
-                    if fields.0.is_empty() {
-                        writeln!(out, "@{type_path}").unwrap();
-                    } else {
-                        writeln!(out, "@{type_path} {{").unwrap();
-                        emit_fields(&fields.0, indent + 1, out);
-                        write_indent(indent, out);
-                        writeln!(out, "}}").unwrap();
-                    }
-                } else {
+        BsnPatch::Template(type_path, fields) => {
+            write_indent(indent, out);
+            if let Some(fields) = fields {
+                if fields.0.is_empty() {
                     writeln!(out, "@{type_path}").unwrap();
-                }
-            }
-
-            BsnPatch::Children(children) => {
-                write_indent(indent, out);
-                if children.is_empty() {
-                    writeln!(out, "bevy_ecs::hierarchy::Children []").unwrap();
                 } else {
-                    writeln!(out, "bevy_ecs::hierarchy::Children [").unwrap();
-                    for (i, &child) in children.iter().enumerate() {
-                        emit_patches(ast, child, indent + 1, out);
-                        if i + 1 < children.len() {
-                            write_indent(indent + 1, out);
-                            out.push_str(",\n");
-                        }
-                    }
+                    writeln!(out, "@{type_path} {{").unwrap();
+                    emit_fields(&fields.0, indent + 1, out);
                     write_indent(indent, out);
-                    writeln!(out, "]").unwrap();
+                    writeln!(out, "}}").unwrap();
                 }
+            } else {
+                writeln!(out, "@{type_path}").unwrap();
+            }
+        }
+
+        BsnPatch::Children(children) => {
+            write_indent(indent, out);
+            if children.is_empty() {
+                writeln!(out, "bevy_ecs::hierarchy::Children []").unwrap();
+            } else {
+                writeln!(out, "bevy_ecs::hierarchy::Children [").unwrap();
+                for (i, &child) in children.iter().enumerate() {
+                    emit_patches(ast, child, indent + 1, out);
+                    if i + 1 < children.len() {
+                        write_indent(indent + 1, out);
+                        out.push_str(",\n");
+                    }
+                }
+                write_indent(indent, out);
+                writeln!(out, "]").unwrap();
             }
         }
     }

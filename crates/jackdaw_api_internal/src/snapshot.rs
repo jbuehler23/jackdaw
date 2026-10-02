@@ -44,6 +44,25 @@ pub trait SceneSnapshot: Any + Send + Sync + 'static {
 /// which Bevy requires exclusive access for (query-state caching).
 pub trait SceneSnapshotter: Send + Sync + 'static {
     fn capture(&self, world: &mut World) -> Box<dyn SceneSnapshot>;
+
+    /// The history entry that takes the scene from `before` to `after`, or
+    /// `None` when they are the same scene. The default keeps both
+    /// snapshots whole and applies one or the other.
+    fn history_entry(
+        &self,
+        before: Box<dyn SceneSnapshot>,
+        after: Box<dyn SceneSnapshot>,
+        label: String,
+    ) -> Option<Box<dyn jackdaw_commands::EditorCommand>> {
+        if before.equals(&*after) {
+            return None;
+        }
+        Some(Box::new(crate::operator::SnapshotDiff {
+            before,
+            after,
+            label,
+        }))
+    }
 }
 
 /// The active snapshotter. Inserted once at plugin setup. Swapped on

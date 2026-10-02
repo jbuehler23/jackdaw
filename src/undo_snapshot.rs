@@ -16,9 +16,11 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use jackdaw_api_internal::snapshot::{ActiveSnapshotter, SceneSnapshot, SceneSnapshotter};
 use jackdaw_avian_integration::PhysicsOverlayConfig;
+use jackdaw_commands::EditorCommand;
 
 use crate::active_tool::ActiveTool;
 use crate::brush::EditMode;
+use crate::document_units::{Located, Side, UnitChange, Units, apply_changes};
 use crate::gizmos::GizmoSpace;
 use crate::snapping::SnapSettings;
 use crate::view_modes::ViewModeSettings;
@@ -119,33 +121,91 @@ impl EditorStateSnapshot {
 
 /// BSN-document-backed snapshotter, the [`ActiveSnapshotter`].
 ///
-/// The document is the source of truth, so a snapshot is its emitted text,
-/// kept compressed: capture is one emit (no world walk), equality compares the
-/// packed text, and apply reloads the text through the scene loader.
+/// The document is the source of truth, so a snapshot is the document as a
+/// save writes it, cut into units that keep their identity across respawns.
+/// A history entry keeps only the units an edit changed. A document that
+/// cannot be cut (a node without an id) is kept whole as compressed text.
+/// Apply reloads the document through the scene loader.
 pub struct BsnDocumentSnapshotter;
 
 impl SceneSnapshotter for BsnDocumentSnapshotter {
     fn capture(&self, world: &mut World) -> Box<dyn SceneSnapshot> {
-        // Emit through the inline-asset pass so runtime materials and other
-        // pathless asset handles on kept components survive undo/redo. The
-        // parent path only affects file-backed handles; project root (falling
-        // back to the working directory) matches the JSN snapshot path.
         let parent_path = world
             .get_resource::<crate::project::ProjectRoot>()
             .map(|r| r.root.clone())
             .unwrap_or_else(|| std::path::PathBuf::from(""));
-        let text = crate::scene_io::emit_bsn_scene_with_inline_assets(world, &parent_path);
-        let text = pack_shared(world, &text);
+        let document = crate::scene_io::save::authored_document_for_history(world, &parent_path);
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let units = document
+            .as_ref()
+            .and_then(|document| Units::split(document, &registry.read()));
+        let document = match (units, document) {
+            (Some(units), _) => Document::Units(Arc::new(units)),
+            (None, Some(document)) => {
+                Document::Text(pack_shared(world, &jackdaw_bsn::emit_scene(&document)))
+            }
+            (None, None) => Document::Text(pack_shared(world, "")),
+        };
         Box::new(BsnDocumentSnapshot {
-            text,
+            document,
             editor_state: EditorStateSnapshot::capture(world),
             selection: selected_node_ids(world),
         })
     }
+
+    fn history_entry(
+        &self,
+        before: Box<dyn SceneSnapshot>,
+        after: Box<dyn SceneSnapshot>,
+        label: String,
+    ) -> Option<Box<dyn EditorCommand>> {
+        let pair = before
+            .as_any()
+            .downcast_ref::<BsnDocumentSnapshot>()
+            .zip(after.as_any().downcast_ref::<BsnDocumentSnapshot>());
+        let Some((
+            BsnDocumentSnapshot {
+                document: Document::Units(from),
+                editor_state: state_before,
+                selection: selection_before,
+            },
+            BsnDocumentSnapshot {
+                document: Document::Units(to),
+                editor_state: state_after,
+                selection: selection_after,
+            },
+        )) = pair
+        else {
+            if before.equals(&*after) {
+                return None;
+            }
+            return Some(Box::new(WholeSceneEdit {
+                before,
+                after,
+                label,
+            }));
+        };
+        let changes = from.changes_to(to);
+        if changes.is_empty() && state_before == state_after {
+            return None;
+        }
+        Some(Box::new(DocumentEdit {
+            changes,
+            before: (state_before.clone(), selection_before.clone()),
+            after: (state_after.clone(), selection_after.clone()),
+            label,
+        }))
+    }
+}
+
+/// What a snapshot holds of the document.
+enum Document {
+    Units(Arc<Units>),
+    Text(Arc<PackedText>),
 }
 
 pub struct BsnDocumentSnapshot {
-    text: Arc<PackedText>,
+    document: Document,
     editor_state: EditorStateSnapshot,
     /// What was selected when this snapshot was taken, by document node.
     /// Order is the selection's own, so the primary comes back last.
@@ -173,79 +233,192 @@ fn selected_node_ids(world: &World) -> Vec<jackdaw_scene_types::SceneNodeId> {
 
 impl SceneSnapshot for BsnDocumentSnapshot {
     fn apply(&self, world: &mut World) {
-        // Mirror the JSN apply sequence: preserve undo history (despawn
-        // directly, never through `clear_scene_entities`), drop stale
-        // selection and tree rows first, and restore this snapshot's own
-        // selection after the respawn re-mints entities.
-        crate::selection::clear_selection_in_world(world);
-        if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
-            error!("Failed to clear tree rows: {err}");
-        }
-
-        // Resolve prefab `IsA` references before spawning. The captured text
-        // stores inherited descendants sparsely (`PrefabEntityId` plus only
-        // diverged fields); the resolver materializes the inherited subtrees
-        // back so the respawn produces complete entities. Resolve the cache
-        // borrow before the spawn borrow.
-        let text = self.text.unpack();
-        let resolved_text: std::borrow::Cow<'_, str> =
-            match world.get_resource::<crate::prefab::PrefabAstCache>() {
-                Some(_) => match jackdaw_bsn::parse_bsn_text(&text) {
-                    Ok(authored) => {
-                        let cache = world.resource::<crate::prefab::PrefabAstCache>();
-                        let get_prefab = |p: &std::path::Path| cache.get(p);
-                        match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
-                            Ok(resolved) => jackdaw_bsn::emit_scene(&resolved).into(),
-                            Err(e) => {
-                                warn!("undo snapshot: resolver failed: {e}; spawning unresolved");
-                                (&text).into()
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("undo snapshot: parse failed: {e}; spawning raw text");
-                        (&text).into()
-                    }
-                },
-                None => (&text).into(),
-            };
-
-        if let Err(err) = crate::scene_io::despawn_scene_entities(world) {
-            error!("undo snapshot: despawn_scene_entities failed: {err}");
-        }
-        if let Err(err) = jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
-            error!("undo snapshot failed to reload: {err}");
-        }
-
-        restore_selection(world, &self.selection);
-
-        self.editor_state.apply(world);
+        let text = match &self.document {
+            Document::Text(text) => text.unpack(),
+            Document::Units(units) => match units.rebuild() {
+                Ok(document) => jackdaw_bsn::emit_scene(&document),
+                Err(err) => {
+                    error!("undo snapshot: the document could not be rebuilt: {err}");
+                    return;
+                }
+            },
+        };
+        respawn(world, &text, &self.selection, &self.editor_state);
     }
 
     fn equals(&self, other: &dyn SceneSnapshot) -> bool {
-        other.as_any().downcast_ref::<Self>().is_some_and(|o| {
-            (Arc::ptr_eq(&self.text, &o.text) || self.text == o.text)
-                && self.editor_state == o.editor_state
-        })
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let same_document = match (&self.document, &other.document) {
+            (Document::Units(a), Document::Units(b)) => Arc::ptr_eq(a, b) || a == b,
+            (Document::Text(a), Document::Text(b)) => Arc::ptr_eq(a, b) || a == b,
+            _ => false,
+        };
+        same_document && self.editor_state == other.editor_state
     }
 
     fn clone_box(&self) -> Box<dyn SceneSnapshot> {
+        let document = match &self.document {
+            Document::Units(units) => Document::Units(units.clone()),
+            Document::Text(text) => Document::Text(text.clone()),
+        };
         Box::new(Self {
-            text: self.text.clone(),
+            document,
             editor_state: self.editor_state.clone(),
             selection: self.selection.clone(),
         })
     }
 
-    /// This snapshot's share of the packed text plus the recorded selection;
-    /// the editor-state half is small enough to round away.
+    /// This snapshot's share of the document plus the recorded selection; the
+    /// editor-state half is small enough to round away.
     fn heap_bytes(&self) -> usize {
-        self.text.bytes.len() / Arc::strong_count(&self.text)
+        let document = match &self.document {
+            Document::Units(units) => units.heap_bytes() / Arc::strong_count(units),
+            Document::Text(text) => text.bytes.len() / Arc::strong_count(text),
+        };
+        document
             + self.selection.capacity() * std::mem::size_of::<jackdaw_scene_types::SceneNodeId>()
     }
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+/// Replace the scene with `text`, then put back `selection` and
+/// `editor_state`.
+fn respawn(
+    world: &mut World,
+    text: &str,
+    selection: &[jackdaw_scene_types::SceneNodeId],
+    editor_state: &EditorStateSnapshot,
+) {
+    crate::selection::clear_selection_in_world(world);
+    if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
+        error!("Failed to clear tree rows: {err}");
+    }
+
+    let resolved_text: std::borrow::Cow<'_, str> =
+        match world.get_resource::<crate::prefab::PrefabAstCache>() {
+            Some(_) => match jackdaw_bsn::parse_bsn_text(text) {
+                Ok(authored) => {
+                    let cache = world.resource::<crate::prefab::PrefabAstCache>();
+                    let get_prefab = |p: &std::path::Path| cache.get(p);
+                    match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
+                        Ok(resolved) => jackdaw_bsn::emit_scene(&resolved).into(),
+                        Err(e) => {
+                            warn!("undo snapshot: resolver failed: {e}; spawning unresolved");
+                            text.into()
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("undo snapshot: parse failed: {e}; spawning raw text");
+                    text.into()
+                }
+            },
+            None => text.into(),
+        };
+
+    if let Err(err) = crate::scene_io::despawn_scene_entities(world) {
+        error!("undo snapshot: despawn_scene_entities failed: {err}");
+    }
+    if let Err(err) = jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
+        error!("undo snapshot failed to reload: {err}");
+    }
+
+    restore_selection(world, selection);
+
+    editor_state.apply(world);
+}
+
+/// A history entry holding two whole snapshots, for a document that could not
+/// be cut into units.
+struct WholeSceneEdit {
+    before: Box<dyn SceneSnapshot>,
+    after: Box<dyn SceneSnapshot>,
+    label: String,
+}
+
+impl EditorCommand for WholeSceneEdit {
+    fn execute(&mut self, world: &mut World) {
+        self.after.apply(world);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        self.before.apply(world);
+    }
+
+    fn description(&self) -> &str {
+        &self.label
+    }
+
+    fn heap_bytes(&self) -> usize {
+        self.before.heap_bytes() + self.after.heap_bytes() + self.label.capacity()
+    }
+}
+
+/// A history entry holding only the document units an edit changed, with the
+/// editor state and selection on either side of it.
+struct DocumentEdit {
+    changes: Vec<UnitChange>,
+    before: (EditorStateSnapshot, Vec<jackdaw_scene_types::SceneNodeId>),
+    after: (EditorStateSnapshot, Vec<jackdaw_scene_types::SceneNodeId>),
+    label: String,
+}
+
+impl DocumentEdit {
+    fn put_back(&self, world: &mut World, side: Side) {
+        let (editor_state, selection) = match side {
+            Side::Before => &self.before,
+            Side::After => &self.after,
+        };
+        if self.changes.is_empty() {
+            editor_state.apply(world);
+            return;
+        }
+        let parent_path = world
+            .get_resource::<crate::project::ProjectRoot>()
+            .map(|r| r.root.clone())
+            .unwrap_or_else(|| std::path::PathBuf::from(""));
+        let Some(mut document) =
+            crate::scene_io::save::authored_document_for_history(world, &parent_path)
+        else {
+            return;
+        };
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let located = Located::find(&document, &registry.read());
+        if let Err(err) = apply_changes(&mut document, located, &self.changes, side) {
+            error!("undo: {} could not be applied: {err}", self.label);
+            return;
+        }
+        let text = jackdaw_bsn::emit_scene(&document);
+        respawn(world, &text, selection, editor_state);
+    }
+}
+
+impl EditorCommand for DocumentEdit {
+    fn execute(&mut self, world: &mut World) {
+        self.put_back(world, Side::After);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        self.put_back(world, Side::Before);
+    }
+
+    fn description(&self) -> &str {
+        &self.label
+    }
+
+    fn heap_bytes(&self) -> usize {
+        self.changes
+            .iter()
+            .map(UnitChange::heap_bytes)
+            .sum::<usize>()
+            + (self.before.1.capacity() + self.after.1.capacity())
+                * std::mem::size_of::<jackdaw_scene_types::SceneNodeId>()
+            + self.label.capacity()
     }
 }
 
@@ -495,19 +668,20 @@ mod tests {
     }
 
     #[test]
-    fn capturing_an_unchanged_scene_shares_the_packed_text() {
+    fn capturing_an_unchanged_scene_without_node_ids_shares_the_packed_text() {
         let mut app = snapshot_app();
         jackdaw_bsn::load_bsn_scene(app.world_mut(), &doc(1.0)).expect("initial load");
 
         let first = BsnDocumentSnapshotter.capture(app.world_mut());
         let second = BsnDocumentSnapshotter.capture(app.world_mut());
-        let held = |snapshot: &dyn SceneSnapshot| {
-            snapshot
-                .as_any()
-                .downcast_ref::<BsnDocumentSnapshot>()
-                .expect("a document snapshot")
-                .text
-                .clone()
+        let held = |snapshot: &dyn SceneSnapshot| match &snapshot
+            .as_any()
+            .downcast_ref::<BsnDocumentSnapshot>()
+            .expect("a document snapshot")
+            .document
+        {
+            Document::Text(text) => text.clone(),
+            Document::Units(_) => panic!("a scene without node ids is kept whole"),
         };
 
         assert!(Arc::ptr_eq(&held(&*first), &held(&*second)));

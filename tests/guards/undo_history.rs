@@ -759,3 +759,20 @@ fn a_move_above_a_spawn_redoes_on_the_node_the_redo_spawns() {
     }
     assert_eq!(x_of(&mut app, rock), Some(5.0));
 }
+
+#[test]
+fn an_undo_entry_holds_only_the_nodes_its_edit_changed() {
+    let (mut app, _dir) = editor();
+    for _ in 0..8 {
+        cube(&mut app);
+    }
+    let history_bytes = |app: &App| app.world().resource::<CommandHistory>().heap_bytes();
+    let before = history_bytes(&app);
+    cube(&mut app);
+    let entry = history_bytes(&app) - before;
+    let text = scene_text(&mut app).len();
+    assert!(
+        entry * 4 < text,
+        "one entry holds {entry} bytes for a {text}-byte scene"
+    );
+}

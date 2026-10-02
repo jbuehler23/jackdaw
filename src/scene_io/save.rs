@@ -970,9 +970,33 @@ fn emit_bsn_scene_authored(
     parent_path: &Path,
     spelling: SourceSpelling,
 ) -> (String, Vec<AbsoluteAssetField>) {
-    let Some(live) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
+    let Some(ast) = authored_document(world, parent_path, spelling) else {
         return (String::new(), Vec::new());
     };
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    emitted(world, &ast, spelling, &registry)
+}
+
+/// The live document as a save writes it, held as a document rather than
+/// text: prefab instances reduced to their overrides and handle fields naming
+/// the assets the document embeds. Preview writes are suspended around the
+/// read, as for every emission.
+pub(crate) fn authored_document_for_history(
+    world: &mut World,
+    parent_path: &Path,
+) -> Option<jackdaw_bsn::SceneBsnAst> {
+    let held = crate::preview_context::suspend_preview_writes(world);
+    let ast = authored_document(world, parent_path, SourceSpelling::AsHeld);
+    crate::preview_context::resume_preview_writes(world, held);
+    ast
+}
+
+fn authored_document(
+    world: &mut World,
+    parent_path: &Path,
+    spelling: SourceSpelling,
+) -> Option<jackdaw_bsn::SceneBsnAst> {
+    let live = world.get_resource::<jackdaw_bsn::SceneBsnAst>()?;
     let mut ast = live.deep_clone();
 
     let registry = world.resource::<AppTypeRegistry>().clone();
@@ -1007,7 +1031,7 @@ fn emit_bsn_scene_authored(
     // faithfully once sparsified.
     if pass.touched.is_empty() {
         normalize_runtime_derived_values(world, &mut ast);
-        return emitted(world, &ast, spelling, &registry);
+        return Some(ast);
     }
 
     if !pass.refs.is_empty() {
@@ -1019,7 +1043,7 @@ fn emit_bsn_scene_authored(
     rederive_handle_patches(world, &mut ast, &registry, parent_path, &pass);
     normalize_runtime_derived_values(world, &mut ast);
 
-    emitted(world, &ast, spelling, &registry)
+    Some(ast)
 }
 
 /// The emitted text, paired with the fields that still name a file by an

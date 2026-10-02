@@ -70,6 +70,7 @@ pub mod canvas_snap;
 pub mod core_extension;
 pub mod dock_ops;
 pub mod document_ops;
+pub(crate) mod document_units;
 pub mod editor_grid_depth_patch;
 pub mod ext_build;
 mod extension_lifecycle;
