@@ -31,7 +31,7 @@ use jackdaw_scene_types::model_parts::{FlatModel, ModelParts, source_path};
 use jackdaw_scene_types::{GltfSource, LodGroup};
 
 use crate::frame_work::FramePace;
-use crate::lod::{LodSwitches, level_shows};
+use crate::lod::{ForcedLod, LodSwitches, level_shows};
 
 /// Places and retires live LOD levels as the cameras move.
 pub struct LiveLevelsPlugin;
@@ -536,6 +536,8 @@ fn select_live_levels(
     mut models: ResMut<ModelParts>,
     settings: Res<LiveLevelSettings>,
     progress: Res<LiveLevelProgress>,
+    forced: Res<ForcedLod>,
+    lods: Query<&LodGroup>,
     mut queue: ResMut<LevelQueue>,
 ) {
     let default_layers = RenderLayers::default();
@@ -553,7 +555,12 @@ fn select_live_levels(
             .zip(&queue.viewed)
             .any(|(now, was)| now.distance_squared(*was) > 1e-4);
     let stopped = !camera_moved && queue.lead > 0.0;
-    if !camera_moved && !stopped && !queue.dirty && moved.is_empty() && models.settled().is_empty()
+    if !camera_moved
+        && !stopped
+        && !forced.is_changed()
+        && !queue.dirty
+        && moved.is_empty()
+        && models.settled().is_empty()
     {
         return;
     }
@@ -599,7 +606,11 @@ fn select_live_levels(
                 .map(|(camera, _)| camera.distance(at))
         };
         let ready = live.ready();
+        let shown = lods.get(group).ok().and_then(|lod| forced.level_of(lod));
         let wanted = bits(live.levels.iter().enumerate().map(|(index, level)| {
+            if forced.0.is_some() {
+                return shown == Some(index) && level.source != LevelSource::Absent;
+            }
             level.source != LevelSource::Absent
                 && switches.ranges.get(index).is_some_and(|range| {
                     distances()

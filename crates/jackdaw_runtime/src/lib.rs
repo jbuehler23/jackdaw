@@ -112,7 +112,7 @@ pub use live_levels::{
     is_level_of, is_lod_level,
 };
 #[cfg(feature = "render")]
-pub use lod::{LodPlugin, LodSwitches, LodView, level_shows, lod_distance, lod_ranges};
+pub use lod::{ForcedLod, LodPlugin, LodSwitches, LodView, level_shows, lod_distance, lod_ranges};
 #[cfg(feature = "render")]
 mod material_overrides;
 #[cfg(feature = "render")]

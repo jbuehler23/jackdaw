@@ -12,7 +12,7 @@ use jackdaw::viewport::MainViewportCamera;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
 use jackdaw_commands::CommandHistory;
-use jackdaw_runtime::{LiveLevelProgress, LodPart};
+use jackdaw_runtime::{LiveLevelProgress, LiveLevels, LodPart};
 use jackdaw_scene_types::model_parts::{FlatModel, ModelPart, ModelParts};
 use jackdaw_widgets::tree_view::TreeIndex;
 
@@ -387,4 +387,45 @@ fn implying_levels_converts_only_groups_that_follow_the_file_names_and_one_undo_
         std::fs::read_to_string(&scene).expect("read the save"),
         before
     );
+}
+
+#[test]
+fn forcing_a_level_draws_it_at_any_distance_and_leaves_the_document_unchanged() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scene = dir.path().join("forest.bsn");
+    std::fs::write(&scene, forest()).expect("write the scene");
+    let mut app = editor_with_trees();
+    open(&mut app, &scene);
+    place_camera(&mut app, Vec3::new(0.0, 0.0, 12.0));
+    settle(&mut app);
+    assert!(jackdaw::scene_io::save_scene(app.world_mut()));
+    let before = std::fs::read(&scene).expect("read the save");
+    let oak = named(&mut app, "Oak");
+    let ready = |app: &App| {
+        app.world()
+            .get::<LiveLevels>(oak)
+            .map(LiveLevels::ready)
+            .unwrap_or_default()
+    };
+    assert_eq!(ready(&app) & 1, 0, "LOD0 is in the world far away");
+
+    app.world_mut()
+        .operator("view.force_lod")
+        .param("level", 0i64)
+        .call()
+        .expect("view.force_lod dispatches")
+        .assert_finished();
+    settle(&mut app);
+    assert_eq!(ready(&app), 1, "only LOD0 is in the world while forced");
+
+    app.world_mut()
+        .operator("view.force_lod")
+        .call()
+        .expect("view.force_lod dispatches")
+        .assert_finished();
+    settle(&mut app);
+    assert_eq!(ready(&app) & 1, 0, "the distance chooses again");
+
+    assert!(jackdaw::scene_io::save_scene(app.world_mut()));
+    assert_eq!(std::fs::read(&scene).expect("read the save"), before);
 }

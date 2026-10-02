@@ -20,6 +20,7 @@ impl Plugin for LodPlugin {
         add_model_parts(app);
         app.add_plugins(LiveLevelsPlugin)
             .init_resource::<LodView>()
+            .init_resource::<ForcedLod>()
             .add_systems(
                 PostUpdate,
                 (follow_lod_view, place_lod_ranges)
@@ -94,6 +95,37 @@ pub fn lod_ranges(group: &LodGroup, size: f32, half_fov_tan: f32) -> Vec<Visibil
         })
         .collect()
 }
+
+/// A view setting that draws every LOD group at one level whatever the
+/// distance, as Unity's LOD bar does when a level is dragged to, for checking
+/// what each level looks like. A group with fewer levels shows its last one.
+/// Never saved.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ForcedLod(pub Option<usize>);
+
+impl ForcedLod {
+    /// The level `group` shows while this is set: the forced level, or the
+    /// nearest one before it that shows at all.
+    pub fn level_of(&self, group: &LodGroup) -> Option<usize> {
+        let forced = self.0?;
+        let last = group.levels.len().checked_sub(1)?;
+        (0..=forced.min(last))
+            .rev()
+            .find(|level| level_shows(group, *level))
+    }
+}
+
+/// A range that takes in every distance, and one that takes in none.
+const EVERYWHERE: VisibilityRange = VisibilityRange {
+    start_margin: 0.0..0.0,
+    end_margin: f32::MAX..f32::MAX,
+    use_aabb: false,
+};
+const NOWHERE: VisibilityRange = VisibilityRange {
+    start_margin: 0.0..0.0,
+    end_margin: 0.0..0.0,
+    use_aabb: false,
+};
 
 /// The distances a group's levels switch at, before any stretching to cover a
 /// level that is not in yet, and the size they were measured for. Derived,
@@ -178,6 +210,7 @@ type Meshes<'w, 's> = Query<
 
 fn place_lod_ranges(
     view: Res<LodView>,
+    forced: Res<ForcedLod>,
     mut groups: Groups,
     added: Query<Entity, Added<Mesh3d>>,
     parents: Query<&ChildOf>,
@@ -191,7 +224,7 @@ fn place_lod_ranges(
     if view.half_fov_tan <= 0.0 {
         return;
     }
-    let mut due: HashSet<Entity> = if view.is_changed() {
+    let mut due: HashSet<Entity> = if view.is_changed() || forced.is_changed() {
         groups.iter().map(|(entity, ..)| entity).collect()
     } else {
         groups
@@ -257,13 +290,16 @@ fn place_lod_ranges(
             ranges: ranges.clone(),
             size,
         };
-        let drawn: Vec<VisibilityRange> = match live.as_deref() {
-            Some(live) => drawn_ranges(&ranges, live.wanted(), live.ready())
+        let drawn: Vec<VisibilityRange> = match (forced.level_of(&group), live.as_deref()) {
+            (Some(shown), _) => (0..ranges.len())
+                .map(|level| if level == shown { EVERYWHERE } else { NOWHERE })
+                .collect(),
+            (None, Some(live)) => drawn_ranges(&ranges, live.wanted(), live.ready())
                 .into_iter()
                 .zip(ranges)
                 .map(|(drawn, own)| drawn.unwrap_or(own))
                 .collect(),
-            None => ranges,
+            (None, None) => ranges,
         };
         match held_switches {
             Some(mut held) if *held != switches => *held = switches,

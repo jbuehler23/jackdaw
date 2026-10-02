@@ -12,7 +12,55 @@ use crate::selection::Selection;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityLodGroupOp>();
-    ctx.register_operator::<SceneLodImplyLevelsOp>();
+    ctx.register_operator::<SceneLodImplyLevelsOp>()
+        .register_operator::<ViewForceLodOp>()
+        .register_operator::<ViewCycleForcedLodOp>();
+}
+
+/// The most levels the forced-LOD cycle steps through before going back to
+/// automatic.
+const FORCED_LOD_LEVELS: usize = 4;
+
+/// Draw every LOD group at one level whatever the distance, or let the
+/// distance choose again. A view setting: nothing is saved.
+#[operator(
+    id = "view.force_lod",
+    label = "Force LOD",
+    description = "Draw every LOD group at one level whatever the distance; a negative level \
+                   lets the distance choose again.",
+    allows_undo = false,
+    params(level(i64, default = -1, doc = "The level to draw, 0 the most detailed.")),
+)]
+pub(crate) fn view_force_lod(
+    params: In<OperatorParameters>,
+    mut forced: ResMut<jackdaw_runtime::ForcedLod>,
+) -> OperatorResult {
+    let level = params.as_int("level").unwrap_or(-1);
+    let wanted = jackdaw_runtime::ForcedLod(usize::try_from(level).ok());
+    if *forced != wanted {
+        *forced = wanted;
+    }
+    OperatorResult::Finished
+}
+
+/// Step the forced LOD level: automatic, then each level from the most
+/// detailed, then automatic again.
+#[operator(
+    id = "view.cycle_forced_lod",
+    label = "Cycle Forced LOD",
+    description = "Step through drawing every LOD group at one level, then back to automatic.",
+    allows_undo = false
+)]
+pub(crate) fn view_cycle_forced_lod(
+    _: In<OperatorParameters>,
+    mut forced: ResMut<jackdaw_runtime::ForcedLod>,
+) -> OperatorResult {
+    forced.0 = match forced.0 {
+        None => Some(0),
+        Some(level) if level + 1 < FORCED_LOD_LEVELS => Some(level + 1),
+        Some(_) => None,
+    };
+    OperatorResult::Finished
 }
 
 /// What placing live LOD levels may cost a frame while a scene opens. The load

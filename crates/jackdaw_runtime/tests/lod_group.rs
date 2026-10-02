@@ -704,3 +704,24 @@ fn a_group_that_names_its_model_itself_keeps_the_same_levels_live() {
     assert_eq!(live.model_path(1), Some("tree_LOD1.gltf"));
     assert!(app.world().get::<WorldAssetRoot>(root).is_none());
 }
+
+#[test]
+fn forcing_a_level_shows_it_at_every_distance() {
+    let mut app = live_app(PLENTY);
+    app.insert_resource(jackdaw_runtime::ForcedLod(Some(0)));
+    camera_at(&mut app, 500.0);
+    let (_, levels) = live_group(&mut app, group(2.0), Vec3::ZERO);
+    settle(&mut app, 8);
+
+    assert_eq!(live_parts(&mut app, &levels), [1, 0, 0]);
+    assert!(something_draws_at(&mut app, 500.0));
+    assert!(something_draws_at(&mut app, 0.5));
+
+    app.insert_resource(jackdaw_runtime::ForcedLod(None));
+    settle(&mut app, 8);
+    assert_eq!(
+        live_parts(&mut app, &levels),
+        [0, 0, 0],
+        "past the last level nothing draws"
+    );
+}

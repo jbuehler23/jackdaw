@@ -2350,6 +2350,7 @@ fn populate_menu(
                     op_entry::<view_ops::ViewToggleAlignmentGuidesOp>("Toggle Alignment Guides"),
                     op_entry::<view_ops::ViewToggleColliderGizmosOp>("Toggle Collider Gizmos"),
                     op_entry::<view_ops::ViewToggleHierarchyArrowsOp>("Toggle Hierarchy Arrows"),
+                    op_entry::<lod_group::ViewCycleForcedLodOp>("Cycle Forced LOD"),
                     op_entry::<view_ops::ViewTogglePerspOrthoOp>(
                         "Toggle Perspective / Orthographic",
                     ),
