@@ -20,6 +20,7 @@ mod foliage;
 mod gltf_authoring;
 mod layered_surface;
 mod live_levels;
+mod lod_bar;
 mod lod_upgrade;
 mod material_overrides;
 mod material_row;

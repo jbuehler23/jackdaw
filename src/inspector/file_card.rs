@@ -374,6 +374,7 @@ fn spawn_model_lod_rows(world: &mut World, body: Entity, path: &Path) {
         if unsaved { ", not saved" } else { "" }
     );
     spawn_row(world, body, "LOD", &summary);
+    crate::lod_bar::spawn_model_controls(world, body, &asset_path);
     for (index, level) in lod.levels.iter().enumerate() {
         let shows = match &level.show {
             LevelShow::Model => "The model".to_string(),

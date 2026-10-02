@@ -876,6 +876,14 @@ pub(crate) fn build_inspector_displays(
             collapse_state,
         );
     }
+
+    if selection_count == 1
+        && entity_ref.contains::<jackdaw_scene_types::model_import::ModelLevels>()
+    {
+        commands.queue(move |world: &mut World| {
+            crate::lod_bar::spawn_placement_card(world, inspector_entity, source_entity);
+        });
+    }
 }
 
 /// Despawn inspector card and picker children as one queued world step so

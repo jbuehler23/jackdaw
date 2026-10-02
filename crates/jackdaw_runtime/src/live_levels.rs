@@ -115,6 +115,11 @@ impl LiveLevelProgress {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct LodPart;
 
+/// The level a [`LodPart`] belongs to, 0 the most detailed. Derived, never
+/// saved.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LodPartLevel(pub usize);
+
 #[derive(Clone, Debug, PartialEq)]
 enum LevelSource {
     /// A model placed as parts while the level is live.
@@ -874,7 +879,7 @@ fn place(world: &mut World, job: &Job, frame: u32) -> bool {
     }) else {
         return false;
     };
-    let parts = spawn_parts(world, node, &model, range);
+    let parts = spawn_parts(world, node, &model, range, job.level);
     for part in &parts {
         crate::dress_part(world, *part);
     }
@@ -895,6 +900,7 @@ fn spawn_parts(
     node: Entity,
     model: &Arc<FlatModel>,
     range: VisibilityRange,
+    level: usize,
 ) -> Vec<Entity> {
     let placed = world
         .get::<GlobalTransform>(node)
@@ -906,6 +912,7 @@ fn spawn_parts(
         .map(|part| {
             let mut spawned = world.spawn((
                 LodPart,
+                LodPartLevel(level),
                 Mesh3d(part.mesh.clone()),
                 MeshMaterial3d(part.material.clone()),
                 part.local,

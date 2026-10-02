@@ -109,7 +109,8 @@ mod lod;
 #[cfg(feature = "render")]
 pub use live_levels::{
     AwaitingModelSettings, LiveLevelProgress, LiveLevelSettings, LiveLevels, LiveLevelsPlugin,
-    LodPart, ModelPlacement, drawn_ranges, is_level_of, is_lod_level, model_placement,
+    LodPart, LodPartLevel, ModelPlacement, drawn_ranges, is_level_of, is_lod_level,
+    model_placement,
 };
 #[cfg(feature = "render")]
 pub use lod::{

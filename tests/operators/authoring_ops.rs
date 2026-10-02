@@ -554,6 +554,7 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
     ("environment.bake_probe", &["entity"], true),
     ("field.set", &["entity"], true),
     ("hierarchy.rename_begin", &["entity"], true),
+    ("lod.revert_override", &["entity"], false),
     ("material.override", &["entity"], true),
     ("physics.disable", &["entity"], true),
     ("physics.enable", &["entity"], true),
