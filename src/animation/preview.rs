@@ -257,11 +257,11 @@ fn start_requested_preview(world: &mut World) {
         Some(handle) => handle,
         None => {
             let path = crate::entity_ops::to_asset_path(&request.file);
-            let handle: Handle<Gltf> = world
-                .resource::<AssetServer>()
-                .load_builder()
-                .with_settings(jackdaw_scene_types::render_assets::model_settings)
-                .load(path);
+            let handle: Handle<Gltf> = jackdaw_scene_types::render_assets::load_model(
+                world.resource::<AssetServer>(),
+                world.get_resource(),
+                path,
+            );
             request.gltf = Some(handle.clone());
             world.resource_mut::<AnimationPreview>().wanted = Some(request.clone());
             handle

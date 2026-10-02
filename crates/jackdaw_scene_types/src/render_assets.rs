@@ -37,6 +37,30 @@ pub fn model_settings(settings: &mut GltfLoaderSettings) {
     settings.load_materials = DRAWN_TEXTURE_USAGE;
 }
 
+/// Load the model at `path`, or a labelled part of it, with the settings every
+/// drawn model shares.
+///
+/// A model whose meta names [`ModelLoader`](crate::model_import::ModelLoader)
+/// already carries them in its meta, and settings typed for Bevy's glTF loader
+/// would be refused for it, so it is loaded as its meta says. `imports` tells
+/// the two apart once the model's meta has been read.
+pub fn load_model<'a, A: bevy::asset::Asset>(
+    server: &bevy::asset::AssetServer,
+    imports: Option<&crate::model_import::ModelLodIndex>,
+    path: impl Into<bevy::asset::AssetPath<'a>>,
+) -> bevy::asset::Handle<A> {
+    let path: bevy::asset::AssetPath = path.into();
+    let file = path.clone_owned().without_label().to_string();
+    if imports.is_some_and(|imports| imports.is_imported(&file)) {
+        server.load(path)
+    } else {
+        server
+            .load_builder()
+            .with_settings(model_settings)
+            .load(path)
+    }
+}
+
 /// Settings for a texture a material draws with. A linear slot is read without
 /// sRGB decoding; any other keeps the colour space its file asks for.
 pub fn drawn_texture_settings(

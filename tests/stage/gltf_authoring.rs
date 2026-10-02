@@ -35,8 +35,23 @@ fn place(app: &mut App, path: &str) {
         .call()
         .expect("dispatch")
         .assert_finished();
-    // The model is handed to the scene spawner on the frame after its source
-    // is set, so a whole document's worth never lands in one frame.
+    for _ in 0..200 {
+        app.update();
+        let reading = app
+            .world()
+            .resource::<jackdaw_scene_types::model_import::ModelLodIndex>()
+            .is_reading();
+        let waiting = app
+            .world_mut()
+            .query_filtered::<(), With<jackdaw_runtime::AwaitingModelSettings>>()
+            .iter(app.world())
+            .next()
+            .is_some();
+        if !reading && !waiting {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
     app.update();
 }
 

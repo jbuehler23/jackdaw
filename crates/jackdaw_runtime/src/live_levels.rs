@@ -27,7 +27,8 @@ use bevy::transform::TransformSystems;
 use bevy::world_serialization::{
     InstanceId, WorldAsset, WorldAssetRoot, WorldInstance, WorldInstanceSpawner,
 };
-use jackdaw_scene_types::model_parts::{FlatModel, ModelParts, source_path};
+use jackdaw_scene_types::model_import::{ModelLevels, ModelLodIndex};
+use jackdaw_scene_types::model_parts::{FlatModel, ModelParts, source_path, split_nodes_key};
 use jackdaw_scene_types::{GltfSource, LodGroup};
 
 use crate::frame_work::FramePace;
@@ -42,9 +43,14 @@ impl Plugin for LiveLevelsPlugin {
             .init_resource::<LiveLevelProgress>()
             .init_resource::<LevelQueue>()
             .add_observer(drop_live_levels)
+            .add_observer(drop_model_levels)
             .add_systems(
                 PostUpdate,
-                (track_groups, select_live_levels, place_live_levels)
+                (
+                    (track_groups, track_model_levels),
+                    select_live_levels,
+                    place_live_levels,
+                )
                     .chain()
                     .after(TransformSystems::Propagate)
                     .before(VisibilitySystems::VisibilityPropagate)
@@ -423,42 +429,97 @@ fn track_groups(
                 })
                 .collect(),
         };
-        for node in std::iter::once(group).chain(levels.iter().map(|level| level.node)) {
-            commands.entity(node).insert_if_new(Visibility::default());
-        }
-        let mut fresh = LiveLevels { levels, wanted: 0 };
-        if let Some(mut live) = live {
-            if live
-                .levels
-                .iter()
-                .zip(&fresh.levels)
-                .all(|(old, new)| old.node == new.node && old.source == new.source)
-                && live.levels.len() == fresh.levels.len()
-            {
-                continue;
-            }
-            for (index, old) in live.levels.drain(..).enumerate() {
-                match fresh.levels.get_mut(index) {
-                    Some(new) if new.node == old.node && new.source == old.source => {
-                        new.parts = old.parts;
-                        new.placed_at = old.placed_at;
-                    }
-                    _ => despawn_parts(&mut commands, &old.parts),
-                }
-            }
-            if let Some((_, path)) = fresh.coarsest_model() {
-                models.request(path);
-            }
-            *live = fresh;
-        } else {
-            if let Some((_, path)) = fresh.coarsest_model() {
-                models.request(path);
-            }
-            commands.entity(group).insert(fresh);
-        }
-        queue.dirty = true;
-        queue.requested_all = false;
+        keep_levels(&mut commands, group, levels, live, &mut models, &mut queue);
     }
+}
+
+/// Read which levels each placed model whose settings changed keeps live. The
+/// model's entity is the node of every level, as for a group that names its
+/// model itself.
+fn track_model_levels(
+    mut commands: Commands,
+    mut placed: Query<
+        (Entity, &ModelLevels, Option<&mut LiveLevels>),
+        (Changed<ModelLevels>, Without<LodGroup>),
+    >,
+    instances: Query<&WorldInstance>,
+    mut models: ResMut<ModelParts>,
+    mut queue: ResMut<LevelQueue>,
+) {
+    for (entity, model, live) in &mut placed {
+        if let Ok(instance) = instances.get(entity) {
+            let instance = **instance;
+            commands.queue(move |world: &mut World| {
+                release_instance(world, entity, instance);
+            });
+        }
+        let levels = model
+            .models
+            .iter()
+            .enumerate()
+            .map(|(index, path)| LiveLevel {
+                node: entity,
+                source: if level_shows(&model.group, index) {
+                    LevelSource::Model {
+                        path: path.clone(),
+                        scene_index: 0,
+                    }
+                } else {
+                    LevelSource::Absent
+                },
+                parts: Vec::new(),
+                placed_at: None,
+            })
+            .collect();
+        keep_levels(&mut commands, entity, levels, live, &mut models, &mut queue);
+    }
+}
+
+/// Make `levels` the live levels of `group`, keeping the parts of each level
+/// that is still the same model.
+fn keep_levels(
+    commands: &mut Commands,
+    group: Entity,
+    levels: Vec<LiveLevel>,
+    live: Option<Mut<LiveLevels>>,
+    models: &mut ModelParts,
+    queue: &mut LevelQueue,
+) {
+    for node in std::iter::once(group).chain(levels.iter().map(|level| level.node)) {
+        commands.entity(node).insert_if_new(Visibility::default());
+    }
+    let mut fresh = LiveLevels { levels, wanted: 0 };
+    if let Some(mut live) = live {
+        if live
+            .levels
+            .iter()
+            .zip(&fresh.levels)
+            .all(|(old, new)| old.node == new.node && old.source == new.source)
+            && live.levels.len() == fresh.levels.len()
+        {
+            return;
+        }
+        for (index, old) in live.levels.drain(..).enumerate() {
+            match fresh.levels.get_mut(index) {
+                Some(new) if new.node == old.node && new.source == old.source => {
+                    new.parts = old.parts;
+                    new.placed_at = old.placed_at;
+                }
+                _ => despawn_parts(commands, &old.parts),
+            }
+        }
+        if let Some((_, path)) = fresh.coarsest_model() {
+            models.request(path);
+        }
+        *live = fresh;
+    } else {
+        if let Some((_, path)) = fresh.coarsest_model() {
+            models.request(path);
+        }
+        commands.entity(group).insert(fresh);
+    }
+    queue.dirty = true;
+    queue.requested_all = false;
 }
 
 /// Take down the instance a model spawned before it became a LOD group that
@@ -486,12 +547,24 @@ fn drop_live_levels(
     mut commands: Commands,
     groups: Query<&LiveLevels>,
 ) {
-    let group = removed.event_target();
+    take_levels_down(&mut commands, removed.event_target(), &groups);
+}
+
+/// Take a placed model's live levels down with its [`ModelLevels`].
+fn drop_model_levels(
+    removed: On<Remove, ModelLevels>,
+    mut commands: Commands,
+    groups: Query<&LiveLevels>,
+) {
+    take_levels_down(&mut commands, removed.event_target(), &groups);
+}
+
+fn take_levels_down(commands: &mut Commands, group: Entity, groups: &Query<&LiveLevels>) {
     let Ok(live) = groups.get(group) else {
         return;
     };
     for level in &live.levels {
-        despawn_parts(&mut commands, &level.parts);
+        despawn_parts(commands, &level.parts);
     }
     commands
         .entity(group)
@@ -537,7 +610,7 @@ fn select_live_levels(
     settings: Res<LiveLevelSettings>,
     progress: Res<LiveLevelProgress>,
     forced: Res<ForcedLod>,
-    lods: Query<&LodGroup>,
+    lods: Query<AnyOf<(&LodGroup, &ModelLevels)>>,
     mut queue: ResMut<LevelQueue>,
 ) {
     let default_layers = RenderLayers::default();
@@ -606,7 +679,10 @@ fn select_live_levels(
                 .map(|(camera, _)| camera.distance(at))
         };
         let ready = live.ready();
-        let shown = lods.get(group).ok().and_then(|lod| forced.level_of(lod));
+        let shown = lods
+            .get(group)
+            .ok()
+            .and_then(|(lod, model)| forced.level_of(lod.or(model.map(|model| &model.group))?));
         let wanted = bits(live.levels.iter().enumerate().map(|(index, level)| {
             if forced.0.is_some() {
                 return shown == Some(index) && level.source != LevelSource::Absent;
@@ -779,7 +855,7 @@ fn place(world: &mut World, job: &Job, frame: u32) -> bool {
     let Some(model) = world.resource::<ModelParts>().get(&path).cloned() else {
         return false;
     };
-    if model.needs_instance {
+    if model.needs_instance && split_nodes_key(&path).1.is_none() {
         return place_instance(world, job, node, path, scene_index, frame);
     }
     let Some(range) = world.get::<LodSwitches>(job.group).and_then(|switches| {
@@ -850,10 +926,11 @@ fn place_instance(
     let Some(server) = world.get_resource::<AssetServer>() else {
         return false;
     };
-    let scene: Handle<WorldAsset> = server
-        .load_builder()
-        .with_settings(jackdaw_scene_types::render_assets::model_settings)
-        .load(GltfAssetLabel::Scene(scene_index).from_asset(path));
+    let scene: Handle<WorldAsset> = jackdaw_scene_types::render_assets::load_model(
+        server,
+        world.get_resource(),
+        GltfAssetLabel::Scene(scene_index).from_asset(path),
+    );
     let placed = world
         .get::<GlobalTransform>(node)
         .copied()
@@ -958,9 +1035,13 @@ pub fn is_level_of(group: &LodGroup, children: &Children, child: Entity) -> bool
         .any(|level| level == child)
 }
 
-/// Whether `entity` is a level of a [`LodGroup`], or a group that names its
-/// first level's model itself.
+/// Whether `entity` is a level of a [`LodGroup`], a group that names its
+/// first level's model itself, or a placed model drawing the levels of detail
+/// its import settings give it.
 pub fn is_lod_level(world: &World, entity: Entity) -> bool {
+    if world.get::<ModelLevels>(entity).is_some() {
+        return true;
+    }
     if world.get::<LodGroup>(entity).is_some() && world.get::<GltfSource>(entity).is_some() {
         return true;
     }
@@ -972,3 +1053,40 @@ pub fn is_lod_level(world: &World, entity: Entity) -> bool {
         _ => false,
     }
 }
+
+/// How a placed model comes into the world.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelPlacement {
+    /// As one spawned instance of the model.
+    Instance,
+    /// As live levels of detail, its own or a group's.
+    Levels,
+    /// Not yet: its import settings have still to be read.
+    Waiting,
+}
+
+/// How the model `entity` names comes into the world.
+pub fn model_placement(world: &World, entity: Entity) -> ModelPlacement {
+    if is_lod_level(world, entity) {
+        return ModelPlacement::Levels;
+    }
+    let (Some(source), Some(index)) = (
+        world.get::<GltfSource>(entity),
+        world.get_resource::<ModelLodIndex>(),
+    ) else {
+        return ModelPlacement::Instance;
+    };
+    let path = source_path(source);
+    if !index.is_known(&path) {
+        ModelPlacement::Waiting
+    } else if index.get(&path).is_some() && world.get::<LodGroup>(entity).is_none() {
+        ModelPlacement::Levels
+    } else {
+        ModelPlacement::Instance
+    }
+}
+
+/// A placed model waiting for its import settings to be read before it gets an
+/// instance or live levels. Derived, never saved.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct AwaitingModelSettings;

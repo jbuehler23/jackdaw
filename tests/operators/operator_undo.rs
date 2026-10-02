@@ -176,9 +176,19 @@ fn entity_place_gltf_survives_later_history_and_scene_tabs() {
 
 #[track_caller]
 fn assert_single_renderable_gltf(app: &mut App, path: &str, position: Vec3) -> Entity {
-    // The render root goes out on the frame after its source is set, so a
-    // document's worth of models never lands in one frame.
-    app.update();
+    for _ in 0..200 {
+        app.update();
+        let placed = app
+            .world_mut()
+            .query_filtered::<(), With<bevy::world_serialization::WorldAssetRoot>>()
+            .iter(app.world())
+            .next()
+            .is_some();
+        if placed {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
     let (entity, source, transform, root) = app
         .world_mut()
         .query::<(

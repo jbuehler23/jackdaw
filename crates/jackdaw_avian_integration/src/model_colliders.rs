@@ -9,6 +9,7 @@
 use avian3d::prelude::*;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
+use jackdaw_scene_types::model_import::ModelLevels;
 use jackdaw_scene_types::model_parts::{ModelParts, add_model_parts, source_path};
 use jackdaw_scene_types::{Brush, GltfSource, LodGroup};
 
@@ -44,6 +45,7 @@ fn build_model_colliders(
         (
             ModelFilter,
             Without<LodGroup>,
+            Without<ModelLevels>,
             Or<(Changed<AvianCollider>, Changed<Children>)>,
         ),
     >,
@@ -103,15 +105,21 @@ type LodGroupModels<'w, 's> = Query<
     (
         Entity,
         &'static AvianCollider,
-        &'static LodGroup,
+        Option<&'static LodGroup>,
+        Option<&'static ModelLevels>,
         Option<&'static Children>,
         Option<&'static GltfSource>,
     ),
-    (ModelFilter, With<AvianCollider>),
+    (
+        ModelFilter,
+        With<AvianCollider>,
+        Or<(With<LodGroup>, With<ModelLevels>)>,
+    ),
 >;
 
 /// Build a LOD group's collider from its first level's model: one shape per
-/// part of the model, placed where the level puts it.
+/// part of the model, placed where the level puts it. A placed model drawing
+/// the levels its import settings give it collides the same way.
 fn build_lod_group_colliders(
     mut commands: Commands,
     groups: LodGroupModels,
@@ -119,13 +127,15 @@ fn build_lod_group_colliders(
         (
             Entity,
             Ref<AvianCollider>,
-            Ref<LodGroup>,
+            Option<Ref<LodGroup>>,
+            Option<Ref<ModelLevels>>,
             Option<Ref<Children>>,
             Option<Ref<GltfSource>>,
         ),
         Or<(
             Changed<AvianCollider>,
             Changed<LodGroup>,
+            Changed<ModelLevels>,
             Changed<Children>,
             Changed<GltfSource>,
         )>,
@@ -139,9 +149,10 @@ fn build_lod_group_colliders(
 ) {
     let mut due: HashSet<Entity> = changed
         .iter()
-        .filter(|(_, collider, lod, children, own)| {
+        .filter(|(_, collider, lod, model, children, own)| {
             collider.is_changed()
-                || lod.is_changed()
+                || lod.as_ref().is_some_and(DetectChanges::is_changed)
+                || model.as_ref().is_some_and(DetectChanges::is_changed)
                 || match own {
                     Some(own) => own.is_changed(),
                     None => children.as_ref().is_some_and(DetectChanges::is_changed),
@@ -153,7 +164,7 @@ fn build_lod_group_colliders(
         due.extend(waiting.drain());
     }
     for group in due {
-        let Ok((group, collider, lod, children, own)) = groups.get(group) else {
+        let Ok((group, collider, lod, model, children, own)) = groups.get(group) else {
             continue;
         };
         clear_part_colliders(&mut commands, group, &descendants, &built);
@@ -165,20 +176,22 @@ fn build_lod_group_colliders(
             }
             continue;
         }
-        if lod.levels.is_empty() {
-            continue;
-        }
-        let first = match own {
-            Some(own) => Some((own, Transform::IDENTITY)),
-            None => children
+        let first = match (lod, model, own) {
+            (Some(lod), _, _) if lod.levels.is_empty() => None,
+            (Some(_), _, Some(own)) => Some((source_path(own), Transform::IDENTITY)),
+            (Some(_), _, None) => children
                 .and_then(|children| children.first())
                 .and_then(|first| levels.get(*first).ok())
-                .map(|(source, placed)| (source, *placed)),
+                .map(|(source, placed)| (source_path(source), *placed)),
+            (None, Some(model), _) => model
+                .models
+                .first()
+                .map(|path| (path.clone(), Transform::IDENTITY)),
+            (None, None, _) => None,
         };
-        let Some((source, placed)) = first else {
+        let Some((path, placed)) = first else {
             continue;
         };
-        let path = source_path(source);
         parts.request(&path);
         let Some(model) = parts.get(&path) else {
             if !parts.failed(&path) {

@@ -429,3 +429,56 @@ fn forcing_a_level_draws_it_at_any_distance_and_leaves_the_document_unchanged() 
     assert!(jackdaw::scene_io::save_scene(app.world_mut()));
     assert_eq!(std::fs::read(&scene).expect("read the save"), before);
 }
+
+fn tree_settings() -> jackdaw_scene_types::model_import::ModelLod {
+    use jackdaw_scene_types::model_import::{LevelShow, LodImportSource, ModelLod, ModelLodLevel};
+    ModelLod {
+        version: ModelLod::VERSION,
+        source: LodImportSource::SiblingFiles,
+        size: 2.0,
+        fade: jackdaw_scene_types::LodFade::Snap,
+        levels: [0.5, 0.25, 0.1]
+            .into_iter()
+            .enumerate()
+            .map(|(index, screen_height)| ModelLodLevel {
+                show: match index {
+                    0 => LevelShow::Model,
+                    _ => LevelShow::File(format!("tree_LOD{index}.gltf")),
+                },
+                screen_height,
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn a_model_with_lod_settings_draws_live_levels_and_saves_as_a_plain_placement() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scene = dir.path().join("grove.bsn");
+    let text = format!(
+        "bevy_ecs::hierarchy::Children [\n    #Oak\n    bevy_transform::components::transform::Transform\n    jackdaw_scene_types::types::GltfSource {{\n        path: \"{}\",\n        scene_index: 0,\n    }}\n]\n",
+        TREE_LEVELS[0]
+    );
+    std::fs::write(&scene, &text).expect("write the scene");
+    let mut app = editor_with_trees();
+    app.world_mut()
+        .resource_mut::<jackdaw_scene_types::model_import::ModelLodIndex>()
+        .set(TREE_LEVELS[0], Some(tree_settings()));
+    place_camera(&mut app, Vec3::new(0.0, 0.0, 5.0));
+    open(&mut app, &scene);
+    settle(&mut app);
+    assert!(jackdaw::scene_io::save_scene(app.world_mut()));
+    let saved = std::fs::read_to_string(&scene).expect("read the save");
+
+    let oak = named(&mut app, "Oak");
+    let live = app.world().get::<LiveLevels>(oak).expect("live levels");
+    assert_eq!(live.model_path(1), Some(TREE_LEVELS[1]));
+    assert_ne!(live.ready(), 0, "a level draws");
+    assert!(
+        app.world()
+            .get::<bevy::world_serialization::WorldAssetRoot>(oak)
+            .is_none()
+    );
+    assert!(!saved.contains("LodGroup"), "{saved}");
+    assert!(!saved.contains("ModelLevels"), "{saved}");
+}

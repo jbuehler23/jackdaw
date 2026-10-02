@@ -1782,11 +1782,11 @@ fn spawn_instance(
     overrides: Option<jackdaw_scene_types::MaterialOverrides>,
 ) -> Entity {
     let asset_path = crate::entity_ops::to_asset_path(path);
-    let scene = world
-        .resource::<AssetServer>()
-        .load_builder()
-        .with_settings(jackdaw_scene_types::render_assets::model_settings)
-        .load(GltfAssetLabel::Scene(0).from_asset(asset_path));
+    let scene = jackdaw_scene_types::render_assets::load_model(
+        world.resource::<AssetServer>(),
+        world.get_resource(),
+        GltfAssetLabel::Scene(0).from_asset(asset_path),
+    );
     let entity = world
         .spawn((
             Name::new(name.to_string()),

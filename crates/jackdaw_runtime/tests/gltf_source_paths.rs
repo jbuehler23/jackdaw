@@ -25,8 +25,7 @@ fn a_prefab_in_a_subdirectory_loads_its_gltf_from_the_assets_root() {
         ));
     app.world_mut().spawn(JackdawSceneRoot(scene));
 
-    app.update();
-    app.update();
+    settle_models(&mut app);
 
     assert_eq!(
         loaded_gltf_path(app.world_mut()).as_deref(),
@@ -45,7 +44,7 @@ fn a_gltf_source_inserted_at_runtime_spawns_its_model() {
         scene_index: 2,
     });
 
-    app.update();
+    settle_models(&mut app);
 
     assert_eq!(
         loaded_gltf_path(app.world_mut()).as_deref(),
@@ -71,4 +70,27 @@ fn runtime_app(assets_root: &std::path::Path) -> App {
     app.insert_resource(JackdawCatalogPath(assets_root.join("catalog.bsn")));
     app.add_plugins(JackdawPlugin);
     app
+}
+
+/// Run `app` until every placed model's import settings are read and the
+/// models waiting on them are placed.
+fn settle_models(app: &mut App) {
+    for _ in 0..200 {
+        app.update();
+        let reading = app
+            .world()
+            .resource::<jackdaw_scene_types::model_import::ModelLodIndex>()
+            .is_reading();
+        let waiting = app
+            .world_mut()
+            .query_filtered::<(), With<jackdaw_runtime::AwaitingModelSettings>>()
+            .iter(app.world())
+            .next()
+            .is_some();
+        if !reading && !waiting {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    app.update();
 }

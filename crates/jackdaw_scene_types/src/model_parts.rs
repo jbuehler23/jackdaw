@@ -48,6 +48,19 @@ pub fn flatten_gltf(
     mesh_assets: &Assets<Mesh>,
     server: &AssetServer,
 ) -> Option<FlatModel> {
+    flatten_gltf_nodes(gltf, nodes, meshes, mesh_assets, server, None)
+}
+
+/// The parts [`flatten_gltf`] finds, kept to those under the nodes named in
+/// `only`, each node with everything below it, when `only` is given.
+pub fn flatten_gltf_nodes(
+    gltf: &Gltf,
+    nodes: &Assets<GltfNode>,
+    meshes: &Assets<GltfMesh>,
+    mesh_assets: &Assets<Mesh>,
+    server: &AssetServer,
+    only: Option<&[String]>,
+) -> Option<FlatModel> {
     let mut child_ids = HashSet::new();
     let mut needs_instance = !gltf.skins.is_empty() || gltf.scenes.len() > 1;
     for handle in &gltf.nodes {
@@ -66,18 +79,22 @@ pub fn flatten_gltf(
     let mut parts = Vec::new();
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
-    let mut pending: Vec<(Handle<GltfNode>, Transform)> = gltf
+    let mut pending: Vec<(Handle<GltfNode>, Transform, bool)> = gltf
         .nodes
         .iter()
         .filter(|handle| !child_ids.contains(&handle.id()))
-        .map(|handle| (handle.clone(), Transform::IDENTITY))
+        .map(|handle| (handle.clone(), Transform::IDENTITY, only.is_none()))
         .collect();
 
-    while let Some((handle, parent)) = pending.pop() {
+    while let Some((handle, parent, above)) = pending.pop() {
         let node = nodes.get(&handle)?;
         let local = parent * node.transform;
+        let kept = above || only.is_some_and(|only| only.contains(&node.name));
         for child in &node.children {
-            pending.push((child.clone(), local));
+            pending.push((child.clone(), local, kept));
+        }
+        if !kept {
+            continue;
         }
         let Some(mesh_handle) = &node.mesh else {
             continue;
@@ -148,6 +165,20 @@ pub fn standard_material(
 /// [`ModelParts`] keys it.
 pub fn source_path(source: &crate::GltfSource) -> String {
     crate::to_asset_path(&source.path, None)
+}
+
+/// How [`ModelParts`] keys the parts of only `nodes` of the model at `path`.
+pub fn nodes_key(path: &str, nodes: &[String]) -> String {
+    format!("{path}#{}", nodes.join("|"))
+}
+
+/// The model file a [`ModelParts`] key names, and the nodes it keeps when it
+/// keeps only some.
+pub fn split_nodes_key(key: &str) -> (&str, Option<Vec<String>>) {
+    match key.split_once('#') {
+        Some((path, nodes)) => (path, Some(nodes.split('|').map(str::to_string).collect())),
+        None => (key, None),
+    }
 }
 
 /// Flattens models on request, once each, keyed by asset path.
@@ -253,6 +284,7 @@ fn resolve_model_parts(
     nodes: Option<Res<Assets<GltfNode>>>,
     meshes: Option<Res<Assets<GltfMesh>>>,
     mesh_assets: Option<Res<Assets<Mesh>>>,
+    imports: Option<Res<crate::model_import::ModelLodIndex>>,
 ) {
     let (Some(server), Some(gltfs), Some(nodes), Some(meshes), Some(mesh_assets)) =
         (server, gltfs, nodes, meshes, mesh_assets)
@@ -272,10 +304,11 @@ fn resolve_model_parts(
         let handle = match parts.entries.get(&path) {
             Some(ModelEntry::Loading(handle)) => handle.clone(),
             Some(ModelEntry::Wanted) => {
-                let handle: Handle<Gltf> = server
-                    .load_builder()
-                    .with_settings(crate::render_assets::model_settings)
-                    .load(path.clone());
+                let handle: Handle<Gltf> = crate::render_assets::load_model(
+                    &server,
+                    imports.as_deref(),
+                    split_nodes_key(&path).0.to_string(),
+                );
                 parts
                     .entries
                     .insert(path.clone(), ModelEntry::Loading(handle));
@@ -290,9 +323,17 @@ fn resolve_model_parts(
             parts.settled.push(path);
             continue;
         }
-        let model = gltfs
-            .get(&handle)
-            .and_then(|gltf| flatten_gltf(gltf, &nodes, &meshes, &mesh_assets, &server));
+        let only = split_nodes_key(&path).1;
+        let model = gltfs.get(&handle).and_then(|gltf| {
+            flatten_gltf_nodes(
+                gltf,
+                &nodes,
+                &meshes,
+                &mesh_assets,
+                &server,
+                only.as_deref(),
+            )
+        });
         match model {
             Some(model) => {
                 parts

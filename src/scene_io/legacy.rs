@@ -576,12 +576,12 @@ pub fn load_scene_from_jsn(
         })
         .collect();
     for (entity, gltf_path, scene_index) in gltf_entities {
-        let asset_server = world.resource::<AssetServer>();
         let asset_path: AssetPath<'static> = crate::entity_ops::to_asset_path(&gltf_path).into();
-        let scene = asset_server
-            .load_builder()
-            .with_settings(jackdaw_scene_types::render_assets::model_settings)
-            .load(GltfAssetLabel::Scene(scene_index).from_asset(asset_path));
+        let scene = jackdaw_scene_types::render_assets::load_model(
+            world.resource::<AssetServer>(),
+            world.get_resource(),
+            GltfAssetLabel::Scene(scene_index).from_asset(asset_path),
+        );
         world.entity_mut(entity).insert(WorldAssetRoot(scene));
     }
 

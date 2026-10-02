@@ -23,6 +23,8 @@ pub mod environment;
 #[cfg(feature = "render")]
 pub mod mesh_rebuild;
 #[cfg(feature = "render")]
+pub mod model_import;
+#[cfg(feature = "render")]
 pub mod model_parts;
 pub mod node_id;
 #[cfg(feature = "render")]
@@ -41,10 +43,10 @@ pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
 pub use types::{
     Brush, BrushFaceData, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
     DetailLayer, DetailMesh, DetailPresser, DetailVariety, GltfSource, InstanceMaterialOverrides,
-    LodGroup, LodLevel, MaterialOverrides, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude,
-    PrefabBaseline, PropertyValue, ReflectionProbe, ScatterGroup, ScatterInstance, SceneRootTag,
-    SceneWind, Terrain, TerrainChannel, TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry,
-    TerrainQuantization, Wind,
+    LodFade, LodGroup, LodLevel, LodOverride, MaterialOverrides, NAVMESH_EXCLUDE_TYPE_PATH,
+    NavmeshExclude, PrefabBaseline, PropertyValue, ReflectionProbe, ScatterGroup, ScatterInstance,
+    SceneRootTag, SceneWind, Terrain, TerrainChannel, TerrainChannelElement, TerrainNavmesh,
+    TerrainPaletteEntry, TerrainQuantization, Wind,
 };
 
 use bevy::prelude::*;
@@ -92,6 +94,8 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<MaterialOverrides>()
             .register_type::<LodGroup>()
             .register_type::<LodLevel>()
+            .register_type::<LodOverride>()
+            .register_type::<LodFade>()
             .register_type::<InstanceMaterialOverrides>()
             .register_type::<Terrain>()
             .register_type::<TerrainChannel>()

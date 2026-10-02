@@ -108,11 +108,13 @@ mod live_levels;
 mod lod;
 #[cfg(feature = "render")]
 pub use live_levels::{
-    LiveLevelProgress, LiveLevelSettings, LiveLevels, LiveLevelsPlugin, LodPart, drawn_ranges,
-    is_level_of, is_lod_level,
+    AwaitingModelSettings, LiveLevelProgress, LiveLevelSettings, LiveLevels, LiveLevelsPlugin,
+    LodPart, ModelPlacement, drawn_ranges, is_level_of, is_lod_level, model_placement,
 };
 #[cfg(feature = "render")]
-pub use lod::{ForcedLod, LodPlugin, LodSwitches, LodView, level_shows, lod_distance, lod_ranges};
+pub use lod::{
+    ForcedLod, LodPlugin, LodQuality, LodSwitches, LodView, level_shows, lod_distance, lod_ranges,
+};
 #[cfg(feature = "render")]
 mod material_overrides;
 #[cfg(feature = "render")]
@@ -302,6 +304,7 @@ impl Plugin for JackdawPlugin {
             (
                 attach_inserted_gltf_sources,
                 attach_models_left_by_lod_groups,
+                attach_awaited_models,
             )
                 .chain()
                 .after(spawn_loaded_scenes),
@@ -861,11 +864,23 @@ fn spawn_scene_entities(
             })
             .collect();
         for (entity, source) in gltf_entities {
-            if live_levels::is_lod_level(world, entity) {
-                continue;
+            match live_levels::model_placement(world, entity) {
+                live_levels::ModelPlacement::Levels => {}
+                live_levels::ModelPlacement::Waiting => {
+                    world
+                        .entity_mut(entity)
+                        .insert(live_levels::AwaitingModelSettings);
+                }
+                live_levels::ModelPlacement::Instance => {
+                    let root = world_asset_root(
+                        &asset_server,
+                        world.get_resource(),
+                        &source,
+                        assets_dir.as_deref(),
+                    );
+                    world.entity_mut(entity).insert(root);
+                }
             }
-            let root = world_asset_root(&asset_server, &source, assets_dir.as_deref());
-            world.entity_mut(entity).insert(root);
         }
     }
     // A terrain's sidecar is named relative to the scene file, whose
@@ -890,14 +905,16 @@ fn spawn_scene_entities(
 #[cfg(feature = "render")]
 fn world_asset_root(
     asset_server: &AssetServer,
+    imports: Option<&jackdaw_scene_types::model_import::ModelLodIndex>,
     source: &jackdaw_scene_types::GltfSource,
     assets_dir: Option<&Path>,
 ) -> WorldAssetRoot {
     let path = jackdaw_scene_types::to_asset_path(&source.path, assets_dir);
-    let scene: Handle<WorldAsset> = asset_server
-        .load_builder()
-        .with_settings(jackdaw_scene_types::render_assets::model_settings)
-        .load(format!("{path}#Scene{}", source.scene_index));
+    let scene: Handle<WorldAsset> = jackdaw_scene_types::render_assets::load_model(
+        asset_server,
+        imports,
+        format!("{path}#Scene{}", source.scene_index),
+    );
     WorldAssetRoot(scene)
 }
 
@@ -912,40 +929,11 @@ fn world_asset_root(
 /// [`GltfSource`]: jackdaw_scene_types::GltfSource
 #[cfg(feature = "render")]
 fn attach_inserted_gltf_sources(
-    added: Query<
-        (Entity, &jackdaw_scene_types::GltfSource),
-        Added<jackdaw_scene_types::GltfSource>,
-    >,
-    existing: Query<&WorldAssetRoot>,
-    parents: Query<&ChildOf>,
-    groups: Query<(&jackdaw_scene_types::LodGroup, &Children)>,
-    own_groups: Query<(), With<jackdaw_scene_types::LodGroup>>,
-    catalog_path: Option<Res<JackdawCatalogPath>>,
-    asset_folder: Option<Res<AssetFolder>>,
-    asset_server: Res<AssetServer>,
+    added: Query<Entity, Added<jackdaw_scene_types::GltfSource>>,
     mut commands: Commands,
 ) {
-    if added.is_empty() {
-        return;
-    }
-    let assets_dir = resolve_assets_root(catalog_path.as_deref(), asset_folder.as_deref());
-    for (entity, source) in &added {
-        let lod_level = parents
-            .get(entity)
-            .and_then(|parent| groups.get(parent.parent()))
-            .is_ok_and(|(group, children)| live_levels::is_level_of(group, children, entity))
-            || own_groups.contains(entity);
-        if lod_level {
-            continue;
-        }
-        let root = world_asset_root(&asset_server, source, assets_dir.as_deref());
-        if existing
-            .get(entity)
-            .is_ok_and(|current| current.0 == root.0)
-        {
-            continue;
-        }
-        commands.queue(move |world: &mut World| attach_shown_model(world, entity, root));
+    for entity in &added {
+        commands.queue(move |world: &mut World| attach_model(world, entity));
     }
 }
 
@@ -959,11 +947,15 @@ fn attach_models_left_by_lod_groups(
         Changed<jackdaw_scene_types::LodGroup>,
     >,
     mut removed: RemovedComponents<jackdaw_scene_types::LodGroup>,
+    mut unleveled: RemovedComponents<jackdaw_scene_types::model_import::ModelLevels>,
     children_of: Query<&Children>,
-    unplaced: Query<&jackdaw_scene_types::GltfSource, Without<WorldAssetRoot>>,
-    catalog_path: Option<Res<JackdawCatalogPath>>,
-    asset_folder: Option<Res<AssetFolder>>,
-    asset_server: Res<AssetServer>,
+    unplaced: Query<
+        (),
+        (
+            With<jackdaw_scene_types::GltfSource>,
+            Without<WorldAssetRoot>,
+        ),
+    >,
     mut commands: Commands,
 ) {
     let past_last_level = groups
@@ -978,29 +970,74 @@ fn attach_models_left_by_lod_groups(
                 .flat_map(RelationshipTarget::iter);
             std::iter::once(group).chain(levels)
         })
+        .chain(unleveled.read())
         .collect();
-    let mut assets_dir = None;
     for model in past_last_level.chain(ungrouped) {
-        let Ok(source) = unplaced.get(model) else {
-            continue;
-        };
-        let assets_dir = assets_dir.get_or_insert_with(|| {
-            resolve_assets_root(catalog_path.as_deref(), asset_folder.as_deref())
-        });
-        let root = world_asset_root(&asset_server, source, assets_dir.as_deref());
-        commands.queue(move |world: &mut World| attach_shown_model(world, model, root));
+        if unplaced.contains(model) {
+            commands.queue(move |world: &mut World| attach_model(world, model));
+        }
     }
 }
 
-/// Give `entity` its model unless it is a LOD level, which the group keeps
-/// live itself.
+/// Give the models that waited for their import settings an instance, now
+/// the settings are read, unless they draw live levels instead.
 #[cfg(feature = "render")]
-fn attach_shown_model(world: &mut World, entity: Entity, root: WorldAssetRoot) {
-    if live_levels::is_lod_level(world, entity) {
-        return;
+fn attach_awaited_models(
+    awaiting: Query<
+        (Entity, &jackdaw_scene_types::GltfSource),
+        With<live_levels::AwaitingModelSettings>,
+    >,
+    index: Res<jackdaw_scene_types::model_import::ModelLodIndex>,
+    mut commands: Commands,
+) {
+    for (entity, source) in &awaiting {
+        if !index.is_known(&jackdaw_scene_types::model_parts::source_path(source)) {
+            continue;
+        }
+        commands
+            .entity(entity)
+            .remove::<live_levels::AwaitingModelSettings>();
+        commands.queue(move |world: &mut World| attach_model(world, entity));
     }
-    if let Ok(mut entity) = world.get_entity_mut(entity) {
-        entity.insert(root);
+}
+
+/// Give `entity` its model's instance unless it draws live levels, or mark it
+/// to wait while its model's import settings are read.
+///
+/// An entity that already points at the same glTF scene is left alone:
+/// re-inserting an equal handle would make the world-asset spawner despawn and
+/// rebuild the instance.
+#[cfg(feature = "render")]
+fn attach_model(world: &mut World, entity: Entity) {
+    let Some(source) = world
+        .get::<jackdaw_scene_types::GltfSource>(entity)
+        .cloned()
+    else {
+        return;
+    };
+    match live_levels::model_placement(world, entity) {
+        live_levels::ModelPlacement::Levels => {}
+        live_levels::ModelPlacement::Waiting => {
+            world
+                .entity_mut(entity)
+                .insert(live_levels::AwaitingModelSettings);
+        }
+        live_levels::ModelPlacement::Instance => {
+            let assets_dir = assets_root(world);
+            let root = world_asset_root(
+                world.resource::<AssetServer>(),
+                world.get_resource(),
+                &source,
+                assets_dir.as_deref(),
+            );
+            let mut entity = world.entity_mut(entity);
+            if entity
+                .get::<WorldAssetRoot>()
+                .is_none_or(|current| current.0 != root.0)
+            {
+                entity.insert(root);
+            }
+        }
     }
 }
 

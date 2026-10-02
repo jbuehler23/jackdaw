@@ -870,6 +870,39 @@ pub struct LodLevel {
     pub screen_height: f32,
 }
 
+/// How a level of detail hands over to the next one.
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[reflect(Default)]
+pub enum LodFade {
+    /// Switch at once.
+    #[default]
+    Snap,
+    /// Cross-fade over `width` of each switch distance.
+    CrossFade { width: f32 },
+}
+
+impl LodFade {
+    /// The share of each switch distance that cross-fades, 0 when it snaps.
+    pub fn width(self) -> f32 {
+        match self {
+            Self::Snap => 0.0,
+            Self::CrossFade { width } => width.max(0.0),
+        }
+    }
+}
+
+/// A placed model's own changes to the levels of detail its model's import
+/// settings give it. A field left `None` keeps the model's value.
+#[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
+#[reflect(Component, Default, @crate::EditorCategory::new("Rendering"))]
+pub struct LodOverride {
+    /// The screen height of each level in place of the model's, from the most
+    /// detailed down.
+    pub screen_heights: Option<Vec<f32>>,
+    /// The fade in place of the model's.
+    pub fade: Option<LodFade>,
+}
+
 /// Materials a placed model's parts wear in place of their own, by the model's material name.
 #[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
 #[reflect(Component, Default, @crate::EditorCategory::new("Rendering"))]

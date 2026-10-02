@@ -48,6 +48,7 @@ pub struct EntityClipboard {
 
 pub use jackdaw_scene_types::GltfSource;
 use jackdaw_scene_types::LodGroup;
+use jackdaw_scene_types::model_import::{ModelLevels, ModelLodIndex};
 
 pub struct EntityOpsPlugin;
 
@@ -80,6 +81,7 @@ impl Plugin for EntityOpsPlugin {
             .add_observer(forget_model_root)
             .add_observer(queue_models_past_last_level)
             .add_observer(queue_models_of_ungrouped_levels)
+            .add_observer(queue_models_left_by_settings)
             .register_type::<EmptyEntity>()
             .register_type::<SceneCamera>()
             .register_type::<SceneLight>()
@@ -129,6 +131,9 @@ pub struct PendingModelRoots {
     wanted: HashMap<Entity, Option<Handle<WorldAsset>>>,
     /// Entities waiting with no model asked for yet, in the order they came.
     unasked: Vec<Entity>,
+    /// Entities whose model's import settings are still being read, asked
+    /// about again on the next frame.
+    waiting: Vec<Entity>,
     pace: FramePace,
     /// The pace while a scene is opening, kept apart so a load does not leave
     /// editing with a batch sized for a load.
@@ -148,6 +153,7 @@ impl Default for PendingModelRoots {
             order: VecDeque::new(),
             wanted: HashMap::new(),
             unasked: Vec::new(),
+            waiting: Vec::new(),
             pace: FramePace::new(MODEL_BATCH_FLOOR, MODEL_BATCH_CEILING),
             load_pace: FramePace::new(MODEL_BATCH_FLOOR, MODEL_LOAD_BATCH_CEILING),
             handed: None,
@@ -262,8 +268,9 @@ fn derive_world_asset_root(
     existing: Query<&WorldAssetRoot>,
     parents: Query<&ChildOf>,
     groups: Query<(&LodGroup, &Children)>,
-    own_groups: Query<(), With<LodGroup>>,
+    own_groups: Query<(), Or<(With<LodGroup>, With<ModelLevels>)>>,
     asset_server: Res<AssetServer>,
+    imports: Res<ModelLodIndex>,
     mut pending: ResMut<PendingModelRoots>,
 ) {
     let entity = insert.entity;
@@ -283,7 +290,7 @@ fn derive_world_asset_root(
         pending.push(entity, None);
         return;
     };
-    let scene = model_scene(&asset_server, source);
+    let scene = model_scene(&asset_server, Some(&imports), source);
     // Re-inserting an equal handle still trips `Changed`, and the world-asset
     // spawner despawns and respawns the whole instance on every change.
     // Applying the document re-inserts `GltfSource` wholesale, so without this
@@ -296,14 +303,19 @@ fn derive_world_asset_root(
 
 /// The glTF scene `source` names, as the handle the world-asset spawner
 /// instantiates.
-fn model_scene(asset_server: &AssetServer, source: &GltfSource) -> Handle<WorldAsset> {
+fn model_scene(
+    asset_server: &AssetServer,
+    imports: Option<&ModelLodIndex>,
+    source: &GltfSource,
+) -> Handle<WorldAsset> {
     // Scenes authored before paths were normalised still hold an absolute
     // path; `to_asset_path` reduces those and passes a relative one through.
     let asset_path = to_asset_path(&source.path);
-    asset_server
-        .load_builder()
-        .with_settings(jackdaw_scene_types::render_assets::model_settings)
-        .load(GltfAssetLabel::Scene(source.scene_index).from_asset(asset_path))
+    jackdaw_scene_types::render_assets::load_model(
+        asset_server,
+        imports,
+        GltfAssetLabel::Scene(source.scene_index).from_asset(asset_path),
+    )
 }
 
 /// Queue the models of children a LOD group no longer keeps as levels: those
@@ -313,6 +325,7 @@ fn queue_models_past_last_level(
     groups: Query<(&LodGroup, &Children)>,
     unplaced: Query<&GltfSource, Without<WorldAssetRoot>>,
     asset_server: Res<AssetServer>,
+    imports: Res<ModelLodIndex>,
     mut pending: ResMut<PendingModelRoots>,
 ) {
     let Ok((group, children)) = groups.get(insert.entity) else {
@@ -320,7 +333,10 @@ fn queue_models_past_last_level(
     };
     for model in children.iter().skip(group.levels.len()) {
         if let Ok(source) = unplaced.get(model) {
-            pending.push(model, Some(model_scene(&asset_server, source)));
+            pending.push(
+                model,
+                Some(model_scene(&asset_server, Some(&imports), source)),
+            );
         }
     }
 }
@@ -332,6 +348,7 @@ fn queue_models_of_ungrouped_levels(
     children: Query<&Children>,
     unplaced: Query<&GltfSource, Without<WorldAssetRoot>>,
     asset_server: Res<AssetServer>,
+    imports: Res<ModelLodIndex>,
     mut pending: ResMut<PendingModelRoots>,
 ) {
     let group = remove.entity;
@@ -341,8 +358,34 @@ fn queue_models_of_ungrouped_levels(
         .flat_map(RelationshipTarget::iter);
     for model in std::iter::once(group).chain(levels) {
         if let Ok(source) = unplaced.get(model) {
-            pending.push(model, Some(model_scene(&asset_server, source)));
+            pending.push(
+                model,
+                Some(model_scene(&asset_server, Some(&imports), source)),
+            );
         }
+    }
+}
+
+/// Queue the model of a placement that no longer draws the levels its import
+/// settings gave it, once it is told apart from a LOD level.
+fn queue_models_left_by_settings(
+    remove: On<Remove, ModelLevels>,
+    unplaced: Query<(), (With<GltfSource>, Without<WorldAssetRoot>)>,
+    mut pending: ResMut<PendingModelRoots>,
+) {
+    if unplaced.contains(remove.entity) {
+        pending.push(remove.entity, None);
+    }
+}
+
+/// How the model `entity` names comes on now: as an instance, or not at all
+/// because a LOD group or its import settings draw it as live levels. `None`
+/// while its import settings are still being read, so it keeps its place.
+fn instance_wanted(world: &World, entity: Entity) -> Option<bool> {
+    match jackdaw_runtime::model_placement(world, entity) {
+        jackdaw_runtime::ModelPlacement::Instance => Some(true),
+        jackdaw_runtime::ModelPlacement::Levels => Some(false),
+        jackdaw_runtime::ModelPlacement::Waiting => None,
     }
 }
 
@@ -351,22 +394,37 @@ fn queue_models_of_ungrouped_levels(
 /// groups keep live. Runs on the frame a scene spawns, so ordinary models are
 /// asked for ahead of every file a LOD group asks for.
 fn ask_for_waiting_models(world: &mut World) {
-    if world.resource::<PendingModelRoots>().unasked.is_empty() {
+    if world.resource::<PendingModelRoots>().unasked.is_empty()
+        && world.resource::<PendingModelRoots>().waiting.is_empty()
+    {
         return;
     }
     world.resource_scope(|world, mut pending: Mut<PendingModelRoots>| {
+        let waited = std::mem::take(&mut pending.waiting);
+        pending.unasked.extend(waited);
         for entity in std::mem::take(&mut pending.unasked) {
             if !matches!(pending.wanted.get(&entity), Some(None)) {
                 continue;
             }
-            if jackdaw_runtime::is_lod_level(world, entity) {
-                pending.forget(entity);
-                continue;
+            match instance_wanted(world, entity) {
+                Some(true) => {}
+                Some(false) => {
+                    pending.forget(entity);
+                    continue;
+                }
+                None => {
+                    pending.waiting.push(entity);
+                    continue;
+                }
             }
             let Some(source) = world.get::<GltfSource>(entity) else {
                 continue;
             };
-            let scene = model_scene(world.resource::<AssetServer>(), source);
+            let scene = model_scene(
+                world.resource::<AssetServer>(),
+                world.get_resource(),
+                source,
+            );
             pending.wanted.insert(entity, Some(scene));
         }
     });
@@ -404,8 +462,15 @@ fn hand_out_model_roots(
     let batch = pending.take(time.delta(), opening);
     commands.queue(move |world: &mut World| {
         for (entity, scene) in batch {
-            if jackdaw_runtime::is_lod_level(world, entity) {
-                continue;
+            match instance_wanted(world, entity) {
+                Some(true) => {}
+                Some(false) => continue,
+                None => {
+                    world
+                        .resource_mut::<PendingModelRoots>()
+                        .push(entity, scene);
+                    continue;
+                }
             }
             // The source may also have gone -- an undo of the placement that
             // set it, say. An instance under an entity that no longer names a
@@ -413,8 +478,13 @@ fn hand_out_model_roots(
             let Some(source) = world.get::<GltfSource>(entity) else {
                 continue;
             };
-            let scene =
-                scene.unwrap_or_else(|| model_scene(world.resource::<AssetServer>(), source));
+            let scene = scene.unwrap_or_else(|| {
+                model_scene(
+                    world.resource::<AssetServer>(),
+                    world.get_resource(),
+                    source,
+                )
+            });
             // Between deriving the root and this frame the entity may have
             // been despawned, or already given this very handle.
             let Ok(mut entity) = world.get_entity_mut(entity) else {

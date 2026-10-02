@@ -479,6 +479,17 @@ pub(crate) struct SceneGeometry<'w, 's> {
     /// camera has spawned.
     lod_groups: Query<'w, 's, (Entity, &'static LodGroup, Option<&'static Children>)>,
     level_models: Query<'w, 's, (&'static GltfSource, &'static GlobalTransform)>,
+    /// Placed models drawing the levels their import settings give them,
+    /// which a bake reads by their first level the same way.
+    placed_levels: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static jackdaw_scene_types::model_import::ModelLevels,
+            &'static GlobalTransform,
+        ),
+    >,
     models: Option<Res<'w, ModelParts>>,
 }
 
@@ -536,6 +547,14 @@ impl SceneGeometry<'_, '_> {
                 let model = self.models.as_ref()?.get(&source_path(source))?;
                 Some((level, placed, model))
             })
+            .chain(
+                self.placed_levels
+                    .iter()
+                    .filter_map(|(entity, levels, placed)| {
+                        let model = self.models.as_ref()?.get(levels.models.first()?)?;
+                        Some((entity, placed, model))
+                    }),
+            )
     }
 
     /// Whether `entity` sits in a level of a LOD group that the bake reads
@@ -545,6 +564,9 @@ impl SceneGeometry<'_, '_> {
         let mut at = entity;
         while let Ok((_, Some(parent))) = self.visibility.get(at) {
             let parent = parent.parent();
+            if self.placed_levels.contains(parent) {
+                return true;
+            }
             if let Ok((_, group, children)) = self.lod_groups.get(parent) {
                 if self.level_models.contains(parent) {
                     return true;
@@ -568,20 +590,27 @@ impl SceneGeometry<'_, '_> {
         let Some(models) = self.models.as_ref() else {
             return false;
         };
-        self.lod_groups.iter().any(|(entity, group, children)| {
-            let level = if self.level_models.contains(entity) {
-                Some(entity)
-            } else {
-                children.and_then(|children| children.first().copied())
-            };
-            level
-                .filter(|_| !group.levels.is_empty())
-                .and_then(|level| self.level_models.get(level).ok())
-                .is_some_and(|(source, _)| {
-                    let path = source_path(source);
-                    models.get(&path).is_none() && !models.failed(&path)
-                })
-        })
+        let placed_loading = self.placed_levels.iter().any(|(_, levels, _)| {
+            levels
+                .models
+                .first()
+                .is_some_and(|path| models.get(path).is_none() && !models.failed(path))
+        });
+        placed_loading
+            || self.lod_groups.iter().any(|(entity, group, children)| {
+                let level = if self.level_models.contains(entity) {
+                    Some(entity)
+                } else {
+                    children.and_then(|children| children.first().copied())
+                };
+                level
+                    .filter(|_| !group.levels.is_empty())
+                    .and_then(|level| self.level_models.get(level).ok())
+                    .is_some_and(|(source, _)| {
+                        let path = source_path(source);
+                        models.get(&path).is_none() && !models.failed(&path)
+                    })
+            })
     }
 
     /// Whether this mesh can be read here: one extracted to the render world

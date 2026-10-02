@@ -151,7 +151,10 @@ fn model_counts(world: &mut World) -> ModelCounts {
             (parts.len(), parts.len() - parts.loading_count())
         });
     let groups = world
-        .query_filtered::<(), With<jackdaw_scene_types::LodGroup>>()
+        .query_filtered::<(), Or<(
+            With<jackdaw_scene_types::LodGroup>,
+            With<jackdaw_scene_types::model_import::ModelLevels>,
+        )>>()
         .iter(world)
         .count();
     let drawn = world

@@ -6,6 +6,7 @@ use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::{VisibilityRange, VisibilitySystems};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
+use jackdaw_scene_types::model_import::{ModelLevels, add_model_import};
 use jackdaw_scene_types::model_parts::{ModelParts, add_model_parts, source_path};
 use jackdaw_scene_types::{GltfSource, LodGroup};
 
@@ -18,9 +19,11 @@ pub struct LodPlugin;
 impl Plugin for LodPlugin {
     fn build(&self, app: &mut App) {
         add_model_parts(app);
+        add_model_import(app);
         app.add_plugins(LiveLevelsPlugin)
             .init_resource::<LodView>()
             .init_resource::<ForcedLod>()
+            .init_resource::<LodQuality>()
             .add_systems(
                 PostUpdate,
                 (follow_lod_view, place_lod_ranges)
@@ -115,6 +118,44 @@ impl ForcedLod {
     }
 }
 
+/// How much detail levels of detail keep, for a game to set per platform or
+/// quality level, as Unity's quality settings do.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct LodQuality {
+    /// Scales every switch distance: above 1 keeps each level out to a
+    /// greater distance, below 1 hands over sooner.
+    pub bias: f32,
+    /// The most detailed level ever drawn; a more detailed one is drawn as
+    /// this one instead.
+    pub max_level: usize,
+}
+
+impl Default for LodQuality {
+    fn default() -> Self {
+        Self {
+            bias: 1.0,
+            max_level: 0,
+        }
+    }
+}
+
+impl LodQuality {
+    /// `ranges` with every level more detailed than [`Self::max_level`] handed
+    /// to it, so the first level drawn shows from the camera out.
+    pub fn limit(&self, mut ranges: Vec<VisibilityRange>) -> Vec<VisibilityRange> {
+        let first = self.max_level.min(ranges.len().saturating_sub(1));
+        for range in ranges.iter_mut().take(first) {
+            *range = NOWHERE;
+        }
+        if let Some(range) = ranges.get_mut(first)
+            && first > 0
+        {
+            range.start_margin = 0.0..0.0;
+        }
+        ranges
+    }
+}
+
 /// A range that takes in every distance, and one that takes in none.
 const EVERYWHERE: VisibilityRange = VisibilityRange {
     start_margin: 0.0..0.0,
@@ -189,12 +230,14 @@ type Groups<'w, 's> = Query<
     's,
     (
         Entity,
-        Ref<'static, LodGroup>,
+        Option<Ref<'static, LodGroup>>,
+        Option<Ref<'static, ModelLevels>>,
         &'static GlobalTransform,
         Option<&'static Children>,
         Option<Ref<'static, LiveLevels>>,
         Option<&'static mut LodSwitches>,
     ),
+    Or<(With<LodGroup>, With<ModelLevels>)>,
 >;
 
 type Meshes<'w, 's> = Query<
@@ -211,6 +254,7 @@ type Meshes<'w, 's> = Query<
 fn place_lod_ranges(
     view: Res<LodView>,
     forced: Res<ForcedLod>,
+    quality: Res<LodQuality>,
     mut groups: Groups,
     added: Query<Entity, Added<Mesh3d>>,
     parents: Query<&ChildOf>,
@@ -224,17 +268,20 @@ fn place_lod_ranges(
     if view.half_fov_tan <= 0.0 {
         return;
     }
-    let mut due: HashSet<Entity> = if view.is_changed() || forced.is_changed() {
-        groups.iter().map(|(entity, ..)| entity).collect()
-    } else {
-        groups
-            .iter()
-            .filter(|(_, group, _, _, live, _)| {
-                group.is_changed() || live.as_ref().is_some_and(DetectChanges::is_changed)
-            })
-            .map(|(entity, ..)| entity)
-            .collect()
-    };
+    let mut due: HashSet<Entity> =
+        if view.is_changed() || forced.is_changed() || quality.is_changed() {
+            groups.iter().map(|(entity, ..)| entity).collect()
+        } else {
+            groups
+                .iter()
+                .filter(|(_, group, model, _, _, live, _)| {
+                    group.as_ref().is_some_and(DetectChanges::is_changed)
+                        || model.as_ref().is_some_and(DetectChanges::is_changed)
+                        || live.as_ref().is_some_and(DetectChanges::is_changed)
+                })
+                .map(|(entity, ..)| entity)
+                .collect()
+        };
     for mesh in &added {
         due.extend(
             parents
@@ -249,11 +296,23 @@ fn place_lod_ranges(
     }
 
     for entity in due {
-        let Ok((_, group, transform, children, live, held_switches)) = groups.get_mut(entity)
+        let Ok((_, group, model, transform, children, live, held_switches)) =
+            groups.get_mut(entity)
         else {
             continue;
         };
-        let models = level_models(entity, &group, children, &sources);
+        let (group, models) = match (group.as_deref(), model.as_deref()) {
+            (Some(group), _) => (group, level_models(entity, group, children, &sources)),
+            (None, Some(model)) => (
+                &model.group,
+                model
+                    .models
+                    .iter()
+                    .map(|path| Some((path.clone(), transform)))
+                    .collect(),
+            ),
+            (None, None) => continue,
+        };
         let size = if group.size > 0.0 {
             group.size * transform.compute_transform().scale.abs().max_element()
         } else {
@@ -285,12 +344,16 @@ fn place_lod_ranges(
             continue;
         }
         let size = quantized(size);
-        let ranges = lod_ranges(&group, size, view.half_fov_tan);
+        let ranges = quality.limit(lod_ranges(
+            group,
+            size * quality.bias.max(0.0),
+            view.half_fov_tan,
+        ));
         let switches = LodSwitches {
             ranges: ranges.clone(),
             size,
         };
-        let drawn: Vec<VisibilityRange> = match (forced.level_of(&group), live.as_deref()) {
+        let drawn: Vec<VisibilityRange> = match (forced.level_of(group), live.as_deref()) {
             (Some(shown), _) => (0..ranges.len())
                 .map(|level| if level == shown { EVERYWHERE } else { NOWHERE })
                 .collect(),
