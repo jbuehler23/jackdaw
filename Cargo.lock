@@ -4856,6 +4856,7 @@ dependencies = [
  "dirs",
  "dunce",
  "ehttp",
+ "flate2",
  "fontique",
  "half",
  "image",

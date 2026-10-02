@@ -166,6 +166,7 @@ regex.workspace = true
 pathdiff.workspace = true
 path-slash.workspace = true
 dunce = "1.0.5"
+flate2 = "1"
 notify = "8"
 ctrlc = "3"
 toml = "0.8"

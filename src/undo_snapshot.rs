@@ -10,6 +10,8 @@
 //! selection change is not an edit.
 
 use std::any::Any;
+use std::io::{Read, Write};
+use std::sync::Arc;
 
 use bevy::prelude::*;
 use jackdaw_api_internal::snapshot::{ActiveSnapshotter, SceneSnapshot, SceneSnapshotter};
@@ -23,7 +25,59 @@ use crate::view_modes::ViewModeSettings;
 use crate::viewport_overlays::OverlaySettings;
 
 pub(super) fn plugin(app: &mut App) {
-    app.insert_resource(ActiveSnapshotter(Box::new(BsnDocumentSnapshotter)));
+    app.insert_resource(ActiveSnapshotter(Box::new(BsnDocumentSnapshotter)))
+        .init_resource::<LastCapture>();
+}
+
+/// A scene document's text, compressed.
+#[derive(PartialEq, Eq)]
+struct PackedText {
+    bytes: Box<[u8]>,
+    len: usize,
+}
+
+impl PackedText {
+    fn pack(text: &str) -> Self {
+        let mut encoder = flate2::write::DeflateEncoder::new(
+            Vec::with_capacity(text.len() / 4),
+            flate2::Compression::fast(),
+        );
+        encoder
+            .write_all(text.as_bytes())
+            .expect("deflating into memory cannot fail");
+        let bytes = encoder.finish().expect("deflating into memory cannot fail");
+        Self {
+            bytes: bytes.into_boxed_slice(),
+            len: text.len(),
+        }
+    }
+
+    fn unpack(&self) -> String {
+        let mut text = String::with_capacity(self.len);
+        flate2::read::DeflateDecoder::new(&self.bytes[..])
+            .read_to_string(&mut text)
+            .expect("a packed scene text is the text it packed");
+        text
+    }
+}
+
+/// The text the last capture packed. An operator's before is usually the
+/// previous operator's after, so the two entries share one copy.
+#[derive(Resource, Default)]
+struct LastCapture(Option<Arc<PackedText>>);
+
+/// `text` packed, sharing the last capture's copy when it is the same text.
+fn pack_shared(world: &mut World, text: &str) -> Arc<PackedText> {
+    let packed = PackedText::pack(text);
+    let mut last = world.get_resource_or_init::<LastCapture>();
+    match &last.0 {
+        Some(previous) if **previous == packed => previous.clone(),
+        _ => {
+            let packed = Arc::new(packed);
+            last.0 = Some(packed.clone());
+            packed
+        }
+    }
 }
 
 /// Snapshot of the editor-state resources that should round-trip
@@ -65,9 +119,9 @@ impl EditorStateSnapshot {
 
 /// BSN-document-backed snapshotter, the [`ActiveSnapshotter`].
 ///
-/// The document is the source of truth, so a snapshot is its emitted text:
-/// capture is one emit (no world walk), equality is string equality, and
-/// apply reloads the text through the scene loader.
+/// The document is the source of truth, so a snapshot is its emitted text,
+/// kept compressed: capture is one emit (no world walk), equality compares the
+/// packed text, and apply reloads the text through the scene loader.
 pub struct BsnDocumentSnapshotter;
 
 impl SceneSnapshotter for BsnDocumentSnapshotter {
@@ -81,6 +135,7 @@ impl SceneSnapshotter for BsnDocumentSnapshotter {
             .map(|r| r.root.clone())
             .unwrap_or_else(|| std::path::PathBuf::from(""));
         let text = crate::scene_io::emit_bsn_scene_with_inline_assets(world, &parent_path);
+        let text = pack_shared(world, &text);
         Box::new(BsnDocumentSnapshot {
             text,
             editor_state: EditorStateSnapshot::capture(world),
@@ -90,7 +145,7 @@ impl SceneSnapshotter for BsnDocumentSnapshotter {
 }
 
 pub struct BsnDocumentSnapshot {
-    text: String,
+    text: Arc<PackedText>,
     editor_state: EditorStateSnapshot,
     /// What was selected when this snapshot was taken, by document node.
     /// Order is the selection's own, so the primary comes back last.
@@ -132,11 +187,10 @@ impl SceneSnapshot for BsnDocumentSnapshot {
         // diverged fields); the resolver materializes the inherited subtrees
         // back so the respawn produces complete entities. Resolve the cache
         // borrow before the spawn borrow.
-        // The captured text is borrowed unless the resolver rewrote it: it is
-        // the whole scene, and the loader below only reads it.
+        let text = self.text.unpack();
         let resolved_text: std::borrow::Cow<'_, str> =
             match world.get_resource::<crate::prefab::PrefabAstCache>() {
-                Some(_) => match jackdaw_bsn::parse_bsn_text(&self.text) {
+                Some(_) => match jackdaw_bsn::parse_bsn_text(&text) {
                     Ok(authored) => {
                         let cache = world.resource::<crate::prefab::PrefabAstCache>();
                         let get_prefab = |p: &std::path::Path| cache.get(p);
@@ -144,16 +198,16 @@ impl SceneSnapshot for BsnDocumentSnapshot {
                             Ok(resolved) => jackdaw_bsn::emit_scene(&resolved).into(),
                             Err(e) => {
                                 warn!("undo snapshot: resolver failed: {e}; spawning unresolved");
-                                (&self.text).into()
+                                (&text).into()
                             }
                         }
                     }
                     Err(e) => {
                         warn!("undo snapshot: parse failed: {e}; spawning raw text");
-                        (&self.text).into()
+                        (&text).into()
                     }
                 },
-                None => (&self.text).into(),
+                None => (&text).into(),
             };
 
         if let Err(err) = crate::scene_io::despawn_scene_entities(world) {
@@ -169,10 +223,10 @@ impl SceneSnapshot for BsnDocumentSnapshot {
     }
 
     fn equals(&self, other: &dyn SceneSnapshot) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<Self>()
-            .is_some_and(|o| self.text == o.text && self.editor_state == o.editor_state)
+        other.as_any().downcast_ref::<Self>().is_some_and(|o| {
+            (Arc::ptr_eq(&self.text, &o.text) || self.text == o.text)
+                && self.editor_state == o.editor_state
+        })
     }
 
     fn clone_box(&self) -> Box<dyn SceneSnapshot> {
@@ -183,10 +237,10 @@ impl SceneSnapshot for BsnDocumentSnapshot {
         })
     }
 
-    /// The document text plus the recorded selection; the editor-state half is
-    /// small enough to round away.
+    /// This snapshot's share of the packed text plus the recorded selection;
+    /// the editor-state half is small enough to round away.
     fn heap_bytes(&self) -> usize {
-        self.text.capacity()
+        self.text.bytes.len() / Arc::strong_count(&self.text)
             + self.selection.capacity() * std::mem::size_of::<jackdaw_scene_types::SceneNodeId>()
     }
 
@@ -438,6 +492,27 @@ mod tests {
         format!(
             "#Node\nbevy_transform::components::transform::Transform {{\n    translation: glam::Vec3 {{ x: {x:?}, y: 0.0, z: 0.0 }},\n}}\n"
         )
+    }
+
+    #[test]
+    fn capturing_an_unchanged_scene_shares_the_packed_text() {
+        let mut app = snapshot_app();
+        jackdaw_bsn::load_bsn_scene(app.world_mut(), &doc(1.0)).expect("initial load");
+
+        let first = BsnDocumentSnapshotter.capture(app.world_mut());
+        let second = BsnDocumentSnapshotter.capture(app.world_mut());
+        let held = |snapshot: &dyn SceneSnapshot| {
+            snapshot
+                .as_any()
+                .downcast_ref::<BsnDocumentSnapshot>()
+                .expect("a document snapshot")
+                .text
+                .clone()
+        };
+
+        assert!(Arc::ptr_eq(&held(&*first), &held(&*second)));
+        assert!(first.equals(&*second));
+        assert_eq!(held(&*first).unpack(), held(&*second).unpack());
     }
 
     #[test]
