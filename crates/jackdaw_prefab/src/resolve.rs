@@ -334,6 +334,14 @@ pub fn sparsify_inherited_descendants(ast: &mut SceneBsnAst, get_prefab: &Prefab
         nodes.push(root);
         nodes.extend(ast.descendants_of(root));
     }
+    let parents: HashMap<Entity, Entity> = nodes
+        .iter()
+        .flat_map(|&node| {
+            ast.get_children_ast(node)
+                .into_iter()
+                .map(move |child| (child, node))
+        })
+        .collect();
 
     for node in nodes {
         // Instance roots sparsify against their own prefab's root entry: resolve
@@ -348,14 +356,14 @@ pub fn sparsify_inherited_descendants(ast: &mut SceneBsnAst, get_prefab: &Prefab
             continue;
         };
 
-        let mut cursor = ast.ast_parent_of(node);
+        let mut cursor = parents.get(&node).copied();
         let mut isa_source: Option<PathBuf> = None;
         while let Some(current) = cursor {
             if let Some(source) = read_isa_source(ast, current) {
                 isa_source = Some(source);
                 break;
             }
-            cursor = ast.ast_parent_of(current);
+            cursor = parents.get(&current).copied();
         }
         let Some(source) = isa_source else {
             continue;
