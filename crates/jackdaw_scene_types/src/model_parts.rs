@@ -147,6 +147,27 @@ pub fn flatten_gltf_nodes(
     })
 }
 
+/// `model` drawing its generated level `level`: each part's mesh swapped for
+/// the one the model's loader generated from it. A part with no generated
+/// mesh keeps its own.
+fn generated_parts(mut model: FlatModel, level: usize, server: &AssetServer) -> FlatModel {
+    for part in &mut model.parts {
+        let Some(path) = part.mesh.path() else {
+            continue;
+        };
+        let Some(label) = path.label() else {
+            continue;
+        };
+        let generated = path
+            .clone_owned()
+            .with_label(crate::model_import::generated_label(level, label));
+        if let Some(handle) = server.get_handle(&generated) {
+            part.mesh = handle;
+        }
+    }
+    model
+}
+
 /// The `StandardMaterial` the glTF loader wrote beside a primitive's
 /// `GltfMaterial`, under the same asset path with a `/std` label.
 ///
@@ -167,6 +188,19 @@ pub fn source_path(source: &crate::GltfSource) -> String {
     crate::to_asset_path(&source.path, None)
 }
 
+/// How [`ModelParts`] keys generated level `level` of the model at `path`.
+pub fn generated_key(path: &str, level: usize) -> String {
+    format!("{path}#{GENERATED}{level}")
+}
+
+/// The generated level a [`ModelParts`] key names, when it names one.
+pub fn split_generated_key(key: &str) -> Option<(&str, usize)> {
+    let (path, rest) = key.split_once('#')?;
+    Some((path, rest.strip_prefix(GENERATED)?.parse().ok()?))
+}
+
+const GENERATED: &str = "generated:";
+
 /// How [`ModelParts`] keys the parts of only `nodes` of the model at `path`.
 pub fn nodes_key(path: &str, nodes: &[String]) -> String {
     format!("{path}#{}", nodes.join("|"))
@@ -175,6 +209,9 @@ pub fn nodes_key(path: &str, nodes: &[String]) -> String {
 /// The model file a [`ModelParts`] key names, and the nodes it keeps when it
 /// keeps only some.
 pub fn split_nodes_key(key: &str) -> (&str, Option<Vec<String>>) {
+    if let Some((path, _)) = split_generated_key(key) {
+        return (path, None);
+    }
     match key.split_once('#') {
         Some((path, nodes)) => (path, Some(nodes.split('|').map(str::to_string).collect())),
         None => (key, None),
@@ -324,16 +361,22 @@ fn resolve_model_parts(
             continue;
         }
         let only = split_nodes_key(&path).1;
-        let model = gltfs.get(&handle).and_then(|gltf| {
-            flatten_gltf_nodes(
-                gltf,
-                &nodes,
-                &meshes,
-                &mesh_assets,
-                &server,
-                only.as_deref(),
-            )
-        });
+        let model = gltfs
+            .get(&handle)
+            .and_then(|gltf| {
+                flatten_gltf_nodes(
+                    gltf,
+                    &nodes,
+                    &meshes,
+                    &mesh_assets,
+                    &server,
+                    only.as_deref(),
+                )
+            })
+            .map(|model| match split_generated_key(&path) {
+                Some((_, level)) => generated_parts(model, level, &server),
+                None => model,
+            });
         match model {
             Some(model) => {
                 parts

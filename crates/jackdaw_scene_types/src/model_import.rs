@@ -85,6 +85,9 @@ pub enum LevelShow {
     File(String),
     /// Only these nodes of the model, each with everything under it.
     Nodes(Vec<String>),
+    /// The model simplified towards `ratio` of its triangles, moving no
+    /// surface further than `error` of its size.
+    Generated { ratio: f32, error: f32 },
 }
 
 /// The settings of a model whose meta names [`ModelLoader`].
@@ -114,6 +117,25 @@ impl ModelSettings {
 pub struct ModelLoader {
     /// The loader every model's file goes through.
     pub gltf: GltfLoader,
+    /// Where generated levels are kept between loads.
+    pub cache: GeneratedLevelCache,
+}
+
+/// The folder generated levels are cached in, once an app names one.
+#[derive(Resource, Clone, Default)]
+pub struct GeneratedLevelCache(pub Arc<std::sync::RwLock<Option<std::path::PathBuf>>>);
+
+impl GeneratedLevelCache {
+    /// Keep generated levels under `folder` from now on.
+    pub fn set(&self, folder: Option<std::path::PathBuf>) {
+        if let Ok(mut held) = self.0.write() {
+            *held = folder;
+        }
+    }
+
+    fn folder(&self) -> Option<std::path::PathBuf> {
+        self.0.read().ok().and_then(|held| held.clone())
+    }
 }
 
 impl AssetLoader for ModelLoader {
@@ -129,11 +151,117 @@ impl AssetLoader for ModelLoader {
     ) -> Result<Gltf, GltfError> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        GltfLoader::load_gltf(&self.gltf, &bytes, load_context, &settings.gltf).await
+        let gltf = GltfLoader::load_gltf(&self.gltf, &bytes, load_context, &settings.gltf).await?;
+        if let Some(lod) = &settings.lod {
+            self.add_generated_levels(&gltf, &bytes, lod, load_context);
+        }
+        Ok(gltf)
     }
 
     fn extensions(&self) -> &[&str] {
         &[]
+    }
+}
+
+impl ModelLoader {
+    /// Add every generated level of every primitive, labelled
+    /// `Lod<level>/Mesh<m>/Primitive<p>`, from the cache when it holds them.
+    fn add_generated_levels(
+        &self,
+        gltf: &Gltf,
+        bytes: &[u8],
+        lod: &ModelLod,
+        load_context: &mut LoadContext<'_>,
+    ) {
+        use crate::lod_generate::{SimplifiedPrimitive, decode, encode, simplified_mesh};
+
+        let generated: Vec<(usize, f32, f32)> = lod
+            .levels
+            .iter()
+            .enumerate()
+            .filter_map(|(index, level)| match level.show {
+                LevelShow::Generated { ratio, error } => Some((index, ratio, error)),
+                _ => None,
+            })
+            .collect();
+        if generated.is_empty() {
+            return;
+        }
+        let mut primitives = Vec::new();
+        for (mesh_index, mesh) in gltf.meshes.iter().enumerate() {
+            let Some(gltf_mesh) = load_context
+                .get_labeled_by_id(mesh)
+                .and_then(|asset| asset.get::<bevy::gltf::GltfMesh>())
+            else {
+                continue;
+            };
+            for primitive in 0..gltf_mesh.primitives.len() {
+                primitives.push(
+                    bevy::gltf::GltfAssetLabel::Primitive {
+                        mesh: mesh_index,
+                        primitive,
+                    }
+                    .to_string(),
+                );
+            }
+        }
+        let settings = format!("{generated:?}");
+        let cached = self.cache.folder().map(|folder| {
+            crate::lod_generate::cache_file(
+                &folder,
+                &load_context.path().path().to_string_lossy(),
+                bytes,
+                settings.as_bytes(),
+            )
+        });
+        let mut levels: Vec<(String, SimplifiedPrimitive)> = cached
+            .as_ref()
+            .and_then(|file| std::fs::read(file).ok())
+            .and_then(|held| decode(&held))
+            .unwrap_or_default();
+        let fresh = levels.is_empty();
+        let mut meshes = Vec::new();
+        for (level, ratio, error) in &generated {
+            for label in &primitives {
+                let Some(mesh) = load_context
+                    .get_labeled(label)
+                    .and_then(|asset| asset.get::<Mesh>())
+                else {
+                    continue;
+                };
+                if mesh.has_morph_targets() {
+                    continue;
+                }
+                let key = generated_label(*level, label);
+                let simplified = match levels.iter().find(|(held, _)| *held == key) {
+                    Some((_, simplified)) => simplified.clone(),
+                    None => {
+                        let Some(positions) = crate::lod_generate::positions(mesh) else {
+                            continue;
+                        };
+                        let indices = crate::lod_generate::triangle_indices(mesh);
+                        let simplified = crate::lod_generate::simplify_primitive(
+                            &positions, &indices, *ratio, *error,
+                        );
+                        levels.push((key.clone(), simplified.clone()));
+                        simplified
+                    }
+                };
+                meshes.push((key, simplified_mesh(mesh, &simplified)));
+            }
+        }
+        for (label, mesh) in meshes {
+            load_context.add_labeled_asset(label, mesh);
+        }
+        if fresh && let Some(file) = cached {
+            if let Some(folder) = file.parent() {
+                let _ = std::fs::create_dir_all(folder);
+            }
+            let partial = file.with_extension("lods.partial");
+            if std::fs::write(&partial, encode(&levels)).is_ok() {
+                let _ = std::fs::rename(&partial, &file);
+            }
+        }
     }
 }
 
@@ -170,12 +298,19 @@ pub fn meta_path(model: &std::path::Path) -> std::path::PathBuf {
 /// keys it.
 ///
 /// [`ModelParts`]: crate::model_parts::ModelParts
-pub fn level_key(model: &str, show: &LevelShow) -> String {
+pub fn level_key(model: &str, level: usize, show: &LevelShow) -> String {
     match show {
         LevelShow::Model => model.to_string(),
         LevelShow::File(file) => sibling_path(model, file),
         LevelShow::Nodes(nodes) => nodes_key(model, nodes),
+        LevelShow::Generated { .. } => crate::model_parts::generated_key(model, level),
     }
+}
+
+/// The label of the generated level `level` of the primitive labelled
+/// `primitive`, as the model's loader adds it.
+pub fn generated_label(level: usize, primitive: &str) -> String {
+    format!("Lod{level}/{primitive}")
 }
 
 /// `file`, relative to the folder of the model at `model`, as an asset path.
@@ -224,7 +359,8 @@ impl ModelLevels {
             models: lod
                 .levels
                 .iter()
-                .map(|level| level_key(model, &level.show))
+                .enumerate()
+                .map(|(index, level)| level_key(model, index, &level.show))
                 .collect(),
         }
     }
@@ -329,6 +465,7 @@ pub struct ModelImportPlugin;
 impl Plugin for ModelImportPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ModelLodIndex>()
+            .init_resource::<GeneratedLevelCache>()
             .add_observer(index_placed_model)
             .add_observer(unindex_placed_model)
             .add_systems(PreUpdate, (read_model_lods, resolve_model_levels).chain());
@@ -336,7 +473,8 @@ impl Plugin for ModelImportPlugin {
 
     fn finish(&self, app: &mut App) {
         if let Some(gltf) = gltf_loader(app) {
-            app.register_asset_loader(ModelLoader { gltf })
+            let cache = app.world().resource::<GeneratedLevelCache>().clone();
+            app.register_asset_loader(ModelLoader { gltf, cache })
                 .add_systems(PreUpdate, reread_reloaded_models.before(read_model_lods));
         }
     }

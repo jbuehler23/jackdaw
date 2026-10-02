@@ -21,6 +21,8 @@ pub mod asset_path;
 pub mod brush_chunks;
 pub mod environment;
 #[cfg(feature = "render")]
+pub mod lod_generate;
+#[cfg(feature = "render")]
 pub mod mesh_rebuild;
 #[cfg(feature = "render")]
 pub mod model_import;

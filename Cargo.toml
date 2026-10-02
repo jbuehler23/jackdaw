@@ -256,6 +256,7 @@ jackdaw_animation_runtime = { version = "0.19.0", path = "crates/jackdaw_animati
 jackdaw_fuzzy = { version = "0.19.0", path = "crates/jackdaw_fuzzy" }
 jackdaw_localization = { version = "0.19.0", path = "crates/jackdaw_localization" }
 glam = { version = "0.32", features = ["serde"] }
+meshopt = "0.6"
 noise = "0.9"
 rand = "0.10"
 serde = "1"

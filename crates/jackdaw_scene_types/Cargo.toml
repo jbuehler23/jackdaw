@@ -25,6 +25,7 @@ glam.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 rand.workspace = true
+meshopt = { workspace = true, optional = true }
 
 [features]
 default = ["render"]
@@ -34,6 +35,7 @@ render = [
     "bevy/bevy_image",
     "bevy/bevy_asset",
     "bevy/bevy_gltf",
+    "dep:meshopt",
     "jackdaw_geometry/render",
 ]
 

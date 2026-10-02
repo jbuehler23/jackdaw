@@ -375,13 +375,23 @@ fn spawn_model_lod_rows(world: &mut World, body: Entity, path: &Path) {
     );
     spawn_row(world, body, "LOD", &summary);
     crate::lod_bar::spawn_model_controls(world, body, &asset_path);
+    spawn_action(
+        world,
+        body,
+        "Generate Levels",
+        crate::model_lod::ModelLodGenerateOp::ID,
+        &asset_path,
+    );
     for (index, level) in lod.levels.iter().enumerate() {
         let shows = match &level.show {
             LevelShow::Model => "The model".to_string(),
             LevelShow::File(file) => file.clone(),
             LevelShow::Nodes(nodes) => nodes.join(", "),
+            LevelShow::Generated { ratio, .. } => {
+                format!("Generated, {} of the triangles", percent(*ratio))
+            }
         };
-        let triangles = triangles_of(world, &asset_path, &level.show)
+        let triangles = triangles_of(world, &asset_path, index, &level.show)
             .map(|count| format!(", {count} triangles"))
             .unwrap_or_default();
         let value = format!("{shows}{triangles}, from {}", percent(level.screen_height));
@@ -435,9 +445,10 @@ fn percent(share: f32) -> String {
 fn triangles_of(
     world: &World,
     model: &str,
+    level: usize,
     show: &jackdaw_scene_types::model_import::LevelShow,
 ) -> Option<usize> {
-    let key = jackdaw_scene_types::model_import::level_key(model, show);
+    let key = jackdaw_scene_types::model_import::level_key(model, level, show);
     let flat = world
         .get_resource::<jackdaw_scene_types::model_parts::ModelParts>()?
         .get(&key)?

@@ -19,11 +19,26 @@ use crate::lod_group::{default_screen_heights, level_files};
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ModelLodImportOp>()
+        .register_operator::<ModelLodGenerateOp>()
         .register_operator::<ModelLodApplyOp>();
 }
 
 pub(crate) fn plugin(app: &mut App) {
-    app.init_resource::<UnsavedModelSettings>();
+    app.init_resource::<UnsavedModelSettings>()
+        .add_systems(Update, follow_project_cache);
+}
+
+/// Keep generated levels in the open project's import cache.
+fn follow_project_cache(
+    project: Option<Res<crate::project::ProjectRoot>>,
+    cache: Option<Res<jackdaw_scene_types::model_import::GeneratedLevelCache>>,
+) {
+    let (Some(project), Some(cache)) = (project, cache) else {
+        return;
+    };
+    if project.is_changed() {
+        cache.set(Some(crate::texture_import::cache_dir(&project.root)));
+    }
 }
 
 /// Models whose import settings were edited and not yet written, by asset path.
@@ -584,6 +599,73 @@ pub(crate) fn model_lod_apply(
             crate::status_bar::notify_error(world, format!("{path} not written: {err}"));
         }
         crate::inspector::file_card::refresh_file_card(world);
+    });
+    OperatorResult::Finished
+}
+
+/// The levels a generated set of `count` levels has: the model, then each
+/// level with half the triangles of the one before, at the screen heights an
+/// import gives that many levels.
+pub fn generated_levels(count: usize) -> Vec<ModelLodLevel> {
+    default_screen_heights(count.max(2))
+        .into_iter()
+        .enumerate()
+        .map(|(level, screen_height)| ModelLodLevel {
+            show: match level {
+                0 => LevelShow::Model,
+                _ => LevelShow::Generated {
+                    ratio: 0.5f32.powi(level as i32),
+                    error: 0.01 * level as f32,
+                },
+            },
+            screen_height,
+        })
+        .collect()
+}
+
+/// Give a model levels simplified from its own meshes, as Godot and Unreal do
+/// at import. They are generated when the model loads and kept in the
+/// project's import cache.
+#[operator(
+    id = "model.lod.generate",
+    label = "Generate LOD Levels",
+    description = "Give a model levels of detail simplified from its own meshes, each with half \
+                   the triangles of the one before. Written to the model's .meta on Save or Apply.",
+    allows_undo = false,
+    params(
+        path(String, doc = "The model, as a path under the project's assets."),
+        count(i64, default = 3, doc = "How many levels, the model itself the first."),
+    )
+)]
+pub(crate) fn model_lod_generate(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(given) = params.as_str("path").map(str::to_string) else {
+        return OperatorResult::Cancelled;
+    };
+    let count = usize::try_from(params.as_int("count").unwrap_or(3)).unwrap_or(3);
+    commands.queue(move |world: &mut World| {
+        let Some(assets) = world
+            .get_resource::<crate::project::ProjectRoot>()
+            .map(crate::project::ProjectRoot::assets_dir)
+        else {
+            return;
+        };
+        let path = asset_path_of(&assets, &given);
+        let current = current_levels(world, &assets, &path);
+        let lod = ModelLod {
+            version: ModelLod::VERSION,
+            source: LodImportSource::Authored,
+            size: current
+                .as_ref()
+                .map(|lod| lod.size)
+                .filter(|size| *size > 0.0)
+                .unwrap_or_else(|| measured_size(&assets.join(&path))),
+            fade: current.as_ref().map_or(LodFade::Snap, |lod| lod.fade),
+            levels: generated_levels(count),
+        };
+        edit_model_levels(world, &path, Some(lod));
     });
     OperatorResult::Finished
 }
